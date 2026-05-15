@@ -1,0 +1,64 @@
+name: Bump version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: SemVer bump to apply
+        required: true
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+        default: patch
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bump-version-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  bump-version:
+    name: Bump package versions and tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump shared version, commit, and tag
+        id: version
+        run: |
+          set -euo pipefail
+
+          new_version="$(node scripts/bump-shared-version.mjs "${{ inputs.version_bump }}" | tail -n 1)"
+          tag="v${new_version}"
+
+          git add package.json package-lock.json extensions/*/package.json
+          git commit -m "chore(release): ${tag}"
+          git tag "${tag}"
+
+          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Push commit and tag
+        run: |
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "${{ steps.version.outputs.tag }}"

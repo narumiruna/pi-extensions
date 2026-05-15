@@ -1,0 +1,87 @@
+#!/usr/bin/env node
+
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+
+const bump = process.argv[2];
+const allowedBumps = new Set(["major", "minor", "patch"]);
+
+if (!allowedBumps.has(bump)) {
+	throw new Error(`Usage: scripts/bump-shared-version.mjs <major|minor|patch>`);
+}
+
+const rootPackagePath = "package.json";
+const rootPackage = readPackage(rootPackagePath);
+const packagePaths = new Set([rootPackagePath]);
+
+for (const workspace of rootPackage.workspaces ?? []) {
+	if (!workspace.endsWith("/*")) {
+		throw new Error(`Unsupported workspace pattern: ${workspace}`);
+	}
+
+	const workspaceRoot = workspace.slice(0, -2);
+	for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+
+		const packagePath = path.join(workspaceRoot, entry.name, "package.json");
+		if (fs.existsSync(packagePath)) packagePaths.add(packagePath);
+	}
+}
+
+const packages = [...packagePaths].map((packagePath) => ({
+	packagePath,
+	packageJson: readPackage(packagePath),
+}));
+
+const currentVersion = packages
+	.map(({ packageJson }) => parseVersion(packageJson.version))
+	.sort(compareVersions)
+	.at(-1);
+
+const newVersion = bumpVersion(currentVersion, bump).join(".");
+
+for (const { packagePath, packageJson } of packages) {
+	packageJson.version = newVersion;
+	fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, "\t")}\n`);
+}
+
+execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts"], {
+	stdio: "inherit",
+});
+
+console.log(newVersion);
+
+function readPackage(packagePath) {
+	return JSON.parse(fs.readFileSync(packagePath, "utf8"));
+}
+
+function parseVersion(version) {
+	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+	if (!match) throw new Error(`Unsupported SemVer version: ${version}`);
+	return match.slice(1).map(Number);
+}
+
+function compareVersions(a, b) {
+	for (let index = 0; index < 3; index += 1) {
+		if (a[index] !== b[index]) return a[index] - b[index];
+	}
+	return 0;
+}
+
+function bumpVersion(version, bumpType) {
+	const nextVersion = [...version];
+
+	if (bumpType === "major") {
+		nextVersion[0] += 1;
+		nextVersion[1] = 0;
+		nextVersion[2] = 0;
+	} else if (bumpType === "minor") {
+		nextVersion[1] += 1;
+		nextVersion[2] = 0;
+	} else {
+		nextVersion[2] += 1;
+	}
+
+	return nextVersion;
+}
