@@ -236,8 +236,7 @@ function renderExtensionStatusline(
 	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme);
 	if (!status) return undefined;
 
-	const prefix = theme.fg("dim", "ext ");
-	return truncateToWidth(`${prefix}${status}`, width, "");
+	return truncateToWidth(status, width, "");
 }
 
 function buildSegment(
