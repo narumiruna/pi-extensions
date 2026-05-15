@@ -29,6 +29,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
+      - name: Update npm for OIDC publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: Install dependencies
         run: npm ci
 
@@ -36,6 +41,8 @@ jobs:
         run: npm run check
 
       - name: Publish unpublished workspace packages
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
         run: |
           set -euo pipefail
 
@@ -68,5 +75,5 @@ jobs:
             fi
 
             echo "Publishing ${package}@${version}..."
-            npm --workspace "$package" publish --access public --provenance
+            npm --workspace "$package" publish --access public --loglevel verbose
           done < /tmp/pi-workspaces.tsv
