@@ -25,17 +25,17 @@ pi -e ./extensions/pi-statusline
 The default statusline includes:
 
 - `π` brand marker
-- current model
-- thinking level
-- git branch
-- current project directory
-- active or last tool
-- context usage percentage
-- token totals
-- estimated cost
-- clock
+- emoji-labeled current model
+- emoji-labeled thinking level
+- emoji-labeled git branch
+- emoji-labeled current project directory
+- emoji-labeled active or last tool
+- emoji-labeled context usage percentage
+- emoji-labeled token totals
+- emoji-labeled estimated cost
+- emoji-labeled clock
 
-Statuses from other extensions, such as goal mode, appear on their own line below the main statusline and are separated with ``.
+Statuses from other extensions, such as goal mode, appear on their own emoji-labeled line below the main statusline and are separated with ``.
 The layout adapts to terminal width and truncates safely.
 
 ## Package layout
