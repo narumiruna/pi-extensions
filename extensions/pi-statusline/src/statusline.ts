@@ -384,15 +384,29 @@ function formatToolActivity(runtime: RuntimeState): string {
 }
 
 function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: Theme): string {
+	const separator = theme.fg("dim", "  ");
 	const visibleStatuses = [...statuses.entries()]
 		.filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0)
-		.slice(0, 2)
+		.slice(0, 3)
 		.map(([key, value]) => {
-			if (visibleWidth(value) <= 28) return value;
-			return `${theme.fg("dim", `${key}:`)} ${truncateToWidth(value, 24)}`;
+			const label = theme.fg("dim", `${key}: `);
+			const text = truncateToWidth(simplifyExtensionStatus(key, value), 24, "…");
+			return `${label}${text}`;
 		});
 
-	return visibleStatuses.join(" ");
+	return visibleStatuses.join(separator);
+}
+
+function simplifyExtensionStatus(key: string, value: string): string {
+	return value
+		.trim()
+		.replace(new RegExp(`^${escapeRegExp(key)}\\s*:\\s*`, "iu"), "")
+		.replace(/\s+\([^)]*\)\s*$/, "")
+		.replace(/\s+/g, " ");
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function getTokenTotals(ctx: ExtensionContext): TokenTotals {

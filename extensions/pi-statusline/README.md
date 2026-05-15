@@ -35,7 +35,7 @@ The default statusline includes:
 - estimated cost
 - clock
 
-Statuses from other extensions, such as goal mode, appear on their own line below the main statusline.
+Statuses from other extensions, such as goal mode, appear on their own line below the main statusline and are separated with ``.
 The layout adapts to terminal width and truncates safely.
 
 ## Package layout
