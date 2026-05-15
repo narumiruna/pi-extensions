@@ -1,5 +1,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+btw := "@narumitw/pi-btw"
 caffeinate := "@narumitw/pi-caffeinate"
 chrome_devtools := "@narumitw/pi-chrome-devtools"
 firecrawl := "@narumitw/pi-firecrawl"
@@ -40,6 +41,7 @@ doctor package="@narumitw/pi-chrome-devtools":
 
 # Show npm visibility/version information for all packages
 doctor-all:
+    just doctor {{btw}}
     just doctor {{caffeinate}}
     just doctor {{chrome_devtools}}
     just doctor {{firecrawl}}
@@ -53,6 +55,10 @@ doctor-all:
 npm-public package="@narumitw/pi-goal" otp="":
     otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; npm access set status=public {{package}} $otp_arg
     npm view {{package}} version
+
+# Preview the btw package that npm would publish
+pack-btw:
+    npm run pack:btw
 
 # Preview the caffeinate package that npm would publish
 pack-caffeinate:
@@ -82,6 +88,10 @@ pack-retry:
 pack-statusline:
     npm run pack:statusline
 
+# Try btw from this working tree as a temporary pi package
+try-btw:
+    pi -e ./extensions/pi-btw
+
 # Try caffeinate from this working tree as a temporary pi package
 try-caffeinate:
     pi -e ./extensions/pi-caffeinate
@@ -110,6 +120,10 @@ try-retry:
 try-statusline:
     pi -e ./extensions/pi-statusline
 
+# Install btw through pi, falling back to the local workspace if unpublished
+install-btw:
+    if npm view {{btw}} version >/dev/null 2>&1; then pi install npm:{{btw}}; else echo "{{btw}} is not published; installing local workspace package instead."; pi install ./extensions/pi-btw; fi
+
 # Install caffeinate through pi, falling back to the local workspace if unpublished
 install-caffeinate:
     if npm view {{caffeinate}} version >/dev/null 2>&1; then pi install npm:{{caffeinate}}; else echo "{{caffeinate}} is not published; installing local workspace package instead."; pi install ./extensions/pi-caffeinate; fi
@@ -137,6 +151,11 @@ install-retry:
 # Install statusline through pi, falling back to the local workspace if unpublished
 install-statusline:
     if npm view {{statusline}} version >/dev/null 2>&1; then pi install npm:{{statusline}}; else echo "{{statusline}} is not published; installing local workspace package instead."; pi install ./extensions/pi-statusline; fi
+
+# Publish btw to npm, skipping if the current version already exists
+# Usage with 2FA: just publish-btw 123456
+publish-btw otp="":
+    version="$(node -p "require('./extensions/pi-btw/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{btw}}@"$version" version >/dev/null 2>&1; then echo "{{btw}}@$version already exists; skipping publish."; else npm --workspace {{btw}} pack --dry-run; npm --workspace {{btw}} publish --access public $otp_arg; fi
 
 # Publish caffeinate to npm, skipping if the current version already exists
 # Usage with 2FA: just publish-caffeinate 123456
@@ -176,6 +195,7 @@ publish-statusline otp="":
 # Publish all extension packages to npm
 # Usage with 2FA: just publish-all 123456
 publish-all otp="":
+    just publish-btw {{otp}}
     just publish-caffeinate {{otp}}
     just publish-chrome-devtools {{otp}}
     just publish-firecrawl {{otp}}
@@ -186,6 +206,7 @@ publish-all otp="":
 
 # Install all published extension packages through pi
 install-all:
+    just install-btw
     just install-caffeinate
     just install-chrome-devtools
     just install-firecrawl

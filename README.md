@@ -6,6 +6,7 @@ Monorepo for independently installable Pi extension packages.
 
 | Package | Source | Install |
 | --- | --- | --- |
+| `@narumitw/pi-btw` | [`extensions/pi-btw`](./extensions/pi-btw) | `pi install npm:@narumitw/pi-btw` |
 | `@narumitw/pi-caffeinate` | [`extensions/pi-caffeinate`](./extensions/pi-caffeinate) | `pi install npm:@narumitw/pi-caffeinate` |
 | `@narumitw/pi-chrome-devtools` | [`extensions/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | `pi install npm:@narumitw/pi-chrome-devtools` |
 | `@narumitw/pi-firecrawl` | [`extensions/pi-firecrawl`](./extensions/pi-firecrawl) | `pi install npm:@narumitw/pi-firecrawl` |
@@ -25,6 +26,7 @@ npm run check
 Try a package locally:
 
 ```bash
+pi -e ./extensions/pi-btw
 pi -e ./extensions/pi-caffeinate
 pi -e ./extensions/pi-chrome-devtools
 pi -e ./extensions/pi-firecrawl
@@ -37,6 +39,7 @@ pi -e ./extensions/pi-statusline
 Preview package contents:
 
 ```bash
+npm run pack:btw
 npm run pack:caffeinate
 npm run pack:chrome-devtools
 npm run pack:firecrawl
@@ -49,6 +52,7 @@ npm run pack:statusline
 Publish packages from their package directories:
 
 ```bash
+cd extensions/pi-btw && npm publish --access public
 cd extensions/pi-caffeinate && npm publish --access public
 cd extensions/pi-chrome-devtools && npm publish --access public
 cd extensions/pi-firecrawl && npm publish --access public
