@@ -4,6 +4,7 @@ caffeinate := "@narumitw/pi-caffeinate"
 chrome_devtools := "@narumitw/pi-chrome-devtools"
 firecrawl := "@narumitw/pi-firecrawl"
 goal := "@narumitw/pi-goal"
+python_lsp := "@narumitw/pi-python-lsp"
 retry := "@narumitw/pi-retry"
 
 # Show available commands
@@ -42,6 +43,7 @@ doctor-all:
     just doctor {{chrome_devtools}}
     just doctor {{firecrawl}}
     just doctor {{goal}}
+    just doctor {{python_lsp}}
     just doctor {{retry}}
 
 # Make a scoped npm package public after publish if npm registry returns 404
@@ -66,6 +68,10 @@ pack-firecrawl:
 pack-goal:
     npm run pack:goal
 
+# Preview the python-lsp package that npm would publish
+pack-python-lsp:
+    npm run pack:python-lsp
+
 # Preview the retry package that npm would publish
 pack-retry:
     npm run pack:retry
@@ -86,6 +92,10 @@ try-firecrawl:
 try-goal:
     pi -e ./extensions/pi-goal
 
+# Try python-lsp from this working tree as a temporary pi package
+try-python-lsp:
+    pi -e ./extensions/pi-python-lsp
+
 # Try retry from this working tree as a temporary pi package
 try-retry:
     pi -e ./extensions/pi-retry
@@ -105,6 +115,10 @@ install-firecrawl:
 # Install the published goal package through pi
 install-goal:
     pi install npm:{{goal}}
+
+# Install python-lsp through pi, falling back to the local workspace if unpublished
+install-python-lsp:
+    if npm view {{python_lsp}} version >/dev/null 2>&1; then pi install npm:{{python_lsp}}; else echo "{{python_lsp}} is not published; installing local workspace package instead."; pi install ./extensions/pi-python-lsp; fi
 
 # Install the published retry package through pi
 install-retry:
@@ -130,6 +144,11 @@ publish-firecrawl otp="":
 publish-goal otp="":
     version="$(node -p "require('./extensions/pi-goal/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{goal}}@"$version" version >/dev/null 2>&1; then echo "{{goal}}@$version already exists; skipping publish."; else npm --workspace {{goal}} pack --dry-run; npm --workspace {{goal}} publish --access public $otp_arg; fi
 
+# Publish python-lsp to npm, skipping if the current version already exists
+# Usage with 2FA: just publish-python-lsp 123456
+publish-python-lsp otp="":
+    version="$(node -p "require('./extensions/pi-python-lsp/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{python_lsp}}@"$version" version >/dev/null 2>&1; then echo "{{python_lsp}}@$version already exists; skipping publish."; else npm --workspace {{python_lsp}} pack --dry-run; npm --workspace {{python_lsp}} publish --access public $otp_arg; fi
+
 # Publish retry to npm, skipping if the current version already exists
 # Usage with 2FA: just publish-retry 123456
 publish-retry otp="":
@@ -142,6 +161,7 @@ publish-all otp="":
     just publish-chrome-devtools {{otp}}
     just publish-firecrawl {{otp}}
     just publish-goal {{otp}}
+    just publish-python-lsp {{otp}}
     just publish-retry {{otp}}
 
 # Install all published extension packages through pi
@@ -150,6 +170,7 @@ install-all:
     just install-chrome-devtools
     just install-firecrawl
     just install-goal
+    just install-python-lsp
     just install-retry
 
 # Bump one workspace package without creating a git tag

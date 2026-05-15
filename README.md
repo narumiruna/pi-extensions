@@ -10,6 +10,7 @@ Monorepo for independently installable Pi extension packages.
 | `@narumitw/pi-chrome-devtools` | [`extensions/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | `pi install npm:@narumitw/pi-chrome-devtools` |
 | `@narumitw/pi-firecrawl` | [`extensions/pi-firecrawl`](./extensions/pi-firecrawl) | `pi install npm:@narumitw/pi-firecrawl` |
 | `@narumitw/pi-goal` | [`extensions/pi-goal`](./extensions/pi-goal) | `pi install npm:@narumitw/pi-goal` |
+| `@narumitw/pi-python-lsp` | [`extensions/pi-python-lsp`](./extensions/pi-python-lsp) | `pi install npm:@narumitw/pi-python-lsp` |
 | `@narumitw/pi-retry` | [`extensions/pi-retry`](./extensions/pi-retry) | `pi install npm:@narumitw/pi-retry` |
 
 ## Local development
@@ -27,6 +28,7 @@ pi -e ./extensions/pi-caffeinate
 pi -e ./extensions/pi-chrome-devtools
 pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-goal
+pi -e ./extensions/pi-python-lsp
 pi -e ./extensions/pi-retry
 ```
 
@@ -37,6 +39,7 @@ npm run pack:caffeinate
 npm run pack:chrome-devtools
 npm run pack:firecrawl
 npm run pack:goal
+npm run pack:python-lsp
 npm run pack:retry
 ```
 
@@ -47,5 +50,6 @@ cd extensions/pi-caffeinate && npm publish --access public
 cd extensions/pi-chrome-devtools && npm publish --access public
 cd extensions/pi-firecrawl && npm publish --access public
 cd extensions/pi-goal && npm publish --access public
+cd extensions/pi-python-lsp && npm publish --access public
 cd extensions/pi-retry && npm publish --access public
 ```

@@ -15,8 +15,8 @@ Run commands from the repository root unless noted otherwise.
 - Full verification: `npm run check` or `just check`
 - Format with Biome: `npm run format` or `just format`
 - Typecheck all workspaces: `npm run typecheck`
-- Preview npm package contents: `just pack-caffeinate`, `just pack-chrome-devtools`, `just pack-firecrawl`, `just pack-goal`, or `just pack-retry`
-- Try a local extension without installing: `just try-caffeinate`, `just try-chrome-devtools`, `just try-firecrawl`, `just try-goal`, or `just try-retry`
+- Preview npm package contents: `just pack-caffeinate`, `just pack-chrome-devtools`, `just pack-firecrawl`, `just pack-goal`, `just pack-python-lsp`, or `just pack-retry`
+- Try a local extension without installing: `just try-caffeinate`, `just try-chrome-devtools`, `just try-firecrawl`, `just try-goal`, `just try-python-lsp`, or `just try-retry`
 - Inspect available recipes before adding new workflow commands: `just --list`
 
 ## Code style
