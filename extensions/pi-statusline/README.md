@@ -2,8 +2,6 @@
 
 A public [pi](https://pi.dev) extension package that replaces Pi's footer with a beautiful, information-rich statusline.
 
-The extension is display-only: it does not intercept prompts or register customization commands.
-
 ## Install
 
 ```bash
