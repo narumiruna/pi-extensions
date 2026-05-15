@@ -1,0 +1,39 @@
+{
+	"name": "@narumitw/pi-firecrawl",
+	"version": "0.1.3",
+	"description": "Pi extension that exposes Firecrawl web scraping and crawling tools.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"firecrawl",
+		"scrape",
+		"crawl"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/firecrawl.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"typebox": "^1.1.37"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@mariozechner/pi-coding-agent": "0.73.0",
+		"typescript": "6.0.3"
+	}
+}

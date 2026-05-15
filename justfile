@@ -2,6 +2,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 caffeinate := "@narumitw/pi-caffeinate"
 chrome_devtools := "@narumitw/pi-chrome-devtools"
+firecrawl := "@narumitw/pi-firecrawl"
 goal := "@narumitw/pi-goal"
 retry := "@narumitw/pi-retry"
 
@@ -39,6 +40,7 @@ doctor package="@narumitw/pi-chrome-devtools":
 doctor-all:
     just doctor {{caffeinate}}
     just doctor {{chrome_devtools}}
+    just doctor {{firecrawl}}
     just doctor {{goal}}
     just doctor {{retry}}
 
@@ -56,6 +58,10 @@ pack-caffeinate:
 pack-chrome-devtools:
     npm run pack:chrome-devtools
 
+# Preview the firecrawl package that npm would publish
+pack-firecrawl:
+    npm run pack:firecrawl
+
 # Preview the goal package that npm would publish
 pack-goal:
     npm run pack:goal
@@ -72,6 +78,10 @@ try-caffeinate:
 try-chrome-devtools:
     pi -e ./extensions/pi-chrome-devtools
 
+# Try firecrawl from this working tree as a temporary pi package
+try-firecrawl:
+    pi -e ./extensions/pi-firecrawl
+
 # Try goal from this working tree as a temporary pi package
 try-goal:
     pi -e ./extensions/pi-goal
@@ -87,6 +97,10 @@ install-caffeinate:
 # Install chrome-devtools through pi, falling back to the local workspace if unpublished
 install-chrome-devtools:
     if npm view {{chrome_devtools}} version >/dev/null 2>&1; then pi install npm:{{chrome_devtools}}; else echo "{{chrome_devtools}} is not published; installing local workspace package instead."; pi install ./extensions/pi-chrome-devtools; fi
+
+# Install firecrawl through pi, falling back to the local workspace if unpublished
+install-firecrawl:
+    if npm view {{firecrawl}} version >/dev/null 2>&1; then pi install npm:{{firecrawl}}; else echo "{{firecrawl}} is not published; installing local workspace package instead."; pi install ./extensions/pi-firecrawl; fi
 
 # Install the published goal package through pi
 install-goal:
@@ -106,6 +120,11 @@ publish-caffeinate otp="":
 publish-chrome-devtools otp="":
     version="$(node -p "require('./extensions/pi-chrome-devtools/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{chrome_devtools}}@"$version" version >/dev/null 2>&1; then echo "{{chrome_devtools}}@$version already exists; skipping publish."; else npm --workspace {{chrome_devtools}} pack --dry-run; npm --workspace {{chrome_devtools}} publish --access public $otp_arg; fi
 
+# Publish firecrawl to npm, skipping if the current version already exists
+# Usage with 2FA: just publish-firecrawl 123456
+publish-firecrawl otp="":
+    version="$(node -p "require('./extensions/pi-firecrawl/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{firecrawl}}@"$version" version >/dev/null 2>&1; then echo "{{firecrawl}}@$version already exists; skipping publish."; else npm --workspace {{firecrawl}} pack --dry-run; npm --workspace {{firecrawl}} publish --access public $otp_arg; fi
+
 # Publish goal to npm, skipping if the current version already exists
 # Usage with 2FA: just publish-goal 123456
 publish-goal otp="":
@@ -121,6 +140,7 @@ publish-retry otp="":
 publish-all otp="":
     just publish-caffeinate {{otp}}
     just publish-chrome-devtools {{otp}}
+    just publish-firecrawl {{otp}}
     just publish-goal {{otp}}
     just publish-retry {{otp}}
 
@@ -128,6 +148,7 @@ publish-all otp="":
 install-all:
     just install-caffeinate
     just install-chrome-devtools
+    just install-firecrawl
     just install-goal
     just install-retry
 
