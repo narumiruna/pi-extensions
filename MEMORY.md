@@ -7,9 +7,8 @@
 - For sleep-inhibitor extensions on WSL, prefer Windows `powershell.exe` with `SetThreadExecutionState`; `systemd-inhibit` may exist but fail without a usable systemd/logind session.
 - When testing TypeScript extensions via direct Node import, avoid parameter properties; Node's strip-only TypeScript loader rejects them even though `tsc` accepts them.
 - ty/ruff LSP servers may request `workspace/configuration`; respond with per-item empty config objects or diagnostic requests can hang.
-- For natural-language statusline parsing, avoid segment keywords that overlap control phrases (`statusline` vs `status`, `turn off` vs `turn`) or direct input gets misclassified.
+- For statusline slash-command parsing, avoid segment keywords that overlap control phrases (`statusline` vs `status`, `turn off` vs `turn`).
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.
-- Direct statusline input interception should stay short/single-line; long prompts that mention statusline must pass through to the agent to avoid feeling swallowed.
 
 ## TASTE
 

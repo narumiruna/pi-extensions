@@ -214,20 +214,23 @@ export default function statusline(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("input", (event, ctx) => {
-		if (event.source === "extension") return;
+	pi.registerCommand("statusline", {
+		description: "Customize the footer/statusline. Usage: /statusline <request>",
+		handler: async (args, ctx) => {
+			const request = args.trim();
+			if (!request) {
+				ctx.ui.notify(`Usage: /statusline <request>\n${summarizeConfig(config, [])}`, "info");
+				return;
+			}
 
-		const request = getDirectStatuslineRequest(event.text);
-		if (!request) return;
+			if (isStatuslineShowRequest(request)) {
+				ctx.ui.notify(summarizeConfig(config, []), "info");
+				return;
+			}
 
-		if (isStatuslineShowRequest(request)) {
-			ctx.ui.notify(summarizeConfig(config, []), "info");
-			return { action: "handled" as const };
-		}
-
-		const result = applyRequest(request, ctx);
-		ctx.ui.notify(summarizeConfig(result.config, result.changes), "info");
-		return { action: "handled" as const };
+			const result = applyRequest(request, ctx);
+			ctx.ui.notify(summarizeConfig(result.config, result.changes), "info");
+		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -429,111 +432,14 @@ function applyNaturalLanguageRequest(
 
 const SHOW_WORDS = ["show", "add", "include", "with", "display", "顯示", "加入", "包含"];
 const HIDE_WORDS = ["hide", "remove", "without", "no ", "omit", "隱藏", "移除", "不要", "沒有"];
-const STATUSLINE_NOUNS = [
-	"statusline",
-	"status line",
-	"status bar",
-	"footer",
-	"bottom bar",
-	"狀態列",
-	"狀態欄",
-	"底部列",
-	"頁尾",
-];
-const STATUSLINE_ACTIONS = [
-	"make",
-	"set",
-	"change",
-	"customize",
-	"customise",
-	"style",
-	"show",
-	"hide",
-	"add",
-	"remove",
-	"enable",
-	"disable",
-	"turn on",
-	"turn off",
-	"reset",
-	"beautiful",
-	"pretty",
-	"minimal",
-	"compact",
-	"rainbow",
-	"powerline",
-	"改",
-	"設定",
-	"美化",
-	"顯示",
-	"隱藏",
-	"加入",
-	"移除",
-	"啟用",
-	"停用",
-	"開啟",
-	"關閉",
-	"重設",
-	"漂亮",
-	"極簡",
-];
-const STATUSLINE_QUESTION_WORDS = [
-	"how do",
-	"how to",
-	"what is",
-	"what are",
-	"where",
-	"why",
-	"explain",
-	"document",
-	"docs",
-	"如何",
-	"什麼",
-	"哪裡",
-	"哪個",
-	"為什麼",
-	"作用",
-	"用途",
-	"解釋",
-	"說明",
-	"介紹",
-	"文件",
-];
-const MAX_DIRECT_STATUSLINE_REQUEST_LENGTH = 240;
-
-function getDirectStatuslineRequest(text: string): string | undefined {
-	const request = text.trim();
-	if (!request || request.startsWith("/")) return undefined;
-
-	// Direct input interception is only for short, obvious customization commands.
-	// Longer or multi-line prompts should continue to the agent so they do not feel swallowed.
-	if (request.includes("\n") || request.length > MAX_DIRECT_STATUSLINE_REQUEST_LENGTH) {
-		return undefined;
-	}
-
-	const lower = request.toLowerCase();
-	if (!hasAny(lower, STATUSLINE_NOUNS)) return undefined;
-	if (hasAny(lower, STATUSLINE_QUESTION_WORDS)) return undefined;
-	if (!hasStatuslineAction(lower) && getMentionedSegments(lower).length === 0) return undefined;
-
-	return request;
-}
-
-function hasStatuslineAction(text: string): boolean {
-	return (
-		hasAny(text, STATUSLINE_ACTIONS) ||
-		hasStandaloneWord(text, "on") ||
-		hasStandaloneWord(text, "off")
-	);
-}
 
 function isStatuslineShowRequest(request: string): boolean {
 	const lower = request.toLowerCase().trim();
-	if (!hasAny(lower, STATUSLINE_NOUNS)) return false;
+	if (!lower) return false;
 	if (hasAny(lower, ["config", "configuration", "current", "目前", "現在", "設定值"])) {
 		return true;
 	}
-	return /^(show|display)\s+(the\s+)?(statusline|status line|footer)(\s+status)?$/i.test(lower);
+	return /^(show|display)(\s+(the\s+)?(statusline|status line|footer)(\s+status)?)?$/i.test(lower);
 }
 
 function detectPreset(text: string): PresetName | undefined {
