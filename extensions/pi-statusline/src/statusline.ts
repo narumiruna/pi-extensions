@@ -253,41 +253,47 @@ function buildSegment(
 		case "brand":
 			return { name, text: "π", color: "accent", emphasis: true };
 		case "model":
-			return labeled(name, shortenModel(ctx.model?.id ?? "no-model"), color, config);
+			return labeled(name, `🤖 ${shortenModel(ctx.model?.id ?? "no-model")}`, color, config);
 		case "thinking":
-			return labeled(name, runtime.thinkingLevel, thinkingColor(runtime.thinkingLevel), config);
+			return labeled(
+				name,
+				`🧠 ${runtime.thinkingLevel}`,
+				thinkingColor(runtime.thinkingLevel),
+				config,
+			);
 		case "branch":
-			return labeled(name, footerData.getGitBranch() ?? "no-git", color, config);
+			return labeled(name, `🌿 ${footerData.getGitBranch() ?? "no-git"}`, color, config);
 		case "cwd":
-			return labeled(name, basename(ctx.cwd) || ctx.cwd, color, config);
+			return labeled(name, `📁 ${basename(ctx.cwd) || ctx.cwd}`, color, config);
 		case "tools":
 			return labeled(name, formatToolActivity(runtime), color, config);
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const value =
 				usage?.percent === null || usage?.percent === undefined
-					? "ctx ?"
-					: `ctx ${usage.percent.toFixed(0)}%`;
+					? "🪟 ctx ?"
+					: `🪟 ctx ${usage.percent.toFixed(0)}%`;
 			return labeled(name, value, contextColor(usage?.percent), config);
 		}
 		case "tokens": {
 			const totals = getTokenTotals(ctx);
-			if (totals.input === 0 && totals.output === 0) return labeled(name, "tok 0", color, config);
+			if (totals.input === 0 && totals.output === 0)
+				return labeled(name, "🔢 tok 0", color, config);
 			return labeled(
 				name,
-				`↑${formatCount(totals.input)} ↓${formatCount(totals.output)}`,
+				`🔢 ↑${formatCount(totals.input)} ↓${formatCount(totals.output)}`,
 				color,
 				config,
 			);
 		}
 		case "cost": {
 			const totals = getTokenTotals(ctx);
-			return labeled(name, `$${totals.cost.toFixed(totals.cost >= 1 ? 2 : 3)}`, color, config);
+			return labeled(name, `💸 $${totals.cost.toFixed(totals.cost >= 1 ? 2 : 3)}`, color, config);
 		}
 		case "time":
-			return labeled(name, formatTime(), color, config);
+			return labeled(name, `🕒 ${formatTime()}`, color, config);
 		case "turn":
-			return labeled(name, `#${runtime.turnCount}`, color, config);
+			return labeled(name, `🔁 #${runtime.turnCount}`, color, config);
 	}
 }
 
@@ -377,9 +383,9 @@ function formatToolActivity(runtime: RuntimeState): string {
 		return `⚙ ${name}${suffix}`;
 	}
 
-	if (runtime.isStreaming) return "thinking";
-	if (runtime.lastCompletedTool) return `✓ ${runtime.lastCompletedTool}`;
-	return "idle";
+	if (runtime.isStreaming) return "💭 thinking";
+	if (runtime.lastCompletedTool) return `✅ ${runtime.lastCompletedTool}`;
+	return "💤 idle";
 }
 
 function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: Theme): string {
@@ -388,12 +394,20 @@ function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: T
 		.filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0)
 		.slice(0, 3)
 		.map(([key, value]) => {
-			const label = theme.fg("dim", `${key}: `);
+			const label = theme.fg("dim", `${extensionIcon(key)} ${key}: `);
 			const text = truncateToWidth(simplifyExtensionStatus(key, value), 24, "…");
 			return `${label}${text}`;
 		});
 
 	return visibleStatuses.join(separator);
+}
+
+function extensionIcon(key: string): string {
+	if (key.includes("caffeinate")) return "☕";
+	if (key.includes("chrome") || key.includes("devtools") || key === "cdp") return "🌐";
+	if (key.includes("firecrawl")) return "🔥";
+	if (key.includes("goal")) return "🎯";
+	return "🔌";
 }
 
 function simplifyExtensionStatus(key: string, value: string): string {
