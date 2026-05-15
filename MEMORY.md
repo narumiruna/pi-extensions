@@ -9,6 +9,7 @@
 - ty/ruff LSP servers may request `workspace/configuration`; respond with per-item empty config objects or diagnostic requests can hang.
 - For natural-language statusline parsing, avoid segment keywords that overlap control phrases (`statusline` vs `status`, `turn off` vs `turn`) or direct input gets misclassified.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.
+- Direct statusline input interception should stay short/single-line; long prompts that mention statusline must pass through to the agent to avoid feeling swallowed.
 
 ## TASTE
 

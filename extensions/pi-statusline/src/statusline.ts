@@ -481,19 +481,35 @@ const STATUSLINE_QUESTION_WORDS = [
 	"how do",
 	"how to",
 	"what is",
+	"what are",
+	"where",
 	"why",
 	"explain",
 	"document",
 	"docs",
 	"如何",
-	"什麼是",
+	"什麼",
+	"哪裡",
+	"哪個",
+	"為什麼",
+	"作用",
+	"用途",
 	"解釋",
+	"說明",
+	"介紹",
 	"文件",
 ];
+const MAX_DIRECT_STATUSLINE_REQUEST_LENGTH = 240;
 
 function getDirectStatuslineRequest(text: string): string | undefined {
 	const request = text.trim();
 	if (!request || request.startsWith("/")) return undefined;
+
+	// Direct input interception is only for short, obvious customization commands.
+	// Longer or multi-line prompts should continue to the agent so they do not feel swallowed.
+	if (request.includes("\n") || request.length > MAX_DIRECT_STATUSLINE_REQUEST_LENGTH) {
+		return undefined;
+	}
 
 	const lower = request.toLowerCase();
 	if (!hasAny(lower, STATUSLINE_NOUNS)) return undefined;
