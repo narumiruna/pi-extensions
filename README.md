@@ -12,6 +12,7 @@ Monorepo for independently installable Pi extension packages.
 | `@narumitw/pi-goal` | [`extensions/pi-goal`](./extensions/pi-goal) | `pi install npm:@narumitw/pi-goal` |
 | `@narumitw/pi-python-lsp` | [`extensions/pi-python-lsp`](./extensions/pi-python-lsp) | `pi install npm:@narumitw/pi-python-lsp` |
 | `@narumitw/pi-retry` | [`extensions/pi-retry`](./extensions/pi-retry) | `pi install npm:@narumitw/pi-retry` |
+| `@narumitw/pi-statusline` | [`extensions/pi-statusline`](./extensions/pi-statusline) | `pi install npm:@narumitw/pi-statusline` |
 
 ## Local development
 
@@ -30,6 +31,7 @@ pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-goal
 pi -e ./extensions/pi-python-lsp
 pi -e ./extensions/pi-retry
+pi -e ./extensions/pi-statusline
 ```
 
 Preview package contents:
@@ -41,6 +43,7 @@ npm run pack:firecrawl
 npm run pack:goal
 npm run pack:python-lsp
 npm run pack:retry
+npm run pack:statusline
 ```
 
 Publish packages from their package directories:
@@ -52,4 +55,5 @@ cd extensions/pi-firecrawl && npm publish --access public
 cd extensions/pi-goal && npm publish --access public
 cd extensions/pi-python-lsp && npm publish --access public
 cd extensions/pi-retry && npm publish --access public
+cd extensions/pi-statusline && npm publish --access public
 ```

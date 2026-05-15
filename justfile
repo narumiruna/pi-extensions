@@ -6,6 +6,7 @@ firecrawl := "@narumitw/pi-firecrawl"
 goal := "@narumitw/pi-goal"
 python_lsp := "@narumitw/pi-python-lsp"
 retry := "@narumitw/pi-retry"
+statusline := "@narumitw/pi-statusline"
 
 # Show available commands
 default:
@@ -45,6 +46,7 @@ doctor-all:
     just doctor {{goal}}
     just doctor {{python_lsp}}
     just doctor {{retry}}
+    just doctor {{statusline}}
 
 # Make a scoped npm package public after publish if npm registry returns 404
 # Usage: just npm-public @narumitw/pi-goal 123456
@@ -76,6 +78,10 @@ pack-python-lsp:
 pack-retry:
     npm run pack:retry
 
+# Preview the statusline package that npm would publish
+pack-statusline:
+    npm run pack:statusline
+
 # Try caffeinate from this working tree as a temporary pi package
 try-caffeinate:
     pi -e ./extensions/pi-caffeinate
@@ -100,6 +106,10 @@ try-python-lsp:
 try-retry:
     pi -e ./extensions/pi-retry
 
+# Try statusline from this working tree as a temporary pi package
+try-statusline:
+    pi -e ./extensions/pi-statusline
+
 # Install caffeinate through pi, falling back to the local workspace if unpublished
 install-caffeinate:
     if npm view {{caffeinate}} version >/dev/null 2>&1; then pi install npm:{{caffeinate}}; else echo "{{caffeinate}} is not published; installing local workspace package instead."; pi install ./extensions/pi-caffeinate; fi
@@ -123,6 +133,10 @@ install-python-lsp:
 # Install the published retry package through pi
 install-retry:
     pi install npm:{{retry}}
+
+# Install statusline through pi, falling back to the local workspace if unpublished
+install-statusline:
+    if npm view {{statusline}} version >/dev/null 2>&1; then pi install npm:{{statusline}}; else echo "{{statusline}} is not published; installing local workspace package instead."; pi install ./extensions/pi-statusline; fi
 
 # Publish caffeinate to npm, skipping if the current version already exists
 # Usage with 2FA: just publish-caffeinate 123456
@@ -154,6 +168,11 @@ publish-python-lsp otp="":
 publish-retry otp="":
     version="$(node -p "require('./extensions/pi-retry/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{retry}}@"$version" version >/dev/null 2>&1; then echo "{{retry}}@$version already exists; skipping publish."; else npm --workspace {{retry}} pack --dry-run; npm --workspace {{retry}} publish --access public $otp_arg; fi
 
+# Publish statusline to npm, skipping if the current version already exists
+# Usage with 2FA: just publish-statusline 123456
+publish-statusline otp="":
+    version="$(node -p "require('./extensions/pi-statusline/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{statusline}}@"$version" version >/dev/null 2>&1; then echo "{{statusline}}@$version already exists; skipping publish."; else npm --workspace {{statusline}} pack --dry-run; npm --workspace {{statusline}} publish --access public $otp_arg; fi
+
 # Publish all extension packages to npm
 # Usage with 2FA: just publish-all 123456
 publish-all otp="":
@@ -163,6 +182,7 @@ publish-all otp="":
     just publish-goal {{otp}}
     just publish-python-lsp {{otp}}
     just publish-retry {{otp}}
+    just publish-statusline {{otp}}
 
 # Install all published extension packages through pi
 install-all:
@@ -172,6 +192,7 @@ install-all:
     just install-goal
     just install-python-lsp
     just install-retry
+    just install-statusline
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch
