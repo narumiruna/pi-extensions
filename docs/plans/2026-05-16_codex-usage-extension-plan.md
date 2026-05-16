@@ -1,3 +1,7 @@
+## Status
+
+完成。實作已在 PR #24（`feat/codex-usage-extension`）中送出，包含 `/codex-status`、`openai-codex` model 自動 statusline、Pi auth direct backend、Codex app-server fallback、README/root metadata、local install 與 package verification。
+
 ## Goal
 
 建立一個新的 Pi extension package，讓使用者可在 Pi 中查看目前 Codex ChatGPT/subscription 使用量，效果接近在 Codex TUI 輸入 `/status` 時看到的 rate limit、reset time、credits 與 plan 資訊。
@@ -73,12 +77,12 @@ extensions/pi-codex-usage/
 - API key auth 不會回傳 Codex subscription usage；direct backend path 只對 ChatGPT/Codex bearer auth 有意義。
 - Pi extension package 可在 command handler 中短暫 spawn 子程序並在完成後清理，但這只是 fallback，不是必要條件。
 
-## Unknowns
+## Resolved Findings
 
-- 已初步驗證：用 Pi `~/.pi/agent/auth.json` 中的 `openai-codex` access token 直接呼叫 `https://chatgpt.com/backend-api/wham/usage` 會回 `200 OK`，且 payload 包含 `plan_type`、`rate_limit.primary_window`、`rate_limit.secondary_window`、`additional_rate_limits`、`credits`。仍需在 extension 內驗證 `ctx.modelRegistry.getApiKeyAndHeaders(ctx.model)` 是否能取得同等 token/headers。
-- 已初步驗證：direct backend response 對齊 Codex `RateLimitStatusPayload` 的 snake_case 欄位；仍需以 runtime schema guard 接受可用欄位並回報 unsupported payload。
-- 本機安裝的 Codex CLI 版本是否穩定支援 `codex app-server --listen stdio://`；僅 fallback 需要在實作初期用 `codex app-server --help` 或文件對照確認。
-- Pi command 的最佳呈現方式是 `ctx.ui.notify`、`ctx.ui.custom` modal，或 custom message renderer；MVP 可先用 notify/簡短 modal，後續再調整 UX。
+- Pi `openai-codex` auth 可透過 `ctx.modelRegistry.getApiKeyAndHeaders(...)` 取得 bearer token，並成功呼叫 `https://chatgpt.com/backend-api/wham/usage`。
+- Direct backend response 對齊 Codex `RateLimitStatusPayload` snake_case 欄位；實作已加入 runtime parsing/normalization，將 direct backend 與 app-server response 轉成同一個 internal snapshot。
+- 本機 Codex CLI `codex app-server --listen stdio://` fallback 已對照 help/protocol 文件，並以 smoke test 驗證可回傳 usage。
+- MVP 呈現方式定案：`/codex-status` 用 `ctx.ui.notify` 顯示完整摘要；當目前 model provider 是 `openai-codex` 時，用 `ctx.ui.setStatus` 顯示 compact statusline，切換 away 時清除。
 
 ## Plan
 

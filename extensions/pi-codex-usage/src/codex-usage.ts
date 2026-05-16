@@ -906,8 +906,10 @@ function formatPlanType(planType: string): string {
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "_");
 	if (key === "pro_lite" || key === "prolite") return "Pro Lite";
-	if (key === "team" || key === "self_serve_business_usage_based") return "Business";
-	if (key === "business" || key === "enterprise_cbp_usage_based") return "Enterprise";
+	if (key === "team" || key === "self_serve_business_usage_based" || key === "business") {
+		return "Business";
+	}
+	if (key === "enterprise_cbp_usage_based") return "Enterprise";
 
 	const normalized = planType
 		.replace(/([a-z])([A-Z])/g, "$1 $2")
