@@ -133,7 +133,8 @@ npm publish --workspace @narumitw/pi-subagents --access public
 ```txt
 extensions/
 ├── deprecated/
-│   └── pi-auto-thinking/
+│   ├── pi-auto-thinking/
+│   └── pi-sidebar/
 ├── pi-biome-lsp/
 ├── pi-btw/
 ├── pi-caffeinate/
