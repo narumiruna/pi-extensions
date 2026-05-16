@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-biome-lsp",
-	"version": "0.1.15",
+	"version": "0.1.16",
 	"description": "Pi extension that exposes Biome language-server tools for diagnostics, formatting, and fixes.",
 	"type": "module",
 	"license": "MIT",
