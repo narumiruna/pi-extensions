@@ -18,6 +18,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-python-lsp`](./extensions/pi-python-lsp) | 🐍 Python language-server tools for ty type diagnostics and Ruff linting, formatting, and fixes. | `pi install npm:@narumitw/pi-python-lsp` |
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for provider responses that fail with `Unknown error (no error details in response)`. | `pi install npm:@narumitw/pi-retry` |
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
+| [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
 
 ## 🚀 Quick start
 
@@ -57,6 +58,10 @@ Use [`@narumitw/pi-python-lsp`](./extensions/pi-python-lsp) to let Pi run Python
 
 Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation, debugging, refactoring, and verification tasks where the agent should continue past planning and call `goal_complete` only after the goal is done.
 
+### 🤖 Delegated subagents
+
+Use [`@narumitw/pi-subagents`](./extensions/pi-subagents) when you want the Pi agent to delegate scouting, planning, review, or implementation work to isolated worker processes with single, parallel, or chained execution.
+
 ### ✨ Better agent ergonomics
 
 Use [`@narumitw/pi-btw`](./extensions/pi-btw), [`@narumitw/pi-caffeinate`](./extensions/pi-caffeinate), [`@narumitw/pi-retry`](./extensions/pi-retry), and [`@narumitw/pi-statusline`](./extensions/pi-statusline) to improve day-to-day Pi coding agent sessions with side questions, sleep prevention, automatic retry hints, and a more informative terminal UI.
@@ -86,6 +91,7 @@ pi -e ./extensions/pi-goal
 pi -e ./extensions/pi-python-lsp
 pi -e ./extensions/pi-retry
 pi -e ./extensions/pi-statusline
+pi -e ./extensions/pi-subagents
 ```
 
 Preview npm package contents before publishing:
@@ -99,6 +105,7 @@ npm run pack:goal
 npm run pack:python-lsp
 npm run pack:retry
 npm run pack:statusline
+npm run pack:subagents
 ```
 
 ## 🗂️ Repository structure
@@ -112,7 +119,8 @@ extensions/
 ├── pi-goal/
 ├── pi-python-lsp/
 ├── pi-retry/
-└── pi-statusline/
+├── pi-statusline/
+└── pi-subagents/
 ```
 
 Each extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`.

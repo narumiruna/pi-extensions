@@ -8,6 +8,7 @@ goal := "@narumitw/pi-goal"
 python_lsp := "@narumitw/pi-python-lsp"
 retry := "@narumitw/pi-retry"
 statusline := "@narumitw/pi-statusline"
+subagents := "@narumitw/pi-subagents"
 
 # Show available commands
 default:
@@ -49,6 +50,7 @@ doctor-all:
     just doctor {{python_lsp}}
     just doctor {{retry}}
     just doctor {{statusline}}
+    just doctor {{subagents}}
 
 # Make a scoped npm package public after publish if npm registry returns 404
 # Usage: just npm-public @narumitw/pi-goal 123456
@@ -88,6 +90,10 @@ pack-retry:
 pack-statusline:
     npm run pack:statusline
 
+# Preview the subagents package that npm would publish
+pack-subagents:
+    npm run pack:subagents
+
 # Try btw from this working tree as a temporary pi package
 try-btw:
     pi -e ./extensions/pi-btw
@@ -120,6 +126,10 @@ try-retry:
 try-statusline:
     pi -e ./extensions/pi-statusline
 
+# Try subagents from this working tree as a temporary pi package
+try-subagents:
+    pi -e ./extensions/pi-subagents
+
 # Install btw through pi, falling back to the local workspace if unpublished
 install-btw:
     if npm view {{btw}} version >/dev/null 2>&1; then pi install npm:{{btw}}; else echo "{{btw}} is not published; installing local workspace package instead."; pi install ./extensions/pi-btw; fi
@@ -151,6 +161,10 @@ install-retry:
 # Install statusline through pi, falling back to the local workspace if unpublished
 install-statusline:
     if npm view {{statusline}} version >/dev/null 2>&1; then pi install npm:{{statusline}}; else echo "{{statusline}} is not published; installing local workspace package instead."; pi install ./extensions/pi-statusline; fi
+
+# Install subagents through pi, falling back to the local workspace if unpublished
+install-subagents:
+    if npm view {{subagents}} version >/dev/null 2>&1; then pi install npm:{{subagents}}; else echo "{{subagents}} is not published; installing local workspace package instead."; pi install ./extensions/pi-subagents; fi
 
 # Publish btw to npm, skipping if the current version already exists
 # Usage with 2FA: just publish-btw 123456
@@ -192,6 +206,11 @@ publish-retry otp="":
 publish-statusline otp="":
     version="$(node -p "require('./extensions/pi-statusline/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{statusline}}@"$version" version >/dev/null 2>&1; then echo "{{statusline}}@$version already exists; skipping publish."; else npm --workspace {{statusline}} pack --dry-run; npm --workspace {{statusline}} publish --access public $otp_arg; fi
 
+# Publish subagents to npm, skipping if the current version already exists
+# Usage with 2FA: just publish-subagents 123456
+publish-subagents otp="":
+    version="$(node -p "require('./extensions/pi-subagents/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{subagents}}@"$version" version >/dev/null 2>&1; then echo "{{subagents}}@$version already exists; skipping publish."; else npm --workspace {{subagents}} pack --dry-run; npm --workspace {{subagents}} publish --access public $otp_arg; fi
+
 # Publish all extension packages to npm
 # Usage with 2FA: just publish-all 123456
 publish-all otp="":
@@ -203,6 +222,7 @@ publish-all otp="":
     just publish-python-lsp {{otp}}
     just publish-retry {{otp}}
     just publish-statusline {{otp}}
+    just publish-subagents {{otp}}
 
 # Install all published extension packages through pi
 install-all:
@@ -214,6 +234,7 @@ install-all:
     just install-python-lsp
     just install-retry
     just install-statusline
+    just install-subagents
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch

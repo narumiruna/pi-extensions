@@ -20,7 +20,8 @@
 		"pack:goal": "npm --workspace @narumitw/pi-goal pack --dry-run",
 		"pack:python-lsp": "npm --workspace @narumitw/pi-python-lsp pack --dry-run",
 		"pack:retry": "npm --workspace @narumitw/pi-retry pack --dry-run",
-		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run"
+		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run",
+		"pack:subagents": "npm --workspace @narumitw/pi-subagents pack --dry-run"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.14",
