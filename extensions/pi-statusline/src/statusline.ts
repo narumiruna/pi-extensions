@@ -1,4 +1,6 @@
-import { basename } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import process from "node:process";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -38,11 +40,18 @@ interface StatuslineConfig {
 interface RuntimeState {
 	turnCount: number;
 	activeTools: Map<string, number>;
+	activeSubagents: Map<string, SubagentActivity>;
 	lastTool?: string;
 	lastCompletedTool?: string;
 	isStreaming: boolean;
 	thinkingLevel: ThinkingLevel;
+	duplicateExtensions: string[];
 	requestRender?: () => void;
+}
+
+interface SubagentActivity {
+	mode: string;
+	count: number;
 }
 
 interface TokenTotals {
@@ -89,14 +98,17 @@ export default function statusline(pi: ExtensionAPI) {
 	const runtime: RuntimeState = {
 		turnCount: 0,
 		activeTools: new Map(),
+		activeSubagents: new Map(),
 		isStreaming: false,
 		thinkingLevel: "off",
+		duplicateExtensions: [],
 	};
 
 	const refresh = () => runtime.requestRender?.();
 
 	const installFooter = (ctx: ExtensionContext) => {
 		ctx.ui.setStatus(STATUSLINE_KEY, undefined);
+		runtime.duplicateExtensions = findDuplicateExtensions(ctx.cwd);
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			runtime.requestRender = () => tui.requestRender();
 
@@ -111,7 +123,7 @@ export default function statusline(pi: ExtensionAPI) {
 				invalidate() {},
 				render(width: number): string[] {
 					const lines = [renderStatusline(width, ctx, footerData, theme, config, runtime)];
-					const extensionStatusLine = renderExtensionStatusline(width, footerData, theme);
+					const extensionStatusLine = renderExtensionStatusline(width, footerData, theme, runtime);
 					if (extensionStatusLine) lines.push(extensionStatusLine);
 					return lines;
 				},
@@ -163,6 +175,9 @@ export default function statusline(pi: ExtensionAPI) {
 	pi.on("tool_execution_start", (event) => {
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		runtime.activeTools.set(event.toolName, currentCount + 1);
+		if (event.toolName === "subagent") {
+			runtime.activeSubagents.set(event.toolCallId, parseSubagentActivity(event.args));
+		}
 		runtime.lastTool = event.toolName;
 		refresh();
 	});
@@ -171,6 +186,7 @@ export default function statusline(pi: ExtensionAPI) {
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		if (currentCount <= 1) runtime.activeTools.delete(event.toolName);
 		else runtime.activeTools.set(event.toolName, currentCount - 1);
+		if (event.toolName === "subagent") runtime.activeSubagents.delete(event.toolCallId);
 
 		runtime.lastCompletedTool = event.toolName;
 		refresh();
@@ -232,8 +248,9 @@ function renderExtensionStatusline(
 	width: number,
 	footerData: ReadonlyFooterDataProvider,
 	theme: Theme,
+	runtime: RuntimeState,
 ): string | undefined {
-	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme);
+	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme, runtime);
 	if (!status) return undefined;
 
 	return truncateToWidth(status, width, "");
@@ -388,38 +405,159 @@ function formatToolActivity(runtime: RuntimeState): string {
 	return "💤 idle";
 }
 
-function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: Theme): string {
+function formatExtensionStatuses(
+	statuses: ReadonlyMap<string, string>,
+	theme: Theme,
+	runtime: RuntimeState,
+): string {
 	const separator = theme.fg("dim", "  ");
-	const visibleStatuses = [...statuses.entries()]
-		.filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0)
-		.slice(0, 3)
-		.map(([key, value]) => {
-			const label = theme.fg("dim", `${extensionIcon(key)} ${key}: `);
-			const text = truncateToWidth(simplifyExtensionStatus(key, value), 24, "…");
-			return `${label}${text}`;
-		});
+	const visibleStatuses = [
+		...formatSubagentStatus(runtime, theme),
+		...formatDuplicateExtensionStatus(runtime, theme),
+		...[...statuses.entries()]
+			.filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0)
+			.map(([key, value]) => formatExtensionStatus(key, value, theme)),
+	].slice(0, 5);
 
 	return visibleStatuses.join(separator);
 }
 
+function formatExtensionStatus(key: string, value: string, theme: Theme): string {
+	const text = truncateToWidth(simplifyExtensionStatus(key, value), 22, "…");
+	return `${theme.fg(extensionColor(key, value), extensionIcon(key))} ${theme.fg("muted", text)}`;
+}
+
+function formatSubagentStatus(runtime: RuntimeState, theme: Theme): string[] {
+	const activities = [...runtime.activeSubagents.values()];
+	if (activities.length === 0) return [];
+
+	const total = activities.reduce((sum, activity) => sum + activity.count, 0);
+	const mode = activities[0]?.mode ?? "active";
+	const suffix = activities.length > 1 ? ` +${activities.length - 1}` : "";
+	return [`${theme.fg("accent", "🧑‍🤝‍🧑")} ${theme.fg("muted", `${total} ${mode}${suffix}`)}`];
+}
+
+function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): string[] {
+	if (runtime.duplicateExtensions.length === 0) return [];
+	const names = runtime.duplicateExtensions.slice(0, 2).join(", ");
+	const suffix = runtime.duplicateExtensions.length > 2 ? ` +${runtime.duplicateExtensions.length - 2}` : "";
+	return [`${theme.fg("warning", "⚠️")} ${theme.fg("warning", `dup ${names}${suffix}`)}`];
+}
+
 function extensionIcon(key: string): string {
-	if (key.includes("caffeinate")) return "☕";
-	if (key.includes("chrome") || key.includes("devtools") || key === "cdp") return "🌐";
-	if (key.includes("firecrawl")) return "🔥";
-	if (key.includes("goal")) return "🎯";
+	const normalizedKey = key.toLowerCase();
+	if (normalizedKey.includes("biome")) return "🧬";
+	if (normalizedKey.includes("python") || normalizedKey.includes("ruff") || normalizedKey.includes("ty"))
+		return "🐍";
+	if (normalizedKey.includes("subagent")) return "🧑‍🤝‍🧑";
+	if (normalizedKey.includes("caffeinate")) return "☕";
+	if (normalizedKey.includes("chrome") || normalizedKey.includes("devtools") || normalizedKey === "cdp")
+		return "🌐";
+	if (normalizedKey.includes("firecrawl")) return "🔥";
+	if (normalizedKey.includes("goal")) return "🎯";
+	if (normalizedKey.includes("retry")) return "🔁";
 	return "🔌";
+}
+
+function extensionColor(key: string, value: string): ThemeColor {
+	const normalized = `${key} ${value}`.toLowerCase();
+	if (/missing|error|fail|conflict|duplicate/.test(normalized)) return "warning";
+	if (/ready|active|running|enabled|ok/.test(normalized)) return "success";
+	return "muted";
 }
 
 function simplifyExtensionStatus(key: string, value: string): string {
 	return value
 		.trim()
 		.replace(new RegExp(`^${escapeRegExp(key)}\\s*:\\s*`, "iu"), "")
+		.replace(/^python-lsp\s*:\s*/iu, "")
+		.replace(/^biome-lsp\s*:\s*/iu, "")
+		.replace(/\bready\b/giu, "✓")
+		.replace(/\bmissing\b/giu, "✗")
+		.replace(/,\s*/g, " ")
 		.replace(/\s+\([^)]*\)\s*$/, "")
 		.replace(/\s+/g, " ");
 }
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseSubagentActivity(args: unknown): SubagentActivity {
+	const input = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+	const tasks = Array.isArray(input.tasks) ? input.tasks.length : 0;
+	const chain = Array.isArray(input.chain) ? input.chain.length : 0;
+	const hasAggregator = input.aggregator !== undefined;
+
+	if (chain > 0) return { mode: "chain", count: chain };
+	if (tasks > 0 && hasAggregator) return { mode: "fan-in", count: tasks };
+	if (tasks > 0) return { mode: "parallel", count: tasks };
+	return { mode: "single", count: 1 };
+}
+
+function findDuplicateExtensions(cwd: string): string[] {
+	const settingsFiles = [
+		join(process.env.HOME ?? "", ".pi", "agent", "settings.json"),
+		join(cwd, ".pi", "settings.json"),
+	].filter((file) => existsSync(file));
+	const sourcesByPackage = new Map<string, Set<string>>();
+
+	for (const settingsFile of settingsFiles) {
+		for (const source of readPackageSources(settingsFile)) {
+			const packageName = packageNameForSource(source, dirname(settingsFile));
+			if (!packageName) continue;
+			const sources = sourcesByPackage.get(packageName) ?? new Set<string>();
+			sources.add(sourceIdentity(source, dirname(settingsFile)));
+			sourcesByPackage.set(packageName, sources);
+		}
+	}
+
+	return [...sourcesByPackage.entries()]
+		.filter(([, sources]) => sources.size > 1)
+		.map(([packageName]) => packageName.replace(/^@[^/]+\//, "").replace(/^pi-/, ""));
+}
+
+function readPackageSources(settingsFile: string): string[] {
+	try {
+		const settings = JSON.parse(readFileSync(settingsFile, "utf8")) as { packages?: unknown[] };
+		return (settings.packages ?? [])
+			.map((entry) => {
+				if (typeof entry === "string") return entry;
+				if (entry && typeof entry === "object" && typeof (entry as { source?: unknown }).source === "string") {
+					return (entry as { source: string }).source;
+				}
+				return undefined;
+			})
+			.filter((source): source is string => source !== undefined);
+	} catch {
+		return [];
+	}
+}
+
+function packageNameForSource(source: string, baseDirectory: string): string | undefined {
+	if (source.startsWith("npm:")) return npmPackageName(source);
+	const packageJson = join(resolveSourcePath(source, baseDirectory), "package.json");
+	try {
+		const packageData = JSON.parse(readFileSync(packageJson, "utf8")) as { name?: unknown };
+		return typeof packageData.name === "string" ? packageData.name : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function npmPackageName(source: string): string {
+	const spec = source.slice("npm:".length);
+	if (spec.startsWith("@")) return spec.split("@").slice(0, 2).join("@").replace(/^@/, "@");
+	return spec.split("@")[0] ?? spec;
+}
+
+function sourceIdentity(source: string, baseDirectory: string): string {
+	if (source.startsWith("npm:")) return `npm:${npmPackageName(source)}`;
+	return resolveSourcePath(source, baseDirectory);
+}
+
+function resolveSourcePath(source: string, baseDirectory: string): string {
+	return isAbsolute(source) ? source : resolve(baseDirectory, source);
 }
 
 function getTokenTotals(ctx: ExtensionContext): TokenTotals {

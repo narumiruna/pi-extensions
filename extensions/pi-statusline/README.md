@@ -10,7 +10,9 @@ Use it to monitor model selection, thinking level, git branch, working directory
 
 - Replaces the default Pi footer with a compact rich statusline.
 - Shows model, thinking level, git branch, project directory, active tool, context usage, tokens, cost, and clock.
-- Displays statuses from other extensions, such as goal mode.
+- Displays compact icon statuses from other extensions, such as goal mode and LSP readiness.
+- Shows active subagent count and execution mode while `pi-subagents` is running.
+- Warns when the same extension package is installed from multiple sources.
 - Uses emoji-labeled segments for readability.
 - Adapts to terminal width and truncates safely.
 - Requires no configuration.
@@ -48,7 +50,15 @@ The default statusline includes:
 - 💰 estimated cost.
 - 🕒 clock.
 
-Statuses from other extensions, such as goal mode, appear on their own emoji-labeled line below the main statusline and are separated with ``.
+Statuses from other extensions, such as goal mode, appear on their own compact icon line below the main statusline and are separated with ``.
+
+Examples:
+
+- `🎯 active` for goal mode.
+- `🧬 ✓` for Biome LSP readiness.
+- `🐍 ty ✓ ruff ✓` for Python LSP readiness.
+- `🧑‍🤝‍🧑 2 parallel` while subagents are active.
+- `⚠️ dup biome-lsp` when local and npm installs register the same extension.
 
 ## 🧠 Use cases
 
