@@ -20,6 +20,7 @@ const RESET_FOREGROUND = "\x1b[39m";
 
 type UsageSource = "pi-auth" | "codex-app-server";
 type PiModel = NonNullable<ExtensionContext["model"]>;
+export type CodexUsageModel = Pick<PiModel, "id" | "name" | "provider">;
 
 type QueryUsageOptions = {
 	clearStatusline: boolean;
@@ -176,17 +177,21 @@ export default function codexUsage(pi: ExtensionAPI) {
 	const setUsageStatusline = (
 		ctx: ExtensionContext,
 		report: CodexUsageReport,
-		options: { autoRefresh: boolean },
+		options: { autoRefresh: boolean; model: CodexUsageModel | undefined },
 	) => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
 		statuslineClearTimer = undefined;
-		ctx.ui.setStatus(STATUS_KEY, formatCodexUsageStatusline(report));
+		ctx.ui.setStatus(STATUS_KEY, formatCodexUsageStatusline(report, options.model));
 		if (options.autoRefresh) scheduleStatuslineRefresh(ctx);
 		else scheduleTemporaryStatuslineClear(ctx);
 	};
 
-	const refreshCurrentCodexUsageStatusline = async (ctx: ExtensionContext, force: boolean) => {
-		if (!isOpenAICodexModel(ctx.model)) {
+	const refreshCurrentCodexUsageStatusline = async (
+		ctx: ExtensionContext,
+		force: boolean,
+		model = ctx.model,
+	) => {
+		if (!isOpenAICodexModel(model)) {
 			clearUsageStatusline(ctx);
 			return;
 		}
@@ -195,7 +200,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 		statuslineRequestId = requestId;
 		const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
 		if (cached && !force) {
-			setUsageStatusline(ctx, cached.report, { autoRefresh: true });
+			setUsageStatusline(ctx, cached.report, { autoRefresh: true, model });
 			return;
 		}
 
@@ -214,7 +219,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 		}
 
 		cache = { createdAt: Date.now(), report: result.report };
-		setUsageStatusline(ctx, result.report, { autoRefresh: true });
+		setUsageStatusline(ctx, result.report, { autoRefresh: true, model });
 	};
 
 	pi.registerCommand(COMMAND_NAME, {
@@ -235,7 +240,10 @@ export default function codexUsage(pi: ExtensionAPI) {
 			const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
 			if (cached && !options.value.refresh) {
 				if (options.value.statusline) {
-					setUsageStatusline(ctx, cached.report, { autoRefresh: isOpenAICodexModel(ctx.model) });
+					setUsageStatusline(ctx, cached.report, {
+						autoRefresh: isOpenAICodexModel(ctx.model),
+						model: ctx.model,
+					});
 				}
 				showReport(ctx, cached.report, true);
 				return;
@@ -252,7 +260,10 @@ export default function codexUsage(pi: ExtensionAPI) {
 
 				cache = { createdAt: Date.now(), report: result.report };
 				if (options.value.statusline) {
-					setUsageStatusline(ctx, result.report, { autoRefresh: isOpenAICodexModel(ctx.model) });
+					setUsageStatusline(ctx, result.report, {
+						autoRefresh: isOpenAICodexModel(ctx.model),
+						model: ctx.model,
+					});
 					keepStatusline = true;
 				}
 				showReport(ctx, result.report, false);
@@ -273,8 +284,11 @@ export default function codexUsage(pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", (event, ctx) => {
-		if (isOpenAICodexModel(event.model)) void refreshCurrentCodexUsageStatusline(ctx, false);
-		else clearUsageStatusline(ctx);
+		if (isOpenAICodexModel(event.model)) {
+			void refreshCurrentCodexUsageStatusline(ctx, false, event.model);
+		} else {
+			clearUsageStatusline(ctx);
+		}
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => clearUsageStatusline(ctx));
@@ -324,7 +338,7 @@ function parseArgs(
 	return { ok: true, value: { clearStatusline, refresh, statusline, timeoutMs } };
 }
 
-function isOpenAICodexModel(model: ExtensionContext["model"]): boolean {
+function isOpenAICodexModel(model: Pick<PiModel, "provider"> | undefined): boolean {
 	return model?.provider === CODEX_PROVIDER_ID;
 }
 
@@ -806,17 +820,107 @@ export function formatCodexUsageReport(report: CodexUsageReport, _cacheAgeMs?: n
 	return lines.join("\n");
 }
 
-export function formatCodexUsageStatusline(report: CodexUsageReport): string {
-	const snapshot =
-		report.snapshots.find((item) => item.limitId.toLowerCase() === "codex") ??
-		report.snapshots[0];
+export function formatCodexUsageStatusline(
+	report: CodexUsageReport,
+	model?: CodexUsageModel,
+): string {
+	const snapshot = selectSnapshotForModel(report, model);
 	if (!snapshot) return "codex usage unavailable";
 
-	const parts = ["codex"];
+	const parts = [formatStatuslinePrefix(snapshot)];
 	if (snapshot.primary) parts.push(`${formatRemainingPercent(snapshot.primary)} 5h`);
 	if (snapshot.secondary) parts.push(`${formatRemainingPercent(snapshot.secondary)} wk`);
 	if (parts.length === 1 && snapshot.credits) parts.push(formatCredits(snapshot.credits));
 	return parts.join(" ");
+}
+
+function selectSnapshotForModel(
+	report: CodexUsageReport,
+	model: CodexUsageModel | undefined,
+): NormalizedRateLimitSnapshot | undefined {
+	const codexSnapshot = report.snapshots.find(isPrimaryCodexSnapshot);
+	if (!model || !isOpenAICodexModel(model)) return codexSnapshot ?? report.snapshots[0];
+
+	const modelKeys = normalizedModelUsageKeys(model);
+	const exactMatch = report.snapshots.find((snapshot) =>
+		normalizedSnapshotUsageKeys(snapshot).some((key) => modelKeys.has(key)),
+	);
+	if (exactMatch) return exactMatch;
+
+	const variants = codexModelVariantKeys(modelKeys);
+	for (const variant of variants) {
+		const matches = report.snapshots.filter(
+			(snapshot) =>
+				!isPrimaryCodexSnapshot(snapshot) &&
+				normalizedSnapshotUsageKeys(snapshot).some((key) => normalizedKeyHasToken(key, variant)),
+		);
+		if (matches.length === 1) return matches[0];
+	}
+
+	return codexSnapshot ?? report.snapshots[0];
+}
+
+function normalizedModelUsageKeys(model: CodexUsageModel): Set<string> {
+	const keys = new Set<string>();
+	addNormalizedUsageKey(keys, model.id);
+	addNormalizedUsageKey(keys, model.name);
+
+	for (const key of [...keys]) {
+		const codexIndex = key.indexOf("codex");
+		if (codexIndex >= 0) keys.add(key.slice(codexIndex));
+	}
+
+	return keys;
+}
+
+function normalizedSnapshotUsageKeys(snapshot: NormalizedRateLimitSnapshot): string[] {
+	return [normalizedUsageKey(snapshot.limitId), normalizedUsageKey(snapshot.limitName)].filter(
+		(key): key is string => key !== undefined,
+	);
+}
+
+function addNormalizedUsageKey(keys: Set<string>, value: string | undefined): void {
+	const key = normalizedUsageKey(value);
+	if (key) keys.add(key);
+}
+
+function normalizedUsageKey(value: string | undefined): string | undefined {
+	const key = value
+		?.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return key || undefined;
+}
+
+function codexModelVariantKeys(modelKeys: Set<string>): string[] {
+	const variants = new Set<string>();
+	for (const key of modelKeys) {
+		const match = key.match(/(?:^|-)codex-(.+)$/);
+		if (match?.[1]) variants.add(match[1]);
+	}
+	return [...variants];
+}
+
+function normalizedKeyHasToken(key: string, token: string): boolean {
+	return (
+		key === token ||
+		key.startsWith(`${token}-`) ||
+		key.endsWith(`-${token}`) ||
+		key.includes(`-${token}-`)
+	);
+}
+
+function formatStatuslinePrefix(snapshot: NormalizedRateLimitSnapshot): string {
+	if (isPrimaryCodexSnapshot(snapshot)) return "codex";
+	const label = snapshot.limitName ?? snapshot.limitId;
+	return `codex ${compactLimitLabel(label)}`;
+}
+
+function compactLimitLabel(label: string): string {
+	const normalized = label.replace(/[_-]+/g, " ").trim();
+	const codexVariant = normalized.match(/\bcodex\s+(.+)$/i)?.[1]?.trim();
+	const compact = codexVariant || normalized;
+	return compact.toLowerCase().replace(/\s+/g, " ");
 }
 
 function formatRemainingPercent(window: NormalizedRateLimitWindow): string {
@@ -840,7 +944,10 @@ function brightenInfoNotification(text: string): string {
 }
 
 function isPrimaryCodexSnapshot(snapshot: NormalizedRateLimitSnapshot): boolean {
-	return snapshot.limitId.toLowerCase() === "codex";
+	return (
+		normalizedUsageKey(snapshot.limitId) === "codex" ||
+		normalizedUsageKey(snapshot.limitName) === "codex"
+	);
 }
 
 function formatWindowLine(label: string, window: NormalizedRateLimitWindow): string {

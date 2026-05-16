@@ -67,9 +67,12 @@ When the selected Pi model provider is `openai-codex`, `pi-codex-usage` refreshe
 
 ```text
 codex 59% 5h 61% wk
+codex spark 100% 5h 100% wk
 ```
 
-The statusline value uses the cached usage snapshot and refreshes every five minutes while the current model remains `openai-codex`. Switching away from an OpenAI Codex model clears the item.
+The statusline value uses the cached usage snapshot and refreshes every five minutes while the current model remains `openai-codex`.
+When the selected model has its own returned usage bucket, such as `gpt-5.3-codex-spark`, the statusline switches to that bucket instead of the default `codex` bucket.
+Switching away from an OpenAI Codex model clears the item.
 
 Use `/codex-status --no-statusline` for a one-off notification without updating the statusline, or `/codex-status --clear-statusline` to clear the item manually.
 
