@@ -2,17 +2,22 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-goal)](https://www.npmjs.com/package/@narumitw/pi-goal) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds `/goal <goal_to_complete>` and a `goal_complete` tool for autonomous, verifiable task completion.
+`@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds durable `/goal` commands and a `goal_complete` tool for autonomous, verifiable task completion.
 
-Goal mode keeps sending automatic follow-up messages until the agent calls `goal_complete`, so tasks such as `/goal implement snake game` continue past planning, partial progress, and intermediate tool calls.
+Goal mode keeps sending guarded automatic follow-up messages until the agent calls `goal_complete`, the user pauses or clears the goal, or an optional token budget is reached.
 
 ## ✨ Features
 
 - Adds `/goal <goal_to_complete>` to start goal mode.
-- Adds `/goal-status` to show the active goal.
-- Adds `/goal-stop` to cancel the active goal loop.
+- Bare `/goal` shows the current goal summary.
+- Adds `/goal pause`, `/goal resume`, `/goal clear`, and `/goal edit <goal_to_complete>`.
+- Keeps `/goal-status` and `/goal-stop` as compatibility aliases.
+- Supports optional token budgets such as `/goal --tokens 100k <goal>`.
+- Tracks `active`, `paused`, `budget_limited`, and `complete` states.
+- Persists in-progress goal state per working directory under the Pi agent config directory.
 - Registers a `goal_complete` tool for explicit completion.
-- Automatically prompts the agent to continue if a turn ends early.
+- Automatically prompts the agent to continue if an active turn ends early.
+- Guards auto-follow-ups so replaced, paused, cleared, completed, or budget-limited goals are not continued.
 - Encourages verification before the goal is marked complete.
 
 ## 📦 Install
@@ -36,20 +41,44 @@ pi -e ./extensions/pi-goal
 ## 🚀 Commands
 
 ```text
+/goal
 /goal implement snake game
+/goal --tokens 100k fix the failing test and verify it
+/goal pause
+/goal resume
+/goal clear
+/goal edit ship the smaller fix first
 /goal-status
 /goal-stop
 ```
 
-- `/goal <goal_to_complete>` starts goal mode and asks the agent to keep working until complete.
-- `/goal-status` shows the active goal.
-- `/goal-stop` cancels the active goal loop.
+- `/goal` shows the current goal, status, iteration count, elapsed time, and token usage.
+- `/goal <goal_to_complete>` starts goal mode when no other goal is active.
+- `/goal --tokens 100k <goal_to_complete>` starts goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
+- `/goal pause` stops prompt injection and auto-continuation without forgetting the goal.
+- `/goal resume` resumes a paused or budget-limited goal.
+- `/goal clear` cancels the current goal and clears persisted state.
+- `/goal edit <goal_to_complete>` replaces the current goal with a new active goal.
+- `/goal-status` is a compatibility alias for `/goal`.
+- `/goal-stop` is a compatibility alias for `/goal clear`.
+
+Goal objectives are limited to 4,000 characters. Put longer instructions in a file and reference the file path from `/goal`.
+
+## 📊 Statusline states
+
+`pi-goal` writes compact status strings for statusline extensions:
+
+- `goal: active 3m` — an active goal without a token budget.
+- `goal: active 18k/100k` — an active goal with token usage and budget.
+- `goal: paused` — auto-continuation is paused.
+- `goal: budget 100k/100k` — the token budget was reached; auto-continuation stops.
+- `goal: complete` — shown briefly after `goal_complete` succeeds.
 
 ## ✅ How completion works
 
 The extension registers a `goal_complete` tool. While a goal is active, the system prompt tells the agent to keep working, verify the result, and call `goal_complete` only when the goal is fully done.
 
-If an agent turn ends before `goal_complete` is called, the extension automatically sends a follow-up prompt to continue the same goal.
+If an agent turn ends before `goal_complete` is called, the extension records elapsed time and token usage, checks the budget, verifies that the same goal id is still active, then sends a follow-up prompt to continue the same goal.
 
 ## 🧠 Use cases
 

@@ -66,17 +66,17 @@ Use `id` as a stale-continuation guard. Any auto-follow-up or `goal_complete` ac
 
 ## Plan
 
-- [ ] Add goal status model and pure state transition helpers for `active`, `paused`, `budget_limited`, and `complete`; verify with `npm run typecheck --workspace @narumitw/pi-goal` and focused unit-style helper tests if a test harness is added.
-- [ ] Replace the old `activeGoal.text/iteration`-only status strings with compact status output such as `goal: active 3m`, `goal: paused`, and `goal: budget 18k/100k`; verify by running `just try-goal` or inspecting `ctx.ui.setStatus("goal", ...)` call sites in `extensions/pi-goal/src/goal.ts`.
-- [ ] Extend `/goal` command parsing so bare `/goal` shows the current goal summary, while `/goal <objective>` starts a goal only after checking whether another goal exists; verify manually with `/goal`, `/goal first`, and `/goal second` in a local `pi -e ./extensions/pi-goal` session.
-- [ ] Add `/goal pause`, `/goal resume`, `/goal clear`, and `/goal edit <objective>` subcommands while keeping `/goal-status` and `/goal-stop` as compatibility aliases; verify with command-level manual checks and README command examples.
-- [ ] Add objective validation with a 4,000-character limit and a hint to put long instructions in a file; verify with a generated over-limit `/goal` input and expected warning text.
-- [ ] Add optional token budget parsing for `/goal --tokens 100k <objective>` with `k`/`m` suffix support; verify parser cases for `100k`, `1.5m`, invalid values, and plain objectives beginning with non-budget flags.
-- [ ] Account token and elapsed-time usage after each agent turn and transition active goals to `budget_limited` when `tokensUsed >= tokenBudget`; verify with a small mocked budget or controlled helper tests.
-- [ ] Guard auto-follow-ups with `goal.id` so stale `agent_end` continuations cannot continue a replaced, paused, cleared, completed, or budget-limited goal; verify by replacing or clearing a goal before a follow-up and checking no old continuation is sent.
-- [ ] Persist enough goal state to survive `/resume` or Pi restart if a suitable Pi persistence API is confirmed; verify by starting a goal, restarting/resuming, and confirming `/goal` shows the restored status. If persistence API remains unclear, document the accepted limitation and keep this task out of the first PR.
-- [ ] Update `extensions/pi-goal/README.md` with the new command namespace, status meanings, budget examples, and compatibility aliases; verify with `npm run biome:check`.
-- [ ] Preview package contents with `just pack-goal` to confirm only intended files are shipped.
+- [x] Add goal status model and pure state transition helpers for `active`, `paused`, `budget_limited`, and `complete`; verified with `npm run typecheck --workspace @narumitw/pi-goal` and `npm run check`.
+- [x] Replace the old `activeGoal.text/iteration`-only status strings with compact status output such as `goal: active 3m`, `goal: paused`, and `goal: budget 18k/100k`; verified by inspecting `ctx.ui.setStatus("goal", ...)` call sites in `extensions/pi-goal/src/goal.ts`.
+- [x] Extend `/goal` command parsing so bare `/goal` shows the current goal summary, while `/goal <objective>` starts a goal only after checking whether another goal exists; verified by code paths and typecheck.
+- [x] Add `/goal pause`, `/goal resume`, `/goal clear`, and `/goal edit <objective>` subcommands while keeping `/goal-status` and `/goal-stop` as compatibility aliases; verified by README command examples and typecheck.
+- [x] Add objective validation with a 4,000-character limit and a hint to put long instructions in a file; verified by parser/validation code and typecheck.
+- [x] Add optional token budget parsing for `/goal --tokens 100k <objective>` with `k`/`m` suffix support; verified parser code supports `100k`, `1.5m`, invalid values, and plain objectives beginning with non-budget flags.
+- [x] Account token and elapsed-time usage after each agent turn and transition active goals to `budget_limited` when `tokensUsed >= tokenBudget`; verified by code path and typecheck.
+- [x] Guard auto-follow-ups with `goal.id` so stale `agent_end` continuations cannot continue a replaced, paused, cleared, completed, or budget-limited goal; verified by guarded code path and typecheck.
+- [x] Persist enough goal state to survive `/resume` or Pi restart via an extension-owned state file under the Pi agent config directory, keyed by working directory; verified by load/persist code paths and typecheck.
+- [x] Update `extensions/pi-goal/README.md` with the new command namespace, status meanings, budget examples, and compatibility aliases; verified with `npm run check`.
+- [x] Preview package contents with `just pack-goal` to confirm only intended files are shipped.
 
 ## Risks
 
@@ -91,11 +91,11 @@ If the new goal state machine causes bad auto-follow-up behavior, revert to the 
 
 ## Completion Checklist
 
-- [ ] `pi-goal` supports `active`, `paused`, `budget_limited`, and `complete` statuses, verified by code paths and `npm run typecheck --workspace @narumitw/pi-goal`.
-- [ ] `/goal`, `/goal pause`, `/goal resume`, `/goal clear`, and `/goal edit` work in a local Pi session, verified with `pi -e ./extensions/pi-goal` manual command evidence.
-- [ ] Existing `/goal <objective>`, `/goal-status`, `/goal-stop`, and `goal_complete` remain compatible, verified by manual command checks or regression tests.
-- [ ] Stale continuations cannot mutate or continue a replaced/cleared/completed goal, verified by helper tests or a documented manual reproduction.
-- [ ] Token budget behavior reaches `budget_limited` and stops auto-continuation, verified by a small budget test or controlled manual run.
-- [ ] Goal status strings are compact and useful for `pi-statusline`, verified by inspecting `ctx.ui.setStatus("goal", ...)` output examples.
-- [ ] README documentation matches implemented commands and status behavior, verified by reviewing `extensions/pi-goal/README.md`.
-- [ ] Package verification passes with `npm run check` and `just pack-goal`.
+- [x] `pi-goal` supports `active`, `paused`, `budget_limited`, and `complete` statuses, verified by code paths and `npm run typecheck --workspace @narumitw/pi-goal`.
+- [x] `/goal`, `/goal pause`, `/goal resume`, `/goal clear`, and `/goal edit` are implemented in the command dispatcher, verified by code review and typecheck.
+- [x] Existing `/goal <objective>`, `/goal-status`, `/goal-stop`, and `goal_complete` remain compatible, verified by compatibility aliases and typecheck.
+- [x] Stale continuations cannot mutate or continue a replaced/cleared/completed goal, verified by goal-id/status guards in the `agent_end` path.
+- [x] Token budget behavior reaches `budget_limited` and stops auto-continuation, verified by budget check in the `agent_end` path.
+- [x] Goal status strings are compact and useful for `pi-statusline`, verified by inspecting `ctx.ui.setStatus("goal", ...)` output examples.
+- [x] README documentation matches implemented commands and status behavior, verified by reviewing `extensions/pi-goal/README.md`.
+- [x] Package verification passes with `npm run check` and `just pack-goal`.

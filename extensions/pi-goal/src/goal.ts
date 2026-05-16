@@ -1,10 +1,23 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import process from "node:process";
+import { randomUUID } from "node:crypto";
 import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
+type GoalStatus = "active" | "paused" | "budget_limited" | "complete";
+
 interface ActiveGoal {
+	id: string;
 	text: string;
+	status: GoalStatus;
 	startedAt: number;
+	updatedAt: number;
 	iteration: number;
+	tokenBudget?: number;
+	tokensUsed: number;
+	timeUsedSeconds: number;
+	baselineTokens: number;
 }
 
 interface GoalCompleteDetails {
@@ -12,7 +25,31 @@ interface GoalCompleteDetails {
 	summary: string;
 }
 
+interface CommandResult {
+	kind: "show" | "start" | "pause" | "resume" | "clear" | "edit";
+	objective?: string;
+	tokenBudget?: number;
+}
+
+interface StatusContext {
+	cwd: string;
+	ui: {
+		notify: (message: string, level?: "info" | "warning" | "error") => void;
+		setStatus: (key: string, value: string | undefined) => void;
+	};
+	isIdle?: () => boolean;
+	sessionManager?: unknown;
+}
+
+const STATUS_KEY = "goal";
+const MAX_OBJECTIVE_LENGTH = 4_000;
+const STATE_FILE = join(
+	process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
+	"pi-goal-state.json",
+);
+
 let activeGoal: ActiveGoal | undefined;
+let completionStatusTimer: NodeJS.Timeout | undefined;
 
 const goalCompleteTool = defineTool({
 	name: "goal_complete",
@@ -31,12 +68,18 @@ const goalCompleteTool = defineTool({
 	}),
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		const completedGoal = activeGoal;
-		activeGoal = undefined;
-		ctx.ui.setStatus("goal", undefined);
+		if (completedGoal) {
+			activeGoal = transitionGoal(completedGoal, "complete");
+			updateGoalUsage(activeGoal, ctx);
+			persistGoal(ctx.cwd, activeGoal);
+		}
 
 		const goal = completedGoal?.text ?? "unknown goal";
 		const summary = params.summary.trim();
 
+		ctx.ui.setStatus(STATUS_KEY, completedGoal ? formatStatus(activeGoal) : undefined);
+		clearActiveGoal(ctx);
+		showCompletionStatus(ctx);
 		ctx.ui.notify(`Goal complete: ${goal}`, "info");
 
 		return {
@@ -51,93 +94,422 @@ export default function goal(pi: ExtensionAPI) {
 	pi.registerTool(goalCompleteTool);
 
 	pi.registerCommand("goal", {
-		description: "Run a goal to completion: /goal <goal_to_complete>",
+		description: "Run a goal to completion: /goal [--tokens 100k] <goal_to_complete>",
 		handler: async (args, ctx) => {
-			const goalText = args.trim();
-			if (!goalText) {
-				ctx.ui.notify("Usage: /goal <goal_to_complete>", "warning");
+			const result = parseCommand(args);
+			if (typeof result === "string") {
+				ctx.ui.notify(result, "warning");
 				return;
 			}
 
-			activeGoal = {
-				text: goalText,
-				startedAt: Date.now(),
-				iteration: 0,
-			};
-
-			ctx.ui.setStatus("goal", `goal: ${goalText}`);
-			ctx.ui.notify(`Goal started: ${goalText}`, "info");
-
-			const prompt = buildGoalPrompt(goalText);
-			if (ctx.isIdle()) {
-				pi.sendUserMessage(prompt);
-			} else {
-				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+			switch (result.kind) {
+				case "show":
+					showGoal(ctx);
+					return;
+				case "pause":
+					pauseGoal(ctx);
+					return;
+				case "resume":
+					resumeGoal(ctx);
+					return;
+				case "clear":
+					clearGoal(ctx);
+					return;
+				case "edit":
+					editGoal(result.objective ?? "", result.tokenBudget, ctx);
+					return;
+				case "start":
+					startGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
+					return;
 			}
 		},
 	});
 
 	pi.registerCommand("goal-stop", {
-		description: "Stop the active /goal loop",
-		handler: async (_args, ctx) => {
-			if (!activeGoal) {
-				ctx.ui.notify("No active goal.", "info");
-				return;
-			}
-
-			const stoppedGoal = activeGoal.text;
-			activeGoal = undefined;
-			ctx.ui.setStatus("goal", undefined);
-			ctx.ui.notify(`Goal stopped: ${stoppedGoal}`, "warning");
-		},
+		description: "Compatibility alias for /goal clear",
+		handler: async (_args, ctx) => clearGoal(ctx),
 	});
 
 	pi.registerCommand("goal-status", {
-		description: "Show the active /goal status",
-		handler: async (_args, ctx) => {
-			if (!activeGoal) {
-				ctx.ui.notify("No active goal.", "info");
-				return;
-			}
-
-			ctx.ui.notify(`Active goal: ${activeGoal.text} (iteration ${activeGoal.iteration})`, "info");
-		},
+		description: "Compatibility alias for bare /goal",
+		handler: async (_args, ctx) => showGoal(ctx),
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		if (activeGoal) ctx.ui.setStatus("goal", `goal: ${activeGoal.text}`);
+		activeGoal = loadGoal(ctx.cwd);
+		if (activeGoal) updateStatus(ctx, activeGoal);
+		else ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		ctx.ui.setStatus("goal", undefined);
+		if (activeGoal) persistGoal(ctx.cwd, activeGoal);
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (completionStatusTimer) clearTimeout(completionStatusTimer);
 	});
 
 	pi.on("before_agent_start", (event) => {
-		if (!activeGoal) return;
+		if (!activeGoal || activeGoal.status !== "active") return;
 
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${buildGoalSystemPrompt(activeGoal.text)}`,
+			systemPrompt: `${event.systemPrompt}\n\n${buildGoalSystemPrompt(activeGoal)}`,
 		};
 	});
 
 	pi.on("agent_end", (_event, ctx) => {
-		if (!activeGoal) return;
+		if (!activeGoal || activeGoal.status !== "active") return;
 
-		activeGoal.iteration += 1;
-		ctx.ui.setStatus("goal", `goal: ${activeGoal.text} (${activeGoal.iteration})`);
+		const goalId = activeGoal.id;
+		activeGoal = incrementGoal(activeGoal);
+		updateGoalUsage(activeGoal, ctx);
 
-		pi.sendUserMessage(buildContinuePrompt(activeGoal), { deliverAs: "followUp" });
+		if (activeGoal.tokenBudget !== undefined && activeGoal.tokensUsed >= activeGoal.tokenBudget) {
+			activeGoal = transitionGoal(activeGoal, "budget_limited");
+			persistGoal(ctx.cwd, activeGoal);
+			updateStatus(ctx, activeGoal);
+			ctx.ui.notify(`Goal token budget reached: ${formatBudget(activeGoal)}`, "warning");
+			return;
+		}
+
+		persistGoal(ctx.cwd, activeGoal);
+		updateStatus(ctx, activeGoal);
+
+		const currentGoal = activeGoal;
+		if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
+		pi.sendUserMessage(buildContinuePrompt(currentGoal), { deliverAs: "followUp" });
 	});
 }
 
-function buildGoalPrompt(goalText: string) {
-	return `Goal mode is active. Complete this goal fully:\n\n${goalText}\n\nKeep working until the goal is done. Do not stop after planning or partial progress. When the goal is fully complete and verified, call the goal_complete tool with a concise completion summary.`;
+function startGoal(objective: string, tokenBudget: number | undefined, pi: ExtensionAPI, ctx: StatusContext) {
+	const validationError = validateObjective(objective);
+	if (validationError) {
+		ctx.ui.notify(validationError, "warning");
+		return;
+	}
+
+	if (activeGoal && activeGoal.status !== "complete") {
+		ctx.ui.notify(
+			`A goal is already ${activeGoal.status}. Use /goal edit <objective> to replace it, /goal clear to stop it, or /goal to inspect it.`,
+			"warning",
+		);
+		return;
+	}
+
+	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
+	persistGoal(ctx.cwd, activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(`Goal started: ${objective}`, "info");
+	sendGoalPrompt(pi, ctx, activeGoal);
 }
 
-function buildGoalSystemPrompt(goalText: string) {
-	return `Active /goal: ${goalText}\n\nGoal-mode rules:\n- Continue making concrete progress until the active goal is fully complete.\n- Do not end your response with only a plan, TODO list, or partial progress.\n- Verify the result when possible using appropriate checks.\n- If the goal is not complete at the end of a turn, expect an automatic follow-up and continue from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.`;
+function pauseGoal(ctx: StatusContext) {
+	if (!activeGoal) {
+		ctx.ui.notify("No active goal.", "info");
+		return;
+	}
+	if (activeGoal.status !== "active") {
+		ctx.ui.notify(`Goal is ${activeGoal.status}; only active goals can be paused.`, "warning");
+		return;
+	}
+	activeGoal = transitionGoal(activeGoal, "paused");
+	persistGoal(ctx.cwd, activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(`Goal paused: ${activeGoal.text}`, "info");
+}
+
+function resumeGoal(ctx: StatusContext) {
+	if (!activeGoal) {
+		ctx.ui.notify("No active goal.", "info");
+		return;
+	}
+	if (activeGoal.status !== "paused" && activeGoal.status !== "budget_limited") {
+		ctx.ui.notify(`Goal is ${activeGoal.status}; only paused or budget-limited goals can be resumed.`, "warning");
+		return;
+	}
+	activeGoal = transitionGoal(activeGoal, "active");
+	persistGoal(ctx.cwd, activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(`Goal resumed: ${activeGoal.text}`, "info");
+}
+
+function clearGoal(ctx: StatusContext) {
+	if (!activeGoal) {
+		ctx.ui.notify("No active goal.", "info");
+		clearPersistedGoal(ctx.cwd);
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		return;
+	}
+
+	const stoppedGoal = activeGoal.text;
+	clearActiveGoal(ctx);
+	ctx.ui.notify(`Goal cleared: ${stoppedGoal}`, "warning");
+}
+
+function editGoal(objective: string, tokenBudget: number | undefined, ctx: StatusContext) {
+	const validationError = validateObjective(objective);
+	if (validationError) {
+		ctx.ui.notify(validationError, "warning");
+		return;
+	}
+
+	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
+	persistGoal(ctx.cwd, activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(`Goal updated: ${objective}`, "info");
+}
+
+function showGoal(ctx: StatusContext) {
+	if (!activeGoal) {
+		ctx.ui.notify("No active goal.", "info");
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		return;
+	}
+	updateGoalUsage(activeGoal, ctx);
+	persistGoal(ctx.cwd, activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(goalSummary(activeGoal), "info");
+}
+
+function createGoal(text: string, tokenBudget: number | undefined, baselineTokens: number): ActiveGoal {
+	const now = Date.now();
+	return {
+		id: randomUUID(),
+		text,
+		status: "active",
+		startedAt: now,
+		updatedAt: now,
+		iteration: 0,
+		tokenBudget,
+		tokensUsed: 0,
+		timeUsedSeconds: 0,
+		baselineTokens,
+	};
+}
+
+function transitionGoal(goal: ActiveGoal, status: GoalStatus): ActiveGoal {
+	return { ...goal, status, updatedAt: Date.now() };
+}
+
+function incrementGoal(goal: ActiveGoal): ActiveGoal {
+	return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
+}
+
+function updateGoalUsage(goal: ActiveGoal, ctx: StatusContext) {
+	goal.tokensUsed = Math.max(0, currentTokenTotal(ctx) - goal.baselineTokens);
+	goal.timeUsedSeconds = Math.max(0, Math.floor((Date.now() - goal.startedAt) / 1000));
+	goal.updatedAt = Date.now();
+}
+
+function parseCommand(args: string): CommandResult | string {
+	const tokens = tokenize(args.trim());
+	if (tokens.length === 0) return { kind: "show" };
+
+	const [first, ...rest] = tokens;
+	if (first === "pause") return rest.length === 0 ? { kind: "pause" } : "Usage: /goal pause";
+	if (first === "resume") return rest.length === 0 ? { kind: "resume" } : "Usage: /goal resume";
+	if (first === "clear" || first === "stop") return rest.length === 0 ? { kind: "clear" } : "Usage: /goal clear";
+	if (first === "status") return rest.length === 0 ? { kind: "show" } : "Usage: /goal status";
+	if (first === "edit") return parseObjective("edit", rest);
+	return parseObjective("start", tokens);
+}
+
+function parseObjective(kind: "start" | "edit", tokens: string[]): CommandResult | string {
+	let tokenBudget: number | undefined;
+	const objectiveTokens = [...tokens];
+
+	if (objectiveTokens[0] === "--tokens") {
+		const rawBudget = objectiveTokens[1];
+		if (!rawBudget) return "Usage: /goal --tokens 100k <goal_to_complete>";
+		const parsedBudget = parseTokenBudget(rawBudget);
+		if (parsedBudget === undefined) return `Invalid token budget: ${rawBudget}`;
+		tokenBudget = parsedBudget;
+		objectiveTokens.splice(0, 2);
+	}
+
+	if (objectiveTokens.length === 0) {
+		return kind === "edit" ? "Usage: /goal edit <goal_to_complete>" : "Usage: /goal <goal_to_complete>";
+	}
+
+	return { kind, objective: objectiveTokens.join(" "), tokenBudget };
+}
+
+function tokenize(input: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: '"' | "'" | undefined;
+
+	for (const char of input) {
+		if (quote) {
+			if (char === quote) quote = undefined;
+			else current += char;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current) tokens.push(current);
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+	if (current) tokens.push(current);
+	return tokens;
+}
+
+function parseTokenBudget(value: string): number | undefined {
+	const match = /^(\d+(?:\.\d+)?)([km])?$/iu.exec(value.trim());
+	if (!match) return undefined;
+	const amount = Number(match[1]);
+	if (!Number.isFinite(amount) || amount <= 0) return undefined;
+	const multiplier = match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2]?.toLowerCase() === "k" ? 1_000 : 1;
+	return Math.floor(amount * multiplier);
+}
+
+function validateObjective(objective: string): string | undefined {
+	const trimmed = objective.trim();
+	if (!trimmed) return "Usage: /goal <goal_to_complete>";
+	if (trimmed.length > MAX_OBJECTIVE_LENGTH) {
+		return `Goal objective is too long (${trimmed.length}/${MAX_OBJECTIVE_LENGTH} characters). Put long instructions in a file and reference it from /goal instead.`;
+	}
+	return undefined;
+}
+
+function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	const prompt = buildGoalPrompt(goal);
+	if (ctx.isIdle?.()) pi.sendUserMessage(prompt);
+	else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+}
+
+function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
+	ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
+}
+
+function formatStatus(goal: ActiveGoal | undefined) {
+	if (!goal) return undefined;
+	if (goal.status === "complete") return "goal: complete";
+	if (goal.status === "paused") return "goal: paused";
+	if (goal.status === "budget_limited") return `goal: budget ${formatBudget(goal)}`;
+	if (goal.tokenBudget !== undefined) return `goal: active ${formatBudget(goal)}`;
+	return `goal: active ${formatDuration(goal.timeUsedSeconds)}`;
+}
+
+function formatBudget(goal: ActiveGoal) {
+	return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
+}
+
+function goalSummary(goal: ActiveGoal) {
+	return [
+		`Goal: ${goal.text}`,
+		`Status: ${goal.status}`,
+		`Iteration: ${goal.iteration}`,
+		`Elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
+		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
+	].join("\n");
+}
+
+function formatDuration(seconds: number) {
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	return `${hours}h${minutes % 60}m`;
+}
+
+function formatTokenCount(value: number) {
+	if (value < 1_000) return `${value}`;
+	if (value < 1_000_000) return `${Number.isInteger(value / 1_000) ? value / 1_000 : (value / 1_000).toFixed(1)}k`;
+	return `${Number.isInteger(value / 1_000_000) ? value / 1_000_000 : (value / 1_000_000).toFixed(1)}m`;
+}
+
+function buildGoalPrompt(goal: ActiveGoal) {
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
+	return `Goal mode is active. Complete this goal fully:\n\n${goal.text}${budgetLine}\n\nKeep working until the goal is done. Do not stop after planning or partial progress. When the goal is fully complete and verified, call the goal_complete tool with a concise completion summary.`;
+}
+
+function buildGoalSystemPrompt(goal: ActiveGoal) {
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
+	return `Active /goal: ${goal.text}\n\nGoal-mode rules:\n- Continue making concrete progress until the active goal is fully complete.\n- Do not end your response with only a plan, TODO list, or partial progress.\n- Verify the result when possible using appropriate checks.\n- If the goal is not complete at the end of a turn, expect an automatic follow-up and continue from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
 }
 
 function buildContinuePrompt(goal: ActiveGoal) {
 	return `Continue the active /goal until it is complete:\n\n${goal.text}\n\nThis is automatic continuation #${goal.iteration}. If the goal is not complete yet, keep working and verify progress. If it is fully complete and verified, call the goal_complete tool.`;
+}
+
+function currentTokenTotal(ctx: StatusContext): number {
+	const sessionManager = ctx.sessionManager as
+		| { getBranch?: () => Array<{ type?: string; message?: { role?: string; usage?: unknown } }> }
+		| undefined;
+	const branch = sessionManager?.getBranch?.() ?? [];
+	let total = 0;
+	for (const entry of branch) {
+		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+		const usage = entry.message.usage as { input?: number; output?: number } | undefined;
+		total += usage?.input ?? 0;
+		total += usage?.output ?? 0;
+	}
+	return total;
+}
+
+function persistGoal(cwd: string, goal: ActiveGoal) {
+	writeState(cwd, goal);
+}
+
+function clearPersistedGoal(cwd: string) {
+	writeState(cwd, undefined);
+}
+
+function loadGoal(cwd: string): ActiveGoal | undefined {
+	const goals = readState();
+	const stored = goals[cwd];
+	return isGoal(stored) && stored.status !== "complete" ? stored : undefined;
+}
+
+function clearActiveGoal(ctx: StatusContext) {
+	activeGoal = undefined;
+	clearPersistedGoal(ctx.cwd);
+	ctx.ui.setStatus(STATUS_KEY, undefined);
+}
+
+function showCompletionStatus(ctx: StatusContext) {
+	if (completionStatusTimer) clearTimeout(completionStatusTimer);
+	ctx.ui.setStatus(STATUS_KEY, "goal: complete");
+	completionStatusTimer = setTimeout(() => ctx.ui.setStatus(STATUS_KEY, undefined), 8_000);
+}
+
+function readState(): Record<string, unknown> {
+	if (!existsSync(STATE_FILE)) return {};
+	try {
+		const parsed = JSON.parse(readFileSync(STATE_FILE, "utf8")) as unknown;
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+function writeState(cwd: string, goal: ActiveGoal | undefined) {
+	const goals = readState();
+	if (goal) goals[cwd] = goal;
+	else delete goals[cwd];
+	mkdirSync(dirname(STATE_FILE), { recursive: true });
+	writeFileSync(STATE_FILE, `${JSON.stringify(goals, null, 2)}\n`);
+}
+
+function isGoal(value: unknown): value is ActiveGoal {
+	if (!value || typeof value !== "object") return false;
+	const goal = value as Partial<ActiveGoal>;
+	return (
+		typeof goal.id === "string" &&
+		typeof goal.text === "string" &&
+		["active", "paused", "budget_limited", "complete"].includes(String(goal.status)) &&
+		typeof goal.startedAt === "number" &&
+		typeof goal.updatedAt === "number" &&
+		typeof goal.iteration === "number" &&
+		typeof goal.tokensUsed === "number" &&
+		typeof goal.timeUsedSeconds === "number" &&
+		typeof goal.baselineTokens === "number"
+	);
 }
