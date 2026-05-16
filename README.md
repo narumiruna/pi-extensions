@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for Chrome DevTools automation, Firecrawl web scraping, Python LSP diagnostics with ty and Ruff, goal-driven task completion, retry handling, terminal statuslines, and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for Biome LSP diagnostics, Chrome DevTools automation, Firecrawl web scraping, Python LSP diagnostics with ty and Ruff, goal-driven task completion, retry handling, terminal statuslines, and keep-awake automation.
 
 ## 📦 Pi extension packages
 
@@ -10,6 +10,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 
 | Pi extension | What it adds | Install |
 | --- | --- | --- |
+| [`@narumitw/pi-biome-lsp`](./extensions/pi-biome-lsp) | 🧬 Biome language-server tools for diagnostics, formatting, import organization, and source fixes. | `pi install npm:@narumitw/pi-biome-lsp` |
 | [`@narumitw/pi-btw`](./extensions/pi-btw) | 💬 `/btw` side-question command for asking quick questions without polluting the main conversation. | `pi install npm:@narumitw/pi-btw` |
 | [`@narumitw/pi-caffeinate`](./extensions/pi-caffeinate) | ☕ Cross-platform sleep prevention while the Pi agent is processing long-running prompts. | `pi install npm:@narumitw/pi-caffeinate` |
 | [`@narumitw/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | 🌐 Native Chrome DevTools Protocol tools for listing tabs, navigating pages, evaluating JavaScript, and taking screenshots. | `pi install npm:@narumitw/pi-chrome-devtools` |
@@ -37,10 +38,14 @@ pi -e npm:@narumitw/pi-statusline
 Use multiple Pi extensions together:
 
 ```bash
-pi -e npm:@narumitw/pi-goal -e npm:@narumitw/pi-statusline -e npm:@narumitw/pi-python-lsp
+pi -e npm:@narumitw/pi-goal -e npm:@narumitw/pi-statusline -e npm:@narumitw/pi-python-lsp -e npm:@narumitw/pi-biome-lsp
 ```
 
 ## 🛠️ Extension use cases
+
+### 🧬 JavaScript and TypeScript coding with Biome
+
+Use [`@narumitw/pi-biome-lsp`](./extensions/pi-biome-lsp) to let Pi run Biome diagnostics through `biome lsp-proxy`, format supported files, organize imports, and apply safe Biome source fixes.
 
 ### 🌐 Browser automation and debugging
 
@@ -83,6 +88,7 @@ npm run check
 Try a package locally:
 
 ```bash
+pi -e ./extensions/pi-biome-lsp
 pi -e ./extensions/pi-btw
 pi -e ./extensions/pi-caffeinate
 pi -e ./extensions/pi-chrome-devtools
@@ -97,6 +103,7 @@ pi -e ./extensions/pi-subagents
 Preview npm package contents before publishing:
 
 ```bash
+npm run pack:biome-lsp
 npm run pack:btw
 npm run pack:caffeinate
 npm run pack:chrome-devtools
@@ -112,6 +119,7 @@ npm run pack:subagents
 
 ```txt
 extensions/
+├── pi-biome-lsp/
 ├── pi-btw/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/
