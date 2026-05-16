@@ -159,6 +159,7 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	finalOutput?: string;
 	timedOut?: boolean;
 	timeoutMs?: number;
 }
@@ -168,6 +169,7 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+	aggregator?: SingleResult;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -180,6 +182,25 @@ function getFinalOutput(messages: Message[]): string {
 		}
 	}
 	return "";
+}
+
+function getResultFinalOutput(result: SingleResult): string {
+	return result.finalOutput ?? getFinalOutput(result.messages);
+}
+
+function buildFanInContext(results: SingleResult[]): string {
+	return results
+		.map((result, index) => {
+			const status = result.exitCode === 0 ? "completed" : result.exitCode === -1 ? "running" : "failed";
+			const output = getResultFinalOutput(result);
+			const error = result.errorMessage || result.stderr.trim();
+			return [
+				`## Result ${index + 1}: ${result.agent} (${status})`,
+				`Task: ${result.task}`,
+				output ? `Output:\n${output}` : error ? `Error:\n${error}` : "Output: (no output)",
+			].join("\n\n");
+		})
+		.join("\n\n---\n\n");
 }
 
 type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
@@ -296,6 +317,7 @@ async function runSingleAgent(
 			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 			step,
+			finalOutput: "",
 		};
 	}
 
@@ -320,9 +342,10 @@ async function runSingleAgent(
 	};
 
 	const emitUpdate = () => {
+		currentResult.finalOutput = getFinalOutput(currentResult.messages);
 		if (onUpdate) {
 			onUpdate({
-				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
+				content: [{ type: "text", text: currentResult.finalOutput || "(running...)" }],
 				details: makeDetails([currentResult]),
 			});
 		}
@@ -439,6 +462,7 @@ async function runSingleAgent(
 		});
 
 		currentResult.exitCode = exitCode;
+		currentResult.finalOutput = getFinalOutput(currentResult.messages);
 		if (wasAborted && !timedOut) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {
@@ -477,6 +501,13 @@ const ChainItem = Type.Object({
 	timeoutMs: Type.Optional(TimeoutMs),
 });
 
+const AggregatorItem = Type.Object({
+	agent: Type.String({ description: "Name of the fan-in agent to invoke after parallel tasks complete" }),
+	task: Type.String({ description: "Fan-in task. Use {previous} to include all parallel outputs." }),
+	cwd: Type.Optional(Type.String({ description: "Working directory for the aggregator process" })),
+	timeoutMs: Type.Optional(TimeoutMs),
+});
+
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
 	default: "user",
@@ -487,6 +518,7 @@ const SubagentParams = Type.Object({
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
+	aggregator: Type.Optional(AggregatorItem),
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
@@ -502,6 +534,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Parallel mode may include an aggregator fan-in step that receives all task outputs.",
 			'Default agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
@@ -521,20 +554,25 @@ export default function (pi: ExtensionAPI) {
 
 			const makeDetails =
 				(mode: "single" | "parallel" | "chain") =>
-				(results: SingleResult[]): SubagentDetails => ({
+				(results: SingleResult[], aggregator?: SingleResult): SubagentDetails => ({
 					mode,
 					agentScope,
 					projectAgentsDir: discovery.projectAgentsDir,
 					results,
+					aggregator,
 				});
 
-			if (modeCount !== 1) {
+			if (modeCount !== 1 || (params.aggregator && !hasTasks)) {
 				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+				const reason =
+					modeCount !== 1
+						? "Provide exactly one mode."
+						: "Aggregator is only valid with parallel tasks.";
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Invalid parameters. Provide exactly one mode.\nAvailable agents: ${available}`,
+							text: `Invalid parameters. ${reason}\nAvailable agents: ${available}`,
 						},
 					],
 					details: makeDetails("single")([]),
@@ -545,6 +583,7 @@ export default function (pi: ExtensionAPI) {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
+				if (params.aggregator) requestedAgentNames.add(params.aggregator.agent);
 				if (params.agent) requestedAgentNames.add(params.agent);
 
 				const projectAgentsRequested = Array.from(requestedAgentNames)
@@ -606,18 +645,17 @@ export default function (pi: ExtensionAPI) {
 					const isError =
 						result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 					if (isError) {
-						const errorMsg =
-							result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+						const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
 						return {
 							content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
 							details: makeDetails("chain")(results),
 							isError: true,
 						};
 					}
-					previousOutput = getFinalOutput(result.messages);
+					previousOutput = getResultFinalOutput(result);
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
+					content: [{ type: "text", text: getResultFinalOutput(results[results.length - 1]) || "(no output)" }],
 					details: makeDetails("chain")(results),
 				};
 			}
@@ -647,6 +685,7 @@ export default function (pi: ExtensionAPI) {
 						messages: [],
 						stderr: "",
 						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+						finalOutput: "",
 					};
 				}
 
@@ -687,22 +726,58 @@ export default function (pi: ExtensionAPI) {
 					return result;
 				});
 
+				let aggregatorResult: SingleResult | undefined;
+				if (params.aggregator) {
+					const fanInContext = buildFanInContext(results);
+					const aggregatorTask = params.aggregator.task.includes("{previous}")
+						? params.aggregator.task.replace(/\{previous\}/g, fanInContext)
+						: `${params.aggregator.task}\n\nParallel task outputs:\n\n${fanInContext}`;
+					aggregatorResult = await runSingleAgent(
+						ctx.cwd,
+						agents,
+						params.aggregator.agent,
+						aggregatorTask,
+						params.aggregator.cwd,
+						undefined,
+						signal,
+						params.aggregator.timeoutMs ?? defaultTimeoutMs,
+						(partial) => {
+							if (onUpdate && partial.details?.results[0]) {
+								onUpdate({
+									content: partial.content,
+									details: makeDetails("parallel")(results, partial.details.results[0]),
+								});
+							}
+						},
+						makeDetails("parallel"),
+					);
+				}
+
 				const successCount = results.filter((r) => r.exitCode === 0).length;
 				const summaries = results.map((r) => {
-					const output = getFinalOutput(r.messages);
+					const output = getResultFinalOutput(r);
 					const error = r.errorMessage || r.stderr.trim();
 					const summaryText = output || error;
 					const preview = summaryText.slice(0, 160) + (summaryText.length > 160 ? "..." : "");
 					return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
 				});
+				const aggregatorOutput = aggregatorResult ? getResultFinalOutput(aggregatorResult) : "";
+				const aggregatorError = aggregatorResult?.errorMessage || aggregatorResult?.stderr.trim() || "";
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+							text: aggregatorResult
+								? aggregatorOutput || aggregatorError || `(aggregator ${aggregatorResult.agent} produced no output)`
+								: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
 						},
 					],
-					details: makeDetails("parallel")(results),
+					details: makeDetails("parallel")(results, aggregatorResult),
+					isError: aggregatorResult
+						? aggregatorResult.exitCode !== 0 ||
+							aggregatorResult.stopReason === "error" ||
+							aggregatorResult.stopReason === "aborted"
+						: undefined,
 				};
 			}
 
@@ -721,8 +796,7 @@ export default function (pi: ExtensionAPI) {
 				);
 				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 				if (isError) {
-					const errorMsg =
-						result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+					const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
 					return {
 						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
 						details: makeDetails("single")([result]),
@@ -730,7 +804,7 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+					content: [{ type: "text", text: getResultFinalOutput(result) || "(no output)" }],
 					details: makeDetails("single")([result]),
 				};
 			}
@@ -774,6 +848,14 @@ export default function (pi: ExtensionAPI) {
 					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
+				if (args.aggregator) {
+					const preview =
+						args.aggregator.task.length > 40 ? `${args.aggregator.task.slice(0, 40)}...` : args.aggregator.task;
+					text += `\n  ${theme.fg("muted", "fan-in → ")}${theme.fg("accent", args.aggregator.agent)}${theme.fg(
+						"dim",
+						` ${preview}`,
+					)}`;
+				}
 				return new Text(text, 0, 0);
 			}
 			const agentName = args.agent || "...";
@@ -816,7 +898,7 @@ export default function (pi: ExtensionAPI) {
 				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
 				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
-				const finalOutput = getFinalOutput(r.messages);
+				const finalOutput = getResultFinalOutput(r);
 
 				if (expanded) {
 					const container = new Container();
@@ -902,7 +984,7 @@ export default function (pi: ExtensionAPI) {
 					for (const r of details.results) {
 						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const finalOutput = getResultFinalOutput(r);
 
 						container.addChild(new Spacer(1));
 						container.addChild(
@@ -968,15 +1050,22 @@ export default function (pi: ExtensionAPI) {
 				const running = details.results.filter((r) => r.exitCode === -1).length;
 				const successCount = details.results.filter((r) => r.exitCode === 0).length;
 				const failCount = details.results.filter((r) => r.exitCode > 0).length;
-				const isRunning = running > 0;
+				const aggregator = details.aggregator;
+				const aggregatorRunning = aggregator?.exitCode === -1;
+				const aggregatorFailed = aggregator ? aggregator.exitCode > 0 || aggregator.stopReason === "error" : false;
+				const isRunning = running > 0 || aggregatorRunning;
 				const icon = isRunning
 					? theme.fg("warning", "⏳")
-					: failCount > 0
+					: failCount > 0 || aggregatorFailed
 						? theme.fg("warning", "◐")
 						: theme.fg("success", "✓");
 				const status = isRunning
-					? `${successCount + failCount}/${details.results.length} done, ${running} running`
-					: `${successCount}/${details.results.length} tasks`;
+					? aggregatorRunning
+						? `${successCount + failCount}/${details.results.length} done, fan-in running`
+						: `${successCount + failCount}/${details.results.length} done, ${running} running`
+					: aggregator
+						? `${successCount}/${details.results.length} tasks + fan-in`
+						: `${successCount}/${details.results.length} tasks`;
 
 				if (expanded && !isRunning) {
 					const container = new Container();
@@ -991,7 +1080,7 @@ export default function (pi: ExtensionAPI) {
 					for (const r of details.results) {
 						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const finalOutput = getResultFinalOutput(r);
 
 						container.addChild(new Spacer(1));
 						container.addChild(
@@ -1022,7 +1111,41 @@ export default function (pi: ExtensionAPI) {
 						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
 					}
 
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
+					if (aggregator) {
+						const rIcon = aggregator.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const displayItems = getDisplayItems(aggregator.messages);
+						const finalOutput = getResultFinalOutput(aggregator);
+
+						container.addChild(new Spacer(1));
+						container.addChild(
+							new Text(
+								`${theme.fg("muted", "─── fan-in → ") + theme.fg("accent", aggregator.agent)} ${rIcon}`,
+								0,
+								0,
+							),
+						);
+						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", aggregator.task), 0, 0));
+						for (const item of displayItems) {
+							if (item.type === "toolCall") {
+								container.addChild(
+									new Text(
+										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
+										0,
+										0,
+									),
+								);
+							}
+						}
+						if (finalOutput) {
+							container.addChild(new Spacer(1));
+							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
+						}
+						const fanInUsage = formatUsageStats(aggregator.usage, aggregator.model);
+						if (fanInUsage) container.addChild(new Text(theme.fg("dim", fanInUsage), 0, 0));
+					}
+
+					const usageResults = aggregator ? [...details.results, aggregator] : details.results;
+					const usageStr = formatUsageStats(aggregateUsage(usageResults));
 					if (usageStr) {
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(theme.fg("dim", `Total: ${usageStr}`), 0, 0));
@@ -1045,8 +1168,22 @@ export default function (pi: ExtensionAPI) {
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
+				if (aggregator) {
+					const rIcon =
+						aggregator.exitCode === -1
+							? theme.fg("warning", "⏳")
+							: aggregator.exitCode === 0
+								? theme.fg("success", "✓")
+								: theme.fg("error", "✗");
+					const displayItems = getDisplayItems(aggregator.messages);
+					text += `\n\n${theme.fg("muted", "─── fan-in → ")}${theme.fg("accent", aggregator.agent)} ${rIcon}`;
+					if (displayItems.length === 0)
+						text += `\n${theme.fg("muted", aggregator.exitCode === -1 ? "(running...)" : "(no output)")}`;
+					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+				}
 				if (!isRunning) {
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
+					const usageResults = aggregator ? [...details.results, aggregator] : details.results;
+					const usageStr = formatUsageStats(aggregateUsage(usageResults));
 					if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
 				}
 				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;

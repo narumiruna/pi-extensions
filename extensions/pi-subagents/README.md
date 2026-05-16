@@ -20,9 +20,10 @@ A `subagent` tool with three execution modes:
 
 - **single**: run one `{ agent, task }`
 - **parallel**: run multiple `{ agent, task }` jobs with bounded concurrency
+- **parallel + aggregator**: run parallel jobs, then fan their complete outputs into one follow-up agent
 - **chain**: run sequential steps, passing prior output with `{previous}`
 
-The design borrows from Pi/Claude-style subagents: each worker has its own system prompt, tool boundary, optional model, subprocess context window, streaming progress, abort propagation, hard subprocess timeout, and summarized sidechain result.
+The design borrows from Pi/Claude-style subagents: each worker has its own system prompt, tool boundary, optional model, subprocess context window, streaming progress, abort propagation, hard subprocess timeout, complete final output in tool details, and summarized sidechain result.
 
 ## Built-in agents
 
@@ -80,6 +81,21 @@ Parallel:
     { "agent": "reviewer", "task": "Review TypeScript config consistency" }
   ],
   "timeoutMs": 120000
+}
+```
+
+Parallel with fan-in aggregation:
+
+```json
+{
+  "tasks": [
+    { "agent": "scout", "task": "Find auth-related code" },
+    { "agent": "scout", "task": "Find auth-related tests" }
+  ],
+  "aggregator": {
+    "agent": "reviewer",
+    "task": "Merge, dedupe, and verify these findings. Use {previous}."
+  }
 }
 ```
 
