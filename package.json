@@ -13,7 +13,6 @@
 		"biome:check": "biome check .",
 		"typecheck": "npm --workspaces run typecheck",
 		"check": "npm run biome:check && npm run typecheck",
-		"pack:auto-thinking": "npm --workspace @narumitw/pi-auto-thinking pack --dry-run",
 		"pack:biome-lsp": "npm --workspace @narumitw/pi-biome-lsp pack --dry-run",
 		"pack:btw": "npm --workspace @narumitw/pi-btw pack --dry-run",
 		"pack:caffeinate": "npm --workspace @narumitw/pi-caffeinate pack --dry-run",

@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-auto-thinking",
 	"version": "0.1.15",
-	"description": "Pi extension that automatically adjusts thinking level from model capability and task difficulty.",
+	"description": "Deprecated Pi extension that automatically adjusts thinking level from model capability and task difficulty.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -37,6 +37,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-auto-thinking"
+		"directory": "extensions/deprecated/pi-auto-thinking"
 	}
 }
