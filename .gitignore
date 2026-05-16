@@ -204,3 +204,4 @@ vite.config.ts.timestamp-*
 src/
 src.zip
 third_party/
+extensions/archived/
