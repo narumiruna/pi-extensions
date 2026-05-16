@@ -1,6 +1,6 @@
 {
 	"name": "pi-extensions",
-	"version": "0.1.10",
+	"version": "0.1.11",
 	"private": true,
 	"description": "Monorepo for @narumitw pi extension packages.",
 	"type": "module",
