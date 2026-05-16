@@ -1,16 +1,5 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-biome_lsp := "@narumitw/pi-biome-lsp"
-btw := "@narumitw/pi-btw"
-caffeinate := "@narumitw/pi-caffeinate"
-chrome_devtools := "@narumitw/pi-chrome-devtools"
-firecrawl := "@narumitw/pi-firecrawl"
-goal := "@narumitw/pi-goal"
-python_lsp := "@narumitw/pi-python-lsp"
-retry := "@narumitw/pi-retry"
-statusline := "@narumitw/pi-statusline"
-subagents := "@narumitw/pi-subagents"
-
 # Show available commands
 default:
     @just --list
@@ -41,223 +30,169 @@ doctor package="@narumitw/pi-chrome-devtools":
     npm dist-tag ls {{package}} || true
     npm view {{package}} version || true
 
-# Show npm visibility/version information for all packages
+# Show npm visibility/version information for all extension packages
 doctor-all:
-    just doctor {{biome_lsp}}
-    just doctor {{btw}}
-    just doctor {{caffeinate}}
-    just doctor {{chrome_devtools}}
-    just doctor {{firecrawl}}
-    just doctor {{goal}}
-    just doctor {{python_lsp}}
-    just doctor {{retry}}
-    just doctor {{statusline}}
-    just doctor {{subagents}}
+    for package_json in extensions/*/package.json; do package="$(node -p "require('./$package_json').name")"; just doctor "$package"; done
 
 # Make an already-published scoped npm package public if npm view returns 404
 # This does not create a package. For a brand-new package, first run:
 #   npm publish --workspace @narumitw/pi-subagents --access public
-# Usage for existing packages: just npm-public @narumitw/pi-goal 123456
-npm-public package="@narumitw/pi-goal" otp="":
-    otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; npm access set status=public {{package}} $otp_arg
+# Usage for existing packages: just npm-public @narumitw/pi-goal
+npm-public package="@narumitw/pi-goal":
+    npm access set status=public {{package}}
     npm view {{package}} version
 
-# Preview the biome-lsp package that npm would publish
-pack-biome-lsp:
-    npm run pack:biome-lsp
+# Preview the package that npm would publish
+# Usage: just pack subagents
+pack name:
+    package="$(node -p "require('./extensions/pi-{{name}}/package.json').name")"; npm --workspace "$package" pack --dry-run
 
-# Preview the btw package that npm would publish
-pack-btw:
-    npm run pack:btw
+# Try a package from this working tree as a temporary pi package
+# Usage: just try subagents
+try name:
+    pi -e ./extensions/pi-{{name}}
 
-# Preview the caffeinate package that npm would publish
-pack-caffeinate:
-    npm run pack:caffeinate
+# Install a package through pi, falling back to the local workspace if unpublished
+# Usage: just install subagents
+install name:
+    package="$(node -p "require('./extensions/pi-{{name}}/package.json').name")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install ./extensions/pi-{{name}}; fi
 
-# Preview the chrome-devtools package that npm would publish
-pack-chrome-devtools:
-    npm run pack:chrome-devtools
-
-# Preview the firecrawl package that npm would publish
-pack-firecrawl:
-    npm run pack:firecrawl
-
-# Preview the goal package that npm would publish
-pack-goal:
-    npm run pack:goal
-
-# Preview the python-lsp package that npm would publish
-pack-python-lsp:
-    npm run pack:python-lsp
-
-# Preview the retry package that npm would publish
-pack-retry:
-    npm run pack:retry
-
-# Preview the statusline package that npm would publish
-pack-statusline:
-    npm run pack:statusline
-
-# Preview the subagents package that npm would publish
-pack-subagents:
-    npm run pack:subagents
-
-# Try biome-lsp from this working tree as a temporary pi package
-try-biome-lsp:
-    pi -e ./extensions/pi-biome-lsp
-
-# Try btw from this working tree as a temporary pi package
-try-btw:
-    pi -e ./extensions/pi-btw
-
-# Try caffeinate from this working tree as a temporary pi package
-try-caffeinate:
-    pi -e ./extensions/pi-caffeinate
-
-# Try chrome-devtools from this working tree as a temporary pi package
-try-chrome-devtools:
-    pi -e ./extensions/pi-chrome-devtools
-
-# Try firecrawl from this working tree as a temporary pi package
-try-firecrawl:
-    pi -e ./extensions/pi-firecrawl
-
-# Try goal from this working tree as a temporary pi package
-try-goal:
-    pi -e ./extensions/pi-goal
-
-# Try python-lsp from this working tree as a temporary pi package
-try-python-lsp:
-    pi -e ./extensions/pi-python-lsp
-
-# Try retry from this working tree as a temporary pi package
-try-retry:
-    pi -e ./extensions/pi-retry
-
-# Try statusline from this working tree as a temporary pi package
-try-statusline:
-    pi -e ./extensions/pi-statusline
-
-# Try subagents from this working tree as a temporary pi package
-try-subagents:
-    pi -e ./extensions/pi-subagents
-
-# Install biome-lsp through pi, falling back to the local workspace if unpublished
-install-biome-lsp:
-    if npm view {{biome_lsp}} version >/dev/null 2>&1; then pi install npm:{{biome_lsp}}; else echo "{{biome_lsp}} is not published; installing local workspace package instead."; pi install ./extensions/pi-biome-lsp; fi
-
-# Install btw through pi, falling back to the local workspace if unpublished
-install-btw:
-    if npm view {{btw}} version >/dev/null 2>&1; then pi install npm:{{btw}}; else echo "{{btw}} is not published; installing local workspace package instead."; pi install ./extensions/pi-btw; fi
-
-# Install caffeinate through pi, falling back to the local workspace if unpublished
-install-caffeinate:
-    if npm view {{caffeinate}} version >/dev/null 2>&1; then pi install npm:{{caffeinate}}; else echo "{{caffeinate}} is not published; installing local workspace package instead."; pi install ./extensions/pi-caffeinate; fi
-
-# Install chrome-devtools through pi, falling back to the local workspace if unpublished
-install-chrome-devtools:
-    if npm view {{chrome_devtools}} version >/dev/null 2>&1; then pi install npm:{{chrome_devtools}}; else echo "{{chrome_devtools}} is not published; installing local workspace package instead."; pi install ./extensions/pi-chrome-devtools; fi
-
-# Install firecrawl through pi, falling back to the local workspace if unpublished
-install-firecrawl:
-    if npm view {{firecrawl}} version >/dev/null 2>&1; then pi install npm:{{firecrawl}}; else echo "{{firecrawl}} is not published; installing local workspace package instead."; pi install ./extensions/pi-firecrawl; fi
-
-# Install the published goal package through pi
-install-goal:
-    pi install npm:{{goal}}
-
-# Install python-lsp through pi, falling back to the local workspace if unpublished
-install-python-lsp:
-    if npm view {{python_lsp}} version >/dev/null 2>&1; then pi install npm:{{python_lsp}}; else echo "{{python_lsp}} is not published; installing local workspace package instead."; pi install ./extensions/pi-python-lsp; fi
-
-# Install the published retry package through pi
-install-retry:
-    pi install npm:{{retry}}
-
-# Install statusline through pi, falling back to the local workspace if unpublished
-install-statusline:
-    if npm view {{statusline}} version >/dev/null 2>&1; then pi install npm:{{statusline}}; else echo "{{statusline}} is not published; installing local workspace package instead."; pi install ./extensions/pi-statusline; fi
-
-# Install subagents through pi, falling back to the local workspace if unpublished
-install-subagents:
-    if npm view {{subagents}} version >/dev/null 2>&1; then pi install npm:{{subagents}}; else echo "{{subagents}} is not published; installing local workspace package instead."; pi install ./extensions/pi-subagents; fi
-
-# Publish biome-lsp to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-biome-lsp 123456
-publish-biome-lsp otp="":
-    version="$(node -p "require('./extensions/pi-biome-lsp/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{biome_lsp}}@"$version" version >/dev/null 2>&1; then echo "{{biome_lsp}}@$version already exists; skipping publish."; else npm --workspace {{biome_lsp}} pack --dry-run; npm --workspace {{biome_lsp}} publish --access public $otp_arg; fi
-
-# Publish btw to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-btw 123456
-publish-btw otp="":
-    version="$(node -p "require('./extensions/pi-btw/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{btw}}@"$version" version >/dev/null 2>&1; then echo "{{btw}}@$version already exists; skipping publish."; else npm --workspace {{btw}} pack --dry-run; npm --workspace {{btw}} publish --access public $otp_arg; fi
-
-# Publish caffeinate to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-caffeinate 123456
-publish-caffeinate otp="":
-    version="$(node -p "require('./extensions/pi-caffeinate/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{caffeinate}}@"$version" version >/dev/null 2>&1; then echo "{{caffeinate}}@$version already exists; skipping publish."; else npm --workspace {{caffeinate}} pack --dry-run; npm --workspace {{caffeinate}} publish --access public $otp_arg; fi
-
-# Publish chrome-devtools to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-chrome-devtools 123456
-publish-chrome-devtools otp="":
-    version="$(node -p "require('./extensions/pi-chrome-devtools/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{chrome_devtools}}@"$version" version >/dev/null 2>&1; then echo "{{chrome_devtools}}@$version already exists; skipping publish."; else npm --workspace {{chrome_devtools}} pack --dry-run; npm --workspace {{chrome_devtools}} publish --access public $otp_arg; fi
-
-# Publish firecrawl to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-firecrawl 123456
-publish-firecrawl otp="":
-    version="$(node -p "require('./extensions/pi-firecrawl/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{firecrawl}}@"$version" version >/dev/null 2>&1; then echo "{{firecrawl}}@$version already exists; skipping publish."; else npm --workspace {{firecrawl}} pack --dry-run; npm --workspace {{firecrawl}} publish --access public $otp_arg; fi
-
-# Publish goal to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-goal 123456
-publish-goal otp="":
-    version="$(node -p "require('./extensions/pi-goal/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{goal}}@"$version" version >/dev/null 2>&1; then echo "{{goal}}@$version already exists; skipping publish."; else npm --workspace {{goal}} pack --dry-run; npm --workspace {{goal}} publish --access public $otp_arg; fi
-
-# Publish python-lsp to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-python-lsp 123456
-publish-python-lsp otp="":
-    version="$(node -p "require('./extensions/pi-python-lsp/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{python_lsp}}@"$version" version >/dev/null 2>&1; then echo "{{python_lsp}}@$version already exists; skipping publish."; else npm --workspace {{python_lsp}} pack --dry-run; npm --workspace {{python_lsp}} publish --access public $otp_arg; fi
-
-# Publish retry to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-retry 123456
-publish-retry otp="":
-    version="$(node -p "require('./extensions/pi-retry/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{retry}}@"$version" version >/dev/null 2>&1; then echo "{{retry}}@$version already exists; skipping publish."; else npm --workspace {{retry}} pack --dry-run; npm --workspace {{retry}} publish --access public $otp_arg; fi
-
-# Publish statusline to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-statusline 123456
-publish-statusline otp="":
-    version="$(node -p "require('./extensions/pi-statusline/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{statusline}}@"$version" version >/dev/null 2>&1; then echo "{{statusline}}@$version already exists; skipping publish."; else npm --workspace {{statusline}} pack --dry-run; npm --workspace {{statusline}} publish --access public $otp_arg; fi
-
-# Publish subagents to npm, skipping if the current version already exists
-# Usage with 2FA: just publish-subagents 123456
-publish-subagents otp="":
-    version="$(node -p "require('./extensions/pi-subagents/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{subagents}}@"$version" version >/dev/null 2>&1; then echo "{{subagents}}@$version already exists; skipping publish."; else npm --workspace {{subagents}} pack --dry-run; npm --workspace {{subagents}} publish --access public $otp_arg; fi
+# Publish one package to npm, skipping if the current version already exists
+# Usage: just publish subagents
+publish name:
+    package="$(node -p "require('./extensions/pi-{{name}}/package.json').name")"; version="$(node -p "require('./extensions/pi-{{name}}/package.json').version")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
 
 # Publish all extension packages to npm
-# Usage with 2FA: just publish-all 123456
-publish-all otp="":
-    just publish-biome-lsp {{otp}}
-    just publish-btw {{otp}}
-    just publish-caffeinate {{otp}}
-    just publish-chrome-devtools {{otp}}
-    just publish-firecrawl {{otp}}
-    just publish-goal {{otp}}
-    just publish-python-lsp {{otp}}
-    just publish-retry {{otp}}
-    just publish-statusline {{otp}}
-    just publish-subagents {{otp}}
+publish-all:
+    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
 
-# Install all published extension packages through pi
+# Install all extension packages through pi
 install-all:
-    just install-biome-lsp
-    just install-btw
-    just install-caffeinate
-    just install-chrome-devtools
-    just install-firecrawl
-    just install-goal
-    just install-python-lsp
-    just install-retry
-    just install-statusline
-    just install-subagents
+    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just install "${dir#pi-}"; done
+
+# Preview individual packages that npm would publish
+pack-biome-lsp:
+    just pack biome-lsp
+
+pack-btw:
+    just pack btw
+
+pack-caffeinate:
+    just pack caffeinate
+
+pack-chrome-devtools:
+    just pack chrome-devtools
+
+pack-firecrawl:
+    just pack firecrawl
+
+pack-goal:
+    just pack goal
+
+pack-python-lsp:
+    just pack python-lsp
+
+pack-retry:
+    just pack retry
+
+pack-statusline:
+    just pack statusline
+
+pack-subagents:
+    just pack subagents
+
+# Try individual packages from this working tree as temporary pi packages
+try-biome-lsp:
+    just try biome-lsp
+
+try-btw:
+    just try btw
+
+try-caffeinate:
+    just try caffeinate
+
+try-chrome-devtools:
+    just try chrome-devtools
+
+try-firecrawl:
+    just try firecrawl
+
+try-goal:
+    just try goal
+
+try-python-lsp:
+    just try python-lsp
+
+try-retry:
+    just try retry
+
+try-statusline:
+    just try statusline
+
+try-subagents:
+    just try subagents
+
+# Install individual packages through pi
+install-biome-lsp:
+    just install biome-lsp
+
+install-btw:
+    just install btw
+
+install-caffeinate:
+    just install caffeinate
+
+install-chrome-devtools:
+    just install chrome-devtools
+
+install-firecrawl:
+    just install firecrawl
+
+install-goal:
+    just install goal
+
+install-python-lsp:
+    just install python-lsp
+
+install-retry:
+    just install retry
+
+install-statusline:
+    just install statusline
+
+install-subagents:
+    just install subagents
+
+# Publish individual packages to npm
+publish-biome-lsp:
+    just publish biome-lsp
+
+publish-btw:
+    just publish btw
+
+publish-caffeinate:
+    just publish caffeinate
+
+publish-chrome-devtools:
+    just publish chrome-devtools
+
+publish-firecrawl:
+    just publish firecrawl
+
+publish-goal:
+    just publish goal
+
+publish-python-lsp:
+    just publish python-lsp
+
+publish-retry:
+    just publish retry
+
+publish-statusline:
+    just publish statusline
+
+publish-subagents:
+    just publish subagents
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch
