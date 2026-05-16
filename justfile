@@ -1,5 +1,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+biome_lsp := "@narumitw/pi-biome-lsp"
 btw := "@narumitw/pi-btw"
 caffeinate := "@narumitw/pi-caffeinate"
 chrome_devtools := "@narumitw/pi-chrome-devtools"
@@ -42,6 +43,7 @@ doctor package="@narumitw/pi-chrome-devtools":
 
 # Show npm visibility/version information for all packages
 doctor-all:
+    just doctor {{biome_lsp}}
     just doctor {{btw}}
     just doctor {{caffeinate}}
     just doctor {{chrome_devtools}}
@@ -57,6 +59,10 @@ doctor-all:
 npm-public package="@narumitw/pi-goal" otp="":
     otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; npm access set status=public {{package}} $otp_arg
     npm view {{package}} version
+
+# Preview the biome-lsp package that npm would publish
+pack-biome-lsp:
+    npm run pack:biome-lsp
 
 # Preview the btw package that npm would publish
 pack-btw:
@@ -94,6 +100,10 @@ pack-statusline:
 pack-subagents:
     npm run pack:subagents
 
+# Try biome-lsp from this working tree as a temporary pi package
+try-biome-lsp:
+    pi -e ./extensions/pi-biome-lsp
+
 # Try btw from this working tree as a temporary pi package
 try-btw:
     pi -e ./extensions/pi-btw
@@ -130,6 +140,10 @@ try-statusline:
 try-subagents:
     pi -e ./extensions/pi-subagents
 
+# Install biome-lsp through pi, falling back to the local workspace if unpublished
+install-biome-lsp:
+    if npm view {{biome_lsp}} version >/dev/null 2>&1; then pi install npm:{{biome_lsp}}; else echo "{{biome_lsp}} is not published; installing local workspace package instead."; pi install ./extensions/pi-biome-lsp; fi
+
 # Install btw through pi, falling back to the local workspace if unpublished
 install-btw:
     if npm view {{btw}} version >/dev/null 2>&1; then pi install npm:{{btw}}; else echo "{{btw}} is not published; installing local workspace package instead."; pi install ./extensions/pi-btw; fi
@@ -165,6 +179,11 @@ install-statusline:
 # Install subagents through pi, falling back to the local workspace if unpublished
 install-subagents:
     if npm view {{subagents}} version >/dev/null 2>&1; then pi install npm:{{subagents}}; else echo "{{subagents}} is not published; installing local workspace package instead."; pi install ./extensions/pi-subagents; fi
+
+# Publish biome-lsp to npm, skipping if the current version already exists
+# Usage with 2FA: just publish-biome-lsp 123456
+publish-biome-lsp otp="":
+    version="$(node -p "require('./extensions/pi-biome-lsp/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{biome_lsp}}@"$version" version >/dev/null 2>&1; then echo "{{biome_lsp}}@$version already exists; skipping publish."; else npm --workspace {{biome_lsp}} pack --dry-run; npm --workspace {{biome_lsp}} publish --access public $otp_arg; fi
 
 # Publish btw to npm, skipping if the current version already exists
 # Usage with 2FA: just publish-btw 123456
@@ -214,6 +233,7 @@ publish-subagents otp="":
 # Publish all extension packages to npm
 # Usage with 2FA: just publish-all 123456
 publish-all otp="":
+    just publish-biome-lsp {{otp}}
     just publish-btw {{otp}}
     just publish-caffeinate {{otp}}
     just publish-chrome-devtools {{otp}}
@@ -226,6 +246,7 @@ publish-all otp="":
 
 # Install all published extension packages through pi
 install-all:
+    just install-biome-lsp
     just install-btw
     just install-caffeinate
     just install-chrome-devtools
