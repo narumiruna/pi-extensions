@@ -12,6 +12,7 @@ Use it to make Pi sessions more resilient when an upstream AI provider returns a
 - Matches the known provider error text `Unknown error (no error details in response)`.
 - Appends Pi's retryable-provider-error hint.
 - Lets Pi's built-in retry path continue the turn.
+- Shows a short-lived statusline item only when a matching error triggers retry.
 - Requires no commands or configuration.
 - Works as a small, focused npm Pi extension package.
 
@@ -36,6 +37,8 @@ pi -e ./extensions/pi-retry
 ## 🚀 What it does
 
 When an assistant message ends with `stopReason: "error"` and the error message matches `Unknown error (no error details in response)`, the extension appends Pi's retryable-provider-error hint so Pi's built-in retry path can continue the turn.
+
+The extension does not keep a permanent statusline entry. It briefly shows `unknown-error retry: retrying` only when it has matched the error and asked Pi to retry.
 
 ## 🧠 Use cases
 

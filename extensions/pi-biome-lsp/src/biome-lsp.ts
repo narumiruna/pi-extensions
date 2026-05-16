@@ -46,6 +46,10 @@ interface ServerCommand {
 	args: string[];
 }
 
+interface StatusContext {
+	ui: { setStatus: (key: string, value: string | undefined) => void };
+}
+
 interface LspPosition {
 	line: number;
 	character: number;
@@ -124,8 +128,8 @@ const biomeDiagnosticsTool = defineTool({
 		"If Biome is missing, report the configuration error and suggest installing @biomejs/biome or setting PI_BIOME_LSP_COMMAND.",
 	],
 	parameters: Type.Object(PathsParameters),
-	async execute(_toolCallId, params, signal) {
-		return runDiagnostics(params, signal);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return runDiagnostics(params, signal, ctx);
 	},
 });
 
@@ -143,12 +147,13 @@ const biomeFormatTool = defineTool({
 			Type.Boolean({ description: "Write formatted text back to the file. Defaults to false." }),
 		),
 	}),
-	async execute(_toolCallId, params, signal) {
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const root = resolveRoot(params.root);
 		const file = resolveBiomeFile(root, params.path);
 		const client = new LspClient(getServerCommand(), root, getTimeoutMs());
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
+		ctx.ui.setStatus(STATUS_KEY, "biome-lsp: format");
 
 		try {
 			await client.start();
@@ -171,6 +176,7 @@ const biomeFormatTool = defineTool({
 				text: params.write ? undefined : newText,
 			});
 		} finally {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
 			signal?.removeEventListener("abort", abort);
 			await client.shutdown();
 		}
@@ -197,13 +203,14 @@ const biomeFixTool = defineTool({
 			Type.Boolean({ description: "Write fixed text back to the file. Defaults to false." }),
 		),
 	}),
-	async execute(_toolCallId, params, signal) {
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const root = resolveRoot(params.root);
 		const file = resolveBiomeFile(root, params.path);
 		const actionKind = params.kind?.trim() || "source.fixAll.biome";
 		const client = new LspClient(getServerCommand(), root, getTimeoutMs());
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
+		ctx.ui.setStatus(STATUS_KEY, "biome-lsp: fix");
 
 		try {
 			await client.start();
@@ -231,6 +238,7 @@ const biomeFixTool = defineTool({
 				text: params.write ? undefined : newText,
 			});
 		} finally {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
 			signal?.removeEventListener("abort", abort);
 			await client.shutdown();
 		}
@@ -246,12 +254,11 @@ export default function biomeLsp(pi: ExtensionAPI) {
 		description: "Show Biome LSP extension configuration",
 		handler: async (_args, ctx) => {
 			ctx.ui.notify(buildStatusMessage(), statusLevel());
-			updateStatus(ctx);
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		updateStatus(ctx);
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -262,6 +269,7 @@ export default function biomeLsp(pi: ExtensionAPI) {
 async function runDiagnostics(
 	params: { root?: string; paths?: string[]; limit?: number },
 	signal: AbortSignal | undefined,
+	ctx: StatusContext,
 ) {
 	const root = resolveRoot(params.root);
 	const files = collectBiomeFiles(root, params.paths, params.limit ?? DEFAULT_FILE_LIMIT);
@@ -272,6 +280,7 @@ async function runDiagnostics(
 	const client = new LspClient(getServerCommand(), root, getTimeoutMs());
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
+	ctx.ui.setStatus(STATUS_KEY, "biome-lsp: diagnostics");
 
 	try {
 		await client.start();
@@ -293,6 +302,7 @@ async function runDiagnostics(
 			summary: summarize(entries),
 		});
 	} finally {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 		signal?.removeEventListener("abort", abort);
 		await client.shutdown();
 	}
@@ -311,13 +321,6 @@ function getServerCommand(): ServerCommand {
 function getTimeoutMs() {
 	const rawValue = Number(process.env.PI_BIOME_LSP_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
 	return Number.isFinite(rawValue) && rawValue > 0 ? rawValue : DEFAULT_TIMEOUT_MS;
-}
-
-function updateStatus(ctx: {
-	ui: { setStatus: (key: string, value: string | undefined) => void };
-}) {
-	const command = getServerCommand();
-	ctx.ui.setStatus(STATUS_KEY, `biome-lsp: ${commandExists(command.command) ? "ready" : "missing"}`);
 }
 
 function buildStatusMessage() {

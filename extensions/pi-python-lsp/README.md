@@ -14,6 +14,7 @@ Use it to give Pi reliable Python type diagnostics, Ruff lint diagnostics, forma
 - Computes or writes Ruff source actions such as `source.fixAll.ruff` and `source.organizeImports.ruff`.
 - Supports workspace roots, file limits, and recursive Python file discovery.
 - Starts language servers only for tool calls, then shuts them down.
+- Shows statusline activity only while Python LSP tools are running.
 - Provides clear setup errors when ty or Ruff is missing.
 
 ## 📦 Install

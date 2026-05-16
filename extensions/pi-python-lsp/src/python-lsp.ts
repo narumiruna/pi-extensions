@@ -28,6 +28,10 @@ interface ServerCommand {
 	args: string[];
 }
 
+interface StatusContext {
+	ui: { setStatus: (key: string, value: string | undefined) => void };
+}
+
 interface LspPosition {
 	line: number;
 	character: number;
@@ -106,8 +110,8 @@ const tyDiagnosticsTool = defineTool({
 		"If ty is missing, report the configuration error and suggest installing ty or setting PI_TY_LSP_COMMAND.",
 	],
 	parameters: Type.Object(PathsParameters),
-	async execute(_toolCallId, params, signal) {
-		return runDiagnostics("ty", params, signal);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return runDiagnostics("ty", params, signal, ctx);
 	},
 });
 
@@ -121,8 +125,8 @@ const ruffDiagnosticsTool = defineTool({
 		"If ruff is missing, report the configuration error and suggest installing ruff or setting PI_RUFF_LSP_COMMAND.",
 	],
 	parameters: Type.Object(PathsParameters),
-	async execute(_toolCallId, params, signal) {
-		return runDiagnostics("ruff", params, signal);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return runDiagnostics("ruff", params, signal, ctx);
 	},
 });
 
@@ -140,12 +144,13 @@ const ruffFormatTool = defineTool({
 			Type.Boolean({ description: "Write formatted text back to the file. Defaults to false." }),
 		),
 	}),
-	async execute(_toolCallId, params, signal) {
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const root = resolveRoot(params.root);
 		const file = resolvePythonFile(root, params.path);
 		const client = new LspClient("ruff", getServerCommand("ruff"), root, getTimeoutMs("ruff"));
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
+		ctx.ui.setStatus(STATUS_KEY, "python-lsp: ruff format");
 
 		try {
 			await client.start();
@@ -168,6 +173,7 @@ const ruffFormatTool = defineTool({
 				text: params.write ? undefined : newText,
 			});
 		} finally {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
 			signal?.removeEventListener("abort", abort);
 			await client.shutdown();
 		}
@@ -194,13 +200,14 @@ const ruffFixTool = defineTool({
 			Type.Boolean({ description: "Write fixed text back to the file. Defaults to false." }),
 		),
 	}),
-	async execute(_toolCallId, params, signal) {
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const root = resolveRoot(params.root);
 		const file = resolvePythonFile(root, params.path);
 		const actionKind = params.kind?.trim() || "source.fixAll.ruff";
 		const client = new LspClient("ruff", getServerCommand("ruff"), root, getTimeoutMs("ruff"));
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
+		ctx.ui.setStatus(STATUS_KEY, "python-lsp: ruff fix");
 
 		try {
 			await client.start();
@@ -228,6 +235,7 @@ const ruffFixTool = defineTool({
 				text: params.write ? undefined : newText,
 			});
 		} finally {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
 			signal?.removeEventListener("abort", abort);
 			await client.shutdown();
 		}
@@ -244,12 +252,11 @@ export default function pythonLsp(pi: ExtensionAPI) {
 		description: "Show Python LSP extension configuration",
 		handler: async (_args, ctx) => {
 			ctx.ui.notify(buildStatusMessage(), statusLevel());
-			updateStatus(ctx);
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		updateStatus(ctx);
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -261,6 +268,7 @@ async function runDiagnostics(
 	kind: ServerKind,
 	params: { root?: string; paths?: string[]; limit?: number },
 	signal: AbortSignal | undefined,
+	ctx: StatusContext,
 ) {
 	const root = resolveRoot(params.root);
 	const files = collectPythonFiles(root, params.paths, params.limit ?? DEFAULT_FILE_LIMIT);
@@ -271,6 +279,7 @@ async function runDiagnostics(
 	const client = new LspClient(kind, getServerCommand(kind), root, getTimeoutMs(kind));
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
+	ctx.ui.setStatus(STATUS_KEY, `python-lsp: ${kind} diagnostics`);
 
 	try {
 		await client.start();
@@ -292,6 +301,7 @@ async function runDiagnostics(
 			summary: summarize(entries),
 		});
 	} finally {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 		signal?.removeEventListener("abort", abort);
 		await client.shutdown();
 	}
@@ -316,17 +326,6 @@ function getTimeoutMs(kind: ServerKind) {
 		kind === "ty" ? process.env.PI_TY_LSP_TIMEOUT_MS : process.env.PI_RUFF_LSP_TIMEOUT_MS;
 	const rawValue = Number(envValue ?? DEFAULT_TIMEOUT_MS);
 	return Number.isFinite(rawValue) && rawValue > 0 ? rawValue : DEFAULT_TIMEOUT_MS;
-}
-
-function updateStatus(ctx: {
-	ui: { setStatus: (key: string, value: string | undefined) => void };
-}) {
-	const tyReady = commandExists(getServerCommand("ty").command);
-	const ruffReady = commandExists(getServerCommand("ruff").command);
-	ctx.ui.setStatus(
-		STATUS_KEY,
-		`python-lsp: ty ${tyReady ? "ready" : "missing"}, ruff ${ruffReady ? "ready" : "missing"}`,
-	);
 }
 
 function buildStatusMessage() {

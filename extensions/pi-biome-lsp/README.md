@@ -13,6 +13,7 @@ Use it to give Pi Biome diagnostics, formatting, import organization, and safe s
 - Computes or writes Biome source actions such as `source.fixAll.biome` and `source.organizeImports.biome`.
 - Supports workspace roots, file limits, and recursive file discovery.
 - Starts the language server only for tool calls, then shuts it down.
+- Shows statusline activity only while Biome LSP tools are running.
 - Provides clear setup errors when Biome is missing.
 
 ## 📦 Install

@@ -14,6 +14,7 @@ Use it to give your AI coding agent reliable web research capabilities for docum
 - Discover URLs with Firecrawl map.
 - Search the web and optionally scrape search result pages.
 - Supports Firecrawl API endpoint overrides.
+- Shows statusline activity only while Firecrawl tools are running.
 - Never logs or displays your Firecrawl API key.
 
 ## 📦 Install

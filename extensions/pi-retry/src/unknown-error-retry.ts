@@ -3,14 +3,35 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 const UNKNOWN_NO_DETAILS_RE = /Unknown error \(no error details in response\)/i;
 const RETRYABLE_HINT = "provider returned error";
 const EXTENSION_TAG = "[unknown-error-retry]";
+const STATUS_KEY = "unknown-error-retry";
+const STATUS_VISIBLE_MS = 8_000;
 
 export default function unknownErrorRetry(pi: ExtensionAPI) {
+	let clearStatusTimer: NodeJS.Timeout | undefined;
+
+	const clearStatus = (ctx: { ui: { setStatus: (key: string, value: string | undefined) => void } }) => {
+		if (clearStatusTimer) clearTimeout(clearStatusTimer);
+		clearStatusTimer = undefined;
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+	};
+
+	const showTransientStatus = (ctx: {
+		ui: { setStatus: (key: string, value: string | undefined) => void };
+	}) => {
+		if (clearStatusTimer) clearTimeout(clearStatusTimer);
+		ctx.ui.setStatus(STATUS_KEY, "unknown-error retry: retrying");
+		clearStatusTimer = setTimeout(() => {
+			clearStatusTimer = undefined;
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+		}, STATUS_VISIBLE_MS);
+	};
+
 	pi.on("session_start", (_event, ctx) => {
-		ctx.ui.setStatus("unknown-error-retry", "unknown-error retry: on");
+		clearStatus(ctx);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		ctx.ui.setStatus("unknown-error-retry", undefined);
+		clearStatus(ctx);
 	});
 
 	pi.on("message_end", (event, ctx) => {
@@ -37,6 +58,7 @@ export default function unknownErrorRetry(pi: ExtensionAPI) {
 		const errorMessage = `${message.errorMessage}\n\n${EXTENSION_TAG} ${RETRYABLE_HINT}; treating empty-detail provider failure as retryable.`;
 
 		if (ctx.hasUI) {
+			showTransientStatus(ctx);
 			ctx.ui.notify(
 				"Matched provider 'Unknown error (no error details in response)'; letting pi auto-retry this turn.",
 				"warning",

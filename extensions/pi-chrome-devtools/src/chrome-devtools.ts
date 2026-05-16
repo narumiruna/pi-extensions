@@ -4,6 +4,11 @@ import { Type } from "typebox";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 9222;
 const DEFAULT_TIMEOUT_MS = 10_000;
+const STATUS_KEY = "chrome-devtools";
+
+interface StatusContext {
+	ui: { setStatus: (key: string, value: string | undefined) => void };
+}
 
 interface DevToolsPage {
 	id: string;
@@ -40,9 +45,11 @@ const listPagesTool = defineTool({
 	description: "List Chrome tabs/pages from a running Chrome DevTools Protocol endpoint.",
 	promptSnippet: "List Chrome tabs/pages available over Chrome DevTools Protocol",
 	parameters: Type.Object({}),
-	async execute() {
-		const pages = await listPages();
-		return textResult(JSON.stringify(pages.map(formatPage), null, 2), { pages });
+	async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+		return withStatus(ctx, "cdp: list pages", async () => {
+			const pages = await listPages();
+			return textResult(JSON.stringify(pages.map(formatPage), null, 2), { pages });
+		});
 	},
 });
 
@@ -54,11 +61,13 @@ const selectPageTool = defineTool({
 	parameters: Type.Object({
 		pageId: Type.String({ description: "Page id from chrome_devtools_list_pages." }),
 	}),
-	async execute(_toolCallId, params) {
-		const page = await getPage(params.pageId);
-		state.activePageId = page.id;
-		return textResult(`Selected page ${page.id}: ${page.title}\n${page.url}`, {
-			page: formatPage(page),
+	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		return withStatus(ctx, "cdp: select page", async () => {
+			const page = await getPage(params.pageId);
+			state.activePageId = page.id;
+			return textResult(`Selected page ${page.id}: ${page.title}\n${page.url}`, {
+				page: formatPage(page),
+			});
 		});
 	},
 });
@@ -74,15 +83,17 @@ const navigateTool = defineTool({
 			Type.String({ description: "Optional page id. Defaults to selected or first page." }),
 		),
 	}),
-	async execute(_toolCallId, params) {
-		const page = await resolvePage(params.pageId);
-		const result = await withCdp(page, async (client) => {
-			await client.send("Page.enable");
-			return client.send("Page.navigate", { url: params.url });
-		});
+	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		return withStatus(ctx, "cdp: navigate", async () => {
+			const page = await resolvePage(params.pageId);
+			const result = await withCdp(page, async (client) => {
+				await client.send("Page.enable");
+				return client.send("Page.navigate", { url: params.url });
+			});
 
-		state.activePageId = page.id;
-		return textResult(`Navigated ${page.id} to ${params.url}`, { page: formatPage(page), result });
+			state.activePageId = page.id;
+			return textResult(`Navigated ${page.id} to ${params.url}`, { page: formatPage(page), result });
+		});
 	},
 });
 
@@ -100,18 +111,20 @@ const evaluateTool = defineTool({
 			Type.Boolean({ description: "Whether to await a returned Promise. Defaults to true." }),
 		),
 	}),
-	async execute(_toolCallId, params) {
-		const page = await resolvePage(params.pageId);
-		const result = await withCdp(page, (client) =>
-			client.send("Runtime.evaluate", {
-				expression: params.expression,
-				awaitPromise: params.awaitPromise ?? true,
-				returnByValue: true,
-			}),
-		);
+	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		return withStatus(ctx, "cdp: evaluate", async () => {
+			const page = await resolvePage(params.pageId);
+			const result = await withCdp(page, (client) =>
+				client.send("Runtime.evaluate", {
+					expression: params.expression,
+					awaitPromise: params.awaitPromise ?? true,
+					returnByValue: true,
+				}),
+			);
 
-		state.activePageId = page.id;
-		return textResult(JSON.stringify(result, null, 2), { page: formatPage(page), result });
+			state.activePageId = page.id;
+			return textResult(JSON.stringify(result, null, 2), { page: formatPage(page), result });
+		});
 	},
 });
 
@@ -128,40 +141,42 @@ const screenshotTool = defineTool({
 			Type.Boolean({ description: "Capture the full document, not just the viewport." }),
 		),
 	}),
-	async execute(_toolCallId, params) {
-		const page = await resolvePage(params.pageId);
-		const result = await withCdp(page, async (client) => {
-			await client.send("Page.enable");
+	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		return withStatus(ctx, "cdp: screenshot", async () => {
+			const page = await resolvePage(params.pageId);
+			const result = await withCdp(page, async (client) => {
+				await client.send("Page.enable");
 
-			if (!params.fullPage) {
-				return client.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
-			}
+				if (!params.fullPage) {
+					return client.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
+				}
 
-			const metrics = await client.send<{
-				contentSize: { x: number; y: number; width: number; height: number };
-			}>("Page.getLayoutMetrics");
+				const metrics = await client.send<{
+					contentSize: { x: number; y: number; width: number; height: number };
+				}>("Page.getLayoutMetrics");
 
-			return client.send<{ data: string }>("Page.captureScreenshot", {
-				captureBeyondViewport: true,
-				format: "png",
-				clip: {
-					x: metrics.contentSize.x,
-					y: metrics.contentSize.y,
-					width: metrics.contentSize.width,
-					height: metrics.contentSize.height,
-					scale: 1,
-				},
+				return client.send<{ data: string }>("Page.captureScreenshot", {
+					captureBeyondViewport: true,
+					format: "png",
+					clip: {
+						x: metrics.contentSize.x,
+						y: metrics.contentSize.y,
+						width: metrics.contentSize.width,
+						height: metrics.contentSize.height,
+						scale: 1,
+					},
+				});
 			});
-		});
 
-		state.activePageId = page.id;
-		return {
-			content: [
-				{ type: "text", text: `Captured PNG screenshot from ${page.title || page.url}` },
-				{ type: "image", data: result.data, mimeType: "image/png" },
-			],
-			details: { page: formatPage(page), bytes: Buffer.byteLength(result.data, "base64") },
-		};
+			state.activePageId = page.id;
+			return {
+				content: [
+					{ type: "text", text: `Captured PNG screenshot from ${page.title || page.url}` },
+					{ type: "image", data: result.data, mimeType: "image/png" },
+				],
+				details: { page: formatPage(page), bytes: Buffer.byteLength(result.data, "base64") },
+			};
+		});
 	},
 });
 
@@ -183,11 +198,11 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		ctx.ui.setStatus("chrome-devtools", `cdp: ${state.host}:${state.port}`);
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		ctx.ui.setStatus("chrome-devtools", undefined);
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 }
 
@@ -237,6 +252,15 @@ function textResult(text: string, details: unknown) {
 		content: [{ type: "text" as const, text }],
 		details,
 	};
+}
+
+async function withStatus<T>(ctx: StatusContext, status: string, callback: () => Promise<T>) {
+	ctx.ui.setStatus(STATUS_KEY, status);
+	try {
+		return await callback();
+	} finally {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+	}
 }
 
 async function withCdp<T>(page: DevToolsPage, callback: (client: CdpClient) => Promise<T>) {

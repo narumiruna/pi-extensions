@@ -10,6 +10,10 @@ interface FirecrawlState {
 	apiUrl: string;
 }
 
+interface StatusContext {
+	ui: { setStatus: (key: string, value: string | undefined) => void };
+}
+
 const state: FirecrawlState = {
 	apiUrl: normalizeApiUrl(process.env.FIRECRAWL_API_URL ?? process.env.FIRECRAWL_BASE_URL),
 };
@@ -68,9 +72,11 @@ const scrapeTool = defineTool({
 		),
 		location: Type.Optional(Type.Any({ description: "Firecrawl location options." })),
 	}),
-	async execute(_toolCallId, params, signal) {
-		const payload = await firecrawlRequest("POST", "/scrape", cleanObject(params), signal);
-		return jsonResult(payload);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return withStatus(ctx, "firecrawl: scrape", async () => {
+			const payload = await firecrawlRequest("POST", "/scrape", cleanObject(params), signal);
+			return jsonResult(payload);
+		});
 	},
 });
 
@@ -104,9 +110,11 @@ const crawlTool = defineTool({
 		),
 		webhook: Type.Optional(Type.Any({ description: "Firecrawl webhook configuration." })),
 	}),
-	async execute(_toolCallId, params, signal) {
-		const payload = await firecrawlRequest("POST", "/crawl", cleanObject(params), signal);
-		return jsonResult(payload);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return withStatus(ctx, "firecrawl: crawl", async () => {
+			const payload = await firecrawlRequest("POST", "/crawl", cleanObject(params), signal);
+			return jsonResult(payload);
+		});
 	},
 });
 
@@ -118,14 +126,16 @@ const crawlStatusTool = defineTool({
 	parameters: Type.Object({
 		id: Type.String({ description: "Crawl job id returned by firecrawl_crawl." }),
 	}),
-	async execute(_toolCallId, params, signal) {
-		const payload = await firecrawlRequest(
-			"GET",
-			`/crawl/${encodeURIComponent(params.id)}`,
-			undefined,
-			signal,
-		);
-		return jsonResult(payload);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return withStatus(ctx, "firecrawl: crawl status", async () => {
+			const payload = await firecrawlRequest(
+				"GET",
+				`/crawl/${encodeURIComponent(params.id)}`,
+				undefined,
+				signal,
+			);
+			return jsonResult(payload);
+		});
 	},
 });
 
@@ -148,9 +158,11 @@ const mapTool = defineTool({
 		),
 		limit: Type.Optional(Type.Number({ description: "Maximum number of URLs to return." })),
 	}),
-	async execute(_toolCallId, params, signal) {
-		const payload = await firecrawlRequest("POST", "/map", cleanObject(params), signal);
-		return jsonResult(payload);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return withStatus(ctx, "firecrawl: map", async () => {
+			const payload = await firecrawlRequest("POST", "/map", cleanObject(params), signal);
+			return jsonResult(payload);
+		});
 	},
 });
 
@@ -170,9 +182,11 @@ const searchTool = defineTool({
 			Type.Any({ description: "Firecrawl scrapeOptions for search result pages." }),
 		),
 	}),
-	async execute(_toolCallId, params, signal) {
-		const payload = await firecrawlRequest("POST", "/search", cleanObject(params), signal);
-		return jsonResult(payload);
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		return withStatus(ctx, "firecrawl: search", async () => {
+			const payload = await firecrawlRequest("POST", "/search", cleanObject(params), signal);
+			return jsonResult(payload);
+		});
 	},
 });
 
@@ -187,12 +201,11 @@ export default function firecrawl(pi: ExtensionAPI) {
 		description: "Show Firecrawl extension configuration status",
 		handler: async (_args, ctx) => {
 			ctx.ui.notify(buildStatusMessage(), hasApiKey() ? "info" : "warning");
-			updateStatus(ctx);
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		updateStatus(ctx);
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -270,10 +283,13 @@ function jsonResult(payload: unknown) {
 	};
 }
 
-function updateStatus(ctx: {
-	ui: { setStatus: (key: string, value: string | undefined) => void };
-}) {
-	ctx.ui.setStatus(STATUS_KEY, hasApiKey() ? "firecrawl: configured" : "firecrawl: missing key");
+async function withStatus<T>(ctx: StatusContext, status: string, callback: () => Promise<T>) {
+	ctx.ui.setStatus(STATUS_KEY, status);
+	try {
+		return await callback();
+	} finally {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+	}
 }
 
 function buildStatusMessage() {

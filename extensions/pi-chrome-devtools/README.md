@@ -16,6 +16,7 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 - Evaluates JavaScript in the selected page.
 - Captures PNG screenshots, including optional full-page screenshots.
 - Uses a local Chrome DevTools Protocol endpoint.
+- Shows statusline activity only while Chrome DevTools tools are running.
 
 ## 📦 Install
 
