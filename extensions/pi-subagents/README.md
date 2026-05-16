@@ -1,90 +1,83 @@
-# @narumitw/pi-subagents
+# 🧑‍🤝‍🧑 pi-subagents — Isolated Subagents for the Pi Coding Agent
 
-Delegate work from Pi to specialized subagents running in isolated `pi --mode json -p --no-session` subprocesses.
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents)](https://www.npmjs.com/package/@narumitw/pi-subagents) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-## Install
+`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension that adds a `subagent` tool for delegating work to specialized agents running in isolated Pi subprocesses.
+
+Use it to split research, planning, implementation, and review work across focused workers while keeping each subprocess context, tools, and prompt boundary separate from the main conversation.
+
+## ✨ Features
+
+- Registers a `subagent` tool for single-agent, parallel, fan-in, and chained delegation.
+- Runs workers as isolated `pi --mode json -p --no-session` subprocesses.
+- Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
+- Loads custom user agents from `~/.pi/agent/agents/*.md`.
+- Optionally loads project agents from `.pi/agents/*.md` with confirmation.
+- Supports per-task `cwd`, hard subprocess `timeoutMs`, abort propagation, and streaming progress.
+- Returns complete worker output in tool details and a concise result for the main agent.
+
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-subagents
 ```
 
-Try locally from this repository:
+Try without installing permanently:
+
+```bash
+pi -e npm:@narumitw/pi-subagents
+```
+
+Try this package locally from the repository root:
 
 ```bash
 pi -e ./extensions/pi-subagents
 ```
 
-## What it adds
+## 🛠️ Pi tool
 
-A `subagent` tool with three execution modes:
+`pi-subagents` registers one tool:
 
-- **single**: run one `{ agent, task }`
-- **parallel**: run multiple `{ agent, task }` jobs with bounded concurrency
-- **parallel + aggregator**: run parallel jobs, then fan their complete outputs into one follow-up agent
-- **chain**: run sequential steps, passing prior output with `{previous}`
+- `subagent` — delegate work to one or more specialized agents.
 
-The design borrows from Pi/Claude-style subagents: each worker has its own system prompt, tool boundary, optional model, subprocess context window, streaming progress, abort propagation, hard subprocess timeout, complete final output in tool details, and summarized sidechain result.
+Execution modes:
 
-## Built-in agents
+- **single** — run one `{ agent, task }` job.
+- **parallel** — run multiple `{ agent, task }` jobs independently.
+- **parallel + aggregator** — run parallel jobs, then pass all outputs into one fan-in agent.
+- **chain** — run sequential steps, passing prior output with `{previous}`.
 
-These are available without setup and can be overridden by user/project agents of the same name:
+## 🚀 Examples
 
-| Agent | Purpose | Tools |
-| --- | --- | --- |
-| `scout` | Read-only codebase reconnaissance | `read`, `grep`, `find`, `ls`, `bash` |
-| `planner` | Grounded implementation plans | `read`, `grep`, `find`, `ls` |
-| `reviewer` | Independent review and verification | `read`, `grep`, `find`, `ls`, `bash` |
-| `worker` | General-purpose implementation | Pi default tools |
-| `general`, `general-purpose` | Aliases for `worker` | Pi default tools |
-
-Built-in agents intentionally inherit the active/default Pi model instead of forcing a model alias; this keeps subprocesses usable across provider setups.
-
-## Custom agents
-
-Create markdown files in:
-
-- `~/.pi/agent/agents/*.md` for user agents
-- `.pi/agents/*.md` for project agents
-
-```markdown
----
-name: api-reviewer
-description: Review API changes for compatibility and tests
-tools: read, grep, find, ls, bash
-model: sonnet
----
-
-You are an API review subagent. Do not edit files. Check compatibility,
-test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
-```
-
-Project agents are repo-controlled and disabled by default. To allow them, set `agentScope` to `"project"` or `"both"`; interactive sessions ask for confirmation.
-
-## Runtime limits
-
-Each subagent subprocess has a hard timeout to avoid runaway workers. Set `timeoutMs` on the top-level call or per task/chain step. The default is `PI_SUBAGENT_TIMEOUT_MS`, or 600000ms (10 minutes) when unset. On timeout, the extension sends SIGTERM, escalates to SIGKILL after a short grace period, and returns any partial messages/stderr collected so far.
-
-## Example tool calls
-
-Single:
+Run one read-only reconnaissance agent:
 
 ```json
-{ "agent": "scout", "task": "Find the statusline extension entry points" }
+{
+  "agent": "scout",
+  "task": "Find the statusline extension entry points"
+}
 ```
 
-Parallel:
+Run multiple agents in parallel:
 
 ```json
 {
   "tasks": [
-    { "agent": "scout", "task": "Map package metadata files", "timeoutMs": 30000 },
-    { "agent": "reviewer", "task": "Review TypeScript config consistency" }
+    {
+      "agent": "scout",
+      "task": "Map package metadata files",
+      "timeoutMs": 30000
+    },
+    {
+      "agent": "reviewer",
+      "task": "Review TypeScript config consistency"
+    }
   ],
   "timeoutMs": 120000
 }
 ```
 
-Parallel with fan-in aggregation:
+Run parallel workers, then aggregate their results:
 
 ```json
 {
@@ -99,17 +92,97 @@ Parallel with fan-in aggregation:
 }
 ```
 
-Chain:
+Run a chain where each step receives the previous output:
 
 ```json
 {
   "chain": [
     { "agent": "scout", "task": "Find subagent-related code" },
-    { "agent": "planner", "task": "Using this context, plan the extension: {previous}" }
+    {
+      "agent": "planner",
+      "task": "Using this context, plan the extension: {previous}"
+    }
   ]
 }
 ```
 
-## Safety notes
+## 🤖 Built-in agents
 
-Subagents are separate Pi processes and may use the tools allowed by their agent definition. Treat project-local agent prompts as code: only enable them in trusted repositories.
+Built-in agents are available without setup and can be overridden by user or project agents with the same name.
+
+| Agent | Purpose | Tools |
+| --- | --- | --- |
+| `scout` | Read-only codebase reconnaissance. | `read`, `grep`, `find`, `ls`, `bash` |
+| `planner` | Grounded implementation plans. | `read`, `grep`, `find`, `ls` |
+| `reviewer` | Independent review and verification. | `read`, `grep`, `find`, `ls`, `bash` |
+| `worker` | General-purpose implementation. | Pi default tools |
+| `general`, `general-purpose` | Aliases for `worker`. | Pi default tools |
+
+Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps subprocesses usable across different Pi setups.
+
+## 🧩 Custom agents
+
+Create markdown agent definitions in either location:
+
+- `~/.pi/agent/agents/*.md` for user agents.
+- `.pi/agents/*.md` for project-local agents.
+
+Example:
+
+```markdown
+---
+name: api-reviewer
+description: Review API changes for compatibility and tests
+tools: read, grep, find, ls, bash
+model: sonnet
+---
+
+You are an API review subagent. Do not edit files. Check compatibility,
+test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
+```
+
+By default, `subagent` loads user agents only. Set `agentScope` to `"project"` or `"both"` to load project-local agents. Interactive sessions ask for confirmation before using project agents unless `confirmProjectAgents` is disabled.
+
+## ⏱️ Runtime limits
+
+Each subprocess has a hard timeout to avoid runaway workers.
+
+- Set `timeoutMs` on the top-level call to apply a default for all jobs.
+- Set `timeoutMs` on a task, chain step, or aggregator to override it locally.
+- If omitted, the default is `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset.
+
+On timeout, the extension sends `SIGTERM`, escalates to `SIGKILL` after a short grace period, and returns any partial messages or stderr collected so far.
+
+## 🔒 Safety notes
+
+Subagents are separate Pi processes and may use the tools allowed by their agent definition. Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories.
+
+## 🗂️ Package layout
+
+```txt
+extensions/pi-subagents/
+├── src/
+│   └── subagents.ts
+├── README.md
+├── LICENSE
+├── tsconfig.json
+└── package.json
+```
+
+The package exposes its Pi extension through `package.json`:
+
+```json
+{
+  "pi": {
+    "extensions": ["./src/subagents.ts"]
+  }
+}
+```
+
+## 🔎 Keywords
+
+Pi extension, Pi coding agent, subagents, agent delegation, parallel agents, fan-in aggregation, chained agents, isolated subprocesses, AI coding workflow, TypeScript Pi package.
+
+## 📄 License
+
+MIT. See [`LICENSE`](./LICENSE).
