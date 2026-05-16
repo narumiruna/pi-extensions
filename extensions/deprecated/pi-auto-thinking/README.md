@@ -1,6 +1,8 @@
-# 🧠 pi-auto-thinking — Automatic Thinking Level for Pi
+# 🧠 pi-auto-thinking — Deprecated Automatic Thinking Level for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-auto-thinking)](https://www.npmjs.com/package/@narumitw/pi-auto-thinking) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
+> Deprecated: this package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set.
 
 `@narumitw/pi-auto-thinking` is a native [Pi coding agent](https://pi.dev) extension that selects Pi's thinking level for each user task from the active model capability and a deterministic task-difficulty score.
 
@@ -32,7 +34,7 @@ pi -e npm:@narumitw/pi-auto-thinking
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-auto-thinking
+pi -e ./extensions/deprecated/pi-auto-thinking
 ```
 
 ## 🚀 Usage
@@ -140,7 +142,7 @@ Higher thinking levels can increase latency and token usage depending on the pro
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-auto-thinking/
+extensions/deprecated/pi-auto-thinking/
 ├── src/
 │   └── auto-thinking.ts
 ├── README.md

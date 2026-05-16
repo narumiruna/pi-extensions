@@ -132,6 +132,8 @@ npm publish --workspace @narumitw/pi-subagents --access public
 
 ```txt
 extensions/
+├── deprecated/
+│   └── pi-auto-thinking/
 ├── pi-biome-lsp/
 ├── pi-btw/
 ├── pi-caffeinate/
@@ -145,7 +147,7 @@ extensions/
 └── pi-subagents/
 ```
 
-Each extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`.
+Each active extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
 
 ## 📄 License
 
