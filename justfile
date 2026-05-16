@@ -71,6 +71,9 @@ install-all:
     for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just install "${dir#pi-}"; done
 
 # Preview individual packages that npm would publish
+pack-auto-thinking:
+    just pack auto-thinking
+
 pack-biome-lsp:
     just pack biome-lsp
 
@@ -105,6 +108,9 @@ pack-subagents:
     just pack subagents
 
 # Try individual packages from this working tree as temporary pi packages
+try-auto-thinking:
+    just try auto-thinking
+
 try-biome-lsp:
     just try biome-lsp
 
@@ -139,6 +145,9 @@ try-subagents:
     just try subagents
 
 # Install individual packages through pi
+install-auto-thinking:
+    just install auto-thinking
+
 install-biome-lsp:
     just install biome-lsp
 
@@ -173,6 +182,9 @@ install-subagents:
     just install subagents
 
 # Publish individual packages to npm
+publish-auto-thinking:
+    just publish auto-thinking
+
 publish-biome-lsp:
     just publish biome-lsp
 

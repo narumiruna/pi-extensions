@@ -1,0 +1,42 @@
+{
+	"name": "@narumitw/pi-auto-thinking",
+	"version": "0.1.12",
+	"description": "Pi extension that automatically adjusts thinking level from model capability and task difficulty.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"thinking",
+		"reasoning",
+		"automation"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/auto-thinking.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@earendil-works/pi-coding-agent": "0.74.0",
+		"@types/node": "25.6.0",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-auto-thinking"
+	}
+}
