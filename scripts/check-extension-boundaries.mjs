@@ -182,7 +182,8 @@ function scriptKindFor(filePath) {
 }
 
 function isForbiddenExtensionReference(packageName, specifier) {
-	return specifier !== packageName && EXTENSION_PACKAGE_RE.test(specifier);
+	if (specifier === packageName || specifier.startsWith(`${packageName}/`)) return false;
+	return EXTENSION_PACKAGE_RE.test(specifier);
 }
 
 function readJson(filePath) {
