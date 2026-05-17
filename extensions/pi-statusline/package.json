@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-statusline",
-	"version": "0.1.17",
+	"version": "0.1.18",
 	"description": "Pi extension that replaces the footer with an information-rich statusline.",
 	"type": "module",
 	"license": "MIT",
