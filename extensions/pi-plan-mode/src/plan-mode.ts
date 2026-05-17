@@ -88,10 +88,15 @@ export default function planMode(pi: ExtensionAPI) {
 	pi.registerCommand("plan", {
 		description: "Enter or manage Codex-like Plan mode",
 		handler: async (args, ctx) => {
-			const command = args.trim().toLowerCase();
+			const prompt = args.trim();
+			const command = prompt.toLowerCase();
 			if (command === "exit" || command === "off") {
 				exitPlanMode(ctx);
 				ctx.ui.notify("Plan mode disabled. Full tool access restored.", "info");
+				return;
+			}
+			if (prompt) {
+				enterPlanModeWithPrompt(prompt, ctx);
 				return;
 			}
 			if (!state.enabled) {
@@ -184,6 +189,16 @@ export default function planMode(pi: ExtensionAPI) {
 		activateReadOnlyTools();
 		persistState();
 		updateUi(ctx);
+	}
+
+	function enterPlanModeWithPrompt(prompt: string, ctx: ExtensionContext) {
+		const wasEnabled = state.enabled;
+		enterPlanMode(ctx);
+		if (!wasEnabled) {
+			ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+		}
+		if (ctx.isIdle()) pi.sendUserMessage(prompt);
+		else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 	}
 
 	function exitPlanMode(ctx: ExtensionContext) {

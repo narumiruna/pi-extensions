@@ -38,7 +38,10 @@ pi -e ./extensions/pi-plan-mode
 
 ```text
 /plan
+/plan <prompt>
 ```
+
+Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user message.
 
 When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation.
 
@@ -75,6 +78,7 @@ You can also exit directly:
 This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 
 - Plan mode is a conversational collaboration mode, not TODO/progress tracking.
+- `/plan <prompt>` follows Codex behavior by switching to Plan mode before submitting the inline prompt.
 - `update_plan`-style checklist use is discouraged while Plan mode is active.
 - The implementation boundary is explicit: Plan mode restores tools before starting implementation, and choosing implementation immediately triggers a normal agent turn with full tool access.
 - Pi extension safety is approximated with active-tool restriction plus bash filtering, so it may be stricter or looser than Codex core in edge cases.
