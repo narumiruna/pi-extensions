@@ -14,6 +14,7 @@ Use it to split research, planning, implementation, and review work across focus
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, abort propagation, and streaming progress.
+- Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete worker output in tool details and a concise result for the main agent.
 
 ## 📦 Install
@@ -152,6 +153,10 @@ Each subprocess has a hard timeout to avoid runaway workers.
 - If omitted, the default is `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset.
 
 On timeout, the extension sends `SIGTERM`, escalates to `SIGKILL` after a short grace period, and returns any partial messages or stderr collected so far.
+
+## 📡 Runtime status
+
+While the `subagent` tool is running, `pi-subagents` publishes compact activity status with `ctx.ui.setStatus("subagents", "...")`. Any statusline extension that reads Pi's generic extension status API can display it; no package-to-package dependency is required.
 
 ## 🔒 Safety notes
 
