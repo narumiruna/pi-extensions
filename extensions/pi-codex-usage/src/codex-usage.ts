@@ -204,7 +204,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 			return;
 		}
 
-		ctx.ui.setStatus(STATUS_KEY, "codex usage: checking");
+		ctx.ui.setStatus(STATUS_KEY, "📊 checking");
 		const result = await queryUsage(ctx, { timeoutMs: DEFAULT_TIMEOUT_MS });
 		if (requestId !== statuslineRequestId) return;
 		if (!isOpenAICodexModel(ctx.model)) {
@@ -213,7 +213,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 		}
 
 		if (!result.ok) {
-			ctx.ui.setStatus(STATUS_KEY, "codex usage error");
+			ctx.ui.setStatus(STATUS_KEY, "📊 usage error");
 			scheduleStatuslineRefresh(ctx);
 			return;
 		}
@@ -250,7 +250,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 			}
 
 			let keepStatusline = false;
-			if (options.value.statusline) ctx.ui.setStatus(STATUS_KEY, "codex usage: checking");
+			if (options.value.statusline) ctx.ui.setStatus(STATUS_KEY, "📊 checking");
 			try {
 				const result = await queryUsage(ctx, options.value);
 				if (!result.ok) {
@@ -825,9 +825,9 @@ export function formatCodexUsageStatusline(
 	model?: CodexUsageModel,
 ): string {
 	const snapshot = selectSnapshotForModel(report, model);
-	if (!snapshot) return "codex usage unavailable";
+	if (!snapshot) return "📊 usage unavailable";
 
-	const parts = [formatStatuslinePrefix(snapshot)];
+	const parts = [`📊 ${formatStatuslinePrefix(snapshot)}`];
 	if (snapshot.primary) parts.push(`${formatRemainingPercent(snapshot.primary)} 5h`);
 	if (snapshot.secondary) parts.push(`${formatRemainingPercent(snapshot.secondary)} wk`);
 	if (parts.length === 1 && snapshot.credits) parts.push(formatCredits(snapshot.credits));

@@ -153,7 +153,7 @@ const biomeFormatTool = defineTool({
 		const client = new LspClient(getServerCommand(), root, getTimeoutMs());
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
-		ctx.ui.setStatus(STATUS_KEY, "biome-lsp: format");
+		ctx.ui.setStatus(STATUS_KEY, "🧬 format");
 
 		try {
 			await client.start();
@@ -210,7 +210,7 @@ const biomeFixTool = defineTool({
 		const client = new LspClient(getServerCommand(), root, getTimeoutMs());
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
-		ctx.ui.setStatus(STATUS_KEY, "biome-lsp: fix");
+		ctx.ui.setStatus(STATUS_KEY, "🧬 fix");
 
 		try {
 			await client.start();
@@ -280,7 +280,7 @@ async function runDiagnostics(
 	const client = new LspClient(getServerCommand(), root, getTimeoutMs());
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
-	ctx.ui.setStatus(STATUS_KEY, "biome-lsp: diagnostics");
+	ctx.ui.setStatus(STATUS_KEY, "🧬 diagnostics");
 
 	try {
 		await client.start();

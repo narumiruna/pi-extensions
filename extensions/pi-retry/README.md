@@ -38,7 +38,7 @@ pi -e ./extensions/pi-retry
 
 When an assistant message ends with `stopReason: "error"` and the error message matches `Unknown error (no error details in response)`, the extension appends Pi's retryable-provider-error hint so Pi's built-in retry path can continue the turn.
 
-The extension does not keep a permanent statusline entry. It briefly shows `unknown-error retry: retrying` only when it has matched the error and asked Pi to retry.
+The extension does not keep a permanent statusline entry. It briefly shows `🔁 retrying` only when it has matched the error and asked Pi to retry.
 
 ## 🧠 Use cases
 

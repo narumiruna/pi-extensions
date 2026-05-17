@@ -150,7 +150,7 @@ const ruffFormatTool = defineTool({
 		const client = new LspClient("ruff", getServerCommand("ruff"), root, getTimeoutMs("ruff"));
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
-		ctx.ui.setStatus(STATUS_KEY, "python-lsp: ruff format");
+		ctx.ui.setStatus(STATUS_KEY, "🐍 ruff format");
 
 		try {
 			await client.start();
@@ -207,7 +207,7 @@ const ruffFixTool = defineTool({
 		const client = new LspClient("ruff", getServerCommand("ruff"), root, getTimeoutMs("ruff"));
 		const abort = () => client.close();
 		signal?.addEventListener("abort", abort, { once: true });
-		ctx.ui.setStatus(STATUS_KEY, "python-lsp: ruff fix");
+		ctx.ui.setStatus(STATUS_KEY, "🐍 ruff fix");
 
 		try {
 			await client.start();
@@ -279,7 +279,7 @@ async function runDiagnostics(
 	const client = new LspClient(kind, getServerCommand(kind), root, getTimeoutMs(kind));
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
-	ctx.ui.setStatus(STATUS_KEY, `python-lsp: ${kind} diagnostics`);
+	ctx.ui.setStatus(STATUS_KEY, `🐍 ${kind} diagnostics`);
 
 	try {
 		await client.start();

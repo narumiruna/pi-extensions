@@ -19,7 +19,7 @@ export default function unknownErrorRetry(pi: ExtensionAPI) {
 		ui: { setStatus: (key: string, value: string | undefined) => void };
 	}) => {
 		if (clearStatusTimer) clearTimeout(clearStatusTimer);
-		ctx.ui.setStatus(STATUS_KEY, "unknown-error retry: retrying");
+		ctx.ui.setStatus(STATUS_KEY, "🔁 retrying");
 		clearStatusTimer = setTimeout(() => {
 			clearStatusTimer = undefined;
 			ctx.ui.setStatus(STATUS_KEY, undefined);

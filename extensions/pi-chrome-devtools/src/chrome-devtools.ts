@@ -46,7 +46,7 @@ const listPagesTool = defineTool({
 	promptSnippet: "List Chrome tabs/pages available over Chrome DevTools Protocol",
 	parameters: Type.Object({}),
 	async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "cdp: list pages", async () => {
+		return withStatus(ctx, "🌐 list pages", async () => {
 			const pages = await listPages();
 			return textResult(JSON.stringify(pages.map(formatPage), null, 2), { pages });
 		});
@@ -62,7 +62,7 @@ const selectPageTool = defineTool({
 		pageId: Type.String({ description: "Page id from chrome_devtools_list_pages." }),
 	}),
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "cdp: select page", async () => {
+		return withStatus(ctx, "🌐 select page", async () => {
 			const page = await getPage(params.pageId);
 			state.activePageId = page.id;
 			return textResult(`Selected page ${page.id}: ${page.title}\n${page.url}`, {
@@ -84,7 +84,7 @@ const navigateTool = defineTool({
 		),
 	}),
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "cdp: navigate", async () => {
+		return withStatus(ctx, "🌐 navigate", async () => {
 			const page = await resolvePage(params.pageId);
 			const result = await withCdp(page, async (client) => {
 				await client.send("Page.enable");
@@ -112,7 +112,7 @@ const evaluateTool = defineTool({
 		),
 	}),
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "cdp: evaluate", async () => {
+		return withStatus(ctx, "🌐 evaluate", async () => {
 			const page = await resolvePage(params.pageId);
 			const result = await withCdp(page, (client) =>
 				client.send("Runtime.evaluate", {
@@ -142,7 +142,7 @@ const screenshotTool = defineTool({
 		),
 	}),
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "cdp: screenshot", async () => {
+		return withStatus(ctx, "🌐 screenshot", async () => {
 			const page = await resolvePage(params.pageId);
 			const result = await withCdp(page, async (client) => {
 				await client.send("Page.enable");

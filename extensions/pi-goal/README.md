@@ -64,11 +64,11 @@ Goal objectives are limited to 4,000 characters. Put longer instructions in a fi
 
 `pi-goal` writes compact status strings for statusline extensions:
 
-- `goal: active 3m` — an active goal without a token budget.
-- `goal: active 18k/100k` — an active goal with token usage and budget.
-- `goal: paused` — auto-continuation is paused.
-- `goal: budget 100k/100k` — the token budget was reached; auto-continuation stops.
-- `goal: complete` — shown briefly after `goal_complete` succeeds.
+- `🎯 active 3m` — an active goal without a token budget.
+- `🎯 active 18k/100k` — an active goal with token usage and budget.
+- `🎯 paused` — auto-continuation is paused.
+- `🎯 budget 100k/100k` — the token budget was reached; auto-continuation stops.
+- `🎯 complete` — shown briefly after `goal_complete` succeeds.
 
 ## ✅ How completion works
 

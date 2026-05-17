@@ -284,12 +284,12 @@ function updateStatus(ctx: ExtensionContext) {
 	}
 
 	if (state.process) {
-		ctx.ui.setStatus(STATUS_KEY, "caffeinate: awake");
+		ctx.ui.setStatus(STATUS_KEY, "💊 awake");
 		return;
 	}
 
 	if (!state.available) {
-		ctx.ui.setStatus(STATUS_KEY, "caffeinate: unavailable");
+		ctx.ui.setStatus(STATUS_KEY, "💊 unavailable");
 		return;
 	}
 

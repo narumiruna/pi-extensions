@@ -426,11 +426,11 @@ function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 
 function formatStatus(goal: ActiveGoal | undefined) {
 	if (!goal) return undefined;
-	if (goal.status === "complete") return "goal: complete";
-	if (goal.status === "paused") return "goal: paused";
-	if (goal.status === "budget_limited") return `goal: budget ${formatBudget(goal)}`;
-	if (goal.tokenBudget !== undefined) return `goal: active ${formatBudget(goal)}`;
-	return `goal: active ${formatDuration(goal.timeUsedSeconds)}`;
+	if (goal.status === "complete") return "🎯 complete";
+	if (goal.status === "paused") return "🎯 paused";
+	if (goal.status === "budget_limited") return `🎯 budget ${formatBudget(goal)}`;
+	if (goal.tokenBudget !== undefined) return `🎯 active ${formatBudget(goal)}`;
+	return `🎯 active ${formatDuration(goal.timeUsedSeconds)}`;
 }
 
 function formatBudget(goal: ActiveGoal) {
@@ -524,7 +524,7 @@ function clearActiveGoal(ctx: StatusContext) {
 
 function showCompletionStatus(ctx: StatusContext) {
 	if (completionStatusTimer) clearTimeout(completionStatusTimer);
-	ctx.ui.setStatus(STATUS_KEY, "goal: complete");
+	ctx.ui.setStatus(STATUS_KEY, "🎯 complete");
 	completionStatusTimer = setTimeout(() => ctx.ui.setStatus(STATUS_KEY, undefined), 8_000);
 }
 

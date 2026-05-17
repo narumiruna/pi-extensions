@@ -59,7 +59,7 @@ Examples:
 
 - `🔌 active` for a plain status such as `goal: active`.
 - `🎯 active` when the producing extension sets `🎯 active`.
-- `🔌 ty ✓ ruff ✓` for a plain LSP readiness status.
+- `🐍 ty ✓ ruff ✓` when the producing extension sets a Python status with a leading icon.
 - `🧑‍🤝‍🧑 2 parallel` while subagent tool calls are active.
 - `⚠️ dup biome-lsp` when local and npm installs register the same extension.
 

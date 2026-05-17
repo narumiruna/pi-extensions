@@ -66,8 +66,8 @@ information on rate limits and credits
 When the selected Pi model provider is `openai-codex`, `pi-codex-usage` refreshes a compact statusline item automatically:
 
 ```text
-codex 59% 5h 61% wk
-codex spark 100% 5h 100% wk
+📊 codex 59% 5h 61% wk
+📊 codex spark 100% 5h 100% wk
 ```
 
 The statusline value uses the cached usage snapshot and refreshes every five minutes while the current model remains `openai-codex`.
