@@ -62,7 +62,7 @@ A complete Plan mode answer should include exactly one block like this:
 </proposed_plan>
 ```
 
-After a proposed plan is detected, `/plan` lets you choose whether to implement the plan, revise it, stay in Plan mode, or exit Plan mode.
+After a proposed plan is detected, `/plan` lets you choose whether to implement the plan, revise it, stay in Plan mode, or exit Plan mode. Choosing implementation disables Plan mode, restores full tool access, and immediately starts an implementation turn with the proposed plan.
 
 You can also exit directly:
 
@@ -76,7 +76,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 
 - Plan mode is a conversational collaboration mode, not TODO/progress tracking.
 - `update_plan`-style checklist use is discouraged while Plan mode is active.
-- The implementation boundary is explicit: Plan mode restores tools only after you choose to leave it.
+- The implementation boundary is explicit: Plan mode restores tools before starting implementation, and choosing implementation immediately triggers a normal agent turn with full tool access.
 - Pi extension safety is approximated with active-tool restriction plus bash filtering, so it may be stricter or looser than Codex core in edge cases.
 
 ## 🗂️ Package layout

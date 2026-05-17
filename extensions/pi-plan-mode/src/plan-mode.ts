@@ -193,6 +193,25 @@ export default function planMode(pi: ExtensionAPI) {
 		updateUi(ctx);
 	}
 
+	function startImplementation(ctx: ExtensionContext) {
+		const plan = state.latestPlan?.trim();
+		exitPlanMode(ctx);
+
+		if (!plan) {
+			ctx.ui.notify("Plan mode disabled. No proposed plan is available to implement.", "warning");
+			return;
+		}
+
+		pi.sendMessage(
+			{
+				customType: "plan-mode-implementation",
+				content: `Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:\n\n${plan}`,
+				display: true,
+			},
+			{ triggerTurn: true },
+		);
+	}
+
 	async function showPlanMenu(ctx: ExtensionContext) {
 		if (!ctx.hasUI) {
 			ctx.ui.notify(planStatusText(), "info");
@@ -207,7 +226,11 @@ export default function planMode(pi: ExtensionAPI) {
 			ctx.ui.notify(state.latestPlan ?? "No proposed plan yet.", "info");
 			return;
 		}
-		if (choice === "Implement this plan" || choice === "Exit Plan mode") {
+		if (choice === "Implement this plan") {
+			startImplementation(ctx);
+			return;
+		}
+		if (choice === "Exit Plan mode") {
 			exitPlanMode(ctx);
 			ctx.ui.notify("Plan mode disabled. Full tool access restored.", "info");
 			return;
@@ -222,8 +245,7 @@ export default function planMode(pi: ExtensionAPI) {
 			"Stay in Plan mode",
 		]);
 		if (choice === "Implement this plan") {
-			exitPlanMode(ctx);
-			ctx.ui.notify("Plan mode disabled. Ask me to implement the proposed plan when ready.", "info");
+			startImplementation(ctx);
 			return;
 		}
 		if (choice === "Revise plan") {
