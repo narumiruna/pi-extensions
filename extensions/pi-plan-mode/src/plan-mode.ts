@@ -305,7 +305,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function updateUi(ctx: ExtensionContext) {
-		ctx.ui.setStatus(STATUS_KEY, state.enabled ? "plan: active" : undefined);
+		ctx.ui.setStatus(STATUS_KEY, formatStatus());
 		if (state.enabled && state.latestPlan) {
 			ctx.ui.setWidget(PLAN_WIDGET_KEY, [
 				"Proposed plan ready",
@@ -316,6 +316,12 @@ export default function planMode(pi: ExtensionAPI) {
 		} else {
 			ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
 		}
+	}
+
+	function formatStatus() {
+		if (!state.enabled) return undefined;
+		if (state.awaitingAction || state.latestPlan) return "📝 plan ready";
+		return "📝 plan active";
 	}
 
 	function clearUi(ctx: ExtensionContext) {
