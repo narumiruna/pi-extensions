@@ -7,6 +7,7 @@ const PLAN_CONTEXT_MARKER = "[CODEX-LIKE PLAN MODE ACTIVE]";
 const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "bash", "grep", "find", "ls"]);
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
+const TOOL_SELECTOR_PAGE_SIZE = 10;
 const PROPOSED_PLAN_PATTERN = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/i;
 
 interface PlanModeState {
@@ -298,21 +299,41 @@ export default function planMode(pi: ExtensionAPI) {
 			return;
 		}
 
+		let pageIndex = 0;
 		while (true) {
 			const tools = selectableTools();
+			const pageCount = toolSelectorPageCount(tools);
+			pageIndex = Math.min(pageIndex, pageCount - 1);
+			const pageStart = pageIndex * TOOL_SELECTOR_PAGE_SIZE;
+			const pageTools = tools.slice(pageStart, pageStart + TOOL_SELECTOR_PAGE_SIZE);
 			const selectedNames = planModeSelectedNames(tools);
-			const choices = tools.map((tool, index) =>
-				formatToolChoice(tool, selectedNames.has(tool.name), index),
+			const choices = pageTools.map((tool, index) =>
+				formatToolChoice(tool, selectedNames.has(tool.name), pageStart + index),
 			);
+			const previousChoice = "Previous page";
+			const nextChoice = "Next page";
 			const doneChoice = "Done";
+			const navigationChoices = [
+				...(pageIndex > 0 ? [previousChoice] : []),
+				...(pageIndex < pageCount - 1 ? [nextChoice] : []),
+				doneChoice,
+			];
 			const choice = await ctx.ui.select(
-				"Plan-mode tools. Non-built-in tools run at user risk.",
-				[...choices, doneChoice],
+				`Plan-mode tools (${pageIndex + 1}/${pageCount}). Non-built-in tools run at user risk.`,
+				[...choices, ...navigationChoices],
 			);
 			if (!choice || choice === doneChoice) break;
+			if (choice === previousChoice) {
+				pageIndex = Math.max(0, pageIndex - 1);
+				continue;
+			}
+			if (choice === nextChoice) {
+				pageIndex = Math.min(pageCount - 1, pageIndex + 1);
+				continue;
+			}
 
 			const selectedIndex = choices.indexOf(choice);
-			const tool = tools[selectedIndex];
+			const tool = pageTools[selectedIndex];
 			if (!tool) continue;
 			if (!canSelectToolInPlanMode(tool)) {
 				ctx.ui.notify(`${tool.name} is blocked in Plan mode.`, "warning");
@@ -388,6 +409,10 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function selectableTools() {
 		return safeGetAllTools().sort(compareTools);
+	}
+
+	function toolSelectorPageCount(tools: ToolInfo[]) {
+		return Math.max(1, Math.ceil(tools.length / TOOL_SELECTOR_PAGE_SIZE));
 	}
 
 	function safeGetAllTools() {
