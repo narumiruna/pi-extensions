@@ -37,17 +37,14 @@ export function splitCommand(input: string) {
 	const parts: string[] = [];
 	let current = "";
 	let quote: '"' | "'" | undefined;
-	let escaping = false;
 
-	for (const char of input) {
-		if (escaping) {
-			current += char;
-			escaping = false;
-			continue;
-		}
+	for (let index = 0; index < input.length; index += 1) {
+		const char = input[index];
+		const next = input[index + 1];
 
-		if (char === "\\") {
-			escaping = true;
+		if (char === "\\" && next !== undefined && shouldEscapeNextCharacter(next, quote)) {
+			current += next;
+			index += 1;
 			continue;
 		}
 
@@ -74,4 +71,10 @@ export function splitCommand(input: string) {
 
 	if (current) parts.push(current);
 	return parts;
+}
+
+function shouldEscapeNextCharacter(next: string, quote: '"' | "'" | undefined) {
+	if (next === "\\") return true;
+	if (quote) return next === quote;
+	return next === '"' || next === "'" || /\s/.test(next);
 }

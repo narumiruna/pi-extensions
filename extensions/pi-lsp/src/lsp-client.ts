@@ -39,25 +39,31 @@ export class LspClient {
 			);
 		}
 
-		this.#child = spawn(this.#command.command, this.#command.args, {
+		const child = spawn(this.#command.command, this.#command.args, {
 			cwd: this.#cwd,
 			stdio: "pipe",
 		});
-		this.#child.stdout.on("data", (chunk) => this.#onData(chunk));
-		this.#child.stderr.on("data", (chunk) => {
+		this.#child = child;
+		child.stdout.on("data", (chunk) => this.#onData(chunk));
+		child.stderr.on("data", (chunk) => {
 			this.#stderr += chunk.toString();
 		});
-		this.#child.once("exit", (code, signal) => {
+		child.once("exit", (code, signal) => {
 			const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
-			for (const [id, pending] of this.#pending.entries()) {
-				clearTimeout(pending.timeout);
-				pending.reject(
-					new Error(
-						`${this.#adapter.label} LSP server exited before response ${id} (${reason}).${this.#formatStderr()}`,
-					),
-				);
-			}
-			this.#pending.clear();
+			this.#rejectPending(
+				(id) =>
+					`${this.#adapter.label} LSP server exited before response ${id} (${reason}).${this.#formatStderr()}`,
+			);
+		});
+
+		await new Promise<void>((resolve, reject) => {
+			child.once("spawn", resolve);
+			child.once("error", (error) => {
+				const message = `${this.#adapter.label} LSP process failed to start: ${error.message}.${this.#formatStderr()}`;
+				this.#rejectPending(message);
+				if (this.#child === child) this.#child = undefined;
+				reject(new Error(message));
+			});
 		});
 	}
 
@@ -181,14 +187,18 @@ export class LspClient {
 	}
 
 	close() {
-		for (const pending of this.#pending.values()) {
-			clearTimeout(pending.timeout);
-			pending.reject(new Error(`${this.#adapter.label} LSP request cancelled.`));
-		}
-		this.#pending.clear();
+		this.#rejectPending(`${this.#adapter.label} LSP request cancelled.`);
 
 		if (this.#child && !this.#child.killed) this.#child.kill("SIGTERM");
 		this.#child = undefined;
+	}
+
+	#rejectPending(message: string | ((id: number) => string)) {
+		for (const [id, pending] of this.#pending.entries()) {
+			clearTimeout(pending.timeout);
+			pending.reject(new Error(typeof message === "string" ? message : message(id)));
+		}
+		this.#pending.clear();
 	}
 
 	private request(method: string, params: unknown) {
