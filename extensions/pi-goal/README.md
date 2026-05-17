@@ -8,7 +8,7 @@ Goal mode keeps sending guarded automatic follow-up messages until the agent cal
 
 ## ✨ Features
 
-- Adds `/goal <goal_to_complete>` to start goal mode.
+- Adds `/goal <goal_to_complete>` to start goal mode or replace the current goal.
 - Bare `/goal` shows the current goal summary.
 - Adds `/goal pause`, `/goal resume`, `/goal clear`, and `/goal edit <goal_to_complete>`.
 - Keeps `/goal-status` and `/goal-stop` as compatibility aliases.
@@ -53,12 +53,12 @@ pi -e ./extensions/pi-goal
 ```
 
 - `/goal` shows the current goal, status, iteration count, elapsed time, and token usage.
-- `/goal <goal_to_complete>` starts goal mode when no other goal is active.
-- `/goal --tokens 100k <goal_to_complete>` starts goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
+- `/goal <goal_to_complete>` starts goal mode, or replaces the current unfinished goal with a new active goal.
+- `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
 - `/goal pause` stops prompt injection and auto-continuation without forgetting the goal.
 - `/goal resume` resumes a paused or budget-limited goal.
 - `/goal clear` cancels the current goal and clears persisted state.
-- `/goal edit <goal_to_complete>` replaces the current goal with a new active goal.
+- `/goal edit <goal_to_complete>` also replaces the current goal with a new active goal, for explicit edit-style workflows.
 - `/goal-status` is a compatibility alias for `/goal`.
 - `/goal-stop` is a compatibility alias for `/goal clear`.
 

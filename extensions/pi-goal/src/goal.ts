@@ -186,18 +186,17 @@ function startGoal(objective: string, tokenBudget: number | undefined, pi: Exten
 		return;
 	}
 
-	if (activeGoal && activeGoal.status !== "complete") {
-		ctx.ui.notify(
-			`A goal is already ${activeGoal.status}. Use /goal edit <objective> to replace it, /goal clear to stop it, or /goal to inspect it.`,
-			"warning",
-		);
-		return;
-	}
+	const replacedGoal = activeGoal?.status !== "complete" ? activeGoal : undefined;
 
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
 	persistGoal(ctx.cwd, activeGoal);
 	updateStatus(ctx, activeGoal);
-	ctx.ui.notify(`Goal started: ${objective}`, "info");
+	ctx.ui.notify(
+		replacedGoal
+			? `Goal replaced (${replacedGoal.status}): ${replacedGoal.text} → ${objective}`
+			: `Goal started: ${objective}`,
+		"info",
+	);
 	sendGoalPrompt(pi, ctx, activeGoal);
 }
 
