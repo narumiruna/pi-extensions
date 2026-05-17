@@ -14,7 +14,7 @@ Goal mode keeps sending guarded automatic follow-up messages until the agent cal
 - Exposes only one top-level command: `/goal`.
 - Supports optional token budgets such as `/goal --tokens 100k <goal>`.
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
-- Keeps goal state in the current Pi runtime by default, so `/reload` or restarting Pi starts without an active goal.
+- Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete` tool for explicit completion.
 - Automatically prompts the agent to continue if an active turn ends early.
 - Guards auto-follow-ups so replaced, paused, cleared, completed, or budget-limited goals are not continued.
@@ -62,9 +62,9 @@ Goal objectives are limited to 4,000 characters. Put longer instructions in a fi
 
 ## 🔁 Session and reload behavior
 
-By default, goal state is scoped to the current Pi runtime. `/reload` or restarting Pi does not restore an unfinished goal, even if an older version left state in `~/.pi/agent/pi-goal-state.json`.
+Goal state is stored as Pi session state, similar to Codex's thread-owned goals. `/reload` and reopening the same Pi session can restore that session's unfinished goal. Starting a new Pi session in the same working directory does not inherit the old goal.
 
-If you explicitly want legacy cross-reload persistence, start Pi with `PI_GOAL_PERSIST=1`. When persistence is enabled, unfinished goals are stored per working directory under the Pi agent config directory. `/goal clear` removes the stored goal for the current working directory.
+Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed by working directory. This version no longer reads that global file, and `/goal clear` removes any legacy entry for the current working directory.
 
 ## 📊 Statusline states
 

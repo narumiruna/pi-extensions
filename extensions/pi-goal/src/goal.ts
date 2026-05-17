@@ -25,6 +25,10 @@ interface GoalCompleteDetails {
 	summary: string;
 }
 
+interface GoalStateEntryData {
+	goal?: ActiveGoal | null;
+}
+
 interface CommandResult {
 	kind: "show" | "start" | "pause" | "resume" | "clear" | "edit";
 	objective?: string;
@@ -43,6 +47,7 @@ interface StatusContext {
 }
 
 const STATUS_KEY = "goal";
+const GOAL_STATE_ENTRY_TYPE = "goal-state";
 const MAX_OBJECTIVE_LENGTH = 4_000;
 const STATE_FILE = join(
 	process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
@@ -51,6 +56,7 @@ const STATE_FILE = join(
 
 let activeGoal: ActiveGoal | undefined;
 let completionStatusTimer: NodeJS.Timeout | undefined;
+let extensionApi: ExtensionAPI | undefined;
 
 const goalCompleteTool = defineTool({
 	name: "goal_complete",
@@ -72,7 +78,7 @@ const goalCompleteTool = defineTool({
 		if (completedGoal) {
 			activeGoal = transitionGoal(completedGoal, "complete");
 			updateGoalUsage(activeGoal, ctx);
-			persistGoal(ctx.cwd, activeGoal);
+			persistGoal(activeGoal);
 		}
 
 		const goal = completedGoal?.text ?? "unknown goal";
@@ -92,6 +98,7 @@ const goalCompleteTool = defineTool({
 });
 
 export default function goal(pi: ExtensionAPI) {
+	extensionApi = pi;
 	pi.registerTool(goalCompleteTool);
 
 	pi.registerCommand("goal", {
@@ -127,14 +134,13 @@ export default function goal(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		activeGoal = undefined;
-		if (isPersistenceEnabled()) activeGoal = loadGoal(ctx.cwd);
+		activeGoal = loadGoalFromSession(ctx);
 		if (activeGoal) updateStatus(ctx, activeGoal);
 		else ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		if (activeGoal) persistGoal(ctx.cwd, activeGoal);
+		if (activeGoal) persistGoal(activeGoal);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (completionStatusTimer) clearTimeout(completionStatusTimer);
 	});
@@ -156,13 +162,13 @@ export default function goal(pi: ExtensionAPI) {
 
 		if (activeGoal.tokenBudget !== undefined && activeGoal.tokensUsed >= activeGoal.tokenBudget) {
 			activeGoal = transitionGoal(activeGoal, "budget_limited");
-			persistGoal(ctx.cwd, activeGoal);
+			persistGoal(activeGoal);
 			updateStatus(ctx, activeGoal);
 			ctx.ui.notify(`Goal token budget reached: ${formatBudget(activeGoal)}`, "warning");
 			return;
 		}
 
-		persistGoal(ctx.cwd, activeGoal);
+		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
 
 		const currentGoal = activeGoal;
@@ -196,7 +202,7 @@ async function startGoal(
 	}
 
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
-	persistGoal(ctx.cwd, activeGoal);
+	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(existingGoal ? `Goal replaced: ${objective}` : `Goal started: ${objective}`, "info");
 	sendGoalPrompt(pi, ctx, activeGoal);
@@ -212,7 +218,7 @@ function pauseGoal(ctx: StatusContext) {
 		return;
 	}
 	activeGoal = transitionGoal(activeGoal, "paused");
-	persistGoal(ctx.cwd, activeGoal);
+	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(`Goal paused: ${activeGoal.text}`, "info");
 }
@@ -227,7 +233,7 @@ function resumeGoal(ctx: StatusContext) {
 		return;
 	}
 	activeGoal = transitionGoal(activeGoal, "active");
-	persistGoal(ctx.cwd, activeGoal);
+	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(`Goal resumed: ${activeGoal.text}`, "info");
 }
@@ -269,7 +275,7 @@ function editGoal(
 		tokenBudget: tokenBudget ?? activeGoal.tokenBudget,
 		updatedAt: Date.now(),
 	});
-	persistGoal(ctx.cwd, activeGoal);
+	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(`Goal updated: ${objective}`, "info");
 	if (activeGoal.status === "active") sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
@@ -282,7 +288,7 @@ function showGoal(ctx: StatusContext) {
 		return;
 	}
 	updateGoalUsage(activeGoal, ctx);
-	persistGoal(ctx.cwd, activeGoal);
+	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(goalSummary(activeGoal), "info");
 }
@@ -503,20 +509,28 @@ function currentTokenTotal(ctx: StatusContext): number {
 	return total;
 }
 
-function persistGoal(cwd: string, goal: ActiveGoal) {
-	if (!isPersistenceEnabled()) return;
-	writeState(cwd, goal);
+function persistGoal(goal: ActiveGoal) {
+	extensionApi?.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal });
 }
 
 function clearPersistedGoal(cwd: string) {
-	writeState(cwd, undefined);
+	extensionApi?.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal: null });
+	clearLegacyPersistedGoal(cwd);
 }
 
-function loadGoal(cwd: string): ActiveGoal | undefined {
-	if (!isPersistenceEnabled()) return undefined;
-	const goals = readState();
-	const stored = goals[cwd];
-	return isGoal(stored) && stored.status !== "complete" ? stored : undefined;
+function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
+	const sessionManager = ctx.sessionManager as
+		| {
+				getBranch?: () => Array<{ type?: string; customType?: string; data?: unknown }>;
+				getEntries?: () => Array<{ type?: string; customType?: string; data?: unknown }>;
+			}
+		| undefined;
+	const entries = sessionManager?.getBranch?.() ?? sessionManager?.getEntries?.() ?? [];
+	const entry = entries
+		.filter((entry) => entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE)
+		.pop();
+	const data = entry?.data as GoalStateEntryData | undefined;
+	return isGoal(data?.goal) && data.goal.status !== "complete" ? data.goal : undefined;
 }
 
 function clearActiveGoal(ctx: StatusContext) {
@@ -543,18 +557,14 @@ function readState(): Record<string, unknown> {
 	}
 }
 
-function writeState(cwd: string, goal: ActiveGoal | undefined) {
+function clearLegacyPersistedGoal(cwd: string) {
+	if (!existsSync(STATE_FILE)) return;
 	const goals = readState();
-	if (goal) goals[cwd] = goal;
-	else delete goals[cwd];
-	if (!goal && !existsSync(STATE_FILE)) return;
+	delete goals[cwd];
 	mkdirSync(dirname(STATE_FILE), { recursive: true });
 	writeFileSync(STATE_FILE, `${JSON.stringify(goals, null, 2)}\n`);
 }
 
-function isPersistenceEnabled() {
-	return ["1", "true", "yes", "on"].includes((process.env.PI_GOAL_PERSIST ?? "").toLowerCase());
-}
 
 function isGoal(value: unknown): value is ActiveGoal {
 	if (!value || typeof value !== "object") return false;
