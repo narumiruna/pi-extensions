@@ -35,24 +35,53 @@ function offsetAt(text: string, position: LspPosition) {
 
 export function applyTextEdits(text: string, edits: LspTextEdit[]) {
 	let output = text;
-	const sortedEdits = edits
-		.map((edit, index) => ({
-			edit,
-			index,
-			start: offsetAt(text, edit.range.start),
-			end: offsetAt(text, edit.range.end),
-		}))
-		.sort((left, right) => {
-			if (left.start !== right.start) return right.start - left.start;
-			if (left.end !== right.end) return right.end - left.end;
-			return right.index - left.index;
-		});
+	const sortedEdits = positionTextEdits(text, edits).sort((left, right) => {
+		if (left.start !== right.start) return right.start - left.start;
+		if (left.end !== right.end) return right.end - left.end;
+		return right.index - left.index;
+	});
 
 	for (const { edit, start, end } of sortedEdits) {
 		output = `${output.slice(0, start)}${edit.newText}${output.slice(end)}`;
 	}
 
 	return output;
+}
+
+export function hasOverlappingTextEdits(text: string, edits: LspTextEdit[]) {
+	const positionedEdits = positionTextEdits(text, edits);
+	for (let leftIndex = 0; leftIndex < positionedEdits.length; leftIndex += 1) {
+		for (let rightIndex = leftIndex + 1; rightIndex < positionedEdits.length; rightIndex += 1) {
+			if (textEditRangesConflict(positionedEdits[leftIndex], positionedEdits[rightIndex])) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function positionTextEdits(text: string, edits: LspTextEdit[]) {
+	return edits.map((edit, index) => ({
+		edit,
+		index,
+		start: offsetAt(text, edit.range.start),
+		end: offsetAt(text, edit.range.end),
+	}));
+}
+
+function textEditRangesConflict(
+	left: { start: number; end: number },
+	right: { start: number; end: number },
+) {
+	if (left.start === left.end && right.start === right.end) return false;
+
+	if (left.start === left.end || right.start === right.end) {
+		const insert = left.start === left.end ? left : right;
+		const replacement = left.start === left.end ? right : left;
+		return replacement.start < insert.start && insert.start < replacement.end;
+	}
+
+	return Math.max(left.start, right.start) < Math.min(left.end, right.end);
 }
 
 export function collectWorkspaceEdits(edit: WorkspaceEdit | undefined, uri: string) {

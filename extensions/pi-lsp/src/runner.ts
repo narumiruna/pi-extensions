@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { commandFromEnv, timeoutFromEnv } from "./command.js";
 import { collectSupportedFiles, resolveRoot, resolveSupportedFile } from "./files.js";
 import { LspClient } from "./lsp-client.js";
-import { applyTextEdits, collectWorkspaceEdits } from "./text-edits.js";
+import { applyTextEdits, collectWorkspaceEdits, hasOverlappingTextEdits } from "./text-edits.js";
 import type { CodeAction, DiagnosticEntry, LspServerAdapter, StatusContext } from "./types.js";
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
@@ -152,6 +152,13 @@ export async function runFix(
 			resolvedActions = await client.resolveActions(actions);
 			selectedActions = selectCodeActions(resolvedActions, actionKind);
 			edits = selectedActions.flatMap((action) => collectWorkspaceEdits(action.edit, uri));
+			if (hasOverlappingTextEdits(text, edits)) {
+				const relativePath = path.relative(root, file) || file;
+				throw new Error(
+					`${adapter.label} LSP returned overlapping code-action edits for ${relativePath}; ` +
+						"use a narrower action kind.",
+				);
+			}
 			newText = applyTextEdits(text, edits);
 		} finally {
 			client.didClose(uri);
@@ -179,13 +186,15 @@ export async function runFix(
 }
 
 function selectCodeActions(actions: CodeAction[], requestedKind: string) {
-	if (actions.length <= 1) return actions;
+	const directMatches = actions.filter(
+		(action) => action.kind === requestedKind || action.kind?.startsWith(`${requestedKind}.`),
+	);
+	if (directMatches.length) return directMatches;
 
-	const exactMatch = actions.find((action) => action.kind === requestedKind);
-	if (exactMatch) return [exactMatch];
-
-	const nestedMatch = actions.find((action) => action.kind?.startsWith(`${requestedKind}.`));
-	return nestedMatch ? [nestedMatch] : [actions[0]];
+	const fallbackMatches = actions.filter(
+		(action) => !action.kind || requestedKind.startsWith(`${action.kind}.`),
+	);
+	return fallbackMatches.length ? fallbackMatches : actions;
 }
 
 function formatDiagnostics(adapter: LspServerAdapter, entries: DiagnosticEntry[]) {

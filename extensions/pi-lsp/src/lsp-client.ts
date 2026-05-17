@@ -93,11 +93,12 @@ export class LspClient {
 
 	async initialize(root: string) {
 		const rootUri = directoryUri(root);
+		const workspaceFolders = [{ uri: rootUri, name: path.basename(root) || "workspace" }];
 		const init = this.#adapter.initialize;
 		await this.request("initialize", {
 			processId: process.pid,
 			rootUri,
-			workspaceFolders: [{ uri: rootUri, name: path.basename(root) || "workspace" }],
+			workspaceFolders: this.#adapter.serverRequestWorkspaceFolders ? workspaceFolders : null,
 			capabilities: {
 				textDocument: {
 					...(init.codeAction
@@ -130,7 +131,7 @@ export class LspClient {
 								},
 							}),
 					workspaceEdit: { documentChanges: true },
-					workspaceFolders: true,
+					workspaceFolders: this.#adapter.serverRequestWorkspaceFolders,
 				},
 			},
 		});
@@ -371,12 +372,17 @@ export class LspClient {
 			this.#send({
 				jsonrpc: "2.0",
 				id: message.id,
-				result: [{ uri: rootUri, name: path.basename(this.#cwd) || "workspace" }],
+				result: this.#adapter.serverRequestWorkspaceFolders
+					? [{ uri: rootUri, name: path.basename(this.#cwd) || "workspace" }]
+					: null,
 			});
 			return;
 		}
 
-		if (message.method === "client/registerCapability") {
+		if (
+			message.method === "client/registerCapability" ||
+			message.method === "client/unregisterCapability"
+		) {
 			this.#send({ jsonrpc: "2.0", id: message.id, result: null });
 			return;
 		}

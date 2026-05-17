@@ -17,7 +17,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) | 📊 `/codex-status` command and automatic statusline item for ChatGPT Codex subscription usage, using Pi auth first and Codex CLI only as fallback. | `pi install npm:@narumitw/pi-codex-usage` |
 | [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) | 🔥 Firecrawl-powered web scraping, crawling, URL discovery, and web search tools for research workflows. | `pi install npm:@narumitw/pi-firecrawl` |
 | [`@narumitw/pi-goal`](./extensions/pi-goal) | 🎯 `/goal` mode that keeps the agent working until a verifiable task is complete. | `pi install npm:@narumitw/pi-goal` |
-| [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Shared language-server tools for Biome, ty, and Ruff diagnostics, formatting, import organization, and source fixes. | `pi install npm:@narumitw/pi-lsp` |
+| [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Shared language-server tools for Biome diagnostics/edits, ty diagnostics, and Ruff diagnostics/edits. | `pi install npm:@narumitw/pi-lsp` |
 | [`@narumitw/pi-python-lsp`](./extensions/pi-python-lsp) | 🐍 Python language-server tools for ty type diagnostics and Ruff linting, formatting, and fixes. | `pi install npm:@narumitw/pi-python-lsp` |
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for provider responses that fail with `Unknown error (no error details in response)`. | `pi install npm:@narumitw/pi-retry` |
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
@@ -47,7 +47,7 @@ pi -e npm:@narumitw/pi-goal -e npm:@narumitw/pi-statusline -e npm:@narumitw/pi-l
 
 ### 🧠 Shared language-server workflows
 
-Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to let Pi run Biome, ty, and Ruff language-server tools through one shared LSP runner. It covers Biome diagnostics and edits plus Python ty/Ruff diagnostics, formatting, import organization, and source fixes. The older [`@narumitw/pi-biome-lsp`](./extensions/pi-biome-lsp) and [`@narumitw/pi-python-lsp`](./extensions/pi-python-lsp) packages remain available and are not deprecated yet.
+Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to let Pi run Biome, ty, and Ruff language-server tools through one shared LSP runner. It covers Biome diagnostics and edits, ty type diagnostics, and Ruff lint diagnostics, formatting, import organization, and source fixes. The older [`@narumitw/pi-biome-lsp`](./extensions/pi-biome-lsp) and [`@narumitw/pi-python-lsp`](./extensions/pi-python-lsp) packages remain available and are not deprecated yet.
 
 ### 🧬 JavaScript and TypeScript coding with Biome
 
