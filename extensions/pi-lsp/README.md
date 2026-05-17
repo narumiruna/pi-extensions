@@ -47,7 +47,7 @@ This package intentionally registers the same tool names as `@narumitw/pi-biome-
 - `ruff_lsp_format`
 - `ruff_lsp_fix`
 
-Avoid installing `@narumitw/pi-lsp` side by side with the older LSP packages unless you have verified how your Pi version handles duplicate tool names. The older packages are not deprecated in this phase.
+Avoid installing `@narumitw/pi-lsp` side by side with the older LSP packages unless you have verified how your Pi version handles duplicate tool names. The older packages are not deprecated in this phase. For the same reason, this repository's `just install-all` recipe skips `pi-lsp`; install `pi-lsp` separately when you want the shared LSP extension instead of the older split packages.
 
 ## ✅ Requirements
 

@@ -66,9 +66,9 @@ publish name:
 publish-all:
     for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
 
-# Install all extension packages through pi
+# Install all extension packages through pi, excluding pi-lsp because it duplicates old LSP tool names
 install-all:
-    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just install "${dir#pi-}"; done
+    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; name="${dir#pi-}"; if [[ "$name" == "lsp" ]]; then echo "Skipping pi-lsp; install it separately instead of biome-lsp/python-lsp to avoid duplicate LSP tools."; continue; fi; just install "$name"; done
 
 # Preview individual packages that npm would publish
 pack-biome-lsp:

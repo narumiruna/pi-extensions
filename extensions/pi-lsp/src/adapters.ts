@@ -46,7 +46,6 @@ const PYTHON_SKIP_DIRECTORIES = new Set([
 ]);
 
 export const biomeAdapter: LspServerAdapter = {
-	id: "biome",
 	label: "Biome",
 	statusPrefix: "🧬",
 	defaultCommand: { command: "biome", args: ["lsp-proxy"] },
@@ -76,7 +75,6 @@ export const biomeAdapter: LspServerAdapter = {
 };
 
 export const tyAdapter: LspServerAdapter = {
-	id: "ty",
 	label: "ty",
 	statusPrefix: "🐍 ty",
 	defaultCommand: { command: "ty", args: ["server"] },
@@ -101,7 +99,6 @@ export const tyAdapter: LspServerAdapter = {
 };
 
 export const ruffAdapter: LspServerAdapter = {
-	id: "ruff",
 	label: "Ruff",
 	statusPrefix: "🐍 ruff",
 	defaultCommand: { command: "ruff", args: ["server"] },

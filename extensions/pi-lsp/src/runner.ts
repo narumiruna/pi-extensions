@@ -5,7 +5,7 @@ import { commandFromEnv, timeoutFromEnv } from "./command.js";
 import { collectSupportedFiles, resolveRoot, resolveSupportedFile } from "./files.js";
 import { LspClient } from "./lsp-client.js";
 import { applyTextEdits, collectWorkspaceEdits } from "./text-edits.js";
-import type { DiagnosticEntry, LspServerAdapter, StatusContext } from "./types.js";
+import type { CodeAction, DiagnosticEntry, LspServerAdapter, StatusContext } from "./types.js";
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
 export const DEFAULT_FILE_LIMIT = 50;
@@ -142,14 +142,16 @@ export async function runFix(
 		const uri = pathToFileURL(file).href;
 		const text = readFileSync(file, "utf8");
 		client.didOpen(uri, text, adapter.languageIdFor(file));
-		let resolvedActions;
+		let resolvedActions: CodeAction[];
+		let selectedActions: CodeAction[];
 		let edits;
 		let newText: string;
 		try {
 			const diagnostics = await client.diagnostics(uri);
 			const actions = await client.codeActions(uri, text, diagnostics, actionKind);
 			resolvedActions = await client.resolveActions(actions);
-			edits = resolvedActions.flatMap((action) => collectWorkspaceEdits(action.edit, uri));
+			selectedActions = selectCodeActions(resolvedActions, actionKind);
+			edits = selectedActions.flatMap((action) => collectWorkspaceEdits(action.edit, uri));
 			newText = applyTextEdits(text, edits);
 		} finally {
 			client.didClose(uri);
@@ -165,6 +167,7 @@ export async function runFix(
 			write: params.write ?? false,
 			kind: actionKind,
 			actions: resolvedActions.map(({ title, kind }) => ({ title, kind })),
+			appliedActions: selectedActions.map(({ title, kind }) => ({ title, kind })),
 			edits,
 			text: params.write ? undefined : newText,
 		});
@@ -173,6 +176,16 @@ export async function runFix(
 		signal?.removeEventListener("abort", abort);
 		await client.shutdown();
 	}
+}
+
+function selectCodeActions(actions: CodeAction[], requestedKind: string) {
+	if (actions.length <= 1) return actions;
+
+	const exactMatch = actions.find((action) => action.kind === requestedKind);
+	if (exactMatch) return [exactMatch];
+
+	const nestedMatch = actions.find((action) => action.kind?.startsWith(`${requestedKind}.`));
+	return nestedMatch ? [nestedMatch] : [actions[0]];
 }
 
 function formatDiagnostics(adapter: LspServerAdapter, entries: DiagnosticEntry[]) {

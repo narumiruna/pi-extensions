@@ -62,7 +62,6 @@ export interface JsonRpcMessage {
 }
 
 export interface LspServerAdapter {
-	id: string;
 	label: string;
 	statusPrefix: string;
 	defaultCommand: ServerCommand;

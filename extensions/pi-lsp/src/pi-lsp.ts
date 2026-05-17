@@ -1,6 +1,6 @@
 import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { biomeAdapter, ruffAdapter, tyAdapter } from "./adapters.js";
+import { adapters, biomeAdapter, ruffAdapter, tyAdapter } from "./adapters.js";
 import { commandExists, commandFromEnv } from "./command.js";
 import { runDiagnostics, runFix, runFormat } from "./runner.js";
 
@@ -193,7 +193,7 @@ export default function lsp(pi: ExtensionAPI) {
 }
 
 function buildStatusMessage() {
-	return [biomeAdapter, tyAdapter, ruffAdapter]
+	return adapters
 		.flatMap((adapter) => {
 			const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
 			return [
@@ -205,7 +205,7 @@ function buildStatusMessage() {
 }
 
 function statusLevel() {
-	return [biomeAdapter, tyAdapter, ruffAdapter].every((adapter) => {
+	return adapters.every((adapter) => {
 		const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
 		return commandExists(command.command);
 	})
