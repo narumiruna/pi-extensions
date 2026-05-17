@@ -71,6 +71,11 @@ export class LspClient {
 		child.stderr.on("data", (chunk) => {
 			this.#stderr += chunk.toString();
 		});
+		child.stdin.on("error", (error) => {
+			this.#fail(
+				`${this.#adapter.label} LSP stdin write failed: ${formatErrorMessage(error)}.${this.#formatStderr()}`,
+			);
+		});
 		child.once("exit", (code, signal) => {
 			if (this.#child === child) this.#child = undefined;
 			const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
@@ -278,7 +283,15 @@ export class LspClient {
 		if (!this.#child) throw new Error(`${this.#adapter.label} LSP server is not running.`);
 
 		const body = JSON.stringify(message);
-		this.#child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+		try {
+			this.#child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+		} catch (error) {
+			const errorMessage =
+				`${this.#adapter.label} LSP stdin write failed: ${formatErrorMessage(error)}.` +
+				this.#formatStderr();
+			this.#fail(errorMessage);
+			throw new Error(errorMessage);
+		}
 	}
 
 	#onData(chunk: Buffer) {

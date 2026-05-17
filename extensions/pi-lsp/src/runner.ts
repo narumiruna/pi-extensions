@@ -186,15 +186,9 @@ export async function runFix(
 }
 
 function selectCodeActions(actions: CodeAction[], requestedKind: string) {
-	const directMatches = actions.filter(
+	return actions.filter(
 		(action) => action.kind === requestedKind || action.kind?.startsWith(`${requestedKind}.`),
 	);
-	if (directMatches.length) return directMatches;
-
-	const fallbackMatches = actions.filter(
-		(action) => !action.kind || requestedKind.startsWith(`${action.kind}.`),
-	);
-	return fallbackMatches.length ? fallbackMatches : actions;
 }
 
 function formatDiagnostics(adapter: LspServerAdapter, entries: DiagnosticEntry[]) {
