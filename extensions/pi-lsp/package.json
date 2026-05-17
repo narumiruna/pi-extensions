@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-lsp",
-	"version": "0.1.22",
+	"version": "0.1.23",
 	"description": "Pi extension that exposes language-server tools for Biome, ty, and Ruff through a shared LSP runner.",
 	"type": "module",
 	"license": "MIT",
