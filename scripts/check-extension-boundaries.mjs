@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 const EXTENSION_PACKAGE_RE = /^@narumitw\/pi-/;
 const DEPENDENCY_FIELDS = [
@@ -11,8 +12,6 @@ const DEPENDENCY_FIELDS = [
 	"optionalDependencies",
 ];
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
-const MODULE_SPECIFIER_RE =
-	/\b(?:import|export)\s+(?:type\s+)?(?:[^"']*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 const rootDirectory = process.cwd();
 const extensionsDirectory = path.join(rootDirectory, "extensions");
@@ -80,7 +79,7 @@ function checkSourceImports(extensionPackage) {
 
 	for (const sourcePath of listSourceFiles(sourceDirectory)) {
 		const source = fs.readFileSync(sourcePath, "utf8");
-		for (const specifier of moduleSpecifiers(source)) {
+		for (const specifier of moduleSpecifiers(sourcePath, source)) {
 			if (!isForbiddenExtensionReference(extensionPackage.name, specifier)) continue;
 
 			failures.push(`${relative(sourcePath)} must not import ${specifier}.`);
@@ -101,16 +100,65 @@ function listSourceFiles(directory) {
 	return files.sort();
 }
 
-function moduleSpecifiers(source) {
+function moduleSpecifiers(sourcePath, source) {
+	const sourceFile = ts.createSourceFile(
+		sourcePath,
+		source,
+		ts.ScriptTarget.Latest,
+		true,
+		scriptKindFor(sourcePath),
+	);
 	const specifiers = [];
-	MODULE_SPECIFIER_RE.lastIndex = 0;
-	while (true) {
-		const match = MODULE_SPECIFIER_RE.exec(source);
-		if (match === null) break;
-		const specifier = match[1] ?? match[2] ?? match[3];
-		if (specifier) specifiers.push(specifier);
-	}
+
+	const visit = (node) => {
+		if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+			const specifier = node.moduleSpecifier && stringLiteralText(node.moduleSpecifier);
+			if (specifier) specifiers.push(specifier);
+		} else if (ts.isImportEqualsDeclaration(node)) {
+			const reference = node.moduleReference;
+			const specifier = ts.isExternalModuleReference(reference)
+				? stringLiteralText(reference.expression)
+				: undefined;
+			if (specifier) specifiers.push(specifier);
+		} else if (ts.isCallExpression(node)) {
+			const firstArgument = node.arguments[0];
+			const specifier = firstArgument && stringLiteralText(firstArgument);
+			if (specifier && isModuleLoaderCall(node)) specifiers.push(specifier);
+		}
+
+		ts.forEachChild(node, visit);
+	};
+
+	visit(sourceFile);
 	return specifiers;
+}
+
+function isModuleLoaderCall(node) {
+	return (
+		node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+		(ts.isIdentifier(node.expression) && node.expression.text === "require")
+	);
+}
+
+function stringLiteralText(node) {
+	return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
+		? node.text
+		: undefined;
+}
+
+function scriptKindFor(filePath) {
+	switch (path.extname(filePath)) {
+		case ".cjs":
+		case ".js":
+		case ".mjs":
+			return ts.ScriptKind.JS;
+		case ".jsx":
+			return ts.ScriptKind.JSX;
+		case ".tsx":
+			return ts.ScriptKind.TSX;
+		default:
+			return ts.ScriptKind.TS;
+	}
 }
 
 function isForbiddenExtensionReference(packageName, specifier) {

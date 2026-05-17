@@ -34,8 +34,7 @@ const COLLAPSED_ITEM_COUNT = 10;
 const DEFAULT_TIMEOUT_MS = parsePositiveInteger(process.env.PI_SUBAGENT_TIMEOUT_MS) ?? 10 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 const STATUS_KEY = "subagents";
-
-let activeStatusRuns = 0;
+const activeStatuses = new Map<string, string>();
 
 function parsePositiveInteger(value: string | undefined): number | undefined {
 	if (!value) return undefined;
@@ -47,13 +46,13 @@ interface StatusContext {
 	ui: { setStatus: (key: string, value: string | undefined) => void };
 }
 
-function startSubagentStatus(ctx: StatusContext, status: string) {
-	activeStatusRuns += 1;
+function startSubagentStatus(ctx: StatusContext, toolCallId: string, status: string) {
 	let cleared = false;
 
 	const update = (nextStatus: string) => {
 		if (cleared) return;
-		ctx.ui.setStatus(STATUS_KEY, withConcurrentStatusSuffix(nextStatus));
+		activeStatuses.set(toolCallId, nextStatus);
+		publishSubagentStatus(ctx);
 	};
 
 	update(status);
@@ -63,17 +62,21 @@ function startSubagentStatus(ctx: StatusContext, status: string) {
 		clear() {
 			if (cleared) return;
 			cleared = true;
-			activeStatusRuns = Math.max(0, activeStatusRuns - 1);
-			ctx.ui.setStatus(
-				STATUS_KEY,
-				activeStatusRuns > 0 ? `🧑‍🤝‍🧑 ${activeStatusRuns} active` : undefined,
-			);
+			activeStatuses.delete(toolCallId);
+			publishSubagentStatus(ctx);
 		},
 	};
 }
 
-function withConcurrentStatusSuffix(status: string): string {
-	return activeStatusRuns > 1 ? `${status} +${activeStatusRuns - 1}` : status;
+function publishSubagentStatus(ctx: StatusContext) {
+	const statuses = [...activeStatuses.values()];
+	if (statuses.length === 0) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		return;
+	}
+
+	const suffix = statuses.length > 1 ? ` +${statuses.length - 1}` : "";
+	ctx.ui.setStatus(STATUS_KEY, `${statuses[0]}${suffix}`);
 }
 
 function singleStatus(agent: string): string {
@@ -596,7 +599,7 @@ export default function (pi: ExtensionAPI) {
 		].join(" "),
 		parameters: SubagentParams,
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
@@ -664,7 +667,7 @@ export default function (pi: ExtensionAPI) {
 			if (params.chain && params.chain.length > 0) {
 				const results: SingleResult[] = [];
 				let previousOutput = "";
-				const status = startSubagentStatus(ctx, chainStatus(0, params.chain.length));
+				const status = startSubagentStatus(ctx, toolCallId, chainStatus(0, params.chain.length));
 
 				try {
 					for (let i = 0; i < params.chain.length; i++) {
@@ -734,7 +737,7 @@ export default function (pi: ExtensionAPI) {
 						details: makeDetails("parallel")([]),
 					};
 
-				const status = startSubagentStatus(ctx, parallelStatus(0, params.tasks.length, params.tasks.length));
+				const status = startSubagentStatus(ctx, toolCallId, parallelStatus(0, params.tasks.length, params.tasks.length));
 
 				try {
 					// Track all results for streaming updates
@@ -854,7 +857,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (params.agent && params.task) {
-				const status = startSubagentStatus(ctx, singleStatus(params.agent));
+				const status = startSubagentStatus(ctx, toolCallId, singleStatus(params.agent));
 
 				try {
 					const result = await runSingleAgent(
