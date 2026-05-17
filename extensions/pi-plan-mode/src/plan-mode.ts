@@ -134,7 +134,7 @@ export default function planMode(pi: ExtensionAPI) {
 				reason: `Plan mode blocks built-in mutating tool '${event.toolName}'. Use /plan and choose implementation when the plan is ready.`,
 			};
 		}
-		if (event.toolName !== "bash") return;
+		if (event.toolName !== "bash" || !isBuiltinToolName(event.toolName)) return;
 
 		const command = readCommand(event.input);
 		if (!isSafeCommand(command)) {
@@ -463,8 +463,17 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function isBlockedBuiltinToolName(toolName: string) {
-		const tool = safeGetAllTools().find((candidate) => candidate.name === toolName);
+		const tool = toolByName(toolName);
 		return tool ? isBuiltinTool(tool) && BLOCKED_BUILTIN_TOOLS.has(tool.name) : false;
+	}
+
+	function isBuiltinToolName(toolName: string) {
+		const tool = toolByName(toolName);
+		return tool ? isBuiltinTool(tool) : false;
+	}
+
+	function toolByName(toolName: string) {
+		return safeGetAllTools().find((candidate) => candidate.name === toolName);
 	}
 }
 
