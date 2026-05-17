@@ -520,9 +520,12 @@ function clearPersistedGoal(cwd: string) {
 
 function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
 	const sessionManager = ctx.sessionManager as
-		| { getEntries?: () => Array<{ type?: string; customType?: string; data?: unknown }> }
+		| {
+				getBranch?: () => Array<{ type?: string; customType?: string; data?: unknown }>;
+				getEntries?: () => Array<{ type?: string; customType?: string; data?: unknown }>;
+			}
 		| undefined;
-	const entries = sessionManager?.getEntries?.() ?? [];
+	const entries = sessionManager?.getBranch?.() ?? sessionManager?.getEntries?.() ?? [];
 	const entry = entries
 		.filter((entry) => entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE)
 		.pop();
