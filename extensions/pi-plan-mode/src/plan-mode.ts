@@ -128,7 +128,7 @@ export default function planMode(pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event) => {
 		if (!state.enabled) return;
-		if (BLOCKED_BUILTIN_TOOLS.has(event.toolName)) {
+		if (isBlockedBuiltinToolName(event.toolName)) {
 			return {
 				block: true,
 				reason: `Plan mode blocks built-in mutating tool '${event.toolName}'. Use /plan and choose implementation when the plan is ready.`,
@@ -431,7 +431,7 @@ export default function planMode(pi: ExtensionAPI) {
 			]);
 		} else if (state.enabled) {
 			ctx.ui.setWidget(PLAN_WIDGET_KEY, [
-				"Plan mode: read-only",
+				"Plan mode: planning",
 				formatToolSummary(),
 				"Produce a <proposed_plan> block.",
 			]);
@@ -461,6 +461,11 @@ export default function planMode(pi: ExtensionAPI) {
 		const names = planModeToolNames();
 		return `Tools: ${names.length > 0 ? names.join(", ") : "none"}`;
 	}
+
+	function isBlockedBuiltinToolName(toolName: string) {
+		const tool = safeGetAllTools().find((candidate) => candidate.name === toolName);
+		return tool ? isBuiltinTool(tool) && BLOCKED_BUILTIN_TOOLS.has(tool.name) : false;
+	}
 }
 
 function isBuiltinTool(tool: ToolInfo) {
@@ -468,7 +473,6 @@ function isBuiltinTool(tool: ToolInfo) {
 }
 
 function canSelectToolInPlanMode(tool: ToolInfo) {
-	if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return false;
 	if (isBuiltinTool(tool)) return SAFE_BUILTIN_PLAN_TOOLS.has(tool.name);
 	return true;
 }
@@ -499,8 +503,10 @@ function formatToolChoice(tool: ToolInfo, selected: boolean, index: number) {
 }
 
 function toolPolicyLabel(tool: ToolInfo) {
-	if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
-	if (isBuiltinTool(tool)) return tool.name === "bash" ? "built-in limited" : "built-in";
+	if (isBuiltinTool(tool)) {
+		if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "built-in blocked";
+		return tool.name === "bash" ? "built-in limited" : "built-in";
+	}
 	return `user risk: ${toolSourceLabel(tool)}`;
 }
 
