@@ -457,7 +457,9 @@ function splitExtensionStatusIcon(value: string): { icon: string; text: string }
 }
 
 function isEmojiOnlyToken(value: string): boolean {
-	return /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\u200d|\ufe0f)+$/u.test(value);
+	return /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}0-9#*\u200d\ufe0f\u20e3]+$/u.test(
+		value,
+	);
 }
 
 function extensionColor(key: string, value: string): ThemeColor {
