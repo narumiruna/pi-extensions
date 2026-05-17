@@ -10,9 +10,8 @@ Use it to monitor model selection, thinking level, git branch, working directory
 
 - Replaces the default Pi footer with a compact rich statusline.
 - Shows model, thinking level, git branch, project directory, active tool, context usage, tokens, cost, and clock.
-- Displays compact statuses from other extensions without knowing about specific packages.
+- Displays compact statuses published through Pi's generic extension status API.
 - Preserves extension-provided status icons when the status text starts with one.
-- Shows active subagent count and execution mode while subagent tools are running.
 - Warns when the same extension package is installed from multiple sources.
 - Uses emoji-labeled segments for readability.
 - Adapts to terminal width and truncates safely.
@@ -53,14 +52,14 @@ The default statusline includes:
 
 Statuses from other extensions appear on their own compact line below the main statusline and are separated with ``.
 
-`pi-statusline` is extension-agnostic: it does not map package names to icons. If an extension wants a custom icon, it should include that icon at the start of its status text, for example `ctx.ui.setStatus("goal", "🎯 active")`. Statuses without a leading icon use the generic `🔌` icon.
+`pi-statusline` is extension-agnostic: it consumes Pi's generic extension status API and does not import or depend on status-producing extensions. If an extension wants a custom icon, it should include that icon at the start of its status text, for example `ctx.ui.setStatus("goal", "🎯 active")`. Statuses without a leading icon use the generic `🔌` icon.
 
 Examples:
 
 - `🔌 active` for a plain status such as `goal: active`.
 - `🎯 active` when the producing extension sets `🎯 active`.
 - `🐍 ty ✓ ruff ✓` when the producing extension sets a Python status with a leading icon.
-- `🧑‍🤝‍🧑 2 parallel` while subagent tool calls are active.
+- `🧪 running` when any extension publishes an activity status with its own icon.
 - `⚠️ dup biome-lsp` when local and npm installs register the same extension.
 
 ## 🧠 Use cases

@@ -33,11 +33,66 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const DEFAULT_TIMEOUT_MS = parsePositiveInteger(process.env.PI_SUBAGENT_TIMEOUT_MS) ?? 10 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
+const STATUS_KEY = "subagents";
+const activeStatuses = new Map<string, string>();
 
 function parsePositiveInteger(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+interface StatusContext {
+	ui: { setStatus: (key: string, value: string | undefined) => void };
+}
+
+function startSubagentStatus(ctx: StatusContext, toolCallId: string, status: string) {
+	let cleared = false;
+
+	const update = (nextStatus: string) => {
+		if (cleared) return;
+		activeStatuses.set(toolCallId, nextStatus);
+		publishSubagentStatus(ctx);
+	};
+
+	update(status);
+
+	return {
+		update,
+		clear() {
+			if (cleared) return;
+			cleared = true;
+			activeStatuses.delete(toolCallId);
+			publishSubagentStatus(ctx);
+		},
+	};
+}
+
+function publishSubagentStatus(ctx: StatusContext) {
+	const statuses = [...activeStatuses.values()];
+	if (statuses.length === 0) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		return;
+	}
+
+	const suffix = statuses.length > 1 ? ` +${statuses.length - 1}` : "";
+	ctx.ui.setStatus(STATUS_KEY, `${statuses[0]}${suffix}`);
+}
+
+function singleStatus(agent: string): string {
+	return `🧑‍🤝‍🧑 ${agent}`;
+}
+
+function chainStatus(step: number, total: number, agent?: string): string {
+	return `🧑‍🤝‍🧑 chain ${step}/${total}${agent ? ` ${agent}` : ""}`;
+}
+
+function parallelStatus(done: number, total: number, running: number): string {
+	return `🧑‍🤝‍🧑 parallel ${done}/${total} done${running > 0 ? ` ${running} running` : ""}`;
+}
+
+function fanInStatus(agent: string): string {
+	return `🧑‍🤝‍🧑 fan-in ${agent}`;
 }
 
 function formatTokens(count: number): string {
@@ -544,7 +599,7 @@ export default function (pi: ExtensionAPI) {
 		].join(" "),
 		parameters: SubagentParams,
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
@@ -612,56 +667,62 @@ export default function (pi: ExtensionAPI) {
 			if (params.chain && params.chain.length > 0) {
 				const results: SingleResult[] = [];
 				let previousOutput = "";
+				const status = startSubagentStatus(ctx, toolCallId, chainStatus(0, params.chain.length));
 
-				for (let i = 0; i < params.chain.length; i++) {
-					const step = params.chain[i];
-					const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
+				try {
+					for (let i = 0; i < params.chain.length; i++) {
+						const step = params.chain[i];
+						status.update(chainStatus(i + 1, params.chain.length, step.agent));
+						const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
 
-					// Create update callback that includes all previous results
-					const chainUpdate: OnUpdateCallback | undefined = onUpdate
-						? (partial) => {
-								// Combine completed results with current streaming result
-								const currentResult = partial.details?.results[0];
-								if (currentResult) {
-									const allResults = [...results, currentResult];
-									onUpdate({
-										content: partial.content,
-										details: makeDetails("chain")(allResults),
-									});
+						// Create update callback that includes all previous results
+						const chainUpdate: OnUpdateCallback | undefined = onUpdate
+							? (partial) => {
+									// Combine completed results with current streaming result
+									const currentResult = partial.details?.results[0];
+									if (currentResult) {
+										const allResults = [...results, currentResult];
+										onUpdate({
+											content: partial.content,
+											details: makeDetails("chain")(allResults),
+										});
+									}
 								}
-							}
-						: undefined;
+							: undefined;
 
-					const result = await runSingleAgent(
-						ctx.cwd,
-						agents,
-						step.agent,
-						taskWithContext,
-						step.cwd,
-						i + 1,
-						signal,
-						step.timeoutMs ?? defaultTimeoutMs,
-						chainUpdate,
-						makeDetails("chain"),
-					);
-					results.push(result);
+						const result = await runSingleAgent(
+							ctx.cwd,
+							agents,
+							step.agent,
+							taskWithContext,
+							step.cwd,
+							i + 1,
+							signal,
+							step.timeoutMs ?? defaultTimeoutMs,
+							chainUpdate,
+							makeDetails("chain"),
+						);
+						results.push(result);
 
-					const isError =
-						result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-					if (isError) {
-						const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
-						return {
-							content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
-							details: makeDetails("chain")(results),
-							isError: true,
-						};
+						const isError =
+							result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+						if (isError) {
+							const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
+							return {
+								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
+								details: makeDetails("chain")(results),
+								isError: true,
+							};
+						}
+						previousOutput = getResultFinalOutput(result);
 					}
-					previousOutput = getResultFinalOutput(result);
+					return {
+						content: [{ type: "text", text: getResultFinalOutput(results[results.length - 1]) || "(no output)" }],
+						details: makeDetails("chain")(results),
+					};
+				} finally {
+					status.clear();
 				}
-				return {
-					content: [{ type: "text", text: getResultFinalOutput(results[results.length - 1]) || "(no output)" }],
-					details: makeDetails("chain")(results),
-				};
 			}
 
 			if (params.tasks && params.tasks.length > 0) {
@@ -676,141 +737,163 @@ export default function (pi: ExtensionAPI) {
 						details: makeDetails("parallel")([]),
 					};
 
-				// Track all results for streaming updates
-				const allResults: SingleResult[] = new Array(params.tasks.length);
+				const status = startSubagentStatus(ctx, toolCallId, parallelStatus(0, params.tasks.length, params.tasks.length));
 
-				// Initialize placeholder results
-				for (let i = 0; i < params.tasks.length; i++) {
-					allResults[i] = {
-						agent: params.tasks[i].agent,
-						agentSource: "unknown",
-						task: params.tasks[i].task,
-						exitCode: -1, // -1 = still running
-						messages: [],
-						stderr: "",
-						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-						finalOutput: "",
-					};
-				}
+				try {
+					// Track all results for streaming updates
+					const allResults: SingleResult[] = new Array(params.tasks.length);
 
-				const emitParallelUpdate = () => {
-					if (onUpdate) {
-						const running = allResults.filter((r) => r.exitCode === -1).length;
-						const done = allResults.filter((r) => r.exitCode !== -1).length;
-						onUpdate({
-							content: [
-								{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` },
-							],
-							details: makeDetails("parallel")([...allResults]),
-						});
+					// Initialize placeholder results
+					for (let i = 0; i < params.tasks.length; i++) {
+						allResults[i] = {
+							agent: params.tasks[i].agent,
+							agentSource: "unknown",
+							task: params.tasks[i].task,
+							exitCode: -1, // -1 = still running
+							messages: [],
+							stderr: "",
+							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+							finalOutput: "",
+						};
 					}
-				};
 
-				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-					const result = await runSingleAgent(
-						ctx.cwd,
-						agents,
-						t.agent,
-						t.task,
-						t.cwd,
-						undefined,
-						signal,
-						t.timeoutMs ?? defaultTimeoutMs,
-						// Per-task update callback
-						(partial) => {
-							if (partial.details?.results[0]) {
-								allResults[index] = partial.details.results[0];
-								emitParallelUpdate();
-							}
-						},
-						makeDetails("parallel"),
-					);
-					allResults[index] = result;
-					emitParallelUpdate();
-					return result;
-				});
+					let doneCount = 0;
+					let runningCount = params.tasks.length;
 
-				let aggregatorResult: SingleResult | undefined;
-				if (params.aggregator) {
-					const fanInContext = buildFanInContext(results);
-					const aggregatorTask = params.aggregator.task.includes("{previous}")
-						? params.aggregator.task.replace(/\{previous\}/g, fanInContext)
-						: `${params.aggregator.task}\n\nParallel task outputs:\n\n${fanInContext}`;
-					aggregatorResult = await runSingleAgent(
-						ctx.cwd,
-						agents,
-						params.aggregator.agent,
-						aggregatorTask,
-						params.aggregator.cwd,
-						undefined,
-						signal,
-						params.aggregator.timeoutMs ?? defaultTimeoutMs,
-						(partial) => {
-							if (onUpdate && partial.details?.results[0]) {
-								onUpdate({
-									content: partial.content,
-									details: makeDetails("parallel")(results, partial.details.results[0]),
-								});
-							}
-						},
-						makeDetails("parallel"),
-					);
+					const emitParallelUpdate = () => {
+						status.update(parallelStatus(doneCount, allResults.length, runningCount));
+						if (onUpdate) {
+							onUpdate({
+								content: [
+									{
+										type: "text",
+										text: `Parallel: ${doneCount}/${allResults.length} done, ${runningCount} running...`,
+									},
+								],
+								details: makeDetails("parallel")([...allResults]),
+							});
+						}
+					};
+
+					const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
+						const result = await runSingleAgent(
+							ctx.cwd,
+							agents,
+							t.agent,
+							t.task,
+							t.cwd,
+							undefined,
+							signal,
+							t.timeoutMs ?? defaultTimeoutMs,
+							// Per-task update callback
+							(partial) => {
+								if (partial.details?.results[0]) {
+									allResults[index] = { ...partial.details.results[0], exitCode: -1 };
+									emitParallelUpdate();
+								}
+							},
+							makeDetails("parallel"),
+						);
+						allResults[index] = result;
+						doneCount += 1;
+						runningCount -= 1;
+						emitParallelUpdate();
+						return result;
+					});
+
+					let aggregatorResult: SingleResult | undefined;
+					if (params.aggregator) {
+						const aggregator = params.aggregator;
+						status.update(fanInStatus(aggregator.agent));
+						const fanInContext = buildFanInContext(results);
+						const aggregatorTask = aggregator.task.includes("{previous}")
+							? aggregator.task.replace(/\{previous\}/g, fanInContext)
+							: `${aggregator.task}\n\nParallel task outputs:\n\n${fanInContext}`;
+						aggregatorResult = await runSingleAgent(
+							ctx.cwd,
+							agents,
+							aggregator.agent,
+							aggregatorTask,
+							aggregator.cwd,
+							undefined,
+							signal,
+							aggregator.timeoutMs ?? defaultTimeoutMs,
+							(partial) => {
+								status.update(fanInStatus(aggregator.agent));
+								if (onUpdate && partial.details?.results[0]) {
+									onUpdate({
+										content: partial.content,
+										details: makeDetails("parallel")(results, partial.details.results[0]),
+									});
+								}
+							},
+							makeDetails("parallel"),
+						);
+					}
+
+					const successCount = results.filter((r) => r.exitCode === 0).length;
+					const summaries = results.map((r) => {
+						const output = getResultFinalOutput(r);
+						const error = r.errorMessage || r.stderr.trim();
+						const summaryText = output || error;
+						const preview = summaryText.slice(0, 160) + (summaryText.length > 160 ? "..." : "");
+						return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
+					});
+					const aggregatorOutput = aggregatorResult ? getResultFinalOutput(aggregatorResult) : "";
+					const aggregatorError = aggregatorResult?.errorMessage || aggregatorResult?.stderr.trim() || "";
+					return {
+						content: [
+							{
+								type: "text",
+								text: aggregatorResult
+									? aggregatorOutput || aggregatorError || `(aggregator ${aggregatorResult.agent} produced no output)`
+									: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+							},
+						],
+						details: makeDetails("parallel")(results, aggregatorResult),
+						isError: aggregatorResult
+							? aggregatorResult.exitCode !== 0 ||
+								aggregatorResult.stopReason === "error" ||
+								aggregatorResult.stopReason === "aborted"
+							: undefined,
+					};
+				} finally {
+					status.clear();
 				}
-
-				const successCount = results.filter((r) => r.exitCode === 0).length;
-				const summaries = results.map((r) => {
-					const output = getResultFinalOutput(r);
-					const error = r.errorMessage || r.stderr.trim();
-					const summaryText = output || error;
-					const preview = summaryText.slice(0, 160) + (summaryText.length > 160 ? "..." : "");
-					return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
-				});
-				const aggregatorOutput = aggregatorResult ? getResultFinalOutput(aggregatorResult) : "";
-				const aggregatorError = aggregatorResult?.errorMessage || aggregatorResult?.stderr.trim() || "";
-				return {
-					content: [
-						{
-							type: "text",
-							text: aggregatorResult
-								? aggregatorOutput || aggregatorError || `(aggregator ${aggregatorResult.agent} produced no output)`
-								: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
-						},
-					],
-					details: makeDetails("parallel")(results, aggregatorResult),
-					isError: aggregatorResult
-						? aggregatorResult.exitCode !== 0 ||
-							aggregatorResult.stopReason === "error" ||
-							aggregatorResult.stopReason === "aborted"
-						: undefined,
-				};
 			}
 
 			if (params.agent && params.task) {
-				const result = await runSingleAgent(
-					ctx.cwd,
-					agents,
-					params.agent,
-					params.task,
-					params.cwd,
-					undefined,
-					signal,
-					params.timeoutMs ?? defaultTimeoutMs,
-					onUpdate,
-					makeDetails("single"),
-				);
-				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-				if (isError) {
-					const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
+				const status = startSubagentStatus(ctx, toolCallId, singleStatus(params.agent));
+
+				try {
+					const result = await runSingleAgent(
+						ctx.cwd,
+						agents,
+						params.agent,
+						params.task,
+						params.cwd,
+						undefined,
+						signal,
+						params.timeoutMs ?? defaultTimeoutMs,
+						onUpdate,
+						makeDetails("single"),
+					);
+					const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+					if (isError) {
+						const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
+						return {
+							content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+							details: makeDetails("single")([result]),
+							isError: true,
+						};
+					}
 					return {
-						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+						content: [{ type: "text", text: getResultFinalOutput(result) || "(no output)" }],
 						details: makeDetails("single")([result]),
-						isError: true,
 					};
+				} finally {
+					status.clear();
 				}
-				return {
-					content: [{ type: "text", text: getResultFinalOutput(result) || "(no output)" }],
-					details: makeDetails("single")([result]),
-				};
 			}
 
 			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";

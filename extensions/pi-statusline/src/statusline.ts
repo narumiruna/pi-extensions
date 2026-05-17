@@ -40,18 +40,12 @@ interface StatuslineConfig {
 interface RuntimeState {
 	turnCount: number;
 	activeTools: Map<string, number>;
-	activeSubagents: Map<string, SubagentActivity>;
 	lastTool?: string;
 	lastCompletedTool?: string;
 	isStreaming: boolean;
 	thinkingLevel: ThinkingLevel;
 	duplicateExtensions: string[];
 	requestRender?: () => void;
-}
-
-interface SubagentActivity {
-	mode: string;
-	count: number;
 }
 
 interface TokenTotals {
@@ -98,7 +92,6 @@ export default function statusline(pi: ExtensionAPI) {
 	const runtime: RuntimeState = {
 		turnCount: 0,
 		activeTools: new Map(),
-		activeSubagents: new Map(),
 		isStreaming: false,
 		thinkingLevel: "off",
 		duplicateExtensions: [],
@@ -175,9 +168,6 @@ export default function statusline(pi: ExtensionAPI) {
 	pi.on("tool_execution_start", (event) => {
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		runtime.activeTools.set(event.toolName, currentCount + 1);
-		if (event.toolName === "subagent") {
-			runtime.activeSubagents.set(event.toolCallId, parseSubagentActivity(event.args));
-		}
 		runtime.lastTool = event.toolName;
 		refresh();
 	});
@@ -186,7 +176,6 @@ export default function statusline(pi: ExtensionAPI) {
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		if (currentCount <= 1) runtime.activeTools.delete(event.toolName);
 		else runtime.activeTools.set(event.toolName, currentCount - 1);
-		if (event.toolName === "subagent") runtime.activeSubagents.delete(event.toolCallId);
 
 		runtime.lastCompletedTool = event.toolName;
 		refresh();
@@ -412,7 +401,6 @@ function formatExtensionStatuses(
 ): string {
 	const separator = theme.fg("dim", "  ");
 	const visibleStatuses = [
-		...formatSubagentStatus(runtime, theme),
 		...formatDuplicateExtensionStatus(runtime, theme),
 		...[...statuses.entries()]
 			.filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0)
@@ -428,16 +416,6 @@ function formatExtensionStatus(key: string, value: string, theme: Theme): string
 	const color = extensionColor(key, value);
 	const textColor = color === "warning" ? "warning" : "muted";
 	return `${theme.fg(color, status.icon)} ${theme.fg(textColor, text)}`;
-}
-
-function formatSubagentStatus(runtime: RuntimeState, theme: Theme): string[] {
-	const activities = [...runtime.activeSubagents.values()];
-	if (activities.length === 0) return [];
-
-	const total = activities.reduce((sum, activity) => sum + activity.count, 0);
-	const mode = activities[0]?.mode ?? "active";
-	const suffix = activities.length > 1 ? ` +${activities.length - 1}` : "";
-	return [`${theme.fg("accent", "🧑‍🤝‍🧑")} ${theme.fg("muted", `${total} ${mode}${suffix}`)}`];
 }
 
 function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): string[] {
@@ -486,18 +464,6 @@ function simplifyExtensionStatusText(value: string): string {
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function parseSubagentActivity(args: unknown): SubagentActivity {
-	const input = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-	const tasks = Array.isArray(input.tasks) ? input.tasks.length : 0;
-	const chain = Array.isArray(input.chain) ? input.chain.length : 0;
-	const hasAggregator = input.aggregator !== undefined;
-
-	if (chain > 0) return { mode: "chain", count: chain };
-	if (tasks > 0 && hasAggregator) return { mode: "fan-in", count: tasks };
-	if (tasks > 0) return { mode: "parallel", count: tasks };
-	return { mode: "single", count: 1 };
 }
 
 function findDuplicateExtensions(cwd: string): string[] {
