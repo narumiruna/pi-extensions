@@ -43,3 +43,10 @@ Run commands from the repository root unless noted otherwise.
 - Recent history uses Conventional Commits such as `feat: ...`, `fix: ...`, and `chore(release): ...`; keep commit messages grounded in the actual diff.
 - Stage only intended paths. Do not use blanket staging for unrelated local changes.
 - For PRs or handoff notes, include the commands run and any publish/visibility checks performed.
+
+## MEMORY.md
+
+- `MEMORY.md` is not auto-loaded. Check it before non-trivial debugging or design work when prior project context may matter.
+- Keep entries short and reusable.
+- `MEMORY.md` must use `## GOTCHA` and `## TASTE` sections.
+- After a non-trivial error or discovery, add one concise entry if it will help future work.
