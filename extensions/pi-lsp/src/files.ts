@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -36,12 +36,13 @@ export function collectSupportedFiles(
 	const cappedLimit = Math.max(1, Math.floor(limit));
 	const files: string[] = [];
 	const seen = new Set<string>();
+	const visitedDirectories = new Set<string>();
 	const inputs = requestedPaths?.length ? requestedPaths : [root];
 
 	for (const input of inputs) {
 		const targetPath = path.resolve(root, input);
 		if (!existsSync(targetPath)) throw new Error(`Requested path does not exist: ${targetPath}`);
-		collectPath(adapter, targetPath, files, seen, cappedLimit);
+		collectPath(adapter, targetPath, files, seen, visitedDirectories, cappedLimit);
 		if (files.length >= cappedLimit) break;
 	}
 
@@ -53,12 +54,10 @@ function collectPath(
 	targetPath: string,
 	files: string[],
 	seen: Set<string>,
+	visitedDirectories: Set<string>,
 	limit: number,
 ) {
 	if (files.length >= limit || !existsSync(targetPath)) return;
-
-	const linkStats = lstatSync(targetPath);
-	if (linkStats.isSymbolicLink()) return;
 
 	const stats = statSync(targetPath);
 	if (stats.isFile()) {
@@ -70,12 +69,16 @@ function collectPath(
 	}
 
 	if (!stats.isDirectory()) return;
+	const directoryKey = realpathSync(targetPath);
+	if (visitedDirectories.has(directoryKey)) return;
+	visitedDirectories.add(directoryKey);
+
 	const entries = readdirSync(targetPath, { withFileTypes: true }).sort((left, right) =>
 		left.name.localeCompare(right.name),
 	);
 	for (const entry of entries) {
 		if (files.length >= limit) break;
-		if (entry.isDirectory() && adapter.skipDirectories.has(entry.name)) continue;
-		collectPath(adapter, path.join(targetPath, entry.name), files, seen, limit);
+		if ((entry.isDirectory() || entry.isSymbolicLink()) && adapter.skipDirectories.has(entry.name)) continue;
+		collectPath(adapter, path.join(targetPath, entry.name), files, seen, visitedDirectories, limit);
 	}
 }
