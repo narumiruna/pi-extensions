@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-goal)](https://www.npmjs.com/package/@narumitw/pi-goal) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds durable `/goal` commands and a `goal_complete` tool for autonomous, verifiable task completion.
+`@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds session-scoped `/goal` commands and a `goal_complete` tool for autonomous, verifiable task completion.
 
 Goal mode keeps sending guarded automatic follow-up messages until the agent calls `goal_complete`, the user pauses or clears the goal, or an optional token budget is reached.
 
@@ -14,7 +14,7 @@ Goal mode keeps sending guarded automatic follow-up messages until the agent cal
 - Exposes only one top-level command: `/goal`.
 - Supports optional token budgets such as `/goal --tokens 100k <goal>`.
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
-- Persists in-progress goal state per working directory under the Pi agent config directory.
+- Keeps goal state in the current Pi runtime by default, so `/reload` or restarting Pi starts without an active goal.
 - Registers a `goal_complete` tool for explicit completion.
 - Automatically prompts the agent to continue if an active turn ends early.
 - Guards auto-follow-ups so replaced, paused, cleared, completed, or budget-limited goals are not continued.
@@ -56,9 +56,15 @@ pi -e ./extensions/pi-goal
 - `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active, paused goals stay paused, and budget-limited goals remain budget-limited if their budget is still exhausted.
 - `/goal pause` stops prompt injection and auto-continuation without forgetting the goal.
 - `/goal resume` resumes a paused or budget-limited goal when the token budget allows it.
-- `/goal clear` cancels the current goal and clears persisted state.
+- `/goal clear` cancels the current goal and also removes any legacy persisted state for the current working directory.
 
 Goal objectives are limited to 4,000 characters. Put longer instructions in a file and reference the file path from `/goal`.
+
+## 🔁 Session and reload behavior
+
+By default, goal state is scoped to the current Pi runtime. `/reload` or restarting Pi does not restore an unfinished goal, even if an older version left state in `~/.pi/agent/pi-goal-state.json`.
+
+If you explicitly want legacy cross-reload persistence, start Pi with `PI_GOAL_PERSIST=1`. When persistence is enabled, unfinished goals are stored per working directory under the Pi agent config directory. `/goal clear` removes the stored goal for the current working directory.
 
 ## 📊 Statusline states
 

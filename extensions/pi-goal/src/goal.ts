@@ -127,7 +127,8 @@ export default function goal(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		activeGoal = loadGoal(ctx.cwd);
+		activeGoal = undefined;
+		if (isPersistenceEnabled()) activeGoal = loadGoal(ctx.cwd);
 		if (activeGoal) updateStatus(ctx, activeGoal);
 		else ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
@@ -503,6 +504,7 @@ function currentTokenTotal(ctx: StatusContext): number {
 }
 
 function persistGoal(cwd: string, goal: ActiveGoal) {
+	if (!isPersistenceEnabled()) return;
 	writeState(cwd, goal);
 }
 
@@ -511,6 +513,7 @@ function clearPersistedGoal(cwd: string) {
 }
 
 function loadGoal(cwd: string): ActiveGoal | undefined {
+	if (!isPersistenceEnabled()) return undefined;
 	const goals = readState();
 	const stored = goals[cwd];
 	return isGoal(stored) && stored.status !== "complete" ? stored : undefined;
@@ -544,8 +547,13 @@ function writeState(cwd: string, goal: ActiveGoal | undefined) {
 	const goals = readState();
 	if (goal) goals[cwd] = goal;
 	else delete goals[cwd];
+	if (!goal && !existsSync(STATE_FILE)) return;
 	mkdirSync(dirname(STATE_FILE), { recursive: true });
 	writeFileSync(STATE_FILE, `${JSON.stringify(goals, null, 2)}\n`);
+}
+
+function isPersistenceEnabled() {
+	return ["1", "true", "yes", "on"].includes((process.env.PI_GOAL_PERSIST ?? "").toLowerCase());
 }
 
 function isGoal(value: unknown): value is ActiveGoal {
