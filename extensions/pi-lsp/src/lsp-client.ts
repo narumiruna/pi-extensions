@@ -4,7 +4,14 @@ import process from "node:process";
 import { commandExists } from "./command.js";
 import { directoryUri } from "./files.js";
 import { positionAt } from "./text-edits.js";
-import type { CodeAction, JsonRpcMessage, LspDiagnostic, LspServerAdapter, LspTextEdit, ServerCommand } from "./types.js";
+import type {
+	CodeAction,
+	JsonRpcMessage,
+	LspDiagnostic,
+	LspServerAdapter,
+	LspTextEdit,
+	ServerCommand,
+} from "./types.js";
 
 export class LspClient {
 	#child?: ChildProcessWithoutNullStreams;

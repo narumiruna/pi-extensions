@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -56,6 +56,9 @@ function collectPath(
 	limit: number,
 ) {
 	if (files.length >= limit || !existsSync(targetPath)) return;
+
+	const linkStats = lstatSync(targetPath);
+	if (linkStats.isSymbolicLink()) return;
 
 	const stats = statSync(targetPath);
 	if (stats.isFile()) {
