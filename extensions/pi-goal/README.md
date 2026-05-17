@@ -8,10 +8,10 @@ Goal mode keeps sending guarded automatic follow-up messages until the agent cal
 
 ## ✨ Features
 
-- Adds `/goal <goal_to_complete>` to start goal mode.
+- Adds `/goal <goal_to_complete>` to start goal mode, with confirmation before replacing an existing goal.
 - Bare `/goal` shows the current goal summary.
-- Adds `/goal pause`, `/goal resume`, `/goal clear`, and `/goal edit <goal_to_complete>`.
-- Keeps `/goal-status` and `/goal-stop` as compatibility aliases.
+- Keeps advanced goal management inside `/goal` subcommands: `pause`, `resume`, `clear`, and `edit`.
+- Exposes only one top-level command: `/goal`.
 - Supports optional token budgets such as `/goal --tokens 100k <goal>`.
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
 - Persists in-progress goal state per working directory under the Pi agent config directory.
@@ -44,23 +44,19 @@ pi -e ./extensions/pi-goal
 /goal
 /goal implement snake game
 /goal --tokens 100k fix the failing test and verify it
+/goal edit ship the smaller fix first
 /goal pause
 /goal resume
 /goal clear
-/goal edit ship the smaller fix first
-/goal-status
-/goal-stop
 ```
 
-- `/goal` shows the current goal, status, iteration count, elapsed time, and token usage.
-- `/goal <goal_to_complete>` starts goal mode when no other goal is active.
-- `/goal --tokens 100k <goal_to_complete>` starts goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
+- `/goal` shows the current goal, status, iteration count, elapsed time, token usage, and available `/goal` subcommands.
+- `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters.
+- `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
+- `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active, paused goals stay paused, and budget-limited goals remain budget-limited if their budget is still exhausted.
 - `/goal pause` stops prompt injection and auto-continuation without forgetting the goal.
-- `/goal resume` resumes a paused or budget-limited goal.
+- `/goal resume` resumes a paused or budget-limited goal when the token budget allows it.
 - `/goal clear` cancels the current goal and clears persisted state.
-- `/goal edit <goal_to_complete>` replaces the current goal with a new active goal.
-- `/goal-status` is a compatibility alias for `/goal`.
-- `/goal-stop` is a compatibility alias for `/goal clear`.
 
 Goal objectives are limited to 4,000 characters. Put longer instructions in a file and reference the file path from `/goal`.
 

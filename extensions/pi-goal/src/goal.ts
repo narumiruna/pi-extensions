@@ -34,6 +34,7 @@ interface CommandResult {
 interface StatusContext {
 	cwd: string;
 	ui: {
+		confirm: (title: string, message: string) => Promise<boolean>;
 		notify: (message: string, level?: "info" | "warning" | "error") => void;
 		setStatus: (key: string, value: string | undefined) => void;
 	};
@@ -116,23 +117,13 @@ export default function goal(pi: ExtensionAPI) {
 					clearGoal(ctx);
 					return;
 				case "edit":
-					editGoal(result.objective ?? "", result.tokenBudget, ctx);
+					editGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
 					return;
 				case "start":
-					startGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
+					await startGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
 					return;
 			}
 		},
-	});
-
-	pi.registerCommand("goal-stop", {
-		description: "Compatibility alias for /goal clear",
-		handler: async (_args, ctx) => clearGoal(ctx),
-	});
-
-	pi.registerCommand("goal-status", {
-		description: "Compatibility alias for bare /goal",
-		handler: async (_args, ctx) => showGoal(ctx),
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -179,25 +170,34 @@ export default function goal(pi: ExtensionAPI) {
 	});
 }
 
-function startGoal(objective: string, tokenBudget: number | undefined, pi: ExtensionAPI, ctx: StatusContext) {
+async function startGoal(
+	objective: string,
+	tokenBudget: number | undefined,
+	pi: ExtensionAPI,
+	ctx: StatusContext,
+) {
 	const validationError = validateObjective(objective);
 	if (validationError) {
 		ctx.ui.notify(validationError, "warning");
 		return;
 	}
 
-	if (activeGoal && activeGoal.status !== "complete") {
-		ctx.ui.notify(
-			`A goal is already ${activeGoal.status}. Use /goal edit <objective> to replace it, /goal clear to stop it, or /goal to inspect it.`,
-			"warning",
+	const existingGoal = activeGoal?.status !== "complete" ? activeGoal : undefined;
+	if (existingGoal) {
+		const shouldReplace = await ctx.ui.confirm(
+			"Replace goal?",
+			`Current goal: ${existingGoal.text}\n\nNew goal: ${objective}`,
 		);
-		return;
+		if (!shouldReplace) {
+			ctx.ui.notify(`Goal kept: ${existingGoal.text}`, "info");
+			return;
+		}
 	}
 
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
 	persistGoal(ctx.cwd, activeGoal);
 	updateStatus(ctx, activeGoal);
-	ctx.ui.notify(`Goal started: ${objective}`, "info");
+	ctx.ui.notify(existingGoal ? `Goal replaced: ${objective}` : `Goal started: ${objective}`, "info");
 	sendGoalPrompt(pi, ctx, activeGoal);
 }
 
@@ -244,22 +244,39 @@ function clearGoal(ctx: StatusContext) {
 	ctx.ui.notify(`Goal cleared: ${stoppedGoal}`, "warning");
 }
 
-function editGoal(objective: string, tokenBudget: number | undefined, ctx: StatusContext) {
+function editGoal(
+	objective: string,
+	tokenBudget: number | undefined,
+	pi: ExtensionAPI,
+	ctx: StatusContext,
+) {
 	const validationError = validateObjective(objective);
 	if (validationError) {
 		ctx.ui.notify(validationError, "warning");
 		return;
 	}
+	if (!activeGoal) {
+		ctx.ui.notify("No active goal. Use /goal <objective> to start one.", "warning");
+		return;
+	}
 
-	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
+	updateGoalUsage(activeGoal, ctx);
+	activeGoal = normalizeGoalForBudget({
+		...activeGoal,
+		text: objective,
+		status: editedGoalStatus(activeGoal.status),
+		tokenBudget: tokenBudget ?? activeGoal.tokenBudget,
+		updatedAt: Date.now(),
+	});
 	persistGoal(ctx.cwd, activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(`Goal updated: ${objective}`, "info");
+	if (activeGoal.status === "active") sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
 }
 
 function showGoal(ctx: StatusContext) {
 	if (!activeGoal) {
-		ctx.ui.notify("No active goal.", "info");
+		ctx.ui.notify("Usage: /goal <objective>\nNo goal is currently set.", "info");
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
 	}
@@ -286,7 +303,22 @@ function createGoal(text: string, tokenBudget: number | undefined, baselineToken
 }
 
 function transitionGoal(goal: ActiveGoal, status: GoalStatus): ActiveGoal {
-	return { ...goal, status, updatedAt: Date.now() };
+	return normalizeGoalForBudget({ ...goal, status, updatedAt: Date.now() });
+}
+
+function editedGoalStatus(status: GoalStatus): GoalStatus {
+	return status === "paused" ? "paused" : "active";
+}
+
+function normalizeGoalForBudget(goal: ActiveGoal): ActiveGoal {
+	if (
+		goal.status === "active" &&
+		goal.tokenBudget !== undefined &&
+		goal.tokensUsed >= goal.tokenBudget
+	) {
+		return { ...goal, status: "budget_limited" };
+	}
+	return goal;
 }
 
 function incrementGoal(goal: ActiveGoal): ActiveGoal {
@@ -382,6 +414,12 @@ function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) 
 	else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 }
 
+function sendObjectiveUpdatedPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	const prompt = buildObjectiveUpdatedPrompt(goal);
+	if (ctx.isIdle?.()) pi.sendUserMessage(prompt);
+	else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+}
+
 function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 	ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
 }
@@ -406,7 +444,14 @@ function goalSummary(goal: ActiveGoal) {
 		`Iteration: ${goal.iteration}`,
 		`Elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
 		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
+		`Commands: ${goalCommandHint(goal.status)}`,
 	].join("\n");
+}
+
+function goalCommandHint(status: GoalStatus) {
+	if (status === "active") return "/goal edit <objective>, /goal pause, /goal clear";
+	if (status === "paused") return "/goal edit <objective>, /goal resume, /goal clear";
+	return "/goal edit <objective>, /goal clear";
 }
 
 function formatDuration(seconds: number) {
@@ -426,6 +471,11 @@ function formatTokenCount(value: number) {
 function buildGoalPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
 	return `Goal mode is active. Complete this goal fully:\n\n${goal.text}${budgetLine}\n\nKeep working until the goal is done. Do not stop after planning or partial progress. When the goal is fully complete and verified, call the goal_complete tool with a concise completion summary.`;
+}
+
+function buildObjectiveUpdatedPrompt(goal: ActiveGoal) {
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+	return `The active /goal objective was updated. Continue working toward this goal:\n\n${goal.text}${budgetLine}\n\nKeep working until the updated goal is fully complete and verified, then call the goal_complete tool.`;
 }
 
 function buildGoalSystemPrompt(goal: ActiveGoal) {
