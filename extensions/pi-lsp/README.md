@@ -4,7 +4,7 @@
 
 `@narumitw/pi-lsp` is a native [Pi coding agent](https://pi.dev) extension that exposes Biome, ty, and Ruff language-server tools through one shared LSP runner Module.
 
-It is intended to cover the current behavior of `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp` while keeping those older packages available and unchanged for now.
+It supersedes the older split packages `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp`, which now live under `extensions/deprecated/` and are excluded from active workspace scripts.
 
 ## ✨ Features
 
@@ -47,7 +47,7 @@ This package intentionally registers the same tool names as `@narumitw/pi-biome-
 - `ruff_lsp_format`
 - `ruff_lsp_fix`
 
-Avoid installing `@narumitw/pi-lsp` side by side with the older LSP packages unless you have verified how your Pi version handles duplicate tool names. The older packages are not deprecated in this phase. For the same reason, this repository's `just install-all` recipe skips `pi-lsp`; install `pi-lsp` separately when you want the shared LSP extension instead of the older split packages.
+Avoid installing `@narumitw/pi-lsp` side by side with the older deprecated LSP packages unless you have verified how your Pi version handles duplicate tool names.
 
 ## ✅ Requirements
 

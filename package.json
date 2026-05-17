@@ -13,7 +13,6 @@
 		"biome:check": "biome check .",
 		"typecheck": "npm --workspaces run typecheck",
 		"check": "npm run biome:check && npm run typecheck",
-		"pack:biome-lsp": "npm --workspace @narumitw/pi-biome-lsp pack --dry-run",
 		"pack:btw": "npm --workspace @narumitw/pi-btw pack --dry-run",
 		"pack:caffeinate": "npm --workspace @narumitw/pi-caffeinate pack --dry-run",
 		"pack:chrome-devtools": "npm --workspace @narumitw/pi-chrome-devtools pack --dry-run",
@@ -22,7 +21,6 @@
 		"pack:goal": "npm --workspace @narumitw/pi-goal pack --dry-run",
 		"pack:lsp": "npm --workspace @narumitw/pi-lsp pack --dry-run",
 		"pack:plan-mode": "npm --workspace @narumitw/pi-plan-mode pack --dry-run",
-		"pack:python-lsp": "npm --workspace @narumitw/pi-python-lsp pack --dry-run",
 		"pack:retry": "npm --workspace @narumitw/pi-retry pack --dry-run",
 		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run",
 		"pack:subagents": "npm --workspace @narumitw/pi-subagents pack --dry-run"

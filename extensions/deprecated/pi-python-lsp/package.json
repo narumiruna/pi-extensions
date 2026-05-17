@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-python-lsp",
 	"version": "0.1.20",
-	"description": "Pi extension that exposes ty and Ruff language-server tools for Python.",
+	"description": "Deprecated Pi extension that exposes ty and Ruff language-server tools for Python.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -43,6 +43,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-python-lsp"
+		"directory": "extensions/deprecated/pi-python-lsp"
 	}
 }

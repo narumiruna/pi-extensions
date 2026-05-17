@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-biome-lsp",
 	"version": "0.1.20",
-	"description": "Pi extension that exposes Biome language-server tools for diagnostics, formatting, and fixes.",
+	"description": "Deprecated Pi extension that exposes Biome language-server tools for diagnostics, formatting, and fixes.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -41,6 +41,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-biome-lsp"
+		"directory": "extensions/deprecated/pi-biome-lsp"
 	}
 }

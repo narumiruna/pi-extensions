@@ -1,6 +1,6 @@
 # pi-lsp parity checklist
 
-`@narumitw/pi-lsp` keeps the existing public tool Interface from `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp` while moving common LSP behavior into a shared runner Module.
+`@narumitw/pi-lsp` keeps the public tool Interface from the now-deprecated `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp` packages while moving common LSP behavior into a shared runner Module.
 
 ## Tool names and parameters
 
@@ -44,6 +44,6 @@
 
 ## Documentation and compatibility
 
-- [x] `extensions/pi-lsp/README.md` documents tool-name compatibility, environment variables, and no-deprecation status for the old packages.
+- [x] `extensions/pi-lsp/README.md` documents tool-name compatibility, environment variables, and the deprecated status for the old packages.
 - [x] Root `README.md`, `package.json`, and `justfile` include `pi-lsp` integration.
-- [x] `pi-biome-lsp` and `pi-python-lsp` package metadata and READMEs are unchanged in this phase.
+- [x] `pi-biome-lsp` and `pi-python-lsp` now live under `extensions/deprecated/` and are excluded from active workspace scripts.

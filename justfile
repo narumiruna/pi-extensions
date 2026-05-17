@@ -66,14 +66,11 @@ publish name:
 publish-all:
     for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
 
-# Install all extension packages through pi, excluding pi-lsp because it duplicates old LSP tool names
+# Install all active extension packages through pi
 install-all:
-    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; name="${dir#pi-}"; if [[ "$name" == "lsp" ]]; then echo "Skipping pi-lsp; install it separately instead of biome-lsp/python-lsp to avoid duplicate LSP tools."; continue; fi; just install "$name"; done
+    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just install "${dir#pi-}"; done
 
 # Preview individual packages that npm would publish
-pack-biome-lsp:
-    just pack biome-lsp
-
 pack-btw:
     just pack btw
 
@@ -98,9 +95,6 @@ pack-lsp:
 pack-plan-mode:
     just pack plan-mode
 
-pack-python-lsp:
-    just pack python-lsp
-
 pack-retry:
     just pack retry
 
@@ -111,9 +105,6 @@ pack-subagents:
     just pack subagents
 
 # Try individual packages from this working tree as temporary pi packages
-try-biome-lsp:
-    just try biome-lsp
-
 try-btw:
     just try btw
 
@@ -138,9 +129,6 @@ try-lsp:
 try-plan-mode:
     just try plan-mode
 
-try-python-lsp:
-    just try python-lsp
-
 try-retry:
     just try retry
 
@@ -151,9 +139,6 @@ try-subagents:
     just try subagents
 
 # Install individual packages through pi
-install-biome-lsp:
-    just install biome-lsp
-
 install-btw:
     just install btw
 
@@ -178,9 +163,6 @@ install-lsp:
 install-plan-mode:
     just install plan-mode
 
-install-python-lsp:
-    just install python-lsp
-
 install-retry:
     just install retry
 
@@ -191,9 +173,6 @@ install-subagents:
     just install subagents
 
 # Publish individual packages to npm
-publish-biome-lsp:
-    just publish biome-lsp
-
 publish-btw:
     just publish btw
 
@@ -217,9 +196,6 @@ publish-lsp:
 
 publish-plan-mode:
     just publish plan-mode
-
-publish-python-lsp:
-    just publish python-lsp
 
 publish-retry:
     just publish retry

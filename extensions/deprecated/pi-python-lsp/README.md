@@ -2,6 +2,8 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-python-lsp)](https://www.npmjs.com/package/@narumitw/pi-python-lsp) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+> Deprecated: use [`@narumitw/pi-lsp`](../../pi-lsp) instead. This package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set.
+
 `@narumitw/pi-python-lsp` is a native [Pi coding agent](https://pi.dev) extension that exposes Python language-server tools from [ty](https://github.com/astral-sh/ty) and [Ruff](https://docs.astral.sh/ruff/).
 
 Use it to give Pi reliable Python type diagnostics, Ruff lint diagnostics, formatting, import organization, and source fixes through Language Server Protocol (LSP) workflows.
@@ -32,7 +34,7 @@ pi -e npm:@narumitw/pi-python-lsp
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-python-lsp
+pi -e ./extensions/deprecated/pi-python-lsp
 ```
 
 ## ✅ Requirements
@@ -47,13 +49,13 @@ uv tool install ruff
 Or provide custom server commands:
 
 ```bash
-PI_TY_LSP_COMMAND="uvx ty server" PI_RUFF_LSP_COMMAND="uvx ruff server" pi -e ./extensions/pi-python-lsp
+PI_TY_LSP_COMMAND="uvx ty server" PI_RUFF_LSP_COMMAND="uvx ruff server" pi -e ./extensions/deprecated/pi-python-lsp
 ```
 
 Optional timeout overrides:
 
 ```bash
-PI_TY_LSP_TIMEOUT_MS=30000 PI_RUFF_LSP_TIMEOUT_MS=30000 pi -e ./extensions/pi-python-lsp
+PI_TY_LSP_TIMEOUT_MS=30000 PI_RUFF_LSP_TIMEOUT_MS=30000 pi -e ./extensions/deprecated/pi-python-lsp
 ```
 
 ## 🛠️ Pi tools
@@ -114,7 +116,7 @@ Shows the configured ty and Ruff LSP commands and whether each command is availa
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-python-lsp/
+extensions/deprecated/pi-python-lsp/
 ├── src/
 │   └── python-lsp.ts
 ├── README.md
