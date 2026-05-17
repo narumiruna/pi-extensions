@@ -184,17 +184,11 @@ export default function goal(pi: ExtensionAPI) {
 	pi.on("agent_end", async (event, ctx) => {
 		if (!activeGoal || activeGoal.status !== "active") return;
 
-		if (continuationPending?.goalId === activeGoal.id) {
-			updateGoalUsage(activeGoal, ctx);
-			persistGoal(activeGoal);
-			updateStatus(ctx, activeGoal);
-			if (hasPendingMessages(ctx)) return;
-			continuationPending = undefined;
-		}
-
 		const goalId = activeGoal.id;
+		const hadPendingContinuation = continuationPending?.goalId === goalId;
 		const finalAssistant = findFinalAssistantMessage(event.messages);
-		activeGoal = incrementGoal(activeGoal);
+
+		if (!hadPendingContinuation) activeGoal = incrementGoal(activeGoal);
 		updateGoalUsage(activeGoal, ctx);
 
 		if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error") {
@@ -203,6 +197,7 @@ export default function goal(pi: ExtensionAPI) {
 		}
 
 		if (activeGoal.tokenBudget !== undefined && activeGoal.tokensUsed >= activeGoal.tokenBudget) {
+			cancelContinuationPending();
 			activeGoal = transitionGoal(activeGoal, "budget_limited");
 			persistGoal(activeGoal);
 			updateStatus(ctx, activeGoal);
@@ -212,6 +207,11 @@ export default function goal(pi: ExtensionAPI) {
 
 		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
+
+		if (hadPendingContinuation) {
+			if (hasPendingMessages(ctx)) return;
+			if (continuationPending?.goalId === goalId) continuationPending = undefined;
+		}
 
 		const currentGoal = activeGoal;
 		if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
@@ -638,8 +638,16 @@ function continuationMarkerComment(marker: string) {
 	return `<!-- ${CONTINUATION_MARKER_PREFIX}${marker} -->`;
 }
 
+function escapeRegExpText(value: string) {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const CONTINUATION_MARKER_PATTERN = new RegExp(
+	`<!--\\s*${escapeRegExpText(CONTINUATION_MARKER_PREFIX)}([^\\s>]+)\\s*-->`,
+);
+
 function extractContinuationMarker(prompt: string) {
-	return new RegExp(`<!--\\s*${CONTINUATION_MARKER_PREFIX}([^\\s>]+)\\s*-->`).exec(prompt)?.[1];
+	return CONTINUATION_MARKER_PATTERN.exec(prompt)?.[1];
 }
 
 function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
