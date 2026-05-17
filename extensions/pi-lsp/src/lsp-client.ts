@@ -356,18 +356,36 @@ export class LspClient {
 	}
 
 	#respondToServerRequest(message: JsonRpcMessage) {
-		let result: unknown = null;
 		if (message.method === "workspace/configuration") {
 			const params = message.params as { items?: unknown[] } | undefined;
-			result = (params?.items ?? []).map(() => ({}));
-		} else if (this.#adapter.serverRequestWorkspaceFolders && message.method === "workspace/workspaceFolders") {
-			const rootUri = directoryUri(this.#cwd);
-			result = [{ uri: rootUri, name: path.basename(this.#cwd) || "workspace" }];
-		} else if (message.method === "client/registerCapability") {
-			result = null;
+			this.#send({
+				jsonrpc: "2.0",
+				id: message.id,
+				result: (params?.items ?? []).map(() => ({})),
+			});
+			return;
 		}
 
-		this.#send({ jsonrpc: "2.0", id: message.id, result });
+		if (message.method === "workspace/workspaceFolders") {
+			const rootUri = directoryUri(this.#cwd);
+			this.#send({
+				jsonrpc: "2.0",
+				id: message.id,
+				result: [{ uri: rootUri, name: path.basename(this.#cwd) || "workspace" }],
+			});
+			return;
+		}
+
+		if (message.method === "client/registerCapability") {
+			this.#send({ jsonrpc: "2.0", id: message.id, result: null });
+			return;
+		}
+
+		this.#send({
+			jsonrpc: "2.0",
+			id: message.id,
+			error: { code: -32601, message: `Method not found: ${message.method ?? "unknown"}` },
+		});
 	}
 
 	#formatStderr() {

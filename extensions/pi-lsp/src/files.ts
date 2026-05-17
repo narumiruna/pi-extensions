@@ -18,8 +18,11 @@ export function directoryUri(directory: string) {
 }
 
 export function resolveSupportedFile(adapter: LspServerAdapter, root: string, filePath: string) {
-	const resolvedPath = path.resolve(root, filePath);
+	const resolvedPath = resolveWorkspacePath(root, filePath, "File path");
 	if (!existsSync(resolvedPath)) throw new Error(`${adapter.label} file does not exist: ${resolvedPath}`);
+	if (!isInsidePath(realpathSync(root), realpathSync(resolvedPath))) {
+		throw new Error(`File resolves outside workspace root: ${resolvedPath}`);
+	}
 	if (!statSync(resolvedPath).isFile()) throw new Error(`Expected a file: ${resolvedPath}`);
 	if (!adapter.isSupportedFile(resolvedPath)) {
 		throw new Error(`Expected a ${adapter.label} supported file: ${resolvedPath}`);
@@ -37,12 +40,16 @@ export function collectSupportedFiles(
 	const files: string[] = [];
 	const seen = new Set<string>();
 	const visitedDirectories = new Set<string>();
+	const realRoot = realpathSync(root);
 	const inputs = requestedPaths?.length ? requestedPaths : [root];
 
 	for (const input of inputs) {
-		const targetPath = path.resolve(root, input);
+		const targetPath = resolveWorkspacePath(root, input, "Requested path");
 		if (!existsSync(targetPath)) throw new Error(`Requested path does not exist: ${targetPath}`);
-		collectPath(adapter, targetPath, files, seen, visitedDirectories, cappedLimit);
+		if (!isInsidePath(realRoot, realpathSync(targetPath))) {
+			throw new Error(`Requested path resolves outside workspace root: ${targetPath}`);
+		}
+		collectPath(adapter, targetPath, files, seen, visitedDirectories, realRoot, cappedLimit);
 		if (files.length >= cappedLimit) break;
 	}
 
@@ -55,9 +62,11 @@ function collectPath(
 	files: string[],
 	seen: Set<string>,
 	visitedDirectories: Set<string>,
+	realRoot: string,
 	limit: number,
 ) {
 	if (files.length >= limit || !existsSync(targetPath)) return;
+	if (!isInsidePath(realRoot, realpathSync(targetPath))) return;
 
 	const stats = statSync(targetPath);
 	if (stats.isFile()) {
@@ -79,6 +88,19 @@ function collectPath(
 	for (const entry of entries) {
 		if (files.length >= limit) break;
 		if ((entry.isDirectory() || entry.isSymbolicLink()) && adapter.skipDirectories.has(entry.name)) continue;
-		collectPath(adapter, path.join(targetPath, entry.name), files, seen, visitedDirectories, limit);
+		collectPath(adapter, path.join(targetPath, entry.name), files, seen, visitedDirectories, realRoot, limit);
 	}
+}
+
+function resolveWorkspacePath(root: string, inputPath: string, label: string) {
+	const resolvedPath = path.resolve(root, inputPath);
+	if (!isInsidePath(root, resolvedPath)) {
+		throw new Error(`${label} escapes workspace root: ${resolvedPath}`);
+	}
+	return resolvedPath;
+}
+
+function isInsidePath(parent: string, child: string) {
+	const relativePath = path.relative(parent, child);
+	return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }

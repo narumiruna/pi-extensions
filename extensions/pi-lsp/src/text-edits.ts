@@ -35,15 +35,20 @@ function offsetAt(text: string, position: LspPosition) {
 
 export function applyTextEdits(text: string, edits: LspTextEdit[]) {
 	let output = text;
-	const sortedEdits = [...edits].sort((left, right) => {
-		const leftOffset = offsetAt(text, left.range.start);
-		const rightOffset = offsetAt(text, right.range.start);
-		return rightOffset - leftOffset;
-	});
+	const sortedEdits = edits
+		.map((edit, index) => ({
+			edit,
+			index,
+			start: offsetAt(text, edit.range.start),
+			end: offsetAt(text, edit.range.end),
+		}))
+		.sort((left, right) => {
+			if (left.start !== right.start) return right.start - left.start;
+			if (left.end !== right.end) return right.end - left.end;
+			return right.index - left.index;
+		});
 
-	for (const edit of sortedEdits) {
-		const start = offsetAt(output, edit.range.start);
-		const end = offsetAt(output, edit.range.end);
+	for (const { edit, start, end } of sortedEdits) {
 		output = `${output.slice(0, start)}${edit.newText}${output.slice(end)}`;
 	}
 
