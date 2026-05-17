@@ -10,8 +10,9 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 
 - Adds `/plan` to enter or manage Plan mode.
 - Adds `--plan` to start a session in Plan mode.
-- Restricts active tools to read-only tools while Plan mode is active.
-- Blocks mutating bash commands such as `rm`, `git commit`, dependency installs, redirects, and editor launches.
+- Enables built-in read-only tools by default while Plan mode is active.
+- Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
+- Blocks mutating built-in tools and bash commands such as `rm`, `git commit`, dependency installs, redirects, and editor launches.
 - Injects Codex-like Plan mode instructions: explore first, ask only non-discoverable questions, do not mutate files, and finish with `<proposed_plan>`.
 - Detects proposed plan blocks and prompts you to implement, revise, or stay in Plan mode.
 - Shows Plan mode state in Pi's statusline as `📝 plan active` or `📝 plan ready`.
@@ -40,11 +41,14 @@ pi -e ./extensions/pi-plan-mode
 ```text
 /plan
 /plan <prompt>
+/plan tools
 ```
 
-Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user message.
+Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user message. Use `/plan tools` to choose which tools are active while Plan mode is enabled.
 
 When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation.
+
+By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, and available read-only built-ins such as `grep`, `find`, and `ls`. Built-in `edit` and `write` are blocked. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `biome_lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
 
 A complete Plan mode answer should include exactly one block like this:
 
@@ -87,7 +91,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 - `/plan <prompt>` follows Codex behavior by switching to Plan mode before submitting the inline prompt.
 - `update_plan`-style checklist use is discouraged while Plan mode is active.
 - The implementation boundary is explicit: Plan mode restores tools before starting implementation, and choosing implementation immediately triggers a normal agent turn with full tool access.
-- Pi extension safety is approximated with active-tool restriction plus bash filtering, so it may be stricter or looser than Codex core in edge cases.
+- Pi extension safety is approximated with built-in tool restriction plus bash filtering; non-built-in tools are user-selected at user risk because Plan mode does not classify extension/custom tool behavior.
 
 ## 🗂️ Package layout
 
