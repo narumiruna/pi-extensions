@@ -757,14 +757,18 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
+					let doneCount = 0;
+					let runningCount = params.tasks.length;
+
 					const emitParallelUpdate = () => {
-						const running = allResults.filter((r) => r.exitCode === -1).length;
-						const done = allResults.filter((r) => r.exitCode !== -1).length;
-						status.update(parallelStatus(done, allResults.length, running));
+						status.update(parallelStatus(doneCount, allResults.length, runningCount));
 						if (onUpdate) {
 							onUpdate({
 								content: [
-									{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` },
+									{
+										type: "text",
+										text: `Parallel: ${doneCount}/${allResults.length} done, ${runningCount} running...`,
+									},
 								],
 								details: makeDetails("parallel")([...allResults]),
 							});
@@ -784,13 +788,15 @@ export default function (pi: ExtensionAPI) {
 							// Per-task update callback
 							(partial) => {
 								if (partial.details?.results[0]) {
-									allResults[index] = partial.details.results[0];
+									allResults[index] = { ...partial.details.results[0], exitCode: -1 };
 									emitParallelUpdate();
 								}
 							},
 							makeDetails("parallel"),
 						);
 						allResults[index] = result;
+						doneCount += 1;
+						runningCount -= 1;
 						emitParallelUpdate();
 						return result;
 					});

@@ -11,7 +11,19 @@ const DEPENDENCY_FIELDS = [
 	"peerDependencies",
 	"optionalDependencies",
 ];
-const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
+const SOURCE_FILE_SUFFIXES = [
+	".d.cts",
+	".d.mts",
+	".d.ts",
+	".cjs",
+	".cts",
+	".js",
+	".jsx",
+	".mjs",
+	".mts",
+	".ts",
+	".tsx",
+];
 
 const rootDirectory = process.cwd();
 const extensionsDirectory = path.join(rootDirectory, "extensions");
@@ -95,9 +107,13 @@ function listSourceFiles(directory) {
 			files.push(...listSourceFiles(entryPath));
 			continue;
 		}
-		if (entry.isFile() && SOURCE_EXTENSIONS.has(path.extname(entry.name))) files.push(entryPath);
+		if (entry.isFile() && isSourceFile(entry.name)) files.push(entryPath);
 	}
 	return files.sort();
+}
+
+function isSourceFile(fileName) {
+	return SOURCE_FILE_SUFFIXES.some((suffix) => fileName.endsWith(suffix));
 }
 
 function moduleSpecifiers(sourcePath, source) {
@@ -147,6 +163,10 @@ function stringLiteralText(node) {
 }
 
 function scriptKindFor(filePath) {
+	if (filePath.endsWith(".d.ts") || filePath.endsWith(".d.mts") || filePath.endsWith(".d.cts")) {
+		return ts.ScriptKind.TS;
+	}
+
 	switch (path.extname(filePath)) {
 		case ".cjs":
 		case ".js":
