@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-codex-usage",
-	"version": "0.1.18",
+	"version": "0.1.19",
 	"description": "Pi extension that shows Codex ChatGPT subscription usage without requiring Codex CLI.",
 	"type": "module",
 	"license": "MIT",
