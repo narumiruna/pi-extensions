@@ -4,7 +4,7 @@
 
 `@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds session-scoped `/goal` commands and a `goal_complete` tool for autonomous, verifiable task completion.
 
-Goal mode keeps sending guarded automatic follow-up messages until the agent calls `goal_complete`, the user pauses or clears the goal, or an optional token budget is reached.
+Goal mode uses Codex-like persistence instructions and keeps sending guarded continuation messages until the agent calls `goal_complete`, the user pauses or clears the goal, or an optional token budget is reached.
 
 ## ✨ Features
 
@@ -16,7 +16,7 @@ Goal mode keeps sending guarded automatic follow-up messages until the agent cal
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete` tool for explicit completion.
-- Automatically prompts the agent to continue if an active turn ends early.
+- Automatically prompts the agent to continue if an active turn ends early, directly triggering the next turn when Pi is idle.
 - Guards auto-follow-ups so replaced, paused, cleared, completed, or budget-limited goals are not continued.
 - Encourages verification before the goal is marked complete.
 
@@ -78,9 +78,9 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 
 ## ✅ How completion works
 
-The extension registers a `goal_complete` tool. While a goal is active, the system prompt tells the agent to keep working, verify the result, and call `goal_complete` only when the goal is fully done.
+The extension registers a `goal_complete` tool. While a goal is active, the system prompt uses Codex-like persistence rules: keep going until the goal is resolved end-to-end, do not stop at analysis, a plan, partial fixes, or suggested next steps, use available tools for implementation and verification, and call `goal_complete` only when the goal is fully done.
 
-If an agent turn ends before `goal_complete` is called, the extension records elapsed time and token usage, checks the budget, verifies that the same goal id is still active, then sends a follow-up prompt to continue the same goal.
+If an agent turn ends before `goal_complete` is called, the extension records elapsed time and token usage, checks the budget, verifies that the same goal id is still active, then sends a continuation prompt for the same goal. When Pi is already idle, this directly triggers the next turn; otherwise it is queued as a follow-up until the agent finishes current work.
 
 ## 🧠 Use cases
 

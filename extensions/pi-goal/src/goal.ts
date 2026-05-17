@@ -173,7 +173,7 @@ export default function goal(pi: ExtensionAPI) {
 
 		const currentGoal = activeGoal;
 		if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
-		pi.sendUserMessage(buildContinuePrompt(currentGoal), { deliverAs: "followUp" });
+		sendContinuationPrompt(pi, ctx, currentGoal);
 	});
 }
 
@@ -416,13 +416,18 @@ function validateObjective(objective: string): string | undefined {
 }
 
 function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	const prompt = buildGoalPrompt(goal);
-	if (ctx.isIdle?.()) pi.sendUserMessage(prompt);
-	else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+	sendPrompt(pi, ctx, buildGoalPrompt(goal));
 }
 
 function sendObjectiveUpdatedPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	const prompt = buildObjectiveUpdatedPrompt(goal);
+	sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
+}
+
+function sendContinuationPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	sendPrompt(pi, ctx, buildContinuePrompt(goal));
+}
+
+function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
 	if (ctx.isIdle?.()) pi.sendUserMessage(prompt);
 	else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 }
@@ -477,21 +482,25 @@ function formatTokenCount(value: number) {
 
 function buildGoalPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
-	return `Goal mode is active. Complete this goal fully:\n\n${goal.text}${budgetLine}\n\nKeep working until the goal is done. Do not stop after planning or partial progress. When the goal is fully complete and verified, call the goal_complete tool with a concise completion summary.`;
+	return `Goal mode is active. Complete this goal fully:\n\n${goal.text}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
 }
 
 function buildObjectiveUpdatedPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
-	return `The active /goal objective was updated. Continue working toward this goal:\n\n${goal.text}${budgetLine}\n\nKeep working until the updated goal is fully complete and verified, then call the goal_complete tool.`;
+	return `The active /goal objective was updated. Continue working toward this goal:\n\n${goal.text}${budgetLine}\n\n${goalPersistenceRules("the updated goal")}`;
 }
 
 function buildGoalSystemPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
-	return `Active /goal: ${goal.text}\n\nGoal-mode rules:\n- Continue making concrete progress until the active goal is fully complete.\n- Do not end your response with only a plan, TODO list, or partial progress.\n- Verify the result when possible using appropriate checks.\n- If the goal is not complete at the end of a turn, expect an automatic follow-up and continue from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
+	return `Active /goal: ${goal.text}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
 }
 
 function buildContinuePrompt(goal: ActiveGoal) {
-	return `Continue the active /goal until it is complete:\n\n${goal.text}\n\nThis is automatic continuation #${goal.iteration}. If the goal is not complete yet, keep working and verify progress. If it is fully complete and verified, call the goal_complete tool.`;
+	return `Continue the active /goal until it is complete:\n\n${goal.text}\n\nThis is automatic continuation #${goal.iteration}. ${goalPersistenceRules("this goal")}`;
+}
+
+function goalPersistenceRules(goalLabel: string) {
+	return `Keep going until ${goalLabel} is completely resolved end-to-end. Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps. Autonomously perform implementation and verification with the available tools when they are needed. If a tool call fails, try reasonable alternatives instead of yielding early. Only call the goal_complete tool after ${goalLabel} is fully complete and verified.`;
 }
 
 function currentTokenTotal(ctx: StatusContext): number {
