@@ -423,10 +423,11 @@ function formatExtensionStatuses(
 }
 
 function formatExtensionStatus(key: string, value: string, theme: Theme): string {
-	const text = truncateToWidth(simplifyExtensionStatus(key, value), 22, "…");
+	const status = splitExtensionStatusIcon(simplifyExtensionStatus(key, value));
+	const text = truncateToWidth(status.text, 22, "…");
 	const color = extensionColor(key, value);
-	const textColor = key.toLowerCase().includes("codex") ? color : "muted";
-	return `${theme.fg(color, extensionIcon(key))} ${theme.fg(textColor, text)}`;
+	const textColor = color === "warning" ? "warning" : "muted";
+	return `${theme.fg(color, status.icon)} ${theme.fg(textColor, text)}`;
 }
 
 function formatSubagentStatus(runtime: RuntimeState, theme: Theme): string[] {
@@ -446,20 +447,13 @@ function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): st
 	return [`${theme.fg("warning", "⚠️")} ${theme.fg("warning", `dup ${names}${suffix}`)}`];
 }
 
-function extensionIcon(key: string): string {
-	const normalizedKey = key.toLowerCase();
-	if (normalizedKey.includes("biome")) return "🧬";
-	if (normalizedKey.includes("python") || normalizedKey.includes("ruff") || normalizedKey.includes("ty"))
-		return "🐍";
-	if (normalizedKey.includes("subagent")) return "🧑‍🤝‍🧑";
-	if (normalizedKey.includes("caffeinate")) return "💊";
-	if (normalizedKey.includes("chrome") || normalizedKey.includes("devtools") || normalizedKey === "cdp")
-		return "🌐";
-	if (normalizedKey.includes("codex")) return "📊";
-	if (normalizedKey.includes("firecrawl")) return "🔥";
-	if (normalizedKey.includes("goal")) return "🎯";
-	if (normalizedKey.includes("retry")) return "🔁";
-	return "🔌";
+function splitExtensionStatusIcon(value: string): { icon: string; text: string } {
+	const trimmed = value.trim();
+	const [firstToken, ...restTokens] = trimmed.split(/\s+/);
+	if (firstToken && /\p{Extended_Pictographic}/u.test(firstToken)) {
+		return { icon: firstToken, text: restTokens.join(" ") };
+	}
+	return { icon: "🔌", text: trimmed };
 }
 
 function extensionColor(key: string, value: string): ThemeColor {
@@ -474,8 +468,6 @@ function simplifyExtensionStatus(key: string, value: string): string {
 	return value
 		.trim()
 		.replace(new RegExp(`^${escapeRegExp(key)}\\s*:\\s*`, "iu"), "")
-		.replace(/^python-lsp\s*:\s*/iu, "")
-		.replace(/^biome-lsp\s*:\s*/iu, "")
 		.replace(/\bready\b/giu, "✓")
 		.replace(/\bmissing\b/giu, "✗")
 		.replace(/,\s*/g, " ")
