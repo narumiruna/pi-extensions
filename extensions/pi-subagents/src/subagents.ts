@@ -597,6 +597,15 @@ export default function (pi: ExtensionAPI) {
 			'Default agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
+		promptSnippet:
+			"Delegate independent research, review, verification, or multi-step work to isolated Pi subagents.",
+		promptGuidelines: [
+			"Use subagent for independent read-only research, broad codebase reconnaissance, high-volume command output, multi-domain parallel investigation, or an independent reviewer after implementation.",
+			"Use subagent parallel mode when work splits into independent tasks; prefer read-only agents such as scout or reviewer for fan-out and serialize write-heavy implementation that touches the same files.",
+			"Do not use subagent for simple answers, quick targeted edits, latency-sensitive one-step work, or tasks requiring frequent user back-and-forth.",
+			'Do not use subagent with project-local agents unless the user explicitly wants project agents or sets agentScope to "project" or "both"; keep confirmation enabled for untrusted repositories.',
+			"When using subagent, write self-contained tasks with file paths, context, expected output, and whether the subagent may edit files.",
+		],
 		parameters: SubagentParams,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {

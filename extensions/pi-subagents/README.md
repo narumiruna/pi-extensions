@@ -48,6 +48,52 @@ Execution modes:
 - **parallel + aggregator** — run parallel jobs, then pass all outputs into one fan-in agent.
 - **chain** — run sequential steps, passing prior output with `{previous}`.
 
+## 🧭 Proactive use
+
+The `subagent` tool now advertises concise prompt guidance so the main Pi agent can choose it
+without an explicit user request when delegation is a good fit.
+
+Use `subagent` proactively for:
+
+- Independent read-only research, broad codebase reconnaissance, or high-volume command output
+  that would clutter the main context.
+- Parallel multi-domain investigation where each branch can return a concise summary.
+- Independent review or verification after implementation, especially with the read-only
+  `reviewer` agent.
+
+Do not use `subagent` for:
+
+- Simple answers, quick targeted edits, latency-sensitive one-step work, or tasks that need
+  frequent user back-and-forth.
+- Parallel implementation that may edit the same files or shared state; serialize write-heavy work
+  instead.
+- Project-local agents unless the user explicitly opts into them with `agentScope: "project"` or
+  `"both"`; keep confirmation enabled for untrusted repositories.
+
+Good delegation example:
+
+```json
+{
+  "tasks": [
+    {
+      "agent": "scout",
+      "task": "Research auth-related source files. Report paths and open questions. Do not edit files."
+    },
+    {
+      "agent": "scout",
+      "task": "Research auth-related tests. Report coverage gaps. Do not edit files."
+    }
+  ],
+  "aggregator": {
+    "agent": "reviewer",
+    "task": "Merge these findings into a concise implementation-risk summary. Use {previous}."
+  }
+}
+```
+
+Bad delegation example: do not spawn a worker just to rename one symbol in a known file; edit it
+directly in the main conversation.
+
 ## 🚀 Examples
 
 Run one read-only reconnaissance agent:

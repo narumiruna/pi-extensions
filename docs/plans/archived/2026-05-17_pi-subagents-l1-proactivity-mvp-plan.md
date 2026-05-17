@@ -23,32 +23,44 @@ L1 evaluation shows under-delegation.
 
 ## Plan
 
-- [ ] Add L1 prompt metadata to `extensions/pi-subagents/src/subagents.ts` by
+- [x] Add L1 prompt metadata to `extensions/pi-subagents/src/subagents.ts` by
   defining `promptSnippet` and concise `promptGuidelines` on the `subagent`
   `registerTool` call; verify with
   `rg -n "promptSnippet|promptGuidelines|Use subagent" extensions/pi-subagents/src/subagents.ts`.
-- [ ] Keep the guidance bounded by encoding both use and non-use criteria: use
+- [x] Keep the guidance bounded by encoding both use and non-use criteria: use
   `subagent` for independent read-only research, parallel multi-domain work, and
   independent review; avoid it for simple answers, same-file write conflicts,
   untrusted project agents, or latency-sensitive one-step work; verify by reading
   the final `promptGuidelines` bullets.
-- [ ] Update `extensions/pi-subagents/README.md` with a short "Proactive use"
+- [x] Update `extensions/pi-subagents/README.md` with a short "Proactive use"
   section that mirrors the rubric and includes at least one good and one bad
   delegation example; verify with
   `rg -n "Proactive use|Do not use|project-local" extensions/pi-subagents/README.md`.
-- [ ] Run the six-prompt L1 evaluation matrix from
+- [x] Run the six-prompt L1 evaluation matrix from
   `docs/implementation-notes/pi-subagents-proactivity-research.md` against the
   current branch and record results in
   `docs/implementation-notes/pi-subagents-l1-proactivity-eval.md`; verify with
   `rg -n 'Audit this branch|Rename.*foo|PASS|FAIL' docs/implementation-notes/pi-subagents-l1-proactivity-eval.md`.
-- [ ] Run repository verification after code/docs changes; verify with
+- [x] Run repository verification after code/docs changes; verify with
   `npm run check` from the repository root.
-- [ ] Preview the package contents after metadata/docs changes; verify with
+- [x] Preview the package contents after metadata/docs changes; verify with
   `npm run pack:subagents` and confirm the tarball includes the intended source
   and README files only.
-- [ ] Decide whether L2 is still needed based on the eval results; verify by
+- [x] Decide whether L2 is still needed based on the eval results; verify by
   recording either "L2 deferred" or a new L2 plan path in
   `docs/implementation-notes/pi-subagents-l1-proactivity-eval.md`.
+
+## Completion Evidence
+
+- L1 prompt metadata implemented in `extensions/pi-subagents/src/subagents.ts` with `promptSnippet` and bounded `promptGuidelines`.
+- User docs updated in `extensions/pi-subagents/README.md` with a `Proactive use` section, positive/negative criteria, and good/bad examples.
+- Six-prompt evaluation recorded at `docs/implementation-notes/pi-subagents-l1-proactivity-eval.md` with 6 PASS, 0 FAIL and `L2 deferred`.
+- Verification passed: `rg -n "promptSnippet|promptGuidelines|Use subagent" extensions/pi-subagents/src/subagents.ts`.
+- Verification passed: `rg -n "Proactive use|Do not use|project-local" extensions/pi-subagents/README.md`.
+- Verification passed: `rg -n 'Audit this branch|Rename.*foo|PASS|FAIL' docs/implementation-notes/pi-subagents-l1-proactivity-eval.md`.
+- Repository gate passed: `npm run check`.
+- Package dry run passed: `npm run pack:subagents`; inspected contents were `LICENSE`, `README.md`, `package.json`, `src/agents.ts`, and `src/subagents.ts`.
+- Independent `reviewer` subagent returned PASS for the source changes, README update, eval note, archived plan, `npm run check`, and `npm run pack:subagents` evidence.
 
 ## Risks
 
@@ -60,12 +72,12 @@ L1 evaluation shows under-delegation.
 
 ## Completion Checklist
 
-- [ ] `subagent` has static L1 prompt metadata, verified by source grep for
+- [x] `subagent` has static L1 prompt metadata, verified by source grep for
   `promptSnippet` and `promptGuidelines`.
-- [ ] User docs explain proactive and non-proactive use cases, verified by README
+- [x] User docs explain proactive and non-proactive use cases, verified by README
   grep evidence.
-- [ ] The six-prompt eval is recorded with pass/fail outcomes and an L2 decision,
+- [x] The six-prompt eval is recorded with pass/fail outcomes and an L2 decision,
   verified by the eval note path.
-- [ ] `npm run check` passes after the implementation.
-- [ ] `npm run pack:subagents` passes and the dry-run package contents are
+- [x] `npm run check` passes after the implementation.
+- [x] `npm run pack:subagents` passes and the dry-run package contents are
   inspected for intended files.
