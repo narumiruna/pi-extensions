@@ -1,180 +1,154 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { adapters, biomeAdapter, ruffAdapter, tyAdapter } from "./adapters.js";
+import { adapters } from "./adapters.js";
 import { commandExists, commandFromEnv } from "./command.js";
-import { runDiagnostics, runFix, runFormat } from "./runner.js";
+import { selectDiagnosticRoutes, selectFixRoute, selectFormatRoute } from "./routes.js";
+import { DEFAULT_FILE_LIMIT, runDiagnostics, runFix, runFormat, textResult } from "./runner.js";
 
 const STATUS_KEY = "lsp";
 
-const BiomePathsParameters = {
+const LanguageParameter = Type.Optional(
+	Type.Union([Type.Literal("web"), Type.Literal("python")], {
+		description:
+			"Optional language/file class override. Defaults to file-extension inference. Use 'web' for Biome-supported web/config files or 'python' for .py/.pyi files.",
+	}),
+);
+
+const DiagnosticsParameters = Type.Object({
 	paths: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "Biome-supported files or directories to check. Defaults to the project root.",
+			description:
+				"Files or directories to check. Defaults to the workspace root and routes by supported file extensions.",
 		}),
 	),
 	root: Type.Optional(
-		Type.String({ description: "Workspace root for the Biome language server. Defaults to cwd." }),
+		Type.String({ description: "Workspace root for language servers. Defaults to cwd." }),
 	),
-	limit: Type.Optional(
-		Type.Number({ description: "Maximum files to open when directories are provided." }),
-	),
-};
-
-const PythonPathsParameters = {
-	paths: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "Python files or directories to check. Defaults to the project root.",
+	limit: Type.Optional(Type.Number({ description: "Maximum files to open per selected route." })),
+	language: LanguageParameter,
+	checker: Type.Optional(
+		Type.Union([Type.Literal("type"), Type.Literal("lint"), Type.Literal("all")], {
+			description:
+				"Python diagnostics checker: 'type' uses ty, 'lint' uses Ruff, and 'all' runs both. Defaults to 'all'. Ignored for web/config diagnostics.",
 		}),
 	),
+});
+
+const SingleFileParameters = {
+	path: Type.String({
+		description: "File to process. The route is selected from the file extension.",
+	}),
 	root: Type.Optional(
-		Type.String({ description: "Workspace root for the language server. Defaults to cwd." }),
+		Type.String({ description: "Workspace root for language servers. Defaults to cwd." }),
 	),
-	limit: Type.Optional(
-		Type.Number({ description: "Maximum Python files to open when directories are provided." }),
+	write: Type.Optional(
+		Type.Boolean({ description: "Write changed text back to the file. Defaults to false." }),
 	),
+	language: LanguageParameter,
 };
 
-const biomeDiagnosticsTool = defineTool({
-	name: "biome_lsp_diagnostics",
-	label: "Biome LSP: Diagnostics",
-	description: "Run Biome's language server and return diagnostics for supported files.",
-	promptSnippet: "Get Biome diagnostics through the Biome language server",
+const lspDiagnosticsTool = defineTool({
+	name: "lsp_diagnostics",
+	label: "LSP: Diagnostics",
+	description:
+		"Run diagnostics using language/file-extension routing: Biome for supported web/config files, ty for Python type diagnostics, and Ruff for Python lint diagnostics.",
+	promptSnippet: "Get language-routed LSP diagnostics for web/config or Python files",
 	promptGuidelines: [
-		"Use biome_lsp_diagnostics when JavaScript, TypeScript, JSON, CSS, GraphQL, or framework files need Biome lint/format diagnostics.",
-		"If Biome is missing, report the configuration error and suggest installing @biomejs/biome or setting PI_BIOME_LSP_COMMAND.",
+		"Use lsp_diagnostics when JavaScript, TypeScript, JSON, CSS, GraphQL, HTML, Vue, Astro, Svelte, or Python files need LSP diagnostics.",
+		"For Python diagnostics, use checker='type' for ty, checker='lint' for Ruff, or checker='all' when both type and lint diagnostics are useful.",
+		"If a routed backend is missing, report the configuration error and suggest installing the backend or setting its PI_*_LSP_COMMAND environment variable.",
 	],
-	parameters: Type.Object(BiomePathsParameters),
+	parameters: DiagnosticsParameters,
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return runDiagnostics(biomeAdapter, params, signal, ctx, STATUS_KEY);
+		const { root, routes } = selectDiagnosticRoutes(params, DEFAULT_FILE_LIMIT);
+		const results = [];
+		for (const route of routes) {
+			const result = await runDiagnostics(
+				route.adapter,
+				{ root, paths: params.paths, limit: params.limit, files: route.files },
+				signal,
+				ctx,
+				STATUS_KEY,
+			);
+			results.push({ route, result });
+		}
+
+		const text = results
+			.map(({ route, result }) => `${route.reason}\n\n${textFromResult(result)}`)
+			.join("\n\n---\n\n");
+		return textResult(text, {
+			root,
+			routes: results.map(({ route, result }) => ({
+				language: route.language,
+				checker: route.checker,
+				backend: route.adapter.label,
+				reason: route.reason,
+				files: route.files,
+				details: result.details,
+			})),
+		});
 	},
 });
 
-const biomeFormatTool = defineTool({
-	name: "biome_lsp_format",
-	label: "Biome LSP: Format",
-	description: "Format a Biome-supported file through Biome's language server.",
-	promptSnippet: "Format a file through Biome LSP",
-	parameters: Type.Object({
-		path: Type.String({ description: "File to format." }),
-		root: Type.Optional(
-			Type.String({ description: "Workspace root for the Biome language server. Defaults to cwd." }),
-		),
-		write: Type.Optional(
-			Type.Boolean({ description: "Write formatted text back to the file. Defaults to false." }),
-		),
-	}),
+const lspFormatTool = defineTool({
+	name: "lsp_format",
+	label: "LSP: Format",
+	description:
+		"Format one file using language/file-extension routing: Biome for supported web/config files and Ruff for Python files.",
+	promptSnippet: "Format a file through the routed LSP formatter",
+	promptGuidelines: [
+		"Use lsp_format for Biome-supported web/config files or Python .py/.pyi files.",
+		"Do not request ty for formatting; Python formatting routes to Ruff.",
+	],
+	parameters: Type.Object(SingleFileParameters),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return runFormat(biomeAdapter, params, signal, ctx, STATUS_KEY);
+		const { root, route } = selectFormatRoute(params);
+		return runFormat(
+			route.adapter,
+			{ root, path: params.path, write: params.write },
+			signal,
+			ctx,
+			STATUS_KEY,
+		);
 	},
 });
 
-const biomeFixTool = defineTool({
-	name: "biome_lsp_fix",
-	label: "Biome LSP: Fix",
-	description: "Apply Biome LSP source fixes or import organization to a file.",
-	promptSnippet: "Apply Biome LSP fixes to a file",
+const lspFixTool = defineTool({
+	name: "lsp_fix",
+	label: "LSP: Fix",
+	description:
+		"Apply source fixes or import organization using language/file-extension routing: Biome for supported web/config files and Ruff for Python files.",
+	promptSnippet: "Apply routed LSP source fixes to a file",
+	promptGuidelines: [
+		"Use lsp_fix for Biome-supported web/config files or Python .py/.pyi files.",
+		"Use kind='source.organizeImports.biome' for Biome import organization or kind='source.organizeImports.ruff' for Python import organization when needed.",
+		"Do not request ty for fixes; Python fixes route to Ruff.",
+	],
 	parameters: Type.Object({
-		path: Type.String({ description: "File to fix." }),
-		root: Type.Optional(
-			Type.String({ description: "Workspace root for the Biome language server. Defaults to cwd." }),
-		),
+		...SingleFileParameters,
 		kind: Type.Optional(
 			Type.String({
 				description:
-					"Biome source action kind. Defaults to source.fixAll.biome. Common value: source.organizeImports.biome.",
+					"Source action kind. Defaults to the routed backend's fix-all action. Common values: source.organizeImports.biome or source.organizeImports.ruff.",
 			}),
 		),
-		write: Type.Optional(
-			Type.Boolean({ description: "Write fixed text back to the file. Defaults to false." }),
-		),
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return runFix(biomeAdapter, params, signal, ctx, STATUS_KEY);
-	},
-});
-
-const tyDiagnosticsTool = defineTool({
-	name: "ty_lsp_diagnostics",
-	label: "Python LSP: ty Diagnostics",
-	description: "Run ty's language server and return Python type diagnostics for files.",
-	promptSnippet: "Get Python type diagnostics from ty's language server",
-	promptGuidelines: [
-		"Use ty_lsp_diagnostics when Python changes need type-checking through ty's language server.",
-		"If ty is missing, report the configuration error and suggest installing ty or setting PI_TY_LSP_COMMAND.",
-	],
-	parameters: Type.Object(PythonPathsParameters),
-	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return runDiagnostics(tyAdapter, params, signal, ctx, STATUS_KEY);
-	},
-});
-
-const ruffDiagnosticsTool = defineTool({
-	name: "ruff_lsp_diagnostics",
-	label: "Python LSP: Ruff Diagnostics",
-	description: "Run Ruff's language server and return Python lint diagnostics for files.",
-	promptSnippet: "Get Python lint diagnostics from Ruff's language server",
-	promptGuidelines: [
-		"Use ruff_lsp_diagnostics when Python changes need Ruff lint checks through the language server.",
-		"If ruff is missing, report the configuration error and suggest installing ruff or setting PI_RUFF_LSP_COMMAND.",
-	],
-	parameters: Type.Object(PythonPathsParameters),
-	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return runDiagnostics(ruffAdapter, params, signal, ctx, STATUS_KEY);
-	},
-});
-
-const ruffFormatTool = defineTool({
-	name: "ruff_lsp_format",
-	label: "Python LSP: Ruff Format",
-	description: "Format a Python file through Ruff's language server.",
-	promptSnippet: "Format a Python file through Ruff LSP",
-	parameters: Type.Object({
-		path: Type.String({ description: "Python file to format." }),
-		root: Type.Optional(
-			Type.String({ description: "Workspace root for the language server. Defaults to cwd." }),
-		),
-		write: Type.Optional(
-			Type.Boolean({ description: "Write formatted text back to the file. Defaults to false." }),
-		),
-	}),
-	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return runFormat(ruffAdapter, params, signal, ctx, STATUS_KEY);
-	},
-});
-
-const ruffFixTool = defineTool({
-	name: "ruff_lsp_fix",
-	label: "Python LSP: Ruff Fix",
-	description: "Apply Ruff LSP source fixes or import organization to a Python file.",
-	promptSnippet: "Apply Ruff LSP fixes to a Python file",
-	parameters: Type.Object({
-		path: Type.String({ description: "Python file to fix." }),
-		root: Type.Optional(
-			Type.String({ description: "Workspace root for the language server. Defaults to cwd." }),
-		),
-		kind: Type.Optional(
-			Type.String({
-				description:
-					"Ruff source action kind. Defaults to source.fixAll.ruff. Common value: source.organizeImports.ruff.",
-			}),
-		),
-		write: Type.Optional(
-			Type.Boolean({ description: "Write fixed text back to the file. Defaults to false." }),
-		),
-	}),
-	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return runFix(ruffAdapter, params, signal, ctx, STATUS_KEY);
+		const { root, route } = selectFixRoute(params);
+		return runFix(
+			route.adapter,
+			{ root, path: params.path, kind: params.kind, write: params.write },
+			signal,
+			ctx,
+			STATUS_KEY,
+		);
 	},
 });
 
 export default function lsp(pi: ExtensionAPI) {
-	pi.registerTool(biomeDiagnosticsTool);
-	pi.registerTool(biomeFormatTool);
-	pi.registerTool(biomeFixTool);
-	pi.registerTool(tyDiagnosticsTool);
-	pi.registerTool(ruffDiagnosticsTool);
-	pi.registerTool(ruffFormatTool);
-	pi.registerTool(ruffFixTool);
+	pi.registerTool(lspDiagnosticsTool);
+	pi.registerTool(lspFormatTool);
+	pi.registerTool(lspFixTool);
 
 	pi.registerCommand("lsp", {
 		description: "Show shared LSP extension configuration",
@@ -190,6 +164,10 @@ export default function lsp(pi: ExtensionAPI) {
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
+}
+
+function textFromResult(result: { content?: Array<{ type?: string; text?: string }> }) {
+	return result.content?.find((item) => item.type === "text")?.text ?? "";
 }
 
 function buildStatusMessage() {

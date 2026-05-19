@@ -5,21 +5,29 @@ import { commandFromEnv, timeoutFromEnv } from "./command.js";
 import { collectSupportedFiles, resolveRoot, resolveSupportedFile } from "./files.js";
 import { LspClient } from "./lsp-client.js";
 import { applyTextEdits, collectWorkspaceEdits, hasOverlappingTextEdits } from "./text-edits.js";
-import type { CodeAction, DiagnosticEntry, LspServerAdapter, StatusContext } from "./types.js";
+import type {
+	CodeAction,
+	DiagnosticEntry,
+	LspServerAdapter,
+	LspTextEdit,
+	StatusContext,
+} from "./types.js";
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
 export const DEFAULT_FILE_LIMIT = 50;
 
 export async function runDiagnostics(
 	adapter: LspServerAdapter,
-	params: { root?: string; paths?: string[]; limit?: number },
+	params: { root?: string; paths?: string[]; limit?: number; files?: string[] },
 	signal: AbortSignal | undefined,
 	ctx: StatusContext,
 	statusKey: string,
 ) {
 	const root = resolveRoot(params.root);
 	const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
-	const files = collectSupportedFiles(adapter, root, params.paths, params.limit ?? DEFAULT_FILE_LIMIT);
+	const files =
+		params.files ??
+		collectSupportedFiles(adapter, root, params.paths, params.limit ?? DEFAULT_FILE_LIMIT);
 	if (files.length === 0) {
 		return textResult(adapter.emptyDiagnosticsMessage, {
 			root,
@@ -29,7 +37,12 @@ export async function runDiagnostics(
 		});
 	}
 
-	const client = new LspClient(adapter, command, root, timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS));
+	const client = new LspClient(
+		adapter,
+		command,
+		root,
+		timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS),
+	);
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
 	throwIfAborted(signal, adapter);
@@ -76,7 +89,12 @@ export async function runFormat(
 	const root = resolveRoot(params.root);
 	const file = resolveSupportedFile(adapter, root, params.path);
 	const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
-	const client = new LspClient(adapter, command, root, timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS));
+	const client = new LspClient(
+		adapter,
+		command,
+		root,
+		timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS),
+	);
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
 	throwIfAborted(signal, adapter);
@@ -90,7 +108,7 @@ export async function runFormat(
 		const text = readFileSync(file, "utf8");
 		client.didOpen(uri, text, adapter.languageIdFor(file));
 		let newText: string;
-		let edits;
+		let edits: LspTextEdit[];
 		try {
 			edits = await client.format(uri);
 			newText = applyTextEdits(text, edits);
@@ -101,14 +119,17 @@ export async function runFormat(
 
 		if (params.write && changed) writeFileSync(file, newText);
 
-		return textResult(formatEditSummary(adapter, "format", root, file, changed, params.write, newText), {
-			path: path.relative(root, file) || file,
-			uri,
-			changed,
-			write: params.write ?? false,
-			edits,
-			text: params.write ? undefined : newText,
-		});
+		return textResult(
+			formatEditSummary(adapter, "format", root, file, changed, params.write, newText),
+			{
+				path: path.relative(root, file) || file,
+				uri,
+				changed,
+				write: params.write ?? false,
+				edits,
+				text: params.write ? undefined : newText,
+			},
+		);
 	} finally {
 		ctx.ui.setStatus(statusKey, undefined);
 		signal?.removeEventListener("abort", abort);
@@ -129,7 +150,12 @@ export async function runFix(
 	if (!actionKind) throw new Error(`${adapter.label} LSP adapter does not support source fixes.`);
 
 	const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
-	const client = new LspClient(adapter, command, root, timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS));
+	const client = new LspClient(
+		adapter,
+		command,
+		root,
+		timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS),
+	);
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
 	throwIfAborted(signal, adapter);
@@ -144,7 +170,7 @@ export async function runFix(
 		client.didOpen(uri, text, adapter.languageIdFor(file));
 		let resolvedActions: CodeAction[];
 		let selectedActions: CodeAction[];
-		let edits;
+		let edits: LspTextEdit[];
 		let newText: string;
 		try {
 			const diagnostics = await client.diagnostics(uri);
@@ -167,17 +193,20 @@ export async function runFix(
 
 		if (params.write && changed) writeFileSync(file, newText);
 
-		return textResult(formatEditSummary(adapter, "fix", root, file, changed, params.write, newText), {
-			path: path.relative(root, file) || file,
-			uri,
-			changed,
-			write: params.write ?? false,
-			kind: actionKind,
-			actions: resolvedActions.map(({ title, kind }) => ({ title, kind })),
-			appliedActions: selectedActions.map(({ title, kind }) => ({ title, kind })),
-			edits,
-			text: params.write ? undefined : newText,
-		});
+		return textResult(
+			formatEditSummary(adapter, "fix", root, file, changed, params.write, newText),
+			{
+				path: path.relative(root, file) || file,
+				uri,
+				changed,
+				write: params.write ?? false,
+				kind: actionKind,
+				actions: resolvedActions.map(({ title, kind }) => ({ title, kind })),
+				appliedActions: selectedActions.map(({ title, kind }) => ({ title, kind })),
+				edits,
+				text: params.write ? undefined : newText,
+			},
+		);
 	} finally {
 		ctx.ui.setStatus(statusKey, undefined);
 		signal?.removeEventListener("abort", abort);
