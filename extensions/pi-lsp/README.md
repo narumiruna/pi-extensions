@@ -2,18 +2,18 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-lsp)](https://www.npmjs.com/package/@narumitw/pi-lsp) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-lsp` is a native [Pi coding agent](https://pi.dev) extension that exposes Biome, ty, and Ruff language-server tools through one shared LSP runner Module.
+`@narumitw/pi-lsp` is a native [Pi coding agent](https://pi.dev) extension that exposes Biome, ty, and Ruff language-server behavior through language/file-extension routed Pi tools.
 
 It supersedes the older split packages `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp`, which now live under `extensions/deprecated/` and are excluded from active workspace scripts.
 
 ## ✨ Features
 
-- Runs `biome lsp-proxy` on demand for diagnostics, formatting, import organization, and source fixes.
-- Runs `ty server` on demand for Python type diagnostics.
-- Runs `ruff server` on demand for Python lint diagnostics, formatting, import organization, and source fixes.
+- Routes Biome-supported web/config files to `biome lsp-proxy` for diagnostics, formatting, import organization, and source fixes.
+- Routes Python `.py` and `.pyi` type diagnostics to `ty server`.
+- Routes Python `.py` and `.pyi` lint diagnostics, formatting, import organization, and source fixes to `ruff server`.
 - Uses one internal LSP runner for JSON-RPC framing, subprocess lifecycle, diagnostics, formatting, code actions, and workspace edit application.
-- Keeps Biome, ty, and Ruff behavior in small server Adapters.
-- Supports workspace roots, file limits, recursive file discovery, and write-or-preview edits.
+- Keeps Biome, ty, and Ruff behavior in small server adapters.
+- Supports workspace roots, file limits, recursive file discovery, language overrides, and write-or-preview edits.
 - Starts language servers only for tool calls, then shuts them down.
 - Shows statusline activity only while LSP tools are running.
 
@@ -37,17 +37,19 @@ pi -e ./extensions/pi-lsp
 
 ## ⚠️ Tool-name compatibility
 
-This package intentionally registers the same tool names as `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp`:
+This package now exposes three language/file-extension routed tools instead of the old backend-specific tool names:
 
-- `biome_lsp_diagnostics`
-- `biome_lsp_format`
-- `biome_lsp_fix`
-- `ty_lsp_diagnostics`
-- `ruff_lsp_diagnostics`
-- `ruff_lsp_format`
-- `ruff_lsp_fix`
+| Old tool | New call |
+| --- | --- |
+| `biome_lsp_diagnostics` | `lsp_diagnostics` with `language: "web"` when an override is needed |
+| `biome_lsp_format` | `lsp_format` for a Biome-supported file |
+| `biome_lsp_fix` | `lsp_fix` for a Biome-supported file |
+| `ty_lsp_diagnostics` | `lsp_diagnostics` with `language: "python"`, `checker: "type"` |
+| `ruff_lsp_diagnostics` | `lsp_diagnostics` with `language: "python"`, `checker: "lint"` |
+| `ruff_lsp_format` | `lsp_format` for a Python file |
+| `ruff_lsp_fix` | `lsp_fix` for a Python file |
 
-Avoid installing `@narumitw/pi-lsp` side by side with the older deprecated LSP packages unless you have verified how your Pi version handles duplicate tool names.
+Avoid installing `@narumitw/pi-lsp` side by side with the older deprecated LSP packages unless you have verified how your Pi version handles overlapping capabilities.
 
 ## ✅ Requirements
 
@@ -85,22 +87,61 @@ pi -e ./extensions/pi-lsp
 
 ## 🛠️ Pi tools
 
-### Biome
+### `lsp_diagnostics`
 
-- `biome_lsp_diagnostics` — start `biome lsp-proxy`, open supported files, and return diagnostics.
-- `biome_lsp_format` — compute or write formatting edits for one Biome-supported file.
-- `biome_lsp_fix` — compute or write source actions such as `source.fixAll.biome` or `source.organizeImports.biome`.
+Run diagnostics through language/file-extension routes.
 
-### Python
+Parameters:
 
-- `ty_lsp_diagnostics` — start `ty server`, open Python files, and return type diagnostics.
-- `ruff_lsp_diagnostics` — start `ruff server`, open Python files, and return lint diagnostics.
-- `ruff_lsp_format` — compute or write Ruff formatting edits for one Python file.
-- `ruff_lsp_fix` — compute or write Ruff source actions such as `source.fixAll.ruff` or `source.organizeImports.ruff`.
+- `paths?`: files or directories to check. Defaults to the workspace root.
+- `root?`: workspace root. Defaults to cwd.
+- `limit?`: maximum files to open per selected route.
+- `language?`: optional override, either `"web"` for Biome-supported web/config files or `"python"` for `.py`/`.pyi` files.
+- `checker?`: Python diagnostics checker, one of `"type"`, `"lint"`, or `"all"`. Defaults to `"all"`.
+
+Routes:
+
+- Biome-supported web/config files → Biome diagnostics.
+- Python `.py`/`.pyi` + `checker: "type"` → ty diagnostics.
+- Python `.py`/`.pyi` + `checker: "lint"` → Ruff diagnostics.
+- Python `.py`/`.pyi` + `checker: "all"` → both ty and Ruff diagnostics.
+
+### `lsp_format`
+
+Format one file through the route selected from its file extension.
+
+Parameters:
+
+- `path`: file to format.
+- `root?`: workspace root. Defaults to cwd.
+- `write?`: write formatted text back to the file. Defaults to false.
+- `language?`: optional route override, either `"web"` or `"python"`.
+
+Routes:
+
+- Biome-supported web/config files → Biome formatting.
+- Python `.py`/`.pyi` files → Ruff formatting.
+
+### `lsp_fix`
+
+Apply source fixes or import organization through the route selected from the file extension.
+
+Parameters:
+
+- `path`: file to fix.
+- `root?`: workspace root. Defaults to cwd.
+- `kind?`: source action kind. Defaults to the routed backend's fix-all action.
+- `write?`: write fixed text back to the file. Defaults to false.
+- `language?`: optional route override, either `"web"` or `"python"`.
+
+Routes:
+
+- Biome-supported web/config files → Biome source fixes such as `source.fixAll.biome` or `source.organizeImports.biome`.
+- Python `.py`/`.pyi` files → Ruff source fixes such as `source.fixAll.ruff` or `source.organizeImports.ruff`.
 
 ## 🚀 Examples
 
-Check a project subset with Biome diagnostics:
+Check a mixed project subset and run all applicable diagnostics:
 
 ```json
 {
@@ -109,7 +150,28 @@ Check a project subset with Biome diagnostics:
 }
 ```
 
-Format a TypeScript file with Biome:
+Check only Biome-supported web/config files:
+
+```json
+{
+  "language": "web",
+  "paths": ["extensions/pi-lsp/src"],
+  "limit": 100
+}
+```
+
+Check Python type diagnostics only:
+
+```json
+{
+  "language": "python",
+  "checker": "type",
+  "paths": ["src", "tests"],
+  "limit": 100
+}
+```
+
+Format a TypeScript file with the inferred Biome route:
 
 ```json
 {
@@ -118,16 +180,7 @@ Format a TypeScript file with Biome:
 }
 ```
 
-Check a Python project with ty or Ruff diagnostics:
-
-```json
-{
-  "paths": ["src", "tests"],
-  "limit": 100
-}
-```
-
-Organize Python imports with Ruff:
+Organize Python imports with the inferred Ruff route:
 
 ```json
 {
@@ -157,6 +210,7 @@ extensions/pi-lsp/
 │   ├── files.ts
 │   ├── lsp-client.ts
 │   ├── pi-lsp.ts
+│   ├── routes.ts
 │   ├── runner.ts
 │   ├── text-edits.ts
 │   └── types.ts

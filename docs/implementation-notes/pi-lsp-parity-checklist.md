@@ -1,16 +1,30 @@
 # pi-lsp parity checklist
 
-`@narumitw/pi-lsp` keeps the public tool Interface from the now-deprecated `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp` packages while moving common LSP behavior into a shared runner Module.
+`@narumitw/pi-lsp` keeps Biome, ty, and Ruff behavior from the now-deprecated `@narumitw/pi-biome-lsp` and `@narumitw/pi-python-lsp` packages while exposing a smaller language/file-extension routed public tool interface.
 
 ## Tool names and parameters
 
-- [x] `biome_lsp_diagnostics`: `paths?`, `root?`, `limit?`.
-- [x] `biome_lsp_format`: `path`, `root?`, `write?`.
-- [x] `biome_lsp_fix`: `path`, `root?`, `kind?`, `write?`; default kind `source.fixAll.biome`.
-- [x] `ty_lsp_diagnostics`: `paths?`, `root?`, `limit?`.
-- [x] `ruff_lsp_diagnostics`: `paths?`, `root?`, `limit?`.
-- [x] `ruff_lsp_format`: `path`, `root?`, `write?`.
-- [x] `ruff_lsp_fix`: `path`, `root?`, `kind?`, `write?`; default kind `source.fixAll.ruff`.
+- [x] `lsp_diagnostics`: `paths?`, `root?`, `limit?`, `language?`, `checker?`.
+  - [x] Biome-supported web/config diagnostics route to Biome.
+  - [x] Python `checker: "type"` diagnostics route to ty.
+  - [x] Python `checker: "lint"` diagnostics route to Ruff.
+  - [x] Python `checker: "all"` diagnostics route to both ty and Ruff.
+- [x] `lsp_format`: `path`, `root?`, `write?`, `language?`.
+  - [x] Biome-supported web/config files route to Biome.
+  - [x] Python `.py`/`.pyi` files route to Ruff.
+- [x] `lsp_fix`: `path`, `root?`, `kind?`, `write?`, `language?`.
+  - [x] Biome-supported web/config files route to Biome; default kind `source.fixAll.biome`.
+  - [x] Python `.py`/`.pyi` files route to Ruff; default kind `source.fixAll.ruff`.
+
+## Migration from deprecated public tool names
+
+- [x] `biome_lsp_diagnostics` maps to `lsp_diagnostics` with `language: "web"` when an override is needed.
+- [x] `biome_lsp_format` maps to `lsp_format` for a Biome-supported file.
+- [x] `biome_lsp_fix` maps to `lsp_fix` for a Biome-supported file.
+- [x] `ty_lsp_diagnostics` maps to `lsp_diagnostics` with `language: "python"`, `checker: "type"`.
+- [x] `ruff_lsp_diagnostics` maps to `lsp_diagnostics` with `language: "python"`, `checker: "lint"`.
+- [x] `ruff_lsp_format` maps to `lsp_format` for a Python file.
+- [x] `ruff_lsp_fix` maps to `lsp_fix` for a Python file.
 
 ## Server commands and environment variables
 
@@ -30,20 +44,22 @@
 ## LSP behavior
 
 - [x] Shared runner owns JSON-RPC framing, subprocess lifecycle, initialize/shutdown, file open/close, diagnostics, formatting, code actions, action resolution, and workspace edit application.
-- [x] Biome Adapter keeps dynamic registration capabilities, publish-diagnostics fallback, workspace-folder request handling, tab size 2, and tabs.
-- [x] ty Adapter keeps diagnostic requests without code actions, tab size 4, and spaces.
-- [x] Ruff Adapter keeps diagnostic requests, code actions, tab size 4, and spaces.
+- [x] Biome adapter keeps dynamic registration capabilities, publish-diagnostics fallback, workspace-folder request handling, tab size 2, and tabs.
+- [x] ty adapter keeps diagnostic requests without code actions, tab size 4, and spaces.
+- [x] Ruff adapter keeps diagnostic requests, code actions, tab size 4, and spaces.
+- [x] Route selection is centralized above the adapters and prevents ty from being selected for format/fix.
 
 ## Result shapes and messages
 
 - [x] Tool results still return `{ content: [{ type: "text", text }], details }`.
-- [x] Diagnostics details include `root`, `command`, `files`, and `summary`.
+- [x] Diagnostics details include root, selected routes, backend details, files, and summaries.
 - [x] Format/fix details include `path`, `uri`, `changed`, `write`, `edits`, and preview `text` when `write` is false.
 - [x] Fix details include `kind` and resolved `actions`.
 - [x] Missing-command errors preserve server-specific install guidance.
+- [x] Unsupported extensions and contradictory language overrides produce route errors that name supported language/file-extension classes.
 
 ## Documentation and compatibility
 
-- [x] `extensions/pi-lsp/README.md` documents tool-name compatibility, environment variables, and the deprecated status for the old packages.
+- [x] `extensions/pi-lsp/README.md` documents the three routed tools, environment variables, and migration from old tool names.
 - [x] Root `README.md`, `package.json`, and `justfile` include `pi-lsp` integration.
 - [x] `pi-biome-lsp` and `pi-python-lsp` now live under `extensions/deprecated/` and are excluded from active workspace scripts.
