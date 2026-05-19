@@ -19,13 +19,13 @@ export function directoryUri(directory: string) {
 
 export function resolveSupportedFile(adapter: LspServerAdapter, root: string, filePath: string) {
 	const resolvedPath = resolveWorkspacePath(root, filePath, "File path");
-	if (!existsSync(resolvedPath)) throw new Error(`${adapter.label} file does not exist: ${resolvedPath}`);
+	if (!existsSync(resolvedPath)) throw new Error(`${adapter.name} file does not exist: ${resolvedPath}`);
 	if (!isInsidePath(realpathSync(root), realpathSync(resolvedPath))) {
 		throw new Error(`File resolves outside workspace root: ${resolvedPath}`);
 	}
 	if (!statSync(resolvedPath).isFile()) throw new Error(`Expected a file: ${resolvedPath}`);
 	if (!adapter.isSupportedFile(resolvedPath)) {
-		throw new Error(`Expected a ${adapter.label} supported file: ${resolvedPath}`);
+		throw new Error(`Expected a ${adapter.name} supported file: ${resolvedPath}`);
 	}
 	return resolvedPath;
 }

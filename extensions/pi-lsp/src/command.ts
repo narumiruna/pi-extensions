@@ -13,11 +13,6 @@ export function commandFromEnv(envVar: string, fallback: ServerCommand): ServerC
 	return fallback;
 }
 
-export function timeoutFromEnv(envVar: string, defaultTimeoutMs: number) {
-	const rawValue = Number(process.env[envVar] ?? defaultTimeoutMs);
-	return Number.isFinite(rawValue) && rawValue > 0 ? rawValue : defaultTimeoutMs;
-}
-
 export function commandExists(command: string, cwd = process.cwd()) {
 	if (command.includes("/") || command.includes("\\")) {
 		return isRunnableFile(path.isAbsolute(command) ? command : path.resolve(cwd, command));

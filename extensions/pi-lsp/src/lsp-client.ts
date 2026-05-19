@@ -9,7 +9,6 @@ import type {
 	JsonRpcMessage,
 	LspDiagnostic,
 	LspServerAdapter,
-	LspTextEdit,
 	ServerCommand,
 } from "./types.js";
 
@@ -50,12 +49,13 @@ export class LspClient {
 	async start() {
 		if (!commandExists(this.#command.command, this.#cwd)) {
 			throw new Error(
-				`${this.#adapter.label} LSP command not found: ${this.#command.command}. ${this.#adapter.missingCommandHint}`,
+				`${this.#adapter.name} LSP command not found: ${this.#command.command}. ${this.#adapter.missingCommandHint}`,
 			);
 		}
 
 		const child = spawn(this.#command.command, this.#command.args, {
 			cwd: this.#cwd,
+			env: { ...process.env, ...this.#adapter.env },
 			stdio: "pipe",
 		});
 		this.#child = child;
@@ -64,7 +64,7 @@ export class LspClient {
 				this.#onData(chunk);
 			} catch (error) {
 				this.#fail(
-					`${this.#adapter.label} LSP server sent invalid JSON-RPC data: ${formatErrorMessage(error)}.${this.#formatStderr()}`,
+					`${this.#adapter.name} LSP server sent invalid JSON-RPC data: ${formatErrorMessage(error)}.${this.#formatStderr()}`,
 				);
 			}
 		});
@@ -73,7 +73,7 @@ export class LspClient {
 		});
 		child.stdin.on("error", (error) => {
 			this.#fail(
-				`${this.#adapter.label} LSP stdin write failed: ${formatErrorMessage(error)}.${this.#formatStderr()}`,
+				`${this.#adapter.name} LSP stdin write failed: ${formatErrorMessage(error)}.${this.#formatStderr()}`,
 			);
 		});
 		child.once("exit", (code, signal) => {
@@ -81,14 +81,14 @@ export class LspClient {
 			const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
 			this.#rejectPending(
 				(id) =>
-					`${this.#adapter.label} LSP server exited before response ${id} (${reason}).${this.#formatStderr()}`,
+					`${this.#adapter.name} LSP server exited before response ${id} (${reason}).${this.#formatStderr()}`,
 			);
 		});
 
 		await new Promise<void>((resolve, reject) => {
 			child.once("spawn", resolve);
 			child.once("error", (error) => {
-				const message = `${this.#adapter.label} LSP process failed to start: ${error.message}.${this.#formatStderr()}`;
+				const message = `${this.#adapter.name} LSP process failed to start: ${error.message}.${this.#formatStderr()}`;
 				this.#rejectPending(message);
 				if (this.#child === child) this.#child = undefined;
 				reject(new Error(message));
@@ -99,49 +99,32 @@ export class LspClient {
 	async initialize(root: string) {
 		const rootUri = directoryUri(root);
 		const workspaceFolders = [{ uri: rootUri, name: path.basename(root) || "workspace" }];
-		const init = this.#adapter.initialize;
 		await this.request("initialize", {
 			processId: process.pid,
 			rootUri,
-			workspaceFolders: this.#adapter.serverRequestWorkspaceFolders ? workspaceFolders : null,
+			workspaceFolders,
+			initializationOptions: this.#adapter.initialization ?? {},
 			capabilities: {
 				textDocument: {
-					...(init.codeAction
-						? {
-								codeAction: {
-									dynamicRegistration: init.codeActionDynamicRegistration,
-									resolveSupport: { properties: ["edit"] },
-								},
-							}
-						: {}),
-					diagnostic: { dynamicRegistration: init.diagnosticDynamicRegistration },
-					...(init.formattingDynamicRegistration === undefined
-						? {}
-						: { formatting: { dynamicRegistration: init.formattingDynamicRegistration } }),
-					publishDiagnostics: {},
-					synchronization: {
-						didSave: true,
-						...(init.didSaveDynamicRegistration === undefined
-							? {}
-							: { dynamicRegistration: init.didSaveDynamicRegistration }),
+					codeAction: {
+						dynamicRegistration: true,
+						resolveSupport: { properties: ["edit"] },
 					},
+					diagnostic: { dynamicRegistration: true, relatedDocumentSupport: true },
+					publishDiagnostics: {},
+					synchronization: { didSave: true },
 				},
 				workspace: {
 					configuration: true,
-					...(init.didChangeConfigurationDynamicRegistration === undefined
-						? {}
-						: {
-								didChangeConfiguration: {
-									dynamicRegistration: init.didChangeConfigurationDynamicRegistration,
-								},
-							}),
 					workspaceEdit: { documentChanges: true },
-					workspaceFolders: this.#adapter.serverRequestWorkspaceFolders,
+					workspaceFolders: true,
 				},
 			},
 		});
 		this.notify("initialized", {});
-		if (this.#adapter.fallbackToPublishDiagnostics) await wait(300);
+		if (this.#adapter.initialization) {
+			this.notify("workspace/didChangeConfiguration", { settings: this.#adapter.initialization });
+		}
 	}
 
 	didOpen(uri: string, text: string, languageId: string) {
@@ -168,17 +151,9 @@ export class LspClient {
 			const result = response.result as { items?: LspDiagnostic[] } | undefined;
 			return result?.items ?? [];
 		} catch (error) {
-			if (!this.#adapter.fallbackToPublishDiagnostics || !isUnsupportedMethodError(error)) throw error;
+			if (!isUnsupportedMethodError(error)) throw error;
 			return this.#waitForPublishedDiagnostics(uri);
 		}
-	}
-
-	async format(uri: string) {
-		const response = await this.request("textDocument/formatting", {
-			textDocument: { uri },
-			options: this.#adapter.formattingOptions,
-		});
-		return (response.result as LspTextEdit[] | null | undefined) ?? [];
 	}
 
 	async codeActions(uri: string, text: string, diagnostics: LspDiagnostic[], kind: string) {
@@ -202,7 +177,7 @@ export class LspClient {
 				const response = await this.request("codeAction/resolve", action);
 				resolvedActions.push((response.result as CodeAction | undefined) ?? action);
 			} catch (error) {
-				if (!this.#adapter.resolveUnsupportedCodeActions || !isUnsupportedMethodError(error)) throw error;
+				if (!isUnsupportedMethodError(error)) throw error;
 				resolvedActions.push(action);
 			}
 		}
@@ -224,7 +199,7 @@ export class LspClient {
 	}
 
 	close() {
-		this.#rejectPending(`${this.#adapter.label} LSP request cancelled.`);
+		this.#rejectPending(`${this.#adapter.name} LSP request cancelled.`);
 
 		if (this.#child && !this.#child.killed) this.#child.kill("SIGTERM");
 		this.#child = undefined;
@@ -258,7 +233,7 @@ export class LspClient {
 			const timeout = setTimeout(() => {
 				this.#pending.delete(id);
 				reject(
-					new Error(`${this.#adapter.label} LSP request timed out: ${method}.${this.#formatStderr()}`),
+					new Error(`${this.#adapter.name} LSP request timed out: ${method}.${this.#formatStderr()}`),
 				);
 			}, this.#timeoutMs);
 			this.#pending.set(id, { resolve, reject, timeout });
@@ -280,14 +255,14 @@ export class LspClient {
 	}
 
 	#send(message: JsonRpcMessage) {
-		if (!this.#child) throw new Error(`${this.#adapter.label} LSP server is not running.`);
+		if (!this.#child) throw new Error(`${this.#adapter.name} LSP server is not running.`);
 
 		const body = JSON.stringify(message);
 		try {
 			this.#child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 		} catch (error) {
 			const errorMessage =
-				`${this.#adapter.label} LSP stdin write failed: ${formatErrorMessage(error)}.` +
+				`${this.#adapter.name} LSP stdin write failed: ${formatErrorMessage(error)}.` +
 				this.#formatStderr();
 			this.#fail(errorMessage);
 			throw new Error(errorMessage);
@@ -323,7 +298,7 @@ export class LspClient {
 			clearTimeout(pending.timeout);
 			this.#pending.delete(message.id as number);
 			if (message.error) {
-				pending.reject(new Error(`${this.#adapter.label} LSP error: ${message.error.message}`));
+				pending.reject(new Error(`${this.#adapter.name} LSP error: ${message.error.message}`));
 			} else {
 				pending.resolve(message);
 			}
@@ -362,7 +337,11 @@ export class LspClient {
 					const waiters = this.#diagnosticWaiters.get(uri)?.filter((entry) => entry !== waiter) ?? [];
 					if (waiters.length) this.#diagnosticWaiters.set(uri, waiters);
 					else this.#diagnosticWaiters.delete(uri);
-					resolve(this.#publishedDiagnostics.get(uri) ?? []);
+					reject(
+						new Error(
+							`${this.#adapter.name} LSP did not return diagnostics for ${uri} before timeout.`,
+						),
+					);
 				}, this.#timeoutMs),
 			};
 			this.#diagnosticWaiters.set(uri, [...(this.#diagnosticWaiters.get(uri) ?? []), waiter]);
@@ -371,11 +350,11 @@ export class LspClient {
 
 	#respondToServerRequest(message: JsonRpcMessage) {
 		if (message.method === "workspace/configuration") {
-			const params = message.params as { items?: unknown[] } | undefined;
+			const params = message.params as { items?: Array<{ section?: string }> } | undefined;
 			this.#send({
 				jsonrpc: "2.0",
 				id: message.id,
-				result: (params?.items ?? []).map(() => ({})),
+				result: (params?.items ?? []).map((item) => this.#configurationValue(item.section)),
 			});
 			return;
 		}
@@ -385,9 +364,7 @@ export class LspClient {
 			this.#send({
 				jsonrpc: "2.0",
 				id: message.id,
-				result: this.#adapter.serverRequestWorkspaceFolders
-					? [{ uri: rootUri, name: path.basename(this.#cwd) || "workspace" }]
-					: null,
+				result: [{ uri: rootUri, name: path.basename(this.#cwd) || "workspace" }],
 			});
 			return;
 		}
@@ -407,6 +384,11 @@ export class LspClient {
 		});
 	}
 
+	#configurationValue(section: string | undefined) {
+		if (!section) return this.#adapter.initialization ?? {};
+		return this.#adapter.initialization?.[section] ?? {};
+	}
+
 	#formatStderr() {
 		const stderr = this.#stderr.trim();
 		return stderr ? `\nServer stderr:\n${stderr}` : "";
@@ -419,8 +401,4 @@ function isUnsupportedMethodError(error: unknown) {
 
 function formatErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function wait(ms: number) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
 }

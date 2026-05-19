@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-lsp",
 	"version": "0.1.26",
-	"description": "Pi extension that exposes language-server tools for Biome, ty, and Ruff through a shared LSP runner.",
+	"description": "Pi extension that exposes configurable, language-agnostic LSP tools through a shared runner.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -10,12 +10,11 @@
 		"pi-extension",
 		"pi",
 		"lsp",
-		"biome",
-		"python",
-		"ty",
-		"ruff",
+		"language-server-protocol",
+		"configurable",
 		"lint",
-		"format"
+		"diagnostics",
+		"code-action"
 	],
 	"files": [
 		"src",

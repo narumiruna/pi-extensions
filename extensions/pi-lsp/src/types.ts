@@ -61,32 +61,33 @@ export interface JsonRpcMessage {
 	error?: { code: number; message: string; data?: unknown };
 }
 
+export interface ConfiguredLspServer {
+	command: string[];
+	extensions: string[];
+	env?: Record<string, string>;
+	initialization?: Record<string, unknown>;
+}
+
+export interface LspConfig {
+	timeout?: number;
+	servers: InternalLspServer[];
+}
+
+export interface InternalLspServer extends ConfiguredLspServer {
+	name: string;
+}
+
 export interface LspServerAdapter {
-	label: string;
-	statusPrefix: string;
+	name: string;
 	defaultCommand: ServerCommand;
 	commandEnvVar: string;
-	timeoutEnvVar: string;
 	missingCommandHint: string;
+	extensions: string[];
+	env?: Record<string, string>;
+	initialization?: Record<string, unknown>;
 	skipDirectories: Set<string>;
 	isSupportedFile: (filePath: string) => boolean;
 	languageIdFor: (filePath: string) => string;
-	formattingOptions: { tabSize: number; insertSpaces: boolean };
-	initialize: {
-		codeAction: boolean;
-		diagnosticDynamicRegistration: boolean;
-		formattingDynamicRegistration?: boolean;
-		codeActionDynamicRegistration?: boolean;
-		didChangeConfigurationDynamicRegistration?: boolean;
-		didSaveDynamicRegistration?: boolean;
-	};
-	fallbackToPublishDiagnostics: boolean;
-	resolveUnsupportedCodeActions: boolean;
-	serverRequestWorkspaceFolders: boolean;
-	emptyDiagnosticsMessage: string;
-	formatDiagnosticsHeader: (summary: DiagnosticSummary) => string;
-	editSummaryLabel: string;
-	defaultFixKind?: string;
 }
 
 export interface DiagnosticSummary {

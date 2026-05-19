@@ -1,23 +1,17 @@
 import path from "node:path";
-import { biomeAdapter, ruffAdapter, tyAdapter } from "./adapters.js";
 import { collectSupportedFiles, resolveRoot } from "./files.js";
 import type { LspServerAdapter } from "./types.js";
 
-export type LanguageFamily = "web" | "python";
-export type DiagnosticChecker = "type" | "lint" | "all";
-export type LspAction = "diagnostics" | "format" | "fix";
+export type LspAction = "diagnostics" | "fix";
 
 export interface DiagnosticRoute {
 	adapter: LspServerAdapter;
-	language: LanguageFamily;
-	checker?: DiagnosticChecker;
 	reason: string;
 	files: string[];
 }
 
 export interface SingleFileRoute {
 	adapter: LspServerAdapter;
-	language: LanguageFamily;
 	reason: string;
 }
 
@@ -25,167 +19,80 @@ export interface DiagnosticRouteParams {
 	root?: string;
 	paths?: string[];
 	limit?: number;
-	language?: LanguageFamily;
-	checker?: DiagnosticChecker;
+	server?: string | string[];
 }
 
 export interface SingleFileRouteParams {
 	root?: string;
 	path: string;
-	language?: LanguageFamily;
+	server?: string;
 }
 
-export const SUPPORTED_LANGUAGE_DESCRIPTION =
-	"Supported language/file classes: web/config files supported by Biome, and Python .py/.pyi files.";
+export const SUPPORTED_SERVER_DESCRIPTION =
+	"Supported LSP servers are defined by pi-lsp config and selected by file extension.";
 
-export function selectDiagnosticRoutes(params: DiagnosticRouteParams, defaultLimit: number) {
+export function selectDiagnosticRoutes(
+	adapters: LspServerAdapter[],
+	params: DiagnosticRouteParams,
+	defaultLimit: number,
+) {
 	const root = resolveRoot(params.root);
-	const checker = params.checker ?? "all";
-	const candidates = diagnosticCandidates(params.language, checker);
-	const filesByLanguage = new Map<LanguageFamily, string[]>();
+	const candidates = filterAdapters(adapters, params.server);
+	const filesByExtensions = new Map<string, string[]>();
 	const routes = candidates
-		.map((candidate) => {
-			let files = filesByLanguage.get(candidate.language);
+		.map((adapter) => {
+			const key = adapter.extensions.join("\0");
+			let files = filesByExtensions.get(key);
 			if (!files) {
-				files = collectSupportedFiles(
-					discoveryAdapterFor(candidate.language),
-					root,
-					params.paths,
-					params.limit ?? defaultLimit,
-				);
-				filesByLanguage.set(candidate.language, files);
+				files = collectSupportedFiles(adapter, root, params.paths, params.limit ?? defaultLimit);
+				filesByExtensions.set(key, files);
 			}
-			return { ...candidate, files };
+			return { adapter, reason: `${adapter.name} diagnostics`, files };
 		})
 		.filter((route) => route.files.length > 0);
 
 	if (routes.length === 0) {
 		const scope = params.paths?.length ? ` in requested paths: ${params.paths.join(", ")}` : "";
-		throw new Error(`No supported files found${scope}. ${SUPPORTED_LANGUAGE_DESCRIPTION}`);
+		throw new Error(`No supported files found${scope}. ${SUPPORTED_SERVER_DESCRIPTION}`);
 	}
 
 	return { root, routes };
 }
 
-export function selectFormatRoute(params: SingleFileRouteParams) {
-	return selectSingleFileRoute("format", params);
-}
-
-export function selectFixRoute(params: SingleFileRouteParams) {
-	return selectSingleFileRoute("fix", params);
-}
-
-function diagnosticCandidates(language: LanguageFamily | undefined, checker: DiagnosticChecker) {
-	if (language === "web") {
-		return [
-			{
-				adapter: biomeAdapter,
-				language,
-				reason: "Biome-supported web/config diagnostics",
-			},
-		];
-	}
-
-	if (language === "python") return pythonDiagnosticCandidates(checker);
-
-	return [
-		{
-			adapter: biomeAdapter,
-			language: "web" as const,
-			reason: "Biome-supported web/config diagnostics",
-		},
-		...pythonDiagnosticCandidates(checker),
-	];
-}
-
-function discoveryAdapterFor(language: LanguageFamily) {
-	if (language === "web") return biomeAdapter;
-	return ruffAdapter;
-}
-
-function pythonDiagnosticCandidates(checker: DiagnosticChecker) {
-	const routes: Array<Omit<DiagnosticRoute, "files">> = [];
-	if (checker === "type" || checker === "all") {
-		routes.push({
-			adapter: tyAdapter,
-			language: "python",
-			checker: "type",
-			reason: "Python type diagnostics through ty",
-		});
-	}
-	if (checker === "lint" || checker === "all") {
-		routes.push({
-			adapter: ruffAdapter,
-			language: "python",
-			checker: "lint",
-			reason: "Python lint diagnostics through Ruff",
-		});
-	}
-	return routes;
-}
-
-function selectSingleFileRoute(action: "format" | "fix", params: SingleFileRouteParams) {
+export function selectFixRoute(adapters: LspServerAdapter[], params: SingleFileRouteParams) {
 	const root = resolveRoot(params.root);
 	const file = path.resolve(root, params.path);
-	const webSupported = biomeAdapter.isSupportedFile(file);
-	const pythonSupported = ruffAdapter.isSupportedFile(file);
-
-	if (params.language === "web") {
-		if (!webSupported) throw unsupportedFileError(action, params.path, params.language);
-		return {
-			root,
-			route: {
-				adapter: biomeAdapter,
-				language: "web" as const,
-				reason: `Biome-supported web/config ${action}`,
-			},
-		};
+	const candidates = filterAdapters(adapters, params.server).filter((adapter) => adapter.isSupportedFile(file));
+	if (candidates.length === 0) throw unsupportedFileError("fix", params.path, params.server);
+	if (!params.server && candidates.length > 1) {
+		throw new Error(
+			`Multiple LSP servers support ${params.path}: ${candidates.map((adapter) => adapter.name).join(", ")}. ` +
+				"Specify the server parameter for lsp_fix.",
+		);
 	}
-
-	if (params.language === "python") {
-		if (!pythonSupported) throw unsupportedFileError(action, params.path, params.language);
-		return {
-			root,
-			route: {
-				adapter: ruffAdapter,
-				language: "python" as const,
-				reason: `Python ${action} through Ruff`,
-			},
-		};
-	}
-
-	if (webSupported) {
-		return {
-			root,
-			route: {
-				adapter: biomeAdapter,
-				language: "web" as const,
-				reason: `Biome-supported web/config ${action}`,
-			},
-		};
-	}
-
-	if (pythonSupported) {
-		return {
-			root,
-			route: {
-				adapter: ruffAdapter,
-				language: "python" as const,
-				reason: `Python ${action} through Ruff`,
-			},
-		};
-	}
-
-	throw unsupportedFileError(action, params.path, params.language);
+	const adapter = candidates[0];
+	return {
+		root,
+		route: {
+			adapter,
+			reason: `${adapter.name} fix`,
+		},
+	};
 }
 
-function unsupportedFileError(
-	action: LspAction,
-	filePath: string,
-	language: LanguageFamily | undefined,
-) {
-	const override = language ? ` for language override '${language}'` : "";
-	return new Error(
-		`No ${action} route supports ${filePath}${override}. ${SUPPORTED_LANGUAGE_DESCRIPTION}`,
+function filterAdapters(adapters: LspServerAdapter[], selected: string | string[] | undefined) {
+	if (!selected) return adapters;
+	const names = [...new Set((Array.isArray(selected) ? selected : [selected]).map((name) => name.trim()))].filter(
+		(name) => name.length > 0,
 	);
+	if (names.length === 0) throw new Error("LSP server parameter must not be blank.");
+	const matched = adapters.filter((adapter) => names.includes(adapter.name));
+	const missing = names.filter((name) => !adapters.some((adapter) => adapter.name === name));
+	if (missing.length) throw new Error(`Unknown LSP server(s): ${missing.join(", ")}.`);
+	return matched;
+}
+
+function unsupportedFileError(action: LspAction, filePath: string, server: string | undefined) {
+	const override = server ? ` for server '${server}'` : "";
+	return new Error(`No ${action} route supports ${filePath}${override}. ${SUPPORTED_SERVER_DESCRIPTION}`);
 }

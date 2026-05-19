@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { commandFromEnv, timeoutFromEnv } from "./command.js";
+import { commandFromEnv } from "./command.js";
 import { collectSupportedFiles, resolveRoot, resolveSupportedFile } from "./files.js";
 import { LspClient } from "./lsp-client.js";
 import { applyTextEdits, collectWorkspaceEdits, hasOverlappingTextEdits } from "./text-edits.js";
@@ -13,12 +13,12 @@ import type {
 	StatusContext,
 } from "./types.js";
 
-export const DEFAULT_TIMEOUT_MS = 20_000;
 export const DEFAULT_FILE_LIMIT = 50;
 
 export async function runDiagnostics(
 	adapter: LspServerAdapter,
 	params: { root?: string; paths?: string[]; limit?: number; files?: string[] },
+	timeoutMs: number,
 	signal: AbortSignal | undefined,
 	ctx: StatusContext,
 	statusKey: string,
@@ -29,7 +29,7 @@ export async function runDiagnostics(
 		params.files ??
 		collectSupportedFiles(adapter, root, params.paths, params.limit ?? DEFAULT_FILE_LIMIT);
 	if (files.length === 0) {
-		return textResult(adapter.emptyDiagnosticsMessage, {
+		return textResult(`${adapter.name} LSP found no supported files to check.`, {
 			root,
 			command,
 			files: [],
@@ -37,16 +37,11 @@ export async function runDiagnostics(
 		});
 	}
 
-	const client = new LspClient(
-		adapter,
-		command,
-		root,
-		timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS),
-	);
+	const client = new LspClient(adapter, command, root, timeoutMs);
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
 	throwIfAborted(signal, adapter);
-	ctx.ui.setStatus(statusKey, `${adapter.statusPrefix} diagnostics`);
+	ctx.ui.setStatus(statusKey, `${adapter.name} diagnostics`);
 
 	try {
 		await client.start();
@@ -79,87 +74,24 @@ export async function runDiagnostics(
 	}
 }
 
-export async function runFormat(
-	adapter: LspServerAdapter,
-	params: { root?: string; path: string; write?: boolean },
-	signal: AbortSignal | undefined,
-	ctx: StatusContext,
-	statusKey: string,
-) {
-	const root = resolveRoot(params.root);
-	const file = resolveSupportedFile(adapter, root, params.path);
-	const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
-	const client = new LspClient(
-		adapter,
-		command,
-		root,
-		timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS),
-	);
-	const abort = () => client.close();
-	signal?.addEventListener("abort", abort, { once: true });
-	throwIfAborted(signal, adapter);
-	ctx.ui.setStatus(statusKey, `${adapter.statusPrefix} format`);
-
-	try {
-		await client.start();
-		await client.initialize(root);
-		throwIfAborted(signal, adapter);
-		const uri = pathToFileURL(file).href;
-		const text = readFileSync(file, "utf8");
-		client.didOpen(uri, text, adapter.languageIdFor(file));
-		let newText: string;
-		let edits: LspTextEdit[];
-		try {
-			edits = await client.format(uri);
-			newText = applyTextEdits(text, edits);
-		} finally {
-			client.didClose(uri);
-		}
-		const changed = newText !== text;
-
-		if (params.write && changed) writeFileSync(file, newText);
-
-		return textResult(
-			formatEditSummary(adapter, "format", root, file, changed, params.write, newText),
-			{
-				path: path.relative(root, file) || file,
-				uri,
-				changed,
-				write: params.write ?? false,
-				edits,
-				text: params.write ? undefined : newText,
-			},
-		);
-	} finally {
-		ctx.ui.setStatus(statusKey, undefined);
-		signal?.removeEventListener("abort", abort);
-		await client.shutdown();
-	}
-}
-
 export async function runFix(
 	adapter: LspServerAdapter,
 	params: { root?: string; path: string; kind?: string; write?: boolean },
+	timeoutMs: number,
 	signal: AbortSignal | undefined,
 	ctx: StatusContext,
 	statusKey: string,
 ) {
 	const root = resolveRoot(params.root);
 	const file = resolveSupportedFile(adapter, root, params.path);
-	const actionKind = params.kind?.trim() || adapter.defaultFixKind;
-	if (!actionKind) throw new Error(`${adapter.label} LSP adapter does not support source fixes.`);
+	const actionKind = params.kind?.trim() || "source.fixAll";
 
 	const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
-	const client = new LspClient(
-		adapter,
-		command,
-		root,
-		timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS),
-	);
+	const client = new LspClient(adapter, command, root, timeoutMs);
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
 	throwIfAborted(signal, adapter);
-	ctx.ui.setStatus(statusKey, `${adapter.statusPrefix} fix`);
+	ctx.ui.setStatus(statusKey, `${adapter.name} fix`);
 
 	try {
 		await client.start();
@@ -181,7 +113,7 @@ export async function runFix(
 			if (hasOverlappingTextEdits(text, edits)) {
 				const relativePath = path.relative(root, file) || file;
 				throw new Error(
-					`${adapter.label} LSP returned overlapping code-action edits for ${relativePath}; ` +
+					`${adapter.name} LSP returned overlapping code-action edits for ${relativePath}; ` +
 						"use a narrower action kind.",
 				);
 			}
@@ -228,18 +160,23 @@ function formatDiagnostics(adapter: LspServerAdapter, entries: DiagnosticEntry[]
 			const line = diagnostic.range.start.line + 1;
 			const column = diagnostic.range.start.character + 1;
 			const severity = severityName(diagnostic.severity);
-			const source = diagnostic.source ?? adapter.label;
+			const source = diagnostic.source ?? adapter.name;
 			const code = diagnostic.code === undefined ? "" : ` ${diagnostic.code}`;
 			return `${entry.path}:${line}:${column}: ${severity} ${source}${code}: ${diagnostic.message}`;
 		});
 	});
 
-	return [adapter.formatDiagnosticsHeader(summarize(entries)), "", ...lines].join("\n");
+	const summary = summarize(entries);
+	return [
+		`${adapter.name} LSP diagnostics: ${summary.diagnostics} diagnostic(s) across ${summary.files} file(s).`,
+		"",
+		...lines,
+	].join("\n");
 }
 
 function formatEditSummary(
 	adapter: LspServerAdapter,
-	action: "fix" | "format",
+	action: "fix",
 	root: string,
 	file: string,
 	changed: boolean,
@@ -248,7 +185,7 @@ function formatEditSummary(
 ) {
 	const relativePath = path.relative(root, file) || file;
 	const status = changed ? (write ? "updated" : "computed changes for") : "left unchanged";
-	const summary = `${adapter.editSummaryLabel} LSP ${action} ${status} ${relativePath}.`;
+	const summary = `${adapter.name} LSP ${action} ${status} ${relativePath}.`;
 	if (write || !changed) return summary;
 	return `${summary}\n\n${text}`;
 }
@@ -269,7 +206,7 @@ function severityName(severity: number | undefined) {
 }
 
 function throwIfAborted(signal: AbortSignal | undefined, adapter: LspServerAdapter) {
-	if (signal?.aborted) throw new Error(`${adapter.label} LSP request aborted.`);
+	if (signal?.aborted) throw new Error(`${adapter.name} LSP request aborted.`);
 }
 
 export function textResult(text: string, details: unknown) {
