@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -16,6 +16,7 @@ const MAX_RETRY_MS = 30_000;
 const TELEGRAM_MESSAGE_LIMIT = 4096;
 const TELEGRAM_CHUNK_LIMIT = 3900;
 const CONFIG_FILE_NAME = "telegram.json";
+const REMOTE_TURN_START_TIMEOUT_MS = 30_000;
 
 interface TelegramConfig {
 	token: string;
@@ -179,35 +180,51 @@ export default function telegram(pi: ExtensionAPI) {
 	let poller: Poller | undefined;
 	let currentConfig: TelegramConfig | undefined;
 	let currentBotUsername: string | undefined;
+	let telegramEnabled = false;
+	let agentRunning = false;
+	let remoteSubmissionPending = false;
+	let pollGeneration = 0;
 	let remoteTurns: RemoteTurn[] = [];
+	let pendingSteers: RemoteTurn[] = [];
 	let nextRemoteTurnId = 1;
 
 	const stopPolling = () => {
+		pollGeneration++;
 		poller?.stop();
 		poller = undefined;
 		currentBotUsername = undefined;
 	};
 
 	const disableTelegram = () => {
+		telegramEnabled = false;
 		stopPolling();
 		remoteTurns = [];
+		pendingSteers = [];
+		remoteSubmissionPending = false;
 		currentConfig = undefined;
 	};
 
-	const getActiveConfig = (ctx: ExtensionContext): ConfigResult => {
+	const getActiveConfig = (): ConfigResult => {
 		if (currentConfig) return { ok: true, value: currentConfig };
-		return readConfig(ctx.cwd);
+		return readConfig();
+	};
+
+	const isTelegramActive = (generation?: number) => {
+		return (
+			telegramEnabled &&
+			Boolean(currentConfig) &&
+			(generation === undefined || generation === pollGeneration)
+		);
 	};
 
 	const markRemoteTurnActive = (text: string) => {
-		const turn = remoteTurns.find(
-			(candidate) => candidate.state === "queued" && text.includes(candidate.marker),
-		);
-		if (turn) turn.state = "active";
+		for (const turn of remoteTurns) {
+			if (turn.state === "queued" && text.includes(turn.marker)) turn.state = "active";
+		}
 	};
 
-	const getConfiguredClient = (ctx: ExtensionContext) => {
-		const config = getActiveConfig(ctx);
+	const getConfiguredClient = () => {
+		const config = getActiveConfig();
 		if (!config.ok) throw new Error(config.error);
 
 		if (!config.value.chatId) {
@@ -227,7 +244,7 @@ export default function telegram(pi: ExtensionAPI) {
 		text: string,
 		options: { replyToMessageId?: number; includeHeader?: boolean } = {},
 	) => {
-		const { chatId, client } = getConfiguredClient(ctx);
+		const { chatId, client } = getConfiguredClient();
 		const body = options.includeHeader === true ? withSessionHeader(pi, ctx, text) : text;
 		const chunks = splitTelegramMessage(body);
 		const sentMessages: TelegramSentMessage[] = [];
@@ -251,7 +268,7 @@ export default function telegram(pi: ExtensionAPI) {
 		text: string,
 		options: { replyToMessageId?: number; includeHeader?: boolean } = {},
 	) => {
-		const { chatId, client } = getConfiguredClient(ctx);
+		const { chatId, client } = getConfiguredClient();
 		const body = options.includeHeader === true ? withSessionHeader(pi, ctx, text) : text;
 		const chunks = splitTelegramMessage(body);
 		const [firstChunk, ...remainingChunks] = chunks;
@@ -291,20 +308,25 @@ export default function telegram(pi: ExtensionAPI) {
 	};
 
 	const enableTelegram = (ctx: ExtensionContext): ConfigResult => {
-		const config = readConfig(ctx.cwd);
+		const config = readConfig();
 		if (!config.ok) {
 			disableTelegram();
 			return config;
 		}
 
 		stopPolling();
+		telegramEnabled = true;
 		remoteTurns = [];
+		pendingSteers = [];
+		remoteSubmissionPending = false;
 		currentConfig = config.value;
+		const generation = pollGeneration;
 		poller = startTelegramPolling(config.value, ctx, {
+			isActive: () => isTelegramActive(generation),
 			onBotInfo: (bot) => {
 				currentBotUsername = bot.username;
 			},
-			onMessage: (message, text) => handleTelegramTextMessage(message, text, ctx),
+			onMessage: (message, text) => handleTelegramTextMessage(message, text, ctx, generation),
 			onError: (error) => {
 				if (ctx.hasUI)
 					ctx.ui.notify(`pi-telegram polling error: ${errorMessage(error)}`, "warning");
@@ -323,6 +345,7 @@ export default function telegram(pi: ExtensionAPI) {
 		if (choice === toggleLabel) {
 			if (enabled) {
 				disableTelegram();
+				ctx.ui.setStatus(STATUS_KEY, undefined);
 				ctx.ui.notify("pi-telegram disabled.", "info");
 				return;
 			}
@@ -338,34 +361,174 @@ export default function telegram(pi: ExtensionAPI) {
 		}
 
 		if (choice === "Show status") {
-			ctx.ui.notify(buildLocalStatus(pi, ctx, getActiveConfig(ctx), enabled), "info");
+			ctx.ui.notify(buildLocalStatus(pi, ctx, getActiveConfig(), enabled), "info");
 			return;
 		}
 
 		if (choice === "Help") ctx.ui.notify(buildPiCommandHelp(), "info");
 	};
 
+	const validateAgentReady = (ctx: ExtensionContext): string | undefined => {
+		if (!ctx.model)
+			return "Pi has no model selected. Select a model locally before using Telegram.";
+		if (!ctx.modelRegistry.hasConfiguredAuth(ctx.model)) {
+			return `Pi has no configured auth for ${ctx.model.provider}. Configure auth locally before using Telegram.`;
+		}
+		return undefined;
+	};
+
+	const sendRemoteTurnText = async (ctx: ExtensionContext, turn: RemoteTurn, text: string) => {
+		if (turn.statusMessageId) {
+			try {
+				await editSessionMessage(ctx, turn.statusMessageId, text, {
+					replyToMessageId: turn.messageId,
+				});
+				return;
+			} catch {
+				// Fall back to a new reply when Telegram refuses to edit the temporary status message.
+			}
+		}
+		await sendSessionMessage(ctx, text, { replyToMessageId: turn.messageId });
+	};
+
+	const failRemoteTurn = async (ctx: ExtensionContext, turn: RemoteTurn, text: string) => {
+		remoteTurns = remoteTurns.filter((candidate) => candidate.id !== turn.id);
+		pendingSteers = pendingSteers.filter((candidate) => candidate.id !== turn.id);
+		await sendRemoteTurnText(ctx, turn, text);
+	};
+
+	const scheduleRemoteTurnStartTimeout = (ctx: ExtensionContext, turn: RemoteTurn) => {
+		setTimeout(() => {
+			if (!remoteSubmissionPending || turn.state !== "queued") return;
+			if (!remoteTurns.some((candidate) => candidate.id === turn.id)) return;
+			remoteSubmissionPending = false;
+			void failRemoteTurn(
+				ctx,
+				turn,
+				"Pi did not start processing this Telegram message. Check the local session and try again.",
+			)
+				.then(() => {
+					schedulePromoteQueuedBusyTurns(ctx);
+				})
+				.catch((error) => {
+					if (ctx.hasUI)
+						ctx.ui.notify(
+							`Failed to send Telegram timeout notice: ${errorMessage(error)}`,
+							"error",
+						);
+				});
+		}, REMOTE_TURN_START_TIMEOUT_MS);
+	};
+
+	const promoteNextPendingTurn = (ctx: ExtensionContext): boolean => {
+		if (agentRunning || remoteSubmissionPending || !ctx.isIdle()) return false;
+
+		while (pendingSteers.length > 0) {
+			const turn = pendingSteers.shift();
+			if (!turn) return false;
+			if (!remoteTurns.some((candidate) => candidate.id === turn.id)) continue;
+			if (turn.state !== "queued") continue;
+
+			try {
+				remoteSubmissionPending = true;
+				pi.sendUserMessage(turn.prompt);
+				scheduleRemoteTurnStartTimeout(ctx, turn);
+				return true;
+			} catch (error) {
+				remoteSubmissionPending = false;
+				void failRemoteTurn(
+					ctx,
+					turn,
+					`Failed to send Telegram message to Pi: ${errorMessage(error)}`,
+				).catch((noticeError) => {
+					if (ctx.hasUI)
+						ctx.ui.notify(
+							`Failed to send Telegram failure notice: ${errorMessage(noticeError)}`,
+							"error",
+						);
+				});
+			}
+		}
+
+		return false;
+	};
+
+	const promoteQueuedBusyTurns = (ctx: ExtensionContext): boolean => {
+		for (const turn of remoteTurns) {
+			if (turn.state !== "queued" || !turn.statusMessageId) continue;
+			if (pendingSteers.some((candidate) => candidate.id === turn.id)) continue;
+			pendingSteers.push(turn);
+		}
+		return promoteNextPendingTurn(ctx);
+	};
+
+	const schedulePromoteQueuedBusyTurns = (ctx: ExtensionContext, attempt = 0) => {
+		setTimeout(() => {
+			if (!isTelegramActive()) return;
+			if (promoteQueuedBusyTurns(ctx)) return;
+			const hasQueuedBusyTurns = remoteTurns.some(
+				(turn) => turn.state === "queued" && Boolean(turn.statusMessageId),
+			);
+			const shouldRetry = hasQueuedBusyTurns || pendingSteers.length > 0;
+			if (shouldRetry && !agentRunning && !remoteSubmissionPending && attempt < 20) {
+				schedulePromoteQueuedBusyTurns(ctx, attempt + 1);
+			}
+		}, 50);
+	};
+
+	const flushPendingSteers = (ctx: ExtensionContext) => {
+		const turns = pendingSteers;
+		pendingSteers = [];
+		for (const turn of turns) {
+			if (!remoteTurns.some((candidate) => candidate.id === turn.id)) continue;
+			if (turn.state !== "queued") continue;
+			try {
+				pi.sendUserMessage(turn.prompt, { deliverAs: "steer" });
+			} catch (error) {
+				void failRemoteTurn(
+					ctx,
+					turn,
+					`Failed to send Telegram message to Pi: ${errorMessage(error)}`,
+				).catch((noticeError) => {
+					if (ctx.hasUI)
+						ctx.ui.notify(
+							`Failed to send Telegram failure notice: ${errorMessage(noticeError)}`,
+							"error",
+						);
+				});
+			}
+		}
+	};
+
 	const handleTelegramTextMessage = async (
 		message: TelegramMessage,
 		text: string,
 		ctx: ExtensionContext,
+		generation: number,
 	) => {
-		const config = getActiveConfig(ctx);
-		if (!config.ok) return;
+		if (!isTelegramActive(generation) || !currentConfig) return;
+		const config = currentConfig;
 		const chatId = normalizeChatId(message.chat.id);
 		const parsedCommand = parseTelegramCommand(text, currentBotUsername);
 
-		if (!config.value.chatId) {
+		if (!config.chatId) {
 			await handleSetupTelegramMessage(parsedCommand, message, sendDirectTelegramMessage);
 			return;
 		}
 
-		if (chatId !== config.value.chatId) return;
+		if (chatId !== config.chatId) return;
 
 		if (parsedCommand) {
 			await handleTelegramCommand(parsedCommand, message, ctx, { sendSessionMessage });
 			return;
 		}
+
+		const readinessError = validateAgentReady(ctx);
+		if (readinessError) {
+			await sendSessionMessage(ctx, readinessError, { replyToMessageId: message.message_id });
+			return;
+		}
+		if (!isTelegramActive(generation)) return;
 
 		const remoteTurnId = `${Date.now()}-${nextRemoteTurnId++}`;
 		const marker = `pi-telegram:${remoteTurnId}`;
@@ -380,12 +543,18 @@ export default function telegram(pi: ExtensionAPI) {
 			createdAt: Date.now(),
 		};
 		remoteTurns.push(remoteTurn);
+		if (!isTelegramActive(generation)) {
+			remoteTurns = remoteTurns.filter((turn) => turn.id !== remoteTurnId);
+			return;
+		}
 
 		try {
-			if (ctx.isIdle() && remoteTurns.filter((turn) => turn.state === "queued").length === 1) {
+			const shouldStartTurn = !agentRunning && !remoteSubmissionPending && ctx.isIdle();
+			if (shouldStartTurn) {
+				remoteSubmissionPending = true;
 				pi.sendUserMessage(prompt);
+				scheduleRemoteTurnStartTimeout(ctx, remoteTurn);
 			} else {
-				pi.sendUserMessage(prompt, { deliverAs: "steer" });
 				const sentMessages = await sendSessionMessage(
 					ctx,
 					"Agent is busy; your Telegram message will steer the current turn.",
@@ -394,9 +563,21 @@ export default function telegram(pi: ExtensionAPI) {
 					},
 				);
 				remoteTurn.statusMessageId = sentMessages[0]?.message_id;
+				if (!isTelegramActive(generation)) {
+					remoteTurns = remoteTurns.filter((turn) => turn.id !== remoteTurnId);
+					return;
+				}
+				if (agentRunning || !ctx.isIdle()) {
+					pi.sendUserMessage(prompt, { deliverAs: "steer" });
+				} else {
+					pendingSteers.push(remoteTurn);
+					promoteNextPendingTurn(ctx);
+				}
 			}
 		} catch (error) {
+			remoteSubmissionPending = false;
 			remoteTurns = remoteTurns.filter((turn) => turn.id !== remoteTurnId);
+			pendingSteers = pendingSteers.filter((turn) => turn.id !== remoteTurnId);
 			await sendSessionMessage(
 				ctx,
 				`Failed to send Telegram message to Pi: ${errorMessage(error)}`,
@@ -429,6 +610,7 @@ export default function telegram(pi: ExtensionAPI) {
 
 			if (["disable", "off", "stop"].includes(parsed.command)) {
 				disableTelegram();
+				ctx.ui.setStatus(STATUS_KEY, undefined);
 				ctx.ui.notify("pi-telegram disabled.", "info");
 				return;
 			}
@@ -461,18 +643,25 @@ export default function telegram(pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify(
-				buildLocalStatus(pi, ctx, getActiveConfig(ctx), poller?.isRunning() ?? false),
+				buildLocalStatus(pi, ctx, getActiveConfig(), poller?.isRunning() ?? false),
 				"info",
 			);
 		},
 	});
 
 	pi.on("session_start", () => {
+		agentRunning = false;
 		disableTelegram();
 	});
 
 	pi.on("before_agent_start", (event) => {
 		markRemoteTurnActive(event.prompt);
+	});
+
+	pi.on("agent_start", (_event, ctx) => {
+		agentRunning = true;
+		remoteSubmissionPending = false;
+		flushPendingSteers(ctx);
 	});
 
 	pi.on("message_start", (event) => {
@@ -481,8 +670,13 @@ export default function telegram(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
+		agentRunning = false;
+		remoteSubmissionPending = false;
 		const turns = remoteTurns.filter((candidate) => candidate.state === "active");
-		if (turns.length === 0) return;
+		if (turns.length === 0) {
+			schedulePromoteQueuedBusyTurns(ctx);
+			return;
+		}
 
 		remoteTurns = remoteTurns.filter((candidate) => candidate.state !== "active");
 		const finalText =
@@ -508,11 +702,16 @@ export default function telegram(pi: ExtensionAPI) {
 					ctx.ui.notify(`Failed to send Telegram reply: ${errorMessage(error)}`, "error");
 			}
 		}
+		schedulePromoteQueuedBusyTurns(ctx);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		telegramEnabled = false;
+		agentRunning = false;
+		remoteSubmissionPending = false;
 		stopPolling();
 		remoteTurns = [];
+		pendingSteers = [];
 		currentConfig = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
@@ -522,6 +721,7 @@ function startTelegramPolling(
 	config: TelegramConfig,
 	ctx: ExtensionContext,
 	callbacks: {
+		isActive: () => boolean;
 		onBotInfo: (bot: TelegramUser) => void;
 		onMessage: (message: TelegramMessage, text: string) => Promise<void>;
 		onError: (error: unknown) => void;
@@ -531,7 +731,7 @@ function startTelegramPolling(
 	let running = true;
 	void pollTelegram(config, ctx, callbacks, controller.signal).finally(() => {
 		running = false;
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (callbacks.isActive()) ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	return {
@@ -539,7 +739,7 @@ function startTelegramPolling(
 			controller.abort();
 		},
 		isRunning() {
-			return running && !controller.signal.aborted;
+			return running && !controller.signal.aborted && callbacks.isActive();
 		},
 	};
 }
@@ -548,6 +748,7 @@ async function pollTelegram(
 	config: TelegramConfig,
 	ctx: ExtensionContext,
 	callbacks: {
+		isActive: () => boolean;
 		onBotInfo: (bot: TelegramUser) => void;
 		onMessage: (message: TelegramMessage, text: string) => Promise<void>;
 		onError: (error: unknown) => void;
@@ -559,16 +760,18 @@ async function pollTelegram(
 	let retryMs = INITIAL_RETRY_MS;
 	let notifiedError = false;
 
-	while (!signal.aborted) {
+	while (!signal.aborted && callbacks.isActive()) {
 		try {
 			ctx.ui.setStatus(STATUS_KEY, "📨 connecting");
 			const bot = await client.getMe(signal);
+			if (!callbacks.isActive()) return;
 			callbacks.onBotInfo(bot);
 			offset = await discardPendingUpdates(client, signal);
+			if (!callbacks.isActive()) return;
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			break;
 		} catch (error) {
-			if (isAbortError(error) || signal.aborted) return;
+			if (isAbortError(error) || signal.aborted || !callbacks.isActive()) return;
 			ctx.ui.setStatus(STATUS_KEY, "📨 error");
 			if (!notifiedError) {
 				callbacks.onError(error);
@@ -581,7 +784,7 @@ async function pollTelegram(
 
 	retryMs = INITIAL_RETRY_MS;
 	notifiedError = false;
-	while (!signal.aborted) {
+	while (!signal.aborted && callbacks.isActive()) {
 		try {
 			const updates = await client.getUpdates(
 				{
@@ -592,11 +795,13 @@ async function pollTelegram(
 				},
 				signal,
 			);
+			if (!callbacks.isActive()) return;
 			retryMs = INITIAL_RETRY_MS;
 			notifiedError = false;
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 
 			for (const update of updates) {
+				if (signal.aborted || !callbacks.isActive()) return;
 				offset = update.update_id + 1;
 				const message = update.message;
 				const text = message?.text?.trim();
@@ -604,7 +809,7 @@ async function pollTelegram(
 				await callbacks.onMessage(message, text);
 			}
 		} catch (error) {
-			if (isAbortError(error) || signal.aborted) return;
+			if (isAbortError(error) || signal.aborted || !callbacks.isActive()) return;
 			ctx.ui.setStatus(STATUS_KEY, "📨 error");
 			if (!notifiedError) {
 				callbacks.onError(error);
@@ -698,47 +903,37 @@ async function handleTelegramCommand(
 	}
 }
 
-function readConfig(cwd: string): ConfigResult {
+function readConfig(): ConfigResult {
 	try {
-		const configured = loadConfiguredConfig(cwd);
-		if (configured) return { ok: true, value: configured };
-
-		const legacyEnv = loadEnvironmentConfig();
-		if (legacyEnv) return legacyEnv;
+		const userConfig = userConfigPath();
+		if (existsSync(userConfig)) return { ok: true, value: parseConfigFile(userConfig) };
 
 		return {
 			ok: false,
-			error: `No Telegram config found. Create ${compactPath(userConfigPath())} or ${compactPath(projectConfigPath(cwd))}.`,
+			error: `No Telegram config found. Create ${compactPath(userConfig)}.`,
 		};
 	} catch (error) {
 		return { ok: false, error: errorMessage(error) };
 	}
 }
 
-function loadConfiguredConfig(cwd: string): TelegramConfig | undefined {
-	const rawConfig = process.env.PI_TELEGRAM_CONFIG?.trim();
-	if (rawConfig) return parseConfigSource(rawConfig, cwd, "PI_TELEGRAM_CONFIG");
-
-	const projectConfig = projectConfigPath(cwd);
-	if (existsSync(projectConfig)) return parseConfigFile(projectConfig);
-
-	const userConfig = userConfigPath();
-	if (existsSync(userConfig)) return parseConfigFile(userConfig);
-
-	return undefined;
-}
-
-function parseConfigSource(source: string, cwd: string, label: string): TelegramConfig {
-	if (source.startsWith("{")) return normalizeConfig(JSON.parse(source), label);
-	const expandedSource = expandHome(source);
-	const filePath = path.isAbsolute(expandedSource)
-		? expandedSource
-		: path.resolve(cwd, expandedSource);
-	return parseConfigFile(filePath);
-}
-
 function parseConfigFile(filePath: string): TelegramConfig {
+	assertPrivateConfigFile(filePath);
 	return normalizeConfig(JSON.parse(readFileSync(filePath, "utf8")), filePath);
+}
+
+function assertPrivateConfigFile(filePath: string) {
+	if (process.platform === "win32") return;
+
+	const stat = statSync(filePath);
+	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+		throw new Error(`${compactPath(filePath)} must be owned by the current user.`);
+	}
+	if ((stat.mode & 0o077) !== 0) {
+		throw new Error(
+			`${compactPath(filePath)} must not be readable by group or others. Run: chmod 600 ${compactPath(filePath)}`,
+		);
+	}
 }
 
 function normalizeConfig(value: unknown, source: string): TelegramConfig {
@@ -755,19 +950,6 @@ function normalizeConfig(value: unknown, source: string): TelegramConfig {
 	const normalizedChatId = chatId?.trim();
 
 	return { token: token.trim(), chatId: normalizedChatId || undefined, source };
-}
-
-function loadEnvironmentConfig(): ConfigResult | undefined {
-	const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-	const chatId = process.env.PI_TELEGRAM_CHAT_ID?.trim();
-	if (!token && !chatId) return undefined;
-	if (!token) return { ok: false, error: "TELEGRAM_BOT_TOKEN is not set." };
-	if (!chatId) return { ok: false, error: "PI_TELEGRAM_CHAT_ID is not set." };
-	return { ok: true, value: { token, chatId, source: "environment variables" } };
-}
-
-function projectConfigPath(cwd: string): string {
-	return path.join(cwd, ".pi", CONFIG_FILE_NAME);
 }
 
 function userConfigPath(): string {
@@ -799,14 +981,6 @@ function firstOptionalStringOrNumberField(
 		throw new Error(`${source}.${field} must be a string or number.`);
 	}
 	return undefined;
-}
-
-function expandHome(filePath: string): string {
-	if (filePath === "~") return os.homedir();
-	if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
-		return path.join(os.homedir(), filePath.slice(2));
-	}
-	return filePath;
 }
 
 function parseTelegramResponse<T>(responseText: string, method: string): TelegramApiResponse<T> {

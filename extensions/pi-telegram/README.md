@@ -14,7 +14,7 @@ Use it to message your active Pi session remotely, ask which session/project/mod
 - Shows the current session name, session file, project cwd, and model from `/status`.
 - Supports Telegram `/start`, `/help`, `/status`, `/whoami`, and `/cancel` commands.
 - Adds Pi `/telegram` enable/disable/status/help and `/telegram send <text>` commands.
-- Loads bot credentials from JSON config: `~/.pi/agent/telegram.json`, `.pi/telegram.json`, or `PI_TELEGRAM_CONFIG`.
+- Loads bot credentials from the user-scoped JSON config at `~/.pi/agent/telegram.json`.
 - Ignores messages from any Telegram chat other than the configured `chatId`.
 - Registers no custom Pi tools.
 
@@ -50,12 +50,7 @@ cat > ~/.pi/agent/telegram.json <<'JSON'
 JSON
 ```
 
-Supported config locations, in precedence order:
-
-1. `PI_TELEGRAM_CONFIG` — either a path to a JSON file or an inline JSON object.
-2. `.pi/telegram.json` in the current project.
-3. `~/.pi/agent/telegram.json`.
-4. Legacy environment fallback: `TELEGRAM_BOT_TOKEN` and `PI_TELEGRAM_CHAT_ID`.
+The extension only reads `~/.pi/agent/telegram.json`. It intentionally ignores project-local `.pi/telegram.json` files so a repository cannot override your Telegram bot destination.
 
 Config shape:
 
@@ -72,7 +67,7 @@ The single configured `chatId` is both the allowed inbound chat and the outbound
 
 When enabled, if `botToken` is set but `chatId` is missing or blank, the extension starts in setup mode. In setup mode, anyone who can message the bot can use only `/start`, `/help`, and `/whoami` to discover their Telegram chat id. Normal messages are not forwarded to Pi, and `/cancel` does not work until `chatId` is configured.
 
-Do not commit a project-local `.pi/telegram.json` if it contains a bot token. Prefer `~/.pi/agent/telegram.json` or a private `PI_TELEGRAM_CONFIG` path for secrets.
+Do not commit Telegram bot tokens or chat IDs to a repository. Keep this file in your user-scoped Pi config directory. On Unix-like systems, the file must not be group- or world-readable; run `chmod 600 ~/.pi/agent/telegram.json` if needed.
 
 ## 💬 Telegram usage
 
