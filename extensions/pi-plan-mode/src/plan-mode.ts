@@ -186,6 +186,10 @@ export default function planMode(pi: ExtensionAPI) {
 		state = { ...state, latestPlan: proposedPlan, awaitingAction: true };
 		persistState();
 		updateUi(ctx);
+
+		if (ctx.hasUI) await showPlanReadyMenu(ctx);
+		if (!state.enabled || !state.latestPlan) return;
+
 		pi.sendMessage(
 			{
 				customType: PROPOSED_PLAN_MESSAGE_TYPE,
@@ -194,8 +198,6 @@ export default function planMode(pi: ExtensionAPI) {
 			},
 			{ triggerTurn: false },
 		);
-
-		if (ctx.hasUI) await showPlanReadyMenu(ctx);
 	});
 
 	function enterPlanMode(ctx: ExtensionContext) {
