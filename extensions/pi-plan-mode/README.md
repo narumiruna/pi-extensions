@@ -14,7 +14,7 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
 - Blocks mutating built-in tools and bash commands such as `rm`, `git commit`, dependency installs, redirects, and editor launches.
 - Injects Codex-like Plan mode instructions: explore first, ask only non-discoverable questions, do not mutate files, and finish with `<proposed_plan>`.
-- Detects proposed plan blocks and prompts you to implement, revise, or stay in Plan mode.
+- Detects proposed plan blocks and prompts you to implement, revise, stay in Plan mode, or exit and discard the plan.
 - Shows Plan mode state in Pi's statusline as `📝 plan active` or `📝 plan ready`.
 - Persists Plan mode state in the Pi session so resume restores the mode.
 
@@ -72,14 +72,14 @@ A complete Plan mode answer should include exactly one block like this:
 </proposed_plan>
 ```
 
-After a proposed plan is detected, `/plan` lets you choose whether to implement the plan, revise it, stay in Plan mode, or exit Plan mode. Choosing implementation disables Plan mode, restores full tool access, and immediately starts an implementation turn with the proposed plan.
+After a proposed plan is detected, `/plan` lets you choose whether to implement the plan, revise it, stay in Plan mode, or exit Plan mode. Choosing implementation disables Plan mode, restores full tool access, and immediately starts an implementation turn with the proposed plan. Choosing exit/off disables Plan mode and discards the proposed plan so it is not carried into later non-plan turns.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines. With `@narumitw/pi-statusline`, this appears in the extension status area:
 
 - `📝 plan active`: Plan mode is enabled and still gathering context or drafting a plan.
 - `📝 plan ready`: A `<proposed_plan>` was detected and is waiting for your next `/plan` action.
 
-You can also exit directly:
+You can also exit directly. Direct exit discards the latest proposed plan instead of treating it as an implementation request:
 
 ```text
 /plan exit
@@ -92,7 +92,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 - Plan mode is a conversational collaboration mode, not TODO/progress tracking.
 - `/plan <prompt>` follows Codex behavior by switching to Plan mode before submitting the inline prompt.
 - `update_plan`-style checklist use is discouraged while Plan mode is active.
-- The implementation boundary is explicit: Plan mode restores tools before starting implementation, and choosing implementation immediately triggers a normal agent turn with full tool access.
+- The implementation boundary is explicit: Plan mode restores tools before starting implementation, choosing implementation immediately triggers a normal agent turn with full tool access, and plain exit/off discards the proposed plan.
 - Pi extension safety is approximated with built-in tool restriction plus bash filtering; non-built-in tools are user-selected at user risk because Plan mode does not classify extension/custom tool behavior.
 
 ## 🗂️ Package layout

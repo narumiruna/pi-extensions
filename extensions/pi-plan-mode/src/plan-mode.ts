@@ -3,12 +3,16 @@ import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@mariozechner/pi-
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const STATUS_KEY = "plan-mode";
 const PLAN_WIDGET_KEY = "plan-mode-plan";
+const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
+const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
+const PLAN_IMPLEMENTATION_MESSAGE_TYPE = "plan-mode-implementation";
 const PLAN_CONTEXT_MARKER = "[CODEX-LIKE PLAN MODE ACTIVE]";
 const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "bash", "grep", "find", "ls"]);
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 const TOOL_SELECTOR_PAGE_SIZE = 10;
 const PROPOSED_PLAN_PATTERN = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/i;
+const PROPOSED_PLAN_BLOCK_PATTERN = /<proposed_plan>\s*[\s\S]*?\s*<\/proposed_plan>/gi;
 
 interface PlanModeState {
 	enabled: boolean;
@@ -95,7 +99,7 @@ export default function planMode(pi: ExtensionAPI) {
 			const command = prompt.toLowerCase();
 			if (command === "exit" || command === "off") {
 				exitPlanMode(ctx);
-				ctx.ui.notify("Plan mode disabled. Full tool access restored.", "info");
+				ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
 				return;
 			}
 			if (command === "tools") {
@@ -150,7 +154,9 @@ export default function planMode(pi: ExtensionAPI) {
 	pi.on("context", async (event) => {
 		if (state.enabled) return;
 		return {
-			messages: event.messages.filter((message: unknown) => !messageContainsPlanModeContext(message)),
+			messages: event.messages
+				.filter((message: unknown) => !messageContainsInactivePlanModeArtifact(message))
+				.map(stripProposedPlanBlocksFromMessage),
 		};
 	});
 
@@ -159,7 +165,7 @@ export default function planMode(pi: ExtensionAPI) {
 		applyPlanModeTools();
 		return {
 			message: {
-				customType: "plan-mode-context",
+				customType: PLAN_CONTEXT_MESSAGE_TYPE,
 				content: buildPlanModePrompt(),
 				display: false,
 			},
@@ -182,7 +188,7 @@ export default function planMode(pi: ExtensionAPI) {
 		updateUi(ctx);
 		pi.sendMessage(
 			{
-				customType: "proposed-plan",
+				customType: PROPOSED_PLAN_MESSAGE_TYPE,
 				content: `**Proposed Plan**\n\n${proposedPlan}`,
 				display: true,
 			},
@@ -211,7 +217,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function exitPlanMode(ctx: ExtensionContext) {
-		state = { ...state, enabled: false, awaitingAction: false };
+		state = { ...state, enabled: false, latestPlan: undefined, awaitingAction: false };
 		restoreTools();
 		persistState();
 		updateUi(ctx);
@@ -228,7 +234,7 @@ export default function planMode(pi: ExtensionAPI) {
 
 		pi.sendMessage(
 			{
-				customType: "plan-mode-implementation",
+				customType: PLAN_IMPLEMENTATION_MESSAGE_TYPE,
 				content: `Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:\n\n${plan}`,
 				display: true,
 			},
@@ -266,7 +272,7 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 		if (choice === "Exit Plan mode") {
 			exitPlanMode(ctx);
-			ctx.ui.notify("Plan mode disabled. Full tool access restored.", "info");
+			ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
 			return;
 		}
 		updateUi(ctx);
@@ -278,6 +284,7 @@ export default function planMode(pi: ExtensionAPI) {
 			"Revise plan",
 			"Configure Plan-mode tools",
 			"Stay in Plan mode",
+			"Exit Plan mode",
 		]);
 		if (choice === "Implement this plan") {
 			startImplementation(ctx);
@@ -290,6 +297,11 @@ export default function planMode(pi: ExtensionAPI) {
 		if (choice === "Revise plan") {
 			const refinement = await ctx.ui.editor("Revise the plan", "");
 			if (refinement?.trim()) pi.sendUserMessage(refinement.trim());
+			return;
+		}
+		if (choice === "Exit Plan mode") {
+			exitPlanMode(ctx);
+			ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
 		}
 	}
 
@@ -446,10 +458,11 @@ export default function planMode(pi: ExtensionAPI) {
 			.filter((candidate) => candidate.type === "custom" && candidate.customType === STATE_ENTRY_TYPE)
 			.pop();
 		if (!entry?.data) return;
+		const enabled = entry.data.enabled ?? false;
 		state = {
-			enabled: entry.data.enabled ?? false,
-			latestPlan: entry.data.latestPlan,
-			awaitingAction: entry.data.awaitingAction ?? false,
+			enabled,
+			latestPlan: enabled ? entry.data.latestPlan : undefined,
+			awaitingAction: enabled ? (entry.data.awaitingAction ?? false) : false,
 			selectedToolNames: entry.data.selectedToolNames,
 			selectedToolKeys: entry.data.selectedToolKeys,
 		};
@@ -616,10 +629,44 @@ function latestAssistantText(messages: unknown) {
 	return "";
 }
 
-function messageContainsPlanModeContext(message: unknown) {
+function messageContainsInactivePlanModeArtifact(message: unknown) {
 	const candidate = message as { customType?: string; content?: unknown };
-	if (candidate.customType === "plan-mode-context") return true;
-	return contentText(candidate.content).includes(PLAN_CONTEXT_MARKER);
+	return (
+		candidate.customType === PLAN_CONTEXT_MESSAGE_TYPE ||
+		candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE ||
+		contentText(candidate.content).includes(PLAN_CONTEXT_MARKER)
+	);
+}
+
+function stripProposedPlanBlocksFromMessage<T>(message: T): T {
+	const candidate = message as { role?: string; content?: unknown };
+	if (candidate.role !== "assistant") return message;
+
+	const content = stripProposedPlanBlocksFromContent(candidate.content);
+	if (content === candidate.content) return message;
+	return { ...candidate, content } as T;
+}
+
+function stripProposedPlanBlocksFromContent(content: unknown) {
+	if (typeof content === "string") return stripProposedPlanBlocks(content);
+	if (!Array.isArray(content)) return content;
+
+	let changed = false;
+	const nextContent = content.map((block) => {
+		const textBlock = block as TextBlock;
+		if (textBlock.type !== "text" || typeof textBlock.text !== "string") return block;
+
+		const text = stripProposedPlanBlocks(textBlock.text);
+		if (text === textBlock.text) return block;
+
+		changed = true;
+		return { ...textBlock, text };
+	});
+	return changed ? nextContent : content;
+}
+
+function stripProposedPlanBlocks(text: string) {
+	return text.replace(PROPOSED_PLAN_BLOCK_PATTERN, "");
 }
 
 function messageText(message: SessionMessage) {
