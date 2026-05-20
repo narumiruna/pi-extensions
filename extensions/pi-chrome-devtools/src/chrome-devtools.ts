@@ -4,6 +4,9 @@ import { Type } from "typebox";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 9222;
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 1_000;
+const DEFAULT_ENDPOINT_WAIT_MS = 5_000;
+const DEFAULT_ENDPOINT_RETRY_MS = 250;
 const STATUS_KEY = "chrome-devtools";
 
 interface StatusContext {
@@ -75,8 +78,9 @@ const selectPageTool = defineTool({
 const navigateTool = defineTool({
 	name: "chrome_devtools_navigate",
 	label: "Chrome DevTools: Navigate",
-	description: "Navigate a Chrome page to a URL through Chrome DevTools Protocol.",
-	promptSnippet: "Navigate the selected Chrome tab to a URL",
+	description:
+		"Navigate a Chrome page to a URL through Chrome DevTools Protocol, creating a page first if none is available.",
+	promptSnippet: "Navigate the selected or first Chrome tab to a URL, creating one if needed",
 	parameters: Type.Object({
 		url: Type.String({ description: "URL to navigate to." }),
 		pageId: Type.Optional(
@@ -85,14 +89,19 @@ const navigateTool = defineTool({
 	}),
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		return withStatus(ctx, "🌐 navigate", async () => {
-			const page = await resolvePage(params.pageId);
+			const { created, page } = await resolvePageForNavigation(params.pageId);
 			const result = await withCdp(page, async (client) => {
 				await client.send("Page.enable");
 				return client.send("Page.navigate", { url: params.url });
 			});
 
 			state.activePageId = page.id;
-			return textResult(`Navigated ${page.id} to ${params.url}`, { page: formatPage(page), result });
+			const action = created ? "Created page and navigated" : "Navigated";
+			return textResult(`${action} ${page.id} to ${params.url}`, {
+				created,
+				page: formatPage(page),
+				result,
+			});
 		});
 	},
 });
@@ -190,10 +199,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	pi.registerCommand("chrome-devtools", {
 		description: "Show Chrome DevTools endpoint and quick start help",
 		handler: async (_args, ctx) => {
-			ctx.ui.notify(
-				`Chrome DevTools endpoint: http://${state.host}:${state.port}. Start Chrome with --remote-debugging-port=${state.port}.`,
-				"info",
-			);
+			ctx.ui.notify(`Chrome DevTools endpoint: ${devToolsEndpoint()}\n${launchHint()}`, "info");
 		},
 	});
 
@@ -206,36 +212,181 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	});
 }
 
-async function listPages() {
-	const response = await fetch(`http://${state.host}:${state.port}/json/list`);
-	if (!response.ok) {
-		throw new Error(`Chrome DevTools endpoint returned ${response.status} ${response.statusText}`);
-	}
-
-	const pages = (await response.json()) as DevToolsPage[];
-	return pages.filter((page) => page.type === "page" && page.webSocketDebuggerUrl);
+async function listPages(options: { waitMs?: number } = {}) {
+	return withEndpointRetry(async () => {
+		const pages = await fetchDevToolsJson<DevToolsPage[]>("/json/list");
+		return pages.filter((page) => page.type === "page" && page.webSocketDebuggerUrl);
+	}, options.waitMs ?? DEFAULT_ENDPOINT_WAIT_MS);
 }
 
 async function getPage(pageId: string) {
 	const pages = await listPages();
-	const page = pages.find((candidate) => candidate.id === pageId);
-	if (!page) throw new Error(`Chrome DevTools page not found: ${pageId}`);
-	return page;
+	return requirePage(pageId, pages);
 }
 
 async function resolvePage(pageId?: string) {
-	if (pageId) return getPage(pageId);
-	if (state.activePageId) return getPage(state.activePageId);
-
 	const pages = await listPages();
-	const page = pages[0];
+	if (pageId) return requirePage(pageId, pages);
+
+	const page = resolveDefaultPage(pages);
 	if (!page) {
 		throw new Error(
-			`No Chrome pages found at http://${state.host}:${state.port}. Start Chrome with --remote-debugging-port=${state.port}.`,
+			[
+				`No Chrome pages found at ${devToolsEndpoint()}.`,
+				"Use chrome_devtools_navigate with a URL to create a page, or open a Chrome tab manually.",
+				launchHint(),
+			].join("\n"),
 		);
 	}
 
 	return page;
+}
+
+async function resolvePageForNavigation(pageId?: string) {
+	const pages = await listPages();
+	if (pageId) return { created: false, page: requirePage(pageId, pages) };
+
+	const page = resolveDefaultPage(pages);
+	if (page) return { created: false, page };
+
+	return { created: true, page: await createPage("about:blank") };
+}
+
+function resolveDefaultPage(pages: DevToolsPage[]) {
+	if (!state.activePageId) return pages[0];
+
+	const activePage = pages.find((candidate) => candidate.id === state.activePageId);
+	if (activePage) return activePage;
+
+	state.activePageId = undefined;
+	return pages[0];
+}
+
+function requirePage(pageId: string, pages: DevToolsPage[]) {
+	const page = pages.find((candidate) => candidate.id === pageId);
+	if (page) return page;
+
+	const availablePages = pages.map(formatPageListItem).join("\n");
+	throw new Error(
+		[
+			`Chrome DevTools page not found: ${pageId}.`,
+			availablePages
+				? `Available pages:\n${availablePages}`
+				: "No inspectable Chrome pages are currently available.",
+		].join("\n"),
+	);
+}
+
+async function createPage(url: string) {
+	const page = await fetchDevToolsJson<DevToolsPage>(`/json/new?${encodeURIComponent(url)}`, {
+		method: "PUT",
+	});
+	if (page.type !== "page" || !page.webSocketDebuggerUrl) {
+		throw new Error("Chrome DevTools created a target that is not an inspectable page.");
+	}
+
+	return page;
+}
+
+async function fetchDevToolsJson<T>(path: string, init?: RequestInit) {
+	const url = `${devToolsEndpoint()}${path}`;
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			...init,
+			signal: AbortSignal.timeout(DEFAULT_HTTP_TIMEOUT_MS),
+		});
+	} catch (error) {
+		throw new DevToolsEndpointError(endpointConnectionErrorMessage(error), { retryable: true });
+	}
+
+	if (!response.ok) {
+		const body = (await response.text().catch(() => "")).trim();
+		const suffix = body ? `: ${body.slice(0, 200)}` : "";
+		throw new DevToolsEndpointError(
+			[
+				`Chrome DevTools endpoint ${url} returned ${response.status} ${response.statusText}${suffix}.`,
+				endpointConfigHint(),
+			].join("\n"),
+			{ retryable: response.status === 429 || response.status >= 500 },
+		);
+	}
+
+	return (await response.json()) as T;
+}
+
+async function withEndpointRetry<T>(operation: () => Promise<T>, waitMs: number) {
+	const deadline = Date.now() + waitMs;
+	while (true) {
+		try {
+			return await operation();
+		} catch (error) {
+			if (!isRetryableEndpointError(error)) throw error;
+
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) throw error;
+
+			await sleep(Math.min(DEFAULT_ENDPOINT_RETRY_MS, remainingMs));
+		}
+	}
+}
+
+function isRetryableEndpointError(error: unknown) {
+	return error instanceof DevToolsEndpointError && error.retryable;
+}
+
+function endpointConnectionErrorMessage(error: unknown) {
+	const reason = isTimeoutError(error) ? "request timed out" : "connection failed";
+	return [
+		`Cannot connect to Chrome DevTools endpoint at ${devToolsEndpoint()} (${reason}).`,
+		launchHint(),
+		endpointConfigHint(),
+	].join("\n");
+}
+
+function isTimeoutError(error: unknown) {
+	return error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name);
+}
+
+function devToolsEndpoint() {
+	return `http://${state.host}:${state.port}`;
+}
+
+function launchHint() {
+	return `Start Chrome with remote debugging enabled: ${chromeLaunchCommand()}`;
+}
+
+function chromeLaunchCommand() {
+	const executable =
+		process.platform === "darwin"
+			? "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome"
+			: process.platform === "win32"
+				? "chrome.exe"
+				: "google-chrome";
+	const dataDir = process.platform === "win32" ? "%TEMP%\\pi-chrome-devtools" : "/tmp/pi-chrome-devtools";
+	return `${executable} --remote-debugging-port=${state.port} --user-data-dir=${dataDir}`;
+}
+
+function endpointConfigHint() {
+	return "Set PI_CHROME_DEVTOOLS_HOST and PI_CHROME_DEVTOOLS_PORT if Chrome uses a different endpoint.";
+}
+
+function formatPageListItem(page: DevToolsPage) {
+	return `- ${page.id}: ${page.title || "(untitled)"} ${page.url}`;
+}
+
+function sleep(ms: number) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class DevToolsEndpointError extends Error {
+	readonly retryable: boolean;
+
+	constructor(message: string, options: { retryable?: boolean } = {}) {
+		super(message);
+		this.name = "DevToolsEndpointError";
+		this.retryable = options.retryable ?? false;
+	}
 }
 
 function formatPage(page: DevToolsPage) {
@@ -284,8 +435,10 @@ class CdpClient {
 			timeout: NodeJS.Timeout;
 		}
 	>();
+	private readonly socket: WebSocket;
 
-	private constructor(private readonly socket: WebSocket) {
+	private constructor(socket: WebSocket) {
+		this.socket = socket;
 		socket.addEventListener("message", (event) => {
 			const response = JSON.parse(String(event.data)) as CdpResponse;
 			if (typeof response.id !== "number") return;

@@ -12,10 +12,12 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 
 - Lists inspectable Chrome tabs and pages.
 - Selects an active Chrome page for later tool calls.
-- Navigates Chrome to a target URL.
+- Navigates Chrome to a target URL, creating an inspectable page when none exists.
+- Recovers from stale active page selections by falling back to an available page.
 - Evaluates JavaScript in the selected page.
 - Captures PNG screenshots, including optional full-page screenshots.
 - Uses a local Chrome DevTools Protocol endpoint.
+- Retries briefly while Chrome is starting and reports actionable endpoint errors.
 - Shows statusline activity only while Chrome DevTools tools are running.
 
 ## 📦 Install
@@ -62,7 +64,7 @@ PI_CHROME_DEVTOOLS_HOST=127.0.0.1 PI_CHROME_DEVTOOLS_PORT=9223 pi -e ./extension
 
 - `chrome_devtools_list_pages` — list inspectable Chrome tabs/pages.
 - `chrome_devtools_select_page` — select the active page for later tool calls.
-- `chrome_devtools_navigate` — navigate a page to a URL.
+- `chrome_devtools_navigate` — navigate a page to a URL; if no page exists, create one first.
 - `chrome_devtools_evaluate` — evaluate JavaScript in the selected page.
 - `chrome_devtools_screenshot` — capture a PNG screenshot.
 

@@ -16,6 +16,7 @@
 - `node-domexception` deprecation comes via `@google/genai -> google-auth-library -> gaxios -> node-fetch -> fetch-blob`; use the root npm override to `npm:@profoundlogic/node-domexception`.
 - New filesystem-writing Pi tools need a pre-review edge-case pass: workspace containment, absolute/`..` paths, symlink loops/escapes, duplicate paths, cancellation, process errors, protocol errors, and edit ordering.
 - When PR comments expose one class of bug, stop patching comment-by-comment and do a holistic pass over adjacent Modules before pushing again.
+- Symptom: Chrome DevTools `/json/new` may reject unsafe `GET`. Cause: modern Chrome expects `PUT` for target creation. Fix: use `PUT /json/new?${encodeURIComponent(url)}`.
 
 ## TASTE
 
