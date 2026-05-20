@@ -25,7 +25,7 @@
 		"pack:retry": "npm --workspace @narumitw/pi-retry pack --dry-run",
 		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run",
 		"pack:subagents": "npm --workspace @narumitw/pi-subagents pack --dry-run",
-		"pack:telegram": "npm --workspace @narumitw/pi-telegram pack --dry-run"
+		"pack:telegram-bot": "npm --workspace @narumitw/pi-telegram-bot pack --dry-run"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.14",

@@ -329,7 +329,7 @@ export default function telegram(pi: ExtensionAPI) {
 			onMessage: (message, text) => handleTelegramTextMessage(message, text, ctx, generation),
 			onError: (error) => {
 				if (ctx.hasUI)
-					ctx.ui.notify(`pi-telegram polling error: ${errorMessage(error)}`, "warning");
+					ctx.ui.notify(`pi-telegram-bot polling error: ${errorMessage(error)}`, "warning");
 			},
 		});
 
@@ -338,23 +338,23 @@ export default function telegram(pi: ExtensionAPI) {
 
 	const showTelegramCommandMenu = async (ctx: ExtensionContext) => {
 		const enabled = poller?.isRunning() ?? false;
-		const toggleLabel = enabled ? "Disable pi-telegram" : "Enable pi-telegram";
-		const choice = await ctx.ui.select("pi-telegram", [toggleLabel, "Show status", "Help"]);
+		const toggleLabel = enabled ? "Disable pi-telegram-bot" : "Enable pi-telegram-bot";
+		const choice = await ctx.ui.select("pi-telegram-bot", [toggleLabel, "Show status", "Help"]);
 		if (!choice) return;
 
 		if (choice === toggleLabel) {
 			if (enabled) {
 				disableTelegram();
 				ctx.ui.setStatus(STATUS_KEY, undefined);
-				ctx.ui.notify("pi-telegram disabled.", "info");
+				ctx.ui.notify("pi-telegram-bot disabled.", "info");
 				return;
 			}
 
 			const config = enableTelegram(ctx);
 			ctx.ui.notify(
 				config.ok
-					? `pi-telegram enabled. Configuration: ${compactPath(config.value.source)}`
-					: `Failed to enable pi-telegram: ${config.error}`,
+					? `pi-telegram-bot enabled. Configuration: ${compactPath(config.value.source)}`
+					: `Failed to enable pi-telegram-bot: ${config.error}`,
 				config.ok ? "info" : "error",
 			);
 			return;
@@ -531,7 +531,7 @@ export default function telegram(pi: ExtensionAPI) {
 		if (!isTelegramActive(generation)) return;
 
 		const remoteTurnId = `${Date.now()}-${nextRemoteTurnId++}`;
-		const marker = `pi-telegram:${remoteTurnId}`;
+		const marker = `pi-telegram-bot:${remoteTurnId}`;
 		const prompt = buildRemotePrompt(marker, message, text);
 		const remoteTurn: RemoteTurn = {
 			id: remoteTurnId,
@@ -588,8 +588,8 @@ export default function telegram(pi: ExtensionAPI) {
 		}
 	};
 
-	pi.registerCommand("telegram", {
-		description: "Enable, disable, or inspect the pi-telegram bridge",
+	pi.registerCommand("telegram-bot", {
+		description: "Enable, disable, or inspect the pi-telegram-bot bridge",
 		handler: async (args, ctx) => {
 			const parsed = parsePiTelegramArgs(args);
 			if (parsed.command === "menu") {
@@ -601,8 +601,8 @@ export default function telegram(pi: ExtensionAPI) {
 				const config = enableTelegram(ctx);
 				ctx.ui.notify(
 					config.ok
-						? `pi-telegram enabled. Configuration: ${compactPath(config.value.source)}`
-						: `Failed to enable pi-telegram: ${config.error}`,
+						? `pi-telegram-bot enabled. Configuration: ${compactPath(config.value.source)}`
+						: `Failed to enable pi-telegram-bot: ${config.error}`,
 					config.ok ? "info" : "error",
 				);
 				return;
@@ -611,13 +611,13 @@ export default function telegram(pi: ExtensionAPI) {
 			if (["disable", "off", "stop"].includes(parsed.command)) {
 				disableTelegram();
 				ctx.ui.setStatus(STATUS_KEY, undefined);
-				ctx.ui.notify("pi-telegram disabled.", "info");
+				ctx.ui.notify("pi-telegram-bot disabled.", "info");
 				return;
 			}
 
 			if (parsed.command === "send") {
 				if (!parsed.text) {
-					ctx.ui.notify("Usage: /telegram send <text>", "warning");
+					ctx.ui.notify("Usage: /telegram-bot send <text>", "warning");
 					return;
 				}
 				try {
@@ -636,7 +636,7 @@ export default function telegram(pi: ExtensionAPI) {
 
 			if (parsed.command !== "status") {
 				ctx.ui.notify(
-					`Unknown /telegram command: ${parsed.command}. ${buildPiCommandUsage()}`,
+					`Unknown /telegram-bot command: ${parsed.command}. ${buildPiCommandUsage()}`,
 					"warning",
 				);
 				return;
@@ -1054,7 +1054,7 @@ function buildLocalStatus(
 	polling: boolean,
 ): string {
 	const lines = [
-		"pi-telegram status",
+		"pi-telegram-bot status",
 		"",
 		config.ok
 			? `Configuration: ${compactPath(config.value.source)}`
@@ -1063,7 +1063,7 @@ function buildLocalStatus(
 		config.ok
 			? `Telegram chat id: ${config.value.chatId ?? "not set (setup mode: send /whoami to the bot)"}`
 			: "Telegram chat id: unavailable",
-		`Polling: ${polling ? "running" : "disabled (run /telegram enable to start)"}`,
+		`Polling: ${polling ? "running" : "disabled (run /telegram-bot enable to start)"}`,
 		"Custom tools: none",
 		"",
 		buildSessionHeader(pi, ctx),
@@ -1075,18 +1075,18 @@ function buildPiCommandHelp(): string {
 	return [
 		buildPiCommandUsage(),
 		"",
-		"With no arguments, /telegram opens an enable/disable menu. Polling is disabled by default for each Pi session.",
+		"With no arguments, /telegram-bot opens an enable/disable menu. Polling is disabled by default for each Pi session.",
 		"This extension registers no custom tools. Telegram messages are sent to the current Pi session with pi.sendUserMessage().",
 	].join("\n");
 }
 
 function buildPiCommandUsage(): string {
-	return "Usage: /telegram [enable|disable|status|help] or /telegram send <text>. Telegram users can use /help, /status, /whoami, and /cancel.";
+	return "Usage: /telegram-bot [enable|disable|status|help] or /telegram-bot send <text>. Telegram users can use /help, /status, /whoami, and /cancel.";
 }
 
 function buildTelegramSetupHelp(message: TelegramMessage): string {
 	return [
-		"pi-telegram setup mode: chatId is not configured yet.",
+		"pi-telegram-bot setup mode: chatId is not configured yet.",
 		"",
 		buildWhoami(message),
 		"",

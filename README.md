@@ -20,7 +20,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for provider responses that fail with `Unknown error (no error details in response)`. | `pi install npm:@narumitw/pi-retry` |
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
-| [`@narumitw/pi-telegram`](./extensions/pi-telegram) | 📨 Telegram Bot bridge for talking to the current Pi session without adding custom tools. | `pi install npm:@narumitw/pi-telegram` |
+| [`@narumitw/pi-telegram-bot`](./extensions/pi-telegram-bot) | 📨 Telegram Bot bridge for talking to the current Pi session without adding custom tools. | `pi install npm:@narumitw/pi-telegram-bot` |
 
 ## 🚀 Quick start
 
@@ -74,7 +74,7 @@ Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation,
 
 ### 📨 Remote Telegram session chat
 
-Use [`@narumitw/pi-telegram`](./extensions/pi-telegram) to talk to one currently running Pi session from a Telegram Bot configured by JSON. Polling is opt-in with `/telegram` or `/telegram enable`; it registers no custom tools, so Telegram messages become normal Pi user messages and code changes depend on the session's active `edit`, `write`, and `bash` tools.
+Use [`@narumitw/pi-telegram-bot`](./extensions/pi-telegram-bot) to talk to one currently running Pi session from a Telegram Bot configured by JSON. Polling is opt-in with `/telegram-bot` or `/telegram-bot enable`; it registers no custom tools, so Telegram messages become normal Pi user messages and code changes depend on the session's active `edit`, `write`, and `bash` tools.
 
 ### 🤖 Delegated subagents
 
@@ -111,7 +111,7 @@ pi -e ./extensions/pi-lsp
 pi -e ./extensions/pi-retry
 pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-subagents
-pi -e ./extensions/pi-telegram
+pi -e ./extensions/pi-telegram-bot
 ```
 
 Preview npm package contents before publishing:
@@ -127,7 +127,7 @@ npm run pack:lsp
 npm run pack:retry
 npm run pack:statusline
 npm run pack:subagents
-npm run pack:telegram
+npm run pack:telegram-bot
 ```
 
 Publishing note for new scoped packages: `just npm-public <package>` only changes visibility for an already-published package. If npm returns 404 for a brand-new package such as `@narumitw/pi-subagents`, create it first with:
@@ -155,7 +155,7 @@ extensions/
 ├── pi-retry/
 ├── pi-statusline/
 ├── pi-subagents/
-└── pi-telegram/
+└── pi-telegram-bot/
 ```
 
 Each active extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.

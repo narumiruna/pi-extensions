@@ -1,19 +1,19 @@
-# 📨 pi-telegram — Telegram Bot Chat for Pi Sessions
+# 📨 pi-telegram-bot — Telegram Bot Chat for Pi Sessions
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-telegram)](https://www.npmjs.com/package/@narumitw/pi-telegram) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-telegram-bot)](https://www.npmjs.com/package/@narumitw/pi-telegram-bot) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-telegram` is a native [Pi coding agent](https://pi.dev) extension that lets a Telegram Bot talk to one currently running Pi session.
+`@narumitw/pi-telegram-bot` is a native [Pi coding agent](https://pi.dev) extension that lets a Telegram Bot talk to one currently running Pi session.
 
 Use it to message your active Pi session remotely, ask which session/project/model you are talking to, and request code changes through that session's existing Pi tools.
 
 ## ✨ Features
 
-- Stays disabled by default until you opt in from Pi with `/telegram` or `/telegram enable`.
+- Stays disabled by default until you opt in from Pi with `/telegram-bot` or `/telegram-bot enable`.
 - Connects Telegram text messages to the current Pi session with `pi.sendUserMessage()`.
 - Sends the assistant's final reply back to Telegram after the Pi turn completes.
 - Shows the current session name, session file, project cwd, and model from `/status`.
 - Supports Telegram `/start`, `/help`, `/status`, `/whoami`, and `/cancel` commands.
-- Adds Pi `/telegram` enable/disable/status/help and `/telegram send <text>` commands.
+- Adds Pi `/telegram-bot` enable/disable/status/help and `/telegram-bot send <text>` commands.
 - Loads bot credentials from the user-scoped JSON config at `~/.pi/agent/telegram.json`.
 - Ignores messages from any Telegram chat other than the configured `chatId`.
 - Registers no custom Pi tools.
@@ -21,19 +21,19 @@ Use it to message your active Pi session remotely, ask which session/project/mod
 ## 📦 Install
 
 ```bash
-pi install npm:@narumitw/pi-telegram
+pi install npm:@narumitw/pi-telegram-bot
 ```
 
 Try without installing permanently after creating the config file:
 
 ```bash
-pi -e npm:@narumitw/pi-telegram
+pi -e npm:@narumitw/pi-telegram-bot
 ```
 
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-telegram
+pi -e ./extensions/pi-telegram-bot
 ```
 
 ## ⚙️ Configuration
@@ -71,7 +71,7 @@ Do not commit Telegram bot tokens or chat IDs to a repository. Keep this file in
 
 ## 💬 Telegram usage
 
-First enable polling from Pi with `/telegram` or `/telegram enable`; polling is disabled by default each time a Pi session starts.
+First enable polling from Pi with `/telegram-bot` or `/telegram-bot enable`; polling is disabled by default each time a Pi session starts.
 
 Then send any normal text message to the bot. The extension forwards it to the current Pi session, so the agent can answer or modify code if the current session has the needed tools active.
 
@@ -87,7 +87,7 @@ Telegram commands:
 /cancel  request abort for the current Pi turn
 ```
 
-`pi-telegram` intentionally controls only the Pi process currently running this extension. It does not switch to saved sessions or route messages across other Pi processes.
+`pi-telegram-bot` intentionally controls only the Pi process currently running this extension. It does not switch to saved sessions or route messages across other Pi processes.
 
 Use `/status` to show the current Pi session identity:
 
@@ -104,19 +104,19 @@ Normal assistant replies omit this header to keep Telegram chat output concise.
 ## 🧑‍💻 Pi commands
 
 ```text
-/telegram
-/telegram enable
-/telegram disable
-/telegram status
-/telegram help
-/telegram send <text>
+/telegram-bot
+/telegram-bot enable
+/telegram-bot disable
+/telegram-bot status
+/telegram-bot help
+/telegram-bot send <text>
 ```
 
-`/telegram` opens a local enable/disable menu. `/telegram enable` starts Telegram long polling for the current Pi session, and `/telegram disable` stops it.
+`/telegram-bot` opens a local enable/disable menu. `/telegram-bot enable` starts Telegram long polling for the current Pi session, and `/telegram-bot disable` stops it.
 
-`/telegram status` shows local configuration, polling status, current session identity, and confirms that the extension registers no custom tools.
+`/telegram-bot status` shows local configuration, polling status, current session identity, and confirms that the extension registers no custom tools.
 
-`/telegram send <text>` sends a manually-authored message from Pi to the configured Telegram chat.
+`/telegram-bot send <text>` sends a manually-authored message from Pi to the configured Telegram chat.
 
 ## 🛠️ No custom tools
 
@@ -136,9 +136,9 @@ Telegram messages become normal user messages in the current Pi session. Whether
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-telegram/
+extensions/pi-telegram-bot/
 ├── src/
-│   └── telegram.ts
+│   └── telegram-bot.ts
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
@@ -150,7 +150,7 @@ The package exposes its Pi extension through `package.json`:
 ```json
 {
   "pi": {
-    "extensions": ["./src/telegram.ts"]
+    "extensions": ["./src/telegram-bot.ts"]
   }
 }
 ```

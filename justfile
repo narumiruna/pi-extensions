@@ -104,8 +104,8 @@ pack-statusline:
 pack-subagents:
     just pack subagents
 
-pack-telegram:
-    just pack telegram
+pack-telegram-bot:
+    just pack telegram-bot
 
 # Try individual packages from this working tree as temporary pi packages
 try-btw:
@@ -141,8 +141,8 @@ try-statusline:
 try-subagents:
     just try subagents
 
-try-telegram:
-    just try telegram
+try-telegram-bot:
+    just try telegram-bot
 
 # Install individual packages through pi
 install-btw:
@@ -178,8 +178,8 @@ install-statusline:
 install-subagents:
     just install subagents
 
-install-telegram:
-    just install telegram
+install-telegram-bot:
+    just install telegram-bot
 
 # Publish individual packages to npm
 publish-btw:
@@ -215,8 +215,8 @@ publish-statusline:
 publish-subagents:
     just publish subagents
 
-publish-telegram:
-    just publish telegram
+publish-telegram-bot:
+    just publish telegram-bot
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch

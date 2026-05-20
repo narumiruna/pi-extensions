@@ -1,5 +1,5 @@
 {
-	"name": "@narumitw/pi-telegram",
+	"name": "@narumitw/pi-telegram-bot",
 	"version": "0.1.29",
 	"description": "Pi extension that connects the current Pi session to a Telegram bot without custom tools.",
 	"type": "module",
@@ -21,7 +21,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/telegram.ts"
+			"./src/telegram-bot.ts"
 		]
 	},
 	"scripts": {
@@ -41,6 +41,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-telegram"
+		"directory": "extensions/pi-telegram-bot"
 	}
 }
