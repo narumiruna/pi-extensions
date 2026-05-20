@@ -8,14 +8,14 @@ Use it to monitor model selection, thinking level, git branch, working directory
 
 ## ✨ Features
 
-- Replaces the default Pi footer with a compact rich statusline.
+- Replaces the default Pi footer with a compact preset-based statusline.
 - Shows model, thinking level, git branch, project directory, active tool, context usage, tokens, cost, and clock.
 - Displays compact statuses published through Pi's generic extension status API.
 - Preserves extension-provided status icons when the status text starts with one.
 - Warns when the same extension package is installed from multiple sources.
-- Uses emoji-labeled segments for readability.
+- Uses emoji-labeled segments for readability in both classic and Tokyo Night presets.
 - Adapts to terminal width and truncates safely.
-- Requires no configuration.
+- Requires no configuration, with optional preset selection through `PI_STATUSLINE_PRESET`.
 
 ## 📦 Install
 
@@ -35,22 +35,38 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-statusline
 ```
 
+## 🎨 Presets
+
+`pi-statusline` supports presets through the `PI_STATUSLINE_PRESET` environment variable:
+
+```bash
+PI_STATUSLINE_PRESET=tokyo-night pi
+PI_STATUSLINE_PRESET=classic pi
+```
+
+Supported presets:
+
+- `tokyo-night` — the default, inspired by the [Starship Tokyo Night preset](https://starship.rs/presets/tokyo-night), using `░▒▓` / `` powerline blocks and the Tokyo Night color ramp.
+- `classic` — a compact Pi-themed statusline with left-aligned `•` separators.
+
+Unset or invalid values fall back to `tokyo-night`. Both presets keep the same emoji-labeled information and preserve extension-provided status icons.
+
 ## 👀 What it shows
 
-The default statusline includes:
+The default `tokyo-night` statusline uses a Starship-inspired `░▒▓` / `` powerline layout and includes:
 
 - `π` brand marker.
 - 🤖 current model.
 - 🧠 thinking level.
-- 🌿 git branch.
 - 📁 current project directory.
-- 🔧 active or last tool.
-- 📊 context usage percentage.
+- 🌿 git branch.
+- ⚙ active or last tool.
+- 🪟 context usage percentage.
 - 🔢 token totals.
-- 💰 estimated cost.
+- 💸 estimated cost.
 - 🕒 clock.
 
-Statuses from other extensions appear on their own compact line below the main statusline and are separated with ``.
+Statuses from other extensions appear on their own compact line below the main statusline and use each preset's separator.
 
 `pi-statusline` is extension-agnostic: it consumes Pi's generic extension status API and does not import or depend on status-producing extensions. If an extension wants a custom icon, it should include that icon at the start of its status text, for example `ctx.ui.setStatus("goal", "🎯 active")`. Statuses without a leading icon use the generic `🔌` icon.
 
@@ -76,6 +92,11 @@ Examples:
 extensions/pi-statusline/
 ├── src/
 │   └── statusline.ts
+├── presets/
+│   ├── ansi.ts
+│   ├── classic.ts
+│   ├── tokyo-night.ts
+│   └── types.ts
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json

@@ -8,34 +8,19 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-
-type SegmentName =
-	| "brand"
-	| "model"
-	| "thinking"
-	| "branch"
-	| "cwd"
-	| "tools"
-	| "context"
-	| "tokens"
-	| "cost"
-	| "time"
-	| "turn";
-
-type PaletteName = "ocean" | "sunset" | "forest" | "candy" | "neon" | "mono";
-type Density = "compact" | "cozy";
-type SeparatorName = "dot" | "bar" | "powerline" | "round" | "none";
+import { truncateToWidth } from "@mariozechner/pi-tui";
+import { classicExtensionSeparator, renderClassicStatusline } from "../presets/classic.js";
+import { renderTokyoNightStatusline, tokyoNightExtensionSeparator } from "../presets/tokyo-night.js";
+import type {
+	PaletteName,
+	RenderSegment,
+	SegmentName,
+	StatuslineConfig,
+	StatuslinePresetName,
+	TokyoNightBlockName,
+} from "../presets/types.js";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
-
-interface StatuslineConfig {
-	palette: PaletteName;
-	density: Density;
-	separator: SeparatorName;
-	showLabels: boolean;
-	segments: SegmentName[];
-}
 
 interface RuntimeState {
 	turnCount: number;
@@ -54,29 +39,21 @@ interface TokenTotals {
 	cost: number;
 }
 
-interface RenderSegment {
-	name: SegmentName;
-	text: string;
-	color: ThemeColor;
-	emphasis?: boolean;
-}
-
 const STATUSLINE_KEY = "statusline";
+const DEFAULT_PRESET: StatuslinePresetName = "tokyo-night";
 
 const DEFAULT_SEGMENTS: SegmentName[] = [
 	"brand",
 	"model",
 	"thinking",
-	"branch",
 	"cwd",
+	"branch",
 	"tools",
 	"context",
 	"tokens",
 	"cost",
 	"time",
 ];
-
-const RIGHT_SEGMENTS = new Set<SegmentName>(["context", "tokens", "cost", "time", "turn"]);
 
 const PALETTES: Record<PaletteName, ThemeColor[]> = {
 	ocean: ["accent", "muted", "success", "warning"],
@@ -116,7 +93,13 @@ export default function statusline(pi: ExtensionAPI) {
 				invalidate() {},
 				render(width: number): string[] {
 					const lines = [renderStatusline(width, ctx, footerData, theme, config, runtime)];
-					const extensionStatusLine = renderExtensionStatusline(width, footerData, theme, runtime);
+					const extensionStatusLine = renderExtensionStatusline(
+						width,
+						footerData,
+						theme,
+						config,
+						runtime,
+					);
 					if (extensionStatusLine) lines.push(extensionStatusLine);
 					return lines;
 				},
@@ -184,12 +167,19 @@ export default function statusline(pi: ExtensionAPI) {
 
 function createDefaultConfig(): StatuslineConfig {
 	return {
+		preset: readStatuslinePreset(),
 		palette: "candy",
 		density: "compact",
-		separator: "powerline",
+		separator: "dot",
 		showLabels: false,
 		segments: [...DEFAULT_SEGMENTS],
 	};
+}
+
+function readStatuslinePreset(): StatuslinePresetName {
+	const preset = process.env.PI_STATUSLINE_PRESET?.trim().toLowerCase();
+	if (preset === "classic" || preset === "tokyo-night") return preset;
+	return DEFAULT_PRESET;
 }
 
 function renderStatusline(
@@ -208,38 +198,24 @@ function renderStatusline(
 			(segment): segment is RenderSegment => segment !== undefined && segment.text.length > 0,
 		);
 
-	const left = joinSegments(
-		segments.filter((segment) => !RIGHT_SEGMENTS.has(segment.name)),
-		theme,
-		config,
-	);
-	const right = joinSegments(
-		segments.filter((segment) => RIGHT_SEGMENTS.has(segment.name)),
-		theme,
-		config,
-	);
+	if (segments.length === 0) return truncateToWidth(theme.fg("dim", "pi-statusline"), width);
 
-	if (!left && !right) return truncateToWidth(theme.fg("dim", "pi-statusline"), width);
-	if (!right) return truncateToWidth(left, width);
-	if (!left) return truncateToWidth(right, width);
-
-	const rightWidth = visibleWidth(right);
-	if (rightWidth + 1 >= width) return truncateToWidth(right, width);
-
-	const leftWidth = Math.max(0, width - rightWidth - 1);
-	const trimmedLeft = truncateToWidth(left, leftWidth, "…");
-	const padding = " ".repeat(Math.max(1, width - visibleWidth(trimmedLeft) - rightWidth));
-
-	return truncateToWidth(`${trimmedLeft}${padding}${right}`, width, "");
+	switch (config.preset) {
+		case "classic":
+			return renderClassicStatusline(width, segments, theme, config);
+		case "tokyo-night":
+			return renderTokyoNightStatusline(width, segments);
+	}
 }
 
 function renderExtensionStatusline(
 	width: number,
 	footerData: ReadonlyFooterDataProvider,
 	theme: Theme,
+	config: StatuslineConfig,
 	runtime: RuntimeState,
 ): string | undefined {
-	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme, runtime);
+	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme, config, runtime);
 	if (!status) return undefined;
 
 	return truncateToWidth(status, width, "");
@@ -257,98 +233,68 @@ function buildSegment(
 
 	switch (name) {
 		case "brand":
-			return { name, text: "π", color: "accent", emphasis: true };
+			return segment(name, "π", "accent", "header", true);
 		case "model":
-			return labeled(name, `🤖 ${shortenModel(ctx.model?.id ?? "no-model")}`, color, config);
+			return segment(name, `🤖 ${shortenModel(ctx.model?.id ?? "no-model")}`, color, "header");
 		case "thinking":
-			return labeled(
+			return segment(
 				name,
 				`🧠 ${runtime.thinkingLevel}`,
 				thinkingColor(runtime.thinkingLevel),
-				config,
+				"header",
 			);
 		case "branch":
-			return labeled(name, `🌿 ${footerData.getGitBranch() ?? "no-git"}`, color, config);
+			return segment(name, `🌿 ${footerData.getGitBranch() ?? "no-git"}`, color, "git");
 		case "cwd":
-			return labeled(name, `📁 ${basename(ctx.cwd) || ctx.cwd}`, color, config);
+			return segment(name, `📁 ${basename(ctx.cwd) || ctx.cwd}`, color, "directory");
 		case "tools":
-			return labeled(name, formatToolActivity(runtime), color, config);
+			return segment(name, formatToolActivity(runtime), color, "runtime");
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const value =
 				usage?.percent === null || usage?.percent === undefined
 					? "🪟 ctx ?"
 					: `🪟 ctx ${usage.percent.toFixed(0)}%`;
-			return labeled(name, value, contextColor(usage?.percent), config);
+			return segment(name, value, contextColor(usage?.percent), "runtime");
 		}
 		case "tokens": {
 			const totals = getTokenTotals(ctx);
 			if (totals.input === 0 && totals.output === 0)
-				return labeled(name, "🔢 tok 0", color, config);
-			return labeled(
+				return segment(name, "🔢 tok 0", color, "runtime");
+			return segment(
 				name,
 				`🔢 ↑${formatCount(totals.input)} ↓${formatCount(totals.output)}`,
 				color,
-				config,
+				"runtime",
 			);
 		}
 		case "cost": {
 			const totals = getTokenTotals(ctx);
-			return labeled(name, `💸 $${totals.cost.toFixed(totals.cost >= 1 ? 2 : 3)}`, color, config);
+			return segment(name, `💸 $${totals.cost.toFixed(totals.cost >= 1 ? 2 : 3)}`, color, "meter");
 		}
 		case "time":
-			return labeled(name, `🕒 ${formatTime()}`, color, config);
+			return segment(name, `🕒 ${formatTime()}`, color, "meter");
 		case "turn":
-			return labeled(name, `🔁 #${runtime.turnCount}`, color, config);
+			return segment(name, `🔁 #${runtime.turnCount}`, color, "meter");
 	}
 }
 
-function labeled(
+function segment(
 	name: SegmentName,
-	value: string,
+	text: string,
 	color: ThemeColor,
-	config: StatuslineConfig,
+	block: TokyoNightBlockName,
+	emphasis = false,
 ): RenderSegment {
-	if (!config.showLabels || name === "brand") return { name, text: value, color };
-	return { name, text: `${name} ${value}`, color };
+	return { name, text, color, block, emphasis };
 }
 
-function joinSegments(segments: RenderSegment[], theme: Theme, config: StatuslineConfig): string {
-	const separator = separatorText(config.separator);
-	return segments
-		.map((segment, index) => styleSegment(segment, index, theme, config))
-		.join(theme.fg("dim", separator));
-}
-
-function styleSegment(
-	segment: RenderSegment,
-	index: number,
-	theme: Theme,
-	config: StatuslineConfig,
-): string {
-	const padding = config.density === "cozy" ? " " : "";
-	const text = `${padding}${segment.text}${padding}`;
-	const styledText = segment.emphasis ? theme.bold(text) : text;
-
-	if (config.palette === "mono") {
-		return index === 0 ? theme.fg("muted", styledText) : theme.fg("dim", styledText);
-	}
-
-	return theme.fg(segment.color, styledText);
-}
-
-function separatorText(separator: SeparatorName): string {
-	switch (separator) {
-		case "powerline":
-			return "  ";
-		case "bar":
-			return " │ ";
-		case "round":
-			return " ❯ ";
-		case "none":
-			return " ";
-		case "dot":
-			return " • ";
+function extensionStatusSeparator(presetName: StatuslinePresetName, theme: Theme): string {
+	switch (presetName) {
+		case "classic":
+			return classicExtensionSeparator(theme);
+		case "tokyo-night":
+			return tokyoNightExtensionSeparator(theme);
 	}
 }
 
@@ -397,9 +343,10 @@ function formatToolActivity(runtime: RuntimeState): string {
 function formatExtensionStatuses(
 	statuses: ReadonlyMap<string, string>,
 	theme: Theme,
+	config: StatuslineConfig,
 	runtime: RuntimeState,
 ): string {
-	const separator = theme.fg("dim", "  ");
+	const separator = extensionStatusSeparator(config.preset, theme);
 	const visibleStatuses = [
 		...formatDuplicateExtensionStatus(runtime, theme),
 		...[...statuses.entries()]
@@ -421,7 +368,8 @@ function formatExtensionStatus(key: string, value: string, theme: Theme): string
 function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): string[] {
 	if (runtime.duplicateExtensions.length === 0) return [];
 	const names = runtime.duplicateExtensions.slice(0, 2).join(", ");
-	const suffix = runtime.duplicateExtensions.length > 2 ? ` +${runtime.duplicateExtensions.length - 2}` : "";
+	const suffix =
+		runtime.duplicateExtensions.length > 2 ? ` +${runtime.duplicateExtensions.length - 2}` : "";
 	return [`${theme.fg("warning", "⚠️")} ${theme.fg("warning", `dup ${names}${suffix}`)}`];
 }
 
@@ -494,7 +442,11 @@ function readPackageSources(settingsFile: string): string[] {
 		return (settings.packages ?? [])
 			.map((entry) => {
 				if (typeof entry === "string") return entry;
-				if (entry && typeof entry === "object" && typeof (entry as { source?: unknown }).source === "string") {
+				if (
+					entry &&
+					typeof entry === "object" &&
+					typeof (entry as { source?: unknown }).source === "string"
+				) {
 					return (entry as { source: string }).source;
 				}
 				return undefined;

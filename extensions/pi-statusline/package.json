@@ -14,6 +14,7 @@
 	],
 	"files": [
 		"src",
+		"presets",
 		"README.md",
 		"LICENSE"
 	],
