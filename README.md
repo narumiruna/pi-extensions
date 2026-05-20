@@ -71,6 +71,10 @@ Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to route Python files to configure
 
 Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation, debugging, refactoring, and verification tasks where the agent should continue past planning and call `goal_complete` only after the goal is done.
 
+### 📨 Remote Telegram session chat
+
+[`@narumitw/pi-telegram-bot`](./extensions/deprecated/pi-telegram-bot) is deprecated and kept under `extensions/deprecated/` for reference.
+
 ### 🤖 Delegated subagents
 
 Use [`@narumitw/pi-subagents`](./extensions/pi-subagents) when you want the Pi agent to delegate scouting, planning, review, or implementation work to isolated worker processes with single, parallel, or chained execution.
@@ -137,7 +141,8 @@ extensions/
 │   ├── pi-auto-thinking/
 │   ├── pi-biome-lsp/
 │   ├── pi-python-lsp/
-│   └── pi-sidebar/
+│   ├── pi-sidebar/
+│   └── pi-telegram-bot/
 ├── pi-btw/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/

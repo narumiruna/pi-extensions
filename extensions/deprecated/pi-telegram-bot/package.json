@@ -1,0 +1,46 @@
+{
+	"name": "@narumitw/pi-telegram-bot",
+	"version": "0.1.29",
+	"description": "Deprecated Pi extension that connects the current Pi session to a Telegram bot without custom tools.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"telegram",
+		"bot",
+		"remote-control",
+		"session"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/telegram-bot.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@earendil-works/pi-coding-agent": "0.74.0",
+		"@types/node": "25.6.0",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/deprecated/pi-telegram-bot"
+	}
+}
