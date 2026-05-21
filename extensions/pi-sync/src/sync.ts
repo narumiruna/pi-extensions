@@ -1036,20 +1036,23 @@ async function preflightSnapshotMutations(
 	root: string,
 	plan: { deletes: string[]; writes: Array<{ target: string; content: Buffer }> },
 ) {
+	const deletePaths = new Set(plan.deletes);
 	for (const target of plan.deletes) {
 		await assertNoSymlinkParents(root, target);
 	}
 	for (const item of plan.writes) {
-		await prepareSnapshotWrite(root, item.target);
+		await prepareSnapshotWrite(root, item.target, deletePaths);
 	}
 }
 
-async function prepareSnapshotWrite(root: string, target: string) {
+async function prepareSnapshotWrite(root: string, target: string, deletePaths: Set<string>) {
 	await ensureSafeDirectory(root, path.dirname(target));
 	try {
 		const stat = await fs.lstat(target);
 		if (stat.isSymbolicLink()) throw new Error(`Refusing to overwrite symlink during snapshot apply: ${target}`);
-		if (stat.isDirectory()) throw new Error(`Refusing to overwrite directory during snapshot apply: ${target}`);
+		if (stat.isDirectory() && !deletePaths.has(target)) {
+			throw new Error(`Refusing to overwrite directory during snapshot apply: ${target}`);
+		}
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
