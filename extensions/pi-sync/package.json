@@ -1,0 +1,41 @@
+{
+	"name": "@narumitw/pi-sync",
+	"version": "0.1.29",
+	"description": "Pi extension that syncs Pi configuration through Cloudflare R2 or S3-compatible storage.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"sync",
+		"r2",
+		"s3"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/sync.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@mariozechner/pi-coding-agent": "0.73.0",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-sync"
+	}
+}

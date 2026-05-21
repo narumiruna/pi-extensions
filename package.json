@@ -24,6 +24,7 @@
 		"pack:plan-mode": "npm --workspace @narumitw/pi-plan-mode pack --dry-run",
 		"pack:retry": "npm --workspace @narumitw/pi-retry pack --dry-run",
 		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run",
+		"pack:sync": "npm --workspace @narumitw/pi-sync pack --dry-run",
 		"pack:subagents": "npm --workspace @narumitw/pi-subagents pack --dry-run"
 	},
 	"devDependencies": {

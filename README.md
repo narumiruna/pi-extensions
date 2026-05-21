@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex usage status, Firecrawl web scraping, goal-driven task completion, retry handling, terminal statuslines, and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex usage status, Firecrawl web scraping, goal-driven task completion, retry handling, R2/S3 settings sync, terminal statuslines, and keep-awake automation.
 
 ## 📦 Pi extension packages
 
@@ -19,6 +19,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Configurable language-server diagnostics and source-fix tools routed by file extension. | `pi install npm:@narumitw/pi-lsp` |
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for provider responses that fail with `Unknown error (no error details in response)`. | `pi install npm:@narumitw/pi-retry` |
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
+| [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, and extensions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
 
 ## 🚀 Quick start
@@ -33,6 +34,7 @@ Try an extension once without adding it permanently:
 
 ```bash
 pi -e npm:@narumitw/pi-statusline
+pi -e npm:@narumitw/pi-sync
 ```
 
 Use multiple Pi extensions together:
@@ -109,6 +111,7 @@ pi -e ./extensions/pi-goal
 pi -e ./extensions/pi-lsp
 pi -e ./extensions/pi-retry
 pi -e ./extensions/pi-statusline
+pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
 ```
 
@@ -124,6 +127,7 @@ npm run pack:goal
 npm run pack:lsp
 npm run pack:retry
 npm run pack:statusline
+npm run pack:sync
 npm run pack:subagents
 ```
 
@@ -152,6 +156,7 @@ extensions/
 ├── pi-lsp/
 ├── pi-retry/
 ├── pi-statusline/
+├── pi-sync/
 └── pi-subagents/
 ```
 

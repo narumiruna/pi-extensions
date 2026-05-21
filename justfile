@@ -101,6 +101,9 @@ pack-retry:
 pack-statusline:
     just pack statusline
 
+pack-sync:
+    just pack sync
+
 pack-subagents:
     just pack subagents
 
@@ -134,6 +137,9 @@ try-retry:
 
 try-statusline:
     just try statusline
+
+try-sync:
+    just try sync
 
 try-subagents:
     just try subagents
@@ -169,6 +175,9 @@ install-retry:
 install-statusline:
     just install statusline
 
+install-sync:
+    just install sync
+
 install-subagents:
     just install subagents
 
@@ -202,6 +211,9 @@ publish-retry:
 
 publish-statusline:
     just publish statusline
+
+publish-sync:
+    just publish sync
 
 publish-subagents:
     just publish subagents
