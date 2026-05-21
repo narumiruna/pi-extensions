@@ -230,6 +230,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 
 async function showConfig(ctx: ExtensionCommandContext) {
 	const partial = await loadPartialConfig();
+	const warnings = sessionTokenWarnings(partial);
 	ctx.ui.notify(
 		[
 			"pi-sync config:",
@@ -243,8 +244,9 @@ async function showConfig(ctx: ExtensionCommandContext) {
 			`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
 			`autoSync: ${isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true) ? "enabled" : "disabled"}`,
 			`local config: ${localConfigPath()}`,
+			...warnings,
 		].join("\n"),
-		"info",
+		warnings.length > 0 ? "warning" : "info",
 	);
 }
 
@@ -300,6 +302,11 @@ async function doctor(ctx: ExtensionCommandContext) {
 	try {
 		const config = await loadConfig();
 		messages.push(`config: ok (${config.bucket}/${profilePrefix(config)})`);
+		const warnings = sessionTokenWarnings(config);
+		if (warnings.length > 0) {
+			level = "warning";
+			messages.push(...warnings);
+		}
 	} catch (error) {
 		level = "warning";
 		messages.push(`config: ${errorMessage(error)}`);
@@ -565,18 +572,18 @@ async function loadConfig(): Promise<SyncConfig> {
 }
 
 async function loadPartialConfig(): Promise<PartialConfig> {
-	const fileConfig = await readJsonIfExists<PartialConfig>(localConfigPath());
+	const fileConfig = (await readJsonIfExists<PartialConfig>(localConfigPath())) ?? {};
 	return {
 		...fileConfig,
-		endpoint: process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig?.endpoint,
-		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig?.bucket,
-		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig?.region,
-		accessKeyId: process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig?.accessKeyId,
-		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig?.secretAccessKey,
-		sessionToken: process.env.PI_SYNC_SESSION_TOKEN ?? process.env.AWS_SESSION_TOKEN ?? fileConfig?.sessionToken,
-		profile: process.env.PI_SYNC_PROFILE ?? fileConfig?.profile,
-		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig?.prefix,
-		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig?.autoSync,
+		endpoint: process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig.endpoint,
+		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig.bucket,
+		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig.region,
+		accessKeyId: process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig.accessKeyId,
+		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig.secretAccessKey,
+		sessionToken: selectSessionToken(fileConfig.sessionToken),
+		profile: process.env.PI_SYNC_PROFILE ?? fileConfig.profile,
+		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
+		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
 	};
 }
 
@@ -847,6 +854,7 @@ async function writeState(profile: string, state: SyncState) {
 class S3Client {
 	private config: SyncConfig;
 	private endpoint: URL;
+	private omitSessionTokenAfterRejection = false;
 
 	constructor(config: SyncConfig) {
 		this.config = config;
@@ -886,17 +894,38 @@ class S3Client {
 	) {
 		const url = new URL(this.endpoint.toString());
 		url.pathname = posixJoin(url.pathname, this.config.bucket, encodeKey(key));
-		const headers = await signedHeaders({
-			method,
-			url,
-			body,
-			extraHeaders,
-			accessKeyId: this.config.accessKeyId,
-			secretAccessKey: this.config.secretAccessKey,
-			sessionToken: this.config.sessionToken,
-			region: this.config.region,
-		});
-		return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
+		const send = async (sessionToken: string | undefined) => {
+			const headers = await signedHeaders({
+				method,
+				url,
+				body,
+				extraHeaders,
+				accessKeyId: this.config.accessKeyId,
+				secretAccessKey: this.config.secretAccessKey,
+				sessionToken,
+				region: this.config.region,
+			});
+			return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
+		};
+		const sessionToken = this.omitSessionTokenAfterRejection ? undefined : this.config.sessionToken;
+		const response = await send(sessionToken);
+		if (!(await this.shouldRetryWithoutSessionToken(response, sessionToken))) return response;
+
+		const retry = await send(undefined);
+		if (retry.ok || retry.status === 404) this.omitSessionTokenAfterRejection = true;
+		return retry;
+	}
+
+	private async shouldRetryWithoutSessionToken(response: Response, sessionToken: string | undefined) {
+		if (
+			!sessionToken ||
+			!isCloudflareR2Endpoint(this.config.endpoint) ||
+			response.ok ||
+			response.status !== 400
+		) {
+			return false;
+		}
+		return isSecurityTokenInvalidArgument(await response.clone().text());
 	}
 }
 
@@ -1129,7 +1158,7 @@ function usage() {
 	return [
 		"Usage: /pisync <command>",
 		"Commands: init, config, status, diff, doctor, push, pull, sync, history, rollback <snapshot>, unlock --stale",
-		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN/region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json.",
+		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN (ignored for R2)/region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json.",
 	].join("\n");
 }
 
@@ -1171,6 +1200,45 @@ function normalizeEtag(value: string | null) {
 
 function redact(value: string) {
 	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function selectSessionToken(fileSessionToken: string | undefined) {
+	if (hasEnv("PI_SYNC_SESSION_TOKEN")) return normalizeOptionalString(process.env.PI_SYNC_SESSION_TOKEN);
+	return normalizeOptionalString(process.env.AWS_SESSION_TOKEN) ?? normalizeOptionalString(fileSessionToken);
+}
+
+function sessionTokenWarnings(config: { endpoint?: string; sessionToken?: string }) {
+	if (!isCloudflareR2Endpoint(config.endpoint) || !config.sessionToken) return [];
+	return [
+		"session token: configured for Cloudflare R2; if R2 rejects X-Amz-Security-Token, pi-sync retries once without it. R2 static access keys usually do not need a session token.",
+	];
+}
+
+function isSecurityTokenInvalidArgument(text: string) {
+	return (
+		text.includes("<Code>InvalidArgument</Code>") &&
+		text.includes("<Message>X-Amz-Security-Token</Message>")
+	);
+}
+
+function isCloudflareR2Endpoint(endpoint: string | undefined) {
+	const value = endpoint?.trim();
+	if (!value) return false;
+	try {
+		const hostname = new URL(value).hostname.toLowerCase();
+		return hostname === "r2.cloudflarestorage.com" || hostname.endsWith(".r2.cloudflarestorage.com");
+	} catch {
+		return false;
+	}
+}
+
+function normalizeOptionalString(value: string | undefined) {
+	const normalized = value?.trim();
+	return normalized ? normalized : undefined;
+}
+
+function hasEnv(name: string) {
+	return Object.prototype.hasOwnProperty.call(process.env, name);
 }
 
 function isEnabled(value: boolean | string | undefined, defaultValue: boolean) {
