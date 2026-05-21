@@ -78,17 +78,17 @@ export PI_SYNC_BUCKET="pi-sync"
 export PI_SYNC_REGION="auto"
 export PI_SYNC_ACCESS_KEY_ID="..."
 export PI_SYNC_SECRET_ACCESS_KEY="..."
-export PI_SYNC_SESSION_TOKEN="..." # ignored for R2; only for temporary AWS S3 STS/SSO credentials
+export PI_SYNC_SESSION_TOKEN="..." # optional, for temporary credentials that require a session token
 export PI_SYNC_PROFILE="default"
 export PI_SYNC_PREFIX="pi-sync"
 export PI_SYNC_AUTO_SYNC="true"
 ```
 
-`PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary AWS S3 credentials such as AWS STS, AWS SSO, or assumed roles.
+`PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary credentials such as AWS STS, AWS SSO, assumed roles, or S3-compatible providers that issue short-lived credentials.
 
-Cloudflare R2 static access keys do not use a session token and usually reject requests signed with `X-Amz-Security-Token`. For R2 endpoints (`*.r2.cloudflarestorage.com`), pi-sync ignores session tokens from `PI_SYNC_SESSION_TOKEN`, `AWS_SESSION_TOKEN`, and local config `sessionToken` so unrelated AWS STS/SSO shell state cannot break R2 sync. `/pisync config` and `/pisync doctor` warn when a configured token is being ignored for R2.
+Cloudflare R2 static access keys do not use a session token and usually reject requests signed with `X-Amz-Security-Token`. R2 temporary credentials that require a token are still supported. For R2 endpoints (`*.r2.cloudflarestorage.com`), pi-sync first sends the configured session token; if R2 rejects it with `InvalidArgument: X-Amz-Security-Token`, pi-sync retries that request once without the token and omits the token for the rest of the same command after a successful retry.
 
-pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `R2_ENDPOINT`, and `R2_BUCKET` as compatibility aliases when the matching `PI_SYNC_*` variable is not set. The exception is every session token source on R2 endpoints, which is ignored to avoid R2 `X-Amz-Security-Token` errors.
+pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `R2_ENDPOINT`, and `R2_BUCKET` as compatibility aliases when the matching `PI_SYNC_*` variable is not set.
 
 ## 🚀 Usage
 

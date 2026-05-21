@@ -38,7 +38,6 @@ interface SyncConfig {
 	accessKeyId: string;
 	secretAccessKey: string;
 	sessionToken?: string;
-	ignoredSessionTokenSources?: string[];
 	profile: string;
 	prefix: string;
 }
@@ -50,7 +49,6 @@ interface PartialConfig {
 	accessKeyId?: string;
 	secretAccessKey?: string;
 	sessionToken?: string;
-	ignoredSessionTokenSources?: string[];
 	profile?: string;
 	prefix?: string;
 	autoSync?: boolean | string;
@@ -568,7 +566,6 @@ async function loadConfig(): Promise<SyncConfig> {
 		accessKeyId: accessKeyId!,
 		secretAccessKey: secretAccessKey!,
 		sessionToken: partial.sessionToken,
-		ignoredSessionTokenSources: partial.ignoredSessionTokenSources,
 		profile: partial.profile ?? DEFAULT_PROFILE,
 		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
 	};
@@ -576,17 +573,14 @@ async function loadConfig(): Promise<SyncConfig> {
 
 async function loadPartialConfig(): Promise<PartialConfig> {
 	const fileConfig = (await readJsonIfExists<PartialConfig>(localConfigPath())) ?? {};
-	const endpoint = process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig.endpoint;
-	const sessionToken = selectSessionToken(endpoint, fileConfig.sessionToken);
 	return {
 		...fileConfig,
-		endpoint,
+		endpoint: process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig.endpoint,
 		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig.bucket,
 		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig.region,
 		accessKeyId: process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig.accessKeyId,
 		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig.secretAccessKey,
-		sessionToken: sessionToken.value,
-		ignoredSessionTokenSources: sessionToken.ignoredSources,
+		sessionToken: selectSessionToken(fileConfig.sessionToken),
 		profile: process.env.PI_SYNC_PROFILE ?? fileConfig.profile,
 		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
 		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
@@ -860,6 +854,7 @@ async function writeState(profile: string, state: SyncState) {
 class S3Client {
 	private config: SyncConfig;
 	private endpoint: URL;
+	private omitSessionTokenAfterRejection = false;
 
 	constructor(config: SyncConfig) {
 		this.config = config;
@@ -899,17 +894,38 @@ class S3Client {
 	) {
 		const url = new URL(this.endpoint.toString());
 		url.pathname = posixJoin(url.pathname, this.config.bucket, encodeKey(key));
-		const headers = await signedHeaders({
-			method,
-			url,
-			body,
-			extraHeaders,
-			accessKeyId: this.config.accessKeyId,
-			secretAccessKey: this.config.secretAccessKey,
-			sessionToken: this.config.sessionToken,
-			region: this.config.region,
-		});
-		return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
+		const send = async (sessionToken: string | undefined) => {
+			const headers = await signedHeaders({
+				method,
+				url,
+				body,
+				extraHeaders,
+				accessKeyId: this.config.accessKeyId,
+				secretAccessKey: this.config.secretAccessKey,
+				sessionToken,
+				region: this.config.region,
+			});
+			return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
+		};
+		const sessionToken = this.omitSessionTokenAfterRejection ? undefined : this.config.sessionToken;
+		const response = await send(sessionToken);
+		if (!(await this.shouldRetryWithoutSessionToken(response, sessionToken))) return response;
+
+		const retry = await send(undefined);
+		if (retry.ok || retry.status === 404) this.omitSessionTokenAfterRejection = true;
+		return retry;
+	}
+
+	private async shouldRetryWithoutSessionToken(response: Response, sessionToken: string | undefined) {
+		if (
+			!sessionToken ||
+			!isCloudflareR2Endpoint(this.config.endpoint) ||
+			response.ok ||
+			response.status !== 400
+		) {
+			return false;
+		}
+		return isSecurityTokenInvalidArgument(await response.clone().text());
 	}
 }
 
@@ -1186,29 +1202,23 @@ function redact(value: string) {
 	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
-function selectSessionToken(endpoint: string | undefined, fileSessionToken: string | undefined) {
-	const piSessionToken = normalizeOptionalString(process.env.PI_SYNC_SESSION_TOKEN);
-	const awsSessionToken = normalizeOptionalString(process.env.AWS_SESSION_TOKEN);
-	const configSessionToken = normalizeOptionalString(fileSessionToken);
-	if (isCloudflareR2Endpoint(endpoint)) {
-		return {
-			value: undefined,
-			ignoredSources: [
-				...(piSessionToken ? ["PI_SYNC_SESSION_TOKEN"] : []),
-				...(awsSessionToken ? ["AWS_SESSION_TOKEN"] : []),
-				...(configSessionToken ? ["local config sessionToken"] : []),
-			],
-		};
-	}
-	if (hasEnv("PI_SYNC_SESSION_TOKEN")) return { value: piSessionToken, ignoredSources: [] };
-	return { value: awsSessionToken ?? configSessionToken, ignoredSources: [] };
+function selectSessionToken(fileSessionToken: string | undefined) {
+	if (hasEnv("PI_SYNC_SESSION_TOKEN")) return normalizeOptionalString(process.env.PI_SYNC_SESSION_TOKEN);
+	return normalizeOptionalString(process.env.AWS_SESSION_TOKEN) ?? normalizeOptionalString(fileSessionToken);
 }
 
-function sessionTokenWarnings(config: { endpoint?: string; ignoredSessionTokenSources?: string[] }) {
-	if (!isCloudflareR2Endpoint(config.endpoint)) return [];
-	const sources = config.ignoredSessionTokenSources ?? [];
-	if (sources.length === 0) return [];
-	return [`session token: ${sources.join(", ")} ignored for Cloudflare R2 endpoints because R2 static access keys reject X-Amz-Security-Token.`];
+function sessionTokenWarnings(config: { endpoint?: string; sessionToken?: string }) {
+	if (!isCloudflareR2Endpoint(config.endpoint) || !config.sessionToken) return [];
+	return [
+		"session token: configured for Cloudflare R2; if R2 rejects X-Amz-Security-Token, pi-sync retries once without it. R2 static access keys usually do not need a session token.",
+	];
+}
+
+function isSecurityTokenInvalidArgument(text: string) {
+	return (
+		text.includes("<Code>InvalidArgument</Code>") &&
+		text.includes("<Message>X-Amz-Security-Token</Message>")
+	);
 }
 
 function isCloudflareR2Endpoint(endpoint: string | undefined) {
