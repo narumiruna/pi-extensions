@@ -401,8 +401,19 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	const remoteChanged = remote ? remote.id !== state.lastAppliedSnapshot : false;
 	const firstSync = !state.lastAppliedSnapshot;
 
-	if (options.auto && firstSync && remote && local.files.length > 0) {
-		throw new Error("Remote settings exist and this machine has local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
+	if (firstSync && remote && local.files.length > 0) {
+		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
+			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
+		}
+		await writeState(config.profile, {
+			version: VERSION,
+			profile: config.profile,
+			lastAppliedSnapshot: remote.id,
+			lastRemoteEtag: undefined,
+			lastFileHashes: fileHashMap(remote),
+		});
+		if (!options.silent) ctx.ui.notify("pi-sync state initialized; local settings already match remote.", "info");
+		return;
 	}
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
 		throw new Error("Both local and remote changed. Run /pisync diff and resolve with push --force or pull --force.");
@@ -686,12 +697,12 @@ async function applySnapshot(snapshot: Snapshot) {
 	const root = agentDir();
 	const current = await createSnapshot(snapshot.profile);
 	const plan = preflightSnapshotApply(root, snapshot, current);
+	for (const target of plan.deletes) {
+		await fs.rm(target, { force: true, recursive: true });
+	}
 	for (const item of plan.writes) {
 		await fs.mkdir(path.dirname(item.target), { recursive: true });
 		await fs.writeFile(item.target, item.content);
-	}
-	for (const target of plan.deletes) {
-		await fs.rm(target, { force: true });
 	}
 }
 
@@ -716,10 +727,15 @@ function preflightSnapshotApply(root: string, snapshot: Snapshot, current: Snaps
 		writes.push({ target, content });
 	}
 
+	const deletePaths = new Set<string>();
 	for (const file of current.files) {
 		const normalized = toPosix(file.path);
-		if (!remotePaths.has(normalized)) deletes.push(safeJoin(root, normalized));
+		if (!remotePaths.has(normalized)) deletePaths.add(safeJoin(root, normalized));
+		for (const remotePath of remotePaths) {
+			if (normalized.startsWith(`${remotePath}/`)) deletePaths.add(safeJoin(root, remotePath));
+		}
 	}
+	deletes.push(...deletePaths);
 
 	return { writes, deletes };
 }
