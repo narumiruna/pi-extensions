@@ -1009,12 +1009,12 @@ async function readLock() {
 }
 
 function isStaleLock(lock: LockFile) {
-	if (Date.now() - Date.parse(lock.startedAt) > LOCK_STALE_MS) return true;
+	if (!Number.isInteger(lock.pid) || lock.pid <= 0) return true;
 	try {
 		process.kill(lock.pid, 0);
 		return false;
 	} catch {
-		return true;
+		return Date.now() - Date.parse(lock.startedAt) > LOCK_STALE_MS;
 	}
 }
 
