@@ -1,4 +1,9 @@
-import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+	defineTool,
+	type AgentToolResult,
+	type ExtensionAPI,
+	type ToolRenderResultOptions,
+} from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -11,6 +16,16 @@ const STATUS_KEY = "chrome-devtools";
 
 interface StatusContext {
 	ui: { setStatus: (key: string, value: string | undefined) => void };
+}
+
+interface RenderTheme {
+	bold(text: string): string;
+	fg(color: string, text: string): string;
+}
+
+interface RenderComponent {
+	invalidate(): void;
+	render(width: number): string[];
 }
 
 interface DevToolsPage {
@@ -48,6 +63,8 @@ const listPagesTool = defineTool({
 	description: "List Chrome tabs/pages from a running Chrome DevTools Protocol endpoint.",
 	promptSnippet: "List Chrome tabs/pages available over Chrome DevTools Protocol",
 	parameters: Type.Object({}),
+	renderCall: renderToolCall("list pages"),
+	renderResult: renderTextResult,
 	async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 		return withStatus(ctx, "🌐 list pages", async () => {
 			const pages = await listPages();
@@ -64,6 +81,8 @@ const selectPageTool = defineTool({
 	parameters: Type.Object({
 		pageId: Type.String({ description: "Page id from chrome_devtools_list_pages." }),
 	}),
+	renderCall: renderToolCall("select page"),
+	renderResult: renderTextResult,
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		return withStatus(ctx, "🌐 select page", async () => {
 			const page = await getPage(params.pageId);
@@ -87,6 +106,8 @@ const navigateTool = defineTool({
 			Type.String({ description: "Optional page id. Defaults to selected or first page." }),
 		),
 	}),
+	renderCall: renderToolCall("navigate"),
+	renderResult: renderTextResult,
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		return withStatus(ctx, "🌐 navigate", async () => {
 			const { created, page } = await resolvePageForNavigation(params.pageId);
@@ -120,6 +141,8 @@ const evaluateTool = defineTool({
 			Type.Boolean({ description: "Whether to await a returned Promise. Defaults to true." }),
 		),
 	}),
+	renderCall: renderToolCall("evaluate"),
+	renderResult: renderTextResult,
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		return withStatus(ctx, "🌐 evaluate", async () => {
 			const page = await resolvePage(params.pageId);
@@ -150,6 +173,8 @@ const screenshotTool = defineTool({
 			Type.Boolean({ description: "Capture the full document, not just the viewport." }),
 		),
 	}),
+	renderCall: renderToolCall("screenshot"),
+	renderResult: renderScreenshotResult,
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		return withStatus(ctx, "🌐 screenshot", async () => {
 			const page = await resolvePage(params.pageId);
@@ -403,6 +428,65 @@ function textResult(text: string, details: unknown) {
 		content: [{ type: "text" as const, text }],
 		details,
 	};
+}
+
+function renderToolCall(action: string) {
+	return () => new PiTextComponent(`Chrome DevTools: ${action}`);
+}
+
+function renderTextResult(
+	result: AgentToolResult<unknown>,
+	options: ToolRenderResultOptions,
+	theme: RenderTheme,
+) {
+	const text = textContent(result);
+	return new PiTextComponent(formatCollapsibleOutput(text, options, theme));
+}
+
+function renderScreenshotResult(
+	result: AgentToolResult<unknown>,
+	options: ToolRenderResultOptions,
+	theme: RenderTheme,
+): RenderComponent {
+	const text = formatCollapsibleOutput(textContent(result), options, theme);
+	return new PiTextComponent(text);
+}
+
+function textContent(result: AgentToolResult<unknown>) {
+	return result.content
+		.flatMap((content) => (content.type === "text" ? [content.text] : []))
+		.join("\n");
+}
+
+function formatCollapsibleOutput(text: string, options: ToolRenderResultOptions, theme: RenderTheme) {
+	if (options.isPartial) return theme.fg("warning", "Running...");
+	if (options.expanded) return theme.fg("toolOutput", text);
+
+	return "";
+}
+
+class PiTextComponent implements RenderComponent {
+	constructor(private text = "") {}
+
+	setText(text: string) {
+		this.text = text;
+	}
+
+	invalidate() {
+		// Stateless renderer: no cached layout to invalidate.
+	}
+
+	render(width: number) {
+		if (!this.text.trim()) return [];
+		return this.text
+			.replace(/\t/g, "   ")
+			.split(/\r?\n/)
+			.map((line) => truncateLine(line, Math.max(1, width)));
+	}
+}
+
+function truncateLine(line: string, maxWidth: number) {
+	return Array.from(line).slice(0, maxWidth).join("");
 }
 
 async function withStatus<T>(ctx: StatusContext, status: string, callback: () => Promise<T>) {
