@@ -5,7 +5,7 @@
 - `MEMORY.md` is not auto-loaded; check it before non-trivial debugging or design work when prior project context may matter.
 - npm can show a scoped package dist-tag (for example `latest`) while `npm view <package>` still returns 404; fix visibility with `npm access set status=public <package> --otp=<otp>` or publish a bumped version.
 - `npm access set status=public <package>` cannot create brand-new scoped packages; if it returns access 404, first run `npm publish --workspace <package> --access public`.
-- For sleep-inhibitor extensions on WSL, prefer Windows `powershell.exe` with `SetThreadExecutionState`; `systemd-inhibit` may exist but fail without a usable systemd/logind session. Ensure Windows inhibitors exit on stdin EOF and clear `ES_CONTINUOUS`; ensure Unix inhibitors are parent-bound and trap cleanup, or Pi shutdown can leave a power request/process active.
+- For sleep-inhibitor extensions on WSL, prefer Windows `powershell.exe` with `SetThreadExecutionState`; `systemd-inhibit` may exist but fail without a usable systemd/logind session. Ensure Windows inhibitors exit on stdin EOF, clear `ES_CONTINUOUS`, and pass execution-state flags as `[uint32]'0x...'`; ensure Unix inhibitors are parent-bound and trap cleanup, or Pi shutdown can leave a power request/process active.
 - When testing TypeScript extensions via direct Node import, avoid parameter properties; Node's strip-only TypeScript loader rejects them even though `tsc` accepts them.
 - ty/ruff LSP servers may request `workspace/configuration`; respond with per-item empty config objects or diagnostic requests can hang.
 - pi-statusline is display-only; avoid prompt interception or customization commands unless intentionally reintroduced.
