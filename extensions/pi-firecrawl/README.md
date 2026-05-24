@@ -103,10 +103,10 @@ The selected tool names are saved to:
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-firecrawl-settings.json
 ```
 
-When the file is missing or invalid, Pi's default behavior applies and all Firecrawl tools are
-enabled. The selection is restored on Pi startup and `/reload`. The settings file stores only
-tool names and a timestamp; it never stores `FIRECRAWL_API_KEY`, request headers, or other
-secrets.
+When the file is missing or invalid, the extension preserves Pi's current active-tool policy
+instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
+`/reload`. The settings file stores only tool names and a timestamp; it never stores
+`FIRECRAWL_API_KEY`, request headers, or other secrets.
 
 ## 🚀 Examples
 

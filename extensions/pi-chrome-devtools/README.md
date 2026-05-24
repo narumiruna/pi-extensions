@@ -109,8 +109,9 @@ The selected tool names are saved to:
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-chrome-devtools-settings.json
 ```
 
-When the file is missing or invalid, Pi's default behavior applies and all Chrome DevTools tools
-are enabled. The selection is restored on Pi startup and `/reload`.
+When the file is missing or invalid, the extension preserves Pi's current active-tool policy
+instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
+`/reload`.
 
 ## 🧠 Use cases
 

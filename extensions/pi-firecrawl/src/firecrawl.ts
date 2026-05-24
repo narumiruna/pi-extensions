@@ -282,7 +282,6 @@ export default function firecrawl(pi: ExtensionAPI) {
 		if (settings.kind === "invalid") {
 			ctx.ui.notify(`Firecrawl settings ignored: ${settings.reason}`, "warning");
 		}
-		applyFirecrawlTools(pi, allFirecrawlTools());
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -603,8 +602,10 @@ function formatRuntimeStatus(summary: ToolStatusSummary) {
 async function persistedSettingLabel() {
 	const settings = await loadSettings();
 	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
-	if (settings.kind === "invalid") return `default all enabled (invalid settings ignored: ${settings.reason})`;
-	return "default all enabled";
+	if (settings.kind === "invalid") {
+		return `none; current active-tool policy preserved (invalid settings ignored: ${settings.reason})`;
+	}
+	return "none; current active-tool policy preserved";
 }
 
 function formatPersistedSelection(tools: readonly FirecrawlToolName[]) {

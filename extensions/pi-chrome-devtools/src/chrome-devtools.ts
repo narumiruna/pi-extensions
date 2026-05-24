@@ -301,7 +301,6 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 		if (settings.kind === "invalid") {
 			ctx.ui.notify(`Chrome DevTools settings ignored: ${settings.reason}`, "warning");
 		}
-		applyChromeDevtoolsTools(pi, allChromeDevtoolsTools());
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -622,8 +621,10 @@ function formatRuntimeStatus(summary: ToolStatusSummary) {
 async function persistedSettingLabel() {
 	const settings = await loadSettings();
 	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
-	if (settings.kind === "invalid") return `default all enabled (invalid settings ignored: ${settings.reason})`;
-	return "default all enabled";
+	if (settings.kind === "invalid") {
+		return `none; current active-tool policy preserved (invalid settings ignored: ${settings.reason})`;
+	}
+	return "none; current active-tool policy preserved";
 }
 
 function formatPersistedSelection(tools: readonly ChromeDevToolsToolName[]) {
