@@ -36,7 +36,7 @@ export function renderTokyoNightStatusline(width: number, segments: RenderSegmen
 }
 
 export function tokyoNightExtensionSeparator(_theme: Theme): string {
-	return ansiFg(TOKYO_NIGHT_COLORS.extensionSeparator, "  ");
+	return ansiFg(TOKYO_NIGHT_COLORS.extensionSeparator, " • ");
 }
 
 function joinTokyoNightSegments(segments: RenderSegment[]): string {
