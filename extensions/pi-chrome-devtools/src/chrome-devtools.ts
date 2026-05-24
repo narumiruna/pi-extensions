@@ -439,8 +439,8 @@ function renderTextResult(
 	options: ToolRenderResultOptions,
 	theme: RenderTheme,
 ) {
-	const text = textContent(result);
-	return new PiTextComponent(formatCollapsibleOutput(text, options, theme));
+	const output = formatCollapsibleOutput(textContent(result), options);
+	return new PiTextComponent(output.text, theme, output.color);
 }
 
 function renderScreenshotResult(
@@ -448,8 +448,8 @@ function renderScreenshotResult(
 	options: ToolRenderResultOptions,
 	theme: RenderTheme,
 ): RenderComponent {
-	const text = formatCollapsibleOutput(textContent(result), options, theme);
-	return new PiTextComponent(text);
+	const output = formatCollapsibleOutput(textContent(result), options);
+	return new PiTextComponent(output.text, theme, output.color);
 }
 
 function textContent(result: AgentToolResult<unknown>) {
@@ -458,15 +458,22 @@ function textContent(result: AgentToolResult<unknown>) {
 		.join("\n");
 }
 
-function formatCollapsibleOutput(text: string, options: ToolRenderResultOptions, theme: RenderTheme) {
-	if (options.isPartial) return theme.fg("warning", "Running...");
-	if (options.expanded) return theme.fg("toolOutput", text);
+function formatCollapsibleOutput(
+	text: string,
+	options: ToolRenderResultOptions,
+): { text: string; color?: string } {
+	if (options.isPartial) return { text: "Running...", color: "warning" };
+	if (options.expanded) return { text, color: "toolOutput" };
 
-	return "";
+	return { text: "" };
 }
 
 class PiTextComponent implements RenderComponent {
-	constructor(private text = "") {}
+	constructor(
+		private text = "",
+		private readonly theme?: RenderTheme,
+		private readonly color?: string,
+	) {}
 
 	setText(text: string) {
 		this.text = text;
@@ -481,7 +488,12 @@ class PiTextComponent implements RenderComponent {
 		return this.text
 			.replace(/\t/g, "   ")
 			.split(/\r?\n/)
-			.map((line) => truncateLine(line, Math.max(1, width)));
+			.map((line) => {
+				const truncatedLine = truncateLine(line, Math.max(1, width));
+				return this.theme && this.color
+					? this.theme.fg(this.color, truncatedLine)
+					: truncatedLine;
+			});
 	}
 }
 
