@@ -41,7 +41,7 @@ pi -e ./extensions/pi-retry
 
 When an assistant message ends with `stopReason: "error"` and the error message matches `Unknown error (no error details in response)`, the extension appends Pi's retryable-provider-error hint so Pi's built-in retry path can continue the turn.
 
-After Pi sends a provider request, the extension also starts a stall watchdog. Provider responses and assistant stream events briefly refresh a `📥 receiving` statusline item, so you can tell that data is still arriving while Pi shows its normal working indicator. If no provider response or assistant stream event is observed for 30000ms, it briefly shows `🔁 retrying`, calls `ctx.abort()`, and rewrites the resulting assistant abort/error as a retryable provider error.
+After Pi sends a provider request, the extension also starts a stall watchdog. Provider responses and assistant stream events briefly refresh a `📥 receiving` statusline item, so you can tell that data is still arriving while Pi shows its normal working indicator. If no provider response or assistant stream event is observed for 90s, it briefly shows `🔁 retrying`, calls `ctx.abort()`, and rewrites the resulting assistant abort/error as a retryable provider error.
 
 Configure the watchdog with:
 

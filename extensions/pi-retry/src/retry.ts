@@ -7,7 +7,7 @@ const STALL_WATCHDOG_TAG = "[stall-watchdog-retry]";
 const STATUS_KEY = "unknown-error-retry";
 const STATUS_VISIBLE_MS = 8_000;
 const INCOMING_STATUS_VISIBLE_MS = 1_500;
-const DEFAULT_STALL_TIMEOUT_MS = 30_000;
+const DEFAULT_STALL_TIMEOUT_MS = 90_000;
 const STALL_TIMEOUT_FLAG = "retry-stall-timeout-ms";
 const STALL_TIMEOUT_ENV = "PI_RETRY_STALL_TIMEOUT_MS";
 
