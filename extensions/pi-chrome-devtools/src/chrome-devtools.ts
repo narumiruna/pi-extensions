@@ -1,7 +1,11 @@
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import {
 	defineTool,
 	type AgentToolResult,
 	type ExtensionAPI,
+	type ExtensionCommandContext,
 	type ToolRenderResultOptions,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
@@ -13,6 +17,49 @@ const DEFAULT_HTTP_TIMEOUT_MS = 1_000;
 const DEFAULT_ENDPOINT_WAIT_MS = 5_000;
 const DEFAULT_ENDPOINT_RETRY_MS = 250;
 const STATUS_KEY = "chrome-devtools";
+const SETTINGS_FILE = join(
+	process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+	"pi-chrome-devtools-settings.json",
+);
+const CHROME_DEVTOOLS_TOOL_NAMES = [
+	"chrome_devtools_list_pages",
+	"chrome_devtools_select_page",
+	"chrome_devtools_navigate",
+	"chrome_devtools_evaluate",
+	"chrome_devtools_screenshot",
+] as const;
+const COMMAND_COMPLETIONS = [
+	{ value: "help", label: "Show command usage" },
+	{ value: "quickstart", label: "Show endpoint and launch help" },
+	{ value: "status", label: "Show tool and settings status" },
+	{ value: "tools", label: "Select Chrome DevTools tools" },
+	{ value: "toggle", label: "Select Chrome DevTools tools" },
+	{ value: "enable", label: "Enable all Chrome DevTools tools" },
+	{ value: "disable", label: "Disable all Chrome DevTools tools" },
+];
+const MENU_OPTIONS = {
+	quickstart: "Quick start / endpoint help",
+	help: "Command usage guide",
+	status: "Show tool status",
+	tools: "Select Chrome DevTools tools",
+	enable: "Enable all Chrome DevTools tools",
+	disable: "Disable all Chrome DevTools tools",
+} as const;
+const TOOL_SELECTOR_DONE = "Done";
+const TOOL_SELECTOR_ENABLE_ALL = "Enable all Chrome DevTools tools";
+const TOOL_SELECTOR_DISABLE_ALL = "Disable all Chrome DevTools tools";
+
+type ChromeDevToolsToolName = (typeof CHROME_DEVTOOLS_TOOL_NAMES)[number];
+type ToolRuntimeStatus = "enabled" | "disabled" | "partial";
+type CommandAction =
+	| "menu"
+	| "help"
+	| "quickstart"
+	| "status"
+	| "tools"
+	| "enable"
+	| "disable";
+type CommandContext = ExtensionCommandContext;
 
 interface StatusContext {
 	ui: { setStatus: (key: string, value: string | undefined) => void };
@@ -42,6 +89,17 @@ interface ChromeDevToolsState {
 	activePageId?: string;
 }
 
+interface ChromeDevToolsSettings {
+	tools: ChromeDevToolsToolName[];
+	updatedAt: number;
+}
+
+interface ToolStatusSummary {
+	runtimeStatus: ToolRuntimeStatus;
+	activeChromeToolCount: number;
+	activeNonChromeToolCount: number;
+}
+
 interface CdpResponse<T = unknown> {
 	id: number;
 	result?: T;
@@ -58,7 +116,7 @@ const state: ChromeDevToolsState = {
 };
 
 const listPagesTool = defineTool({
-	name: "chrome_devtools_list_pages",
+	name: CHROME_DEVTOOLS_TOOL_NAMES[0],
 	label: "Chrome DevTools: List Pages",
 	description: "List Chrome tabs/pages from a running Chrome DevTools Protocol endpoint.",
 	promptSnippet: "List Chrome tabs/pages available over Chrome DevTools Protocol",
@@ -74,7 +132,7 @@ const listPagesTool = defineTool({
 });
 
 const selectPageTool = defineTool({
-	name: "chrome_devtools_select_page",
+	name: CHROME_DEVTOOLS_TOOL_NAMES[1],
 	label: "Chrome DevTools: Select Page",
 	description: "Select the active Chrome page for later chrome_devtools_* tool calls.",
 	promptSnippet: "Select the Chrome tab/page to inspect or control",
@@ -95,7 +153,7 @@ const selectPageTool = defineTool({
 });
 
 const navigateTool = defineTool({
-	name: "chrome_devtools_navigate",
+	name: CHROME_DEVTOOLS_TOOL_NAMES[2],
 	label: "Chrome DevTools: Navigate",
 	description:
 		"Navigate a Chrome page to a URL through Chrome DevTools Protocol, creating a page first if none is available.",
@@ -128,7 +186,7 @@ const navigateTool = defineTool({
 });
 
 const evaluateTool = defineTool({
-	name: "chrome_devtools_evaluate",
+	name: CHROME_DEVTOOLS_TOOL_NAMES[3],
 	label: "Chrome DevTools: Evaluate",
 	description: "Evaluate JavaScript in a Chrome page through Chrome DevTools Protocol.",
 	promptSnippet: "Evaluate JavaScript in the selected Chrome tab",
@@ -161,7 +219,7 @@ const evaluateTool = defineTool({
 });
 
 const screenshotTool = defineTool({
-	name: "chrome_devtools_screenshot",
+	name: CHROME_DEVTOOLS_TOOL_NAMES[4],
 	label: "Chrome DevTools: Screenshot",
 	description: "Capture a PNG screenshot from a Chrome page through Chrome DevTools Protocol.",
 	promptSnippet: "Capture a screenshot from the selected Chrome tab",
@@ -222,19 +280,368 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	pi.registerTool(screenshotTool);
 
 	pi.registerCommand("chrome-devtools", {
-		description: "Show Chrome DevTools endpoint and quick start help",
-		handler: async (_args, ctx) => {
-			ctx.ui.notify(`Chrome DevTools endpoint: ${devToolsEndpoint()}\n${launchHint()}`, "info");
+		description: "Open Chrome DevTools help and tool controls",
+		getArgumentCompletions: (prefix) => commandCompletions(prefix),
+		handler: async (args, ctx) => {
+			await handleChromeDevtoolsCommand(pi, args, ctx);
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		const settings = await loadSettings();
+		if (settings.kind === "loaded") {
+			applyChromeDevtoolsTools(pi, settings.settings.tools);
+			return;
+		}
+		if (settings.kind === "invalid") {
+			ctx.ui.notify(`Chrome DevTools settings ignored: ${settings.reason}`, "warning");
+		}
+		applyChromeDevtoolsTools(pi, allChromeDevtoolsTools());
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
+}
+
+async function handleChromeDevtoolsCommand(pi: ExtensionAPI, args: string, ctx: CommandContext) {
+	const command = parseCommand(args);
+	switch (command) {
+		case "menu":
+			await showMenu(pi, ctx);
+			return;
+		case "help":
+			ctx.ui.notify(buildCommandGuide(), "info");
+			return;
+		case "quickstart":
+			ctx.ui.notify(buildQuickstartMessage(), "info");
+			return;
+		case "status":
+			ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+			return;
+		case "tools":
+			await showToolSelector(pi, ctx);
+			return;
+		case "enable":
+			await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "enabled all");
+			return;
+		case "disable":
+			await updateChromeDevtoolsTools(pi, ctx, [], "disabled all");
+			return;
+	}
+
+	ctx.ui.notify(`Unknown /chrome-devtools command: ${args.trim()}
+
+${buildCommandGuide()}`, "warning");
+}
+
+async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
+	if (!ctx.hasUI) {
+		ctx.ui.notify(`${buildCommandGuide()}
+
+${await buildToolStatusMessage(pi)}`, "info");
+		return;
+	}
+
+	const choice = await ctx.ui.select("Chrome DevTools", Object.values(MENU_OPTIONS));
+	switch (choice) {
+		case MENU_OPTIONS.quickstart:
+			ctx.ui.notify(buildQuickstartMessage(), "info");
+			return;
+		case MENU_OPTIONS.help:
+			ctx.ui.notify(buildCommandGuide(), "info");
+			return;
+		case MENU_OPTIONS.status:
+			ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+			return;
+		case MENU_OPTIONS.tools:
+			await showToolSelector(pi, ctx);
+			return;
+		case MENU_OPTIONS.enable:
+			await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "enabled all");
+			return;
+		case MENU_OPTIONS.disable:
+			await updateChromeDevtoolsTools(pi, ctx, [], "disabled all");
+			return;
+	}
+}
+
+function parseCommand(args: string): CommandAction | "unknown" {
+	const command = args.trim().toLowerCase();
+	if (!command) return "menu";
+	if (command === "help") return "help";
+	if (command === "quickstart") return "quickstart";
+	if (command === "status") return "status";
+	if (command === "tools" || command === "select" || command === "toggle") return "tools";
+	if (command === "enable" || command === "on") return "enable";
+	if (command === "disable" || command === "off") return "disable";
+	return "unknown";
+}
+
+function commandCompletions(prefix: string) {
+	const normalized = prefix.trim().toLowerCase();
+	if (normalized.includes(" ")) return null;
+
+	const matches = COMMAND_COMPLETIONS.filter((completion) =>
+		completion.value.startsWith(normalized),
+	);
+	return matches.length > 0 ? matches : null;
+}
+
+async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
+	if (!ctx.hasUI) {
+		ctx.ui.notify(
+			`Chrome DevTools tool selection needs an interactive UI.
+
+${await buildToolStatusMessage(pi)}`,
+			"info",
+		);
+		return;
+	}
+
+	let selectedTools = new Set<ChromeDevToolsToolName>(getActiveChromeDevtoolsTools(pi));
+	while (true) {
+		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), [
+			...CHROME_DEVTOOLS_TOOL_NAMES.map((toolName) => formatToolChoice(toolName, selectedTools)),
+			TOOL_SELECTOR_ENABLE_ALL,
+			TOOL_SELECTOR_DISABLE_ALL,
+			TOOL_SELECTOR_DONE,
+		]);
+
+		if (!choice || choice === TOOL_SELECTOR_DONE) {
+			ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+			return;
+		}
+
+		if (choice === TOOL_SELECTOR_ENABLE_ALL) {
+			selectedTools = new Set(allChromeDevtoolsTools());
+		} else if (choice === TOOL_SELECTOR_DISABLE_ALL) {
+			selectedTools = new Set();
+		} else {
+			const selectedTool = toolNameFromChoice(choice);
+			if (!selectedTool) continue;
+
+			if (selectedTools.has(selectedTool)) selectedTools.delete(selectedTool);
+			else selectedTools.add(selectedTool);
+		}
+
+		await setSelectedChromeDevtoolsTools(pi, ctx, orderedChromeDevtoolsTools(selectedTools));
+	}
+}
+
+async function updateChromeDevtoolsTools(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly ChromeDevToolsToolName[],
+	action: string,
+) {
+	await setSelectedChromeDevtoolsTools(pi, ctx, selectedTools);
+	ctx.ui.notify(`Chrome DevTools tools ${action}.
+
+${await buildToolStatusMessage(pi)}`, "info");
+}
+
+async function setSelectedChromeDevtoolsTools(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly ChromeDevToolsToolName[],
+) {
+	applyChromeDevtoolsTools(pi, selectedTools);
+	await persistSettings(ctx, selectedTools);
+}
+
+function applyChromeDevtoolsTools(
+	pi: ExtensionAPI,
+	selectedTools: readonly ChromeDevToolsToolName[],
+) {
+	const activeToolNames = pi.getActiveTools();
+	const chromeToolNames = new Set<string>(CHROME_DEVTOOLS_TOOL_NAMES);
+	const activeNonChromeToolNames = activeToolNames.filter((name) => !chromeToolNames.has(name));
+	pi.setActiveTools(unique([...activeNonChromeToolNames, ...selectedTools]));
+}
+
+function getToolStatusSummary(pi: ExtensionAPI): ToolStatusSummary {
+	const chromeToolNames = new Set<string>(CHROME_DEVTOOLS_TOOL_NAMES);
+	const activeToolNames = new Set(pi.getActiveTools());
+	const activeChromeToolCount = CHROME_DEVTOOLS_TOOL_NAMES.filter((name) =>
+		activeToolNames.has(name),
+	).length;
+	const activeNonChromeToolCount = Array.from(activeToolNames).filter(
+		(name) => !chromeToolNames.has(name),
+	).length;
+	const runtimeStatus =
+		activeChromeToolCount === CHROME_DEVTOOLS_TOOL_NAMES.length
+			? "enabled"
+			: activeChromeToolCount === 0
+				? "disabled"
+				: "partial";
+
+	return { runtimeStatus, activeChromeToolCount, activeNonChromeToolCount };
+}
+
+async function buildToolStatusMessage(pi: ExtensionAPI) {
+	const summary = getToolStatusSummary(pi);
+	const persistedSetting = await persistedSettingLabel();
+	return [
+		`Chrome DevTools tools: ${formatRuntimeStatus(summary)}`,
+		`Persisted selection: ${persistedSetting}`,
+		`Settings file: ${SETTINGS_FILE}`,
+		`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
+		`Endpoint: ${devToolsEndpoint()}`,
+	].join("\n");
+}
+
+function buildQuickstartMessage() {
+	return [
+		`Chrome DevTools endpoint: ${devToolsEndpoint()}`,
+		launchHint(),
+		endpointConfigHint(),
+	].join("\n");
+}
+
+function buildCommandGuide() {
+	return [
+		"Chrome DevTools commands:",
+		"/chrome-devtools — open this menu",
+		"/chrome-devtools help — show command usage",
+		"/chrome-devtools quickstart — show endpoint and launch help",
+		"/chrome-devtools status — show tool and settings status",
+		"/chrome-devtools tools — select individual Chrome DevTools tools",
+		"/chrome-devtools toggle — alias for /chrome-devtools tools",
+		"/chrome-devtools enable — enable all Chrome DevTools tools",
+		"/chrome-devtools disable — disable all Chrome DevTools tools",
+	].join("\n");
+}
+
+function toolSelectorTitle(selectedTools: ReadonlySet<ChromeDevToolsToolName>) {
+	return `Chrome DevTools tools (${selectedTools.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
+}
+
+function formatToolChoice(
+	toolName: ChromeDevToolsToolName,
+	selectedTools: ReadonlySet<ChromeDevToolsToolName>,
+) {
+	return `${selectedTools.has(toolName) ? "[x]" : "[ ]"} ${toolName}`;
+}
+
+function toolNameFromChoice(choice: string) {
+	return CHROME_DEVTOOLS_TOOL_NAMES.find((toolName) => choice.endsWith(toolName));
+}
+
+function getActiveChromeDevtoolsTools(pi: ExtensionAPI) {
+	const activeToolNames = new Set(pi.getActiveTools());
+	return CHROME_DEVTOOLS_TOOL_NAMES.filter((toolName) => activeToolNames.has(toolName));
+}
+
+function allChromeDevtoolsTools() {
+	return [...CHROME_DEVTOOLS_TOOL_NAMES];
+}
+
+function orderedChromeDevtoolsTools(selectedTools: ReadonlySet<ChromeDevToolsToolName>) {
+	return CHROME_DEVTOOLS_TOOL_NAMES.filter((toolName) => selectedTools.has(toolName));
+}
+
+function formatRuntimeStatus(summary: ToolStatusSummary) {
+	return `${summary.runtimeStatus} (${summary.activeChromeToolCount}/${CHROME_DEVTOOLS_TOOL_NAMES.length} active)`;
+}
+
+async function persistedSettingLabel() {
+	const settings = await loadSettings();
+	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
+	if (settings.kind === "invalid") return `default all enabled (invalid settings ignored: ${settings.reason})`;
+	return "default all enabled";
+}
+
+function formatPersistedSelection(tools: readonly ChromeDevToolsToolName[]) {
+	if (tools.length === CHROME_DEVTOOLS_TOOL_NAMES.length) {
+		return `all enabled (${tools.length}/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected)`;
+	}
+	if (tools.length === 0) return `all disabled (0/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected)`;
+	return `${tools.length}/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected: ${tools.join(", ")}`;
+}
+
+async function persistSettings(
+	ctx: CommandContext,
+	selectedTools: readonly ChromeDevToolsToolName[],
+) {
+	try {
+		await saveSettings({ tools: [...selectedTools], updatedAt: Date.now() });
+	} catch (error) {
+		ctx.ui.notify(`Chrome DevTools settings save failed: ${formatError(error)}`, "warning");
+	}
+}
+
+async function loadSettings(): Promise<
+	| { kind: "missing" }
+	| { kind: "invalid"; reason: string }
+	| { kind: "loaded"; settings: ChromeDevToolsSettings }
+> {
+	let text: string;
+	try {
+		text = await readFile(SETTINGS_FILE, "utf8");
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
+		return { kind: "invalid", reason: formatError(error) };
+	}
+
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		const settings = normalizeChromeDevtoolsSettings(parsed);
+		if (settings) return { kind: "loaded", settings };
+		return { kind: "invalid", reason: "expected tools to be an array of Chrome DevTools tool names" };
+	} catch (error) {
+		return { kind: "invalid", reason: formatError(error) };
+	}
+}
+
+function normalizeChromeDevtoolsSettings(value: unknown): ChromeDevToolsSettings | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const settings = value as { tools?: unknown; updatedAt?: unknown };
+	if (typeof settings.updatedAt !== "number") return undefined;
+
+	if (settings.tools === "enabled") {
+		return { tools: allChromeDevtoolsTools(), updatedAt: settings.updatedAt };
+	}
+	if (settings.tools === "disabled") return { tools: [], updatedAt: settings.updatedAt };
+
+	if (!Array.isArray(settings.tools)) return undefined;
+	if (!settings.tools.every(isChromeDevtoolsToolName)) return undefined;
+	return { tools: orderedUniqueChromeDevtoolsTools(settings.tools), updatedAt: settings.updatedAt };
+}
+
+function isChromeDevtoolsToolName(value: unknown): value is ChromeDevToolsToolName {
+	return typeof value === "string" && CHROME_DEVTOOLS_TOOL_NAMES.includes(value as never);
+}
+
+function orderedUniqueChromeDevtoolsTools(tools: readonly ChromeDevToolsToolName[]) {
+	const selectedTools = new Set(tools);
+	return orderedChromeDevtoolsTools(selectedTools);
+}
+
+async function saveSettings(settings: ChromeDevToolsSettings) {
+	await mkdir(dirname(SETTINGS_FILE), { recursive: true });
+	const tempFile = `${SETTINGS_FILE}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}
+`, "utf8");
+		await rename(tempFile, SETTINGS_FILE);
+	} catch (error) {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+		throw error;
+	}
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && "code" in error;
+}
+
+function formatError(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function unique<T>(values: T[]) {
+	return Array.from(new Set(values));
 }
 
 async function listPages(options: { waitMs?: number } = {}) {
