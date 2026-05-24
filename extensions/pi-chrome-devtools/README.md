@@ -20,6 +20,9 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 - Uses a local Chrome DevTools Protocol endpoint.
 - Retries briefly while Chrome is starting and reports actionable endpoint errors.
 - Shows statusline activity only while Chrome DevTools tools are running.
+- Provides a `/chrome-devtools` menu with quick-start help and tool controls.
+- Provides a Plan-mode-style selector for choosing individual Chrome DevTools tools.
+- Persists the selected Chrome DevTools tools across Pi restarts.
 
 ## 📦 Install
 
@@ -75,7 +78,39 @@ PI_CHROME_DEVTOOLS_HOST=127.0.0.1 PI_CHROME_DEVTOOLS_PORT=9223 pi -e ./extension
 /chrome-devtools
 ```
 
-Shows the configured CDP endpoint and a quick-start hint.
+Opens a menu with quick-start help, command usage, tool status, controls for enabling or
+disabling all Chrome DevTools tools, and a selector for choosing individual tools.
+
+Direct subcommands are also available:
+
+```text
+/chrome-devtools help
+/chrome-devtools quickstart
+/chrome-devtools status
+/chrome-devtools tools
+/chrome-devtools toggle
+/chrome-devtools enable
+/chrome-devtools disable
+```
+
+- `help` shows command usage.
+- `quickstart` shows the configured CDP endpoint and launch hint.
+- `status` shows runtime tool state, persisted selection, settings file path, and active
+  non-Chrome tool count.
+- `tools` opens a Plan-mode-style selector for choosing individual `chrome_devtools_*` tools.
+- `toggle` is an alias for `tools`.
+- `enable` enables all `chrome_devtools_*` tools for future turns.
+- `disable` disables all `chrome_devtools_*` tools for future turns. The slash command remains
+  available.
+
+The selected tool names are saved to:
+
+```text
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-chrome-devtools-settings.json
+```
+
+When the file is missing or invalid, Pi's default behavior applies and all Chrome DevTools tools
+are enabled. The selection is restored on Pi startup and `/reload`.
 
 ## 🧠 Use cases
 
