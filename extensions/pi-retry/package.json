@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-retry",
 	"version": "0.1.32",
-	"description": "Public pi extension that retries empty-detail provider unknown errors.",
+	"description": "Public pi extension that retries empty-detail provider errors and stalled streams.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -18,7 +18,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/unknown-error-retry.ts"
+			"./src/retry.ts"
 		]
 	},
 	"scripts": {
