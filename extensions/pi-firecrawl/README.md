@@ -15,7 +15,10 @@ Use it to give your AI coding agent reliable web research capabilities for docum
 - Search the web and optionally scrape search result pages.
 - Supports Firecrawl API endpoint overrides.
 - Shows statusline activity only while Firecrawl tools are running.
-- Never logs or displays your Firecrawl API key.
+- Provides a `/firecrawl` menu with configuration help and tool controls.
+- Provides a Plan-mode-style selector for choosing individual Firecrawl tools.
+- Persists the selected Firecrawl tools across Pi restarts.
+- Never logs, displays, or stores your Firecrawl API key.
 
 ## 📦 Install
 
@@ -67,7 +70,43 @@ All tools fail with a clear configuration error when `FIRECRAWL_API_KEY` is miss
 /firecrawl
 ```
 
-Shows whether the extension sees an API key and which Firecrawl API URL it will call.
+Opens a menu with configuration quick start, command usage, tool status, controls for enabling
+or disabling all Firecrawl tools, and a selector for choosing individual tools.
+
+Direct subcommands are also available:
+
+```text
+/firecrawl help
+/firecrawl config
+/firecrawl quickstart
+/firecrawl status
+/firecrawl tools
+/firecrawl toggle
+/firecrawl enable
+/firecrawl disable
+```
+
+- `help` shows command usage.
+- `config` shows API-key presence and API URL without displaying the API key value.
+- `quickstart` is an alias for `config`.
+- `status` shows runtime tool state, persisted selection, settings file path, API-key presence,
+  API URL, and active non-Firecrawl tool count.
+- `tools` opens a Plan-mode-style selector for choosing individual `firecrawl_*` tools.
+- `toggle` is an alias for `tools`.
+- `enable` enables all `firecrawl_*` tools for future turns.
+- `disable` disables all `firecrawl_*` tools for future turns. The slash command remains
+  available.
+
+The selected tool names are saved to:
+
+```text
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-firecrawl-settings.json
+```
+
+When the file is missing or invalid, the extension preserves Pi's current active-tool policy
+instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
+`/reload`. The settings file stores only tool names and a timestamp; it never stores
+`FIRECRAWL_API_KEY`, request headers, or other secrets.
 
 ## 🚀 Examples
 

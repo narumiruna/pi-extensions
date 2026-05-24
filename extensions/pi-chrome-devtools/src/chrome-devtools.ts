@@ -60,6 +60,10 @@ type CommandAction =
 	| "enable"
 	| "disable";
 type CommandContext = ExtensionCommandContext;
+type ToolSelectorAction = "enableAll" | "disableAll" | "done";
+type ToolSelectorRow =
+	| { kind: "tool"; toolName: ChromeDevToolsToolName }
+	| { kind: "action"; action: ToolSelectorAction; label: string };
 
 interface StatusContext {
 	ui: { setStatus: (key: string, value: string | undefined) => void };
@@ -297,7 +301,6 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 		if (settings.kind === "invalid") {
 			ctx.ui.notify(`Chrome DevTools settings ignored: ${settings.reason}`, "warning");
 		}
-		applyChromeDevtoolsTools(pi, allChromeDevtoolsTools());
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -401,33 +404,130 @@ ${await buildToolStatusMessage(pi)}`,
 	}
 
 	let selectedTools = new Set<ChromeDevToolsToolName>(getActiveChromeDevtoolsTools(pi));
+	let persistQueue = Promise.resolve();
+	const commitSelectedTools = () => {
+		const nextSelectedTools = orderedChromeDevtoolsTools(selectedTools);
+		applyChromeDevtoolsTools(pi, nextSelectedTools);
+		persistQueue = persistQueue.then(() => persistSettings(ctx, nextSelectedTools));
+	};
+
+	const customResult = await ctx.ui.custom<"closed" | undefined>(
+		(tui, theme, keybindings, done) => {
+			const rows = chromeDevtoolsToolSelectorRows();
+			let selectedIndex = 0;
+			const moveSelection = (delta: number) => {
+				selectedIndex = (selectedIndex + delta + rows.length) % rows.length;
+			};
+			const activateSelectedRow = () => {
+				const row = rows[selectedIndex];
+				if (!row) return;
+
+				if (row.kind === "tool") {
+					if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+					else selectedTools.add(row.toolName);
+					commitSelectedTools();
+					return;
+				}
+
+				if (row.action === "enableAll") {
+					selectedTools = new Set(allChromeDevtoolsTools());
+					commitSelectedTools();
+					return;
+				}
+				if (row.action === "disableAll") {
+					selectedTools = new Set();
+					commitSelectedTools();
+					return;
+				}
+
+				done("closed");
+			};
+
+			return {
+				invalidate() {},
+				render() {
+					return [
+						theme.fg("accent", theme.bold(toolSelectorTitle(selectedTools))),
+						"",
+						...rows.map((row, index) => {
+							const label = formatToolSelectorRow(row, selectedTools);
+							if (index === selectedIndex) {
+								return `${theme.fg("accent", "›")} ${theme.fg("accent", label)}`;
+							}
+							return `  ${label}`;
+						}),
+						"",
+						theme.fg("dim", "↑↓ navigate • Enter/Space toggle • Esc close"),
+					];
+				},
+				handleInput(data: string) {
+					if (keybindings.matches(data, "tui.select.up")) {
+						moveSelection(-1);
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.down")) {
+						moveSelection(1);
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.pageUp")) {
+						selectedIndex = 0;
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.pageDown")) {
+						selectedIndex = rows.length - 1;
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.confirm") || data === " ") {
+						activateSelectedRow();
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.cancel")) {
+						done("closed");
+					}
+				},
+			};
+		},
+	);
+
+	if (customResult !== "closed") {
+		await showDialogToolSelector(pi, ctx);
+		return;
+	}
+
+	await persistQueue;
+	ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+}
+
+async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
+	let selectedTools = new Set<ChromeDevToolsToolName>(getActiveChromeDevtoolsTools(pi));
 	while (true) {
-		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), [
-			...CHROME_DEVTOOLS_TOOL_NAMES.map((toolName) => formatToolChoice(toolName, selectedTools)),
-			TOOL_SELECTOR_ENABLE_ALL,
-			TOOL_SELECTOR_DISABLE_ALL,
-			TOOL_SELECTOR_DONE,
-		]);
+		const rows = chromeDevtoolsToolSelectorRows();
+		const choices = rows.map((row) => formatToolSelectorRow(row, selectedTools));
+		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), choices);
+		if (!choice) break;
 
-		if (!choice || choice === TOOL_SELECTOR_DONE) {
-			ctx.ui.notify(await buildToolStatusMessage(pi), "info");
-			return;
-		}
+		const row = rows[choices.indexOf(choice)];
+		if (!row) continue;
+		if (row.kind === "action" && row.action === "done") break;
 
-		if (choice === TOOL_SELECTOR_ENABLE_ALL) {
+		if (row.kind === "tool") {
+			if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+			else selectedTools.add(row.toolName);
+		} else if (row.action === "enableAll") {
 			selectedTools = new Set(allChromeDevtoolsTools());
-		} else if (choice === TOOL_SELECTOR_DISABLE_ALL) {
+		} else if (row.action === "disableAll") {
 			selectedTools = new Set();
-		} else {
-			const selectedTool = toolNameFromChoice(choice);
-			if (!selectedTool) continue;
-
-			if (selectedTools.has(selectedTool)) selectedTools.delete(selectedTool);
-			else selectedTools.add(selectedTool);
 		}
 
 		await setSelectedChromeDevtoolsTools(pi, ctx, orderedChromeDevtoolsTools(selectedTools));
 	}
+
+	ctx.ui.notify(await buildToolStatusMessage(pi), "info");
 }
 
 async function updateChromeDevtoolsTools(
@@ -518,15 +618,21 @@ function toolSelectorTitle(selectedTools: ReadonlySet<ChromeDevToolsToolName>) {
 	return `Chrome DevTools tools (${selectedTools.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
 }
 
-function formatToolChoice(
-	toolName: ChromeDevToolsToolName,
-	selectedTools: ReadonlySet<ChromeDevToolsToolName>,
-) {
-	return `${selectedTools.has(toolName) ? "[x]" : "[ ]"} ${toolName}`;
+function chromeDevtoolsToolSelectorRows(): ToolSelectorRow[] {
+	return [
+		...CHROME_DEVTOOLS_TOOL_NAMES.map((toolName) => ({ kind: "tool" as const, toolName })),
+		{ kind: "action", action: "enableAll", label: TOOL_SELECTOR_ENABLE_ALL },
+		{ kind: "action", action: "disableAll", label: TOOL_SELECTOR_DISABLE_ALL },
+		{ kind: "action", action: "done", label: TOOL_SELECTOR_DONE },
+	];
 }
 
-function toolNameFromChoice(choice: string) {
-	return CHROME_DEVTOOLS_TOOL_NAMES.find((toolName) => choice.endsWith(toolName));
+function formatToolSelectorRow(
+	row: ToolSelectorRow,
+	selectedTools: ReadonlySet<ChromeDevToolsToolName>,
+) {
+	if (row.kind === "action") return row.label;
+	return `${selectedTools.has(row.toolName) ? "[x]" : "[ ]"} ${row.toolName}`;
 }
 
 function getActiveChromeDevtoolsTools(pi: ExtensionAPI) {
@@ -549,8 +655,10 @@ function formatRuntimeStatus(summary: ToolStatusSummary) {
 async function persistedSettingLabel() {
 	const settings = await loadSettings();
 	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
-	if (settings.kind === "invalid") return `default all enabled (invalid settings ignored: ${settings.reason})`;
-	return "default all enabled";
+	if (settings.kind === "invalid") {
+		return `none; current active-tool policy preserved (invalid settings ignored: ${settings.reason})`;
+	}
+	return "none; current active-tool policy preserved";
 }
 
 function formatPersistedSelection(tools: readonly ChromeDevToolsToolName[]) {
