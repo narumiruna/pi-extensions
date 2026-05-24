@@ -66,10 +66,6 @@ publish name:
 publish-all:
     for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
 
-# Install all active extension packages through pi
-install-all:
-    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just install "${dir#pi-}"; done
-
 # Preview individual packages that npm would publish
 pack-btw:
     just pack btw
