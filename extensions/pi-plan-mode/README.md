@@ -13,7 +13,8 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Enables built-in read-only tools by default while Plan mode is active.
 - Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
 - Blocks mutating built-in tools and bash commands such as `rm`, `git commit`, dependency installs, redirects, and editor launches.
-- Injects Codex-like Plan mode instructions: explore first, ask only non-discoverable questions, do not mutate files, and finish with `<proposed_plan>`.
+- Injects Codex-like Plan mode instructions: explore first, ask decision questions for high-impact ambiguity, do not mutate files, and finish with `<proposed_plan>` only when decision-complete.
+- Adds a required `plan_mode_question` tool so the agent can ask structured Plan-mode questions before finalizing a plan.
 - Detects proposed plan blocks and prompts you to implement, stay in Plan mode, or exit and discard the plan.
 - Shows Plan mode state in Pi's statusline as `📝 plan active` or `📝 plan ready`.
 - Persists Plan mode state in the Pi session so resume restores the mode.
@@ -46,13 +47,15 @@ pi -e ./extensions/pi-plan-mode
 
 Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user message. Use `/plan tools` to choose which tools are active while Plan mode is enabled; the selector is paginated at 10 tools per page.
 
-When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation.
+When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation. It should explore first, then use structured questions when your preference or a tradeoff materially changes the plan.
 
-By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, and available read-only built-ins such as `grep`, `find`, and `ls`. Built-in `edit` and `write` are blocked. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `biome_lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
+By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, available read-only built-ins such as `grep`, `find`, and `ls`, plus the required `plan_mode_question` tool. Built-in `edit` and `write` are blocked. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `biome_lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
+
+`plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path. If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 
 Pi activates tools by tool name. The `/plan tools` selector stores selections by name and shows each currently effective tool's source from Pi metadata, such as `built-in`, a user extension path, or a project extension path. If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
 
-A complete Plan mode answer should include exactly one block like this:
+A complete Plan mode answer should appear only after the agent has resolved discoverable facts and any high-impact user decisions. It should include exactly one block like this:
 
 ```xml
 <proposed_plan>
@@ -91,6 +94,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 
 - Plan mode is a conversational collaboration mode, not TODO/progress tracking.
 - `/plan <prompt>` follows Codex behavior by switching to Plan mode before submitting the inline prompt.
+- The agent should use `plan_mode_question` for important non-discoverable preferences or tradeoffs before finalizing.
 - `update_plan`-style checklist use is discouraged while Plan mode is active.
 - The implementation boundary is explicit: Plan mode restores tools before starting implementation, choosing implementation immediately triggers a normal agent turn with full tool access, and plain exit/off discards the proposed plan.
 - Pi extension safety is approximated with built-in tool restriction plus bash filtering; non-built-in tools are user-selected at user risk because Plan mode does not classify extension/custom tool behavior.

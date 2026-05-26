@@ -5,6 +5,7 @@ const STATUS_KEY = "plan-mode";
 const PLAN_WIDGET_KEY = "plan-mode-plan";
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
+const PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
 const PLAN_CONTEXT_MARKER = "[CODEX-LIKE PLAN MODE ACTIVE]";
 const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "bash", "grep", "find", "ls"]);
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
@@ -37,6 +38,95 @@ type TextBlock = {
 	type?: string;
 	text?: string;
 };
+
+type PlanModeQuestionOption = {
+	label: string;
+	description?: string;
+};
+
+type PlanModeQuestion = {
+	id: string;
+	header: string;
+	question: string;
+	options: PlanModeQuestionOption[];
+};
+
+type PlanModeQuestionParams = {
+	questions: PlanModeQuestion[];
+};
+
+type PlanModeQuestionAnswer = {
+	id: string;
+	header: string;
+	question: string;
+	answer: string;
+	wasCustom: boolean;
+	optionIndex?: number;
+};
+
+type PlanModeQuestionReason = "cancelled" | "ui_unavailable" | "plan_mode_inactive" | "invalid_input";
+
+type PlanModeQuestionDetails = {
+	cancelled: boolean;
+	reason?: PlanModeQuestionReason;
+	questions: PlanModeQuestion[];
+	answers?: PlanModeQuestionAnswer[];
+};
+
+const PLAN_MODE_QUESTION_PARAMS = {
+	type: "object",
+	additionalProperties: false,
+	required: ["questions"],
+	properties: {
+		questions: {
+			type: "array",
+			minItems: 1,
+			maxItems: 3,
+			description: "Questions to show the user. Prefer 1 and do not exceed 3.",
+			items: {
+				type: "object",
+				additionalProperties: false,
+				required: ["id", "header", "question", "options"],
+				properties: {
+					id: {
+						type: "string",
+						description: "Stable identifier for mapping answers (snake_case).",
+					},
+					header: {
+						type: "string",
+						description: "Short header label shown in the UI (12 or fewer chars).",
+					},
+					question: {
+						type: "string",
+						description: "Single-sentence prompt shown to the user.",
+					},
+					options: {
+						type: "array",
+						minItems: 2,
+						maxItems: 4,
+						description:
+							"Provide 2-4 mutually exclusive choices. Put the recommended option first when there is a clear default.",
+						items: {
+							type: "object",
+							additionalProperties: false,
+							required: ["label", "description"],
+							properties: {
+								label: {
+									type: "string",
+									description: "User-facing label (1-5 words).",
+								},
+								description: {
+									type: "string",
+									description: "One short sentence explaining impact/tradeoff if selected.",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	},
+} as const;
 
 const MUTATING_BASH_PATTERNS = [
 	/\brm\b/i,
@@ -91,6 +181,51 @@ export default function planMode(pi: ExtensionAPI) {
 		default: false,
 	});
 
+	pi.registerTool({
+		name: PLAN_MODE_QUESTION_TOOL_NAME,
+		label: "Plan question",
+		description:
+			"Ask the user one to three Plan-mode clarification questions with meaningful options, then wait for the answer. Only available while Plan mode is active.",
+		promptSnippet: "Ask user decision questions while Plan mode is active",
+		promptGuidelines: [
+			"In Plan mode, use plan_mode_question for important preferences, tradeoffs, or assumptions that cannot be discovered from read-only exploration.",
+		],
+		parameters: PLAN_MODE_QUESTION_PARAMS,
+		async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
+			if (!state.enabled) {
+				return planModeQuestionCancelled(
+					[],
+					"plan_mode_inactive",
+					"Error: plan_mode_question is only available while Plan mode is active.",
+				);
+			}
+
+			const parsed = normalizePlanModeQuestionParams(params);
+			if (!parsed.ok) {
+				return planModeQuestionCancelled([], "invalid_input", `Error: ${parsed.error}`);
+			}
+
+			if (!ctx.hasUI) {
+				return planModeQuestionCancelled(
+					parsed.questions,
+					"ui_unavailable",
+					"Unable to ask Plan-mode questions because interactive UI is not available.",
+				);
+			}
+
+			const answers = await askPlanModeQuestions(parsed.questions, ctx);
+			if (!answers) {
+				return planModeQuestionCancelled(
+					parsed.questions,
+					"cancelled",
+					"User cancelled the Plan-mode question prompt.",
+				);
+			}
+
+			return planModeQuestionAnswered(parsed.questions, answers);
+		},
+	});
+
 	pi.registerCommand("plan", {
 		description: "Enter or manage Codex-like Plan mode",
 		handler: async (args, ctx) => {
@@ -123,6 +258,7 @@ export default function planMode(pi: ExtensionAPI) {
 		restoreState(ctx);
 		if (pi.getFlag("plan") === true) state.enabled = true;
 		if (state.enabled) activatePlanModeTools();
+		else deactivatePlanModeQuestionTool();
 		updateUi(ctx);
 	});
 
@@ -151,15 +287,18 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	pi.on("context", async (event) => {
-		if (state.enabled) return;
+		const messagesWithoutLegacyPlanContext = event.messages.filter(
+			(message: unknown) => !messageContainsLegacyPlanModeContextArtifact(message),
+		);
+		if (state.enabled) return { messages: messagesWithoutLegacyPlanContext };
 		return {
-			messages: event.messages
+			messages: messagesWithoutLegacyPlanContext
 				.filter((message: unknown) => !messageContainsInactivePlanModeArtifact(message))
 				.map(stripProposedPlanBlocksFromMessage),
 		};
 	});
 
-	pi.on("before_agent_start", (_event, ctx) => {
+	pi.on("before_agent_start", (event, ctx) => {
 		if (!state.enabled) return;
 		if (state.latestPlan || state.awaitingAction) {
 			state = { ...state, latestPlan: undefined, awaitingAction: false };
@@ -168,11 +307,7 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 		applyPlanModeTools();
 		return {
-			message: {
-				customType: PLAN_CONTEXT_MESSAGE_TYPE,
-				content: buildPlanModePrompt(),
-				display: false,
-			},
+			systemPrompt: `${event.systemPrompt}\n\n${buildPlanModePrompt()}`,
 		};
 	});
 
@@ -208,7 +343,7 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	function enterPlanMode(ctx: ExtensionContext) {
-		if (!state.enabled) previousTools = safeGetActiveTools();
+		if (!state.enabled) previousTools = withoutPlanModeQuestionTool(safeGetActiveTools());
 		state = { ...state, enabled: true, awaitingAction: false };
 		activatePlanModeTools();
 		persistState();
@@ -379,7 +514,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function activatePlanModeTools() {
-		previousTools ??= safeGetActiveTools();
+		previousTools ??= withoutPlanModeQuestionTool(safeGetActiveTools());
 		applyPlanModeTools();
 	}
 
@@ -389,12 +524,14 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function planModeToolNames() {
 		const tools = selectableTools();
-		if (tools.length === 0) return ["read", "bash"];
+		if (tools.length === 0) return ["read", "bash", PLAN_MODE_QUESTION_TOOL_NAME];
 
 		const selectedNames = planModeSelectedNames(tools);
-		return tools
-			.filter((tool) => selectedNames.has(tool.name) && canSelectToolInPlanMode(tool))
-			.map((tool) => tool.name);
+		return withRequiredPlanModeTools(
+			tools
+				.filter((tool) => selectedNames.has(tool.name) && canSelectToolInPlanMode(tool))
+				.map((tool) => tool.name),
+		);
 	}
 
 	function planModeSelectedNames(tools: ToolInfo[]) {
@@ -428,7 +565,9 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function selectableTools() {
-		return safeGetAllTools().sort(compareTools);
+		return safeGetAllTools()
+			.filter((tool) => tool.name !== PLAN_MODE_QUESTION_TOOL_NAME)
+			.sort(compareTools);
 	}
 
 	function toolSelectorPageCount(tools: ToolInfo[]) {
@@ -444,8 +583,17 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function restoreTools() {
-		pi.setActiveTools(previousTools && previousTools.length > 0 ? previousTools : DEFAULT_TOOLS);
+		const restoredTools = previousTools && previousTools.length > 0 ? previousTools : DEFAULT_TOOLS;
+		pi.setActiveTools(withoutPlanModeQuestionTool(restoredTools));
 		previousTools = undefined;
+	}
+
+	function deactivatePlanModeQuestionTool() {
+		const activeTools = safeGetActiveTools();
+		const filteredTools = withoutPlanModeQuestionTool(activeTools);
+		if (filteredTools.length !== activeTools.length) {
+			pi.setActiveTools(filteredTools);
+		}
 	}
 
 	function safeGetActiveTools() {
@@ -578,19 +726,194 @@ function unique(values: string[]) {
 	return Array.from(new Set(values));
 }
 
+function withRequiredPlanModeTools(toolNames: string[]) {
+	return unique([...withoutPlanModeQuestionTool(toolNames), PLAN_MODE_QUESTION_TOOL_NAME]);
+}
+
+function withoutPlanModeQuestionTool(toolNames: string[]) {
+	return toolNames.filter((toolName) => toolName !== PLAN_MODE_QUESTION_TOOL_NAME);
+}
+
+type NormalizePlanModeQuestionParamsResult =
+	| { ok: true; questions: PlanModeQuestion[] }
+	| { ok: false; error: string };
+
+function normalizePlanModeQuestionParams(input: unknown): NormalizePlanModeQuestionParamsResult {
+	if (!isRecord(input) || !Array.isArray(input.questions)) {
+		return { ok: false, error: "questions must be an array" };
+	}
+	if (input.questions.length < 1 || input.questions.length > 3) {
+		return { ok: false, error: "questions must contain 1-3 items" };
+	}
+
+	const questions: PlanModeQuestion[] = [];
+	for (const [questionIndex, rawQuestion] of input.questions.entries()) {
+		if (!isRecord(rawQuestion)) {
+			return { ok: false, error: `question ${questionIndex + 1} must be an object` };
+		}
+
+		const id = stringField(rawQuestion.id);
+		const header = stringField(rawQuestion.header);
+		const question = stringField(rawQuestion.question);
+		if (!id || !header || !question) {
+			return {
+				ok: false,
+				error: `question ${questionIndex + 1} requires non-empty id, header, and question`,
+			};
+		}
+
+		if (!Array.isArray(rawQuestion.options)) {
+			return { ok: false, error: `question ${questionIndex + 1} options must be an array` };
+		}
+		if (rawQuestion.options.length < 2 || rawQuestion.options.length > 4) {
+			return { ok: false, error: `question ${questionIndex + 1} options must contain 2-4 items` };
+		}
+
+		const options: PlanModeQuestionOption[] = [];
+		for (const [optionIndex, rawOption] of rawQuestion.options.entries()) {
+			if (!isRecord(rawOption)) {
+				return {
+					ok: false,
+					error: `question ${questionIndex + 1} option ${optionIndex + 1} must be an object`,
+				};
+			}
+
+			const label = stringField(rawOption.label);
+			if (!label) {
+				return {
+					ok: false,
+					error: `question ${questionIndex + 1} option ${optionIndex + 1} requires a label`,
+				};
+			}
+			const description = stringField(rawOption.description);
+			if (!description) {
+				return {
+					ok: false,
+					error: `question ${questionIndex + 1} option ${optionIndex + 1} requires a description`,
+				};
+			}
+			options.push({ label, description });
+		}
+
+		questions.push({ id, header, question, options });
+	}
+
+	return { ok: true, questions };
+}
+
+async function askPlanModeQuestions(
+	questions: PlanModeQuestion[],
+	ctx: ExtensionContext,
+): Promise<PlanModeQuestionAnswer[] | undefined> {
+	const answers: PlanModeQuestionAnswer[] = [];
+	for (const question of questions) {
+		const choices = question.options.map(formatPlanModeQuestionChoice);
+		const otherChoice = `${question.options.length + 1}. Other (free-form)`;
+		const choice = await ctx.ui.select(`${question.header}: ${question.question}`, [...choices, otherChoice]);
+		if (!choice) return undefined;
+
+		if (choice === otherChoice) {
+			const customAnswer = (await ctx.ui.editor(question.question, ""))?.trim();
+			if (!customAnswer) return undefined;
+			answers.push({
+				id: question.id,
+				header: question.header,
+				question: question.question,
+				answer: customAnswer,
+				wasCustom: true,
+			});
+			continue;
+		}
+
+		const optionIndex = choices.indexOf(choice);
+		const option = question.options[optionIndex];
+		if (!option) return undefined;
+		answers.push({
+			id: question.id,
+			header: question.header,
+			question: question.question,
+			answer: option.label,
+			wasCustom: false,
+			optionIndex: optionIndex + 1,
+		});
+	}
+	return answers;
+}
+
+function formatPlanModeQuestionChoice(option: PlanModeQuestionOption, index: number) {
+	return `${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`;
+}
+
+function planModeQuestionAnswered(questions: PlanModeQuestion[], answers: PlanModeQuestionAnswer[]) {
+	return {
+		content: [{ type: "text" as const, text: formatPlanModeQuestionPayload({ cancelled: false, answers }) }],
+		details: { cancelled: false, questions, answers } satisfies PlanModeQuestionDetails,
+	};
+}
+
+function planModeQuestionCancelled(
+	questions: PlanModeQuestion[],
+	reason: PlanModeQuestionReason,
+	message: string,
+) {
+	return {
+		content: [{ type: "text" as const, text: formatPlanModeQuestionPayload({ cancelled: true, reason, message }) }],
+		details: { cancelled: true, reason, questions } satisfies PlanModeQuestionDetails,
+	};
+}
+
+function formatPlanModeQuestionPayload(payload: {
+	cancelled: boolean;
+	reason?: PlanModeQuestionReason;
+	message?: string;
+	answers?: PlanModeQuestionAnswer[];
+}) {
+	return JSON.stringify(payload, null, 2);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function stringField(value: unknown) {
+	return typeof value === "string" ? value.trim() : undefined;
+}
+
 function buildPlanModePrompt() {
 	return `${PLAN_CONTEXT_MARKER}
-You are in Plan Mode, a Codex-like collaboration mode for producing a decision-complete implementation plan.
+# Plan Mode (Conversational)
 
-Mode rules:
+You are in Plan Mode, a Codex-like collaboration mode for producing a decision-complete implementation plan. Chat your way to the plan before finalizing it. A final plan must leave no implementation decisions unresolved.
+
+## Mode rules
+
 - Stay in Plan Mode until a developer or extension explicitly exits it.
 - Treat requests to implement as requests to plan the implementation; do not edit files or carry out the plan.
-- Use non-mutating exploration first: read files, search, inspect configuration, run read-only checks, and resolve discoverable facts before asking the user.
-- Ask the user only for preferences or tradeoffs that cannot be discovered from the repository.
 - Do not use update_plan/TODO tooling in Plan Mode; Plan Mode is conversational planning, not execution progress tracking.
 - Plan Mode manages built-in tool safety only. Non-built-in tools are disabled by default and may be enabled by the user at their own risk.
 - Do not perform mutating actions: no edit/write tools, no patching, no formatting that rewrites files, no dependency installation, no commits, no migrations.
-- When the plan is decision-complete, output exactly one proposed plan block using:
+
+## Phase 1 — Ground in the environment
+
+- Explore first and ask second. Use non-mutating exploration to read files, search, inspect configuration, run read-only checks, and resolve discoverable facts.
+- Before asking the user any question, perform at least one targeted non-mutating exploration pass unless no local environment or repository is available.
+- Do not ask questions that can be answered from repository or system truth. Ask only when multiple plausible choices remain, a needed identifier/context is missing, or the ambiguity is product intent.
+
+## Phase 2 — Intent chat
+
+- Keep asking until you can clearly state the goal, success criteria, in/out of scope, constraints, current state, and key preferences/tradeoffs.
+- Bias toward questions over guessing: if a high-impact ambiguity remains, do not produce a proposed plan yet.
+
+## Phase 3 — Implementation chat
+
+- Once intent is stable, keep asking until the spec is decision-complete: approach, interfaces, data flow, edge cases/failure modes, testing and acceptance criteria, and any migration or compatibility constraints.
+- Use plan_mode_question for important preferences, tradeoffs, or assumption locks that cannot be discovered by non-mutating exploration. Ask 1-3 concise questions with 2-4 meaningful options. Do not include filler options.
+- If plan_mode_question returns cancelled or ui_unavailable, do not jump straight to a final plan when the missing answer is high impact. Ask one concise plain-text question or proceed only with a clearly stated low-risk assumption.
+
+## Finalization rule
+
+Only output the final plan when it is decision-complete and leaves no decisions to the implementer. When presenting the official plan, output exactly one proposed plan block and keep the tags exactly as shown:
+
 <proposed_plan>
 # Title
 
@@ -606,7 +929,8 @@ Mode rules:
 ## Assumptions
 ...
 </proposed_plan>
-- Keep the proposed plan concise, implementation-ready, and free of open decisions.`;
+
+Keep the proposed plan concise, human and agent digestible, and free of open decisions. Do not ask "should I proceed?" in the final output; the Plan-mode ready menu handles implementation, staying in Plan mode, or exit.`;
 }
 
 function readCommand(input: unknown) {
@@ -637,12 +961,14 @@ function latestAssistantText(messages: unknown) {
 	return "";
 }
 
+function messageContainsLegacyPlanModeContextArtifact(message: unknown) {
+	const candidate = unwrapSessionMessage(message);
+	return candidate.customType === PLAN_CONTEXT_MESSAGE_TYPE;
+}
+
 function messageContainsInactivePlanModeArtifact(message: unknown) {
 	const candidate = unwrapSessionMessage(message);
-	return (
-		candidate.customType === PLAN_CONTEXT_MESSAGE_TYPE ||
-		candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE
-	);
+	return candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE;
 }
 
 function stripProposedPlanBlocksFromMessage<T>(message: T): T {
