@@ -635,8 +635,7 @@ function messageContainsInactivePlanModeArtifact(message: unknown) {
 	const candidate = unwrapSessionMessage(message);
 	return (
 		candidate.customType === PLAN_CONTEXT_MESSAGE_TYPE ||
-		candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE ||
-		contentText(candidate.content).includes(PLAN_CONTEXT_MARKER)
+		candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE
 	);
 }
 
