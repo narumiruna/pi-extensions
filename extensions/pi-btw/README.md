@@ -9,7 +9,7 @@ Use it when you want to ask a temporary question, inspect context, or get a shor
 ## ✨ Features
 
 - Adds a `/btw <question>` command to Pi.
-- Answers side questions in a temporary UI.
+- Answers side questions in a temporary, scrollable UI.
 - Uses the current session branch as context.
 - Does not append the side question or answer to the main conversation.
 - Works as an independently installable npm Pi extension package.
@@ -45,6 +45,11 @@ Examples:
 /btw summarize the current implementation before we continue
 /btw is this API name idiomatic?
 ```
+
+Long answers open in a pager-style view. Use `↑`/`↓` or `k`/`j` to scroll by line,
+`PgUp`/`PgDn`, `Shift+Space`/`Space`, or `Ctrl+B`/`Ctrl+F` to scroll by page,
+`Ctrl+U`/`Ctrl+D` to scroll by half page, and `Home`/`End` to jump. Close with
+`q`, `Esc`, `Enter`, or `Ctrl+C`.
 
 ## 🧠 Why use pi-btw?
 
