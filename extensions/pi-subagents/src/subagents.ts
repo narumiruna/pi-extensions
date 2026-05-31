@@ -1521,9 +1521,11 @@ export default function (pi: ExtensionAPI) {
 
 				// Save to global settings
 				const updatedAgents = { ...currentAgents };
+				let deleted = false;
 				if (selectedTools.length === 0) {
 					// Remove agent entry if no tools selected to use defaults
 					delete updatedAgents[agentName];
+					deleted = true;
 				} else {
 					const isSameAsDefault =
 						defaultTools &&
@@ -1532,6 +1534,7 @@ export default function (pi: ExtensionAPI) {
 					if (isSameAsDefault) {
 						// Tools match defaults — no need to store, remove entry
 						delete updatedAgents[agentName];
+						deleted = true;
 					} else {
 						updatedAgents[agentName] = {
 							...updatedAgents[agentName],
@@ -1546,10 +1549,10 @@ export default function (pi: ExtensionAPI) {
 				};
 
 				saveSubagentConfig(newSettings);
-				ctx.ui.notify(
-					`${agentName}: ${selectedTools.length} tool${selectedTools.length !== 1 ? "s" : ""} configured`,
-					"info",
-				);
+				const message = deleted
+					? `${agentName}: defaults restored`
+					: `${agentName}: ${selectedTools.length} tool${selectedTools.length !== 1 ? "s" : ""} configured`;
+				ctx.ui.notify(message, "info");
 				// Saved — exit the loop
 				break;
 			}
