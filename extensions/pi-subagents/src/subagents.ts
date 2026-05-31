@@ -21,12 +21,30 @@ import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	type ExtensionAPI,
+	getAgentDir,
 	getMarkdownTheme,
 	withFileMutationQueue,
+	DynamicBorder,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+	Container,
+	Markdown,
+	Spacer,
+	Text,
+	type SelectItem,
+	SelectList,
+	Key,
+	matchesKey,
+	truncateToWidth,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, type AgentSource, discoverAgents } from "./agents.js";
+import {
+	type AgentConfig,
+	type AgentScope,
+	type AgentSource,
+	type SubagentSettings,
+	discoverAgents,
+} from "./agents.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -586,6 +604,78 @@ const SubagentParams = Type.Object({
 	timeoutMs: Type.Optional(TimeoutMs),
 });
 
+// ---- Settings helpers ----
+
+function readSubagentSettings(): SubagentSettings | undefined {
+	const configPath = path.join(getAgentDir(), "pi-subagents-config.json");
+	if (!fs.existsSync(configPath)) return undefined;
+	try {
+		return JSON.parse(fs.readFileSync(configPath, "utf-8"));
+	} catch {
+		return undefined;
+	}
+}
+
+function saveSubagentConfig(settings: SubagentSettings): void {
+	const agentDir = getAgentDir();
+	fs.mkdirSync(agentDir, { recursive: true });
+
+	const configPath = path.join(agentDir, "pi-subagents-config.json");
+	fs.writeFileSync(configPath, `${JSON.stringify(settings, null, "\t")}\n`, "utf-8");
+}
+
+// ---- Tool toggle component ----
+
+class ToolToggleList {
+	private items: { name: string; selected: boolean }[];
+	private cursor = 0;
+	private cachedWidth?: number;
+	private cachedLines?: string[];
+	onDone?: (selected: string[]) => void;
+	onCancel?: () => void;
+
+	constructor(tools: string[], selected: Set<string>) {
+		this.items = tools.map((name) => ({ name, selected: selected.has(name) }));
+	}
+
+	private getSelectedNames(): string[] {
+		return this.items.filter((i) => i.selected).map((i) => i.name);
+	}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, Key.up) && this.cursor > 0) {
+			this.cursor--;
+			this.invalidate();
+		} else if (matchesKey(data, Key.down) && this.cursor < this.items.length - 1) {
+			this.cursor++;
+			this.invalidate();
+		} else if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
+			this.items[this.cursor].selected = !this.items[this.cursor].selected;
+			this.invalidate();
+		} else if (matchesKey(data, Key.escape)) {
+			this.onCancel?.();
+		} else if (data === "s" || data === "S") {
+			this.onDone?.(this.getSelectedNames());
+		}
+	}
+
+	render(width: number): string[] {
+		if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
+		this.cachedWidth = width;
+		this.cachedLines = this.items.map((item, i) => {
+			const pointer = i === this.cursor ? ">" : " ";
+			const check = item.selected ? "✓" : "○";
+			return truncateToWidth(`${pointer} ${check} ${item.name}`, width);
+		});
+		return this.cachedLines;
+	}
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent",
@@ -610,7 +700,8 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
-			const discovery = discoverAgents(ctx.cwd, agentScope);
+			const config = readSubagentSettings();
+			const discovery = discoverAgents(ctx.cwd, agentScope, config);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 			const defaultTimeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -1288,6 +1379,180 @@ export default function (pi: ExtensionAPI) {
 
 			const text = result.content[0];
 			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+		},
+	});
+
+	// ---- Configuration command ----
+
+	pi.registerCommand("subagents:config", {
+		description: "Configure which tools each subagent can use",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) {
+				return;
+			}
+
+			// Get current settings
+			const currentSettings = readSubagentSettings() ?? {};
+			const currentAgents = currentSettings.agents ?? {};
+
+			// Discover agents to show which ones are available
+			const discovery = discoverAgents(ctx.cwd, "user", currentSettings);
+			const agents = discovery.agents;
+
+			if (agents.length === 0) {
+				ctx.ui.notify("No agents found", "warning");
+				return;
+			}
+
+			// Loop: agent selection → tool toggle (Esc in tools returns here)
+			while (true) {
+				// Step 1: pick an agent to configure
+				const agentItems: SelectItem[] = agents.map((a) => {
+					const cfg = currentAgents[a.name];
+					const toolSummary = cfg?.tools ? cfg.tools.join(", ") : "defaults";
+					return {
+						val: a.name,
+						label: a.name,
+						desc: `${a.source} · tools: ${toolSummary}`,
+					};
+				});
+
+				const agentName = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+					const container = new Container();
+					container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+					container.addChild(
+						new Text(theme.fg("accent", theme.bold("Subagent Tool Configuration")), 1, 0),
+					);
+					container.addChild(new Spacer(1));
+					container.addChild(
+						new Text(theme.fg("muted", "Select an agent to configure its allowed tools:"), 1, 0),
+					);
+					container.addChild(new Spacer(1));
+					const selectList = new SelectList(agentItems, Math.min(agentItems.length + 2, 15), {
+						selectedPrefix: (t: string) => theme.fg("accent", t),
+						selectedText: (t: string) => theme.fg("accent", t),
+						desc: (t: string) => theme.fg("muted", t),
+						scrollInfo: (t: string) => theme.fg("dim", t),
+						noMatch: (t: string) => theme.fg("warning", t),
+					});
+					selectList.onSelect = (item) => done(item.val);
+					selectList.onCancel = () => done(null);
+					container.addChild(selectList);
+					container.addChild(
+						new Text(theme.fg("dim", "↑↓ navigate · enter select · esc cancel"), 1, 0),
+					);
+					container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+					return {
+						render: (w: number) => container.render(w),
+						invalidate: () => container.invalidate(),
+						handleInput: (data: string) => {
+							selectList.handleInput(data);
+							tui.requestRender();
+						},
+					};
+				});
+
+				if (!agentName) return;
+
+				const agent = agents.find((a) => a.name === agentName);
+				if (!agent) return;
+
+				// Step 2: toggle tools for the selected agent
+				// Get the default tools for this agent (from built-in definition)
+				const defaultTools = agent.tools;
+				const currentTools = currentAgents[agentName]?.tools ?? defaultTools ?? [];
+
+				// Get all available tools from pi's registry
+				const allTools = pi.getAllTools().map((t) => t.name);
+				// Sort: currently selected tools first, then rest alphabetically
+				const currentSet = new Set(currentTools);
+				const selectedFirst = [
+					...currentTools.filter((t) => allTools.includes(t)),
+					...allTools.filter((t) => !currentSet.has(t)),
+				];
+
+				const selectedTools = await ctx.ui.custom<string[] | null>((tui, theme, _kb, done) => {
+					const toggleList = new ToolToggleList(selectedFirst, currentSet);
+
+					const container = new Container();
+					container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+					container.addChild(
+						new Text(
+							theme.fg("accent", theme.bold(`${agentName} tools`)) +
+								theme.fg("muted", ` (${agent.source})`),
+							1,
+							0,
+						),
+					);
+					container.addChild(new Spacer(1));
+					container.addChild(
+						new Text(theme.fg("muted", "Toggle tools with Enter/Space. S to save, Esc to cancel."), 1, 0),
+					);
+					container.addChild(new Spacer(1));
+
+					const listContainer = new Container();
+					listContainer.addChild({
+						render: (w: number) => toggleList.render(w),
+						invalidate: () => toggleList.invalidate(),
+					});
+					container.addChild(listContainer);
+
+					container.addChild(new Spacer(1));
+					container.addChild(
+						new Text(theme.fg("dim", "↑↓ navigate · enter/space toggle · S save · esc cancel"), 1, 0),
+					);
+					container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+
+					toggleList.onDone = (tools) => done(tools);
+					toggleList.onCancel = () => done(null);
+
+					return {
+						render: (w: number) => container.render(w),
+						invalidate: () => container.invalidate(),
+						handleInput: (data: string) => {
+							toggleList.handleInput(data);
+							tui.requestRender();
+						},
+					};
+				});
+
+				// null means user cancelled — loop back to agent selection
+				if (selectedTools === null) continue;
+
+				// Save to global settings
+				const updatedAgents = { ...currentAgents };
+				if (selectedTools.length === 0) {
+					// Remove agent entry if no tools selected to use defaults
+					delete updatedAgents[agentName];
+				} else {
+					const isSameAsDefault =
+						defaultTools &&
+						defaultTools.length === selectedTools.length &&
+						defaultTools.every((t, i) => t === selectedTools[i]);
+					if (isSameAsDefault) {
+						// Tools match defaults — no need to store, remove entry
+						delete updatedAgents[agentName];
+					} else {
+						updatedAgents[agentName] = {
+							...updatedAgents[agentName],
+							tools: selectedTools,
+						};
+					}
+				}
+
+				const newSettings: SubagentSettings = {
+					...currentSettings,
+					agents: Object.keys(updatedAgents).length > 0 ? updatedAgents : undefined,
+				};
+
+				saveSubagentConfig(newSettings);
+				ctx.ui.notify(
+					`${agentName}: ${selectedTools.length} tool${selectedTools.length !== 1 ? "s" : ""} configured`,
+					"info",
+				);
+				// Saved — exit the loop
+				break;
+			}
 		},
 	});
 }

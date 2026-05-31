@@ -20,6 +20,16 @@ export interface AgentConfig {
 	filePath: string;
 }
 
+export interface SubagentAgentConfig {
+	tools?: string[];
+	model?: string | null;
+	timeoutMs?: number | null;
+}
+
+export interface SubagentSettings {
+	agents?: Record<string, SubagentAgentConfig>;
+}
+
 const BUILT_IN_AGENTS: AgentConfig[] = [
 	{
 		name: "scout",
@@ -164,7 +174,11 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
+export function discoverAgents(
+	cwd: string,
+	scope: AgentScope,
+	config?: SubagentSettings,
+): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
@@ -176,7 +190,18 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	// Lowest priority: built-ins are always available, then user agents, then
 	// trusted project agents if requested. This mirrors the subagent boundary
 	// pattern in ./src: stable built-ins plus overridable local definitions.
-	for (const agent of BUILT_IN_AGENTS) agentMap.set(agent.name, agent);
+	for (const agent of BUILT_IN_AGENTS) {
+		const override = config?.agents?.[agent.name];
+		if (override) {
+			agentMap.set(agent.name, {
+				...agent,
+				tools: override.tools ?? agent.tools,
+				model: override.model ?? agent.model,
+			});
+		} else {
+			agentMap.set(agent.name, agent);
+		}
+	}
 
 	if (scope === "both") {
 		for (const agent of userAgents) agentMap.set(agent.name, agent);
