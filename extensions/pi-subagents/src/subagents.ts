@@ -1458,8 +1458,12 @@ export default function (pi: ExtensionAPI) {
 				if (!agent) return;
 
 				// Step 2: toggle tools for the selected agent
-				// Get the default tools for this agent (from built-in definition)
-				const defaultTools = agent.tools;
+				// Discover without overrides to get original built-in/frontmatter defaults.
+				// The main discovery above applies saved overrides, so agent.tools is already
+				// overridden — using it for the reset-to-default comparison would match the
+				// override against itself and silently delete it on a no-op save.
+				const defaultDiscovery = discoverAgents(ctx.cwd, "user");
+				const defaultTools = defaultDiscovery.agents.find((a) => a.name === agentName)?.tools;
 				const currentTools = currentAgents[agentName]?.tools ?? defaultTools ?? [];
 
 				// Get all available tools from pi's registry
