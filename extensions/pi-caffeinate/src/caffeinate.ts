@@ -320,12 +320,12 @@ function updateStatus(ctx: ExtensionContext) {
 	}
 
 	if (state.process) {
-		ctx.ui.setStatus(STATUS_KEY, "💊 awake");
+		ctx.ui.setStatus(STATUS_KEY, `${getIcon()} awake`);
 		return;
 	}
 
 	if (!state.available) {
-		ctx.ui.setStatus(STATUS_KEY, "💊 unavailable");
+		ctx.ui.setStatus(STATUS_KEY, `${getIcon()} unavailable`);
 		return;
 	}
 
@@ -351,4 +351,8 @@ function formatExit(code: number | null, signal: NodeJS.Signals | null) {
 function isDisabled() {
 	const value = process.env.PI_CAFFEINATE_DISABLED?.trim().toLowerCase();
 	return value ? DISABLED_VALUES.has(value) : false;
+}
+
+function getIcon() {
+	return process.env.PI_CAFFEINATE_ICON?.trim() ?? "💊";
 }
