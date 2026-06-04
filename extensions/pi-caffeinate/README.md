@@ -14,6 +14,7 @@ It is designed for long-running coding, refactoring, debugging, web research, an
 - Supports macOS, Windows, WSL, and Linux.
 - Provides `/caffeinate-status` and `/caffeinate-stop` commands.
 - Allows a custom inhibitor command through environment configuration.
+- Allows a custom status icon through environment configuration.
 - Fails safely when no supported inhibitor is available.
 
 ## 📦 Install
@@ -73,6 +74,12 @@ PI_CAFFEINATE_COMMAND='systemd-inhibit --what=idle:sleep --why="pi running" --mo
 ```
 
 The custom command is parsed with shell-like quoting and is run directly without a shell.
+
+Customise the status bar icon (default: `💊`):
+
+```bash
+PI_CAFFEINATE_ICON='☕️' pi
+```
 
 ## 🧠 Why use pi-caffeinate?
 
