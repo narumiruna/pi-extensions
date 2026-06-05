@@ -13,6 +13,7 @@ Use it to split research, planning, implementation, and review work across focus
 - Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
+- Provides `/subagents:config` to persist per-agent tool allow-lists.
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, abort propagation, and streaming progress.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete worker output in tool details and a concise result for the main agent.
@@ -166,6 +167,19 @@ Built-in agents are available without setup and can be overridden by user or pro
 | `general`, `general-purpose` | Aliases for `worker`. | Pi default tools |
 
 Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps subprocesses usable across different Pi setups.
+
+## ⚙️ Configure agent tools
+
+Run `/subagents:config` in an interactive Pi session to edit the tools each subagent may use.
+The command stores settings in `~/.pi/agent/pi-subagents-config.json`.
+
+- Select an agent, then press Enter or Space to toggle tools.
+- Press `S` to save, or Esc to cancel and return to agent selection.
+- Save the default selection to remove a custom override and use the agent defaults again.
+- Deselect every tool and save to run that agent with no tools.
+
+Configured tool names that are not currently registered are preserved, so settings for tools from
+other extension sessions are not silently dropped.
 
 ## 🧩 Custom agents
 

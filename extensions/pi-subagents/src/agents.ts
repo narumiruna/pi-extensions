@@ -15,9 +15,20 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	timeoutMs?: number;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
+}
+
+export interface SubagentAgentConfig {
+	tools?: string[];
+	model?: string | null;
+	timeoutMs?: number | null;
+}
+
+export interface SubagentSettings {
+	agents?: Record<string, SubagentAgentConfig>;
 }
 
 const BUILT_IN_AGENTS: AgentConfig[] = [
@@ -164,7 +175,15 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
+function hasOwn(obj: object, key: PropertyKey): boolean {
+	return Object.hasOwn(obj, key);
+}
+
+export function discoverAgents(
+	cwd: string,
+	scope: AgentScope,
+	config?: SubagentSettings,
+): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
@@ -185,6 +204,23 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		for (const agent of userAgents) agentMap.set(agent.name, agent);
 	} else {
 		for (const agent of projectAgents) agentMap.set(agent.name, agent);
+	}
+
+	// Apply user-configured overrides (from /subagents:config) on top of
+	// the final resolved agent map, regardless of agent source.
+	for (const [name, override] of Object.entries(config?.agents ?? {})) {
+		const agent = agentMap.get(name);
+		if (!agent) continue;
+
+		const nextAgent: AgentConfig = { ...agent };
+		if (hasOwn(override, "tools")) nextAgent.tools = override.tools;
+		if (hasOwn(override, "model")) {
+			nextAgent.model = override.model === null ? undefined : override.model;
+		}
+		if (hasOwn(override, "timeoutMs")) {
+			nextAgent.timeoutMs = override.timeoutMs === null ? undefined : override.timeoutMs;
+		}
+		agentMap.set(name, nextAgent);
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
