@@ -103,6 +103,9 @@ pack-sync:
 pack-subagents:
     just pack subagents
 
+pack-wait-what:
+    just pack wait-what
+
 # Try individual packages from this working tree as temporary pi packages
 try-btw:
     just try btw
@@ -139,6 +142,9 @@ try-sync:
 
 try-subagents:
     just try subagents
+
+try-wait-what:
+    just try wait-what
 
 # Install individual packages through pi
 install-btw:
@@ -177,6 +183,9 @@ install-sync:
 install-subagents:
     just install subagents
 
+install-wait-what:
+    just install wait-what
+
 # Publish individual packages to npm
 publish-btw:
     just publish btw
@@ -213,6 +222,9 @@ publish-sync:
 
 publish-subagents:
     just publish subagents
+
+publish-wait-what:
+    just publish wait-what
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch
