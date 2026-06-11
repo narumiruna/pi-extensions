@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-lsp",
-	"version": "0.1.37",
+	"version": "0.2.0",
 	"description": "Pi extension that exposes configurable, language-agnostic LSP tools through a shared runner.",
 	"type": "module",
 	"license": "MIT",

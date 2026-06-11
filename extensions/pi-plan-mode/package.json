@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-plan-mode",
-	"version": "0.1.37",
+	"version": "0.2.0",
 	"description": "Pi extension that adds a Codex-like read-only /plan collaboration mode.",
 	"type": "module",
 	"license": "MIT",
