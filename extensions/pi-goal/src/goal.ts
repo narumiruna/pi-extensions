@@ -154,6 +154,7 @@ export default function goal(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		clearCompletionStatusTimer();
 		clearContinuationTracking();
 		activeGoal = loadGoalFromSession(ctx);
 		if (activeGoal) updateStatus(ctx, activeGoal);
@@ -164,7 +165,7 @@ export default function goal(pi: ExtensionAPI) {
 		if (activeGoal) persistGoal(activeGoal);
 		clearContinuationTracking();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		if (completionStatusTimer) clearTimeout(completionStatusTimer);
+		clearCompletionStatusTimer();
 	});
 
 	pi.on("input", (event) => {
@@ -520,6 +521,7 @@ async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) 
 }
 
 function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
+	clearCompletionStatusTimer();
 	ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
 }
 
@@ -728,9 +730,23 @@ function clearActiveGoal(ctx: StatusContext) {
 }
 
 function showCompletionStatus(ctx: StatusContext) {
-	if (completionStatusTimer) clearTimeout(completionStatusTimer);
+	clearCompletionStatusTimer();
 	ctx.ui.setStatus(STATUS_KEY, "🎯 complete");
-	completionStatusTimer = setTimeout(() => ctx.ui.setStatus(STATUS_KEY, undefined), 8_000);
+	completionStatusTimer = setTimeout(() => {
+		completionStatusTimer = undefined;
+		try {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+		} catch {
+			// The completion status is best-effort; the captured ctx may be stale after
+			// session replacement or reload before this timer fires.
+		}
+	}, 8_000);
+}
+
+function clearCompletionStatusTimer() {
+	if (!completionStatusTimer) return;
+	clearTimeout(completionStatusTimer);
+	completionStatusTimer = undefined;
 }
 
 function readState(): Record<string, unknown> {
