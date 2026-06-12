@@ -947,7 +947,6 @@ async function ensureDevToolsEndpoint(waitMs = DEFAULT_ENDPOINT_WAIT_MS) {
 				await ensureManagedBrowserLaunched(waitMs);
 				return;
 			}
-			if (isRetryableEndpointError(error)) return;
 			throw error;
 		}
 	}
