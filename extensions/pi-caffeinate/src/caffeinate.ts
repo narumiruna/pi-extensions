@@ -34,7 +34,7 @@ const MENU_OPTIONS = {
 	help: "Show command help",
 } as const;
 const MODE_OPTIONS = {
-	display: "Keep display awake",
+	display: "Keep system and display awake",
 	sleep: "Keep system awake; allow display sleep",
 } as const;
 
