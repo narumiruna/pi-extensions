@@ -59,7 +59,19 @@ If no supported inhibitor is available, the extension stays loaded and reports t
 /caffeinate
 ```
 
-Opens mode and status controls. In non-interactive sessions, it prints command usage and status.
+Opens keep-awake controls. In non-interactive sessions, it prints command usage and status.
+
+```text
+/caffeinate display
+```
+
+Keeps the system and screen/display awake. If an inhibitor is currently active, it is restarted so the new mode applies immediately.
+
+```text
+/caffeinate sleep
+```
+
+Keeps the system awake while allowing normal display sleep. If an inhibitor is currently active, it is restarted so the new mode applies immediately.
 
 ```text
 /caffeinate status
@@ -74,22 +86,10 @@ Shows whether an inhibitor is active, unavailable, disabled, or idle. The status
 Opens an interactive selector for the keep-awake mode.
 
 ```text
-/caffeinate sleep
-```
-
-Prevents system sleep only and allows the display to turn off. If an inhibitor is currently active, it is restarted so the new mode applies immediately.
-
-```text
-/caffeinate display
-```
-
-Prevents system sleep and keeps the screen/display awake. If an inhibitor is currently active, it is restarted so the new mode applies immediately.
-
-```text
 /caffeinate stop
 ```
 
-Manually releases any active inhibitor until Pi starts another agent run.
+Releases any active inhibitor until Pi starts another agent run.
 
 ## ⚙️ Configuration
 
