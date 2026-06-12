@@ -1,7 +1,9 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	defineTool,
 	type AgentToolResult,
@@ -18,6 +20,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 1_000;
 const DEFAULT_ENDPOINT_WAIT_MS = 5_000;
 const DEFAULT_ENDPOINT_RETRY_MS = 250;
+const MANAGED_BROWSER_PROFILE_PREFIX = "pi-chrome-devtools-profile-";
+const DEVTOOLS_ACTIVE_PORT_FILE = "DevToolsActivePort";
+const BROWSER_SHUTDOWN_WAIT_MS = 1_500;
 const STATUS_KEY = "chrome-devtools";
 const SETTINGS_FILE = join(
 	process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
@@ -63,6 +68,7 @@ type CommandAction =
 	| "disable";
 type CommandContext = ExtensionCommandContext;
 type ToolSelectorAction = "enableAll" | "disableAll" | "done";
+type BrowserCandidateSource = "env" | "path" | "wellKnownPath";
 type ToolSelectorRow =
 	| { kind: "tool"; toolName: ChromeDevToolsToolName }
 	| { kind: "action"; action: ToolSelectorAction; label: string };
@@ -92,7 +98,30 @@ interface DevToolsPage {
 interface ChromeDevToolsState {
 	host: string;
 	port: number;
+	configuredPort: number;
+	hostConfigured: boolean;
+	portConfigured: boolean;
+	autoLaunchEnabled: boolean;
+	browserExecutable?: string;
 	activePageId?: string;
+	managedBrowser?: ManagedBrowser;
+	launchPromise?: Promise<void>;
+	lastLaunchAttempt?: BrowserLaunchAttempt;
+}
+
+interface ManagedBrowser {
+	process: ChildProcess;
+	userDataDir: string;
+	port?: number;
+	exited: boolean;
+}
+
+interface BrowserLaunchAttempt {
+	candidateLabels: string[];
+	mode: "dynamic-port" | "explicit-port";
+	selectedCandidate?: string;
+	userDataDir?: string;
+	lastError?: string;
 }
 
 interface ChromeDevToolsSettings {
@@ -128,9 +157,27 @@ interface ScreenshotSaveResult {
 	isDefaultPath: boolean;
 }
 
+interface BrowserCandidateDefinition {
+	label: string;
+	executable: string;
+	source: BrowserCandidateSource;
+}
+
+interface BrowserCandidate extends BrowserCandidateDefinition {
+	resolvedExecutable: string;
+}
+
+const configuredHost = process.env.PI_CHROME_DEVTOOLS_HOST ?? DEFAULT_HOST;
+const configuredPort = Number(process.env.PI_CHROME_DEVTOOLS_PORT ?? DEFAULT_PORT);
+
 const state: ChromeDevToolsState = {
-	host: process.env.PI_CHROME_DEVTOOLS_HOST ?? DEFAULT_HOST,
-	port: Number(process.env.PI_CHROME_DEVTOOLS_PORT ?? DEFAULT_PORT),
+	host: configuredHost,
+	port: configuredPort,
+	configuredPort,
+	hostConfigured: process.env.PI_CHROME_DEVTOOLS_HOST !== undefined,
+	portConfigured: process.env.PI_CHROME_DEVTOOLS_PORT !== undefined,
+	autoLaunchEnabled: process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH !== "0",
+	browserExecutable: process.env.PI_CHROME_DEVTOOLS_BROWSER,
 };
 
 const listPagesTool = defineTool({
@@ -334,8 +381,9 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		await shutdownManagedBrowser();
 	});
 }
 
@@ -620,13 +668,16 @@ async function buildToolStatusMessage(pi: ExtensionAPI) {
 		`Settings file: ${SETTINGS_FILE}`,
 		`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
 		`Endpoint: ${devToolsEndpoint()}`,
+		`Launch mode: ${launchModeLabel()}`,
 	].join("\n");
 }
 
 function buildQuickstartMessage() {
 	return [
 		`Chrome DevTools endpoint: ${devToolsEndpoint()}`,
+		`Launch mode: ${launchModeLabel()}`,
 		launchHint(),
+		browserCandidateHint(),
 		endpointConfigHint(),
 	].join("\n");
 }
@@ -784,10 +835,12 @@ function unique<T>(values: T[]) {
 }
 
 async function listPages(options: { waitMs?: number } = {}) {
+	const waitMs = options.waitMs ?? DEFAULT_ENDPOINT_WAIT_MS;
+	await ensureDevToolsEndpoint(waitMs);
 	return withEndpointRetry(async () => {
 		const pages = await fetchDevToolsJson<DevToolsPage[]>("/json/list");
 		return pages.filter((page) => page.type === "page" && page.webSocketDebuggerUrl);
-	}, options.waitMs ?? DEFAULT_ENDPOINT_WAIT_MS);
+	}, waitMs);
 }
 
 async function getPage(pageId: string) {
@@ -849,6 +902,7 @@ function requirePage(pageId: string, pages: DevToolsPage[]) {
 }
 
 async function createPage(url: string) {
+	await ensureDevToolsEndpoint();
 	const page = await fetchDevToolsJson<DevToolsPage>(`/json/new?${encodeURIComponent(url)}`, {
 		method: "PUT",
 	});
@@ -857,6 +911,211 @@ async function createPage(url: string) {
 	}
 
 	return page;
+}
+
+async function ensureDevToolsEndpoint(waitMs = DEFAULT_ENDPOINT_WAIT_MS) {
+	try {
+		await fetchDevToolsJson<unknown>("/json/version");
+		return;
+	} catch (error) {
+		if (isLaunchableEndpointError(error) && canAutoLaunchBrowser()) {
+			await ensureManagedBrowserLaunched(waitMs);
+			return;
+		}
+		if (isRetryableEndpointError(error)) return;
+		throw error;
+	}
+}
+
+async function ensureManagedBrowserLaunched(waitMs: number) {
+	if (state.managedBrowser && !state.managedBrowser.exited) return;
+	if (state.launchPromise) return state.launchPromise;
+
+	state.launchPromise = launchManagedBrowser(waitMs).finally(() => {
+		state.launchPromise = undefined;
+	});
+	return state.launchPromise;
+}
+
+async function launchManagedBrowser(waitMs: number) {
+	const candidateDefinitions = browserCandidateDefinitions();
+	const candidates = await resolveBrowserCandidates(candidateDefinitions);
+	state.lastLaunchAttempt = {
+		candidateLabels: candidateDefinitions.map(formatBrowserCandidateDefinition),
+		mode: state.portConfigured ? "explicit-port" : "dynamic-port",
+	};
+
+	if (candidates.length === 0) {
+		throw new DevToolsEndpointError(noBrowserCandidateMessage(candidateDefinitions));
+	}
+
+	let lastError: unknown;
+	for (const candidate of candidates) {
+		try {
+			await launchBrowserCandidate(candidate, waitMs);
+			state.lastLaunchAttempt = {
+				...state.lastLaunchAttempt,
+				selectedCandidate: formatBrowserCandidate(candidate),
+				userDataDir: state.managedBrowser?.userDataDir,
+			};
+			return;
+		} catch (error) {
+			lastError = error;
+			state.lastLaunchAttempt = {
+				...state.lastLaunchAttempt,
+				lastError: formatError(error),
+			};
+		}
+	}
+
+	throw new DevToolsEndpointError(
+		[
+			"Unable to auto-launch a Chromium-family browser for Chrome DevTools.",
+			`Tried: ${candidates.map(formatBrowserCandidate).join(", ")}`,
+			lastError ? `Last error: ${formatError(lastError)}` : undefined,
+			launchHint(),
+			endpointConfigHint(),
+		]
+			.filter(Boolean)
+			.join("\n"),
+	);
+}
+
+async function launchBrowserCandidate(candidate: BrowserCandidate, waitMs: number) {
+	const userDataDir = await mkdtemp(join(tmpdir(), MANAGED_BROWSER_PROFILE_PREFIX));
+	const portArgument = state.portConfigured ? String(state.port) : "0";
+	const args = [
+		`--remote-debugging-port=${portArgument}`,
+		`--user-data-dir=${userDataDir}`,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	];
+	const child = spawn(candidate.resolvedExecutable, args, { shell: false, stdio: "ignore" });
+	const managedBrowser: ManagedBrowser = { process: child, userDataDir, exited: false };
+	state.managedBrowser = managedBrowser;
+
+	child.once("exit", () => {
+		managedBrowser.exited = true;
+		if (state.managedBrowser === managedBrowser) state.managedBrowser = undefined;
+		if (!state.portConfigured && managedBrowser.port === state.port) state.port = state.configuredPort;
+	});
+
+	try {
+		await waitForBrowserSpawn(child);
+		if (state.portConfigured) {
+			managedBrowser.port = state.port;
+		} else {
+			managedBrowser.port = await readManagedBrowserPort(userDataDir, managedBrowser, waitMs);
+			state.port = managedBrowser.port;
+		}
+		await waitForDevToolsEndpoint(waitMs, managedBrowser);
+	} catch (error) {
+		await shutdownManagedBrowser(managedBrowser);
+		throw error;
+	}
+}
+
+function waitForBrowserSpawn(child: ChildProcess) {
+	return new Promise<void>((resolve, reject) => {
+		let settled = false;
+		const settle = (callback: () => void) => {
+			if (settled) return;
+			settled = true;
+			child.off("error", onError);
+			child.off("spawn", onSpawn);
+			callback();
+		};
+		const onError = (error: Error) => settle(() => reject(error));
+		const onSpawn = () => settle(resolve);
+		child.once("error", onError);
+		child.once("spawn", onSpawn);
+	});
+}
+
+async function readManagedBrowserPort(
+	userDataDir: string,
+	managedBrowser: ManagedBrowser,
+	waitMs: number,
+) {
+	const activePortFile = join(userDataDir, DEVTOOLS_ACTIVE_PORT_FILE);
+	const deadline = Date.now() + waitMs;
+	while (true) {
+		throwIfManagedBrowserExited(managedBrowser);
+		const text = await readFile(activePortFile, "utf8").catch((error: unknown) => {
+			if (isNodeError(error) && error.code === "ENOENT") return undefined;
+			throw error;
+		});
+		const portText = text?.split(/\r?\n/, 1)[0]?.trim();
+		const port = Number(portText);
+		if (Number.isInteger(port) && port > 0) return port;
+
+		const remainingMs = deadline - Date.now();
+		if (remainingMs <= 0) {
+			throw new DevToolsEndpointError(
+				[
+					"Timed out waiting for auto-launched browser DevToolsActivePort.",
+					`Expected file: ${activePortFile}`,
+					launchHint(),
+				].join("\n"),
+			);
+		}
+		await sleep(Math.min(DEFAULT_ENDPOINT_RETRY_MS, remainingMs));
+	}
+}
+
+async function waitForDevToolsEndpoint(waitMs: number, managedBrowser: ManagedBrowser) {
+	const deadline = Date.now() + waitMs;
+	while (true) {
+		throwIfManagedBrowserExited(managedBrowser);
+		try {
+			await fetchDevToolsJson<unknown>("/json/version");
+			return;
+		} catch (error) {
+			if (!isRetryableEndpointError(error)) throw error;
+		}
+
+		const remainingMs = deadline - Date.now();
+		if (remainingMs <= 0) {
+			throw new DevToolsEndpointError(
+				[
+					`Timed out waiting for auto-launched browser at ${devToolsEndpoint()}.`,
+					launchHint(),
+				].join("\n"),
+			);
+		}
+		await sleep(Math.min(DEFAULT_ENDPOINT_RETRY_MS, remainingMs));
+	}
+}
+
+function throwIfManagedBrowserExited(managedBrowser: ManagedBrowser) {
+	if (!managedBrowser.exited) return;
+	throw new DevToolsEndpointError("Auto-launched browser exited before DevTools became available.");
+}
+
+async function shutdownManagedBrowser(managedBrowser = state.managedBrowser) {
+	if (!managedBrowser) return;
+	if (state.managedBrowser === managedBrowser) state.managedBrowser = undefined;
+
+	if (!managedBrowser.exited) {
+		managedBrowser.process.kill();
+		await waitForManagedBrowserExit(managedBrowser, BROWSER_SHUTDOWN_WAIT_MS).catch(() => {
+			managedBrowser.process.kill("SIGKILL");
+		});
+	}
+	await rm(managedBrowser.userDataDir, { recursive: true, force: true }).catch(() => undefined);
+	if (!state.portConfigured && managedBrowser.port === state.port) state.port = state.configuredPort;
+}
+
+function waitForManagedBrowserExit(managedBrowser: ManagedBrowser, waitMs: number) {
+	if (managedBrowser.exited) return Promise.resolve();
+	return new Promise<void>((resolve, reject) => {
+		const timeout = setTimeout(() => reject(new Error("Timed out waiting for browser shutdown.")), waitMs);
+		managedBrowser.process.once("exit", () => {
+			clearTimeout(timeout);
+			resolve();
+		});
+	});
 }
 
 async function fetchDevToolsJson<T>(path: string, init?: RequestInit) {
@@ -868,7 +1127,10 @@ async function fetchDevToolsJson<T>(path: string, init?: RequestInit) {
 			signal: AbortSignal.timeout(DEFAULT_HTTP_TIMEOUT_MS),
 		});
 	} catch (error) {
-		throw new DevToolsEndpointError(endpointConnectionErrorMessage(error), { retryable: true });
+		throw new DevToolsEndpointError(endpointConnectionErrorMessage(error), {
+			launchable: true,
+			retryable: true,
+		});
 	}
 
 	if (!response.ok) {
@@ -883,7 +1145,16 @@ async function fetchDevToolsJson<T>(path: string, init?: RequestInit) {
 		);
 	}
 
-	return (await response.json()) as T;
+	try {
+		return (await response.json()) as T;
+	} catch (error) {
+		throw new DevToolsEndpointError(
+			[
+				`Chrome DevTools endpoint ${url} returned invalid JSON: ${formatError(error)}.`,
+				endpointConfigHint(),
+			].join("\n"),
+		);
+	}
 }
 
 async function withEndpointRetry<T>(operation: () => Promise<T>, waitMs: number) {
@@ -906,6 +1177,14 @@ function isRetryableEndpointError(error: unknown) {
 	return error instanceof DevToolsEndpointError && error.retryable;
 }
 
+function isLaunchableEndpointError(error: unknown) {
+	return error instanceof DevToolsEndpointError && error.launchable;
+}
+
+function canAutoLaunchBrowser() {
+	return state.autoLaunchEnabled && isLocalDevToolsHost(state.host);
+}
+
 function endpointConnectionErrorMessage(error: unknown) {
 	const reason = isTimeoutError(error) ? "request timed out" : "connection failed";
 	return [
@@ -920,26 +1199,236 @@ function isTimeoutError(error: unknown) {
 }
 
 function devToolsEndpoint() {
-	return `http://${state.host}:${state.port}`;
+	return `http://${formatHostForUrl(state.host)}:${state.port}`;
+}
+
+function formatHostForUrl(host: string) {
+	if (host.startsWith("[") && host.endsWith("]")) return host;
+	return host.includes(":") ? `[${host}]` : host;
+}
+
+function launchModeLabel() {
+	if (!isLocalDevToolsHost(state.host)) return "manual remote endpoint";
+	if (!state.autoLaunchEnabled) return "manual; auto-launch disabled";
+	if (state.managedBrowser && !state.managedBrowser.exited) {
+		return state.portConfigured ? "auto-launched on explicit port" : "auto-launched on dynamic port";
+	}
+	return state.portConfigured ? "attach first; auto-launch explicit port" : "attach first; auto-launch dynamic port";
 }
 
 function launchHint() {
-	return `Start Chrome with remote debugging enabled: ${chromeLaunchCommand()}`;
+	if (!isLocalDevToolsHost(state.host)) {
+		return `Remote/non-local endpoints are not auto-launched. Start a browser with CDP enabled at ${devToolsEndpoint()}.`;
+	}
+	if (!state.autoLaunchEnabled) {
+		return `Auto-launch is disabled. Start a browser manually: ${chromeLaunchCommand()}`;
+	}
+	const managedMode = state.portConfigured ? `port ${state.port}` : "a dynamic DevTools port";
+	return `If no endpoint is available, Pi will auto-launch a Chromium-family browser with ${managedMode} and an isolated temp profile. Manual command: ${chromeLaunchCommand()}`;
+}
+
+function browserCandidateHint() {
+	return `Browser candidates: ${browserCandidateDefinitions().map((candidate) => candidate.label).join(", ")}`;
 }
 
 function chromeLaunchCommand() {
-	const executable =
-		process.platform === "darwin"
-			? "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome"
-			: process.platform === "win32"
-				? "chrome.exe"
-				: "google-chrome";
-	const dataDir = process.platform === "win32" ? "%TEMP%\\pi-chrome-devtools" : "/tmp/pi-chrome-devtools";
-	return `${executable} --remote-debugging-port=${state.port} --user-data-dir=${dataDir}`;
+	const executable = state.browserExecutable ?? defaultManualBrowserExecutable();
+	const dataDir =
+		process.platform === "win32" ? "%TEMP%\\pi-chrome-devtools" : "/tmp/pi-chrome-devtools";
+	return `${quoteCommandPart(executable)} --remote-debugging-port=${state.port} --user-data-dir=${dataDir}`;
+}
+
+function defaultManualBrowserExecutable() {
+	return process.platform === "darwin"
+		? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+		: process.platform === "win32"
+			? "chrome.exe"
+			: "google-chrome";
+}
+
+function quoteCommandPart(value: string) {
+	return /\s/.test(value) ? JSON.stringify(value) : value;
 }
 
 function endpointConfigHint() {
-	return "Set PI_CHROME_DEVTOOLS_HOST and PI_CHROME_DEVTOOLS_PORT if Chrome uses a different endpoint.";
+	return "Set PI_CHROME_DEVTOOLS_HOST and PI_CHROME_DEVTOOLS_PORT for a manual endpoint, PI_CHROME_DEVTOOLS_BROWSER to choose an executable, or PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0 to disable auto-launch.";
+}
+
+function isLocalDevToolsHost(host: string) {
+	const normalizedHost = host.toLowerCase().replace(/^\[(.*)]$/, "$1");
+	return ["localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"].includes(normalizedHost);
+}
+
+function browserCandidateDefinitions(): BrowserCandidateDefinition[] {
+	return uniqueBrowserCandidates([
+		...explicitBrowserCandidateDefinition(),
+		...platformBrowserCandidateDefinitions(),
+	]);
+}
+
+function explicitBrowserCandidateDefinition(): BrowserCandidateDefinition[] {
+	if (!state.browserExecutable) return [];
+	return [{ label: "PI_CHROME_DEVTOOLS_BROWSER", executable: state.browserExecutable, source: "env" }];
+}
+
+function platformBrowserCandidateDefinitions(): BrowserCandidateDefinition[] {
+	if (process.platform === "darwin") {
+		return [
+			{
+				label: "Google Chrome",
+				executable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+				source: "wellKnownPath",
+			},
+			{
+				label: "Chromium",
+				executable: "/Applications/Chromium.app/Contents/MacOS/Chromium",
+				source: "wellKnownPath",
+			},
+			{
+				label: "Brave Browser",
+				executable: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+				source: "wellKnownPath",
+			},
+			{
+				label: "Microsoft Edge",
+				executable: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+				source: "wellKnownPath",
+			},
+		];
+	}
+
+	if (process.platform === "win32") {
+		return windowsBrowserCandidateDefinitions();
+	}
+
+	return [
+		{ label: "Google Chrome", executable: "google-chrome", source: "path" },
+		{ label: "Google Chrome Stable", executable: "google-chrome-stable", source: "path" },
+		{ label: "Chromium", executable: "chromium", source: "path" },
+		{ label: "Chromium Browser", executable: "chromium-browser", source: "path" },
+		{ label: "Brave Browser", executable: "brave-browser", source: "path" },
+		{ label: "Brave", executable: "brave", source: "path" },
+		{ label: "Microsoft Edge", executable: "microsoft-edge", source: "path" },
+		{ label: "Microsoft Edge Stable", executable: "microsoft-edge-stable", source: "path" },
+	];
+}
+
+function windowsBrowserCandidateDefinitions(): BrowserCandidateDefinition[] {
+	const programFiles = [
+		process.env.PROGRAMFILES,
+		process.env["PROGRAMFILES(X86)"],
+		process.env.LOCALAPPDATA,
+	].filter((value): value is string => typeof value === "string" && value.length > 0);
+	const wellKnownPaths = programFiles.flatMap((root) => [
+		join(root, "Google", "Chrome", "Application", "chrome.exe"),
+		join(root, "Chromium", "Application", "chrome.exe"),
+		join(root, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+		join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
+	]);
+	return [
+		{ label: "Google Chrome", executable: "chrome.exe", source: "path" },
+		{ label: "Chromium", executable: "chromium.exe", source: "path" },
+		{ label: "Brave Browser", executable: "brave.exe", source: "path" },
+		{ label: "Microsoft Edge", executable: "msedge.exe", source: "path" },
+		...wellKnownPaths.map((executable) => ({
+			label: browserLabelFromExecutable(executable),
+			executable,
+			source: "wellKnownPath" as const,
+		})),
+	];
+}
+
+function browserLabelFromExecutable(executable: string) {
+	const normalizedExecutable = normalizePathForComparison(executable);
+	if (normalizedExecutable.includes("brave")) return "Brave Browser";
+	if (normalizedExecutable.includes("edge") || normalizedExecutable.includes("msedge")) {
+		return "Microsoft Edge";
+	}
+	if (normalizedExecutable.includes("chromium")) return "Chromium";
+	return "Google Chrome";
+}
+
+function uniqueBrowserCandidates(candidates: BrowserCandidateDefinition[]) {
+	const seen = new Set<string>();
+	return candidates.filter((candidate) => {
+		const key = normalizePathForComparison(candidate.executable);
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
+async function resolveBrowserCandidates(definitions: BrowserCandidateDefinition[]) {
+	const candidates: BrowserCandidate[] = [];
+	for (const definition of definitions) {
+		const resolvedExecutable = await resolveBrowserExecutable(definition.executable);
+		if (!resolvedExecutable) continue;
+		candidates.push({ ...definition, resolvedExecutable });
+	}
+	return uniqueBrowserCandidatesByResolvedPath(candidates);
+}
+
+function uniqueBrowserCandidatesByResolvedPath(candidates: BrowserCandidate[]) {
+	const seen = new Set<string>();
+	return candidates.filter((candidate) => {
+		const key = normalizePathForComparison(resolve(candidate.resolvedExecutable));
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
+async function resolveBrowserExecutable(executable: string) {
+	if (hasPathSeparator(executable) || isAbsolute(executable)) {
+		const resolvedExecutable = isAbsolute(executable) ? executable : resolve(executable);
+		return (await canAccessExecutable(resolvedExecutable)) ? resolvedExecutable : undefined;
+	}
+
+	for (const directory of executableSearchPath()) {
+		for (const executableName of executableSearchNames(executable)) {
+			const candidate = join(directory, executableName);
+			if (await canAccessExecutable(candidate)) return candidate;
+		}
+	}
+	return undefined;
+}
+
+function hasPathSeparator(path: string) {
+	return path.includes("/") || path.includes("\\");
+}
+
+function executableSearchPath() {
+	return (process.env.PATH ?? "").split(delimiter).filter((part) => part.length > 0);
+}
+
+function executableSearchNames(executable: string) {
+	if (process.platform !== "win32" || /\.[a-z0-9]+$/i.test(executable)) return [executable];
+	return [executable, `${executable}.exe`, `${executable}.cmd`, `${executable}.bat`];
+}
+
+async function canAccessExecutable(path: string) {
+	try {
+		await access(path, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function formatBrowserCandidate(candidate: BrowserCandidate) {
+	return `${candidate.label} (${candidate.resolvedExecutable})`;
+}
+
+function formatBrowserCandidateDefinition(candidate: BrowserCandidateDefinition) {
+	return `${candidate.label} (${candidate.executable})`;
+}
+
+function noBrowserCandidateMessage(candidateDefinitions: BrowserCandidateDefinition[]) {
+	return [
+		"Cannot auto-launch Chrome DevTools because no Chromium-family browser executable was found.",
+		`Tried: ${candidateDefinitions.map(formatBrowserCandidateDefinition).join(", ")}`,
+		endpointConfigHint(),
+	].join("\n");
 }
 
 function formatPageListItem(page: DevToolsPage) {
@@ -952,11 +1441,13 @@ function sleep(ms: number) {
 
 class DevToolsEndpointError extends Error {
 	readonly retryable: boolean;
+	readonly launchable: boolean;
 
-	constructor(message: string, options: { retryable?: boolean } = {}) {
+	constructor(message: string, options: { retryable?: boolean; launchable?: boolean } = {}) {
 		super(message);
 		this.name = "DevToolsEndpointError";
 		this.retryable = options.retryable ?? false;
+		this.launchable = options.launchable ?? false;
 	}
 }
 
