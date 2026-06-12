@@ -52,7 +52,7 @@ Implementation evidence:
 - [x] For explicit local ports, launch with `--remote-debugging-port=<port>` and wait for that configured endpoint; verify with mocked args that `PI_CHROME_DEVTOOLS_PORT=9223` keeps port `9223`.
 - [x] Gate auto-launch with local-host detection and `PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0`; verified by source review of local-host checks and browser-launch harness cases for `127.0.0.1` plus opt-out env.
 - [x] Update endpoint retry errors, `launchHint()`, and `/chrome-devtools quickstart` to report whether the extension will attach, auto-launch with dynamic port, use an explicit port, or require manual startup, including browser candidates and opt-out/configuration environment variables; verified by source review and README review.
-- [x] Track extension-owned child processes and temp profiles in state, clear state on process exit, and attempt graceful termination on `session_shutdown` without touching unowned endpoints; verify with a mocked shutdown harness that only owned child processes receive termination and temp-dir cleanup is attempted after exit.
+- [x] Track extension-owned child processes and temp profiles in state until cleanup, mark readiness separately from process creation, await/cancel in-flight launches during shutdown, guard best-effort kill calls, and attempt graceful termination on `session_shutdown` without touching unowned endpoints; verified by source review and mocked browser-launch/shutdown harness behavior.
 - [x] Update `extensions/pi-chrome-devtools/README.md` to document existing-endpoint-first behavior, dynamic managed ports, fallback browser order, `PI_CHROME_DEVTOOLS_BROWSER`, `PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0`, endpoint overrides, WSL/manual fallback guidance, and cleanup semantics; verify by README review.
 - [x] Run `npm --workspace @narumitw/pi-chrome-devtools run check` and `npm run check`; verify both commands exit successfully.
 - [x] Run `just pack-chrome-devtools`; verify the tarball still contains only the package files expected by `extensions/pi-chrome-devtools/package.json`.
@@ -62,7 +62,7 @@ Implementation evidence:
 - Browser executable names and install paths vary by OS and package manager, so candidate discovery must be explicit, ordered, and easy to override.
 - Dynamic ports require reading `DevToolsActivePort`; if that file is delayed or missing, the extension must time out with a manual launch hint rather than hang.
 - Auto-launch can surprise users by leaving a browser process running; cleanup must apply only to extension-owned processes and be documented.
-- Removing temp profiles too early can race browser shutdown; cleanup should be best-effort and never delete user-configured or unowned directories.
+- Removing temp profiles too early can race browser shutdown, while dropping exited-browser state can leak profiles; cleanup should be best-effort and never delete user-configured or unowned directories.
 - WSL setups may need Windows path/profile translation; first-pass behavior should either be proven by harness or documented as manual/override-only.
 
 ## Rollback / Recovery

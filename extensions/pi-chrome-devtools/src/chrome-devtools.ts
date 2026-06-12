@@ -107,6 +107,7 @@ interface ChromeDevToolsState {
 	managedBrowser?: ManagedBrowser;
 	launchPromise?: Promise<void>;
 	lastLaunchAttempt?: BrowserLaunchAttempt;
+	shuttingDown: boolean;
 }
 
 interface ManagedBrowser {
@@ -114,6 +115,7 @@ interface ManagedBrowser {
 	userDataDir: string;
 	port?: number;
 	exited: boolean;
+	ready: boolean;
 }
 
 interface BrowserLaunchAttempt {
@@ -178,6 +180,7 @@ const state: ChromeDevToolsState = {
 	portConfigured: process.env.PI_CHROME_DEVTOOLS_PORT !== undefined,
 	autoLaunchEnabled: process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH !== "0",
 	browserExecutable: process.env.PI_CHROME_DEVTOOLS_BROWSER,
+	shuttingDown: false,
 };
 
 const listPagesTool = defineTool({
@@ -370,6 +373,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		state.shuttingDown = false;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const settings = await loadSettings();
 		if (settings.kind === "loaded") {
@@ -383,7 +387,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		await shutdownManagedBrowser();
+		await shutdownManagedBrowser(undefined, { cancelLaunch: true });
 	});
 }
 
@@ -928,8 +932,12 @@ async function ensureDevToolsEndpoint(waitMs = DEFAULT_ENDPOINT_WAIT_MS) {
 }
 
 async function ensureManagedBrowserLaunched(waitMs: number) {
-	if (state.managedBrowser && !state.managedBrowser.exited) return;
 	if (state.launchPromise) return state.launchPromise;
+	if (state.managedBrowser && !state.managedBrowser.exited && state.managedBrowser.ready) return;
+	if (state.managedBrowser) {
+		await shutdownManagedBrowser(state.managedBrowser, { awaitLaunch: false });
+	}
+	throwIfBrowserLaunchCancelled();
 
 	state.launchPromise = launchManagedBrowser(waitMs).finally(() => {
 		state.launchPromise = undefined;
@@ -938,8 +946,10 @@ async function ensureManagedBrowserLaunched(waitMs: number) {
 }
 
 async function launchManagedBrowser(waitMs: number) {
+	throwIfBrowserLaunchCancelled();
 	const candidateDefinitions = browserCandidateDefinitions();
 	const candidates = await resolveBrowserCandidates(candidateDefinitions);
+	throwIfBrowserLaunchCancelled();
 	state.lastLaunchAttempt = {
 		candidateLabels: candidateDefinitions.map(formatBrowserCandidateDefinition),
 		mode: state.portConfigured ? "explicit-port" : "dynamic-port",
@@ -951,6 +961,7 @@ async function launchManagedBrowser(waitMs: number) {
 
 	let lastError: unknown;
 	for (const candidate of candidates) {
+		throwIfBrowserLaunchCancelled();
 		try {
 			await launchBrowserCandidate(candidate, waitMs);
 			state.lastLaunchAttempt = {
@@ -982,36 +993,44 @@ async function launchManagedBrowser(waitMs: number) {
 }
 
 async function launchBrowserCandidate(candidate: BrowserCandidate, waitMs: number) {
+	throwIfBrowserLaunchCancelled();
 	const userDataDir = await mkdtemp(join(tmpdir(), MANAGED_BROWSER_PROFILE_PREFIX));
-	const portArgument = state.portConfigured ? String(state.port) : "0";
-	const args = [
-		`--remote-debugging-port=${portArgument}`,
-		`--user-data-dir=${userDataDir}`,
-		"--no-first-run",
-		"--no-default-browser-check",
-		"about:blank",
-	];
-	const child = spawn(candidate.resolvedExecutable, args, { shell: false, stdio: "ignore" });
-	const managedBrowser: ManagedBrowser = { process: child, userDataDir, exited: false };
-	state.managedBrowser = managedBrowser;
-
-	child.once("exit", () => {
-		managedBrowser.exited = true;
-		if (state.managedBrowser === managedBrowser) state.managedBrowser = undefined;
-		if (!state.portConfigured && managedBrowser.port === state.port) state.port = state.configuredPort;
-	});
-
+	let managedBrowser: ManagedBrowser | undefined;
 	try {
+		const portArgument = state.portConfigured ? String(state.port) : "0";
+		const args = [
+			`--remote-debugging-port=${portArgument}`,
+			`--user-data-dir=${userDataDir}`,
+			"--no-first-run",
+			"--no-default-browser-check",
+			"about:blank",
+		];
+		throwIfBrowserLaunchCancelled();
+		const child = spawn(candidate.resolvedExecutable, args, { shell: false, stdio: "ignore" });
+		const launchedBrowser: ManagedBrowser = { process: child, userDataDir, exited: false, ready: false };
+		managedBrowser = launchedBrowser;
+		state.managedBrowser = launchedBrowser;
+
+		child.once("exit", () => {
+			launchedBrowser.exited = true;
+			launchedBrowser.ready = false;
+			if (!state.portConfigured && launchedBrowser.port === state.port) {
+				state.port = state.configuredPort;
+			}
+		});
+
 		await waitForBrowserSpawn(child);
 		if (state.portConfigured) {
-			managedBrowser.port = state.port;
+			launchedBrowser.port = state.port;
 		} else {
-			managedBrowser.port = await readManagedBrowserPort(userDataDir, managedBrowser, waitMs);
-			state.port = managedBrowser.port;
+			launchedBrowser.port = await readManagedBrowserPort(userDataDir, launchedBrowser, waitMs);
+			state.port = launchedBrowser.port;
 		}
-		await waitForDevToolsEndpoint(waitMs, managedBrowser);
+		await waitForDevToolsEndpoint(waitMs, launchedBrowser);
+		launchedBrowser.ready = true;
 	} catch (error) {
-		await shutdownManagedBrowser(managedBrowser);
+		if (managedBrowser) await shutdownManagedBrowser(managedBrowser, { awaitLaunch: false });
+		else await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
 		throw error;
 	}
 }
@@ -1050,6 +1069,7 @@ async function readManagedBrowserPort(
 		const port = Number(portText);
 		if (Number.isInteger(port) && port > 0) return port;
 
+		throwIfBrowserLaunchCancelled();
 		const remainingMs = deadline - Date.now();
 		if (remainingMs <= 0) {
 			throw new DevToolsEndpointError(
@@ -1075,6 +1095,7 @@ async function waitForDevToolsEndpoint(waitMs: number, managedBrowser: ManagedBr
 			if (!isRetryableEndpointError(error)) throw error;
 		}
 
+		throwIfBrowserLaunchCancelled();
 		const remainingMs = deadline - Date.now();
 		if (remainingMs <= 0) {
 			throw new DevToolsEndpointError(
@@ -1093,18 +1114,39 @@ function throwIfManagedBrowserExited(managedBrowser: ManagedBrowser) {
 	throw new DevToolsEndpointError("Auto-launched browser exited before DevTools became available.");
 }
 
-async function shutdownManagedBrowser(managedBrowser = state.managedBrowser) {
+function throwIfBrowserLaunchCancelled() {
+	if (!state.shuttingDown) return;
+	throw new DevToolsEndpointError("Chrome DevTools browser launch cancelled during shutdown.");
+}
+
+async function shutdownManagedBrowser(
+	managedBrowser = state.managedBrowser,
+	options: { awaitLaunch?: boolean; cancelLaunch?: boolean } = {},
+) {
+	if (options.cancelLaunch) state.shuttingDown = true;
+	if (options.awaitLaunch !== false) {
+		await state.launchPromise?.catch(() => undefined);
+		managedBrowser = managedBrowser ?? state.managedBrowser;
+	}
 	if (!managedBrowser) return;
 	if (state.managedBrowser === managedBrowser) state.managedBrowser = undefined;
 
 	if (!managedBrowser.exited) {
-		managedBrowser.process.kill();
+		killManagedBrowserProcess(managedBrowser);
 		await waitForManagedBrowserExit(managedBrowser, BROWSER_SHUTDOWN_WAIT_MS).catch(() => {
-			managedBrowser.process.kill("SIGKILL");
+			killManagedBrowserProcess(managedBrowser, "SIGKILL");
 		});
 	}
 	await rm(managedBrowser.userDataDir, { recursive: true, force: true }).catch(() => undefined);
 	if (!state.portConfigured && managedBrowser.port === state.port) state.port = state.configuredPort;
+}
+
+function killManagedBrowserProcess(managedBrowser: ManagedBrowser, signal?: NodeJS.Signals) {
+	try {
+		managedBrowser.process.kill(signal);
+	} catch {
+		// Best-effort shutdown: the browser may have already exited or failed to spawn.
+	}
 }
 
 function waitForManagedBrowserExit(managedBrowser: ManagedBrowser, waitMs: number) {
@@ -1247,7 +1289,7 @@ function defaultManualBrowserExecutable() {
 }
 
 function quoteCommandPart(value: string) {
-	return /\s/.test(value) ? JSON.stringify(value) : value;
+	return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
 }
 
 function endpointConfigHint() {
