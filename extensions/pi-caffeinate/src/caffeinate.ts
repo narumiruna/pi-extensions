@@ -19,23 +19,23 @@ const SETTINGS_FILE = join(
 	"pi-caffeinate-settings.json",
 );
 const COMMAND_COMPLETIONS = [
-	{ value: "help", label: "Show command usage" },
-	{ value: "status", label: "Show current caffeinate status" },
-	{ value: "mode", label: "Select keep-awake mode" },
-	{ value: "sleep", label: "Sleep only — let screen turn off" },
-	{ value: "display", label: "Keep screen awake" },
-	{ value: "stop", label: "Stop keeping awake" },
+	{ value: "display", label: "Keep system and display awake" },
+	{ value: "sleep", label: "Keep system awake; allow display sleep" },
+	{ value: "status", label: "Show current status" },
+	{ value: "mode", label: "Choose keep-awake mode" },
+	{ value: "stop", label: "Release inhibitor for now" },
+	{ value: "help", label: "Show command help" },
 ];
 const MENU_OPTIONS = {
-	status: "Status",
-	sleep: "Sleep only — let screen turn off",
-	display: "Keep screen awake",
-	stop: "Stop keeping awake",
-	help: "Help",
+	display: "Keep system and display awake",
+	sleep: "Keep system awake; allow display sleep",
+	status: "Show current status",
+	stop: "Release inhibitor for now",
+	help: "Show command help",
 } as const;
 const MODE_OPTIONS = {
-	sleep: "Sleep only — let screen turn off",
-	display: "Keep screen awake",
+	display: "Keep system and display awake",
+	sleep: "Keep system awake; allow display sleep",
 } as const;
 
 type CaffeinateMode = "sleep" | "display";
@@ -101,7 +101,7 @@ export default function caffeinate(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("caffeinate", {
-		description: "Open pi-caffeinate mode and status controls",
+		description: "Open pi-caffeinate keep-awake controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
 			await ensureSettingsLoaded(ctx);
@@ -147,7 +147,7 @@ async function showMenu(ctx: CommandContext) {
 		return;
 	}
 
-	const choice = await ctx.ui.select("pi-caffeinate", Object.values(MENU_OPTIONS));
+	const choice = await ctx.ui.select("pi-caffeinate controls", Object.values(MENU_OPTIONS));
 	switch (choice) {
 		case MENU_OPTIONS.status:
 			showStatus(ctx);
@@ -254,11 +254,11 @@ function commandCompletions(prefix: string) {
 function buildCommandGuide() {
 	return [
 		"pi-caffeinate commands:",
-		"/caffeinate — open mode and status controls",
+		"/caffeinate — open keep-awake controls",
+		"/caffeinate display — keep the system and display awake",
+		"/caffeinate sleep — keep the system awake while allowing display sleep",
 		"/caffeinate status — show current mode, settings, and inhibitor state",
-		"/caffeinate mode — choose sleep-only or display-awake mode",
-		"/caffeinate sleep — prevent system sleep only and allow the display to turn off",
-		"/caffeinate display — prevent system sleep and keep the screen awake",
+		"/caffeinate mode — choose a keep-awake mode",
 		"/caffeinate stop — release the active inhibitor until the next agent run",
 	].join("\n");
 }
