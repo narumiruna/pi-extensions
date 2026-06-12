@@ -27,7 +27,7 @@ const COMMAND_COMPLETIONS = [
 	{ value: "help", label: "Show command help" },
 ];
 const MENU_OPTIONS = {
-	display: "Keep display awake",
+	display: "Keep system and display awake",
 	sleep: "Keep system awake; allow display sleep",
 	status: "Show current status",
 	stop: "Release inhibitor for now",
