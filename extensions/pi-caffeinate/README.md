@@ -10,9 +10,11 @@ It is designed for long-running coding, refactoring, debugging, web research, an
 
 - Starts an OS sleep inhibitor when Pi begins processing (`agent_start`).
 - Releases the inhibitor when processing ends (`agent_end`) or the session shuts down.
-- Publishes an `awake` status only while an inhibitor is active.
+- Publishes the active keep-awake mode as status while an inhibitor is active.
 - Supports macOS, Windows, WSL, and Linux.
-- Provides `/caffeinate-status` and `/caffeinate-stop` commands.
+- Defaults to display-awake mode on every supported OS: prevent system sleep and keep the screen/display awake.
+- Provides a single `/caffeinate` command with menu-based controls and direct subcommands.
+- Persists the selected keep-awake mode in a small JSON settings file.
 - Allows a custom inhibitor command through environment configuration.
 - Allows a custom status icon through environment configuration.
 - Fails safely when no supported inhibitor is available.
@@ -37,29 +39,80 @@ pi -e ./extensions/pi-caffeinate
 
 ## 🖥️ Supported platforms
 
-- macOS: uses `caffeinate -dimsu`.
-- Windows: uses PowerShell `SetThreadExecutionState`.
-- WSL: uses Windows `powershell.exe` with `SetThreadExecutionState`.
-- Linux: uses `systemd-inhibit` with `sleep infinity`.
-- Linux fallback: uses `caffeinate -dimsu` when available.
+The default mode is `display` on every supported OS. That means pi-caffeinate prevents system sleep, suspend, or hibernate and keeps the screen/display awake.
+
+Use `/caffeinate sleep` if you want to prevent system sleep while allowing normal display idle behavior such as screen blanking or monitor power-off.
+
+| Platform | `sleep` mode | `display` mode, default |
+| --- | --- | --- |
+| macOS | `caffeinate -ims` | `caffeinate -dimsu` |
+| Windows | PowerShell `SetThreadExecutionState(0x80000001)` | PowerShell `SetThreadExecutionState(0x80000003)` |
+| WSL | Windows `powershell.exe` with `SetThreadExecutionState(0x80000001)` | Windows `powershell.exe` with `SetThreadExecutionState(0x80000003)` |
+| Linux with systemd | `systemd-inhibit --what=sleep ... sleep infinity` | `systemd-inhibit --what=idle:sleep ... sleep infinity` |
+| Linux fallback | `caffeinate -ims` when available | `caffeinate -dimsu` when available |
 
 If no supported inhibitor is available, the extension stays loaded and reports that caffeinate is unavailable.
 
 ## 🚀 Commands
 
 ```text
-/caffeinate-status
+/caffeinate
 ```
 
-Shows whether an inhibitor is active, unavailable, or disabled.
+Opens mode and status controls. In non-interactive sessions, it prints command usage and status.
 
 ```text
-/caffeinate-stop
+/caffeinate status
 ```
 
-Manually releases any active inhibitor for the current session.
+Shows whether an inhibitor is active, unavailable, disabled, or idle. The status includes the current mode and settings file path.
+
+```text
+/caffeinate mode
+```
+
+Opens an interactive selector for the keep-awake mode.
+
+```text
+/caffeinate sleep
+```
+
+Prevents system sleep only and allows the display to turn off. If an inhibitor is currently active, it is restarted so the new mode applies immediately.
+
+```text
+/caffeinate display
+```
+
+Prevents system sleep and keeps the screen/display awake. If an inhibitor is currently active, it is restarted so the new mode applies immediately.
+
+```text
+/caffeinate stop
+```
+
+Manually releases any active inhibitor until Pi starts another agent run.
 
 ## ⚙️ Configuration
+
+### Persisted mode
+
+`/caffeinate sleep` and `/caffeinate display` save the selected mode to:
+
+```text
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-caffeinate-settings.json
+```
+
+Example:
+
+```json
+{
+  "mode": "display",
+  "updatedAt": 1791763200000
+}
+```
+
+Missing, invalid, or deleted settings default back to `display` mode on every supported OS.
+
+### Environment variables
 
 Disable the extension:
 
@@ -73,7 +126,7 @@ Use a custom inhibitor command:
 PI_CAFFEINATE_COMMAND='systemd-inhibit --what=idle:sleep --why="pi running" --mode=block sleep infinity' pi
 ```
 
-The custom command is parsed with shell-like quoting and is run directly without a shell.
+The custom command is parsed with shell-like quoting and is run directly without a shell. `PI_CAFFEINATE_COMMAND` takes precedence over the saved mode; `/caffeinate status` reports when a custom command is active.
 
 Customise the status bar icon (default: `💊`):
 
@@ -84,6 +137,8 @@ PI_CAFFEINATE_ICON='☕️' pi
 ## 🧠 Why use pi-caffeinate?
 
 AI coding agents often run tool-heavy tasks that take several minutes. `pi-caffeinate` keeps your machine awake during active Pi work, helping browser automation, local builds, test runs, code generation, and long prompts finish reliably.
+
+The default display-awake mode prioritizes uninterrupted long-running Pi work across platforms, including Linux desktops that require idle inhibition to prevent automatic suspend. Use sleep-only mode when you prefer normal screen power saving and your system does not need idle inhibition to keep Pi running.
 
 ## 🗂️ Package layout
 
