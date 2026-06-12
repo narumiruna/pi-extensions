@@ -19,7 +19,7 @@ const SETTINGS_FILE = join(
 	"pi-caffeinate-settings.json",
 );
 const COMMAND_COMPLETIONS = [
-	{ value: "display", label: "Keep display awake" },
+	{ value: "display", label: "Keep system and display awake" },
 	{ value: "sleep", label: "Keep system awake; allow display sleep" },
 	{ value: "status", label: "Show current status" },
 	{ value: "mode", label: "Choose keep-awake mode" },
