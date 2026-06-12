@@ -36,17 +36,17 @@ Implementation evidence:
 ## Assumptions
 
 - A newly auto-launched browser should use an isolated user data directory from `mkdtemp(join(tmpdir(), "pi-chrome-devtools-profile-"))`.
-- `PI_CHROME_DEVTOOLS_BROWSER` should allow users to force a specific executable before fallback discovery.
+- `PI_CHROME_DEVTOOLS_BROWSER` should force one specific executable; missing or unusable forced browsers should fail instead of falling back to another browser.
 - `PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0` should preserve the current manual endpoint behavior.
 - Dynamic managed ports are safer than defaulting every auto-launched session to `9222`, but explicit `PI_CHROME_DEVTOOLS_PORT` remains authoritative.
 
 ## Plan
 
 - [x] Add endpoint-source state to `extensions/pi-chrome-devtools/src/chrome-devtools.ts` so the extension can distinguish default endpoint values from explicit environment overrides; verify with source review that explicit `PI_CHROME_DEVTOOLS_PORT` disables dynamic-port launch while default `9222` does not.
-- [x] Split endpoint failures into launchable transport failures, retryable HTTP failures, and non-launchable protocol/configuration failures; verified by source review of `DevToolsEndpointError` flags plus the browser-launch harness cases for connection refusal, opt-out transport failure, and valid existing CDP JSON.
+- [x] Split endpoint failures into launchable transport failures, retryable HTTP failures, and default-port collision failures; verified by source review of `DevToolsEndpointError` flags plus browser-launch harness cases for connection refusal, default-port collision, opt-out transport failure, and valid existing CDP JSON.
 - [x] Add a single `ensureDevToolsEndpoint()` helper used before both `/json/list` and `/json/new`; verify by code review that `listPages()` and `createPage()` cannot call `fetchDevToolsJson()` without passing through endpoint readiness.
 - [x] Implement single-flight `ensureManagedBrowserLaunched()` state so concurrent missing-endpoint tool calls share one launch attempt; verify with a mocked `spawn` harness that two simultaneous `listPages()` calls produce one spawn.
-- [x] Implement platform-specific browser candidate discovery for explicit `PI_CHROME_DEVTOOLS_BROWSER` plus Chrome, Chromium, Brave, and Edge executable names/paths on Linux, macOS, and Windows; verified by source review of deterministic candidate order and browser-launch harness use of an explicit fake browser path.
+- [x] Implement browser candidate discovery so explicit `PI_CHROME_DEVTOOLS_BROWSER` is the only candidate when set, otherwise Chrome, Chromium, Brave, and Edge executable names/paths are tried on Linux, macOS, and Windows; verified by source review of deterministic candidate order and browser-launch harness use of an explicit fake browser path.
 - [x] Implement `launchBrowserForDevTools()` with shell-free `spawn`, isolated temp profile, `--no-first-run`, `--no-default-browser-check`, and `about:blank`; verify with a mocked `spawn` harness that arguments include the expected profile and no shell string is constructed.
 - [x] For managed launches without explicit `PI_CHROME_DEVTOOLS_PORT`, start the browser with `--remote-debugging-port=0`, read `<userDataDir>/DevToolsActivePort`, update `state.port` to the assigned port, and wait for `/json/version`; verify with a temp-dir harness that delayed `DevToolsActivePort` creation updates the endpoint before `/json/list` runs.
 - [x] For explicit local ports, launch with `--remote-debugging-port=<port>` and wait for that configured endpoint; verify with mocked args that `PI_CHROME_DEVTOOLS_PORT=9223` keeps port `9223`.
@@ -75,9 +75,9 @@ Implementation evidence:
 
 - [x] Existing CDP endpoints are reused and not owned by the extension, verified by a mocked existing-endpoint harness where no browser process is spawned.
 - [x] Missing local default endpoints are recovered by launching exactly one extension-owned Chromium-family browser, verified by a local smoke test or mocked endpoint/spawn harness.
-- [x] Managed launches without explicit `PI_CHROME_DEVTOOLS_PORT` use a dynamic port from `DevToolsActivePort`, verified by harness output showing `--remote-debugging-port=0` and the updated endpoint.
+- [x] Managed launches without explicit `PI_CHROME_DEVTOOLS_PORT` use a dynamic port from `DevToolsActivePort`, including when the default port is occupied by a non-CDP service, verified by harness output showing `--remote-debugging-port=0` and the updated endpoint.
 - [x] Explicit local endpoint configuration is respected, verified by harness cases for `PI_CHROME_DEVTOOLS_PORT=9223` and `PI_CHROME_DEVTOOLS_BROWSER=<path>`.
 - [x] Google Chrome absence falls back to at least Chromium and Brave candidates, verified by candidate-order harness output.
-- [x] Remote endpoint configuration, non-launchable HTTP/protocol failures, and explicit auto-launch opt-out do not spawn a local browser, verified by source review and the opt-out harness case.
+- [x] Remote endpoint configuration, explicit-port HTTP/protocol failures, and explicit auto-launch opt-out do not spawn a local browser, verified by source review and the opt-out harness case.
 - [x] `/chrome-devtools quickstart` and README explain auto-launch, dynamic ports, fallbacks, cleanup, and manual override variables, verified by source review of `buildQuickstartMessage()` and `extensions/pi-chrome-devtools/README.md`.
 - [x] Typecheck, repo check, and package dry-run pass, verified by `npm --workspace @narumitw/pi-chrome-devtools run check`, `npm run check`, and `just pack-chrome-devtools`.

@@ -58,8 +58,10 @@ When `PI_CHROME_DEVTOOLS_PORT` is not set, auto-launch uses Chrome's dynamic Dev
 forcing every Pi session onto port `9222`. If you set `PI_CHROME_DEVTOOLS_PORT`, the extension
 uses that explicit port for both attach and auto-launch.
 
-Browser discovery checks `PI_CHROME_DEVTOOLS_BROWSER` first, then platform-specific Chrome,
-Chromium, Brave, and Microsoft Edge candidates. Disable auto-launch to keep the older manual flow:
+When `PI_CHROME_DEVTOOLS_BROWSER` is set, that executable is the only auto-launch candidate; a
+missing or unusable forced browser reports an error instead of falling back. Without that override,
+browser discovery checks platform-specific Chrome, Chromium, Brave, and Microsoft Edge candidates.
+Disable auto-launch to keep the older manual flow:
 
 ```bash
 PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0 pi -e ./extensions/pi-chrome-devtools

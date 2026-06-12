@@ -922,7 +922,7 @@ async function ensureDevToolsEndpoint(waitMs = DEFAULT_ENDPOINT_WAIT_MS) {
 		await fetchDevToolsJson<unknown>("/json/version");
 		return;
 	} catch (error) {
-		if (isLaunchableEndpointError(error) && canAutoLaunchBrowser()) {
+		if (shouldAutoLaunchAfterEndpointError(error)) {
 			await ensureManagedBrowserLaunched(waitMs);
 			return;
 		}
@@ -1223,6 +1223,15 @@ function isLaunchableEndpointError(error: unknown) {
 	return error instanceof DevToolsEndpointError && error.launchable;
 }
 
+function shouldAutoLaunchAfterEndpointError(error: unknown) {
+	if (!canAutoLaunchBrowser()) return false;
+	if (isLaunchableEndpointError(error)) return true;
+
+	// If the user did not pin a port, anything unexpected on the default port is a
+	// conflict we can avoid by starting a managed browser on a dynamic DevTools port.
+	return !state.portConfigured && error instanceof DevToolsEndpointError;
+}
+
 function canAutoLaunchBrowser() {
 	return state.autoLaunchEnabled && isLocalDevToolsHost(state.host);
 }
@@ -1302,10 +1311,10 @@ function isLocalDevToolsHost(host: string) {
 }
 
 function browserCandidateDefinitions(): BrowserCandidateDefinition[] {
-	return uniqueBrowserCandidates([
-		...explicitBrowserCandidateDefinition(),
-		...platformBrowserCandidateDefinitions(),
-	]);
+	const explicitCandidate = explicitBrowserCandidateDefinition();
+	if (explicitCandidate.length > 0) return explicitCandidate;
+
+	return uniqueBrowserCandidates(platformBrowserCandidateDefinitions());
 }
 
 function explicitBrowserCandidateDefinition(): BrowserCandidateDefinition[] {
