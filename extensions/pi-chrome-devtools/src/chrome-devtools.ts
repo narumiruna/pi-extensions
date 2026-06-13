@@ -1266,9 +1266,9 @@ function shouldAutoLaunchAfterEndpointError(error: unknown) {
 	if (!canAutoLaunchBrowser()) return false;
 	if (isLaunchableEndpointError(error)) return true;
 
-	// If the user did not pin a port, non-retryable unexpected responses on the
-	// default port are conflicts we can avoid with a dynamic DevTools port.
-	return !state.portConfigured && error instanceof DevToolsEndpointError && !error.retryable;
+	// After the attach-first retry window is exhausted, anything unexpected on an
+	// unpinned default port is a conflict we can avoid with a dynamic DevTools port.
+	return !state.portConfigured && error instanceof DevToolsEndpointError;
 }
 
 function canAutoLaunchBrowser() {
