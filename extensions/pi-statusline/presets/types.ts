@@ -1,4 +1,4 @@
-import type { ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 
 export type SegmentName =
 	| "brand"

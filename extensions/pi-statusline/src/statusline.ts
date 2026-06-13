@@ -7,8 +7,8 @@ import type {
 	ReadonlyFooterDataProvider,
 	Theme,
 	ThemeColor,
-} from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { classicExtensionSeparator, renderClassicStatusline } from "../presets/classic.js";
 import { renderTokyoNightStatusline, tokyoNightExtensionSeparator } from "../presets/tokyo-night.js";
 import type {

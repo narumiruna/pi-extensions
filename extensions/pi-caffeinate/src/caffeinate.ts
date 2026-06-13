@@ -9,7 +9,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "caffeinate";
 const DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);

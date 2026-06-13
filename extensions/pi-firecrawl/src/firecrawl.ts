@@ -5,7 +5,7 @@ import {
 	defineTool,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const DEFAULT_API_URL = "https://api.firecrawl.dev/v1";
