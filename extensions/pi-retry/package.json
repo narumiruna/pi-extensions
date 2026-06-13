@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-retry",
-	"version": "0.4.1",
+	"version": "0.4.2",
 	"description": "Public pi extension that retries empty-detail provider errors and stalled streams.",
 	"type": "module",
 	"license": "MIT",
