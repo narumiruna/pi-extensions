@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-goal",
-	"version": "0.4.0",
+	"version": "0.4.1",
 	"description": "Pi extension that keeps working on a /goal until the agent marks it complete.",
 	"type": "module",
 	"license": "MIT",
