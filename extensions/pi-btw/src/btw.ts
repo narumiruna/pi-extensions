@@ -1,4 +1,4 @@
-import { complete, type UserMessage } from "@mariozechner/pi-ai";
+import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import {
 	BorderedLoader,
 	DynamicBorder,
@@ -6,7 +6,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type Theme,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	Key,
 	Markdown,
@@ -15,7 +15,7 @@ import {
 	visibleWidth,
 	type Component,
 	type TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 const MAX_CONTEXT_CHARS = 40_000;
 const ANSWER_CHROME_LINES = 4;

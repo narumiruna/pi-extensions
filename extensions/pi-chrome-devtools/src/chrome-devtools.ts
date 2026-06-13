@@ -11,7 +11,7 @@ import {
 	type ExtensionCommandContext,
 	type ToolRenderResultOptions,
 	withFileMutationQueue,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const DEFAULT_HOST = "127.0.0.1";

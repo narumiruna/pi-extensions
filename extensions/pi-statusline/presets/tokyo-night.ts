@@ -1,5 +1,5 @@
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { ansiFg, ansiStyle } from "./ansi.js";
 import type { RenderSegment, TokyoNightBlockName } from "./types.js";
 
