@@ -13,6 +13,7 @@ Run commands from the repository root unless noted otherwise.
 
 - Install dependencies: `npm install`
 - Full verification: `npm run check` or `just check`
+- Run extension tests: `npm test`
 - Format with Biome: `npm run format` or `just format`
 - Typecheck all workspaces: `npm run typecheck`
 - Preview npm package contents: `just pack-caffeinate`, `just pack-chrome-devtools`, `just pack-firecrawl`, `just pack-goal`, `just pack-lsp`, `just pack-retry`, `just pack-statusline`, or `just pack-sync`
@@ -28,7 +29,8 @@ Run commands from the repository root unless noted otherwise.
 
 ## Testing and verification
 
-- There is no separate test suite configured; use `npm run check` as the CI-equivalent local gate.
+- Extension test suites live under `extensions/<package>/test/*.test.ts` and run with `npm test`.
+- Use `npm run check` as the CI-equivalent local gate; it runs Biome, boundary checks, workspace typechecks, and tests.
 - For package metadata or publishing changes, also run the relevant `just pack-*` dry run and inspect the tarball contents.
 - For Pi runtime behavior, prefer `pi -e ./extensions/<package>` or the matching `just try-*` recipe before publishing.
 
