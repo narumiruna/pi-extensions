@@ -454,7 +454,7 @@ ${await buildToolStatusMessage(pi)}`, "info");
 	}
 }
 
-function parseCommand(args: string): CommandAction | "unknown" {
+export function parseCommand(args: string): CommandAction | "unknown" {
 	const command = args.trim().toLowerCase();
 	if (!command) return "menu";
 	if (command === "help") return "help";
@@ -466,7 +466,7 @@ function parseCommand(args: string): CommandAction | "unknown" {
 	return "unknown";
 }
 
-function commandCompletions(prefix: string) {
+export function commandCompletions(prefix: string) {
 	const normalized = prefix.trim().toLowerCase();
 	if (normalized.includes(" ")) return null;
 
@@ -735,7 +735,7 @@ function allChromeDevtoolsTools() {
 	return [...CHROME_DEVTOOLS_TOOL_NAMES];
 }
 
-function orderedChromeDevtoolsTools(selectedTools: ReadonlySet<ChromeDevToolsToolName>) {
+export function orderedChromeDevtoolsTools(selectedTools: ReadonlySet<ChromeDevToolsToolName>) {
 	return CHROME_DEVTOOLS_TOOL_NAMES.filter((toolName) => selectedTools.has(toolName));
 }
 
@@ -794,7 +794,7 @@ async function loadSettings(): Promise<
 	}
 }
 
-function normalizeChromeDevtoolsSettings(value: unknown): ChromeDevToolsSettings | undefined {
+export function normalizeChromeDevtoolsSettings(value: unknown): ChromeDevToolsSettings | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const settings = value as { tools?: unknown; updatedAt?: unknown };
 	if (typeof settings.updatedAt !== "number") return undefined;
@@ -843,7 +843,7 @@ function unique<T>(values: T[]) {
 	return Array.from(new Set(values));
 }
 
-function parseConfiguredPort(value: string | undefined) {
+export function parseConfiguredPort(value: string | undefined) {
 	if (value === undefined) return undefined;
 	const trimmedValue = value.trim();
 	if (!/^\d+$/.test(trimmedValue)) return undefined;
@@ -1292,7 +1292,7 @@ function devToolsEndpoint() {
 	return `http://${formatHostForUrl(state.host)}:${state.port}`;
 }
 
-function formatHostForUrl(host: string) {
+export function formatHostForUrl(host: string) {
 	if (host.startsWith("[") && host.endsWith("]")) return host;
 	return host.includes(":") ? `[${host}]` : host;
 }
@@ -1360,7 +1360,7 @@ function defaultManualBrowserExecutable() {
 			: "google-chrome";
 }
 
-function quoteCommandPart(value: string) {
+export function quoteCommandPart(value: string) {
 	return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
 }
 
@@ -1368,7 +1368,7 @@ function endpointConfigHint() {
 	return "Set PI_CHROME_DEVTOOLS_HOST and PI_CHROME_DEVTOOLS_PORT for a manual endpoint, PI_CHROME_DEVTOOLS_BROWSER to choose an executable, or PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0 to disable auto-launch.";
 }
 
-function isLocalDevToolsHost(host: string) {
+export function isLocalDevToolsHost(host: string) {
 	const normalizedHost = host.toLowerCase().replace(/^\[(.*)]$/, "$1");
 	return ["localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"].includes(normalizedHost);
 }
@@ -1604,7 +1604,7 @@ async function saveScreenshot(
 	};
 }
 
-function resolveScreenshotPath(savePath: string | undefined, cwd: string): ResolvedScreenshotPath {
+export function resolveScreenshotPath(savePath: string | undefined, cwd: string): ResolvedScreenshotPath {
 	const cwdRoot = resolve(cwd);
 	const tempRoot = resolve(tmpdir());
 
@@ -1643,7 +1643,7 @@ function stripLeadingAtPath(path: string) {
 	return path.startsWith("@") ? path.slice(1) : path;
 }
 
-function hasParentPathSegment(path: string) {
+export function hasParentPathSegment(path: string) {
 	return path.split(/[\\/]+/).some((part) => part === "..");
 }
 
@@ -1668,7 +1668,7 @@ async function ensureSafeScreenshotParent(resolvedPath: ResolvedScreenshotPath) 
 	}
 }
 
-function selectAllowedRoot(path: string, roots: readonly string[]) {
+export function selectAllowedRoot(path: string, roots: readonly string[]) {
 	const matchingRoots = roots.filter((root) => isPathInsideRoot(path, root));
 	matchingRoots.sort(
 		(left, right) =>
@@ -1781,7 +1781,7 @@ async function realpathOrResolvedPath(path: string) {
 	return realpath(path).catch(() => resolve(path));
 }
 
-function isPathInsideRoot(path: string, root: string) {
+export function isPathInsideRoot(path: string, root: string) {
 	const normalizedPath = normalizePathForComparison(resolve(path));
 	const normalizedRoot = normalizePathForComparison(resolve(root));
 	if (normalizedPath === normalizedRoot) return true;

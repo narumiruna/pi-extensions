@@ -684,7 +684,7 @@ function isBuiltinTool(tool: ToolInfo) {
 	return tool.sourceInfo.source === "builtin";
 }
 
-function canSelectToolInPlanMode(tool: ToolInfo) {
+export function canSelectToolInPlanMode(tool: ToolInfo) {
 	if (isBuiltinTool(tool)) return SAFE_BUILTIN_PLAN_TOOLS.has(tool.name);
 	return true;
 }
@@ -726,11 +726,11 @@ function unique(values: string[]) {
 	return Array.from(new Set(values));
 }
 
-function withRequiredPlanModeTools(toolNames: string[]) {
+export function withRequiredPlanModeTools(toolNames: string[]) {
 	return unique([...withoutPlanModeQuestionTool(toolNames), PLAN_MODE_QUESTION_TOOL_NAME]);
 }
 
-function withoutPlanModeQuestionTool(toolNames: string[]) {
+export function withoutPlanModeQuestionTool(toolNames: string[]) {
 	return toolNames.filter((toolName) => toolName !== PLAN_MODE_QUESTION_TOOL_NAME);
 }
 
@@ -738,7 +738,7 @@ type NormalizePlanModeQuestionParamsResult =
 	| { ok: true; questions: PlanModeQuestion[] }
 	| { ok: false; error: string };
 
-function normalizePlanModeQuestionParams(input: unknown): NormalizePlanModeQuestionParamsResult {
+export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanModeQuestionParamsResult {
 	if (!isRecord(input) || !Array.isArray(input.questions)) {
 		return { ok: false, error: "questions must be an array" };
 	}
@@ -938,19 +938,19 @@ function readCommand(input: unknown) {
 	return typeof command?.command === "string" ? command.command : "";
 }
 
-function isSafeCommand(command: string) {
+export function isSafeCommand(command: string) {
 	const trimmed = command.trim();
 	if (!trimmed) return false;
 	if (MUTATING_BASH_PATTERNS.some((pattern) => pattern.test(trimmed))) return false;
 	return SAFE_BASH_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
-function extractProposedPlan(text: string) {
+export function extractProposedPlan(text: string) {
 	const match = PROPOSED_PLAN_PATTERN.exec(text);
 	return match?.[1]?.trim();
 }
 
-function latestAssistantText(messages: unknown) {
+export function latestAssistantText(messages: unknown) {
 	if (!Array.isArray(messages)) return "";
 	for (const entry of [...messages].reverse()) {
 		const message = (entry as { message?: SessionMessage })?.message ?? (entry as SessionMessage);
@@ -971,7 +971,7 @@ function messageContainsInactivePlanModeArtifact(message: unknown) {
 	return candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE;
 }
 
-function stripProposedPlanBlocksFromMessage<T>(message: T): T {
+export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
 	const candidate = unwrapSessionMessage(message);
 	if (candidate.role !== "assistant") return message;
 
@@ -1011,7 +1011,7 @@ function stripProposedPlanBlocksFromContent(content: unknown) {
 	return changed ? nextContent : content;
 }
 
-function stripProposedPlanBlocks(text: string) {
+export function stripProposedPlanBlocks(text: string) {
 	return text.replace(PROPOSED_PLAN_BLOCK_PATTERN, "");
 }
 

@@ -631,7 +631,7 @@ async function addFile(results: SnapshotFile[], root: string, relativePath: stri
 	results.push({ path: relativePath, contentBase64: content.toString("base64"), sha256: sha256(content) });
 }
 
-function isDeniedPath(relativePath: string) {
+export function isDeniedPath(relativePath: string) {
 	const normalized = toPosix(relativePath);
 	const base = path.posix.basename(normalized).toLowerCase();
 	return (
@@ -647,7 +647,7 @@ function isDeniedPath(relativePath: string) {
 	);
 }
 
-function scanSnapshot(snapshot: Snapshot) {
+export function scanSnapshot(snapshot: Snapshot) {
 	const findings: string[] = [];
 	for (const file of snapshot.files) {
 		const content = Buffer.from(file.contentBase64, "base64");
@@ -718,7 +718,7 @@ async function applySnapshot(snapshot: Snapshot) {
 	}
 }
 
-function preflightSnapshotApply(root: string, snapshot: Snapshot, current: Snapshot) {
+export function preflightSnapshotApply(root: string, snapshot: Snapshot, current: Snapshot) {
 	const seenPaths = new Set<string>();
 	const remotePaths = new Set<string>();
 	const writes: Array<{ target: string; content: Buffer }> = [];
@@ -1124,7 +1124,7 @@ async function assertNoSymlinkParents(root: string, target: string) {
 	}
 }
 
-function safeJoin(root: string, relativePath: string) {
+export function safeJoin(root: string, relativePath: string) {
 	const target = path.resolve(root, relativePath);
 	assertWithinRoot(root, target, relativePath);
 	return target;
@@ -1138,11 +1138,11 @@ function assertWithinRoot(root: string, target: string, label = target) {
 	}
 }
 
-function splitArgs(input: string) {
+export function splitArgs(input: string) {
 	return input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((arg) => arg.replace(/^['"]|['"]$/g, "")) ?? [];
 }
 
-function parseOptions(args: string[]): CommandOptions {
+export function parseOptions(args: string[]): CommandOptions {
 	return {
 		yes: args.includes("--yes") || args.includes("-y"),
 		force: args.includes("--force"),
@@ -1170,11 +1170,11 @@ function iso8601Basic(date: Date) {
 	return date.toISOString().replace(/[:-]|\.\d{3}/g, "");
 }
 
-function encodeKey(key: string) {
+export function encodeKey(key: string) {
 	return key.split("/").map(encodeURIComponent).join("/");
 }
 
-function posixJoin(...parts: string[]) {
+export function posixJoin(...parts: string[]) {
 	return parts.map((part) => trimSlashes(part)).filter(Boolean).join("/");
 }
 
@@ -1186,7 +1186,7 @@ function trimSlashes(value: string) {
 	return value.replace(/^\/+|\/+$/g, "");
 }
 
-function safeName(value: string) {
+export function safeName(value: string) {
 	return value.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
@@ -1207,7 +1207,7 @@ function selectSessionToken(fileSessionToken: string | undefined) {
 	return normalizeOptionalString(process.env.AWS_SESSION_TOKEN) ?? normalizeOptionalString(fileSessionToken);
 }
 
-function sessionTokenWarnings(config: { endpoint?: string; sessionToken?: string }) {
+export function sessionTokenWarnings(config: { endpoint?: string; sessionToken?: string }) {
 	if (!isCloudflareR2Endpoint(config.endpoint) || !config.sessionToken) return [];
 	return [
 		"session token: configured for Cloudflare R2; if R2 rejects X-Amz-Security-Token, pi-sync retries once without it. R2 static access keys usually do not need a session token.",
@@ -1221,7 +1221,7 @@ function isSecurityTokenInvalidArgument(text: string) {
 	);
 }
 
-function isCloudflareR2Endpoint(endpoint: string | undefined) {
+export function isCloudflareR2Endpoint(endpoint: string | undefined) {
 	const value = endpoint?.trim();
 	if (!value) return false;
 	try {
@@ -1241,7 +1241,7 @@ function hasEnv(name: string) {
 	return Object.prototype.hasOwnProperty.call(process.env, name);
 }
 
-function isEnabled(value: boolean | string | undefined, defaultValue: boolean) {
+export function isEnabled(value: boolean | string | undefined, defaultValue: boolean) {
 	if (value === undefined) return defaultValue;
 	if (typeof value === "boolean") return value;
 	return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());

@@ -279,7 +279,7 @@ class BtwAnswerPager implements Component {
 	}
 }
 
-function sanitizeSingleLine(text: string) {
+export function sanitizeSingleLine(text: string) {
 	return text
 		.replace(/[\r\n\t]/g, " ")
 		.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
@@ -287,7 +287,7 @@ function sanitizeSingleLine(text: string) {
 		.trim();
 }
 
-function buildUserPrompt(question: string, conversationContext: string) {
+export function buildUserPrompt(question: string, conversationContext: string) {
 	return [
 		"Answer this side question without modifying the main conversation.",
 		"",
@@ -301,7 +301,7 @@ function buildUserPrompt(question: string, conversationContext: string) {
 	].join("\n");
 }
 
-function buildConversationContext(entries: readonly SessionEntry[]) {
+export function buildConversationContext(entries: readonly SessionEntry[]) {
 	const sections: string[] = [];
 
 	for (const entry of entries) {

@@ -7,6 +7,7 @@
 - `npm access set status=public <package>` cannot create brand-new scoped packages; if it returns access 404, first run `npm publish --workspace <package> --access public`.
 - For sleep-inhibitor extensions on WSL, prefer Windows `powershell.exe` with `SetThreadExecutionState`; `systemd-inhibit` may exist but fail without a usable systemd/logind session. Ensure Windows inhibitors exit on stdin EOF, clear `ES_CONTINUOUS`, and pass execution-state flags as `[uint32]'0x...'`; ensure Unix inhibitors are parent-bound and trap cleanup, or Pi shutdown can leave a power request/process active.
 - When testing TypeScript extensions via direct Node import, avoid parameter properties; Node's strip-only TypeScript loader rejects them even though `tsc` accepts them.
+- Symptom: Node's built-in TypeScript test runner cannot resolve source imports written as `./module.js` to local `.ts` files. Cause: Node strip-types does not apply TypeScript's NodeNext extension remapping. Fix: compile tests with `tsc` to a temp JS outDir before running `node --test`.
 - ty/ruff LSP servers may request `workspace/configuration`; respond with per-item empty config objects or diagnostic requests can hang.
 - pi-statusline is display-only; avoid prompt interception or customization commands unless intentionally reintroduced.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.

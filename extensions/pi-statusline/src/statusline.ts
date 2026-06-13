@@ -320,14 +320,14 @@ function thinkingColor(level: ThinkingLevel): ThemeColor {
 	}
 }
 
-function contextColor(percent: number | null | undefined): ThemeColor {
+export function contextColor(percent: number | null | undefined): ThemeColor {
 	if (percent === null || percent === undefined) return "dim";
 	if (percent >= 90) return "error";
 	if (percent >= 70) return "warning";
 	return "success";
 }
 
-function formatToolActivity(runtime: RuntimeState): string {
+export function formatToolActivity(runtime: RuntimeState): string {
 	const active = [...runtime.activeTools.entries()];
 	if (active.length > 0) {
 		const [name, count] = active[0] ?? ["tool", 1];
@@ -373,7 +373,7 @@ function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): st
 	return [`${theme.fg("warning", "⚠️")} ${theme.fg("warning", `dup ${names}${suffix}`)}`];
 }
 
-function splitExtensionStatusIcon(value: string): { icon: string; text: string } {
+export function splitExtensionStatusIcon(value: string): { icon: string; text: string } {
 	const trimmed = value.trim();
 	const [firstToken, ...restTokens] = trimmed.split(/\s+/);
 	if (firstToken && isEmojiOnlyToken(firstToken)) {
@@ -388,7 +388,7 @@ function isEmojiOnlyToken(value: string): boolean {
 	);
 }
 
-function extensionColor(key: string, value: string): ThemeColor {
+export function extensionColor(key: string, value: string): ThemeColor {
 	const normalized = `${key} ${value}`.toLowerCase();
 	if (/missing|error|fail|conflict|duplicate|unavailable/.test(normalized)) return "warning";
 	if (normalized.includes("codex")) return "accent";
@@ -396,11 +396,11 @@ function extensionColor(key: string, value: string): ThemeColor {
 	return "muted";
 }
 
-function stripExtensionStatusPrefix(key: string, value: string): string {
+export function stripExtensionStatusPrefix(key: string, value: string): string {
 	return value.trim().replace(new RegExp(`^${escapeRegExp(key)}\\s*:\\s*`, "iu"), "");
 }
 
-function simplifyExtensionStatusText(value: string): string {
+export function simplifyExtensionStatusText(value: string): string {
 	return value
 		.trim()
 		.replace(/\bready\b/giu, "✓")
@@ -468,7 +468,7 @@ function packageNameForSource(source: string, baseDirectory: string): string | u
 	}
 }
 
-function npmPackageName(source: string): string {
+export function npmPackageName(source: string): string {
 	const spec = source.slice("npm:".length);
 	if (spec.startsWith("@")) return spec.split("@").slice(0, 2).join("@").replace(/^@/, "@");
 	return spec.split("@")[0] ?? spec;
@@ -505,7 +505,7 @@ function getTokenTotals(ctx: ExtensionContext): TokenTotals {
 	return totals;
 }
 
-function formatCount(value: number): string {
+export function formatCount(value: number): string {
 	if (value < 1000) return `${value}`;
 	if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
 	return `${(value / 1_000_000).toFixed(1)}m`;
@@ -518,7 +518,7 @@ function formatTime(): string {
 	return `${hours}:${minutes}`;
 }
 
-function shortenModel(model: string): string {
+export function shortenModel(model: string): string {
 	return model
 		.replace(/^claude-/, "")
 		.replace(/^gpt-/, "gpt ")

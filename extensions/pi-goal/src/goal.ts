@@ -406,7 +406,7 @@ function updateGoalUsage(goal: ActiveGoal, ctx: StatusContext) {
 	goal.updatedAt = Date.now();
 }
 
-function parseCommand(args: string): CommandResult | string {
+export function parseCommand(args: string): CommandResult | string {
 	const tokens = tokenize(args.trim());
 	if (tokens.length === 0) return { kind: "show" };
 
@@ -465,7 +465,7 @@ function tokenize(input: string): string[] {
 	return tokens;
 }
 
-function parseTokenBudget(value: string): number | undefined {
+export function parseTokenBudget(value: string): number | undefined {
 	const match = /^(\d+(?:\.\d+)?)([km])?$/iu.exec(value.trim());
 	if (!match) return undefined;
 	const amount = Number(match[1]);
@@ -474,7 +474,7 @@ function parseTokenBudget(value: string): number | undefined {
 	return Math.floor(amount * multiplier);
 }
 
-function validateObjective(objective: string): string | undefined {
+export function validateObjective(objective: string): string | undefined {
 	const trimmed = objective.trim();
 	if (!trimmed) return "Usage: /goal <goal_to_complete>";
 	if (trimmed.length > MAX_OBJECTIVE_LENGTH) {
@@ -525,7 +525,7 @@ function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 	ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
 }
 
-function formatStatus(goal: ActiveGoal | undefined) {
+export function formatStatus(goal: ActiveGoal | undefined) {
 	if (!goal) return undefined;
 	if (goal.status === "complete") return "🎯 complete";
 	if (goal.status === "paused") return "🎯 paused";
@@ -555,7 +555,7 @@ function goalCommandHint(status: GoalStatus) {
 	return "/goal edit <objective>, /goal clear";
 }
 
-function formatDuration(seconds: number) {
+export function formatDuration(seconds: number) {
 	if (seconds < 60) return `${seconds}s`;
 	const minutes = Math.floor(seconds / 60);
 	if (minutes < 60) return `${minutes}m`;
@@ -563,7 +563,7 @@ function formatDuration(seconds: number) {
 	return `${hours}h${minutes % 60}m`;
 }
 
-function formatTokenCount(value: number) {
+export function formatTokenCount(value: number) {
 	if (value < 1_000) return `${value}`;
 	if (value < 1_000_000) return `${Number.isInteger(value / 1_000) ? value / 1_000 : (value / 1_000).toFixed(1)}k`;
 	return `${Number.isInteger(value / 1_000_000) ? value / 1_000_000 : (value / 1_000_000).toFixed(1)}m`;
@@ -584,7 +584,7 @@ function buildResumePrompt(goal: ActiveGoal) {
 	return `The user explicitly resumed the paused /goal. Continue working toward this goal:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
 }
 
-function buildGoalSystemPrompt(goal: ActiveGoal) {
+export function buildGoalSystemPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
 	return `Active /goal:\n${goalObjectiveBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
 }
@@ -652,7 +652,7 @@ function extractContinuationMarker(prompt: string) {
 	return CONTINUATION_MARKER_PATTERN.exec(prompt)?.[1];
 }
 
-function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
+export function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
 		if (!message || typeof message !== "object") continue;

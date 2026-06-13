@@ -1,0 +1,9 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"outDir": "node_modules/.cache/pi-extensions-test",
+		"rootDir": "."
+	},
+	"include": ["extensions/*/src/**/*.ts", "extensions/*/test/**/*.ts", "test/**/*.ts"]
+}

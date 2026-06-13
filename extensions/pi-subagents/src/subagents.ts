@@ -55,7 +55,7 @@ const KILL_GRACE_MS = 5000;
 const STATUS_KEY = "subagents";
 const activeStatuses = new Map<string, string>();
 
-function parsePositiveInteger(value: string | undefined): number | undefined {
+export function parsePositiveInteger(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
@@ -114,14 +114,14 @@ function fanInStatus(agent: string): string {
 	return `🧑‍🤝‍🧑 fan-in ${agent}`;
 }
 
-function formatTokens(count: number): string {
+export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	return `${(count / 1000000).toFixed(1)}M`;
 }
 
-function formatUsageStats(
+export function formatUsageStats(
 	usage: {
 		input: number;
 		output: number;
@@ -626,7 +626,7 @@ function isPositiveNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 1;
 }
 
-function normalizeAgentSettings(value: unknown): SubagentAgentConfig | undefined {
+export function normalizeAgentSettings(value: unknown): SubagentAgentConfig | undefined {
 	if (!isPlainObject(value)) return undefined;
 
 	const config: SubagentAgentConfig = {};
@@ -653,7 +653,7 @@ function normalizeAgentSettings(value: unknown): SubagentAgentConfig | undefined
 	return hasKnownField ? config : undefined;
 }
 
-function normalizeSubagentSettings(value: unknown): SubagentSettings | undefined {
+export function normalizeSubagentSettings(value: unknown): SubagentSettings | undefined {
 	if (!isPlainObject(value)) return undefined;
 	if (!hasOwn(value, "agents")) return {};
 	if (!isPlainObject(value.agents)) return undefined;
@@ -685,11 +685,11 @@ function saveSubagentConfig(settings: SubagentSettings): void {
 	fs.writeFileSync(configPath, `${JSON.stringify(settings, null, "\t")}\n`, "utf-8");
 }
 
-function uniqueToolNames(tools: string[]): string[] {
+export function uniqueToolNames(tools: string[]): string[] {
 	return [...new Set(tools)];
 }
 
-function sameToolSet(left: string[], right: string[]): boolean {
+export function sameToolSet(left: string[], right: string[]): boolean {
 	const leftSet = new Set(left);
 	const rightSet = new Set(right);
 	if (leftSet.size !== rightSet.size) return false;

@@ -348,7 +348,7 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
 	}
 }
 
-function parseCommand(args: string): CommandAction | "unknown" {
+export function parseCommand(args: string): CommandAction | "unknown" {
 	const command = args.trim().toLowerCase();
 	if (!command) return "menu";
 	if (command === "help") return "help";
@@ -361,7 +361,7 @@ function parseCommand(args: string): CommandAction | "unknown" {
 	return "unknown";
 }
 
-function commandCompletions(prefix: string) {
+export function commandCompletions(prefix: string) {
 	const normalized = prefix.trim().toLowerCase();
 	if (normalized.includes(" ")) return null;
 
@@ -625,7 +625,7 @@ function allFirecrawlTools() {
 	return [...FIRECRAWL_TOOL_NAMES];
 }
 
-function orderedFirecrawlTools(selectedTools: ReadonlySet<FirecrawlToolName>) {
+export function orderedFirecrawlTools(selectedTools: ReadonlySet<FirecrawlToolName>) {
 	return FIRECRAWL_TOOL_NAMES.filter((toolName) => selectedTools.has(toolName));
 }
 
@@ -642,7 +642,7 @@ async function persistedSettingLabel() {
 	return "none; current active-tool policy preserved";
 }
 
-function formatPersistedSelection(tools: readonly FirecrawlToolName[]) {
+export function formatPersistedSelection(tools: readonly FirecrawlToolName[]) {
 	if (tools.length === FIRECRAWL_TOOL_NAMES.length) {
 		return `all enabled (${tools.length}/${FIRECRAWL_TOOL_NAMES.length} selected)`;
 	}
@@ -684,7 +684,7 @@ async function loadSettings(): Promise<
 	}
 }
 
-function normalizeFirecrawlSettings(value: unknown): FirecrawlSettings | undefined {
+export function normalizeFirecrawlSettings(value: unknown): FirecrawlSettings | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const settings = value as { tools?: unknown; updatedAt?: unknown };
 	if (typeof settings.updatedAt !== "number") return undefined;
@@ -770,11 +770,11 @@ function hasApiKey() {
 	return Boolean(process.env.FIRECRAWL_API_KEY?.trim());
 }
 
-function normalizeApiUrl(apiUrl: string | undefined) {
+export function normalizeApiUrl(apiUrl: string | undefined) {
 	return (apiUrl?.trim() || DEFAULT_API_URL).replace(/\/+$/, "");
 }
 
-function parseResponseBody(responseText: string) {
+export function parseResponseBody(responseText: string) {
 	if (!responseText) return null;
 
 	try {
@@ -784,12 +784,12 @@ function parseResponseBody(responseText: string) {
 	}
 }
 
-function formatPayload(payload: unknown) {
+export function formatPayload(payload: unknown) {
 	if (typeof payload === "string") return payload;
 	return JSON.stringify(payload);
 }
 
-function jsonResult(payload: unknown) {
+export function jsonResult(payload: unknown) {
 	return {
 		content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
 		details: payload,
@@ -805,7 +805,7 @@ async function withStatus<T>(ctx: StatusContext, status: string, callback: () =>
 	}
 }
 
-function cleanObject<T>(value: T): T {
+export function cleanObject<T>(value: T): T {
 	if (Array.isArray(value)) {
 		return value.map((item) => cleanObject(item)) as T;
 	}

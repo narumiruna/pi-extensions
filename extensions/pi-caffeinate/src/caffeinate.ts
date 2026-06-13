@@ -229,7 +229,7 @@ function stopCaffeinate(ctx: ExtensionContext, reason: string) {
 	updateStatus(ctx);
 }
 
-function parseCommand(args: string): CommandAction | "unknown" {
+export function parseCommand(args: string): CommandAction | "unknown" {
 	const command = args.trim().toLowerCase();
 	if (!command) return "menu";
 	if (command === "help") return "help";
@@ -241,7 +241,7 @@ function parseCommand(args: string): CommandAction | "unknown" {
 	return "unknown";
 }
 
-function commandCompletions(prefix: string) {
+export function commandCompletions(prefix: string) {
 	const normalized = prefix.trim().toLowerCase();
 	if (normalized.includes(" ")) return null;
 
@@ -455,7 +455,7 @@ function commandExists(command: string) {
 	return false;
 }
 
-function splitCommand(input: string) {
+export function splitCommand(input: string) {
 	const parts: string[] = [];
 	let current = "";
 	let quote: '"' | "'" | undefined;
@@ -507,7 +507,7 @@ function windowsPowerInhibitorCommand(command: string, mode: CaffeinateMode): In
 	};
 }
 
-function windowsInhibitorScript(mode: CaffeinateMode) {
+export function windowsInhibitorScript(mode: CaffeinateMode) {
 	const flags = mode === "sleep" ? "0x80000001" : "0x80000003";
 	return `$ErrorActionPreference = 'Stop'; Add-Type -Namespace Native -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'; $flags = [uint32]'${flags}'; $release = [uint32]'0x80000000'; $stdin = [Console]::OpenStandardInput(); $buffer = New-Object byte[] 1; $readTask = $stdin.ReadAsync($buffer, 0, 1); try { while ($true) { [Native.Power]::SetThreadExecutionState($flags) | Out-Null; if ($readTask.Wait(30000)) { break } } } finally { [Native.Power]::SetThreadExecutionState($release) | Out-Null }`;
 }
@@ -579,7 +579,7 @@ function statusModeLabel() {
 	return state.mode === "sleep" ? "sleep" : "display";
 }
 
-function formatMode(mode: CaffeinateMode) {
+export function formatMode(mode: CaffeinateMode) {
 	return mode === "sleep" ? "sleep-only" : "display-awake";
 }
 
@@ -637,7 +637,7 @@ async function loadSettings(): Promise<
 	}
 }
 
-function normalizeCaffeinateSettings(value: unknown): CaffeinateSettings | undefined {
+export function normalizeCaffeinateSettings(value: unknown): CaffeinateSettings | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const settings = value as { mode?: unknown; updatedAt?: unknown };
 	if (!isCaffeinateMode(settings.mode)) return undefined;

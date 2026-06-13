@@ -24,7 +24,7 @@ type MessageShape = {
 
 type StatusMode = "incoming" | "retry";
 
-function parseStallTimeoutMs(value: unknown): number | undefined {
+export function parseStallTimeoutMs(value: unknown): number | undefined {
 	if (value === undefined || value === null || value === "") return undefined;
 	if (typeof value !== "string") return undefined;
 

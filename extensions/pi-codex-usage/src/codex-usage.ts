@@ -294,7 +294,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 	pi.on("session_shutdown", (_event, ctx) => clearUsageStatusline(ctx));
 }
 
-function parseArgs(
+export function parseArgs(
 	args: string,
 ): { ok: true; value: QueryUsageOptions } | { ok: false; error: string } {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
