@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexUsage, {
 	type CodexUsageReport,
 	formatCodexUsageReport,
 	formatCodexUsageStatusline,
+	isStaleExtensionContextError,
 	normalizeAppServerResponse,
 	normalizeBackendPayload,
 	parseArgs,
@@ -77,6 +78,243 @@ test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => 
 	assert.equal(report.snapshots.length, 1);
 	assert.equal(report.snapshots[0]?.primary?.usedPercent, 40);
 	assert.equal(report.snapshots[0]?.secondary?.windowMinutes, 10080);
+});
+
+test("scheduled statusline refresh ignores stale extension contexts", async (t) => {
+	// Node pairs clearTimeout with mocked setTimeout; clearTimeout is not a valid apis entry.
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = async () =>
+		new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: 25 } },
+			}),
+			{ status: 200 },
+		);
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	const { ctx, statuses } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, ctx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+
+	let staleModelRegistryReads = 0;
+	const staleError = new Error(
+		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
+	);
+	Object.defineProperty(ctx, "modelRegistry", {
+		configurable: true,
+		get() {
+			staleModelRegistryReads += 1;
+			throw staleError;
+		},
+	});
+
+	t.mock.timers.tick(5 * 60 * 1000);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(staleModelRegistryReads, 1);
+});
+
+test("stale refresh errors do not cancel newer session refresh timers", async (t) => {
+	// Node pairs clearTimeout with mocked setTimeout; clearTimeout is not a valid apis entry.
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	let fetches = 0;
+	globalThis.fetch = async () => {
+		fetches += 1;
+		return new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: fetches === 1 ? 25 : 50 } },
+			}),
+			{ status: 200 },
+		);
+	};
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	let rejectOldAuth: (error: Error) => void = () => undefined;
+	const oldAuth = new Promise<never>((_resolve, reject) => {
+		rejectOldAuth = reject;
+	});
+	const staleError = new Error(
+		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
+	);
+	const { ctx: oldCtx } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: () => oldAuth,
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+	const { ctx: newCtx, statuses } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, oldCtx);
+	mock.events.get("session_start")?.[0]?.({}, newCtx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+
+	rejectOldAuth(staleError);
+	await Promise.resolve();
+	await Promise.resolve();
+
+	t.mock.timers.tick(5 * 60 * 1000);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
+});
+
+test("stale command statusline writes are ignored", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = async () =>
+		new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: 25 } },
+			}),
+			{ status: 200 },
+		);
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const command = mock.commands.get("codex-status");
+	assert.ok(command);
+	const staleError = new Error("This extension ctx is stale after session replacement or reload.");
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	const { ctx } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+		ui: {
+			notify: () => undefined,
+			setStatus: () => {
+				throw staleError;
+			},
+		},
+	});
+
+	await command.handler("", ctx);
+});
+
+test("stale command query failures are ignored", async () => {
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const command = mock.commands.get("codex-status");
+	assert.ok(command);
+	const staleError = new Error("This extension ctx is stale after session replacement or reload.");
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	const { ctx } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => {
+				throw staleError;
+			},
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+
+	await command.handler("", ctx);
+});
+
+test("stale command statusline writes do not cancel newer session refresh timers", async (t) => {
+	// Node pairs clearTimeout with mocked setTimeout; clearTimeout is not a valid apis entry.
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	let fetches = 0;
+	globalThis.fetch = async () => {
+		fetches += 1;
+		return new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: fetches === 1 ? 25 : 50 } },
+			}),
+			{ status: 200 },
+		);
+	};
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const command = mock.commands.get("codex-status");
+	assert.ok(command);
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	const { ctx: newCtx, statuses } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, newCtx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+
+	const staleError = new Error(
+		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
+	);
+	const { ctx: staleCtx } = createMockContext({
+		model,
+		ui: {
+			notify: () => undefined,
+			setStatus: () => {
+				throw staleError;
+			},
+		},
+	});
+
+	await command.handler("", staleCtx);
+	t.mock.timers.tick(5 * 60 * 1000);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
+});
+
+test("isStaleExtensionContextError recognizes Pi stale-context failures", () => {
+	assert.equal(
+		isStaleExtensionContextError(
+			new Error("This extension ctx is stale after session replacement or reload."),
+		),
+		true,
+	);
+	assert.equal(isStaleExtensionContextError(new Error("network failed")), false);
 });
 
 test("formatters render report text and model-specific statusline buckets", () => {

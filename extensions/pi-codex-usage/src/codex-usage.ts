@@ -143,6 +143,8 @@ export default function codexUsage(pi: ExtensionAPI) {
 	let statuslineClearTimer: ReturnType<typeof setTimeout> | undefined;
 	let statuslineRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	let statuslineRequestId = 0;
+	let sessionActive = false;
+	let activeStatuslineContext: ExtensionContext | undefined;
 
 	const clearStatuslineTimers = () => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
@@ -151,25 +153,57 @@ export default function codexUsage(pi: ExtensionAPI) {
 		statuslineRefreshTimer = undefined;
 	};
 
+	const handleStaleContextError = (ctx: ExtensionContext, error: unknown): boolean => {
+		if (!isStaleExtensionContextError(error)) return false;
+		if (ctx === activeStatuslineContext) {
+			statuslineRequestId += 1;
+			clearStatuslineTimers();
+			activeStatuslineContext = undefined;
+		}
+		return true;
+	};
+
+	const rethrowUnlessStaleContextError = (ctx: ExtensionContext) => (error: unknown) => {
+		if (!handleStaleContextError(ctx, error)) throw error;
+	};
+
+	const setStatuslineValue = (ctx: ExtensionContext, value: string | undefined): boolean => {
+		try {
+			ctx.ui.setStatus(STATUS_KEY, value);
+			return true;
+		} catch (error) {
+			if (handleStaleContextError(ctx, error)) return false;
+			throw error;
+		}
+	};
+
 	const clearUsageStatusline = (ctx: ExtensionContext) => {
 		statuslineRequestId += 1;
 		clearStatuslineTimers();
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		activeStatuslineContext = undefined;
+		setStatuslineValue(ctx, undefined);
 	};
 
 	const scheduleTemporaryStatuslineClear = (ctx: ExtensionContext) => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
+		const requestId = statuslineRequestId;
 		statuslineClearTimer = setTimeout(() => {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
 			statuslineClearTimer = undefined;
+			if (!sessionActive || requestId !== statuslineRequestId) return;
+			setStatuslineValue(ctx, undefined);
 		}, CACHE_TTL_MS);
 		statuslineClearTimer.unref?.();
 	};
 
-	const scheduleStatuslineRefresh = (ctx: ExtensionContext) => {
+	const scheduleStatuslineRefresh = (ctx: ExtensionContext, model: CodexUsageModel | undefined) => {
 		if (statuslineRefreshTimer) clearTimeout(statuslineRefreshTimer);
+		const requestId = statuslineRequestId;
 		statuslineRefreshTimer = setTimeout(() => {
-			void refreshCurrentCodexUsageStatusline(ctx, true);
+			statuslineRefreshTimer = undefined;
+			if (!sessionActive || requestId !== statuslineRequestId) return;
+			void refreshCurrentCodexUsageStatusline(ctx, true, model).catch(
+				rethrowUnlessStaleContextError(ctx),
+			);
 		}, CACHE_TTL_MS);
 		statuslineRefreshTimer.unref?.();
 	};
@@ -179,19 +213,23 @@ export default function codexUsage(pi: ExtensionAPI) {
 		report: CodexUsageReport,
 		options: { autoRefresh: boolean; model: CodexUsageModel | undefined },
 	) => {
+		if (!setStatuslineValue(ctx, formatCodexUsageStatusline(report, options.model))) return;
+		activeStatuslineContext = ctx;
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
 		statuslineClearTimer = undefined;
-		ctx.ui.setStatus(STATUS_KEY, formatCodexUsageStatusline(report, options.model));
-		if (options.autoRefresh) scheduleStatuslineRefresh(ctx);
+		if (options.autoRefresh) scheduleStatuslineRefresh(ctx, options.model);
 		else scheduleTemporaryStatuslineClear(ctx);
 	};
 
 	const refreshCurrentCodexUsageStatusline = async (
 		ctx: ExtensionContext,
 		force: boolean,
-		model = ctx.model,
+		model?: CodexUsageModel,
 	) => {
-		if (!isOpenAICodexModel(model)) {
+		if (!sessionActive) return;
+		activeStatuslineContext = ctx;
+		const selectedModel = model ?? ctx.model;
+		if (!isOpenAICodexModel(selectedModel)) {
 			clearUsageStatusline(ctx);
 			return;
 		}
@@ -200,98 +238,117 @@ export default function codexUsage(pi: ExtensionAPI) {
 		statuslineRequestId = requestId;
 		const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
 		if (cached && !force) {
-			setUsageStatusline(ctx, cached.report, { autoRefresh: true, model });
+			setUsageStatusline(ctx, cached.report, { autoRefresh: true, model: selectedModel });
 			return;
 		}
 
-		ctx.ui.setStatus(STATUS_KEY, "📊 checking");
+		if (!setStatuslineValue(ctx, "📊 checking")) return;
 		const result = await queryUsage(ctx, { timeoutMs: DEFAULT_TIMEOUT_MS });
-		if (requestId !== statuslineRequestId) return;
-		if (!isOpenAICodexModel(ctx.model)) {
-			clearUsageStatusline(ctx);
-			return;
-		}
+		if (!sessionActive || requestId !== statuslineRequestId) return;
 
 		if (!result.ok) {
-			ctx.ui.setStatus(STATUS_KEY, "📊 usage error");
-			scheduleStatuslineRefresh(ctx);
+			if (setStatuslineValue(ctx, "📊 usage error")) {
+				scheduleStatuslineRefresh(ctx, selectedModel);
+			}
 			return;
 		}
 
 		cache = { createdAt: Date.now(), report: result.report };
-		setUsageStatusline(ctx, result.report, { autoRefresh: true, model });
+		setUsageStatusline(ctx, result.report, { autoRefresh: true, model: selectedModel });
 	};
 
 	pi.registerCommand(COMMAND_NAME, {
 		description: "Show Codex ChatGPT subscription usage and rate-limit windows",
 		handler: async (args, ctx) => {
-			const options = parseArgs(args);
-			if (!options.ok) {
-				ctx.ui.notify(options.error, "warning");
-				return;
-			}
-
-			if (options.value.clearStatusline) {
-				clearUsageStatusline(ctx);
-				ctx.ui.notify("Codex usage statusline cleared.", "info");
-				return;
-			}
-
-			const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
-			if (cached && !options.value.refresh) {
-				if (options.value.statusline) {
-					setUsageStatusline(ctx, cached.report, {
-						autoRefresh: isOpenAICodexModel(ctx.model),
-						model: ctx.model,
-					});
-				}
-				showReport(ctx, cached.report, true);
-				return;
-			}
-
-			let keepStatusline = false;
-			if (options.value.statusline) ctx.ui.setStatus(STATUS_KEY, "📊 checking");
 			try {
-				const result = await queryUsage(ctx, options.value);
-				if (!result.ok) {
-					ctx.ui.notify(formatQueryErrors(result.errors), "error");
+				const options = parseArgs(args);
+				if (!options.ok) {
+					ctx.ui.notify(options.error, "warning");
 					return;
 				}
 
-				cache = { createdAt: Date.now(), report: result.report };
-				if (options.value.statusline) {
-					setUsageStatusline(ctx, result.report, {
-						autoRefresh: isOpenAICodexModel(ctx.model),
-						model: ctx.model,
-					});
-					keepStatusline = true;
+				if (options.value.clearStatusline) {
+					clearUsageStatusline(ctx);
+					ctx.ui.notify("Codex usage statusline cleared.", "info");
+					return;
 				}
-				showReport(ctx, result.report, false);
-			} finally {
-				if (options.value.statusline && !keepStatusline) ctx.ui.setStatus(STATUS_KEY, undefined);
+
+				const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
+				if (cached && !options.value.refresh) {
+					if (options.value.statusline) {
+						setUsageStatusline(ctx, cached.report, {
+							autoRefresh: isOpenAICodexModel(ctx.model),
+							model: ctx.model,
+						});
+					}
+					showReport(ctx, cached.report, true);
+					return;
+				}
+
+				let keepStatusline = false;
+				const statuslineStarted =
+					options.value.statusline && setStatuslineValue(ctx, "📊 checking");
+				try {
+					const result = await queryUsage(ctx, options.value);
+					if (!result.ok) {
+						ctx.ui.notify(formatQueryErrors(result.errors), "error");
+						return;
+					}
+
+					cache = { createdAt: Date.now(), report: result.report };
+					if (options.value.statusline) {
+						setUsageStatusline(ctx, result.report, {
+							autoRefresh: isOpenAICodexModel(ctx.model),
+							model: ctx.model,
+						});
+						keepStatusline = true;
+					}
+					showReport(ctx, result.report, false);
+				} finally {
+					if (statuslineStarted && !keepStatusline) setStatuslineValue(ctx, undefined);
+				}
+			} catch (error) {
+				if (handleStaleContextError(ctx, error)) return;
+				throw error;
 			}
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false);
-		else clearUsageStatusline(ctx);
-	});
-
-	pi.on("session_tree", (_event, ctx) => {
-		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false);
-		else clearUsageStatusline(ctx);
-	});
-
-	pi.on("model_select", (event, ctx) => {
-		if (isOpenAICodexModel(event.model)) {
-			void refreshCurrentCodexUsageStatusline(ctx, false, event.model);
+		sessionActive = true;
+		if (isOpenAICodexModel(ctx.model)) {
+			void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model).catch(
+				rethrowUnlessStaleContextError(ctx),
+			);
 		} else {
 			clearUsageStatusline(ctx);
 		}
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => clearUsageStatusline(ctx));
+	pi.on("session_tree", (_event, ctx) => {
+		if (isOpenAICodexModel(ctx.model)) {
+			void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model).catch(
+				rethrowUnlessStaleContextError(ctx),
+			);
+		} else {
+			clearUsageStatusline(ctx);
+		}
+	});
+
+	pi.on("model_select", (event, ctx) => {
+		if (isOpenAICodexModel(event.model)) {
+			void refreshCurrentCodexUsageStatusline(ctx, false, event.model).catch(
+				rethrowUnlessStaleContextError(ctx),
+			);
+		} else {
+			clearUsageStatusline(ctx);
+		}
+	});
+
+	pi.on("session_shutdown", (_event, ctx) => {
+		sessionActive = false;
+		clearUsageStatusline(ctx);
+	});
 }
 
 export function parseArgs(
@@ -342,6 +399,13 @@ function isOpenAICodexModel(model: Pick<PiModel, "provider"> | undefined): boole
 	return model?.provider === CODEX_PROVIDER_ID;
 }
 
+export function isStaleExtensionContextError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		error.message.includes("This extension ctx is stale after session replacement or reload")
+	);
+}
+
 async function queryUsage(
 	ctx: ExtensionContext,
 	options: Pick<QueryUsageOptions, "timeoutMs">,
@@ -352,6 +416,7 @@ async function queryUsage(
 		const report = await queryViaPiAuth(ctx, options.timeoutMs);
 		return { ok: true, report };
 	} catch (cause) {
+		if (isStaleExtensionContextError(cause)) throw cause;
 		errors.push({ source: "pi-auth", message: errorMessage(cause), cause });
 	}
 
@@ -359,6 +424,7 @@ async function queryUsage(
 		const report = await queryViaCodexAppServer(options.timeoutMs);
 		return { ok: true, report };
 	} catch (cause) {
+		if (isStaleExtensionContextError(cause)) throw cause;
 		errors.push({ source: "codex-app-server", message: errorMessage(cause), cause });
 	}
 
