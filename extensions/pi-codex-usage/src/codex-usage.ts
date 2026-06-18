@@ -260,51 +260,56 @@ export default function codexUsage(pi: ExtensionAPI) {
 	pi.registerCommand(COMMAND_NAME, {
 		description: "Show Codex ChatGPT subscription usage and rate-limit windows",
 		handler: async (args, ctx) => {
-			const options = parseArgs(args);
-			if (!options.ok) {
-				ctx.ui.notify(options.error, "warning");
-				return;
-			}
-
-			if (options.value.clearStatusline) {
-				clearUsageStatusline(ctx);
-				ctx.ui.notify("Codex usage statusline cleared.", "info");
-				return;
-			}
-
-			const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
-			if (cached && !options.value.refresh) {
-				if (options.value.statusline) {
-					setUsageStatusline(ctx, cached.report, {
-						autoRefresh: isOpenAICodexModel(ctx.model),
-						model: ctx.model,
-					});
-				}
-				showReport(ctx, cached.report, true);
-				return;
-			}
-
-			let keepStatusline = false;
-			const statuslineStarted =
-				options.value.statusline && setStatuslineValue(ctx, "📊 checking");
 			try {
-				const result = await queryUsage(ctx, options.value);
-				if (!result.ok) {
-					ctx.ui.notify(formatQueryErrors(result.errors), "error");
+				const options = parseArgs(args);
+				if (!options.ok) {
+					ctx.ui.notify(options.error, "warning");
 					return;
 				}
 
-				cache = { createdAt: Date.now(), report: result.report };
-				if (options.value.statusline) {
-					setUsageStatusline(ctx, result.report, {
-						autoRefresh: isOpenAICodexModel(ctx.model),
-						model: ctx.model,
-					});
-					keepStatusline = true;
+				if (options.value.clearStatusline) {
+					clearUsageStatusline(ctx);
+					ctx.ui.notify("Codex usage statusline cleared.", "info");
+					return;
 				}
-				showReport(ctx, result.report, false);
-			} finally {
-				if (statuslineStarted && !keepStatusline) setStatuslineValue(ctx, undefined);
+
+				const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
+				if (cached && !options.value.refresh) {
+					if (options.value.statusline) {
+						setUsageStatusline(ctx, cached.report, {
+							autoRefresh: isOpenAICodexModel(ctx.model),
+							model: ctx.model,
+						});
+					}
+					showReport(ctx, cached.report, true);
+					return;
+				}
+
+				let keepStatusline = false;
+				const statuslineStarted =
+					options.value.statusline && setStatuslineValue(ctx, "📊 checking");
+				try {
+					const result = await queryUsage(ctx, options.value);
+					if (!result.ok) {
+						ctx.ui.notify(formatQueryErrors(result.errors), "error");
+						return;
+					}
+
+					cache = { createdAt: Date.now(), report: result.report };
+					if (options.value.statusline) {
+						setUsageStatusline(ctx, result.report, {
+							autoRefresh: isOpenAICodexModel(ctx.model),
+							model: ctx.model,
+						});
+						keepStatusline = true;
+					}
+					showReport(ctx, result.report, false);
+				} finally {
+					if (statuslineStarted && !keepStatusline) setStatuslineValue(ctx, undefined);
+				}
+			} catch (error) {
+				if (handleStaleContextError(ctx, error)) return;
+				throw error;
 			}
 		},
 	});
