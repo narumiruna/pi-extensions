@@ -81,6 +81,7 @@ test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => 
 });
 
 test("scheduled statusline refresh ignores stale extension contexts", async (t) => {
+	// Node pairs clearTimeout with mocked setTimeout; clearTimeout is not a valid apis entry.
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const originalFetch = globalThis.fetch;
 	t.after(() => {
@@ -111,12 +112,14 @@ test("scheduled statusline refresh ignores stale extension contexts", async (t) 
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
 
+	let staleModelRegistryReads = 0;
 	const staleError = new Error(
 		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
 	);
 	Object.defineProperty(ctx, "modelRegistry", {
 		configurable: true,
 		get() {
+			staleModelRegistryReads += 1;
 			throw staleError;
 		},
 	});
@@ -124,6 +127,68 @@ test("scheduled statusline refresh ignores stale extension contexts", async (t) 
 	t.mock.timers.tick(5 * 60 * 1000);
 	await Promise.resolve();
 	await Promise.resolve();
+	assert.equal(staleModelRegistryReads, 1);
+});
+
+test("stale refresh errors do not cancel newer session refresh timers", async (t) => {
+	// Node pairs clearTimeout with mocked setTimeout; clearTimeout is not a valid apis entry.
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	let fetches = 0;
+	globalThis.fetch = async () => {
+		fetches += 1;
+		return new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: fetches === 1 ? 25 : 50 } },
+			}),
+			{ status: 200 },
+		);
+	};
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	let rejectOldAuth: (error: Error) => void = () => undefined;
+	const oldAuth = new Promise<never>((_resolve, reject) => {
+		rejectOldAuth = reject;
+	});
+	const staleError = new Error(
+		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
+	);
+	const { ctx: oldCtx } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: () => oldAuth,
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+	const { ctx: newCtx, statuses } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, oldCtx);
+	mock.events.get("session_start")?.[0]?.({}, newCtx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+
+	rejectOldAuth(staleError);
+	await Promise.resolve();
+	await Promise.resolve();
+
+	t.mock.timers.tick(5 * 60 * 1000);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
 });
 
 test("isStaleExtensionContextError recognizes Pi stale-context failures", () => {

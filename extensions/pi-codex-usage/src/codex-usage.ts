@@ -144,6 +144,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 	let statuslineRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	let statuslineRequestId = 0;
 	let sessionActive = false;
+	let activeStatuslineContext: ExtensionContext | undefined;
 
 	const clearStatuslineTimers = () => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
@@ -152,15 +153,18 @@ export default function codexUsage(pi: ExtensionAPI) {
 		statuslineRefreshTimer = undefined;
 	};
 
-	const handleStaleContextError = (error: unknown): boolean => {
+	const handleStaleContextError = (ctx: ExtensionContext, error: unknown): boolean => {
 		if (!isStaleExtensionContextError(error)) return false;
-		statuslineRequestId += 1;
-		clearStatuslineTimers();
+		if (ctx === activeStatuslineContext) {
+			statuslineRequestId += 1;
+			clearStatuslineTimers();
+			activeStatuslineContext = undefined;
+		}
 		return true;
 	};
 
-	const rethrowUnlessStaleContextError = (error: unknown) => {
-		if (!handleStaleContextError(error)) throw error;
+	const rethrowUnlessStaleContextError = (ctx: ExtensionContext) => (error: unknown) => {
+		if (!handleStaleContextError(ctx, error)) throw error;
 	};
 
 	const setStatuslineValue = (ctx: ExtensionContext, value: string | undefined): boolean => {
@@ -168,7 +172,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 			ctx.ui.setStatus(STATUS_KEY, value);
 			return true;
 		} catch (error) {
-			if (handleStaleContextError(error)) return false;
+			if (handleStaleContextError(ctx, error)) return false;
 			throw error;
 		}
 	};
@@ -176,6 +180,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 	const clearUsageStatusline = (ctx: ExtensionContext) => {
 		statuslineRequestId += 1;
 		clearStatuslineTimers();
+		activeStatuslineContext = undefined;
 		setStatuslineValue(ctx, undefined);
 	};
 
@@ -197,7 +202,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 			statuslineRefreshTimer = undefined;
 			if (!sessionActive || requestId !== statuslineRequestId) return;
 			void refreshCurrentCodexUsageStatusline(ctx, true, model).catch(
-				rethrowUnlessStaleContextError,
+				rethrowUnlessStaleContextError(ctx),
 			);
 		}, CACHE_TTL_MS);
 		statuslineRefreshTimer.unref?.();
@@ -208,6 +213,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 		report: CodexUsageReport,
 		options: { autoRefresh: boolean; model: CodexUsageModel | undefined },
 	) => {
+		activeStatuslineContext = ctx;
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
 		statuslineClearTimer = undefined;
 		if (!setStatuslineValue(ctx, formatCodexUsageStatusline(report, options.model))) return;
@@ -221,6 +227,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 		model?: CodexUsageModel,
 	) => {
 		if (!sessionActive) return;
+		activeStatuslineContext = ctx;
 		const selectedModel = model ?? ctx.model;
 		if (!isOpenAICodexModel(selectedModel)) {
 			clearUsageStatusline(ctx);
@@ -304,7 +311,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 		sessionActive = true;
 		if (isOpenAICodexModel(ctx.model)) {
 			void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model).catch(
-				rethrowUnlessStaleContextError,
+				rethrowUnlessStaleContextError(ctx),
 			);
 		} else {
 			clearUsageStatusline(ctx);
@@ -314,7 +321,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 	pi.on("session_tree", (_event, ctx) => {
 		if (isOpenAICodexModel(ctx.model)) {
 			void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model).catch(
-				rethrowUnlessStaleContextError,
+				rethrowUnlessStaleContextError(ctx),
 			);
 		} else {
 			clearUsageStatusline(ctx);
@@ -324,7 +331,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 	pi.on("model_select", (event, ctx) => {
 		if (isOpenAICodexModel(event.model)) {
 			void refreshCurrentCodexUsageStatusline(ctx, false, event.model).catch(
-				rethrowUnlessStaleContextError,
+				rethrowUnlessStaleContextError(ctx),
 			);
 		} else {
 			clearUsageStatusline(ctx);
