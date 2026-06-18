@@ -153,8 +153,8 @@ export default function sync(pi: ExtensionAPI) {
 		await autoSync(ctx);
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		await autoPushSessions(ctx);
+	pi.on("session_shutdown", async (event, ctx) => {
+		if (event.reason !== "reload") await autoPushSessions(ctx);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 }
@@ -398,23 +398,24 @@ async function push(
 	const client = input?.client ?? new S3Client(config);
 	const state = input?.state ?? (await readState(config.profile));
 	const local = input?.local ?? (await createSnapshot(config.profile, config));
-	const secrets = scanSnapshot(local);
-	if (secrets.length > 0) {
-		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
-	}
 
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	if (remoteChangedSinceState(latest, state, config) && !options.force) {
 		throw new Error("Remote changed since last sync. Run /pisync pull first or /pisync push --force.");
 	}
 
-	if (!options.yes && !(await ctx.ui.confirm("Push pi settings?", formatPushSummary(local, latest)))) {
+	const upload = await snapshotForUpload(client, config, local, latest);
+	const secrets = scanSnapshot(upload);
+	if (secrets.length > 0) {
+		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
+	}
+
+	if (!options.yes && !(await ctx.ui.confirm("Push pi settings?", formatPushSummary(upload, latest)))) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		ctx.ui.notify("Push cancelled.", "info");
 		return;
 	}
 
-	const upload = await snapshotForUpload(client, config, local, latest);
 	const pointer = await uploadSnapshot(client, config, upload, latest, options.force);
 	await updateHistory(client, config, pointer);
 	await writeState(config.profile, {
@@ -484,6 +485,9 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
 		}
 		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
+			if (!canPullRemoteSessionsOnFirstSync(local, remote)) {
+				throw new Error("Remote settings match, but local and remote Pi sessions differ. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
+			}
 			await pull(ctx, options);
 			return;
 		}
@@ -561,12 +565,12 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	await writeState(config.profile, {
 		version: VERSION,
 		profile: config.profile,
-		lastAppliedSnapshot: remote.id,
+		lastAppliedSnapshot: pointer.snapshot,
 		lastRemoteEtag: undefined,
 		lastFileHashes: fileHashMap(remote),
 		syncSessions: config.syncSessions,
 	});
-	ctx.ui.notify(`Rolled back to ${remote.id}. Backup: ${backup}`, "info");
+	ctx.ui.notify(`Rolled back to ${target}; latest: ${pointer.snapshot}. Backup: ${backup}`, "info");
 	await maybeReload(ctx);
 }
 
@@ -781,9 +785,9 @@ function filterSnapshotForSessionPolicy(
 	};
 }
 
-function snapshotWithoutSessions(snapshot: Snapshot) {
+export function snapshotWithoutSessions(snapshot: Snapshot) {
 	const files = snapshot.files.filter((file) => !isSessionPath(file.path));
-	if (files.length === snapshot.files.length) return snapshot;
+	if (files.length === snapshot.files.length && snapshot.syncSessions !== true) return snapshot;
 	return {
 		...snapshot,
 		id: snapshotId(),
@@ -1058,6 +1062,18 @@ export function settingsHashMap(snapshot: Snapshot) {
 			.filter((file) => !isSessionPath(file.path))
 			.map((file) => [file.path, file.sha256]),
 	);
+}
+
+export function sessionHashMap(snapshot: Snapshot) {
+	return Object.fromEntries(
+		snapshot.files.filter((file) => isSessionPath(file.path)).map((file) => [file.path, file.sha256]),
+	);
+}
+
+export function canPullRemoteSessionsOnFirstSync(local: Snapshot, remote: Snapshot) {
+	const localSessions = sessionHashMap(local);
+	const remoteSessions = sessionHashMap(remote);
+	return Object.entries(localSessions).every(([filePath, hash]) => remoteSessions[filePath] === hash);
 }
 
 async function readState(profile: string): Promise<SyncState> {

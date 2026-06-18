@@ -8,6 +8,7 @@ import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import sync, {
 	backupLocal,
+	canPullRemoteSessionsOnFirstSync,
 	collectFiles,
 	encodeKey,
 	isCloudflareR2Endpoint,
@@ -25,6 +26,7 @@ import sync, {
 	scanSnapshot,
 	sessionTokenWarnings,
 	settingsHashMap,
+	snapshotWithoutSessions,
 	splitArgs,
 } from "../src/sync.js";
 
@@ -219,6 +221,34 @@ test("settings hash maps ignore session differences for first sync checks", () =
 	]);
 
 	assert.deepEqual(settingsHashMap(local), settingsHashMap(remote));
+});
+
+test("first sync only auto-pulls remote sessions when local sessions are not at risk", () => {
+	const remoteOnly = snapshot([
+		{ path: "sessions/--project--/remote.jsonl", content: Buffer.from("r") },
+	]);
+	const shared = { path: "sessions/--project--/shared.jsonl", content: Buffer.from("same") };
+	const changed = { path: "sessions/--project--/shared.jsonl", content: Buffer.from("changed") };
+
+	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([]), remoteOnly), true);
+	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([shared]), snapshot([shared])), true);
+	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([shared]), remoteOnly), false);
+	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([changed]), snapshot([shared])), false);
+});
+
+test("snapshotWithoutSessions clears session opt-in even when no session files exist", () => {
+	const source = {
+		...snapshot([{ path: "settings.json", content: Buffer.from("{}") }]),
+		syncSessions: true,
+	};
+	const filtered = snapshotWithoutSessions(source);
+
+	assert.equal(filtered.syncSessions, false);
+	assert.notEqual(filtered.id, source.id);
+	assert.deepEqual(
+		filtered.files.map((file) => file.path),
+		["settings.json"],
+	);
 });
 
 test("protected session apply plans keep the live session file", () => {
