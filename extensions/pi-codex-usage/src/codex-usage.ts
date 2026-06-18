@@ -213,10 +213,10 @@ export default function codexUsage(pi: ExtensionAPI) {
 		report: CodexUsageReport,
 		options: { autoRefresh: boolean; model: CodexUsageModel | undefined },
 	) => {
+		if (!setStatuslineValue(ctx, formatCodexUsageStatusline(report, options.model))) return;
 		activeStatuslineContext = ctx;
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
 		statuslineClearTimer = undefined;
-		if (!setStatuslineValue(ctx, formatCodexUsageStatusline(report, options.model))) return;
 		if (options.autoRefresh) scheduleStatuslineRefresh(ctx, options.model);
 		else scheduleTemporaryStatuslineClear(ctx);
 	};
@@ -247,8 +247,9 @@ export default function codexUsage(pi: ExtensionAPI) {
 		if (!sessionActive || requestId !== statuslineRequestId) return;
 
 		if (!result.ok) {
-			setStatuslineValue(ctx, "📊 usage error");
-			scheduleStatuslineRefresh(ctx, selectedModel);
+			if (setStatuslineValue(ctx, "📊 usage error")) {
+				scheduleStatuslineRefresh(ctx, selectedModel);
+			}
 			return;
 		}
 

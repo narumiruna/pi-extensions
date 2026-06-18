@@ -191,6 +191,63 @@ test("stale refresh errors do not cancel newer session refresh timers", async (t
 	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
 });
 
+test("stale command statusline writes do not cancel newer session refresh timers", async (t) => {
+	// Node pairs clearTimeout with mocked setTimeout; clearTimeout is not a valid apis entry.
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	let fetches = 0;
+	globalThis.fetch = async () => {
+		fetches += 1;
+		return new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: fetches === 1 ? 25 : 50 } },
+			}),
+			{ status: 200 },
+		);
+	};
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const command = mock.commands.get("codex-status");
+	assert.ok(command);
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	const { ctx: newCtx, statuses } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, newCtx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+
+	const staleError = new Error(
+		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
+	);
+	const { ctx: staleCtx } = createMockContext({
+		model,
+		ui: {
+			notify: () => undefined,
+			setStatus: () => {
+				throw staleError;
+			},
+		},
+	});
+
+	await command.handler("", staleCtx);
+	t.mock.timers.tick(5 * 60 * 1000);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
+});
+
 test("isStaleExtensionContextError recognizes Pi stale-context failures", () => {
 	assert.equal(
 		isStaleExtensionContextError(
