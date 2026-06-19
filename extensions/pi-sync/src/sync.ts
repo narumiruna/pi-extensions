@@ -964,7 +964,8 @@ export function preflightSnapshotApply(
 			!normalized ||
 			normalized.startsWith("../") ||
 			path.posix.isAbsolute(normalized) ||
-			path.posix.normalize(normalized) !== normalized
+			path.posix.normalize(normalized) !== normalized ||
+			isDeniedPath(normalized)
 		) {
 			throw new Error(`Unsafe path in snapshot: ${file.path}`);
 		}

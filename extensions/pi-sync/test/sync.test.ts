@@ -181,6 +181,10 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 			),
 		/Unsafe path/,
 	);
+	assert.throws(
+		() => preflightSnapshotApply(root, snapshot([{ path: ".env", content }]), current),
+		/Unsafe path/,
+	);
 	const sessionSnapshot = snapshot([{ path: "sessions/--project--/session.jsonl", content }]);
 	assert.throws(
 		() =>
@@ -420,13 +424,18 @@ function requiredConfig() {
 
 async function withTempHome<T>(fn: (agentDir: string) => Promise<T>) {
 	const previousHome = process.env.HOME;
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const home = mkdtempSync(path.join(os.tmpdir(), "pi-sync-home-"));
+	const agentDir = path.join(home, ".pi", "agent");
 	process.env.HOME = home;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
-		return await fn(path.join(home, ".pi", "agent"));
+		return await fn(agentDir);
 	} finally {
 		if (previousHome === undefined) delete process.env.HOME;
 		else process.env.HOME = previousHome;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(home, { recursive: true, force: true });
 	}
 }
