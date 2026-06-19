@@ -103,7 +103,7 @@ Session sync is snapshot-based, not live collaboration. If the same session chan
 
 When both `autoSync` and `syncSessions` are enabled, pi-sync syncs on startup and attempts a quiet session push on shutdown when local files changed. If the remote changed first, the shutdown push is skipped with a warning instead of overwriting it.
 
-Session files can contain prompts, model output, tool results, file paths, images, and secrets. Use trusted R2/S3 storage, keep credentials local, and recover local files from `~/.pi/agent/.pisync/backups/` if a pull or rollback overwrites something unexpectedly.
+Session files can contain prompts, model output, tool results, file paths, images, and secrets. Use trusted R2/S3 storage, keep credentials local, and recover local files from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/.pisync/backups/` if a pull or rollback overwrites something unexpectedly.
 
 ## 🚀 Usage
 
