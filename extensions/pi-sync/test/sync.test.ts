@@ -12,6 +12,7 @@ import sync, {
 	canPullRemoteSessionsOnFirstSync,
 	collectFiles,
 	encodeKey,
+	hasRemoteChanges,
 	isCloudflareR2Endpoint,
 	isDeniedPath,
 	isEnabled,
@@ -200,9 +201,20 @@ test("settings-only uploads preserve remote session files", () => {
 		path: "sessions/--project--/session.jsonl",
 		content: Buffer.from("remote"),
 	};
+	const invalidSession = {
+		path: "sessions/--project--/notes.txt",
+		content: Buffer.from("skip"),
+	};
+	const deniedSession = {
+		path: "sessions/--project--/token.jsonl",
+		content: Buffer.from("skip"),
+	};
 	const local = snapshot([settings]);
 
-	const merged = mergeRemoteSessionFiles(local, snapshot([remoteSession]));
+	const merged = mergeRemoteSessionFiles(
+		local,
+		snapshot([remoteSession, invalidSession, deniedSession]),
+	);
 
 	assert.notEqual(merged.id, local.id);
 	assert.deepEqual(
@@ -223,12 +235,28 @@ test("settings hash maps ignore session differences for first sync checks", () =
 	]);
 
 	assert.deepEqual(settingsHashMap(local), settingsHashMap(remote));
+	const state = {
+		version: 1,
+		profile: "default",
+		lastAppliedSnapshot: "old",
+		lastFileHashes: Object.fromEntries(local.files.map((file) => [file.path, file.sha256])),
+	};
+	const config = {
+		...requiredConfig(),
+		region: "auto",
+		profile: "default",
+		prefix: "pi-sync",
+		syncSessions: false,
+	};
+
+	assert.equal(settingsHashesMatchState(remote, state), true);
+	assert.equal(hasRemoteChanges(remote, state, config), false);
 	assert.equal(
-		settingsHashesMatchState(remote, {
-			version: 1,
-			profile: "default",
-			lastFileHashes: Object.fromEntries(local.files.map((file) => [file.path, file.sha256])),
-		}),
+		hasRemoteChanges(
+			snapshot([{ path: "settings.json", content: Buffer.from("changed") }]),
+			state,
+			config,
+		),
 		true,
 	);
 });

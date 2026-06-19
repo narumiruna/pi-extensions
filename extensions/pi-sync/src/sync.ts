@@ -843,13 +843,17 @@ async function snapshotForUpload(
 	latest: RemoteObject<LatestPointer>,
 	remote?: Snapshot,
 ) {
-	if (config.syncSessions || latest.missing || !latest.value) return local;
+	if (config.syncSessions || latest.missing || !latest.value || latest.value.syncSessions !== true) {
+		return local;
+	}
 	const snapshot = remote ?? (await readRemoteSnapshotRaw(client, config));
 	return snapshot ? mergeRemoteSessionFiles(local, snapshot) : local;
 }
 
 export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
-	const remoteSessions = remote.files.filter((file) => isSessionPath(file.path));
+	const remoteSessions = remote.files.filter(
+		(file) => isSessionFilePath(file.path) && !isDeniedPath(file.path),
+	);
 	if (remoteSessions.length === 0) return local;
 	return {
 		...local,
@@ -1084,8 +1088,10 @@ function remoteChangedSinceState(
 	return config.syncSessions && state.syncSessions !== true && latest.value?.syncSessions === true;
 }
 
-function hasRemoteChanges(remote: Snapshot, state: SyncState, config: SyncConfig) {
-	if (remote.id !== state.lastAppliedSnapshot) return true;
+export function hasRemoteChanges(remote: Snapshot, state: SyncState, config: SyncConfig) {
+	if (remote.id !== state.lastAppliedSnapshot) {
+		return config.syncSessions || !settingsHashesMatchState(remote, state);
+	}
 	return config.syncSessions && state.syncSessions !== true && snapshotIncludesSessions(remote);
 }
 
