@@ -97,7 +97,7 @@ pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TO
 
 ### Session syncing
 
-`syncSessions` defaults to `false`. Set it to `true`, or set `PI_SYNC_SESSIONS=true`, to include `~/.pi/agent/sessions/**/*.jsonl` in snapshots. Empty or misspelled `PI_SYNC_SESSIONS` values stay disabled. Only JSONL session files are included; other session-directory files and denylisted paths such as `.env*`, `.pisync`, `node_modules`, and names containing `token` or `secret` are ignored.
+`syncSessions` defaults to `false`. Set it to `true`, or set `PI_SYNC_SESSIONS=true`, to include `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/**/*.jsonl` in snapshots. Empty or misspelled `PI_SYNC_SESSIONS` values stay disabled. Only JSONL session files are included; other session-directory files and denylisted paths such as `.env*`, `.pisync`, `node_modules`, and names containing `token` or `secret` are ignored.
 
 Session sync is snapshot-based, not live collaboration. If the same session changes on two machines, `/pisync sync` uses the same conflict rules as settings sync and skips when both local and remote changed. Run `/pisync diff`, then choose `/pisync pull --force` or `/pisync push --force` if needed.
 
