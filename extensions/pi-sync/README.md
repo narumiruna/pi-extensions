@@ -4,7 +4,7 @@
 
 `@narumitw/pi-sync` is a native [Pi coding agent](https://pi.dev) extension that syncs selected Pi configuration through Cloudflare R2 or other S3-compatible object storage.
 
-It syncs automatically by default when Pi starts, then uses immutable snapshot bundles, a `latest.json` pointer, local locking, secret scanning, and pre-apply backups. Cross-machine pushes use a best-effort remote re-read guard because R2 rejected conditional `latest.json` writes during testing.
+It syncs automatically by default when Pi starts, then uses immutable snapshot bundles, a `latest.json` pointer, local locking, secret scanning, and pre-apply backups. Conversation/session syncing is opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets. Cross-machine pushes use a best-effort remote re-read guard because R2 rejected conditional `latest.json` writes during testing.
 
 ## ✨ Features
 
@@ -15,6 +15,7 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
   - `models.json`
   - `AGENTS.md`
   - `skills/`, `prompts/`, `themes/`, and `extensions/`
+  - optionally denylist-filtered `sessions/**/*.jsonl` when `syncSessions` is enabled
 - Stores each remote version as an immutable gzip-compressed JSON snapshot bundle.
 - Updates remote state through `latest.json` after re-reading remote state to reject already-visible remote changes.
 - Creates local backups before `pull` and `rollback` under `~/.pi/agent/.pisync/backups/`.
@@ -55,6 +56,8 @@ Then edit:
 ~/.pi/agent/pi-sync.local.json
 ```
 
+If `PI_CODING_AGENT_DIR` is set, pi-sync uses that directory instead of `~/.pi/agent` for config, state, backups, and synced files.
+
 Example:
 
 ```json
@@ -66,7 +69,8 @@ Example:
   "secretAccessKey": "<secret-access-key>",
   "profile": "default",
   "prefix": "pi-sync",
-  "autoSync": true
+  "autoSync": true,
+  "syncSessions": false
 }
 ```
 
@@ -82,6 +86,7 @@ export PI_SYNC_SESSION_TOKEN="..." # optional, for temporary credentials that re
 export PI_SYNC_PROFILE="default"
 export PI_SYNC_PREFIX="pi-sync"
 export PI_SYNC_AUTO_SYNC="true"
+export PI_SYNC_SESSIONS="false" # opt in with true to sync Pi conversation JSONL files
 ```
 
 `PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary credentials such as AWS STS, AWS SSO, assumed roles, or S3-compatible providers that issue short-lived credentials.
@@ -89,6 +94,16 @@ export PI_SYNC_AUTO_SYNC="true"
 Cloudflare R2 static access keys do not use a session token and usually reject requests signed with `X-Amz-Security-Token`. R2 temporary credentials that require a token are still supported. For R2 endpoints (`*.r2.cloudflarestorage.com`), pi-sync first sends the configured session token; if R2 rejects it with `InvalidArgument: X-Amz-Security-Token`, pi-sync retries that request once without the token and omits the token for the rest of the same command after a successful retry.
 
 pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `R2_ENDPOINT`, and `R2_BUCKET` as compatibility aliases when the matching `PI_SYNC_*` variable is not set.
+
+### Session syncing
+
+`syncSessions` defaults to `false`. Set it to `true`, or set `PI_SYNC_SESSIONS=true`, to include Pi's configured session JSONL files in snapshots. pi-sync uses `PI_CODING_AGENT_SESSION_DIR`, Pi's `sessionDir` setting, or the default `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/**/*.jsonl` storage. Empty or misspelled `PI_SYNC_SESSIONS` values stay disabled. Only JSONL session files are included; other session-directory files and denylisted paths such as `.env*`, `.pisync`, `node_modules`, and names containing `token` or `secret` are ignored.
+
+Session sync is snapshot-based, not live collaboration. If the same session changes on two machines, `/pisync sync` uses the same conflict rules as settings sync and skips when both local and remote changed. Run `/pisync diff`, then choose `/pisync pull --force` or `/pisync push --force` if needed.
+
+When both `autoSync` and `syncSessions` are enabled, pi-sync syncs on startup and attempts a quiet session push on shutdown when local files changed. Startup session pulls happen after Pi has already selected the current session, so restart Pi or resume a pulled session to use newly synced conversations. If the remote changed first, the shutdown push is skipped with a warning instead of overwriting it.
+
+Session files can contain prompts, model output, tool results, file paths, images, and secrets. Use trusted R2/S3 storage, keep credentials local, and recover local files from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/.pisync/backups/` if a pull or rollback overwrites something unexpectedly.
 
 ## 🚀 Usage
 
@@ -157,7 +172,7 @@ Before updating `latest.json`, pi-sync re-reads the current pointer and rejects 
 ## 🛡️ Safety notes
 
 - pi-sync auto-syncs on startup by default, but skips instead of overwriting when first-run local settings and a remote snapshot both exist, or when both local and remote changed after a previous sync.
-- pi-sync does not sync Pi sessions, OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
+- With `syncSessions`/`PI_SYNC_SESSIONS` disabled, pi-sync does not collect or apply local Pi sessions, though settings-only pushes may preserve session files already present in remote snapshots. It never syncs OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
 - If another Pi process is already syncing on the same machine, destructive commands stop at the local lock. `/pisync unlock --stale` is intended for locks whose process is gone or invalid.
 - If another machine's update is visible before this machine updates `latest.json`, push is rejected unless you explicitly use `--force`.
 - Pull and rollback create backups before writing local files, then preflight deletes and writes before mutating the local settings tree.
