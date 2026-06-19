@@ -1,6 +1,6 @@
 ## Goal
 
-Add opt-in Pi conversation/session syncing to `@narumitw/pi-sync` for issue #99. Success means users can sync Pi JSONL sessions under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/` through the existing R2/S3 snapshot flow, with privacy warnings, backups, conflict protection, tests, and docs.
+Add opt-in Pi conversation/session syncing to `@narumitw/pi-sync` for issue #99. Success means users can sync Pi JSONL sessions from Pi's configured session directory through the existing R2/S3 snapshot flow, with privacy warnings, backups, conflict protection, tests, and docs.
 
 ## Context
 
@@ -8,7 +8,7 @@ Issue #99 asks for `pi-sync` to support synced sessions/conversations. Current d
 
 ## Architecture
 
-Keep the existing S3/R2 snapshot model and local lock. Add a `syncSessions` config flag, defaulting to `false`, that extends the collected file set with denylist-filtered session JSONL files only. Honor `PI_CODING_AGENT_DIR`, preserve remote session entries during settings-only operations, and protect the current live session JSONL during destructive applies. Do not add real-time collaborative editing; this remains file snapshot sync.
+Keep the existing S3/R2 snapshot model and local lock. Add a `syncSessions` config flag, defaulting to `false`, that extends the collected file set with denylist-filtered session JSONL files only. Honor `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, Pi `sessionDir`, and the session manager's custom directory, preserve remote session entries during settings-only operations, and protect the current live session JSONL during destructive applies. Do not add real-time collaborative editing; this remains file snapshot sync.
 
 ## Non-Goals
 
@@ -32,6 +32,7 @@ Keep the existing S3/R2 snapshot model and local lock. Add a `syncSessions` conf
 - [x] Preserve remote session state for opted-out clients: settings-only pushes/rollbacks keep valid remote session JSONL entries, preserve empty session-aware snapshots, avoid rescanning preserved remote sessions, and ignore session-only remote advances when settings hashes match; verified by `settings-only uploads preserve remote session files` and `settings hash maps ignore session differences for first sync checks` in `npm test`.
 - [x] Update `extensions/pi-sync/README.md` to document `syncSessions`, `PI_SYNC_SESSIONS`, `PI_CODING_AGENT_DIR`, denylisted session paths, privacy risks, non-real-time behavior, conflict expectations, and the recovery path from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/.pisync/backups/`; verified by README review and `rg -n "syncSessions|PI_SYNC_SESSIONS|PI_CODING_AGENT_DIR|sessions" extensions/pi-sync/README.md`.
 - [x] Run package checks for the smallest affected surface and final PR verification; verified by `npm --workspace @narumitw/pi-sync run typecheck`, `npm --workspace @narumitw/pi-sync run check`, `npm test`, `npm test -- --workspace @narumitw/pi-sync`, `npm run check`, `npm run pack:sync`, and GitHub `Check and test` passing.
+- [x] Address latest PR review feedback on configured session directories: external session roots preflight against the session root, incoming `settings.json` `sessionDir` decides the apply root unless CLI/env overrides it, nested configured session directories are not widened to `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions`, `PI_CODING_AGENT_DIR` supports `~` and ignores empty values, `snapshotOptionsForContext` passes only snapshot fields, session apply preflight avoids the old current×remote nested scan, and startup session pulls warn that Pi has already selected the current session. Verified by `npm test -- --workspace @narumitw/pi-sync`, `npm run check`, and `npm run pack:sync` on 2026-06-19 after commit `26748e3`.
 
 ## Risks
 
