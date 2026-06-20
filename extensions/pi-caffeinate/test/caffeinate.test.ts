@@ -70,6 +70,7 @@ test("session start warns for deprecated PI_CAFFEINATE_ICON", async (t) => {
 
 	assert.equal(notifications.length, 1);
 	assert.match(notifications[0]?.message ?? "", /PI_CAFFEINATE_ICON is deprecated/);
+	assert.match(notifications[0]?.message ?? "", /If you use @narumitw\/pi-statusline/);
 });
 
 test("windowsInhibitorScript uses unsigned flags and releases on exit", () => {

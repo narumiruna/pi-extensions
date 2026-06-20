@@ -696,7 +696,7 @@ function warnDeprecatedIcon(ctx: ExtensionContext) {
 	if (state.iconWarningShown || !process.env.PI_CAFFEINATE_ICON?.trim()) return;
 	state.iconWarningShown = true;
 	ctx.ui.notify(
-		'PI_CAFFEINATE_ICON is deprecated. Configure { "extensionStatusIcons": { "caffeinate": "..." } } in pi-statusline-settings.json instead.',
+		'PI_CAFFEINATE_ICON is deprecated and still works for now. If you use @narumitw/pi-statusline, move this icon to pi-statusline-settings.json: { "extensionStatusIcons": { "caffeinate": "..." } }.',
 		"warning",
 	);
 }
