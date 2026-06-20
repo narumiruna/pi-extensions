@@ -21,7 +21,7 @@ const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
 const LOCK_STALE_MS = 30 * 60 * 1000;
 
-const TOP_LEVEL_FILES = new Set(["settings.json", "keybindings.json", "models.json", "AGENTS.md", "APPEND_SYSTEM.md"]);
+const TOP_LEVEL_FILES = new Set(["settings.json", "keybindings.json", "models.json", "AGENTS.md"]);
 const TOP_LEVEL_DIRS = new Set(["skills", "prompts", "themes", "extensions"]);
 const SECRET_PATTERNS = [
 	/AWS_SECRET_ACCESS_KEY\s*[=:]\s*['\"]?[A-Za-z0-9/+]{35,}/i,
@@ -41,6 +41,7 @@ interface SyncConfig {
 	profile: string;
 	prefix: string;
 	syncSessions: boolean;
+	extraFiles: string[];
 }
 
 interface PartialConfig {
@@ -54,6 +55,7 @@ interface PartialConfig {
 	prefix?: string;
 	autoSync?: boolean | string;
 	syncSessions?: boolean | string;
+	extraFiles?: string[];
 }
 
 interface SnapshotFile {
@@ -117,6 +119,7 @@ interface CommandOptions {
 interface SnapshotOptions {
 	syncSessions?: boolean;
 	sessionDir?: string;
+	extraFiles?: string[];
 }
 
 interface PushInput {
@@ -636,7 +639,7 @@ function snapshotOptionsForContext(
 	ctx: ExtensionCommandContext | ExtensionContext,
 	config: SyncConfig,
 ): SnapshotOptions {
-	return { syncSessions: config.syncSessions, sessionDir: sessionDirFromContext(ctx) };
+	return { syncSessions: config.syncSessions, sessionDir: sessionDirFromContext(ctx), extraFiles: config.extraFiles };
 }
 
 function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) {
@@ -719,6 +722,7 @@ async function loadConfigInternal(): Promise<SyncConfig> {
 		profile: partial.profile ?? DEFAULT_PROFILE,
 		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
 		syncSessions: isExplicitlyEnabled(partial.syncSessions),
+	extraFiles: partial.extraFiles ?? [],
 	};
 }
 
@@ -740,6 +744,7 @@ async function loadPartialConfig(): Promise<PartialConfig> {
 		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
 		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
 		syncSessions: process.env.PI_SYNC_SESSIONS ?? fileConfig.syncSessions,
+	extraFiles: fileConfig.extraFiles,
 	};
 }
 
@@ -780,6 +785,7 @@ async function createSnapshot(profile: string, options: SnapshotOptions = {}): P
 	const files = await collectFiles(agentDir(), {
 		syncSessions,
 		sessionDir: options.sessionDir ?? (await configuredSessionDir()),
+		extraFiles: options.extraFiles,
 	});
 	return {
 		version: VERSION,
@@ -798,7 +804,7 @@ export async function collectFiles(
 ): Promise<SnapshotFile[]> {
 	const results: SnapshotFile[] = [];
 	for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-		if (entry.isFile() && TOP_LEVEL_FILES.has(entry.name)) {
+		if (entry.isFile() && (TOP_LEVEL_FILES.has(entry.name) || (options.extraFiles?.includes(entry.name) ?? false))) {
 			await addFile(results, root, entry.name);
 		} else if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
