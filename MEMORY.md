@@ -23,6 +23,7 @@
 - Symptom: Telegram bot polling can replay stale queued messages or conflict across Pi processes. Cause: `getUpdates` is a single bot-token queue controlled by offsets. Fix: discard pending updates on startup with an offset and run one active polling Pi per bot token.
 - For pi-sync on Cloudflare R2, keep session-token support for temporary credentials but retry once without the token when R2 static keys reject `X-Amz-Security-Token`.
 - Symptom: Pi extension async/timer/command continuations can crash after reload or session replacement. Cause: captured `ExtensionContext` becomes stale. Fix: pass plain data into delayed callbacks, catch stale-context errors, and scope cleanup to the failing ctx/request.
+- Codex `websocket_connection_limit_reached` is a retryable fresh-websocket case, but Pi 0.79.8's auto-retry regex does not classify “connection limit”; pi-retry must add the `provider returned error` hint.
 
 ## TASTE
 

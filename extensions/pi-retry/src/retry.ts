@@ -1,8 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const UNKNOWN_NO_DETAILS_RE = /Unknown error \(no error details in response\)/i;
+const CODEX_WEBSOCKET_CONNECTION_LIMIT_RE =
+	/websocket[_\s-]*connection[_\s-]*limit[_\s-]*reached|create a new websocket connection to continue/i;
 const RETRYABLE_HINT = "provider returned error";
 const UNKNOWN_ERROR_TAG = "[unknown-error-retry]";
+const CODEX_WEBSOCKET_CONNECTION_LIMIT_TAG = "[codex-websocket-limit-retry]";
 const STALL_WATCHDOG_TAG = "[stall-watchdog-retry]";
 const STATUS_KEY = "unknown-error-retry";
 const STATUS_VISIBLE_MS = 8_000;
@@ -190,24 +193,37 @@ export default function retry(pi: ExtensionAPI) {
 
 		if (message.stopReason !== "error") return;
 		if (typeof message.errorMessage !== "string") return;
-		if (!UNKNOWN_NO_DETAILS_RE.test(message.errorMessage)) return;
+
+		const matchedError = UNKNOWN_NO_DETAILS_RE.test(message.errorMessage)
+			? {
+					tag: UNKNOWN_ERROR_TAG,
+					label: "empty-detail provider failure",
+					notification:
+						"Matched provider 'Unknown error (no error details in response)'; letting pi auto-retry this turn.",
+				}
+			: CODEX_WEBSOCKET_CONNECTION_LIMIT_RE.test(message.errorMessage)
+				? {
+						tag: CODEX_WEBSOCKET_CONNECTION_LIMIT_TAG,
+						label: "Codex websocket connection limit",
+						notification:
+							"Matched Codex websocket connection limit; letting pi auto-retry with a fresh websocket.",
+					}
+				: undefined;
+		if (!matchedError) return;
 
 		// Avoid appending the hint repeatedly if a resumed/replayed message already has it.
-		if (message.errorMessage.includes(UNKNOWN_ERROR_TAG)) return;
+		if (message.errorMessage.includes(matchedError.tag)) return;
 
 		// pi already has agent-level auto-retry for transient provider errors, but its
-		// matcher does not classify this empty-detail "Unknown error" message as retryable.
+		// matcher does not classify a few provider-specific messages as retryable.
 		// Adding this hint before the message is finalized makes pi's built-in auto-retry
 		// path pick it up, remove the failed assistant message from live agent state, and
 		// call agent.continue() with the normal retry settings/backoff.
-		const errorMessage = `${message.errorMessage}\n\n${UNKNOWN_ERROR_TAG} ${RETRYABLE_HINT}; treating empty-detail provider failure as retryable.`;
+		const errorMessage = `${message.errorMessage}\n\n${matchedError.tag} ${RETRYABLE_HINT}; treating ${matchedError.label} as retryable.`;
 
 		if (ctx.hasUI) {
 			showRetryStatus(ctx);
-			ctx.ui.notify?.(
-				"Matched provider 'Unknown error (no error details in response)'; letting pi auto-retry this turn.",
-				"warning",
-			);
+			ctx.ui.notify?.(matchedError.notification, "warning");
 		}
 
 		return {

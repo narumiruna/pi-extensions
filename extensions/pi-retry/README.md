@@ -2,14 +2,15 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-retry)](https://www.npmjs.com/package/@narumitw/pi-retry) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-retry` is a native [Pi coding agent](https://pi.dev) extension that treats provider responses containing `Unknown error (no error details in response)` and stalled provider streams as retryable.
+`@narumitw/pi-retry` is a native [Pi coding agent](https://pi.dev) extension that treats provider responses containing `Unknown error (no error details in response)`, Codex `websocket_connection_limit_reached`, and stalled provider streams as retryable.
 
-Use it to make Pi sessions more resilient when an upstream AI provider returns a transient unknown error without useful details or stops streaming after Pi has sent a request.
+Use it to make Pi sessions more resilient when an upstream AI provider returns a transient unknown error without useful details, Codex asks for a fresh websocket, or a provider stops streaming after Pi has sent a request.
 
 ## ✨ Features
 
 - Detects assistant messages that end with `stopReason: "error"`.
 - Matches the known provider error text `Unknown error (no error details in response)`.
+- Matches Codex `websocket_connection_limit_reached` after a websocket hits its 60-minute limit.
 - Appends Pi's retryable-provider-error hint.
 - Lets Pi's built-in retry path continue the turn.
 - Watches provider requests and assistant stream events for stalls.
@@ -39,7 +40,7 @@ pi -e ./extensions/pi-retry
 
 ## 🚀 What it does
 
-When an assistant message ends with `stopReason: "error"` and the error message matches `Unknown error (no error details in response)`, the extension appends Pi's retryable-provider-error hint so Pi's built-in retry path can continue the turn.
+When an assistant message ends with `stopReason: "error"` and the error message matches `Unknown error (no error details in response)` or Codex `websocket_connection_limit_reached`, the extension appends Pi's retryable-provider-error hint so Pi's built-in retry path can continue the turn.
 
 After Pi sends a provider request, the extension also starts a stall watchdog. Provider responses and assistant stream events briefly refresh a `receiving` statusline item, so you can tell that data is still arriving while Pi shows its normal working indicator. If no provider response or assistant stream event is observed for 90s, it briefly shows `retrying`, calls `ctx.abort()`, and rewrites the resulting assistant abort/error as a retryable provider error.
 
@@ -55,6 +56,7 @@ Use `0`, `off`, or `false` to disable the watchdog. Retry attempts and backoff r
 ## 🧠 Use cases
 
 - Reduce manual restarts after transient provider failures.
+- Recover when Codex websocket sessions hit the 60-minute connection limit.
 - Improve reliability during long Pi coding agent sessions.
 - Keep tool-heavy implementation tasks moving when a provider returns an unknown error or stream stalls.
 - Pair with `@narumitw/pi-goal` for more robust autonomous task loops.
