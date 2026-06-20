@@ -47,3 +47,31 @@ test("message_end appends pi retry hint for unknown provider errors once", () =>
 		undefined,
 	);
 });
+
+test("message_end appends pi retry hint for Codex websocket connection limits once", () => {
+	const mock = createMockPi();
+	retry(mock.pi);
+	const handler = mock.events.get("message_end")?.[0];
+	assert.ok(handler);
+
+	const event = {
+		message: {
+			role: "assistant",
+			stopReason: "error",
+			errorMessage:
+				'Codex error: {"type":"error","error":{"code":"websocket_connection_limit_reached","message":"Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue."},"status":400}',
+		},
+	};
+	const result = handler(event, createMockContext({ hasUI: false }).ctx);
+	assert.ok(result && typeof result === "object" && "message" in result);
+	const retryResult = result as { message: { errorMessage: string } };
+
+	assert.match(
+		retryResult.message.errorMessage,
+		/\[codex-websocket-limit-retry\] provider returned error/,
+	);
+	assert.equal(
+		handler({ message: retryResult.message }, createMockContext({ hasUI: false }).ctx),
+		undefined,
+	);
+});
