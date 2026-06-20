@@ -21,7 +21,7 @@ const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
 const LOCK_STALE_MS = 30 * 60 * 1000;
 
-const TOP_LEVEL_FILES = new Set(["settings.json", "keybindings.json", "models.json", "AGENTS.md"]);
+const TOP_LEVEL_FILES = new Set(["settings.json", "keybindings.json", "models.json", "AGENTS.md", "APPEND_SYSTEM.md"]);
 const TOP_LEVEL_DIRS = new Set(["skills", "prompts", "themes", "extensions"]);
 const SECRET_PATTERNS = [
 	/AWS_SECRET_ACCESS_KEY\s*[=:]\s*['\"]?[A-Za-z0-9/+]{35,}/i,
