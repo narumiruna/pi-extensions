@@ -550,6 +550,19 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 		if (!options.silent) ctx.ui.notify("pi-sync state initialized; local settings already match remote.", "info");
 		return;
 	}
+	if (localChanged && remoteChanged && remote && snapshotsMatch(local, remote)) {
+		await writeState(config.profile, {
+			version: VERSION,
+			profile: config.profile,
+			lastAppliedSnapshot: remote.id,
+			lastRemoteEtag: undefined,
+			lastFileHashes: fileHashMap(remote),
+			syncSessions: config.syncSessions,
+			extraFiles: config.extraFiles,
+		});
+		if (!options.silent) ctx.ui.notify("pi-sync is already up to date.", "info");
+		return;
+	}
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
 		throw new Error("Both local and remote changed. Run /pisync diff and resolve with push --force or pull --force.");
 	}
@@ -969,7 +982,7 @@ export function filterSnapshotForConfigPolicy(
 			return isSafeSnapshotPath(normalized) && isConfiguredSnapshotPath(normalized, config, extraFiles);
 		}),
 	};
-	if (!options.regenerateId || snapshotHashesMatch(snapshot, filtered)) return filtered;
+	if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
 	return {
 		...filtered,
 		id: snapshotId(),
@@ -1344,6 +1357,7 @@ function remoteChangedSinceState(
 }
 
 export function hasRemoteChanges(remote: Snapshot, state: SyncState, config: SyncConfig) {
+	if (remote.id === state.lastAppliedSnapshot && !syncPolicyChanged(state, config)) return false;
 	return !snapshotHashesMatchState(filterSnapshotForConfigPolicy(remote, config), state, config);
 }
 
@@ -1380,7 +1394,7 @@ function snapshotHashesMatchState(
 	return sameHashes(fileHashMap(snapshot), stateHashMapForConfig(state, config));
 }
 
-function snapshotHashesMatch(left: Snapshot, right: Snapshot) {
+function snapshotsMatch(left: Snapshot, right: Snapshot) {
 	return left.syncSessions === right.syncSessions && sameHashes(fileHashMap(left), fileHashMap(right));
 }
 

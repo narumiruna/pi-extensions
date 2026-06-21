@@ -506,6 +506,27 @@ test("protected session apply plans keep the live session file", () => {
 		hashes["settings.json"],
 		remote.files.find((file) => file.path === "settings.json")?.sha256,
 	);
+	assert.equal(
+		hasRemoteChanges(
+			remote,
+			{
+				version: 1,
+				profile: "default",
+				lastAppliedSnapshot: remote.id,
+				lastFileHashes: hashes,
+				syncSessions: true,
+				extraFiles: [],
+			},
+			{
+				...requiredConfig(),
+				region: "auto",
+				profile: "default",
+				prefix: "pi-sync",
+				syncSessions: true,
+			},
+		),
+		false,
+	);
 });
 
 test("session backups include session jsonl files when enabled", async () => {
