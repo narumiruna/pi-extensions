@@ -291,11 +291,14 @@ test("unconfigured extra top-level files are filtered locally and preserved on u
 		extraFiles: ["CONFIGURED.md"],
 	};
 
-	assert.deepEqual(
-		filterSnapshotForConfigPolicy(remote, config)
-			.files.map((file) => file.path)
-			.sort(),
-		["CONFIGURED.md", "settings.json"],
+	const filtered = filterSnapshotForConfigPolicy(remote, config);
+	assert.deepEqual(filtered.files.map((file) => file.path).sort(), [
+		"CONFIGURED.md",
+		"settings.json",
+	]);
+	assert.notEqual(
+		filterSnapshotForConfigPolicy(remote, config, { regenerateId: true }).id,
+		remote.id,
 	);
 	assert.deepEqual(
 		filterSnapshotForConfigPolicy(remote, { ...config, syncSessions: true })
@@ -313,6 +316,22 @@ test("unconfigured extra top-level files are filtered locally and preserved on u
 			extraFiles: ["CONFIGURED.md", "LOCAL.md"],
 		}).files.map((file) => file.path),
 		["sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.equal(
+		hasRemoteChanges(
+			filtered,
+			{
+				version: 1,
+				profile: "default",
+				lastAppliedSnapshot: remote.id,
+				lastFileHashes: Object.fromEntries(
+					snapshot([settings]).files.map((file) => [file.path, file.sha256]),
+				),
+				extraFiles: [],
+			},
+			config,
+		),
+		true,
 	);
 });
 
@@ -380,6 +399,7 @@ test("settings hash maps ignore session differences for first sync checks", () =
 
 	assert.equal(settingsHashesMatchState(remote, state), true);
 	assert.equal(hasRemoteChanges(remote, state, config), false);
+	assert.equal(hasRemoteChanges(remote, state, { ...config, syncSessions: true }), true);
 	assert.equal(
 		hasRemoteChanges(
 			snapshot([{ path: "settings.json", content: Buffer.from("changed") }]),
