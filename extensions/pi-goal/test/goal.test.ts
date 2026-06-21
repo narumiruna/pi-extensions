@@ -35,6 +35,17 @@ test("completeGoalArguments suggests /goal subcommands and token options", () =>
 		["pause", "resume", "clear", "edit", "status", "--tokens"],
 	);
 	assert.deepEqual(
+		completeGoalArguments("")?.map((item) => item.description),
+		[
+			"Pause the active goal",
+			"Resume a paused or budget-limited goal",
+			"Clear the current goal",
+			"Edit the current goal objective",
+			"Show the current goal",
+			"Set a token budget before the goal",
+		],
+	);
+	assert.deepEqual(
 		completeGoalArguments("pa")?.map((item) => item.value),
 		["pause"],
 	);
