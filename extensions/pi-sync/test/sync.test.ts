@@ -77,7 +77,10 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 		});
 		writeFileSync(
 			path.join(agentDir, "pi-sync.local.json"),
-			JSON.stringify({ ...requiredConfig(), extraFiles: ["LOCAL.md", 1, ""] }),
+			JSON.stringify({
+				...requiredConfig(),
+				extraFiles: ["LOCAL.md", "LOCAL.md", "skills/demo.md", "nested\\x", 1, ""],
+			}),
 		);
 		await withEnv({}, async () => {
 			assert.deepEqual((await loadConfig()).extraFiles, ["LOCAL.md"]);

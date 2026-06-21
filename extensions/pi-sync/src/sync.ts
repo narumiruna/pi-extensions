@@ -420,7 +420,9 @@ async function push(
 			? filterSnapshotForConfigPolicy(remoteForUpload, config)
 			: undefined;
 		if (!remoteForConflict || !snapshotHashesMatchState(remoteForConflict, state, config)) {
-			throw new Error("Remote changed since last sync. Run /pisync pull first or /pisync push --force.");
+			throw new Error(
+				"Remote or sync policy changed since last sync. Run /pisync pull first or /pisync push --force.",
+			);
 		}
 	}
 
@@ -1860,9 +1862,11 @@ function normalizeOptionalString(value: string | undefined) {
 
 function normalizeExtraFiles(value: unknown) {
 	if (!Array.isArray(value)) return [];
-	return value
-		.filter((item): item is string => typeof item === "string" && item.trim() !== "")
-		.map((item) => item.trim());
+	const files = value
+		.filter((item): item is string => typeof item === "string")
+		.map((item) => item.trim())
+		.filter((item) => item !== "" && !item.includes("/") && !item.includes("\\"));
+	return [...new Set(files)];
 }
 
 function hasEnv(name: string) {
