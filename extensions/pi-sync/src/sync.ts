@@ -21,7 +21,13 @@ const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
 const LOCK_STALE_MS = 30 * 60 * 1000;
 
-const TOP_LEVEL_FILES = new Set(["settings.json", "keybindings.json", "models.json", "AGENTS.md"]);
+const TOP_LEVEL_FILES = new Set([
+	"settings.json",
+	"keybindings.json",
+	"models.json",
+	"AGENTS.md",
+	"APPEND_SYSTEM.md",
+]);
 const TOP_LEVEL_DIRS = new Set(["skills", "prompts", "themes", "extensions"]);
 const SECRET_PATTERNS = [
 	/AWS_SECRET_ACCESS_KEY\s*[=:]\s*['\"]?[A-Za-z0-9/+]{35,}/i,
@@ -55,7 +61,7 @@ interface PartialConfig {
 	prefix?: string;
 	autoSync?: boolean | string;
 	syncSessions?: boolean | string;
-	extraFiles?: string[];
+	extraFiles?: unknown;
 }
 
 interface SnapshotFile {
@@ -272,6 +278,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 		prefix: DEFAULT_PREFIX,
 		autoSync: true,
 		syncSessions: false,
+		extraFiles: [],
 	};
 	await writeJson(configPath, sample);
 	ctx.ui.notify(`Created ${configPath}. Fill in R2 credentials, then run /pisync doctor.`, "info");
@@ -294,6 +301,7 @@ async function showConfig(ctx: ExtensionCommandContext) {
 			`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
 			`autoSync: ${isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true) ? "enabled" : "disabled"}`,
 			`syncSessions: ${syncSessions ? "enabled" : "disabled"}`,
+			`extraFiles: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
 			`local config: ${localConfigPath()}`,
 			...warnings,
 		].join("\n"),
@@ -477,7 +485,10 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), applySessionDir);
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), {
+		sessionDir: applySessionDir,
+		extraFiles: config.extraFiles,
+	});
 	await writeState(config.profile, {
 		version: VERSION,
 		profile: config.profile,
@@ -589,7 +600,10 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), applySessionDir);
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), {
+		sessionDir: applySessionDir,
+		extraFiles: config.extraFiles,
+	});
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const upload = await snapshotForUpload(client, config, remote, latest);
 	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
@@ -639,7 +653,11 @@ function snapshotOptionsForContext(
 	ctx: ExtensionCommandContext | ExtensionContext,
 	config: SyncConfig,
 ): SnapshotOptions {
-	return { syncSessions: config.syncSessions, sessionDir: sessionDirFromContext(ctx), extraFiles: config.extraFiles };
+	return {
+		syncSessions: config.syncSessions,
+		sessionDir: sessionDirFromContext(ctx),
+		extraFiles: config.extraFiles,
+	};
 }
 
 function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) {
@@ -722,7 +740,7 @@ async function loadConfigInternal(): Promise<SyncConfig> {
 		profile: partial.profile ?? DEFAULT_PROFILE,
 		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
 		syncSessions: isExplicitlyEnabled(partial.syncSessions),
-	extraFiles: partial.extraFiles ?? [],
+		extraFiles: normalizeExtraFiles(partial.extraFiles),
 	};
 }
 
@@ -744,7 +762,7 @@ async function loadPartialConfig(): Promise<PartialConfig> {
 		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
 		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
 		syncSessions: process.env.PI_SYNC_SESSIONS ?? fileConfig.syncSessions,
-	extraFiles: fileConfig.extraFiles,
+		extraFiles: fileConfig.extraFiles,
 	};
 }
 
@@ -803,8 +821,10 @@ export async function collectFiles(
 	options: SnapshotOptions = {},
 ): Promise<SnapshotFile[]> {
 	const results: SnapshotFile[] = [];
+	const extraFiles = new Set(normalizeExtraFiles(options.extraFiles));
 	for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-		if (entry.isFile() && (TOP_LEVEL_FILES.has(entry.name) || (options.extraFiles?.includes(entry.name) ?? false))) {
+		const isTopLevelFile = TOP_LEVEL_FILES.has(entry.name) || extraFiles.has(entry.name);
+		if (entry.isFile() && isTopLevelFile) {
 			await addFile(results, root, entry.name);
 		} else if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
@@ -1042,12 +1062,14 @@ async function decodeSnapshot(buffer: Buffer): Promise<Snapshot> {
 async function applySnapshot(
 	snapshot: Snapshot,
 	protectedRelativePaths = new Set<string>(),
-	sessionDir?: string,
+	options: Pick<SnapshotOptions, "sessionDir" | "extraFiles"> = {},
 ) {
 	const root = agentDir();
+	const { sessionDir } = options;
 	const current = await createSnapshot(snapshot.profile, {
 		syncSessions: snapshotIncludesSessions(snapshot),
 		sessionDir,
+		extraFiles: options.extraFiles,
 	});
 	const plan = protectSnapshotApplyPlan(
 		root,
@@ -1719,6 +1741,13 @@ export function isCloudflareR2Endpoint(endpoint: string | undefined) {
 function normalizeOptionalString(value: string | undefined) {
 	const normalized = value?.trim();
 	return normalized ? normalized : undefined;
+}
+
+function normalizeExtraFiles(value: unknown) {
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+		.map((item) => item.trim());
 }
 
 function hasEnv(name: string) {

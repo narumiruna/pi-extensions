@@ -65,6 +65,22 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 			assert.equal((await loadConfig()).syncSessions, true);
 		});
 
+		rmSync(path.join(agentDir, "pi-sync.local.json"));
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), extraFiles: "APPEND_SYSTEM.md" }),
+		);
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, []);
+		});
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), extraFiles: ["LOCAL.md", 1, ""] }),
+		);
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, ["LOCAL.md"]);
+		});
+
 		const customAgentDir = path.join(agentDir, "custom-agent");
 		mkdirSync(customAgentDir, { recursive: true });
 		writeFileSync(
@@ -147,6 +163,8 @@ test("snapshot collection includes session jsonl files only when enabled", async
 	mkdirSync(path.join(root, "skills"), { recursive: true });
 	mkdirSync(path.join(root, "sessions", "--project--"), { recursive: true });
 	mkdirSync(path.join(root, "sessions", "token-project"), { recursive: true });
+	writeFileSync(path.join(root, "APPEND_SYSTEM.md"), "append\n");
+	writeFileSync(path.join(root, "LOCAL.md"), "local\n");
 	writeFileSync(path.join(root, "settings.json"), "{}\n");
 	writeFileSync(path.join(root, "skills", "demo.md"), "demo\n");
 	writeFileSync(path.join(root, "sessions", "--project--", "session.jsonl"), "{}\n");
@@ -157,17 +175,21 @@ test("snapshot collection includes session jsonl files only when enabled", async
 
 	assert.deepEqual(
 		(await collectFiles(root)).map((file) => file.path),
-		["settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "settings.json", "skills/demo.md"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { extraFiles: ["LOCAL.md"] })).map((file) => file.path),
+		["APPEND_SYSTEM.md", "LOCAL.md", "settings.json", "skills/demo.md"],
 	);
 	assert.deepEqual(
 		(await collectFiles(root, { syncSessions: true })).map((file) => file.path),
-		["sessions/--project--/session.jsonl", "settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "sessions/--project--/session.jsonl", "settings.json", "skills/demo.md"],
 	);
 	assert.deepEqual(
 		(await collectFiles(root, { syncSessions: true, sessionDir: customSessionDir })).map(
 			(file) => file.path,
 		),
-		["sessions/custom.jsonl", "settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "sessions/custom.jsonl", "settings.json", "skills/demo.md"],
 	);
 	const nestedSessionDir = path.join(root, "sessions", "work");
 	mkdirSync(nestedSessionDir, { recursive: true });
@@ -176,7 +198,7 @@ test("snapshot collection includes session jsonl files only when enabled", async
 		(await collectFiles(root, { syncSessions: true, sessionDir: nestedSessionDir })).map(
 			(file) => file.path,
 		),
-		["sessions/nested.jsonl", "settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "sessions/nested.jsonl", "settings.json", "skills/demo.md"],
 	);
 });
 
@@ -453,6 +475,7 @@ function requiredConfig() {
 		bucket: "pi-sync-test",
 		accessKeyId: "access-key",
 		secretAccessKey: "secret-key",
+		extraFiles: [],
 	};
 }
 

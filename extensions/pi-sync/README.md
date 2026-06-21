@@ -14,6 +14,7 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
   - `keybindings.json`
   - `models.json`
   - `AGENTS.md`
+  - `APPEND_SYSTEM.md`
   - `skills/`, `prompts/`, `themes/`, and `extensions/`
   - optionally denylist-filtered `sessions/**/*.jsonl` when `syncSessions` is enabled
 - Stores each remote version as an immutable gzip-compressed JSON snapshot bundle.
@@ -70,7 +71,8 @@ Example:
   "profile": "default",
   "prefix": "pi-sync",
   "autoSync": true,
-  "syncSessions": false
+  "syncSessions": false,
+  "extraFiles": []
 }
 ```
 
@@ -88,6 +90,8 @@ export PI_SYNC_PREFIX="pi-sync"
 export PI_SYNC_AUTO_SYNC="true"
 export PI_SYNC_SESSIONS="false" # opt in with true to sync Pi conversation JSONL files
 ```
+
+Set `extraFiles` to additional top-level file names to include beyond the default allowlist.
 
 `PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary credentials such as AWS STS, AWS SSO, assumed roles, or S3-compatible providers that issue short-lived credentials.
 
