@@ -79,7 +79,16 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 			path.join(agentDir, "pi-sync.local.json"),
 			JSON.stringify({
 				...requiredConfig(),
-				extraFiles: ["LOCAL.md", "LOCAL.md", "skills/demo.md", "nested\\x", 1, ""],
+				extraFiles: [
+					"LOCAL.md",
+					"LOCAL.md",
+					"skills/demo.md",
+					"nested\\x",
+					"skills",
+					"SESSIONS",
+					1,
+					"",
+				],
 			}),
 		);
 		await withEnv({}, async () => {

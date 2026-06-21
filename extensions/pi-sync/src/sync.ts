@@ -1867,7 +1867,16 @@ function normalizeExtraFiles(value: unknown) {
 	const files = value
 		.filter((item): item is string => typeof item === "string")
 		.map((item) => item.trim())
-		.filter((item) => item !== "" && !item.includes("/") && !item.includes("\\"));
+		.filter((item) => {
+			const lower = item.toLowerCase();
+			return (
+				item !== "" &&
+				!item.includes("/") &&
+				!item.includes("\\") &&
+				!TOP_LEVEL_DIRS.has(lower) &&
+				lower !== "sessions"
+			);
+		});
 	return [...new Set(files)];
 }
 
