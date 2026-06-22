@@ -3,6 +3,7 @@ import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexUsage, {
 	type CodexUsageReport,
+	completeCodexStatusArguments,
 	formatCodexUsageReport,
 	formatCodexUsageStatusline,
 	isStaleExtensionContextError,
@@ -16,12 +17,30 @@ test("codex-usage registers command and statusline lifecycle hooks", () => {
 	codexUsage(mock.pi);
 
 	assert.ok(mock.commands.has("codex-status"));
+	assert.equal(typeof mock.commands.get("codex-status")?.getArgumentCompletions, "function");
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"model_select",
 		"session_shutdown",
 		"session_start",
 		"session_tree",
 	]);
+});
+
+test("completeCodexStatusArguments suggests accepted options", () => {
+	assert.deepEqual(
+		completeCodexStatusArguments("")?.map((item) => item.label),
+		["--refresh", "--no-statusline", "--clear-statusline", "--timeout"],
+	);
+	assert.deepEqual(
+		completeCodexStatusArguments("--r")?.map((item) => item.value),
+		["--refresh"],
+	);
+	assert.deepEqual(
+		completeCodexStatusArguments("--timeout 2 --n")?.map((item) => item.value),
+		["--no-statusline"],
+	);
+	assert.equal(completeCodexStatusArguments("--timeout "), null);
+	assert.equal(completeCodexStatusArguments("wat"), null);
 });
 
 test("parseArgs handles refresh, statusline, clear, and timeout options", () => {

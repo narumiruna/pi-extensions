@@ -33,7 +33,10 @@ test("parseCommand accepts documented commands and aliases", () => {
 });
 
 test("commandCompletions filters single-token prefixes", () => {
-	assert.deepEqual(commandCompletions("sta"), [{ value: "status", label: "Show current status" }]);
+	assert.deepEqual(commandCompletions("sta"), [
+		{ value: "status", label: "status", description: "Show current status" },
+	]);
+	assert.equal(commandCompletions("status "), null);
 	assert.equal(commandCompletions("status now"), null);
 });
 

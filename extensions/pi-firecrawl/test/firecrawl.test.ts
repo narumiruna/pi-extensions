@@ -40,8 +40,9 @@ test("firecrawl command parsing and completions cover aliases", () => {
 	assert.equal(parseCommand("off"), "disable");
 	assert.equal(parseCommand("wat"), "unknown");
 	assert.deepEqual(commandCompletions("con"), [
-		{ value: "config", label: "Show configuration quick start" },
+		{ value: "config", label: "config", description: "Show configuration quick start" },
 	]);
+	assert.equal(commandCompletions("config "), null);
 	assert.equal(commandCompletions("config now"), null);
 });
 

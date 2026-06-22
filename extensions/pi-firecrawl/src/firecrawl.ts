@@ -22,14 +22,14 @@ const FIRECRAWL_TOOL_NAMES = [
 	"firecrawl_search",
 ] as const;
 const COMMAND_COMPLETIONS = [
-	{ value: "help", label: "Show command usage" },
-	{ value: "config", label: "Show configuration quick start" },
-	{ value: "quickstart", label: "Show configuration quick start" },
-	{ value: "status", label: "Show tool and settings status" },
-	{ value: "tools", label: "Select Firecrawl tools" },
-	{ value: "toggle", label: "Select Firecrawl tools" },
-	{ value: "enable", label: "Enable all Firecrawl tools" },
-	{ value: "disable", label: "Disable all Firecrawl tools" },
+	{ value: "help", label: "help", description: "Show command usage" },
+	{ value: "config", label: "config", description: "Show configuration quick start" },
+	{ value: "quickstart", label: "quickstart", description: "Show configuration quick start" },
+	{ value: "status", label: "status", description: "Show tool and settings status" },
+	{ value: "tools", label: "tools", description: "Select Firecrawl tools" },
+	{ value: "toggle", label: "toggle", description: "Select Firecrawl tools" },
+	{ value: "enable", label: "enable", description: "Enable all Firecrawl tools" },
+	{ value: "disable", label: "disable", description: "Disable all Firecrawl tools" },
 ];
 const MENU_OPTIONS = {
 	config: "Configuration quick start",
@@ -362,8 +362,8 @@ export function parseCommand(args: string): CommandAction | "unknown" {
 }
 
 export function commandCompletions(prefix: string) {
-	const normalized = prefix.trim().toLowerCase();
-	if (normalized.includes(" ")) return null;
+	const normalized = prefix.trimStart().toLowerCase();
+	if (/\s/.test(normalized)) return null;
 
 	const matches = COMMAND_COMPLETIONS.filter((completion) =>
 		completion.value.startsWith(normalized),

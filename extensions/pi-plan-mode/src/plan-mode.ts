@@ -14,6 +14,12 @@ const TOOL_SELECTOR_PAGE_SIZE = 10;
 const PROPOSED_PLAN_PATTERN = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/i;
 const PROPOSED_PLAN_BLOCK_PATTERN = /<proposed_plan>\s*[\s\S]*?\s*<\/proposed_plan>/gi;
 
+interface CommandArgumentCompletion {
+	value: string;
+	label: string;
+	description?: string;
+}
+
 interface PlanModeState {
 	enabled: boolean;
 	latestPlan?: string;
@@ -72,6 +78,12 @@ type PlanModeQuestionDetails = {
 	questions: PlanModeQuestion[];
 	answers?: PlanModeQuestionAnswer[];
 };
+
+const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
+	{ value: "exit", label: "exit", description: "Leave Plan mode" },
+	{ value: "off", label: "off", description: "Leave Plan mode" },
+	{ value: "tools", label: "tools", description: "Select tools allowed in Plan mode" },
+];
 
 const PLAN_MODE_QUESTION_PARAMS = {
 	type: "object",
@@ -228,6 +240,7 @@ export default function planMode(pi: ExtensionAPI) {
 
 	pi.registerCommand("plan", {
 		description: "Enter or manage Codex-like Plan mode",
+		getArgumentCompletions: completePlanArguments,
 		handler: async (args, ctx) => {
 			const prompt = args.trim();
 			const command = prompt.toLowerCase();
@@ -682,6 +695,15 @@ export default function planMode(pi: ExtensionAPI) {
 
 function isBuiltinTool(tool: ToolInfo) {
 	return tool.sourceInfo.source === "builtin";
+}
+
+export function completePlanArguments(argumentPrefix: string): CommandArgumentCompletion[] | null {
+	const prefix = argumentPrefix.trimStart().toLowerCase();
+	if (prefix === "") return [...PLAN_COMMAND_COMPLETIONS];
+	if (/\s/.test(prefix)) return null;
+
+	const matches = PLAN_COMMAND_COMPLETIONS.filter((item) => item.value.startsWith(prefix));
+	return matches.length > 0 ? [...matches] : null;
 }
 
 export function canSelectToolInPlanMode(tool: ToolInfo) {

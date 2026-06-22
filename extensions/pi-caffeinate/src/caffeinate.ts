@@ -19,12 +19,12 @@ const SETTINGS_FILE = join(
 	"pi-caffeinate-settings.json",
 );
 const COMMAND_COMPLETIONS = [
-	{ value: "display", label: "Keep system and display awake" },
-	{ value: "sleep", label: "Keep system awake; allow display sleep" },
-	{ value: "status", label: "Show current status" },
-	{ value: "mode", label: "Choose keep-awake mode" },
-	{ value: "stop", label: "Release inhibitor for now" },
-	{ value: "help", label: "Show command help" },
+	{ value: "display", label: "display", description: "Keep system and display awake" },
+	{ value: "sleep", label: "sleep", description: "Keep system awake; allow display sleep" },
+	{ value: "status", label: "status", description: "Show current status" },
+	{ value: "mode", label: "mode", description: "Choose keep-awake mode" },
+	{ value: "stop", label: "stop", description: "Release inhibitor for now" },
+	{ value: "help", label: "help", description: "Show command help" },
 ];
 const MENU_OPTIONS = {
 	display: "Keep system and display awake",
@@ -246,8 +246,8 @@ export function parseCommand(args: string): CommandAction | "unknown" {
 }
 
 export function commandCompletions(prefix: string) {
-	const normalized = prefix.trim().toLowerCase();
-	if (normalized.includes(" ")) return null;
+	const normalized = prefix.trimStart().toLowerCase();
+	if (/\s/.test(normalized)) return null;
 
 	const matches = COMMAND_COMPLETIONS.filter((completion) =>
 		completion.value.startsWith(normalized),

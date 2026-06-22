@@ -18,6 +18,23 @@ const LIMIT_VALUE_COLUMN = 29;
 const MAX_ERROR_BODY_CHARS = 600;
 const RESET_FOREGROUND = "\x1b[39m";
 
+interface CommandArgumentCompletion {
+	value: string;
+	label: string;
+	description?: string;
+}
+
+const COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
+	{ value: "--refresh", label: "--refresh", description: "Refresh usage instead of cached data" },
+	{ value: "--no-statusline", label: "--no-statusline", description: "Do not update the statusline" },
+	{
+		value: "--clear-statusline",
+		label: "--clear-statusline",
+		description: "Clear the usage statusline",
+	},
+	{ value: "--timeout ", label: "--timeout", description: "Set query timeout in seconds" },
+];
+
 type UsageSource = "pi-auth" | "codex-app-server";
 type PiModel = NonNullable<ExtensionContext["model"]>;
 export type CodexUsageModel = Pick<PiModel, "id" | "name" | "provider">;
@@ -259,6 +276,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 
 	pi.registerCommand(COMMAND_NAME, {
 		description: "Show Codex ChatGPT subscription usage and rate-limit windows",
+		getArgumentCompletions: completeCodexStatusArguments,
 		handler: async (args, ctx) => {
 			try {
 				const options = parseArgs(args);
@@ -349,6 +367,25 @@ export default function codexUsage(pi: ExtensionAPI) {
 		sessionActive = false;
 		clearUsageStatusline(ctx);
 	});
+}
+
+export function completeCodexStatusArguments(
+	argumentPrefix: string,
+): CommandArgumentCompletion[] | null {
+	const prefix = argumentPrefix.trimStart();
+	if (prefix === "") return [...COMMAND_COMPLETIONS];
+
+	const trailingSpace = /\s$/.test(prefix);
+	const tokens = prefix.trimEnd().split(/\s+/).filter(Boolean);
+	const previous = tokens.at(-1);
+	if (previous === "--timeout" && trailingSpace) return null;
+	if (!trailingSpace && tokens.at(-2) === "--timeout") return null;
+
+	const current = trailingSpace ? "" : (previous ?? "");
+	if (current && !current.startsWith("-")) return null;
+
+	const matches = COMMAND_COMPLETIONS.filter((item) => item.value.startsWith(current));
+	return matches.length > 0 ? [...matches] : null;
 }
 
 export function parseArgs(

@@ -45,8 +45,9 @@ test("chrome-devtools command parsing and completions cover aliases", () => {
 	assert.equal(parseCommand("off"), "disable");
 	assert.equal(parseCommand("wat"), "unknown");
 	assert.deepEqual(commandCompletions("qui"), [
-		{ value: "quickstart", label: "Show endpoint and launch help" },
+		{ value: "quickstart", label: "quickstart", description: "Show endpoint and launch help" },
 	]);
+	assert.equal(commandCompletions("quickstart "), null);
 	assert.equal(commandCompletions("quick start"), null);
 });
 

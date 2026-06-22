@@ -36,13 +36,13 @@ const CHROME_DEVTOOLS_TOOL_NAMES = [
 	"chrome_devtools_screenshot",
 ] as const;
 const COMMAND_COMPLETIONS = [
-	{ value: "help", label: "Show command usage" },
-	{ value: "quickstart", label: "Show endpoint and launch help" },
-	{ value: "status", label: "Show tool and settings status" },
-	{ value: "tools", label: "Select Chrome DevTools tools" },
-	{ value: "toggle", label: "Select Chrome DevTools tools" },
-	{ value: "enable", label: "Enable all Chrome DevTools tools" },
-	{ value: "disable", label: "Disable all Chrome DevTools tools" },
+	{ value: "help", label: "help", description: "Show command usage" },
+	{ value: "quickstart", label: "quickstart", description: "Show endpoint and launch help" },
+	{ value: "status", label: "status", description: "Show tool and settings status" },
+	{ value: "tools", label: "tools", description: "Select Chrome DevTools tools" },
+	{ value: "toggle", label: "toggle", description: "Select Chrome DevTools tools" },
+	{ value: "enable", label: "enable", description: "Enable all Chrome DevTools tools" },
+	{ value: "disable", label: "disable", description: "Disable all Chrome DevTools tools" },
 ];
 const MENU_OPTIONS = {
 	quickstart: "Quick start / endpoint help",
@@ -467,8 +467,8 @@ export function parseCommand(args: string): CommandAction | "unknown" {
 }
 
 export function commandCompletions(prefix: string) {
-	const normalized = prefix.trim().toLowerCase();
-	if (normalized.includes(" ")) return null;
+	const normalized = prefix.trimStart().toLowerCase();
+	if (/\s/.test(normalized)) return null;
 
 	const matches = COMMAND_COMPLETIONS.filter((completion) =>
 		completion.value.startsWith(normalized),

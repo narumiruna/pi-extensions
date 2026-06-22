@@ -3,6 +3,7 @@ import test from "node:test";
 import { builtinTool, createMockPi, extensionTool } from "../../../test/support.js";
 import planMode, {
 	canSelectToolInPlanMode,
+	completePlanArguments,
 	extractProposedPlan,
 	isSafeCommand,
 	latestAssistantText,
@@ -20,8 +21,23 @@ test("plan-mode registers flag, question tool, command, and safety hooks", () =>
 	assert.ok(mock.flags.has("plan"));
 	assert.equal(mock.tools[0]?.name, "plan_mode_question");
 	assert.ok(mock.commands.has("plan"));
+	assert.equal(typeof mock.commands.get("plan")?.getArgumentCompletions, "function");
 	assert.ok(mock.events.has("tool_call"));
 	assert.ok(mock.events.has("before_agent_start"));
+});
+
+test("completePlanArguments suggests management tokens only", () => {
+	assert.deepEqual(
+		completePlanArguments("")?.map((item) => item.label),
+		["exit", "off", "tools"],
+	);
+	assert.deepEqual(
+		completePlanArguments("to")?.map((item) => item.value),
+		["tools"],
+	);
+	assert.equal(completePlanArguments("tools "), null);
+	assert.equal(completePlanArguments("write a plan"), null);
+	assert.equal(completePlanArguments("unknown"), null);
 });
 
 test("tool selection allows safe built-ins and non-built-ins only", () => {
