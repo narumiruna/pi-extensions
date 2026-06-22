@@ -10,6 +10,7 @@ import sync, {
 	appliedFileHashMap,
 	backupLocal,
 	canPullRemoteSessionsOnFirstSync,
+	canPullRemoteSettingsOnFirstSync,
 	collectFiles,
 	encodeKey,
 	filterSnapshotForConfigPolicy,
@@ -82,6 +83,7 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 				extraFiles: [
 					"LOCAL.md",
 					"LOCAL.md",
+					"local.md",
 					"skills/demo.md",
 					"nested\\x",
 					"skills",
@@ -189,6 +191,7 @@ test("snapshot collection includes session jsonl files only when enabled", async
 	writeFileSync(path.join(root, "LOCAL.md"), "local\n");
 	writeFileSync(path.join(root, "settings.json"), "{}\n");
 	writeFileSync(path.join(root, "skills", "demo.md"), "demo\n");
+	if (path.sep === "/") writeFileSync(path.join(root, "skills", "foo\\bar.md"), "skip\n");
 	writeFileSync(path.join(root, "sessions", "--project--", "session.jsonl"), "{}\n");
 	writeFileSync(path.join(root, "sessions", "--project--", "notes.txt"), "skip\n");
 	writeFileSync(path.join(root, "sessions", "token-project", "session.jsonl"), "skip\n");
@@ -457,13 +460,28 @@ test("settings hash maps ignore session differences for first sync checks", () =
 	);
 });
 
-test("first sync only auto-pulls remote sessions when local sessions are not at risk", () => {
+test("first sync only auto-pulls remote files when local files are not at risk", () => {
+	const settings = { path: "settings.json", content: Buffer.from("settings") };
+	const appendSystem = { path: "APPEND_SYSTEM.md", content: Buffer.from("append") };
+	const changedSettings = { path: "settings.json", content: Buffer.from("changed") };
 	const remoteOnly = snapshot([
 		{ path: "sessions/--project--/remote.jsonl", content: Buffer.from("r") },
 	]);
 	const shared = { path: "sessions/--project--/shared.jsonl", content: Buffer.from("same") };
 	const changed = { path: "sessions/--project--/shared.jsonl", content: Buffer.from("changed") };
 
+	assert.equal(
+		canPullRemoteSettingsOnFirstSync(snapshot([settings]), snapshot([settings, appendSystem])),
+		true,
+	);
+	assert.equal(
+		canPullRemoteSettingsOnFirstSync(snapshot([settings]), snapshot([changedSettings])),
+		false,
+	);
+	assert.equal(
+		canPullRemoteSettingsOnFirstSync(snapshot([appendSystem]), snapshot([settings])),
+		false,
+	);
 	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([]), remoteOnly), true);
 	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([shared]), snapshot([shared])), true);
 	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([shared]), remoteOnly), false);

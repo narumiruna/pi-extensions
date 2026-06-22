@@ -529,7 +529,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	const firstSync = !state.lastAppliedSnapshot;
 
 	if (firstSync && remote && local.files.length > 0) {
-		if (!sameHashes(settingsHashMap(local), settingsHashMap(remote))) {
+		if (!canPullRemoteSettingsOnFirstSync(local, remote)) {
 			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
 		}
 		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
@@ -909,7 +909,7 @@ async function addFile(
 	relativePath: string,
 	snapshotPath = relativePath,
 ) {
-	if (isDeniedPath(snapshotPath)) return;
+	if (!isSafeSnapshotPath(snapshotPath)) return;
 	const absolutePath = safeJoin(root, relativePath);
 	const content = await fs.readFile(absolutePath);
 	results.push({ path: snapshotPath, contentBase64: content.toString("base64"), sha256: sha256(content) });
@@ -1447,6 +1447,13 @@ export function settingsHashesMatchState(remote: Snapshot, state: SyncState) {
 	return sameHashes(settingsHashMap(remote), settingsHashMapFromState(state));
 }
 
+export function canPullRemoteSettingsOnFirstSync(local: Snapshot, remote: Snapshot) {
+	const remoteSettings = settingsHashMap(remote);
+	return Object.entries(settingsHashMap(local)).every(
+		([filePath, hash]) => remoteSettings[filePath] === hash,
+	);
+}
+
 export function canPullRemoteSessionsOnFirstSync(local: Snapshot, remote: Snapshot) {
 	const localSessions = sessionHashMap(local);
 	const remoteSessions = sessionHashMap(remote);
@@ -1887,21 +1894,26 @@ function normalizeOptionalString(value: string | undefined) {
 
 function normalizeExtraFiles(value: unknown) {
 	if (!Array.isArray(value)) return [];
-	const files = value
+	const seen = new Set<string>();
+	return value
 		.filter((item): item is string => typeof item === "string")
 		.map((item) => item.trim())
 		.filter((item) => {
 			const lower = item.toLowerCase();
-			return (
-				item !== "" &&
-				!item.includes("/") &&
-				!item.includes("\\") &&
-				!TOP_LEVEL_FILE_NAMES.has(lower) &&
-				!isDeniedPath(item) &&
-				!RESERVED_TOP_LEVEL_NAMES.has(lower)
-			);
+			if (
+				item === "" ||
+				item.includes("/") ||
+				item.includes("\\") ||
+				TOP_LEVEL_FILE_NAMES.has(lower) ||
+				isDeniedPath(item) ||
+				RESERVED_TOP_LEVEL_NAMES.has(lower) ||
+				seen.has(lower)
+			) {
+				return false;
+			}
+			seen.add(lower);
+			return true;
 		});
-	return [...new Set(files)];
 }
 
 function hasEnv(name: string) {
