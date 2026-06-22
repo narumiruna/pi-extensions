@@ -322,6 +322,7 @@ async function status(ctx: ExtensionCommandContext) {
 		[
 			`profile: ${config.profile}`,
 			`sessions: ${config.syncSessions ? "included" : "excluded"}`,
+			`extra files: ${formatExtraFiles(config.extraFiles)}`,
 			remoteText,
 			`local files: ${local.files.length}`,
 			`local changed since last sync: ${localChanged ? "yes" : "no"}`,
@@ -341,7 +342,11 @@ async function diff(ctx: ExtensionCommandContext) {
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 
 	const warnings = syncSessionsWarnings(config);
-	const header = [`sessions: ${config.syncSessions ? "included" : "excluded"}`, ...warnings].join(
+	const header = [
+		`sessions: ${config.syncSessions ? "included" : "excluded"}`,
+		`extra files: ${formatExtraFiles(config.extraFiles)}`,
+		...warnings,
+	].join(
 		"\n",
 	);
 	const level = warnings.length > 0 ? "warning" : "info";
@@ -368,6 +373,7 @@ async function doctor(ctx: ExtensionCommandContext) {
 		snapshotOptions = snapshotOptionsForContext(ctx, config);
 		messages.push(`config: ok (${config.bucket}/${profilePrefix(config)})`);
 		messages.push(`sessions: ${config.syncSessions ? "included" : "excluded"}`);
+		messages.push(`extra files: ${formatExtraFiles(config.extraFiles)}`);
 		const warnings = [...sessionTokenWarnings(config), ...syncSessionsWarnings(config)];
 		if (warnings.length > 0) {
 			level = "warning";
@@ -1756,6 +1762,10 @@ export function isExplicitlyEnabled(value: boolean | string | undefined) {
 function normalizeExtraFiles(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((item): item is string => typeof item === "string");
+}
+
+function formatExtraFiles(extraFiles: string[]): string {
+	return extraFiles.length === 0 ? "none" : extraFiles.join(", ");
 }
 
 function isMissingConfigError(error: unknown) {
