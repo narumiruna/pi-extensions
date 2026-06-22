@@ -369,6 +369,7 @@ test("settings hash maps ignore session differences for first sync checks", () =
 		profile: "default",
 		prefix: "pi-sync",
 		syncSessions: false,
+		skipSecretScan: false,
 		extraFiles: [],
 	};
 
@@ -488,6 +489,33 @@ test("security and configuration helpers detect secrets and R2 session-token war
 	assert.equal(isExplicitlyEnabled("true"), true);
 	assert.equal(isExplicitlyEnabled("tru"), false);
 	assert.equal(isExplicitlyEnabled(""), false);
+});
+
+test("skipSecretScan config loads and defaults to false", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), skipSecretScan: true }),
+		);
+		await withEnv({}, async () => {
+			assert.equal((await loadConfig()).skipSecretScan, true);
+		});
+
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), skipSecretScan: "yes" }),
+		);
+		await withEnv({}, async () => {
+			assert.equal((await loadConfig()).skipSecretScan, false);
+		});
+
+		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
+		await withEnv({}, async () => {
+			assert.equal((await loadConfig()).skipSecretScan, false);
+		});
+	});
 });
 
 function snapshot(files: Array<{ path: string; content: Buffer }>) {

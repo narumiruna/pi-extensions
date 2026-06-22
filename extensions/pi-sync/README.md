@@ -108,6 +108,18 @@ By default, pi-sync syncs `settings.json`, `keybindings.json`, `models.json`, an
 
 `extraFiles` entries are validated to be strings at load time. Names containing `..` or `/` are rejected by the standard top-level snapshot logic, and the existing secret/denylist scan still applies to included files.
 
+### Secret scan
+
+By default, pi-sync scans snapshots for common secret patterns (AWS keys, `sk-...`, `ghp_...`, etc.) and refuses to push a snapshot when any matched file is present. Set `skipSecretScan: true` in the config to disable the scan:
+
+```json
+{
+  "skipSecretScan": true
+}
+```
+
+Disabling the scan is a deliberate opt-in: pi-sync still respects file-level denylists (`.env*`, names containing `secret`/`token`) on apply, but no longer blocks pushes. Use only when you have a separate reason to sync files that look like secrets (e.g., your own config file contains API keys that you know about).
+
 ### Session syncing
 
 `syncSessions` defaults to `false`. Set it to `true`, or set `PI_SYNC_SESSIONS=true`, to include Pi's configured session JSONL files in snapshots. pi-sync uses `PI_CODING_AGENT_SESSION_DIR`, Pi's `sessionDir` setting, or the default `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/**/*.jsonl` storage. Empty or misspelled `PI_SYNC_SESSIONS` values stay disabled. Only JSONL session files are included; other session-directory files and denylisted paths such as `.env*`, `.pisync`, `node_modules`, and names containing `token` or `secret` are ignored.

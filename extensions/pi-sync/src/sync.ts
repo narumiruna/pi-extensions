@@ -41,6 +41,7 @@ interface SyncConfig {
 	profile: string;
 	prefix: string;
 	syncSessions: boolean;
+	skipSecretScan: boolean;
 	extraFiles: string[];
 }
 
@@ -55,6 +56,7 @@ interface PartialConfig {
 	prefix?: string;
 	autoSync?: boolean | string;
 	syncSessions?: boolean | string;
+	skipSecretScan?: boolean;
 	extraFiles?: string[];
 }
 
@@ -420,9 +422,11 @@ async function push(
 
 	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload);
 	const scanTarget = config.syncSessions ? upload : local;
-	const secrets = scanSnapshot(scanTarget);
-	if (secrets.length > 0) {
-		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
+	if (!config.skipSecretScan) {
+		const secrets = scanSnapshot(scanTarget);
+		if (secrets.length > 0) {
+			throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
+		}
 	}
 
 	const preservedRemoteSessionCount = Math.max(0, countSessionFiles(upload) - countSessionFiles(local));
@@ -742,6 +746,7 @@ async function loadConfigInternal(): Promise<SyncConfig> {
 		profile: partial.profile ?? DEFAULT_PROFILE,
 		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
 		syncSessions: isExplicitlyEnabled(partial.syncSessions),
+		skipSecretScan: partial.skipSecretScan === true,
 		extraFiles: normalizeExtraFiles(partial.extraFiles),
 	};
 }
@@ -764,7 +769,8 @@ async function loadPartialConfig(): Promise<PartialConfig> {
 		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
 		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
 		syncSessions: process.env.PI_SYNC_SESSIONS ?? fileConfig.syncSessions,
-	extraFiles: fileConfig.extraFiles,
+		skipSecretScan: fileConfig.skipSecretScan,
+		extraFiles: fileConfig.extraFiles,
 	};
 }
 
