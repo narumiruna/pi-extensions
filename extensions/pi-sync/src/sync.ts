@@ -580,7 +580,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 		await push(ctx, options);
 		return;
 	}
-	if (syncPolicyChanged(state, config)) {
+	if (shouldRefreshSyncedState(remote, state, config)) {
 		await writeState(config.profile, {
 			version: VERSION,
 			profile: config.profile,
@@ -1494,6 +1494,14 @@ function snapshotsMatch(left: Snapshot, right: Snapshot) {
 
 function syncPolicyChanged(state: SyncState, config: Pick<SyncConfig, "syncSessions" | "extraFiles">) {
 	return (state.syncSessions ?? false) !== config.syncSessions || extraFilesChanged(state, config);
+}
+
+function shouldRefreshSyncedState(
+	remote: Snapshot,
+	state: SyncState,
+	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
+) {
+	return remote.id !== state.lastAppliedSnapshot || syncPolicyChanged(state, config);
 }
 
 function extraFilesChanged(state: SyncState, config: Pick<SyncConfig, "extraFiles">) {
