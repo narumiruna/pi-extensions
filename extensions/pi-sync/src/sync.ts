@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -860,16 +860,17 @@ export async function collectFiles(
 	options: SnapshotOptions = {},
 ): Promise<SnapshotFile[]> {
 	const results: SnapshotFile[] = [];
-	const extraFiles = extraFileNamesByLower(options.extraFiles);
-	for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-		const extraFileName = extraFiles.get(entry.name.toLowerCase());
+	const entries = await fs.readdir(root, { withFileTypes: true });
+	for (const entry of entries) {
 		if (entry.isFile() && TOP_LEVEL_FILES.has(entry.name)) {
 			await addFile(results, root, entry.name);
-		} else if (entry.isFile() && extraFileName) {
-			await addFile(results, root, entry.name, extraFileName);
 		} else if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
 		}
+	}
+	for (const extraFileName of normalizeExtraFiles(options.extraFiles)) {
+		const entry = selectExtraFileEntry(entries, extraFileName);
+		if (entry) await addFile(results, root, entry.name, extraFileName);
 	}
 	if (options.syncSessions) {
 		try {
@@ -976,7 +977,7 @@ export function filterSnapshotForConfigPolicy(
 	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
 	options: { regenerateId?: boolean } = {},
 ) {
-	const extraFiles = new Set(normalizeExtraFiles(config.extraFiles));
+	const extraFiles = extraFileNames(config.extraFiles);
 	const filtered = {
 		...snapshot,
 		syncSessions: config.syncSessions ? snapshot.syncSessions : false,
@@ -1001,7 +1002,7 @@ function isConfiguredSnapshotPath(
 ) {
 	const normalized = toPosix(relativePath);
 	if (isSessionPath(normalized)) return config.syncSessions;
-	if (!normalized.includes("/")) return TOP_LEVEL_FILES.has(normalized) || extraFiles.has(normalized);
+	if (!normalized.includes("/")) return TOP_LEVEL_FILES.has(normalized) || extraFiles.has(normalized.toLowerCase());
 	return TOP_LEVEL_DIRS.has(normalized.slice(0, normalized.indexOf("/")));
 }
 
@@ -1393,7 +1394,7 @@ function fileHashMap(snapshot: Snapshot) {
 }
 
 function stateHashMapForConfig(state: SyncState, config: Pick<SyncConfig, "syncSessions" | "extraFiles">) {
-	const extraFiles = new Set(normalizeExtraFiles(config.extraFiles));
+	const extraFiles = extraFileNames(config.extraFiles);
 	return Object.fromEntries(
 		Object.entries(state.lastFileHashes).filter(([filePath]) =>
 			isConfiguredSnapshotPath(filePath, config, extraFiles),
@@ -1928,8 +1929,17 @@ function normalizeExtraFiles(value: unknown) {
 		});
 }
 
-function extraFileNamesByLower(value: unknown) {
-	return new Map(normalizeExtraFiles(value).map((fileName) => [fileName.toLowerCase(), fileName]));
+function extraFileNames(value: unknown) {
+	return new Set(normalizeExtraFiles(value).map((fileName) => fileName.toLowerCase()));
+}
+
+function selectExtraFileEntry(entries: Dirent[], fileName: string) {
+	const exact = entries.find((entry) => entry.isFile() && entry.name === fileName);
+	if (exact) return exact;
+	const lower = fileName.toLowerCase();
+	return entries
+		.filter((entry) => entry.isFile() && entry.name.toLowerCase() === lower)
+		.sort((left, right) => left.name.localeCompare(right.name))[0];
 }
 
 function hasEnv(name: string) {

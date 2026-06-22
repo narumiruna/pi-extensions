@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -213,6 +213,13 @@ test("snapshot collection includes session jsonl files only when enabled", async
 		(await collectFiles(root, { extraFiles: ["LOCAL-CASE.md"] })).map((file) => file.path),
 		["APPEND_SYSTEM.md", "LOCAL-CASE.md", "settings.json", "skills/demo.md"],
 	);
+	writeFileSync(path.join(root, "LOCAL-CASE.md"), "local exact case\n");
+	if (readdirSync(root).includes("LOCAL-CASE.md")) {
+		assert.deepEqual(
+			(await collectFiles(root, { extraFiles: ["LOCAL-CASE.md"] })).map((file) => file.path),
+			["APPEND_SYSTEM.md", "LOCAL-CASE.md", "settings.json", "skills/demo.md"],
+		);
+	}
 	assert.deepEqual(
 		(await collectFiles(root, { syncSessions: true })).map((file) => file.path),
 		["APPEND_SYSTEM.md", "sessions/--project--/session.jsonl", "settings.json", "skills/demo.md"],
@@ -362,6 +369,13 @@ test("unconfigured extra top-level files are filtered locally and preserved on u
 			.files.map((file) => file.path)
 			.sort(),
 		["CONFIGURED.md", "sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.deepEqual(
+		filterSnapshotForConfigPolicy(snapshot([{ path: "local.md", content: Buffer.from("local") }]), {
+			...config,
+			extraFiles: ["LOCAL.md"],
+		}).files.map((file) => file.path),
+		["local.md"],
 	);
 	assert.deepEqual(
 		mergeRemotePreservedFiles(snapshot([settings]), remote, config).files.map((file) => file.path),
