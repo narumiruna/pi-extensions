@@ -70,7 +70,8 @@ Example:
   "profile": "default",
   "prefix": "pi-sync",
   "autoSync": true,
-  "syncSessions": false
+  "syncSessions": false,
+  "extraFiles": ["APPEND_SYSTEM.md"]
 }
 ```
 
@@ -94,6 +95,18 @@ export PI_SYNC_SESSIONS="false" # opt in with true to sync Pi conversation JSONL
 Cloudflare R2 static access keys do not use a session token and usually reject requests signed with `X-Amz-Security-Token`. R2 temporary credentials that require a token are still supported. For R2 endpoints (`*.r2.cloudflarestorage.com`), pi-sync first sends the configured session token; if R2 rejects it with `InvalidArgument: X-Amz-Security-Token`, pi-sync retries that request once without the token and omits the token for the rest of the same command after a successful retry.
 
 pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `R2_ENDPOINT`, and `R2_BUCKET` as compatibility aliases when the matching `PI_SYNC_*` variable is not set.
+
+### Extra top-level files
+
+By default, pi-sync syncs `settings.json`, `keybindings.json`, `models.json`, and `AGENTS.md` from the top level of the agent directory. Set `extraFiles` in the config to a list of additional top-level file names to include in snapshots, for example `APPEND_SYSTEM.md` to sync user-level system-prompt instructions alongside the built-in allowlist:
+
+```json
+{
+  "extraFiles": ["APPEND_SYSTEM.md"]
+}
+```
+
+`extraFiles` entries are validated to be strings at load time. Names containing `..` or `/` are rejected by the standard top-level snapshot logic, and the existing secret/denylist scan still applies to included files.
 
 ### Session syncing
 

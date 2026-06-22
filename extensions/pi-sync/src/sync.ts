@@ -477,7 +477,12 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), applySessionDir);
+	const lastFileHashes = await applySnapshot(
+		remote,
+		protectedSessionPaths(ctx),
+		applySessionDir,
+		config.extraFiles,
+	);
 	await writeState(config.profile, {
 		version: VERSION,
 		profile: config.profile,
@@ -589,7 +594,12 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), applySessionDir);
+	const lastFileHashes = await applySnapshot(
+		remote,
+		protectedSessionPaths(ctx),
+		applySessionDir,
+		config.extraFiles,
+	);
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const upload = await snapshotForUpload(client, config, remote, latest);
 	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
@@ -639,7 +649,11 @@ function snapshotOptionsForContext(
 	ctx: ExtensionCommandContext | ExtensionContext,
 	config: SyncConfig,
 ): SnapshotOptions {
-	return { syncSessions: config.syncSessions, sessionDir: sessionDirFromContext(ctx), extraFiles: config.extraFiles };
+	return {
+		syncSessions: config.syncSessions,
+		sessionDir: sessionDirFromContext(ctx),
+		extraFiles: config.extraFiles,
+	};
 }
 
 function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) {
@@ -722,7 +736,7 @@ async function loadConfigInternal(): Promise<SyncConfig> {
 		profile: partial.profile ?? DEFAULT_PROFILE,
 		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
 		syncSessions: isExplicitlyEnabled(partial.syncSessions),
-	extraFiles: partial.extraFiles ?? [],
+		extraFiles: normalizeExtraFiles(partial.extraFiles),
 	};
 }
 
@@ -804,7 +818,8 @@ export async function collectFiles(
 ): Promise<SnapshotFile[]> {
 	const results: SnapshotFile[] = [];
 	for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-		if (entry.isFile() && (TOP_LEVEL_FILES.has(entry.name) || (options.extraFiles?.includes(entry.name) ?? false))) {
+		const isExtraFile = options.extraFiles?.includes(entry.name) ?? false;
+		if (entry.isFile() && (TOP_LEVEL_FILES.has(entry.name) || isExtraFile)) {
 			await addFile(results, root, entry.name);
 		} else if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
@@ -1043,11 +1058,13 @@ async function applySnapshot(
 	snapshot: Snapshot,
 	protectedRelativePaths = new Set<string>(),
 	sessionDir?: string,
+	extraFiles: string[] = [],
 ) {
 	const root = agentDir();
 	const current = await createSnapshot(snapshot.profile, {
 		syncSessions: snapshotIncludesSessions(snapshot),
 		sessionDir,
+		extraFiles,
 	});
 	const plan = protectSnapshotApplyPlan(
 		root,
@@ -1734,6 +1751,11 @@ export function isEnabled(value: boolean | string | undefined, defaultValue: boo
 export function isExplicitlyEnabled(value: boolean | string | undefined) {
 	if (typeof value === "boolean") return value;
 	return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
+function normalizeExtraFiles(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((item): item is string => typeof item === "string");
 }
 
 function isMissingConfigError(error: unknown) {

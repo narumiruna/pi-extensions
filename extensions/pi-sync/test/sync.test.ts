@@ -93,6 +93,41 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 	});
 });
 
+test("extraFiles config validates entries and loads from file", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), extraFiles: ["APPEND_SYSTEM.md"] }),
+		);
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, ["APPEND_SYSTEM.md"]);
+		});
+
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), extraFiles: "APPEND_SYSTEM.md" }),
+		);
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, []);
+		});
+
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), extraFiles: ["APPEND_SYSTEM.md", 42, null] }),
+		);
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, ["APPEND_SYSTEM.md"]);
+		});
+
+		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, []);
+		});
+	});
+});
+
 test("pisync config output reports session sync and privacy warning", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
@@ -177,6 +212,28 @@ test("snapshot collection includes session jsonl files only when enabled", async
 			(file) => file.path,
 		),
 		["sessions/nested.jsonl", "settings.json", "skills/demo.md"],
+	);
+});
+
+test("extraFiles config adds optional top-level files to snapshots", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-extra-"));
+	writeFileSync(path.join(root, "settings.json"), "{}\n");
+	writeFileSync(path.join(root, "APPEND_SYSTEM.md"), "rules\n");
+	writeFileSync(path.join(root, "random.md"), "skip\n");
+
+	assert.deepEqual(
+		(await collectFiles(root)).map((file) => file.path),
+		["settings.json"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { extraFiles: ["APPEND_SYSTEM.md"] })).map((file) => file.path),
+		["APPEND_SYSTEM.md", "settings.json"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { extraFiles: ["APPEND_SYSTEM.md", "models.json"] })).map(
+			(file) => file.path,
+		),
+		["APPEND_SYSTEM.md", "settings.json"],
 	);
 });
 
@@ -312,6 +369,7 @@ test("settings hash maps ignore session differences for first sync checks", () =
 		profile: "default",
 		prefix: "pi-sync",
 		syncSessions: false,
+		extraFiles: [],
 	};
 
 	assert.equal(settingsHashesMatchState(remote, state), true);
