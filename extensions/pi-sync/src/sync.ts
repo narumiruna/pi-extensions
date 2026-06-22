@@ -2011,8 +2011,14 @@ export function completeSyncArguments(argumentPrefix: string): CommandArgumentCo
 	const current = trailingSpace ? "" : (args.at(-1) ?? "");
 	if (current && !current.startsWith("-")) return null;
 
+	const currentRaw = trailingSpace ? "" : (prefix.match(/\S+$/)?.[0] ?? "");
+	const completionPrefix = trailingSpace
+		? prefix
+		: prefix.slice(0, prefix.length - currentRaw.length);
 	const matches = flagCompletions.filter((item) => item.value.startsWith(current));
-	return matches.length > 0 ? [...matches] : null;
+	return matches.length > 0
+		? matches.map((item) => ({ ...item, value: `${completionPrefix}${item.value}` }))
+		: null;
 }
 
 function usage() {

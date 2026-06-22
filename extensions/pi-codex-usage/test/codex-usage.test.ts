@@ -37,7 +37,11 @@ test("completeCodexStatusArguments suggests accepted options", () => {
 	);
 	assert.deepEqual(
 		completeCodexStatusArguments("--timeout 2 --n")?.map((item) => item.value),
-		["--no-statusline"],
+		["--timeout 2 --no-statusline"],
+	);
+	assert.deepEqual(
+		completeCodexStatusArguments("--refresh --c")?.map((item) => item.value),
+		["--refresh --clear-statusline"],
 	);
 	assert.equal(completeCodexStatusArguments("--timeout "), null);
 	assert.equal(completeCodexStatusArguments("wat"), null);

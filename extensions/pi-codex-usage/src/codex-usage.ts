@@ -384,8 +384,14 @@ export function completeCodexStatusArguments(
 	const current = trailingSpace ? "" : (previous ?? "");
 	if (current && !current.startsWith("-")) return null;
 
+	const currentRaw = trailingSpace ? "" : (prefix.match(/\S+$/)?.[0] ?? "");
+	const completionPrefix = trailingSpace
+		? prefix
+		: prefix.slice(0, prefix.length - currentRaw.length);
 	const matches = COMMAND_COMPLETIONS.filter((item) => item.value.startsWith(current));
-	return matches.length > 0 ? [...matches] : null;
+	return matches.length > 0
+		? matches.map((item) => ({ ...item, value: `${completionPrefix}${item.value}` }))
+		: null;
 }
 
 export function parseArgs(

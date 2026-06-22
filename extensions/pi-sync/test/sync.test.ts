@@ -71,23 +71,27 @@ test("completeSyncArguments suggests commands and useful flags", () => {
 	);
 	assert.deepEqual(
 		completeSyncArguments("push ")?.map((item) => item.value),
-		["--yes", "-y", "--force"],
+		["push --yes", "push -y", "push --force"],
 	);
 	assert.deepEqual(
 		completeSyncArguments("pull --f")?.map((item) => item.value),
-		["--force"],
+		["pull --force"],
 	);
 	assert.deepEqual(
 		completeSyncArguments("sync -")?.map((item) => item.value),
-		["--yes", "-y", "--force"],
+		["sync --yes", "sync -y", "sync --force"],
+	);
+	assert.deepEqual(
+		completeSyncArguments("push --yes --f")?.map((item) => item.value),
+		["push --yes --force"],
 	);
 	assert.deepEqual(
 		completeSyncArguments("rollback 2026-06-22 --y")?.map((item) => item.value),
-		["--yes"],
+		["rollback 2026-06-22 --yes"],
 	);
 	assert.deepEqual(
 		completeSyncArguments("unlock --s")?.map((item) => item.value),
-		["--stale"],
+		["unlock --stale"],
 	);
 	assert.equal(completeSyncArguments("status "), null);
 	assert.equal(completeSyncArguments("push snapshot"), null);
