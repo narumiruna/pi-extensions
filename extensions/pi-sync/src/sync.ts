@@ -479,7 +479,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	if (!remote) throw new Error("Remote is empty. Run /pisync push from a configured machine first.");
 
 	const localChanged = hasLocalChanges(local, state, config);
-	const remoteChanged = hasRemoteChanges(remote, state, config);
+	const remoteChanged = hasRemoteChanges(remote, state, config, protectedSessionPaths(ctx));
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot && !options.force) {
 		throw new Error("Both local and remote changed since last sync. Run /pisync diff, then choose /pisync pull --force or /pisync push --force.");
 	}
@@ -530,7 +530,9 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const remote = await readRemoteSnapshot(client, config);
 	const localChanged = hasLocalChanges(local, state, config);
-	const remoteChanged = remote ? hasRemoteChanges(remote, state, config) : false;
+	const remoteChanged = remote
+		? hasRemoteChanges(remote, state, config, protectedSessionPaths(ctx))
+		: false;
 	const firstSync = !state.lastAppliedSnapshot;
 
 	if (firstSync && remote && remote.files.length > 0 && local.files.length > 0) {
@@ -1364,7 +1366,7 @@ export async function addTopLevelCaseVariantDeletes(
 	const deletes = new Set(plan.deletes);
 	for (const entry of entries) {
 		const canonicalPath = topLevelPaths.get(entry.name.toLowerCase());
-		if (canonicalPath && entry.name !== canonicalPath) {
+		if (canonicalPath && entry.name !== canonicalPath && (entry.isFile() || entry.isSymbolicLink())) {
 			deletes.add(safeJoin(root, entry.name));
 		}
 	}
@@ -1485,9 +1487,14 @@ function remoteChangedSinceState(
 	return config.syncSessions && state.syncSessions !== true && latest.value?.syncSessions === true;
 }
 
-export function hasRemoteChanges(remote: Snapshot, state: SyncState, config: SyncConfig) {
+export function hasRemoteChanges(
+	remote: Snapshot,
+	state: SyncState,
+	config: SyncConfig,
+	ignoredPaths = new Set<string>(),
+) {
 	if (remote.id === state.lastAppliedSnapshot && !syncPolicyChanged(state, config)) return false;
-	return !snapshotHashesMatchState(filterSnapshotForConfigPolicy(remote, config), state, config);
+	return !snapshotHashesMatchState(filterSnapshotForConfigPolicy(remote, config), state, config, ignoredPaths);
 }
 
 function remoteIdentity(remote: RemoteObject<LatestPointer>) {
@@ -1520,12 +1527,23 @@ function snapshotHashesMatchState(
 	snapshot: Snapshot,
 	state: SyncState,
 	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
+	ignoredPaths = new Set<string>(),
 ) {
-	return sameHashes(fileHashMap(snapshot), stateHashMapForConfig(state, config));
+	return sameHashes(
+		withoutHashPaths(fileHashMap(snapshot), ignoredPaths),
+		withoutHashPaths(stateHashMapForConfig(state, config), ignoredPaths),
+	);
 }
 
 function snapshotsMatch(left: Snapshot, right: Snapshot) {
 	return left.syncSessions === right.syncSessions && sameHashes(fileHashMap(left), fileHashMap(right));
+}
+
+function withoutHashPaths(hashes: Record<string, string>, ignoredPaths: Set<string>) {
+	if (ignoredPaths.size === 0) return hashes;
+	return Object.fromEntries(
+		Object.entries(hashes).filter(([filePath]) => !ignoredPaths.has(toPosix(filePath))),
+	);
 }
 
 function syncPolicyChanged(state: SyncState, config: Pick<SyncConfig, "syncSessions" | "extraFiles">) {

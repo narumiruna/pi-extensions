@@ -357,6 +357,16 @@ test("snapshot apply deletes stale top-level case variants", async () => {
 
 	const withCaseDeletes = await addTopLevelCaseVariantDeletes(root, plan, remote);
 	assert.deepEqual(withCaseDeletes.deletes, [path.join(root, "append_system.md")]);
+
+	const directoryRoot = mkdtempSync(path.join(os.tmpdir(), "pi-sync-apply-case-dir-"));
+	mkdirSync(path.join(directoryRoot, "append_system.md"));
+	const directoryPlan = preflightSnapshotApply(directoryRoot, remote, current);
+	const withoutDirectoryDelete = await addTopLevelCaseVariantDeletes(
+		directoryRoot,
+		directoryPlan,
+		remote,
+	);
+	assert.deepEqual(withoutDirectoryDelete.deletes, []);
 });
 
 test("unconfigured extra top-level files are filtered locally and preserved on upload", () => {
@@ -635,24 +645,31 @@ test("protected session apply plans keep the live session file", () => {
 		hashes["settings.json"],
 		remote.files.find((file) => file.path === "settings.json")?.sha256,
 	);
+	const config = {
+		...requiredConfig(),
+		region: "auto",
+		profile: "default",
+		prefix: "pi-sync",
+		syncSessions: true,
+	};
+	const protectedState = {
+		version: 1,
+		profile: "default",
+		lastAppliedSnapshot: remote.id,
+		lastFileHashes: hashes,
+		syncSessions: true,
+		extraFiles: [],
+	};
+	assert.equal(hasRemoteChanges(remote, protectedState, config), false);
+
+	const advancedRemote = { ...remote, id: "advanced" };
+	assert.equal(hasRemoteChanges(advancedRemote, protectedState, config), true);
 	assert.equal(
 		hasRemoteChanges(
-			remote,
-			{
-				version: 1,
-				profile: "default",
-				lastAppliedSnapshot: remote.id,
-				lastFileHashes: hashes,
-				syncSessions: true,
-				extraFiles: [],
-			},
-			{
-				...requiredConfig(),
-				region: "auto",
-				profile: "default",
-				prefix: "pi-sync",
-				syncSessions: true,
-			},
+			advancedRemote,
+			protectedState,
+			config,
+			new Set(["sessions/--project--/live.jsonl"]),
 		),
 		false,
 	);
