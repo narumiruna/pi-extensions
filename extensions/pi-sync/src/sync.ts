@@ -920,11 +920,13 @@ async function addFile(
 
 export function isDeniedPath(relativePath: string) {
 	const normalized = toPosix(relativePath);
-	const base = path.posix.basename(normalized).toLowerCase();
+	const lower = normalized.toLowerCase();
+	const segments = lower.split("/");
+	const base = path.posix.basename(lower);
 	return (
-		normalized.includes("/node_modules/") ||
-		normalized.includes("/.git/") ||
-		normalized.includes("/.pisync/") ||
+		segments.includes("node_modules") ||
+		segments.includes(".git") ||
+		segments.includes(".pisync") ||
 		base === ".env" ||
 		base.startsWith(".env.") ||
 		base.endsWith(".env") ||
@@ -977,14 +979,12 @@ export function filterSnapshotForConfigPolicy(
 	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
 	options: { regenerateId?: boolean } = {},
 ) {
-	const extraFiles = extraFileNames(config.extraFiles);
+	const extraFilePaths = extraFilePathsByLower(config.extraFiles);
+	const extraFiles = new Set(extraFilePaths.keys());
 	const filtered = {
 		...snapshot,
 		syncSessions: config.syncSessions ? snapshot.syncSessions : false,
-		files: snapshot.files.filter((file) => {
-			const normalized = toPosix(file.path);
-			return isSafeSnapshotPath(file.path) && isConfiguredSnapshotPath(normalized, config, extraFiles);
-		}),
+		files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, extraFiles, extraFilePaths),
 	};
 	if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
 	return {
@@ -1004,6 +1004,61 @@ function isConfiguredSnapshotPath(
 	if (isSessionPath(normalized)) return config.syncSessions;
 	if (!normalized.includes("/")) return TOP_LEVEL_FILES.has(normalized) || extraFiles.has(normalized.toLowerCase());
 	return TOP_LEVEL_DIRS.has(normalized.slice(0, normalized.indexOf("/")));
+}
+
+function canonicalizeSnapshotFilesForConfig(
+	files: SnapshotFile[],
+	config: Pick<SyncConfig, "syncSessions">,
+	extraFiles: Set<string>,
+	extraFilePaths: Map<string, string>,
+) {
+	const configuredFiles: SnapshotFile[] = [];
+	const extraCandidates = new Map<
+		string,
+		{ exact: boolean; file: SnapshotFile; originalPath: string }
+	>();
+	for (const file of files) {
+		const normalized = toPosix(file.path);
+		if (!isSafeSnapshotPath(file.path) || !isConfiguredSnapshotPath(normalized, config, extraFiles)) {
+			continue;
+		}
+		const extraPath = configuredExtraPath(normalized, extraFilePaths);
+		if (!extraPath) {
+			configuredFiles.push(normalized === file.path ? file : { ...file, path: normalized });
+			continue;
+		}
+		const candidate = {
+			exact: normalized === extraPath,
+			file: { ...file, path: extraPath },
+			originalPath: normalized,
+		};
+		const current = extraCandidates.get(extraPath.toLowerCase());
+		if (!current || isPreferredExtraCandidate(candidate, current)) {
+			extraCandidates.set(extraPath.toLowerCase(), candidate);
+		}
+	}
+	return [
+		...configuredFiles,
+		...[...extraCandidates.values()].map((candidate) => candidate.file),
+	].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function configuredExtraPath(relativePath: string, extraFilePaths: Map<string, string>) {
+	const normalized = toPosix(relativePath);
+	if (normalized.includes("/") || TOP_LEVEL_FILES.has(normalized)) return undefined;
+	return extraFilePaths.get(normalized.toLowerCase());
+}
+
+function canonicalSnapshotPathForConfig(relativePath: string, extraFilePaths: Map<string, string>) {
+	return configuredExtraPath(relativePath, extraFilePaths) ?? toPosix(relativePath);
+}
+
+function isPreferredExtraCandidate(
+	left: { exact: boolean; originalPath: string },
+	right: { exact: boolean; originalPath: string },
+) {
+	if (left.exact !== right.exact) return left.exact;
+	return left.originalPath.localeCompare(right.originalPath) < 0;
 }
 
 export function snapshotWithoutSessions(snapshot: Snapshot) {
@@ -1394,11 +1449,12 @@ function fileHashMap(snapshot: Snapshot) {
 }
 
 function stateHashMapForConfig(state: SyncState, config: Pick<SyncConfig, "syncSessions" | "extraFiles">) {
-	const extraFiles = extraFileNames(config.extraFiles);
+	const extraFilePaths = extraFilePathsByLower(config.extraFiles);
+	const extraFiles = new Set(extraFilePaths.keys());
 	return Object.fromEntries(
-		Object.entries(state.lastFileHashes).filter(([filePath]) =>
-			isConfiguredSnapshotPath(filePath, config, extraFiles),
-		),
+		Object.entries(state.lastFileHashes)
+			.filter(([filePath]) => isConfiguredSnapshotPath(filePath, config, extraFiles))
+			.map(([filePath, hash]) => [canonicalSnapshotPathForConfig(filePath, extraFilePaths), hash]),
 	);
 }
 
@@ -1929,8 +1985,8 @@ function normalizeExtraFiles(value: unknown) {
 		});
 }
 
-function extraFileNames(value: unknown) {
-	return new Set(normalizeExtraFiles(value).map((fileName) => fileName.toLowerCase()));
+function extraFilePathsByLower(value: unknown) {
+	return new Map(normalizeExtraFiles(value).map((fileName) => [fileName.toLowerCase(), fileName]));
 }
 
 function selectExtraFileEntry(entries: Dirent[], fileName: string) {

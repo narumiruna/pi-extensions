@@ -94,6 +94,9 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 					"append_system.md",
 					".",
 					"..",
+					".git",
+					"node_modules",
+					".pisync",
 					".env",
 					"pi-sync.local.json",
 					"secret.txt",
@@ -178,6 +181,9 @@ test("path and key helpers normalize safe names and reject escapes", () => {
 	assert.equal(safeJoin(root, "skills/demo.md"), path.join(root, "skills", "demo.md"));
 	assert.throws(() => safeJoin(root, "../escape"), /Unsafe path/);
 	assert.equal(isDeniedPath("skills/.env.local"), true);
+	assert.equal(isDeniedPath(".git"), true);
+	assert.equal(isDeniedPath("node_modules"), true);
+	assert.equal(isDeniedPath(".pisync"), true);
 	assert.equal(isDeniedPath("skills/demo.md"), false);
 	assert.equal(encodeKey("a b/c+d"), "a%20b/c%2Bd");
 	assert.equal(posixJoin("/prefix/", "profile", "/latest.json"), "prefix/profile/latest.json");
@@ -370,12 +376,35 @@ test("unconfigured extra top-level files are filtered locally and preserved on u
 			.sort(),
 		["CONFIGURED.md", "sessions/--project--/session.jsonl", "settings.json"],
 	);
-	assert.deepEqual(
-		filterSnapshotForConfigPolicy(snapshot([{ path: "local.md", content: Buffer.from("local") }]), {
+	const lowerCaseRemoteExtra = filterSnapshotForConfigPolicy(
+		snapshot([{ path: "local.md", content: Buffer.from("local") }]),
+		{
 			...config,
 			extraFiles: ["LOCAL.md"],
-		}).files.map((file) => file.path),
-		["local.md"],
+		},
+	);
+	assert.deepEqual(
+		lowerCaseRemoteExtra.files.map((file) => file.path),
+		["LOCAL.md"],
+	);
+	assert.equal(
+		hasRemoteChanges(
+			lowerCaseRemoteExtra,
+			{
+				version: 1,
+				profile: "default",
+				lastAppliedSnapshot: lowerCaseRemoteExtra.id,
+				lastFileHashes: Object.fromEntries(
+					snapshot([{ path: "local.md", content: Buffer.from("local") }]).files.map((file) => [
+						file.path,
+						file.sha256,
+					]),
+				),
+				extraFiles: ["LOCAL.md"],
+			},
+			{ ...config, extraFiles: ["LOCAL.md"] },
+		),
+		false,
 	);
 	assert.deepEqual(
 		mergeRemotePreservedFiles(snapshot([settings]), remote, config).files.map((file) => file.path),
