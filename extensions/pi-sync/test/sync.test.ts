@@ -86,6 +86,8 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 					"nested\\x",
 					"skills",
 					"SESSIONS",
+					"settings.json",
+					"AGENTS.md",
 					".env",
 					"pi-sync.local.json",
 					"secret.txt",
@@ -245,6 +247,11 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 	);
 	assert.throws(
 		() => preflightSnapshotApply(root, snapshot([{ path: "..", content }]), current),
+		/Unsafe path/,
+	);
+	assert.throws(
+		() =>
+			preflightSnapshotApply(root, snapshot([{ path: "sessions\\bad.jsonl", content }]), current),
 		/Unsafe path/,
 	);
 	assert.throws(

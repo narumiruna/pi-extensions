@@ -1269,6 +1269,7 @@ function isSafeSnapshotPath(normalized: string) {
 		normalized !== "." &&
 		normalized !== ".." &&
 		!normalized.startsWith("../") &&
+		!normalized.includes("\\") &&
 		!path.posix.isAbsolute(normalized) &&
 		path.posix.normalize(normalized) === normalized &&
 		!isDeniedPath(normalized)
@@ -1891,6 +1892,7 @@ function normalizeExtraFiles(value: unknown) {
 				item !== "" &&
 				!item.includes("/") &&
 				!item.includes("\\") &&
+				!TOP_LEVEL_FILES.has(item) &&
 				!isDeniedPath(item) &&
 				!TOP_LEVEL_DIRS.has(lower) &&
 				lower !== "sessions"
