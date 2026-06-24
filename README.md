@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex usage status, Firecrawl web scraping, goal-driven task completion, retry handling, R2/S3 settings sync, terminal statuslines, and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex usage status, Firecrawl web scraping, GitHub PR status, goal-driven task completion, retry handling, R2/S3 settings sync, terminal statuslines, and keep-awake automation.
 
 ## 📦 Pi extension packages
 
@@ -15,6 +15,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | 🌐 Native Chrome DevTools Protocol tools for listing tabs, navigating pages, evaluating JavaScript, and taking screenshots. | `pi install npm:@narumitw/pi-chrome-devtools` |
 | [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) | 📊 `/codex-status` command and automatic statusline item for ChatGPT Codex subscription usage, using Pi auth first and Codex CLI only as fallback. | `pi install npm:@narumitw/pi-codex-usage` |
 | [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) | 🔥 Firecrawl-powered web scraping, crawling, URL discovery, and web search tools for research workflows. | `pi install npm:@narumitw/pi-firecrawl` |
+| [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
 | [`@narumitw/pi-goal`](./extensions/pi-goal) | 🎯 `/goal` mode that keeps the agent working until a verifiable task is complete. | `pi install npm:@narumitw/pi-goal` |
 | [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Configurable language-server diagnostics and source-fix tools routed by file extension. | `pi install npm:@narumitw/pi-lsp` |
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for provider responses that fail with `Unknown error (no error details in response)`. | `pi install npm:@narumitw/pi-retry` |
@@ -65,6 +66,10 @@ Use [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) to give Pi native Fire
 
 Use [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) to show ChatGPT Codex subscription usage and reset windows from Pi with `/codex-status`. When the current model uses `openai-codex`, it also shows compact quota status in the statusline. It uses Pi's OpenAI Codex auth first, so Codex CLI is optional.
 
+### 🔎 GitHub pull request status
+
+Use [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) to passively show the current branch PR number, checks state, review state, and comment/review count in Pi's statusline through the authenticated `gh` CLI.
+
 ### 🐍 Python coding with ty and Ruff
 
 Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to route Python files to configured servers such as `ty server` for type diagnostics and `ruff server` for lint diagnostics or source actions such as import organization.
@@ -107,6 +112,7 @@ pi -e ./extensions/pi-caffeinate
 pi -e ./extensions/pi-chrome-devtools
 pi -e ./extensions/pi-codex-usage
 pi -e ./extensions/pi-firecrawl
+pi -e ./extensions/pi-github-pr
 pi -e ./extensions/pi-goal
 pi -e ./extensions/pi-lsp
 pi -e ./extensions/pi-retry
@@ -123,6 +129,7 @@ npm run pack:caffeinate
 npm run pack:chrome-devtools
 npm run pack:codex-usage
 npm run pack:firecrawl
+npm run pack:github-pr
 npm run pack:goal
 npm run pack:lsp
 npm run pack:retry
@@ -152,6 +159,7 @@ extensions/
 ├── pi-chrome-devtools/
 ├── pi-codex-usage/
 ├── pi-firecrawl/
+├── pi-github-pr/
 ├── pi-goal/
 ├── pi-lsp/
 ├── pi-retry/

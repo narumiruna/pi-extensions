@@ -94,6 +94,10 @@ test("extension status icons use config, leading emoji, defaults, and fallback",
 
 	assert.equal(formatExtensionStatus("goal", "active", theme, config({})), "🎯 active");
 	assert.equal(
+		formatExtensionStatus("github-pr", "PR #123 checks passing", theme, config({})),
+		"🔎 PR #123 checks passing",
+	);
+	assert.equal(
 		formatExtensionStatus("caffeinate", "☕ display", theme, config({ caffeinate: "🍵" })),
 		"🍵 display",
 	);

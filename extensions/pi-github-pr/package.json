@@ -1,0 +1,42 @@
+{
+	"name": "@narumitw/pi-github-pr",
+	"version": "0.7.0",
+	"description": "Pi extension that shows GitHub pull request review, checks, and comment status.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"github",
+		"pull-request",
+		"gh"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/github-pr.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@earendil-works/pi-coding-agent": "0.79.8",
+		"@types/node": "25.6.0",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-github-pr"
+	}
+}

@@ -82,6 +82,9 @@ pack-codex-usage:
 pack-firecrawl:
     just pack firecrawl
 
+pack-github-pr:
+    just pack github-pr
+
 pack-goal:
     just pack goal
 
@@ -121,6 +124,9 @@ try-codex-usage:
 
 try-firecrawl:
     just try firecrawl
+
+try-github-pr:
+    just try github-pr
 
 try-goal:
     just try goal
@@ -162,6 +168,9 @@ install-codex-usage:
 install-firecrawl:
     just install firecrawl
 
+install-github-pr:
+    just install github-pr
+
 install-goal:
     just install goal
 
@@ -201,6 +210,9 @@ publish-codex-usage:
 
 publish-firecrawl:
     just publish firecrawl
+
+publish-github-pr:
+    just publish github-pr
 
 publish-goal:
     just publish goal

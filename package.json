@@ -20,6 +20,7 @@
 		"pack:chrome-devtools": "npm --workspace @narumitw/pi-chrome-devtools pack --dry-run",
 		"pack:codex-usage": "npm --workspace @narumitw/pi-codex-usage pack --dry-run",
 		"pack:firecrawl": "npm --workspace @narumitw/pi-firecrawl pack --dry-run",
+		"pack:github-pr": "npm --workspace @narumitw/pi-github-pr pack --dry-run",
 		"pack:goal": "npm --workspace @narumitw/pi-goal pack --dry-run",
 		"pack:lsp": "npm --workspace @narumitw/pi-lsp pack --dry-run",
 		"pack:plan-mode": "npm --workspace @narumitw/pi-plan-mode pack --dry-run",
