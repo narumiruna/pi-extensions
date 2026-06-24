@@ -49,6 +49,7 @@ const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
 	"codex-usage": "📊",
 	caffeinate: "💊",
 	firecrawl: "🔥",
+	"github-pr": "🔎",
 	goal: "🎯",
 	lsp: "🧰",
 	"plan-mode": "📝",

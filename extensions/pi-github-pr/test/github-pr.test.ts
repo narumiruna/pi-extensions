@@ -55,7 +55,7 @@ test("normalizeGhPrView summarizes approved reviews, failed CI, and comments", (
 	assert.deepEqual(status.checks, { passed: 1, failed: 1, pending: 1, total: 3 });
 	assert.deepEqual(status.comments, { issue: 2, reviews: 3, total: 5 });
 	assert.deepEqual(status.review.approvedBy, ["alice"]);
-	assert.equal(formatCompactStatus(status), "PR #123 ❌ CI 1 failed approved 💬5");
+	assert.equal(formatCompactStatus(status), "PR #123 CI failed 1 approved C5");
 });
 
 test("normalizeGhPrView summarizes pending, changes-requested, draft, and commented reviews", () => {
@@ -84,13 +84,10 @@ test("normalizeGhPrView summarizes pending, changes-requested, draft, and commen
 	});
 
 	assert.deepEqual(changesRequested.comments, { issue: 0, reviews: 3, total: 3 });
-	assert.equal(
-		formatCompactStatus(changesRequested),
-		"PR #123 🟡 CI 1 pending changes requested 💬3",
-	);
+	assert.equal(formatCompactStatus(changesRequested), "PR #123 CI pending 1 changes requested C3");
 	assert.deepEqual(draft.comments, { issue: 0, reviews: 0, total: 0 });
-	assert.equal(formatCompactStatus(draft), "PR #123 ⚪ CI draft 💬0");
-	assert.equal(formatCompactStatus(commented), "PR #123 ✅ CI commented 💬3");
+	assert.equal(formatCompactStatus(draft), "PR #123 CI none draft C0");
+	assert.equal(formatCompactStatus(commented), "PR #123 CI ok commented C3");
 });
 
 test("runGhPrView calls gh pr view for the current branch and reports actionable failures", async () => {
@@ -182,13 +179,13 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.ok(sessionShutdown);
 
 	await sessionStart({}, context.ctx);
-	assert.equal(context.statuses.get("github-pr"), "PR #123 ❌ CI 1 failed approved 💬5");
+	assert.equal(context.statuses.get("github-pr"), "PR #123 CI failed 1 approved C5");
 	assert.equal(context.widgets.size, 0);
 	assert.equal(context.notifications.length, 0);
 
 	await agentEnd({}, context.ctx);
 	assert.equal(calls.length, 2);
-	assert.equal(context.statuses.get("github-pr"), "PR #123 ❌ CI 1 failed approved 💬5");
+	assert.equal(context.statuses.get("github-pr"), "PR #123 CI failed 1 approved C5");
 
 	await sessionShutdown({}, context.ctx);
 	assert.equal(context.statuses.get("github-pr"), undefined);

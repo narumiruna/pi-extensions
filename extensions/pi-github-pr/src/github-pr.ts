@@ -217,20 +217,20 @@ export function formatCompactStatus(status: PullRequestStatus): string {
 		`PR #${status.number}`,
 		formatCheckCompact(status.checks),
 		formatReviewCompact(status),
-		`💬${status.comments.total}`,
+		`C${status.comments.total}`,
 	].join(" ");
 }
 
 function formatCheckCompact(checks: CheckSummary): string {
 	switch (checkOverall(checks)) {
 		case "pass":
-			return "✅ CI";
+			return "CI ok";
 		case "fail":
-			return `❌ CI ${checks.failed} failed`;
+			return `CI failed ${checks.failed}`;
 		case "pending":
-			return `🟡 CI ${checks.pending} pending`;
+			return `CI pending ${checks.pending}`;
 		case "none":
-			return "⚪ CI";
+			return "CI none";
 	}
 }
 

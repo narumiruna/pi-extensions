@@ -40,7 +40,7 @@ Change `@narumitw/pi-github-pr` into a passive statusline-only Pi extension. Suc
 
 - [x] Remove the `/pr` command registration, command parsing, command completions, help text, widget rendering, and command-focused tests from `extensions/pi-github-pr/src/github-pr.ts`; verified with `npm run check`.
 - [x] Remove the `github_pr_status` tool registration, `typebox` schema usage, and tool-focused tests; verified by package metadata without `typebox` runtime dependency and `npm run check`.
-- [x] Keep and simplify the pure `gh pr view` normalization/formatting path so it produces a compact status string shaped like `PR #116 ✅ CI approved 💬4`; verified with unit tests for passing, failing, pending, draft, approved, changes-requested, review-required/commented, and no-CI cases.
+- [x] Keep and simplify the pure `gh pr view` normalization/formatting path so it produces a compact text-only status string shaped like `PR #116 CI ok approved C4`; verified with unit tests for passing, failing, pending, draft, approved, changes-requested, review-required/commented, and no-CI cases.
 - [x] Implement passive lifecycle refresh only on `session_start`, `agent_end`, and `session_shutdown`; verified by mocked lifecycle tests showing status is set on successful PR lookup, refreshed after agent turns, and cleared on shutdown.
 - [x] Make ambient failures non-intrusive by clearing status or setting a short status only for actionable failures; verified by tests covering no PR, missing `gh`, unauthenticated `gh`, and non-GitHub repo without widget/notification output.
 - [x] Update `extensions/pi-github-pr/README.md` to describe statusline-only behavior, `gh` prerequisites, no commands/tools, and known limits; verified by `just pack-github-pr` tarball contents.

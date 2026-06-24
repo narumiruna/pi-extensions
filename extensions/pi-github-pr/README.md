@@ -17,14 +17,17 @@ It is intentionally ambient: no slash command, no custom tool, no widget, and no
 - Uses GitHub CLI auth and repository resolution; the extension stores no GitHub token.
 - No slash commands, LLM tools, widgets, polling loop, webhook server, or runtime service.
 
-Example statusline output:
+Example statusline text:
 
 ```text
-PR #123 ✅ CI approved 💬7
-PR #123 ❌ CI 2 failed changes requested 💬3
-PR #123 🟡 CI 5 pending commented 💬12
-PR #123 ⚪ CI draft 💬0
+PR #123 CI ok approved C7
+PR #123 CI failed 2 changes requested C3
+PR #123 CI pending 5 commented C12
+PR #123 CI none draft C0
 ```
+
+The trailing `C#` is the combined comments + reviews count. When rendered by `pi-statusline`,
+the `github-pr` icon comes from pi-statusline icon settings.
 
 ## 📦 Install
 
