@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockPi } from "../../../test/support.js";
 import statusline, {
 	contextColor,
@@ -16,6 +17,7 @@ import statusline, {
 	simplifyExtensionStatusText,
 	splitExtensionStatusIcon,
 	stripExtensionStatusPrefix,
+	wrapExtensionStatusline,
 } from "../src/statusline.js";
 
 test("statusline registers lifecycle handlers without reading thinking level at load time", () => {
@@ -98,12 +100,33 @@ test("extension status icons use config, leading emoji, defaults, and fallback",
 		"🔎 PR #123 checks passing",
 	);
 	assert.equal(
+		formatExtensionStatus(
+			"github-pr",
+			"PR #123: checks pending (12), changes requested, 45 comments",
+			theme,
+			config({}),
+		),
+		"🔎 PR #123: checks pending (12) changes requested 45 comments",
+	);
+	assert.equal(
 		formatExtensionStatus("caffeinate", "☕ display", theme, config({ caffeinate: "🍵" })),
 		"🍵 display",
 	);
 	assert.equal(formatExtensionStatus("caffeinate", "☕ display", theme, config({})), "☕ display");
 	assert.equal(formatExtensionStatus("goal", "active", theme, config({ goal: "" })), "active");
 	assert.equal(formatExtensionStatus("unknown", "running", theme, config({})), "🔌 running");
+});
+
+test("long extension status lines wrap to terminal width without ellipsis", () => {
+	const lines = wrapExtensionStatusline(
+		"🔎 PR #123: checks pending (12) changes requested 45 comments",
+		30,
+	);
+
+	assert.ok(lines.length > 1);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 30));
+	assert.equal(lines.join(" ").includes("…"), false);
+	assert.match(lines.join(" "), /45 comments/);
 });
 
 test("statusline compact formatting helpers", () => {

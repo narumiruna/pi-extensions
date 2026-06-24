@@ -9,7 +9,7 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { classicExtensionSeparator, renderClassicStatusline } from "../presets/classic.js";
 import { renderTokyoNightStatusline, tokyoNightExtensionSeparator } from "../presets/tokyo-night.js";
 import type {
@@ -113,14 +113,7 @@ export default function statusline(pi: ExtensionAPI) {
 				invalidate() {},
 				render(width: number): string[] {
 					const lines = [renderStatusline(width, ctx, footerData, theme, config, runtime)];
-					const extensionStatusLine = renderExtensionStatusline(
-						width,
-						footerData,
-						theme,
-						config,
-						runtime,
-					);
-					if (extensionStatusLine) lines.push(extensionStatusLine);
+					lines.push(...renderExtensionStatusline(width, footerData, theme, config, runtime));
 					return lines;
 				},
 			};
@@ -256,11 +249,9 @@ function renderExtensionStatusline(
 	theme: Theme,
 	config: StatuslineConfig,
 	runtime: RuntimeState,
-): string | undefined {
+): string[] {
 	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme, config, runtime);
-	if (!status) return undefined;
-
-	return truncateToWidth(status, width, "");
+	return wrapExtensionStatusline(status, width);
 }
 
 function buildSegment(
@@ -406,7 +397,7 @@ export function formatExtensionStatus(
 	config: Pick<StatuslineConfig, "extensionStatusIcons">,
 ): string {
 	const status = splitExtensionStatusIcon(stripExtensionStatusPrefix(key, value));
-	const text = truncateToWidth(simplifyExtensionStatusText(status.text), 22, "…");
+	const text = simplifyExtensionStatusText(status.text);
 	const color = extensionColor(key, value);
 	const textColor = color === "warning" ? "warning" : "muted";
 	const icon = extensionStatusIcon(key, status.icon, config.extensionStatusIcons);
@@ -421,6 +412,11 @@ function extensionStatusIcon(
 ) {
 	if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key];
 	return leadingIcon ?? DEFAULT_EXTENSION_STATUS_ICONS[key] ?? "🔌";
+}
+
+export function wrapExtensionStatusline(status: string, width: number): string[] {
+	if (!status || width <= 0) return [];
+	return wrapTextWithAnsi(status, width);
 }
 
 function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): string[] {

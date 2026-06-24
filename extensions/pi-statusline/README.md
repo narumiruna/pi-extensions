@@ -14,7 +14,7 @@ Use it to monitor model selection, thinking level, git branch, working directory
 - Owns extension status icons through optional JSON config, including per-extension icon suppression with `""`.
 - Warns when the same extension package is installed from multiple sources.
 - Uses emoji-labeled segments for readability in both classic and Tokyo Night presets.
-- Adapts to terminal width and truncates safely.
+- Adapts to terminal width and wraps long extension status lines safely.
 - Requires no configuration, with optional preset selection through `PI_STATUSLINE_PRESET`.
 
 ## 📦 Install
@@ -91,7 +91,7 @@ The default `tokyo-night` statusline uses a Starship-inspired `░▒▓` / `
 - 💸 estimated cost.
 - 🕒 clock.
 
-Statuses from other extensions appear on their own compact line below the main statusline and use each preset's separator.
+Statuses from other extensions appear below the main statusline, use each preset's separator, and wrap onto additional footer lines when they exceed the terminal width.
 
 `pi-statusline` is extension-agnostic: it consumes Pi's generic extension status API and does not import or depend on status-producing extensions.
 
