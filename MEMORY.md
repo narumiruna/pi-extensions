@@ -19,6 +19,7 @@
 - New filesystem-writing Pi tools need a pre-review edge-case pass: workspace containment, absolute/`..` paths, symlink loops/escapes, duplicate paths, cancellation, process errors, protocol errors, and edit ordering.
 - New extension package source may match the root `.gitignore` `src/` rule; stage intended `extensions/<pkg>/src/*.ts` with `git add -f`.
 - When PR comments expose one class of bug, stop patching comment-by-comment and do a holistic pass over adjacent Modules before pushing again.
+- Symptom: PR status shows no issue comments but inline review comments exist. Cause: `gh pr view --json comments,reviews` omits pull review comment bodies. Fix: use `gh api repos/OWNER/REPO/pulls/NUMBER/comments` plus issue comments/reviews when actual PR review comments are needed.
 - Symptom: Chrome DevTools `/json/new` may reject unsafe `GET`. Cause: modern Chrome expects `PUT` for target creation. Fix: use `PUT /json/new?${encodeURIComponent(url)}`.
 - Symptom: Telegram bot polling can replay stale queued messages or conflict across Pi processes. Cause: `getUpdates` is a single bot-token queue controlled by offsets. Fix: discard pending updates on startup with an offset and run one active polling Pi per bot token.
 - For pi-sync on Cloudflare R2, keep session-token support for temporary credentials but retry once without the token when R2 static keys reject `X-Amz-Security-Token`.

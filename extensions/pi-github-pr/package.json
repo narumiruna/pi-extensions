@@ -28,9 +28,6 @@
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit"
 	},
-	"dependencies": {
-		"typebox": "^1.1.37"
-	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.14",
 		"@earendil-works/pi-coding-agent": "0.79.8",

@@ -2,21 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import githubPr, {
-	commandCompletions,
-	formatCompactStatus,
-	formatDetailedStatus,
-	normalizeGhPrView,
-	parseCommand,
-	runGhPrView,
-} from "../src/github-pr.js";
+import githubPr, { formatCompactStatus, normalizeGhPrView, runGhPrView } from "../src/github-pr.js";
 
-type ExecCall = { command: string; args: string[]; options?: { cwd?: string } };
-type ExecFunction = (
-	command: string,
-	args: string[],
-	options?: { cwd?: string },
-) => Promise<ExecResult>;
+type ExecOptions = { cwd?: string; signal?: AbortSignal; timeout?: number };
+type ExecCall = { command: string; args: string[]; options?: ExecOptions };
+type ExecFunction = (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult>;
 
 const okResult = (stdout: unknown): ExecResult => ({
 	stdout: JSON.stringify(stdout),
@@ -27,9 +17,6 @@ const okResult = (stdout: unknown): ExecResult => ({
 
 const samplePr = {
 	number: 123,
-	title: "Add PR status extension",
-	url: "https://github.com/narumiruna/pi-extensions/pull/123",
-	state: "OPEN",
 	isDraft: false,
 	reviewDecision: "APPROVED",
 	latestReviews: [
@@ -47,35 +34,19 @@ const samplePr = {
 		{ state: "FAILURE" },
 		{ status: "IN_PROGRESS" },
 	],
-	updatedAt: "2026-06-24T12:00:00Z",
 };
 
-test("github-pr registers command, tool, and session events", () => {
+test("github-pr registers only passive lifecycle events", () => {
 	const mock = createMockPi();
 	githubPr(mock.pi);
 
-	assert.ok(mock.commands.has("pr"));
-	assert.deepEqual(
-		mock.tools.map((tool) => tool.name),
-		["github_pr_status"],
-	);
+	assert.equal(mock.commands.size, 0);
+	assert.deepEqual(mock.tools, []);
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"agent_end",
 		"session_shutdown",
 		"session_start",
 	]);
-});
-
-test("github-pr command parsing and completions cover subcommands", () => {
-	assert.deepEqual(parseCommand(""), { action: "show" });
-	assert.deepEqual(parseCommand("123"), { action: "show", target: "123" });
-	assert.deepEqual(parseCommand("status 123"), { action: "show", target: "123" });
-	assert.deepEqual(parseCommand("refresh"), { action: "refresh", target: undefined });
-	assert.equal(parseCommand("clear now"), "Usage: /pr clear");
-	assert.deepEqual(commandCompletions("ref"), [
-		{ value: "refresh", label: "refresh", description: "Refresh the last selected PR" },
-	]);
-	assert.equal(commandCompletions("refresh "), null);
 });
 
 test("normalizeGhPrView summarizes approved reviews, failed CI, and comments", () => {
@@ -84,11 +55,10 @@ test("normalizeGhPrView summarizes approved reviews, failed CI, and comments", (
 	assert.deepEqual(status.checks, { passed: 1, failed: 1, pending: 1, total: 3 });
 	assert.deepEqual(status.comments, { issue: 2, reviews: 3, total: 5 });
 	assert.deepEqual(status.review.approvedBy, ["alice"]);
-	assert.match(formatCompactStatus(status), /PR #123 ❌ ci 1 failed approved 💬5/);
-	assert.match(formatDetailedStatus(status), /Review: APPROVED by alice/);
+	assert.equal(formatCompactStatus(status), "PR #123 ❌ CI 1 failed approved 💬5");
 });
 
-test("normalizeGhPrView summarizes pending, changes-requested, draft, and missing comments", () => {
+test("normalizeGhPrView summarizes pending, changes-requested, draft, and commented reviews", () => {
 	const changesRequested = normalizeGhPrView({
 		...samplePr,
 		reviewDecision: "CHANGES_REQUESTED",
@@ -105,15 +75,25 @@ test("normalizeGhPrView summarizes pending, changes-requested, draft, and missin
 		comments: undefined,
 		statusCheckRollup: [],
 	});
+	const commented = normalizeGhPrView({
+		...samplePr,
+		reviewDecision: "REVIEW_REQUIRED",
+		latestReviews: [{ state: "COMMENTED", author: { login: "copilot" } }],
+		comments: [],
+		statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+	});
 
 	assert.deepEqual(changesRequested.comments, { issue: 0, reviews: 3, total: 3 });
-	assert.match(formatCompactStatus(changesRequested), /🟡 ci 1 pending changes requested/);
-	assert.match(formatDetailedStatus(changesRequested), /CHANGES_REQUESTED by carol/);
+	assert.equal(
+		formatCompactStatus(changesRequested),
+		"PR #123 🟡 CI 1 pending changes requested 💬3",
+	);
 	assert.deepEqual(draft.comments, { issue: 0, reviews: 0, total: 0 });
-	assert.match(formatCompactStatus(draft), /⚪ ci none draft 💬0/);
+	assert.equal(formatCompactStatus(draft), "PR #123 ⚪ CI draft 💬0");
+	assert.equal(formatCompactStatus(commented), "PR #123 ✅ CI commented 💬3");
 });
 
-test("runGhPrView calls gh pr view and reports actionable failures", async () => {
+test("runGhPrView calls gh pr view for the current branch and reports actionable failures", async () => {
 	const calls: ExecCall[] = [];
 	const pi = {
 		exec: async (command, args, options) => {
@@ -122,7 +102,7 @@ test("runGhPrView calls gh pr view and reports actionable failures", async () =>
 		},
 	} satisfies { exec: ExecFunction };
 
-	const status = await runGhPrView(pi, "/repo", "123");
+	const status = await runGhPrView(pi, "/repo");
 
 	assert.equal(status.number, 123);
 	assert.deepEqual(calls, [
@@ -131,9 +111,8 @@ test("runGhPrView calls gh pr view and reports actionable failures", async () =>
 			args: [
 				"pr",
 				"view",
-				"123",
 				"--json",
-				"number,title,url,state,isDraft,reviewDecision,latestReviews,reviews,comments,statusCheckRollup,updatedAt",
+				"number,isDraft,reviewDecision,latestReviews,reviews,comments,statusCheckRollup",
 			],
 			options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
 		},
@@ -189,54 +168,70 @@ test("runGhPrView calls gh pr view and reports actionable failures", async () =>
 	);
 });
 
-test("/pr updates and clears status and widget", async () => {
-	const mock = createMockPi();
-	installExec(mock, async () => okResult(samplePr));
-	githubPr(mock.pi);
-
-	const command = mock.commands.get("pr");
-	assert.ok(command);
-	const context = createMockContext({ cwd: "/repo" });
-
-	await command.handler("123", context.ctx);
-	assert.match(context.statuses.get("github-pr") ?? "", /PR #123/);
-	assert.deepEqual(
-		context.widgets.get("github-pr"),
-		formatDetailedStatus(normalizeGhPrView(samplePr)).split("\n"),
-	);
-	assert.equal(context.notifications[0]?.level, "info");
-
-	await command.handler("clear", context.ctx);
-	assert.equal(context.statuses.get("github-pr"), undefined);
-	assert.equal(context.widgets.get("github-pr"), undefined);
-});
-
-test("github_pr_status tool returns structured PR status", async () => {
-	const mock = createMockPi();
-	installExec(mock, async () => okResult(samplePr));
-	githubPr(mock.pi);
-
-	const tool = mock.tools[0];
-	const execute = tool.execute as ExecTool;
-	const context = createMockContext({ cwd: "/repo" });
-	const result = await execute("tool-call", { target: "123" }, undefined, undefined, context.ctx);
-
-	assert.match(result.content[0]?.text ?? "", /PR #123 Add PR status extension/);
-	assert.equal(result.details.number, 123);
-	assert.match(context.statuses.get("github-pr") ?? "", /approved/);
-});
-
-test("agent_end refresh does not run before a PR is selected", async () => {
+test("lifecycle refresh sets and clears only statusline output", async () => {
 	const mock = createMockPi();
 	const calls = installExec(mock, async () => okResult(samplePr));
 	githubPr(mock.pi);
+	const context = createMockContext({ cwd: "/repo" });
 
-	const handler = mock.events.get("agent_end")?.[0];
-	assert.ok(handler);
-	await handler({}, createMockContext({ cwd: "/repo" }).ctx);
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const agentEnd = mock.events.get("agent_end")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(agentEnd);
+	assert.ok(sessionShutdown);
 
-	assert.equal(calls.length, 0);
+	await sessionStart({}, context.ctx);
+	assert.equal(context.statuses.get("github-pr"), "PR #123 ❌ CI 1 failed approved 💬5");
+	assert.equal(context.widgets.size, 0);
+	assert.equal(context.notifications.length, 0);
+
+	await agentEnd({}, context.ctx);
+	assert.equal(calls.length, 2);
+	assert.equal(context.statuses.get("github-pr"), "PR #123 ❌ CI 1 failed approved 💬5");
+
+	await sessionShutdown({}, context.ctx);
+	assert.equal(context.statuses.get("github-pr"), undefined);
+	assert.equal(context.widgets.size, 0);
+	assert.equal(context.notifications.length, 0);
 });
+
+test("ambient failures stay non-intrusive", async () => {
+	const missingGh = await lifecycleStatusFor(async () => {
+		throw new Error("spawn gh ENOENT");
+	});
+	const unauthenticated = await lifecycleStatusFor(async () => ({
+		stdout: "",
+		stderr: "not logged in",
+		code: 1,
+		killed: false,
+	}));
+	const noPr = await lifecycleStatusFor(async () => ({
+		stdout: "",
+		stderr: "no pull requests found",
+		code: 1,
+		killed: false,
+	}));
+
+	assert.equal(missingGh.statuses.get("github-pr"), "PR gh missing");
+	assert.equal(unauthenticated.statuses.get("github-pr"), "PR gh auth");
+	assert.equal(noPr.statuses.get("github-pr"), undefined);
+	for (const context of [missingGh, unauthenticated, noPr]) {
+		assert.equal(context.widgets.size, 0);
+		assert.equal(context.notifications.length, 0);
+	}
+});
+
+async function lifecycleStatusFor(exec: ExecFunction) {
+	const mock = createMockPi();
+	installExec(mock, exec);
+	githubPr(mock.pi);
+	const context = createMockContext({ cwd: "/repo" });
+	const handler = mock.events.get("session_start")?.[0];
+	assert.ok(handler);
+	await handler({}, context.ctx);
+	return context;
+}
 
 function installExec(mock: ReturnType<typeof createMockPi>, exec: ExecFunction): ExecCall[] {
 	const calls: ExecCall[] = [];
@@ -250,11 +245,3 @@ function installExec(mock: ReturnType<typeof createMockPi>, exec: ExecFunction):
 	};
 	return calls;
 }
-
-type ExecTool = (
-	toolCallId: string,
-	params: { target?: string },
-	signal: AbortSignal | undefined,
-	onUpdate: undefined,
-	ctx: never,
-) => Promise<{ content: Array<{ text?: string }>; details: { number: number } }>;

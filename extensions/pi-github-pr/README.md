@@ -1,19 +1,27 @@
-# 🔎 pi-github-pr — GitHub Pull Request Status for Pi Agents
+# 🔎 pi-github-pr — GitHub Pull Request Statusline for Pi Agents
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-github-pr)](https://www.npmjs.com/package/@narumitw/pi-github-pr) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-github-pr` is a native [Pi coding agent](https://pi.dev) extension that shows GitHub pull request review, CI, and comment status from the GitHub CLI.
+`@narumitw/pi-github-pr` is a passive [Pi coding agent](https://pi.dev) extension that shows the current branch GitHub pull request status in Pi's statusline.
 
-Use it to quickly answer: is the current PR approved, are checks passing, and did anyone comment?
+It is intentionally ambient: no slash command, no custom tool, no widget, and no comment injection.
 
 ## ✨ Features
 
-- Shows a compact PR status through Pi extension status: PR number, CI, review decision, and comment count.
-- Provides `/pr` for manual lookup by current branch, PR number, URL, or branch.
-- Provides `github_pr_status` so the agent can check PR status itself.
-- Refreshes the selected PR after agent turns.
+- Automatically shows compact PR status in Pi's statusline.
+- Refreshes the current branch PR after agent turns.
+- Shows PR number, CI state, review state, and comment/review count.
 - Uses GitHub CLI auth and repository resolution; the extension stores no GitHub token.
-- No background polling, webhook server, or new runtime service.
+- No slash commands, LLM tools, widgets, polling loop, webhook server, or runtime service.
+
+Example statusline output:
+
+```text
+PR #123 ✅ CI approved 💬7
+PR #123 ❌ CI 2 failed changes requested 💬3
+PR #123 🟡 CI 5 pending commented 💬12
+PR #123 ⚪ CI draft 💬0
+```
 
 ## 📦 Install
 
@@ -44,58 +52,22 @@ gh auth login
 
 The extension shells out to `gh pr view`; GitHub Enterprise hosts and credential storage are delegated to `gh`.
 
-## 💬 Command
+## 💬 Behavior
 
-```text
-/pr
-```
+The extension runs passively:
 
-Shows the pull request for the current branch.
-
-Direct forms are also available:
-
-```text
-/pr status
-/pr refresh
-/pr clear
-/pr 123
-/pr https://github.com/OWNER/REPO/pull/123
-```
-
-- `status` shows the current branch PR.
-- `refresh` refreshes the last selected PR.
-- `clear` clears the status/widget.
-- A number, URL, or branch asks `gh pr view` for that target.
-
-## 🛠️ Pi tool
-
-- `github_pr_status` — show review, CI, and comment status for a GitHub pull request. Optional `target` accepts a PR number, URL, or branch; when omitted, `gh` resolves the current branch PR.
-
-Example tool input:
-
-```json
-{
-  "target": "123"
-}
-```
-
-## 📋 Status output
-
-Compact status examples:
-
-```text
-PR #123 ✅ ci ✓ approved 💬7
-PR #123 ❌ ci 2 failed review required 💬3
-PR #123 🟡 ci 5 pending changes requested 💬12
-```
-
-Detailed status includes title, state, review summary, CI counts, comments/reviews, updated time, and URL.
+- On session start, it checks the current branch PR and sets a compact statusline entry.
+- After each agent turn, it refreshes that same current branch PR status.
+- On session shutdown, it clears the statusline entry.
+- If the directory has no GitHub PR, the statusline entry stays empty.
+- If `gh` is missing or unauthenticated, the statusline shows a short hint such as `PR gh missing` or `PR gh auth`.
 
 ## Known limits
 
 - Requires `gh`; there is no direct GitHub API or `GITHUB_TOKEN` fallback.
+- Only the current branch PR is shown; there is no command or tool for arbitrary PR lookup.
 - Comment count uses `gh pr view` comments and reviews, not precise unresolved review-thread counts.
-- No continuous polling in the MVP; refresh happens manually or after agent turns once a PR is selected.
+- No continuous polling; refresh happens on session start and after agent turns.
 
 ## 📁 Package layout
 
@@ -111,7 +83,7 @@ extensions/pi-github-pr/
 
 ## 🏷️ Keywords
 
-`pi-package`, `pi-extension`, `github`, `pull-request`, `gh`
+`pi-package`, `pi-extension`, `github`, `pull-request`, `statusline`, `gh`
 
 ## 📄 License
 
