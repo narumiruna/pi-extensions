@@ -86,6 +86,31 @@ test("formatLinkedStatus falls back to plain text when the PR url is missing", (
 	assert.equal(formatLinkedStatus(status), formatCompactStatus(status));
 });
 
+test("formatLinkedStatus rejects invalid and non-http PR urls", () => {
+	const status = normalizeGhPrView(samplePr);
+
+	for (const url of ["not a url", "javascript:alert(1)"]) {
+		const candidate = { ...status, url };
+		assert.equal(formatLinkedStatus(candidate), formatCompactStatus(candidate));
+	}
+});
+
+test("formatLinkedStatus strips terminal controls from OSC 8 url and text", () => {
+	const status = normalizeGhPrView({ ...samplePr, url: `${samplePr.url}\x1b` });
+	const unsafeNumber = { toString: () => "12\x1b\n3" } as unknown as number;
+	const rendered = formatLinkedStatus({ ...status, number: unsafeNumber });
+
+	const controls = [...rendered]
+		.filter((char) => {
+			const code = char.charCodeAt(0);
+			return code <= 0x1f || code === 0x7f;
+		})
+		.join("");
+	assert.equal(controls, "\x1b\x07\x1b\x07");
+	assert.ok(rendered.includes("#123"));
+	assert.ok(!rendered.includes("#12\x1b\n3"));
+});
+
 test("normalizeGhPrView summarizes pending, changes-requested, draft, and commented reviews", () => {
 	const changesRequested = normalizeGhPrView({
 		...samplePr,
