@@ -64,6 +64,7 @@ interface StatusContext {
 	};
 	isIdle?: () => boolean;
 	hasPendingMessages?: () => boolean;
+	abort?: () => void;
 	sessionManager?: unknown;
 }
 
@@ -72,6 +73,15 @@ const GOAL_STATE_ENTRY_TYPE = "goal-state";
 const MAX_OBJECTIVE_LENGTH = 4_000;
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const CONTINUATION_MARKER_PREFIX = "pi-goal-continuation:";
+const CONTRADICTORY_COMPLETION_PATTERNS = [
+	/(?<!could\s)\bnot\s+(?:yet\s+)?(?:complete|completed|done|finished)\b/i,
+	/\bstill\s+(?:incomplete|failing|failing\s+tests?|fails?)\b/i,
+	/\btests?\s+(?:still\s+)?fail(?:ing)?\b/i,
+] as const;
+const NON_RETRYABLE_GOAL_ERROR_RE =
+	/usage[_\s-]*limit|chatgpt usage limit|multi-auth rotation failed|credentials tried|unauthori[sz]ed|invalid api key/i;
+const RETRYABLE_GOAL_ERROR_RE =
+	/websocket closed|sse response headers timed out|headers timed out|context[_\s-]*length[_\s-]*exceeded|input exceeds the context window|provider returned error/i;
 const GOAL_ARGUMENT_COMPLETIONS: readonly GoalArgumentCompletion[] = [
 	{ value: "pause", label: "pause", description: "Pause the active goal" },
 	{ value: "resume", label: "resume", description: "Resume a paused or budget-limited goal" },
@@ -94,34 +104,69 @@ let activeGoal: ActiveGoal | undefined;
 let completionStatusTimer: NodeJS.Timeout | undefined;
 let extensionApi: ExtensionAPI | undefined;
 let continuationPending: ContinuationPending | undefined;
+let staleGoalToolCallsBlocked = false;
 const cancelledContinuationMarkers = new Set<string>();
 
 const goalCompleteTool = defineTool({
 	name: "goal_complete",
 	label: "Goal Complete",
 	description:
-		"Mark the active /goal as complete. Only call this after the requested goal is fully done and verified.",
+		"Mark the active /goal as complete after all required work is done and verified. Do not use for partial progress, blockers, failing, or unverified work.",
 	promptSnippet: "Mark the active /goal as complete after fully finishing and verifying it",
 	promptGuidelines: [
 		"When a /goal is active, keep working until the goal is complete; do not stop with only a plan or partial progress.",
 		"Before calling goal_complete, audit the active goal requirement by requirement against the current files, command output, tests, or external state.",
-		"Call goal_complete only after the requested goal is fully implemented, verified, and no known required work remains.",
+		"Call goal_complete only after the requested goal is fully implemented, verified, and no known required work remains; otherwise keep working.",
 	],
 	parameters: Type.Object({
 		summary: Type.String({
-			description: "Concise summary of what was completed and how it was verified.",
+			description:
+				"State what was completed and what evidence verified it. Do not use this tool to report partial progress, blockers, failures, or remaining work.",
 		}),
 	}),
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		const completedGoal = activeGoal;
+		const goal = completedGoal?.text ?? "unknown goal";
+		const summary = params.summary.trim();
+
+		if (!completedGoal) {
+			const rejection = "Goal completion rejected: no active goal.";
+			ctx.ui.notify(rejection, "warning");
+
+			return {
+				content: [{ type: "text", text: rejection }],
+				details: { goal, summary } satisfies GoalCompleteDetails,
+			};
+		}
+
+		const rejectionReason = !summary
+			? "summary is empty"
+			: isContradictoryCompletionSummary(summary)
+				? "summary says the goal is not complete"
+				: undefined;
+		if (rejectionReason) {
+			updateGoalUsage(completedGoal, ctx);
+			persistGoal(completedGoal);
+			updateStatus(ctx, completedGoal);
+			const rejection = `Goal completion rejected: ${rejectionReason}.`;
+			ctx.ui.notify(rejection, "warning");
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: rejection,
+					},
+				],
+				details: { goal, summary } satisfies GoalCompleteDetails,
+			};
+		}
+
 		if (completedGoal) {
 			activeGoal = transitionGoal(completedGoal, "complete");
 			updateGoalUsage(activeGoal, ctx);
 			persistGoal(activeGoal);
 		}
-
-		const goal = completedGoal?.text ?? "unknown goal";
-		const summary = params.summary.trim();
 
 		ctx.ui.setStatus(STATUS_KEY, completedGoal ? formatStatus(activeGoal) : undefined);
 		clearActiveGoal(ctx);
@@ -176,6 +221,7 @@ export default function goal(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		clearCompletionStatusTimer();
 		clearContinuationTracking();
+		clearStaleGoalToolCallBlock();
 		activeGoal = loadGoalFromSession(ctx);
 		if (activeGoal) updateStatus(ctx, activeGoal);
 		else ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -184,13 +230,25 @@ export default function goal(pi: ExtensionAPI) {
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (activeGoal) persistGoal(activeGoal);
 		clearContinuationTracking();
+		clearStaleGoalToolCallBlock();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearCompletionStatusTimer();
 	});
 
 	pi.on("input", (event) => {
-		if (event.source !== "extension") return;
-		if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
+		if (event.source === "extension") {
+			if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
+			return;
+		}
+		clearStaleGoalToolCallBlock();
+	});
+
+	pi.on("tool_call", () => {
+		if (!staleGoalToolCallsBlocked) return;
+		return {
+			block: true,
+			reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+		};
 	});
 
 	pi.on("before_agent_start", (event) => {
@@ -213,6 +271,12 @@ export default function goal(pi: ExtensionAPI) {
 		updateGoalUsage(activeGoal, ctx);
 
 		if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error") {
+			if (isRetryableGoalInterruption(finalAssistant)) {
+				forgetContinuationPending();
+				persistGoal(activeGoal);
+				updateStatus(ctx, activeGoal);
+				return;
+			}
 			pauseGoalAfterAgentEnd(ctx, activeGoal, finalAssistant);
 			return;
 		}
@@ -266,6 +330,7 @@ async function startGoal(
 	}
 
 	cancelContinuationPending();
+	clearStaleGoalToolCallBlock();
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
@@ -283,6 +348,8 @@ function pauseGoal(ctx: StatusContext) {
 		return;
 	}
 	cancelContinuationPending();
+	blockStaleGoalToolCalls();
+	abortCurrentTurn(ctx);
 	activeGoal = transitionGoal(activeGoal, "paused");
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
@@ -298,6 +365,7 @@ async function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 		ctx.ui.notify(`Goal is ${activeGoal.status}; only paused or budget-limited goals can be resumed.`, "warning");
 		return;
 	}
+	clearStaleGoalToolCallBlock();
 	activeGoal = transitionGoal(activeGoal, "active");
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
@@ -319,6 +387,8 @@ function clearGoal(ctx: StatusContext) {
 	}
 
 	const stoppedGoal = activeGoal.text;
+	blockStaleGoalToolCalls();
+	abortCurrentTurn(ctx);
 	clearActiveGoal(ctx);
 	ctx.ui.notify(`Goal cleared: ${stoppedGoal}`, "warning");
 }
@@ -351,7 +421,10 @@ async function editGoal(
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(`Goal updated: ${objective}`, "info");
-	if (activeGoal.status === "active") await sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
+	if (activeGoal.status === "active") {
+		clearStaleGoalToolCallBlock();
+		await sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
+	}
 }
 
 function showGoal(ctx: StatusContext) {
@@ -411,6 +484,8 @@ function pauseGoalAfterAgentEnd(
 	assistant: AssistantMessageLike,
 ) {
 	cancelContinuationPending();
+	blockStaleGoalToolCalls();
+	abortCurrentTurn(ctx);
 	activeGoal = transitionGoal(goal, "paused");
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
@@ -642,6 +717,37 @@ function goalPersistenceRules(goalLabel: string) {
 
 function hasPendingMessages(ctx: StatusContext) {
 	return ctx.hasPendingMessages?.() ?? false;
+}
+
+function abortCurrentTurn(ctx: StatusContext) {
+	try {
+		ctx.abort?.();
+	} catch {
+		// Best effort: stale goal guards still prevent follow-on tool calls.
+	}
+}
+
+function blockStaleGoalToolCalls() {
+	staleGoalToolCallsBlocked = true;
+}
+
+function clearStaleGoalToolCallBlock() {
+	staleGoalToolCallsBlocked = false;
+}
+
+function forgetContinuationPending() {
+	continuationPending = undefined;
+}
+
+export function isContradictoryCompletionSummary(summary: string) {
+	return CONTRADICTORY_COMPLETION_PATTERNS.some((pattern) => pattern.test(summary));
+}
+
+export function isRetryableGoalInterruption(assistant: AssistantMessageLike) {
+	if (assistant.stopReason !== "error") return false;
+	if (!assistant.errorMessage) return false;
+	if (NON_RETRYABLE_GOAL_ERROR_RE.test(assistant.errorMessage)) return false;
+	return RETRYABLE_GOAL_ERROR_RE.test(assistant.errorMessage);
 }
 
 function clearContinuationTracking() {

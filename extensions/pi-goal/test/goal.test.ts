@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import goal, {
 	buildGoalSystemPrompt,
 	completeGoalArguments,
@@ -8,6 +8,8 @@ import goal, {
 	formatDuration,
 	formatStatus,
 	formatTokenCount,
+	isContradictoryCompletionSummary,
+	isRetryableGoalInterruption,
 	parseCommand,
 	parseTokenBudget,
 	validateObjective,
@@ -26,6 +28,7 @@ test("goal registers command, completion tool, and lifecycle hooks", () => {
 		"input",
 		"session_shutdown",
 		"session_start",
+		"tool_call",
 	]);
 });
 
@@ -133,6 +136,205 @@ test("buildGoalSystemPrompt escapes objective XML and includes budget rules", ()
 	assert.match(prompt, /Only call the goal_complete tool after/);
 });
 
+test("goal_complete rejects contradictory summaries and accepts verified completion", async () => {
+	assert.equal(isContradictoryCompletionSummary("Not complete: tests still fail."), true);
+	assert.equal(isContradictoryCompletionSummary("Tests still fail."), true);
+	assert.equal(isContradictoryCompletionSummary("Implemented and verified with npm test."), false);
+	assert.equal(isContradictoryCompletionSummary("Remaining tasks: none."), false);
+	assert.equal(
+		isContradictoryCompletionSummary("Could not complete earlier, but now fixed and verified."),
+		false,
+	);
+	assert.equal(isContradictoryCompletionSummary("Was failing before, now passes."), false);
+	assert.equal(
+		isContradictoryCompletionSummary("Coverage was below threshold, now passes."),
+		false,
+	);
+
+	const { mock, ctx } = await startGoalForTest();
+	const tool = mock.tools[0] as GoalTool;
+
+	const rejected = await tool.execute(
+		"call-1",
+		{ summary: "Not complete: tests still fail." },
+		new AbortController().signal,
+		() => undefined,
+		ctx,
+	);
+
+	assert.equal(rejected.terminate, undefined);
+	assert.match(rejected.content?.[0]?.text ?? "", /rejected/i);
+	assert.equal(lastGoalStatus(mock), "active");
+
+	const emptyRejected = await tool.execute(
+		"call-empty",
+		{ summary: "   " },
+		new AbortController().signal,
+		() => undefined,
+		ctx,
+	);
+
+	assert.equal(emptyRejected.terminate, undefined);
+	assert.match(emptyRejected.content?.[0]?.text ?? "", /summary is empty/i);
+	assert.equal(lastGoalStatus(mock), "active");
+
+	const accepted = await tool.execute(
+		"call-2",
+		{ summary: "Implemented and verified with npm test." },
+		new AbortController().signal,
+		() => undefined,
+		ctx,
+	);
+
+	assert.equal(accepted.terminate, true);
+	assert.equal(lastGoalStatus(mock), null);
+
+	const noActiveRejected = await tool.execute(
+		"call-no-active",
+		{ summary: "Implemented and verified with npm test." },
+		new AbortController().signal,
+		() => undefined,
+		ctx,
+	);
+
+	assert.equal(noActiveRejected.terminate, undefined);
+	assert.match(noActiveRejected.content?.[0]?.text ?? "", /no active goal/i);
+	assert.equal(lastGoalStatus(mock), null);
+	mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+});
+
+test("pause and clear abort the current turn and persist stopped goal state", async () => {
+	let pauseAborts = 0;
+	const paused = await startGoalForTest({ abort: () => pauseAborts++ });
+	await paused.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		paused.ctx,
+	);
+	const staleContinuation = paused.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.match(staleContinuation, /pi-goal-continuation/);
+
+	await paused.mock.commands.get("goal")?.handler("pause", paused.ctx);
+
+	assert.equal(pauseAborts, 1);
+	assert.equal(lastGoalStatus(paused.mock), "paused");
+	assert.equal(paused.statuses.get("goal"), "paused");
+	assert.deepEqual(
+		paused.mock.events.get("input")?.[0]?.(
+			{ source: "extension", text: staleContinuation },
+			paused.ctx,
+		),
+		{ action: "handled" },
+	);
+
+	let clearAborts = 0;
+	const cleared = await startGoalForTest({ abort: () => clearAborts++ });
+	await cleared.mock.commands.get("goal")?.handler("clear", cleared.ctx);
+
+	assert.equal(clearAborts, 1);
+	assert.equal(lastGoalStatus(cleared.mock), null);
+	assert.equal(cleared.statuses.get("goal"), undefined);
+});
+
+test("agent_end keeps retryable interruptions active but pauses non-retryable errors", async () => {
+	assert.equal(
+		isRetryableGoalInterruption({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "WebSocket closed 1000",
+		}),
+		true,
+	);
+	assert.equal(
+		isRetryableGoalInterruption({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "You have hit your ChatGPT usage limit.",
+		}),
+		false,
+	);
+
+	const retryable = await startGoalForTest();
+	await retryable.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [{ role: "assistant", stopReason: "error", errorMessage: "WebSocket closed 1000" }],
+		},
+		retryable.ctx,
+	);
+
+	assert.equal(lastGoalStatus(retryable.mock), "active");
+	assert.equal(retryable.mock.sentUserMessages.length, 1);
+
+	let aborts = 0;
+	const nonRetryable = await startGoalForTest({ abort: () => aborts++ });
+	await nonRetryable.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "You have hit your ChatGPT usage limit.",
+				},
+			],
+		},
+		nonRetryable.ctx,
+	);
+
+	assert.equal(aborts, 1);
+	assert.equal(lastGoalStatus(nonRetryable.mock), "paused");
+	assert.deepEqual(
+		nonRetryable.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "t1", input: {} },
+			nonRetryable.ctx,
+		),
+		{
+			block: true,
+			reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+		},
+	);
+});
+
+test("stale goal tool calls are blocked until a fresh non-goal prompt arrives", async () => {
+	const paused = await startGoalForTest();
+	await paused.mock.commands.get("goal")?.handler("pause", paused.ctx);
+
+	const pauseToolCall = paused.mock.events.get("tool_call")?.[0];
+	assert.deepEqual(pauseToolCall?.({ toolName: "bash", toolCallId: "t1", input: {} }, paused.ctx), {
+		block: true,
+		reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+	});
+
+	paused.mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: "unrelated extension message" },
+		paused.ctx,
+	);
+	assert.deepEqual(pauseToolCall?.({ toolName: "bash", toolCallId: "t2", input: {} }, paused.ctx), {
+		block: true,
+		reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+	});
+
+	paused.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "what happened?" },
+		paused.ctx,
+	);
+	assert.equal(
+		pauseToolCall?.({ toolName: "bash", toolCallId: "t3", input: {} }, paused.ctx),
+		undefined,
+	);
+
+	const cleared = await startGoalForTest();
+	await cleared.mock.commands.get("goal")?.handler("clear", cleared.ctx);
+	assert.deepEqual(
+		cleared.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "edit", toolCallId: "t3", input: {} },
+			cleared.ctx,
+		),
+		{
+			block: true,
+			reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+		},
+	);
+});
+
 test("findFinalAssistantMessage returns the last assistant with a known stop reason", () => {
 	assert.deepEqual(
 		findFinalAssistantMessage([
@@ -143,3 +345,25 @@ test("findFinalAssistantMessage returns the last assistant with a known stop rea
 	);
 	assert.equal(validateObjective(""), "Usage: /goal <goal_to_complete>");
 });
+
+type GoalTool = {
+	execute: (...args: unknown[]) => Promise<{
+		content?: Array<{ type: string; text: string }>;
+		terminate?: boolean;
+	}>;
+};
+
+async function startGoalForTest(overrides: Record<string, unknown> = {}) {
+	const mock = createMockPi();
+	goal(mock.pi);
+	const context = createMockContext(overrides);
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	await mock.commands.get("goal")?.handler("finish", context.ctx);
+	return { mock, ...context };
+}
+
+function lastGoalStatus(mock: ReturnType<typeof createMockPi>) {
+	const entry = mock.entries.filter((entry) => entry.customType === "goal-state").at(-1);
+	return ((entry?.data as { goal?: { status?: string } | null } | undefined)?.goal?.status ??
+		null) as string | null;
+}
