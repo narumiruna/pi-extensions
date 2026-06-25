@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-wait-what",
-	"version": "0.9.0",
+	"version": "0.9.1",
 	"description": "Pi extension that lets you pause and ask the agent to explain surprising actions.",
 	"type": "module",
 	"license": "MIT",
