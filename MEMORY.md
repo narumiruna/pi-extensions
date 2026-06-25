@@ -18,6 +18,7 @@
 - `node-domexception` deprecation comes via `@google/genai -> google-auth-library -> gaxios -> node-fetch -> fetch-blob`; use the root npm override to `npm:@profoundlogic/node-domexception`.
 - New filesystem-writing Pi tools need a pre-review edge-case pass: workspace containment, absolute/`..` paths, symlink loops/escapes, duplicate paths, cancellation, process errors, protocol errors, and edit ordering.
 - New extension package source may match the root `.gitignore` `src/` rule; stage intended `extensions/<pkg>/src/*.ts` with `git add -f`.
+- Symptom: `npm test --workspace @narumitw/<extension>` fails with “Missing script: test”. Cause: extension packages do not define workspace test scripts; root `npm test` compiles and runs all extension tests. Fix: run `npm test` from the repository root.
 - When PR comments expose one class of bug, stop patching comment-by-comment and do a holistic pass over adjacent Modules before pushing again.
 - Symptom: PR status shows no issue comments but inline review comments exist. Cause: `gh pr view --json comments,reviews` omits pull review comment bodies. Fix: use `gh api repos/OWNER/REPO/pulls/NUMBER/comments` plus issue comments/reviews when actual PR review comments are needed.
 - Symptom: Chrome DevTools `/json/new` may reject unsafe `GET`. Cause: modern Chrome expects `PUT` for target creation. Fix: use `PUT /json/new?${encodeURIComponent(url)}`.

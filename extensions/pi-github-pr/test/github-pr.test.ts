@@ -155,9 +155,16 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 		options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
 	});
 	assert.deepEqual(calls[1]?.options, { cwd: "/repo", signal: undefined, timeout: 10_000 });
-	assert.deepEqual(calls[1]?.args.slice(0, 4), ["api", "graphql", "-f", calls[1]?.args[3]]);
-	assert.match(calls[1]?.args[3] ?? "", /^query=\s*query PullRequestCounts/);
-	assert.deepEqual(calls[1]?.args.slice(4), [
+	assert.deepEqual(calls[1]?.args.slice(0, 6), [
+		"api",
+		"graphql",
+		"--hostname",
+		"github.com",
+		"-f",
+		calls[1]?.args[5],
+	]);
+	assert.match(calls[1]?.args[5] ?? "", /^query=\s*query PullRequestCounts/);
+	assert.deepEqual(calls[1]?.args.slice(6), [
 		"-F",
 		"owner=narumiruna",
 		"-F",
@@ -250,6 +257,37 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 		),
 		/gh pr view failed/,
 	);
+});
+
+test("runGhPrView sends gh api graphql to the enterprise PR hostname", async () => {
+	const calls: ExecCall[] = [];
+	const pi = {
+		exec: async (command, args, options) => {
+			calls.push({ command, args, options });
+			return okResult(
+				args[0] === "pr"
+					? { ...samplePr, url: "https://github.example.com/org/repo/pull/123" }
+					: sampleCounts,
+			);
+		},
+	} satisfies { exec: ExecFunction };
+
+	await runGhPrView(pi, "/repo");
+
+	assert.deepEqual(calls[1]?.args.slice(0, 4), [
+		"api",
+		"graphql",
+		"--hostname",
+		"github.example.com",
+	]);
+	assert.deepEqual(calls[1]?.args.slice(6), [
+		"-F",
+		"owner=org",
+		"-F",
+		"name=repo",
+		"-F",
+		"number=123",
+	]);
 });
 
 test("lifecycle refresh sets and clears only statusline output", async () => {

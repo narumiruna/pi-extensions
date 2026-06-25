@@ -55,9 +55,11 @@ Install and authenticate GitHub CLI yourself:
 ```bash
 brew install gh
 gh auth login
+# For GitHub Enterprise Server:
+gh auth login --hostname github.example.com
 ```
 
-The extension shells out to `gh pr view`; GitHub Enterprise hosts and credential storage are delegated to `gh`.
+The extension shells out to `gh`; GitHub Enterprise hosts and credential storage are delegated to `gh`. It uses the PR URL host for follow-up API calls, so no manual `GH_HOST` is required.
 
 ## 💬 Behavior
 
@@ -71,7 +73,7 @@ The extension runs passively:
 
 ## Known limits
 
-- Requires `gh`; there is no direct GitHub API or `GITHUB_TOKEN` fallback.
+- Requires `gh`; there is no direct GitHub API, `GITHUB_TOKEN` fallback, or manual `GH_HOST` requirement.
 - Only the current branch PR is shown; there is no command or tool for arbitrary PR lookup.
 - Comment count uses `gh pr view` comments and reviews, not precise unresolved review-thread counts.
 - It does not read PR comment bodies, review bodies, inline diff comments, or unresolved review-thread text.
