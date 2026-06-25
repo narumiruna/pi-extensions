@@ -276,7 +276,9 @@ export function formatLinkedStatus(status: PullRequestStatus): string {
 }
 
 function osc8Link(url: string, text: string): string {
-	return `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
+	const safeUrl = url.replace(/[\x00-\x1f\x7f]/g, "");
+	if (!/^https?:\/\//.test(safeUrl)) return text;
+	return `\x1b]8;;${safeUrl}\x07${text}\x1b]8;;\x07`;
 }
 
 function clearStatus(ctx: ExtensionContext) {
