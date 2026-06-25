@@ -275,10 +275,22 @@ export function formatLinkedStatus(status: PullRequestStatus): string {
 	return text.replace(label, osc8Link(status.url, label));
 }
 
+function stripTerminalControlChars(value: string): string {
+	return value.replace(/[\x00-\x1f\x7f]/g, "");
+}
+
 function osc8Link(url: string, text: string): string {
-	const safeUrl = url.replace(/[\x00-\x1f\x7f]/g, "");
-	if (!/^https?:\/\//.test(safeUrl)) return text;
-	return `\x1b]8;;${safeUrl}\x07${text}\x1b]8;;\x07`;
+	const safeText = stripTerminalControlChars(text);
+
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return safeText;
+
+		const safeUrl = stripTerminalControlChars(parsed.toString());
+		return `\x1b]8;;${safeUrl}\x07${safeText}\x1b]8;;\x07`;
+	} catch {
+		return safeText;
+	}
 }
 
 function clearStatus(ctx: ExtensionContext) {
