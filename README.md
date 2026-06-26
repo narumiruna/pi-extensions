@@ -2,11 +2,11 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex usage status, Firecrawl web scraping, GitHub PR status, goal-driven task completion, retry handling, R2/S3 settings sync, terminal statuslines, and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex usage status, Firecrawl web scraping, GitHub PR status, goal-driven task completion, read-only plan mode, pause-and-explain interruptions, retry handling, R2/S3 settings sync, terminal statuslines, delegated subagents, and keep-awake automation.
 
 ## 📦 Pi extension packages
 
-Install only the Pi extensions you need. Each package is published under the `@narumitw` npm scope and can be installed directly with `pi install npm:<package>`.
+Install only the Pi extensions you need. Each package is published under the `@narumitw` npm scope and can be installed directly with the package-specific `pi install npm:@narumitw/...` command.
 
 | Pi extension | What it adds | Install |
 | --- | --- | --- |
@@ -18,10 +18,12 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
 | [`@narumitw/pi-goal`](./extensions/pi-goal) | 🎯 `/goal` mode that keeps the agent working until a verifiable task is complete. | `pi install npm:@narumitw/pi-goal` |
 | [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Configurable language-server diagnostics and source-fix tools routed by file extension. | `pi install npm:@narumitw/pi-lsp` |
+| [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) | 🧭 Codex-like read-only `/plan` collaboration mode with safe exploration and implementation-ready plans. | `pi install npm:@narumitw/pi-plan-mode` |
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for provider responses that fail with `Unknown error (no error details in response)`. | `pi install npm:@narumitw/pi-retry` |
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
+| [`@narumitw/pi-wait-what`](./extensions/pi-wait-what) | 🤔 `/wait-what` pause command for asking the agent to explain surprising actions before continuing. | `pi install npm:@narumitw/pi-wait-what` |
 
 ## 🚀 Quick start
 
@@ -78,6 +80,14 @@ Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to route Python files to configure
 
 Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation, debugging, refactoring, and verification tasks where the agent should continue past planning and call `goal_complete` only after the goal is done.
 
+### 🧭 Read-only planning mode
+
+Use [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) when you want a Codex-like `/plan` mode where the agent explores with read-only tools, asks structured questions, and produces an implementation-ready plan before editing.
+
+### 🤔 Pause and explain surprising actions
+
+Use [`@narumitw/pi-wait-what`](./extensions/pi-wait-what) when you want to pause the agent and ask it to explain what it was doing, why, assumptions, and next step before it continues.
+
 ### 📨 Remote Telegram session chat
 
 [`@narumitw/pi-telegram-bot`](./extensions/deprecated/pi-telegram-bot) is deprecated and kept under `extensions/deprecated/` for reference.
@@ -115,10 +125,12 @@ pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-github-pr
 pi -e ./extensions/pi-goal
 pi -e ./extensions/pi-lsp
+pi -e ./extensions/pi-plan-mode
 pi -e ./extensions/pi-retry
 pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
+pi -e ./extensions/pi-wait-what
 ```
 
 Preview npm package contents before publishing:
@@ -132,16 +144,18 @@ npm run pack:firecrawl
 npm run pack:github-pr
 npm run pack:goal
 npm run pack:lsp
+npm run pack:plan-mode
 npm run pack:retry
 npm run pack:statusline
 npm run pack:sync
 npm run pack:subagents
+npm run pack:wait-what
 ```
 
-Publishing note for new scoped packages: `just npm-public <package>` only changes visibility for an already-published package. If npm returns 404 for a brand-new package such as `@narumitw/pi-subagents`, create it first with:
+Publishing note for new scoped packages: `just npm-public @narumitw/pi-new-extension` only changes visibility for an already-published package. If npm returns 404 for a brand-new package, create it first with the new package's workspace name, for example:
 
 ```bash
-npm publish --workspace @narumitw/pi-subagents --access public
+npm publish --workspace @narumitw/pi-new-extension --access public
 ```
 
 ## 🗂️ Repository structure
@@ -162,10 +176,12 @@ extensions/
 ├── pi-github-pr/
 ├── pi-goal/
 ├── pi-lsp/
+├── pi-plan-mode/
 ├── pi-retry/
 ├── pi-statusline/
 ├── pi-sync/
-└── pi-subagents/
+├── pi-subagents/
+└── pi-wait-what/
 ```
 
 Each active extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
