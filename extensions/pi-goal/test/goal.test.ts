@@ -26,6 +26,8 @@ test("goal registers command, completion tool, and lifecycle hooks", () => {
 		"agent_end",
 		"before_agent_start",
 		"input",
+		"session_before_compact",
+		"session_compact",
 		"session_shutdown",
 		"session_start",
 		"tool_call",
@@ -293,6 +295,31 @@ test("agent_end keeps retryable interruptions active but pauses non-retryable er
 		isRetryableGoalInterruption({
 			role: "assistant",
 			stopReason: "error",
+			errorMessage: "prompt is too long: 213462 tokens > 200000 maximum",
+		}),
+		true,
+	);
+	assert.equal(
+		isRetryableGoalInterruption({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage:
+				"This endpoint's maximum context length is 128000 tokens. However, you requested about 140000 tokens.",
+		}),
+		true,
+	);
+	assert.equal(
+		isRetryableGoalInterruption({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "context_length_exceeded",
+		}),
+		true,
+	);
+	assert.equal(
+		isRetryableGoalInterruption({
+			role: "assistant",
+			stopReason: "error",
 			errorMessage: "You have hit your ChatGPT usage limit.",
 		}),
 		false,
@@ -308,6 +335,13 @@ test("agent_end keeps retryable interruptions active but pauses non-retryable er
 
 	assert.equal(lastGoalStatus(retryable.mock), "active");
 	assert.equal(retryable.mock.sentUserMessages.length, 1);
+	assert.equal(
+		retryable.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "retry-tool", input: {} },
+			retryable.ctx,
+		),
+		undefined,
+	);
 
 	let aborts = 0;
 	const nonRetryable = await startGoalForTest({ abort: () => aborts++ });
@@ -336,6 +370,108 @@ test("agent_end keeps retryable interruptions active but pauses non-retryable er
 			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
 		},
 	);
+});
+
+test("overflow compaction retry keeps the goal active and does not block retry tools", async () => {
+	let aborts = 0;
+	const overflow = await startGoalForTest({ abort: () => aborts++ });
+
+	await overflow.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "prompt is too long: 213462 tokens > 200000 maximum",
+				},
+			],
+		},
+		overflow.ctx,
+	);
+
+	assert.equal(aborts, 0);
+	assert.equal(lastGoalStatus(overflow.mock), "active");
+	assert.equal(overflow.mock.sentUserMessages.length, 1);
+	assert.equal(
+		overflow.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "retry-tool", input: {} },
+			overflow.ctx,
+		),
+		undefined,
+	);
+
+	overflow.mock.events.get("session_before_compact")?.[0]?.({}, overflow.ctx);
+	await overflow.mock.events.get("session_compact")?.[0]?.({}, overflow.ctx);
+
+	assert.equal(lastGoalStatus(overflow.mock), "active");
+	assert.equal(overflow.mock.sentUserMessages.length, 1);
+	assert.equal(
+		overflow.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "post-compact-retry-tool", input: {} },
+			overflow.ctx,
+		),
+		undefined,
+	);
+});
+
+test("compaction with willRetry true does not enqueue a goal continuation", async () => {
+	const retrying = await startGoalForTest();
+
+	retrying.mock.events.get("session_before_compact")?.[0]?.(
+		{ reason: "overflow", willRetry: true },
+		retrying.ctx,
+	);
+	await retrying.mock.events.get("session_compact")?.[0]?.(
+		{ reason: "overflow", willRetry: true },
+		retrying.ctx,
+	);
+
+	assert.equal(lastGoalStatus(retrying.mock), "active");
+	assert.equal(retrying.mock.sentUserMessages.length, 1);
+});
+
+test("manual compaction cancels stale continuation and sends one fresh continuation", async () => {
+	const compacted = await startGoalForTest();
+	await compacted.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		compacted.ctx,
+	);
+	const staleContinuation = compacted.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.match(staleContinuation, /pi-goal-continuation/);
+
+	compacted.mock.events.get("session_before_compact")?.[0]?.(
+		{ reason: "threshold", willRetry: false },
+		compacted.ctx,
+	);
+	assert.deepEqual(
+		compacted.mock.events.get("input")?.[0]?.(
+			{ source: "extension", text: staleContinuation },
+			compacted.ctx,
+		),
+		{ action: "handled" },
+	);
+
+	await compacted.mock.events.get("session_compact")?.[0]?.(
+		{ reason: "threshold", willRetry: false },
+		compacted.ctx,
+	);
+	const freshContinuation = compacted.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.equal(compacted.mock.sentUserMessages.length, 3);
+	assert.match(freshContinuation, /pi-goal-continuation/);
+	assert.notEqual(freshContinuation, staleContinuation);
+	assert.equal(
+		compacted.mock.events.get("input")?.[0]?.(
+			{ source: "extension", text: freshContinuation },
+			compacted.ctx,
+		),
+		undefined,
+	);
+
+	await compacted.mock.events.get("session_compact")?.[0]?.(
+		{ reason: "threshold", willRetry: false },
+		compacted.ctx,
+	);
+	assert.equal(compacted.mock.sentUserMessages.length, 3);
 });
 
 test("stale goal tool calls are blocked after pause until a fresh non-goal prompt arrives", async () => {
@@ -374,6 +510,35 @@ test("findFinalAssistantMessage returns the last assistant with a known stop rea
 			{ role: "assistant", stopReason: "error", errorMessage: "bad" },
 		]),
 		{ role: "assistant", stopReason: "error", errorMessage: "bad" },
+	);
+	assert.deepEqual(
+		findFinalAssistantMessage([
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "context_length_exceeded",
+				provider: "openai",
+				model: "gpt-test",
+				usage: { input: 10, output: 2 },
+				timestamp: 123,
+			},
+		]),
+		{
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "context_length_exceeded",
+			provider: "openai",
+			model: "gpt-test",
+			usage: {
+				input: 10,
+				output: 2,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 12,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: 123,
+		},
 	);
 	assert.equal(validateObjective(""), "Usage: /goal <goal_to_complete>");
 });

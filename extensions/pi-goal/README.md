@@ -18,9 +18,10 @@ Goal mode uses Codex-like persistence instructions and keeps sending guarded con
 - Registers a `goal_complete` tool for explicit completion, and rejects plainly contradictory completion summaries such as “not complete” or “tests still fail”.
 - Automatically prompts the agent to continue if an active turn ends early, directly triggering the next turn when Pi is idle and no pending messages are queued.
 - Pauses and aborts queued goal work when the user pauses a goal or Pi reports a non-retryable aborted/errored assistant turn.
-- Keeps retryable provider interruptions active without enqueueing duplicate goal continuations while Pi retries.
+- Keeps retryable provider interruptions and Pi compaction retries active without enqueueing duplicate goal continuations while Pi retries.
+- Preserves active goals across manual, threshold, and overflow compaction.
 - Guards auto-follow-ups so duplicate, replaced, paused, cleared, completed, or budget-limited goals are not continued.
-- Blocks stale tool calls after pause/interruption.
+- Blocks stale tool calls after pause or non-retryable interruption.
 - Encourages requirement-by-requirement verification before the goal is marked complete.
 
 ## 📦 Install
@@ -85,7 +86,7 @@ While a goal is active, `pi-goal` injects persistence rules and exposes `goal_co
 
 ## 🛑 Interruption and queued-input behavior
 
-On user pause, abort, or non-retryable error, `pi-goal` pauses the goal, aborts stale work, and blocks stale tool calls until the next user prompt (non-extension input). On `/goal clear`, it only clears goal state and pending continuation markers; it does not abort the current turn. Retryable provider interruptions stay active while Pi retries; no extra continuation is queued.
+On user pause, abort, or non-retryable error, `pi-goal` pauses the goal, aborts stale work, and blocks stale tool calls until the next user prompt (non-extension input). On `/goal clear`, it only clears goal state and pending continuation markers; it does not abort the current turn. Retryable provider interruptions and overflow compaction retries stay active while Pi retries; no extra continuation is queued.
 
 ## 🧠 Use cases
 

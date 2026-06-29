@@ -26,6 +26,8 @@
 - For pi-sync on Cloudflare R2, keep session-token support for temporary credentials but retry once without the token when R2 static keys reject `X-Amz-Security-Token`.
 - Symptom: Pi extension async/timer/command continuations can crash after reload or session replacement. Cause: captured `ExtensionContext` becomes stale. Fix: pass plain data into delayed callbacks, catch stale-context errors, and scope cleanup to the failing ctx/request.
 - Codex `websocket_connection_limit_reached` is a retryable fresh-websocket case, but Pi 0.79.8's auto-retry regex does not classify “connection limit”; pi-retry must add the `provider returned error` hint.
+- Symptom: pi-goal compaction/retry hooks can mis-handle continuation state if a fresh continuation reuses a cancelled marker. Cause: markers based only on goal id and iteration collide after compaction cancellation. Fix: include a unique nonce in continuation markers.
+- Symptom: Pi compaction event docs may mention `reason`/`willRetry` while project target typings lack them. Cause: local/global `@earendil-works/pi-coding-agent` version skew. Fix: run `npm install`, verify target version, and treat compaction event fields as optional.
 
 ## TASTE
 
