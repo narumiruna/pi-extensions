@@ -42,24 +42,27 @@ npm-public package="@narumitw/pi-goal":
     npm access set status=public {{quote(package)}}
     npm view {{quote(package)}} version
 
+_validate-extension-name name:
+    @[[ {{quote(name)}} =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { printf 'invalid extension name: %s\n' {{quote(name)}} >&2; exit 2; }
+
 # Preview the package that npm would publish
 # Usage: just pack subagents
-pack name:
+pack name: (_validate-extension-name name)
     name={{quote(name)}}; package="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').name" "$name")"; npm --workspace "$package" pack --dry-run
 
 # Try a package from this working tree as a temporary pi package
 # Usage: just try subagents
-try name:
+try name: (_validate-extension-name name)
     name={{quote(name)}}; pi -e "./extensions/pi-$name"
 
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
-install name:
+install name: (_validate-extension-name name)
     name={{quote(name)}}; package="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').name" "$name")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "./extensions/pi-$name"; fi
 
 # Publish one package to npm, skipping if the current version already exists
 # Usage: just publish subagents
-publish name:
+publish name: (_validate-extension-name name)
     name={{quote(name)}}; package="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').name" "$name")"; version="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').version" "$name")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
 
 # Publish all extension packages to npm
