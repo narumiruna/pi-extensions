@@ -282,6 +282,42 @@ test("clear removes goal state without aborting or blocking stale tools", async 
 	assert.match(staleCompletion.content?.[0]?.text ?? "", /no active goal/i);
 });
 
+test("clear releases stale tool-call block from a paused goal", async () => {
+	let pauseAborts = 0;
+	const paused = await startGoalForTest({ abort: () => pauseAborts++ });
+	await paused.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		paused.ctx,
+	);
+
+	await paused.mock.commands.get("goal")?.handler("pause", paused.ctx);
+
+	assert.equal(pauseAborts, 1);
+	assert.equal(lastGoalStatus(paused.mock), "paused");
+	assert.deepEqual(
+		paused.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "t-paused", input: {} },
+			paused.ctx,
+		),
+		{
+			block: true,
+			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
+		},
+	);
+
+	await paused.mock.commands.get("goal")?.handler("clear", paused.ctx);
+
+	assert.equal(lastGoalStatus(paused.mock), null);
+	assert.equal(paused.statuses.get("goal"), undefined);
+	assert.equal(
+		paused.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "t-after-clear", input: {} },
+			paused.ctx,
+		),
+		undefined,
+	);
+});
+
 test("agent_end keeps retryable interruptions active but pauses non-retryable errors", async () => {
 	assert.equal(
 		isRetryableGoalInterruption({

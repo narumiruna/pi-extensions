@@ -86,7 +86,7 @@ While a goal is active, `pi-goal` injects persistence rules and exposes `goal_co
 
 ## 🛑 Interruption and queued-input behavior
 
-On user pause, abort, or non-retryable error, `pi-goal` pauses the goal, aborts stale work, and blocks stale tool calls until the next user prompt (non-extension input). On `/goal clear`, it only clears goal state and pending continuation markers; it does not abort the current turn. Retryable provider interruptions and overflow compaction retries stay active while Pi retries; no extra continuation is queued.
+On user pause, abort, or non-retryable error, `pi-goal` pauses the goal, aborts stale work, and blocks stale tool calls until the next user prompt (non-extension input), `/goal resume`, or `/goal clear`. On `/goal clear`, it clears goal state, pending continuation markers, and any stale tool-call block; it does not abort the current turn. Retryable provider interruptions and overflow compaction retries stay active while Pi retries; no extra continuation is queued.
 
 ## 🧠 Use cases
 

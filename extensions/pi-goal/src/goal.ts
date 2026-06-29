@@ -293,6 +293,10 @@ export default function goal(pi: ExtensionAPI) {
 
 	pi.on("tool_call", () => {
 		if (!staleGoalToolCallsBlocked) return;
+		if (!activeGoal || activeGoal.status !== "paused") {
+			clearStaleGoalToolCallBlock();
+			return;
+		}
 		return {
 			block: true,
 			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
@@ -439,6 +443,7 @@ function clearGoal(ctx: StatusContext) {
 		ctx.ui.notify("No active goal.", "info");
 		cancelContinuationPending();
 		clearGoalRecovery();
+		clearStaleGoalToolCallBlock();
 		clearPersistedGoal(ctx.cwd);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
@@ -1004,6 +1009,7 @@ function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
 function clearActiveGoal(ctx: StatusContext) {
 	cancelContinuationPending();
 	clearGoalRecovery();
+	clearStaleGoalToolCallBlock();
 	activeGoal = undefined;
 	clearPersistedGoal(ctx.cwd);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
