@@ -216,7 +216,18 @@ test("buildGhosttyForkTabInitialInput runs pi fork with the side question", () =
 	assert.doesNotMatch(input, / -- '/);
 	assert.equal(input.endsWith("\n"), true);
 	assert.equal(input.includes("'/tmp/session file'\\''s\n下一.jsonl'"), true);
-	assert.equal(input.includes(" 'what'\\''s \"up\"?\n下一行'"), true);
+	assert.equal(input.includes(" 'Side question:\n\nwhat'\\''s \"up\"?\n下一行'"), true);
+});
+
+test("buildGhosttyForkTabInitialInput prefixes flag-like and file-like questions safely", () => {
+	for (const question of ["--help", "--model x", "@README.md"]) {
+		const input = buildGhosttyForkTabInitialInput(question, "/tmp/session.jsonl");
+
+		assert.equal(input.startsWith("pi --fork '/tmp/session.jsonl' 'Side question:\n\n"), true);
+		assert.doesNotMatch(input, /^exec /);
+		assert.doesNotMatch(input, / -- /);
+		assert.equal(input.includes(question), true);
+	}
 });
 
 test("buildGhosttyForkTabAppleScript escapes AppleScript strings", () => {
