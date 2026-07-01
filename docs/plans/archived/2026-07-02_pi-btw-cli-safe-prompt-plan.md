@@ -14,7 +14,7 @@ Pi CLI exists and supports `pi --fork <path|id>`, but the installed Pi parser cu
 
 ## Plan
 
-- [x] Update `extensions/pi-btw/src/btw.ts` so Ghostty initial input passes one safe prompt argument that cannot start with `-` or `@`, for example `pi --fork <session> 'Side question:\n\n<question>'`; verify by inspecting `buildGhosttyForkTabInitialInput()` output.
+- [x] Update `extensions/pi-btw/src/btw.ts` so Ghostty initial input stays ASCII, decodes UTF-8 in the shell, and passes one safe prompt argument that cannot start with `-` or `@`; verify by inspecting `buildGhosttyForkTabInitialInput()` output.
 - [x] Add regression tests in `extensions/pi-btw/test/btw.test.ts` for questions beginning with `--help`, `--model x`, and `@README.md`; verify generated input contains no bare ` -- ` sentinel and the prompt argument starts with safe text.
 - [x] Keep the previous no-`exec` behavior so Ghostty tabs remain open on Pi errors; verify with the existing `doesNotMatch(input, /^exec /)` assertion.
 - [x] Run `npm test -- --package pi-btw`, `npm run typecheck`, `npm run check`, and `npm run pack:btw`; verify all commands pass.

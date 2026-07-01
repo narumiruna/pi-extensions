@@ -218,7 +218,12 @@ export function buildGhosttyForkTabAppleScript(question: string, sessionFile: st
 }
 
 export function buildGhosttyForkTabInitialInput(question: string, sessionFile: string) {
-	return `pi --fork ${shellQuote(sessionFile)} ${shellQuote(`${GHOSTTY_FORK_PROMPT_PREFIX}${question}`)}\n`;
+	return `pi --fork ${shellUtf8Arg(sessionFile)} ${shellUtf8Arg(`${GHOSTTY_FORK_PROMPT_PREFIX}${question}`)}\n`;
+}
+
+function shellUtf8Arg(text: string) {
+	const encoded = Buffer.from(text, "utf8").toString("base64");
+	return `"$(printf %s ${shellQuote(encoded)} | /usr/bin/base64 -D)"`;
 }
 
 function shellQuote(text: string) {
