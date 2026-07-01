@@ -217,7 +217,7 @@ export function buildGhosttyForkTabAppleScript(question: string, sessionFile: st
 }
 
 export function buildGhosttyForkTabInitialInput(question: string, sessionFile: string) {
-	return `exec pi --fork ${shellQuote(sessionFile)} -- ${shellQuote(question)}\n`;
+	return `pi --fork ${shellQuote(sessionFile)} ${shellQuote(question)}\n`;
 }
 
 function shellQuote(text: string) {

@@ -26,7 +26,8 @@
 - For pi-sync on Cloudflare R2, keep session-token support for temporary credentials but retry once without the token when R2 static keys reject `X-Amz-Security-Token`.
 - Symptom: Pi extension async/timer/command continuations can crash after reload or session replacement. Cause: captured `ExtensionContext` becomes stale. Fix: pass plain data into delayed callbacks, catch stale-context errors, and scope cleanup to the failing ctx/request.
 - Symptom: `npm run check` can fail on Biome schema after dependency bumps while `package-lock.json` is already correct. Cause: stale `node_modules` binary version. Fix: run `npm install` to refresh `node_modules`, then revert unrelated lockfile rewrites if npm changes metadata only.
-- Ghostty AppleScript `surface configuration.command` can treat `shell:...` as an executable on macOS; for one-shot commands, set `initial input` to `exec /bin/sh -lc ...` instead.
+- Ghostty AppleScript `surface configuration.command` can treat `shell:...` as an executable on macOS; for one-shot commands, set `initial input` instead.
+- Pi CLI `parseArgs` treats bare `--` as an unknown extension flag, not an option sentinel; don't generate `pi --fork <session> -- <prompt>`.
 - Codex `websocket_connection_limit_reached` is a retryable fresh-websocket case, but Pi 0.79.8's auto-retry regex does not classify “connection limit”; pi-retry must add the `provider returned error` hint.
 - Symptom: pi-goal compaction/retry hooks can mis-handle continuation state if a fresh continuation reuses a cancelled marker. Cause: markers based only on goal id and iteration collide after compaction cancellation. Fix: include a unique nonce in continuation markers.
 - Symptom: Pi compaction event docs may mention `reason`/`willRetry` while project target typings lack them. Cause: local/global `@earendil-works/pi-coding-agent` version skew. Fix: run `npm install`, verify target version, and treat compaction event fields as optional.

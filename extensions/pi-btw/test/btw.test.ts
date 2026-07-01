@@ -100,7 +100,7 @@ test("btw opens Ghostty fork tab before asking locally", async () => {
 	assert.equal(mock.execCalls.length, 1);
 	assert.equal(mock.execCalls[0]?.command, "osascript");
 	assert.deepEqual(mock.execCalls[0]?.options, { timeout: 5000 });
-	assert.match(mock.execCalls[0]?.args?.[1] ?? "", /exec pi --fork/);
+	assert.match(mock.execCalls[0]?.args?.[1] ?? "", /pi --fork/);
 	assert.equal((mock.execCalls[0]?.args?.[1] ?? "").includes("what'\\\\''s up?"), true);
 	assert.equal(customCalls, 0);
 	assert.equal(context.notifications.length, 0);
@@ -184,10 +184,12 @@ test("buildGhosttyForkTabInitialInput runs pi fork with the side question", () =
 		"/tmp/session file's\n下一.jsonl",
 	);
 
-	assert.match(input, /^exec pi --fork '/);
+	assert.match(input, /^pi --fork '/);
+	assert.doesNotMatch(input, /^exec /);
+	assert.doesNotMatch(input, / -- '/);
 	assert.equal(input.endsWith("\n"), true);
 	assert.equal(input.includes("'/tmp/session file'\\''s\n下一.jsonl'"), true);
-	assert.equal(input.includes(" -- 'what'\\''s \"up\"?\n下一行'"), true);
+	assert.equal(input.includes(" 'what'\\''s \"up\"?\n下一行'"), true);
 });
 
 test("buildGhosttyForkTabAppleScript escapes AppleScript strings", () => {
@@ -206,7 +208,7 @@ test("buildGhosttyForkTabAppleScript escapes AppleScript strings", () => {
 		true,
 	);
 	assert.doesNotMatch(script, /set command of cfg/);
-	assert.match(script, /set initial input of cfg to "exec pi --fork /);
+	assert.match(script, /set initial input of cfg to "pi --fork /);
 	assert.match(script, / & linefeed & /);
 	assert.equal(script.includes("'/tmp/session file'\\\\''s.jsonl'"), true);
 });
