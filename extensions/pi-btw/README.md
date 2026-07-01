@@ -9,9 +9,10 @@ Use it when you want to ask a temporary question, inspect context, or get a shor
 ## ✨ Features
 
 - Adds a `/btw <question>` command to Pi.
-- Answers side questions in a temporary, scrollable UI.
+- Answers side questions in a temporary, scrollable UI outside Ghostty.
+- On macOS Ghostty, opens a forked Pi session in a new Ghostty tab.
 - Uses the current session branch as context.
-- Does not append the side question or answer to the main conversation.
+- Does not append inline side questions or answers to the main conversation.
 - Works as an independently installable npm Pi extension package.
 
 ## 📦 Install
@@ -46,10 +47,27 @@ Examples:
 /btw is this API name idiomatic?
 ```
 
-Long answers open in a pager-style view. Use `↑`/`↓` or `k`/`j` to scroll by line,
-`PgUp`/`PgDn`, `Shift+Space`/`Space`, or `Ctrl+B`/`Ctrl+F` to scroll by page,
-`Ctrl+U`/`Ctrl+D` to scroll by half page, and `Home`/`End` to jump. Close with
-`q`, `Esc`, `Enter`, or `Ctrl+C`.
+On macOS Ghostty, `/btw` opens a new Ghostty tab and runs `pi --fork` against
+the current session, with your side question submitted as the forked session's
+first prompt. This keeps the side conversation separate while still letting you
+continue chatting in that tab. It requires Ghostty's default
+`macos-applescript = true`. If the current Pi session is unsaved or tab creation
+fails, `/btw` falls back to the inline pager and shows a warning.
+
+Outside Ghostty, long answers open in a pager-style view. Use `↑`/`↓` or `k`/`j`
+to scroll by line, `PgUp`/`PgDn`, `Shift+Space`/`Space`, or `Ctrl+B`/`Ctrl+F` to
+scroll by page, `Ctrl+U`/`Ctrl+D` to scroll by half page, and `Home`/`End` to
+jump. Close with `q`, `Esc`, `Enter`, or `Ctrl+C`.
+
+## 🖥️ Terminal support notes
+
+- Ghostty on macOS exposes `new tab` via AppleScript, so pi-btw can open a real
+  Ghostty tab without extra dependencies and start `pi --fork` there.
+- macOS Terminal.app can run commands via AppleScript, but it does not provide a
+  reliable direct new-tab command without UI scripting/Accessibility, so pi-btw
+  keeps the inline pager there.
+- iTerm2 has AppleScript tab/session support and may be added later; this release
+  only implements Ghostty.
 
 ## 🧠 Why use pi-btw?
 
