@@ -21,14 +21,14 @@ The temp-file answer tab works like a display pane, but it cannot continue the s
 
 - [x] Remove the Ghostty temp-answer implementation from `extensions/pi-btw/src/btw.ts`, including temp file writes, answer display shell command, and related tests; verified with `rg "pi-btw-|answer.md|buildGhosttyTabShellCommand" extensions/pi-btw` returning no matches.
 - [x] Add a Ghostty fork-tab path before `askSideQuestion()` so macOS Ghostty `/btw <question>` does not spend a model call in the original session; verified by `btw opens Ghostty fork tab before asking locally` in `extensions/pi-btw/test/btw.test.ts` asserting `pi.exec("osascript", ...)` and zero custom UI/model calls.
-- [x] Build Ghostty AppleScript using `new tab ... with configuration cfg`, `initial working directory`, and `initial input` that runs `exec pi --fork <session-file>` with the escaped question; verified by helper tests covering spaces, quotes, Unicode, and newlines in cwd/session/question.
+- [x] Build Ghostty AppleScript using `new tab ... with configuration cfg`, `initial working directory`, and `initial input` that runs `pi --fork <session-file> <safe-prefixed-question>`; verified by helper tests covering spaces, quotes, Unicode, and newlines in cwd/session/question.
 - [x] Add fallback behavior: if no session file exists or AppleScript fails/times out, notify a warning and use the existing inline pager flow; verified by no-session and AppleScript-failure tests in `extensions/pi-btw/test/btw.test.ts`.
 - [x] Update `extensions/pi-btw/README.md` to describe Ghostty fork-tab behavior and remove temp-file answer-tab wording; verified with `rg "temp answer|temp-file|answer file|answer.md|generated answer" extensions/pi-btw/README.md extensions/pi-btw/src/btw.ts extensions/pi-btw/test/btw.test.ts` returning no matches.
 - [x] Run `npm test`, `npm run typecheck`, `npm run check`, and `npm run pack:btw`; verified all pass and `npm run pack:btw` dry-run package contains only `LICENSE`, `README.md`, `package.json`, and `src/btw.ts`.
 
 ## Risks
 
-- Mitigated: instead of delayed typing into an already launched Pi, the new tab runs `pi --fork <session> -- <question>` as one startup command, so the question is the fork's initial prompt without terminal-input races; verified by generated-command tests.
+- Mitigated: instead of delayed typing into an already launched Pi, the new tab runs `pi --fork <session> <safe-prefixed-question>` as one startup command, so the question is the fork's initial prompt without terminal-input races; verified by generated-command tests.
 - Accepted: `pi` must be in PATH in the new tab's shell. Add a configurable command only if real users hit it.
 
 ## Completion Checklist
