@@ -178,6 +178,33 @@ test("btw falls back to inline pager when Ghostty AppleScript fails", async () =
 	assert.equal(customCalls, 2);
 });
 
+test("btw falls back to inline pager when Ghostty AppleScript throws", async () => {
+	const mock = createMockPi();
+	mock.rawPi.exec = async () => {
+		throw new Error("spawn failed");
+	};
+	btw(mock.pi, { env: { TERM: "xterm-ghostty" }, platform: "darwin" });
+
+	const command = mock.commands.get("btw");
+	assert.ok(command);
+	let customCalls = 0;
+	const context = createMockContext({
+		hasUI: true,
+		model: { id: "model", provider: "provider" },
+		sessionManager: sessionManagerWithFile("/tmp/session.jsonl"),
+		custom: async () => {
+			customCalls += 1;
+			return customCalls === 1 ? "answer" : undefined;
+		},
+	});
+
+	await command.handler("question?", context.ctx);
+
+	assert.match(context.notifications[0]?.message ?? "", /spawn failed/);
+	assert.equal(context.notifications[0]?.level, "warning");
+	assert.equal(customCalls, 2);
+});
+
 test("buildGhosttyForkTabInitialInput runs pi fork with the side question", () => {
 	const input = buildGhosttyForkTabInitialInput(
 		`what's "up"?\n下一行`,
