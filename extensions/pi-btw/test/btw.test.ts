@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import btw, {
@@ -88,7 +91,7 @@ test("btw opens Ghostty fork tab before asking locally", async () => {
 	let customCalls = 0;
 	const context = createMockContext({
 		hasUI: true,
-		sessionManager: sessionManagerWithFile("/tmp/session file.jsonl"),
+		sessionManager: sessionManagerWithFile(sessionFile()),
 		custom: async () => {
 			customCalls += 1;
 			return "unused";
@@ -155,6 +158,31 @@ test("btw falls back to inline pager when Ghostty fork tab has no session file",
 	assert.equal(customCalls, 2);
 });
 
+test("btw falls back to inline pager when Ghostty session file is empty", async () => {
+	const mock = createMockPi();
+	btw(mock.pi, { env: { TERM_PROGRAM: "ghostty" }, platform: "darwin" });
+
+	const command = mock.commands.get("btw");
+	assert.ok(command);
+	let customCalls = 0;
+	const context = createMockContext({
+		hasUI: true,
+		model: { id: "model", provider: "provider" },
+		sessionManager: sessionManagerWithFile(sessionFile("")),
+		custom: async () => {
+			customCalls += 1;
+			return customCalls === 1 ? "answer" : undefined;
+		},
+	});
+
+	await command.handler("question?", context.ctx);
+
+	assert.equal(mock.execCalls.length, 0);
+	assert.match(context.notifications[0]?.message ?? "", /empty or invalid/);
+	assert.equal(context.notifications[0]?.level, "warning");
+	assert.equal(customCalls, 2);
+});
+
 test("btw falls back to inline pager when Ghostty AppleScript fails", async () => {
 	const mock = createMockPi({ execResult: { stderr: "boom", code: 1 } });
 	btw(mock.pi, { env: { TERM: "xterm-ghostty" }, platform: "darwin" });
@@ -165,7 +193,7 @@ test("btw falls back to inline pager when Ghostty AppleScript fails", async () =
 	const context = createMockContext({
 		hasUI: true,
 		model: { id: "model", provider: "provider" },
-		sessionManager: sessionManagerWithFile("/tmp/session.jsonl"),
+		sessionManager: sessionManagerWithFile(sessionFile()),
 		custom: async () => {
 			customCalls += 1;
 			return customCalls === 1 ? "answer" : undefined;
@@ -193,7 +221,7 @@ test("btw falls back to inline pager when Ghostty AppleScript throws", async () 
 	const context = createMockContext({
 		hasUI: true,
 		model: { id: "model", provider: "provider" },
-		sessionManager: sessionManagerWithFile("/tmp/session.jsonl"),
+		sessionManager: sessionManagerWithFile(sessionFile()),
 		custom: async () => {
 			customCalls += 1;
 			return customCalls === 1 ? "answer" : undefined;
@@ -255,6 +283,13 @@ test("buildGhosttyForkTabAppleScript escapes AppleScript strings", () => {
 	assert.equal(script.includes(base64("/tmp/session file's.jsonl")), true);
 	assert.equal(script.includes(base64(`Side question:\n\nwhat's "up"?\n下一行`)), true);
 });
+
+function sessionFile(content = `${JSON.stringify({ type: "session", version: 3 })}\n`) {
+	const dir = mkdtempSync(path.join(tmpdir(), "pi-btw-session-"));
+	const file = path.join(dir, "session.jsonl");
+	writeFileSync(file, content);
+	return file;
+}
 
 function base64(text: string) {
 	return Buffer.from(text, "utf8").toString("base64");

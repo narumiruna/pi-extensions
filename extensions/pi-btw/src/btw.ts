@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import {
 	BorderedLoader,
@@ -158,6 +159,13 @@ async function tryOpenGhosttyForkTab(
 		ctx.ui.notify("Could not open Ghostty fork tab (no saved session); showing inline pager.", "warning");
 		return false;
 	}
+	if (!hasSessionHeader(sessionFile)) {
+		ctx.ui.notify(
+			"Could not open Ghostty fork tab (session file is empty or invalid); showing inline pager.",
+			"warning",
+		);
+		return false;
+	}
 
 	try {
 		const result = await pi.exec(
@@ -175,6 +183,15 @@ async function tryOpenGhosttyForkTab(
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		ctx.ui.notify(`Could not open Ghostty fork tab (${message}); showing inline pager.`, "warning");
+		return false;
+	}
+}
+
+function hasSessionHeader(sessionFile: string) {
+	try {
+		const [firstLine] = readFileSync(sessionFile, "utf8").split("\n", 1);
+		return JSON.parse(firstLine ?? "{}").type === "session";
+	} catch {
 		return false;
 	}
 }

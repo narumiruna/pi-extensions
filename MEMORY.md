@@ -29,6 +29,7 @@
 - Ghostty AppleScript `surface configuration.command` can treat `shell:...` as an executable on macOS; for one-shot commands, set `initial input` instead.
 - Ghostty AppleScript `initial input` can mojibake non-ASCII text; keep generated input ASCII and decode UTF-8 in the shell.
 - Pi CLI `parseArgs` treats bare `--` as an unknown extension flag, not an option sentinel; don't generate `pi --fork <session> -- <prompt>`.
+- Pi `--fork` rejects empty session files; Ghostty `/btw` should verify a session header before opening a fork tab.
 - Codex `websocket_connection_limit_reached` is a retryable fresh-websocket case, but Pi 0.79.8's auto-retry regex does not classify “connection limit”; pi-retry must add the `provider returned error` hint.
 - Symptom: pi-goal compaction/retry hooks can mis-handle continuation state if a fresh continuation reuses a cancelled marker. Cause: markers based only on goal id and iteration collide after compaction cancellation. Fix: include a unique nonce in continuation markers.
 - Symptom: Pi compaction event docs may mention `reason`/`willRetry` while project target typings lack them. Cause: local/global `@earendil-works/pi-coding-agent` version skew. Fix: run `npm install`, verify target version, and treat compaction event fields as optional.
