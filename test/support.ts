@@ -19,6 +19,15 @@ type MockFlag = {
 	[key: string]: unknown;
 };
 
+type MockExecOptions = { cwd?: string; signal?: AbortSignal; timeout?: number };
+
+type MockExecResult = {
+	stdout?: string;
+	stderr?: string;
+	code?: number | null;
+	killed?: boolean;
+};
+
 type MockPiApi = {
 	registerCommand(name: string, command: unknown): void;
 	registerFlag(name: string, flag: unknown): void;
@@ -32,9 +41,12 @@ type MockPiApi = {
 	appendEntry(customType: string, data: unknown): void;
 	sendUserMessage(text: string, messageOptions?: unknown): void;
 	sendMessage(message: unknown, messageOptions?: unknown): void;
+	exec(command: string, args: string[], execOptions?: MockExecOptions): Promise<MockExecResult>;
 };
 
-export function createMockPi(options: { activeTools?: string[]; allTools?: unknown[] } = {}) {
+export function createMockPi(
+	options: { activeTools?: string[]; allTools?: unknown[]; execResult?: MockExecResult } = {},
+) {
 	const commands = new Map<string, MockCommand>();
 	const flags = new Map<string, MockFlag>();
 	const events = new Map<string, MockHandler[]>();
@@ -42,6 +54,7 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 	const entries: Array<{ customType: string; data: unknown }> = [];
 	const sentUserMessages: Array<{ text: string; options?: unknown }> = [];
 	const sentMessages: Array<{ message: unknown; options?: unknown }> = [];
+	const execCalls: Array<{ command: string; args: string[]; options?: MockExecOptions }> = [];
 	let activeTools = [...(options.activeTools ?? [])];
 	const allTools = options.allTools ?? activeTools.map((name) => builtinTool(name));
 
@@ -82,6 +95,10 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 		sendMessage(message: unknown, messageOptions?: unknown) {
 			sentMessages.push({ message, options: messageOptions });
 		},
+		async exec(command: string, args: string[], execOptions?: MockExecOptions) {
+			execCalls.push({ command, args, options: execOptions });
+			return options.execResult ?? { stdout: "", stderr: "", code: 0, killed: false };
+		},
 	};
 
 	return {
@@ -94,6 +111,7 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 		entries,
 		sentUserMessages,
 		sentMessages,
+		execCalls,
 	};
 }
 
@@ -133,6 +151,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 		sessionManager: overrides.sessionManager ?? {
 			getBranch: () => [],
 			getEntries: () => [],
+			getSessionFile: () => undefined,
 		},
 		modelRegistry: overrides.modelRegistry ?? {
 			getApiKeyAndHeaders: async () => ({ ok: false, error: "missing" }),

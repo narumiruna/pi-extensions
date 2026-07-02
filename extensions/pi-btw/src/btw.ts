@@ -1,3 +1,4 @@
+import { closeSync, openSync, readSync } from "node:fs";
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import {
 	BorderedLoader,
@@ -21,6 +22,8 @@ const MAX_CONTEXT_CHARS = 40_000;
 const ANSWER_CHROME_LINES = 4;
 // Pi renders a spacer above the custom editor and a two-line built-in footer below it.
 const ANSWER_RESERVED_APP_LINES = 3;
+const GHOSTTY_FORK_PROMPT_PREFIX = "Side question:\n\n";
+const SESSION_HEADER_BYTES = 8192;
 const SYSTEM_PROMPT = `You answer quick side questions for a coding-agent user.
 
 Use the provided conversation context only as background. Answer the user's side question directly and concisely. Do not claim to have changed files, run tools, or affected the main task. If the context is insufficient, say what is unknown and give the best next step.`;
@@ -44,7 +47,12 @@ type SessionEntry = {
 	message?: SessionMessage;
 };
 
-export default function btw(pi: ExtensionAPI) {
+type BtwOptions = {
+	env?: NodeJS.ProcessEnv;
+	platform?: NodeJS.Platform;
+};
+
+export default function btw(pi: ExtensionAPI, options: BtwOptions = {}) {
 	pi.registerCommand("btw", {
 		description: "Ask a quick side question without adding it to the main conversation",
 		handler: async (args, ctx) => {
@@ -57,6 +65,11 @@ export default function btw(pi: ExtensionAPI) {
 			if (!ctx.hasUI) {
 				ctx.ui.notify("/btw requires interactive mode", "error");
 				return;
+			}
+
+			if (shouldOpenGhosttyTab(options.env, options.platform)) {
+				const opened = await tryOpenGhosttyForkTab(question, ctx, pi);
+				if (opened) return;
 			}
 
 			if (!ctx.model) {
@@ -135,6 +148,117 @@ async function showAnswer(question: string, answer: string, ctx: ExtensionComman
 	await ctx.ui.custom((tui, theme, _keybindings, done) => {
 		return new BtwAnswerPager(tui, theme, question, answer, () => done(undefined));
 	});
+}
+
+async function tryOpenGhosttyForkTab(
+	question: string,
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+) {
+	const sessionFile = ctx.sessionManager.getSessionFile();
+	if (!sessionFile) {
+		ctx.ui.notify("Could not open Ghostty fork tab (no saved session); using inline /btw flow.", "warning");
+		return false;
+	}
+	if (!hasSessionHeader(sessionFile)) {
+		ctx.ui.notify(
+			"Could not open Ghostty fork tab (session file is empty or invalid); using inline /btw flow.",
+			"warning",
+		);
+		return false;
+	}
+
+	try {
+		const result = await pi.exec(
+			"osascript",
+			["-e", buildGhosttyForkTabAppleScript(question, sessionFile, ctx.cwd)],
+			{ timeout: 5000 },
+		);
+		if (result.code === 0 && !result.killed) return true;
+
+		ctx.ui.notify(
+			`Could not open Ghostty fork tab (${formatExecFailure(result)}); using inline /btw flow.`,
+			"warning",
+		);
+		return false;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		ctx.ui.notify(`Could not open Ghostty fork tab (${message}); using inline /btw flow.`, "warning");
+		return false;
+	}
+}
+
+function hasSessionHeader(sessionFile: string) {
+	try {
+		const file = openSync(sessionFile, "r");
+		try {
+			const buffer = Buffer.alloc(SESSION_HEADER_BYTES);
+			const bytesRead = readSync(file, buffer, 0, buffer.length, 0);
+			const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split("\n", 1)[0];
+			return JSON.parse(firstLine || "{}").type === "session";
+		} finally {
+			closeSync(file);
+		}
+	} catch {
+		return false;
+	}
+}
+
+function formatExecFailure(result: {
+	stdout?: string;
+	stderr?: string;
+	code?: number | null;
+	killed?: boolean;
+}) {
+	if (result.killed) return "osascript timed out";
+	return (
+		result.stderr?.trim() ||
+		result.stdout?.trim() ||
+		`osascript exited ${result.code ?? "unknown"}`
+	);
+}
+
+export function shouldOpenGhosttyTab(
+	env: NodeJS.ProcessEnv = process.env,
+	platform = process.platform,
+) {
+	return (
+		platform === "darwin" &&
+		(env.TERM_PROGRAM?.toLowerCase() === "ghostty" ||
+			env.TERM?.toLowerCase() === "xterm-ghostty")
+	);
+}
+
+export function buildGhosttyForkTabAppleScript(question: string, sessionFile: string, cwd: string) {
+	const input = buildGhosttyForkTabInitialInput(question, sessionFile);
+	return [
+		'tell application "Ghostty"',
+		"set cfg to new surface configuration",
+		`set initial working directory of cfg to ${appleScriptText(cwd)}`,
+		`set initial input of cfg to ${appleScriptText(input)}`,
+		"set tabRef to new tab in front window with configuration cfg",
+		"select tab tabRef",
+		"end tell",
+	].join("\n");
+}
+
+export function buildGhosttyForkTabInitialInput(question: string, sessionFile: string) {
+	return `pi --fork ${shellUtf8Arg(sessionFile)} ${shellUtf8Arg(`${GHOSTTY_FORK_PROMPT_PREFIX}${question}`)}\n`;
+}
+
+function shellUtf8Arg(text: string) {
+	const bytes = [...Buffer.from(text, "utf8")]
+		.map((byte) => `\\x${byte.toString(16).padStart(2, "0")}`)
+		.join("");
+	return `$'${bytes}'`;
+}
+
+function appleScriptText(text: string) {
+	return text.split("\n").map(appleScriptString).join(" & linefeed & ");
+}
+
+function appleScriptString(text: string) {
+	return `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
 class BtwAnswerPager implements Component {
