@@ -105,8 +105,8 @@ test("btw opens Ghostty fork tab before asking locally", async () => {
 	assert.deepEqual(mock.execCalls[0]?.options, { timeout: 5000 });
 	const script = mock.execCalls[0]?.args?.[1] ?? "";
 	assert.match(script, /pi --fork/);
-	assert.equal(script.includes(base64("Side question:\n\nwhat's up?")), true);
-	assert.equal(script.includes("what'\\\\''s up?"), false);
+	assert.equal(script.includes(appleScriptHex("Side question:\n\nwhat's up?")), true);
+	assert.equal(script.includes("$("), false);
 	assert.equal(customCalls, 0);
 	assert.equal(context.notifications.length, 0);
 });
@@ -241,23 +241,25 @@ test("buildGhosttyForkTabInitialInput runs pi fork with the side question", () =
 		"/tmp/session file's\n下一.jsonl",
 	);
 
-	assert.match(input, /^pi --fork "\$\(printf %s '/);
+	assert.match(input, /^pi --fork \$'\\x/);
 	assert.doesNotMatch(input, /^exec /);
 	assert.doesNotMatch(input, / -- /);
 	assert.equal(input.endsWith("\n"), true);
 	assert.equal(isAscii(input), true);
-	assert.equal(input.includes(base64("/tmp/session file's\n下一.jsonl")), true);
-	assert.equal(input.includes(base64(`Side question:\n\nwhat's "up"?\n下一行`)), true);
+	assert.equal(input.includes("$("), false);
+	assert.equal(input.includes(hex("/tmp/session file's\n下一.jsonl")), true);
+	assert.equal(input.includes(hex(`Side question:\n\nwhat's "up"?\n下一行`)), true);
 });
 
 test("buildGhosttyForkTabInitialInput prefixes flag-like and file-like questions safely", () => {
 	for (const question of ["--help", "--model x", "@README.md"]) {
 		const input = buildGhosttyForkTabInitialInput(question, "/tmp/session.jsonl");
 
-		assert.equal(input.startsWith("pi --fork \"$(printf %s '"), true);
-		assert.equal(input.includes(base64(`Side question:\n\n${question}`)), true);
+		assert.equal(input.startsWith("pi --fork $'\\x"), true);
+		assert.equal(input.includes(hex(`Side question:\n\n${question}`)), true);
 		assert.doesNotMatch(input, /^exec /);
 		assert.doesNotMatch(input, / -- /);
+		assert.equal(input.includes("$("), false);
 		assert.equal(input.includes(question), false);
 	}
 });
@@ -280,8 +282,8 @@ test("buildGhosttyForkTabAppleScript escapes AppleScript strings", () => {
 	assert.doesNotMatch(script, /set command of cfg/);
 	assert.match(script, /set initial input of cfg to "pi --fork /);
 	assert.match(script, / & linefeed & /);
-	assert.equal(script.includes(base64("/tmp/session file's.jsonl")), true);
-	assert.equal(script.includes(base64(`Side question:\n\nwhat's "up"?\n下一行`)), true);
+	assert.equal(script.includes(appleScriptHex("/tmp/session file's.jsonl")), true);
+	assert.equal(script.includes(appleScriptHex(`Side question:\n\nwhat's "up"?\n下一行`)), true);
 });
 
 function sessionFile(content = `${JSON.stringify({ type: "session", version: 3 })}\n`) {
@@ -291,8 +293,14 @@ function sessionFile(content = `${JSON.stringify({ type: "session", version: 3 }
 	return file;
 }
 
-function base64(text: string) {
-	return Buffer.from(text, "utf8").toString("base64");
+function hex(text: string) {
+	return [...Buffer.from(text, "utf8")]
+		.map((byte) => `\\x${byte.toString(16).padStart(2, "0")}`)
+		.join("");
+}
+
+function appleScriptHex(text: string) {
+	return hex(text).replaceAll("\\", "\\\\");
 }
 
 function isAscii(text: string) {

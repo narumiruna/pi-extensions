@@ -247,12 +247,10 @@ export function buildGhosttyForkTabInitialInput(question: string, sessionFile: s
 }
 
 function shellUtf8Arg(text: string) {
-	const encoded = Buffer.from(text, "utf8").toString("base64");
-	return `"$(printf %s ${shellQuote(encoded)} | /usr/bin/base64 -D)"`;
-}
-
-function shellQuote(text: string) {
-	return `'${text.replaceAll("'", "'\\''")}'`;
+	const bytes = [...Buffer.from(text, "utf8")]
+		.map((byte) => `\\x${byte.toString(16).padStart(2, "0")}`)
+		.join("");
+	return `$'${bytes}'`;
 }
 
 function appleScriptText(text: string) {
