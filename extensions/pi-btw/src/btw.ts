@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readSync } from "node:fs";
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import {
 	BorderedLoader,
@@ -23,6 +23,7 @@ const ANSWER_CHROME_LINES = 4;
 // Pi renders a spacer above the custom editor and a two-line built-in footer below it.
 const ANSWER_RESERVED_APP_LINES = 3;
 const GHOSTTY_FORK_PROMPT_PREFIX = "Side question:\n\n";
+const SESSION_HEADER_BYTES = 8192;
 const SYSTEM_PROMPT = `You answer quick side questions for a coding-agent user.
 
 Use the provided conversation context only as background. Answer the user's side question directly and concisely. Do not claim to have changed files, run tools, or affected the main task. If the context is insufficient, say what is unknown and give the best next step.`;
@@ -156,12 +157,12 @@ async function tryOpenGhosttyForkTab(
 ) {
 	const sessionFile = ctx.sessionManager.getSessionFile();
 	if (!sessionFile) {
-		ctx.ui.notify("Could not open Ghostty fork tab (no saved session); showing inline pager.", "warning");
+		ctx.ui.notify("Could not open Ghostty fork tab (no saved session); using inline /btw flow.", "warning");
 		return false;
 	}
 	if (!hasSessionHeader(sessionFile)) {
 		ctx.ui.notify(
-			"Could not open Ghostty fork tab (session file is empty or invalid); showing inline pager.",
+			"Could not open Ghostty fork tab (session file is empty or invalid); using inline /btw flow.",
 			"warning",
 		);
 		return false;
@@ -176,21 +177,28 @@ async function tryOpenGhosttyForkTab(
 		if (result.code === 0 && !result.killed) return true;
 
 		ctx.ui.notify(
-			`Could not open Ghostty fork tab (${formatExecFailure(result)}); showing inline pager.`,
+			`Could not open Ghostty fork tab (${formatExecFailure(result)}); using inline /btw flow.`,
 			"warning",
 		);
 		return false;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		ctx.ui.notify(`Could not open Ghostty fork tab (${message}); showing inline pager.`, "warning");
+		ctx.ui.notify(`Could not open Ghostty fork tab (${message}); using inline /btw flow.`, "warning");
 		return false;
 	}
 }
 
 function hasSessionHeader(sessionFile: string) {
 	try {
-		const [firstLine] = readFileSync(sessionFile, "utf8").split("\n", 1);
-		return JSON.parse(firstLine ?? "{}").type === "session";
+		const file = openSync(sessionFile, "r");
+		try {
+			const buffer = Buffer.alloc(SESSION_HEADER_BYTES);
+			const bytesRead = readSync(file, buffer, 0, buffer.length, 0);
+			const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split("\n", 1)[0];
+			return JSON.parse(firstLine || "{}").type === "session";
+		} finally {
+			closeSync(file);
+		}
 	} catch {
 		return false;
 	}

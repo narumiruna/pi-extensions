@@ -52,7 +52,7 @@ the current session, with your side question submitted as the forked session's
 first prompt. This keeps the side conversation separate while still letting you
 continue chatting in that tab. It requires Ghostty's default
 `macos-applescript = true`. If the current Pi session is unsaved or tab creation
-fails, `/btw` falls back to the inline pager and shows a warning.
+fails, `/btw` falls back to the inline flow and shows a warning.
 
 Outside Ghostty, long answers open in a pager-style view. Use `↑`/`↓` or `k`/`j`
 to scroll by line, `PgUp`/`PgDn`, `Shift+Space`/`Space`, or `Ctrl+B`/`Ctrl+F` to
