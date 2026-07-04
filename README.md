@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex usage status, Firecrawl web scraping, GitHub PR status, goal-driven task completion, read-only plan mode, pause-and-explain interruptions, retry handling, R2/S3 settings sync, terminal statuslines, delegated subagents, and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) extension packages for the Pi coding agent. This monorepo provides native Pi tools and commands for configurable LSP diagnostics and source fixes, Chrome DevTools automation, Codex account switching and usage status, Firecrawl web scraping, GitHub PR status, goal-driven task completion, read-only plan mode, pause-and-explain interruptions, retry handling, R2/S3 settings sync, terminal statuslines, delegated subagents, and keep-awake automation.
 
 ## 📦 Pi extension packages
 
@@ -13,6 +13,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-btw`](./extensions/pi-btw) | 💬 `/btw` side-question command for asking quick questions without polluting the main conversation. | `pi install npm:@narumitw/pi-btw` |
 | [`@narumitw/pi-caffeinate`](./extensions/pi-caffeinate) | ☕ Cross-platform sleep prevention while the Pi agent is processing long-running prompts. | `pi install npm:@narumitw/pi-caffeinate` |
 | [`@narumitw/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | 🌐 Native Chrome DevTools Protocol tools for listing tabs, navigating pages, evaluating JavaScript, and taking screenshots. | `pi install npm:@narumitw/pi-chrome-devtools` |
+| [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) | 🔐 `/codex-login`, `/codex-account`, and `/codex-logout` for switching self-managed ChatGPT Codex subscription accounts without changing Pi's `/login` list. | `pi install npm:@narumitw/pi-codex-accounts` |
 | [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) | 📊 `/codex-status` command and automatic statusline item for ChatGPT Codex subscription usage, using Pi auth first and Codex CLI only as fallback. | `pi install npm:@narumitw/pi-codex-usage` |
 | [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) | 🔥 Firecrawl-powered web scraping, crawling, URL discovery, and web search tools for research workflows. | `pi install npm:@narumitw/pi-firecrawl` |
 | [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
@@ -63,6 +64,10 @@ Use [`@narumitw/pi-chrome-devtools`](./extensions/pi-chrome-devtools) when you w
 ### 🔎 Web scraping, crawling, and research
 
 Use [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) to give Pi native Firecrawl tools for scraping markdown or HTML, mapping URLs, crawling websites, and searching the web from inside an agent workflow.
+
+### 🔐 Codex subscription accounts
+
+Use [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) to keep multiple ChatGPT Codex subscription accounts in a private `codex-accounts.json` file and switch the active account with `/codex-account`. It does not add provider aliases or change Pi's built-in `/login` provider list.
 
 ### 📊 Codex usage status
 
@@ -120,6 +125,7 @@ Try a package locally:
 pi -e ./extensions/pi-btw
 pi -e ./extensions/pi-caffeinate
 pi -e ./extensions/pi-chrome-devtools
+pi -e ./extensions/pi-codex-accounts
 pi -e ./extensions/pi-codex-usage
 pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-github-pr
@@ -139,6 +145,7 @@ Preview npm package contents before publishing:
 npm run pack:btw
 npm run pack:caffeinate
 npm run pack:chrome-devtools
+npm run pack:codex-accounts
 npm run pack:codex-usage
 npm run pack:firecrawl
 npm run pack:github-pr
@@ -171,6 +178,7 @@ extensions/
 ├── pi-btw/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/
+├── pi-codex-accounts/
 ├── pi-codex-usage/
 ├── pi-firecrawl/
 ├── pi-github-pr/

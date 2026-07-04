@@ -32,6 +32,7 @@ type MockPiApi = {
 	appendEntry(customType: string, data: unknown): void;
 	sendUserMessage(text: string, messageOptions?: unknown): void;
 	sendMessage(message: unknown, messageOptions?: unknown): void;
+	setModel(model: unknown): Promise<boolean>;
 };
 
 export function createMockPi(options: { activeTools?: string[]; allTools?: unknown[] } = {}) {
@@ -42,6 +43,7 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 	const entries: Array<{ customType: string; data: unknown }> = [];
 	const sentUserMessages: Array<{ text: string; options?: unknown }> = [];
 	const sentMessages: Array<{ message: unknown; options?: unknown }> = [];
+	const setModels: unknown[] = [];
 	let activeTools = [...(options.activeTools ?? [])];
 	const allTools = options.allTools ?? activeTools.map((name) => builtinTool(name));
 
@@ -82,6 +84,10 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 		sendMessage(message: unknown, messageOptions?: unknown) {
 			sentMessages.push({ message, options: messageOptions });
 		},
+		async setModel(model: unknown) {
+			setModels.push(model);
+			return true;
+		},
 	};
 
 	return {
@@ -94,6 +100,7 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 		entries,
 		sentUserMessages,
 		sentMessages,
+		setModels,
 	};
 }
 

@@ -1,0 +1,47 @@
+{
+	"name": "@narumitw/pi-codex-accounts",
+	"version": "0.9.2",
+	"description": "Pi extension for switching self-managed ChatGPT Codex subscription accounts without touching /login.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"codex",
+		"chatgpt",
+		"accounts",
+		"oauth"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/codex-accounts.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.1",
+		"@earendil-works/pi-ai": "0.74.0",
+		"@earendil-works/pi-coding-agent": "0.79.8",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-codex-accounts"
+	}
+}
