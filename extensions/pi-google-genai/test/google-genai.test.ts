@@ -338,6 +338,23 @@ test("formatToolResult limits sources, truncates content, and writes raw respons
 	});
 });
 
+test("session_shutdown removes truncated raw response temp directory", async () => {
+	await withTempAgentDir(async () => {
+		const result = await formatToolResult({ output_text: "x".repeat(60_000) }, "gemini-test");
+		const fullResponsePath = result.details.fullResponsePath;
+		assert.ok(fullResponsePath);
+		const directory = dirname(fullResponsePath);
+		assert.equal((await stat(directory)).mode & 0o777, 0o700);
+
+		const mock = createMockPi();
+		googleGenai(mock.pi);
+		const { ctx } = createMockContext();
+		await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+
+		await assert.rejects(() => stat(directory), { code: "ENOENT" });
+	});
+});
+
 test("commands init, status, and tool selection merge config and preserve unrelated tools", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		await writeConfig({ apiKey: "old-key", model: "old-model", tools: ["google_search"] });

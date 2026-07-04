@@ -216,8 +216,9 @@ export default function googleGenai(pi: ExtensionAPI) {
 		if (loaded.warnings.length > 0) ctx.ui.notify(loaded.warnings.join("\n"), "warning");
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		await cleanupRawResponseDirectory();
 	});
 }
 
@@ -896,6 +897,17 @@ function rawResponseDirectory() {
 			throw error;
 		});
 	return rawResponseDirectoryPromise;
+}
+
+async function cleanupRawResponseDirectory() {
+	const directoryPromise = rawResponseDirectoryPromise;
+	rawResponseDirectoryPromise = undefined;
+	if (!directoryPromise) return;
+	try {
+		await rm(await directoryPromise, { recursive: true, force: true });
+	} catch {
+		// Best-effort temp cleanup; avoid making session shutdown fail.
+	}
 }
 
 function asArray(value: unknown): unknown[] {
