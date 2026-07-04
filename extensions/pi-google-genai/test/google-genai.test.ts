@@ -52,7 +52,8 @@ test("command parser and completions cover google-genai subcommands", () => {
 test("config loading defaults, normalizes tools, and rejects interpolation", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		assert.equal(googleGenaiConfigPath(), join(agentDir, "google-genai.json"));
-		assert.deepEqual(await loadGoogleGenaiConfig(), {
+		const missingConfig = await loadGoogleGenaiConfig();
+		assert.deepEqual(missingConfig, {
 			config: {
 				model: DEFAULT_MODEL,
 				apiUrl: DEFAULT_API_URL,
@@ -63,6 +64,9 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 			warnings: [],
 			configLoaded: false,
 		});
+		const missingStatus = buildStatusMessage(missingConfig, "missing");
+		assert.match(missingStatus, /configLoaded: no/);
+		assert.match(missingStatus, /persisted tools: none/);
 
 		await writeConfig({
 			apiKey: "$GEMINI_API_KEY",

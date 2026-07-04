@@ -405,7 +405,8 @@ export function buildStatusMessage(loaded: LoadedGoogleGenaiConfig, authSource: 
 		`apiUrl: ${config.apiUrl}`,
 		`timeoutMs: ${config.timeoutMs}`,
 		`auth: ${authSource}`,
-		`tools: ${formatPersistedTools(config.tools)}`,
+		`configLoaded: ${loaded.configLoaded ? "yes" : "no"}`,
+		`persisted tools: ${loaded.configLoaded ? formatPersistedTools(config.tools) : "none"}`,
 		...(warnings.length > 0 ? ["warnings:", ...warnings.map((warning) => `- ${warning}`)] : []),
 	].join("\n");
 }
