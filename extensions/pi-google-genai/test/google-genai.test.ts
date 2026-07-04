@@ -60,6 +60,7 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 			},
 			path: join(agentDir, "google-genai.json"),
 			warnings: [],
+			configLoaded: false,
 		});
 
 		await writeConfig({
@@ -74,6 +75,7 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 		assert.equal(loaded.config.model, "custom-model");
 		assert.equal(loaded.config.apiUrl, "https://proxy.test/interactions");
 		assert.equal(loaded.config.timeoutMs, 12);
+		assert.equal(loaded.configLoaded, true);
 		assert.match(loaded.warnings.join("\n"), /unknown/);
 		await assert.rejects(
 			() => resolveGoogleGenaiAuth(loaded.config, authContext()),
@@ -92,6 +94,7 @@ test("config loading repairs permissions even when JSON is invalid", async () =>
 		const loaded = await loadGoogleGenaiConfig();
 
 		assert.match(loaded.warnings.join("\n"), /Failed to read/);
+		assert.equal(loaded.configLoaded, false);
 		assert.equal((await stat(path)).mode & 0o777, 0o600);
 	});
 });
@@ -390,6 +393,16 @@ test("status reports unsupported config apiKey interpolation as invalid", async 
 		const message = notifications.at(-1)?.message ?? "";
 		assert.match(message, /auth: invalid config apiKey/);
 		assert.doesNotMatch(message, /auth: config apiKey/);
+	});
+});
+
+test("session_start preserves active tools when config is missing", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["read"] });
+		googleGenai(mock.pi);
+		const { ctx } = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
 	});
 });
 

@@ -66,6 +66,7 @@ export interface LoadedGoogleGenaiConfig {
 	config: GoogleGenaiConfig;
 	path: string;
 	warnings: string[];
+	configLoaded: boolean;
 }
 
 interface GoogleGenaiSource {
@@ -210,7 +211,7 @@ export default function googleGenai(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const loaded = await loadGoogleGenaiConfig();
-		applyGoogleToolSelection(pi, loaded.config.tools);
+		if (loaded.configLoaded) applyGoogleToolSelection(pi, loaded.config.tools);
 		if (loaded.warnings.length > 0) ctx.ui.notify(loaded.warnings.join("\n"), "warning");
 	});
 
@@ -266,7 +267,12 @@ export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> 
 	await ensureConfigPermissions(path, warnings);
 	const raw = await readJsonIfExists(path, warnings);
 	const normalized = normalizeConfigWithWarnings(raw);
-	return { config: normalized.config, path, warnings: [...warnings, ...normalized.warnings] };
+	return {
+		config: normalized.config,
+		path,
+		warnings: [...warnings, ...normalized.warnings],
+		configLoaded: raw !== undefined,
+	};
 }
 
 export async function resolveGoogleGenaiAuth(
