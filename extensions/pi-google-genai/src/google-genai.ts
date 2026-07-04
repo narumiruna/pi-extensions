@@ -272,7 +272,7 @@ export async function resolveGoogleGenaiAuth(
 	ctx: Pick<ExtensionContext, "modelRegistry">,
 ) {
 	if (config.apiKey) {
-		if (config.apiKey.startsWith("$") || config.apiKey.startsWith("!")) {
+		if (isUnsupportedConfigApiKey(config.apiKey)) {
 			throw new Error(
 				"Interpolation and command syntax are not supported in google-genai.json apiKey. Use a literal key, /login google, or GEMINI_API_KEY.",
 			);
@@ -433,6 +433,7 @@ async function callInteraction(
 ) {
 	const loaded = await loadGoogleGenaiConfig();
 	const { config } = loaded;
+	assertSafeApiUrl(config.apiUrl);
 	const apiKey = await resolveGoogleGenaiAuth(config, ctx);
 	const body: InteractionRequest = {
 		model: config.model,
@@ -539,7 +540,11 @@ async function selectTools(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
 }
 
 function authSource(config: GoogleGenaiConfig, ctx: ExtensionCommandContext) {
-	if (config.apiKey) return "config apiKey";
+	if (config.apiKey) {
+		return isUnsupportedConfigApiKey(config.apiKey)
+			? "invalid config apiKey (interpolation unsupported)"
+			: "config apiKey";
+	}
 	const status = ctx.modelRegistry.getProviderAuthStatus("google");
 	if (status.configured || status.source) {
 		return status.label ? `Pi auth/google (${status.label})` : "Pi auth/google";
@@ -565,6 +570,26 @@ function currentGoogleTools(pi: ExtensionAPI) {
 
 function orderedGoogleTools(tools: Set<GoogleGenaiToolName>) {
 	return GOOGLE_GENAI_TOOL_NAMES.filter((toolName) => tools.has(toolName));
+}
+
+function isUnsupportedConfigApiKey(apiKey: string) {
+	return apiKey.startsWith("$") || apiKey.startsWith("!");
+}
+
+function assertSafeApiUrl(apiUrl: string) {
+	let parsed: URL;
+	try {
+		parsed = new URL(apiUrl);
+	} catch {
+		throw new Error(`Google GenAI apiUrl must be a valid HTTPS URL: ${apiUrl}`);
+	}
+	const localHttp =
+		parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+	if (parsed.protocol !== "https:" && !localHttp) {
+		throw new Error(
+			`Google GenAI apiUrl must use https:// to protect the API key (http://localhost is allowed for local proxies): ${apiUrl}`,
+		);
+	}
 }
 
 function normalizeConfigWithWarnings(value: unknown): { config: GoogleGenaiConfig; warnings: string[] } {

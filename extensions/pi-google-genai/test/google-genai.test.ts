@@ -161,6 +161,32 @@ test("tools send expected interaction requests and format sources", async () => 
 	});
 });
 
+test("tools reject insecure apiUrl before sending the API key", async () => {
+	await withTempAgentDir(async () => {
+		await writeConfig({ apiUrl: "http://example.test/interactions" });
+		const mock = createMockPi();
+		googleGenai(mock.pi);
+		const { ctx } = createMockContext({
+			modelRegistry: { getApiKeyForProvider: async () => "test-key" },
+		});
+		const previous = globalThis.fetch;
+		let fetchCalls = 0;
+		globalThis.fetch = (async () => {
+			fetchCalls += 1;
+			return new Response("{}");
+		}) as typeof fetch;
+		try {
+			await assert.rejects(
+				() => executeTool(mock.tools[0], "call-insecure", { query: "bad" }, ctx),
+				/must use https:\/\//,
+			);
+			assert.equal(fetchCalls, 0);
+		} finally {
+			globalThis.fetch = previous;
+		}
+	});
+});
+
 test("tool requests report HTTP errors and time out", async () => {
 	await withTempAgentDir(async () => {
 		await writeConfig({ timeoutMs: 1 });
@@ -333,6 +359,31 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		await command.handler("status", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /auth: config apiKey/);
 		assert.match(buildStatusMessage(await loadGoogleGenaiConfig(), "config apiKey"), /apiUrl:/);
+	});
+});
+
+test("status reports unsupported config apiKey interpolation as invalid", async () => {
+	await withTempAgentDir(async () => {
+		await writeConfig({ apiKey: "$GEMINI_API_KEY" });
+		const mock = createMockPi();
+		googleGenai(mock.pi);
+		const command = mock.commands.get("google-genai");
+		assert.ok(command);
+		const notifications: Array<{ message: string; level?: string }> = [];
+		await command.handler("status", {
+			hasUI: true,
+			ui: {
+				notify(message: string, level?: string) {
+					notifications.push({ message, level });
+				},
+				setStatus() {},
+			},
+			modelRegistry: { getProviderAuthStatus: () => ({ configured: true, source: "env" }) },
+		});
+
+		const message = notifications.at(-1)?.message ?? "";
+		assert.match(message, /auth: invalid config apiKey/);
+		assert.doesNotMatch(message, /auth: config apiKey/);
 	});
 });
 
