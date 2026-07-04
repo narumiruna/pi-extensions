@@ -599,9 +599,7 @@ function assertSafeApiUrl(apiUrl: string) {
 		throw new Error(`Google GenAI apiUrl must be a valid URL: ${apiUrl}`);
 	}
 	const localHttp =
-		parsed.protocol === "http:" &&
-		["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
-	if (parsed.protocol !== "https:" && !localHttp) {
+		parsed.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
 		throw new Error(
 			`Google GenAI apiUrl must use https:// to protect the API key (http://localhost is allowed for local proxies): ${apiUrl}`,
 		);
