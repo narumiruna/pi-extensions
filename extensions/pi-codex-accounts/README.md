@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-accounts)](https://www.npmjs.com/package/@narumitw/pi-codex-accounts) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-codex-accounts` is a native [Pi coding agent](https://pi.dev) extension that lets you login to, switch between, and remove multiple ChatGPT Plus/Pro Codex subscription accounts.
+`@narumitw/pi-codex-accounts` is a native [Pi coding agent](https://pi.dev) extension that lets you log in to, switch between, and remove multiple ChatGPT Plus/Pro Codex subscription accounts.
 
 It keeps using Pi's built-in `openai-codex` provider. It does **not** add provider aliases, register OAuth providers, or change Pi's built-in `/login` and `/logout` provider lists.
 
