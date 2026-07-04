@@ -84,18 +84,23 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 	});
 });
 
-test("config loading repairs permissions even when JSON is invalid", async () => {
+test("config loading repairs permissions and ignores invalid payloads", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		const path = join(agentDir, "google-genai.json");
 		await mkdir(agentDir, { recursive: true });
 		await writeFile(path, '{"apiKey":"secret"', { mode: 0o644 });
 		await chmod(path, 0o644);
 
-		const loaded = await loadGoogleGenaiConfig();
+		let loaded = await loadGoogleGenaiConfig();
 
 		assert.match(loaded.warnings.join("\n"), /Failed to read/);
 		assert.equal(loaded.configLoaded, false);
 		assert.equal((await stat(path)).mode & 0o777, 0o600);
+
+		await writeConfig(null);
+		loaded = await loadGoogleGenaiConfig();
+		assert.equal(loaded.configLoaded, false);
+		assert.match(loaded.warnings.join("\n"), /must contain a JSON object/);
 	});
 });
 
@@ -184,6 +189,11 @@ test("tools reject insecure apiUrl before sending the API key", async () => {
 			await assert.rejects(
 				() => executeTool(mock.tools[0], "call-insecure", { query: "bad" }, ctx),
 				/must use https:\/\//,
+			);
+			await writeConfig({ apiUrl: "not a url" });
+			await assert.rejects(
+				() => executeTool(mock.tools[0], "call-invalid-url", { query: "bad" }, ctx),
+				/must be a valid URL/,
 			);
 			assert.equal(fetchCalls, 0);
 		} finally {
@@ -432,13 +442,21 @@ test("status reports unsupported config apiKey interpolation as invalid", async 
 	});
 });
 
-test("session_start preserves active tools when config is missing", async () => {
+test("session_start preserves active tools when config is missing or invalid", async () => {
 	await withTempAgentDir(async () => {
-		const mock = createMockPi({ activeTools: ["read"] });
+		let mock = createMockPi({ activeTools: ["read"] });
 		googleGenai(mock.pi);
-		const { ctx } = createMockContext();
-		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		let context = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+
+		await writeConfig(null);
+		mock = createMockPi({ activeTools: ["read"] });
+		googleGenai(mock.pi);
+		context = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+		assert.match(context.notifications[0].message, /must contain a JSON object/);
 	});
 });
 

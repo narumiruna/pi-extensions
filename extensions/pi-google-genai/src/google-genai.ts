@@ -268,12 +268,16 @@ export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> 
 	const warnings: string[] = [];
 	await ensureConfigPermissions(path, warnings);
 	const raw = await readJsonIfExists(path, warnings);
-	const normalized = normalizeConfigWithWarnings(raw);
+	const configLoaded = isObject(raw);
+	if (raw !== undefined && !configLoaded) {
+		warnings.push("google-genai.json must contain a JSON object; ignoring config.");
+	}
+	const normalized = normalizeConfigWithWarnings(configLoaded ? raw : undefined);
 	return {
 		config: normalized.config,
 		path,
 		warnings: [...warnings, ...normalized.warnings],
-		configLoaded: raw !== undefined,
+		configLoaded,
 	};
 }
 
@@ -591,7 +595,7 @@ function assertSafeApiUrl(apiUrl: string) {
 	try {
 		parsed = new URL(apiUrl);
 	} catch {
-		throw new Error(`Google GenAI apiUrl must be a valid HTTPS URL: ${apiUrl}`);
+		throw new Error(`Google GenAI apiUrl must be a valid URL: ${apiUrl}`);
 	}
 	const localHttp =
 		parsed.protocol === "http:" &&
