@@ -91,6 +91,9 @@ pack-firecrawl:
 pack-github-pr:
     just pack github-pr
 
+pack-google-genai:
+    just pack google-genai
+
 pack-goal:
     just pack goal
 
@@ -136,6 +139,9 @@ try-firecrawl:
 
 try-github-pr:
     just try github-pr
+
+try-google-genai:
+    just try google-genai
 
 try-goal:
     just try goal
@@ -183,6 +189,9 @@ install-firecrawl:
 install-github-pr:
     just install github-pr
 
+install-google-genai:
+    just install google-genai
+
 install-goal:
     just install goal
 
@@ -228,6 +237,9 @@ publish-firecrawl:
 
 publish-github-pr:
     just publish github-pr
+
+publish-google-genai:
+    just publish google-genai
 
 publish-goal:
     just publish goal
