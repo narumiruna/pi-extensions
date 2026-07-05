@@ -66,6 +66,7 @@ The extension shells out to `gh`; GitHub Enterprise hosts and credential storage
 The extension runs passively:
 
 - On session start, it checks the current branch PR and sets a compact statusline entry.
+- On Git branch change, it clears the old PR immediately and refreshes the new current branch.
 - After each agent turn, it refreshes that same current branch PR status.
 - On session shutdown, it clears the statusline entry.
 - If the directory has no GitHub PR, the statusline entry stays empty.
@@ -77,7 +78,7 @@ The extension runs passively:
 - Only the current branch PR is shown; there is no command or tool for arbitrary PR lookup.
 - Comment count uses `gh pr view` comments and reviews, not precise unresolved review-thread counts.
 - It does not read PR comment bodies, review bodies, inline diff comments, or unresolved review-thread text.
-- No continuous polling; refresh happens on session start and after agent turns.
+- No continuous polling; refresh happens on session start, branch change, and after agent turns.
 
 ## 📁 Package layout
 

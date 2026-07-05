@@ -1,3 +1,5 @@
+import { watch, type FSWatcher } from "node:fs";
+import { resolve } from "node:path";
 import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export type ReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "UNKNOWN";
@@ -37,6 +39,8 @@ export interface PullRequestStatus {
 
 const STATUS_KEY = "github-pr";
 const GH_TIMEOUT_MS = 10_000;
+const GIT_TIMEOUT_MS = 5_000;
+const BRANCH_REFRESH_DEBOUNCE_MS = 100;
 const GH_PR_FIELDS = [
 	"number",
 	"isDraft",
@@ -61,16 +65,50 @@ const GH_PR_COUNT_QUERY = `
 `;
 
 export default function githubPr(pi: ExtensionAPI) {
-	const refreshStatus = async (ctx: ExtensionContext, signal?: AbortSignal) => {
+	const branchWatch: BranchWatchState = { generation: 0, session: 0 };
+	const refreshStatus = async (
+		ctx: ExtensionContext,
+		signal?: AbortSignal,
+		generation = branchWatch.generation,
+	) => {
 		try {
 			const status = await runGhPrView(pi, ctx.cwd, signal);
-			renderStatus(ctx, status);
+			if (generation === branchWatch.generation) renderStatus(ctx, status);
 		} catch (error) {
-			renderAmbientFailure(ctx, error);
+			if (generation === branchWatch.generation) renderAmbientFailure(ctx, error);
 		}
+	};
+	const scheduleBranchRefresh = (ctx: ExtensionContext) => {
+		branchWatch.generation += 1;
+		const generation = branchWatch.generation;
+		clearStatus(ctx);
+		if (branchWatch.timer) clearTimeout(branchWatch.timer);
+		branchWatch.timer = setTimeout(() => {
+			branchWatch.timer = undefined;
+			if (generation !== branchWatch.generation) return;
+			void refreshStatus(ctx, ctx.signal, generation);
+		}, BRANCH_REFRESH_DEBOUNCE_MS);
+	};
+	const closeBranchWatcher = () => {
+		if (branchWatch.timer) clearTimeout(branchWatch.timer);
+		branchWatch.timer = undefined;
+		branchWatch.watcher?.close();
+		branchWatch.watcher = undefined;
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		branchWatch.generation += 1;
+		branchWatch.session += 1;
+		const session = branchWatch.session;
+		closeBranchWatcher();
+		const watcher = await createBranchWatcher(pi, ctx.cwd, ctx.signal, () => {
+			if (session === branchWatch.session) scheduleBranchRefresh(ctx);
+		});
+		if (session !== branchWatch.session) {
+			watcher?.close();
+			return;
+		}
+		branchWatch.watcher = watcher;
 		await refreshStatus(ctx, ctx.signal);
 	});
 
@@ -79,8 +117,43 @@ export default function githubPr(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		branchWatch.generation += 1;
+		branchWatch.session += 1;
+		closeBranchWatcher();
 		clearStatus(ctx);
 	});
+}
+
+interface BranchWatchState {
+	generation: number;
+	session: number;
+	watcher?: FSWatcher;
+	timer?: ReturnType<typeof setTimeout>;
+}
+
+async function createBranchWatcher(
+	pi: Pick<ExtensionAPI, "exec">,
+	cwd: string,
+	signal: AbortSignal | undefined,
+	onChange: () => void,
+): Promise<FSWatcher | undefined> {
+	try {
+		const result = await pi.exec("git", ["rev-parse", "--git-path", "HEAD"], {
+			cwd,
+			signal,
+			timeout: GIT_TIMEOUT_MS,
+		});
+		if (result.killed || result.code !== 0) return undefined;
+
+		const gitHead = result.stdout.trim();
+		if (!gitHead) return undefined;
+
+		const watcher = watch(resolve(cwd, gitHead), { persistent: false }, onChange);
+		watcher.on("error", () => watcher.close());
+		return watcher;
+	} catch {
+		return undefined;
+	}
 }
 
 export async function runGhPrView(
