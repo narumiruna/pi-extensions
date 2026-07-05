@@ -84,6 +84,26 @@ Parameters:
 - `query`: search question.
 - `searchTypes?`: optional array of `web_search` and/or `image_search`. Omit it for Google's default web search.
 
+#### Large / broad searches
+
+Very broad market-research queries can time out. Prefer several narrow searches over one big query.
+
+Instead of:
+
+```text
+2026 AI coding assistant product trends agentic coding IDE local first developer tools web UI Cursor Claude Code GitHub Copilot
+```
+
+Try:
+
+```text
+Cursor AI coding features 2026
+Claude Code features agentic coding
+GitHub Copilot coding agent features 2026
+AI coding assistant trends 2025 2026
+local first AI developer tools trends
+```
+
 ### 🗺️ `google_maps`
 
 Ask Google Maps-grounded questions.

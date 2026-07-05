@@ -33,6 +33,7 @@ test("google-genai registers three tools, command, and session hooks", () => {
 	assert.ok(mock.commands.has("google-genai"));
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"web_search"/);
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"image_search"/);
+	assert.match(JSON.stringify(mock.tools[0].promptGuidelines), /split|narrow/i);
 	assert.match(JSON.stringify(mock.tools[2].parameters), /"minItems":1/);
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
 });
@@ -275,8 +276,18 @@ test("tool requests report HTTP errors and time out", async () => {
 			}) as typeof fetch;
 			await assert.rejects(
 				() => executeTool(mock.tools[0], "call-timeout", { query: "slow" }, ctx),
-				/timed out/,
+				/timed out after 1ms.*split/i,
 			);
+
+			let mapsTimeout: unknown;
+			try {
+				await executeTool(mock.tools[1], "call-timeout-maps", { query: "nearby" }, ctx);
+			} catch (error) {
+				mapsTimeout = error;
+			}
+			assert.ok(mapsTimeout instanceof Error);
+			assert.match(mapsTimeout.message, /timed out after 1ms/);
+			assert.doesNotMatch(mapsTimeout.message, /google_search/);
 		} finally {
 			globalThis.fetch = previous;
 		}
