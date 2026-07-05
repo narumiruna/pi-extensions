@@ -331,7 +331,8 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 		okResult(args[0] === "pr" ? samplePr : sampleCounts),
 	);
 	githubPr(mock.pi);
-	const context = createMockContext({ cwd: "/repo" });
+	const signal = new AbortController().signal;
+	const context = createMockContext({ cwd: "/repo", signal });
 
 	const sessionStart = mock.events.get("session_start")?.[0];
 	const agentEnd = mock.events.get("agent_end")?.[0];
@@ -351,6 +352,7 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	await agentEnd({}, context.ctx);
 	assert.equal(calls.length, 5);
 	assert.deepEqual(calls[0]?.args, ["rev-parse", "--git-path", "HEAD"]);
+	assert.equal(calls[0]?.options?.signal, signal);
 	assert.equal(
 		context.statuses.get("github-pr"),
 		`PR \x1b]8;;${samplePr.url}\x07#123\x1b]8;;\x07: checks failing (1), approved, 5 comments`,

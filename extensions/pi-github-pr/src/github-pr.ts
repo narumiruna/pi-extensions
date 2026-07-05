@@ -96,7 +96,7 @@ export default function githubPr(pi: ExtensionAPI) {
 		branchWatch.session += 1;
 		const session = branchWatch.session;
 		closeBranchWatcher();
-		const watcher = await createBranchWatcher(pi, ctx.cwd, () => {
+		const watcher = await createBranchWatcher(pi, ctx.cwd, ctx.signal, () => {
 			if (session === branchWatch.session) scheduleBranchRefresh(ctx);
 		});
 		if (session !== branchWatch.session) {
@@ -129,11 +129,13 @@ interface BranchWatchState {
 async function createBranchWatcher(
 	pi: Pick<ExtensionAPI, "exec">,
 	cwd: string,
+	signal: AbortSignal | undefined,
 	onChange: () => void,
 ): Promise<FSWatcher | undefined> {
 	try {
 		const result = await pi.exec("git", ["rev-parse", "--git-path", "HEAD"], {
 			cwd,
+			signal,
 			timeout: GIT_TIMEOUT_MS,
 		});
 		if (result.killed || result.code !== 0) return undefined;
