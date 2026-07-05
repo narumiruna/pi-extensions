@@ -66,8 +66,11 @@ const GH_PR_COUNT_QUERY = `
 
 export default function githubPr(pi: ExtensionAPI) {
 	const branchWatch: BranchWatchState = { generation: 0, session: 0 };
-	const refreshStatus = async (ctx: ExtensionContext, signal?: AbortSignal) => {
-		const generation = branchWatch.generation;
+	const refreshStatus = async (
+		ctx: ExtensionContext,
+		signal?: AbortSignal,
+		generation = branchWatch.generation,
+	) => {
 		try {
 			const status = await runGhPrView(pi, ctx.cwd, signal);
 			if (generation === branchWatch.generation) renderStatus(ctx, status);
@@ -77,11 +80,13 @@ export default function githubPr(pi: ExtensionAPI) {
 	};
 	const scheduleBranchRefresh = (ctx: ExtensionContext) => {
 		branchWatch.generation += 1;
+		const generation = branchWatch.generation;
 		clearStatus(ctx);
 		if (branchWatch.timer) clearTimeout(branchWatch.timer);
 		branchWatch.timer = setTimeout(() => {
 			branchWatch.timer = undefined;
-			void refreshStatus(ctx, ctx.signal);
+			if (generation !== branchWatch.generation) return;
+			void refreshStatus(ctx, ctx.signal, generation);
 		}, BRANCH_REFRESH_DEBOUNCE_MS);
 	};
 	const closeBranchWatcher = () => {

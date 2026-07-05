@@ -451,6 +451,52 @@ test("session shutdown disposes the branch watcher and pending refresh", async (
 	assert.equal(context.statuses.get("github-pr"), undefined);
 });
 
+test("queued branch refresh does not run after session shutdown", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-github-pr-test-"));
+	const gitDir = join(root, ".git");
+	const headPath = join(gitDir, "HEAD");
+	mkdirSync(gitDir);
+	writeFileSync(headPath, "ref: refs/heads/feature\n");
+
+	let ghPrViews = 0;
+	const mock = createMockPi();
+	installExec(mock, async (command, args) => {
+		if (command === "git") return textResult(".git/HEAD\n");
+		if (args[0] === "pr") {
+			ghPrViews += 1;
+			return okResult(samplePr);
+		}
+		return okResult(sampleCounts);
+	});
+	githubPr(mock.pi);
+	const context = createMockContext({ cwd: root });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(sessionShutdown);
+
+	await sessionStart({}, context.ctx);
+	assert.equal(ghPrViews, 1);
+
+	const originalClearTimeout = globalThis.clearTimeout;
+	try {
+		globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+		writeFileSync(headPath, "ref: refs/heads/main\n");
+		await waitFor(
+			() => context.statuses.get("github-pr") === undefined,
+			"branch change clears stale PR status",
+		);
+
+		await sessionShutdown({}, context.ctx);
+		await wait(300);
+	} finally {
+		globalThis.clearTimeout = originalClearTimeout;
+	}
+
+	assert.equal(ghPrViews, 1);
+	assert.equal(context.statuses.get("github-pr"), undefined);
+});
+
 test("branch watcher failures stay non-intrusive", async () => {
 	const mock = createMockPi();
 	installExec(mock, async (command, args) => {
