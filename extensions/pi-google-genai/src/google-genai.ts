@@ -116,6 +116,7 @@ const googleSearchTool = defineTool({
 	promptSnippet: "Search Google through Gemini grounding",
 	promptGuidelines: [
 		"Use google_search when the user asks for current public web or image-search-backed information.",
+		"Split or narrow broad trend, multi-product, or market-research questions before synthesizing.",
 		"If Google GenAI auth is missing, report the configuration error instead of retrying repeatedly.",
 	],
 	parameters: Type.Object({
@@ -129,6 +130,8 @@ const googleSearchTool = defineTool({
 				{
 					input: params.query,
 					tool: cleanObject({ type: "google_search", search_types: searchTypes }),
+					timeoutAdvice:
+						"Broad trend, multi-product, or market-research queries can time out; split them into smaller google_search calls before increasing timeoutMs.",
 				},
 				ctx,
 				signal,
@@ -443,7 +446,7 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext, pi: 
 }
 
 async function callInteraction(
-	request: { input: string; tool: Record<string, unknown> },
+	request: { input: string; tool: Record<string, unknown>; timeoutAdvice?: string },
 	ctx: ExtensionContext,
 	signal: AbortSignal | undefined,
 ) {
@@ -475,7 +478,9 @@ async function callInteraction(
 		return formatToolResult(payload, config.model);
 	} catch (error) {
 		if (timeoutSignal.isTimeout()) {
-			throw new Error(`Google GenAI request timed out after ${config.timeoutMs}ms.`);
+			throw new Error(
+				`Google GenAI request timed out after ${config.timeoutMs}ms. ${request.timeoutAdvice ?? "Try a smaller request or increase timeoutMs."}`,
+			);
 		}
 		throw error;
 	} finally {
