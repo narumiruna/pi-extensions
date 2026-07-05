@@ -143,7 +143,9 @@ async function createBranchWatcher(
 		const gitHead = result.stdout.trim();
 		if (!gitHead) return undefined;
 
-		return watch(resolve(cwd, gitHead), { persistent: false }, onChange);
+		const watcher = watch(resolve(cwd, gitHead), { persistent: false }, onChange);
+		watcher.on("error", () => watcher.close());
+		return watcher;
 	} catch {
 		return undefined;
 	}
