@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -17,6 +20,13 @@ const okResult = (stdout: unknown): ExecResult => ({
 	stdout: JSON.stringify(stdout),
 	stderr: "",
 	code: 0,
+	killed: false,
+});
+
+const textResult = (stdout: string, code = 0, stderr = ""): ExecResult => ({
+	stdout,
+	stderr,
+	code,
 	killed: false,
 });
 
@@ -339,7 +349,8 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.equal(context.notifications.length, 0);
 
 	await agentEnd({}, context.ctx);
-	assert.equal(calls.length, 4);
+	assert.equal(calls.length, 5);
+	assert.deepEqual(calls[0]?.args, ["rev-parse", "--git-path", "HEAD"]);
 	assert.equal(
 		context.statuses.get("github-pr"),
 		`PR \x1b]8;;${samplePr.url}\x07#123\x1b]8;;\x07: checks failing (1), approved, 5 comments`,
@@ -347,6 +358,114 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 
 	await sessionShutdown({}, context.ctx);
 	assert.equal(context.statuses.get("github-pr"), undefined);
+	assert.equal(context.widgets.size, 0);
+	assert.equal(context.notifications.length, 0);
+});
+
+test("branch changes clear stale PR status and stale refreshes cannot restore it", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-github-pr-test-"));
+	const gitDir = join(root, ".git");
+	const headPath = join(gitDir, "HEAD");
+	mkdirSync(gitDir);
+	writeFileSync(headPath, "ref: refs/heads/feature\n");
+
+	const firstPrView = deferred<ExecResult>();
+	const calls: ExecCall[] = [];
+	let ghPrViews = 0;
+	const pi = {
+		exec: async (command, args, options) => {
+			calls.push({ command, args, options });
+			if (command === "git") return textResult(".git/HEAD\n");
+			if (args[0] === "pr") {
+				ghPrViews += 1;
+				if (ghPrViews === 1) return firstPrView.promise;
+				return textResult("", 1, 'no pull requests found for branch "main"');
+			}
+			return okResult(sampleCounts);
+		},
+	} satisfies { exec: ExecFunction };
+	const mock = createMockPi();
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = pi.exec;
+	githubPr(mock.pi);
+	const context = createMockContext({ cwd: root });
+	context.statuses.set("github-pr", "PR #4: checks passing, approved, no comments");
+
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(sessionShutdown);
+
+	const startPromise = sessionStart({}, context.ctx);
+	await waitFor(() => ghPrViews === 1, "initial PR refresh starts");
+
+	writeFileSync(headPath, "ref: refs/heads/main\n");
+
+	await waitFor(
+		() => context.statuses.get("github-pr") === undefined,
+		"branch change clears stale PR status",
+	);
+	await waitFor(() => ghPrViews >= 2, "branch change refreshes the current branch");
+
+	firstPrView.resolve(okResult({ ...samplePr, number: 4, url: "https://github.com/o/r/pull/4" }));
+	await startPromise;
+	await wait(25);
+
+	assert.equal(context.statuses.get("github-pr"), undefined);
+	await sessionShutdown({}, context.ctx);
+});
+
+test("session shutdown disposes the branch watcher and pending refresh", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-github-pr-test-"));
+	const gitDir = join(root, ".git");
+	const headPath = join(gitDir, "HEAD");
+	mkdirSync(gitDir);
+	writeFileSync(headPath, "ref: refs/heads/feature\n");
+
+	let ghPrViews = 0;
+	const mock = createMockPi();
+	installExec(mock, async (command, args) => {
+		if (command === "git") return textResult(".git/HEAD\n");
+		if (args[0] === "pr") {
+			ghPrViews += 1;
+			return okResult(samplePr);
+		}
+		return okResult(sampleCounts);
+	});
+	githubPr(mock.pi);
+	const context = createMockContext({ cwd: root });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(sessionShutdown);
+
+	await sessionStart({}, context.ctx);
+	assert.equal(ghPrViews, 1);
+
+	writeFileSync(headPath, "ref: refs/heads/main\n");
+	await sessionShutdown({}, context.ctx);
+	await wait(300);
+
+	assert.equal(ghPrViews, 1);
+	assert.equal(context.statuses.get("github-pr"), undefined);
+});
+
+test("branch watcher failures stay non-intrusive", async () => {
+	const mock = createMockPi();
+	installExec(mock, async (command, args) => {
+		if (command === "git") return textResult("", 128, "not a git repository");
+		return okResult(args[0] === "pr" ? samplePr : sampleCounts);
+	});
+	githubPr(mock.pi);
+	const context = createMockContext({ cwd: "/repo" });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	assert.ok(sessionStart);
+
+	await sessionStart({}, context.ctx);
+
+	assert.equal(
+		context.statuses.get("github-pr"),
+		`PR \x1b]8;;${samplePr.url}\x07#123\x1b]8;;\x07: checks failing (1), approved, 5 comments`,
+	);
 	assert.equal(context.widgets.size, 0);
 	assert.equal(context.notifications.length, 0);
 });
@@ -421,4 +540,27 @@ function installExec(mock: ReturnType<typeof createMockPi>, exec: ExecFunction):
 		return exec(command, args, options);
 	};
 	return calls;
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((promiseResolve, promiseReject) => {
+		resolve = promiseResolve;
+		reject = promiseReject;
+	});
+	return { promise, resolve, reject };
+}
+
+function wait(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(predicate: () => boolean, message: string, timeoutMs = 1_000) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (predicate()) return;
+		await wait(10);
+	}
+	assert.fail(message);
 }
