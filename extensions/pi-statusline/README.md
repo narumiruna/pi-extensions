@@ -9,7 +9,7 @@ Use it to monitor model selection, thinking level, git branch, working directory
 ## ✨ Features
 
 - Replaces the default Pi footer with a compact preset-based statusline.
-- Shows model, thinking level, git branch, project directory, active tool, context usage, tokens, cost, and clock.
+- Shows model, thinking level, git branch/status, project directory, active tool, context usage, tokens, cost, and clock.
 - Displays compact statuses published through Pi's generic extension status API.
 - Owns extension status icons through optional JSON config, including per-extension icon suppression with `""`.
 - Warns when the same extension package is installed from multiple sources.
@@ -84,12 +84,14 @@ The default `tokyo-night` statusline uses a Starship-inspired `░▒▓` / `
 - 🤖 current model.
 - 🧠 thinking level.
 - 📁 current project directory.
-- 🌿 git branch.
+- 🌿 git branch, with compact git status tokens when dirty or ahead/behind.
 - ⚙ active or last tool.
 - 🪟 context usage percentage.
 - 🔢 token totals.
 - 💸 estimated cost.
 - 🕒 clock.
+
+Git status tokens are hidden for clean repositories. When present, they mean `⇡` ahead, `⇣` behind, `+` staged, `~` modified/deleted in the worktree, `?` untracked, and `!` conflicts. Example: `🌿 main ⇡1 +2 ~1 ?3`.
 
 Statuses from other extensions appear below the main statusline, use each preset's separator, and wrap onto additional footer lines when they exceed the terminal width.
 

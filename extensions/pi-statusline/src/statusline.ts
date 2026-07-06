@@ -31,7 +31,17 @@ interface RuntimeState {
 	isStreaming: boolean;
 	thinkingLevel: ThinkingLevel;
 	duplicateExtensions: string[];
+	gitStatus?: GitStatusSummary;
 	requestRender?: () => void;
+}
+
+export interface GitStatusSummary {
+	ahead: number;
+	behind: number;
+	staged: number;
+	modified: number;
+	untracked: number;
+	conflicts: number;
 }
 
 interface TokenTotals {
@@ -44,6 +54,9 @@ const STATUSLINE_KEY = "statusline";
 const GITHUB_PR_KEY = "github-pr";
 const SETTINGS_FILE = "pi-statusline-settings.json";
 const DEFAULT_PRESET: StatuslinePresetName = "tokyo-night";
+const GIT_STATUS_REFRESH_INTERVAL_MS = 30_000;
+const GIT_STATUS_EVENT_DEBOUNCE_MS = 250;
+const GIT_STATUS_TIMEOUT_MS = 3_000;
 
 const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
 	"chrome-devtools": "🌐",
@@ -95,21 +108,106 @@ export default function statusline(pi: ExtensionAPI) {
 		duplicateExtensions: [],
 	};
 
+	let sessionGeneration = 0;
+	let activeGitStatusTarget: { cwd: string; generation: number } | undefined;
+	let gitStatusRefreshInFlight = false;
+	let gitStatusDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingGitStatusRefresh: { cwd: string; generation: number } | undefined;
+
 	const refresh = () => runtime.requestRender?.();
 
+	const setGitStatus = (summary: GitStatusSummary | undefined) => {
+		if (gitStatusSummaryEqual(runtime.gitStatus, summary)) return;
+		runtime.gitStatus = summary;
+		refresh();
+	};
+
+	const clearGitStatusDebounce = () => {
+		if (!gitStatusDebounceTimer) return;
+		clearTimeout(gitStatusDebounceTimer);
+		gitStatusDebounceTimer = undefined;
+	};
+
+	const isActiveGitStatusTarget = (cwd: string, generation: number) =>
+		activeGitStatusTarget?.cwd === cwd &&
+		activeGitStatusTarget.generation === generation &&
+		generation === sessionGeneration;
+
+	const refreshGitStatus = (cwd: string, generation = sessionGeneration) => {
+		if (!isActiveGitStatusTarget(cwd, generation)) return;
+		if (gitStatusRefreshInFlight) {
+			pendingGitStatusRefresh = { cwd, generation };
+			return;
+		}
+
+		gitStatusRefreshInFlight = true;
+		void (async () => {
+			try {
+				const summary = await readGitStatus(pi, cwd);
+				if (isActiveGitStatusTarget(cwd, generation)) setGitStatus(summary);
+			} catch {
+				if (isActiveGitStatusTarget(cwd, generation)) setGitStatus(undefined);
+			} finally {
+				gitStatusRefreshInFlight = false;
+				const pending = pendingGitStatusRefresh;
+				pendingGitStatusRefresh = undefined;
+				if (pending && isActiveGitStatusTarget(pending.cwd, pending.generation)) {
+					refreshGitStatus(pending.cwd, pending.generation);
+				}
+			}
+		})();
+	};
+
+	const scheduleGitStatusRefresh = (cwd: string, generation = sessionGeneration) => {
+		if (!isActiveGitStatusTarget(cwd, generation)) return;
+		clearGitStatusDebounce();
+		gitStatusDebounceTimer = setTimeout(() => {
+			gitStatusDebounceTimer = undefined;
+			refreshGitStatus(cwd, generation);
+		}, GIT_STATUS_EVENT_DEBOUNCE_MS);
+	};
+
+	const scheduleGitStatusRefreshForContext = (ctx: ExtensionContext) => {
+		if (!activeGitStatusTarget || activeGitStatusTarget.cwd !== ctx.cwd) return;
+		scheduleGitStatusRefresh(activeGitStatusTarget.cwd, activeGitStatusTarget.generation);
+	};
+
 	const installFooter = (ctx: ExtensionContext) => {
+		const generation = ++sessionGeneration;
+		const cwd = ctx.cwd;
+		clearGitStatusDebounce();
+		activeGitStatusTarget = ctx.mode === "tui" ? { cwd, generation } : undefined;
+		runtime.gitStatus = undefined;
 		ctx.ui.setStatus(STATUSLINE_KEY, undefined);
-		runtime.duplicateExtensions = findDuplicateExtensions(ctx.cwd);
+		if (!activeGitStatusTarget) return;
+		runtime.duplicateExtensions = findDuplicateExtensions(cwd);
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			runtime.requestRender = () => tui.requestRender();
 
-			const branchUnsubscribe = footerData.onBranchChange(() => tui.requestRender());
-			const clock = setInterval(() => tui.requestRender(), 30_000);
+			const refreshFooterGitStatus = () => refreshGitStatus(cwd, generation);
+			const branchUnsubscribe = footerData.onBranchChange(() => {
+				runtime.gitStatus = undefined;
+				clearGitStatusDebounce();
+				refreshFooterGitStatus();
+				tui.requestRender();
+			});
+			const clock = setInterval(() => {
+				clearGitStatusDebounce();
+				refreshFooterGitStatus();
+				tui.requestRender();
+			}, GIT_STATUS_REFRESH_INTERVAL_MS);
 
 			return {
 				dispose() {
 					branchUnsubscribe();
 					clearInterval(clock);
+					if (isActiveGitStatusTarget(cwd, generation)) {
+						activeGitStatusTarget = undefined;
+						clearGitStatusDebounce();
+						pendingGitStatusRefresh = undefined;
+						runtime.gitStatus = undefined;
+						runtime.requestRender = undefined;
+					}
 				},
 				invalidate() {},
 				render(width: number): string[] {
@@ -119,6 +217,7 @@ export default function statusline(pi: ExtensionAPI) {
 				},
 			};
 		});
+		refreshGitStatus(cwd, generation);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -132,6 +231,11 @@ export default function statusline(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		sessionGeneration += 1;
+		activeGitStatusTarget = undefined;
+		clearGitStatusDebounce();
+		pendingGitStatusRefresh = undefined;
+		runtime.gitStatus = undefined;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setStatus(STATUSLINE_KEY, undefined);
 		runtime.requestRender = undefined;
@@ -149,8 +253,9 @@ export default function statusline(pi: ExtensionAPI) {
 		refresh();
 	});
 
-	pi.on("agent_end", () => {
+	pi.on("agent_end", (_event, ctx) => {
 		runtime.isStreaming = false;
+		scheduleGitStatusRefreshForContext(ctx);
 		refresh();
 	});
 
@@ -160,7 +265,10 @@ export default function statusline(pi: ExtensionAPI) {
 		refresh();
 	});
 
-	pi.on("turn_end", () => refresh());
+	pi.on("turn_end", (_event, ctx) => {
+		scheduleGitStatusRefreshForContext(ctx);
+		refresh();
+	});
 
 	pi.on("tool_execution_start", (event) => {
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
@@ -169,12 +277,13 @@ export default function statusline(pi: ExtensionAPI) {
 		refresh();
 	});
 
-	pi.on("tool_execution_end", (event) => {
+	pi.on("tool_execution_end", (event, ctx) => {
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		if (currentCount <= 1) runtime.activeTools.delete(event.toolName);
 		else runtime.activeTools.set(event.toolName, currentCount - 1);
 
 		runtime.lastCompletedTool = event.toolName;
+		scheduleGitStatusRefreshForContext(ctx);
 		refresh();
 	});
 }
@@ -280,7 +389,7 @@ function buildSegment(
 		case "branch": {
 			const branch = footerData.getGitBranch();
 			const pr = branch ? prLinkFromStatuses(footerData.getExtensionStatuses()) : undefined;
-			return segment(name, pr ? `🌿 ${branch} (${pr})` : `🌿 ${branch ?? "no-git"}`, color, "git");
+			return segment(name, formatGitBranchText(branch, runtime.gitStatus, pr), color, "git");
 		}
 		case "cwd":
 			return segment(name, `📁 ${basename(ctx.cwd) || ctx.cwd}`, color, "directory");
@@ -388,6 +497,113 @@ export function prLinkFromStatuses(statuses: ReadonlyMap<string, string>): strin
 	const closeMarker = "\x1b]8;;\x07";
 	const close = value.indexOf(closeMarker, open + 1);
 	return close === -1 ? undefined : value.slice(open, close + closeMarker.length);
+}
+
+async function readGitStatus(
+	pi: ExtensionAPI,
+	cwd: string,
+): Promise<GitStatusSummary | undefined> {
+	const result = await pi.exec(
+		"git",
+		["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=normal"],
+		{
+			cwd,
+			timeout: GIT_STATUS_TIMEOUT_MS,
+		},
+	);
+	if (result.code !== 0 || result.killed) return undefined;
+	return parseGitStatusPorcelain(result.stdout);
+}
+
+export function parseGitStatusPorcelain(output: string): GitStatusSummary {
+	const summary: GitStatusSummary = {
+		ahead: 0,
+		behind: 0,
+		staged: 0,
+		modified: 0,
+		untracked: 0,
+		conflicts: 0,
+	};
+
+	for (const line of output.split(/\r?\n/)) {
+		if (!line) continue;
+		if (line.startsWith("## ")) {
+			const ahead = line.match(/\bahead (\d+)/u);
+			const behind = line.match(/\bbehind (\d+)/u);
+			summary.ahead = ahead ? Number(ahead[1]) : 0;
+			summary.behind = behind ? Number(behind[1]) : 0;
+			continue;
+		}
+
+		const indexStatus = line[0] ?? " ";
+		const worktreeStatus = line[1] ?? " ";
+		if (indexStatus === "?" && worktreeStatus === "?") {
+			summary.untracked += 1;
+			continue;
+		}
+		if (isConflictStatus(indexStatus, worktreeStatus)) {
+			summary.conflicts += 1;
+			continue;
+		}
+		if (isChangedStatus(indexStatus)) summary.staged += 1;
+		if (isChangedStatus(worktreeStatus)) summary.modified += 1;
+	}
+
+	return summary;
+}
+
+function isConflictStatus(indexStatus: string, worktreeStatus: string): boolean {
+	return (
+		(indexStatus === "D" && worktreeStatus === "D") ||
+		(indexStatus === "A" && worktreeStatus === "A") ||
+		indexStatus === "U" ||
+		worktreeStatus === "U"
+	);
+}
+
+function isChangedStatus(status: string): boolean {
+	return status !== " " && status !== "?" && status !== "!";
+}
+
+export function formatGitStatusSummary(summary: GitStatusSummary | undefined): string {
+	if (!summary) return "";
+	const tokens = [
+		["⇡", summary.ahead],
+		["⇣", summary.behind],
+		["+", summary.staged],
+		["~", summary.modified],
+		["?", summary.untracked],
+		["!", summary.conflicts],
+	] as const;
+	return tokens
+		.filter(([, count]) => count > 0)
+		.map(([prefix, count]) => `${prefix}${formatCount(count)}`)
+		.join(" ");
+}
+
+export function formatGitBranchText(
+	branch: string | null,
+	status: GitStatusSummary | undefined,
+	pr?: string,
+): string {
+	if (!branch) return "🌿 no-git";
+	const suffixes = [formatGitStatusSummary(status), pr ? `(${pr})` : ""].filter(Boolean);
+	return suffixes.length > 0 ? `🌿 ${branch} ${suffixes.join(" ")}` : `🌿 ${branch}`;
+}
+
+function gitStatusSummaryEqual(
+	left: GitStatusSummary | undefined,
+	right: GitStatusSummary | undefined,
+): boolean {
+	if (!left || !right) return left === right;
+	return (
+		left.ahead === right.ahead &&
+		left.behind === right.behind &&
+		left.staged === right.staged &&
+		left.modified === right.modified &&
+		left.untracked === right.untracked &&
+		left.conflicts === right.conflicts
+	);
 }
 
 function formatExtensionStatuses(
