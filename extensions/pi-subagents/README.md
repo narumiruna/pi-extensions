@@ -51,27 +51,42 @@ Execution modes:
 
 ## 🧭 Proactive use
 
-The `subagent` tool now advertises concise prompt guidance so the main Pi agent can choose it
-without an explicit user request when delegation is a good fit.
+The `subagent` tool advertises concise prompt guidance so the main Pi agent can decide
+whether to spawn 0, 1, or multiple subagents without an explicit user-specified count.
 
-Use `subagent` proactively for:
+Count-selection guidance:
 
-- Independent read-only research, broad codebase reconnaissance, or high-volume command output
-  that would clutter the main context.
-- Parallel multi-domain investigation where each branch can return a concise summary.
-- Independent review or verification after implementation, especially with the read-only
-  `reviewer` agent.
+- Use **no subagent** for simple answers, quick targeted edits, latency-sensitive one-step work, or
+  tasks that need frequent user back-and-forth.
+- Use **one subagent** for isolated research, high-volume command output, planning, or independent
+  review/verification after implementation.
+- Prefer **2–4 parallel read-only subagents** when a broad task naturally splits into independent
+  branches that can each return a concise summary.
+- Exceed 4 tasks only when the branches are clearly distinct and worth the extra cost, while staying
+  within the existing hard max of 8 parallel tasks.
+- Do not parallelize implementation that may edit the same files or shared state; serialize
+  write-heavy work instead.
+- Do not use project-local agents unless the user explicitly opts into them with
+  `agentScope: "project"` or `"both"`; keep confirmation enabled for untrusted repositories.
 
-Do not use `subagent` for:
+Examples where the main agent chooses the count:
 
-- Simple answers, quick targeted edits, latency-sensitive one-step work, or tasks that need
-  frequent user back-and-forth.
-- Parallel implementation that may edit the same files or shared state; serialize write-heavy work
-  instead.
-- Project-local agents unless the user explicitly opts into them with `agentScope: "project"` or
-  `"both"`; keep confirmation enabled for untrusted repositories.
+No subagent for a known-file edit:
 
-Good delegation example:
+```txt
+Rename one symbol in src/foo.ts.
+```
+
+One subagent for an independent review:
+
+```json
+{
+  "agent": "reviewer",
+  "task": "Review the current changes for release blockers. Do not edit files. Report PASS/FAIL/PARTIAL with evidence."
+}
+```
+
+Two to four parallel subagents for broad independent reconnaissance:
 
 ```json
 {
@@ -83,6 +98,10 @@ Good delegation example:
     {
       "agent": "scout",
       "task": "Research auth-related tests. Report coverage gaps. Do not edit files."
+    },
+    {
+      "agent": "scout",
+      "task": "Research API entry points that depend on auth. Report integration risks. Do not edit files."
     }
   ],
   "aggregator": {
@@ -91,9 +110,6 @@ Good delegation example:
   }
 }
 ```
-
-Bad delegation example: do not spawn a worker just to rename one symbol in a known file; edit it
-directly in the main conversation.
 
 ## 🚀 Examples
 

@@ -14,11 +14,22 @@ import subagents, {
 	uniqueToolNames,
 } from "../src/subagents.js";
 
-test("subagents registers delegation tool and configuration command", () => {
+test("subagents registers self-directed fan-out guidance and configuration command", () => {
 	const mock = createMockPi();
 	subagents(mock.pi);
 
-	assert.equal(mock.tools[0]?.name, "subagent");
+	const tool = mock.tools[0];
+	assert.equal(tool?.name, "subagent");
+	assert.match(String(tool?.promptSnippet), /decide whether to spawn 0, 1, or multiple subagents/i);
+
+	const promptGuidelines = tool?.promptGuidelines;
+	assert.ok(Array.isArray(promptGuidelines));
+	const guidanceText = promptGuidelines.join("\n");
+	assert.match(guidanceText, /decide how many subagents to spawn/i);
+	assert.match(guidanceText, /no subagent/i);
+	assert.match(guidanceText, /one subagent/i);
+	assert.match(guidanceText, /2-4 parallel read-only subagents/i);
+	assert.match(guidanceText, /hard max 8/i);
 	assert.ok(mock.commands.has("subagents:config"));
 });
 

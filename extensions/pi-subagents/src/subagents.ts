@@ -770,11 +770,14 @@ export default function (pi: ExtensionAPI) {
 			'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
 		promptSnippet:
-			"Delegate independent research, review, verification, or multi-step work to isolated Pi subagents.",
+			"Decide whether to spawn 0, 1, or multiple subagents for independent research, review, verification, or multi-step work in isolated Pi processes.",
 		promptGuidelines: [
-			"Use subagent for independent read-only research, broad codebase reconnaissance, high-volume command output, multi-domain parallel investigation, or an independent reviewer after implementation.",
-			"Use subagent parallel mode when work splits into independent tasks; prefer read-only agents such as scout or reviewer for fan-out and serialize write-heavy implementation that touches the same files.",
-			"Do not use subagent for simple answers, quick targeted edits, latency-sensitive one-step work, or tasks requiring frequent user back-and-forth.",
+			"Use subagent only when delegation fits; the main agent should decide how many subagents to spawn from task shape instead of waiting for the user to specify a count.",
+			"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, or tasks requiring frequent user back-and-forth.",
+			"Use one subagent for isolated research, broad command output, planning, or independent review/verification that benefits from a separate context.",
+			"Use subagent parallel mode with 2-4 parallel read-only subagents when work has broad independent branches; prefer scout or reviewer for fan-out and add an aggregator when synthesis helps.",
+			"Use more than 4 subagent tasks only when clearly justified by distinct independent branches, and stay within the existing hard max 8 parallel tasks.",
+			"Do not use subagent parallel mode for write-heavy implementation touching the same files or shared state; serialize those changes in the main agent or one worker.",
 			'Do not use subagent with project-local agents unless the user explicitly wants project agents or sets agentScope to "project" or "both"; keep confirmation enabled for untrusted repositories.',
 			"When using subagent, write self-contained tasks with file paths, context, expected output, and whether the subagent may edit files.",
 		],
