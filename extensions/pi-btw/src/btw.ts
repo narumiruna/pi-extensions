@@ -1,4 +1,14 @@
-import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
+import type { UserMessage } from "@earendil-works/pi-ai";
+// Support both old (@earendil-works/pi-ai/compat) and new (@earendil-works/pi-ai)
+// pi-ai layouts. compat subpath was removed in later versions.
+let complete: (model: any, context: any, options?: any) => Promise<any>;
+try {
+	const mod = await import("@earendil-works/pi-ai/compat");
+	complete = mod.complete;
+} catch {
+	const mod = await import("@earendil-works/pi-ai");
+	complete = mod.complete;
+}
 import {
 	BorderedLoader,
 	DynamicBorder,
