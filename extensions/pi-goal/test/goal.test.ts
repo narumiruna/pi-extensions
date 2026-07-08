@@ -22,6 +22,11 @@ test("goal registers command, completion tool, and lifecycle hooks", () => {
 	assert.ok(mock.commands.has("goal"));
 	assert.equal(typeof mock.commands.get("goal")?.getArgumentCompletions, "function");
 	assert.equal(mock.tools[0]?.name, "goal_complete");
+	const toolParameters = mock.tools[0]?.parameters as
+		| { required?: string[]; properties?: Record<string, unknown> }
+		| undefined;
+	assert.deepEqual(toolParameters?.required, ["goal_id", "summary"]);
+	assert.ok(toolParameters?.properties?.goal_id);
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"agent_end",
 		"before_agent_start",
@@ -119,9 +124,9 @@ test("formatStatus reports active, paused, budget-limited, and empty states", ()
 	assert.equal(formatStatus({ ...activeGoal, status: "budget_limited" }), "budget 500/2k");
 });
 
-test("buildGoalSystemPrompt escapes objective XML and includes budget rules", () => {
+test("buildGoalSystemPrompt escapes objective XML and includes goal_id guard rules", () => {
 	const prompt = buildGoalSystemPrompt({
-		id: "g1",
+		id: "g<1&2>",
 		text: "fix <all> & verify",
 		status: "active",
 		startedAt: 0,
@@ -134,8 +139,75 @@ test("buildGoalSystemPrompt escapes objective XML and includes budget rules", ()
 	});
 
 	assert.match(prompt, /fix &lt;all&gt; &amp; verify/);
+	assert.match(prompt, /g&lt;1&amp;2&gt;/);
 	assert.match(prompt, /Respect the goal token budget \(250\/1k used\)/);
 	assert.match(prompt, /Only call the goal_complete tool after/);
+	assert.match(prompt, /pass this exact goal_id/);
+	assert.match(prompt, /stale-turn guard/);
+});
+
+test("goal prompts include the active goal_id guard", async () => {
+	const started = await startGoalForTest();
+	const initialGoal = requireLastGoal(started.mock);
+	assertPromptHasGoalId(started.mock.sentUserMessages[0]?.text ?? "", initialGoal.id);
+
+	const systemPrompt = started.mock.events.get("before_agent_start")?.[0]?.(
+		{ systemPrompt: "base" },
+		started.ctx,
+	) as { systemPrompt?: string } | undefined;
+	assertPromptHasGoalId(systemPrompt?.systemPrompt ?? "", initialGoal.id);
+
+	await started.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		started.ctx,
+	);
+	assertPromptHasGoalId(started.mock.sentUserMessages.at(-1)?.text ?? "", initialGoal.id);
+
+	await started.mock.commands.get("goal")?.handler("pause", started.ctx);
+	await started.mock.commands.get("goal")?.handler("resume", started.ctx);
+	const resumedGoal = requireLastGoal(started.mock);
+	assertPromptHasGoalId(started.mock.sentUserMessages.at(-1)?.text ?? "", resumedGoal.id);
+
+	await started.mock.commands.get("goal")?.handler("edit verify edited objective", started.ctx);
+	const editedGoal = requireLastGoal(started.mock);
+	assertPromptHasGoalId(started.mock.sentUserMessages.at(-1)?.text ?? "", editedGoal.id);
+});
+
+test("goal_complete requires current goal_id before validating summary", async () => {
+	const { mock, ctx } = await startGoalForTest();
+	const tool = mock.tools[0] as GoalTool;
+	const currentGoal = requireLastGoal(mock);
+
+	try {
+		const missingId = await tool.execute(
+			"call-missing-id",
+			{ summary: "Implemented and verified with npm test." },
+			new AbortController().signal,
+			() => undefined,
+			ctx,
+		);
+
+		assert.equal(missingId.terminate, undefined);
+		assert.match(missingId.content?.[0]?.text ?? "", /goal_id/i);
+		assert.equal(lastGoalStatus(mock), "active");
+
+		const staleId = await tool.execute(
+			"call-stale-id",
+			{ goal_id: "stale-goal", summary: "Not complete: tests still fail." },
+			new AbortController().signal,
+			() => undefined,
+			ctx,
+		);
+
+		assert.equal(staleId.terminate, undefined);
+		assert.match(staleId.content?.[0]?.text ?? "", /goal_id/i);
+		assert.doesNotMatch(staleId.content?.[0]?.text ?? "", /summary/i);
+		assert.doesNotMatch(staleId.content?.[0]?.text ?? "", new RegExp(escapeRegExp(currentGoal.id)));
+		assert.equal(requireLastGoal(mock).id, currentGoal.id);
+		assert.equal(lastGoalStatus(mock), "active");
+	} finally {
+		mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+	}
 });
 
 test("goal_complete rejects contradictory summaries and accepts verified completion", async () => {
@@ -155,10 +227,11 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 
 	const { mock, ctx } = await startGoalForTest();
 	const tool = mock.tools[0] as GoalTool;
+	const goalId = requireLastGoal(mock).id;
 
 	const rejected = await tool.execute(
 		"call-1",
-		{ summary: "Not complete: tests still fail." },
+		{ goal_id: goalId, summary: "Not complete: tests still fail." },
 		new AbortController().signal,
 		() => undefined,
 		ctx,
@@ -170,7 +243,7 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 
 	const emptyRejected = await tool.execute(
 		"call-empty",
-		{ summary: "   " },
+		{ goal_id: goalId, summary: "   " },
 		new AbortController().signal,
 		() => undefined,
 		ctx,
@@ -182,7 +255,7 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 
 	const accepted = await tool.execute(
 		"call-2",
-		{ summary: "Implemented and verified with npm test." },
+		{ goal_id: goalId, summary: "Implemented and verified with npm test." },
 		new AbortController().signal,
 		() => undefined,
 		ctx,
@@ -193,7 +266,7 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 
 	const noActiveRejected = await tool.execute(
 		"call-no-active",
-		{ summary: "Implemented and verified with npm test." },
+		{ goal_id: goalId, summary: "Implemented and verified with npm test." },
 		new AbortController().signal,
 		() => undefined,
 		ctx,
@@ -203,6 +276,98 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 	assert.match(noActiveRejected.content?.[0]?.text ?? "", /no active goal/i);
 	assert.equal(lastGoalStatus(mock), null);
 	mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+});
+
+test("goal_complete rejects stale goal_id after replacement, pause/resume, and clear", async () => {
+	const replaced = await startGoalForTest();
+	const replacementTool = replaced.mock.tools[0] as GoalTool;
+	const originalGoal = requireLastGoal(replaced.mock);
+
+	await replaced.mock.commands.get("goal")?.handler("ship replacement objective", replaced.ctx);
+	const replacementGoal = requireLastGoal(replaced.mock);
+	assert.notEqual(replacementGoal.id, originalGoal.id);
+
+	const staleReplacement = await replacementTool.execute(
+		"call-stale-replacement",
+		{ goal_id: originalGoal.id, summary: "Not complete: tests still fail." },
+		new AbortController().signal,
+		() => undefined,
+		replaced.ctx,
+	);
+
+	assert.equal(staleReplacement.terminate, undefined);
+	assert.match(staleReplacement.content?.[0]?.text ?? "", /goal_id/i);
+	assert.doesNotMatch(
+		staleReplacement.content?.[0]?.text ?? "",
+		new RegExp(escapeRegExp(replacementGoal.id)),
+	);
+	assert.equal(requireLastGoal(replaced.mock).id, replacementGoal.id);
+	assert.equal(lastGoalStatus(replaced.mock), "active");
+
+	const resumed = await startGoalForTest();
+	const resumeTool = resumed.mock.tools[0] as GoalTool;
+	const beforePauseGoal = requireLastGoal(resumed.mock);
+	await resumed.mock.commands.get("goal")?.handler("pause", resumed.ctx);
+
+	const stalePaused = await resumeTool.execute(
+		"call-stale-paused",
+		{ goal_id: beforePauseGoal.id, summary: "Not complete: tests still fail." },
+		new AbortController().signal,
+		() => undefined,
+		resumed.ctx,
+	);
+
+	assert.equal(stalePaused.terminate, undefined);
+	assert.match(stalePaused.content?.[0]?.text ?? "", /paused|not active/i);
+	assert.equal(lastGoalStatus(resumed.mock), "paused");
+	assert.deepEqual(
+		resumed.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "t-after-stale-complete", input: {} },
+			resumed.ctx,
+		),
+		{
+			block: true,
+			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
+		},
+	);
+
+	await resumed.mock.commands.get("goal")?.handler("resume", resumed.ctx);
+	const afterResumeGoal = requireLastGoal(resumed.mock);
+	assert.notEqual(afterResumeGoal.id, beforePauseGoal.id);
+
+	const staleAfterResume = await resumeTool.execute(
+		"call-stale-after-resume",
+		{ goal_id: beforePauseGoal.id, summary: "Not complete: tests still fail." },
+		new AbortController().signal,
+		() => undefined,
+		resumed.ctx,
+	);
+
+	assert.equal(staleAfterResume.terminate, undefined);
+	assert.match(staleAfterResume.content?.[0]?.text ?? "", /goal_id/i);
+	assert.doesNotMatch(
+		staleAfterResume.content?.[0]?.text ?? "",
+		new RegExp(escapeRegExp(afterResumeGoal.id)),
+	);
+	assert.equal(requireLastGoal(resumed.mock).id, afterResumeGoal.id);
+	assert.equal(lastGoalStatus(resumed.mock), "active");
+
+	const cleared = await startGoalForTest();
+	const clearTool = cleared.mock.tools[0] as GoalTool;
+	const beforeClearGoal = requireLastGoal(cleared.mock);
+	await cleared.mock.commands.get("goal")?.handler("clear", cleared.ctx);
+
+	const staleAfterClear = await clearTool.execute(
+		"call-stale-after-clear",
+		{ goal_id: beforeClearGoal.id, summary: "Implemented and verified." },
+		new AbortController().signal,
+		() => undefined,
+		cleared.ctx,
+	);
+
+	assert.equal(staleAfterClear.terminate, undefined);
+	assert.match(staleAfterClear.content?.[0]?.text ?? "", /no active goal/i);
+	assert.equal(lastGoalStatus(cleared.mock), null);
 });
 
 test("pause aborts the current turn, blocks stale tools, and persists paused state", async () => {
@@ -242,6 +407,7 @@ test("pause aborts the current turn, blocks stale tools, and persists paused sta
 test("clear removes goal state without aborting or blocking stale tools", async () => {
 	let clearAborts = 0;
 	const cleared = await startGoalForTest({ abort: () => clearAborts++ });
+	const beforeClearGoal = requireLastGoal(cleared.mock);
 	await cleared.mock.events.get("agent_end")?.[0]?.(
 		{ messages: [{ role: "assistant", stopReason: "stop" }] },
 		cleared.ctx,
@@ -272,7 +438,7 @@ test("clear removes goal state without aborting or blocking stale tools", async 
 	const tool = cleared.mock.tools[0] as GoalTool;
 	const staleCompletion = await tool.execute(
 		"call-after-clear",
-		{ summary: "Implemented and verified." },
+		{ goal_id: beforeClearGoal.id, summary: "Implemented and verified." },
 		new AbortController().signal,
 		() => undefined,
 		cleared.ctx,
@@ -612,6 +778,21 @@ type GoalTool = {
 	}>;
 };
 
+type StoredGoal = {
+	id: string;
+	status?: string;
+};
+
+function assertPromptHasGoalId(prompt: string, goalId: string) {
+	assert.match(prompt, new RegExp(`<goal_id>\\s*${escapeRegExp(goalId)}\\s*</goal_id>`));
+	assert.match(prompt, /pass this exact goal_id/);
+	assert.match(prompt, /stale-turn guard/);
+}
+
+function escapeRegExp(value: string) {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function startGoalForTest(overrides: Record<string, unknown> = {}) {
 	const mock = createMockPi();
 	goal(mock.pi);
@@ -621,8 +802,18 @@ async function startGoalForTest(overrides: Record<string, unknown> = {}) {
 	return { mock, ...context };
 }
 
-function lastGoalStatus(mock: ReturnType<typeof createMockPi>) {
+function requireLastGoal(mock: ReturnType<typeof createMockPi>) {
+	const goal = lastGoal(mock);
+	assert.ok(goal, "expected a persisted goal");
+	return goal;
+}
+
+function lastGoal(mock: ReturnType<typeof createMockPi>) {
 	const entry = mock.entries.filter((entry) => entry.customType === "goal-state").at(-1);
-	return ((entry?.data as { goal?: { status?: string } | null } | undefined)?.goal?.status ??
-		null) as string | null;
+	return ((entry?.data as { goal?: StoredGoal | null } | undefined)?.goal ??
+		null) as StoredGoal | null;
+}
+
+function lastGoalStatus(mock: ReturnType<typeof createMockPi>) {
+	return lastGoal(mock)?.status ?? null;
 }

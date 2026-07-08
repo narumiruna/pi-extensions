@@ -28,6 +28,7 @@ interface ActiveGoal {
 
 interface GoalCompleteDetails {
 	goal: string;
+	goal_id: string;
 	summary: string;
 }
 
@@ -130,14 +131,20 @@ const goalCompleteTool = defineTool({
 	name: "goal_complete",
 	label: "Goal Complete",
 	description:
-		"Mark the active /goal as complete after all required work is done and verified. Do not use for partial progress, blockers, failing, or unverified work.",
-	promptSnippet: "Mark the active /goal as complete after fully finishing and verifying it",
+		"Mark the active /goal as complete after all required work is done and verified, using the current goal_id stale-turn guard. Do not use for partial progress, blockers, failing, or unverified work.",
+	promptSnippet:
+		"Mark the active /goal as complete after fully finishing and verifying it, with the current goal_id",
 	promptGuidelines: [
 		"When a /goal is active, keep working until the goal is complete; do not stop with only a plan or partial progress.",
 		"Before calling goal_complete, audit the active goal requirement by requirement against the current files, command output, tests, or external state.",
+		"Pass the exact goal_id shown in the current /goal prompt; never reuse a goal_id from an older, paused, replaced, or cleared turn.",
 		"Call goal_complete only after the requested goal is fully implemented, verified, and no known required work remains; otherwise keep working.",
 	],
 	parameters: Type.Object({
+		goal_id: Type.String({
+			description:
+				"The exact goal_id shown in the current active /goal prompt. Used only to reject stale completion calls from older turns.",
+		}),
 		summary: Type.String({
 			description:
 				"State what was completed and what evidence verified it. Do not use this tool to report partial progress, blockers, failures, or remaining work.",
@@ -146,7 +153,8 @@ const goalCompleteTool = defineTool({
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		const completedGoal = activeGoal;
 		const goal = completedGoal?.text ?? "unknown goal";
-		const summary = params.summary.trim();
+		const requestedGoalId = typeof params.goal_id === "string" ? params.goal_id.trim() : "";
+		const summary = typeof params.summary === "string" ? params.summary.trim() : "";
 
 		if (!completedGoal) {
 			const rejection = "Goal completion rejected: no active goal.";
@@ -154,7 +162,28 @@ const goalCompleteTool = defineTool({
 
 			return {
 				content: [{ type: "text", text: rejection }],
-				details: { goal, summary } satisfies GoalCompleteDetails,
+				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+			};
+		}
+
+		const staleGoalRejection = goalIdRejectionReason(completedGoal, requestedGoalId);
+		if (staleGoalRejection) {
+			const rejection = `Goal completion rejected: ${staleGoalRejection}.`;
+			ctx.ui.notify(rejection, "warning");
+
+			return {
+				content: [{ type: "text", text: rejection }],
+				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+			};
+		}
+
+		if (completedGoal.status !== "active") {
+			const rejection = `Goal completion rejected: goal is ${completedGoal.status}, not active.`;
+			ctx.ui.notify(rejection, "warning");
+
+			return {
+				content: [{ type: "text", text: rejection }],
+				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
 			};
 		}
 
@@ -177,24 +206,22 @@ const goalCompleteTool = defineTool({
 						text: rejection,
 					},
 				],
-				details: { goal, summary } satisfies GoalCompleteDetails,
+				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
 			};
 		}
 
-		if (completedGoal) {
-			activeGoal = transitionGoal(completedGoal, "complete");
-			updateGoalUsage(activeGoal, ctx);
-			persistGoal(activeGoal);
-		}
+		activeGoal = transitionGoal(completedGoal, "complete");
+		updateGoalUsage(activeGoal, ctx);
+		persistGoal(activeGoal);
 
-		ctx.ui.setStatus(STATUS_KEY, completedGoal ? formatStatus(activeGoal) : undefined);
+		ctx.ui.setStatus(STATUS_KEY, formatStatus(activeGoal));
 		clearActiveGoal(ctx);
 		showCompletionStatus(ctx);
 		ctx.ui.notify(`Goal complete: ${goal}`, "info");
 
 		return {
 			content: [{ type: "text", text: `Goal complete: ${summary}` }],
-			details: { goal, summary } satisfies GoalCompleteDetails,
+			details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
 			terminate: true,
 		};
 	},
@@ -427,7 +454,7 @@ async function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 	}
 	clearGoalRecovery();
 	clearStaleGoalToolCallBlock();
-	activeGoal = transitionGoal(activeGoal, "active");
+	activeGoal = transitionGoal(nextGoalInstance(activeGoal), "active");
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	if (activeGoal.status !== "active") {
@@ -474,7 +501,7 @@ async function editGoal(
 	cancelContinuationPending();
 	clearGoalRecovery();
 	activeGoal = normalizeGoalForBudget({
-		...activeGoal,
+		...nextGoalInstance(activeGoal),
 		text: objective,
 		status: editedGoalStatus(activeGoal.status),
 		tokenBudget: tokenBudget ?? activeGoal.tokenBudget,
@@ -519,6 +546,10 @@ function createGoal(text: string, tokenBudget: number | undefined, baselineToken
 
 function transitionGoal(goal: ActiveGoal, status: GoalStatus): ActiveGoal {
 	return normalizeGoalForBudget({ ...goal, status, updatedAt: Date.now() });
+}
+
+function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
+	return { ...goal, id: randomUUID(), updatedAt: Date.now() };
 }
 
 function editedGoalStatus(status: GoalStatus): GoalStatus {
@@ -747,34 +778,42 @@ export function formatTokenCount(value: number) {
 
 function buildGoalPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
-	return `Goal mode is active. Complete this goal fully:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
+	return `Goal mode is active. Complete this goal fully:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
 }
 
 function buildObjectiveUpdatedPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
-	return `The active /goal objective was updated. Continue working toward this goal:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("the updated goal")}`;
+	return `The active /goal objective was updated. Continue working toward this goal:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("the updated goal")}`;
 }
 
 function buildResumePrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
-	return `The user explicitly resumed the paused /goal. Continue working toward this goal:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
+	return `The user explicitly resumed the paused /goal. Continue working toward this goal:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
 }
 
 export function buildGoalSystemPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
-	return `Active /goal:\n${goalObjectiveBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
+	return `Active /goal:\n${goalContextBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified, and pass this exact goal_id.${budgetLine}`;
 }
 
 function buildContinuePrompt(goal: ActiveGoal, marker: string) {
-	return `Continue the active /goal until it is complete:\n\n${goalObjectiveBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. Current files, command output, tests, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
+	return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. Current files, command output, tests, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
+}
+
+function goalContextBlock(goal: ActiveGoal) {
+	return `${goalObjectiveBlock(goal)}\n\n${goalCompletionGuardBlock(goal)}`;
 }
 
 function goalObjectiveBlock(goal: ActiveGoal) {
 	return `<goal_objective>\n${escapeXmlText(goal.text)}\n</goal_objective>`;
 }
 
+function goalCompletionGuardBlock(goal: ActiveGoal) {
+	return `<goal_id>\n${escapeXmlText(goal.id)}\n</goal_id>\nThis goal_id is only the goal_complete tool stale-turn guard, not part of the objective. If and only if the goal is fully complete, pass this exact goal_id to goal_complete with the completion summary.`;
+}
+
 function goalPersistenceRules(goalLabel: string) {
-	return `Keep going until ${goalLabel} is completely resolved end-to-end. Do not redefine ${goalLabel} into a smaller task. Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps. Autonomously perform implementation and verification with the available tools when they are needed. Treat the current worktree, command output, tests, and external state as authoritative. If a tool call fails, try reasonable alternatives instead of yielding early. Before calling goal_complete, audit ${goalLabel} requirement by requirement against the verified current state. Only call the goal_complete tool after ${goalLabel} is fully complete and verified.`;
+	return `Keep going until ${goalLabel} is completely resolved end-to-end. Do not redefine ${goalLabel} into a smaller task. Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps. Autonomously perform implementation and verification with the available tools when they are needed. Treat the current worktree, command output, tests, and external state as authoritative. If a tool call fails, try reasonable alternatives instead of yielding early. Before calling goal_complete, audit ${goalLabel} requirement by requirement against the verified current state. Only call the goal_complete tool after ${goalLabel} is fully complete and verified, and pass this exact goal_id. Never reuse a goal_id from an older, paused, replaced, or cleared turn.`;
 }
 
 function hasPendingMessages(ctx: StatusContext) {
@@ -817,6 +856,12 @@ function isPiOwnedCompactionRetry(event: unknown, goalId: string) {
 
 export function isContradictoryCompletionSummary(summary: string) {
 	return CONTRADICTORY_COMPLETION_PATTERNS.some((pattern) => pattern.test(summary));
+}
+
+function goalIdRejectionReason(goal: ActiveGoal, requestedGoalId: string) {
+	if (!requestedGoalId) return "missing goal_id";
+	if (requestedGoalId !== goal.id) return "goal_id does not match the active goal";
+	return undefined;
 }
 
 export function isRetryableGoalInterruption(assistant: AssistantMessageLike) {

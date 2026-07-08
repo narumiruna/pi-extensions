@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-goal)](https://www.npmjs.com/package/@narumitw/pi-goal) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds session-scoped `/goal` commands and a `goal_complete` tool for autonomous, verifiable task completion.
+`@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds session-scoped `/goal` commands and a `goal_complete({ goal_id, summary })` tool for autonomous, verifiable task completion.
 
 Goal mode uses Codex-like persistence instructions and keeps sending guarded continuation messages until the agent calls `goal_complete`, the user pauses or clears the goal, an interrupt/error pauses the goal, or an optional token budget is reached.
 
@@ -15,12 +15,13 @@ Goal mode uses Codex-like persistence instructions and keeps sending guarded con
 - Supports optional token budgets such as `/goal --tokens 100k <goal>`.
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
-- Registers a `goal_complete` tool for explicit completion, and rejects plainly contradictory completion summaries such as “not complete” or “tests still fail”.
+- Registers a `goal_complete({ goal_id, summary })` tool for explicit completion, requiring the current goal id and rejecting missing/stale ids plus plainly contradictory summaries such as “not complete” or “tests still fail”.
 - Automatically prompts the agent to continue if an active turn ends early, directly triggering the next turn when Pi is idle and no pending messages are queued.
 - Pauses and aborts queued goal work when the user pauses a goal or Pi reports a non-retryable aborted/errored assistant turn.
 - Keeps retryable provider interruptions and Pi compaction retries active without enqueueing duplicate goal continuations while Pi retries.
 - Preserves active goals across manual, threshold, and overflow compaction.
 - Guards auto-follow-ups so duplicate, replaced, paused, cleared, completed, or budget-limited goals are not continued.
+- Rotates the completion guard id when a goal is resumed or edited so delayed old turns cannot complete the newer goal instance.
 - Blocks stale tool calls after pause or non-retryable interruption.
 - Encourages requirement-by-requirement verification before the goal is marked complete.
 
@@ -82,7 +83,9 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 
 ## ✅ How completion works
 
-While a goal is active, `pi-goal` injects persistence rules and exposes `goal_complete`. If a turn ends before completion, it records usage and sends one guarded continuation only when no other messages are pending. Empty or plainly contradictory completion summaries are rejected as a state-safety guard, not as proof of completion.
+While a goal is active, `pi-goal` injects persistence rules, a `<goal_id>` stale-turn guard, and exposes `goal_complete`. To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation, and paused goals cannot be completed until resumed. Empty or plainly contradictory summaries are also rejected; the summary is completion evidence, not the stale-turn safety token.
+
+If a turn ends before completion, `pi-goal` records usage and sends one guarded continuation only when no other messages are pending.
 
 ## 🛑 Interruption and queued-input behavior
 
