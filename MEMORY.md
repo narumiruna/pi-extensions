@@ -34,6 +34,7 @@
 
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
+- Prefer JSON config files over environment variables for user-facing settings, including token configuration when it is appropriate for the product. Add new environment variables only when they serve a clear purpose, such as secrets, deployment workflows, automation, or compatibility with existing integrations.
 - Keep `just` install recipes resilient by verifying registry visibility and falling back only when it solves the current install path.
 - New extension README files should mirror the existing style: emoji title, npm/Pi/license badges, Features, Install, Usage/What it does, Package layout, Keywords, and License.
 - New slash-command extensions should include argument autocomplete when the command has known subcommands, modes, or flags.

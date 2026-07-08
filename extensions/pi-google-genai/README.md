@@ -40,12 +40,15 @@ Example:
   "apiKey": "YOUR_GOOGLE_API_KEY",
   "model": "gemini-3.5-flash",
   "apiUrl": "https://generativelanguage.googleapis.com/v1beta/interactions",
-  "timeoutMs": 30000,
+  "timeoutMs": 60000,
   "tools": ["google_search", "google_maps", "google_url_context"]
 }
 ```
 
 The file is written as `0600`.
+
+Timeout precedence is: per-call `timeoutMs` parameter, `google-genai.json` `timeoutMs`, then
+the 60000ms default. Timeout values must be integer milliseconds from 1 to 2147483647.
 
 ### 🔐 Auth precedence
 
@@ -83,10 +86,14 @@ Parameters:
 
 - `query`: search question.
 - `searchTypes?`: optional array of `web_search` and/or `image_search`. Omit it for Google's default web search.
+- `timeoutMs?`: per-call timeout in milliseconds.
 
 #### Large / broad searches
 
-Very broad market-research queries can time out. Prefer several narrow searches over one big query.
+Very broad market-research, comparison, review, or search-result synthesis queries can time out. A
+timeout error means the request exceeded the configured duration; it is not a “no results found”
+response. Prefer several narrow searches over one big query, or raise config `timeoutMs` or
+per-call `timeoutMs` when a broader call is genuinely needed.
 
 Instead of:
 
@@ -112,6 +119,7 @@ Parameters:
 
 - `query`: maps/place question.
 - `latitude?` and `longitude?`: optional pair for location-sensitive questions. If one is set, both are required. Latitude must be `-90..90`; longitude must be `-180..180`.
+- `timeoutMs?`: per-call timeout in milliseconds.
 
 ### 🔗 `google_url_context`
 
@@ -121,6 +129,7 @@ Parameters:
 
 - `prompt`: question or instruction.
 - `urls`: one or more `http://` or `https://` URLs.
+- `timeoutMs?`: per-call timeout in milliseconds.
 
 Use Firecrawl instead when you need raw HTML/markdown extraction, crawling, or URL discovery.
 

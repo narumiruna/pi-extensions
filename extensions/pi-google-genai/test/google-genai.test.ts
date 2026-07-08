@@ -10,15 +10,18 @@ import googleGenai, {
 	commandCompletions,
 	DEFAULT_API_URL,
 	DEFAULT_MODEL,
+	DEFAULT_TIMEOUT_MS,
 	formatToolResult,
 	GOOGLE_GENAI_TOOL_NAMES,
 	googleGenaiConfigPath,
 	loadGoogleGenaiConfig,
+	MAX_TIMEOUT_MS,
 	normalizeGoogleGenaiSettings,
 	parseCommand,
 	resolveGoogleGenaiAuth,
 	validateMapsLocation,
 	validateSearchTypes,
+	validateTimeoutMs,
 	validateUrls,
 } from "../src/google-genai.js";
 
@@ -33,6 +36,9 @@ test("google-genai registers three tools, command, and session hooks", () => {
 	assert.ok(mock.commands.has("google-genai"));
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"web_search"/);
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"image_search"/);
+	assert.match(JSON.stringify(mock.tools[0].parameters), /timeoutMs/);
+	assert.match(JSON.stringify(mock.tools[0].parameters), /"type":"integer"/);
+	assert.match(JSON.stringify(mock.tools[0].parameters), new RegExp(`"maximum":${MAX_TIMEOUT_MS}`));
 	assert.match(JSON.stringify(mock.tools[0].promptGuidelines), /split|narrow/i);
 	assert.match(JSON.stringify(mock.tools[2].parameters), /"minItems":1/);
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
@@ -58,7 +64,7 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 			config: {
 				model: DEFAULT_MODEL,
 				apiUrl: DEFAULT_API_URL,
-				timeoutMs: 30000,
+				timeoutMs: DEFAULT_TIMEOUT_MS,
 				tools: [...GOOGLE_GENAI_TOOL_NAMES],
 			},
 			path: join(agentDir, "google-genai.json"),
@@ -87,6 +93,26 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 			() => resolveGoogleGenaiAuth(loaded.config, authContext()),
 			/Interpolation/,
 		);
+	});
+});
+
+test("config loading validates google-genai.json timeoutMs", async () => {
+	await withTempAgentDir(async () => {
+		await writeConfig({ timeoutMs: 45_000 });
+		let loaded = await loadGoogleGenaiConfig();
+		assert.equal(loaded.config.timeoutMs, 45_000);
+		assert.deepEqual(loaded.warnings, []);
+
+		await writeConfig({ timeoutMs: "not-a-number" });
+		loaded = await loadGoogleGenaiConfig();
+		assert.equal(loaded.config.timeoutMs, DEFAULT_TIMEOUT_MS);
+		assert.match(loaded.warnings.join("\n"), /google-genai\.json timeoutMs/);
+		assert.match(loaded.warnings.join("\n"), /integer from 1/);
+
+		await writeConfig({ timeoutMs: MAX_TIMEOUT_MS + 1 });
+		loaded = await loadGoogleGenaiConfig();
+		assert.equal(loaded.config.timeoutMs, DEFAULT_TIMEOUT_MS);
+		assert.match(loaded.warnings.join("\n"), new RegExp(String(MAX_TIMEOUT_MS)));
 	});
 });
 
@@ -122,13 +148,18 @@ test("auth uses config apiKey before Pi google auth", async () => {
 	);
 });
 
-test("validators enforce search types, map coordinate pairs, and URL schemes", () => {
+test("validators enforce search types, timeout bounds, map coordinate pairs, and URL schemes", () => {
 	assert.deepEqual(validateSearchTypes(undefined), undefined);
 	assert.deepEqual(validateSearchTypes(["web_search", "image_search"]), [
 		"web_search",
 		"image_search",
 	]);
 	assert.throws(() => validateSearchTypes(["enterprise_web_search"]), /searchTypes/);
+	assert.equal(validateTimeoutMs(undefined), undefined);
+	assert.equal(validateTimeoutMs(MAX_TIMEOUT_MS), MAX_TIMEOUT_MS);
+	assert.throws(() => validateTimeoutMs(0), /integer from 1/);
+	assert.throws(() => validateTimeoutMs(1.5), /integer from 1/);
+	assert.throws(() => validateTimeoutMs(MAX_TIMEOUT_MS + 1), /integer from 1/);
 	assert.deepEqual(validateMapsLocation({}), {});
 	assert.deepEqual(validateMapsLocation({ latitude: 34.05, longitude: -118.24 }), {
 		latitude: 34.05,
@@ -194,6 +225,26 @@ test("tools surface successful non-JSON responses instead of dropping the body",
 			const result = await executeTool(mock.tools[0], "call-text", { query: "text" }, ctx);
 			assert.equal(result.content[0].text, "plain text response");
 			assert.equal(result.details.outputText, "plain text response");
+		} finally {
+			globalThis.fetch = previous;
+		}
+	});
+});
+
+test("tools keep empty successful responses distinct from timeout errors", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi();
+		googleGenai(mock.pi);
+		const { ctx } = createMockContext({
+			modelRegistry: { getApiKeyForProvider: async () => "test-key" },
+		});
+		const previous = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify({ output_text: "" }))) as typeof fetch;
+		try {
+			const result = await executeTool(mock.tools[0], "call-empty", { query: "empty" }, ctx);
+			assert.equal(result.content[0].text, "No response received.");
+			assert.doesNotMatch(result.content[0].text, /timed out|no results found|not found/i);
 		} finally {
 			globalThis.fetch = previous;
 		}
@@ -274,14 +325,44 @@ test("tool requests report HTTP errors and time out", async () => {
 				});
 				throw new Error("unreachable");
 			}) as typeof fetch;
+
 			await assert.rejects(
 				() => executeTool(mock.tools[0], "call-timeout", { query: "slow" }, ctx),
-				/timed out after 1ms.*split/i,
+				(error) => {
+					assert.ok(error instanceof Error);
+					assert.match(error.message, /timed out after 1ms/);
+					assert.match(error.message, /timeout, not a no-results response/i);
+					assert.match(error.message, /narrow/i);
+					assert.match(error.message, /split/i);
+					assert.match(error.message, /google-genai\.json timeoutMs/);
+					assert.doesNotMatch(error.message, /not found|no results found/i);
+					return true;
+				},
+			);
+
+			await writeConfig({ timeoutMs: 50_000 });
+			await assert.rejects(
+				() =>
+					executeTool(mock.tools[0], "call-per-call-timeout", { query: "slow", timeoutMs: 1 }, ctx),
+				/timed out after 1ms/,
+			);
+			await assert.rejects(
+				() =>
+					executeTool(mock.tools[0], "call-invalid-timeout", { query: "slow", timeoutMs: 0 }, ctx),
+				/integer from 1/,
 			);
 
 			let mapsTimeout: unknown;
 			try {
-				await executeTool(mock.tools[1], "call-timeout-maps", { query: "nearby" }, ctx);
+				await executeTool(
+					mock.tools[1],
+					"call-timeout-maps",
+					{
+						query: "nearby",
+						timeoutMs: 1,
+					},
+					ctx,
+				);
 			} catch (error) {
 				mapsTimeout = error;
 			}
@@ -515,7 +596,7 @@ test("normalize settings defaults missing tools to all enabled and allows empty 
 	assert.deepEqual(normalizeGoogleGenaiSettings({}), {
 		model: DEFAULT_MODEL,
 		apiUrl: DEFAULT_API_URL,
-		timeoutMs: 30000,
+		timeoutMs: DEFAULT_TIMEOUT_MS,
 		tools: [...GOOGLE_GENAI_TOOL_NAMES],
 	});
 	assert.deepEqual(normalizeGoogleGenaiSettings({ tools: [] }).tools, []);

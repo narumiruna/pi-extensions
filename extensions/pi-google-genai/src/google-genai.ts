@@ -17,7 +17,8 @@ import { Type } from "typebox";
 
 export const DEFAULT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
-export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_TIMEOUT_MS = 60_000;
+export const MAX_TIMEOUT_MS = 2_147_483_647;
 export const GOOGLE_GENAI_TOOL_NAMES = [
 	"google_search",
 	"google_maps",
@@ -41,6 +42,13 @@ const COMMAND_COMPLETIONS = [
 const SearchTypesParameter = Type.Optional(
 	Type.Array(Type.Union([Type.Literal("web_search"), Type.Literal("image_search")]), {
 		description: "Optional Google Search grounding types. Defaults to Google's web search.",
+	}),
+);
+const TimeoutMsParameter = Type.Optional(
+	Type.Integer({
+		description: `Per-call timeout in milliseconds. Overrides google-genai.json timeoutMs and the ${DEFAULT_TIMEOUT_MS}ms default. Must be an integer from 1 to ${MAX_TIMEOUT_MS}.`,
+		minimum: 1,
+		maximum: MAX_TIMEOUT_MS,
 	}),
 );
 
@@ -122,16 +130,19 @@ const googleSearchTool = defineTool({
 	parameters: Type.Object({
 		query: Type.String({ description: "Search question or query." }),
 		searchTypes: SearchTypesParameter,
+		timeoutMs: TimeoutMsParameter,
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const searchTypes = validateSearchTypes(params.searchTypes);
+		const timeoutMs = validateTimeoutMs(params.timeoutMs);
 		return withStatus(ctx, "search", () =>
 			callInteraction(
 				{
 					input: params.query,
 					tool: cleanObject({ type: "google_search", search_types: searchTypes }),
+					timeoutMs,
 					timeoutAdvice:
-						"Broad trend, multi-product, or market-research queries can time out; split them into smaller google_search calls before increasing timeoutMs.",
+						"Broad trend, comparison, review, or search-result synthesis queries can time out; narrow the query or split it into smaller google_search calls before increasing the timeout.",
 				},
 				ctx,
 				signal,
@@ -153,14 +164,17 @@ const googleMapsTool = defineTool({
 		query: Type.String({ description: "Maps-grounded question or place query." }),
 		latitude: Type.Optional(Type.Number({ description: "User latitude in degrees." })),
 		longitude: Type.Optional(Type.Number({ description: "User longitude in degrees." })),
+		timeoutMs: TimeoutMsParameter,
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const location = validateMapsLocation(params);
+		const timeoutMs = validateTimeoutMs(params.timeoutMs);
 		return withStatus(ctx, "maps", () =>
 			callInteraction(
 				{
 					input: params.query,
 					tool: cleanObject({ type: "google_maps", ...location }),
+					timeoutMs,
 				},
 				ctx,
 				signal,
@@ -184,14 +198,17 @@ const googleUrlContextTool = defineTool({
 			description: "One or more http:// or https:// URLs.",
 			minItems: 1,
 		}),
+		timeoutMs: TimeoutMsParameter,
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const urls = validateUrls(params.urls);
+		const timeoutMs = validateTimeoutMs(params.timeoutMs);
 		return withStatus(ctx, "url", () =>
 			callInteraction(
 				{
 					input: `${params.prompt}\n\nURLs:\n${urls.join("\n")}`,
 					tool: { type: "url_context" },
+					timeoutMs,
 				},
 				ctx,
 				signal,
@@ -316,6 +333,14 @@ export function validateSearchTypes(searchTypes: unknown): SearchType[] | undefi
 		}
 	}
 	return values as SearchType[];
+}
+
+export function validateTimeoutMs(timeoutMs: unknown): number | undefined {
+	if (timeoutMs === undefined) return undefined;
+	if (!isValidTimeoutMs(timeoutMs)) {
+		throw new Error(`timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} milliseconds.`);
+	}
+	return timeoutMs;
 }
 
 export function validateMapsLocation(params: { latitude?: unknown; longitude?: unknown }) {
@@ -446,7 +471,7 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext, pi: 
 }
 
 async function callInteraction(
-	request: { input: string; tool: Record<string, unknown>; timeoutAdvice?: string },
+	request: { input: string; tool: Record<string, unknown>; timeoutMs?: number; timeoutAdvice?: string },
 	ctx: ExtensionContext,
 	signal: AbortSignal | undefined,
 ) {
@@ -459,7 +484,8 @@ async function callInteraction(
 		input: request.input,
 		tools: [request.tool],
 	};
-	const timeoutSignal = makeTimeoutSignal(signal, config.timeoutMs);
+	const timeoutMs = request.timeoutMs ?? config.timeoutMs;
+	const timeoutSignal = makeTimeoutSignal(signal, timeoutMs);
 	try {
 		const response = await fetch(config.apiUrl, {
 			method: "POST",
@@ -478,9 +504,7 @@ async function callInteraction(
 		return formatToolResult(payload, config.model);
 	} catch (error) {
 		if (timeoutSignal.isTimeout()) {
-			throw new Error(
-				`Google GenAI request timed out after ${config.timeoutMs}ms. ${request.timeoutAdvice ?? "Try a smaller request or increase timeoutMs."}`,
-			);
+			throw new Error(formatTimeoutError(timeoutMs, request.timeoutAdvice));
 		}
 		throw error;
 	} finally {
@@ -619,10 +643,11 @@ function normalizeConfigWithWarnings(value: unknown): { config: GoogleGenaiConfi
 	const raw = input as Record<string, unknown>;
 	const warnings: string[] = [];
 	const tools = normalizeTools(raw.tools, warnings);
+	const fileTimeoutMs = normalizeConfigTimeout(raw.timeoutMs, warnings);
 	const config: GoogleGenaiConfig = {
 		model: normalizeString(raw.model) ?? DEFAULT_MODEL,
 		apiUrl: normalizeApiUrl(raw.apiUrl) ?? DEFAULT_API_URL,
-		timeoutMs: normalizeTimeout(raw.timeoutMs) ?? DEFAULT_TIMEOUT_MS,
+		timeoutMs: fileTimeoutMs ?? DEFAULT_TIMEOUT_MS,
 		tools,
 	};
 	const apiKey = normalizeString(raw.apiKey);
@@ -662,8 +687,17 @@ function normalizeApiUrl(value: unknown) {
 	return url.replace(/\/+$/, "");
 }
 
-function normalizeTimeout(value: unknown) {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+function normalizeConfigTimeout(value: unknown, warnings: string[]) {
+	if (value === undefined) return undefined;
+	if (isValidTimeoutMs(value)) return value;
+	warnings.push(
+		`google-genai.json timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} milliseconds; ignoring value.`,
+	);
+	return undefined;
+}
+
+function isValidTimeoutMs(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
 }
 
 async function readJsonIfExists(path: string, warnings: string[]) {
@@ -722,6 +756,15 @@ function formatPersistedTools(tools: readonly GoogleGenaiToolName[]) {
 
 function isGoogleGenaiToolName(value: string): value is GoogleGenaiToolName {
 	return GOOGLE_GENAI_TOOL_NAMES.includes(value as GoogleGenaiToolName);
+}
+
+function formatTimeoutError(timeoutMs: number, timeoutAdvice?: string) {
+	return [
+		`Google GenAI request timed out after ${timeoutMs}ms.`,
+		"This is a timeout, not a no-results response.",
+		timeoutAdvice ?? "Try narrowing the query or splitting broad comparison/review queries.",
+		"To allow longer calls, set google-genai.json timeoutMs or the per-call timeoutMs parameter.",
+	].join(" ");
 }
 
 function makeTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): FetchSignal {
