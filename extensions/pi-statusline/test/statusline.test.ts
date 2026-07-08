@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import statusline, {
+	buildExtensionStatusIconAliases,
 	contextColor,
 	extensionColor,
 	formatCount,
@@ -439,6 +440,167 @@ test("extension status icons use config, leading emoji, defaults, and fallback",
 	assert.equal(formatExtensionStatus("caffeinate", "☕ display", theme, config({})), "☕ display");
 	assert.equal(formatExtensionStatus("goal", "active", theme, config({ goal: "" })), "active");
 	assert.equal(formatExtensionStatus("unknown", "running", theme, config({})), "🔌 running");
+});
+
+test("statusline render uses installed package id icon aliases from settings", async () => {
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-alias-test-"));
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "project");
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	mkdirSync(agentDir, { recursive: true });
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+
+	try {
+		writeFileSync(
+			join(agentDir, "pi-statusline-settings.json"),
+			JSON.stringify({ extensionStatusIcons: { "@vendor/pi-foo": "🧪" } }),
+		);
+		writeFileSync(
+			join(cwd, ".pi", "settings.json"),
+			JSON.stringify({ packages: ["npm:@vendor/pi-foo@1.2.3"] }),
+		);
+
+		const mock = createMockPi();
+		(mock.rawPi as typeof mock.rawPi & { exec: () => Promise<ExecResult> }).exec = async () => ({
+			stdout: "## main\n",
+			stderr: "",
+			code: 0,
+			killed: false,
+		});
+		statusline(mock.pi);
+		const context = createMockContext({ mode: "tui", cwd });
+
+		await emit(mock.events, "session_start", {}, context.ctx);
+		const footerFactory = context.footer as (
+			tui: { requestRender(): void },
+			theme: { fg(_color: string, text: string): string; bold(text: string): string },
+			footerData: {
+				getGitBranch(): string | null;
+				getExtensionStatuses(): ReadonlyMap<string, string>;
+				onBranchChange(callback: () => void): () => void;
+			},
+		) => { render(width: number): string[]; dispose(): void };
+		const footer = footerFactory(
+			{ requestRender() {} },
+			{ fg: (_color, text) => text, bold: (text) => text },
+			{
+				getGitBranch: () => "main",
+				getExtensionStatuses: () => new Map([["foo:server", "running"]]),
+				onBranchChange: () => () => undefined,
+			},
+		);
+
+		const lines = footer.render(120);
+		footer.dispose();
+
+		assert.ok(
+			lines.some((line) => line.includes("🧪 running")),
+			lines.join("\n"),
+		);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
+});
+
+test("extension status icons use installed package id aliases without fuzzy matching", () => {
+	const theme = { fg: (_color: string, text: string) => text } as never;
+	const config = (extensionStatusIcons: Record<string, string>) => ({ extensionStatusIcons });
+	const aliases = buildExtensionStatusIconAliases([
+		{ packageName: "@vendor/pi-foo", source: "npm:@vendor/pi-foo@1.2.3" },
+		{ packageName: "@vendor/bar" },
+	]);
+
+	assert.deepEqual(
+		[...aliases],
+		[
+			[
+				"foo",
+				["npm:@vendor/pi-foo@1.2.3", "npm:@vendor/pi-foo", "@vendor/pi-foo", "pi-foo", "foo"],
+			],
+			["bar", ["@vendor/bar", "bar"]],
+		],
+	);
+	assert.equal(
+		formatExtensionStatus("foo", "running", theme, config({ "@vendor/pi-foo": "🧪" }), aliases),
+		"🧪 running",
+	);
+	assert.equal(
+		formatExtensionStatus("foo:server", "running", theme, config({ "pi-foo": "🧬" }), aliases),
+		"🧬 running",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"foo/server",
+			"running",
+			theme,
+			config({ "npm:@vendor/pi-foo@1.2.3": "📦" }),
+			aliases,
+		),
+		"📦 running",
+	);
+	assert.equal(
+		formatExtensionStatus("bar", "running", theme, config({ "@vendor/bar": "🍫" }), aliases),
+		"🍫 running",
+	);
+	assert.equal(
+		formatExtensionStatus("foobar", "running", theme, config({ "@vendor/pi-foo": "🧪" }), aliases),
+		"🔌 running",
+	);
+});
+
+test("extension status icon aliases preserve exact-key precedence and skip ambiguous packages", () => {
+	const theme = { fg: (_color: string, text: string) => text } as never;
+	const config = (extensionStatusIcons: Record<string, string>) => ({ extensionStatusIcons });
+	const aliases = buildExtensionStatusIconAliases([
+		{ packageName: "@first/pi-foo" },
+		{ packageName: "@second/pi-foo" },
+	]);
+
+	assert.deepEqual([...aliases], []);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:server",
+			"running",
+			theme,
+			config({ "@first/pi-foo": "1️⃣", "foo:server": "✅" }),
+			aliases,
+		),
+		"✅ running",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:server",
+			"running",
+			theme,
+			config({ "@first/pi-foo": "1️⃣" }),
+			aliases,
+		),
+		"🔌 running",
+	);
+
+	const unambiguousAliases = buildExtensionStatusIconAliases([{ packageName: "@vendor/pi-foo" }]);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:server",
+			"running",
+			theme,
+			config({ "@vendor/pi-foo": "🧪", "foo:server": "" }),
+			unambiguousAliases,
+		),
+		"running",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:server",
+			"running",
+			theme,
+			config({ "@vendor/pi-foo": "" }),
+			unambiguousAliases,
+		),
+		"running",
+	);
 });
 
 test("long extension status lines wrap to terminal width without ellipsis", () => {

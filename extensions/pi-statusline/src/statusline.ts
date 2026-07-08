@@ -22,6 +22,7 @@ import type {
 } from "../presets/types.js";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+export type ExtensionStatusIconAliasMap = ReadonlyMap<string, readonly string[]>;
 
 interface RuntimeState {
 	turnCount: number;
@@ -31,6 +32,7 @@ interface RuntimeState {
 	isStreaming: boolean;
 	thinkingLevel: ThinkingLevel;
 	duplicateExtensions: string[];
+	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	gitStatus?: GitStatusSummary;
 	requestRender?: () => void;
 }
@@ -57,6 +59,8 @@ const DEFAULT_PRESET: StatuslinePresetName = "tokyo-night";
 const GIT_STATUS_REFRESH_INTERVAL_MS = 30_000;
 const GIT_STATUS_EVENT_DEBOUNCE_MS = 250;
 const GIT_STATUS_TIMEOUT_MS = 3_000;
+
+const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
 
 const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
 	"chrome-devtools": "🌐",
@@ -106,6 +110,7 @@ export default function statusline(pi: ExtensionAPI) {
 		isStreaming: false,
 		thinkingLevel: "off",
 		duplicateExtensions: [],
+		extensionStatusIconAliases: EMPTY_EXTENSION_STATUS_ICON_ALIASES,
 	};
 
 	let sessionGeneration = 0;
@@ -188,9 +193,13 @@ export default function statusline(pi: ExtensionAPI) {
 		clearGitStatusDebounce();
 		activeGitStatusTarget = ctx.mode === "tui" ? { cwd, generation } : undefined;
 		runtime.gitStatus = undefined;
+		runtime.duplicateExtensions = [];
+		runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
 		ctx.ui.setStatus(STATUSLINE_KEY, undefined);
 		if (!activeGitStatusTarget) return;
-		runtime.duplicateExtensions = findDuplicateExtensions(cwd);
+		const installedPackages = readInstalledExtensionPackages(cwd);
+		runtime.duplicateExtensions = findDuplicateExtensions(installedPackages);
+		runtime.extensionStatusIconAliases = buildExtensionStatusIconAliases(installedPackages);
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			runtime.requestRender = () => tui.requestRender();
 
@@ -216,6 +225,8 @@ export default function statusline(pi: ExtensionAPI) {
 						clearGitStatusDebounce();
 						pendingGitStatusRefresh = undefined;
 						runtime.gitStatus = undefined;
+						runtime.duplicateExtensions = [];
+						runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
 						runtime.requestRender = undefined;
 					}
 				},
@@ -246,6 +257,8 @@ export default function statusline(pi: ExtensionAPI) {
 		clearGitStatusDebounce();
 		pendingGitStatusRefresh = undefined;
 		runtime.gitStatus = undefined;
+		runtime.duplicateExtensions = [];
+		runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setStatus(STATUSLINE_KEY, undefined);
 		runtime.requestRender = undefined;
@@ -631,7 +644,9 @@ function formatExtensionStatuses(
 				([key, value]) =>
 					key !== STATUSLINE_KEY && key !== GITHUB_PR_KEY && value.trim().length > 0,
 			)
-			.map(([key, value]) => formatExtensionStatus(key, value, theme, config)),
+			.map(([key, value]) =>
+				formatExtensionStatus(key, value, theme, config, runtime.extensionStatusIconAliases),
+			),
 	].slice(0, 5);
 
 	return visibleStatuses.join(separator);
@@ -642,12 +657,13 @@ export function formatExtensionStatus(
 	value: string,
 	theme: Theme,
 	config: Pick<StatuslineConfig, "extensionStatusIcons">,
+	extensionStatusIconAliases: ExtensionStatusIconAliasMap = EMPTY_EXTENSION_STATUS_ICON_ALIASES,
 ): string {
 	const status = splitExtensionStatusIcon(stripExtensionStatusPrefix(key, value));
 	const text = simplifyExtensionStatusText(status.text);
 	const color = extensionColor(key, value);
 	const textColor = color === "warning" ? "warning" : "muted";
-	const icon = extensionStatusIcon(key, status.icon, config.extensionStatusIcons);
+	const icon = extensionStatusIcon(key, status.icon, config.extensionStatusIcons, extensionStatusIconAliases);
 	const renderedText = theme.fg(textColor, text);
 	return icon ? `${theme.fg(color, icon)} ${renderedText}` : renderedText;
 }
@@ -656,9 +672,27 @@ function extensionStatusIcon(
 	key: string,
 	leadingIcon: string | undefined,
 	configuredIcons: Record<string, string>,
+	extensionStatusIconAliases: ExtensionStatusIconAliasMap,
 ) {
 	if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key];
+	for (const alias of extensionStatusAliasesForKey(key, extensionStatusIconAliases)) {
+		if (Object.hasOwn(configuredIcons, alias)) return configuredIcons[alias];
+	}
 	return leadingIcon ?? DEFAULT_EXTENSION_STATUS_ICONS[key] ?? "🔌";
+}
+
+function extensionStatusAliasesForKey(
+	key: string,
+	extensionStatusIconAliases: ExtensionStatusIconAliasMap,
+): readonly string[] {
+	for (const [statusBase, aliases] of extensionStatusIconAliases) {
+		if (statusKeyMatchesStatusBase(key, statusBase)) return aliases;
+	}
+	return [];
+}
+
+function statusKeyMatchesStatusBase(key: string, statusBase: string): boolean {
+	return key === statusBase || key.startsWith(`${statusBase}:`) || key.startsWith(`${statusBase}/`);
 }
 
 export function wrapExtensionStatusline(status: string, width: number): string[] {
@@ -715,26 +749,100 @@ function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function findDuplicateExtensions(cwd: string): string[] {
-	const settingsFiles = [
+interface InstalledExtensionPackage {
+	packageName: string;
+	source: string;
+	identity: string;
+}
+
+function readInstalledExtensionPackages(cwd: string): InstalledExtensionPackage[] {
+	const packages: InstalledExtensionPackage[] = [];
+	const settingsFiles = extensionSettingsFiles(cwd);
+
+	for (const settingsFile of settingsFiles) {
+		const baseDirectory = dirname(settingsFile);
+		for (const rawSource of readPackageSources(settingsFile)) {
+			const source = rawSource.trim();
+			if (!source) continue;
+			const packageName = packageNameForSource(source, baseDirectory);
+			if (!packageName) continue;
+			packages.push({ packageName, source, identity: sourceIdentity(source, baseDirectory) });
+		}
+	}
+
+	return packages;
+}
+
+function extensionSettingsFiles(cwd: string): string[] {
+	return [
 		join(process.env.HOME ?? "", ".pi", "agent", "settings.json"),
 		join(cwd, ".pi", "settings.json"),
 	].filter((file) => existsSync(file));
+}
+
+function findDuplicateExtensions(installedPackages: readonly InstalledExtensionPackage[]): string[] {
 	const sourcesByPackage = new Map<string, Set<string>>();
 
-	for (const settingsFile of settingsFiles) {
-		for (const source of readPackageSources(settingsFile)) {
-			const packageName = packageNameForSource(source, dirname(settingsFile));
-			if (!packageName) continue;
-			const sources = sourcesByPackage.get(packageName) ?? new Set<string>();
-			sources.add(sourceIdentity(source, dirname(settingsFile)));
-			sourcesByPackage.set(packageName, sources);
-		}
+	for (const extensionPackage of installedPackages) {
+		const sources = sourcesByPackage.get(extensionPackage.packageName) ?? new Set<string>();
+		sources.add(extensionPackage.identity);
+		sourcesByPackage.set(extensionPackage.packageName, sources);
 	}
 
 	return [...sourcesByPackage.entries()]
 		.filter(([, sources]) => sources.size > 1)
 		.map(([packageName]) => packageName.replace(/^@[^/]+\//, "").replace(/^pi-/, ""));
+}
+
+export function buildExtensionStatusIconAliases(
+	installedPackages: readonly { packageName: string; source?: string }[],
+): Map<string, string[]> {
+	const packageAliasesByStatusBase = new Map<string, Map<string, string[]>>();
+
+	for (const extensionPackage of installedPackages) {
+		const candidate = extensionStatusIconAliasCandidate(extensionPackage.packageName, extensionPackage.source);
+		if (!candidate) continue;
+		const aliasesByPackage = packageAliasesByStatusBase.get(candidate.statusBase) ?? new Map<string, string[]>();
+		const existingAliases = aliasesByPackage.get(extensionPackage.packageName) ?? [];
+		aliasesByPackage.set(extensionPackage.packageName, uniqueStrings([...existingAliases, ...candidate.aliases]));
+		packageAliasesByStatusBase.set(candidate.statusBase, aliasesByPackage);
+	}
+
+	const aliases = new Map<string, string[]>();
+	for (const [statusBase, aliasesByPackage] of packageAliasesByStatusBase) {
+		if (aliasesByPackage.size === 1) aliases.set(statusBase, [...aliasesByPackage.values()][0] ?? []);
+	}
+	return aliases;
+}
+
+function extensionStatusIconAliasCandidate(
+	packageName: string,
+	source?: string,
+): { statusBase: string; aliases: string[] } | undefined {
+	const packageBase = packageBaseName(packageName);
+	const statusBase = statusBaseFromPackageBase(packageBase);
+	if (!statusBase) return undefined;
+
+	const sourceAliases = source?.startsWith("npm:") ? [source, `npm:${npmPackageName(source)}`] : [];
+	return {
+		statusBase,
+		aliases: uniqueStrings([...sourceAliases, packageName, packageBase, statusBase]),
+	};
+}
+
+function packageBaseName(packageName: string): string {
+	const slashIndex = packageName.lastIndexOf("/");
+	return slashIndex === -1 ? packageName : packageName.slice(slashIndex + 1);
+}
+
+function statusBaseFromPackageBase(packageBase: string): string {
+	return packageBase.startsWith("pi-") && packageBase.length > "pi-".length
+		? packageBase.slice("pi-".length)
+		: packageBase;
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+	return [...new Set(values.filter((value) => value.length > 0))];
 }
 
 function readPackageSources(settingsFile: string): string[] {

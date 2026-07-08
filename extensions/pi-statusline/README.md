@@ -64,14 +64,19 @@ Extension statuses use built-in icons by status key. Override or suppress them i
     "pisync": "☁️",
     "unknown-error-retry": "",
     "plan-mode": "📝",
-    "subagents": "🤖"
+    "subagents": "🤖",
+    "@vendor/pi-foo": "🧪"
   }
 }
 ```
 
+- Exact status key: always wins, e.g. `"goal"` or `"foo:server"`.
+- Installed extension id: for installed packages, use the package name/source such as `"@vendor/pi-foo"`, `"npm:@vendor/pi-foo@1.2.3"`, `"pi-foo"`, or the derived key `"foo"`.
+- Namespaced status keys: package `@vendor/pi-foo` can match `foo`, `foo:server`, and `foo/server`, but not fuzzy matches like `foobar`.
 - Missing key: use the built-in icon, or `🔌` for an unknown status key.
 - String value: use that string as the icon.
 - Empty string: show the status text without an icon.
+- If multiple installed packages derive the same key, use the exact status key to disambiguate.
 - `PI_STATUSLINE_PRESET` remains the only preset setting; this JSON file only controls extension status icons.
 
 During the `PI_CAFFEINATE_ICON` deprecation window, a leading emoji from `pi-caffeinate` is still used when JSON does not configure `caffeinate`. JSON wins when both are set.
@@ -102,6 +107,7 @@ Examples:
 - `🎯 active` for `goal: active` using the built-in `goal` icon.
 - `🔎 PR #123 checks passing` for `github-pr: PR #123 checks passing` using the built-in `github-pr` icon.
 - `☕ display` when JSON config sets `"caffeinate": "☕"`.
+- `🧪 running` for third-party status `foo:server` when an installed package is named `@vendor/pi-foo` and JSON config sets `"@vendor/pi-foo": "🧪"`.
 - `receiving` when JSON config sets `"unknown-error-retry": ""`.
 - `🔌 running` for an unknown extension status key with no configured icon.
 - `⚠️ dup biome-lsp` when local and npm installs register the same extension.
