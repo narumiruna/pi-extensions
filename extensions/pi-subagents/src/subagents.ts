@@ -39,12 +39,15 @@ import {
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
+	THINKING_LEVELS,
 	type AgentConfig,
 	type AgentScope,
 	type AgentSource,
 	type SubagentAgentConfig,
 	type SubagentSettings,
+	type SubagentThinkingLevel,
 	discoverAgents,
+	isThinkingLevel,
 } from "./agents.js";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -132,6 +135,7 @@ export function formatUsageStats(
 		turns?: number;
 	},
 	model?: string,
+	thinkingLevel?: SubagentThinkingLevel,
 ): string {
 	const parts: string[] = [];
 	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
@@ -144,6 +148,7 @@ export function formatUsageStats(
 		parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
 	}
 	if (model) parts.push(model);
+	if (thinkingLevel) parts.push(`thinking:${thinkingLevel}`);
 	return parts.join(" ");
 }
 
@@ -234,6 +239,7 @@ interface SingleResult {
 	stderr: string;
 	usage: UsageStats;
 	model?: string;
+	thinkingLevel?: SubagentThinkingLevel;
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
@@ -326,6 +332,25 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 	return { dir: tmpDir, filePath };
 }
 
+export function buildPiArgs(options: {
+	model?: string;
+	thinkingLevel?: SubagentThinkingLevel;
+	tools?: string[];
+	systemPromptPath?: string;
+	task: string;
+}): string[] {
+	const args: string[] = ["--mode", "json", "-p", "--no-session"];
+	if (options.model) args.push("--model", options.model);
+	if (options.thinkingLevel) args.push("--thinking", options.thinkingLevel);
+	if (Array.isArray(options.tools)) {
+		if (options.tools.length > 0) args.push("--tools", options.tools.join(","));
+		else args.push("--no-tools");
+	}
+	if (options.systemPromptPath) args.push("--append-system-prompt", options.systemPromptPath);
+	args.push(`Task: ${options.task}`);
+	return args;
+}
+
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
 	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
@@ -378,6 +403,7 @@ async function runSingleAgent(
 	cwd: string | undefined,
 	step: number | undefined,
 	signal: AbortSignal | undefined,
+	thinkingLevel: SubagentThinkingLevel | undefined,
 	timeoutMs: number,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
@@ -394,16 +420,10 @@ async function runSingleAgent(
 			messages: [],
 			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			thinkingLevel,
 			step,
 			finalOutput: "",
 		};
-	}
-
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	if (agent.model) args.push("--model", agent.model);
-	if (Array.isArray(agent.tools)) {
-		if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
-		else args.push("--no-tools");
 	}
 
 	let tmpPromptDir: string | null = null;
@@ -418,6 +438,7 @@ async function runSingleAgent(
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model: agent.model ?? undefined,
+		thinkingLevel,
 		step,
 		timeoutMs,
 	};
@@ -437,10 +458,15 @@ async function runSingleAgent(
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
-			args.push("--append-system-prompt", tmpPromptPath);
 		}
 
-		args.push(`Task: ${task}`);
+		const args = buildPiArgs({
+			model: agent.model,
+			thinkingLevel,
+			tools: agent.tools,
+			systemPromptPath: tmpPromptPath ?? undefined,
+			task,
+		});
 		let wasAborted = false;
 		let timedOut = false;
 
@@ -568,11 +594,16 @@ const TimeoutMs = Type.Number({
 	minimum: 1,
 });
 
+const ThinkingLevelSchema = StringEnum(THINKING_LEVELS, {
+	description: "Pi thinking level for the subagent process: off, minimal, low, medium, high, or xhigh.",
+});
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	timeoutMs: Type.Optional(TimeoutMs),
+	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 
 const ChainItem = Type.Object({
@@ -580,6 +611,7 @@ const ChainItem = Type.Object({
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	timeoutMs: Type.Optional(TimeoutMs),
+	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 
 const AggregatorItem = Type.Object({
@@ -587,6 +619,7 @@ const AggregatorItem = Type.Object({
 	task: Type.String({ description: "Fan-in task. Use {previous} to include all parallel outputs." }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the aggregator process" })),
 	timeoutMs: Type.Optional(TimeoutMs),
+	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -606,6 +639,7 @@ const SubagentParams = Type.Object({
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 	timeoutMs: Type.Optional(TimeoutMs),
+	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 
 // ---- Settings helpers ----
@@ -641,6 +675,12 @@ export function normalizeAgentSettings(value: unknown): SubagentAgentConfig | un
 	if (hasOwn(value, "model")) {
 		if (value.model !== null && typeof value.model !== "string") return undefined;
 		config.model = value.model;
+		hasKnownField = true;
+	}
+
+	if (hasOwn(value, "thinkingLevel")) {
+		if (value.thinkingLevel !== null && !isThinkingLevel(value.thinkingLevel)) return undefined;
+		config.thinkingLevel = value.thinkingLevel;
 		hasKnownField = true;
 	}
 
@@ -696,8 +736,22 @@ export function sameToolSet(left: string[], right: string[]): boolean {
 	return [...leftSet].every((tool) => rightSet.has(tool));
 }
 
+export function resolveSubagentThinkingLevel(
+	agents: readonly Pick<AgentConfig, "name" | "thinkingLevel">[],
+	agentName: string,
+	topLevelThinkingLevel?: SubagentThinkingLevel,
+	localThinkingLevel?: SubagentThinkingLevel,
+): SubagentThinkingLevel | undefined {
+	return localThinkingLevel ?? topLevelThinkingLevel ?? agents.find((agent) => agent.name === agentName)?.thinkingLevel;
+}
+
 function hasAnyAgentOverride(config: SubagentAgentConfig): boolean {
-	return hasOwn(config, "tools") || hasOwn(config, "model") || hasOwn(config, "timeoutMs");
+	return (
+		hasOwn(config, "tools") ||
+		hasOwn(config, "model") ||
+		hasOwn(config, "thinkingLevel") ||
+		hasOwn(config, "timeoutMs")
+	);
 }
 
 // ---- Tool toggle component ----
@@ -794,6 +848,8 @@ export default function (pi: ExtensionAPI) {
 				params.timeoutMs ??
 				agents.find((agent) => agent.name === agentName)?.timeoutMs ??
 				DEFAULT_TIMEOUT_MS;
+			const resolveThinkingLevel = (agentName: string, localThinkingLevel?: SubagentThinkingLevel) =>
+				resolveSubagentThinkingLevel(agents, agentName, params.thinkingLevel, localThinkingLevel);
 
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -887,6 +943,7 @@ export default function (pi: ExtensionAPI) {
 							step.cwd,
 							i + 1,
 							signal,
+							resolveThinkingLevel(step.agent, step.thinkingLevel),
 							resolveTimeoutMs(step.agent, step.timeoutMs),
 							chainUpdate,
 							makeDetails("chain"),
@@ -942,6 +999,7 @@ export default function (pi: ExtensionAPI) {
 							messages: [],
 							stderr: "",
 							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+							thinkingLevel: resolveThinkingLevel(params.tasks[i].agent, params.tasks[i].thinkingLevel),
 							finalOutput: "",
 						};
 					}
@@ -973,6 +1031,7 @@ export default function (pi: ExtensionAPI) {
 							t.cwd,
 							undefined,
 							signal,
+							resolveThinkingLevel(t.agent, t.thinkingLevel),
 							resolveTimeoutMs(t.agent, t.timeoutMs),
 							// Per-task update callback
 							(partial) => {
@@ -1006,6 +1065,7 @@ export default function (pi: ExtensionAPI) {
 							aggregator.cwd,
 							undefined,
 							signal,
+							resolveThinkingLevel(aggregator.agent, aggregator.thinkingLevel),
 							resolveTimeoutMs(aggregator.agent, aggregator.timeoutMs),
 							(partial) => {
 								status.update(fanInStatus(aggregator.agent));
@@ -1063,6 +1123,7 @@ export default function (pi: ExtensionAPI) {
 						params.cwd,
 						undefined,
 						signal,
+						resolveThinkingLevel(params.agent, params.thinkingLevel),
 						resolveTimeoutMs(params.agent, params.timeoutMs),
 						onUpdate,
 						makeDetails("single"),
@@ -1206,7 +1267,7 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 					}
-					const usageStr = formatUsageStats(r.usage, r.model);
+					const usageStr = formatUsageStats(r.usage, r.model, r.thinkingLevel);
 					if (usageStr) {
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
@@ -1222,7 +1283,7 @@ export default function (pi: ExtensionAPI) {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 					if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				}
-				const usageStr = formatUsageStats(r.usage, r.model);
+				const usageStr = formatUsageStats(r.usage, r.model, r.thinkingLevel);
 				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
 				return new Text(text, 0, 0);
 			}
@@ -1291,7 +1352,7 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
-						const stepUsage = formatUsageStats(r.usage, r.model);
+						const stepUsage = formatUsageStats(r.usage, r.model, r.thinkingLevel);
 						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
 					}
 
@@ -1383,7 +1444,7 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
-						const taskUsage = formatUsageStats(r.usage, r.model);
+						const taskUsage = formatUsageStats(r.usage, r.model, r.thinkingLevel);
 						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
 					}
 
@@ -1416,7 +1477,7 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
-						const fanInUsage = formatUsageStats(aggregator.usage, aggregator.model);
+						const fanInUsage = formatUsageStats(aggregator.usage, aggregator.model, aggregator.thinkingLevel);
 						if (fanInUsage) container.addChild(new Text(theme.fg("dim", fanInUsage), 0, 0));
 					}
 

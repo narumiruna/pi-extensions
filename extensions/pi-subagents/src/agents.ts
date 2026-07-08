@@ -4,7 +4,16 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const satisfies readonly ThinkingLevel[];
+
+export type SubagentThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export function isThinkingLevel(value: unknown): value is SubagentThinkingLevel {
+	return typeof value === "string" && THINKING_LEVELS.includes(value as SubagentThinkingLevel);
+}
 
 export type AgentScope = "user" | "project" | "both";
 
@@ -15,6 +24,7 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	thinkingLevel?: SubagentThinkingLevel;
 	timeoutMs?: number;
 	systemPrompt: string;
 	source: AgentSource;
@@ -24,6 +34,7 @@ export interface AgentConfig {
 export interface SubagentAgentConfig {
 	tools?: string[];
 	model?: string | null;
+	thinkingLevel?: SubagentThinkingLevel | null;
 	timeoutMs?: number | null;
 }
 
@@ -146,6 +157,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model: frontmatter.model,
+			thinkingLevel: isThinkingLevel(frontmatter.thinkingLevel) ? frontmatter.thinkingLevel : undefined,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -216,6 +228,9 @@ export function discoverAgents(
 		if (hasOwn(override, "tools")) nextAgent.tools = override.tools;
 		if (hasOwn(override, "model")) {
 			nextAgent.model = override.model === null ? undefined : override.model;
+		}
+		if (hasOwn(override, "thinkingLevel")) {
+			nextAgent.thinkingLevel = override.thinkingLevel === null ? undefined : override.thinkingLevel;
 		}
 		if (hasOwn(override, "timeoutMs")) {
 			nextAgent.timeoutMs = override.timeoutMs === null ? undefined : override.timeoutMs;

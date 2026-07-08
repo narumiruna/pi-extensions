@@ -14,7 +14,7 @@ Use it to split research, planning, implementation, and review work across focus
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides `/subagents:config` to persist per-agent tool allow-lists.
-- Supports per-task `cwd`, hard subprocess `timeoutMs`, abort propagation, and streaming progress.
+- Supports per-task `cwd`, hard subprocess `timeoutMs`, `thinkingLevel`, abort propagation, and streaming progress.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete worker output in tool details and a concise result for the main agent.
 
@@ -48,6 +48,12 @@ Execution modes:
 - **parallel** — run multiple `{ agent, task }` jobs independently.
 - **parallel + aggregator** — run parallel jobs, then pass all outputs into one fan-in agent.
 - **chain** — run sequential steps, passing prior output with `{previous}`.
+
+Common controls:
+
+- `cwd` — run a job from a different working directory.
+- `timeoutMs` — set a hard subprocess timeout.
+- `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, or `xhigh` thinking for the spawned Pi process.
 
 ## 🧭 Proactive use
 
@@ -122,7 +128,7 @@ Run one read-only reconnaissance agent:
 }
 ```
 
-Run multiple agents in parallel:
+Run multiple agents in parallel with a shared thinking level and one per-task override:
 
 ```json
 {
@@ -130,14 +136,16 @@ Run multiple agents in parallel:
     {
       "agent": "scout",
       "task": "Map package metadata files",
-      "timeoutMs": 30000
+      "timeoutMs": 30000,
+      "thinkingLevel": "low"
     },
     {
       "agent": "reviewer",
       "task": "Review TypeScript config consistency"
     }
   ],
-  "timeoutMs": 120000
+  "timeoutMs": 120000,
+  "thinkingLevel": "medium"
 }
 ```
 
@@ -212,6 +220,7 @@ name: api-reviewer
 description: Review API changes for compatibility and tests
 tools: read, grep, find, ls, bash
 model: sonnet
+thinkingLevel: high
 ---
 
 You are an API review subagent. Do not edit files. Check compatibility,
@@ -220,13 +229,17 @@ test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
 
 By default, `subagent` loads user agents only. Set `agentScope` to `"project"` or `"both"` to load project-local agents. Interactive sessions ask for confirmation before using project agents unless `confirmProjectAgents` is disabled.
 
-## ⏱️ Runtime limits
+## ⏱️ Runtime limits and thinking levels
 
 Each subprocess has a hard timeout to avoid runaway workers.
 
 - Set `timeoutMs` on the top-level call to apply a default for all jobs.
 - Set `timeoutMs` on a task, chain step, or aggregator to override it locally.
 - If omitted, the default is `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset.
+
+Set `thinkingLevel` to pass Pi's `--thinking <level>` to a subprocess. Supported values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`.
+
+Thinking-level precedence is: task/chain step/aggregator `thinkingLevel` → top-level `thinkingLevel` → agent default from config or frontmatter → Pi subprocess default. Omit `thinkingLevel` to preserve existing behavior. Pi still owns model capability clamping, so unsupported thinking levels are handled by the spawned Pi process.
 
 On timeout, the extension sends `SIGTERM`, escalates to `SIGKILL` after a short grace period, and returns any partial messages or stderr collected so far.
 
