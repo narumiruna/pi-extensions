@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from "node:fs";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export type ReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "UNKNOWN";
@@ -148,7 +148,11 @@ async function createBranchWatcher(
 		const gitHead = result.stdout.trim();
 		if (!gitHead) return undefined;
 
-		const watcher = watch(resolve(cwd, gitHead), { persistent: false }, onChange);
+		const headPath = resolve(cwd, gitHead);
+		const headFileName = basename(headPath);
+		const watcher = watch(dirname(headPath), { persistent: false }, (_event, fileName) => {
+			if (!fileName || fileName.toString() === headFileName) onChange();
+		});
 		watcher.on("error", () => watcher.close());
 		return watcher;
 	} catch {

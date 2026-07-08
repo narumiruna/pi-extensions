@@ -32,6 +32,25 @@ async function emit(
 	for (const handler of events.get(name) ?? []) await handler(...args);
 }
 
+type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
+
+function deferred<T>() {
+	let resolveValue: ((value: T) => void) | undefined;
+	const promise = new Promise<T>((resolve) => {
+		resolveValue = resolve;
+	});
+	return {
+		promise,
+		resolve(value: T) {
+			resolveValue?.(value);
+		},
+	};
+}
+
+async function flushAsync() {
+	await new Promise((resolve) => setImmediate(resolve));
+}
+
 test("statusline registers lifecycle handlers without reading thinking level at load time", () => {
 	const mock = createMockPi();
 	mock.rawPi.getThinkingLevel = () => {
@@ -160,6 +179,119 @@ test("statusline stops git refreshes after its footer is disposed", async () => 
 	async function execGitStatus() {
 		execCalls += 1;
 		return { stdout: "## main\n", stderr: "", code: 0, killed: false };
+	}
+});
+
+test("statusline does not render stale in-flight git status after a branch change", async () => {
+	const mock = createMockPi();
+	const firstStatus = deferred<ExecResult>();
+	const secondStatus = deferred<ExecResult>();
+	const execResults = [firstStatus.promise, secondStatus.promise];
+	let execCalls = 0;
+	(mock.rawPi as typeof mock.rawPi & { exec: typeof execGitStatus }).exec = execGitStatus;
+	statusline(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+
+	await emit(mock.events, "session_start", {}, context.ctx);
+	let branchChange: (() => void) | undefined;
+	const footerFactory = context.footer as (
+		tui: { requestRender(): void },
+		theme: { fg(_color: string, text: string): string; bold(text: string): string },
+		footerData: {
+			getGitBranch(): string | null;
+			getExtensionStatuses(): ReadonlyMap<string, string>;
+			onBranchChange(callback: () => void): () => void;
+		},
+	) => { dispose(): void; render(width: number): string[] };
+	const footer = footerFactory(
+		{ requestRender() {} },
+		{ fg: (_color, text) => text, bold: (text) => text },
+		{
+			getGitBranch: () => "main",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange(callback) {
+				branchChange = callback;
+				return () => {
+					branchChange = undefined;
+				};
+			},
+		},
+	);
+
+	assert.equal(execCalls, 1);
+	assert.ok(branchChange);
+	branchChange();
+	firstStatus.resolve({ stdout: "## main\n M stale.ts\n", stderr: "", code: 0, killed: false });
+	await flushAsync();
+
+	assert.equal(execCalls, 2);
+	assert.equal(footer.render(120).join("\n").includes("~1"), false);
+
+	secondStatus.resolve({ stdout: "## main\n?? fresh.ts\n", stderr: "", code: 0, killed: false });
+	await flushAsync();
+
+	assert.match(footer.render(120).join("\n"), /\?1/u);
+	footer.dispose();
+
+	async function execGitStatus() {
+		const result = execResults[execCalls];
+		execCalls += 1;
+		if (!result) throw new Error("unexpected git status refresh");
+		return result;
+	}
+});
+
+test("statusline invalidates in-flight git status while a debounced refresh is pending", async () => {
+	const mock = createMockPi();
+	const firstStatus = deferred<ExecResult>();
+	const secondStatus = deferred<ExecResult>();
+	const execResults = [firstStatus.promise, secondStatus.promise];
+	let execCalls = 0;
+	(mock.rawPi as typeof mock.rawPi & { exec: typeof execGitStatus }).exec = execGitStatus;
+	statusline(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+
+	await emit(mock.events, "session_start", {}, context.ctx);
+	const footerFactory = context.footer as (
+		tui: { requestRender(): void },
+		theme: { fg(_color: string, text: string): string; bold(text: string): string },
+		footerData: {
+			getGitBranch(): string | null;
+			getExtensionStatuses(): ReadonlyMap<string, string>;
+			onBranchChange(callback: () => void): () => void;
+		},
+	) => { dispose(): void; render(width: number): string[] };
+	const footer = footerFactory(
+		{ requestRender() {} },
+		{ fg: (_color, text) => text, bold: (text) => text },
+		{
+			getGitBranch: () => "main",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
+
+	assert.equal(execCalls, 1);
+	await emit(mock.events, "tool_execution_end", { toolName: "write" }, context.ctx);
+	firstStatus.resolve({ stdout: "## main\n M stale.ts\n", stderr: "", code: 0, killed: false });
+	await flushAsync();
+
+	assert.equal(execCalls, 1);
+	assert.equal(footer.render(120).join("\n").includes("~1"), false);
+
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	assert.equal(execCalls, 2);
+	secondStatus.resolve({ stdout: "## main\n?? fresh.ts\n", stderr: "", code: 0, killed: false });
+	await flushAsync();
+
+	assert.match(footer.render(120).join("\n"), /\?1/u);
+	footer.dispose();
+
+	async function execGitStatus() {
+		const result = execResults[execCalls];
+		execCalls += 1;
+		if (!result) throw new Error("unexpected git status refresh");
+		return result;
 	}
 });
 

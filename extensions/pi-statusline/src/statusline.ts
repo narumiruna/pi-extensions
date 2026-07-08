@@ -109,10 +109,13 @@ export default function statusline(pi: ExtensionAPI) {
 	};
 
 	let sessionGeneration = 0;
+	let gitStatusRequestId = 0;
 	let activeGitStatusTarget: { cwd: string; generation: number } | undefined;
 	let gitStatusRefreshInFlight = false;
 	let gitStatusDebounceTimer: ReturnType<typeof setTimeout> | undefined;
-	let pendingGitStatusRefresh: { cwd: string; generation: number } | undefined;
+	let pendingGitStatusRefresh:
+		| { cwd: string; generation: number; requestId: number }
+		| undefined;
 
 	const refresh = () => runtime.requestRender?.();
 
@@ -133,10 +136,13 @@ export default function statusline(pi: ExtensionAPI) {
 		activeGitStatusTarget.generation === generation &&
 		generation === sessionGeneration;
 
-	const refreshGitStatus = (cwd: string, generation = sessionGeneration) => {
-		if (!isActiveGitStatusTarget(cwd, generation)) return;
+	const isCurrentGitStatusRequest = (cwd: string, generation: number, requestId: number) =>
+		isActiveGitStatusTarget(cwd, generation) && requestId === gitStatusRequestId;
+
+	const runGitStatusRefresh = (cwd: string, generation: number, requestId: number) => {
+		if (!isCurrentGitStatusRequest(cwd, generation, requestId)) return;
 		if (gitStatusRefreshInFlight) {
-			pendingGitStatusRefresh = { cwd, generation };
+			pendingGitStatusRefresh = { cwd, generation, requestId };
 			return;
 		}
 
@@ -144,26 +150,30 @@ export default function statusline(pi: ExtensionAPI) {
 		void (async () => {
 			try {
 				const summary = await readGitStatus(pi, cwd);
-				if (isActiveGitStatusTarget(cwd, generation)) setGitStatus(summary);
+				if (isCurrentGitStatusRequest(cwd, generation, requestId)) setGitStatus(summary);
 			} catch {
-				if (isActiveGitStatusTarget(cwd, generation)) setGitStatus(undefined);
+				if (isCurrentGitStatusRequest(cwd, generation, requestId)) setGitStatus(undefined);
 			} finally {
 				gitStatusRefreshInFlight = false;
 				const pending = pendingGitStatusRefresh;
 				pendingGitStatusRefresh = undefined;
-				if (pending && isActiveGitStatusTarget(pending.cwd, pending.generation)) {
-					refreshGitStatus(pending.cwd, pending.generation);
-				}
+				if (pending) runGitStatusRefresh(pending.cwd, pending.generation, pending.requestId);
 			}
 		})();
 	};
 
+	const refreshGitStatus = (cwd: string, generation = sessionGeneration) => {
+		if (!isActiveGitStatusTarget(cwd, generation)) return;
+		runGitStatusRefresh(cwd, generation, ++gitStatusRequestId);
+	};
+
 	const scheduleGitStatusRefresh = (cwd: string, generation = sessionGeneration) => {
 		if (!isActiveGitStatusTarget(cwd, generation)) return;
+		const requestId = ++gitStatusRequestId;
 		clearGitStatusDebounce();
 		gitStatusDebounceTimer = setTimeout(() => {
 			gitStatusDebounceTimer = undefined;
-			refreshGitStatus(cwd, generation);
+			runGitStatusRefresh(cwd, generation, requestId);
 		}, GIT_STATUS_EVENT_DEBOUNCE_MS);
 	};
 
