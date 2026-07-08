@@ -47,6 +47,15 @@ Example:
 
 The file is written as `0600`.
 
+Timeout precedence is: per-call `timeoutMs` parameter, `PI_GOOGLE_GENAI_TIMEOUT_MS`,
+`google-genai.json` `timeoutMs`, then the 30000ms default.
+
+Example environment override:
+
+```bash
+PI_GOOGLE_GENAI_TIMEOUT_MS=60000 pi -e ./extensions/pi-google-genai
+```
+
 ### 🔐 Auth precedence
 
 1. Literal `apiKey` in `google-genai.json`.
@@ -83,10 +92,15 @@ Parameters:
 
 - `query`: search question.
 - `searchTypes?`: optional array of `web_search` and/or `image_search`. Omit it for Google's default web search.
+- `timeoutMs?`: per-call timeout in milliseconds.
 
 #### Large / broad searches
 
-Very broad market-research queries can time out. Prefer several narrow searches over one big query.
+Very broad market-research, comparison, review, or search-result synthesis queries can time out. A
+timeout error means the request exceeded the configured duration; it is not a “no results found”
+response. Prefer several narrow searches over one big query, or raise
+`PI_GOOGLE_GENAI_TIMEOUT_MS`, config `timeoutMs`, or per-call `timeoutMs` when a broader call is
+genuinely needed.
 
 Instead of:
 
@@ -112,6 +126,7 @@ Parameters:
 
 - `query`: maps/place question.
 - `latitude?` and `longitude?`: optional pair for location-sensitive questions. If one is set, both are required. Latitude must be `-90..90`; longitude must be `-180..180`.
+- `timeoutMs?`: per-call timeout in milliseconds.
 
 ### 🔗 `google_url_context`
 
@@ -121,6 +136,7 @@ Parameters:
 
 - `prompt`: question or instruction.
 - `urls`: one or more `http://` or `https://` URLs.
+- `timeoutMs?`: per-call timeout in milliseconds.
 
 Use Firecrawl instead when you need raw HTML/markdown extraction, crawling, or URL discovery.
 
