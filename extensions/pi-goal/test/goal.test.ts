@@ -42,7 +42,7 @@ test("goal registers command, completion tool, and lifecycle hooks", () => {
 test("completeGoalArguments suggests /goal subcommands and token options", () => {
 	assert.deepEqual(
 		completeGoalArguments("")?.map((item) => item.label),
-		["pause", "resume", "clear", "edit", "status", "--tokens"],
+		["pause", "resume", "clear", "push", "pop", "edit", "status", "--tokens"],
 	);
 	assert.deepEqual(
 		completeGoalArguments("")?.map((item) => item.description),
@@ -50,6 +50,8 @@ test("completeGoalArguments suggests /goal subcommands and token options", () =>
 			"Pause the active goal",
 			"Resume a paused or budget-limited goal",
 			"Clear the current goal",
+			"Push a sub-goal onto the goal stack",
+			"Pop back to the parent goal",
 			"Edit the current goal objective",
 			"Show the current goal",
 			"Set a token budget before the goal",
@@ -90,6 +92,12 @@ test("parseCommand parses budgets, quoted objectives, and management commands", 
 		objective: "revise scope",
 		tokenBudget: 2_000_000,
 	});
+	assert.deepEqual(parseCommand("push --tokens 500 write docs"), {
+		kind: "push",
+		objective: "write docs",
+		tokenBudget: 500,
+	});
+	assert.deepEqual(parseCommand("pop"), { kind: "pop" });
 	assert.deepEqual(parseCommand("pause"), { kind: "pause" });
 	assert.equal(parseCommand("pause now"), "Usage: /goal pause");
 });
@@ -120,6 +128,7 @@ test("formatStatus reports active, paused, budget-limited, and empty states", ()
 
 	assert.equal(formatStatus(undefined), undefined);
 	assert.equal(formatStatus(activeGoal), "active 500/2k");
+	assert.equal(formatStatus(activeGoal, 2), "#2 active 500/2k");
 	assert.equal(formatStatus({ ...activeGoal, status: "paused" }), "paused");
 	assert.equal(formatStatus({ ...activeGoal, status: "budget_limited" }), "budget 500/2k");
 });
@@ -276,6 +285,46 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 	assert.match(noActiveRejected.content?.[0]?.text ?? "", /no active goal/i);
 	assert.equal(lastGoalStatus(mock), null);
 	mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+});
+
+test("goal stack pushes sub-goals and resumes parents after completion or pop", async () => {
+	const { mock, ctx, statuses } = await startGoalForTest();
+	const parentGoal = requireLastGoal(mock);
+
+	await mock.commands.get("goal")?.handler("push --tokens 1k fix sub task", ctx);
+	const subGoal = requireLastGoal(mock);
+	assert.notEqual(subGoal.id, parentGoal.id);
+	assert.equal(lastGoalState(mock).parents?.length, 1);
+	assert.equal(statuses.get("goal"), "#2 active 0/1k");
+	assert.match(mock.sentUserMessages.at(-1)?.text ?? "", /fix sub task/);
+	assert.match(mock.sentUserMessages.at(-1)?.text ?? "", new RegExp(escapeRegExp(subGoal.id)));
+
+	const tool = mock.tools[0] as GoalTool;
+	const accepted = await tool.execute(
+		"call-sub-complete",
+		{ goal_id: subGoal.id, summary: "Implemented and verified sub task." },
+		new AbortController().signal,
+		() => undefined,
+		ctx,
+	);
+
+	assert.equal(accepted.terminate, true);
+	const resumedParent = requireLastGoal(mock);
+	assert.notEqual(resumedParent.id, parentGoal.id);
+	assert.equal(resumedParent.status, "active");
+	assert.equal(lastGoalState(mock).parents?.length, 0);
+	assert.equal(statuses.get("goal"), "active 0s");
+
+	await mock.commands.get("goal")?.handler("push another sub task", ctx);
+	const secondSubGoal = requireLastGoal(mock);
+	await mock.commands.get("goal")?.handler("pop", ctx);
+	const poppedBackParent = requireLastGoal(mock);
+	assert.notEqual(poppedBackParent.id, secondSubGoal.id);
+	assert.equal(lastGoalState(mock).parents?.length, 0);
+	assert.match(
+		mock.sentUserMessages.at(-1)?.text ?? "",
+		/Continue working toward the parent \/goal/,
+	);
 });
 
 test("goal_complete rejects stale goal_id after replacement, pause/resume, and clear", async () => {
@@ -809,9 +858,12 @@ function requireLastGoal(mock: ReturnType<typeof createMockPi>) {
 }
 
 function lastGoal(mock: ReturnType<typeof createMockPi>) {
+	return lastGoalState(mock).goal ?? null;
+}
+
+function lastGoalState(mock: ReturnType<typeof createMockPi>) {
 	const entry = mock.entries.filter((entry) => entry.customType === "goal-state").at(-1);
-	return ((entry?.data as { goal?: StoredGoal | null } | undefined)?.goal ??
-		null) as StoredGoal | null;
+	return (entry?.data as { goal?: StoredGoal | null; parents?: StoredGoal[] } | undefined) ?? {};
 }
 
 function lastGoalStatus(mock: ReturnType<typeof createMockPi>) {

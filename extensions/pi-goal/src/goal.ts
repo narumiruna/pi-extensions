@@ -60,10 +60,11 @@ interface AssistantMessageLike {
 
 interface GoalStateEntryData {
 	goal?: ActiveGoal | null;
+	parents?: ActiveGoal[];
 }
 
 interface CommandResult {
-	kind: "show" | "start" | "pause" | "resume" | "clear" | "edit";
+	kind: "show" | "start" | "push" | "pop" | "pause" | "resume" | "clear" | "edit";
 	objective?: string;
 	tokenBudget?: number;
 }
@@ -105,6 +106,8 @@ const GOAL_ARGUMENT_COMPLETIONS: readonly GoalArgumentCompletion[] = [
 	{ value: "pause", label: "pause", description: "Pause the active goal" },
 	{ value: "resume", label: "resume", description: "Resume a paused or budget-limited goal" },
 	{ value: "clear", label: "clear", description: "Clear the current goal" },
+	{ value: "push", label: "push", description: "Push a sub-goal onto the goal stack" },
+	{ value: "pop", label: "pop", description: "Pop back to the parent goal" },
 	{ value: "edit", label: "edit", description: "Edit the current goal objective" },
 	{ value: "status", label: "status", description: "Show the current goal" },
 	{ value: "--tokens ", label: "--tokens", description: "Set a token budget before the goal" },
@@ -120,6 +123,7 @@ const STATE_FILE = join(
 );
 
 let activeGoal: ActiveGoal | undefined;
+let parentGoals: ActiveGoal[] = [];
 let completionStatusTimer: NodeJS.Timeout | undefined;
 let extensionApi: ExtensionAPI | undefined;
 let continuationPending: ContinuationPending | undefined;
@@ -214,6 +218,21 @@ const goalCompleteTool = defineTool({
 		updateGoalUsage(activeGoal, ctx);
 		persistGoal(activeGoal);
 
+		const parentGoal = parentGoals.pop();
+		if (parentGoal) {
+			activeGoal = nextGoalInstance(parentGoal);
+			persistGoal(activeGoal);
+			updateStatus(ctx, activeGoal);
+			ctx.ui.notify(`Goal complete: ${goal}; resumed parent goal: ${activeGoal.text}`, "info");
+			if (extensionApi && activeGoal.status === "active") await sendStackResumePrompt(extensionApi, ctx, activeGoal);
+
+			return {
+				content: [{ type: "text", text: `Goal complete: ${summary}` }],
+				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+				terminate: true,
+			};
+		}
+
 		ctx.ui.setStatus(STATUS_KEY, formatStatus(activeGoal));
 		clearActiveGoal(ctx);
 		showCompletionStatus(ctx);
@@ -245,6 +264,12 @@ export default function goal(pi: ExtensionAPI) {
 				case "show":
 					showGoal(ctx);
 					return;
+				case "push":
+					await pushGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
+					return;
+				case "pop":
+					await popGoal(pi, ctx);
+					return;
 				case "pause":
 					pauseGoal(ctx);
 					return;
@@ -269,13 +294,16 @@ export default function goal(pi: ExtensionAPI) {
 		clearContinuationTracking();
 		clearGoalRecovery();
 		clearStaleGoalToolCallBlock();
-		activeGoal = loadGoalFromSession(ctx);
+		const restored = loadGoalFromSession(ctx);
+		activeGoal = restored.goal;
+		parentGoals = restored.parents;
 		if (activeGoal) updateStatus(ctx, activeGoal);
 		else ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (activeGoal) persistGoal(activeGoal);
+		parentGoals = [];
 		clearContinuationTracking();
 		clearGoalRecovery();
 		clearStaleGoalToolCallBlock();
@@ -297,8 +325,11 @@ export default function goal(pi: ExtensionAPI) {
 			return;
 		}
 
-		const restoredGoal = loadGoalFromSession(ctx);
-		if (restoredGoal?.id === activeGoal.id) activeGoal = restoredGoal;
+		const restored = loadGoalFromSession(ctx);
+		if (restored.goal?.id === activeGoal.id) {
+			activeGoal = restored.goal;
+			parentGoals = restored.parents;
+		}
 		updateGoalUsage(activeGoal, ctx);
 		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
@@ -335,7 +366,7 @@ export default function goal(pi: ExtensionAPI) {
 		if (!activeGoal || activeGoal.status !== "active") return;
 
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${buildGoalSystemPrompt(activeGoal)}`,
+			systemPrompt: `${event.systemPrompt}\n\n${buildGoalSystemPrompt(activeGoal, goalDepth())}`,
 		};
 	});
 
@@ -425,6 +456,51 @@ async function startGoal(
 	await sendGoalPrompt(pi, ctx, activeGoal);
 }
 
+async function pushGoal(
+	objective: string,
+	tokenBudget: number | undefined,
+	pi: ExtensionAPI,
+	ctx: StatusContext,
+) {
+	const validationError = validateObjective(objective);
+	if (validationError) {
+		ctx.ui.notify(validationError, "warning");
+		return;
+	}
+
+	if (activeGoal) {
+		updateGoalUsage(activeGoal, ctx);
+		parentGoals.push(activeGoal);
+	}
+	cancelContinuationPending();
+	clearGoalRecovery();
+	clearStaleGoalToolCallBlock();
+	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
+	persistGoal(activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(`Goal pushed #${goalDepth()}: ${objective}`, "info");
+	await sendGoalPrompt(pi, ctx, activeGoal);
+}
+
+async function popGoal(pi: ExtensionAPI, ctx: StatusContext) {
+	if (!activeGoal || parentGoals.length === 0) {
+		ctx.ui.notify("No parent goal to pop to. Use /goal clear to remove the current goal.", "info");
+		return;
+	}
+
+	const parentGoal = parentGoals.pop();
+	if (!parentGoal) return;
+	const poppedGoal = activeGoal.text;
+	cancelContinuationPending();
+	clearGoalRecovery();
+	clearStaleGoalToolCallBlock();
+	activeGoal = nextGoalInstance(parentGoal);
+	persistGoal(activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(`Goal popped: ${poppedGoal}; resumed parent goal: ${activeGoal.text}`, "info");
+	if (activeGoal.status === "active") await sendStackResumePrompt(pi, ctx, activeGoal);
+}
+
 function pauseGoal(ctx: StatusContext) {
 	if (!activeGoal) {
 		ctx.ui.notify("No active goal.", "info");
@@ -471,14 +547,16 @@ function clearGoal(ctx: StatusContext) {
 		cancelContinuationPending();
 		clearGoalRecovery();
 		clearStaleGoalToolCallBlock();
+		parentGoals = [];
 		clearPersistedGoal(ctx.cwd);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
 	}
 
 	const stoppedGoal = activeGoal.text;
+	const depth = goalDepth();
 	clearActiveGoal(ctx);
-	ctx.ui.notify(`Goal cleared: ${stoppedGoal}`, "warning");
+	ctx.ui.notify(`Goal cleared: ${stoppedGoal}${depth > 1 ? ` (stack depth ${depth})` : ""}`, "warning");
 }
 
 async function editGoal(
@@ -525,7 +603,7 @@ function showGoal(ctx: StatusContext) {
 	updateGoalUsage(activeGoal, ctx);
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
-	ctx.ui.notify(goalSummary(activeGoal), "info");
+	ctx.ui.notify(goalStackSummary(activeGoal), "info");
 }
 
 function createGoal(text: string, tokenBudget: number | undefined, baselineTokens: number): ActiveGoal {
@@ -622,11 +700,13 @@ export function parseCommand(args: string): CommandResult | string {
 	if (first === "resume") return rest.length === 0 ? { kind: "resume" } : "Usage: /goal resume";
 	if (first === "clear" || first === "stop") return rest.length === 0 ? { kind: "clear" } : "Usage: /goal clear";
 	if (first === "status") return rest.length === 0 ? { kind: "show" } : "Usage: /goal status";
+	if (first === "pop") return rest.length === 0 ? { kind: "pop" } : "Usage: /goal pop";
+	if (first === "push") return parseObjective("push", rest);
 	if (first === "edit") return parseObjective("edit", rest);
 	return parseObjective("start", tokens);
 }
 
-function parseObjective(kind: "start" | "edit", tokens: string[]): CommandResult | string {
+function parseObjective(kind: "start" | "push" | "edit", tokens: string[]): CommandResult | string {
 	let tokenBudget: number | undefined;
 	const objectiveTokens = [...tokens];
 
@@ -640,7 +720,9 @@ function parseObjective(kind: "start" | "edit", tokens: string[]): CommandResult
 	}
 
 	if (objectiveTokens.length === 0) {
-		return kind === "edit" ? "Usage: /goal edit <goal_to_complete>" : "Usage: /goal <goal_to_complete>";
+		if (kind === "edit") return "Usage: /goal edit <goal_to_complete>";
+		if (kind === "push") return "Usage: /goal push <goal_to_complete>";
+		return "Usage: /goal <goal_to_complete>";
 	}
 
 	return { kind, objective: objectiveTokens.join(" "), tokenBudget };
@@ -702,12 +784,16 @@ async function sendResumePrompt(pi: ExtensionAPI, ctx: StatusContext, goal: Acti
 	return sendPrompt(pi, ctx, buildResumePrompt(goal));
 }
 
+async function sendStackResumePrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	return sendPrompt(pi, ctx, buildStackResumePrompt(goal));
+}
+
 async function sendContinuationPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
 	if (continuationPending?.goalId === goal.id) return false;
 	if (hasPendingMessages(ctx)) return false;
 
 	const marker = continuationMarker(goal);
-	const prompt = buildContinuePrompt(goal, marker);
+	const prompt = buildContinuePrompt(goal, marker, goalDepth());
 	continuationPending = { goalId: goal.id, iteration: goal.iteration, marker, prompt };
 	const sent = await sendPrompt(pi, ctx, prompt);
 	if (!sent && continuationPending?.marker === marker) continuationPending = undefined;
@@ -729,20 +815,26 @@ async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) 
 
 function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 	clearCompletionStatusTimer();
-	ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
+	ctx.ui.setStatus(STATUS_KEY, formatStatus(goal, goalDepth()));
 }
 
-export function formatStatus(goal: ActiveGoal | undefined) {
+export function formatStatus(goal: ActiveGoal | undefined, depth = 1) {
 	if (!goal) return undefined;
-	if (goal.status === "complete") return "complete";
-	if (goal.status === "paused") return "paused";
-	if (goal.status === "budget_limited") return `budget ${formatBudget(goal)}`;
-	if (goal.tokenBudget !== undefined) return `active ${formatBudget(goal)}`;
-	return `active ${formatDuration(goal.timeUsedSeconds)}`;
+	const prefix = depth > 1 ? `#${depth} ` : "";
+	if (goal.status === "complete") return `${prefix}complete`;
+	if (goal.status === "paused") return `${prefix}paused`;
+	if (goal.status === "budget_limited") return `${prefix}budget ${formatBudget(goal)}`;
+	if (goal.tokenBudget !== undefined) return `${prefix}active ${formatBudget(goal)}`;
+	return `${prefix}active ${formatDuration(goal.timeUsedSeconds)}`;
 }
 
 function formatBudget(goal: ActiveGoal) {
 	return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
+}
+
+function goalStackSummary(goal: ActiveGoal) {
+	const lines = goalDepth() > 1 ? [`Goal stack: ${goalDepth()} levels`, ...parentGoals.map((parent, index) => `#${index + 1}: ${parent.text}`), `#${goalDepth()}: ${goal.text}`] : [];
+	return [...lines, goalSummary(goal)].join(lines.length > 0 ? "\n\n" : "");
 }
 
 function goalSummary(goal: ActiveGoal) {
@@ -757,9 +849,14 @@ function goalSummary(goal: ActiveGoal) {
 }
 
 function goalCommandHint(status: GoalStatus) {
-	if (status === "active") return "/goal edit <objective>, /goal pause, /goal clear";
-	if (status === "paused") return "/goal edit <objective>, /goal resume, /goal clear";
-	return "/goal edit <objective>, /goal clear";
+	const stackCommands = ", /goal push <objective>, /goal pop";
+	if (status === "active") return `/goal edit <objective>, /goal pause${stackCommands}, /goal clear`;
+	if (status === "paused") return `/goal edit <objective>, /goal resume${stackCommands}, /goal clear`;
+	return `/goal edit <objective>${stackCommands}, /goal clear`;
+}
+
+function goalDepth() {
+	return activeGoal ? parentGoals.length + 1 : 0;
 }
 
 export function formatDuration(seconds: number) {
@@ -791,13 +888,20 @@ function buildResumePrompt(goal: ActiveGoal) {
 	return `The user explicitly resumed the paused /goal. Continue working toward this goal:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
 }
 
-export function buildGoalSystemPrompt(goal: ActiveGoal) {
-	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
-	return `Active /goal:\n${goalContextBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified, and pass this exact goal_id.${budgetLine}`;
+function buildStackResumePrompt(goal: ActiveGoal) {
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+	return `The active sub-goal ended. Continue working toward the parent /goal:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this parent goal")}`;
 }
 
-function buildContinuePrompt(goal: ActiveGoal, marker: string) {
-	return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. Current files, command output, tests, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
+export function buildGoalSystemPrompt(goal: ActiveGoal, depth = 1) {
+	const stackLine = depth > 1 ? `\n- This is goal stack level #${depth}; complete this sub-goal, then resume the parent goal.` : "";
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
+	return `Active /goal:\n${goalContextBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified, and pass this exact goal_id.${stackLine}${budgetLine}`;
+}
+
+function buildContinuePrompt(goal: ActiveGoal, marker: string, depth = 1) {
+	const stackLine = depth > 1 ? ` This is goal stack level #${depth}; finish this sub-goal before returning to the parent goal.` : "";
+	return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}.${stackLine} Current files, command output, tests, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
 }
 
 function goalContextBlock(goal: ActiveGoal) {
@@ -1028,15 +1132,15 @@ function currentTokenTotal(ctx: StatusContext): number {
 }
 
 function persistGoal(goal: ActiveGoal) {
-	extensionApi?.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal });
+	extensionApi?.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal, parents: parentGoals });
 }
 
 function clearPersistedGoal(cwd: string) {
-	extensionApi?.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal: null });
+	extensionApi?.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal: null, parents: [] });
 	clearLegacyPersistedGoal(cwd);
 }
 
-function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
+function loadGoalFromSession(ctx: StatusContext): { goal: ActiveGoal | undefined; parents: ActiveGoal[] } {
 	const sessionManager = ctx.sessionManager as
 		| {
 				getBranch?: () => Array<{ type?: string; customType?: string; data?: unknown }>;
@@ -1048,7 +1152,9 @@ function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
 		.filter((entry) => entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE)
 		.pop();
 	const data = entry?.data as GoalStateEntryData | undefined;
-	return isGoal(data?.goal) && data.goal.status !== "complete" ? data.goal : undefined;
+	const goal = isGoal(data?.goal) && data.goal.status !== "complete" ? data.goal : undefined;
+	const parents = Array.isArray(data?.parents) ? data.parents.filter(isGoal) : [];
+	return { goal, parents: goal ? parents : [] };
 }
 
 function clearActiveGoal(ctx: StatusContext) {
@@ -1056,6 +1162,7 @@ function clearActiveGoal(ctx: StatusContext) {
 	clearGoalRecovery();
 	clearStaleGoalToolCallBlock();
 	activeGoal = undefined;
+	parentGoals = [];
 	clearPersistedGoal(ctx.cwd);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 }

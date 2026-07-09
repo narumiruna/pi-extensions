@@ -10,9 +10,10 @@ Goal mode uses Codex-like persistence instructions and keeps sending guarded con
 
 - Adds `/goal <goal_to_complete>` to start goal mode, with confirmation before replacing an existing goal.
 - Bare `/goal` shows the current goal summary.
-- Keeps advanced goal management inside `/goal` subcommands: `pause`, `resume`, `clear`, and `edit`.
+- Keeps advanced goal management inside `/goal` subcommands: `push`, `pop`, `pause`, `resume`, `clear`, and `edit`.
 - Exposes only one top-level command: `/goal`.
-- Supports optional token budgets such as `/goal --tokens 100k <goal>`.
+- Supports optional token budgets such as `/goal --tokens 100k <goal>` or `/goal push --tokens 10k <sub-goal>`.
+- Supports a LIFO goal stack for temporary sub-goals; completing or popping a sub-goal resumes the parent.
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete({ goal_id, summary })` tool for explicit completion, requiring the current goal id and rejecting missing/stale ids plus plainly contradictory summaries such as “not complete” or “tests still fail”.
@@ -50,6 +51,8 @@ pi -e ./extensions/pi-goal
 /goal implement snake game
 /goal --tokens 100k fix the failing test and verify it
 /goal edit ship the smaller fix first
+/goal push write the missing regression test first
+/goal pop
 /goal pause
 /goal resume
 /goal clear
@@ -59,6 +62,8 @@ pi -e ./extensions/pi-goal
 - `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters.
 - `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
 - `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active, paused goals stay paused, and budget-limited goals remain budget-limited if their budget is still exhausted.
+- `/goal push [--tokens 10k] <sub_goal>` pushes the current goal onto a LIFO stack and starts a temporary sub-goal. If no goal exists, it starts a new goal.
+- `/goal pop` abandons the current sub-goal and resumes the parent goal with a fresh guard id. Use `/goal clear` to remove the only goal.
 - `/goal pause` stops prompt injection and auto-continuation, aborts the current turn, and keeps the goal for later resume.
 - `/goal resume` resumes a paused or budget-limited goal when the token budget allows it, then queues a resume prompt so work continues.
 - `/goal clear` clears the current goal state, status, pending continuation, and legacy persisted state for the current working directory without aborting any in-flight agent turn.
@@ -77,6 +82,7 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 
 - `active 3m` — an active goal without a token budget.
 - `active 18k/100k` — an active goal with token usage and budget.
+- `#2 active 2m` — an active sub-goal at stack depth 2.
 - `paused` — auto-continuation is paused.
 - `budget 100k/100k` — the token budget was reached; auto-continuation stops.
 - `complete` — shown briefly after `goal_complete` succeeds.
@@ -84,6 +90,8 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 ## ✅ How completion works
 
 While a goal is active, `pi-goal` injects persistence rules, a `<goal_id>` stale-turn guard, and exposes `goal_complete`. To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation, and paused goals cannot be completed until resumed. Empty or plainly contradictory summaries are also rejected; the summary is completion evidence, not the stale-turn safety token.
+
+If the completed goal is a sub-goal, `goal_complete` pops it and resumes the parent goal. The resumed parent gets a fresh `goal_id`, so delayed completions from older parent turns stay stale.
 
 If a turn ends before completion, `pi-goal` records usage and sends one guarded continuation only when no other messages are pending.
 
