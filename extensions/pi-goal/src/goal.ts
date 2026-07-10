@@ -32,7 +32,7 @@ interface GoalCompleteDetails {
 	summary: string;
 }
 
-interface ContinuationPending {
+interface ContinuationTicket {
 	goalId: string;
 	iteration: number;
 	marker: string;
@@ -122,7 +122,8 @@ const STATE_FILE = join(
 let activeGoal: ActiveGoal | undefined;
 let completionStatusTimer: NodeJS.Timeout | undefined;
 let extensionApi: ExtensionAPI | undefined;
-let continuationPending: ContinuationPending | undefined;
+let continuationIntent: ContinuationTicket | undefined;
+let continuationDelivery: ContinuationTicket | undefined;
 let goalRecovery: GoalRecovery | undefined;
 let staleGoalToolCallsBlocked = false;
 const cancelledContinuationMarkers = new Set<string>();
@@ -286,12 +287,12 @@ export default function goal(pi: ExtensionAPI) {
 	pi.on("session_before_compact", (_event, ctx) => {
 		if (!activeGoal || activeGoal.status !== "active") return;
 		updateGoalUsage(activeGoal, ctx);
-		cancelContinuationPending();
+		cancelContinuationWork();
 		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
 	});
 
-	pi.on("session_compact", async (event, ctx) => {
+	pi.on("session_compact", (event, ctx) => {
 		if (!activeGoal || activeGoal.status !== "active") {
 			clearGoalRecovery();
 			return;
@@ -305,8 +306,12 @@ export default function goal(pi: ExtensionAPI) {
 
 		const wasPiRetry = isPiOwnedCompactionRetry(event, activeGoal.id);
 		clearGoalRecoveryForGoal(activeGoal.id);
-		if (wasPiRetry || hasPendingMessages(ctx)) return;
-		await sendContinuationPrompt(pi, ctx, activeGoal);
+		if (wasPiRetry) return;
+		requestContinuation(activeGoal);
+		// Manual compaction does not emit agent_settled. This common dispatcher is
+		// therefore the narrow fallback; threshold compaction leaves the intent for
+		// agent_settled when Pi is still busy.
+		dispatchContinuationIfSettled(pi, ctx);
 	});
 
 	pi.on("input", (event) => {
@@ -331,7 +336,7 @@ export default function goal(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", (event) => {
-		markContinuationDelivered(event.prompt);
+		markContinuationStarted(event.prompt);
 		if (!activeGoal || activeGoal.status !== "active") return;
 
 		return {
@@ -339,14 +344,14 @@ export default function goal(pi: ExtensionAPI) {
 		};
 	});
 
-	pi.on("agent_end", async (event, ctx) => {
+	pi.on("agent_end", (event, ctx) => {
 		if (!activeGoal || activeGoal.status !== "active") return;
 
 		const goalId = activeGoal.id;
-		const hadPendingContinuation = continuationPending?.goalId === goalId;
+		const alreadyAwaitingContinuation = hasContinuationWorkForGoal(goalId);
 		const finalAssistant = findFinalAssistantMessage(event.messages);
 
-		if (!hadPendingContinuation) activeGoal = incrementGoal(activeGoal);
+		if (!alreadyAwaitingContinuation) activeGoal = incrementGoal(activeGoal);
 		updateGoalUsage(activeGoal, ctx);
 
 		if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error") {
@@ -355,7 +360,7 @@ export default function goal(pi: ExtensionAPI) {
 					goalId,
 					kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
 				};
-				cancelContinuationPending();
+				cancelContinuationWork();
 				persistGoal(activeGoal);
 				updateStatus(ctx, activeGoal);
 				return;
@@ -368,7 +373,7 @@ export default function goal(pi: ExtensionAPI) {
 		clearGoalRecoveryForGoal(goalId);
 
 		if (activeGoal.tokenBudget !== undefined && activeGoal.tokensUsed >= activeGoal.tokenBudget) {
-			cancelContinuationPending();
+			cancelContinuationWork();
 			activeGoal = transitionGoal(activeGoal, "budget_limited");
 			persistGoal(activeGoal);
 			updateStatus(ctx, activeGoal);
@@ -379,15 +384,13 @@ export default function goal(pi: ExtensionAPI) {
 		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
 
-		if (hadPendingContinuation) {
-			if (hasPendingMessages(ctx)) return;
-			if (continuationPending?.goalId === goalId) continuationPending = undefined;
-		}
-
 		const currentGoal = activeGoal;
 		if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
-		if (hasPendingMessages(ctx)) return;
-		await sendContinuationPrompt(pi, ctx, currentGoal);
+		requestContinuation(currentGoal);
+	});
+
+	pi.on("agent_settled", (_event, ctx) => {
+		dispatchContinuationIfSettled(pi, ctx);
 	});
 }
 
@@ -415,7 +418,7 @@ async function startGoal(
 		}
 	}
 
-	cancelContinuationPending();
+	cancelContinuationWork();
 	clearGoalRecovery();
 	clearStaleGoalToolCallBlock();
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
@@ -434,7 +437,7 @@ function pauseGoal(ctx: StatusContext) {
 		ctx.ui.notify(`Goal is ${activeGoal.status}; only active goals can be paused.`, "warning");
 		return;
 	}
-	cancelContinuationPending();
+	cancelContinuationWork();
 	blockStaleGoalToolCalls();
 	abortCurrentTurn(ctx);
 	activeGoal = transitionGoal(activeGoal, "paused");
@@ -468,7 +471,7 @@ async function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 function clearGoal(ctx: StatusContext) {
 	if (!activeGoal) {
 		ctx.ui.notify("No active goal.", "info");
-		cancelContinuationPending();
+		cancelContinuationWork();
 		clearGoalRecovery();
 		clearStaleGoalToolCallBlock();
 		clearPersistedGoal(ctx.cwd);
@@ -498,7 +501,7 @@ async function editGoal(
 	}
 
 	updateGoalUsage(activeGoal, ctx);
-	cancelContinuationPending();
+	cancelContinuationWork();
 	clearGoalRecovery();
 	activeGoal = normalizeGoalForBudget({
 		...nextGoalInstance(activeGoal),
@@ -576,7 +579,7 @@ function pauseGoalAfterAgentEnd(
 	goal: ActiveGoal,
 	assistant: AssistantMessageLike,
 ) {
-	cancelContinuationPending();
+	cancelContinuationWork();
 	blockStaleGoalToolCalls();
 	abortCurrentTurn(ctx);
 	activeGoal = transitionGoal(goal, "paused");
@@ -702,16 +705,44 @@ async function sendResumePrompt(pi: ExtensionAPI, ctx: StatusContext, goal: Acti
 	return sendPrompt(pi, ctx, buildResumePrompt(goal));
 }
 
-async function sendContinuationPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	if (continuationPending?.goalId === goal.id) return false;
-	if (hasPendingMessages(ctx)) return false;
-
+function requestContinuation(goal: ActiveGoal) {
+	if (hasContinuationWorkForGoal(goal.id)) return false;
 	const marker = continuationMarker(goal);
-	const prompt = buildContinuePrompt(goal, marker);
-	continuationPending = { goalId: goal.id, iteration: goal.iteration, marker, prompt };
-	const sent = await sendPrompt(pi, ctx, prompt);
-	if (!sent && continuationPending?.marker === marker) continuationPending = undefined;
-	return sent;
+	continuationIntent = {
+		goalId: goal.id,
+		iteration: goal.iteration,
+		marker,
+		prompt: buildContinuePrompt(goal, marker),
+	};
+	return true;
+}
+
+function dispatchContinuationIfSettled(pi: ExtensionAPI, ctx: StatusContext) {
+	const intent = continuationIntent;
+	if (!intent) return false;
+	if (!activeGoal || activeGoal.id !== intent.goalId || activeGoal.status !== "active") {
+		continuationIntent = undefined;
+		return false;
+	}
+	if (ctx.isIdle?.() !== true || hasPendingMessages(ctx)) return false;
+
+	continuationIntent = undefined;
+	continuationDelivery = intent;
+	try {
+		pi.sendUserMessage(intent.prompt);
+		return true;
+	} catch (error) {
+		if (continuationDelivery?.marker === intent.marker) continuationDelivery = undefined;
+		if (activeGoal?.id === intent.goalId && activeGoal.status === "active") {
+			continuationIntent = intent;
+		}
+		ctx.ui.notify(`Goal prompt failed: ${formatError(error)}`, "error");
+		return false;
+	}
+}
+
+function hasContinuationWorkForGoal(goalId: string) {
+	return continuationIntent?.goalId === goalId || continuationDelivery?.goalId === goalId;
 }
 
 async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
@@ -907,13 +938,15 @@ function zeroUsage(): Usage {
 }
 
 function clearContinuationTracking() {
-	continuationPending = undefined;
+	continuationIntent = undefined;
+	continuationDelivery = undefined;
 	cancelledContinuationMarkers.clear();
 }
 
-function cancelContinuationPending() {
-	if (continuationPending) rememberCancelledContinuationMarker(continuationPending.marker);
-	continuationPending = undefined;
+function cancelContinuationWork() {
+	if (continuationDelivery) rememberCancelledContinuationMarker(continuationDelivery.marker);
+	continuationIntent = undefined;
+	continuationDelivery = undefined;
 }
 
 function rememberCancelledContinuationMarker(marker: string) {
@@ -928,9 +961,16 @@ function consumeCancelledContinuationPrompt(prompt: string) {
 	return marker ? cancelledContinuationMarkers.delete(marker) : false;
 }
 
-function markContinuationDelivered(prompt: string) {
+function markContinuationStarted(prompt: string) {
 	const marker = extractContinuationMarker(prompt);
-	if (marker && continuationPending?.marker === marker) continuationPending = undefined;
+	if (!marker) {
+		// A user, retry, or another extension started newer work. Cancel both an
+		// unsent intent and a delivery that may have lost the non-atomic idle race;
+		// the newer work's agent_end will record a fresh intent.
+		cancelContinuationWork();
+		return;
+	}
+	if (continuationDelivery?.marker === marker) continuationDelivery = undefined;
 }
 
 function continuationMarker(goal: ActiveGoal) {
@@ -1052,7 +1092,7 @@ function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
 }
 
 function clearActiveGoal(ctx: StatusContext) {
-	cancelContinuationPending();
+	cancelContinuationWork();
 	clearGoalRecovery();
 	clearStaleGoalToolCallBlock();
 	activeGoal = undefined;

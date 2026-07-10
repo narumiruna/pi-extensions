@@ -4,7 +4,7 @@
 
 `@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds session-scoped `/goal` commands and a `goal_complete({ goal_id, summary })` tool for autonomous, verifiable task completion.
 
-Goal mode uses Codex-like persistence instructions and keeps sending guarded continuation messages until the agent calls `goal_complete`, the user pauses or clears the goal, an interrupt/error pauses the goal, or an optional token budget is reached.
+Goal mode uses Codex-like persistence instructions and sends guarded continuation messages from Pi's fully settled idle boundary until the agent calls `goal_complete`, the user pauses or clears the goal, an interrupt/error pauses the goal, or an optional token budget is reached.
 
 ## ✨ Features
 
@@ -16,7 +16,8 @@ Goal mode uses Codex-like persistence instructions and keeps sending guarded con
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete({ goal_id, summary })` tool for explicit completion, requiring the current goal id and rejecting missing/stale ids plus plainly contradictory summaries such as “not complete” or “tests still fail”.
-- Automatically prompts the agent to continue if an active turn ends early, directly triggering the next turn when Pi is idle and no pending messages are queued.
+- Records continuation intent when an active turn ends early, then directly triggers exactly one next turn only after Pi reports the agent fully settled, idle, and free of pending messages.
+- Lets retry, compaction, steering, follow-up, and other queued work settle before automatic goal continuation.
 - Pauses and aborts queued goal work when the user pauses a goal or Pi reports a non-retryable aborted/errored assistant turn.
 - Keeps retryable provider interruptions and Pi compaction retries active without enqueueing duplicate goal continuations while Pi retries.
 - Preserves active goals across manual, threshold, and overflow compaction.
@@ -26,6 +27,8 @@ Goal mode uses Codex-like persistence instructions and keeps sending guarded con
 - Encourages requirement-by-requirement verification before the goal is marked complete.
 
 ## 📦 Install
+
+Requires Pi `0.80.6` or newer for the `agent_settled` lifecycle event.
 
 ```bash
 pi install npm:@narumitw/pi-goal
@@ -85,11 +88,13 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 
 While a goal is active, `pi-goal` injects persistence rules, a `<goal_id>` stale-turn guard, and exposes `goal_complete`. To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation, and paused goals cannot be completed until resumed. Empty or plainly contradictory summaries are also rejected; the summary is completion evidence, not the stale-turn safety token.
 
-If a turn ends before completion, `pi-goal` records usage and sends one guarded continuation only when no other messages are pending.
+If a turn ends before completion, `pi-goal` records usage and creates one continuation intent. It dispatches that continuation only from Pi's `agent_settled` lifecycle after retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending. Repeated settled events cannot dispatch the same intent twice.
+
+Manual compaction does not emit `agent_settled`, so its completion hook uses the same single-flight dispatcher as a narrow idle-only fallback. Pi extensions cannot reserve an idle turn atomically like Codex core; another extension can still win the race after the idle check, and its newer turn supersedes the old continuation intent.
 
 ## 🛑 Interruption and queued-input behavior
 
-On user pause, abort, or non-retryable error, `pi-goal` pauses the goal, aborts stale work, and blocks stale tool calls until the next user prompt (non-extension input), `/goal resume`, or `/goal clear`. On `/goal clear`, it clears goal state, pending continuation markers, and any stale tool-call block; it does not abort the current turn. Retryable provider interruptions and overflow compaction retries stay active while Pi retries; no extra continuation is queued.
+On user pause, abort, or non-retryable error, `pi-goal` pauses the goal, cancels pending continuation intent or delivery, aborts stale work, and blocks stale tool calls until the next user prompt (non-extension input), `/goal resume`, or `/goal clear`. On `/goal clear`, it clears goal state, continuation intent and markers, and any stale tool-call block; it does not abort the current turn. Retryable provider interruptions and overflow compaction retries stay active while Pi retries; no extra continuation is queued. User and extension work that starts before settlement supersedes the older continuation intent, and pending messages always take priority.
 
 ## 🧠 Use cases
 

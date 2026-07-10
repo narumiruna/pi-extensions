@@ -12,7 +12,7 @@
 - ty/ruff LSP servers may request `workspace/configuration`; respond with per-item empty config objects or diagnostic requests can hang.
 - pi-statusline is display-only; avoid prompt interception or customization commands unless intentionally reintroduced.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.
-- Symptom: extension accept/execute actions from `agent_end` may not trigger a new turn. Cause: `pi.sendMessage({ triggerTurn: true })` only triggers when idle, and `sendUserMessage(..., { deliverAs: "followUp" })` can miss the current drain point late in `agent_end`. Fix: avoid starting new user turns from `agent_end`; let the user submit normally or schedule work after the agent is truly idle.
+- Symptom: extension actions from `agent_end` may not trigger a new turn. Cause: follow-ups can miss the late drain point. Fix: on Pi 0.80.6+, record intent in `agent_end` and dispatch from `agent_settled`; standalone manual compaction does not emit `agent_settled`, so use a narrowly idle-gated `session_compact` fallback when needed.
 - Extension statusline entries should be activity-based: only show an extension in status when it is actively running, retrying, or needs attention; avoid permanent “configured/ready/on” statuses.
 - Codex usage can be queried without Codex CLI by sending Pi's `openai-codex` bearer token to `https://chatgpt.com/backend-api/wham/usage`; response uses Codex `RateLimitStatusPayload` snake_case fields.
 - `pi-codex-usage` statusline must select a rate-limit bucket by current model id/name; `gpt-5.3-codex-spark` can use its own returned bucket instead of primary `codex`.

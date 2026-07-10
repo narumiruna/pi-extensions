@@ -25,6 +25,7 @@
 	"scripts": {
 		"check": "biome check . && npm run typecheck",
 		"format": "biome check --write .",
+		"test:runtime": "node ./test/goal-runtime-smoke.mjs",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
@@ -32,8 +33,8 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.2",
-		"@earendil-works/pi-ai": "0.80.3",
-		"@earendil-works/pi-coding-agent": "0.80.3",
+		"@earendil-works/pi-ai": "0.80.6",
+		"@earendil-works/pi-coding-agent": "0.80.6",
 		"typescript": "6.0.3"
 	},
 	"repository": {
