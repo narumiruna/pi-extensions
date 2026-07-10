@@ -30,10 +30,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
-      - name: Update npm for OIDC publishing
+      - name: Setup npm
         run: |
-          npm install -g npm@12.0.0
+          npm install -g npm@11.16.0
           npm --version
+          node -e 'require.resolve("sigstore", { paths: [process.argv[1]] })' "$(npm root -g)/npm"
 
       - name: Install dependencies
         run: npm ci
