@@ -37,7 +37,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	const blockedParameters = blockerDefinition?.parameters as
 		| {
 				required?: string[];
-				properties?: Record<string, { minimum?: number; minLength?: number }>;
+				properties?: Record<string, { minimum?: number; minLength?: number; maxLength?: number }>;
 		  }
 		| undefined;
 	assert.deepEqual(blockedParameters?.required, [
@@ -47,7 +47,9 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 		"repeated_turns",
 	]);
 	assert.equal(blockedParameters?.properties?.reason?.minLength, 1);
+	assert.equal(blockedParameters?.properties?.reason?.maxLength, 1_000);
 	assert.equal(blockedParameters?.properties?.evidence?.minLength, 1);
+	assert.equal(blockedParameters?.properties?.evidence?.maxLength, 4_000);
 	assert.equal(blockedParameters?.properties?.repeated_turns?.minimum, 3);
 	assert.match(
 		String(blockerDefinition?.description),
@@ -470,6 +472,24 @@ test("goal_blocked requires a current active goal and strict blocker evidence", 
 		[
 			{
 				goal_id: currentGoal.id,
+				reason: "r".repeat(1_001),
+				evidence: "Three attempts failed",
+				repeated_turns: 3,
+			},
+			/reason is too long/i,
+		],
+		[
+			{
+				goal_id: currentGoal.id,
+				reason: "Need access",
+				evidence: "e".repeat(4_001),
+				repeated_turns: 3,
+			},
+			/evidence is too long/i,
+		],
+		[
+			{
+				goal_id: currentGoal.id,
 				reason: "Need access",
 				evidence: "Three attempts failed",
 				repeated_turns: 3.5,
@@ -590,13 +610,37 @@ test("resume rejects active goals and exhausted budgets without rotating goal_id
 	assert.equal(requireLastGoal(active.mock).id, activeGoal.id);
 	assert.equal(active.mock.sentUserMessages.length, activeMessageCount);
 
-	const exhausted = restoreGoalForTest("budget_limited", { tokensUsed: 10 });
-	await exhausted.mock.commands.get("goal")?.handler("resume", exhausted.ctx);
-	assert.match(exhausted.notifications.at(-1)?.message ?? "", /still reached/i);
-	exhausted.mock.events.get("session_shutdown")?.[0]?.({}, exhausted.ctx);
-	assert.equal(lastGoalStatus(exhausted.mock), "budget_limited");
-	assert.equal(requireLastGoal(exhausted.mock).id, exhausted.sessionGoal.id);
-	assert.equal(exhausted.mock.sentUserMessages.length, 0);
+	for (const status of ["paused", "blocked", "usage_limited", "budget_limited"] as const) {
+		const exhausted = restoreGoalForTest(status, { tokensUsed: 10 });
+		await exhausted.mock.commands.get("goal")?.handler("resume", exhausted.ctx);
+		assert.match(exhausted.notifications.at(-1)?.message ?? "", /still reached/i);
+		exhausted.mock.events.get("session_shutdown")?.[0]?.({}, exhausted.ctx);
+		assert.equal(lastGoalStatus(exhausted.mock), status);
+		assert.equal(requireLastGoal(exhausted.mock).id, exhausted.sessionGoal.id);
+		assert.equal(exhausted.mock.sentUserMessages.length, 0);
+	}
+});
+
+test("failed resume delivery restores the stopped state and original goal_id", async () => {
+	const restored = restoreGoalForTest("blocked");
+	restored.mock.rawPi.sendUserMessage = () => {
+		throw new Error("runtime became busy");
+	};
+
+	await restored.mock.commands.get("goal")?.handler("resume", restored.ctx);
+
+	assert.equal(lastGoalStatus(restored.mock), "blocked");
+	assert.equal(requireLastGoal(restored.mock).id, restored.sessionGoal.id);
+	assert.equal(restored.statuses.get("goal"), "blocked");
+	assert.equal(restored.mock.sentUserMessages.length, 0);
+	assert.match(restored.notifications.at(-1)?.message ?? "", /runtime became busy/i);
+	assert.deepEqual(
+		restored.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "stale-after-failed-resume", input: {} },
+			restored.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
 });
 
 test("editing paused, blocked, or usage-limited goals preserves their stopped state", async () => {
@@ -907,11 +951,14 @@ test("budget exhaustion between agent_end and agent_settled cancels continuation
 test("usage-limit classification recognizes quota failures without swallowing unrelated errors", () => {
 	for (const errorMessage of [
 		"You have hit your ChatGPT usage limit.",
-		"rate_limit_exceeded",
+		"GoUsageLimitError",
+		"Monthly usage limit reached; enable available balance",
+		"Provider account is out of budget",
 		"Your organization quota has been exceeded",
 		"RESOURCE_EXHAUSTED: quota exhausted",
 		"insufficient_quota",
 		"Billing hard limit reached",
+		"Please check your plan and billing details",
 		"Your credit balance is too low to access the API",
 		"Payment Required: insufficient credits",
 	]) {
@@ -923,6 +970,8 @@ test("usage-limit classification recognizes quota failures without swallowing un
 	}
 	for (const errorMessage of [
 		"WebSocket closed 1000",
+		"rate_limit_exceeded",
+		"HTTP 429 Too Many Requests",
 		"Unauthorized: invalid API key",
 		"multi-auth rotation failed: 2 credentials tried",
 	]) {
@@ -940,6 +989,17 @@ test("usage-limit classification recognizes quota failures without swallowing un
 		}),
 		false,
 	);
+	for (const errorMessage of [
+		"rate_limit_exceeded",
+		"HTTP 429 Too Many Requests",
+		"Internal server error 503",
+	]) {
+		assert.equal(
+			isRetryableGoalInterruption({ role: "assistant", stopReason: "error", errorMessage }),
+			true,
+			errorMessage,
+		);
+	}
 });
 
 test("agent_end maps abort, quota failure, and terminal error to distinct stopped states", async () => {

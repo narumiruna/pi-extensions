@@ -48,7 +48,7 @@ Land each linked plan as an independent change. If a slice regresses runtime beh
 ## Completion Checklist
 
 - [x] Safe continuation is verified by the completed and archived idle-continuation plan, 211 passing repository tests, and the four-scenario runtime smoke.
-- [x] Distinct stopped statuses are verified by the completed and archived stopped-statuses plan, 220 passing repository tests, the runtime continuation smoke, and the package dry run.
+- [x] Distinct stopped statuses are verified by the completed and archived stopped-statuses plan, 221 passing repository tests, the runtime continuation smoke, and the package dry run.
 - [ ] Correct token and active-time accounting is verified by the completed and archived budget-accounting plan plus boundary tests.
 - [ ] Consistent evidence-based prompts are verified by the completed and archived prompt-hardening plan plus prompt assertions.
 - [ ] Public documentation and package contents are verified by README review, `npm run check`, and `just pack-goal` output.

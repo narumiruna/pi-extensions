@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	isContextOverflow,
+	isRetryableAssistantError,
 	type AssistantMessage as PiAssistantMessage,
 	type Usage,
 } from "@earendil-works/pi-ai";
@@ -104,6 +105,8 @@ interface StatusContext {
 const STATUS_KEY = "goal";
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
 const MAX_OBJECTIVE_LENGTH = 4_000;
+const MAX_BLOCKER_REASON_LENGTH = 1_000;
+const MAX_BLOCKER_EVIDENCE_LENGTH = 4_000;
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const CONTINUATION_MARKER_PREFIX = "pi-goal-continuation:";
 const CONTRADICTORY_COMPLETION_PATTERNS = [
@@ -113,10 +116,9 @@ const CONTRADICTORY_COMPLETION_PATTERNS = [
 ] as const;
 const USAGE_LIMIT_GOAL_ERROR_PATTERNS = [
 	/usage[_\s-]*(?:limit|cap)|chatgpt.{0,32}usage/i,
-	/rate[_\s-]*limit(?:[_\s-]*(?:reached|exceeded))?/i,
 	/quota.{0,32}(?:reached|exceeded|exhausted|depleted)|(?:reached|exceeded|exhausted|depleted).{0,32}quota/i,
-	/insufficient[_\s-]*(?:quota|credits?)|out of credits|payment required/i,
-	/(?:credit|balance).{0,32}(?:low|exhausted|depleted)|billing.{0,32}(?:limit|quota)/i,
+	/insufficient[_\s-]*(?:quota|credits?)|out of credits|out of budget|available balance|payment required/i,
+	/(?:credit|balance).{0,32}(?:low|exhausted|depleted)|billing/i,
 ] as const;
 const NON_RETRYABLE_GOAL_ERROR_RE =
 	/multi-auth rotation failed|credentials tried|unauthori[sz]ed|invalid api key/i;
@@ -268,10 +270,12 @@ const goalBlockedTool = defineTool({
 		}),
 		reason: Type.String({
 			minLength: 1,
+			maxLength: MAX_BLOCKER_REASON_LENGTH,
 			description: "The specific user or external action required to unblock the goal.",
 		}),
 		evidence: Type.String({
 			minLength: 1,
+			maxLength: MAX_BLOCKER_EVIDENCE_LENGTH,
 			description: "Concrete evidence from the repeated attempts that proves the impasse.",
 		}),
 		repeated_turns: Type.Integer({
@@ -295,9 +299,9 @@ const goalBlockedTool = defineTool({
 				details: {
 					goal,
 					goal_id: requestedGoalId,
-					reason,
-					evidence,
-					repeated_turns: repeatedTurns,
+					reason: reason.slice(0, MAX_BLOCKER_REASON_LENGTH),
+					evidence: evidence.slice(0, MAX_BLOCKER_EVIDENCE_LENGTH),
+					repeated_turns: Number.isFinite(repeatedTurns) ? repeatedTurns : 0,
 				} satisfies GoalBlockedDetails,
 			};
 		};
@@ -309,7 +313,9 @@ const goalBlockedTool = defineTool({
 			return reject(`goal is ${blockedGoal.status}, not active`);
 		}
 		if (!reason) return reject("reason is empty");
+		if (reason.length > MAX_BLOCKER_REASON_LENGTH) return reject("reason is too long");
 		if (!evidence) return reject("evidence is empty");
+		if (evidence.length > MAX_BLOCKER_EVIDENCE_LENGTH) return reject("evidence is too long");
 		if (!Number.isInteger(repeatedTurns)) return reject("repeated_turns must be a whole number");
 		if (repeatedTurns < 3) return reject("repeated_turns must be at least 3");
 
@@ -579,14 +585,14 @@ async function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 		return;
 	}
 	if (
-		activeGoal.status === "budget_limited" &&
 		activeGoal.tokenBudget !== undefined &&
 		activeGoal.tokensUsed >= activeGoal.tokenBudget
 	) {
 		ctx.ui.notify(`Goal token budget is still reached: ${formatBudget(activeGoal)}`, "warning");
 		return;
 	}
-	const stoppedStatus = activeGoal.status;
+	const stoppedGoal = activeGoal;
+	const stoppedStatus = stoppedGoal.status;
 	cancelContinuationWork();
 	clearGoalRecovery();
 	clearStaleGoalToolCallBlock();
@@ -597,8 +603,21 @@ async function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 		ctx.ui.notify(`Goal token budget is still reached: ${formatBudget(activeGoal)}`, "warning");
 		return;
 	}
-	ctx.ui.notify(`Goal resumed from ${stoppedStatusLabel(stoppedStatus)}: ${activeGoal.text}`, "info");
-	await sendResumePrompt(pi, ctx, activeGoal, stoppedStatus);
+	const resumedGoal = activeGoal;
+	const sent = await sendResumePrompt(pi, ctx, resumedGoal, stoppedStatus);
+	if (!sent) {
+		if (activeGoal?.id === resumedGoal.id && activeGoal.status === "active") {
+			activeGoal = stoppedGoal;
+			persistGoal(activeGoal);
+			updateStatus(ctx, activeGoal);
+			if (blocksStaleGoalToolCalls(activeGoal.status)) blockStaleGoalToolCalls();
+		}
+		return;
+	}
+	ctx.ui.notify(
+		`Goal resumed from ${stoppedStatusLabel(stoppedStatus)}: ${resumedGoal.text}`,
+		"info",
+	);
 }
 
 function clearGoal(ctx: StatusContext) {
@@ -1084,7 +1103,11 @@ export function isRetryableGoalInterruption(assistant: AssistantMessageLike) {
 	) {
 		return false;
 	}
-	return isGoalContextOverflow(assistant) || RETRYABLE_GOAL_ERROR_RE.test(assistant.errorMessage);
+	return (
+		isGoalContextOverflow(assistant) ||
+		isRetryableAssistantError(toPiAssistantMessage(assistant)) ||
+		RETRYABLE_GOAL_ERROR_RE.test(assistant.errorMessage)
+	);
 }
 
 function isGoalContextOverflow(assistant: AssistantMessageLike) {

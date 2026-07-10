@@ -64,7 +64,7 @@ pi -e ./extensions/pi-goal
 - `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
 - `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active; paused, blocked, and usage-limited goals stay stopped; budget-limited goals remain limited if their budget is still exhausted.
 - `/goal pause` stops prompt injection and auto-continuation, aborts the current turn, and keeps the goal for later resume. Only active goals can be paused.
-- `/goal resume` resumes a paused, blocked, usage-limited, or budget-limited goal when its token budget allows it, rotates the stale-turn guard id, and queues a resume prompt so work continues.
+- `/goal resume` resumes a paused, blocked, usage-limited, or budget-limited goal when its token budget allows it, rotates the stale-turn guard id, and queues a resume prompt so work continues. If prompt delivery fails, the original stopped state and guard id are restored.
 - `/goal clear` clears the current goal state, status, pending continuation, and legacy persisted state for the current working directory without aborting any in-flight agent turn.
 
 Goal objectives are limited to 4,000 characters. Put longer instructions in a file and reference the file path from `/goal`.
@@ -97,7 +97,7 @@ Manual compaction does not emit `agent_settled`, so its completion hook uses the
 
 ## 🚧 Blocked goals
 
-`goal_blocked` is intentionally narrower than completion or ordinary clarification. The model must provide the exact current `goal_id`, a specific reason describing the user or external action required, concrete evidence from the failed resolution attempts, and `repeated_turns` showing the same blocker recurred for at least three consecutive goal turns. A resumed goal starts a fresh blocker audit. Empty evidence, stale ids, non-whole turn counts, stopped goals, and fewer than three turns are rejected. Accepted blocker reports set `blocked`, stop automatic continuation, and terminate the tool batch when Pi can do so safely.
+`goal_blocked` is intentionally narrower than completion or ordinary clarification. The model must provide the exact current `goal_id`, a specific reason describing the user or external action required (up to 1,000 characters), concrete evidence from the failed resolution attempts (up to 4,000 characters), and `repeated_turns` showing the same blocker recurred for at least three consecutive goal turns. A resumed goal starts a fresh blocker audit. Empty or oversized reasons/evidence, stale ids, non-whole turn counts, stopped goals, and fewer than three turns are rejected. Accepted blocker reports set `blocked`, stop automatic continuation, and terminate the tool batch when Pi can do so safely.
 
 Do not use `goal_blocked` merely because work is difficult, incomplete, uncertain, awaiting normal clarification, or affected by a recoverable tool/provider failure. The user can resolve the external condition and run `/goal resume` to rotate the goal id and continue.
 
