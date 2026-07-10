@@ -1,48 +1,55 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type {
 	Api,
 	AssistantMessage,
 	Context,
 	Model,
-	ProviderStreamOptions,
+	ProviderEnv,
+	ProviderHeaders,
+	SimpleStreamOptions,
 	UserMessage,
 } from "@earendil-works/pi-ai";
-// pi-ai 0.79 exports complete from the root; 0.80 moved it to the compat subpath.
-type CompleteFunction = <TApi extends Api>(
+// pi-ai 0.79 exports completeSimple from the root; 0.80 moved it to the compat subpath.
+type CompleteSimpleFunction = <TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
-	options?: ProviderStreamOptions,
+	options?: SimpleStreamOptions,
 ) => Promise<AssistantMessage>;
 
-function hasComplete(value: unknown): value is { complete: CompleteFunction } {
+function hasCompleteSimple(value: unknown): value is { completeSimple: CompleteSimpleFunction } {
 	return (
 		typeof value === "object" &&
 		value !== null &&
-		typeof Reflect.get(value, "complete") === "function"
+		typeof Reflect.get(value, "completeSimple") === "function"
 	);
 }
 
 type ModuleImporter = (moduleId: string) => Promise<unknown>;
 
-export async function loadComplete(
+export async function loadCompleteSimple(
 	importModule: ModuleImporter = (moduleId) => import(moduleId),
-): Promise<CompleteFunction> {
+): Promise<CompleteSimpleFunction> {
 	let importError: unknown;
 	for (const moduleId of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"]) {
 		try {
 			const module = await importModule(moduleId);
-			if (hasComplete(module)) return module.complete;
+			if (hasCompleteSimple(module)) return module.completeSimple;
 		} catch (error: unknown) {
 			importError = error;
 		}
 	}
 
-	throw new Error("@earendil-works/pi-ai does not export complete", { cause: importError });
+	throw new Error("@earendil-works/pi-ai does not export completeSimple", {
+		cause: importError,
+	});
 }
 
-const complete = await loadComplete();
+const completeSimple = await loadCompleteSimple();
 import {
 	BorderedLoader,
 	DynamicBorder,
+	getAgentDir,
 	getMarkdownTheme,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
@@ -62,6 +69,134 @@ const MAX_CONTEXT_CHARS = 40_000;
 const ANSWER_CHROME_LINES = 4;
 // Pi renders a spacer above the custom editor and a two-line built-in footer below it.
 const ANSWER_RESERVED_APP_LINES = 3;
+export const BTW_SETTINGS_FILE = "pi-btw.json";
+export const BTW_THINKING_LEVELS = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+] as const;
+
+export type BtwThinkingLevel = (typeof BTW_THINKING_LEVELS)[number];
+
+export interface BtwSettings {
+	thinkingLevel?: BtwThinkingLevel;
+}
+
+export type BtwSettingsLoadResult =
+	| { kind: "missing" }
+	| { kind: "invalid"; reason: string }
+	| { kind: "loaded"; settings: BtwSettings };
+
+interface LoadBtwThinkingLevelOptions {
+	settingsPath?: string;
+	warn?: (message: string) => void;
+}
+
+interface SideQuestionAuth {
+	apiKey: string;
+	headers?: ProviderHeaders;
+	env?: ProviderEnv;
+}
+
+interface CompleteSideQuestionOptions {
+	model: Model<Api>;
+	question: string;
+	conversationContext: string;
+	thinkingLevel: BtwThinkingLevel;
+	auth: SideQuestionAuth;
+	signal?: AbortSignal;
+	completeSimple?: CompleteSimpleFunction;
+}
+
+export function normalizeBtwSettings(value: unknown): BtwSettings | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	if (!Object.hasOwn(value, "thinkingLevel")) return {};
+
+	const thinkingLevel = Reflect.get(value, "thinkingLevel");
+	return isBtwThinkingLevel(thinkingLevel) ? { thinkingLevel } : undefined;
+}
+
+export async function readBtwSettings(
+	settingsPath = join(getAgentDir(), BTW_SETTINGS_FILE),
+): Promise<BtwSettingsLoadResult> {
+	let contents: string;
+	try {
+		contents = await readFile(settingsPath, "utf8");
+	} catch (error: unknown) {
+		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
+		return { kind: "invalid", reason: `${settingsPath}: ${formatError(error)}` };
+	}
+
+	try {
+		const settings = normalizeBtwSettings(JSON.parse(contents) as unknown);
+		if (settings) return { kind: "loaded", settings };
+		return { kind: "invalid", reason: `${settingsPath}: invalid settings shape` };
+	} catch (error: unknown) {
+		return { kind: "invalid", reason: `${settingsPath}: ${formatError(error)}` };
+	}
+}
+
+export async function loadBtwThinkingLevel(
+	currentThinkingLevel: BtwThinkingLevel,
+	options: LoadBtwThinkingLevelOptions = {},
+): Promise<BtwThinkingLevel> {
+	const settings = await readBtwSettings(options.settingsPath);
+	if (settings.kind === "missing") return currentThinkingLevel;
+	if (settings.kind === "loaded") {
+		return settings.settings.thinkingLevel ?? currentThinkingLevel;
+	}
+
+	options.warn?.(
+		`pi-btw settings ignored: ${settings.reason}; expected { "thinkingLevel"?: "${BTW_THINKING_LEVELS.join('" | "')}" }. Using current Pi thinking level.`,
+	);
+	return currentThinkingLevel;
+}
+
+export async function completeSideQuestion({
+	model,
+	question,
+	conversationContext,
+	thinkingLevel,
+	auth,
+	signal,
+	completeSimple: runCompleteSimple = completeSimple,
+}: CompleteSideQuestionOptions): Promise<AssistantMessage> {
+	const userMessage: UserMessage = {
+		role: "user",
+		content: [
+			{
+				type: "text",
+				text: buildUserPrompt(question, conversationContext),
+			},
+		],
+		timestamp: Date.now(),
+	};
+	const streamOptions: SimpleStreamOptions = {
+		apiKey: auth.apiKey,
+		headers: auth.headers,
+		env: auth.env,
+		signal,
+	};
+	if (thinkingLevel !== "off") streamOptions.reasoning = thinkingLevel;
+
+	return runCompleteSimple(model, { systemPrompt: SYSTEM_PROMPT, messages: [userMessage] }, streamOptions);
+}
+
+function isBtwThinkingLevel(value: unknown): value is BtwThinkingLevel {
+	return BTW_THINKING_LEVELS.includes(value as BtwThinkingLevel);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && "code" in error;
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 const SYSTEM_PROMPT = `You answer quick side questions for a coding-agent user.
 
 Use the provided conversation context only as background. Answer the user's side question directly and concisely. Do not claim to have changed files, run tools, or affected the main task. If the context is insufficient, say what is unknown and give the best next step.`;
@@ -105,7 +240,10 @@ export default function btw(pi: ExtensionAPI) {
 				return;
 			}
 
-			const answer = await askSideQuestion(question, ctx);
+			const thinkingLevel = await loadBtwThinkingLevel(pi.getThinkingLevel(), {
+				warn: (message) => ctx.ui.notify(message, "warning"),
+			});
+			const answer = await askSideQuestion(question, thinkingLevel, ctx);
 			if (answer === undefined) {
 				ctx.ui.notify("Cancelled", "info");
 				return;
@@ -118,6 +256,7 @@ export default function btw(pi: ExtensionAPI) {
 
 async function askSideQuestion(
 	question: string,
+	thinkingLevel: BtwThinkingLevel,
 	ctx: ExtensionCommandContext,
 ): Promise<string | undefined> {
 	return ctx.ui.custom<string | undefined>((tui, theme, _keybindings, done) => {
@@ -131,22 +270,14 @@ async function askSideQuestion(
 			}
 
 			const conversationContext = buildConversationContext(ctx.sessionManager.getBranch());
-			const userMessage: UserMessage = {
-				role: "user",
-				content: [
-					{
-						type: "text",
-						text: buildUserPrompt(question, conversationContext),
-					},
-				],
-				timestamp: Date.now(),
-			};
-
-			const response = await complete(
-				ctx.model!,
-				{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-				{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
-			);
+			const response = await completeSideQuestion({
+				model: ctx.model!,
+				question,
+				conversationContext,
+				thinkingLevel,
+				auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
+				signal: loader.signal,
+			});
 
 			if (response.stopReason === "aborted") {
 				return undefined;
