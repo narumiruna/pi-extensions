@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -780,21 +780,36 @@ type SettingsLoadResult =
 	| { kind: "invalid"; reason: string; notice?: string }
 	| { kind: "loaded"; settings: ChromeDevToolsSettings; notice?: string };
 
+type SettingsMigrationResult = {
+	kind: "migrated" | "failed";
+	notice: string;
+};
+
 async function loadSettings(): Promise<SettingsLoadResult> {
-	const newSettings = await readSettingsFile(settingsFilePath());
+	const newPath = settingsFilePath();
+	const newSettings = await readSettingsFile(newPath);
 	if (newSettings.kind !== "missing") {
 		return withLegacyIgnoredNotice(newSettings);
 	}
 
 	const legacyPath = legacySettingsFilePath();
 	const legacySettings = await readSettingsFile(legacyPath);
+	const concurrentlyCreatedSettings = await readSettingsFile(newPath);
+	if (concurrentlyCreatedSettings.kind !== "missing") {
+		return withLegacyIgnoredNotice(concurrentlyCreatedSettings);
+	}
 	if (legacySettings.kind === "missing") return { kind: "missing" };
 	if (legacySettings.kind === "invalid") return legacySettings;
 
-	return {
-		...legacySettings,
-		notice: await migrateLegacySettings(legacyPath, legacySettings.settings),
-	};
+	const migration = await migrateLegacySettings(legacyPath, legacySettings.settings);
+	if (migration.kind === "failed") {
+		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
+		if (settingsCreatedDuringMigration.kind !== "missing") {
+			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
+		}
+	}
+
+	return { ...legacySettings, notice: migration.notice };
 }
 
 async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
@@ -827,25 +842,47 @@ async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<Se
 	};
 }
 
-async function migrateLegacySettings(legacyPath: string, settings: ChromeDevToolsSettings) {
+export async function installSettingsFileExclusively(filePath: string, contents: string) {
+	await mkdir(dirname(filePath), { recursive: true });
+	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
+		await link(tempFile, filePath);
+	} finally {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+	}
+}
+
+async function migrateLegacySettings(
+	legacyPath: string,
+	settings: ChromeDevToolsSettings,
+): Promise<SettingsMigrationResult> {
 	const newPath = settingsFilePath();
 	try {
-		await mkdir(dirname(newPath), { recursive: true });
-		await writeFile(newPath, `${JSON.stringify(settings, null, 2)}\n`, {
-			encoding: "utf8",
-			flag: "wx",
-		});
+		await installSettingsFileExclusively(
+			newPath,
+			`${JSON.stringify(settings, null, 2)}\n`,
+		);
 	} catch (error) {
-		return `Chrome DevTools legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE_NAME}.`;
+		return {
+			kind: "failed",
+			notice: `Chrome DevTools legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE_NAME}.`,
+		};
 	}
 
 	try {
 		await rm(legacyPath, { force: true });
 	} catch (error) {
-		return `Chrome DevTools settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE_NAME} after confirming your settings.`;
+		return {
+			kind: "migrated",
+			notice: `Chrome DevTools settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE_NAME} after confirming your settings.`,
+		};
 	}
 
-	return `Chrome DevTools settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE_NAME} is deprecated and will be removed in a future major release.`;
+	return {
+		kind: "migrated",
+		notice: `Chrome DevTools settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE_NAME} is deprecated and will be removed in a future major release.`,
+	};
 }
 
 async function fileExists(filePath: string) {

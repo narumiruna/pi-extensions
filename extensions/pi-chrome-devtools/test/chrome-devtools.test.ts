@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import chromeDevtools, {
 	commandCompletions,
 	formatHostForUrl,
 	hasParentPathSegment,
+	installSettingsFileExclusively,
 	isLocalDevToolsHost,
 	isPathInsideRoot,
 	normalizeChromeDevtoolsSettings,
@@ -69,6 +70,21 @@ test("chrome-devtools settings normalize ordered unique tool names", () => {
 	assert.deepEqual(orderedChromeDevtoolsTools(new Set([EVALUATE_TOOL])), [EVALUATE_TOOL]);
 });
 
+test("chrome-devtools installs migrated settings exclusively without leaving temp files", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		await installSettingsFileExclusively(settingsPath, "first\n");
+
+		await assert.rejects(
+			installSettingsFileExclusively(settingsPath, "replacement\n"),
+			(error: NodeJS.ErrnoException) => error.code === "EEXIST",
+		);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), "first\n");
+		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
+	});
+});
+
 test("chrome-devtools preserves active tools when settings are missing", async () => {
 	await withTempAgentDir(async () => {
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
@@ -114,6 +130,25 @@ test("chrome-devtools migrates a legacy-only settings file and warns", async () 
 		assert.match(notifications[0]?.message ?? "", /migrated/i);
 		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools-settings\.json/);
 		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools\.json/);
+	});
+});
+
+test("chrome-devtools prefers new settings created while legacy settings are loading", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [LIST_PAGES_TOOL]);
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const mock = createMockPi({ activeTools: ["other_tool", EVALUATE_TOOL] });
+		const { ctx, notifications } = createMockContext();
+
+		chromeDevtoolsModule.default(mock.pi);
+		const sessionStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [SCREENSHOT_TOOL]);
+		await sessionStart;
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", SCREENSHOT_TOOL]);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [SCREENSHOT_TOOL]);
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
+		assert.match(notifications[0]?.message ?? "", /legacy settings ignored/i);
 	});
 });
 

@@ -1,4 +1,6 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -10,10 +12,8 @@ import { Type } from "typebox";
 
 const DEFAULT_API_URL = "https://api.firecrawl.dev/v1";
 const STATUS_KEY = "firecrawl";
-const SETTINGS_FILE = join(
-	process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
-	"pi-firecrawl-settings.json",
-);
+const NEW_SETTINGS_FILE = "pi-firecrawl.json";
+const LEGACY_SETTINGS_FILE = "pi-firecrawl-settings.json";
 const FIRECRAWL_TOOL_NAMES = [
 	"firecrawl_scrape",
 	"firecrawl_crawl",
@@ -64,6 +64,7 @@ type ToolSelectorRow =
 
 interface FirecrawlState {
 	apiUrl: string;
+	settingsNotice?: string;
 }
 
 interface FirecrawlSettings {
@@ -273,8 +274,11 @@ export default function firecrawl(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		state.settingsNotice = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const settings = await loadSettings();
+		recordSettingsNotice(settings);
+		if (settings.notice) ctx.ui.notify(settings.notice, "warning");
 		if (settings.kind === "loaded") {
 			applyFirecrawlTools(pi, settings.settings.tools);
 			return;
@@ -563,7 +567,8 @@ async function buildStatusMessage(pi: ExtensionAPI) {
 	return [
 		`Firecrawl tools: ${formatRuntimeStatus(summary)}`,
 		`Persisted selection: ${persistedSetting}`,
-		`Settings file: ${SETTINGS_FILE}`,
+		`Settings file: ${settingsFilePath()}`,
+		...(state.settingsNotice ? [`Settings note: ${state.settingsNotice}`] : []),
 		`Other active tools preserved: ${summary.activeNonFirecrawlToolCount}`,
 		`API key: ${hasApiKey() ? "present" : "missing"} (FIRECRAWL_API_KEY)`,
 		`API URL: ${state.apiUrl}`,
@@ -635,6 +640,7 @@ function formatRuntimeStatus(summary: ToolStatusSummary) {
 
 async function persistedSettingLabel() {
 	const settings = await loadSettings();
+	recordSettingsNotice(settings);
 	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
 	if (settings.kind === "invalid") {
 		return `none; current active-tool policy preserved (invalid settings ignored: ${settings.reason})`;
@@ -661,27 +667,127 @@ async function persistSettings(
 	}
 }
 
-async function loadSettings(): Promise<
-	| { kind: "missing" }
-	| { kind: "invalid"; reason: string }
-	| { kind: "loaded"; settings: FirecrawlSettings }
-> {
+type SettingsLoadResult =
+	| { kind: "missing"; notice?: string }
+	| { kind: "invalid"; reason: string; notice?: string }
+	| { kind: "loaded"; settings: FirecrawlSettings; notice?: string };
+
+type SettingsMigrationResult = {
+	kind: "migrated" | "failed";
+	notice: string;
+};
+
+async function loadSettings(): Promise<SettingsLoadResult> {
+	const newPath = settingsFilePath();
+	const newSettings = await readSettingsFile(newPath);
+	if (newSettings.kind !== "missing") {
+		return withLegacyIgnoredNotice(newSettings);
+	}
+
+	const legacyPath = legacySettingsFilePath();
+	const legacySettings = await readSettingsFile(legacyPath);
+	const concurrentlyCreatedSettings = await readSettingsFile(newPath);
+	if (concurrentlyCreatedSettings.kind !== "missing") {
+		return withLegacyIgnoredNotice(concurrentlyCreatedSettings);
+	}
+	if (legacySettings.kind === "missing") return { kind: "missing" };
+	if (legacySettings.kind === "invalid") return legacySettings;
+
+	const migration = await migrateLegacySettings(legacyPath, legacySettings.settings);
+	if (migration.kind === "failed") {
+		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
+		if (settingsCreatedDuringMigration.kind !== "missing") {
+			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
+		}
+	}
+
+	return { ...legacySettings, notice: migration.notice };
+}
+
+async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
 	let text: string;
 	try {
-		text = await readFile(SETTINGS_FILE, "utf8");
+		text = await readFile(filePath, "utf8");
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: formatError(error) };
+		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
 	}
 
 	try {
 		const parsed = JSON.parse(text) as unknown;
 		const settings = normalizeFirecrawlSettings(parsed);
 		if (settings) return { kind: "loaded", settings };
-		return { kind: "invalid", reason: "expected tools to be an array of Firecrawl tool names" };
+		return {
+			kind: "invalid",
+			reason: `${filePath}: expected tools to be an array of Firecrawl tool names`,
+		};
 	} catch (error) {
-		return { kind: "invalid", reason: formatError(error) };
+		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
 	}
+}
+
+async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
+	if (!(await fileExists(legacySettingsFilePath()))) return settings;
+	return {
+		...settings,
+		notice: `Firecrawl legacy settings ignored: ${legacySettingsFilePath()} exists, but ${settingsFilePath()} takes precedence. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
+	};
+}
+
+export async function installSettingsFileExclusively(filePath: string, contents: string) {
+	await mkdir(dirname(filePath), { recursive: true });
+	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
+		await link(tempFile, filePath);
+	} finally {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+	}
+}
+
+async function migrateLegacySettings(
+	legacyPath: string,
+	settings: FirecrawlSettings,
+): Promise<SettingsMigrationResult> {
+	const newPath = settingsFilePath();
+	try {
+		await installSettingsFileExclusively(
+			newPath,
+			`${JSON.stringify(settings, null, 2)}\n`,
+		);
+	} catch (error) {
+		return {
+			kind: "failed",
+			notice: `Firecrawl legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`,
+		};
+	}
+
+	try {
+		await rm(legacyPath, { force: true });
+	} catch (error) {
+		return {
+			kind: "migrated",
+			notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
+		};
+	}
+
+	return {
+		kind: "migrated",
+		notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`,
+	};
+}
+
+async function fileExists(filePath: string) {
+	try {
+		await access(filePath, constants.F_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function recordSettingsNotice(settings: SettingsLoadResult) {
+	if (settings.notice) state.settingsNotice = settings.notice;
 }
 
 export function normalizeFirecrawlSettings(value: unknown): FirecrawlSettings | undefined {
@@ -703,15 +809,28 @@ function orderedUniqueFirecrawlTools(tools: readonly FirecrawlToolName[]) {
 }
 
 async function saveSettings(settings: FirecrawlSettings) {
-	await mkdir(dirname(SETTINGS_FILE), { recursive: true });
-	const tempFile = `${SETTINGS_FILE}.${process.pid}.${Date.now()}.tmp`;
+	const filePath = settingsFilePath();
+	await mkdir(dirname(filePath), { recursive: true });
+	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	try {
 		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-		await rename(tempFile, SETTINGS_FILE);
+		await rename(tempFile, filePath);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
 	}
+}
+
+function settingsFilePath() {
+	return join(agentDir(), NEW_SETTINGS_FILE);
+}
+
+function legacySettingsFilePath() {
+	return join(agentDir(), LEGACY_SETTINGS_FILE);
+}
+
+function agentDir() {
+	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
