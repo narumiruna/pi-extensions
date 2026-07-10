@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants, existsSync } from "node:fs";
+import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import pathModule from "node:path";
@@ -14,10 +14,8 @@ import type {
 const STATUS_KEY = "caffeinate";
 const DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_MODE = "display" satisfies CaffeinateMode;
-const SETTINGS_FILE = join(
-	process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
-	"pi-caffeinate-settings.json",
-);
+const NEW_SETTINGS_FILE = "pi-caffeinate.json";
+const LEGACY_SETTINGS_FILE = "pi-caffeinate-settings.json";
 const COMMAND_COMPLETIONS = [
 	{ value: "display", label: "display", description: "Keep system and display awake" },
 	{ value: "sleep", label: "sleep", description: "Keep system awake; allow display sleep" },
@@ -61,6 +59,7 @@ interface CaffeinateState {
 	mode: CaffeinateMode;
 	settingsLoaded: boolean;
 	settingsError?: string;
+	settingsNotice?: string;
 	iconWarningShown: boolean;
 }
 
@@ -81,6 +80,7 @@ const state: CaffeinateState = {
 export default function caffeinate(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		state.iconWarningShown = false;
+		state.settingsNotice = undefined;
 		warnDeprecatedIcon(ctx);
 		await loadSettingsIntoState(ctx);
 		updateStatus(ctx);
@@ -547,10 +547,11 @@ function describeState() {
 	const customCommand = hasCustomCommand();
 	const lines = [
 		`Mode: ${formatMode(state.mode)}${customCommand ? " (overridden by custom command)" : ""}`,
-		`Settings: ${SETTINGS_FILE}`,
+		`Settings: ${settingsFilePath()}`,
 	];
 
 	if (customCommand) lines.push("Custom command: PI_CAFFEINATE_COMMAND overrides the saved mode.");
+	if (state.settingsNotice) lines.push(`Settings note: ${state.settingsNotice}`);
 	if (state.settingsError) lines.push(`Settings warning: ${state.settingsError}`);
 	if (state.disabled) {
 		lines.unshift("pi-caffeinate is disabled by PI_CAFFEINATE_DISABLED.");
@@ -602,6 +603,10 @@ async function loadSettingsIntoState(ctx: ExtensionContext) {
 	const settings = await loadSettings();
 	state.settingsLoaded = true;
 	state.settingsError = undefined;
+	if (settings.notice) {
+		state.settingsNotice = settings.notice;
+		ctx.ui.notify(settings.notice, "warning");
+	}
 
 	if (settings.kind === "loaded") {
 		state.mode = settings.settings.mode;
@@ -618,26 +623,105 @@ async function loadSettingsIntoState(ctx: ExtensionContext) {
 	}
 }
 
-async function loadSettings(): Promise<
-	| { kind: "missing" }
-	| { kind: "invalid"; reason: string }
-	| { kind: "loaded"; settings: CaffeinateSettings }
-> {
+type SettingsLoadResult =
+	| { kind: "missing"; notice?: string }
+	| { kind: "invalid"; reason: string; notice?: string }
+	| { kind: "loaded"; settings: CaffeinateSettings; notice?: string };
+
+type SettingsMigrationResult = {
+	kind: "migrated" | "failed";
+	notice: string;
+};
+
+async function loadSettings(): Promise<SettingsLoadResult> {
+	const newPath = settingsFilePath();
+	const newSettings = await readSettingsFile(newPath);
+	if (newSettings.kind !== "missing") {
+		return withLegacyIgnoredNotice(newSettings);
+	}
+
+	const legacyPath = legacySettingsFilePath();
+	const legacySettings = await readSettingsFile(legacyPath);
+	const concurrentlyCreatedSettings = await readSettingsFile(newPath);
+	if (concurrentlyCreatedSettings.kind !== "missing") {
+		return withLegacyIgnoredNotice(concurrentlyCreatedSettings);
+	}
+	if (legacySettings.kind === "missing") return { kind: "missing" };
+	if (legacySettings.kind === "invalid") return legacySettings;
+
+	const migration = await migrateLegacySettings(legacyPath);
+	if (migration.kind === "failed") {
+		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
+		if (settingsCreatedDuringMigration.kind !== "missing") {
+			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
+		}
+	}
+
+	return { ...legacySettings, notice: migration.notice };
+}
+
+async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
 	let text: string;
 	try {
-		text = await readFile(SETTINGS_FILE, "utf8");
+		text = await readFile(filePath, "utf8");
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: formatError(error) };
+		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
 	}
 
 	try {
 		const parsed = JSON.parse(text) as unknown;
 		const settings = normalizeCaffeinateSettings(parsed);
 		if (settings) return { kind: "loaded", settings };
-		return { kind: "invalid", reason: 'expected { "mode": "sleep" | "display" }' };
+		return {
+			kind: "invalid",
+			reason: `${filePath}: expected { "mode": "sleep" | "display" }`,
+		};
 	} catch (error) {
-		return { kind: "invalid", reason: formatError(error) };
+		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+	}
+}
+
+async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
+	if (!(await fileExists(legacySettingsFilePath()))) return settings;
+	return {
+		...settings,
+		notice: `pi-caffeinate legacy settings ignored: ${legacySettingsFilePath()} exists, but ${settingsFilePath()} takes precedence. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
+	};
+}
+
+async function migrateLegacySettings(legacyPath: string): Promise<SettingsMigrationResult> {
+	const newPath = settingsFilePath();
+	try {
+		await link(legacyPath, newPath);
+	} catch (error) {
+		return {
+			kind: "failed",
+			notice: `pi-caffeinate legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`,
+		};
+	}
+
+	try {
+		await rm(legacyPath, { force: true });
+	} catch (error) {
+		return {
+			kind: "migrated",
+			notice: `pi-caffeinate settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
+		};
+	}
+
+	return {
+		kind: "migrated",
+		notice: `pi-caffeinate settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`,
+	};
+}
+
+async function fileExists(filePath: string) {
+	try {
+		await access(filePath, constants.F_OK);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -654,15 +738,28 @@ function isCaffeinateMode(value: unknown): value is CaffeinateMode {
 }
 
 async function saveSettings(settings: CaffeinateSettings) {
-	await mkdir(dirname(SETTINGS_FILE), { recursive: true });
-	const tempFile = `${SETTINGS_FILE}.${process.pid}.${Date.now()}.tmp`;
+	const filePath = settingsFilePath();
+	await mkdir(dirname(filePath), { recursive: true });
+	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	try {
 		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-		await rename(tempFile, SETTINGS_FILE);
+		await rename(tempFile, filePath);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
 	}
+}
+
+function settingsFilePath() {
+	return join(agentDir(), NEW_SETTINGS_FILE);
+}
+
+function legacySettingsFilePath() {
+	return join(agentDir(), LEGACY_SETTINGS_FILE);
+}
+
+function agentDir() {
+	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

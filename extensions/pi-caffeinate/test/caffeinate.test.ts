@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import caffeinate, {
@@ -9,6 +12,9 @@ import caffeinate, {
 	splitCommand,
 	windowsInhibitorScript,
 } from "../src/caffeinate.js";
+
+const NEW_SETTINGS_FILE = "pi-caffeinate.json";
+const LEGACY_SETTINGS_FILE = "pi-caffeinate-settings.json";
 
 test("caffeinate registers lifecycle handlers and command controls", () => {
 	const mock = createMockPi();
@@ -62,19 +68,22 @@ test("session start warns for deprecated PI_CAFFEINATE_ICON", async (t) => {
 		if (original === undefined) delete process.env.PI_CAFFEINATE_ICON;
 		else process.env.PI_CAFFEINATE_ICON = original;
 	});
-	process.env.PI_CAFFEINATE_ICON = "☕";
 
-	const mock = createMockPi();
-	caffeinate(mock.pi);
-	const { ctx, notifications } = createMockContext();
-	const handler = mock.events.get("session_start")?.[0];
+	await withTempAgentDir(async () => {
+		process.env.PI_CAFFEINATE_ICON = "☕";
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		caffeinateModule.default(mock.pi);
+		const { ctx, notifications } = createMockContext();
+		const handler = mock.events.get("session_start")?.[0];
 
-	await handler?.({}, ctx);
+		await handler?.({}, ctx);
 
-	assert.equal(notifications.length, 1);
-	assert.match(notifications[0]?.message ?? "", /PI_CAFFEINATE_ICON is deprecated/);
-	assert.match(notifications[0]?.message ?? "", /still works for now/);
-	assert.match(notifications[0]?.message ?? "", /If you use @narumitw\/pi-statusline/);
+		assert.equal(notifications.length, 1);
+		assert.match(notifications[0]?.message ?? "", /PI_CAFFEINATE_ICON is deprecated/);
+		assert.match(notifications[0]?.message ?? "", /still works for now/);
+		assert.match(notifications[0]?.message ?? "", /If you use @narumitw\/pi-statusline/);
+	});
 });
 
 test("windowsInhibitorScript flags and formatMode labels are user-facing", () => {
@@ -84,3 +93,206 @@ test("windowsInhibitorScript flags and formatMode labels are user-facing", () =>
 	assert.equal(formatMode("sleep"), "system-awake");
 	assert.equal(formatMode("display"), "display-awake");
 });
+
+test("caffeinate loads the new settings file without a migration warning", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "sleep");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		assert.equal(notifications.length, 0);
+
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /Mode: system-awake/);
+		assert.match(notifications.at(-1)?.message ?? "", /Settings: .*pi-caffeinate\.json/);
+	});
+});
+
+test("caffeinate migrates legacy-only settings and warns", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "sleep");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE), {
+			mode: "sleep",
+			updatedAt: 1,
+		});
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
+		assert.match(notifications[0]?.message ?? "", /migrated/i);
+		assert.match(notifications[0]?.message ?? "", /pi-caffeinate-settings\.json/);
+		assert.match(notifications[0]?.message ?? "", /pi-caffeinate\.json/);
+
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		const statusMessage = notifications.at(-1)?.message ?? "";
+		assert.match(statusMessage, /Mode: system-awake/);
+		assert.match(statusMessage, /Settings: .*pi-caffeinate\.json/);
+		assert.match(statusMessage, /Settings note: .*migrated/i);
+	});
+});
+
+test("caffeinate falls back to valid legacy settings when migration fails", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "sleep");
+		symlinkSync("missing-caffeinate-settings-target", path.join(agentDir, NEW_SETTINGS_FILE));
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
+		assert.match(notifications[0]?.message ?? "", /migration failed/i);
+		assert.match(notifications[0]?.message ?? "", /legacy file was used for this session/i);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /Mode: system-awake/);
+	});
+});
+
+test("caffeinate prefers new settings created while legacy settings are loading", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "sleep");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		const sessionStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display");
+		await sessionStart;
+
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
+		assert.match(notifications[0]?.message ?? "", /legacy settings ignored/i);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /Mode: display-awake/);
+	});
+});
+
+test("caffeinate prefers new settings when both files exist and reports legacy ignored", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display");
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "sleep");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
+		assert.match(notifications[0]?.message ?? "", /legacy settings ignored/i);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		const statusMessage = notifications.at(-1)?.message ?? "";
+		assert.match(statusMessage, /Mode: display-awake/);
+		assert.match(statusMessage, /Settings: .*pi-caffeinate\.json/);
+		assert.match(statusMessage, /legacy settings ignored/i);
+	});
+});
+
+test("caffeinate does not fall back to legacy settings when the new file is invalid", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeFileSync(
+			path.join(agentDir, NEW_SETTINGS_FILE),
+			JSON.stringify({ mode: "bad", updatedAt: 1 }),
+		);
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "sleep");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
+		assert.match(notifications[0]?.message ?? "", /legacy settings ignored/i);
+		assert.match(notifications[1]?.message ?? "", /settings ignored/i);
+		assert.match(notifications[1]?.message ?? "", /pi-caffeinate\.json/);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /Mode: display-awake/);
+	});
+});
+
+test("caffeinate ignores invalid legacy settings without creating the new file", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeFileSync(
+			path.join(agentDir, LEGACY_SETTINGS_FILE),
+			JSON.stringify({ mode: "bad", updatedAt: 1 }),
+		);
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.equal(existsSync(path.join(agentDir, NEW_SETTINGS_FILE)), false);
+		assert.match(notifications[0]?.message ?? "", /settings ignored/i);
+		assert.match(notifications[0]?.message ?? "", /pi-caffeinate-settings\.json/);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /Mode: display-awake/);
+	});
+});
+
+test("caffeinate saves mode only to the new settings file", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display");
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "display");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.commands.get("caffeinate")?.handler("sleep", ctx);
+
+		assert.equal(readSettings(agentDir, NEW_SETTINGS_FILE).mode, "sleep");
+		assert.equal(readSettings(agentDir, LEGACY_SETTINGS_FILE).mode, "display");
+	});
+});
+
+let importCounter = 0;
+
+async function importFreshCaffeinate() {
+	return (await import(
+		`../src/caffeinate.js?settings-test=${Date.now()}-${importCounter++}`
+	)) as typeof import("../src/caffeinate.js");
+}
+
+async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousDisabled = process.env.PI_CAFFEINATE_DISABLED;
+	const previousIcon = process.env.PI_CAFFEINATE_ICON;
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-caffeinate-settings-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	delete process.env.PI_CAFFEINATE_DISABLED;
+	delete process.env.PI_CAFFEINATE_ICON;
+	try {
+		return await fn(agentDir);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		if (previousDisabled === undefined) delete process.env.PI_CAFFEINATE_DISABLED;
+		else process.env.PI_CAFFEINATE_DISABLED = previousDisabled;
+		if (previousIcon === undefined) delete process.env.PI_CAFFEINATE_ICON;
+		else process.env.PI_CAFFEINATE_ICON = previousIcon;
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+}
+
+function writeSettings(agentDir: string, fileName: string, mode: string) {
+	writeFileSync(path.join(agentDir, fileName), JSON.stringify({ mode, updatedAt: 1 }));
+}
+
+function readSettings(agentDir: string, fileName: string) {
+	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as {
+		mode: string;
+		updatedAt: number;
+	};
+}
