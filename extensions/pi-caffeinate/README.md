@@ -98,7 +98,7 @@ Releases any active inhibitor until Pi starts another agent run.
 `/caffeinate sleep` and `/caffeinate display` save the selected mode to:
 
 ```text
-${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-caffeinate-settings.json
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-caffeinate.json
 ```
 
 Example:
@@ -111,6 +111,12 @@ Example:
 ```
 
 Missing, invalid, or deleted settings default back to `display` mode on every supported OS.
+
+Compatibility: older versions used `pi-caffeinate-settings.json`. During the migration window, a
+legacy-only file is automatically migrated to `pi-caffeinate.json` with a warning. If both files
+exist, `pi-caffeinate.json` wins and the legacy file is ignored. The legacy filename is deprecated
+and planned for removal after at least one minor release cycle, preferably 4–8 weeks, or at the
+next major release.
 
 ### Environment variables
 
