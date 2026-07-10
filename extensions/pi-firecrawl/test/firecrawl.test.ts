@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +17,7 @@ import firecrawl, {
 	commandCompletions,
 	formatPayload,
 	formatPersistedSelection,
+	installSettingsFileExclusively,
 	jsonResult,
 	normalizeApiUrl,
 	normalizeFirecrawlSettings,
@@ -95,6 +104,21 @@ test("firecrawl helpers trim URLs, parse payloads, and remove undefined fields",
 test("formatPersistedSelection summarizes all, none, and partial selections", () => {
 	assert.equal(formatPersistedSelection([]), "all disabled (0/5 selected)");
 	assert.equal(formatPersistedSelection(["firecrawl_scrape"]), "1/5 selected: firecrawl_scrape");
+});
+
+test("firecrawl installs migrated settings exclusively without leaving temp files", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		await installSettingsFileExclusively(settingsPath, "first\n");
+
+		await assert.rejects(
+			installSettingsFileExclusively(settingsPath, "replacement\n"),
+			(error: NodeJS.ErrnoException) => error.code === "EEXIST",
+		);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), "first\n");
+		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
+	});
 });
 
 test("firecrawl preserves active tools when settings are missing", async () => {

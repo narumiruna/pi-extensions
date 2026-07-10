@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -733,17 +734,27 @@ async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<Se
 	};
 }
 
+export async function installSettingsFileExclusively(filePath: string, contents: string) {
+	await mkdir(dirname(filePath), { recursive: true });
+	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
+		await link(tempFile, filePath);
+	} finally {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+	}
+}
+
 async function migrateLegacySettings(
 	legacyPath: string,
 	settings: FirecrawlSettings,
 ): Promise<SettingsMigrationResult> {
 	const newPath = settingsFilePath();
 	try {
-		await mkdir(dirname(newPath), { recursive: true });
-		await writeFile(newPath, `${JSON.stringify(settings, null, 2)}\n`, {
-			encoding: "utf8",
-			flag: "wx",
-		});
+		await installSettingsFileExclusively(
+			newPath,
+			`${JSON.stringify(settings, null, 2)}\n`,
+		);
 	} catch (error) {
 		return {
 			kind: "failed",
