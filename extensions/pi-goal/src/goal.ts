@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	isContextOverflow,
-	isRetryableAssistantError,
 	type AssistantMessage as PiAssistantMessage,
 	type Usage,
 } from "@earendil-works/pi-ai";
@@ -122,8 +121,15 @@ const USAGE_LIMIT_GOAL_ERROR_PATTERNS = [
 ] as const;
 const NON_RETRYABLE_GOAL_ERROR_RE =
 	/multi-auth rotation failed|credentials tried|unauthori[sz]ed|invalid api key/i;
-const RETRYABLE_GOAL_ERROR_RE =
-	/websocket closed|sse response headers timed out|headers timed out|context[_\s-]*length[_\s-]*exceeded|input exceeds the context window|provider returned error/i;
+// Pi 0.79 does not export its assistant-error retry classifier. Keep this
+// compatibility mirror aligned with Pi's public retry utility in newer versions.
+const RETRYABLE_GOAL_ERROR_PATTERNS = [
+	/overloaded|rate.?limit|too many requests|\b(?:429|500|502|503|504)\b|service.?unavailable|server.?error|internal.?error/i,
+	/provider.?returned.?error|you can retry your request|try your request again|please retry your request/i,
+	/network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up/i,
+	/timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before message_stop|http2 request did not get a response|retry delay/i,
+	/context[_\s-]*length[_\s-]*exceeded|input exceeds the context window/i,
+] as const;
 const GOAL_ARGUMENT_COMPLETIONS: readonly GoalArgumentCompletion[] = [
 	{ value: "pause", label: "pause", description: "Pause the active goal" },
 	{ value: "resume", label: "resume", description: "Resume a stopped or budget-limited goal" },
@@ -1105,8 +1111,7 @@ export function isRetryableGoalInterruption(assistant: AssistantMessageLike) {
 	}
 	return (
 		isGoalContextOverflow(assistant) ||
-		isRetryableAssistantError(toPiAssistantMessage(assistant)) ||
-		RETRYABLE_GOAL_ERROR_RE.test(assistant.errorMessage)
+		RETRYABLE_GOAL_ERROR_PATTERNS.some((pattern) => pattern.test(assistant.errorMessage ?? ""))
 	);
 }
 

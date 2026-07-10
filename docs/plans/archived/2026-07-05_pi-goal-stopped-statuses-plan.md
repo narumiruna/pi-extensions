@@ -36,7 +36,7 @@ A dedicated `goal_blocked({ goal_id, reason, evidence, repeated_turns })` tool k
 - [x] Extended `GoalStatus`, session persistence validation, `formatStatus()`, `goalSummary()`, and command hints for `blocked` and `usage_limited`; persistence and formatter tests pass.
 - [x] Updated `/goal resume` for paused, blocked, usage-limited, and eligible budget-limited goals while preserving active-only `/goal pause`; tests cover all accepted statuses, active rejection, exhausted-budget rejection without mutation, and prompt-delivery rollback to the original stopped state/id/guard.
 - [x] Added strict `goal_blocked({ goal_id, reason, evidence, repeated_turns })` handling with current-id and active-state guards, bounded non-empty reason/evidence, a whole three-turn minimum, stopped-state persistence, stale-tool blocking, and terminating results; tool schema and execution tests pass.
-- [x] Split interruption classification so aborts become `paused`, terminal usage/quota/credit/billing limits become `usage_limited`, transient rate/server failures remain retryable through Pi's classifier, and other terminal errors become `blocked`; retry and context-overflow tests pass.
+- [x] Split interruption classification so aborts become `paused`, terminal usage/quota/credit/billing limits become `usage_limited`, transient rate/server failures remain retryable through a Pi-compatible classifier, and other terminal errors become `blocked`; retry and context-overflow tests pass.
 - [x] Generalized stale tool-call blocking to in-flight `paused`, `blocked`, and `usage_limited` transitions until fresh user input, resume, or clear; parameterized tests verify extension input does not release the guard and resume does.
 - [x] Updated `extensions/pi-goal/README.md` with all states, compact statusline values, resume/edit semantics, strict blocker requirements, and interruption classification.
 - [x] Ran `npm run check`; Biome, extension boundaries, all workspace typechecks, and 221 tests passed.
@@ -44,7 +44,7 @@ A dedicated `goal_blocked({ goal_id, reason, evidence, repeated_turns })` tool k
 ## Risks
 
 - The model self-reports that the same blocker recurred across three consecutive turns because Pi does not expose blocker identity. The strict schema, evidence requirement, and prompt guidance mitigate overuse without claiming runtime proof that Pi cannot provide.
-- Provider limit wording varies. The classifier recognizes explicit subscription/quota/credit/billing exhaustion as `usage_limited` while delegating transient rate, 429, and server failures to Pi's authoritative retry classifier.
+- Provider limit wording varies. The classifier recognizes explicit subscription/quota/credit/billing exhaustion as `usage_limited` while routing transient rate, 429, and server failures through a compatibility mirror of Pi's retry semantics (Pi 0.79 does not export the newer helper).
 - Statusline consumers now receive `blocked` and `usage`; `pi-statusline` already accepts arbitrary plain status text.
 
 ## Rollback / Recovery
