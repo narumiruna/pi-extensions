@@ -28,7 +28,7 @@ This plan can land before or after stopped statuses. If stopped statuses are not
 
 ## Plan
 
-- [x] Added failing prompt tests asserting objective trust-boundary, no-scope-shrinking, evidence-based completion audit, current authoritative-state, and blocked-audit language; verified the initial failures with focused `npm test` runs.
+- [x] Added failing prompt tests asserting a trust boundary before objective data, no-scope-shrinking, evidence-based completion audit, current authoritative-state, and blocked-audit language; verified the initial failures with focused `npm test` runs.
 - [x] Refactored prompt builders around one concise `goalModeRules()` section without changing public command behavior; existing parser, status, lifecycle, and runtime tests still pass.
 - [x] Updated `buildContinuePrompt()` so the full objective persists across turns, completion is proven requirement by requirement, and weak/indirect evidence is insufficient; tests verify the guidance and parseable nonce marker.
 - [x] Updated system, kickoff, resume, edited-objective, and continuation builders to share the same completion standard; one lifecycle test exercises every path.
