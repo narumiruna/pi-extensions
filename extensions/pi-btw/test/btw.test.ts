@@ -1,7 +1,45 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import btw, { buildConversationContext, buildUserPrompt, sanitizeSingleLine } from "../src/btw.js";
+import btw, {
+	buildConversationContext,
+	buildUserPrompt,
+	loadComplete,
+	sanitizeSingleLine,
+} from "../src/btw.js";
+
+test("loadComplete prefers compat and falls back to the root module", async () => {
+	const compatComplete = async () => ({ source: "compat" });
+	const rootComplete = async () => ({ source: "root" });
+	const preferredImports: string[] = [];
+	const preferred = await loadComplete(async (moduleId) => {
+		preferredImports.push(moduleId);
+		return moduleId.endsWith("/compat") ? { complete: compatComplete } : { complete: rootComplete };
+	});
+
+	assert.equal(preferred, compatComplete);
+	assert.deepEqual(preferredImports, ["@earendil-works/pi-ai/compat"]);
+
+	const fallbackImports: string[] = [];
+	const fallback = await loadComplete(async (moduleId) => {
+		fallbackImports.push(moduleId);
+		if (moduleId.endsWith("/compat")) throw new Error("missing compat export");
+		return { complete: rootComplete };
+	});
+
+	assert.equal(fallback, rootComplete);
+	assert.deepEqual(fallbackImports, ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"]);
+});
+
+test("loadComplete reports when neither module exports complete", async () => {
+	await assert.rejects(
+		loadComplete(async (moduleId) => {
+			if (moduleId.endsWith("/compat")) throw new Error("missing compat export");
+			return {};
+		}),
+		/@earendil-works\/pi-ai does not export complete/,
+	);
+});
 
 test("btw command validates usage before asking a side question", async () => {
 	const mock = createMockPi();

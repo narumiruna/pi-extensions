@@ -6,8 +6,7 @@ import type {
 	ProviderStreamOptions,
 	UserMessage,
 } from "@earendil-works/pi-ai";
-// Support both old (@earendil-works/pi-ai/compat) and new (@earendil-works/pi-ai)
-// pi-ai layouts. compat subpath was removed in later versions.
+// pi-ai 0.79 exports complete from the root; 0.80 moved it to the compat subpath.
 type CompleteFunction = <TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
@@ -22,18 +21,22 @@ function hasComplete(value: unknown): value is { complete: CompleteFunction } {
 	);
 }
 
-async function loadComplete(): Promise<CompleteFunction> {
+type ModuleImporter = (moduleId: string) => Promise<unknown>;
+
+export async function loadComplete(
+	importModule: ModuleImporter = (moduleId) => import(moduleId),
+): Promise<CompleteFunction> {
 	let importError: unknown;
 	for (const moduleId of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"]) {
 		try {
-			const module: unknown = await import(moduleId);
+			const module = await importModule(moduleId);
 			if (hasComplete(module)) return module.complete;
 		} catch (error: unknown) {
 			importError = error;
 		}
 	}
 
-	throw importError ?? new Error("@earendil-works/pi-ai does not export complete");
+	throw new Error("@earendil-works/pi-ai does not export complete", { cause: importError });
 }
 
 const complete = await loadComplete();

@@ -14,32 +14,12 @@ concurrency:
 
 jobs:
   check:
-    name: Check and test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run checks and tests
-        run: npm run check
-
-  pi-btw-compatibility:
-    name: pi-btw with pi-ai ${{ matrix.pi_ai }}
+    name: Check and test with Pi ${{ matrix.pi_version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        pi_ai:
+        pi_version:
           - "0.79.10"
           - "0.80.3"
 
@@ -56,13 +36,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install pi-ai ${{ matrix.pi_ai }}
-        run: npm install --no-save --package-lock=false @earendil-works/pi-ai@${{ matrix.pi_ai }}
-
-      - name: Typecheck pi-btw
-        run: npm run typecheck --workspace @narumitw/pi-btw
-
-      - name: Test pi-btw
+      - name: Install Pi ${{ matrix.pi_version }} packages
         run: |
-          npx tsc -p tsconfig.test.json
-          node --test "$GITHUB_WORKSPACE/node_modules/.cache/pi-extensions-test/extensions/pi-btw/test/btw.test.js"
+          node scripts/set-pi-version.mjs ${{ matrix.pi_version }}
+          npm install --no-save
+
+      - name: Run checks and tests
+        run: npm run check
