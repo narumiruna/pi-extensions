@@ -30,6 +30,7 @@ interface ActiveGoal {
 	tokensUsed: number;
 	timeUsedSeconds: number;
 	baselineTokens: number;
+	activeStartedAt?: number;
 }
 
 interface GoalCompleteDetails {
@@ -51,6 +52,11 @@ interface ContinuationTicket {
 	iteration: number;
 	marker: string;
 	prompt: string;
+}
+
+interface BudgetWrapUp {
+	goalId: string;
+	delivered: boolean;
 }
 
 type GoalRecoveryKind = "provider_retry" | "compaction_retry";
@@ -108,6 +114,9 @@ const MAX_BLOCKER_REASON_LENGTH = 1_000;
 const MAX_BLOCKER_EVIDENCE_LENGTH = 4_000;
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const CONTINUATION_MARKER_PREFIX = "pi-goal-continuation:";
+const BUDGET_WRAP_UP_MESSAGE_TYPE = "goal-budget-wrap-up";
+const BUDGET_WRAP_UP_PROMPT =
+	"The active /goal token budget is exhausted. Stop substantive work and do not call more tools. Summarize progress, verified results, remaining work, and blockers concisely. Do not call goal_complete unless existing evidence already proves every requirement is complete; budget exhaustion alone is not completion.";
 const CONTRADICTORY_COMPLETION_PATTERNS = [
 	/(?<!could\s)\bnot\s+(?:yet\s+)?(?:complete|completed|done|finished)\b/i,
 	/\bstill\s+(?:incomplete|failing|failing\s+tests?|fails?)\b/i,
@@ -154,6 +163,7 @@ let extensionApi: ExtensionAPI | undefined;
 let continuationIntent: ContinuationTicket | undefined;
 let continuationDelivery: ContinuationTicket | undefined;
 let goalRecovery: GoalRecovery | undefined;
+let budgetWrapUp: BudgetWrapUp | undefined;
 let staleGoalToolCallsBlocked = false;
 const cancelledContinuationMarkers = new Set<string>();
 
@@ -196,18 +206,28 @@ const goalCompleteTool = defineTool({
 			};
 		}
 
+		const completingDuringBudgetWrapUp =
+			completedGoal.status === "budget_limited" &&
+			budgetWrapUp?.goalId === completedGoal.id &&
+			budgetWrapUp.delivered;
 		const staleGoalRejection = goalIdRejectionReason(completedGoal, requestedGoalId);
 		if (staleGoalRejection) {
 			const rejection = `Goal completion rejected: ${staleGoalRejection}.`;
 			ctx.ui.notify(rejection, "warning");
+			if (completingDuringBudgetWrapUp) {
+				updateGoalUsage(completedGoal, ctx);
+				persistGoal(completedGoal);
+				updateStatus(ctx, completedGoal);
+				clearBudgetWrapUp();
+			}
 
 			return {
 				content: [{ type: "text", text: rejection }],
 				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+				terminate: completingDuringBudgetWrapUp || undefined,
 			};
 		}
-
-		if (completedGoal.status !== "active") {
+		if (completedGoal.status !== "active" && !completingDuringBudgetWrapUp) {
 			const rejection = `Goal completion rejected: goal is ${completedGoal.status}, not active.`;
 			ctx.ui.notify(rejection, "warning");
 
@@ -228,6 +248,7 @@ const goalCompleteTool = defineTool({
 			updateStatus(ctx, completedGoal);
 			const rejection = `Goal completion rejected: ${rejectionReason}.`;
 			ctx.ui.notify(rejection, "warning");
+			if (completingDuringBudgetWrapUp) clearBudgetWrapUp();
 
 			return {
 				content: [
@@ -237,6 +258,7 @@ const goalCompleteTool = defineTool({
 					},
 				],
 				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+				terminate: completingDuringBudgetWrapUp || undefined,
 			};
 		}
 
@@ -327,6 +349,7 @@ const goalBlockedTool = defineTool({
 
 		updateGoalUsage(blockedGoal, ctx);
 		cancelContinuationWork();
+		clearBudgetWrapUp();
 		clearGoalRecoveryForGoal(blockedGoal.id);
 		blockStaleGoalToolCalls();
 		activeGoal = transitionGoal(blockedGoal, "blocked");
@@ -390,27 +413,43 @@ export default function goal(pi: ExtensionAPI) {
 		clearCompletionStatusTimer();
 		clearContinuationTracking();
 		clearGoalRecovery();
+		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
 		activeGoal = loadGoalFromSession(ctx);
-		if (activeGoal) updateStatus(ctx, activeGoal);
-		else ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (activeGoal) {
+			if (activeGoal.status === "active") {
+				updateGoalUsage(activeGoal, ctx);
+				if (limitActiveGoalForBudget(pi, ctx, false)) return;
+			}
+			persistGoal(activeGoal);
+			updateStatus(ctx, activeGoal);
+		} else ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		if (activeGoal) persistGoal(activeGoal);
+		if (activeGoal) {
+			updateGoalUsage(activeGoal, ctx, false);
+			persistGoal(activeGoal);
+		}
 		clearContinuationTracking();
 		clearGoalRecovery();
+		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearCompletionStatusTimer();
 	});
 
-	pi.on("session_before_compact", (_event, ctx) => {
+	pi.on("session_before_compact", (event, ctx) => {
+		if (activeGoal?.status === "budget_limited") {
+			if ((event as { willRetry?: boolean }).willRetry === true) return { cancel: true as const };
+			return;
+		}
 		if (!activeGoal || activeGoal.status !== "active") return;
 		updateGoalUsage(activeGoal, ctx);
 		cancelContinuationWork();
 		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
+		if (limitActiveGoalForBudget(pi, ctx, false)) return { cancel: true as const };
 	});
 
 	pi.on("session_compact", (event, ctx) => {
@@ -424,6 +463,7 @@ export default function goal(pi: ExtensionAPI) {
 		updateGoalUsage(activeGoal, ctx);
 		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
+		if (limitActiveGoalForBudget(pi, ctx, false)) return;
 
 		const wasPiRetry = isPiOwnedCompactionRetry(event, activeGoal.id);
 		clearGoalRecoveryForGoal(activeGoal.id);
@@ -440,11 +480,31 @@ export default function goal(pi: ExtensionAPI) {
 			if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
 			return;
 		}
+		if (/^\/goal(?:\s|$)/u.test(event.text.trimStart())) return;
 		clearGoalRecovery();
+		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
 	});
 
-	pi.on("tool_call", () => {
+	pi.on("context", (event) => {
+		const messages = event.messages.filter((message) => keepBudgetWrapUpMessage(message));
+		if (messages.length !== event.messages.length) return { messages };
+	});
+
+	pi.on("tool_call", (event, ctx) => {
+		if (
+			activeGoal?.status === "budget_limited" &&
+			budgetWrapUp?.goalId === activeGoal.id &&
+			event.toolName !== "goal_complete"
+		) {
+			// A blocked tool result would normally trigger another model call. Abort the
+			// wrap-up instead so a tool-seeking model cannot create an unbounded loop.
+			abortCurrentTurn(ctx);
+			return {
+				block: true,
+				reason: "Goal token budget is exhausted; only goal_complete is allowed during wrap-up.",
+			};
+		}
 		if (!staleGoalToolCallsBlocked) return;
 		if (!activeGoal || !blocksStaleGoalToolCalls(activeGoal.status)) {
 			clearStaleGoalToolCallBlock();
@@ -454,6 +514,25 @@ export default function goal(pi: ExtensionAPI) {
 			block: true,
 			reason: "Blocked stale /goal tool call after the goal stopped or was interrupted.",
 		};
+	});
+
+	pi.on("tool_execution_end", (_event, ctx) => {
+		if (
+			activeGoal?.status === "budget_limited" &&
+			budgetWrapUp?.goalId === activeGoal.id &&
+			!budgetWrapUp.delivered
+		) {
+			queueBudgetWrapUp(pi, ctx, activeGoal);
+			return;
+		}
+		if (!activeGoal || activeGoal.status !== "active") return;
+
+		// AgentSession persists assistant message_end before tool execution events,
+		// so the completed assistant call's usage is authoritative at this boundary.
+		updateGoalUsage(activeGoal, ctx);
+		persistGoal(activeGoal);
+		updateStatus(ctx, activeGoal);
+		limitActiveGoalForBudget(pi, ctx, true);
 	});
 
 	pi.on("before_agent_start", (event) => {
@@ -466,7 +545,15 @@ export default function goal(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", (event, ctx) => {
-		if (!activeGoal || activeGoal.status !== "active") return;
+		if (!activeGoal) return;
+		if (activeGoal.status === "budget_limited" && budgetWrapUp?.goalId === activeGoal.id) {
+			updateGoalUsage(activeGoal, ctx);
+			persistGoal(activeGoal);
+			updateStatus(ctx, activeGoal);
+			clearBudgetWrapUp();
+			return;
+		}
+		if (activeGoal.status !== "active") return;
 
 		const goalId = activeGoal.id;
 		const alreadyAwaitingContinuation = hasContinuationWorkForGoal(goalId);
@@ -483,6 +570,7 @@ export default function goal(pi: ExtensionAPI) {
 
 		if (finalAssistant?.stopReason === "error") {
 			if (isRetryableGoalInterruption(finalAssistant)) {
+				if (limitActiveGoalForBudget(pi, ctx, false)) return;
 				goalRecovery = {
 					goalId,
 					kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
@@ -504,14 +592,7 @@ export default function goal(pi: ExtensionAPI) {
 
 		clearGoalRecoveryForGoal(goalId);
 
-		if (activeGoal.tokenBudget !== undefined && activeGoal.tokensUsed >= activeGoal.tokenBudget) {
-			cancelContinuationWork();
-			activeGoal = transitionGoal(activeGoal, "budget_limited");
-			persistGoal(activeGoal);
-			updateStatus(ctx, activeGoal);
-			ctx.ui.notify(`Goal token budget reached: ${formatBudget(activeGoal)}`, "warning");
-			return;
-		}
+		if (limitActiveGoalForBudget(pi, ctx, false)) return;
 
 		persistGoal(activeGoal);
 		updateStatus(ctx, activeGoal);
@@ -552,12 +633,35 @@ async function startGoal(
 
 	cancelContinuationWork();
 	clearGoalRecovery();
+	clearBudgetWrapUp();
 	clearStaleGoalToolCallBlock();
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
+	const startedGoal = activeGoal;
+	const sent = await sendGoalPrompt(pi, ctx, startedGoal);
+	if (!sent) {
+		if (activeGoal?.id === startedGoal.id) {
+			if (existingGoal) {
+				updateGoalUsage(existingGoal, ctx);
+				if (existingGoal.status === "active") {
+					abortCurrentTurn(ctx);
+					activeGoal = transitionGoal(existingGoal, "paused");
+					blockStaleGoalToolCalls();
+				} else {
+					activeGoal = existingGoal;
+					if (blocksStaleGoalToolCalls(activeGoal.status)) blockStaleGoalToolCalls();
+					else clearStaleGoalToolCallBlock();
+				}
+				persistGoal(activeGoal);
+				updateStatus(ctx, activeGoal);
+			} else {
+				clearActiveGoal(ctx);
+			}
+		}
+		return;
+	}
 	ctx.ui.notify(existingGoal ? `Goal replaced: ${objective}` : `Goal started: ${objective}`, "info");
-	await sendGoalPrompt(pi, ctx, activeGoal);
 }
 
 function pauseGoal(ctx: StatusContext) {
@@ -569,7 +673,9 @@ function pauseGoal(ctx: StatusContext) {
 		ctx.ui.notify(`Goal is ${activeGoal.status}; only active goals can be paused.`, "warning");
 		return;
 	}
+	updateGoalUsage(activeGoal, ctx);
 	cancelContinuationWork();
+	clearBudgetWrapUp();
 	blockStaleGoalToolCalls();
 	abortCurrentTurn(ctx);
 	activeGoal = transitionGoal(activeGoal, "paused");
@@ -601,6 +707,7 @@ async function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 	const stoppedStatus = stoppedGoal.status;
 	cancelContinuationWork();
 	clearGoalRecovery();
+	clearBudgetWrapUp();
 	clearStaleGoalToolCallBlock();
 	activeGoal = transitionGoal(nextGoalInstance(activeGoal), "active");
 	persistGoal(activeGoal);
@@ -631,6 +738,7 @@ function clearGoal(ctx: StatusContext) {
 		ctx.ui.notify("No active goal.", "info");
 		cancelContinuationWork();
 		clearGoalRecovery();
+		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
 		clearPersistedGoal(ctx.cwd);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -659,22 +767,47 @@ async function editGoal(
 	}
 
 	updateGoalUsage(activeGoal, ctx);
+	const previousGoal = { ...activeGoal };
 	cancelContinuationWork();
 	clearGoalRecovery();
-	activeGoal = normalizeGoalForBudget({
-		...nextGoalInstance(activeGoal),
-		text: objective,
-		status: editedGoalStatus(activeGoal.status),
-		tokenBudget: tokenBudget ?? activeGoal.tokenBudget,
-		updatedAt: Date.now(),
-	});
+	clearBudgetWrapUp();
+	const previousStatus = activeGoal.status;
+	activeGoal = transitionGoal(
+		{
+			...nextGoalInstance(activeGoal),
+			text: objective,
+			tokenBudget: tokenBudget ?? activeGoal.tokenBudget,
+		},
+		editedGoalStatus(previousStatus),
+	);
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
-	ctx.ui.notify(`Goal updated: ${objective}`, "info");
 	if (activeGoal.status === "active") {
 		clearStaleGoalToolCallBlock();
-		await sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
+		const editedGoal = activeGoal;
+		const sent = await sendObjectiveUpdatedPrompt(pi, ctx, editedGoal);
+		if (!sent) {
+			if (activeGoal?.id === editedGoal.id) {
+				if (previousStatus === "active") {
+					abortCurrentTurn(ctx);
+					activeGoal = transitionGoal(previousGoal, "paused");
+					blockStaleGoalToolCalls();
+				} else {
+					activeGoal = previousGoal;
+					if (blocksStaleGoalToolCalls(activeGoal.status)) blockStaleGoalToolCalls();
+					else clearStaleGoalToolCallBlock();
+				}
+				persistGoal(activeGoal);
+				updateStatus(ctx, activeGoal);
+			}
+			return;
+		}
+	} else if (blocksStaleGoalToolCalls(activeGoal.status)) {
+		blockStaleGoalToolCalls();
+	} else {
+		clearStaleGoalToolCallBlock();
 	}
+	ctx.ui.notify(`Goal updated: ${objective}`, "info");
 }
 
 function showGoal(ctx: StatusContext) {
@@ -702,11 +835,21 @@ function createGoal(text: string, tokenBudget: number | undefined, baselineToken
 		tokensUsed: 0,
 		timeUsedSeconds: 0,
 		baselineTokens,
+		activeStartedAt: now,
 	};
 }
 
-function transitionGoal(goal: ActiveGoal, status: GoalStatus): ActiveGoal {
-	return normalizeGoalForBudget({ ...goal, status, updatedAt: Date.now() });
+function transitionGoal(goal: ActiveGoal, requestedStatus: GoalStatus): ActiveGoal {
+	const now = Date.now();
+	const status =
+		requestedStatus === "active" &&
+		goal.tokenBudget !== undefined &&
+		goal.tokensUsed >= goal.tokenBudget
+			? "budget_limited"
+			: requestedStatus;
+	const next = { ...goal, status, updatedAt: now };
+	checkpointGoalActiveTime(next, now, status === "active");
+	return next;
 }
 
 function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
@@ -716,17 +859,6 @@ function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
 function editedGoalStatus(status: GoalStatus): GoalStatus {
 	if (status === "paused" || status === "blocked" || status === "usage_limited") return status;
 	return "active";
-}
-
-function normalizeGoalForBudget(goal: ActiveGoal): ActiveGoal {
-	if (
-		goal.status === "active" &&
-		goal.tokenBudget !== undefined &&
-		goal.tokensUsed >= goal.tokenBudget
-	) {
-		return { ...goal, status: "budget_limited" };
-	}
-	return goal;
 }
 
 function incrementGoal(goal: ActiveGoal): ActiveGoal {
@@ -740,6 +872,7 @@ function stopGoalAfterAgentEnd(
 	status: "paused" | "blocked" | "usage_limited",
 ) {
 	cancelContinuationWork();
+	clearBudgetWrapUp();
 	blockStaleGoalToolCalls();
 	abortCurrentTurn(ctx);
 	activeGoal = transitionGoal(goal, status);
@@ -764,10 +897,25 @@ function stopGoalAfterAgentEnd(
 	);
 }
 
-function updateGoalUsage(goal: ActiveGoal, ctx: StatusContext) {
-	goal.tokensUsed = Math.max(0, currentTokenTotal(ctx) - goal.baselineTokens);
-	goal.timeUsedSeconds = Math.max(0, Math.floor((Date.now() - goal.startedAt) / 1000));
-	goal.updatedAt = Date.now();
+function checkpointGoalActiveTime(goal: ActiveGoal, now: number, continueClock: boolean) {
+	const activeStartedAt = goal.activeStartedAt;
+	if (typeof activeStartedAt === "number" && Number.isFinite(activeStartedAt)) {
+		const elapsedMilliseconds = Math.max(0, now - activeStartedAt);
+		goal.timeUsedSeconds =
+			nonNegativeFiniteNumber(goal.timeUsedSeconds) + elapsedMilliseconds / 1_000;
+	} else {
+		goal.timeUsedSeconds = nonNegativeFiniteNumber(goal.timeUsedSeconds);
+	}
+	goal.activeStartedAt = continueClock ? now : undefined;
+}
+
+function updateGoalUsage(goal: ActiveGoal, ctx: StatusContext, continueClock = goal.status === "active") {
+	const now = Date.now();
+	const baselineTokens = nonNegativeFiniteNumber(goal.baselineTokens);
+	goal.baselineTokens = baselineTokens;
+	goal.tokensUsed = Math.max(0, currentTokenTotal(ctx) - baselineTokens);
+	checkpointGoalActiveTime(goal, now, continueClock);
+	goal.updatedAt = now;
 }
 
 export function completeGoalArguments(argumentPrefix: string): GoalArgumentCompletion[] | null {
@@ -854,7 +1002,8 @@ export function parseTokenBudget(value: string): number | undefined {
 	const amount = Number(match[1]);
 	if (!Number.isFinite(amount) || amount <= 0) return undefined;
 	const multiplier = match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2]?.toLowerCase() === "k" ? 1_000 : 1;
-	return Math.floor(amount * multiplier);
+	const tokens = Math.floor(amount * multiplier);
+	return normalizeTokenBudget(tokens);
 }
 
 export function validateObjective(objective: string): string | undefined {
@@ -961,7 +1110,7 @@ function goalSummary(goal: ActiveGoal) {
 		`Goal: ${goal.text}`,
 		`Status: ${goal.status}`,
 		`Iteration: ${goal.iteration}`,
-		`Elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
+		`Active elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
 		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
 		`Commands: ${goalCommandHint(goal.status)}`,
 	].join("\n");
@@ -976,8 +1125,9 @@ function goalCommandHint(status: GoalStatus) {
 }
 
 export function formatDuration(seconds: number) {
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
+	const wholeSeconds = Math.max(0, Math.floor(nonNegativeFiniteNumber(seconds)));
+	if (wholeSeconds < 60) return `${wholeSeconds}s`;
+	const minutes = Math.floor(wholeSeconds / 60);
 	if (minutes < 60) return `${minutes}m`;
 	const hours = Math.floor(minutes / 60);
 	return `${hours}h${minutes % 60}m`;
@@ -1065,6 +1215,73 @@ function clearStaleGoalToolCallBlock() {
 
 function clearGoalRecovery() {
 	goalRecovery = undefined;
+}
+
+function clearBudgetWrapUp() {
+	budgetWrapUp = undefined;
+}
+
+function keepBudgetWrapUpMessage(message: unknown) {
+	if (!message || typeof message !== "object") return true;
+	const candidate = message as {
+		role?: unknown;
+		customType?: unknown;
+		details?: { goalId?: unknown };
+	};
+	if (candidate.role !== "custom" || candidate.customType !== BUDGET_WRAP_UP_MESSAGE_TYPE) {
+		return true;
+	}
+	return (
+		typeof candidate.details?.goalId === "string" &&
+		candidate.details.goalId === budgetWrapUp?.goalId &&
+		candidate.details.goalId === activeGoal?.id
+	);
+}
+
+function queueBudgetWrapUp(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	if (!budgetWrapUp || budgetWrapUp.goalId !== goal.id) {
+		budgetWrapUp = { goalId: goal.id, delivered: false };
+	}
+	if (budgetWrapUp.delivered) return true;
+	budgetWrapUp.delivered = true;
+	try {
+		pi.sendMessage(
+			{
+				customType: BUDGET_WRAP_UP_MESSAGE_TYPE,
+				content: BUDGET_WRAP_UP_PROMPT,
+				display: true,
+				details: { goalId: goal.id },
+			},
+			{ deliverAs: "steer" },
+		);
+		return true;
+	} catch (error) {
+		budgetWrapUp.delivered = false;
+		ctx.ui.notify(`Goal budget wrap-up failed: ${formatError(error)}`, "error");
+		return false;
+	}
+}
+
+function limitActiveGoalForBudget(pi: ExtensionAPI, ctx: StatusContext, sendWrapUp: boolean) {
+	const goal = activeGoal;
+	if (
+		!goal ||
+		goal.status !== "active" ||
+		goal.tokenBudget === undefined ||
+		goal.tokensUsed < goal.tokenBudget
+	) {
+		return false;
+	}
+
+	cancelContinuationWork();
+	clearGoalRecoveryForGoal(goal.id);
+	clearBudgetWrapUp();
+	activeGoal = transitionGoal(goal, "budget_limited");
+	persistGoal(activeGoal);
+	updateStatus(ctx, activeGoal);
+	ctx.ui.notify(`Goal token budget reached: ${formatBudget(activeGoal)}`, "warning");
+	if (sendWrapUp) queueBudgetWrapUp(pi, ctx, activeGoal);
+	return true;
 }
 
 function clearGoalRecoveryForGoal(goalId: string) {
@@ -1238,11 +1455,11 @@ function normalizeUsage(value: unknown): Usage | undefined {
 	const usage = value as Partial<Usage>;
 	if (typeof usage.input !== "number" || typeof usage.output !== "number") return undefined;
 	return {
-		input: usage.input,
-		output: usage.output,
-		cacheRead: usage.cacheRead ?? 0,
-		cacheWrite: usage.cacheWrite ?? 0,
-		totalTokens: usage.totalTokens ?? usage.input + usage.output + (usage.cacheRead ?? 0),
+		input: nonNegativeFiniteNumber(usage.input),
+		output: nonNegativeFiniteNumber(usage.output),
+		cacheRead: nonNegativeFiniteNumber(usage.cacheRead),
+		cacheWrite: nonNegativeFiniteNumber(usage.cacheWrite),
+		totalTokens: assistantUsageTokens(usage),
 		cost: {
 			input: usage.cost?.input ?? 0,
 			output: usage.cost?.output ?? 0,
@@ -1265,19 +1482,65 @@ function truncateNotification(value: string) {
 	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
 }
 
-function currentTokenTotal(ctx: StatusContext): number {
-	const sessionManager = ctx.sessionManager as
-		| { getBranch?: () => Array<{ type?: string; message?: { role?: string; usage?: unknown } }> }
-		| undefined;
-	const branch = sessionManager?.getBranch?.() ?? [];
+interface AssistantUsageEntryLike {
+	type?: unknown;
+	message?: { role?: unknown; usage?: unknown };
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function nonNegativeFiniteNumber(value: unknown) {
+	return isNonNegativeFiniteNumber(value) ? value : 0;
+}
+
+function normalizeTokenBudget(value: unknown) {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+		? value
+		: undefined;
+}
+
+export function assistantUsageTokens(value: unknown) {
+	if (!value || typeof value !== "object") return 0;
+	const usage = value as Partial<Usage>;
+	if (
+		typeof usage.totalTokens === "number" &&
+		Number.isFinite(usage.totalTokens) &&
+		usage.totalTokens >= 0
+	) {
+		return usage.totalTokens;
+	}
+	// Pi providers define the compatibility total as input + output + cache read +
+	// cache write. reasoning is already in output; cacheWrite1h is in cacheWrite.
+	return Math.min(
+		Number.MAX_SAFE_INTEGER,
+		nonNegativeFiniteNumber(usage.input) +
+			nonNegativeFiniteNumber(usage.output) +
+			nonNegativeFiniteNumber(usage.cacheRead) +
+			nonNegativeFiniteNumber(usage.cacheWrite),
+	);
+}
+
+export function cumulativeAssistantTokens(entries: unknown[]) {
 	let total = 0;
-	for (const entry of branch) {
+	for (const candidate of entries) {
+		if (!candidate || typeof candidate !== "object") continue;
+		const entry = candidate as AssistantUsageEntryLike;
 		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-		const usage = entry.message.usage as { input?: number; output?: number } | undefined;
-		total += usage?.input ?? 0;
-		total += usage?.output ?? 0;
+		total = Math.min(
+			Number.MAX_SAFE_INTEGER,
+			total + assistantUsageTokens(entry.message.usage),
+		);
 	}
 	return total;
+}
+
+function currentTokenTotal(ctx: StatusContext): number {
+	const sessionManager = ctx.sessionManager as
+		| { getBranch?: () => AssistantUsageEntryLike[] }
+		| undefined;
+	return cumulativeAssistantTokens(sessionManager?.getBranch?.() ?? []);
 }
 
 function persistGoal(goal: ActiveGoal) {
@@ -1301,12 +1564,29 @@ function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
 		.filter((entry) => entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE)
 		.pop();
 	const data = entry?.data as GoalStateEntryData | undefined;
-	return isGoal(data?.goal) && data.goal.status !== "complete" ? data.goal : undefined;
+	if (!isGoal(data?.goal) || data.goal.status === "complete") return undefined;
+	return normalizeLoadedGoal(data.goal);
+}
+
+function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
+	const now = Date.now();
+	return {
+		...goal,
+		startedAt: isNonNegativeFiniteNumber(goal.startedAt) ? goal.startedAt : now,
+		updatedAt: isNonNegativeFiniteNumber(goal.updatedAt) ? goal.updatedAt : now,
+		iteration: Math.max(0, Math.floor(nonNegativeFiniteNumber(goal.iteration))),
+		tokenBudget: normalizeTokenBudget(goal.tokenBudget),
+		tokensUsed: nonNegativeFiniteNumber(goal.tokensUsed),
+		timeUsedSeconds: nonNegativeFiniteNumber(goal.timeUsedSeconds),
+		baselineTokens: nonNegativeFiniteNumber(goal.baselineTokens),
+		activeStartedAt: goal.status === "active" ? now : undefined,
+	};
 }
 
 function clearActiveGoal(ctx: StatusContext) {
 	cancelContinuationWork();
 	clearGoalRecovery();
+	clearBudgetWrapUp();
 	clearStaleGoalToolCallBlock();
 	activeGoal = undefined;
 	clearPersistedGoal(ctx.cwd);
@@ -1353,7 +1633,6 @@ function clearLegacyPersistedGoal(cwd: string) {
 	writeFileSync(STATE_FILE, `${JSON.stringify(goals, null, 2)}\n`);
 }
 
-
 function isGoal(value: unknown): value is ActiveGoal {
 	if (!value || typeof value !== "object") return false;
 	const goal = value as Partial<ActiveGoal>;
@@ -1368,6 +1647,7 @@ function isGoal(value: unknown): value is ActiveGoal {
 		typeof goal.iteration === "number" &&
 		typeof goal.tokensUsed === "number" &&
 		typeof goal.timeUsedSeconds === "number" &&
-		typeof goal.baselineTokens === "number"
+		typeof goal.baselineTokens === "number" &&
+		(goal.activeStartedAt === undefined || typeof goal.activeStartedAt === "number")
 	);
 }

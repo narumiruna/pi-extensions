@@ -8,7 +8,7 @@ This is the entry plan for the improvement program. Execute the linked plans as 
 
 1. [Idle continuation](./archived/2026-07-10_pi-goal-idle-continuation-plan.md) — completed
 2. [Stopped statuses](./archived/2026-07-05_pi-goal-stopped-statuses-plan.md) — completed
-3. [Budget accounting](./2026-07-10_pi-goal-budget-accounting-plan.md)
+3. [Budget accounting](./archived/2026-07-10_pi-goal-budget-accounting-plan.md) — completed
 4. [Prompt hardening](./2026-07-05_pi-goal-continuation-prompt-hardening-plan.md)
 
 The order is intentional: prompt text must describe states and controls that already exist, while accounting and continuation changes should land before wording claims Codex-like behavior.
@@ -29,7 +29,7 @@ Keep the implementation as a Pi extension with session-entry persistence and one
 
 - [x] Executed the idle-continuation plan: ordinary continuation now leaves `agent_end` and starts only after Pi is settled; verified by focused tests, the real `AgentSession` runtime smoke, `npm run check`, and `just pack-goal`.
 - [x] Executed the stopped-statuses plan: `paused`, `blocked`, `usage_limited`, `budget_limited`, and `complete` now have distinct transitions and resume behavior; verified by state, tool, persistence, interruption, retry, and stale-call tests.
-- [ ] Execute the budget-accounting plan so cached/total tokens, active elapsed time, tool-boundary exhaustion, and wrap-up behavior have documented semantics; verify with its accounting tests.
+- [x] Executed the budget-accounting plan: provider-total/cache fallback semantics, active elapsed time, tool/compaction/turn boundary exhaustion, and one bounded wrap-up are implemented and documented; verified by 239 tests, the seven-scenario runtime smoke, Pi 0.79.10/0.80.3 checks, and `just pack-goal`.
 - [ ] Execute the prompt-hardening plan after stopped statuses exist so kickoff, resume, edit, system, continuation, blocker, and budget prompts all match implemented behavior; verify with prompt snapshots/assertions.
 - [ ] Reconcile `extensions/pi-goal/README.md` with the final command surface, all statuses, interruption semantics, token definition, visible-versus-hidden continuation limitation, and completion contract; verify every documented command and status against source tests.
 - [ ] Run the CI-equivalent gate and package preview after all slices land; verify with `npm run check` and `just pack-goal`, then inspect that the tarball contains only `src`, `README.md`, `LICENSE`, and package metadata.
@@ -49,7 +49,7 @@ Land each linked plan as an independent change. If a slice regresses runtime beh
 
 - [x] Safe continuation is verified by the completed and archived idle-continuation plan, 211 passing repository tests, and the four-scenario runtime smoke.
 - [x] Distinct stopped statuses are verified by the completed and archived stopped-statuses plan, 221 passing repository tests, the runtime continuation smoke, and the package dry run.
-- [ ] Correct token and active-time accounting is verified by the completed and archived budget-accounting plan plus boundary tests.
+- [x] Correct token and active-time accounting is verified by the completed and archived budget-accounting plan, boundary tests, runtime smokes, and Pi compatibility checks.
 - [ ] Consistent evidence-based prompts are verified by the completed and archived prompt-hardening plan plus prompt assertions.
 - [ ] Public documentation and package contents are verified by README review, `npm run check`, and `just pack-goal` output.
 - [ ] All linked plans are archived under `docs/plans/archived/` only after their own completion evidence is recorded.
