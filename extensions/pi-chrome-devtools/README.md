@@ -190,14 +190,15 @@ filename is deprecated and planned for removal after at least one minor release 
 ```txt
 extensions/pi-chrome-devtools/
 ├── src/
-│   └── chrome-devtools.ts
+│   ├── chrome-devtools.ts  # Pi entrypoint and command orchestration
+│   └── *.ts                # Package-local browser, CDP, tool, and storage modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-The package exposes its Pi extension through `package.json`:
+Only `chrome-devtools.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {

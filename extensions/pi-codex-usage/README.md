@@ -98,14 +98,15 @@ The extension does not read Pi or Codex auth files directly, and it does not exp
 ```txt
 extensions/pi-codex-usage/
 ├── src/
-│   └── codex-usage.ts
+│   ├── codex-usage.ts  # Pi entrypoint and cache/lifecycle orchestration
+│   └── *.ts            # Package-local query, RPC, normalization, and format modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-The package exposes its Pi extension through `package.json`:
+Only `codex-usage.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {

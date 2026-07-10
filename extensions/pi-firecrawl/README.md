@@ -159,12 +159,15 @@ Start a crawl with markdown extraction:
 ```txt
 extensions/pi-firecrawl/
 ├── src/
-│   └── firecrawl.ts
+│   ├── firecrawl.ts  # Pi entrypoint and command orchestration
+│   └── *.ts          # Package-local client, settings, selector, and tool modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
+
+Only `firecrawl.ts` is a Pi entrypoint; the other source modules are internal.
 
 ## 🔎 Keywords
 

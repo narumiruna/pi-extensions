@@ -158,13 +158,17 @@ The first version only needs one POST to the Interactions API, so native `fetch`
 
 ```txt
 extensions/pi-google-genai/
-├── src/google-genai.ts
+├── src/
+│   ├── google-genai.ts  # Pi entrypoint and command orchestration
+│   └── *.ts             # Package-local config, client, response, and tool modules
 ├── test/google-genai.test.ts
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
+
+Only `google-genai.ts` is a Pi entrypoint; the other source modules are internal.
 
 ## 🏷️ Keywords
 

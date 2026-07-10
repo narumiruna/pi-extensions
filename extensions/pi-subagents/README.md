@@ -256,14 +256,15 @@ Subagents are separate Pi processes and may use the tools allowed by their agent
 ```txt
 extensions/pi-subagents/
 ├── src/
-│   └── subagents.ts
+│   ├── subagents.ts  # Pi entrypoint and tool schema
+│   └── *.ts          # Package-local discovery, execution, rendering, and config modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-The package exposes its Pi extension through `package.json`:
+Only `subagents.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {

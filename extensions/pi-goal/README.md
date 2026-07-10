@@ -131,14 +131,15 @@ A user pause or aborted turn produces `paused`; a terminal provider/account quot
 ```txt
 extensions/pi-goal/
 ├── src/
-│   └── goal.ts
+│   ├── goal.ts       # Pi entrypoint and shared lifecycle state machine
+│   └── *.ts          # Package-local command, prompt, accounting, and persistence modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-The package exposes its Pi extension through `package.json`:
+Only `goal.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {

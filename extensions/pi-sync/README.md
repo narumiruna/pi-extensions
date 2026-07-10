@@ -187,14 +187,15 @@ Before updating `latest.json`, pi-sync re-reads the current pointer and rejects 
 ```txt
 extensions/pi-sync/
 ├── src/
-│   └── sync.ts
+│   ├── sync.ts        # Pi entrypoint and command orchestration
+│   └── *.ts           # Package-local config, snapshot, path, and S3 modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-The package exposes its Pi extension through `package.json`:
+Only `sync.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {

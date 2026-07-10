@@ -125,7 +125,8 @@ Examples:
 ```txt
 extensions/pi-statusline/
 ├── src/
-│   └── statusline.ts
+│   ├── statusline.ts  # Pi entrypoint and watcher lifecycle
+│   └── *.ts           # Package-local git, extension status, settings, and render modules
 ├── presets/
 │   ├── ansi.ts
 │   ├── classic.ts
@@ -137,7 +138,7 @@ extensions/pi-statusline/
 └── package.json
 ```
 
-The package exposes its Pi extension through `package.json`:
+Only `statusline.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {
