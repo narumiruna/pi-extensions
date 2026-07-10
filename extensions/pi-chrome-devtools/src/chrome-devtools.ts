@@ -24,10 +24,8 @@ const MANAGED_BROWSER_PROFILE_PREFIX = "pi-chrome-devtools-profile-";
 const DEVTOOLS_ACTIVE_PORT_FILE = "DevToolsActivePort";
 const BROWSER_SHUTDOWN_WAIT_MS = 1_500;
 const STATUS_KEY = "chrome-devtools";
-const SETTINGS_FILE = join(
-	process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
-	"pi-chrome-devtools-settings.json",
-);
+const NEW_SETTINGS_FILE_NAME = "pi-chrome-devtools.json";
+const LEGACY_SETTINGS_FILE_NAME = "pi-chrome-devtools-settings.json";
 const CHROME_DEVTOOLS_TOOL_NAMES = [
 	"chrome_devtools_list_pages",
 	"chrome_devtools_select_page",
@@ -108,6 +106,7 @@ interface ChromeDevToolsState {
 	launchPromise?: Promise<void>;
 	lastLaunchAttempt?: BrowserLaunchAttempt;
 	shuttingDown: boolean;
+	settingsNotice?: string;
 }
 
 interface ManagedBrowser {
@@ -375,8 +374,11 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.shuttingDown = false;
+		state.settingsNotice = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const settings = await loadSettings();
+		recordSettingsNotice(settings);
+		if (settings.notice) ctx.ui.notify(settings.notice, "warning");
 		if (settings.kind === "loaded") {
 			applyChromeDevtoolsTools(pi, settings.settings.tools);
 			return;
@@ -670,7 +672,8 @@ async function buildToolStatusMessage(pi: ExtensionAPI) {
 	return [
 		`Chrome DevTools tools: ${formatRuntimeStatus(summary)}`,
 		`Persisted selection: ${persistedSetting}`,
-		`Settings file: ${SETTINGS_FILE}`,
+		`Settings file: ${settingsFilePath()}`,
+		...(state.settingsNotice ? [`Settings note: ${state.settingsNotice}`] : []),
 		`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
 		`Endpoint: ${devToolsEndpoint()}`,
 		`Endpoint source: ${endpointSourceLabel()}`,
@@ -745,6 +748,7 @@ function formatRuntimeStatus(summary: ToolStatusSummary) {
 
 async function persistedSettingLabel() {
 	const settings = await loadSettings();
+	recordSettingsNotice(settings);
 	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
 	if (settings.kind === "invalid") {
 		return `none; current active-tool policy preserved (invalid settings ignored: ${settings.reason})`;
@@ -771,27 +775,90 @@ async function persistSettings(
 	}
 }
 
-async function loadSettings(): Promise<
-	| { kind: "missing" }
-	| { kind: "invalid"; reason: string }
-	| { kind: "loaded"; settings: ChromeDevToolsSettings }
-> {
+type SettingsLoadResult =
+	| { kind: "missing"; notice?: string }
+	| { kind: "invalid"; reason: string; notice?: string }
+	| { kind: "loaded"; settings: ChromeDevToolsSettings; notice?: string };
+
+async function loadSettings(): Promise<SettingsLoadResult> {
+	const newSettings = await readSettingsFile(settingsFilePath());
+	if (newSettings.kind !== "missing") {
+		return withLegacyIgnoredNotice(newSettings);
+	}
+
+	const legacyPath = legacySettingsFilePath();
+	const legacySettings = await readSettingsFile(legacyPath);
+	if (legacySettings.kind === "missing") return { kind: "missing" };
+	if (legacySettings.kind === "invalid") return legacySettings;
+
+	return {
+		...legacySettings,
+		notice: await migrateLegacySettings(legacyPath, legacySettings.settings),
+	};
+}
+
+async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
 	let text: string;
 	try {
-		text = await readFile(SETTINGS_FILE, "utf8");
+		text = await readFile(filePath, "utf8");
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: formatError(error) };
+		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
 	}
 
 	try {
 		const parsed = JSON.parse(text) as unknown;
 		const settings = normalizeChromeDevtoolsSettings(parsed);
 		if (settings) return { kind: "loaded", settings };
-		return { kind: "invalid", reason: "expected tools to be an array of Chrome DevTools tool names" };
+		return {
+			kind: "invalid",
+			reason: `${filePath}: expected tools to be an array of Chrome DevTools tool names`,
+		};
 	} catch (error) {
-		return { kind: "invalid", reason: formatError(error) };
+		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
 	}
+}
+
+async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
+	if (!(await fileExists(legacySettingsFilePath()))) return settings;
+	return {
+		...settings,
+		notice: `Chrome DevTools legacy settings ignored: ${legacySettingsFilePath()} exists, but ${settingsFilePath()} takes precedence. Delete ${LEGACY_SETTINGS_FILE_NAME} after confirming your settings.`,
+	};
+}
+
+async function migrateLegacySettings(legacyPath: string, settings: ChromeDevToolsSettings) {
+	const newPath = settingsFilePath();
+	try {
+		await mkdir(dirname(newPath), { recursive: true });
+		await writeFile(newPath, `${JSON.stringify(settings, null, 2)}\n`, {
+			encoding: "utf8",
+			flag: "wx",
+		});
+	} catch (error) {
+		return `Chrome DevTools legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE_NAME}.`;
+	}
+
+	try {
+		await rm(legacyPath, { force: true });
+	} catch (error) {
+		return `Chrome DevTools settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE_NAME} after confirming your settings.`;
+	}
+
+	return `Chrome DevTools settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE_NAME} is deprecated and will be removed in a future major release.`;
+}
+
+async function fileExists(filePath: string) {
+	try {
+		await access(filePath, constants.F_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function recordSettingsNotice(settings: SettingsLoadResult) {
+	if (settings.notice) state.settingsNotice = settings.notice;
 }
 
 export function normalizeChromeDevtoolsSettings(value: unknown): ChromeDevToolsSettings | undefined {
@@ -819,16 +886,28 @@ function orderedUniqueChromeDevtoolsTools(tools: readonly ChromeDevToolsToolName
 }
 
 async function saveSettings(settings: ChromeDevToolsSettings) {
-	await mkdir(dirname(SETTINGS_FILE), { recursive: true });
-	const tempFile = `${SETTINGS_FILE}.${process.pid}.${Date.now()}.tmp`;
+	const filePath = settingsFilePath();
+	await mkdir(dirname(filePath), { recursive: true });
+	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}
-`, "utf8");
-		await rename(tempFile, SETTINGS_FILE);
+		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+		await rename(tempFile, filePath);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
 	}
+}
+
+function settingsFilePath() {
+	return join(agentDir(), NEW_SETTINGS_FILE_NAME);
+}
+
+function legacySettingsFilePath() {
+	return join(agentDir(), LEGACY_SETTINGS_FILE_NAME);
+}
+
+function agentDir() {
+	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

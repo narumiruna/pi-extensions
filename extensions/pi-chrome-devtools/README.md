@@ -164,12 +164,18 @@ Direct subcommands are also available:
 The selected tool names are saved to:
 
 ```text
-${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-chrome-devtools-settings.json
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-chrome-devtools.json
 ```
 
 When the file is missing or invalid, the extension preserves Pi's current active-tool policy
 instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
 `/reload`.
+
+Compatibility: older versions used `pi-chrome-devtools-settings.json`. During the migration
+window, a legacy-only file is automatically migrated to `pi-chrome-devtools.json` with a warning.
+If both files exist, `pi-chrome-devtools.json` wins and the legacy file is ignored. The legacy
+filename is deprecated and planned for removal after at least one minor release cycle, preferably
+4–8 weeks, or at the next major release.
 
 ## 🧠 Use cases
 
