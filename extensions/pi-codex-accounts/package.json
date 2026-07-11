@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-codex-accounts",
-	"version": "0.13.0",
+	"version": "0.13.1",
 	"description": "Pi extension for switching self-managed ChatGPT Codex subscription accounts without touching /login.",
 	"type": "module",
 	"license": "MIT",
