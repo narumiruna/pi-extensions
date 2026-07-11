@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import type { ExtensionStatusIconAliasMap } from "../src/statusline.js";
 import statusline, {
 	buildExtensionStatusIconAliases,
 	contextColor,
@@ -24,6 +25,9 @@ import statusline, {
 	stripExtensionStatusPrefix,
 	wrapExtensionStatusline,
 } from "../src/statusline.js";
+
+const EMPTY_STATUS_ALIASES: ExtensionStatusIconAliasMap = new Map();
+void EMPTY_STATUS_ALIASES;
 
 async function emit(
 	events: ReadonlyMap<string, Array<(...args: unknown[]) => unknown>>,

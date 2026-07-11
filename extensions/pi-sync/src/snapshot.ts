@@ -3,7 +3,9 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { posixJoin, safeJoin, toPosix } from "./paths.js";
+import { agentDir, configuredSessionDir } from "./config.js";
+import { isDeniedPath, posixJoin, safeJoin, toPosix } from "./paths.js";
+export { isDeniedPath } from "./paths.js";
 import type {
 	Snapshot,
 	SnapshotFile,
@@ -24,10 +26,6 @@ const SECRET_PATTERNS = [
 	/sk-[A-Za-z0-9]{20,}/,
 	/gh[pousr]_[A-Za-z0-9_]{20,}/,
 ];
-
-function agentDir() {
-	return process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? ".", ".pi", "agent");
-}
 
 function expandHome(value: string) {
 	if (value === "~") return process.env.HOME ?? value;
@@ -91,15 +89,19 @@ export async function createSnapshot(
 	profile: string,
 	options: SnapshotOptions = {},
 ): Promise<Snapshot> {
-	const root = agentDir();
-	const files = await collectFiles(root, options);
+	const syncSessions = Boolean(options.syncSessions);
+	const files = await collectFiles(agentDir(), {
+		syncSessions,
+		sessionDir: options.sessionDir ?? (await configuredSessionDir()),
+		extraFiles: options.extraFiles,
+	});
 	return {
 		version: VERSION,
 		id: snapshotId(),
 		createdAt: new Date().toISOString(),
 		machine: os.hostname(),
 		profile,
-		syncSessions: options.syncSessions === true,
+		syncSessions,
 		files,
 	};
 }
@@ -167,24 +169,6 @@ async function addFile(
 	const absolutePath = safeJoin(root, relativePath);
 	const content = await fs.readFile(absolutePath);
 	results.push({ path: snapshotPath, contentBase64: content.toString("base64"), sha256: sha256(content) });
-}
-
-export function isDeniedPath(relativePath: string) {
-	const normalized = toPosix(relativePath);
-	const lower = normalized.toLowerCase();
-	const segments = lower.split("/");
-	const base = path.posix.basename(lower);
-	return (
-		segments.includes("node_modules") ||
-		segments.includes(".git") ||
-		segments.includes(".pisync") ||
-		base === ".env" ||
-		base.startsWith(".env.") ||
-		base.endsWith(".env") ||
-		base.includes("secret") ||
-		base.includes("token") ||
-		base === "pi-sync.local.json"
-	);
 }
 
 export function isSessionPath(relativePath: string) {

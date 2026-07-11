@@ -233,6 +233,7 @@ export default function statusline(pi: ExtensionAPI) {
 
 export {
 	buildExtensionStatusIconAliases,
+	type ExtensionStatusIconAliasMap,
 	extensionColor,
 	formatExtensionStatus,
 	npmPackageName,

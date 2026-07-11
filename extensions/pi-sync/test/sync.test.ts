@@ -745,6 +745,40 @@ test("session backups include session jsonl files when enabled", async () => {
 	});
 });
 
+test("snapshot backups expand a tilde-configured agent directory", async () => {
+	await withTempHome(async (defaultAgentDir) => {
+		const home = path.resolve(defaultAgentDir, "../../");
+		const tildeAgentDir = path.join(home, ".pi", "agent-tilde");
+		mkdirSync(tildeAgentDir, { recursive: true });
+		writeFileSync(path.join(tildeAgentDir, "settings.json"), '{"tilde":true}\n');
+
+		await withEnv({ PI_CODING_AGENT_DIR: "~/.pi/agent-tilde" }, async () => {
+			const backupPath = await backupLocal("tilde");
+			const backup = JSON.parse(gunzipSync(readFileSync(backupPath)).toString("utf8"));
+			assert.ok(backup.files.some((file: { path: string }) => file.path === "settings.json"));
+			assert.equal(backupPath.startsWith(tildeAgentDir), true);
+		});
+	});
+});
+
+test("session backups honor the configured session directory fallback", async () => {
+	await withTempHome(async (agentDir) => {
+		const sessionDir = path.join(path.dirname(agentDir), "custom-sessions");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(path.join(sessionDir, "--project--"), { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), `${JSON.stringify({ sessionDir })}\n`);
+		writeFileSync(path.join(sessionDir, "--project--", "configured.jsonl"), "{}\n");
+
+		const backupPath = await backupLocal("configured", { syncSessions: true });
+		const backup = JSON.parse(gunzipSync(readFileSync(backupPath)).toString("utf8"));
+		assert.ok(
+			backup.files.some(
+				(file: { path: string }) => file.path === "sessions/--project--/configured.jsonl",
+			),
+		);
+	});
+});
+
 test("security and configuration helpers detect secrets and R2 session-token warnings", () => {
 	const secret = Buffer.from("FIRECRAWL_API_KEY=sk-12345678901234567890");
 	assert.deepEqual(scanSnapshot(snapshot([{ path: "settings.json", content: secret }])), [

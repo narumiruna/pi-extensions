@@ -1,5 +1,23 @@
 import path from "node:path";
 
+export function isDeniedPath(relativePath: string) {
+	const normalized = toPosix(relativePath);
+	const lower = normalized.toLowerCase();
+	const segments = lower.split("/");
+	const base = path.posix.basename(lower);
+	return (
+		segments.includes("node_modules") ||
+		segments.includes(".git") ||
+		segments.includes(".pisync") ||
+		base === ".env" ||
+		base.startsWith(".env.") ||
+		base.endsWith(".env") ||
+		base.includes("secret") ||
+		base.includes("token") ||
+		base === "pi-sync.local.json"
+	);
+}
+
 export function isPathInside(parent: string, child: string) {
 	const relative = path.relative(path.resolve(parent), path.resolve(child));
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));

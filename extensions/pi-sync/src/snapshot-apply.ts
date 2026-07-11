@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { assertWithinRoot, isPathInside, parentPaths, safeJoin, toPosix } from "./paths.js";
+import { agentDir } from "./config.js";
+import { assertWithinRoot, isDeniedPath, isPathInside, parentPaths, safeJoin, toPosix } from "./paths.js";
 import {
 	createSnapshot,
-	isDeniedPath,
 	isSessionFilePath,
 	isSessionPath,
 	sessionStorageRoot,
@@ -13,10 +13,6 @@ import {
 	snapshotTarget,
 } from "./snapshot.js";
 import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./types.js";
-
-function agentDir() {
-	return process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? ".", ".pi", "agent");
-}
 
 function sha256(value: Buffer) {
 	return createHash("sha256").update(value).digest("hex");

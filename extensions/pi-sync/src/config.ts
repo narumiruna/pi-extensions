@@ -4,8 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { safeName } from "./paths.js";
-import { isDeniedPath } from "./snapshot.js";
+import { isDeniedPath, safeName } from "./paths.js";
 import type { LockFile, PartialConfig, Snapshot, SyncConfig, SyncState } from "./types.js";
 
 const VERSION = 1;
