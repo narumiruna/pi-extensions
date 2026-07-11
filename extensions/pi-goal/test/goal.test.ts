@@ -1282,31 +1282,18 @@ test("tool_execution_end enforces budget once and injects one bounded wrap-up", 
 	assert.equal(budgeted.statuses.get("goal"), "budget 12/10");
 	assert.equal(budgeted.mock.sentMessages.length, 1);
 	const wrapUp = budgeted.mock.sentMessages[0];
-	assert.deepEqual(wrapUp?.options, { deliverAs: "steer" });
-	assert.equal((wrapUp?.message as { customType?: string }).customType, "goal-budget-wrap-up");
-	assert.match(String((wrapUp?.message as { content?: string }).content), /stop substantive work/i);
-	assert.match(
-		String((wrapUp?.message as { content?: string }).content),
-		/do not call substantive tools/i,
-	);
-	assert.match(String((wrapUp?.message as { content?: string }).content), /summarize progress/i);
-	assert.match(
-		String((wrapUp?.message as { content?: string }).content),
-		/goal_complete.*evidence/i,
-	);
-	assert.match(
-		String((wrapUp?.message as { content?: string }).content),
-		/completion as unproven/i,
-	);
-	assert.match(
-		String((wrapUp?.message as { content?: string }).content),
-		/weak, indirect, or missing evidence/i,
-	);
-	assert.match(
-		String((wrapUp?.message as { content?: string }).content),
-		/budget exhaustion.*not completion/i,
-	);
-	assert.ok(String((wrapUp?.message as { content?: string }).content).length < 1_000);
+	assert.ok(wrapUp);
+	assert.deepEqual(wrapUp.options, { deliverAs: "steer" });
+	const wrapUpMessage = wrapUp.message as { customType?: string; content?: string };
+	assert.equal(wrapUpMessage.customType, "goal-budget-wrap-up");
+	assert.match(String(wrapUpMessage.content), /stop substantive work/i);
+	assert.match(String(wrapUpMessage.content), /do not call substantive tools/i);
+	assert.match(String(wrapUpMessage.content), /summarize progress/i);
+	assert.match(String(wrapUpMessage.content), /goal_complete.*evidence/i);
+	assert.match(String(wrapUpMessage.content), /completion as unproven/i);
+	assert.match(String(wrapUpMessage.content), /weak, indirect, or missing evidence/i);
+	assert.match(String(wrapUpMessage.content), /budget exhaustion.*not completion/i);
+	assert.ok(String(wrapUpMessage.content).length < 1_000);
 
 	await budgeted.mock.events.get("agent_settled")?.[0]?.({}, budgeted.ctx);
 	assert.equal(budgeted.mock.sentUserMessages.length, 1);
