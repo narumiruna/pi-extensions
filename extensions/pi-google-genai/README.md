@@ -19,6 +19,12 @@
 pi install npm:@narumitw/pi-google-genai
 ```
 
+Try without installing permanently:
+
+```bash
+pi -e npm:@narumitw/pi-google-genai
+```
+
 Try from this repository:
 
 ```bash

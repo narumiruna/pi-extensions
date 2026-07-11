@@ -115,8 +115,7 @@ Missing, invalid, or deleted settings default back to `display` mode on every su
 Compatibility: older versions used `pi-caffeinate-settings.json`. During the migration window, a
 legacy-only file is automatically migrated to `pi-caffeinate.json` with a warning. If both files
 exist, `pi-caffeinate.json` wins and the legacy file is ignored. The legacy filename is deprecated
-and planned for removal after at least one minor release cycle, preferably 4–8 weeks, or at the
-next major release.
+and will be removed in a future major release.
 
 ### Environment variables
 

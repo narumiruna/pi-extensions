@@ -22,6 +22,12 @@ The extension is language-agnostic: servers are selected by config and file exte
 pi install npm:@narumitw/pi-lsp
 ```
 
+Try without installing permanently:
+
+```bash
+pi -e npm:@narumitw/pi-lsp
+```
+
 Try this package locally from the repository root:
 
 ```bash
