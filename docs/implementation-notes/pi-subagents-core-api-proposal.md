@@ -1,10 +1,12 @@
-# Proposed Pi core APIs for native subagent sessions
+# Proposed Pi core APIs for core-owned subagent sessions
 
 Date: 2026-07-11
 
 ## Finding
 
-The extension API supports subprocess execution, custom tools, custom transcript entries, session persistence, and temporary TUI components. It does not expose a supported way to create a child `AgentSession`, send turns to it, subscribe to its transcript, switch the interactive transcript to it, or inherit the current turn's resolved approval/sandbox policy. Building native transcript navigation inside the extension would require private Pi internals and was therefore not implemented.
+The public Pi SDK now supports extension-owned in-memory child execution through `createAgentSession()`, `SessionManager.inMemory()`, resource/model/settings managers, subscriptions, abort, and disposal. `pi-subagents` uses that surface for its opt-in `in-process` transport.
+
+Pi still does not expose a core-owned child-session tree that inherits the current turn's resolved approval/sandbox/header policy, participates in global scheduling, persists through core lifecycle semantics, or switches the interactive transcript. Building those capabilities inside an extension would require private internals and remains out of scope.
 
 ## Minimal proposed API
 
@@ -48,4 +50,4 @@ interface ExtensionCommandContext {
 
 ## Migration path
 
-`pi-subagents` retains its batch API and now places child execution behind `SubagentTransport` in `extensions/pi-subagents/src/transport.ts`. When the proposed API exists, a `ChildSessionHandle` adapter can replace `SubprocessTransport` while preserving opaque IDs, hierarchy, mailboxes, and lifecycle tools. The shared transport contract suite must pass before native transport is enabled. Existing persisted logical histories remain readable and can be imported as context for the first native child turn. No private Pi imports or runtime-object casts are permitted.
+`pi-subagents` retains its batch API and places stateful execution behind `SubagentTransport`. `InProcessTransport` currently adapts extension-owned public SDK sessions while `SubprocessTransport` remains the default fallback. If Pi later adds the core-owned handle above, another adapter can preserve opaque IDs, hierarchy, mailboxes, lifecycle tools, and stored logical histories while gaining core policy inheritance, scheduling, persistence, and transcript inspection. No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are permitted.

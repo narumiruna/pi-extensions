@@ -1,62 +1,43 @@
 # pi-subagents L1 proactivity evaluation
 
-Date: 2026-05-17
-Branch: `docs/pi-subagents-proactivity-research-plan`
-Base before implementation: `7c7fbd2`
+Original date: 2026-05-17
+Updated: 2026-07-11
 
 ## Method
 
-This MVP changes static tool prompt metadata and docs, not runtime orchestration.
-The evaluation therefore checks the current branch's L1 guidance against the six
-prompts from `docs/implementation-notes/pi-subagents-proactivity-research.md`.
-No live autonomous LLM delegation run was used as the pass/fail oracle because
-model tool-choice behavior is nondeterministic and can incur additional nested
-subagent calls. The concrete evidence is the implemented `promptSnippet`,
-`promptGuidelines`, README rubric, repository checks, package dry run, and an
-independent reviewer audit.
+The policy remains static tool prompt metadata and documentation, not autonomous runtime orchestration. Tests inspect both blocking `subagent` guidance and default-on background `subagent_spawn` guidance. Live model tool choice is not a deterministic pass/fail oracle.
 
 ## Static guidance evidence
 
-- `extensions/pi-subagents/src/subagents.ts` defines `promptSnippet` and
-  `promptGuidelines` on the `subagent` tool.
-- The guidelines explicitly say to use `subagent` for independent read-only
-  research, high-volume output, multi-domain parallel investigation, and
-  independent review after implementation.
-- The guidelines explicitly say not to use `subagent` for simple answers, quick
-  targeted edits, latency-sensitive one-step work, frequent user back-and-forth,
-  same-file write-heavy fan-out, or project-local agents without explicit opt-in.
-- `extensions/pi-subagents/README.md` mirrors the rubric in a "Proactive use"
-  section and includes good/bad examples.
+- `subagent` says not to delegate critical-path work needed for the main agent's next action.
+- A single blocking call is reserved for context/output isolation or independent review that is worth waiting for.
+- `subagent_spawn` is reserved for a concrete sidecar task that overlaps meaningful non-overlapping main-agent work.
+- Spawn guidance explicitly forbids immediately calling `subagent_wait` unless useful local work is exhausted and progress is genuinely blocked.
+- Parallel fan-out remains limited to independent branches; write-heavy shared-file work is serialized.
+- Project agents still require explicit scope selection and project trust.
 
-## Six-prompt matrix
+## Decision matrix
 
-| # | Prompt | Expected | L1 evidence | Result |
-| --- | --- | --- | --- | --- |
-| 1 | "Audit this branch for release blockers before I merge." | Should use `subagent` `reviewer`/`scout`. | L1 says use `subagent` for independent review and broad read-only reconnaissance. | PASS |
-| 2 | "Research auth, database, and API modules in parallel." | Should use parallel `subagent`. | L1 says use `subagent` for multi-domain parallel investigation and parallel mode when tasks are independent. | PASS |
-| 3 | "Implement the change, then independently verify it." | Should implement in main/worker, then use `reviewer`. | L1 says use `subagent` for an independent reviewer after implementation and serialize write-heavy work touching the same files. | PASS |
-| 4 | "Explain this README sentence in plain language." | Should not use `subagent`. | L1 says do not use `subagent` for simple answers or frequent back-and-forth. | PASS |
-| 5 | "Rename `foo` to `bar` in one file." | Should not use `subagent`. | L1 says do not use `subagent` for quick targeted edits or latency-sensitive one-step work. | PASS |
-| 6 | "Use project agents to review this repo." | Conditional: require explicit project-agent opt-in and confirmation. | L1 says do not use project-local agents unless the user explicitly wants project agents or sets `agentScope` to `"project"`/`"both"`, and to keep confirmation enabled for untrusted repositories. | PASS |
+| # | Prompt/shape | Expected | Result |
+| --- | --- | --- | --- |
+| 1 | Audit a completed branch for release blockers. | One blocking independent reviewer can be justified by context isolation. | PASS |
+| 2 | Research auth, database, and API modules. | Use 2–4 parallel read-only agents when branches are independent. | PASS |
+| 3 | Implement, then independently verify. | Implement locally/serially, then request independent review. | PASS |
+| 4 | Explain one README sentence. | No subagent. | PASS |
+| 5 | Rename one symbol in one file. | No subagent. | PASS |
+| 6 | Use project agents. | Require explicit project scope and trust. | PASS |
+| 7 | Spawn one agent for information required before any next step. | Do the critical-path work in the main agent instead of spawning and idling. | PASS |
+| 8 | Spawn research while the main agent can implement unrelated scaffolding. | Use background `subagent_spawn`, perform that scaffolding immediately, then inspect/wait only when needed. | PASS |
+| 9 | Spawn a background agent, then immediately wait despite known local work. | Explicitly prohibited by `subagent_spawn.promptGuidelines`. | PASS |
 
-Summary: 6 PASS, 0 FAIL.
+Summary: 9 PASS, 0 FAIL.
 
-## Verification commands
+## Automated evidence
 
-- `rg -n "promptSnippet|promptGuidelines|Use subagent" extensions/pi-subagents/src/subagents.ts`
-- `rg -n "Proactive use|Do not use|project-local" extensions/pi-subagents/README.md`
-- `npm run check` — passed.
-- `npm run pack:subagents` — passed. Dry-run package contents inspected:
-  `LICENSE`, `README.md`, `package.json`, `src/agents.ts`, and
-  `src/subagents.ts` only.
+- `extensions/pi-subagents/test/subagents.test.ts` asserts the blocking/critical-path/background guidance.
+- `extensions/pi-subagents/test/evolution.test.ts` asserts stateful tools are default-on, can be disabled, and expose the no-immediate-wait guidance.
+- `npm run check` is the release gate.
 
-## L2 decision
+## Runtime boundary
 
-L2 deferred.
-
-The L1 guidance covers all six static expected decisions with explicit positive
-and negative rules. Do not add a `before_agent_start` dynamic orchestration hint
-until real session evidence shows L1 under-delegates on complex prompts or users
-ask for a stronger opt-in coordinator mode. If L2 is revisited, keep it behind a
-disabled-by-default feature flag and measure false positives against this same
-matrix.
+The extension cannot force the model to remain productive after a spawn without adding an autonomous scheduler. Default-on detached lifecycle tools plus explicit prompt rules provide the bounded behavior: spawning does not block, completion remains queryable, and immediate waiting is discouraged. Autonomous continuation remains rejected without explicit opt-in, budgets, stop conditions, and visible controls.

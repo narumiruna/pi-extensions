@@ -38,8 +38,11 @@ export interface SubagentAgentConfig {
 	timeoutMs?: number | null;
 }
 
+export type SubagentTransportKind = "subprocess" | "in-process";
+
 export interface SubagentRuntimeSettings {
 	enabled?: boolean;
+	transport?: SubagentTransportKind;
 	maxAgents?: number;
 	maxActiveTurns?: number;
 	maxDepth?: number;

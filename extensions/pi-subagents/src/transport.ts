@@ -1,8 +1,9 @@
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 
 export interface SubagentTransport {
-	readonly kind: "subprocess" | "native" | "fake";
+	readonly kind: "subprocess" | "in-process" | "fake";
 	runTurn(agent: ManagedAgent, task: string, signal: AbortSignal): Promise<TurnOutcome>;
+	release?(agent: ManagedAgent): Promise<void>;
 	shutdown?(): Promise<void>;
 }
 

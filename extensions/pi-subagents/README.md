@@ -2,14 +2,16 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents)](https://www.npmjs.com/package/@narumitw/pi-subagents) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension that adds a `subagent` tool for delegating work to specialized agents running in isolated Pi subprocesses.
+`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. The batch `subagent` tool keeps isolated Pi subprocesses, while addressable lifecycle tools can run reusable agents either as subprocess-backed logical sessions or as public-SDK in-process child sessions.
 
-Use it to split research, planning, implementation, and review work across focused workers while keeping each subprocess context, tools, and prompt boundary separate from the main conversation.
+Use it to split independent research, planning, implementation, and review work across focused workers. Background delegation is intended for sidecar work the main agent can overlap with useful local work—not for handing off one critical-path task and waiting.
 
 ## ✨ Features
 
 - Registers a `subagent` tool for single-agent, parallel, fan-in, and chained delegation.
-- Runs workers as isolated `pi --mode json -p --no-session` subprocesses.
+- Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
+- Registers background stateful lifecycle tools by default; they can be disabled in settings.
+- Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
 - Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
@@ -17,7 +19,7 @@ Use it to split research, planning, implementation, and review work across focus
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, `thinkingLevel`, abort propagation, and streaming progress.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
-- Optionally provides addressable stateful agents with follow-up, wait, list, interrupt, close, context selection, and persistence.
+- Provides addressable stateful agents with follow-up, wait, list, interrupt, close, context selection, and persistence.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete bounded worker output in tool details and a concise result for the main agent.
 
@@ -41,9 +43,10 @@ pi -e ./extensions/pi-subagents
 
 ## 🛠️ Pi tool
 
-`pi-subagents` registers one tool:
+`pi-subagents` registers a primary batch tool plus the stateful lifecycle tools documented below:
 
-- `subagent` — delegate work to one or more specialized agents.
+- `subagent` — delegate blocking single, parallel, fan-in, or chained batch work.
+- `subagent_spawn` and related lifecycle tools — start reusable background work and return immediately.
 
 Execution modes:
 
@@ -67,8 +70,11 @@ Count-selection guidance:
 
 - Use **no subagent** for simple answers, quick targeted edits, latency-sensitive one-step work, or
   tasks that need frequent user back-and-forth.
-- Use **one subagent** for isolated research, high-volume command output, planning, or independent
-  review/verification after implementation.
+- A single `subagent` call is blocking. Use one only when context isolation, high-volume output
+  isolation, or independent review is worth waiting for; otherwise the main agent should do the work.
+- Never delegate a critical-path task whose answer is required for the main agent's next action merely
+  to wait for it. Use background `subagent_spawn` only for sidecar work, continue meaningful
+  non-overlapping local work immediately, and call `subagent_wait` only when genuinely blocked.
 - Prefer **2–4 parallel read-only subagents** when a broad task naturally splits into independent
   branches that can each return a concise summary.
 - Exceed 4 tasks only when the branches are clearly distinct and worth the extra cost, while staying
@@ -183,14 +189,16 @@ Run a chain where each step receives the previous output:
 
 ## 🔁 Stateful agents
 
-Stateful agents are an opt-in logical-session layer over the same isolated one-shot Pi subprocesses. Each turn starts a fresh child process; the extension retains only sanitized, bounded task/output history and supplies it to the next turn. This avoids relying on an undocumented bidirectional child protocol.
+Stateful lifecycle tools are available by default. `subagent_spawn` returns immediately with an opaque `agentId`; the main agent should continue identified non-overlapping work before waiting.
 
-Enable the lifecycle tools in `~/.pi/agent/pi-subagents-config.json`, then reload Pi:
+The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
+
+Configure the runtime in `~/.pi/agent/pi-subagents-config.json`, then reload Pi:
 
 ```json
 {
   "stateful": {
-    "enabled": true,
+    "transport": "in-process",
     "maxAgents": 16,
     "maxActiveTurns": 4,
     "maxDepth": 3,
@@ -204,7 +212,7 @@ Enable the lifecycle tools in `~/.pi/agent/pi-subagents-config.json`, then reloa
 }
 ```
 
-Enabling the feature registers:
+Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the extension registers:
 
 | Tool | Purpose |
 | --- | --- |
@@ -230,7 +238,17 @@ Use `contextEntryIds` to select exact session entries. Supplying IDs without `co
 
 Reasoning, tool results, custom transport messages, and non-text parts are excluded. Text inside `<private>...</private>` and lines containing `[subagent-private]` are omitted before context, mailbox content, or history is persisted.
 
-Stateful execution now uses a transport boundary. `SubprocessTransport` is the supported fallback and preserves current behavior; a native child-session transport remains unavailable until Pi exposes supported child-session APIs. No private Pi imports are used.
+Stateful execution uses a transport boundary:
+
+- `subprocess` is the default compatibility and rollback path.
+- `in-process` uses only public Pi SDK APIs: `createAgentSession()`, `SessionManager.inMemory()`, `DefaultResourceLoader`, and normal session lifecycle methods. It isolates conversation/tool selection, not memory or crashes; child failures share the parent Node.js process.
+- Child resource loading sets `noExtensions: true`, preventing recursive `pi-subagents` loading and duplicate extension side effects while retaining normal context/skill resources and the selected agent prompt.
+- Agent model, thinking level, and built-in tool allow-list overrides are applied when the child is created. Parent model/thinking changes are snapshotted for subsequently created children; an existing child keeps its own session configuration.
+- Extension/custom tool names are rejected in-process with an actionable recommendation to use `subprocess`; permissions are never silently widened.
+- Timeout, parent abort, close, expiry, and session shutdown abort/dispose owned child sessions. A child that does not settle after abort grace is discarded rather than reused.
+- In-process startup failures do not silently retry through subprocesses, preventing duplicate side effects.
+
+No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used. Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by the in-process transport.
 
 Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. Isolated worktree agents are intentionally not restored after shutdown.
 

@@ -11,6 +11,11 @@ import { AgentPersistence } from "./persistence.js";
 import { AgentRegistry, type ManagedAgent } from "./registry.js";
 import { readSubagentSettings } from "./settings.js";
 import { SubprocessTransport } from "./subprocess-transport.js";
+import {
+	type ChildSessionFactory,
+	InProcessTransport,
+	type ParentRuntimeSnapshot,
+} from "./in-process-transport.js";
 import { WorkspaceManager } from "./workspace.js";
 
 const ContextModeSchema = Type.Union([
@@ -20,9 +25,16 @@ const ContextModeSchema = Type.Union([
 const ScopeSchema = StringEnum(["user", "project", "both"] as const);
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 
-export function registerStatefulSubagents(pi: ExtensionAPI): void {
-	const settings = readSubagentSettings()?.stateful;
-	if (!settings?.enabled) return;
+export interface StatefulSubagentDependencies {
+	createInProcessSession?: ChildSessionFactory;
+}
+
+export function registerStatefulSubagents(
+	pi: ExtensionAPI,
+	dependencies: StatefulSubagentDependencies = {},
+): void {
+	const settings = readSubagentSettings()?.stateful ?? {};
+	if (settings.enabled === false) return;
 
 	let registry: AgentRegistry | undefined;
 	let persistence: AgentPersistence | undefined;
@@ -30,6 +42,7 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 	const workspaceManager = new WorkspaceManager();
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
+	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
 
 	const requireRegistry = () => {
 		if (!registry) throw new Error("Stateful subagents are not initialized for this session");
@@ -37,12 +50,22 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		parentRuntime.model = ctx.model;
+		parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(pi.getThinkingLevel());
 		const owner = ctx.sessionManager.getSessionId?.() ?? ctx.sessionManager.getSessionFile?.() ?? `ephemeral:${ctx.cwd}`;
 		persistence = new AgentPersistence(owner, {
 			retentionDays: settings.retentionDays,
 			maxStoredAgents: settings.maxStoredAgents,
 		});
-		registry = new AgentRegistry(new SubprocessTransport(ctx), {
+		const transport =
+			resolveStatefulTransportKind(settings.transport) === "in-process"
+				? new InProcessTransport({
+						modelRegistry: ctx.modelRegistry,
+						getParentRuntime: () => ({ ...parentRuntime }),
+						createSession: dependencies.createInProcessSession,
+					})
+				: new SubprocessTransport(ctx);
+		registry = new AgentRegistry(transport, {
 			maxAgents: settings.maxAgents,
 			maxActiveTurns: settings.maxActiveTurns,
 			maxDepth: settings.maxDepth,
@@ -77,8 +100,22 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		}
 		registry.restore(restored);
 		const sweepEveryMs = Math.max(1_000, Math.min(settings.idleTtlMs ?? 60 * 60 * 1000, 60_000));
-		sweepTimer = setInterval(() => void registry?.sweepExpired(), sweepEveryMs);
+		sweepTimer = setInterval(() => {
+			void registry?.sweepExpired().catch((error: unknown) => {
+				if (!ctx.hasUI) return;
+				const reason = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Subagent expiry cleanup failed: ${reason}`, "warning");
+			});
+		}, sweepEveryMs);
 		sweepTimer.unref();
+	});
+
+	pi.on("model_select", (event) => {
+		parentRuntime.model = event.model;
+	});
+
+	pi.on("thinking_level_select", (event) => {
+		parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(event.level);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -110,8 +147,13 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
-		description: "Start an addressable logical subagent. Returns immediately with an agentId.",
-		promptSnippet: "Start a reusable subagent and receive an agentId for lifecycle operations",
+		description: "Start an addressable background subagent and return immediately with an agentId.",
+		promptSnippet: "Start a reusable background subagent and receive an agentId for lifecycle operations",
+		promptGuidelines: [
+			"Use subagent_spawn only for a concrete sidecar task that can run while the main agent immediately performs meaningful non-overlapping work.",
+			"Do not use subagent_spawn for critical-path work whose result is required for the main agent's next action; do that work locally instead.",
+			"After subagent_spawn, do not call subagent_wait immediately unless all useful local work is exhausted and progress is genuinely blocked on that result.",
+		],
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
@@ -361,11 +403,11 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 				return result(existing, `Closed ${existing.id}.`);
 			}
 			if (params.subtree) {
-				const agents = await requireRegistry().closeTree(params.agentId);
-				for (const closed of agents) {
-					const owner = isolatedAgents.get(closed.id);
-					if (owner) await workspaceManager.cleanup(owner);
-					isolatedAgents.delete(closed.id);
+				let agents: ManagedAgent[];
+				try {
+					agents = await requireRegistry().closeTree(params.agentId);
+				} finally {
+					await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
 				}
 				return {
 					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
@@ -375,10 +417,12 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 					},
 				};
 			}
-			const agent = await requireRegistry().close(params.agentId);
-			const owner = isolatedAgents.get(agent.id);
-			if (owner) await workspaceManager.cleanup(owner);
-			isolatedAgents.delete(agent.id);
+			let agent: ManagedAgent;
+			try {
+				agent = await requireRegistry().close(params.agentId);
+			} finally {
+				await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
+			}
 			return result(agent, `Closed ${agent.id}.`);
 		},
 	});
@@ -392,9 +436,12 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		},
 		async handler(args, ctx) {
 			if (args.trim() === "clear") {
-				await requireRegistry().closeAll();
-				await workspaceManager.cleanupAll();
-				isolatedAgents.clear();
+				try {
+					await requireRegistry().closeAll();
+				} finally {
+					await workspaceManager.cleanupAll();
+					isolatedAgents.clear();
+				}
 				seenMessageIds.clear();
 				await persistence?.delete();
 				ctx.ui.notify("Cleared stateful subagents.", "info");
@@ -538,11 +585,36 @@ function summarizeAgent(agent: ManagedAgent) {
 	};
 }
 
+async function cleanupClosedWorkspaces(
+	registry: AgentRegistry,
+	isolatedAgents: Map<string, string>,
+	workspaceManager: WorkspaceManager,
+): Promise<void> {
+	for (const [agentId, owner] of [...isolatedAgents]) {
+		if (registry.get(agentId)?.state !== "closed") continue;
+		await workspaceManager.cleanup(owner);
+		isolatedAgents.delete(agentId);
+	}
+}
+
 function result(agent: ManagedAgent, text: string) {
 	return {
 		content: [{ type: "text" as const, text }],
 		details: { agent: summarizeAgent(agent) },
 	};
+}
+
+export function resolveStatefulTransportKind(
+	value: "subprocess" | "in-process" | undefined,
+): "subprocess" | "in-process" {
+	return value ?? "subprocess";
+}
+
+function normalizeRuntimeThinkingLevel(value: string): ParentRuntimeSnapshot["thinkingLevel"] {
+	if (value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh") {
+		return value;
+	}
+	return value === "max" ? "xhigh" : "off";
 }
 
 export {

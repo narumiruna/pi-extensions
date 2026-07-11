@@ -81,6 +81,12 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 	if (hasOwn(value, "stateful")) {
 		if (!isPlainObject(value.stateful)) return undefined;
 		const runtime: NonNullable<SubagentSettings["stateful"]> = {};
+		if (hasOwn(value.stateful, "transport")) {
+			if (value.stateful.transport !== "subprocess" && value.stateful.transport !== "in-process") {
+				return undefined;
+			}
+			runtime.transport = value.stateful.transport;
+		}
 		for (const key of [
 			"maxAgents",
 			"maxActiveTurns",

@@ -35,8 +35,9 @@ export default function (pi: ExtensionAPI) {
 			"Decide whether to spawn 0, 1, or multiple subagents for independent research, review, verification, or multi-step work in isolated Pi processes.",
 		promptGuidelines: [
 			"Use subagent only when delegation fits; the main agent should decide how many subagents to spawn from task shape instead of waiting for the user to specify a count.",
-			"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, or tasks requiring frequent user back-and-forth.",
-			"Use one subagent for isolated research, broad command output, planning, or independent review/verification that benefits from a separate context.",
+			"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, tasks requiring frequent user back-and-forth, or critical-path work needed for the main agent's next action.",
+			"A single blocking subagent call should be used only when independent context, high-volume output isolation, or an external review is worth waiting for; otherwise do the task in the main agent.",
+			"When subagent_spawn is available, use that background tool only for independent sidecar work, then immediately perform meaningful non-overlapping work instead of waiting.",
 			"Use subagent parallel mode with 2-4 parallel read-only subagents when work has broad independent branches; prefer scout or reviewer for fan-out and add an aggregator when synthesis helps.",
 			"Use more than 4 subagent tasks only when clearly justified by distinct independent branches, and stay within the existing hard max 8 parallel tasks.",
 			"Do not use subagent parallel mode for write-heavy implementation touching the same files or shared state; serialize those changes in the main agent or one worker.",

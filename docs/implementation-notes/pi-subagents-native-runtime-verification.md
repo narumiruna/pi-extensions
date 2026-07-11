@@ -1,26 +1,33 @@
-# pi-subagents native runtime verification
+# pi-subagents in-process runtime verification
 
 Date: 2026-07-11
 
 ## Automated evidence
 
-- `npm run check`: passed with Biome, extension boundaries, all workspace typechecks, and 270 tests.
-- `just pack-subagents`: passed; dry-run package contains 21 expected files, including transport and workspace modules.
-- Transport contract behavior is exercised through fake transport lifecycle tests and the subprocess-backed local Pi smoke test.
-- Hierarchy tests cover root/child/grandchild metadata, depth rejection, child ordering, cyclic restore rejection, subtree close, and inert migration.
-- Mailbox tests cover bounded bytes/count, empty and cross-tree rejection, message IDs, deduplication keys, one-turn unread consumption, and completion delivery for successful and rejected child turns.
-- Workspace tests create and remove real detached Git worktrees from repository roots and nested cwd values, verify ownership retry behavior, reject duplicate owners and dirty repositories, and exercise cleanup-all.
-- Persistence tests cover version-1 migration, version-2 writes, hierarchy-aware retention, mailbox sanitation, unknown versions, corruption quarantine, atomic replacement, and deletion.
-- Additional edge tests cover split UTF-8 JSON chunks, malformed limits, nested/unclosed private markers, duplicate context sources, selected-entry mode inference, recent-summary retention, follow-up write conflicts, active-ancestor expiry, closed-record bounds, and task/output bounds.
+- `npm run check`: passed with Biome, extension boundaries, every workspace typecheck, and 287 tests.
+- `just pack-subagents`: passed; npm dry-run contained 22 files, including unchanged `src/subagents.ts` and new `src/in-process-transport.ts`, with no generated/test/temp files.
+- Public import audit: `rg 'pi-coding-agent/(src|dist)/' extensions/pi-subagents/src` returned no private Pi imports.
+- A deterministic mock provider drove a real public `createAgentSession()` child through prompt completion and disposal without network access or session files.
+- Transport tests cover one-session/two-turn reuse, context/history seeding, model inheritance and explicit `provider/model:thinking` selection, current-turn-only prompts, stale-output rejection, timeout 124, parent abort 130, abort-during-creation, unsettled-child discard, custom-tool rejection, and all-session shutdown after one disposal failure.
+- Resource-loader tests verify `noExtensions: true`, selected agent prompt injection, and trusted-project settings propagation.
+- Registry tests cover exactly-once explicit close, child-before-parent subtree release, TTL release, inert restoration, persistence migration/redaction, and shutdown.
+- Registered-tool integration exercises in-process spawn → wait → follow-up → wait → interrupt → reuse → close with one injected SDK child and verifies live parent model/thinking snapshots.
+- Existing subprocess, hierarchy, mailbox, context, persistence, write-conflict, and real worktree suites remain green.
 
-## Runtime evidence
+## Local Pi runtime evidence
 
-A local `pi -e ./extensions/pi-subagents -p ...` scenario enabled stateful tools temporarily, spawned and waited for a root agent, spawned a child using `parentId`, waited for completion, and read the parent's completion mailbox. It returned `HIERARCHY_MAILBOX_OK`. The original settings file was restored and the smoke-test state file was removed.
+Both smokes used a temporary `PI_CODING_AGENT_DIR`, copied only runtime auth/model/settings files needed by Pi, installed a temporary read-only `scout` override using `github-copilot/gpt-4.1`, set `persistence: false`, and removed the directory through a shell trap.
 
-## Native API boundary
+- Default `stateful.transport: "subprocess"`: background spawn overlapped a main-agent README read, then wait completed and Pi returned `SUBPROCESS_STATEFUL_OK`.
+- Opt-in `stateful.transport: "in-process"`: background spawn overlapped a main-agent read, then the same `agentId` completed wait → follow-up → wait → close and Pi returned `IN_PROCESS_STATEFUL_OK`.
+- An initial subprocess attempt inherited the environment's exhausted Codex quota and correctly returned the child usage-limit failure; the successful smoke selected the available Copilot provider explicitly rather than hiding the failure through transport fallback.
 
-Native child sessions, policy inheritance, transcript switching, and agent-navigation shortcuts remain blocked because the supported project dependency does not expose those APIs. The upstream-ready contract is documented in `pi-subagents-core-api-proposal.md`. No private imports or runtime casts were added. `SubprocessTransport` remains the supported fallback and the registry is ready for a native adapter when public APIs exist.
+## Public SDK boundary
+
+`InProcessTransport` uses public package exports only. It owns one in-memory SDK session per logical ID, disables child extensions, validates built-in tools, and disposes on timeout/abort/close/expiry/shutdown. It never silently retries a failed in-process task as a subprocess.
+
+Core-global scheduling, inherited resolved approval/sandbox policy, provider-header extension hooks, arbitrary extension state, and interactive parent/child transcript switching remain unsupported. In-process sessions isolate conversation/tool selection but share the parent process memory and crash domain. `SubprocessTransport` remains the default rollback path.
 
 ## Rollback
 
-The changes are additive. Existing batch and stateful request shapes still work. Removing the new mailbox/hierarchy parameters returns behavior to root logical agents. `SubprocessTransport` remains the execution path. Persisted version-1 records migrate without destructive rewrites, while unknown future versions are quarantined.
+Set `stateful.transport` to `"subprocess"` and reload Pi. Persisted logical records stay transport-neutral and restored work remains inert until explicit follow-up. Batch `subagent` execution is unchanged and continues to use subprocesses.

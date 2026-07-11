@@ -31,6 +31,7 @@ import {
 	isWriteCapable,
 	registerStatefulSubagents,
 	resolveSpawnContextMode,
+	resolveStatefulTransportKind,
 	resolveStatefulTurnTimeout,
 } from "../src/stateful.js";
 import { WorkspaceManager } from "../src/workspace.js";
@@ -382,6 +383,9 @@ test("AgentRegistry runs lifecycle operations through a transport contract", asy
 			}
 			return { output: task, exitCode: signal.aborted ? 130 : 0, aborted: signal.aborted };
 		},
+		async release(agent) {
+			calls.push(`release:${agent.id}`);
+		},
 		async shutdown() {
 			calls.push("shutdown");
 		},
@@ -390,8 +394,58 @@ test("AgentRegistry runs lifecycle operations through a transport contract", asy
 	await registry.interrupt(agent.id);
 	await registry.followUp(agent.id, "next");
 	await registry.wait(agent.id, 100);
+	await registry.close(agent.id);
 	await registry.shutdown();
-	assert.deepEqual(calls, ["run:slow", "run:next", "shutdown"]);
+	assert.deepEqual(calls, ["run:slow", "run:next", `release:${agent.id}`, "shutdown"]);
+});
+
+test("AgentRegistry persists closed state even when transport release reports cleanup failure", async () => {
+	const snapshots: ManagedAgent[][] = [];
+	const registry = new AgentRegistry(
+		{
+			kind: "fake",
+			async runTurn() {
+				return { output: "done", exitCode: 0 };
+			},
+			async release() {
+				throw new Error("cleanup failed");
+			},
+		},
+		{
+			onChange: (agents) => {
+				snapshots.push(agents);
+			},
+		},
+	);
+	const agent = await registry.spawn({ agent: "scout", task: "task", cwd: process.cwd() });
+	await registry.wait(agent.id, 100);
+	await assert.rejects(() => registry.close(agent.id), /cleanup failed/);
+	assert.equal(snapshots.at(-1)?.find((candidate) => candidate.id === agent.id)?.state, "closed");
+});
+
+test("AgentRegistry releases subtree transport sessions child-first and exactly once", async () => {
+	const released: string[] = [];
+	const registry = new AgentRegistry({
+		kind: "fake",
+		async runTurn(_agent, task) {
+			return { output: task, exitCode: 0 };
+		},
+		async release(agent) {
+			released.push(agent.id);
+		},
+	});
+	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	await registry.wait(root.id, 100);
+	const child = await registry.spawn({
+		agent: "scout",
+		task: "child",
+		cwd: process.cwd(),
+		parentId: root.id,
+	});
+	await registry.wait(child.id, 100);
+	await registry.closeTree(root.id);
+	await registry.closeTree(root.id);
+	assert.deepEqual(released, [child.id, root.id]);
 });
 
 test("AgentRegistry delivers unread mailbox messages to only the next follow-up turn", async () => {
@@ -574,12 +628,24 @@ test("AgentRegistry eviction preserves active ancestry and removes expired trees
 	assert.equal(registry.get(child.id), undefined);
 });
 
-test("AgentRegistry expiry prunes stale child links from retained parents", async () => {
+test("AgentRegistry expiry prunes stale child links and releases its transport", async () => {
 	let now = 1_000;
-	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
-		idleTtlMs: 100,
-		now: () => now,
-	});
+	const released: string[] = [];
+	const registry = new AgentRegistry(
+		{
+			kind: "fake",
+			async runTurn() {
+				return { output: "done", exitCode: 0 };
+			},
+			async release(agent) {
+				released.push(agent.id);
+			},
+		},
+		{
+			idleTtlMs: 100,
+			now: () => now,
+		},
+	);
 	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
 	await registry.wait(root.id, 100);
 	const child = await registry.spawn({
@@ -595,7 +661,9 @@ test("AgentRegistry expiry prunes stale child links from retained parents", asyn
 	assert.equal(await registry.sweepExpired(), 1);
 	assert.equal(registry.get(child.id), undefined);
 	assert.deepEqual(registry.get(root.id)?.children, []);
+	assert.deepEqual(released, [child.id]);
 	assert.equal((await registry.close(root.id)).state, "closed");
+	assert.deepEqual(released, [child.id, root.id]);
 });
 
 test("AgentRegistry bounds retained closed records", async () => {
@@ -812,15 +880,11 @@ test("selected context entries imply all mode only when context mode is omitted"
 	assert.equal(resolveSpawnContextMode(3, ["entry"]), 3);
 });
 
-test("stateful tools are opt-in and expose the complete lifecycle surface", async () => {
+test("stateful tools are available by default, disable cleanly, and expose the lifecycle surface", async () => {
 	const originalDir = process.env.PI_CODING_AGENT_DIR;
 	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-config-"));
 	process.env.PI_CODING_AGENT_DIR = dir;
 	try {
-		writeFileSync(
-			path.join(dir, "pi-subagents-config.json"),
-			JSON.stringify({ stateful: { enabled: true } }),
-		);
 		const mock = createMockPi();
 		registerStatefulSubagents(mock.pi);
 		assert.deepEqual(
@@ -855,7 +919,10 @@ test("stateful tools are opt-in and expose the complete lifecycle surface", asyn
 		const untrusted = createMockContext({ cwd: project, isProjectTrusted: () => false });
 		const spawnTool = mock.tools.find((tool) => tool.name === "subagent_spawn") as {
 			execute: (...args: unknown[]) => Promise<unknown>;
+			promptGuidelines: string[];
 		};
+		assert.match(spawnTool.promptGuidelines.join("\n"), /meaningful non-overlapping work/);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /do not call subagent_wait immediately/i);
 		const originalDepth = process.env.PI_SUBAGENT_DEPTH;
 		process.env.PI_SUBAGENT_DEPTH = "1";
 		try {
@@ -908,17 +975,29 @@ test("stateful tools are opt-in and expose the complete lifecycle surface", asyn
 			/trusted project/,
 		);
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+
+		writeFileSync(
+			path.join(dir, "pi-subagents-config.json"),
+			JSON.stringify({ stateful: { enabled: false } }),
+		);
+		const disabled = createMockPi();
+		registerStatefulSubagents(disabled.pi);
+		assert.equal(disabled.tools.length, 0);
+		assert.equal(disabled.events.size, 0);
 	} finally {
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalDir;
 	}
 });
 
-test("stateful settings validate bounded runtime options without breaking agent overrides", () => {
+test("stateful settings validate transport and bounded runtime options", () => {
+	assert.equal(resolveStatefulTransportKind(undefined), "subprocess");
+	assert.equal(resolveStatefulTransportKind("in-process"), "in-process");
 	assert.deepEqual(
 		normalizeSubagentSettings({
 			stateful: {
 				enabled: true,
+				transport: "in-process",
 				maxAgents: 8,
 				maxDepth: 2,
 				maxChildrenPerAgent: 3,
@@ -930,6 +1009,7 @@ test("stateful settings validate bounded runtime options without breaking agent 
 		{
 			stateful: {
 				enabled: true,
+				transport: "in-process",
 				maxAgents: 8,
 				maxDepth: 2,
 				maxChildrenPerAgent: 3,
@@ -938,6 +1018,10 @@ test("stateful settings validate bounded runtime options without breaking agent 
 			},
 		},
 	);
+	assert.deepEqual(normalizeSubagentSettings({ stateful: { transport: "subprocess" } }), {
+		stateful: { transport: "subprocess" },
+	});
+	assert.equal(normalizeSubagentSettings({ stateful: { transport: "native" } }), undefined);
 	assert.equal(normalizeSubagentSettings({ stateful: { maxAgents: 0 } }), undefined);
 	assert.equal(normalizeSubagentSettings({ stateful: { maxAgents: 1.5 } }), undefined);
 	assert.deepEqual(normalizeSubagentSettings({ stateful: { maxDepth: 0 } }), {

@@ -202,7 +202,15 @@ export class AgentRegistry {
 	}): Promise<ManagedAgent> {
 		if (!input.task.trim()) throw new Error("Subagent tasks cannot be empty");
 		const task = truncateUtf8(input.task, this.maxTaskBytes).text;
-		this.evictExpired();
+		const expired = this.evictExpired();
+		let expiryReleaseError: unknown;
+		try {
+			await this.releaseAgents(expired);
+		} catch (error) {
+			expiryReleaseError = error;
+		}
+		if (expired.length > 0) await this.changed();
+		if (expiryReleaseError) throw expiryReleaseError;
 		if (this.retainedCount() >= this.maxAgents) {
 			throw new Error(`Subagent capacity reached (${this.maxAgents})`);
 		}
@@ -354,9 +362,20 @@ export class AgentRegistry {
 
 	async closeTree(id: string): Promise<ManagedAgent[]> {
 		const results: ManagedAgent[] = [];
+		const failures: unknown[] = [];
 		for (const target of this.descendants(id).reverse()) {
 			const agent = this.require(target);
-			if (agent.state !== "closed") results.push(await this.close(target));
+			if (agent.state === "closed") continue;
+			try {
+				results.push(await this.close(target));
+			} catch (error) {
+				failures.push(error);
+				const closed = this.get(target);
+				if (closed?.state === "closed") results.push(closed);
+			}
+		}
+		if (failures.length > 0) {
+			throw new AggregateError(failures, `Failed to release ${failures.length} subagent(s)`);
 		}
 		return results;
 	}
@@ -385,8 +404,15 @@ export class AgentRegistry {
 		}
 		agent.currentTask = undefined;
 		agent.currentMailboxMessageIds = undefined;
+		let releaseError: unknown;
+		try {
+			await this.transport.release?.(this.copy(agent));
+		} catch (error) {
+			releaseError = error;
+		}
 		this.pruneClosedAgents();
 		await this.changed();
+		if (releaseError) throw releaseError;
 		return this.copy(agent);
 	}
 
@@ -394,7 +420,13 @@ export class AgentRegistry {
 		const roots = [...this.agents.values()]
 			.filter((agent) => agent.state !== "closed" && !agent.parentId)
 			.map((agent) => agent.id);
-		for (const id of roots) await this.closeTree(id);
+		const results = await Promise.allSettled(roots.map((id) => this.closeTree(id)));
+		const failures = results.flatMap((result) =>
+			result.status === "rejected" ? [result.reason] : [],
+		);
+		if (failures.length > 0) {
+			throw new AggregateError(failures, `Failed to close ${failures.length} subagent tree(s)`);
+		}
 	}
 
 	async shutdown(): Promise<void> {
@@ -414,8 +446,14 @@ export class AgentRegistry {
 				agent.currentMailboxMessageIds = undefined;
 			}
 		}
-		await this.transport.shutdown?.();
+		let shutdownError: unknown;
+		try {
+			await this.transport.shutdown?.();
+		} catch (error) {
+			shutdownError = error;
+		}
 		await this.changed();
+		if (shutdownError) throw shutdownError;
 	}
 
 	list(includeClosed = false, rootId?: string): ManagedAgent[] {
@@ -433,8 +471,15 @@ export class AgentRegistry {
 
 	async sweepExpired(): Promise<number> {
 		const removed = this.evictExpired();
-		if (removed > 0) await this.changed();
-		return removed;
+		let releaseError: unknown;
+		try {
+			await this.releaseAgents(removed);
+		} catch (error) {
+			releaseError = error;
+		}
+		if (removed.length > 0) await this.changed();
+		if (releaseError) throw releaseError;
+		return removed.length;
 	}
 
 	private startTurn(agent: ManagedAgent, task: string): void {
@@ -575,7 +620,7 @@ export class AgentRegistry {
 		return [...this.agents.values()].filter((agent) => agent.state !== "closed").length;
 	}
 
-	private evictExpired(): number {
+	private evictExpired(): ManagedAgent[] {
 		const cutoff = this.now() - this.idleTtlMs;
 		const protectedIds = new Set<string>();
 		for (const agent of this.agents.values()) {
@@ -586,7 +631,7 @@ export class AgentRegistry {
 				current = current.parentId ? this.agents.get(current.parentId) : undefined;
 			}
 		}
-		let removed = 0;
+		const removed: ManagedAgent[] = [];
 		const candidates = [...this.agents.values()].sort((left, right) => right.depth - left.depth);
 		for (const agent of candidates) {
 			if (protectedIds.has(agent.id) || agent.updatedAt >= cutoff) continue;
@@ -596,9 +641,25 @@ export class AgentRegistry {
 				const parent = this.agents.get(agent.parentId);
 				if (parent) parent.children = parent.children.filter((childId) => childId !== agent.id);
 			}
-			removed++;
+			removed.push(this.copy(agent));
 		}
 		return removed;
+	}
+
+	private async releaseAgents(agents: readonly ManagedAgent[]): Promise<void> {
+		if (!this.transport.release || agents.length === 0) return;
+		const results = await Promise.allSettled(
+			agents.map((agent) => this.transport.release?.(agent)),
+		);
+		const failures = results.flatMap((result) =>
+			result.status === "rejected" ? [result.reason] : [],
+		);
+		if (failures.length > 0) {
+			throw new AggregateError(
+				failures,
+				`Failed to release ${failures.length} subagent transport session(s)`,
+			);
+		}
 	}
 
 	private pruneClosedAgents(): void {
