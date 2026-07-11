@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -89,14 +89,22 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"find . -delete",
 		"find . -exec rm {} ;",
 		"sed -i 's/a/b/' file",
+		"sed -ni 's/a/b/' file",
 		"git branch -D old",
+		"git branch --unset-upstream",
+		"git branch --set-upstream-to=origin/main",
 		"git remote add origin url",
+		"git remote set-head origin -a",
+		"git remote set-branches origin main",
 		"npm audit --fix",
+		"npm audit fix",
 		"env sh -c 'touch file'",
 		"date --set tomorrow",
 		"sort input -o output",
+		"sort -o/tmp/output input",
 		"tree -o output",
 		"find . -fprint output",
+		"find . -fprint0 output",
 		"fd pattern --exec touch file",
 		"fd pattern -x rm {}",
 		"rg pattern --pre 'touch file'",
@@ -104,6 +112,7 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"git diff --ext-diff",
 		"git log --output=log.txt",
 		"git remote update",
+		"tsc --noEmit --incremental --tsBuildInfoFile info.tsbuildinfo",
 		"awk 'BEGIN { system(\"touch file\") }'",
 		"rg x || (echo bad > file)",
 		"cat <<EOF",
@@ -227,6 +236,28 @@ test("Plan-mode settings validate inherit and fixed thinking levels", async () =
 	}
 });
 
+test("missing settings reset a previously loaded fixed thinking level", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-reset-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = join(directory, "plan-mode.json");
+		await writeFile(settingsPath, '{"thinkingLevel":"medium"}');
+		const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+		planMode(mock.pi);
+		const context = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await unlink(settingsPath);
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await mock.commands.get("plan")?.handler("", context.ctx);
+		assert.equal(mock.thinkingLevel, "low");
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("session resume restores active Plan state and required tools", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-resume-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -305,6 +336,38 @@ test("Plan mode restores an intentionally empty active-tool set", async () => {
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "plan_mode_question"]);
 	await mock.commands.get("plan")?.handler("exit", context.ctx);
 	assert.deepEqual(mock.rawPi.getActiveTools(), []);
+});
+
+test("manual thinking changes survive active Plan-mode shutdown and resume", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-manual-resume-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		await writeFile(join(directory, "plan-mode.json"), '{"thinkingLevel":"medium"}');
+		const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+		planMode(mock.pi);
+		const context = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await mock.commands.get("plan")?.handler("", context.ctx);
+		mock.rawPi.setThinkingLevel("high");
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+
+		const persisted = mock.entries.at(-1);
+		const resumedContext = createMockContext({
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => (persisted ? [{ type: "custom", ...persisted }] : []),
+			},
+		});
+		await mock.events.get("session_start")?.[0]?.({}, resumedContext.ctx);
+		assert.equal(mock.thinkingLevel, "high");
+		await mock.commands.get("plan")?.handler("exit", resumedContext.ctx);
+		assert.equal(mock.thinkingLevel, "high");
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("Plan lifecycle enters with a prompt and hands a valid plan to implementation", async () => {

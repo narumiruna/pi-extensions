@@ -193,9 +193,19 @@ function hasSafeArguments(command: string, args: string[]) {
 	const forbidden = new Set(["-i", "--in-place", "--fix", "--write", "-delete", "--delete"]);
 	if (args.some((argument) => forbidden.has(argument))) return false;
 	if (
+		command === "sed" &&
+		args.some(
+			(argument) =>
+				argument.startsWith("--in-place=") ||
+				(/^-[^-]+/.test(argument) && argument.slice(1).includes("i")),
+		)
+	) {
+		return false;
+	}
+	if (
 		command === "find" &&
 		args.some((argument) =>
-			["-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"].includes(
+			["-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(
 				argument,
 			),
 		)
@@ -207,7 +217,12 @@ function hasSafeArguments(command: string, args: string[]) {
 	}
 	if (
 		(command === "sort" || command === "tree") &&
-		args.some((argument) => argument === "-o" || argument.startsWith("--output"))
+		args.some(
+			(argument) =>
+				argument === "-o" ||
+				(argument.startsWith("-o") && !argument.startsWith("--")) ||
+				argument.startsWith("--output"),
+		)
 	) {
 		return false;
 	}
@@ -246,20 +261,28 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 		if (subcommand === "branch" && subcommandArgs.some((argument) => !argument.startsWith("-"))) return false;
 		if (
 			subcommand === "branch" &&
-			subcommandArgs.some((argument) =>
-				["-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy", "--edit-description"].includes(
-					argument,
-				),
+			subcommandArgs.some(
+				(argument) =>
+					[
+						"-d",
+						"-D",
+						"-m",
+						"-M",
+						"-c",
+						"-C",
+						"--delete",
+						"--move",
+						"--copy",
+						"--edit-description",
+						"--unset-upstream",
+					].includes(argument) || argument.startsWith("--set-upstream-to"),
 			)
 		)
 			return false;
-		if (
-			subcommand === "remote" &&
-			subcommandArgs.some((argument) =>
-				["add", "remove", "rename", "set-url", "prune", "update"].includes(argument),
-			)
-		)
-			return false;
+		if (subcommand === "remote") {
+			const action = subcommandArgs.find((argument) => !argument.startsWith("-"));
+			if (action && action !== "show" && action !== "get-url") return false;
+		}
 		if (
 			args.some(
 				(argument) =>
@@ -273,9 +296,21 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 		return true;
 	}
 	if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
-		return args.includes("--version") || (command === "tsc" && args.includes("--noEmit"));
+		if (args.includes("--version")) return true;
+		return (
+			command === "tsc" &&
+			args.includes("--noEmit") &&
+			!args.some(
+				(argument) =>
+					argument === "--incremental" ||
+					argument.startsWith("--incremental=") ||
+					argument === "--tsBuildInfoFile" ||
+					argument.startsWith("--tsBuildInfoFile="),
+			)
+		);
 	}
 	if (command === "npm") {
+		if (subcommand === "audit" && subcommandArgs.includes("fix")) return false;
 		if (["list", "ls", "view", "info", "search", "outdated", "audit", "test"].includes(subcommand ?? "")) {
 			return true;
 		}

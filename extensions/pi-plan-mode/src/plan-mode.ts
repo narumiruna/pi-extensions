@@ -57,6 +57,7 @@ interface PlanModeState {
 	selectedToolKeys?: string[];
 	previousThinkingLevel?: PlanModeFixedThinkingLevel;
 	appliedThinkingLevel?: PlanModeFixedThinkingLevel;
+	manualThinkingLevel?: PlanModeFixedThinkingLevel;
 }
 
 type SessionEntry = {
@@ -168,6 +169,7 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		settings = { thinkingLevel: "inherit" };
 		const loadedSettings = await readPlanModeSettings();
 		if (loadedSettings.kind === "loaded") settings = loadedSettings.settings;
 		else if (loadedSettings.kind === "invalid") {
@@ -182,7 +184,21 @@ export default function planMode(pi: ExtensionAPI) {
 		updateUi(ctx);
 	});
 
+	pi.on("thinking_level_select", (event) => {
+		if (!state.enabled || !state.appliedThinkingLevel) return;
+		if (event.level !== state.appliedThinkingLevel) {
+			state = {
+				...state,
+				manualThinkingLevel: event.level,
+				previousThinkingLevel: undefined,
+				appliedThinkingLevel: undefined,
+			};
+			persistState();
+		}
+	});
+
 	pi.on("session_shutdown", (_event, ctx) => {
+		captureManualThinkingLevel();
 		persistState();
 		if (state.enabled) {
 			restoreTools();
@@ -304,10 +320,17 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function exitPlanMode(ctx: ExtensionContext) {
 		const wasEnabled = state.enabled;
-		state = { ...state, enabled: false, latestPlan: undefined, awaitingAction: false };
+		state = {
+			...state,
+			enabled: false,
+			latestPlan: undefined,
+			awaitingAction: false,
+			manualThinkingLevel: undefined,
+		};
 		if (wasEnabled) {
 			restoreTools();
 			restoreThinkingLevel();
+			state = { ...state, manualThinkingLevel: undefined };
 		}
 		persistState();
 		updateUi(ctx);
@@ -548,6 +571,12 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function applyPlanThinkingLevel() {
+		if (state.manualThinkingLevel) {
+			if (pi.getThinkingLevel() !== state.manualThinkingLevel) {
+				pi.setThinkingLevel(state.manualThinkingLevel);
+			}
+			return;
+		}
 		const configured = configuredThinkingLevel(settings);
 		if (!configured) return;
 		const current = pi.getThinkingLevel();
@@ -556,7 +585,20 @@ export default function planMode(pi: ExtensionAPI) {
 		state.appliedThinkingLevel = pi.getThinkingLevel();
 	}
 
+	function captureManualThinkingLevel() {
+		if (!state.appliedThinkingLevel) return;
+		const current = pi.getThinkingLevel();
+		if (current === state.appliedThinkingLevel) return;
+		state = {
+			...state,
+			manualThinkingLevel: current,
+			previousThinkingLevel: undefined,
+			appliedThinkingLevel: undefined,
+		};
+	}
+
 	function restoreThinkingLevel() {
+		captureManualThinkingLevel();
 		const { appliedThinkingLevel, previousThinkingLevel } = state;
 		if (
 			appliedThinkingLevel &&
@@ -604,6 +646,7 @@ export default function planMode(pi: ExtensionAPI) {
 			selectedToolKeys: entry.data.selectedToolKeys,
 			previousThinkingLevel: enabled ? entry.data.previousThinkingLevel : undefined,
 			appliedThinkingLevel: enabled ? entry.data.appliedThinkingLevel : undefined,
+			manualThinkingLevel: enabled ? entry.data.manualThinkingLevel : undefined,
 		};
 	}
 
