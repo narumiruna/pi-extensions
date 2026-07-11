@@ -2,6 +2,8 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sidebar)](https://www.npmjs.com/package/@narumitw/pi-sidebar) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+> Deprecated: this package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set.
+
 `@narumitw/pi-sidebar` is a native [Pi coding agent](https://pi.dev) extension that adds an opencode-inspired right sidebar overlay to Pi's interactive terminal UI.
 
 It keeps session state, model information, context usage, running tools, and recent activity visible while leaving the main editor focused.
