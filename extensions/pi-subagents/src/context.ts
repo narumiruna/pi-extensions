@@ -1,11 +1,13 @@
+import { createHash } from "node:crypto";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 
-export type ContextMode = "none" | "all" | number;
+export type ContextMode = "none" | "all" | "summary" | number;
 
 export interface ContextSnapshot {
 	text: string;
 	turns: number;
 	truncated: boolean;
+	sourceIds: string[];
 }
 
 function textParts(content: unknown): string {
@@ -36,12 +38,14 @@ export function buildContextSnapshot(
 	entries: readonly unknown[],
 	mode: ContextMode,
 	maxBytes = DEFAULT_MAX_CONTEXT_BYTES,
+	selectedSourceIds?: readonly string[],
 ): ContextSnapshot {
-	if (mode === "none") return { text: "", turns: 0, truncated: false };
-	const messages: Array<{ role: "user" | "assistant"; text: string }> = [];
+	if (mode === "none") return { text: "", turns: 0, truncated: false, sourceIds: [] };
+	const messages: Array<{ role: "user" | "assistant"; text: string; sourceId: string }> = [];
 	for (const entry of entries) {
 		if (!entry || typeof entry !== "object") continue;
 		const candidate = entry as {
+			id?: string;
 			type?: string;
 			role?: string;
 			content?: unknown;
@@ -51,23 +55,47 @@ export function buildContextSnapshot(
 			candidate.type === "message" ? candidate.message : candidate;
 		if (message?.role !== "user" && message?.role !== "assistant") continue;
 		const text = redactPrivateText(textParts(message.content));
-		if (text.trim()) messages.push({ role: message.role, text });
+		if (text.trim()) {
+			const sourceId =
+				candidate.id ??
+				createHash("sha256").update(`${message.role}\0${text}`).digest("hex").slice(0, 16);
+			messages.push({ role: message.role, text, sourceId });
+		}
 	}
+	const selectedSet = selectedSourceIds ? new Set(selectedSourceIds) : undefined;
+	const eligible = selectedSet
+		? messages.filter((message) => selectedSet.has(message.sourceId))
+		: messages;
 	const turnLimit =
 		typeof mode === "number" ? Math.max(1, Math.floor(mode)) : Number.POSITIVE_INFINITY;
 	let userTurns = 0;
-	let start = messages.length;
-	for (let index = messages.length - 1; index >= 0; index--) {
-		if (messages[index].role === "user") userTurns++;
+	let start = eligible.length;
+	for (let index = eligible.length - 1; index >= 0; index--) {
+		if (eligible[index].role === "user") userTurns++;
 		if (userTurns > turnLimit) break;
 		start = index;
 	}
-	const selected = messages.slice(start);
-	const raw = selected.map((message) => `## ${message.role}\n${message.text}`).join("\n\n");
+	const selected = eligible.slice(start);
+	const raw =
+		mode === "summary" && selected.length > 4
+			? [
+					`## Earlier context checkpoint\n${truncateUtf8(
+						selected
+							.slice(0, -4)
+							.map((message) => `${message.role}: ${message.text}`)
+							.join("\n"),
+						Math.floor(maxBytes / 3),
+					).text}`,
+					...selected
+						.slice(-4)
+						.map((message) => `## ${message.role}\n${message.text}`),
+				].join("\n\n")
+			: selected.map((message) => `## ${message.role}\n${message.text}`).join("\n\n");
 	const bounded = truncateUtf8(raw, maxBytes);
 	return {
 		text: bounded.text,
 		turns: selected.filter((message) => message.role === "user").length,
 		truncated: bounded.truncated,
+		sourceIds: selected.map((message) => message.sourceId),
 	};
 }

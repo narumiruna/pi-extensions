@@ -73,7 +73,16 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 	if (hasOwn(value, "stateful")) {
 		if (!isPlainObject(value.stateful)) return undefined;
 		const runtime: NonNullable<SubagentSettings["stateful"]> = {};
-		for (const key of ["maxAgents", "maxActiveTurns", "idleTtlMs", "retentionDays", "maxStoredAgents"] as const) {
+		for (const key of [
+			"maxAgents",
+			"maxActiveTurns",
+			"maxDepth",
+			"maxChildrenPerAgent",
+			"maxMailboxMessages",
+			"idleTtlMs",
+			"retentionDays",
+			"maxStoredAgents",
+		] as const) {
 			if (hasOwn(value.stateful, key)) {
 				if (!isPositiveNumber(value.stateful[key])) return undefined;
 				runtime[key] = value.stateful[key];

@@ -5,11 +5,11 @@ import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-ag
 import { redactPrivateText } from "./context.js";
 import type { ManagedAgent } from "./registry.js";
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const MAX_STATE_BYTES = 1024 * 1024;
 
 interface StoredState {
-	version: 1;
+	version: 2;
 	updatedAt: number;
 	agents: ManagedAgent[];
 }
@@ -89,6 +89,13 @@ export class AgentPersistence {
 function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 	return {
 		...agent,
+		rootId: agent.rootId ?? agent.id,
+		depth: agent.depth ?? 0,
+		children: [...(agent.children ?? [])],
+		mailbox: (agent.mailbox ?? []).map((message) => ({
+			...message,
+			content: redactPrivateText(message.content),
+		})),
 		state: "idle",
 		currentTask: undefined,
 		context: agent.context ? redactPrivateText(agent.context) : undefined,
@@ -104,7 +111,9 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 function isStoredState(value: unknown): value is StoredState {
 	if (!value || typeof value !== "object") return false;
 	const state = value as { version?: unknown; agents?: unknown };
-	if (state.version !== STATE_VERSION || !Array.isArray(state.agents)) return false;
+	if ((state.version !== 1 && state.version !== STATE_VERSION) || !Array.isArray(state.agents)) {
+		return false;
+	}
 	return state.agents.every((agent) => {
 		if (!agent || typeof agent !== "object") return false;
 		const record = agent as Partial<ManagedAgent>;
