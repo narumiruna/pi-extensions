@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; ChatGPT Codex account switching and usage status; GitHub pull request checks; goal mode; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; `/wait-what` pause explanations; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; ChatGPT Codex account switching and usage status; GitHub pull request checks; goal mode; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
 
 **Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
@@ -27,7 +27,6 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch/status, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
-| [`@narumitw/pi-wait-what`](./extensions/pi-wait-what) | 🤔 `/wait-what` pause command for asking the agent to explain surprising actions before continuing. | `pi install npm:@narumitw/pi-wait-what` |
 
 ## 🚀 Quick start
 
@@ -96,13 +95,9 @@ Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation,
 
 Use [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) when you want a Codex-like `/plan` mode where the agent explores with read-only tools, asks structured questions, and produces an implementation-ready plan before editing.
 
-### 🤔 Pause and explain surprising actions
-
-Use [`@narumitw/pi-wait-what`](./extensions/pi-wait-what) when you want to pause the agent and ask it to explain what it was doing, why, assumptions, and next step before it continues.
-
 ### 📨 Remote Telegram session chat
 
-[`@narumitw/pi-telegram-bot`](./extensions/deprecated/pi-telegram-bot) is deprecated and kept under `extensions/deprecated/` for reference.
+[`@narumitw/pi-telegram-bot`](./extensions/deprecated/pi-telegram-bot) and [`@narumitw/pi-wait-what`](./extensions/deprecated/pi-wait-what) are deprecated and kept under `extensions/deprecated/` for reference.
 
 ### 🤖 Delegated subagents
 
@@ -144,7 +139,6 @@ pi -e ./extensions/pi-retry
 pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
-pi -e ./extensions/pi-wait-what
 ```
 
 Preview npm package contents before publishing:
@@ -165,7 +159,6 @@ npm run pack:retry
 npm run pack:statusline
 npm run pack:sync
 npm run pack:subagents
-npm run pack:wait-what
 ```
 
 Publishing note for new scoped packages: `just npm-public @narumitw/pi-new-extension` only changes visibility for an already-published package. If npm returns 404 for a brand-new package, create it first with the new package's workspace name, for example:
@@ -183,7 +176,8 @@ extensions/
 │   ├── pi-biome-lsp/
 │   ├── pi-python-lsp/
 │   ├── pi-sidebar/
-│   └── pi-telegram-bot/
+│   ├── pi-telegram-bot/
+│   └── pi-wait-what/
 ├── pi-btw/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/
@@ -198,8 +192,7 @@ extensions/
 ├── pi-retry/
 ├── pi-statusline/
 ├── pi-sync/
-├── pi-subagents/
-└── pi-wait-what/
+└── pi-subagents/
 ```
 
 Each active extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
