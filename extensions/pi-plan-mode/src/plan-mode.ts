@@ -1,7 +1,12 @@
-import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ToolInfo,
+} from "@earendil-works/pi-coding-agent";
 import {
 	extractProposedPlan,
 	latestAssistantText,
+	parseProposedPlan,
 	messageContainsInactivePlanModeArtifact,
 	messageContainsLegacyPlanModeContextArtifact,
 	stripProposedPlanBlocksFromMessage,
@@ -17,11 +22,18 @@ import {
 } from "./question-tool.js";
 import {
 	canSelectToolInPlanMode,
+	classifyPlanModeTool,
 	isBuiltinTool,
 	isSafeCommand,
 	readCommand,
 	SAFE_BUILTIN_PLAN_TOOLS,
 } from "./tool-policy.js";
+import {
+	configuredThinkingLevel,
+	readPlanModeSettings,
+	type PlanModeFixedThinkingLevel,
+	type PlanModeSettings,
+} from "./settings.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const STATUS_KEY = "plan-mode";
@@ -43,6 +55,8 @@ interface PlanModeState {
 	awaitingAction: boolean;
 	selectedToolNames?: string[];
 	selectedToolKeys?: string[];
+	previousThinkingLevel?: PlanModeFixedThinkingLevel;
+	appliedThinkingLevel?: PlanModeFixedThinkingLevel;
 }
 
 type SessionEntry = {
@@ -70,6 +84,7 @@ const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 
 export default function planMode(pi: ExtensionAPI) {
 	let state: PlanModeState = { enabled: false, awaitingAction: false };
+	let settings: PlanModeSettings = { thinkingLevel: "inherit" };
 	let previousTools: string[] | undefined;
 
 	pi.registerFlag("plan", {
@@ -152,21 +167,39 @@ export default function planMode(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
+		const loadedSettings = await readPlanModeSettings();
+		if (loadedSettings.kind === "loaded") settings = loadedSettings.settings;
+		else if (loadedSettings.kind === "invalid") {
+			ctx.ui.notify(`pi-plan-mode settings ignored: ${loadedSettings.reason}`, "warning");
+		}
 		restoreState(ctx);
 		if (pi.getFlag("plan") === true) state.enabled = true;
-		if (state.enabled) activatePlanModeTools();
-		else deactivatePlanModeQuestionTool();
+		if (state.enabled) {
+			activatePlanModeTools();
+			applyPlanThinkingLevel();
+		} else deactivatePlanModeQuestionTool();
 		updateUi(ctx);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		persistState();
+		if (state.enabled) {
+			restoreTools();
+			restoreThinkingLevel();
+		}
 		clearUi(ctx);
 	});
 
 	pi.on("tool_call", async (event) => {
 		if (!state.enabled) return;
+		if (event.toolName === "update_plan") {
+			return {
+				block: true,
+				reason:
+					"Plan mode blocks update_plan because it tracks execution progress rather than conversational planning.",
+			};
+		}
 		if (isBlockedBuiltinToolName(event.toolName)) {
 			return {
 				block: true,
@@ -213,12 +246,16 @@ export default function planMode(pi: ExtensionAPI) {
 		if (!state.enabled) return;
 
 		const text = latestAssistantText(event.messages);
-		const proposedPlan = extractProposedPlan(text);
-		if (!proposedPlan) {
+		const parsedPlan = parseProposedPlan(text);
+		if (parsedPlan.kind !== "valid") {
+			if (parsedPlan.kind !== "absent") {
+				ctx.ui.notify(invalidPlanMessage(parsedPlan.kind), "warning");
+			}
 			persistState();
 			updateUi(ctx);
 			return;
 		}
+		const proposedPlan = parsedPlan.plan;
 
 		state = { ...state, latestPlan: proposedPlan, awaitingAction: true };
 		persistState();
@@ -244,6 +281,7 @@ export default function planMode(pi: ExtensionAPI) {
 		if (!state.enabled) previousTools = withoutPlanModeQuestionTool(safeGetActiveTools());
 		state = { ...state, enabled: true, awaitingAction: false };
 		activatePlanModeTools();
+		applyPlanThinkingLevel();
 		persistState();
 		updateUi(ctx);
 	}
@@ -254,20 +292,30 @@ export default function planMode(pi: ExtensionAPI) {
 		if (!wasEnabled) {
 			ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
 		}
-		sendPlanModeUserMessage(prompt, ctx);
+		if (!sendPlanModeUserMessage(prompt, ctx) && !wasEnabled) exitPlanMode(ctx);
 	}
 
 	function exitPlanMode(ctx: ExtensionContext) {
 		const wasEnabled = state.enabled;
 		state = { ...state, enabled: false, latestPlan: undefined, awaitingAction: false };
-		if (wasEnabled) restoreTools();
+		if (wasEnabled) {
+			restoreTools();
+			restoreThinkingLevel();
+		}
 		persistState();
 		updateUi(ctx);
 	}
 
 	function sendPlanModeUserMessage(message: string, ctx: ExtensionContext) {
-		if (ctx.isIdle()) pi.sendUserMessage(message);
-		else pi.sendUserMessage(message, { deliverAs: "followUp" });
+		try {
+			if (ctx.isIdle()) pi.sendUserMessage(message);
+			else pi.sendUserMessage(message, { deliverAs: "followUp" });
+			return true;
+		} catch (error: unknown) {
+			const detail = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Unable to send Plan-mode message: ${detail}`, "error");
+			return false;
+		}
 	}
 
 	function scheduleAfterCurrentAgentRun(task: () => Promise<void> | void) {
@@ -288,10 +336,16 @@ export default function planMode(pi: ExtensionAPI) {
 			return;
 		}
 
-		sendPlanModeUserMessage(
+		const sent = sendPlanModeUserMessage(
 			`Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:\n\n${plan}`,
 			ctx,
 		);
+		if (!sent) {
+			enterPlanMode(ctx);
+			state = { ...state, latestPlan: plan, awaitingAction: true };
+			persistState();
+			updateUi(ctx);
+		}
 	}
 
 	async function showPlanMenu(ctx: ExtensionContext) {
@@ -486,6 +540,27 @@ export default function planMode(pi: ExtensionAPI) {
 		previousTools = undefined;
 	}
 
+	function applyPlanThinkingLevel() {
+		const configured = configuredThinkingLevel(settings);
+		if (!configured) return;
+		const current = pi.getThinkingLevel();
+		if (!state.appliedThinkingLevel) state.previousThinkingLevel = current;
+		if (current !== configured) pi.setThinkingLevel(configured);
+		state.appliedThinkingLevel = pi.getThinkingLevel();
+	}
+
+	function restoreThinkingLevel() {
+		const { appliedThinkingLevel, previousThinkingLevel } = state;
+		if (
+			appliedThinkingLevel &&
+			previousThinkingLevel &&
+			pi.getThinkingLevel() === appliedThinkingLevel
+		) {
+			pi.setThinkingLevel(previousThinkingLevel);
+		}
+		state = { ...state, appliedThinkingLevel: undefined, previousThinkingLevel: undefined };
+	}
+
 	function deactivatePlanModeQuestionTool() {
 		const activeTools = safeGetActiveTools();
 		const filteredTools = withoutPlanModeQuestionTool(activeTools);
@@ -507,6 +582,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function restoreState(ctx: ExtensionContext) {
+		state = { enabled: false, awaitingAction: false };
 		const entries = ctx.sessionManager.getEntries() as SessionEntry[];
 		const entry = entries
 			.filter((candidate) => candidate.type === "custom" && candidate.customType === STATE_ENTRY_TYPE)
@@ -519,6 +595,8 @@ export default function planMode(pi: ExtensionAPI) {
 			awaitingAction: enabled ? (entry.data.awaitingAction ?? false) : false,
 			selectedToolNames: entry.data.selectedToolNames,
 			selectedToolKeys: entry.data.selectedToolKeys,
+			previousThinkingLevel: enabled ? entry.data.previousThinkingLevel : undefined,
+			appliedThinkingLevel: enabled ? entry.data.appliedThinkingLevel : undefined,
 		};
 	}
 
@@ -607,11 +685,11 @@ function formatToolChoice(tool: ToolInfo, selected: boolean, index: number) {
 }
 
 function toolPolicyLabel(tool: ToolInfo) {
-	if (isBuiltinTool(tool)) {
-		if (!SAFE_BUILTIN_PLAN_TOOLS.has(tool.name)) return "built-in blocked";
-		return tool.name === "bash" ? "built-in limited" : "built-in";
-	}
-	return `user risk: ${toolSourceLabel(tool)}`;
+	const policy = classifyPlanModeTool(tool);
+	if (policy === "read-only") return "built-in read-only";
+	if (policy === "limited") return "built-in limited";
+	if (policy === "blocked") return "built-in blocked";
+	return `user opt-in: ${toolSourceLabel(tool)}`;
 }
 
 function toolSourceLabel(tool: ToolInfo) {
@@ -632,6 +710,24 @@ export function withoutPlanModeQuestionTool(toolNames: string[]) {
 	return toolNames.filter((toolName) => toolName !== PLAN_MODE_QUESTION_TOOL_NAME);
 }
 
-export { extractProposedPlan, latestAssistantText, stripProposedPlanBlocks, stripProposedPlanBlocksFromMessage } from "./message-transform.js";
+function invalidPlanMessage(kind: "empty" | "multiple" | "malformed" | "unclosed") {
+	const detail = {
+		empty: "the block is empty",
+		multiple: "more than one plan block was produced",
+		malformed: "the tags must be on their own lines",
+		unclosed: "the closing tag is missing",
+	}[kind];
+	return `Proposed plan is not ready: ${detail}. Continue Plan mode and produce one complete non-empty <proposed_plan> block.`;
+}
+
+export {
+	extractProposedPlan,
+	latestAssistantText,
+	parseProposedPlan,
+	stripProposedPlanBlocks,
+	stripProposedPlanBlocksFromMessage,
+} from "./message-transform.js";
+export { buildPlanModePrompt } from "./prompt.js";
 export { normalizePlanModeQuestionParams } from "./question-tool.js";
-export { canSelectToolInPlanMode, isSafeCommand } from "./tool-policy.js";
+export { normalizePlanModeSettings, readPlanModeSettings } from "./settings.js";
+export { canSelectToolInPlanMode, classifyPlanModeTool, isSafeCommand } from "./tool-policy.js";

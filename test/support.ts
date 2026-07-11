@@ -29,13 +29,21 @@ type MockPiApi = {
 	setActiveTools(names: string[]): void;
 	getAllTools(): unknown[];
 	getThinkingLevel(): string;
+	setThinkingLevel(level: string): void;
 	appendEntry(customType: string, data: unknown): void;
 	sendUserMessage(text: string, messageOptions?: unknown): void;
 	sendMessage(message: unknown, messageOptions?: unknown): void;
 	setModel(model: unknown): Promise<boolean>;
 };
 
-export function createMockPi(options: { activeTools?: string[]; allTools?: unknown[] } = {}) {
+export function createMockPi(
+	options: {
+		activeTools?: string[];
+		allTools?: unknown[];
+		thinkingLevel?: string;
+		clampThinkingLevel?: (level: string) => string;
+	} = {},
+) {
 	const commands = new Map<string, MockCommand>();
 	const flags = new Map<string, MockFlag>();
 	const events = new Map<string, MockHandler[]>();
@@ -44,6 +52,8 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 	const sentUserMessages: Array<{ text: string; options?: unknown }> = [];
 	const sentMessages: Array<{ message: unknown; options?: unknown }> = [];
 	const setModels: unknown[] = [];
+	const thinkingLevels: string[] = [];
+	let thinkingLevel = options.thinkingLevel ?? "off";
 	let activeTools = [...(options.activeTools ?? [])];
 	const allTools = options.allTools ?? activeTools.map((name) => builtinTool(name));
 
@@ -73,7 +83,11 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 			return allTools;
 		},
 		getThinkingLevel() {
-			return "off";
+			return thinkingLevel;
+		},
+		setThinkingLevel(level: string) {
+			thinkingLevel = options.clampThinkingLevel?.(level) ?? level;
+			thinkingLevels.push(thinkingLevel);
 		},
 		appendEntry(customType: string, data: unknown) {
 			entries.push({ customType, data });
@@ -101,6 +115,10 @@ export function createMockPi(options: { activeTools?: string[]; allTools?: unkno
 		sentUserMessages,
 		sentMessages,
 		setModels,
+		thinkingLevels,
+		get thinkingLevel() {
+			return thinkingLevel;
+		},
 	};
 }
 

@@ -1,7 +1,15 @@
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
-const PROPOSED_PLAN_PATTERN = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/i;
-const PROPOSED_PLAN_BLOCK_PATTERN = /<proposed_plan>\s*[\s\S]*?\s*<\/proposed_plan>/gi;
+const PROPOSED_PLAN_PATTERN = /^<proposed_plan>[\t ]*\r?\n([\s\S]*?)\r?\n<\/proposed_plan>[\t ]*$/gim;
+const PROPOSED_PLAN_BLOCK_PATTERN = /^<proposed_plan>[\t ]*\r?\n[\s\S]*?\r?\n<\/proposed_plan>[\t ]*$/gim;
+
+export type ProposedPlanParseResult =
+	| { kind: "absent" }
+	| { kind: "valid"; plan: string }
+	| { kind: "empty" }
+	| { kind: "multiple" }
+	| { kind: "malformed" }
+	| { kind: "unclosed" };
 
 type SessionMessage = {
 	role?: string;
@@ -13,9 +21,23 @@ type TextBlock = {
 	text?: string;
 };
 
+export function parseProposedPlan(text: string): ProposedPlanParseResult {
+	const openingCount = text.match(/<proposed_plan>/gi)?.length ?? 0;
+	const closingCount = text.match(/<\/proposed_plan>/gi)?.length ?? 0;
+	if (openingCount === 0 && closingCount === 0) return { kind: "absent" };
+	if (openingCount > 1 || closingCount > 1) return { kind: "multiple" };
+	if (openingCount === 1 && closingCount === 0) return { kind: "unclosed" };
+	if (openingCount !== 1 || closingCount !== 1) return { kind: "malformed" };
+
+	const matches = Array.from(text.matchAll(PROPOSED_PLAN_PATTERN));
+	if (matches.length !== 1) return { kind: "malformed" };
+	const plan = matches[0]?.[1]?.trim() ?? "";
+	return plan ? { kind: "valid", plan } : { kind: "empty" };
+}
+
 export function extractProposedPlan(text: string) {
-	const match = PROPOSED_PLAN_PATTERN.exec(text);
-	return match?.[1]?.trim();
+	const result = parseProposedPlan(text);
+	return result.kind === "valid" ? result.plan : undefined;
 }
 
 export function latestAssistantText(messages: unknown) {
