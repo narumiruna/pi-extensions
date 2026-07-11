@@ -15,6 +15,7 @@ import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { buildContextSnapshot, redactPrivateText } from "../src/context.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8, truncateUtf8Tail } from "../src/limits.js";
+import { RootOrchestrationState } from "../src/orchestration.js";
 import { AgentPersistence } from "../src/persistence.js";
 import { JsonLineDecoder } from "../src/protocol.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
@@ -353,6 +354,14 @@ test("AgentRegistry supports follow-up, wait timeout, interrupt/reuse, limits, a
 	assert.equal(queued.agent.state, "starting");
 	const timed = await registry.wait(first.id, 5);
 	assert.equal(timed.timedOut, true);
+	const waitController = new AbortController();
+	const abortedWait = registry.wait(first.id, 1_000, waitController.signal);
+	waitController.abort();
+	await assert.rejects(
+		abortedWait,
+		(error) => error instanceof Error && error.name === "AbortError",
+	);
+	assert.equal(registry.get(first.id)?.state, "running");
 	const interrupted = await registry.interrupt(first.id);
 	assert.equal(interrupted.state, "interrupted");
 	assert.equal((await registry.wait(second.id, 100)).agent.state, "completed");
@@ -1017,6 +1026,78 @@ test("shared-workspace write classification and follow-up guards are conservativ
 	await registry.interrupt(active.id);
 });
 
+test("root orchestration recovery is revision-bounded and clears synthesized results", () => {
+	const state = new RootOrchestrationState();
+	state.reset();
+	state.beginTurn();
+	state.spawn("sa_one");
+	const first = state.endTurn();
+	assert.ok(first);
+	assert.match(first.prompt, /subagent_wait/);
+	state.markDelivered(first);
+
+	state.beginTurn();
+	assert.equal(state.endTurn(), undefined, "unchanged live work does not loop autonomously");
+	state.complete("sa_one");
+	const synthesis = state.endTurn();
+	assert.ok(synthesis, "completion after the turn schedules a synthesis recovery");
+	state.markDelivered(synthesis);
+	state.beginTurn();
+	assert.equal(state.endTurn(), undefined);
+	assert.equal(state.hasUnresolved(), false);
+});
+
+test("root orchestration treats newer root work as a bounded coordination attempt", () => {
+	const state = new RootOrchestrationState();
+	state.reset();
+	state.spawn("sa_one");
+	assert.ok(state.endTurn());
+	state.beginTurn();
+	assert.equal(state.endTurn(), undefined);
+	assert.deepEqual(state.liveAgentIds(), ["sa_one"]);
+});
+
+test("root orchestration lets newer user work supersede a queued recovery", () => {
+	const state = new RootOrchestrationState();
+	state.reset();
+	state.spawn("sa_one");
+	const queued = state.endTurn();
+	assert.ok(queued);
+	assert.match(queued.prompt, new RegExp(queued.nonce));
+	assert.deepEqual(state.supersedePending(), queued);
+	assert.equal(state.isCurrent(queued), false);
+	state.beginTurn();
+	assert.equal(state.endTurn(), undefined);
+});
+
+test("root orchestration accepts completion synthesized during useful root work", () => {
+	const state = new RootOrchestrationState();
+	state.reset();
+	state.beginTurn();
+	state.spawn("sa_one");
+	state.complete("sa_one");
+	state.observeAvailable();
+	assert.equal(state.endTurn(), undefined);
+	assert.equal(state.hasUnresolved(), false);
+});
+
+test("root orchestration cancels stale tickets and explicit resolution", () => {
+	const state = new RootOrchestrationState();
+	state.reset();
+	state.spawn("sa_one");
+	const stale = state.endTurn();
+	assert.ok(stale);
+	state.complete("sa_one");
+	assert.equal(state.isCurrent(stale), false);
+	const current = state.endTurn();
+	assert.ok(current);
+	state.resolve("sa_one");
+	assert.equal(state.isCurrent(current), false);
+	assert.equal(state.hasUnresolved(), false);
+	state.reset();
+	assert.equal(state.pendingTicket(), undefined);
+});
+
 test("selected context entries imply all mode only when context mode is omitted", () => {
 	assert.equal(resolveSpawnContextMode(undefined, ["entry"]), "all");
 	assert.equal(resolveSpawnContextMode(undefined, []), "all");
@@ -1066,9 +1147,13 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			execute: (...args: unknown[]) => Promise<unknown>;
 			promptGuidelines: string[];
 		};
-		assert.match(spawnTool.promptGuidelines.join("\n"), /meaningful non-overlapping work/);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /completion.*delivered automatically/i);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /do not call subagent_wait immediately/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /simple or critical-path work/);
+		assert.match(
+			spawnTool.promptGuidelines.join("\n"),
+			/single detached subagent.*isolation or specialization/i,
+		);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /call subagent_wait rather than yielding/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /synthesize their results/i);
 		const originalDepth = process.env.PI_SUBAGENT_DEPTH;
 		process.env.PI_SUBAGENT_DEPTH = "1";
 		try {

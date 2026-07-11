@@ -103,6 +103,12 @@ function nonNegativeInteger(value: number, label: string): number {
 	return value;
 }
 
+function waitAbortError(): Error {
+	const error = new Error("Subagent wait was aborted");
+	error.name = "AbortError";
+	return error;
+}
+
 export class AgentRegistry {
 	private readonly agents = new Map<string, ManagedAgent>();
 	private readonly controllers = new Map<string, AbortController>();
@@ -318,19 +324,31 @@ export class AgentRegistry {
 		return unread.map((message) => ({ ...message }));
 	}
 
-	async wait(id: string, timeoutMs = 30_000): Promise<{ timedOut: boolean; agent: ManagedAgent }> {
+	async wait(
+		id: string,
+		timeoutMs = 30_000,
+		signal?: AbortSignal,
+	): Promise<{ timedOut: boolean; agent: ManagedAgent }> {
 		if (!Number.isFinite(timeoutMs) || timeoutMs < 1) {
 			throw new Error("Subagent wait timeout must be a positive finite number");
 		}
+		if (signal?.aborted) throw waitAbortError();
 		const agent = this.require(id);
 		const running = this.running.get(id);
 		if (!running) return { timedOut: false, agent: this.copy(agent) };
 		let timer: NodeJS.Timeout | undefined;
+		let onAbort: (() => void) | undefined;
 		const timeout = new Promise<"timeout">((resolve) => {
 			timer = setTimeout(() => resolve("timeout"), Math.max(1, timeoutMs));
 		});
-		const result = await Promise.race([running, timeout]);
+		const aborted = new Promise<"aborted">((resolve) => {
+			onAbort = () => resolve("aborted");
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
+		const result = await Promise.race([running, timeout, aborted]);
 		if (timer) clearTimeout(timer);
+		if (onAbort) signal?.removeEventListener("abort", onAbort);
+		if (result === "aborted") throw waitAbortError();
 		return result === "timeout"
 			? { timedOut: true, agent: this.copy(this.require(id)) }
 			: { timedOut: false, agent: this.copy(result) };

@@ -7,6 +7,11 @@ import { discoverAgents, type AgentScope } from "./agents.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import {
+	ORCHESTRATION_MARKER_PREFIX,
+	RootOrchestrationState,
+	type OrchestrationRecoveryTicket,
+} from "./orchestration.js";
 import { AgentPersistence } from "./persistence.js";
 import {
 	AgentRegistry,
@@ -49,6 +54,8 @@ export function registerStatefulSubagents(
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
 	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
+	const orchestration = new RootOrchestrationState();
+	const cancelledRecoveryNonces = new Set<string>();
 
 	const requireRegistry = () => {
 		if (!registry) throw new Error("Stateful subagents are not initialized for this session");
@@ -57,6 +64,8 @@ export function registerStatefulSubagents(
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++runtimeGeneration;
+		rememberCancelledRecovery(orchestration.supersedePending(), cancelledRecoveryNonces);
+		orchestration.reset();
 		parentRuntime.model = ctx.model;
 		parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(pi.getThinkingLevel());
 		const owner = ctx.sessionManager.getSessionId?.() ?? ctx.sessionManager.getSessionFile?.() ?? `ephemeral:${ctx.cwd}`;
@@ -97,7 +106,9 @@ export function registerStatefulSubagents(
 				}
 			},
 			onTurnComplete: (completion) => {
-				if (generation === runtimeGeneration) sendDetachedCompletion(pi, completion);
+				if (generation !== runtimeGeneration) return;
+				orchestration.complete(completion.agent.id);
+				sendDetachedCompletion(pi, completion);
 			},
 		});
 		const restored = sessionPersistence
@@ -122,6 +133,38 @@ export function registerStatefulSubagents(
 		sweepTimer.unref();
 	});
 
+	pi.on("input", (event) => {
+		if (event.source === "extension") {
+			const nonce = extractOrchestrationNonce(event.text);
+			if (nonce && cancelledRecoveryNonces.delete(nonce)) return { action: "handled" as const };
+			return;
+		}
+		rememberCancelledRecovery(orchestration.supersedePending(), cancelledRecoveryNonces);
+	});
+
+	pi.on("before_agent_start", () => {
+		orchestration.beginTurn();
+	});
+
+	pi.on("before_provider_request", () => {
+		orchestration.observeAvailable();
+	});
+
+	pi.on("agent_end", (_event, ctx) => {
+		const ticket = orchestration.endTurn();
+		if (ticket && !hasPendingRootMessages(ctx)) queueOrchestrationFollowUp(pi, ctx, ticket);
+	});
+
+	const settledEvents = pi as unknown as {
+		on(
+			event: "agent_settled",
+			handler: (event: unknown, ctx: ExtensionContext) => void,
+		): void;
+	};
+	settledEvents.on("agent_settled", (_event, ctx) => {
+		dispatchOrchestrationRecovery(pi, ctx, orchestration);
+	});
+
 	pi.on("model_select", (event) => {
 		parentRuntime.model = event.model;
 	});
@@ -132,6 +175,8 @@ export function registerStatefulSubagents(
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		runtimeGeneration++;
+		rememberCancelledRecovery(orchestration.supersedePending(), cancelledRecoveryNonces);
+		orchestration.reset();
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		for (const agentId of isolatedAgents.keys()) {
@@ -163,10 +208,11 @@ export function registerStatefulSubagents(
 		description: "Start an addressable background subagent, return immediately with an agentId, and receive its completion asynchronously.",
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
 		promptGuidelines: [
-			"Use subagent_spawn only for a concrete sidecar task that can run while the main agent immediately performs meaningful non-overlapping work.",
-			"Do not use subagent_spawn for critical-path work whose result is required for the main agent's next action; do that work locally instead.",
-			"A completion message is delivered automatically without triggering a new turn; consume it when it arrives instead of polling.",
-			"After subagent_spawn, do not call subagent_wait immediately unless all useful local work is exhausted and progress is genuinely blocked on that result.",
+			"Do not delegate simple or critical-path work that the main agent can perform directly.",
+			"A single detached subagent is appropriate only for a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
+			"After spawning, continue useful non-overlapping local work when available; otherwise call subagent_wait rather than yielding while delegated work remains unresolved.",
+			"Consume available completion messages and synthesize their results before finishing; interrupt or close agents that are no longer needed.",
+			"Detached completion is delivered automatically. Do not poll, wait forever, or spawn additional agents without a distinct need.",
 		],
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),
@@ -243,7 +289,11 @@ export function registerStatefulSubagents(
 				throw error;
 			}
 			if (workspace) isolatedAgents.set(agent.id, workspaceOwner);
-			return result(agent, `Spawned ${agent.agent} as ${agent.id}.`);
+			trackSpawnedAgent(orchestration, agent);
+			return result(
+				agent,
+				`Spawned ${agent.agent} as ${agent.id}. Continue coordinating this agent; do useful non-overlapping work or call subagent_wait, then synthesize its result before finishing.`,
+			);
 		},
 	});
 
@@ -275,6 +325,7 @@ export function registerStatefulSubagents(
 				isolatedAgents.has(existing.id),
 			);
 			const agent = await requireRegistry().followUp(params.agentId, params.task);
+			trackSpawnedAgent(orchestration, agent);
 			return result(agent, `Started follow-up for ${agent.id}.`);
 		},
 	});
@@ -344,8 +395,9 @@ export function registerStatefulSubagents(
 			agentId: Type.String(),
 			timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: 3_600_000, default: 30_000 })),
 		}),
-		async execute(_id, params) {
-			const waited = await requireRegistry().wait(params.agentId, params.timeoutMs);
+		async execute(_id, params, signal) {
+			const waited = await requireRegistry().wait(params.agentId, params.timeoutMs, signal);
+			if (!waited.timedOut) orchestration.observe(waited.agent.id);
 			return result(
 				waited.agent,
 				waited.timedOut
@@ -411,6 +463,7 @@ export function registerStatefulSubagents(
 		async execute(_id, params) {
 			const existing = requireRegistry().get(params.agentId);
 			if (existing?.state === "closed" && !params.subtree) {
+				orchestration.resolve(existing.id);
 				const pendingOwner = isolatedAgents.get(existing.id);
 				if (pendingOwner) await workspaceManager.cleanup(pendingOwner);
 				isolatedAgents.delete(existing.id);
@@ -423,6 +476,7 @@ export function registerStatefulSubagents(
 				} finally {
 					await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
 				}
+				for (const closed of agents) orchestration.resolve(closed.id);
 				return {
 					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
 					details: {
@@ -437,6 +491,7 @@ export function registerStatefulSubagents(
 			} finally {
 				await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
 			}
+			orchestration.resolve(agent.id);
 			return result(agent, `Closed ${agent.id}.`);
 		},
 	});
@@ -457,6 +512,7 @@ export function registerStatefulSubagents(
 					isolatedAgents.clear();
 				}
 				seenMessageIds.clear();
+				orchestration.reset();
 				await persistence?.delete();
 				ctx.ui.notify("Cleared stateful subagents.", "info");
 				return;
@@ -597,6 +653,81 @@ function summarizeAgent(agent: ManagedAgent) {
 		error: agent.error ? truncateUtf8(agent.error, MAX_TOOL_MESSAGE_BYTES).text : undefined,
 		policy: agent.policy,
 	};
+}
+
+function trackSpawnedAgent(
+	orchestration: RootOrchestrationState,
+	agent: ManagedAgent,
+): void {
+	orchestration.spawn(agent.id);
+	if (agent.state === "closed") orchestration.resolve(agent.id);
+	else if (agent.state !== "starting" && agent.state !== "running") {
+		orchestration.complete(agent.id);
+	}
+}
+
+function rememberCancelledRecovery(
+	ticket: OrchestrationRecoveryTicket | undefined,
+	cancelledNonces: Set<string>,
+): void {
+	if (!ticket) return;
+	cancelledNonces.add(ticket.nonce);
+	if (cancelledNonces.size <= 64) return;
+	const oldest = cancelledNonces.values().next().value;
+	if (oldest) cancelledNonces.delete(oldest);
+}
+
+function extractOrchestrationNonce(text: string): string | undefined {
+	const marker = `<!-- ${ORCHESTRATION_MARKER_PREFIX}`;
+	const start = text.lastIndexOf(marker);
+	if (start < 0) return undefined;
+	const valueStart = start + marker.length;
+	const end = text.indexOf(" -->", valueStart);
+	return end < 0 ? undefined : text.slice(valueStart, end);
+}
+
+function queueOrchestrationFollowUp(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	ticket: OrchestrationRecoveryTicket,
+): void {
+	try {
+		pi.sendUserMessage(ticket.prompt, { deliverAs: "followUp" });
+	} catch (error) {
+		if (ctx.hasUI) {
+			const reason = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Subagent coordination follow-up failed: ${reason}`, "warning");
+		}
+	}
+}
+
+function dispatchOrchestrationRecovery(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	orchestration: RootOrchestrationState,
+): boolean {
+	const ticket = orchestration.pendingTicket();
+	if (!ticket || !orchestration.isCurrent(ticket)) return false;
+	if (hasPendingRootMessages(ctx)) return false;
+	try {
+		pi.sendUserMessage(ticket.prompt);
+		orchestration.markDelivered(ticket);
+		return true;
+	} catch (error) {
+		if (ctx.hasUI) {
+			const reason = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Subagent coordination prompt failed: ${reason}`, "warning");
+		}
+		return false;
+	}
+}
+
+function hasPendingRootMessages(ctx: ExtensionContext): boolean {
+	try {
+		return ctx.hasPendingMessages();
+	} catch {
+		return true;
+	}
 }
 
 function sendDetachedCompletion(

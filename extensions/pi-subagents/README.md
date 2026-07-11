@@ -72,10 +72,10 @@ Count-selection guidance:
   tasks that need frequent user back-and-forth.
 - A single `subagent` call is blocking. Use one only when context isolation, high-volume output
   isolation, or independent review is worth waiting for; otherwise the main agent should do the work.
-- Never delegate a critical-path task whose answer is required for the main agent's next action merely
-  to wait for it. Use detached `subagent_spawn` only for sidecar work, continue meaningful
-  non-overlapping local work immediately, and consume its automatic completion message when it
-  arrives. Call `subagent_wait` only when genuinely blocked.
+- Do not delegate ordinary critical-path work merely to wait for it. Use detached `subagent_spawn`
+  only when parallel work, bounded context/output, independent review, a distinct model/tool profile,
+  or workspace isolation provides concrete value. Continue useful non-overlapping work when available;
+  otherwise call `subagent_wait` and synthesize the result before finishing.
 - Prefer **2–4 parallel read-only subagents** when a broad task naturally splits into independent
   branches that can each return a concise summary.
 - Exceed 4 tasks only when the branches are clearly distinct and worth the extra cost, while staying
@@ -190,7 +190,11 @@ Run a chain where each step receives the previous output:
 
 ## 🔁 Stateful agents
 
-Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects one bounded `pi-subagent-completion` message per settled turn. The message uses `deliverAs: "steer"` with `triggerTurn: false`, so an active root turn can consume it naturally while an idle root does not wake up autonomously. The main agent should continue identified non-overlapping work instead of polling or waiting immediately.
+Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects one bounded `pi-subagent-completion` message per settled turn. The message uses `deliverAs: "steer"` with `triggerTurn: false`, so an active root turn can consume it naturally.
+
+Detached work has a root-coordination invariant: the main agent should continue useful non-overlapping work when available, or call `subagent_wait` when coordination is the only useful next action. If it yields while current delegated work is still live or awaiting synthesis, the extension schedules one idle-gated recovery continuation for that orchestration revision. A completion, close, interruption, new root turn, session replacement, or shutdown revises or clears that ephemeral state. Recovery is bounded and does not internally wait forever or persist across sessions.
+
+A single detached agent is justified only by a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
@@ -221,7 +225,7 @@ Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the ex
 | `subagent_send` | Send follow-up work to a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
 | `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
-| `subagent_wait` | Explicitly wait only when blocked; timeout does not terminate the agent. Detached completion does not require polling. |
+| `subagent_wait` | Wait when coordination is the useful next action; timeout does not terminate the agent, and parent abort/user steering cancels only the wait. Already-terminal agents return immediately. |
 | `subagent_list` | List retained agents and lifecycle states. |
 | `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
 | `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |
