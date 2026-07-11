@@ -108,6 +108,7 @@ export class AgentRegistry {
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly running = new Map<string, Promise<ManagedAgent>>();
 	private readonly queue: Array<{ agent: ManagedAgent; task: string; resolve: (agent: ManagedAgent) => void }> = [];
+	private changeQueue: Promise<void> = Promise.resolve();
 	private readonly maxAgents: number;
 	private readonly maxActiveTurns: number;
 	private readonly maxHistoryTurns: number;
@@ -499,6 +500,7 @@ export class AgentRegistry {
 
 	private startTurn(agent: ManagedAgent, task: string): void {
 		agent.state = "starting";
+		agent.error = undefined;
 		agent.currentTask = task;
 		agent.updatedAt = this.now();
 		let resolveQueued!: (agent: ManagedAgent) => void;
@@ -704,12 +706,17 @@ export class AgentRegistry {
 		}
 	}
 
-	private async changed(): Promise<void> {
-		try {
-			await this.options.onChange?.(this.list(true));
-		} catch {
-			// Persistence is best-effort; lifecycle operations must remain usable if storage fails.
-		}
+	private changed(): Promise<void> {
+		const snapshot = this.list(true);
+		const next = this.changeQueue.then(async () => {
+			try {
+				await this.options.onChange?.(snapshot);
+			} catch {
+				// Persistence is best-effort; lifecycle operations must remain usable if storage fails.
+			}
+		});
+		this.changeQueue = next;
+		return next;
 	}
 
 	private copy(agent: ManagedAgent): ManagedAgent {

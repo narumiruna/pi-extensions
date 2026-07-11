@@ -12,7 +12,7 @@ Keep the existing logical stateful registry and support two transports:
 
 Stateful lifecycle tools are registered by default and can be removed with `stateful.enabled: false`. The default transport remains subprocess for compatibility and rollback safety.
 
-Detached completion follows Codex's completion-watcher pattern: spawn returns after scheduling, a background lifecycle observer publishes final status/output to the parent session, and the notification does not trigger a turn by itself. Pi implements this with `AgentRegistry.onTurnComplete` plus `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: false })`.
+Detached completion follows Codex's completion-watcher pattern: spawn returns after scheduling, a background lifecycle observer publishes final status/output to the parent session, and the notification does not trigger a turn by itself. Pi implements this with `AgentRegistry.onTurnComplete` plus `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: false })`. Completion metadata/output/error fields are independently sanitized and bounded so a large error cannot hide partial output, and runtime-generation guards prevent stale reload callbacks from writing into a replacement session.
 
 ## In-process ownership
 
@@ -45,6 +45,7 @@ restored persisted state -> idle -> explicit follow-up -> starting
 - `running` owns one `AbortController` and one transport turn.
 - `subagent_spawn` returns immediately; prompt guidance requires useful non-overlapping main-agent work instead of polling or waiting.
 - Every settled turn emits one bounded `pi-subagent-completion` custom message through `deliverAs: "steer"` and `triggerTurn: false`. Active root turns can consume it; idle roots are not awakened autonomously.
+- Registry state-change callbacks are serialized in invocation order, preventing a slow `starting` persistence write from overwriting a later terminal snapshot.
 - `subagent_wait` is an explicit blocking fallback and times out only the caller's wait.
 - `subagent_interrupt` aborts a queued/running turn but preserves identity and settled history.
 - `subagent_close` aborts current work, releases transport ownership exactly once, and excludes the record from persistence.

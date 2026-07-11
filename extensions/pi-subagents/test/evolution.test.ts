@@ -27,6 +27,7 @@ import {
 import { normalizeSubagentSettings } from "../src/settings.js";
 import {
 	assertFollowUpWriteAllowed,
+	buildDetachedCompletionMessage,
 	buildStatefulTurnPrompt,
 	isWriteCapable,
 	registerStatefulSubagents,
@@ -399,6 +400,25 @@ test("AgentRegistry runs lifecycle operations through a transport contract", asy
 	assert.deepEqual(calls, ["run:slow", "run:next", `release:${agent.id}`, "shutdown"]);
 });
 
+test("AgentRegistry clears stale terminal errors when a detached follow-up starts", async () => {
+	let turn = 0;
+	const registry = new AgentRegistry(async (_agent, _task, signal) => {
+		turn++;
+		if (turn === 1) return { output: "", exitCode: 1, error: "first failure" };
+		await new Promise<void>((resolve) =>
+			signal.addEventListener("abort", () => resolve(), { once: true }),
+		);
+		return { output: "", exitCode: 130, aborted: true };
+	});
+	const agent = await registry.spawn({ agent: "scout", task: "first", cwd: process.cwd() });
+	await registry.wait(agent.id, 100);
+	assert.equal(registry.get(agent.id)?.error, "first failure");
+	const followUp = await registry.followUp(agent.id, "second");
+	assert.match(followUp.state, /starting|running/);
+	assert.equal(followUp.error, undefined);
+	await registry.interrupt(agent.id);
+});
+
 test("AgentRegistry emits one detached completion event for every settled turn", async () => {
 	const completions: Array<{
 		agentId: string;
@@ -444,6 +464,21 @@ test("AgentRegistry emits one detached completion event for every settled turn",
 		output: "second result",
 	});
 	assert.equal(completions.length, 2);
+});
+
+test("detached completion messages retain bounded task, partial output, and errors after redaction", () => {
+	const content = buildDetachedCompletionMessage({
+		agent: record({ agent: "scout\nspoofed", state: "failed" }),
+		task: `inspect <private>task secret</private> ${"界".repeat(200)}`,
+		output: `partial output <private>output secret</private> ${"x".repeat(4_000)}`,
+		error: `provider failed ${"e".repeat(4_000)}`,
+	});
+	assert.match(content, /Agent: scout spoofed/);
+	assert.match(content, /Task: inspect/);
+	assert.match(content, /Error:\nprovider failed/);
+	assert.match(content, /Payload:\npartial output/);
+	assert.doesNotMatch(content, /task secret|output secret/);
+	assert.ok(Buffer.byteLength(content, "utf8") <= 2 * 1024);
 });
 
 test("AgentRegistry keeps detached lifecycle stable when completion delivery fails", async () => {
@@ -768,6 +803,28 @@ test("AgentRegistry bounds retained closed records", async () => {
 		await registry.close(agent.id);
 	}
 	assert.equal(registry.list(true).length, 2);
+});
+
+test("AgentRegistry serializes state snapshots so slow persistence cannot overwrite completion", async () => {
+	const savedStates: string[] = [];
+	let saveCount = 0;
+	let releaseSlowSave: (() => void) | undefined;
+	const slowSave = new Promise<void>((resolve) => {
+		releaseSlowSave = resolve;
+	});
+	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
+		onChange: async (agents) => {
+			saveCount++;
+			if (saveCount === 2) await slowSave;
+			savedStates.push(agents[0]?.state ?? "missing");
+		},
+	});
+	const agent = await registry.spawn({ agent: "scout", task: "task", cwd: process.cwd() });
+	await registry.wait(agent.id, 100);
+	await new Promise((resolve) => setImmediate(resolve));
+	releaseSlowSave?.();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(savedStates, ["starting", "starting", "completed"]);
 });
 
 test("AgentRegistry keeps lifecycle usable when persistence callbacks fail", async () => {

@@ -4,14 +4,15 @@ Date: 2026-07-11
 
 ## Automated evidence
 
-- `npm run check`: passed with Biome, extension boundaries, every workspace typecheck, and 290 tests.
+- `npm run check`: passed with Biome, extension boundaries, every workspace typecheck, and 293 tests.
 - `just pack-subagents`: passed; npm dry-run contained 22 files, including unchanged `src/subagents.ts` and new `src/in-process-transport.ts`, with no generated/test/temp files.
 - Public import audit: `rg 'pi-coding-agent/(src|dist)/' extensions/pi-subagents/src` returned no private Pi imports.
 - A deterministic mock provider drove a real public `createAgentSession()` child through prompt completion and disposal without network access or session files.
 - Transport tests cover one-session/two-turn reuse, context/history seeding, model inheritance and explicit `provider/model:thinking` selection, current-turn-only prompts, stale-output rejection, timeout 124, parent abort 130, abort-during-creation, unsettled-child discard, custom-tool rejection, and all-session shutdown after one disposal failure.
 - Resource-loader tests verify `noExtensions: true`, selected agent prompt injection, and trusted-project settings propagation.
-- Registry tests cover detached spawn returning before settlement, one completion callback per settled turn, queued interruption completion, exactly-once explicit close, child-before-parent subtree release, TTL release, inert restoration, persistence migration/redaction, and shutdown.
+- Registry tests cover detached spawn returning before settlement, one completion callback per settled turn, queued interruption completion, stale-error clearing on follow-up, ordered persistence snapshots under slow writes, exactly-once explicit close, child-before-parent subtree release, TTL release, inert restoration, persistence migration/redaction, and shutdown.
 - Registered-tool integration exercises in-process detached spawn → interrupt → follow-up → wait → interrupt → reuse → close with one injected SDK child, verifies live parent model/thinking snapshots, and asserts four bounded `pi-subagent-completion` messages use `deliverAs: "steer"` with `triggerTurn: false`.
+- Completion-format tests cover multiline metadata, private-marker redaction, multibyte task bounds, large errors plus partial output, and the 2 KiB final message cap.
 - Existing subprocess, hierarchy, mailbox, context, persistence, write-conflict, and real worktree suites remain green.
 
 ## Local Pi runtime evidence

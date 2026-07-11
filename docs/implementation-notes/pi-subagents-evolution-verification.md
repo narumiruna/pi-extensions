@@ -16,7 +16,7 @@ The existing `subagent` schema remains the compatibility path. Setting `stateful
 
 ## Automated evidence
 
-- `npm run check`: passed; includes Biome, package-boundary checks, all workspace typechecks, and 290 tests.
+- `npm run check`: passed; includes Biome, package-boundary checks, all workspace typechecks, and 293 tests.
 - `just pack-subagents`: passed; dry-run tarball contained README, license, package metadata, and all 19 source modules, including `src/in-process-transport.ts` and the declared `src/subagents.ts` entrypoint.
 - Process fixtures verified SIGTERM-resistant forced kill in about 54 ms with a 30 ms test grace period.
 - Registry fixtures verified FIFO active-turn capacity, retained-agent capacity, wait timeout, interrupt/reuse, close, idle expiry, inert restoration, corruption quarantine, redaction, and deletion.

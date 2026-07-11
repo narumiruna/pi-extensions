@@ -28,6 +28,7 @@ const ContextModeSchema = Type.Union([
 ]);
 const ScopeSchema = StringEnum(["user", "project", "both"] as const);
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
+const MAX_COMPLETION_ERROR_BYTES = 512;
 
 export interface StatefulSubagentDependencies {
 	createInProcessSession?: ChildSessionFactory;
@@ -43,7 +44,7 @@ export function registerStatefulSubagents(
 	let registry: AgentRegistry | undefined;
 	let persistence: AgentPersistence | undefined;
 	let sweepTimer: NodeJS.Timeout | undefined;
-	let completionNotificationsEnabled = false;
+	let runtimeGeneration = 0;
 	const workspaceManager = new WorkspaceManager();
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
@@ -55,14 +56,15 @@ export function registerStatefulSubagents(
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		completionNotificationsEnabled = true;
+		const generation = ++runtimeGeneration;
 		parentRuntime.model = ctx.model;
 		parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(pi.getThinkingLevel());
 		const owner = ctx.sessionManager.getSessionId?.() ?? ctx.sessionManager.getSessionFile?.() ?? `ephemeral:${ctx.cwd}`;
-		persistence = new AgentPersistence(owner, {
+		const sessionPersistence = new AgentPersistence(owner, {
 			retentionDays: settings.retentionDays,
 			maxStoredAgents: settings.maxStoredAgents,
 		});
+		persistence = sessionPersistence;
 		const transport =
 			resolveStatefulTransportKind(settings.transport) === "in-process"
 				? new InProcessTransport({
@@ -80,7 +82,8 @@ export function registerStatefulSubagents(
 			maxMailboxMessageBytes: settings.maxMailboxMessageBytes,
 			idleTtlMs: settings.idleTtlMs,
 			onChange: async (agents) => {
-				await persistence?.save(agents);
+				await sessionPersistence.save(agents);
+				if (generation !== runtimeGeneration) return;
 				for (const agent of agents) {
 					for (const message of agent.mailbox) {
 						if (seenMessageIds.has(message.id)) continue;
@@ -94,10 +97,10 @@ export function registerStatefulSubagents(
 				}
 			},
 			onTurnComplete: (completion) => {
-				if (completionNotificationsEnabled) sendDetachedCompletion(pi, completion);
+				if (generation === runtimeGeneration) sendDetachedCompletion(pi, completion);
 			},
 		});
-		const restored = persistence
+		const restored = sessionPersistence
 			.load()
 			.filter(
 				(agent) =>
@@ -128,7 +131,7 @@ export function registerStatefulSubagents(
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		completionNotificationsEnabled = false;
+		runtimeGeneration++;
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		for (const agentId of isolatedAgents.keys()) {
@@ -600,18 +603,7 @@ function sendDetachedCompletion(
 	pi: ExtensionAPI,
 	completion: AgentTurnCompletion,
 ): void {
-	const payload = redactPrivateText(completion.output || completion.error || "(no output)");
-	const content = truncateUtf8(
-		[
-			"Message Type: SUBAGENT_COMPLETION",
-			`Agent ID: ${completion.agent.id}`,
-			`Agent: ${completion.agent.agent}`,
-			`State: ${completion.agent.state}`,
-			"Payload:",
-			payload,
-		].join("\n"),
-		MAX_TOOL_MESSAGE_BYTES,
-	).text;
+	const content = buildDetachedCompletionMessage(completion);
 	pi.sendMessage(
 		{
 			customType: "pi-subagent-completion",
@@ -625,6 +617,35 @@ function sendDetachedCompletion(
 		},
 		{ deliverAs: "steer", triggerTurn: false },
 	);
+}
+
+export function buildDetachedCompletionMessage(completion: AgentTurnCompletion): string {
+	const task = sanitizeCompletionLine(completion.task, 256) || "(unknown task)";
+	const agentName = sanitizeCompletionLine(completion.agent.agent, 128) || "(unknown agent)";
+	const output = redactPrivateText(completion.output);
+	const error = completion.error
+		? truncateUtf8(redactPrivateText(completion.error), MAX_COMPLETION_ERROR_BYTES).text
+		: "";
+	return truncateUtf8(
+		[
+			"Message Type: SUBAGENT_COMPLETION",
+			`Agent ID: ${completion.agent.id}`,
+			`Agent: ${agentName}`,
+			`Task: ${task}`,
+			`State: ${completion.agent.state}`,
+			...(error.trim() ? ["Error:", error] : []),
+			"Payload:",
+			output.trim() ? output : "(no output)",
+		].join("\n"),
+		MAX_TOOL_MESSAGE_BYTES,
+	).text;
+}
+
+function sanitizeCompletionLine(value: string, maxBytes: number): string {
+	return truncateUtf8(redactPrivateText(value), maxBytes).text
+		.replace(/[\u0000-\u001f\u007f]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 async function cleanupClosedWorkspaces(
