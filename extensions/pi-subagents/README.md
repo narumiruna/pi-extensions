@@ -48,6 +48,14 @@ pi -e ./extensions/pi-subagents
 - `subagent` — delegate blocking single, parallel, fan-in, or chained batch work.
 - `subagent_spawn` and related lifecycle tools — start reusable detached work, return immediately, and receive bounded completion messages automatically.
 
+Choose the API by lifecycle:
+
+| Need | Use |
+| --- | --- |
+| One or more independent, one-shot results needed before the root responds | One blocking `subagent` call (`tasks` for parallel work) |
+| Reusable history, follow-ups, mailboxes, or work that overlaps useful root work | `subagent_spawn` and lifecycle tools |
+| One simple or critical-path action the root can perform directly | No subagent |
+
 Execution modes:
 
 - **single** — run one `{ agent, task }` job.
@@ -138,6 +146,8 @@ Run one read-only reconnaissance agent:
 }
 ```
 
+For genuinely random values, specify the range, duplicate policy, and a system randomness source instead of relying on model sampling, for example: `Use Python secrets to return 10 integers from 0 through 999; duplicates are allowed.`
+
 Run multiple agents in parallel with a shared thinking level and one per-task override:
 
 ```json
@@ -195,6 +205,8 @@ Stateful lifecycle tools are available by default. `subagent_spawn` is detached:
 Detached work has a root-coordination invariant: the main agent should continue useful non-overlapping work when available, or call `subagent_wait` when coordination is the only useful next action. If it yields while current delegated work is still live or awaiting synthesis, the extension schedules one idle-gated recovery continuation for that orchestration revision. A completion, close, interruption, new root turn, session replacement, or shutdown revises or clears that ephemeral state. Recovery is bounded and does not internally wait forever or persist across sessions.
 
 A single detached agent is justified only by a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
+
+When `subagent_wait` starts while a turn is running, that wait consumes the turn's completion: the terminal output is returned by the tool and is not also injected as a duplicate asynchronous completion. Multiple active waiters may all receive the terminal result. A timed-out or aborted wait does not consume it, so later settlement still delivers the normal asynchronous completion. If a turn has already settled and queued its completion before a wait starts, the queued message cannot be retracted safely.
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
@@ -255,7 +267,9 @@ Stateful execution uses a transport boundary:
 
 No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used. Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by the in-process transport.
 
-Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. Isolated worktree agents are intentionally not restored after shutdown.
+Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. For independent one-shot work, use batch parallel mode. Otherwise wait for or close the active agent, explicitly accept safe overlap with `allowConcurrentWrites`, or use an isolated worktree when repository isolation is actually needed.
+
+Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. Isolated worktree agents are intentionally not restored after shutdown.
 
 ## 📜 Compatibility and failure contract
 

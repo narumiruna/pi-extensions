@@ -1019,7 +1019,14 @@ test("shared-workspace write classification and follow-up guards are conservativ
 	const followUp = record({ agent: "worker", cwd: process.cwd(), state: "completed" });
 	assert.throws(
 		() => assertFollowUpWriteAllowed(registry, followUp, false, false),
-		/already active in shared workspace/,
+		(error: unknown) => {
+			assert.match(String(error), /already active in shared workspace/);
+			assert.match(String(error), /subagent parallel mode/);
+			assert.match(String(error), /wait or close/);
+			assert.match(String(error), /allowConcurrentWrites/);
+			assert.match(String(error), /worktree/);
+			return true;
+		},
 	);
 	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, true, false));
 	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, false, true));

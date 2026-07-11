@@ -46,6 +46,7 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	assert.match(guidanceText, /decide how many subagents to spawn/i);
 	assert.match(guidanceText, /no subagent/i);
 	assert.match(guidanceText, /blocking subagent/i);
+	assert.match(guidanceText, /one-shot.*parallel.*single.*subagent.*call/i);
 	assert.match(guidanceText, /critical-path/i);
 	assert.match(guidanceText, /subagent_spawn.*parallel, isolation, or specialization benefit/i);
 	assert.match(

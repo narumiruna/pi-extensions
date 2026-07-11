@@ -482,7 +482,10 @@ test("registered detached spawn returns while running and publishes each in-proc
 		mock.sentUserMessages.length = 1;
 		mock.events.get("before_agent_start")?.[0]?.({}, context.ctx);
 		await execute("subagent_send", { agentId, task: "second" });
-		await execute("subagent_wait", { agentId, timeoutMs: 100 });
+		await Promise.all([
+			execute("subagent_wait", { agentId, timeoutMs: 100 }),
+			execute("subagent_wait", { agentId, timeoutMs: 100 }),
+		]);
 		child.waitForNextAbort();
 		await execute("subagent_send", { agentId, task: "interrupt me" });
 		await execute("subagent_interrupt", { agentId });
@@ -495,7 +498,11 @@ test("registered detached spawn returns while running and publishes each in-proc
 		assert.equal(created[0].parentRuntime.thinkingLevel, "high");
 		assert.equal(child.disposals, 1);
 		await new Promise((resolve) => setImmediate(resolve));
-		assert.equal(mock.sentMessages.length, 4);
+		assert.equal(
+			mock.sentMessages.length,
+			2,
+			"active waits consume completion without suppressing unwaited turns",
+		);
 		const firstCompletion = mock.sentMessages[0] as {
 			message: { customType: string; content: string; details: { agentId: string; state: string } };
 			options: { deliverAs: string; triggerTurn: boolean };

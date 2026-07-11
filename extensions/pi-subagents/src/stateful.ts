@@ -56,6 +56,7 @@ export function registerStatefulSubagents(
 	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
 	const orchestration = new RootOrchestrationState();
 	const cancelledRecoveryNonces = new Set<string>();
+	const completionWaiters = new Map<string, number>();
 
 	const requireRegistry = () => {
 		if (!registry) throw new Error("Stateful subagents are not initialized for this session");
@@ -108,7 +109,9 @@ export function registerStatefulSubagents(
 			onTurnComplete: (completion) => {
 				if (generation !== runtimeGeneration) return;
 				orchestration.complete(completion.agent.id);
-				sendDetachedCompletion(pi, completion);
+				if (!completionWaiters.has(completion.agent.id)) {
+					sendDetachedCompletion(pi, completion);
+				}
 			},
 		});
 		const restored = sessionPersistence
@@ -184,6 +187,7 @@ export function registerStatefulSubagents(
 		}
 		isolatedAgents.clear();
 		seenMessageIds.clear();
+		completionWaiters.clear();
 		let cleanupError: unknown;
 		try {
 			await workspaceManager.cleanupAll();
@@ -210,6 +214,7 @@ export function registerStatefulSubagents(
 		promptGuidelines: [
 			"Do not delegate simple or critical-path work that the main agent can perform directly.",
 			"A single detached subagent is appropriate only for a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
+			"Use one blocking subagent parallel call for multiple independent one-shot tasks; do not use repeated detached spawns when no reuse or overlap is needed.",
 			"After spawning, continue useful non-overlapping local work when available; otherwise call subagent_wait rather than yielding while delegated work remains unresolved.",
 			"Consume available completion messages and synthesize their results before finishing; interrupt or close agents that are no longer needed.",
 			"Detached completion is delivered automatically. Do not poll, wait forever, or spawn additional agents without a distinct need.",
@@ -396,14 +401,23 @@ export function registerStatefulSubagents(
 			timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: 3_600_000, default: 30_000 })),
 		}),
 		async execute(_id, params, signal) {
-			const waited = await requireRegistry().wait(params.agentId, params.timeoutMs, signal);
-			if (!waited.timedOut) orchestration.observe(waited.agent.id);
-			return result(
-				waited.agent,
-				waited.timedOut
-					? `Wait timed out; ${waited.agent.id} is ${waited.agent.state}.`
-					: formatFinal(waited.agent),
-			);
+			const existing = requireRegistry().get(params.agentId);
+			const registered = existing?.state === "starting" || existing?.state === "running";
+			if (registered) {
+				completionWaiters.set(params.agentId, (completionWaiters.get(params.agentId) ?? 0) + 1);
+			}
+			try {
+				const waited = await requireRegistry().wait(params.agentId, params.timeoutMs, signal);
+				if (!waited.timedOut) orchestration.observe(waited.agent.id);
+				return result(
+					waited.agent,
+					waited.timedOut
+						? `Wait timed out; ${waited.agent.id} is ${waited.agent.state}.`
+						: formatFinal(waited.agent),
+				);
+			} finally {
+				if (registered) decrementWaiter(completionWaiters, params.agentId);
+			}
 		},
 	});
 
@@ -545,7 +559,8 @@ export function assertNoSharedWriteConflict(
 		const activeConfig = agents.find((agent) => agent.name === active.agent);
 		if (isWriteCapable(activeConfig?.tools)) {
 			throw new Error(
-				`Write-capable subagent ${active.id} is already active in shared workspace ${cwd}`,
+				`Write-capable subagent ${active.id} is already active in shared workspace ${cwd}. ` +
+					"For independent one-shot work, use subagent parallel mode. Otherwise wait or close the active agent; set allowConcurrentWrites only when overlapping writes are knowingly safe, or use workspaceMode worktree when repository isolation is needed.",
 			);
 		}
 	}
@@ -569,6 +584,12 @@ export function assertFollowUpWriteAllowed(
 export function isWriteCapable(tools: string[] | undefined): boolean {
 	if (!tools) return true;
 	return tools.some((tool) => ["bash", "write", "edit"].includes(tool));
+}
+
+function decrementWaiter(waiters: Map<string, number>, agentId: string): void {
+	const count = waiters.get(agentId);
+	if (count === undefined || count <= 1) waiters.delete(agentId);
+	else waiters.set(agentId, count - 1);
 }
 
 async function confirmProjectAgent(

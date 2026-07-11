@@ -37,6 +37,7 @@ export default function (pi: ExtensionAPI) {
 			"Use subagent only when delegation fits; the main agent should decide how many subagents to spawn from task shape instead of waiting for the user to specify a count.",
 			"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, tasks requiring frequent user back-and-forth, or critical-path work needed for the main agent's next action.",
 			"A single blocking subagent call should be used only when independent context, high-volume output isolation, or an external review is worth waiting for; otherwise do the task in the main agent.",
+			"For one-shot parallel work, use a single subagent call with tasks instead of repeated subagent_spawn calls, even when the user explicitly requests multiple agents.",
 			"When subagent_spawn is available, use it only when detached delegation has a concrete parallel, isolation, or specialization benefit; otherwise keep the work in the main agent.",
 			"After detached spawn, continue useful non-overlapping work when available, or call subagent_wait when coordination is the only useful next action; do not yield permanently while delegated work remains unresolved.",
 			"Consume detached completion messages and synthesize their results before finishing; interrupt or close agents that are no longer needed.",
