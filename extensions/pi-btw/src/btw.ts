@@ -95,7 +95,7 @@ interface LoadBtwThinkingLevelOptions {
 }
 
 interface SideQuestionAuth {
-	apiKey: string;
+	apiKey?: string;
 	headers?: Record<string, string>;
 	env?: Record<string, string>;
 }
@@ -179,8 +179,8 @@ export async function resolveBtwModel({
 				: `falling back to ${fallback}`;
 			try {
 				const auth = await modelRegistry.getApiKeyAndHeaders(configuredModel);
-				if (auth.ok && auth.apiKey) return { model: configuredModel, auth: withApiKey(auth) };
-				const reason = auth.ok ? "has no API key" : auth.error;
+				if (auth.ok && hasRequestAuth(auth)) return { model: configuredModel, auth };
+				const reason = auth.ok ? "has no request credentials" : auth.error;
 				warn?.(
 					`pi-btw model ${settings.model} is unavailable (${reason}); ${fallbackAction}.`,
 				);
@@ -196,19 +196,19 @@ export async function resolveBtwModel({
 	if (!currentModel) return undefined;
 	try {
 		const auth = await modelRegistry.getApiKeyAndHeaders(currentModel);
-		if (auth.ok && auth.apiKey) return { model: currentModel, auth: withApiKey(auth) };
+		if (auth.ok && hasRequestAuth(auth)) return { model: currentModel, auth };
 	} catch {
 		// The caller reports the final lack of an available model.
 	}
 	return undefined;
 }
 
-function withApiKey(auth: {
-	apiKey?: string;
-	headers?: Record<string, string>;
-	env?: Record<string, string>;
-}): SideQuestionAuth {
-	return { apiKey: auth.apiKey!, headers: auth.headers, env: auth.env };
+function hasRequestAuth(auth: SideQuestionAuth): boolean {
+	return Boolean(
+		auth.apiKey ||
+			(auth.headers && Object.keys(auth.headers).length > 0) ||
+			(auth.env && Object.keys(auth.env).length > 0),
+	);
 }
 
 export async function readBtwSettings(
@@ -335,19 +335,18 @@ export default function btw(pi: ExtensionAPI) {
 				ctx.ui.notify(`pi-btw settings ignored: ${settingsResult.reason}`, "warning");
 			}
 
-			const selected = await resolveBtwModel({
-				settings,
-				currentModel: ctx.model,
-				modelRegistry: ctx.modelRegistry,
-				warn: (message) => ctx.ui.notify(message, "warning"),
-			});
-			if (!selected) {
+			const resolution = await resolveBtwModelWithLoader(settings, ctx);
+			if (resolution.kind === "cancelled") {
+				ctx.ui.notify("Cancelled", "info");
+				return;
+			}
+			if (resolution.kind === "unavailable") {
 				ctx.ui.notify("No available model for /btw", "error");
 				return;
 			}
 
 			const thinkingLevel = settings.thinkingLevel ?? pi.getThinkingLevel();
-			const answer = await askSideQuestion(question, selected, thinkingLevel, ctx);
+			const answer = await askSideQuestion(question, resolution.selected, thinkingLevel, ctx);
 			if (answer === undefined) {
 				ctx.ui.notify("Cancelled", "info");
 				return;
@@ -355,6 +354,39 @@ export default function btw(pi: ExtensionAPI) {
 
 			await showAnswer(question, answer, ctx);
 		},
+	});
+}
+
+type ModelResolutionOutcome =
+	| { kind: "cancelled" }
+	| { kind: "unavailable" }
+	| { kind: "selected"; selected: ResolvedBtwModel };
+
+async function resolveBtwModelWithLoader(
+	settings: BtwSettings,
+	ctx: ExtensionCommandContext,
+): Promise<ModelResolutionOutcome> {
+	return ctx.ui.custom<ModelResolutionOutcome>((tui, theme, _keybindings, done) => {
+		const loader = new BorderedLoader(tui, theme, "Resolving /btw model credentials...");
+		let cancelled = false;
+		loader.onAbort = () => {
+			cancelled = true;
+			done({ kind: "cancelled" });
+		};
+
+		resolveBtwModel({
+			settings,
+			currentModel: ctx.model,
+			modelRegistry: ctx.modelRegistry,
+			warn: (message) => {
+				if (!cancelled) ctx.ui.notify(message, "warning");
+			},
+		}).then((selected) => {
+			if (cancelled) return;
+			done(selected ? { kind: "selected", selected } : { kind: "unavailable" });
+		});
+
+		return loader;
 	});
 }
 

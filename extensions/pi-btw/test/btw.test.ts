@@ -130,6 +130,27 @@ test("resolveBtwModel selects configured model and its credentials", async () =>
 	assert.deepEqual(warnings, []);
 });
 
+test("resolveBtwModel accepts header-only and environment-only configured auth", async () => {
+	for (const auth of [
+		{ ok: true as const, headers: { Authorization: "Bearer test" } },
+		{ ok: true as const, env: { PROVIDER_TOKEN: "test" } },
+	]) {
+		const configuredModel = { provider: "custom", id: "side" } as Model<Api>;
+		const result = await resolveBtwModel({
+			settings: { model: "custom/side" },
+			currentModel: undefined,
+			modelRegistry: {
+				find: () => configuredModel,
+				getApiKeyAndHeaders: async () => auth,
+			} as never,
+		});
+
+		assert.equal(result?.model, configuredModel);
+		assert.deepEqual(result?.auth.headers, auth.headers);
+		assert.deepEqual(result?.auth.env, auth.env);
+	}
+});
+
 test("resolveBtwModel inherits current model when no model is configured", async () => {
 	const currentModel = { provider: "current", id: "main" } as Model<Api>;
 	const result = await resolveBtwModel({
