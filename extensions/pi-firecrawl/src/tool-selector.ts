@@ -26,7 +26,7 @@ export function clearSettingsNotice() {
 }
 
 export function recordSettingsNotice(settings: SettingsLoadResult) {
-	settingsNotice = settings.notice;
+	if (settings.notice) settingsNotice = settings.notice;
 }
 
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {

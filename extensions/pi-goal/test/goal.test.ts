@@ -159,6 +159,15 @@ test("assistant token accounting prefers totalTokens and uses a cache-inclusive 
 		13,
 	);
 	assert.equal(assistantUsageTokens({ totalTokens: Number.POSITIVE_INFINITY }), 0);
+	assert.equal(
+		assistantUsageTokens({
+			input: Number.MAX_SAFE_INTEGER,
+			output: Number.MAX_SAFE_INTEGER,
+			cacheRead: Number.MAX_SAFE_INTEGER,
+			cacheWrite: Number.MAX_SAFE_INTEGER,
+		}),
+		Number.MAX_SAFE_INTEGER,
+	);
 	assert.equal(assistantUsageTokens(undefined), 0);
 
 	assert.equal(
@@ -175,6 +184,16 @@ test("assistant token accounting prefers totalTokens and uses a cache-inclusive 
 			{ type: "custom", data: { usage: { totalTokens: 999 } } },
 		]),
 		40,
+	);
+	assert.equal(
+		cumulativeAssistantTokens([
+			{
+				type: "message",
+				message: { role: "assistant", usage: { totalTokens: Number.MAX_SAFE_INTEGER } },
+			},
+			{ type: "message", message: { role: "assistant", usage: { totalTokens: 1 } } },
+		]),
+		Number.MAX_SAFE_INTEGER,
 	);
 });
 

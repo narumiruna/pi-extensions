@@ -233,6 +233,10 @@ test("argument and option helpers parse quoted command lines", () => {
 test("path and key helpers normalize safe names and reject escapes", () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-test-"));
 	assert.equal(safeJoin(root, "skills/demo.md"), path.join(root, "skills", "demo.md"));
+	assert.equal(
+		safeJoin(root, path.join(root, "skills/demo.md")),
+		path.join(root, "skills/demo.md"),
+	);
 	assert.throws(() => safeJoin(root, "../escape"), /Unsafe path/);
 	assert.equal(isDeniedPath("skills/.env.local"), true);
 	assert.equal(isDeniedPath(".git"), true);

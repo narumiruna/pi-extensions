@@ -78,10 +78,16 @@ export function normalizeTokenBudget(value: unknown) {
 }
 
 export function assistantUsageTokens(value: unknown) {
-	const usage = normalizeUsage(value);
-	if (!usage) return 0;
+	if (!value || typeof value !== "object") return 0;
+	const usage = value as Partial<Usage>;
 	if (isNonNegativeFiniteNumber(usage.totalTokens)) return usage.totalTokens;
-	return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+	return Math.min(
+		Number.MAX_SAFE_INTEGER,
+		nonNegativeFiniteNumber(usage.input) +
+			nonNegativeFiniteNumber(usage.output) +
+			nonNegativeFiniteNumber(usage.cacheRead) +
+			nonNegativeFiniteNumber(usage.cacheWrite),
+	);
 }
 
 export function cumulativeAssistantTokens(entries: unknown[]) {
@@ -91,7 +97,7 @@ export function cumulativeAssistantTokens(entries: unknown[]) {
 		if (candidate?.type !== "message") continue;
 		const message = candidate.message as { role?: unknown; usage?: unknown } | undefined;
 		if (message?.role !== "assistant") continue;
-		total += assistantUsageTokens(message.usage);
+		total = Math.min(Number.MAX_SAFE_INTEGER, total + assistantUsageTokens(message.usage));
 	}
 	return total;
 }
@@ -99,28 +105,4 @@ export function cumulativeAssistantTokens(entries: unknown[]) {
 export function currentTokenTotal(ctx: UsageContext): number {
 	const sessionManager = ctx.sessionManager as { getBranch?: () => unknown[] } | undefined;
 	return cumulativeAssistantTokens(sessionManager?.getBranch?.() ?? []);
-}
-
-function normalizeUsage(value: unknown): Usage | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const usage = value as Partial<Usage>;
-	return {
-		input: nonNegativeFiniteNumber(usage.input),
-		output: nonNegativeFiniteNumber(usage.output),
-		cacheRead: nonNegativeFiniteNumber(usage.cacheRead),
-		cacheWrite: nonNegativeFiniteNumber(usage.cacheWrite),
-		totalTokens: isNonNegativeFiniteNumber(usage.totalTokens)
-			? usage.totalTokens
-			: nonNegativeFiniteNumber(usage.input) +
-				nonNegativeFiniteNumber(usage.output) +
-				nonNegativeFiniteNumber(usage.cacheRead) +
-				nonNegativeFiniteNumber(usage.cacheWrite),
-		cost: {
-			input: nonNegativeFiniteNumber(usage.cost?.input),
-			output: nonNegativeFiniteNumber(usage.cost?.output),
-			cacheRead: nonNegativeFiniteNumber(usage.cost?.cacheRead),
-			cacheWrite: nonNegativeFiniteNumber(usage.cost?.cacheWrite),
-			total: nonNegativeFiniteNumber(usage.cost?.total),
-		},
-	};
 }

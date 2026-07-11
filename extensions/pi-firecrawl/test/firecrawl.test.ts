@@ -166,6 +166,10 @@ test("firecrawl migrates a legacy-only settings file and warns", async () => {
 		assert.match(notifications[0]?.message ?? "", /migrated/i);
 		assert.match(notifications[0]?.message ?? "", /pi-firecrawl-settings\.json/);
 		assert.match(notifications[0]?.message ?? "", /pi-firecrawl\.json/);
+
+		await mock.commands.get("firecrawl")?.handler("disable", ctx);
+		await mock.commands.get("firecrawl")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /migrated/i);
 	});
 });
 

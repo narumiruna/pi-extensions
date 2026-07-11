@@ -130,6 +130,10 @@ test("chrome-devtools migrates a legacy-only settings file and warns", async () 
 		assert.match(notifications[0]?.message ?? "", /migrated/i);
 		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools-settings\.json/);
 		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools\.json/);
+
+		await mock.commands.get("chrome-devtools")?.handler("disable", ctx);
+		await mock.commands.get("chrome-devtools")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /migrated/i);
 	});
 });
 

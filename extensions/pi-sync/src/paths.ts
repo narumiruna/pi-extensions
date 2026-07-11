@@ -24,7 +24,6 @@ export function isPathInside(parent: string, child: string) {
 }
 
 export function safeJoin(root: string, relativePath: string) {
-	if (path.isAbsolute(relativePath)) throw new Error(`Unsafe path in snapshot: ${relativePath}`);
 	const target = path.resolve(root, relativePath);
 	assertWithinRoot(root, target, relativePath);
 	return target;

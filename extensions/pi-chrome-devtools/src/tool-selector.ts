@@ -29,7 +29,7 @@ function unique<T>(values: T[]) {
 }
 
 function recordSettingsNotice(settings: { notice?: string }) {
-	state.settingsNotice = settings.notice;
+	if (settings.notice) state.settingsNotice = settings.notice;
 }
 
 function formatError(error: unknown) {
