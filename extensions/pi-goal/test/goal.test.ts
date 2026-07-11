@@ -98,6 +98,7 @@ test("child session initialization does not erase or reroute the parent goal", a
 		data: { goal: rootGoal },
 	});
 	const rootCompletion = requireGoalTool(root, "goal_complete");
+	const rootEntriesBeforeChild = root.entries.length;
 
 	const child = createMockPi();
 	goal(child.pi);
@@ -105,6 +106,12 @@ test("child session initialization does not erase or reroute the parent goal", a
 		sessionManager: { getBranch: () => [], getEntries: () => [] },
 	});
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+
+	// Empty-child startup must not claim the parent goal or append any snapshot of it.
+	assert.equal(lastGoalStatus(child), null);
+	assert.equal(child.entries.filter((entry) => entry.customType === "goal-state").length, 0);
+	assert.equal(requireLastGoal(root).id, rootGoal.id);
+	assert.equal(lastGoalStatus(root), "active");
 
 	const result = await rootCompletion.execute(
 		"root-completion",
@@ -117,10 +124,54 @@ test("child session initialization does not erase or reroute the parent goal", a
 	assert.equal(result.content?.[0]?.text, "Goal complete: Verified parent completion.");
 	assert.equal(result.terminate, true);
 	assert.equal(result.details?.goal, rootGoal.text);
-	assert.deepEqual(root.entries.filter((entry) => entry.customType === "goal-state").at(-1)?.data, {
-		goal: null,
-	});
-	assert.equal(child.entries.filter((entry) => entry.customType === "goal-state").length, 0);
+	assert.equal(result.details?.goal_id, rootGoal.id);
+
+	const rootGoalStates = root.entries
+		.slice(rootEntriesBeforeChild)
+		.filter((entry) => entry.customType === "goal-state")
+		.map((entry) => entry.data as { goal?: StoredGoal | null });
+	assert.equal(rootGoalStates.length, 2);
+	assert.equal(rootGoalStates[0]?.goal?.status, "complete");
+	assert.equal(rootGoalStates[0]?.goal?.id, rootGoal.id);
+	assert.equal(rootGoalStates[0]?.goal?.text, rootGoal.text);
+	assert.deepEqual(rootGoalStates[1], { goal: null });
+	assert.equal(lastGoalStatus(root), null);
+
+	const childGoalStates = child.entries.filter((entry) => entry.customType === "goal-state");
+	assert.equal(childGoalStates.length, 0);
+	assert.equal(
+		childGoalStates.some(
+			(entry) => (entry.data as { goal?: StoredGoal | null } | undefined)?.goal?.id === rootGoal.id,
+		),
+		false,
+	);
+});
+
+test("independent goal instances keep distinct concurrent active goals", async () => {
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext();
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	await child.commands.get("goal")?.handler("child objective", childContext.ctx);
+
+	const rootGoal = requireLastGoal(root);
+	const childGoal = requireLastGoal(child);
+	assert.notEqual(rootGoal.id, childGoal.id);
+	assert.equal(rootGoal.text, "root objective");
+	assert.equal(childGoal.text, "child objective");
+	assert.equal(lastGoalStatus(root), "active");
+	assert.equal(lastGoalStatus(child), "active");
+	assert.match(String(rootContext.statuses.get("goal")), /^active /);
+	assert.match(String(childContext.statuses.get("goal")), /^active /);
+
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
 });
 
 test("independent goal instances keep completion local", async () => {
@@ -138,7 +189,8 @@ test("independent goal instances keep completion local", async () => {
 
 	const rootGoal = requireLastGoal(root);
 	const childGoal = requireLastGoal(child);
-	assert.notEqual(rootGoal.id, childGoal.id);
+	const rootEntriesBefore = root.entries.length;
+	const childEntriesBefore = child.entries.length;
 
 	const result = await requireGoalTool(root, "goal_complete").execute(
 		"root-completion",
@@ -149,9 +201,28 @@ test("independent goal instances keep completion local", async () => {
 	);
 
 	assert.equal(result.terminate, true);
+	assert.equal(result.details?.goal, rootGoal.text);
+	assert.equal(result.details?.goal_id, rootGoal.id);
+
+	const rootCompletion = findPersistedGoal(root, "complete");
+	assert.ok(rootCompletion);
+	assert.equal(rootCompletion.id, rootGoal.id);
+	assert.equal(rootCompletion.text, rootGoal.text);
+	assert.deepEqual(lastGoal(root), null);
 	assert.equal(lastGoalStatus(root), null);
+
+	const rootGoalStates = root.entries
+		.slice(rootEntriesBefore)
+		.filter((entry) => entry.customType === "goal-state")
+		.map((entry) => entry.data as { goal?: StoredGoal | null });
+	assert.equal(rootGoalStates.length, 2);
+	assert.equal(rootGoalStates[0]?.goal?.status, "complete");
+	assert.deepEqual(rootGoalStates[1], { goal: null });
+
+	assert.equal(child.entries.length, childEntriesBefore);
 	assert.equal(lastGoalStatus(child), "active");
 	assert.equal(requireLastGoal(child).id, childGoal.id);
+	assert.equal(requireLastGoal(child).text, childGoal.text);
 	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
 	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
 });
@@ -175,15 +246,128 @@ test("tool lifecycle persistence stays on the owning goal instance", async () =>
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	await child.commands.get("goal")?.handler("child objective", childContext.ctx);
 
+	const rootGoal = requireLastGoal(root);
+	const childGoal = requireLastGoal(child);
 	const rootEntriesBefore = root.entries.length;
 	const childEntriesBefore = child.entries.length;
+
 	root.events.get("tool_execution_end")?.[0]?.({}, rootContext.ctx);
 	assert.equal(root.entries.length, rootEntriesBefore + 1);
 	assert.equal(child.entries.length, childEntriesBefore);
+	const rootUpdated = requireLastGoal(root);
+	assert.equal(rootUpdated.id, rootGoal.id);
+	assert.equal(rootUpdated.text, "root objective");
+	assert.equal(rootUpdated.status, "active");
+	assert.equal(requireLastGoal(child).id, childGoal.id);
+	assert.equal(requireLastGoal(child).text, "child objective");
 
 	child.events.get("tool_execution_end")?.[0]?.({}, childContext.ctx);
 	assert.equal(root.entries.length, rootEntriesBefore + 1);
 	assert.equal(child.entries.length, childEntriesBefore + 1);
+	const childUpdated = requireLastGoal(child);
+	assert.equal(childUpdated.id, childGoal.id);
+	assert.equal(childUpdated.text, "child objective");
+	assert.equal(childUpdated.status, "active");
+	assert.equal(requireLastGoal(root).id, rootGoal.id);
+	assert.equal(requireLastGoal(root).text, "root objective");
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+});
+
+test("goal_blocked ownership stays on the root instance after child start", async () => {
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext();
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+	const rootGoal = requireLastGoal(root);
+	const rootBlocker = requireGoalTool(root, "goal_blocked");
+	const rootEntriesBeforeChild = root.entries.length;
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	assert.equal(lastGoalStatus(child), null);
+
+	const result = await rootBlocker.execute(
+		"root-block",
+		{
+			goal_id: rootGoal.id,
+			reason: "Need offline hardware access that remains unavailable",
+			evidence: "Attempted recovery three times with the same USB failure",
+			repeated_turns: 3,
+		},
+		new AbortController().signal,
+		() => undefined,
+		rootContext.ctx,
+	);
+
+	assert.equal(result.terminate, true);
+	assert.equal(result.details?.goal, rootGoal.text);
+	assert.equal(result.details?.goal_id, rootGoal.id);
+	assert.match(result.content?.[0]?.text ?? "", /Goal blocked:/i);
+
+	const rootBlocked = findPersistedGoal(root, "blocked");
+	assert.ok(rootBlocked);
+	assert.equal(rootBlocked.id, rootGoal.id);
+	assert.equal(rootBlocked.text, rootGoal.text);
+	assert.equal(lastGoalStatus(root), "blocked");
+	assert.ok(root.entries.length > rootEntriesBeforeChild);
+	assert.equal(child.entries.filter((entry) => entry.customType === "goal-state").length, 0);
+	assert.equal(lastGoalStatus(child), null);
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+});
+
+test("continuation and budget messages stay on the owning runtime API", async () => {
+	const rootBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 0 })];
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext({
+		sessionManager: { getBranch: () => rootBranch, getEntries: () => rootBranch },
+	});
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("--tokens 1 root objective", rootContext.ctx);
+	const rootGoal = requireLastGoal(root);
+	const rootUserMessagesBefore = root.sentUserMessages.length;
+	const rootCustomMessagesBefore = root.sentMessages.length;
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	const childUserMessagesBefore = child.sentUserMessages.length;
+	const childCustomMessagesBefore = child.sentMessages.length;
+
+	// Parent agent_end after an incomplete stop must enqueue and later dispatch continuation
+	// against the parent API only, even after a sibling factory started.
+	await root.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		rootContext.ctx,
+	);
+	root.events.get("agent_settled")?.[0]?.({}, rootContext.ctx);
+	assert.ok(root.sentUserMessages.length > rootUserMessagesBefore);
+	assert.match(
+		root.sentUserMessages.at(-1)?.text ?? "",
+		new RegExp(`<!-- pi-goal-continuation:${rootGoal.id}:`),
+	);
+	assert.equal(child.sentUserMessages.length, childUserMessagesBefore);
+
+	// Parent tool activity that crosses the token budget must wrap up through the parent API.
+	rootBranch.push(assistantUsageEntry({ totalTokens: 5 }));
+	root.events.get("tool_execution_end")?.[0]?.({}, rootContext.ctx);
+	assert.equal(lastGoalStatus(root), "budget_limited");
+	assert.ok(root.sentMessages.length > rootCustomMessagesBefore);
+	const wrapUp = root.sentMessages.at(-1)?.message as {
+		customType?: string;
+		details?: { goalId?: string };
+	};
+	assert.equal(wrapUp?.customType, "goal-budget-wrap-up");
+	assert.equal(wrapUp?.details?.goalId, rootGoal.id);
+	assert.equal(child.sentMessages.length, childCustomMessagesBefore);
+	assert.equal(lastGoalStatus(child), null);
+
 	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
 	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
 });
@@ -195,12 +379,18 @@ test("child shutdown does not clear the parent goal", async () => {
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
 	const rootGoal = requireLastGoal(root);
+	const rootEntriesBeforeChild = root.entries.length;
 
 	const child = createMockPi();
 	goal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+
+	assert.equal(requireLastGoal(root).id, rootGoal.id);
+	assert.equal(lastGoalStatus(root), "active");
+	assert.equal(lastGoalStatus(child), null);
+	assert.equal(child.entries.filter((entry) => entry.customType === "goal-state").length, 0);
 
 	const result = await requireGoalTool(root, "goal_complete").execute(
 		"root-completion-after-child-shutdown",
@@ -211,6 +401,17 @@ test("child shutdown does not clear the parent goal", async () => {
 	);
 
 	assert.equal(result.terminate, true);
+	assert.equal(result.details?.goal, rootGoal.text);
+	assert.equal(result.details?.goal_id, rootGoal.id);
+
+	const rootGoalStates = root.entries
+		.slice(rootEntriesBeforeChild)
+		.filter((entry) => entry.customType === "goal-state")
+		.map((entry) => entry.data as { goal?: StoredGoal | null });
+	assert.equal(rootGoalStates.length, 2);
+	assert.equal(rootGoalStates[0]?.goal?.status, "complete");
+	assert.equal(rootGoalStates[0]?.goal?.id, rootGoal.id);
+	assert.deepEqual(rootGoalStates[1], { goal: null });
 	assert.equal(lastGoalStatus(root), null);
 	assert.equal(child.entries.length, 0);
 	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
@@ -2175,7 +2376,13 @@ test("findFinalAssistantMessage returns the last assistant with a known stop rea
 type GoalTool = {
 	execute: (...args: unknown[]) => Promise<{
 		content?: Array<{ type: string; text: string }>;
-		details?: { goal?: string };
+		details?: {
+			goal?: string;
+			goal_id?: string;
+			reason?: string;
+			evidence?: string;
+			repeated_turns?: number;
+		};
 		terminate?: boolean;
 	}>;
 };

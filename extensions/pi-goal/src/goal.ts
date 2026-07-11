@@ -33,11 +33,12 @@ import {
 
 type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
-// This module intentionally retains the shared lifecycle state machine: every
-// Pi hook and goal tool coordinates the same goal, continuation, retry, stale-
-// turn guard, and budget single-flight state. Pure command, prompt, accounting,
-// and persistence logic lives in focused modules; splitting the remaining
-// handlers would create ambiguous mutable-state ownership.
+// Per-factory GoalRuntime owns mutable goal/continuation/budget/recovery state
+// so concurrent in-process AgentSessions cannot clobber each other. Pure helpers
+// live at module scope (single source of truth). registerGoalRuntime still keeps
+// the orchestration handlers together so mutable ownership does not fragment
+// across files; a file-size split is deferred until that ownership boundary is
+// stable under isolation tests.
 
 interface GoalCompleteDetails {
 	goal: string;
@@ -128,6 +129,7 @@ const RETRYABLE_GOAL_ERROR_PATTERNS = [
 	/timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before message_stop|http2 request did not get a response|retry delay/i,
 	/context[_\s-]*length[_\s-]*exceeded|input exceeds the context window/i,
 ] as const;
+
 interface GoalRuntime {
 	readonly pi: ExtensionAPI;
 	activeGoal?: ActiveGoal;
@@ -376,16 +378,16 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 					pauseGoal(ctx);
 					return;
 				case "resume":
-					await resumeGoal(pi, ctx);
+					await resumeGoal(runtime.pi, ctx);
 					return;
 				case "clear":
 					clearGoal(ctx);
 					return;
 				case "edit":
-					await editGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
+					await editGoal(result.objective ?? "", result.tokenBudget, runtime.pi, ctx);
 					return;
 				case "start":
-					await startGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
+					await startGoal(result.objective ?? "", result.tokenBudget, runtime.pi, ctx);
 					return;
 			}
 		},
@@ -401,7 +403,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		if (runtime.activeGoal) {
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
-				if (limitActiveGoalForBudget(pi, ctx, false)) return;
+				if (limitActiveGoalForBudget(ctx, false)) return;
 			}
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
@@ -431,7 +433,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		cancelContinuationWork();
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
-		if (limitActiveGoalForBudget(pi, ctx, false)) return { cancel: true as const };
+		if (limitActiveGoalForBudget(ctx, false)) return { cancel: true as const };
 	});
 
 	pi.on("session_compact", (event, ctx) => {
@@ -445,7 +447,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		updateGoalUsage(runtime.activeGoal, ctx);
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
-		if (limitActiveGoalForBudget(pi, ctx, false)) return;
+		if (limitActiveGoalForBudget(ctx, false)) return;
 
 		const wasPiRetry = isPiOwnedCompactionRetry(event, runtime.activeGoal.id);
 		clearGoalRecoveryForGoal(runtime.activeGoal.id);
@@ -454,7 +456,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		// Manual compaction does not emit agent_settled. This common dispatcher is
 		// therefore the narrow fallback; threshold compaction leaves the intent for
 		// agent_settled when Pi is still busy.
-		dispatchContinuationIfSettled(pi, ctx);
+		dispatchContinuationIfSettled(ctx);
 	});
 
 	pi.on("input", (event) => {
@@ -504,7 +506,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			runtime.budgetWrapUp?.goalId === runtime.activeGoal.id &&
 			!runtime.budgetWrapUp.delivered
 		) {
-			queueBudgetWrapUp(pi, ctx, runtime.activeGoal);
+			queueBudgetWrapUp(ctx, runtime.activeGoal);
 			return;
 		}
 		if (runtime.activeGoal?.status !== "active") return;
@@ -514,7 +516,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		updateGoalUsage(runtime.activeGoal, ctx);
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
-		limitActiveGoalForBudget(pi, ctx, true);
+		limitActiveGoalForBudget(ctx, true);
 	});
 
 	pi.on("before_agent_start", (event) => {
@@ -555,7 +557,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 
 		if (finalAssistant?.stopReason === "error") {
 			if (isRetryableGoalInterruption(finalAssistant)) {
-				if (limitActiveGoalForBudget(pi, ctx, false)) return;
+				if (limitActiveGoalForBudget(ctx, false)) return;
 				runtime.goalRecovery = {
 					goalId,
 					kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
@@ -577,7 +579,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 
 		clearGoalRecoveryForGoal(goalId);
 
-		if (limitActiveGoalForBudget(pi, ctx, false)) return;
+		if (limitActiveGoalForBudget(ctx, false)) return;
 
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -588,7 +590,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {
-		dispatchContinuationIfSettled(pi, ctx);
+		dispatchContinuationIfSettled(ctx);
 	});
 
 	async function startGoal(
@@ -819,53 +821,6 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		ctx.ui.notify(goalSummary(runtime.activeGoal), "info");
 	}
 
-	function createGoal(
-		text: string,
-		tokenBudget: number | undefined,
-		baselineTokens: number,
-	): ActiveGoal {
-		const now = Date.now();
-		return {
-			id: randomUUID(),
-			text,
-			status: "active",
-			startedAt: now,
-			updatedAt: now,
-			iteration: 0,
-			tokenBudget,
-			tokensUsed: 0,
-			timeUsedSeconds: 0,
-			baselineTokens,
-			activeStartedAt: now,
-		};
-	}
-
-	function transitionGoal(goal: ActiveGoal, requestedStatus: GoalStatus): ActiveGoal {
-		const now = Date.now();
-		const status =
-			requestedStatus === "active" &&
-			goal.tokenBudget !== undefined &&
-			goal.tokensUsed >= goal.tokenBudget
-				? "budget_limited"
-				: requestedStatus;
-		const next = { ...goal, status, updatedAt: now };
-		checkpointGoalActiveTime(next, now, status === "active");
-		return next;
-	}
-
-	function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
-		return { ...goal, id: randomUUID(), updatedAt: Date.now() };
-	}
-
-	function editedGoalStatus(status: GoalStatus): GoalStatus {
-		if (status === "paused" || status === "blocked" || status === "usage_limited") return status;
-		return "active";
-	}
-
-	function incrementGoal(goal: ActiveGoal): ActiveGoal {
-		return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
-	}
-
 	function stopGoalAfterAgentEnd(
 		ctx: StatusContext,
 		goal: ActiveGoal,
@@ -903,27 +858,6 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		);
 	}
 
-	async function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-		return sendPrompt(pi, ctx, buildGoalPrompt(goal));
-	}
-
-	async function sendObjectiveUpdatedPrompt(
-		pi: ExtensionAPI,
-		ctx: StatusContext,
-		goal: ActiveGoal,
-	) {
-		return sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
-	}
-
-	async function sendResumePrompt(
-		pi: ExtensionAPI,
-		ctx: StatusContext,
-		goal: ActiveGoal,
-		stoppedStatus: GoalStatus,
-	) {
-		return sendPrompt(pi, ctx, buildResumePrompt(goal, stoppedStatus));
-	}
-
 	function requestContinuation(goal: ActiveGoal) {
 		if (hasContinuationWorkForGoal(goal.id)) return false;
 		const marker = continuationMarker(goal);
@@ -936,7 +870,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		return true;
 	}
 
-	function dispatchContinuationIfSettled(pi: ExtensionAPI, ctx: StatusContext) {
+	function dispatchContinuationIfSettled(ctx: StatusContext) {
 		const intent = runtime.continuationIntent;
 		if (!intent) return false;
 		if (
@@ -952,7 +886,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		runtime.continuationIntent = undefined;
 		runtime.continuationDelivery = intent;
 		try {
-			pi.sendUserMessage(intent.prompt);
+			runtime.pi.sendUserMessage(intent.prompt);
 			return true;
 		} catch (error) {
 			if (runtime.continuationDelivery?.marker === intent.marker)
@@ -972,86 +906,13 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		);
 	}
 
-	async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
-		try {
-			const sent = ctx.isIdle?.()
-				? (pi.sendUserMessage(prompt) as void | Promise<void>)
-				: (pi.sendUserMessage(prompt, { deliverAs: "followUp" }) as void | Promise<void>);
-			await sent;
-			return true;
-		} catch (error) {
-			ctx.ui.notify(`Goal prompt failed: ${formatError(error)}`, "error");
-			return false;
-		}
-	}
-
 	function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 		clearCompletionStatusTimer();
 		ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
 	}
 
-	function formatStatus(goal: ActiveGoal | undefined) {
-		if (!goal) return undefined;
-		if (goal.status === "complete") return "complete";
-		if (goal.status === "paused") return "paused";
-		if (goal.status === "blocked") return "blocked";
-		if (goal.status === "usage_limited") return "usage";
-		if (goal.status === "budget_limited") return `budget ${formatBudget(goal)}`;
-		if (goal.tokenBudget !== undefined) return `active ${formatBudget(goal)}`;
-		return `active ${formatDuration(goal.timeUsedSeconds)}`;
-	}
-
-	function formatBudget(goal: ActiveGoal) {
-		return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
-	}
-
-	function goalSummary(goal: ActiveGoal) {
-		return [
-			`Goal: ${goal.text}`,
-			`Status: ${goal.status}`,
-			`Iteration: ${goal.iteration}`,
-			`Active elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
-			`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
-			`Commands: ${goalCommandHint(goal.status)}`,
-		].join("\n");
-	}
-
-	function goalCommandHint(status: GoalStatus) {
-		if (status === "active") return "/goal edit <objective>, /goal pause, /goal clear";
-		if (isResumableGoalStatus(status)) {
-			return "/goal edit <objective>, /goal resume, /goal clear";
-		}
-		return "/goal edit <objective>, /goal clear";
-	}
-
-	function hasPendingMessages(ctx: StatusContext) {
-		return ctx.hasPendingMessages?.() ?? false;
-	}
-
-	function abortCurrentTurn(ctx: StatusContext) {
-		try {
-			ctx.abort?.();
-		} catch {
-			// Best effort: stale goal guards still prevent follow-on tool calls.
-		}
-	}
-
 	function blockStaleGoalToolCalls() {
 		runtime.staleGoalToolCallsBlocked = true;
-	}
-
-	function blocksStaleGoalToolCalls(status: GoalStatus) {
-		return status === "paused" || status === "blocked" || status === "usage_limited";
-	}
-
-	function isResumableGoalStatus(status: GoalStatus) {
-		return blocksStaleGoalToolCalls(status) || status === "budget_limited";
-	}
-
-	function stoppedStatusLabel(status: GoalStatus) {
-		if (status === "usage_limited") return "usage-limited";
-		if (status === "budget_limited") return "budget-limited";
-		return status;
 	}
 
 	function clearStaleGoalToolCallBlock() {
@@ -1083,14 +944,14 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		);
 	}
 
-	function queueBudgetWrapUp(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	function queueBudgetWrapUp(ctx: StatusContext, goal: ActiveGoal) {
 		if (!runtime.budgetWrapUp || runtime.budgetWrapUp.goalId !== goal.id) {
 			runtime.budgetWrapUp = { goalId: goal.id, delivered: false };
 		}
 		if (runtime.budgetWrapUp.delivered) return true;
 		runtime.budgetWrapUp.delivered = true;
 		try {
-			pi.sendMessage(
+			runtime.pi.sendMessage(
 				{
 					customType: BUDGET_WRAP_UP_MESSAGE_TYPE,
 					content: BUDGET_WRAP_UP_PROMPT,
@@ -1107,7 +968,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		}
 	}
 
-	function limitActiveGoalForBudget(pi: ExtensionAPI, ctx: StatusContext, sendWrapUp: boolean) {
+	function limitActiveGoalForBudget(ctx: StatusContext, sendWrapUp: boolean) {
 		const goal = runtime.activeGoal;
 		if (
 			goal?.status !== "active" ||
@@ -1124,7 +985,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		ctx.ui.notify(`Goal token budget reached: ${formatBudget(runtime.activeGoal)}`, "warning");
-		if (sendWrapUp) queueBudgetWrapUp(pi, ctx, runtime.activeGoal);
+		if (sendWrapUp) queueBudgetWrapUp(ctx, runtime.activeGoal);
 		return true;
 	}
 
@@ -1140,75 +1001,6 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			runtime.goalRecovery.kind === "compaction_retry" &&
 			(compaction.reason === undefined || compaction.reason === "overflow")
 		);
-	}
-
-	function isContradictoryCompletionSummary(summary: string) {
-		return CONTRADICTORY_COMPLETION_PATTERNS.some((pattern) => pattern.test(summary));
-	}
-
-	function goalIdRejectionReason(goal: ActiveGoal, requestedGoalId: string) {
-		if (!requestedGoalId) return "missing goal_id";
-		if (requestedGoalId !== goal.id) return "goal_id does not match the active goal";
-		return undefined;
-	}
-
-	function isUsageLimitedGoalInterruption(assistant: AssistantMessageLike) {
-		const errorMessage = assistant.errorMessage;
-		return (
-			assistant.stopReason === "error" &&
-			typeof errorMessage === "string" &&
-			USAGE_LIMIT_GOAL_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage))
-		);
-	}
-
-	function isRetryableGoalInterruption(assistant: AssistantMessageLike) {
-		if (assistant.stopReason !== "error") return false;
-		if (!assistant.errorMessage) return false;
-		if (
-			isUsageLimitedGoalInterruption(assistant) ||
-			NON_RETRYABLE_GOAL_ERROR_RE.test(assistant.errorMessage)
-		) {
-			return false;
-		}
-		return (
-			isGoalContextOverflow(assistant) ||
-			RETRYABLE_GOAL_ERROR_PATTERNS.some((pattern) => pattern.test(assistant.errorMessage ?? ""))
-		);
-	}
-
-	function isGoalContextOverflow(assistant: AssistantMessageLike) {
-		return isContextOverflow(toPiAssistantMessage(assistant));
-	}
-
-	function toPiAssistantMessage(assistant: AssistantMessageLike): PiAssistantMessage {
-		return {
-			role: "assistant",
-			content: assistant.content ?? [],
-			api: assistant.api ?? "openai-responses",
-			provider: assistant.provider ?? "unknown",
-			model: assistant.model ?? "unknown",
-			usage: assistant.usage ?? zeroUsage(),
-			stopReason: assistant.stopReason ?? "error",
-			errorMessage: assistant.errorMessage,
-			timestamp: assistant.timestamp ?? Date.now(),
-		};
-	}
-
-	function zeroUsage(): Usage {
-		return {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				total: 0,
-			},
-		};
 	}
 
 	function clearContinuationTracking() {
@@ -1246,87 +1038,6 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			return;
 		}
 		if (runtime.continuationDelivery?.marker === marker) runtime.continuationDelivery = undefined;
-	}
-
-	function continuationMarker(goal: ActiveGoal) {
-		return `${goal.id}:${goal.iteration}:${randomUUID()}`;
-	}
-
-	function continuationMarkerComment(marker: string) {
-		return `<!-- ${CONTINUATION_MARKER_PREFIX}${marker} -->`;
-	}
-
-	function escapeRegExpText(value: string) {
-		return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	}
-
-	const CONTINUATION_MARKER_PATTERN = new RegExp(
-		`<!--\\s*${escapeRegExpText(CONTINUATION_MARKER_PREFIX)}([^\\s>]+)\\s*-->`,
-	);
-
-	function extractContinuationMarker(prompt: string) {
-		return CONTINUATION_MARKER_PATTERN.exec(prompt)?.[1];
-	}
-
-	function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			if (!message || typeof message !== "object") continue;
-			const candidate = message as Record<string, unknown>;
-			if (candidate.role !== "assistant") continue;
-			const assistant: AssistantMessageLike = {
-				role: "assistant",
-				stopReason: isAgentStopReason(candidate.stopReason) ? candidate.stopReason : undefined,
-				errorMessage:
-					typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
-			};
-			if (Array.isArray(candidate.content))
-				assistant.content = candidate.content as PiAssistantMessage["content"];
-			if (typeof candidate.api === "string") assistant.api = candidate.api;
-			if (typeof candidate.provider === "string") assistant.provider = candidate.provider;
-			if (typeof candidate.model === "string") assistant.model = candidate.model;
-			if (typeof candidate.timestamp === "number") assistant.timestamp = candidate.timestamp;
-			const usage = normalizeUsage(candidate.usage);
-			if (usage) assistant.usage = usage;
-			return assistant;
-		}
-		return undefined;
-	}
-
-	function isAgentStopReason(value: unknown): value is AgentStopReason {
-		return ["stop", "length", "toolUse", "error", "aborted"].includes(String(value));
-	}
-
-	function normalizeUsage(value: unknown): Usage | undefined {
-		if (!value || typeof value !== "object") return undefined;
-		const usage = value as Partial<Usage>;
-		if (typeof usage.input !== "number" || typeof usage.output !== "number") return undefined;
-		return {
-			input: nonNegativeFiniteNumber(usage.input),
-			output: nonNegativeFiniteNumber(usage.output),
-			cacheRead: nonNegativeFiniteNumber(usage.cacheRead),
-			cacheWrite: nonNegativeFiniteNumber(usage.cacheWrite),
-			totalTokens: assistantUsageTokens(usage),
-			cost: {
-				input: usage.cost?.input ?? 0,
-				output: usage.cost?.output ?? 0,
-				cacheRead: usage.cost?.cacheRead ?? 0,
-				cacheWrite: usage.cost?.cacheWrite ?? 0,
-				total: usage.cost?.total ?? 0,
-			},
-		};
-	}
-
-	function escapeXmlText(value: string) {
-		return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-	}
-
-	function formatError(error: unknown) {
-		return truncateNotification(error instanceof Error ? error.message : String(error));
-	}
-
-	function truncateNotification(value: string) {
-		return value.length > 160 ? `${value.slice(0, 157)}...` : value;
 	}
 
 	function persistGoal(goal: ActiveGoal) {
@@ -1369,8 +1080,85 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	}
 }
 
-export default function goal(pi: ExtensionAPI) {
-	registerGoalRuntime(pi);
+function createGoal(
+	text: string,
+	tokenBudget: number | undefined,
+	baselineTokens: number,
+): ActiveGoal {
+	const now = Date.now();
+	return {
+		id: randomUUID(),
+		text,
+		status: "active",
+		startedAt: now,
+		updatedAt: now,
+		iteration: 0,
+		tokenBudget,
+		tokensUsed: 0,
+		timeUsedSeconds: 0,
+		baselineTokens,
+		activeStartedAt: now,
+	};
+}
+
+function transitionGoal(goal: ActiveGoal, requestedStatus: GoalStatus): ActiveGoal {
+	const now = Date.now();
+	const status =
+		requestedStatus === "active" &&
+		goal.tokenBudget !== undefined &&
+		goal.tokensUsed >= goal.tokenBudget
+			? "budget_limited"
+			: requestedStatus;
+	const next = { ...goal, status, updatedAt: now };
+	checkpointGoalActiveTime(next, now, status === "active");
+	return next;
+}
+
+function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
+	return { ...goal, id: randomUUID(), updatedAt: Date.now() };
+}
+
+function editedGoalStatus(status: GoalStatus): GoalStatus {
+	if (status === "paused" || status === "blocked" || status === "usage_limited") return status;
+	return "active";
+}
+
+function incrementGoal(goal: ActiveGoal): ActiveGoal {
+	return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
+}
+
+async function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	return sendPrompt(pi, ctx, buildGoalPrompt(goal));
+}
+
+async function sendObjectiveUpdatedPrompt(
+	pi: ExtensionAPI,
+	ctx: StatusContext,
+	goal: ActiveGoal,
+) {
+	return sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
+}
+
+async function sendResumePrompt(
+	pi: ExtensionAPI,
+	ctx: StatusContext,
+	goal: ActiveGoal,
+	stoppedStatus: GoalStatus,
+) {
+	return sendPrompt(pi, ctx, buildResumePrompt(goal, stoppedStatus));
+}
+
+async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
+	try {
+		const sent = ctx.isIdle?.()
+			? (pi.sendUserMessage(prompt) as void | Promise<void>)
+			: (pi.sendUserMessage(prompt, { deliverAs: "followUp" }) as void | Promise<void>);
+		await sent;
+		return true;
+	} catch (error) {
+		ctx.ui.notify(`Goal prompt failed: ${formatError(error)}`, "error");
+		return false;
+	}
 }
 
 export function formatStatus(goal: ActiveGoal | undefined) {
@@ -1379,17 +1167,68 @@ export function formatStatus(goal: ActiveGoal | undefined) {
 	if (goal.status === "paused") return "paused";
 	if (goal.status === "blocked") return "blocked";
 	if (goal.status === "usage_limited") return "usage";
-	if (goal.status === "budget_limited") {
-		return `budget ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
-	}
-	if (goal.tokenBudget !== undefined) {
-		return `active ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-	}
+	if (goal.status === "budget_limited") return `budget ${formatBudget(goal)}`;
+	if (goal.tokenBudget !== undefined) return `active ${formatBudget(goal)}`;
 	return `active ${formatDuration(goal.timeUsedSeconds)}`;
+}
+
+function formatBudget(goal: ActiveGoal) {
+	return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
+}
+
+function goalSummary(goal: ActiveGoal) {
+	return [
+		`Goal: ${goal.text}`,
+		`Status: ${goal.status}`,
+		`Iteration: ${goal.iteration}`,
+		`Active elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
+		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
+		`Commands: ${goalCommandHint(goal.status)}`,
+	].join("\n");
+}
+
+function goalCommandHint(status: GoalStatus) {
+	if (status === "active") return "/goal edit <objective>, /goal pause, /goal clear";
+	if (isResumableGoalStatus(status)) {
+		return "/goal edit <objective>, /goal resume, /goal clear";
+	}
+	return "/goal edit <objective>, /goal clear";
+}
+
+function hasPendingMessages(ctx: StatusContext) {
+	return ctx.hasPendingMessages?.() ?? false;
+}
+
+function abortCurrentTurn(ctx: StatusContext) {
+	try {
+		ctx.abort?.();
+	} catch {
+		// Best effort: stale goal guards still prevent follow-on tool calls.
+	}
+}
+
+function blocksStaleGoalToolCalls(status: GoalStatus) {
+	return status === "paused" || status === "blocked" || status === "usage_limited";
+}
+
+function isResumableGoalStatus(status: GoalStatus) {
+	return blocksStaleGoalToolCalls(status) || status === "budget_limited";
+}
+
+function stoppedStatusLabel(status: GoalStatus) {
+	if (status === "usage_limited") return "usage-limited";
+	if (status === "budget_limited") return "budget-limited";
+	return status;
 }
 
 export function isContradictoryCompletionSummary(summary: string) {
 	return CONTRADICTORY_COMPLETION_PATTERNS.some((pattern) => pattern.test(summary));
+}
+
+function goalIdRejectionReason(goal: ActiveGoal, requestedGoalId: string) {
+	if (!requestedGoalId) return "missing goal_id";
+	if (requestedGoalId !== goal.id) return "goal_id does not match the active goal";
+	return undefined;
 }
 
 export function isUsageLimitedGoalInterruption(assistant: AssistantMessageLike) {
@@ -1411,34 +1250,60 @@ export function isRetryableGoalInterruption(assistant: AssistantMessageLike) {
 		return false;
 	}
 	return (
-		isGoalContextOverflowForExport(assistant) ||
+		isGoalContextOverflow(assistant) ||
 		RETRYABLE_GOAL_ERROR_PATTERNS.some((pattern) => pattern.test(assistant.errorMessage ?? ""))
 	);
 }
 
-function isGoalContextOverflowForExport(assistant: AssistantMessageLike) {
-	return isContextOverflow({
+function isGoalContextOverflow(assistant: AssistantMessageLike) {
+	return isContextOverflow(toPiAssistantMessage(assistant));
+}
+
+function toPiAssistantMessage(assistant: AssistantMessageLike): PiAssistantMessage {
+	return {
 		role: "assistant",
 		content: assistant.content ?? [],
 		api: assistant.api ?? "openai-responses",
 		provider: assistant.provider ?? "unknown",
 		model: assistant.model ?? "unknown",
-		usage: assistant.usage ?? zeroUsageForExport(),
+		usage: assistant.usage ?? zeroUsage(),
 		stopReason: assistant.stopReason ?? "error",
 		errorMessage: assistant.errorMessage,
 		timestamp: assistant.timestamp ?? Date.now(),
-	});
+	};
 }
 
-function zeroUsageForExport(): Usage {
+function zeroUsage(): Usage {
 	return {
 		input: 0,
 		output: 0,
 		cacheRead: 0,
 		cacheWrite: 0,
 		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		cost: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			total: 0,
+		},
 	};
+}
+
+function continuationMarker(goal: ActiveGoal) {
+	return `${goal.id}:${goal.iteration}:${randomUUID()}`;
+}
+
+function escapeRegExpText(value: string) {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const CONTINUATION_MARKER_PATTERN = new RegExp(
+	`<!--\\s*${escapeRegExpText(CONTINUATION_MARKER_PREFIX)}([^\\s>]+)\\s*-->`,
+);
+
+function extractContinuationMarker(prompt: string) {
+	return CONTINUATION_MARKER_PATTERN.exec(prompt)?.[1];
 }
 
 export function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
@@ -1449,30 +1314,28 @@ export function findFinalAssistantMessage(messages: unknown[]): AssistantMessage
 		if (candidate.role !== "assistant") continue;
 		const assistant: AssistantMessageLike = {
 			role: "assistant",
-			stopReason: isAgentStopReasonForExport(candidate.stopReason)
-				? candidate.stopReason
-				: undefined,
-			errorMessage: typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
+			stopReason: isAgentStopReason(candidate.stopReason) ? candidate.stopReason : undefined,
+			errorMessage:
+				typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
 		};
-		if (Array.isArray(candidate.content)) {
+		if (Array.isArray(candidate.content))
 			assistant.content = candidate.content as PiAssistantMessage["content"];
-		}
 		if (typeof candidate.api === "string") assistant.api = candidate.api;
 		if (typeof candidate.provider === "string") assistant.provider = candidate.provider;
 		if (typeof candidate.model === "string") assistant.model = candidate.model;
 		if (typeof candidate.timestamp === "number") assistant.timestamp = candidate.timestamp;
-		const usage = normalizeUsageForExport(candidate.usage);
+		const usage = normalizeUsage(candidate.usage);
 		if (usage) assistant.usage = usage;
 		return assistant;
 	}
 	return undefined;
 }
 
-function isAgentStopReasonForExport(value: unknown): value is AgentStopReason {
+function isAgentStopReason(value: unknown): value is AgentStopReason {
 	return ["stop", "length", "toolUse", "error", "aborted"].includes(String(value));
 }
 
-function normalizeUsageForExport(value: unknown): Usage | undefined {
+function normalizeUsage(value: unknown): Usage | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const usage = value as Partial<Usage>;
 	if (typeof usage.input !== "number" || typeof usage.output !== "number") return undefined;
@@ -1492,16 +1355,30 @@ function normalizeUsageForExport(value: unknown): Usage | undefined {
 	};
 }
 
+function formatError(error: unknown) {
+	return truncateNotification(error instanceof Error ? error.message : String(error));
+}
+
+function truncateNotification(value: string) {
+	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
+}
+
+export default function goal(pi: ExtensionAPI) {
+	registerGoalRuntime(pi);
+}
+
 export {
 	assistantUsageTokens,
 	cumulativeAssistantTokens,
 	formatDuration,
 	formatTokenCount,
 } from "./accounting.js";
+
 export {
 	completeGoalArguments,
 	parseCommand,
 	parseTokenBudget,
 	validateObjective,
 } from "./command.js";
+
 export { buildGoalSystemPrompt } from "./prompts.js";
