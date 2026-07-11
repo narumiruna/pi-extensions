@@ -4,13 +4,14 @@ Date: 2026-07-11
 
 ## Automated evidence
 
-- `npm run check`: passed with Biome, extension boundaries, all workspace typechecks, and 264 tests.
+- `npm run check`: passed with Biome, extension boundaries, all workspace typechecks, and 268 tests.
 - `just pack-subagents`: passed; dry-run package contains 21 expected files, including transport and workspace modules.
 - Transport contract behavior is exercised through fake transport lifecycle tests and the subprocess-backed local Pi smoke test.
 - Hierarchy tests cover root/child/grandchild metadata, depth rejection, child ordering, cyclic restore rejection, subtree close, and inert migration.
-- Mailbox tests cover bounded retention, message IDs, deduplication keys, unread/ack state, follow-up consumption, and exactly-once child completion delivery.
-- Workspace tests create and remove a real detached Git worktree, verify tracked content, and reject dirty repositories.
-- Persistence tests cover version-1 migration, version-2 writes, hierarchy/mailbox sanitation, unknown versions, corruption quarantine, atomic replacement, and deletion.
+- Mailbox tests cover bounded bytes/count, empty and cross-tree rejection, message IDs, deduplication keys, one-turn unread consumption, and completion delivery for successful and rejected child turns.
+- Workspace tests create and remove real detached Git worktrees from repository roots and nested cwd values, verify ownership retry behavior, reject duplicate owners and dirty repositories, and exercise cleanup-all.
+- Persistence tests cover version-1 migration, version-2 writes, hierarchy-aware retention, mailbox sanitation, unknown versions, corruption quarantine, atomic replacement, and deletion.
+- Additional edge tests cover split UTF-8 JSON chunks, malformed limits, nested/unclosed private markers, duplicate context sources, recent-summary retention, active-ancestor expiry, closed-record bounds, and task/output bounds.
 
 ## Runtime evidence
 

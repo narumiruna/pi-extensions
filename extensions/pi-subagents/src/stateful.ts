@@ -4,9 +4,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { discoverAgents, type AgentScope } from "./agents.js";
-import { buildContextSnapshot, type ContextMode } from "./context.js";
+import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
-import { DEFAULT_MAX_CONTEXT_BYTES } from "./limits.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
 import { AgentRegistry, type ManagedAgent } from "./registry.js";
 import { readSubagentSettings } from "./settings.js";
@@ -18,6 +18,7 @@ const ContextModeSchema = Type.Union([
 	Type.Number({ minimum: 1, description: "Include the most recent N user turns." }),
 ]);
 const ScopeSchema = StringEnum(["user", "project", "both"] as const);
+const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 
 export function registerStatefulSubagents(pi: ExtensionAPI): void {
 	const settings = readSubagentSettings()?.stateful;
@@ -47,6 +48,7 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 			maxDepth: settings.maxDepth,
 			maxChildrenPerAgent: settings.maxChildrenPerAgent,
 			maxMailboxMessages: settings.maxMailboxMessages,
+			maxMailboxMessageBytes: settings.maxMailboxMessageBytes,
 			idleTtlMs: settings.idleTtlMs,
 			onChange: async (agents) => {
 				await persistence?.save(agents);
@@ -57,7 +59,7 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 						pi.appendEntry("pi-subagent-message", {
 							senderId: message.senderId,
 							recipientId: message.recipientId,
-							content: message.content.slice(0, 160),
+							content: redactPrivateText(message.content).slice(0, 160),
 						});
 					}
 				}
@@ -79,7 +81,7 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		sweepTimer.unref();
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		for (const agentId of isolatedAgents.keys()) {
@@ -87,10 +89,22 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		}
 		isolatedAgents.clear();
 		seenMessageIds.clear();
-		await workspaceManager.cleanupAll();
+		let cleanupError: unknown;
+		try {
+			await workspaceManager.cleanupAll();
+		} catch (error) {
+			cleanupError = error;
+		}
 		await registry?.shutdown();
 		registry = undefined;
 		persistence = undefined;
+		if (cleanupError && ctx.hasUI) {
+			const reason = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+			ctx.ui.notify(
+				`Some isolated subagent workspaces could not be removed: ${reason}`,
+				"warning",
+			);
+		}
 	});
 
 	pi.registerTool({
@@ -99,8 +113,8 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		description: "Start an addressable logical subagent. Returns immediately with an agentId.",
 		promptSnippet: "Start a reusable subagent and receive an agentId for lifecycle operations",
 		parameters: Type.Object({
-			agent: Type.String(),
-			task: Type.String(),
+			agent: Type.String({ minLength: 1 }),
+			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
 			cwd: Type.Optional(Type.String()),
 			agentScope: Type.Optional(ScopeSchema),
 			confirmProjectAgents: Type.Optional(Type.Boolean({ default: true })),
@@ -162,9 +176,9 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 					agent: params.agent,
 					task: params.task,
 					cwd: workspace?.path ?? requestedCwd,
-				agentScope: scope,
-				parentId: params.parentId,
-				context: snapshot.text || undefined,
+					agentScope: scope,
+					parentId: params.parentId,
+					context: snapshot.text || undefined,
 					contextSourceIds: snapshot.sourceIds,
 					contextTruncated: snapshot.truncated,
 				});
@@ -181,7 +195,10 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		name: "subagent_send",
 		label: "Send Subagent Follow-up",
 		description: "Send a follow-up task to an idle, completed, interrupted, or failed subagent.",
-		parameters: Type.Object({ agentId: Type.String(), task: Type.String() }),
+		parameters: Type.Object({
+			agentId: Type.String(),
+			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
+		}),
 		async execute(_id, params, _signal, _update, ctx) {
 			const existing = requireRegistry().get(params.agentId);
 			if (!existing) throw new Error(`Unknown subagent: ${params.agentId}`);
@@ -203,9 +220,9 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		description: "Queue a bounded mailbox message without starting a turn.",
 		parameters: Type.Object({
 			agentId: Type.String(),
-			message: Type.String(),
+			message: Type.String({ minLength: 1, maxLength: 16 * 1024 }),
 			senderId: Type.Optional(Type.String()),
-			deduplicationKey: Type.Optional(Type.String()),
+			deduplicationKey: Type.Optional(Type.String({ maxLength: 256 })),
 		}),
 		async execute(_id, params) {
 			const message = await requireRegistry().sendMessage(
@@ -228,27 +245,28 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		parameters: Type.Object({
 			agentId: Type.String(),
 			acknowledge: Type.Optional(Type.Boolean({ default: true })),
+			limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20, default: 20 })),
 		}),
 		async execute(_id, params) {
 			const messages = await requireRegistry().readMessages(
 				params.agentId,
 				params.acknowledge,
+				params.limit,
 			);
+			const summaries = messages.map((message) => ({
+				...message,
+				content: truncateUtf8(message.content, MAX_TOOL_MESSAGE_BYTES).text,
+			}));
+			const text = summaries.length
+				? summaries
+						.map(
+							(message) => `${message.id} from ${message.senderId}: ${message.content}`,
+						)
+						.join("\n")
+				: "No unread messages.";
 			return {
-				content: [
-					{
-						type: "text",
-						text: messages.length
-							? messages
-									.map(
-										(message) =>
-											`${message.id} from ${message.senderId}: ${message.content}`,
-									)
-									.join("\n")
-							: "No unread messages.",
-					},
-				],
-				details: { messages },
+				content: [{ type: "text", text: truncateUtf8(text, DEFAULT_MAX_CONTEXT_BYTES).text }],
+				details: { messages: summaries },
 			};
 		},
 	});
@@ -288,7 +306,7 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 							: "No stateful subagents.",
 					},
 				],
-				details: { agents },
+				details: { agents: agents.map(summarizeAgent) },
 			};
 		},
 	});
@@ -306,7 +324,10 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 				const agents = await requireRegistry().interruptTree(params.agentId);
 				return {
 					content: [{ type: "text", text: `Interrupted ${agents.length} active agent(s).` }],
-					details: { agent: requireRegistry().get(params.agentId)!, agents },
+					details: {
+						agent: summarizeAgent(requireRegistry().get(params.agentId)!),
+						agents: agents.map(summarizeAgent),
+					},
 				};
 			}
 			const agent = await requireRegistry().interrupt(params.agentId);
@@ -323,6 +344,13 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 			subtree: Type.Optional(Type.Boolean({ default: false })),
 		}),
 		async execute(_id, params) {
+			const existing = requireRegistry().get(params.agentId);
+			if (existing?.state === "closed" && !params.subtree) {
+				const pendingOwner = isolatedAgents.get(existing.id);
+				if (pendingOwner) await workspaceManager.cleanup(pendingOwner);
+				isolatedAgents.delete(existing.id);
+				return result(existing, `Closed ${existing.id}.`);
+			}
 			if (params.subtree) {
 				const agents = await requireRegistry().closeTree(params.agentId);
 				for (const closed of agents) {
@@ -332,7 +360,10 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 				}
 				return {
 					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
-					details: { agent: requireRegistry().get(params.agentId)!, agents },
+					details: {
+						agent: summarizeAgent(requireRegistry().get(params.agentId)!),
+						agents: agents.map(summarizeAgent),
+					},
 				};
 			}
 			const agent = await requireRegistry().close(params.agentId);
@@ -353,6 +384,9 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		async handler(args, ctx) {
 			if (args.trim() === "clear") {
 				await requireRegistry().closeAll();
+				await workspaceManager.cleanupAll();
+				isolatedAgents.clear();
+				seenMessageIds.clear();
 				await persistence?.delete();
 				ctx.ui.notify("Cleared stateful subagents.", "info");
 				return;
@@ -376,7 +410,12 @@ export function assertNoSharedWriteConflict(
 	const requested = agents.find((agent) => agent.name === agentName);
 	if (!isWriteCapable(requested?.tools)) return;
 	for (const active of registry.list()) {
-		if (active.cwd !== cwd || (active.state !== "running" && active.state !== "starting")) continue;
+		if (
+			!isSameCwd(active.cwd, cwd) ||
+			(active.state !== "running" && active.state !== "starting")
+		) {
+			continue;
+		}
 		const activeConfig = agents.find((agent) => agent.name === active.agent);
 		if (isWriteCapable(activeConfig?.tools)) {
 			throw new Error(
@@ -445,8 +484,33 @@ function formatFinal(agent: ManagedAgent): string {
 	return last?.output || agent.error || `${agent.id} is ${agent.state}.`;
 }
 
+function summarizeAgent(agent: ManagedAgent) {
+	return {
+		id: agent.id,
+		agent: agent.agent,
+		parentId: agent.parentId,
+		rootId: agent.rootId,
+		depth: agent.depth,
+		children: [...agent.children],
+		state: agent.state,
+		createdAt: agent.createdAt,
+		updatedAt: agent.updatedAt,
+		cwd: agent.cwd,
+		currentTask: agent.currentTask
+			? truncateUtf8(agent.currentTask, MAX_TOOL_MESSAGE_BYTES).text
+			: undefined,
+		historyCount: agent.history.length,
+		unreadMessages: agent.mailbox.filter((message) => !message.readAt).length,
+		error: agent.error ? truncateUtf8(agent.error, MAX_TOOL_MESSAGE_BYTES).text : undefined,
+		policy: agent.policy,
+	};
+}
+
 function result(agent: ManagedAgent, text: string) {
-	return { content: [{ type: "text" as const, text }], details: { agent } };
+	return {
+		content: [{ type: "text" as const, text }],
+		details: { agent: summarizeAgent(agent) },
+	};
 }
 
 export {

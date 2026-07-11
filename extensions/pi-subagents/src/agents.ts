@@ -45,6 +45,7 @@ export interface SubagentRuntimeSettings {
 	maxDepth?: number;
 	maxChildrenPerAgent?: number;
 	maxMailboxMessages?: number;
+	maxMailboxMessageBytes?: number;
 	idleTtlMs?: number;
 	retentionDays?: number;
 	maxStoredAgents?: number;

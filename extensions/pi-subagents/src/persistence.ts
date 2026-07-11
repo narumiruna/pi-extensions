@@ -26,11 +26,23 @@ export class AgentPersistence {
 	private readonly maxStoredAgents: number;
 
 	constructor(owner: string, options: PersistenceOptions = {}) {
+		const retentionDays = options.retentionDays ?? 30;
+		if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+			throw new Error("Subagent retentionDays must be a positive finite number");
+		}
+		const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+		if (!Number.isFinite(retentionMs)) {
+			throw new Error("Subagent retentionDays is too large");
+		}
+		const maxStoredAgents = options.maxStoredAgents ?? 50;
+		if (!Number.isSafeInteger(maxStoredAgents) || maxStoredAgents < 1) {
+			throw new Error("Subagent maxStoredAgents must be a positive safe integer");
+		}
 		const safeOwner = createHash("sha256").update(owner).digest("hex").slice(0, 24);
 		const stateDir = options.stateDir ?? path.join(getAgentDir(), "pi-subagents-state");
 		this.filePath = path.join(stateDir, `${safeOwner}.json`);
-		this.retentionMs = (options.retentionDays ?? 30) * 24 * 60 * 60 * 1000;
-		this.maxStoredAgents = options.maxStoredAgents ?? 50;
+		this.retentionMs = retentionMs;
+		this.maxStoredAgents = maxStoredAgents;
 	}
 
 	load(): ManagedAgent[] {
@@ -53,14 +65,15 @@ export class AgentPersistence {
 
 	async save(agents: readonly ManagedAgent[]): Promise<void> {
 		const cutoff = Date.now() - this.retentionMs;
-		const records = agents
-			.filter((agent) => agent.state !== "closed" && agent.updatedAt >= cutoff)
-			.slice(-this.maxStoredAgents)
-			.map(sanitizeAgent);
+		const eligible = agents.filter(
+			(agent) => agent.state !== "closed" && agent.updatedAt >= cutoff,
+		);
+		const records = selectAgentsForPersistence(eligible, this.maxStoredAgents).map(sanitizeAgent);
 		const state: StoredState = { version: STATE_VERSION, updatedAt: Date.now(), agents: records };
 		let content = `${JSON.stringify(state, null, "\t")}\n`;
 		while (Buffer.byteLength(content, "utf8") > MAX_STATE_BYTES && state.agents.length > 0) {
-			state.agents.shift();
+			const oldestRootId = state.agents[0].rootId;
+			state.agents = state.agents.filter((agent) => agent.rootId !== oldestRootId);
 			content = `${JSON.stringify(state, null, "\t")}\n`;
 		}
 		await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true });
@@ -86,6 +99,30 @@ export class AgentPersistence {
 	}
 }
 
+function selectAgentsForPersistence(
+	agents: readonly ManagedAgent[],
+	maxAgents: number,
+): ManagedAgent[] {
+	const byId = new Map(agents.map((agent) => [agent.id, agent]));
+	const selected = new Map<string, ManagedAgent>();
+	const newestFirst = [...agents].sort((left, right) => right.updatedAt - left.updatedAt);
+	for (const agent of newestFirst) {
+		const chain: ManagedAgent[] = [];
+		let current: ManagedAgent | undefined = agent;
+		const seen = new Set<string>();
+		while (current && !seen.has(current.id)) {
+			seen.add(current.id);
+			chain.unshift(current);
+			current = current.parentId ? byId.get(current.parentId) : undefined;
+		}
+		if (current || (agent.parentId && chain[0].parentId)) continue;
+		const missing = chain.filter((candidate) => !selected.has(candidate.id));
+		if (selected.size + missing.length > maxAgents) continue;
+		for (const candidate of missing) selected.set(candidate.id, candidate);
+	}
+	return agents.filter((agent) => selected.has(agent.id));
+}
+
 function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 	return {
 		...agent,
@@ -94,10 +131,12 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 		children: [...(agent.children ?? [])],
 		mailbox: (agent.mailbox ?? []).map((message) => ({
 			...message,
+			recipientId: agent.id,
 			content: redactPrivateText(message.content),
 		})),
 		state: "idle",
 		currentTask: undefined,
+		currentMailboxMessageIds: undefined,
 		context: agent.context ? redactPrivateText(agent.context) : undefined,
 		error: agent.error ? redactPrivateText(agent.error) : undefined,
 		history: agent.history.map((turn) => ({
@@ -122,8 +161,47 @@ function isStoredState(value: unknown): value is StoredState {
 			typeof record.agent === "string" &&
 			typeof record.cwd === "string" &&
 			typeof record.createdAt === "number" &&
+			Number.isFinite(record.createdAt) &&
 			typeof record.updatedAt === "number" &&
-			Array.isArray(record.history)
+			Number.isFinite(record.updatedAt) &&
+			(record.parentId === undefined || typeof record.parentId === "string") &&
+			(record.children === undefined ||
+				(Array.isArray(record.children) && record.children.every((id) => typeof id === "string"))) &&
+			Array.isArray(record.history) &&
+			record.history.every(isAgentTurn) &&
+			(record.mailbox === undefined ||
+				(Array.isArray(record.mailbox) && record.mailbox.every(isMailboxMessage)))
 		);
 	});
+}
+
+function isAgentTurn(value: unknown): boolean {
+	if (!value || typeof value !== "object") return false;
+	const turn = value as Record<string, unknown>;
+	return (
+		typeof turn.task === "string" &&
+		typeof turn.output === "string" &&
+		typeof turn.startedAt === "number" &&
+		Number.isFinite(turn.startedAt) &&
+		typeof turn.completedAt === "number" &&
+		Number.isFinite(turn.completedAt) &&
+		typeof turn.exitCode === "number" &&
+		Number.isFinite(turn.exitCode)
+	);
+}
+
+function isMailboxMessage(value: unknown): boolean {
+	if (!value || typeof value !== "object") return false;
+	const message = value as Record<string, unknown>;
+	return (
+		typeof message.id === "string" &&
+		typeof message.senderId === "string" &&
+		typeof message.recipientId === "string" &&
+		typeof message.content === "string" &&
+		typeof message.createdAt === "number" &&
+		Number.isFinite(message.createdAt) &&
+		(message.readAt === undefined ||
+			(typeof message.readAt === "number" && Number.isFinite(message.readAt))) &&
+		(message.deduplicationKey === undefined || typeof message.deduplicationKey === "string")
+	);
 }

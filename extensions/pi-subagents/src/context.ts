@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import {
+	DEFAULT_MAX_CONTEXT_BYTES,
+	truncateUtf8,
+	truncateUtf8Tail,
+} from "./limits.js";
 
 export type ContextMode = "none" | "all" | "summary" | number;
 
@@ -27,8 +31,26 @@ function textParts(content: unknown): string {
 }
 
 export function redactPrivateText(text: string): string {
-	return text
-		.replace(/<private>[\s\S]*?<\/private>/gi, "[private content omitted]")
+	const tagPattern = /<\/?private>/gi;
+	let redacted = "";
+	let cursor = 0;
+	let depth = 0;
+	for (const match of text.matchAll(tagPattern)) {
+		const tag = match[0].toLowerCase();
+		const index = match.index ?? cursor;
+		if (depth === 0) redacted += text.slice(cursor, index);
+		if (tag === "<private>") {
+			if (depth === 0) redacted += "[private content omitted]";
+			depth++;
+		} else if (depth > 0) {
+			depth--;
+		} else {
+			redacted += match[0];
+		}
+		cursor = index + match[0].length;
+	}
+	if (depth === 0) redacted += text.slice(cursor);
+	return redacted
 		.split("\n")
 		.filter((line) => !line.includes("[subagent-private]"))
 		.join("\n");
@@ -62,10 +84,16 @@ export function buildContextSnapshot(
 			messages.push({ role: message.role, text, sourceId });
 		}
 	}
+	const seenSourceIds = new Set<string>();
+	const uniqueMessages = messages.filter((message) => {
+		if (seenSourceIds.has(message.sourceId)) return false;
+		seenSourceIds.add(message.sourceId);
+		return true;
+	});
 	const selectedSet = selectedSourceIds ? new Set(selectedSourceIds) : undefined;
 	const eligible = selectedSet
-		? messages.filter((message) => selectedSet.has(message.sourceId))
-		: messages;
+		? uniqueMessages.filter((message) => selectedSet.has(message.sourceId))
+		: uniqueMessages;
 	const turnLimit =
 		typeof mode === "number" ? Math.max(1, Math.floor(mode)) : Number.POSITIVE_INFINITY;
 	let userTurns = 0;
@@ -91,7 +119,7 @@ export function buildContextSnapshot(
 						.map((message) => `## ${message.role}\n${message.text}`),
 				].join("\n\n")
 			: selected.map((message) => `## ${message.role}\n${message.text}`).join("\n\n");
-	const bounded = truncateUtf8(raw, maxBytes);
+	const bounded = mode === "summary" ? truncateUtf8Tail(raw, maxBytes) : truncateUtf8(raw, maxBytes);
 	return {
 		text: bounded.text,
 		turns: selected.filter((message) => message.role === "user").length,

@@ -25,6 +25,14 @@ function isPositiveNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 1;
 }
 
+function isPositiveInteger(value: unknown): value is number {
+	return isPositiveNumber(value) && Number.isSafeInteger(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 export function normalizeAgentSettings(value: unknown): SubagentAgentConfig | undefined {
 	if (!isPlainObject(value)) return undefined;
 
@@ -76,17 +84,24 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 		for (const key of [
 			"maxAgents",
 			"maxActiveTurns",
-			"maxDepth",
 			"maxChildrenPerAgent",
 			"maxMailboxMessages",
+			"maxMailboxMessageBytes",
 			"idleTtlMs",
-			"retentionDays",
 			"maxStoredAgents",
 		] as const) {
 			if (hasOwn(value.stateful, key)) {
-				if (!isPositiveNumber(value.stateful[key])) return undefined;
+				if (!isPositiveInteger(value.stateful[key])) return undefined;
 				runtime[key] = value.stateful[key];
 			}
+		}
+		if (hasOwn(value.stateful, "maxDepth")) {
+			if (!isNonNegativeInteger(value.stateful.maxDepth)) return undefined;
+			runtime.maxDepth = value.stateful.maxDepth;
+		}
+		if (hasOwn(value.stateful, "retentionDays")) {
+			if (!isPositiveNumber(value.stateful.retentionDays)) return undefined;
+			runtime.retentionDays = value.stateful.retentionDays;
 		}
 		if (hasOwn(value.stateful, "enabled")) {
 			if (typeof value.stateful.enabled !== "boolean") return undefined;

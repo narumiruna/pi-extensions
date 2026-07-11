@@ -5,7 +5,10 @@ import { redactPrivateText } from "./context.js";
 import type { ManagedAgent } from "./registry.js";
 
 export function buildStatefulTurnPrompt(
-	record: Pick<ManagedAgent, "context" | "history" | "mailbox">,
+	record: Pick<
+		ManagedAgent,
+		"context" | "history" | "mailbox" | "currentMailboxMessageIds"
+	>,
 	task: string,
 	maxBytes = DEFAULT_MAX_CONTEXT_BYTES,
 ): { text: string; truncated: boolean } {
@@ -16,12 +19,14 @@ export function buildStatefulTurnPrompt(
 			return `Task: ${redactedTask}\nOutput: ${redactedOutput}`;
 		})
 		.join("\n\n");
+	const currentMessageIds = new Set(record.currentMailboxMessageIds ?? []);
 	const messages = record.mailbox
+		.filter((message) => currentMessageIds.has(message.id))
 		.slice(-20)
 		.map((message) => `From ${message.senderId}: ${redactPrivateText(message.content)}`)
 		.join("\n");
 	const context = [
-		`Current task:\n${task}`,
+		`Current task:\n${redactPrivateText(task)}`,
 		messages ? `Mailbox messages:\n${messages}` : "",
 		previous ? `Prior subagent turns:\n${previous}` : "",
 		record.context ? `Parent context:\n${redactPrivateText(record.context)}` : "",

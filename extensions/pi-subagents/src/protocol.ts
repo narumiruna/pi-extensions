@@ -1,3 +1,5 @@
+import { StringDecoder } from "node:string_decoder";
+
 const DEFAULT_MAX_LINE_BYTES = 256 * 1024;
 
 export interface JsonLineDecoderOptions {
@@ -12,17 +14,23 @@ export class JsonLineDecoder {
 	private buffer = "";
 	private droppingOversizedLine = false;
 	private readonly maxLineBytes: number;
+	private readonly decoder = new StringDecoder("utf8");
 
 	constructor(private readonly options: JsonLineDecoderOptions) {
-		this.maxLineBytes = Math.max(1, options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES);
+		const maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
+		if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1) {
+			throw new Error("JSON line limit must be a positive safe integer");
+		}
+		this.maxLineBytes = maxLineBytes;
 	}
 
 	push(chunk: string | Buffer): void {
-		this.buffer += chunk.toString();
+		this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
 		this.drain(false);
 	}
 
 	finish(): void {
+		this.buffer += this.decoder.end();
 		this.drain(true);
 		this.buffer = "";
 		this.droppingOversizedLine = false;

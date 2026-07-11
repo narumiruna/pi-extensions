@@ -196,6 +196,7 @@ Enable the lifecycle tools in `~/.pi/agent/pi-subagents-config.json`, then reloa
     "maxDepth": 3,
     "maxChildrenPerAgent": 8,
     "maxMailboxMessages": 100,
+    "maxMailboxMessageBytes": 16384,
     "idleTtlMs": 3600000,
     "retentionDays": 30,
     "maxStoredAgents": 50
@@ -209,7 +210,7 @@ Enabling the feature registers:
 | --- | --- |
 | `subagent_spawn` | Start a logical agent and return an opaque `agentId`. |
 | `subagent_send` | Send follow-up work to a reusable agent. |
-| `subagent_message` | Queue a bounded mailbox message without starting a turn. |
+| `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
 | `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
 | `subagent_wait` | Wait for completion without terminating the agent on wait timeout. |
 | `subagent_list` | List retained agents and lifecycle states. |
