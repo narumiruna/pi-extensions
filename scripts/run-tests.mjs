@@ -16,9 +16,9 @@ const tsc = path.join(
 
 fs.rmSync(outDir, { recursive: true, force: true });
 
-const missingTests = activeExtensionDirectories().filter(
-	(extensionDir) => !hasTestFile(path.join(root, "extensions", extensionDir, "test")),
-);
+const missingTests = activeExtensionDirectories()
+	.filter((extensionDir) => !hasTestFile(path.join(extensionDir, "test")))
+	.map((extensionDir) => path.relative(root, extensionDir));
 if (missingTests.length > 0) {
 	console.error(`Missing test files for active extension(s): ${missingTests.join(", ")}`);
 	process.exit(1);
@@ -34,14 +34,20 @@ if (testFiles.length === 0) {
 
 run(process.execPath, ["--test", ...testFiles]);
 
-function activeExtensionDirectories() {
-	const extensionsDir = path.join(root, "extensions");
-	return fs
-		.readdirSync(extensionsDir, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory() && entry.name !== "deprecated")
-		.map((entry) => entry.name)
-		.filter((entryName) => fs.existsSync(path.join(extensionsDir, entryName, "package.json")))
-		.sort();
+function activeExtensionDirectories(directory = path.join(root, "extensions")) {
+	const directories = [];
+	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+		if (!entry.isDirectory() || entry.name === "deprecated" || entry.name === "node_modules") {
+			continue;
+		}
+		const entryPath = path.join(directory, entry.name);
+		if (fs.existsSync(path.join(entryPath, "package.json"))) {
+			directories.push(entryPath);
+			continue;
+		}
+		directories.push(...activeExtensionDirectories(entryPath));
+	}
+	return directories.sort();
 }
 
 function hasTestFile(directory) {

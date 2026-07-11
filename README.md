@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; goal mode; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; single-goal mode; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
 
 **Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
@@ -94,7 +94,20 @@ Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to route Python files to configure
 
 ### 🎯 Autonomous task completion
 
-Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation, debugging, refactoring, and verification tasks where the agent should continue past planning and call `goal_complete` only after the goal is done.
+Use [`@narumitw/pi-goal`](./extensions/pi-goal) for one long-running implementation, debugging, refactoring, or verification task where the agent should continue past planning and call `goal_complete` only after the goal is done.
+
+### 🧪 Experimental ordered goals
+
+> [!WARNING]
+> `pi-goals` is an experimental Pi extension. Its behavior and persisted state may change without compatibility guarantees.
+
+[`pi-goals`](./extensions/experimental/pi-goals) provides ordered goal arrays and is excluded from `publish-all`, shared version bumps, and GitHub publish workflows. After cloning this repository and installing dependencies, run it explicitly with:
+
+```bash
+pi -e ./extensions/experimental/pi-goals
+```
+
+Maintainers may manually publish its current version with `just publish goals`; npm availability is not guaranteed.
 
 ### 🧭 Read-only planning mode
 
@@ -185,6 +198,8 @@ extensions/
 │   ├── pi-sidebar/
 │   ├── pi-telegram-bot/
 │   └── pi-wait-what/
+├── experimental/
+│   └── pi-goals/
 ├── pi-btw/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/
@@ -203,7 +218,7 @@ extensions/
 └── pi-subagents/
 ```
 
-Each active extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
+Each production extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Experimental extensions live under `extensions/experimental/`, remain covered by root checks, and may be published only through an explicit local maintainer recipe—not `publish-all` or GitHub workflows. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
 
 ## 📄 License
 

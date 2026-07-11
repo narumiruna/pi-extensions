@@ -64,12 +64,12 @@ try-all:
 install name: (_validate-extension-name name)
     name={{quote(name)}}; package="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').name" "$name")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "./extensions/pi-$name"; fi
 
-# Publish one package to npm, skipping if the current version already exists
-# Usage: just publish subagents
-publish name: (_validate-extension-name name)
-    name={{quote(name)}}; package="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').name" "$name")"; version="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').version" "$name")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
+# Manually publish one production or experimental package, skipping an existing version
+# Usage: just publish subagents [otp]
+publish name otp="": (_validate-extension-name name)
+    name={{quote(name)}}; otp={{quote(otp)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./extensions/experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; if [[ "$package_json" == ./extensions/experimental/* ]]; then echo "WARNING: manually publishing experimental Pi extension pi-$name; automated workflows exclude it." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else otp_flag=(); [[ -z "$otp" ]] || otp_flag=(--otp "$otp"); npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public "${otp_flag[@]}"; fi
 
-# Publish all extension packages to npm
+# Publish all production extension packages to npm; experimental packages are excluded
 publish-all:
     for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
 
@@ -152,6 +152,10 @@ try-goal:
 
 try-langfuse:
     just try langfuse
+
+# Try the local-only experimental goals extension explicitly
+try-goals:
+    pi -e ./extensions/experimental/pi-goals
 
 try-lsp:
     just try lsp

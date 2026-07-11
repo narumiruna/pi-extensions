@@ -28,6 +28,10 @@ const SOURCE_FILE_SUFFIXES = [
 const rootDirectory = process.cwd();
 const extensionsDirectory = path.join(rootDirectory, "extensions");
 const activePackages = findActiveExtensionPackages(extensionsDirectory);
+const experimentalDirectory = path.join(extensionsDirectory, "experimental") + path.sep;
+const experimentalPackageCount = activePackages.filter(({ directory }) =>
+	directory.startsWith(experimentalDirectory),
+).length;
 const failures = [];
 
 for (const extensionPackage of activePackages) {
@@ -42,17 +46,23 @@ if (failures.length > 0) {
 }
 
 console.log(
-	`Extension boundary check passed: ${activePackages.length} active packages have no extension-to-extension dependencies.`,
+	`Extension boundary check passed: ${activePackages.length} active packages (${experimentalPackageCount} experimental) have no extension-to-extension dependencies.`,
 );
 
 function findActiveExtensionPackages(directory) {
 	const packages = [];
 
 	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-		if (!entry.isDirectory() || entry.name === "deprecated") continue;
+		if (!entry.isDirectory() || entry.name === "deprecated" || entry.name === "node_modules") {
+			continue;
+		}
 
-		const packagePath = path.join(directory, entry.name, "package.json");
-		if (!fs.existsSync(packagePath)) continue;
+		const entryPath = path.join(directory, entry.name);
+		const packagePath = path.join(entryPath, "package.json");
+		if (!fs.existsSync(packagePath)) {
+			packages.push(...findActiveExtensionPackages(entryPath));
+			continue;
+		}
 
 		const packageJson = readJson(packagePath);
 		if (typeof packageJson.name !== "string") {
@@ -60,7 +70,7 @@ function findActiveExtensionPackages(directory) {
 		}
 
 		packages.push({
-			directory: path.dirname(packagePath),
+			directory: entryPath,
 			name: packageJson.name,
 			packageJson,
 			packagePath,

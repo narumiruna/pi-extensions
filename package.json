@@ -6,7 +6,8 @@
 	"description": "Monorepo for @narumitw pi extension packages.",
 	"type": "module",
 	"workspaces": [
-		"extensions/*"
+		"extensions/*",
+		"extensions/experimental/*"
 	],
 	"scripts": {
 		"format": "biome format --write .",

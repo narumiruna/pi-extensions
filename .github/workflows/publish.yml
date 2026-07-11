@@ -55,6 +55,8 @@ jobs:
           const extensionsDir = "extensions";
           for (const dirent of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
             if (!dirent.isDirectory()) continue;
+            // Experimental packages may be published only through an explicit local just recipe.
+            if (dirent.name === "experimental" || dirent.name === "deprecated") continue;
 
             const packageJsonPath = path.join(extensionsDir, dirent.name, "package.json");
             if (!fs.existsSync(packageJsonPath)) continue;
