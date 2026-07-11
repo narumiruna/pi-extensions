@@ -22,6 +22,7 @@ jobs:
         pi_version:
           - "0.79.10"
           - "0.80.3"
+          - "latest"
 
     steps:
       - name: Checkout
