@@ -67,6 +67,67 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 		thinkingLevels,
 	);
 	assert.ok(mock.commands.has("subagents:config"));
+	const toolResultHandler = mock.events.get("tool_result")?.[0];
+	assert.deepEqual(
+		toolResultHandler?.(
+			{ toolName: "subagent", details: { isError: true } },
+			createMockContext().ctx,
+		),
+		{ isError: true },
+	);
+});
+
+test("subagent recursion guard rejects nested delegation before spawning", async () => {
+	const mock = createMockPi();
+	subagents(mock.pi);
+	const tool = mock.tools[0] as SubagentTool;
+	const originalDepth = process.env.PI_SUBAGENT_DEPTH;
+	process.env.PI_SUBAGENT_DEPTH = "1";
+	try {
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"call",
+					{ agent: "scout", task: "nested" },
+					undefined,
+					undefined,
+					createMockContext().ctx,
+				),
+			/recursion depth limit/,
+		);
+	} finally {
+		if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+		else process.env.PI_SUBAGENT_DEPTH = originalDepth;
+	}
+});
+
+test("one-shot project agents require project trust even when confirmation is disabled", async () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-untrusted-"));
+	const agentsDir = path.join(cwd, ".pi", "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	writeFileSync(
+		path.join(agentsDir, "project.md"),
+		"---\nname: project\ndescription: project agent\n---\nProject prompt.",
+	);
+	const mock = createMockPi();
+	subagents(mock.pi);
+	const tool = mock.tools[0] as SubagentTool;
+	await assert.rejects(
+		() =>
+			tool.execute(
+				"call",
+				{
+					agent: "project",
+					task: "task",
+					agentScope: "project",
+					confirmProjectAgents: false,
+				},
+				undefined,
+				undefined,
+				createMockContext({ cwd, isProjectTrusted: () => false }).ctx,
+			),
+		/trusted project/,
+	);
 });
 
 test("discoverAgents includes built-ins and lets project agents override by name", () => {

@@ -38,8 +38,18 @@ export interface SubagentAgentConfig {
 	timeoutMs?: number | null;
 }
 
+export interface SubagentRuntimeSettings {
+	enabled?: boolean;
+	maxAgents?: number;
+	maxActiveTurns?: number;
+	idleTtlMs?: number;
+	retentionDays?: number;
+	maxStoredAgents?: number;
+}
+
 export interface SubagentSettings {
 	agents?: Record<string, SubagentAgentConfig>;
+	stateful?: SubagentRuntimeSettings;
 }
 
 const BUILT_IN_AGENTS: AgentConfig[] = [

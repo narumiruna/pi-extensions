@@ -60,16 +60,32 @@ export function normalizeAgentSettings(value: unknown): SubagentAgentConfig | un
 
 export function normalizeSubagentSettings(value: unknown): SubagentSettings | undefined {
 	if (!isPlainObject(value)) return undefined;
-	if (!hasOwn(value, "agents")) return {};
-	if (!isPlainObject(value.agents)) return undefined;
-
-	const agents: Record<string, SubagentAgentConfig> = {};
-	for (const [name, rawConfig] of Object.entries(value.agents)) {
-		const config = normalizeAgentSettings(rawConfig);
-		if (config) agents[name] = config;
+	const settings: SubagentSettings = {};
+	if (hasOwn(value, "agents")) {
+		if (!isPlainObject(value.agents)) return undefined;
+		const agents: Record<string, SubagentAgentConfig> = {};
+		for (const [name, rawConfig] of Object.entries(value.agents)) {
+			const config = normalizeAgentSettings(rawConfig);
+			if (config) agents[name] = config;
+		}
+		if (Object.keys(agents).length > 0) settings.agents = agents;
 	}
-
-	return Object.keys(agents).length > 0 ? { agents } : {};
+	if (hasOwn(value, "stateful")) {
+		if (!isPlainObject(value.stateful)) return undefined;
+		const runtime: NonNullable<SubagentSettings["stateful"]> = {};
+		for (const key of ["maxAgents", "maxActiveTurns", "idleTtlMs", "retentionDays", "maxStoredAgents"] as const) {
+			if (hasOwn(value.stateful, key)) {
+				if (!isPositiveNumber(value.stateful[key])) return undefined;
+				runtime[key] = value.stateful[key];
+			}
+		}
+		if (hasOwn(value.stateful, "enabled")) {
+			if (typeof value.stateful.enabled !== "boolean") return undefined;
+			runtime.enabled = value.stateful.enabled;
+		}
+		settings.stateful = runtime;
+	}
+	return settings;
 }
 
 export function readSubagentSettings(): SubagentSettings | undefined {

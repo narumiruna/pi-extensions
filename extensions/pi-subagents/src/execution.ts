@@ -15,12 +15,13 @@ import {
 	type SingleResult,
 	type SubagentDetails,
 } from "./runner.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import type { SubagentParams } from "./params.js";
 import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
-const DEFAULT_TIMEOUT_MS = parsePositiveInteger(process.env.PI_SUBAGENT_TIMEOUT_MS) ?? 10 * 60 * 1000;
+export const FALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 const STATUS_KEY = "subagents";
 const activeStatuses = new Map<string, string>();
 
@@ -28,6 +29,18 @@ export function parsePositiveInteger(value: string | undefined): number | undefi
 	if (!value) return undefined;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export function resolveDefaultSubagentTimeoutMs(): number {
+	return parsePositiveInteger(process.env.PI_SUBAGENT_TIMEOUT_MS) ?? FALLBACK_TIMEOUT_MS;
+}
+
+export function assertSubagentDepthAllowed(): void {
+	const depth = Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0;
+	const maxDepth = parsePositiveInteger(process.env.PI_SUBAGENT_MAX_DEPTH) ?? 1;
+	if (depth >= maxDepth) {
+		throw new Error(`Subagent recursion depth limit reached (${maxDepth})`);
+	}
 }
 
 interface StatusContext {
@@ -90,6 +103,7 @@ export async function executeSubagent(
 	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
 	ctx: ExtensionContext,
 ): Promise<AgentToolResult<SubagentDetails> & { isError?: boolean }> {
+			assertSubagentDepthAllowed();
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const config = readSubagentSettings();
 			const discovery = discoverAgents(ctx.cwd, agentScope, config);
@@ -99,7 +113,7 @@ export async function executeSubagent(
 				localTimeoutMs ??
 				params.timeoutMs ??
 				agents.find((agent) => agent.name === agentName)?.timeoutMs ??
-				DEFAULT_TIMEOUT_MS;
+				resolveDefaultSubagentTimeoutMs();
 			const resolveThinkingLevel = (agentName: string, localThinkingLevel?: SubagentThinkingLevel) =>
 				resolveSubagentThinkingLevel(agents, agentName, params.thinkingLevel, localThinkingLevel);
 
@@ -135,7 +149,7 @@ export async function executeSubagent(
 				};
 			}
 
-			if ((agentScope === "project" || agentScope === "both") && confirmProjectAgents && ctx.hasUI) {
+			if (agentScope === "project" || agentScope === "both") {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
@@ -147,17 +161,23 @@ export async function executeSubagent(
 					.filter((a): a is AgentConfig => a?.source === "project");
 
 				if (projectAgentsRequested.length > 0) {
-					const names = projectAgentsRequested.map((a) => a.name).join(", ");
-					const dir = discovery.projectAgentsDir ?? "(unknown)";
-					const ok = await ctx.ui.confirm(
-						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-					);
-					if (!ok)
-						return {
-							content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
-							details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
-						};
+					if (!ctx.isProjectTrusted()) {
+						throw new Error("Project-local subagent definitions require a trusted project");
+					}
+					if (confirmProjectAgents && ctx.hasUI) {
+						const names = projectAgentsRequested.map((a) => a.name).join(", ");
+						const dir = discovery.projectAgentsDir ?? "(unknown)";
+						const ok = await ctx.ui.confirm(
+							"Run project-local agents?",
+							`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						);
+						if (!ok) {
+							return {
+								content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
+								details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+							};
+						}
+					}
 				}
 			}
 
@@ -170,7 +190,10 @@ export async function executeSubagent(
 					for (let i = 0; i < params.chain.length; i++) {
 						const step = params.chain[i];
 						status.update(chainStatus(i + 1, params.chain.length, step.agent));
-						const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
+						const taskWithContext = truncateUtf8(
+							step.task.replace(/\{previous\}/g, previousOutput),
+							DEFAULT_MAX_CONTEXT_BYTES,
+						).text;
 
 						// Create update callback that includes all previous results
 						const chainUpdate: OnUpdateCallback | undefined = onUpdate
@@ -208,7 +231,7 @@ export async function executeSubagent(
 							const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
 							return {
 								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
-								details: makeDetails("chain")(results),
+								details: { ...makeDetails("chain")(results), isError: true },
 								isError: true,
 							};
 						}
@@ -299,16 +322,33 @@ export async function executeSubagent(
 						runningCount -= 1;
 						emitParallelUpdate();
 						return result;
+					}, signal, (task, index) => {
+						const skipped: SingleResult = {
+							...allResults[index],
+							task: task.task,
+							exitCode: 130,
+							stopReason: "aborted",
+							aborted: true,
+							errorMessage: "Subagent was not started because the parent call was aborted",
+						};
+						allResults[index] = skipped;
+						doneCount += 1;
+						runningCount -= 1;
+						emitParallelUpdate();
+						return skipped;
 					});
 
 					let aggregatorResult: SingleResult | undefined;
-					if (params.aggregator) {
+					if (params.aggregator && !signal?.aborted) {
 						const aggregator = params.aggregator;
 						status.update(fanInStatus(aggregator.agent));
 						const fanInContext = buildFanInContext(results);
-						const aggregatorTask = aggregator.task.includes("{previous}")
-							? aggregator.task.replace(/\{previous\}/g, fanInContext)
-							: `${aggregator.task}\n\nParallel task outputs:\n\n${fanInContext}`;
+						const aggregatorTask = truncateUtf8(
+							aggregator.task.includes("{previous}")
+								? aggregator.task.replace(/\{previous\}/g, fanInContext)
+								: `${aggregator.task}\n\nParallel task outputs:\n\n${fanInContext}`,
+							DEFAULT_MAX_CONTEXT_BYTES,
+						).text;
 						aggregatorResult = await runSingleAgent(
 							ctx.cwd,
 							agents,
@@ -351,7 +391,14 @@ export async function executeSubagent(
 									: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
 							},
 						],
-						details: makeDetails("parallel")(results, aggregatorResult),
+						details: {
+							...makeDetails("parallel")(results, aggregatorResult),
+							isError: aggregatorResult
+								? aggregatorResult.exitCode !== 0 ||
+									aggregatorResult.stopReason === "error" ||
+									aggregatorResult.stopReason === "aborted"
+								: false,
+						},
 						isError: aggregatorResult
 							? aggregatorResult.exitCode !== 0 ||
 								aggregatorResult.stopReason === "error" ||
@@ -385,7 +432,7 @@ export async function executeSubagent(
 						const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
 						return {
 							content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
-							details: makeDetails("single")([result]),
+							details: { ...makeDetails("single")([result]), isError: true },
 							isError: true,
 						};
 					}

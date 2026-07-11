@@ -11,8 +11,17 @@ import type {
 	AgentSource,
 	SubagentThinkingLevel,
 } from "./agents.js";
+import {
+	appendBounded,
+	DEFAULT_MAX_CONTEXT_BYTES,
+	DEFAULT_MAX_MESSAGES,
+	DEFAULT_MAX_OUTPUT_BYTES,
+	DEFAULT_MAX_STDERR_BYTES,
+	truncateUtf8,
+} from "./limits.js";
+import { JsonLineDecoder } from "./protocol.js";
 
-const KILL_GRACE_MS = 5000;
+export const KILL_GRACE_MS = 5000;
 
 export interface UsageStats {
 	input: number;
@@ -40,6 +49,14 @@ export interface SingleResult {
 	finalOutput?: string;
 	timedOut?: boolean;
 	timeoutMs?: number;
+	aborted?: boolean;
+	truncated?: boolean;
+	malformedEvents?: number;
+	policy?: {
+		inherited: string[];
+		overridden: string[];
+		unsupported: string[];
+	};
 }
 
 export interface SubagentDetails {
@@ -48,6 +65,7 @@ export interface SubagentDetails {
 	projectAgentsDir: string | null;
 	results: SingleResult[];
 	aggregator?: SingleResult;
+	isError?: boolean;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -66,8 +84,28 @@ export function getResultFinalOutput(result: SingleResult): string {
 	return result.finalOutput ?? getFinalOutput(result.messages);
 }
 
-export function buildFanInContext(results: SingleResult[]): string {
-	return results
+function boundMessageText(message: Message, maxBytes: number): { message: Message; bytes: number; truncated: boolean } {
+	const serializedBytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+	if (serializedBytes <= maxBytes) return { message, bytes: serializedBytes, truncated: false };
+	if (!Array.isArray(message.content)) return { message, bytes: Math.min(serializedBytes, maxBytes), truncated: true };
+	let remaining = maxBytes;
+	const content = message.content
+		.filter((part) => part.type === "text")
+		.map((part) => {
+			const bounded = truncateUtf8(part.text, remaining);
+			remaining = Math.max(0, remaining - Buffer.byteLength(bounded.text, "utf8"));
+			return { ...part, text: bounded.text };
+		});
+	const boundedMessage = { ...message, content } as Message;
+	return {
+		message: boundedMessage,
+		bytes: Math.min(Buffer.byteLength(JSON.stringify(boundedMessage), "utf8"), maxBytes),
+		truncated: true,
+	};
+}
+
+export function buildFanInContext(results: SingleResult[], maxBytes = DEFAULT_MAX_CONTEXT_BYTES): string {
+	const text = results
 		.map((result, index) => {
 			const status = result.exitCode === 0 ? "completed" : result.exitCode === -1 ? "running" : "failed";
 			const output = getResultFinalOutput(result);
@@ -79,12 +117,15 @@ export function buildFanInContext(results: SingleResult[]): string {
 			].join("\n\n");
 		})
 		.join("\n\n---\n\n");
+	return truncateUtf8(text, maxBytes).text;
 }
 
 export async function mapWithConcurrencyLimit<TIn, TOut>(
 	items: TIn[],
 	concurrency: number,
 	fn: (item: TIn, index: number) => Promise<TOut>,
+	signal?: AbortSignal,
+	onSkipped?: (item: TIn, index: number) => TOut,
 ): Promise<TOut[]> {
 	if (items.length === 0) return [];
 	const limit = Math.max(1, Math.min(concurrency, items.length));
@@ -94,6 +135,10 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 		while (true) {
 			const current = nextIndex++;
 			if (current >= items.length) return;
+			if (signal?.aborted && onSkipped) {
+				results[current] = onSkipped(items[current], current);
+				continue;
+			}
 			results[current] = await fn(items[current], current);
 		}
 	});
@@ -146,30 +191,37 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	return { command: "pi", args };
 }
 
-function terminateProcess(proc: ReturnType<typeof spawn>) {
-	if (proc.killed) return;
+function signalProcess(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
 	if (process.platform !== "win32" && proc.pid) {
 		try {
-			process.kill(-proc.pid, "SIGTERM");
+			process.kill(-proc.pid, signal);
+			return;
 		} catch {
-			proc.kill("SIGTERM");
+			// Fall back to signaling the immediate child when process-group signaling is unavailable.
 		}
-	} else {
-		proc.kill("SIGTERM");
 	}
+	try {
+		proc.kill(signal);
+	} catch {
+		// The process may already have exited.
+	}
+}
 
-	setTimeout(() => {
-		if (proc.killed) return;
-		if (process.platform !== "win32" && proc.pid) {
-			try {
-				process.kill(-proc.pid, "SIGKILL");
-			} catch {
-				proc.kill("SIGKILL");
-			}
-		} else {
-			proc.kill("SIGKILL");
-		}
-	}, KILL_GRACE_MS).unref();
+export function terminateProcess(proc: ReturnType<typeof spawn>, graceMs = KILL_GRACE_MS): () => void {
+	let closed = proc.exitCode !== null || proc.signalCode !== null;
+	const onClose = () => {
+		closed = true;
+	};
+	proc.once("close", onClose);
+	if (!closed) signalProcess(proc, "SIGTERM");
+	const escalation = setTimeout(() => {
+		if (!closed) signalProcess(proc, "SIGKILL");
+	}, graceMs);
+	escalation.unref();
+	return () => {
+		clearTimeout(escalation);
+		proc.off("close", onClose);
+	};
 }
 
 export type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
@@ -186,6 +238,7 @@ export async function runSingleAgent(
 	timeoutMs: number,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	invocationOverride?: { command: string; argsPrefix?: string[] },
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -233,6 +286,26 @@ export async function runSingleAgent(
 	};
 
 	try {
+		const effectiveCwd = cwd ?? defaultCwd;
+		try {
+			if (!fs.statSync(effectiveCwd).isDirectory()) throw new Error("not a directory");
+		} catch (error) {
+			currentResult.exitCode = 1;
+			currentResult.stopReason = "error";
+			const reason = error instanceof Error ? error.message : String(error);
+			currentResult.errorMessage = `Invalid subagent cwd: ${effectiveCwd} (${reason})`;
+			currentResult.stderr = currentResult.errorMessage;
+			return currentResult;
+		}
+
+		if (signal?.aborted) {
+			currentResult.exitCode = 130;
+			currentResult.aborted = true;
+			currentResult.stopReason = "aborted";
+			currentResult.errorMessage = "Subagent was aborted before start";
+			return currentResult;
+		}
+
 		if (agent.systemPrompt.trim()) {
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
@@ -250,45 +323,63 @@ export async function runSingleAgent(
 		let timedOut = false;
 
 		const exitCode = await new Promise<number>((resolve) => {
-			const invocation = getPiInvocation(args);
+			const invocation = invocationOverride
+				? {
+						command: invocationOverride.command,
+						args: [...(invocationOverride.argsPrefix ?? []), ...args],
+					}
+				: getPiInvocation(args);
 			let settled = false;
+			let cleanupTermination: (() => void) | undefined;
+			let timeout: NodeJS.Timeout | undefined;
+			let abortHandler: (() => void) | undefined;
 			const finish = (code: number) => {
 				if (settled) return;
 				settled = true;
-				clearTimeout(timeout);
+				if (timeout) clearTimeout(timeout);
+				cleanupTermination?.();
+				if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
 				resolve(code);
 			};
-			const proc = spawn(invocation.command, invocation.args, {
-				cwd: cwd ?? defaultCwd,
-				detached: process.platform !== "win32",
-				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let buffer = "";
-			const timeout = setTimeout(() => {
-				timedOut = true;
-				currentResult.timedOut = true;
-				currentResult.stopReason = "timeout";
-				currentResult.errorMessage = `Subagent timed out after ${timeoutMs}ms`;
-				currentResult.stderr += `${currentResult.stderr ? "\n" : ""}Subagent timed out after ${timeoutMs}ms.`;
-				emitUpdate();
-				terminateProcess(proc);
-			}, timeoutMs);
-			timeout.unref();
+			let proc: ReturnType<typeof spawn>;
+			try {
+				proc = spawn(invocation.command, invocation.args, {
+					cwd: effectiveCwd,
+					detached: process.platform !== "win32",
+					shell: false,
+					stdio: ["ignore", "pipe", "pipe"],
+					env: {
+						...process.env,
+						PI_SUBAGENT_DEPTH: String(
+							(Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) + 1,
+						),
+					},
+				});
+			} catch (error) {
+				currentResult.errorMessage = error instanceof Error ? error.message : String(error);
+				currentResult.stderr = currentResult.errorMessage;
+				finish(1);
+				return;
+			}
 
-			const processLine = (line: string) => {
-				if (!line.trim()) return;
-				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
+			let capturedMessageBytes = 0;
+			const addMessage = (msg: Message) => {
+				if (currentResult.messages.length >= DEFAULT_MAX_MESSAGES) {
+					currentResult.truncated = true;
 					return;
 				}
-
+				const remaining = Math.max(0, DEFAULT_MAX_OUTPUT_BYTES - capturedMessageBytes);
+				const boundedMessage = boundMessageText(msg, remaining);
+				capturedMessageBytes += boundedMessage.bytes;
+				currentResult.truncated ||= boundedMessage.truncated;
+				currentResult.messages.push(boundedMessage.message);
+			};
+			const processEvent = (raw: unknown) => {
+				if (!raw || typeof raw !== "object") return;
+				const event = raw as { type?: string; message?: Message };
 				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					currentResult.messages.push(msg);
-
+					const msg = event.message;
+					addMessage(msg);
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
 						const usage = msg.usage;
@@ -305,51 +396,88 @@ export async function runSingleAgent(
 						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
 					}
 					emitUpdate();
-				}
-
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
+				} else if (event.type === "tool_result_end" && event.message) {
+					addMessage(event.message);
 					emitUpdate();
 				}
 			};
-
-			proc.stdout.on("data", (data) => {
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-				for (const line of lines) processLine(line);
+			const decoder = new JsonLineDecoder({
+				onValue: processEvent,
+				onMalformed: () => {
+					currentResult.malformedEvents = (currentResult.malformedEvents ?? 0) + 1;
+				},
+				onOversized: () => {
+					currentResult.truncated = true;
+				},
 			});
 
-			proc.stderr.on("data", (data) => {
-				currentResult.stderr += data.toString();
-			});
+			timeout = setTimeout(() => {
+				timedOut = true;
+				currentResult.timedOut = true;
+				currentResult.stopReason = "timeout";
+				currentResult.errorMessage = `Subagent timed out after ${timeoutMs}ms`;
+				const bounded = appendBounded(
+					currentResult.stderr,
+					`\nSubagent timed out after ${timeoutMs}ms.`,
+					DEFAULT_MAX_STDERR_BYTES,
+				);
+				currentResult.stderr = bounded.text;
+				currentResult.truncated ||= bounded.truncated;
+				emitUpdate();
+				cleanupTermination = terminateProcess(proc);
+			}, timeoutMs);
+			timeout.unref();
 
+			proc.stdout?.on("data", (data) => decoder.push(data));
+			proc.stderr?.on("data", (data) => {
+				const bounded = appendBounded(currentResult.stderr, data.toString(), DEFAULT_MAX_STDERR_BYTES);
+				currentResult.stderr = bounded.text;
+				currentResult.truncated ||= bounded.truncated;
+			});
 			proc.on("close", (code) => {
-				if (buffer.trim()) processLine(buffer);
-				finish(timedOut ? 124 : (code ?? 0));
+				decoder.finish();
+				finish(timedOut ? 124 : wasAborted ? 130 : (code ?? 0));
 			});
-
 			proc.on("error", (error) => {
 				currentResult.errorMessage = error.message;
-				currentResult.stderr += `${currentResult.stderr ? "\n" : ""}${error.message}`;
+				const bounded = appendBounded(
+					currentResult.stderr,
+					`${currentResult.stderr ? "\n" : ""}${error.message}`,
+					DEFAULT_MAX_STDERR_BYTES,
+				);
+				currentResult.stderr = bounded.text;
+				currentResult.truncated ||= bounded.truncated;
 				finish(1);
 			});
 
 			if (signal) {
-				const killProc = () => {
+				abortHandler = () => {
+					if (timedOut || settled) return;
 					wasAborted = true;
+					currentResult.aborted = true;
 					currentResult.stopReason = "aborted";
 					currentResult.errorMessage = "Subagent was aborted";
-					terminateProcess(proc);
+					cleanupTermination = terminateProcess(proc);
 				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
+				if (signal.aborted) abortHandler();
+				else signal.addEventListener("abort", abortHandler, { once: true });
 			}
 		});
 
 		currentResult.exitCode = exitCode;
-		currentResult.finalOutput = getFinalOutput(currentResult.messages);
-		if (wasAborted && !timedOut) throw new Error("Subagent was aborted");
+		const final = truncateUtf8(getFinalOutput(currentResult.messages), DEFAULT_MAX_OUTPUT_BYTES);
+		currentResult.finalOutput = final.text;
+		currentResult.truncated ||= final.truncated;
+		currentResult.policy = {
+			inherited: ["environment"],
+			overridden: [
+				"cwd",
+				...(agent.model ? ["model"] : []),
+				...(thinkingLevel ? ["thinkingLevel"] : []),
+				...(agent.tools ? ["tools"] : []),
+			],
+			unsupported: ["approvalPolicy", "sandboxProfile", "providerHeaders"],
+		};
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)

@@ -15,8 +15,11 @@ Use it to split research, planning, implementation, and review work across focus
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides `/subagents:config` to persist per-agent tool allow-lists.
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, `thinkingLevel`, abort propagation, and streaming progress.
+- Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
+- Enforces a recursion-depth guard and deterministic process-group termination.
+- Optionally provides addressable stateful agents with follow-up, wait, list, interrupt, close, context selection, and persistence.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
-- Returns complete worker output in tool details and a concise result for the main agent.
+- Returns complete bounded worker output in tool details and a concise result for the main agent.
 
 ## 📦 Install
 
@@ -178,6 +181,59 @@ Run a chain where each step receives the previous output:
 }
 ```
 
+## 🔁 Stateful agents
+
+Stateful agents are an opt-in logical-session layer over the same isolated one-shot Pi subprocesses. Each turn starts a fresh child process; the extension retains only sanitized, bounded task/output history and supplies it to the next turn. This avoids relying on an undocumented bidirectional child protocol.
+
+Enable the lifecycle tools in `~/.pi/agent/pi-subagents-config.json`, then reload Pi:
+
+```json
+{
+  "stateful": {
+    "enabled": true,
+    "maxAgents": 16,
+    "maxActiveTurns": 4,
+    "idleTtlMs": 3600000,
+    "retentionDays": 30,
+    "maxStoredAgents": 50
+  }
+}
+```
+
+Enabling the feature registers:
+
+| Tool | Purpose |
+| --- | --- |
+| `subagent_spawn` | Start a logical agent and return an opaque `agentId`. |
+| `subagent_send` | Send follow-up work to a reusable agent. |
+| `subagent_wait` | Wait for completion without terminating the agent on wait timeout. |
+| `subagent_list` | List retained agents and lifecycle states. |
+| `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
+| `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |
+
+Use `/subagents:agents list` to inspect agents and `/subagents:agents clear` to close and delete all retained agents for the session. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records.
+
+`subagent_spawn.context` accepts:
+
+- `"none"` (default) — no parent conversation.
+- `"all"` — bounded user/assistant text from the active branch.
+- A positive number — the most recent N user turns and related assistant text.
+
+Reasoning, tool results, custom transport messages, and non-text parts are excluded. Text inside `<private>...</private>` and lines containing `[subagent-private]` are omitted before context or history is persisted.
+
+## 📜 Compatibility and failure contract
+
+Existing `subagent` requests remain unchanged:
+
+| Mode | Ordering | Failure behavior |
+| --- | --- | --- |
+| Single | One result. | A failed/aborted/timed-out worker is marked as a tool error while preserving bounded details. |
+| Chain | Input order. | Stops at the first failed step; completed steps remain in details. |
+| Parallel | Input order, with at most four active children. | Collects all task results; partial worker failure is reported in summaries but does not discard successful results. |
+| Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with both successful outputs and failure descriptions; aggregator failure marks the tool result as an error. |
+
+Timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Thinking precedence remains: task/step/aggregator → call → agent setting → child default. Project-agent resolution and confirmation behavior is unchanged.
+
 ## 🤖 Built-in agents
 
 Built-in agents are available without setup and can be overridden by user or project agents with the same name.
@@ -241,7 +297,15 @@ Set `thinkingLevel` to pass Pi's `--thinking <level>` to a subprocess. Supported
 
 Thinking-level precedence is: task/chain step/aggregator `thinkingLevel` → top-level `thinkingLevel` → agent default from config or frontmatter → Pi subprocess default. Omit `thinkingLevel` to preserve existing behavior. Pi still owns model capability clamping, so unsupported thinking levels are handled by the spawned Pi process.
 
-On timeout, the extension sends `SIGTERM`, escalates to `SIGKILL` after a short grace period, and returns any partial messages or stderr collected so far.
+On timeout, the extension sends process-group `SIGTERM`, escalates to `SIGKILL` after a five-second grace period if the process has not actually closed, and returns partial bounded messages or stderr collected so far. Parent abort uses the same cleanup path and preserves a structured result.
+
+The child event protocol limits each JSON line to 256 KiB. Captured output uses these defaults:
+
+- final output and fan-in/chain context: 50 KiB;
+- stderr: 16 KiB;
+- captured messages: 200.
+
+Truncated text includes a `truncated by pi-subagents` marker and details expose `truncated: true`. `PI_SUBAGENT_MAX_DEPTH` controls nested delegation depth and defaults to 1; child processes receive `PI_SUBAGENT_DEPTH` automatically.
 
 ## 📡 Runtime status
 
@@ -249,7 +313,17 @@ While the `subagent` tool is running, `pi-subagents` publishes compact activity 
 
 ## 🔒 Safety notes
 
-Subagents are separate Pi processes and may use the tools allowed by their agent definition. Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories.
+Subagents have separate processes and context windows, but they are **not security sandboxes**. They run as the same OS user, share the host filesystem and network access, and may conflict if they edit the same files. Tool allow-lists reduce available Pi tools but do not reduce operating-system permissions.
+
+The runner explicitly reports policy continuity in result details:
+
+- inherited: process environment;
+- overridden when selected: cwd, model, thinking level, and tool list;
+- unsupported guarantees: parent approval policy, sandbox profile, and provider headers.
+
+Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories. Stateful project agents require Pi's project trust; interactive use also keeps confirmation enabled by default.
+
+Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory). Records contain sanitized logical history, never process IDs or credentials. Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed. Retention and count limits are configurable. Downgrading is safe: older extension versions ignore this separate state directory; use `/subagents:agents clear` before downgrade if the histories should be removed.
 
 ## 🗂️ Package layout
 

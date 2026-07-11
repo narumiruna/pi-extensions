@@ -18,6 +18,7 @@ import { SubagentParams } from "./params.js";
 import { executeSubagent } from "./execution.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
 import type { SubagentDetails } from "./runner.js";
+import { registerStatefulSubagents } from "./stateful.js";
 
 export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof SubagentParams, SubagentDetails>({
@@ -57,8 +58,13 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.on("tool_result", (event) => {
+		if (event.toolName !== "subagent") return;
+		if ((event.details as (SubagentDetails & { isError?: boolean }) | undefined)?.isError) return { isError: true };
+	});
 
 	registerSubagentConfigCommand(pi);
+	registerStatefulSubagents(pi);
 }
 export { formatTokens, formatUsageStats } from "./render.js";
 export { buildPiArgs } from "./runner.js";
