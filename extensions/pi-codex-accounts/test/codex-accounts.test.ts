@@ -138,6 +138,40 @@ test("ensureActiveCodexAuth refreshes near-expired active accounts", async () =>
 	assert.equal((await store.readAsync()).accounts.work?.access, "access-new");
 });
 
+test("concurrent auth checks refresh an expiring account only once", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({
+		active: "work",
+		accounts: { work: { access: "old", refresh: "refresh-old", expires: 0 } },
+	});
+	let refreshCalls = 0;
+	const oauthProvider = {
+		async refreshToken() {
+			refreshCalls += 1;
+			await Promise.resolve();
+			return validCred("new");
+		},
+		getApiKey: (credential: { access: string }) => credential.access,
+	};
+	const runtimeKeys: string[] = [];
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: (_provider: string, key: string) => runtimeKeys.push(key),
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	await Promise.all([
+		ensureActiveCodexAuth(ctx, store, { oauthProvider }),
+		ensureActiveCodexAuth(ctx, store, { oauthProvider }),
+	]);
+
+	assert.equal(refreshCalls, 1);
+	assert.deepEqual(runtimeKeys, ["access-new", "access-new"]);
+});
+
 test("ensureActiveCodexAuth fails closed when active account refresh fails", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	await store.write({
@@ -350,6 +384,61 @@ test("codex-account can switch accounts or return to default Pi login", async ()
 	assert.deepEqual(runtimeCalls.at(-1), `remove:${CODEX_PROVIDER_ID}`);
 });
 
+test("codex-account default does not let an in-flight refresh restore the previous account", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({
+		active: "work",
+		accounts: {
+			work: { ...validCred("work"), expires: 0 },
+			home: validCred("home"),
+		},
+	});
+	let releaseRefresh: (() => void) | undefined;
+	const refreshStarted = new Promise<void>((resolve) => {
+		releaseRefresh = resolve;
+	});
+	let signalRefreshStarted: (() => void) | undefined;
+	const refreshEntered = new Promise<void>((resolve) => {
+		signalRefreshStarted = resolve;
+	});
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("unexpected login");
+			},
+			async refreshToken() {
+				signalRefreshStarted?.();
+				await refreshStarted;
+				return validCred("work-refreshed");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+	const runtimeCalls: string[] = [];
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: (provider: string, key: string) =>
+					runtimeCalls.push(`set:${provider}:${key}`),
+				removeRuntimeApiKey: (provider: string) => runtimeCalls.push(`remove:${provider}`),
+			},
+		},
+	});
+
+	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await refreshEntered;
+	const switching = command.handler("default", ctx);
+	releaseRefresh?.();
+	await Promise.all([startup, switching]);
+
+	assert.equal((await store.readAsync()).active, undefined);
+	assert.equal(runtimeCalls.at(-1), `remove:${CODEX_PROVIDER_ID}`);
+});
+
 test("codex-account selector includes default Pi login", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	await store.write({ active: "work", accounts: { work: validCred("work") } });
@@ -409,6 +498,92 @@ test("codex-logout deletes accounts and clears active runtime auth", async () =>
 	assert.equal(data.active, undefined);
 	assert.equal(data.accounts.work, undefined);
 	assert.deepEqual(runtimeCalls.at(-1), `remove:${CODEX_PROVIDER_ID}`);
+});
+
+test("logging out another account does not overwrite an in-flight token refresh", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({
+		active: "work",
+		accounts: {
+			work: { ...validCred("work"), expires: 0 },
+			home: validCred("home"),
+		},
+	});
+	let releaseRefresh: (() => void) | undefined;
+	const refreshBlocked = new Promise<void>((resolve) => {
+		releaseRefresh = resolve;
+	});
+	let signalRefreshStarted: (() => void) | undefined;
+	const refreshStarted = new Promise<void>((resolve) => {
+		signalRefreshStarted = resolve;
+	});
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("unexpected login");
+			},
+			async refreshToken() {
+				signalRefreshStarted?.();
+				await refreshBlocked;
+				return validCred("refreshed");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+		closeWebSocketSessions: () => undefined,
+	});
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: () => undefined,
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await refreshStarted;
+	const command = mock.commands.get("codex-logout");
+	assert.ok(command);
+	const logout = command.handler("home", ctx);
+	releaseRefresh?.();
+	await Promise.all([startup, logout]);
+
+	const data = await store.readAsync();
+	assert.equal(data.accounts.home, undefined);
+	assert.equal(data.accounts.work?.access, "access-refreshed");
+});
+
+test("account changes close cached Codex WebSockets while unchanged compaction checks do not", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({
+		active: "work",
+		accounts: { work: validCred("work"), home: validCred("home") },
+	});
+	const closedSessions: Array<string | undefined> = [];
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		closeWebSocketSessions: (sessionId) => closedSessions.push(sessionId),
+	});
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: () => undefined,
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	await mock.events.get("before_agent_start")?.[0]?.({}, ctx);
+	assert.equal(closedSessions.length, 1);
+
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+	await command.handler("home", ctx);
+	assert.equal(closedSessions.length, 2);
 });
 
 test("status is visible only while the selected model is openai-codex", async () => {

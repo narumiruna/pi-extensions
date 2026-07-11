@@ -156,6 +156,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 		reload: overrides.reload ?? (async () => undefined),
 		getContextUsage: overrides.getContextUsage ?? (() => undefined),
 		sessionManager: overrides.sessionManager ?? {
+			getSessionId: () => "test-session",
 			getBranch: () => [],
 			getEntries: () => [],
 		},

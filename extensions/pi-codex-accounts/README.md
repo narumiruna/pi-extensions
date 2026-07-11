@@ -17,6 +17,7 @@ It keeps using Pi's built-in `openai-codex` provider. It does **not** add provid
 - Leaves your selected `/model` unchanged, matching Pi's built-in `/login` behavior, except it may select `openai-codex/gpt-5.5` when the current model is `unknown/unknown`.
 - Shows `codex:<name>` in the statusline only while the current model provider is `openai-codex`.
 - Fails closed if an active self-managed account cannot refresh, so Pi does not silently fall back to a different Codex account.
+- Closes the current session's cached Codex WebSocket when auth changes, preventing a reused connection from staying on the previous account.
 
 ## 📦 Install
 
@@ -71,6 +72,8 @@ When an active self-managed account is set, the extension applies that account's
 When no self-managed account is active, the extension removes its runtime override and Pi uses its normal `openai-codex` auth resolution. That means existing `/login openai-codex`, `auth.json`, or environment behavior still works.
 
 If the active self-managed account refresh fails, the extension keeps a non-empty failing runtime key in place. This prevents accidental fallback to a different Codex account.
+
+Account switches and token refreshes also close any cached Codex WebSocket for the current Pi session. The next request reconnects with the newly selected credentials; repeated pre-turn checks, including turns started after compaction, keep the connection when auth is unchanged.
 
 ## 🚧 Limitations
 
