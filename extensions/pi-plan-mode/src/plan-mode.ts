@@ -30,6 +30,7 @@ import {
 } from "./tool-policy.js";
 import {
 	configuredThinkingLevel,
+	PLAN_MODE_THINKING_LEVELS,
 	readPlanModeSettings,
 	type PlanModeFixedThinkingLevel,
 	type PlanModeSettings,
@@ -578,7 +579,14 @@ export default function planMode(pi: ExtensionAPI) {
 			return;
 		}
 		const configured = configuredThinkingLevel(settings);
-		if (!configured) return;
+		if (!configured) {
+			state = {
+				...state,
+				previousThinkingLevel: undefined,
+				appliedThinkingLevel: undefined,
+			};
+			return;
+		}
 		const current = pi.getThinkingLevel();
 		if (!state.appliedThinkingLevel) state.previousThinkingLevel = current;
 		if (current !== configured) pi.setThinkingLevel(configured);
@@ -636,17 +644,24 @@ export default function planMode(pi: ExtensionAPI) {
 		const entry = entries
 			.filter((candidate) => candidate.type === "custom" && candidate.customType === STATE_ENTRY_TYPE)
 			.pop();
-		if (!entry?.data) return;
-		const enabled = entry.data.enabled ?? false;
+		if (!isRecord(entry?.data)) return;
+		const enabled = entry.data.enabled === true;
 		state = {
 			enabled,
-			latestPlan: enabled ? entry.data.latestPlan : undefined,
-			awaitingAction: enabled ? (entry.data.awaitingAction ?? false) : false,
-			selectedToolNames: entry.data.selectedToolNames,
-			selectedToolKeys: entry.data.selectedToolKeys,
-			previousThinkingLevel: enabled ? entry.data.previousThinkingLevel : undefined,
-			appliedThinkingLevel: enabled ? entry.data.appliedThinkingLevel : undefined,
-			manualThinkingLevel: enabled ? entry.data.manualThinkingLevel : undefined,
+			latestPlan:
+				enabled && typeof entry.data.latestPlan === "string" ? entry.data.latestPlan : undefined,
+			awaitingAction: enabled && entry.data.awaitingAction === true,
+			selectedToolNames: stringArray(entry.data.selectedToolNames),
+			selectedToolKeys: stringArray(entry.data.selectedToolKeys),
+			previousThinkingLevel: enabled
+				? fixedThinkingLevel(entry.data.previousThinkingLevel)
+				: undefined,
+			appliedThinkingLevel: enabled
+				? fixedThinkingLevel(entry.data.appliedThinkingLevel)
+				: undefined,
+			manualThinkingLevel: enabled
+				? fixedThinkingLevel(entry.data.manualThinkingLevel)
+				: undefined,
 		};
 	}
 
@@ -744,6 +759,24 @@ function toolSourceLabel(tool: ToolInfo) {
 
 function unique(values: string[]) {
 	return Array.from(new Set(values));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringArray(value: unknown) {
+	return Array.isArray(value) && value.every((item): item is string => typeof item === "string")
+		? unique(value)
+		: undefined;
+}
+
+function fixedThinkingLevel(value: unknown): PlanModeFixedThinkingLevel | undefined {
+	return typeof value === "string" &&
+		value !== "inherit" &&
+		PLAN_MODE_THINKING_LEVELS.includes(value as (typeof PLAN_MODE_THINKING_LEVELS)[number])
+		? (value as PlanModeFixedThinkingLevel)
+		: undefined;
 }
 
 export function withRequiredPlanModeTools(toolNames: string[]) {

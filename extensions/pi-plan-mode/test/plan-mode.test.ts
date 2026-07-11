@@ -97,6 +97,8 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"sort --compress-program='touch output' input",
 		"sort -T /tmp input",
 		"git grep --open-files-in-pager='sh -c touch output' pattern",
+		"git grep -O'sh -c touch output' pattern",
+		"git grep -O 'sh -c touch output' pattern",
 		"git branch -D old",
 		"git branch --unset-upstream",
 		"git branch --set-upstream-to=origin/main",
@@ -120,6 +122,10 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"git log --output=log.txt",
 		"git remote update",
 		"tsc --noEmit --incremental --tsBuildInfoFile info.tsbuildinfo",
+		"tsc --noEmit --generateTrace trace",
+		"go build ./cmd/app",
+		"cargo build",
+		"npm run build",
 		"awk 'BEGIN { system(\"touch file\") }'",
 		"rg x || (echo bad > file)",
 		"cat <<EOF",
@@ -258,6 +264,74 @@ test("missing settings reset a previously loaded fixed thinking level", async ()
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		await mock.commands.get("plan")?.handler("", context.ctx);
 		assert.equal(mock.thinkingLevel, "low");
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("malformed persisted Plan state fails closed", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-malformed-state-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const mock = createMockPi({ activeTools: ["read", "write"] });
+		planMode(mock.pi);
+		const context = createMockContext({
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [
+					{
+						type: "custom",
+						customType: "plan-mode-state",
+						data: {
+							enabled: "yes",
+							awaitingAction: 1,
+							selectedToolNames: "read",
+							previousThinkingLevel: "extreme",
+						},
+					},
+				],
+			},
+		});
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		assert.equal(context.statuses.get("plan-mode"), undefined);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "write"]);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("inherit settings clear stale persisted thinking ownership", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-inherit-ownership-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "medium" });
+		planMode(mock.pi);
+		const context = createMockContext({
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [
+					{
+						type: "custom",
+						customType: "plan-mode-state",
+						data: {
+							enabled: true,
+							awaitingAction: false,
+							previousThinkingLevel: "low",
+							appliedThinkingLevel: "medium",
+						},
+					},
+				],
+			},
+		});
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await mock.commands.get("plan")?.handler("exit", context.ctx);
+		assert.equal(mock.thinkingLevel, "medium");
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -440,6 +514,7 @@ test("proposed-plan parser distinguishes valid and malformed output", () => {
 	);
 	assert.equal(parseProposedPlan("before <proposed_plan>bad</proposed_plan>").kind, "malformed");
 	assert.equal(parseProposedPlan("<proposed_plan>unfinished").kind, "unclosed");
+	assert.equal(parseProposedPlan("<PROPOSED_PLAN>\n# Plan\n</PROPOSED_PLAN>").kind, "malformed");
 });
 
 test("Codex-like prompt includes replacement, default, and compactness rules", () => {

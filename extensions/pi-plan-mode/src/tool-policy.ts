@@ -319,7 +319,8 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 					argument === "--ext-diff" ||
 					argument === "--textconv" ||
 					argument === "--open-files-in-pager" ||
-					argument.startsWith("--open-files-in-pager="),
+					argument.startsWith("--open-files-in-pager=") ||
+					(subcommand === "grep" && (argument === "-O" || argument.startsWith("-O"))),
 			)
 		)
 			return false;
@@ -335,7 +336,9 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 					argument === "--incremental" ||
 					argument.startsWith("--incremental=") ||
 					argument === "--tsBuildInfoFile" ||
-					argument.startsWith("--tsBuildInfoFile="),
+					argument.startsWith("--tsBuildInfoFile=") ||
+					argument === "--generateTrace" ||
+					argument.startsWith("--generateTrace="),
 			)
 		);
 	}
@@ -344,10 +347,10 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 		if (["list", "ls", "view", "info", "search", "outdated", "audit", "test"].includes(subcommand ?? "")) {
 			return true;
 		}
-		return subcommand === "run" && ["test", "check", "typecheck", "lint", "build"].includes(args[1] ?? "");
+		return subcommand === "run" && ["test", "check", "typecheck", "lint"].includes(args[1] ?? "");
 	}
 	if (["cargo", "go", "pytest", "vitest", "jest"].includes(command)) {
-		return ["test", "check", "build"].includes(subcommand ?? "") || ["pytest", "vitest", "jest"].includes(command);
+		return ["test", "check"].includes(subcommand ?? "") || ["pytest", "vitest", "jest"].includes(command);
 	}
 	return false;
 }

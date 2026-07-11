@@ -25,7 +25,7 @@ Use this document as the implementation ledger. Work on exactly one unchecked st
 
 ## Plan
 
-- [x] **Stage 1 — Enforce mode invariants.** Added direct `tool_call` blocking for `update_plan` while preserving built-in mutation enforcement; hook tests pass in the 304-test root suite.
+- [x] **Stage 1 — Enforce mode invariants.** Added direct `tool_call` blocking for `update_plan` while preserving built-in mutation enforcement; hook tests pass in the 306-test root suite.
 - [x] **Stage 2 — Synchronize Codex planning behavior.** Reconciled `src/prompt.ts` with recommended-default assumptions, complete replacement and unchanged-plan rules, one-block limits, and behavior-level output guidance; prompt assertions and `npm run check` pass.
 - [x] **Stage 3 — Validate proposed plans structurally.** Added deterministic absent/valid/empty/multiple/malformed/unclosed results, warning behavior that stays unready, and complete-block-only stripping; parser and agent-end tests pass.
 - [x] **Stage 4 — Harden command policy.** Added quote-aware segmentation for chains and pipelines with fail-closed rejection of redirects, substitutions, subshells, background jobs, unknown commands, mutating flags, and adversarial command forms; the command matrix and `npm run check` pass.
@@ -50,4 +50,4 @@ Use this document as the implementation ledger. Work on exactly one unchecked st
 - [x] Prompt behavior is reconciled against the vendored Codex template, with Pi-specific deviations recorded in source tests and README documentation.
 - [x] Optional thinking-level behavior preserves manual user changes and provider-clamped levels across tested transitions.
 - [x] User-facing safety and configuration documentation matches implemented behavior, verified by README review and `just pack-plan-mode` output.
-- [x] Repository quality gates pass with `npm run check` (304/304 tests), and extension loading is smoke-tested non-interactively with `pi -ne -e ./extensions/pi-plan-mode --help` showing `--plan`.
+- [x] Repository quality gates pass with `npm run check` (306/306 tests), and extension loading is smoke-tested non-interactively with `pi -ne -e ./extensions/pi-plan-mode --help` showing `--plan`.
