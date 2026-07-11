@@ -227,6 +227,27 @@ function hasSafeArguments(command: string, args: string[]) {
 		return false;
 	}
 	if (
+		command === "sort" &&
+		args.some(
+			(argument) =>
+				argument === "-T" ||
+				(argument.startsWith("-T") && argument.length > 2) ||
+				argument.startsWith("--temporary-directory") ||
+				argument.startsWith("--compress-program"),
+		)
+	) {
+		return false;
+	}
+	if (
+		command === "diff" &&
+		args.some((argument) => argument === "--output" || argument.startsWith("--output="))
+	) {
+		return false;
+	}
+	if (command === "uniq" && args.filter((argument) => !argument.startsWith("-")).length > 1) {
+		return false;
+	}
+	if (
 		command === "fd" &&
 		args.some((argument) =>
 			["-x", "-X", "--exec", "--exec-batch"].some(
@@ -255,7 +276,14 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 	const subcommandIndex = args.findIndex((argument) => !argument.startsWith("-"));
 	const subcommand = args[subcommandIndex]?.toLowerCase();
 	const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
-	if (command === "sed") return args.includes("-n") || args.some((argument) => argument.startsWith("-n"));
+	if (command === "sed") {
+		const script = args.find((argument) => !argument.startsWith("-"));
+		return (
+			Boolean(script) &&
+			(args.includes("-n") || args.some((argument) => /^-[^-]*n[^-]*$/.test(argument))) &&
+			/^\d+(,\d+)?p$/.test(script ?? "")
+		);
+	}
 	if (command === "git") {
 		if (!subcommand || !["status", "log", "diff", "show", "branch", "remote", "ls-files", "grep"].includes(subcommand)) return false;
 		if (subcommand === "branch" && subcommandArgs.some((argument) => !argument.startsWith("-"))) return false;
@@ -289,7 +317,9 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 					argument === "--output" ||
 					argument.startsWith("--output=") ||
 					argument === "--ext-diff" ||
-					argument === "--textconv",
+					argument === "--textconv" ||
+					argument === "--open-files-in-pager" ||
+					argument.startsWith("--open-files-in-pager="),
 			)
 		)
 			return false;
