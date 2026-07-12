@@ -21,7 +21,6 @@ jobs:
       matrix:
         pi_version:
           - "0.79.10"
-          - "0.80.3"
           - "latest"
 
     steps:
