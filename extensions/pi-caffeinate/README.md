@@ -14,7 +14,7 @@ It is designed for long-running coding, refactoring, debugging, web research, an
 - Supports macOS, Windows, WSL, and Linux.
 - Defaults to display-awake mode on every supported OS: prevent system sleep and keep the screen/display awake.
 - Provides a single `/caffeinate` command with menu-based controls and direct subcommands.
-- Persists the selected keep-awake mode in a small JSON settings file.
+- Persists the selected keep-awake mode and optional quiet mode in a small JSON settings file.
 - Allows a custom inhibitor command through environment configuration.
 - Emits plain status text; `@narumitw/pi-statusline` can add or suppress the status icon from JSON config.
 - Fails safely when no supported inhibitor is available.
@@ -77,7 +77,7 @@ Keeps the system awake while allowing normal display sleep. If an inhibitor is c
 /caffeinate status
 ```
 
-Shows whether an inhibitor is active, unavailable, disabled, or idle. The status includes the current mode and settings file path.
+Shows whether an inhibitor is active, unavailable, disabled, or idle. The status includes the current mode, quiet mode, and settings file path.
 
 ```text
 /caffeinate mode
@@ -93,7 +93,7 @@ Releases any active inhibitor until Pi starts another agent run.
 
 ## ⚙️ Configuration
 
-### Persisted mode
+### Persisted settings
 
 `/caffeinate sleep` and `/caffeinate display` save the selected mode to:
 
@@ -106,11 +106,18 @@ Example:
 ```json
 {
   "mode": "display",
+  "quiet": true,
   "updatedAt": 1791763200000
 }
 ```
 
-Missing, invalid, or deleted settings default back to `display` mode on every supported OS.
+Set `"quiet": true` to hide the routine `Keeping computer awake (...)` and
+`Released pi-caffeinate (agent finished)` lifecycle notifications. Quiet mode does not hide
+warnings, status updates, or feedback from `/caffeinate` commands such as `status`, mode changes,
+help, and manual stop. It defaults to `false` when omitted.
+
+Missing, invalid, or deleted settings default back to `display` mode with quiet mode disabled on
+every supported OS.
 
 Compatibility: older versions used `pi-caffeinate-settings.json`. During the migration window, a
 legacy-only file is automatically migrated to `pi-caffeinate.json` with a warning. If both files

@@ -56,6 +56,7 @@ interface CaffeinateState {
 	available: boolean;
 	disabled: boolean;
 	mode: CaffeinateMode;
+	quiet: boolean;
 	settingsLoaded: boolean;
 	settingsError?: string;
 	settingsNotice?: string;
@@ -67,6 +68,7 @@ const state: CaffeinateState = {
 	available: true,
 	disabled: isDisabled(),
 	mode: DEFAULT_MODE,
+	quiet: false,
 	settingsLoaded: false,
 	iconWarningShown: false,
 };
@@ -83,12 +85,14 @@ export default function caffeinate(pi: ExtensionAPI) {
 	pi.on("agent_start", async (_event, ctx) => {
 		await ensureSettingsLoaded(ctx);
 		state.activeTurns += 1;
-		startInhibitor(ctx);
+		startInhibitor(ctx, { notify: !state.quiet });
 	});
 
 	pi.on("agent_end", (_event, ctx) => {
 		state.activeTurns = Math.max(0, state.activeTurns - 1);
-		if (state.activeTurns === 0) stopInhibitor(ctx, "agent finished");
+		if (state.activeTurns === 0) {
+			stopInhibitor(ctx, "agent finished", { notify: !state.quiet });
+		}
 		updateStatus(ctx);
 	});
 
@@ -195,7 +199,7 @@ async function setMode(ctx: ExtensionContext, mode: CaffeinateMode) {
 
 	let saved = true;
 	try {
-		await saveSettings({ mode, updatedAt: Date.now() });
+		await saveSettings({ mode, quiet: state.quiet, updatedAt: Date.now() });
 	} catch (error) {
 		saved = false;
 		state.settingsError = `settings save failed: ${formatError(error)}`;
@@ -204,7 +208,7 @@ async function setMode(ctx: ExtensionContext, mode: CaffeinateMode) {
 
 	if (state.process && previousMode !== mode && !state.command?.custom) {
 		stopInhibitor(ctx, "mode changed", { notify: false });
-		startInhibitor(ctx);
+		startInhibitor(ctx, { notify: !state.quiet });
 	}
 
 	ctx.ui.notify(
@@ -261,7 +265,7 @@ function buildCommandGuide() {
 	].join("\n");
 }
 
-function startInhibitor(ctx: ExtensionContext) {
+function startInhibitor(ctx: ExtensionContext, options: { notify?: boolean } = {}) {
 	if (state.disabled || state.process) {
 		updateStatus(ctx);
 		return;
@@ -293,6 +297,7 @@ function startInhibitor(ctx: ExtensionContext) {
 				if (state.process !== child) return;
 				state.process = undefined;
 				state.startedAt = undefined;
+				state.available = false;
 				state.lastError = `${command.description} exited unexpectedly (${exit}).`;
 				ctx.ui.notify(state.lastError, "warning");
 				updateStatus(ctx);
@@ -303,7 +308,9 @@ function startInhibitor(ctx: ExtensionContext) {
 		state.command = command;
 		state.available = true;
 		state.lastError = undefined;
-		ctx.ui.notify(`Keeping computer awake (${statusModeLabel()}).`, "info");
+		if (options.notify !== false) {
+			ctx.ui.notify(`Keeping computer awake (${statusModeLabel()}).`, "info");
+		}
 		updateStatus(ctx);
 	} catch (error) {
 		state.process = undefined;
@@ -348,6 +355,7 @@ function describeState() {
 	const customCommand = hasCustomCommand();
 	const lines = [
 		`Mode: ${formatMode(state.mode)}${customCommand ? " (overridden by custom command)" : ""}`,
+		`Quiet mode: ${state.quiet ? "enabled" : "disabled"}`,
 		`Settings: ${settingsFilePath()}`,
 	];
 
@@ -394,6 +402,7 @@ async function loadSettingsIntoState(ctx: ExtensionContext) {
 	if (state.disabled) {
 		state.settingsLoaded = true;
 		state.settingsError = undefined;
+		state.quiet = false;
 		return;
 	}
 
@@ -407,10 +416,12 @@ async function loadSettingsIntoState(ctx: ExtensionContext) {
 
 	if (settings.kind === "loaded") {
 		state.mode = settings.settings.mode;
+		state.quiet = settings.settings.quiet;
 		return;
 	}
 
 	state.mode = DEFAULT_MODE;
+	state.quiet = false;
 	if (settings.kind === "invalid") {
 		state.settingsError = settings.reason;
 		ctx.ui.notify(

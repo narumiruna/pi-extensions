@@ -56,8 +56,23 @@ test("splitCommand handles quotes and escaped spaces", () => {
 	]);
 });
 
-test("normalizeCaffeinateSettings accepts only known modes", () => {
-	assert.deepEqual(normalizeCaffeinateSettings({ mode: "sleep" }), { mode: "sleep", updatedAt: 0 });
+test("normalizeCaffeinateSettings accepts quiet booleans and defaults quiet to false", () => {
+	assert.deepEqual(normalizeCaffeinateSettings({ mode: "sleep" }), {
+		mode: "sleep",
+		quiet: false,
+		updatedAt: 0,
+	});
+	assert.deepEqual(normalizeCaffeinateSettings({ mode: "display", quiet: true }), {
+		mode: "display",
+		quiet: true,
+		updatedAt: 0,
+	});
+	assert.deepEqual(normalizeCaffeinateSettings({ mode: "display", quiet: false }), {
+		mode: "display",
+		quiet: false,
+		updatedAt: 0,
+	});
+	assert.equal(normalizeCaffeinateSettings({ mode: "display", quiet: "yes" }), undefined);
 	assert.equal(normalizeCaffeinateSettings({ mode: "display", updatedAt: "now" }), undefined);
 	assert.equal(normalizeCaffeinateSettings({ mode: "screen" }), undefined);
 });
@@ -241,19 +256,104 @@ test("caffeinate ignores invalid legacy settings without creating the new file",
 	});
 });
 
-test("caffeinate saves mode only to the new settings file", async () => {
+test("caffeinate saves mode only to the new settings file and preserves quiet mode", async () => {
 	await withTempAgentDir(async (agentDir) => {
-		writeSettings(agentDir, NEW_SETTINGS_FILE, "display");
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "display");
 		const caffeinateModule = await importFreshCaffeinate();
 		const mock = createMockPi();
-		const { ctx } = createMockContext();
+		const { ctx, notifications } = createMockContext();
 
 		caffeinateModule.default(mock.pi);
 		await mock.commands.get("caffeinate")?.handler("sleep", ctx);
 
-		assert.equal(readSettings(agentDir, NEW_SETTINGS_FILE).mode, "sleep");
+		const savedSettings = readSettings(agentDir, NEW_SETTINGS_FILE);
+		assert.equal(savedSettings.mode, "sleep");
+		assert.equal(savedSettings.quiet, true);
+		assert.equal(typeof savedSettings.updatedAt, "number");
 		assert.equal(readSettings(agentDir, LEGACY_SETTINGS_FILE).mode, "display");
+		assert.match(notifications.at(-1)?.message ?? "", /mode set to system-awake and saved/);
+	});
+});
+
+test("quiet mode keeps lifecycle and status active without routine notifications", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
+		process.env.PI_CAFFEINATE_COMMAND = longRunningCustomCommand();
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications, statuses } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await mock.events.get("agent_start")?.[0]?.({}, ctx);
+		const activeStatus = statuses.get("caffeinate");
+		await mock.events.get("agent_end")?.[0]?.({}, ctx);
+
+		assert.equal(notifications.length, 0);
+		assert.equal(activeStatus, "custom");
+		assert.equal(statuses.get("caffeinate"), undefined);
+	});
+});
+
+test("quiet mode preserves explicit command feedback", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
+		process.env.PI_CAFFEINATE_COMMAND = longRunningCustomCommand();
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await mock.events.get("agent_start")?.[0]?.({}, ctx);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		await mock.commands.get("caffeinate")?.handler("stop", ctx);
+
+		assert.match(notifications[0]?.message ?? "", /Quiet mode: enabled/);
+		assert.match(notifications[1]?.message ?? "", /Released pi-caffeinate \(manual stop\)/);
+	});
+});
+
+test("quiet mode preserves inhibitor failure warnings", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
+		process.env.PI_CAFFEINATE_COMMAND = customNodeCommand("setTimeout(()=>process.exit(7),20)");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications, statuses } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await mock.events.get("agent_start")?.[0]?.({}, ctx);
+		await waitFor(() => notifications.length > 0 && statuses.get("caffeinate") === "unavailable");
+
+		assert.equal(notifications.length, 1);
+		assert.equal(notifications[0]?.level, "warning");
+		assert.match(notifications[0]?.message ?? "", /exited unexpectedly \(code 7\)/);
+		assert.equal(statuses.get("caffeinate"), "unavailable");
+	});
+});
+
+test("default settings keep routine lifecycle notifications", async () => {
+	await withTempAgentDir(async () => {
+		process.env.PI_CAFFEINATE_COMMAND = longRunningCustomCommand();
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await mock.events.get("agent_start")?.[0]?.({}, ctx);
+		await mock.events.get("agent_end")?.[0]?.({}, ctx);
+
+		assert.deepEqual(
+			notifications.map(({ message, level }) => ({ message, level })),
+			[
+				{ message: "Keeping computer awake (custom).", level: "info" },
+				{ message: "Released pi-caffeinate (agent finished).", level: "info" },
+			],
+		);
 	});
 });
 
@@ -269,10 +369,12 @@ async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const previousDisabled = process.env.PI_CAFFEINATE_DISABLED;
 	const previousIcon = process.env.PI_CAFFEINATE_ICON;
+	const previousCommand = process.env.PI_CAFFEINATE_COMMAND;
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-caffeinate-settings-"));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	delete process.env.PI_CAFFEINATE_DISABLED;
 	delete process.env.PI_CAFFEINATE_ICON;
+	delete process.env.PI_CAFFEINATE_COMMAND;
 	try {
 		return await fn(agentDir);
 	} finally {
@@ -282,17 +384,39 @@ async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {
 		else process.env.PI_CAFFEINATE_DISABLED = previousDisabled;
 		if (previousIcon === undefined) delete process.env.PI_CAFFEINATE_ICON;
 		else process.env.PI_CAFFEINATE_ICON = previousIcon;
+		if (previousCommand === undefined) delete process.env.PI_CAFFEINATE_COMMAND;
+		else process.env.PI_CAFFEINATE_COMMAND = previousCommand;
 		rmSync(agentDir, { recursive: true, force: true });
 	}
 }
 
-function writeSettings(agentDir: string, fileName: string, mode: string) {
-	writeFileSync(path.join(agentDir, fileName), JSON.stringify({ mode, updatedAt: 1 }));
+function writeSettings(agentDir: string, fileName: string, mode: string, quiet?: boolean) {
+	writeFileSync(
+		path.join(agentDir, fileName),
+		JSON.stringify({ mode, ...(quiet === undefined ? {} : { quiet }), updatedAt: 1 }),
+	);
 }
 
 function readSettings(agentDir: string, fileName: string) {
 	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as {
 		mode: string;
+		quiet?: boolean;
 		updatedAt: number;
 	};
+}
+
+function longRunningCustomCommand() {
+	return customNodeCommand("setInterval(()=>{},1000)");
+}
+
+function customNodeCommand(script: string) {
+	return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate()) {
+		if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
 }

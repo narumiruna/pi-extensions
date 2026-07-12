@@ -11,6 +11,7 @@ export type CaffeinateMode = "sleep" | "display";
 
 export interface CaffeinateSettings {
 	mode: CaffeinateMode;
+	quiet: boolean;
 	updatedAt: number;
 }
 
@@ -59,7 +60,10 @@ async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
 	try {
 		const settings = normalizeCaffeinateSettings(JSON.parse(text) as unknown);
 		if (settings) return { kind: "loaded", settings };
-		return { kind: "invalid", reason: `${filePath}: expected { "mode": "sleep" | "display" }` };
+		return {
+			kind: "invalid",
+			reason: `${filePath}: expected { "mode": "sleep" | "display", optional "quiet": boolean }`,
+		};
 	} catch (error) {
 		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
 	}
@@ -108,10 +112,11 @@ async function fileExists(filePath: string) {
 
 export function normalizeCaffeinateSettings(value: unknown): CaffeinateSettings | undefined {
 	if (!value || typeof value !== "object") return undefined;
-	const settings = value as { mode?: unknown; updatedAt?: unknown };
+	const settings = value as { mode?: unknown; quiet?: unknown; updatedAt?: unknown };
 	if (!isCaffeinateMode(settings.mode)) return undefined;
+	if (settings.quiet !== undefined && typeof settings.quiet !== "boolean") return undefined;
 	if (settings.updatedAt !== undefined && typeof settings.updatedAt !== "number") return undefined;
-	return { mode: settings.mode, updatedAt: settings.updatedAt ?? 0 };
+	return { mode: settings.mode, quiet: settings.quiet ?? false, updatedAt: settings.updatedAt ?? 0 };
 }
 
 function isCaffeinateMode(value: unknown): value is CaffeinateMode {
