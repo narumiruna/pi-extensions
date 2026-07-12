@@ -1131,11 +1131,7 @@ async function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: Active
 	return sendPrompt(pi, ctx, buildGoalPrompt(goal));
 }
 
-async function sendObjectiveUpdatedPrompt(
-	pi: ExtensionAPI,
-	ctx: StatusContext,
-	goal: ActiveGoal,
-) {
+async function sendObjectiveUpdatedPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
 	return sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
 }
 
@@ -1315,8 +1311,7 @@ export function findFinalAssistantMessage(messages: unknown[]): AssistantMessage
 		const assistant: AssistantMessageLike = {
 			role: "assistant",
 			stopReason: isAgentStopReason(candidate.stopReason) ? candidate.stopReason : undefined,
-			errorMessage:
-				typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
+			errorMessage: typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
 		};
 		if (Array.isArray(candidate.content))
 			assistant.content = candidate.content as PiAssistantMessage["content"];
