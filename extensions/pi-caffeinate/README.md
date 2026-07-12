@@ -114,7 +114,8 @@ Example:
 Set `"quiet": true` to hide the routine `Keeping computer awake (...)` and
 `Released pi-caffeinate (agent finished)` lifecycle notifications. Quiet mode does not hide
 warnings, status updates, or feedback from `/caffeinate` commands such as `status`, mode changes,
-help, and manual stop. It defaults to `false` when omitted.
+help, and manual stop. It defaults to `false` when omitted. The file is read at startup and on
+`/reload`; run `/reload` after editing it in a running Pi session before using mode commands.
 
 Missing, invalid, or deleted settings default back to `display` mode with quiet mode disabled on
 every supported OS.

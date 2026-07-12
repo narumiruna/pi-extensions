@@ -122,7 +122,28 @@ test("caffeinate loads the new settings file without a migration warning", async
 
 		await mock.commands.get("caffeinate")?.handler("status", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /Mode: system-awake/);
+		assert.match(notifications.at(-1)?.message ?? "", /Quiet mode: disabled/);
 		assert.match(notifications.at(-1)?.message ?? "", /Settings: .*pi-caffeinate\.json/);
+	});
+});
+
+test("session reload applies manual quiet mode changes", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display");
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		const sessionStart = mock.events.get("session_start")?.[0];
+		await sessionStart?.({ reason: "startup" }, ctx);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /Quiet mode: disabled/);
+
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
+		await sessionStart?.({ reason: "reload" }, ctx);
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /Quiet mode: enabled/);
 	});
 });
 
@@ -410,7 +431,8 @@ function longRunningCustomCommand() {
 }
 
 function customNodeCommand(script: string) {
-	return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+	const executable = process.execPath.replaceAll("\\", "/");
+	return `${JSON.stringify(executable)} -e ${JSON.stringify(script)}`;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
