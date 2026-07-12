@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-subagents",
-	"version": "0.13.1",
+	"version": "0.14.0",
 	"description": "Pi extension for delegating work to specialized isolated subagents.",
 	"type": "module",
 	"license": "MIT",
