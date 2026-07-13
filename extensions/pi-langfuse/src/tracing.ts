@@ -4,6 +4,8 @@ const MAX_COLLECTION_LENGTH = 200;
 const MAX_DEPTH = 12;
 const CONTENT_DISABLED = "[content capture disabled]";
 const TRUNCATED = "[truncated: content budget exceeded]";
+const BASE64_DATA_URI = /data:[^,\s"'`]*;base64,[^\s"'`]*/gi;
+const BASE64_DATA_URI_OMITTED = "[base64 data URI omitted]";
 
 export interface ObservationAttributes {
 	input?: unknown;
@@ -22,7 +24,7 @@ export interface ObservationAttributes {
 export interface Observation {
 	update(attributes: ObservationAttributes): Observation;
 	updateTrace?(attributes: ObservationAttributes): Observation;
-	end(): Observation;
+	end(endTime?: number): Observation;
 }
 
 export type ObservationType = "agent" | "generation" | "span" | "tool";
@@ -89,6 +91,7 @@ export class TraceRecorder {
 	private turn: Observation | undefined;
 	private turnIndex: number | undefined;
 	private generation: Observation | undefined;
+	private generationEndTime: number | undefined;
 	private readonly tools = new Map<string, Observation>();
 	private lastOutput: unknown;
 
@@ -175,6 +178,7 @@ export class TraceRecorder {
 	beginGeneration(): void {
 		if (!this.root) return;
 		this.closeGeneration("Interrupted by the next provider request.");
+		this.generationEndTime = undefined;
 		this.generation = this.backend.start(
 			"pi.llm",
 			{},
@@ -190,6 +194,12 @@ export class TraceRecorder {
 				? { level: "ERROR" as const, statusMessage: `Provider returned HTTP ${status}.` }
 				: {}),
 		});
+	}
+
+	markGenerationEnd(endTime = Date.now()): void {
+		if (this.generation && this.generationEndTime === undefined) {
+			this.generationEndTime = endTime;
+		}
 	}
 
 	finishAssistant(message: AssistantMessage): void {
@@ -228,8 +238,9 @@ export class TraceRecorder {
 					}
 				: {}),
 		});
-		this.generation.end();
+		this.generation.end(this.generationEndTime);
 		this.generation = undefined;
+		this.generationEndTime = undefined;
 	}
 
 	beginTool(toolCallId: string, toolName: string, args?: unknown): void {
@@ -320,8 +331,9 @@ export class TraceRecorder {
 	private closeGeneration(statusMessage: string): void {
 		if (!this.generation) return;
 		this.generation.update({ level: "ERROR", statusMessage });
-		this.generation.end();
+		this.generation.end(this.generationEndTime);
 		this.generation = undefined;
+		this.generationEndTime = undefined;
 	}
 
 	private capture(value: unknown): unknown {
@@ -346,17 +358,17 @@ function sanitize(
 		return consume(value, budget);
 	}
 	if (typeof value === "string") {
-		if (/^data:image\/[^;,]+;base64,/i.test(value)) {
-			return consume("[base64 image omitted]", budget);
-		}
-		const bounded = truncateString(value, Math.min(MAX_STRING_LENGTH, budget.remaining));
+		const redacted = value.replace(BASE64_DATA_URI, BASE64_DATA_URI_OMITTED);
+		const bounded = truncateString(redacted, Math.min(MAX_STRING_LENGTH, budget.remaining));
 		return consume(bounded, budget);
 	}
 	if (typeof value === "bigint") return consume(value.toString(), budget);
 	if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") {
 		return undefined;
 	}
-	if (value instanceof Date) return consume(value.toISOString(), budget);
+	if (value instanceof Date) {
+		return consume(Number.isNaN(value.getTime()) ? "[invalid date]" : value.toISOString(), budget);
+	}
 	if (value instanceof Error) {
 		return sanitize({ name: value.name, message: value.message }, active, depth, budget);
 	}
@@ -375,36 +387,45 @@ function sanitize(
 		result = items;
 	} else {
 		const record = value as Record<string, unknown>;
-		const entries = Object.entries(record);
+		let keys: string[];
+		try {
+			keys = Object.keys(record);
+		} catch {
+			active.delete(value);
+			return consume("[unreadable object]", budget);
+		}
 		const output: Record<string, unknown> = {};
-		const isImage = record.type === "image";
+		const objectType = readProperty(record, "type").value;
+		const redactData = objectType === "image" || objectType === "base64";
 		let processed = 0;
-		for (const [key, item] of entries.slice(0, MAX_COLLECTION_LENGTH)) {
+		for (const key of keys.slice(0, MAX_COLLECTION_LENGTH)) {
 			if (budget.remaining <= byteLength(TRUNCATED)) break;
 			budget.remaining -= byteLength(key) + 4;
-			if (isImage && key === "data") output[key] = consume("[base64 omitted]", budget);
-			else if (
-				key === "source" &&
-				item &&
-				typeof item === "object" &&
-				(item as Record<string, unknown>).type === "base64"
-			) {
-				output[key] = sanitize(
-					{ ...(item as Record<string, unknown>), data: "[base64 omitted]" },
-					active,
-					depth + 1,
-					budget,
-				);
-			} else output[key] = sanitize(item, active, depth + 1, budget);
+			const property = readProperty(record, key);
+			if (redactData && key === "data") {
+				output[key] = consume("[base64 omitted]", budget);
+			} else if (!property.ok) output[key] = consume("[unreadable property]", budget);
+			else output[key] = sanitize(property.value, active, depth + 1, budget);
 			processed += 1;
 		}
-		if (processed < entries.length) {
-			output["$truncated"] = `${entries.length - processed} object entries omitted`;
+		if (processed < keys.length) {
+			output["$truncated"] = `${keys.length - processed} object entries omitted`;
 		}
 		result = output;
 	}
 	active.delete(value);
 	return result;
+}
+
+function readProperty(
+	record: Record<string, unknown>,
+	key: string,
+): { ok: true; value: unknown } | { ok: false; value?: undefined } {
+	try {
+		return { ok: true, value: record[key] };
+	} catch {
+		return { ok: false };
+	}
 }
 
 function consume<T>(value: T, budget: { remaining: number }): T | string {

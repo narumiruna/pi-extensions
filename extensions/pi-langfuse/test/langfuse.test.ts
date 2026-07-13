@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { trace } from "@opentelemetry/api";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -24,6 +24,7 @@ class FakeObservation implements Observation {
 	readonly updates: ObservationAttributes[] = [];
 	readonly traceUpdates: ObservationAttributes[] = [];
 	ended = false;
+	endTime: number | undefined;
 
 	constructor(
 		readonly name: string,
@@ -42,8 +43,9 @@ class FakeObservation implements Observation {
 		return this;
 	}
 
-	end() {
+	end(endTime?: number) {
 		this.ended = true;
+		this.endTime = endTime;
 		return this;
 	}
 }
@@ -340,6 +342,16 @@ test("maskSecrets redacts Langfuse credentials in nested exported data", () => {
 	);
 });
 
+test("maskSecrets safely handles circular exporter data", () => {
+	const circular: Record<string, unknown> = { secret: "sk-lf-nested" };
+	circular.self = circular;
+
+	assert.deepEqual(maskSecrets(circular, []), {
+		secret: "[LANGFUSE_KEY_REDACTED]",
+		self: "[circular]",
+	});
+});
+
 test("pi-langfuse registers lifecycle hooks and exports completed traces", async () => {
 	const backend = new FakeBackend();
 	const mock = createMockPi();
@@ -365,6 +377,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		"agent_end",
 		"before_agent_start",
 		"before_provider_request",
+		"message_end",
 		"session_shutdown",
 		"session_start",
 		"tool_execution_end",
@@ -531,6 +544,23 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 		ctx,
 	);
 	await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
+	await mock.events.get("before_provider_request")?.[0]?.({ payload: { model: "test" } }, ctx);
+	await mock.events.get("message_end")?.[0]?.(
+		{
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-1", name: "edit", arguments: {} }],
+				provider: "test",
+				model: "test",
+				usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+			},
+		},
+		ctx,
+	);
+	const generation = backend.observations.at(-1);
+	assert.equal(generation?.name, "pi.llm");
+	assert.equal(generation?.ended, false);
 	await mock.events.get("tool_execution_start")?.[0]?.(
 		{
 			toolCallId: "call-1",
@@ -562,7 +592,24 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 		},
 		ctx,
 	);
+	await mock.events.get("turn_end")?.[0]?.(
+		{
+			turnIndex: 0,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-1", name: "edit", arguments: {} }],
+				provider: "test",
+				model: "test",
+				usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+			},
+			toolResults: [],
+		},
+		ctx,
+	);
 
+	assert.equal(generation?.ended, true);
+	assert.equal(typeof generation?.endTime, "number");
 	const tool = backend.observations.at(-1);
 	assert.equal(backend.observations[1]?.name, "pi.turn");
 	assert.equal(tool?.parent, backend.observations[1]);
@@ -603,8 +650,45 @@ test("sanitizeTraceValue globally bounds adversarial values in UTF-8 bytes", () 
 		second: { text: "repeated" },
 	});
 	assert.match(JSON.stringify(sanitizeTraceValue(circular)), /circular/i);
-	assert.deepEqual(sanitizeTraceValue({ imageUrl: "data:image/png;base64,cHJpdmF0ZS1pbWFnZQ==" }), {
-		imageUrl: "[base64 image omitted]",
+	assert.deepEqual(
+		sanitizeTraceValue({
+			imageUrl: "data:image/png;base64,cHJpdmF0ZS1pbWFnZQ==",
+			parameterizedImageUrl: "data:image/svg+xml;charset=utf-8;base64,cHJpdmF0ZS1pbWFnZQ==",
+			embeddedDataUri:
+				"example: data:application/octet-stream;base64,not-valid%%% should not be parsed",
+		}),
+		{
+			imageUrl: "[base64 data URI omitted]",
+			parameterizedImageUrl: "[base64 data URI omitted]",
+			embeddedDataUri: "example: [base64 data URI omitted] should not be parsed",
+		},
+	);
+});
+
+test("sanitizeTraceValue contains malformed object values", () => {
+	const invalidDate = new Date(Number.NaN);
+	const value = {
+		before: "kept",
+		invalidDate,
+		get inaccessible() {
+			throw new Error("getter failed");
+		},
+		source: {
+			type: "base64",
+			mediaType: "image/png",
+			get data() {
+				throw new Error("base64 getter failed");
+			},
+		},
+		after: "also kept",
+	};
+
+	assert.deepEqual(sanitizeTraceValue(value), {
+		before: "kept",
+		invalidDate: "[invalid date]",
+		inaccessible: "[unreadable property]",
+		source: { type: "base64", mediaType: "image/png", data: "[base64 omitted]" },
+		after: "also kept",
 	});
 });
 
@@ -653,10 +737,18 @@ test("configuration covers malformed JSON, normalization, and captureContent fal
 			},
 		},
 	);
-	assert.equal(
-		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", baseUrl: "ftp://x" }).ok,
-		false,
-	);
+	for (const baseUrl of [
+		"ftp://x",
+		"https://user:password@x.test",
+		"https://x.test?token=private",
+		"https://x.test#private",
+	]) {
+		assert.equal(
+			normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", baseUrl }).ok,
+			false,
+			baseUrl,
+		);
+	}
 	assert.deepEqual(
 		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", captureContent: false }),
 		{
@@ -922,7 +1014,11 @@ test("isolated runtime preserves the global provider and exports native observat
 		mode: "tui",
 		captureContent: true,
 	});
-	recorder.beginAgent({ prompt: "hello" });
+	const ambient = trace.getTracer("ambient").startSpan("ambient");
+	otelContext.with(trace.setSpan(otelContext.active(), ambient), () => {
+		recorder.beginAgent({ prompt: "hello" });
+	});
+	ambient.end();
 	recorder.beginTurn(0);
 	recorder.beginGeneration();
 	recorder.finishAssistant({ role: "assistant", content: "world", stopReason: "toolUse" });
@@ -944,6 +1040,7 @@ test("isolated runtime preserves the global provider and exports native observat
 	]);
 	const root = spans.find((span) => span.name === "pi.agent");
 	const turn = spans.find((span) => span.name === "pi.turn");
+	assert.equal(root?.parentSpanContext, undefined);
 	assert.equal(turn?.parentSpanContext?.spanId, root?.spanContext().spanId);
 	for (const child of spans.filter((span) => ["pi.llm", "pi.tool.read"].includes(span.name))) {
 		assert.equal(child.parentSpanContext?.spanId, turn?.spanContext().spanId);

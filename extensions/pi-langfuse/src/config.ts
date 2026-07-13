@@ -120,7 +120,8 @@ export function normalizeLangfuseConfig(
 	if (!baseUrl) {
 		return {
 			ok: false,
-			reason: "pi-langfuse.json baseUrl must use HTTP or HTTPS.",
+			reason:
+				"pi-langfuse.json baseUrl must use HTTP or HTTPS without credentials, a query, or a fragment.",
 		};
 	}
 
@@ -153,6 +154,10 @@ async function ensurePrivatePermissions(
 		const file = await stat(path);
 		if ((file.mode & 0o777) !== 0o600) {
 			await chmod(path, 0o600);
+			const repaired = await stat(path);
+			if ((repaired.mode & 0o777) !== 0o600) {
+				throw new Error(`permissions remained ${(repaired.mode & 0o777).toString(8)}`);
+			}
 			warnings.push(`Restricted ${path} permissions to 0600.`);
 		}
 	} catch (error) {
@@ -168,6 +173,7 @@ function normalizeBaseUrl(value: string): string | undefined {
 	try {
 		const url = new URL(value);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+		if (url.username || url.password || url.search || url.hash) return undefined;
 		return url.toString().replace(/\/+$/, "");
 	} catch {
 		return undefined;

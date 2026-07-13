@@ -48,8 +48,8 @@ class ProductionObservation implements Observation {
 		return this;
 	}
 
-	end(): Observation {
-		this.native.end();
+	end(endTime?: number): Observation {
+		this.native.end(endTime);
 		return this;
 	}
 }
@@ -212,6 +212,14 @@ function configFingerprint(config: LangfuseConfig): string {
 }
 
 export function maskSecrets(data: unknown, secrets: readonly string[]): unknown {
+	return maskSecretValue(data, secrets, new WeakSet<object>());
+}
+
+function maskSecretValue(
+	data: unknown,
+	secrets: readonly string[],
+	active: WeakSet<object>,
+): unknown {
 	if (typeof data === "string") {
 		let masked = data.replace(/\b(?:sk|pk)-lf-[A-Za-z0-9_-]+\b/g, "[LANGFUSE_KEY_REDACTED]");
 		for (const secret of secrets) {
@@ -219,11 +227,21 @@ export function maskSecrets(data: unknown, secrets: readonly string[]): unknown 
 		}
 		return masked;
 	}
-	if (Array.isArray(data)) return data.map((item) => maskSecrets(item, secrets));
-	if (data && typeof data === "object") {
+	if (!data || typeof data !== "object") return data;
+	if (active.has(data)) return "[circular]";
+
+	active.add(data);
+	try {
+		if (Array.isArray(data)) {
+			return data.map((item) => maskSecretValue(item, secrets, active));
+		}
 		return Object.fromEntries(
-			Object.entries(data).map(([key, value]) => [key, maskSecrets(value, secrets)]),
+			Object.entries(data).map(([key, value]) => [
+				key,
+				maskSecretValue(value, secrets, active),
+			]),
 		);
+	} finally {
+		active.delete(data);
 	}
-	return data;
 }

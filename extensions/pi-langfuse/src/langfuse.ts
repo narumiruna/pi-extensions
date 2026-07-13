@@ -188,6 +188,10 @@ export function createLangfuseExtension(
 			recorder?.recordProviderResponse(event.status);
 		});
 
+		pi.on("message_end", (event) => {
+			if (event.message.role === "assistant") recorder?.markGenerationEnd();
+		});
+
 		pi.on("turn_end", (event) => {
 			if (event.message.role === "assistant") recorder?.finishAssistant(event.message);
 			recorder?.finishTurn(event.turnIndex, {

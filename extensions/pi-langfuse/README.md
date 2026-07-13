@@ -82,7 +82,7 @@ Each `pi.trace` contains one `pi.agent` native `agent` observation, which contai
 
 Pi does not expose a post-transform provider payload event, so generation request bodies are intentionally omitted rather than risking capture of a payload that a later extension rewrites or redacts. The agent observation still records the user prompt, and assistant output is reconciled after message transformers. Tool input is captured after argument preparation and `tool_call` mutations, while tool output is captured after `tool_result` transformers.
 
-Images are represented without their base64 payload, including provider data URLs. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
+Images and embedded base64 data URIs are represented without their payloads, including provider data URLs. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
 
 Completed observations are exported in batches while Pi remains live. Normal `agent_end` handling never waits for Langfuse network I/O. Use `/langfuse flush` when you need to wait for completed exports; quit shutdown also drains the provider.
 
