@@ -22,20 +22,8 @@ const COMMAND_COMPLETIONS = [
 	{ value: "status", label: "status", description: "Show Langfuse tracing status" },
 	{ value: "flush", label: "flush", description: "Export all completed traces now" },
 	{ value: "help", label: "help", description: "Show Langfuse command help" },
-	{ value: "config", label: "config", description: "Show the config path and JSON template" },
 	{ value: "init", label: "init", description: "Interactively create or update config" },
 ];
-
-const CONFIG_TEMPLATE = JSON.stringify(
-	{
-		publicKey: "pk-lf-...",
-		secretKey: "sk-lf-...",
-		baseUrl: DEFAULT_BASE_URL,
-		captureContent: true,
-	},
-	null,
-	2,
-);
 
 export function createLangfuseExtension(
 	dependencies: Partial<ExtensionDependencies> = {},
@@ -98,13 +86,6 @@ export function createLangfuseExtension(
 					}
 					return;
 				}
-				if (action === "config") {
-					ctx.ui.notify(
-						`Langfuse configuration: ${configPath ?? "~/.pi/agent/pi-langfuse.json"}\n${CONFIG_TEMPLATE}`,
-						"info",
-					);
-					return;
-				}
 				if (action === "init") {
 					if (!ctx.hasUI) {
 						ctx.ui.notify(
@@ -130,17 +111,16 @@ export function createLangfuseExtension(
 				if (action === "help") {
 					ctx.ui.notify(
 						[
-							"Usage: /langfuse [status|flush|help|config|init]",
+							"Usage: /langfuse [status|flush|help|init]",
 							"status: show tracing state without credentials",
 							"flush: wait for completed traces to export",
-							"config: show the config path and credential-free JSON template",
 							"init: interactively create or update the private config",
 						].join("\n"),
 						"info",
 					);
 					return;
 				}
-				ctx.ui.notify("Usage: /langfuse [status|flush|help|config|init]", "warning");
+				ctx.ui.notify("Usage: /langfuse [status|flush|help|init]", "warning");
 			},
 		});
 
@@ -298,7 +278,10 @@ async function promptForConfig(
 }
 
 function formatConfigError(result: Extract<LangfuseConfigResult, { ok: false }>): string {
-	return `Langfuse tracing is disabled: ${result.reason}`;
+	const setupHint = result.reason.startsWith("Configuration file not found:")
+		? " Run /langfuse init to create it."
+		: "";
+	return `Langfuse tracing is disabled: ${result.reason}${setupHint}`;
 }
 
 function formatError(error: unknown): string {

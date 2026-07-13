@@ -94,14 +94,12 @@ Automatic retries or continuations that begin without a new user prompt are reco
 /langfuse status
 /langfuse flush
 /langfuse help
-/langfuse config
 /langfuse init
 ```
 
 - `status` reports whether tracing is enabled, the endpoint, configuration source, and content-capture mode. It never displays credentials.
 - `flush` waits for all completed observations to export.
 - `help` displays command guidance.
-- `config` displays the config path and a credential-free JSON template. It never opens an interactive prompt or echoes configured keys.
 - `init` interactively creates or updates the private config without displaying existing credentials. Blank keys preserve valid existing values; a blank base URL uses the US cloud endpoint.
 
 ## 🔐 Privacy

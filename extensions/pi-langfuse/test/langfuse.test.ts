@@ -125,6 +125,23 @@ test("loadLangfuseConfig reports missing and unsafe settings without environment
 	if (!invalid.ok) assert.match(invalid.reason, /publicKey must be literal/i);
 });
 
+test("session start suggests /langfuse init when the config file is missing", async () => {
+	const mock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: false,
+			path: "/config/pi-langfuse.json",
+			warnings: [],
+			reason: "Configuration file not found: /config/pi-langfuse.json",
+		}),
+	})(mock.pi);
+	const { ctx, notifications } = createMockContext();
+
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+	assert.match(notifications.at(-1)?.message ?? "", /run \/langfuse init/i);
+});
+
 test("TraceRecorder builds one agent trace with child generations and tool spans", async () => {
 	const backend = new FakeBackend();
 	const recorder = new TraceRecorder(backend, {
@@ -659,7 +676,7 @@ test("configuration covers malformed JSON, normalization, and captureContent fal
 	assert.deepEqual(repaired.warnings, [`Restricted ${path} permissions to 0600.`]);
 });
 
-test("commands expose status, flush, help, and credential-free config guidance", async () => {
+test("commands expose status, flush, help, and init without a config alias", async () => {
 	const backend = new FakeBackend();
 	let releaseFlush: (() => void) | undefined;
 	backend.forceFlush = () =>
@@ -687,11 +704,15 @@ test("commands expose status, flush, help, and credential-free config guidance",
 	const completions = command?.getArgumentCompletions?.("") as Array<{ value: string }>;
 	assert.deepEqual(
 		completions.map(({ value }) => value),
-		["status", "flush", "help", "config", "init"],
+		["status", "flush", "help", "init"],
 	);
 	await command?.handler("status", ctx);
 	await command?.handler("help", ctx);
 	await command?.handler("config", ctx);
+	assert.deepEqual(notifications.at(-1), {
+		message: "Usage: /langfuse [status|flush|help|init]",
+		level: "warning",
+	});
 	const flush = command?.handler("flush", ctx) as Promise<void>;
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(
@@ -702,8 +723,6 @@ test("commands expose status, flush, help, and credential-free config guidance",
 	await flush;
 
 	const output = notifications.map(({ message }) => message).join("\n");
-	assert.match(output, /\/private\/pi-langfuse\.json/);
-	assert.match(output, /"publicKey": "pk-lf-\.\.\."/);
 	assert.doesNotMatch(output, /private-value/);
 });
 
