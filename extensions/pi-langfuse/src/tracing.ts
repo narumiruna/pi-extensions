@@ -50,13 +50,11 @@ interface ModelDescriptor {
 interface BeginAgentInput {
 	prompt: unknown;
 	images?: unknown;
-	systemPrompt?: unknown;
 	model?: ModelDescriptor;
 }
 
 interface BeginGenerationInput {
-	messages: unknown;
-	systemPrompt?: unknown;
+	payload: unknown;
 }
 
 interface AssistantMessage {
@@ -86,7 +84,6 @@ export class TraceRecorder {
 	private root: Observation | undefined;
 	private generation: Observation | undefined;
 	private readonly tools = new Map<string, Observation>();
-	private systemPrompt: unknown;
 	private lastOutput: unknown;
 
 	constructor(
@@ -101,7 +98,6 @@ export class TraceRecorder {
 	beginAgent(input: BeginAgentInput): void {
 		if (this.root) this.closeActiveTrace("Interrupted by a new Pi agent run.");
 
-		this.systemPrompt = input.systemPrompt;
 		this.lastOutput = undefined;
 		const traceInput = this.capture({
 			prompt: input.prompt,
@@ -130,16 +126,7 @@ export class TraceRecorder {
 		this.closeGeneration("Interrupted by the next provider request.");
 		this.generation = this.backend.start(
 			"pi.llm",
-			{
-				input: this.capture({
-					messages: input.messages,
-					...(input.systemPrompt !== undefined
-						? { systemPrompt: input.systemPrompt }
-						: this.systemPrompt !== undefined
-							? { systemPrompt: this.systemPrompt }
-							: {}),
-				}),
-			},
+			{ input: this.capture(input.payload) },
 			{ asType: "generation", parent: this.root },
 		);
 	}
@@ -172,7 +159,9 @@ export class TraceRecorder {
 			output: this.lastOutput,
 			...(message.model ? { model: message.model } : {}),
 			...(Object.keys(usageDetails).length > 0 ? { usageDetails } : {}),
-			...(typeof totalCost === "number" ? { costDetails: { totalCost } } : {}),
+			...(typeof totalCost === "number" && Number.isFinite(totalCost) && totalCost > 0
+				? { costDetails: { total: totalCost } }
+				: {}),
 			metadata: {
 				...(message.provider ? { "pi.provider": message.provider } : {}),
 				...(message.stopReason ? { "pi.stop_reason": message.stopReason } : {}),
@@ -188,7 +177,7 @@ export class TraceRecorder {
 		this.generation = undefined;
 	}
 
-	beginTool(toolCallId: string, toolName: string, args: unknown): void {
+	beginTool(toolCallId: string, toolName: string, args?: unknown): void {
 		if (!this.root) return;
 		const existing = this.tools.get(toolCallId);
 		if (existing) {
@@ -200,12 +189,16 @@ export class TraceRecorder {
 			this.backend.start(
 				`pi.tool.${toolName}`,
 				{
-					input: this.capture(args),
+					...(args !== undefined ? { input: this.capture(args) } : {}),
 					metadata: { "pi.tool.call_id": toolCallId, "pi.tool.name": toolName },
 				},
 				{ asType: "tool", parent: this.root },
 			),
 		);
+	}
+
+	updateToolInput(toolCallId: string, input: unknown): void {
+		this.tools.get(toolCallId)?.update({ input: this.capture(input) });
 	}
 
 	finishTool(toolCallId: string, result: ToolResult): void {
@@ -256,7 +249,6 @@ export class TraceRecorder {
 		});
 		this.root.end();
 		this.root = undefined;
-		this.systemPrompt = undefined;
 		this.lastOutput = undefined;
 	}
 
@@ -289,6 +281,9 @@ function sanitize(
 		return consume(value, budget);
 	}
 	if (typeof value === "string") {
+		if (/^data:image\/[^;,]+;base64,/i.test(value)) {
+			return consume("[base64 image omitted]", budget);
+		}
 		const bounded = truncateString(value, Math.min(MAX_STRING_LENGTH, budget.remaining));
 		return consume(bounded, budget);
 	}

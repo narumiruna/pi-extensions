@@ -142,36 +142,35 @@ export function createLangfuseExtension(
 			recorder?.beginAgent({
 				prompt: event.prompt,
 				images: event.images,
-				systemPrompt: event.systemPrompt,
 				model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 			});
 		});
 
-		pi.on("context", (event, ctx) => {
+		pi.on("before_provider_request", (event, ctx) => {
 			if (!recorder) return;
 			if (!recorder.hasActiveTrace()) {
 				recorder.beginAgent({
 					prompt: "[automatic continuation]",
-					systemPrompt: ctx.getSystemPrompt(),
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 				});
 			}
-			recorder.beginGeneration({
-				messages: event.messages,
-				systemPrompt: ctx.getSystemPrompt(),
-			});
+			recorder.beginGeneration({ payload: event.payload });
 		});
 
 		pi.on("after_provider_response", (event) => {
 			recorder?.recordProviderResponse(event.status);
 		});
 
-		pi.on("message_end", (event) => {
+		pi.on("turn_end", (event) => {
 			if (event.message.role === "assistant") recorder?.finishAssistant(event.message);
 		});
 
 		pi.on("tool_execution_start", (event) => {
-			recorder?.beginTool(event.toolCallId, event.toolName, event.args);
+			recorder?.beginTool(event.toolCallId, event.toolName);
+		});
+
+		pi.on("tool_result", (event) => {
+			recorder?.updateToolInput(event.toolCallId, event.input);
 		});
 
 		pi.on("tool_execution_end", (event) => {
@@ -182,7 +181,13 @@ export function createLangfuseExtension(
 			});
 		});
 
-		pi.on("agent_end", () => {
+		pi.on("agent_end", (event) => {
+			for (let index = event.messages.length - 1; index >= 0; index -= 1) {
+				const message = event.messages[index];
+				if (message?.role !== "assistant") continue;
+				recorder?.finishAssistant(message);
+				break;
+			}
 			recorder?.settle();
 		});
 

@@ -135,10 +135,14 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 
 	recorder.beginAgent({
 		prompt: "Fix the test",
-		systemPrompt: "You are Pi",
 		model: { provider: "anthropic", id: "claude" },
 	});
-	recorder.beginGeneration({ messages: [{ role: "user", content: "Fix the test" }] });
+	recorder.beginGeneration({
+		payload: {
+			messages: [{ role: "user", content: "Fix the test" }],
+			systemPrompt: "You are Pi",
+		},
+	});
 	recorder.finishAssistant({
 		role: "assistant",
 		provider: "anthropic",
@@ -204,6 +208,33 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 	assert.equal(backend.flushes, 1);
 });
 
+test("TraceRecorder only exports known non-zero costs with the Langfuse total bucket", () => {
+	const backend = new FakeBackend();
+	const recorder = new TraceRecorder(backend, {
+		sessionId: "session-1",
+		cwd: "/workspace",
+		mode: "tui",
+		captureContent: true,
+	});
+
+	recorder.beginAgent({ prompt: "test" });
+	recorder.beginGeneration({ payload: { model: "unpriced" } });
+	recorder.finishAssistant({
+		role: "assistant",
+		content: "unpriced",
+		usage: { cost: { total: 0 } },
+	});
+	recorder.beginGeneration({ payload: { model: "priced" } });
+	recorder.finishAssistant({
+		role: "assistant",
+		content: "priced",
+		usage: { cost: { total: 0.01 } },
+	});
+
+	assert.equal(backend.observations[1]?.updates.at(-1)?.costDetails, undefined);
+	assert.deepEqual(backend.observations[2]?.updates.at(-1)?.costDetails, { total: 0.01 });
+});
+
 test("TraceRecorder replaces all captured values when content capture is disabled", () => {
 	const backend = new FakeBackend();
 	const recorder = new TraceRecorder(backend, {
@@ -212,8 +243,8 @@ test("TraceRecorder replaces all captured values when content capture is disable
 		mode: "tui",
 		captureContent: false,
 	});
-	recorder.beginAgent({ prompt: "private prompt", systemPrompt: "private system" });
-	recorder.beginGeneration({ messages: ["private history"] });
+	recorder.beginAgent({ prompt: "private prompt" });
+	recorder.beginGeneration({ payload: { messages: ["private history"] } });
 	recorder.finishAssistant({ role: "assistant", content: "private response" });
 	recorder.beginTool("call", "read", { path: "private path" });
 	recorder.finishTool("call", { content: "private content", details: "private details" });
@@ -243,8 +274,8 @@ test("TraceRecorder closes interrupted observations and redacts image payloads",
 		images: [{ type: "image", mimeType: "image/png", data: "base64-secret" }],
 		model: { provider: "openai", id: "gpt" },
 	});
-	recorder.beginGeneration({ messages: [] });
-	recorder.beginGeneration({ messages: [] });
+	recorder.beginGeneration({ payload: { messages: [] } });
+	recorder.beginGeneration({ payload: { messages: [] } });
 	recorder.beginTool("call-1", "bash", { command: "exit 1" });
 	recorder.finishTool("call-1", { content: "failed", isError: true });
 	recorder.settle();
@@ -295,12 +326,13 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		"after_provider_response",
 		"agent_end",
 		"before_agent_start",
-		"context",
-		"message_end",
+		"before_provider_request",
 		"session_shutdown",
 		"session_start",
 		"tool_execution_end",
 		"tool_execution_start",
+		"tool_result",
+		"turn_end",
 	]);
 
 	const { ctx } = createMockContext({
@@ -315,21 +347,28 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		{ prompt: "Hello", images: [], systemPrompt: "system before modifiers" },
 		ctx,
 	);
-	await mock.events.get("context")?.[0]?.({ messages: [{ role: "user", content: "Hello" }] }, ctx);
-	await mock.events.get("message_end")?.[0]?.(
+	const finalPayload = {
+		model: "claude",
+		system: "system after modifiers",
+		messages: [{ role: "user", content: "Hello after context filters" }],
+	};
+	await mock.events.get("before_provider_request")?.[0]?.({ payload: finalPayload }, ctx);
+	await mock.events.get("turn_end")?.[0]?.(
 		{
+			turnIndex: 0,
 			message: {
 				role: "assistant",
-				content: [{ type: "text", text: "Hi" }],
+				content: [{ type: "text", text: "Hi after message transforms" }],
 				provider: "anthropic",
 				model: "claude",
 				usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0 },
 				stopReason: "stop",
 			},
+			toolResults: [],
 		},
 		ctx,
 	);
-	await mock.events.get("agent_end")?.[0]?.({}, ctx);
+	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
 	assert.equal(backend.observations.length, 2);
 	assert.equal(
@@ -337,15 +376,18 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		true,
 	);
 	assert.equal(backend.flushes, 0);
-	assert.equal(
-		(backend.observations[1]?.attributes.input as Record<string, unknown> | undefined)
-			?.systemPrompt,
-		"system",
-	);
+	assert.deepEqual(backend.observations[1]?.attributes.input, finalPayload);
+	assert.deepEqual(backend.observations[1]?.updates.at(-1)?.output, [
+		{ type: "text", text: "Hi after message transforms" },
+	]);
 
-	await mock.events.get("context")?.[0]?.({ messages: [{ role: "user", content: "retry" }] }, ctx);
-	await mock.events.get("message_end")?.[0]?.(
+	await mock.events.get("before_provider_request")?.[0]?.(
+		{ payload: { messages: [{ role: "user", content: "retry" }] } },
+		ctx,
+	);
+	await mock.events.get("turn_end")?.[0]?.(
 		{
+			turnIndex: 0,
 			message: {
 				role: "assistant",
 				content: [{ type: "text", text: "Recovered" }],
@@ -354,10 +396,11 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 				usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0 },
 				stopReason: "stop",
 			},
+			toolResults: [],
 		},
 		ctx,
 	);
-	await mock.events.get("agent_end")?.[0]?.({}, ctx);
+	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
 	assert.equal(backend.observations.length, 4);
 	assert.deepEqual(backend.observations[2]?.attributes.input, {
@@ -368,6 +411,114 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		true,
 	);
 	assert.equal(backend.flushes, 0);
+});
+
+test("pi-langfuse reconciles the finalized assistant message from agent_end", async () => {
+	const backend = new FakeBackend();
+	const mock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: true,
+			config: {
+				publicKey: "pk-test",
+				secretKey: "sk-test",
+				baseUrl: "https://cloud.langfuse.com",
+				captureContent: true,
+			},
+			path: "/config/pi-langfuse.json",
+			warnings: [],
+		}),
+		createBackend: async () => backend,
+	})(mock.pi);
+	const { ctx } = createMockContext();
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	await mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "retry", images: [], systemPrompt: "system" },
+		ctx,
+	);
+	await mock.events.get("before_provider_request")?.[0]?.({ payload: { model: "test" } }, ctx);
+	const finalized = {
+		role: "assistant",
+		content: [{ type: "text", text: "retryable error added by a later transformer" }],
+		provider: "test",
+		model: "test",
+		usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0 },
+		stopReason: "error",
+		errorMessage: "retryable error added by a later transformer",
+	};
+	await mock.events.get("agent_end")?.[0]?.({ messages: [finalized] }, ctx);
+
+	const generation = backend.observations[1];
+	assert.deepEqual(generation?.updates.at(-1)?.output, finalized.content);
+	assert.equal(generation?.updates.at(-1)?.statusMessage, finalized.errorMessage);
+	assert.equal(generation?.ended, true);
+});
+
+test("pi-langfuse traces normalized tool inputs and finalized tool outputs", async () => {
+	const backend = new FakeBackend();
+	const mock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: true,
+			config: {
+				publicKey: "pk-test",
+				secretKey: "sk-test",
+				baseUrl: "https://cloud.langfuse.com",
+				captureContent: true,
+			},
+			path: "/config/pi-langfuse.json",
+			warnings: [],
+		}),
+		createBackend: async () => backend,
+	})(mock.pi);
+	const { ctx } = createMockContext();
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	await mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "edit", images: [], systemPrompt: "system" },
+		ctx,
+	);
+	await mock.events.get("tool_execution_start")?.[0]?.(
+		{
+			toolCallId: "call-1",
+			toolName: "edit",
+			args: { path: "file.ts", oldText: "old", newText: "new" },
+		},
+		ctx,
+	);
+	await mock.events.get("tool_result")?.[0]?.(
+		{
+			toolCallId: "call-1",
+			toolName: "edit",
+			input: { path: "file.ts", edits: [{ oldText: "old", newText: "new" }] },
+			content: [{ type: "text", text: "intermediate" }],
+			details: { stage: "intermediate" },
+			isError: false,
+		},
+		ctx,
+	);
+	await mock.events.get("tool_execution_end")?.[0]?.(
+		{
+			toolCallId: "call-1",
+			toolName: "edit",
+			result: {
+				content: [{ type: "text", text: "final" }],
+				details: { stage: "final" },
+			},
+			isError: false,
+		},
+		ctx,
+	);
+
+	const tool = backend.observations.at(-1);
+	assert.equal(tool?.attributes.input, undefined);
+	assert.deepEqual(tool?.updates.find((update) => update.input !== undefined)?.input, {
+		path: "file.ts",
+		edits: [{ oldText: "old", newText: "new" }],
+	});
+	assert.deepEqual(tool?.updates.at(-1)?.output, {
+		content: [{ type: "text", text: "final" }],
+		details: { stage: "final" },
+	});
 });
 
 function serializedBytes(value: unknown): number {
@@ -396,6 +547,9 @@ test("sanitizeTraceValue globally bounds adversarial values in UTF-8 bytes", () 
 		second: { text: "repeated" },
 	});
 	assert.match(JSON.stringify(sanitizeTraceValue(circular)), /circular/i);
+	assert.deepEqual(sanitizeTraceValue({ imageUrl: "data:image/png;base64,cHJpdmF0ZS1pbWFnZQ==" }), {
+		imageUrl: "[base64 image omitted]",
+	});
 });
 
 test("TraceRecorder bounds oversized tool details as one captured output", () => {
@@ -531,7 +685,7 @@ test("agent_end never waits for or starts a routine flush", async () => {
 		ctx,
 	);
 	await Promise.race([
-		mock.events.get("agent_end")?.[0]?.({}, ctx),
+		mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx),
 		new Promise((_, reject) => setTimeout(() => reject(new Error("agent_end blocked")), 50)),
 	]);
 	assert.equal(backend.flushes, 0);
@@ -626,7 +780,7 @@ test("isolated runtime preserves the global provider and exports native observat
 		captureContent: true,
 	});
 	recorder.beginAgent({ prompt: "hello" });
-	recorder.beginGeneration({ messages: [] });
+	recorder.beginGeneration({ payload: { messages: [] } });
 	recorder.finishAssistant({ role: "assistant", content: "world" });
 	recorder.beginTool("call", "read", { path: "file" });
 	recorder.finishTool("call", { content: "content" });

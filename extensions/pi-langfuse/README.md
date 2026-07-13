@@ -7,8 +7,9 @@
 ## ✨ Features
 
 - Creates a native Langfuse `agent` observation for each Pi agent run.
-- Records LLM input, output, provider, model, stop reason, token usage, and reported cost.
-- Records tool inputs, outputs, duration, and failures as child spans.
+- Records serialized provider payloads after context filtering and finalized assistant outputs.
+- Records provider, model, stop reason, token usage, and known non-zero reported cost.
+- Records normalized tool inputs, finalized outputs, duration, and failures as child spans.
 - Groups traces with Pi's session id.
 - Records provider HTTP status codes when Pi exposes them.
 - Reads Langfuse credentials and options only from a private `pi-langfuse.json` file.
@@ -65,10 +66,12 @@ Each `pi.agent` native `agent` observation contains:
 - a `pi.llm` native `generation` for every provider request;
 - a `pi.tool.<tool-name>` native `tool` observation for every tool execution;
 - the Pi session id, working directory, mode, provider, and model;
-- generation token usage and total cost when the provider reports them;
+- generation token usage and positive total cost when Pi reports a known price;
 - error levels and status messages for failed provider responses, model calls, and tools.
 
-Images are represented without their base64 payload. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
+Generation input uses Pi's serialized provider payload after context filters, and assistant output is reconciled after message transformers. Tool input is captured after argument preparation and `tool_call` mutations, while tool output is captured after `tool_result` transformers.
+
+Images are represented without their base64 payload, including provider data URLs. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
 
 Completed observations are exported in batches while Pi remains live. Normal `agent_end` handling never waits for Langfuse network I/O. Use `/langfuse flush` when you need to wait for completed exports; quit shutdown also drains the provider.
 
