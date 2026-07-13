@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, stat } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexAccounts, {
+	CODEX_ACCOUNTS_FILE,
 	CODEX_ACCOUNTS_STATUS_KEY,
 	CODEX_PROVIDER_ID,
 	CodexAccountStore,
@@ -55,7 +56,7 @@ test("parseAccountName accepts small account labels and rejects unsafe names", (
 
 test("store writes private account files and redacts invalid JSON", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-"));
-	const file = join(dir, "codex-accounts.json");
+	const file = join(dir, "pi-codex-accounts.json");
 	const store = new CodexAccountStore(new FileAuthStorageBackend(file));
 
 	await store.write({ active: "work", accounts: { work: validCred("work") } });
@@ -69,6 +70,95 @@ test("store writes private account files and redacts invalid JSON", async () => 
 		assert.doesNotMatch(error.message, /secret-token/);
 		return true;
 	});
+});
+
+test("default store migrates credentials to the canonical package filename", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-migration-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	try {
+		const legacyPath = join(dir, "codex-accounts.json");
+		const canonicalPath = join(dir, "pi-codex-accounts.json");
+		const raw = JSON.stringify({
+			active: "work",
+			accounts: { work: validCred("work") },
+			futureOption: true,
+		});
+		await writeFile(legacyPath, raw, { mode: 0o644 });
+		await chmod(legacyPath, 0o644);
+
+		const mock = createMockPi();
+		codexAccounts(mock.pi);
+		assert.equal(CODEX_ACCOUNTS_FILE, "pi-codex-accounts.json");
+		assert.equal(await readFile(canonicalPath, "utf8"), raw);
+		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
+		await assert.rejects(access(legacyPath));
+
+		const context = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		assert.match(context.notifications[0]?.message ?? "", /migrated/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("migration preserves malformed credential data without leaking tokens", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-invalid-migration-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	try {
+		const legacyPath = join(dir, "codex-accounts.json");
+		const canonicalPath = join(dir, "pi-codex-accounts.json");
+		await writeFile(legacyPath, '{"accounts":{"work":{"access":"secret-token"}}', {
+			mode: 0o600,
+		});
+		const store = new CodexAccountStore();
+
+		await assert.rejects(store.readAsync(), (error) => {
+			assert.ok(error instanceof Error);
+			assert.match(error.message, /pi-codex-accounts\.json/);
+			assert.doesNotMatch(error.message, /secret-token/);
+			return true;
+		});
+		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
+		await assert.rejects(access(legacyPath));
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("canonical Codex accounts file wins without deleting the legacy file", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-precedence-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	try {
+		const legacyPath = join(dir, "codex-accounts.json");
+		const canonicalPath = join(dir, "pi-codex-accounts.json");
+		await writeFile(
+			legacyPath,
+			JSON.stringify({ active: "old", accounts: { old: validCred("old") } }),
+			{ mode: 0o600 },
+		);
+		await writeFile(
+			canonicalPath,
+			JSON.stringify({ active: "new", accounts: { new: validCred("new") } }),
+			{ mode: 0o644 },
+		);
+		await chmod(canonicalPath, 0o644);
+
+		const store = new CodexAccountStore();
+		assert.equal(store.read().active, "new");
+		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
+		assert.equal((await stat(legacyPath)).isFile(), true);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 test("ensureActiveCodexAuth clears runtime auth when no self-managed account is active", async () => {

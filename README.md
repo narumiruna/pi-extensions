@@ -73,7 +73,7 @@ Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Googl
 
 ### 🔐 Codex subscription accounts
 
-Use [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) to keep multiple ChatGPT Codex subscription accounts in a private `codex-accounts.json` file and switch the active account with `/codex-account`. It does not add provider aliases or change Pi's built-in `/login` provider list.
+Use [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) to keep multiple ChatGPT Codex subscription accounts in a private `pi-codex-accounts.json` file and switch the active account with `/codex-account`. It does not add provider aliases or change Pi's built-in `/login` provider list.
 
 ### 📊 Codex usage status
 

@@ -12,7 +12,7 @@ It keeps using Pi's built-in `openai-codex` provider. It does **not** add provid
 - Adds `/codex-account [name]` for switching the active self-managed Codex account.
 - Adds `/codex-logout <name>` for deleting one self-managed account.
 - Adds `(default pi login)` in the selector to clear the active self-managed account and return to Pi's normal `openai-codex` auth.
-- Stores credentials in `~/.pi/agent/codex-accounts.json` with private file permissions.
+- Stores credentials in `~/.pi/agent/pi-codex-accounts.json` with private file permissions.
 - Sets only the runtime API key for Pi's native `openai-codex` provider.
 - Leaves your selected `/model` unchanged, matching Pi's built-in `/login` behavior, except it may select `openai-codex/gpt-5.5` when the current model is `unknown/unknown`.
 - Shows `codex:<name>` in the statusline only while the current model provider is `openai-codex`.
@@ -66,6 +66,9 @@ Remove one self-managed account:
 ```
 
 ## 🔐 Auth behavior
+
+The canonical credential file is `~/.pi/agent/pi-codex-accounts.json`. A legacy-only `codex-accounts.json` is migrated under the existing credential-file lock, copied with `0600` permissions, and removed only after the canonical file is installed. If both files exist, the canonical file takes precedence and the legacy file is retained.
+
 
 When an active self-managed account is set, the extension applies that account's access token as Pi's runtime key for the native `openai-codex` provider.
 
