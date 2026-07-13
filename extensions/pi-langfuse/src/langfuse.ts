@@ -249,17 +249,20 @@ async function promptForConfig(
 	ctx: ExtensionCommandContext,
 	current: LangfuseConfig | undefined,
 ): Promise<LangfuseConfig | undefined> {
-	const publicKey = await ctx.ui.input("Langfuse public key (leave blank to keep existing):");
-	if (publicKey === undefined) {
-		ctx.ui.notify("Cancelled", "info");
-		return undefined;
-	}
 	const secretKey = await ctx.ui.input("Langfuse secret key (leave blank to keep existing):");
 	if (secretKey === undefined) {
 		ctx.ui.notify("Cancelled", "info");
 		return undefined;
 	}
-	const baseUrl = await ctx.ui.input("Langfuse base URL:", current?.baseUrl ?? DEFAULT_BASE_URL);
+	const publicKey = await ctx.ui.input("Langfuse public key (leave blank to keep existing):");
+	if (publicKey === undefined) {
+		ctx.ui.notify("Cancelled", "info");
+		return undefined;
+	}
+	const baseUrl = await ctx.ui.input(
+		`Langfuse base URL (leave blank for default ${DEFAULT_BASE_URL}):`,
+		DEFAULT_BASE_URL,
+	);
 	if (baseUrl === undefined) {
 		ctx.ui.notify("Cancelled", "info");
 		return undefined;
@@ -269,7 +272,7 @@ async function promptForConfig(
 		...current,
 		publicKey: publicKey.trim() || current?.publicKey || "",
 		secretKey: secretKey.trim() || current?.secretKey || "",
-		baseUrl: baseUrl.trim() || current?.baseUrl || DEFAULT_BASE_URL,
+		baseUrl: baseUrl.trim() || DEFAULT_BASE_URL,
 		captureContent: current?.captureContent ?? true,
 	});
 	if (!normalized.ok) {

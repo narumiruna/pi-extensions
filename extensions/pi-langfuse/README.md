@@ -40,7 +40,7 @@ Create or update the private config interactively from Pi:
 /langfuse init
 ```
 
-The command prompts for the public key, secret key, and base URL. Leave either key blank to preserve its existing value when updating a valid config. The file is saved atomically with mode `0600`; restart Pi after saving. In print or JSON mode, edit the file manually because interactive input is unavailable.
+The command prompts for the secret key, public key, and base URL in the same order Langfuse presents them. Leave either key blank to preserve its existing value when updating a valid config. Leave the base URL blank to use `https://us.cloud.langfuse.com`. The file is saved atomically with mode `0600`; restart Pi after saving. In print or JSON mode, edit the file manually because interactive input is unavailable.
 
 You can also create the file manually:
 
@@ -99,7 +99,7 @@ Automatic retries or continuations that begin without a new user prompt are reco
 - `flush` waits for all completed observations to export.
 - `help` displays command guidance.
 - `config` displays the config path and a credential-free JSON template. It never opens an interactive prompt or echoes configured keys.
-- `init` interactively creates or updates the private config without displaying existing credentials. Blank keys preserve valid existing values.
+- `init` interactively creates or updates the private config without displaying existing credentials. Blank keys preserve valid existing values; a blank base URL uses the US cloud endpoint.
 
 ## 🔐 Privacy
 

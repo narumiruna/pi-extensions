@@ -681,11 +681,15 @@ test("/langfuse init interactively creates and updates a private config", async 
 	await mock.events.get("session_start")?.[0]?.({}, session.ctx);
 	const command = mock.commands.get("langfuse");
 	const notifications: Array<{ message: string; level?: string }> = [];
-	const answers = ["pk-new", "sk-new", ""];
+	const prompts: Array<{ title: string; placeholder?: string }> = [];
+	const answers = ["sk-new", "pk-new", ""];
 	const ctx = {
 		hasUI: true,
 		ui: {
-			input: async () => answers.shift(),
+			input: async (title: string, placeholder?: string) => {
+				prompts.push({ title, placeholder });
+				return answers.shift();
+			},
 			notify(message: string, level?: string) {
 				notifications.push({ message, level });
 			},
@@ -694,6 +698,15 @@ test("/langfuse init interactively creates and updates a private config", async 
 
 	await command?.handler("init", ctx);
 
+	assert.deepEqual(
+		prompts.slice(0, 3).map(({ title }) => title),
+		[
+			"Langfuse secret key (leave blank to keep existing):",
+			"Langfuse public key (leave blank to keep existing):",
+			"Langfuse base URL (leave blank for default https://us.cloud.langfuse.com):",
+		],
+	);
+	assert.equal(prompts[2]?.placeholder, "https://us.cloud.langfuse.com");
 	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
 		publicKey: "pk-new",
 		secretKey: "sk-new",
