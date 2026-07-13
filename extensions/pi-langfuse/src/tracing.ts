@@ -358,9 +358,9 @@ function sanitize(
 		return consume(value, budget);
 	}
 	if (typeof value === "string") {
-		const redacted = value.replace(BASE64_DATA_URI, BASE64_DATA_URI_OMITTED);
-		const bounded = truncateString(redacted, Math.min(MAX_STRING_LENGTH, budget.remaining));
-		return consume(bounded, budget);
+		const bounded = truncateString(value, Math.min(MAX_STRING_LENGTH, budget.remaining));
+		const redacted = bounded.replace(BASE64_DATA_URI, BASE64_DATA_URI_OMITTED);
+		return consume(redacted, budget);
 	}
 	if (typeof value === "bigint") return consume(value.toString(), budget);
 	if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") {
@@ -387,30 +387,46 @@ function sanitize(
 		result = items;
 	} else {
 		const record = value as Record<string, unknown>;
-		let keys: string[];
-		try {
-			keys = Object.keys(record);
-		} catch {
-			active.delete(value);
-			return consume("[unreadable object]", budget);
-		}
 		const output: Record<string, unknown> = {};
 		const objectType = readProperty(record, "type").value;
 		const redactData = objectType === "image" || objectType === "base64";
+		let visited = 0;
 		let processed = 0;
-		for (const key of keys.slice(0, MAX_COLLECTION_LENGTH)) {
-			if (budget.remaining <= byteLength(TRUNCATED)) break;
-			budget.remaining -= byteLength(key) + 4;
-			const property = readProperty(record, key);
-			if (redactData && key === "data") {
-				output[key] = consume("[base64 omitted]", budget);
-			} else if (!property.ok) output[key] = consume("[unreadable property]", budget);
-			else output[key] = sanitize(property.value, active, depth + 1, budget);
-			processed += 1;
+		let omitted = false;
+		try {
+			for (const key in record) {
+				if (visited >= MAX_COLLECTION_LENGTH || budget.remaining <= byteLength(TRUNCATED)) {
+					omitted = true;
+					break;
+				}
+				visited += 1;
+				const keyBudget = Math.min(MAX_STRING_LENGTH, Math.max(0, budget.remaining - 4));
+				if (key.length > keyBudget) {
+					omitted = true;
+					break;
+				}
+				const keyBytes = byteLength(key);
+				if (keyBytes > keyBudget) {
+					omitted = true;
+					break;
+				}
+				budget.remaining -= keyBytes + 4;
+				if (!Object.hasOwn(record, key)) continue;
+				const property = readProperty(record, key);
+				if (redactData && key === "data") {
+					output[key] = consume("[base64 omitted]", budget);
+				} else if (!property.ok) output[key] = consume("[unreadable property]", budget);
+				else output[key] = sanitize(property.value, active, depth + 1, budget);
+				processed += 1;
+			}
+		} catch {
+			if (processed === 0) {
+				active.delete(value);
+				return consume("[unreadable object]", budget);
+			}
+			omitted = true;
 		}
-		if (processed < keys.length) {
-			output["$truncated"] = `${keys.length - processed} object entries omitted`;
-		}
+		if (omitted) output["$truncated"] = "additional object entries omitted";
 		result = output;
 	}
 	active.delete(value);
@@ -439,12 +455,15 @@ function consume<T>(value: T, budget: { remaining: number }): T | string {
 }
 
 function truncateString(value: string, maxBytes: number): string {
-	if (byteLength(value) <= maxBytes) return value;
+	const boundedPrefix = value.slice(0, maxBytes);
+	if (boundedPrefix.length === value.length && byteLength(boundedPrefix) <= maxBytes) {
+		return boundedPrefix;
+	}
 	const suffix = "… [truncated]";
 	const target = Math.max(0, maxBytes - byteLength(suffix) - 2);
 	let bytes = 0;
 	let output = "";
-	for (const character of value) {
+	for (const character of boundedPrefix) {
 		const size = byteLength(character);
 		if (bytes + size > target) break;
 		output += character;
