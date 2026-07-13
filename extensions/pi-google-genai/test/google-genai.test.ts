@@ -120,11 +120,13 @@ test("config loading migrates to the canonical package filename with private per
 		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
 		await assert.rejects(stat(legacyPath));
 
-		await writeFile(legacyPath, JSON.stringify({ model: "old" }), { mode: 0o600 });
+		await writeFile(legacyPath, JSON.stringify({ model: "old" }), { mode: 0o644 });
+		await chmod(legacyPath, 0o644);
 		await writeFile(canonicalPath, JSON.stringify({ model: "new" }), { mode: 0o600 });
 		const preferred = await loadGoogleGenaiConfig();
 		assert.equal(preferred.config.model, "new");
 		assert.match(preferred.warnings.join("\n"), /ignored/i);
+		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
 
 		await writeFile(canonicalPath, "invalid", { mode: 0o600 });
 		const invalidNew = await loadGoogleGenaiConfig();

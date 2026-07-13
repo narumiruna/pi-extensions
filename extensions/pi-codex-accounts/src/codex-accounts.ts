@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, linkSync, lstatSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	closeSync,
+	linkSync,
+	lstatSync,
+	openSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
 	FileAuthStorageBackend,
@@ -367,8 +376,23 @@ function defaultAccountsPath(): string {
 		const notices: string[] = [];
 		const permissionError = enforcePrivateFilePermissions(canonicalPath);
 		if (permissionError) notices.push(permissionError);
-		if (pathEntryExists(legacyPath)) {
-			notices.push(`${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} takes precedence.`);
+		if (readableFileExists(canonicalPath)) {
+			if (pathEntryExists(legacyPath)) {
+				notices.push(
+					`${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} takes precedence.`,
+				);
+			}
+			pendingAccountsMigrationNotice = notices.length > 0 ? notices.join("\n") : undefined;
+			return canonicalPath;
+		}
+		if (readableFileExists(legacyPath)) {
+			const legacyPermissionError = enforcePrivateFilePermissions(legacyPath);
+			if (legacyPermissionError) notices.push(legacyPermissionError);
+			notices.push(
+				`${CODEX_ACCOUNTS_FILE} is unusable; ${LEGACY_CODEX_ACCOUNTS_FILE} will be used for this session.`,
+			);
+			pendingAccountsMigrationNotice = notices.join("\n");
+			return legacyPath;
 		}
 		pendingAccountsMigrationNotice = notices.length > 0 ? notices.join("\n") : undefined;
 		return canonicalPath;
@@ -440,6 +464,19 @@ function pathEntryExists(filePath: string): boolean {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+function readableFileExists(filePath: string): boolean {
+	let descriptor: number | undefined;
+	try {
+		if (!statSync(filePath).isFile()) return false;
+		descriptor = openSync(filePath, "r");
+		return true;
+	} catch {
+		return false;
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
 	}
 }
 

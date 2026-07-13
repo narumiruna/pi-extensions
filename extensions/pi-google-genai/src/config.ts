@@ -4,6 +4,7 @@ import {
 	chmod,
 	link,
 	mkdir,
+	lstat,
 	readFile,
 	rename,
 	rm,
@@ -180,6 +181,7 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 	const legacyPath = join(dirname(canonicalPath), LEGACY_CONFIG_FILE_NAME);
 	if (await exists(canonicalPath)) {
 		if (await exists(legacyPath)) {
+			await ensureConfigPermissions(legacyPath, warnings);
 			warnings.push(
 				`${LEGACY_CONFIG_FILE_NAME} ignored because ${CONFIG_FILE_NAME} takes precedence.`,
 			);
@@ -196,11 +198,21 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 		return legacyPath;
 	}
 	try {
-		await installPrivateConfigExclusively(canonicalPath, `${JSON.stringify(legacy, null, "\t")}\n`);
+		const installedContents = `${JSON.stringify(legacy, null, "\t")}\n`;
+		const installedIdentity = await installPrivateConfigExclusively(
+			canonicalPath,
+			installedContents,
+		);
 		await chmod(canonicalPath, 0o600);
 		if (!(await jsonFileEquals(legacyPath, legacy))) {
+			if (await removeFileIfIdentityMatches(canonicalPath, installedIdentity)) {
+				warnings.push(
+					`${LEGACY_CONFIG_FILE_NAME} changed during migration; the stale ${CONFIG_FILE_NAME} snapshot was removed and the legacy file was used for this session.`,
+				);
+				return legacyPath;
+			}
 			warnings.push(
-				`Google GenAI config migrated to ${CONFIG_FILE_NAME}, but ${LEGACY_CONFIG_FILE_NAME} changed during migration and was retained.`,
+				`${LEGACY_CONFIG_FILE_NAME} changed during migration, but ${CONFIG_FILE_NAME} was replaced concurrently and takes precedence.`,
 			);
 			return canonicalPath;
 		}
@@ -239,14 +251,32 @@ async function jsonFileEquals(filePath: string, expected: object) {
 	}
 }
 
-async function installPrivateConfigExclusively(filePath: string, contents: string) {
+type FileIdentity = Pick<Awaited<ReturnType<typeof lstat>>, "dev" | "ino">;
+
+async function installPrivateConfigExclusively(
+	filePath: string,
+	contents: string,
+): Promise<FileIdentity> {
 	const tempFile = join(dirname(filePath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
 	try {
 		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
 		await chmod(tempFile, 0o600);
+		const identity = await lstat(tempFile);
 		await link(tempFile, filePath);
+		return { dev: identity.dev, ino: identity.ino };
 	} finally {
 		await rm(tempFile, { force: true }).catch(() => undefined);
+	}
+}
+
+async function removeFileIfIdentityMatches(filePath: string, expected: FileIdentity) {
+	try {
+		const current = await lstat(filePath);
+		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		await rm(filePath);
+		return true;
+	} catch {
+		return false;
 	}
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -154,6 +154,30 @@ test("canonical Codex accounts file wins without deleting the legacy file", asyn
 		assert.equal(store.read().active, "new");
 		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
 		assert.equal((await stat(legacyPath)).isFile(), true);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("default store falls back to legacy credentials for a broken canonical symlink", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-broken-canonical-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	try {
+		const legacyPath = join(dir, "codex-accounts.json");
+		const canonicalPath = join(dir, "pi-codex-accounts.json");
+		await writeFile(
+			legacyPath,
+			JSON.stringify({ active: "legacy", accounts: { legacy: validCred("legacy") } }),
+			{ mode: 0o600 },
+		);
+		await symlink("missing-target", canonicalPath);
+
+		const store = new CodexAccountStore();
+		assert.equal(store.read().active, "legacy");
+		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

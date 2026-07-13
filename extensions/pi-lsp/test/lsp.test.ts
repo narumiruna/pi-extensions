@@ -5,6 +5,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	unlinkSync,
 	writeFileSync,
@@ -76,8 +77,10 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 	try {
 		const userLegacy = path.join(agentDir, "lsp.json");
 		writeFileSync(userLegacy, JSON.stringify(config("user")));
+		chmodSync(userLegacy, 0o600);
 		assert.equal(loadConfig(project).servers[0]?.name, "user");
 		assert.equal(existsSync(path.join(agentDir, "pi-lsp.json")), true);
+		assert.equal(statSync(path.join(agentDir, "pi-lsp.json")).mode & 0o777, 0o600);
 		assert.equal(existsSync(userLegacy), false);
 
 		const projectLegacy = path.join(project, ".pi", "lsp.json");
