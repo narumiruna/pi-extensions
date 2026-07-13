@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -640,7 +640,7 @@ test("commands expose status, flush, help, and credential-free config guidance",
 	const completions = command?.getArgumentCompletions?.("") as Array<{ value: string }>;
 	assert.deepEqual(
 		completions.map(({ value }) => value),
-		["status", "flush", "help", "config"],
+		["status", "flush", "help", "config", "init"],
 	);
 	await command?.handler("status", ctx);
 	await command?.handler("help", ctx);
@@ -658,6 +658,43 @@ test("commands expose status, flush, help, and credential-free config guidance",
 	assert.match(output, /\/private\/pi-langfuse\.json/);
 	assert.match(output, /"publicKey": "pk-lf-\.\.\."/);
 	assert.doesNotMatch(output, /private-value/);
+});
+
+test("/langfuse init creates a private starter config without overwriting", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-init-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const path = join(dir, "nested", "pi-langfuse.json");
+	const mock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: false,
+			path,
+			warnings: [],
+			reason: `Configuration file not found: ${path}`,
+		}),
+		createBackend: async () => new FakeBackend(),
+	})(mock.pi);
+	const { ctx, notifications } = createMockContext({ hasUI: false });
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	const command = mock.commands.get("langfuse");
+
+	await command?.handler("init", ctx);
+
+	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+		publicKey: "",
+		secretKey: "",
+		baseUrl: "https://cloud.langfuse.com",
+		captureContent: true,
+	});
+	assert.equal((await stat(path)).mode & 0o777, 0o600);
+	assert.match(notifications.at(-1)?.message ?? "", /created.*restart pi/i);
+	assert.equal(notifications.at(-1)?.level, "info");
+
+	await writeFile(path, '{"keep":true}\n', { mode: 0o600 });
+	await command?.handler("init", ctx);
+	assert.equal(await readFile(path, "utf8"), '{"keep":true}\n');
+	assert.match(notifications.at(-1)?.message ?? "", /already exists/i);
+	assert.equal(notifications.at(-1)?.level, "warning");
 });
 
 test("agent_end never waits for or starts a routine flush", async () => {

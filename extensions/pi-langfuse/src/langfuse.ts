@@ -1,9 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type LangfuseConfig, type LangfuseConfigResult, loadLangfuseConfig } from "./config.js";
+import {
+	type LangfuseConfig,
+	type LangfuseConfigInitResult,
+	type LangfuseConfigResult,
+	initializeLangfuseConfig,
+	loadLangfuseConfig,
+} from "./config.js";
 import { type TraceBackend, TraceRecorder } from "./tracing.js";
 
 interface ExtensionDependencies {
 	loadConfig(): Promise<LangfuseConfigResult>;
+	initializeConfig(path?: string): Promise<LangfuseConfigInitResult>;
 	createBackend(config: LangfuseConfig): Promise<TraceBackend>;
 }
 
@@ -12,6 +19,7 @@ const COMMAND_COMPLETIONS = [
 	{ value: "flush", label: "flush", description: "Export all completed traces now" },
 	{ value: "help", label: "help", description: "Show Langfuse command help" },
 	{ value: "config", label: "config", description: "Show the config path and JSON template" },
+	{ value: "init", label: "init", description: "Create a starter config without overwriting" },
 ];
 
 const CONFIG_TEMPLATE = JSON.stringify(
@@ -29,6 +37,7 @@ export function createLangfuseExtension(
 	dependencies: Partial<ExtensionDependencies> = {},
 ): (pi: ExtensionAPI) => void {
 	const loadConfig = dependencies.loadConfig ?? loadLangfuseConfig;
+	const initializeConfig = dependencies.initializeConfig ?? initializeLangfuseConfig;
 	const createBackend =
 		dependencies.createBackend ??
 		(async (config) => {
@@ -43,7 +52,7 @@ export function createLangfuseExtension(
 		let initializationError: string | undefined;
 
 		pi.registerCommand("langfuse", {
-			description: "Show or flush Langfuse tracing",
+			description: "Manage Langfuse tracing and configuration",
 			getArgumentCompletions: (prefix) => {
 				const normalized = prefix.trimStart().toLowerCase();
 				if (/\s/.test(normalized)) return null;
@@ -92,19 +101,35 @@ export function createLangfuseExtension(
 					);
 					return;
 				}
+				if (action === "init") {
+					const result = await initializeConfig(configPath);
+					configPath = result.path;
+					if (result.ok) {
+						initializationError =
+							"Langfuse tracing is disabled until the new config has credentials and Pi is restarted.";
+						ctx.ui.notify(
+							`Created Langfuse config at ${result.path}. Fill in publicKey and secretKey, then restart Pi.`,
+							"info",
+						);
+					} else {
+						ctx.ui.notify(result.reason, result.exists ? "warning" : "error");
+					}
+					return;
+				}
 				if (action === "help") {
 					ctx.ui.notify(
 						[
-							"Usage: /langfuse [status|flush|help|config]",
+							"Usage: /langfuse [status|flush|help|config|init]",
 							"status: show tracing state without credentials",
 							"flush: wait for completed traces to export",
 							"config: show the config path and credential-free JSON template",
+							"init: create a private starter config without overwriting an existing file",
 						].join("\n"),
 						"info",
 					);
 					return;
 				}
-				ctx.ui.notify("Usage: /langfuse [status|flush|help|config]", "warning");
+				ctx.ui.notify("Usage: /langfuse [status|flush|help|config|init]", "warning");
 			},
 		});
 

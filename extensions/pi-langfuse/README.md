@@ -34,7 +34,15 @@ The Langfuse v4 SDK requires Node.js 20 or newer.
 
 ## ⚙️ Configuration
 
-Create `~/.pi/agent/pi-langfuse.json`:
+Create a private starter file from Pi:
+
+```text
+/langfuse init
+```
+
+The command creates `~/.pi/agent/pi-langfuse.json` with mode `0600`, empty key fields, and safe defaults. It never overwrites an existing file. Fill in the generated `publicKey` and `secretKey`, then restart Pi.
+
+You can also create the file manually:
 
 ```json
 {
@@ -84,12 +92,14 @@ Automatic retries or continuations that begin without a new user prompt are reco
 /langfuse flush
 /langfuse help
 /langfuse config
+/langfuse init
 ```
 
 - `status` reports whether tracing is enabled, the endpoint, configuration source, and content-capture mode. It never displays credentials.
 - `flush` waits for all completed observations to export.
 - `help` displays command guidance.
 - `config` displays the config path and a credential-free JSON template. It never opens an interactive prompt or echoes configured keys.
+- `init` creates a private starter config with empty credential fields and never overwrites an existing file.
 
 ## 🔐 Privacy
 
