@@ -1,14 +1,19 @@
 import type {
 	AppServerCreditsSnapshot,
+	AppServerRateLimitResetCredit,
+	AppServerRateLimitResetCredits,
 	AppServerRateLimitResponse,
 	AppServerRateLimitSnapshot,
 	AppServerWindowSnapshot,
 	BackendAdditionalRateLimit,
 	BackendCreditsSnapshot,
 	BackendRateLimitDetails,
+	BackendRateLimitResetCredits,
 	BackendWindowSnapshot,
 	CodexUsageReport,
 	NormalizedCredits,
+	NormalizedRateLimitResetCredit,
+	NormalizedRateLimitResetCredits,
 	NormalizedRateLimitSnapshot,
 	NormalizedRateLimitWindow,
 	RateLimitStatusPayload,
@@ -45,11 +50,12 @@ export function normalizeBackendPayload(
 		if (snapshot) snapshots.push(snapshot);
 	}
 
-	if (snapshots.length === 0) {
-		throw new Error("Codex usage endpoint returned no displayable rate-limit windows.");
+	const resetCredits = normalizeBackendRateLimitResetCredits(payload.rate_limit_reset_credits);
+	if (snapshots.length === 0 && !resetCredits) {
+		throw new Error("Codex usage endpoint returned no displayable usage data.");
 	}
 
-	return { source, capturedAt, planType, snapshots };
+	return { source, capturedAt, planType, snapshots, resetCredits };
 }
 
 function normalizeBackendSnapshot(
@@ -95,6 +101,14 @@ function normalizeBackendCredits(value: unknown): NormalizedCredits | undefined 
 	return { hasCredits, unlimited, balance: asString(credits.balance) };
 }
 
+function normalizeBackendRateLimitResetCredits(
+	value: unknown,
+): NormalizedRateLimitResetCredits | undefined {
+	const resetCredits = asObject(value) as BackendRateLimitResetCredits | undefined;
+	const availableCount = asNonnegativeInteger(resetCredits?.available_count);
+	return availableCount === undefined ? undefined : { availableCount };
+}
+
 export function normalizeAppServerResponse(
 	response: AppServerRateLimitResponse,
 	capturedAt: number,
@@ -116,12 +130,19 @@ export function normalizeAppServerResponse(
 		}
 	}
 
-	if (snapshots.length === 0) {
-		throw new Error("codex app-server returned no displayable rate-limit windows.");
+	const resetCredits = normalizeAppServerRateLimitResetCredits(response.rateLimitResetCredits);
+	if (snapshots.length === 0 && !resetCredits) {
+		throw new Error("codex app-server returned no displayable usage data.");
 	}
 
 	const planType = asAppServerPlanType(response.rateLimits);
-	return { source: "codex-app-server", capturedAt, planType, snapshots };
+	return {
+		source: "codex-app-server",
+		capturedAt,
+		planType,
+		snapshots,
+		resetCredits,
+	};
 }
 
 function asAppServerPlanType(raw: unknown): string | undefined {
@@ -172,6 +193,38 @@ function normalizeAppServerCredits(value: unknown): NormalizedCredits | undefine
 	return { hasCredits, unlimited, balance: asString(credits.balance) };
 }
 
+function normalizeAppServerRateLimitResetCredits(
+	value: unknown,
+): NormalizedRateLimitResetCredits | undefined {
+	const resetCredits = asObject(value) as AppServerRateLimitResetCredits | undefined;
+	const availableCount = asNonnegativeInteger(resetCredits?.availableCount);
+	if (availableCount === undefined) return undefined;
+
+	const credits = Array.isArray(resetCredits?.credits)
+		? resetCredits.credits
+				.map(normalizeAppServerRateLimitResetCredit)
+				.filter((credit): credit is NormalizedRateLimitResetCredit => credit !== undefined)
+		: undefined;
+	return credits ? { availableCount, credits } : { availableCount };
+}
+
+function normalizeAppServerRateLimitResetCredit(
+	value: unknown,
+): NormalizedRateLimitResetCredit | undefined {
+	const credit = asObject(value) as AppServerRateLimitResetCredit | undefined;
+	const id = asString(credit?.id);
+	if (!id) return undefined;
+	return {
+		id,
+		resetType: asString(credit?.resetType),
+		status: asString(credit?.status),
+		grantedAt: asNumber(credit?.grantedAt),
+		expiresAt: asNumber(credit?.expiresAt),
+		title: asString(credit?.title),
+		description: asString(credit?.description),
+	};
+}
+
 function mergeSnapshot(
 	left: NormalizedRateLimitSnapshot,
 	right: NormalizedRateLimitSnapshot,
@@ -186,9 +239,13 @@ function mergeSnapshot(
 }
 
 function assertObject(value: unknown, description: string): Record<string, unknown> {
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		throw new Error(`${description} was not an object.`);
-	}
+	const object = asObject(value);
+	if (!object) throw new Error(`${description} was not an object.`);
+	return object;
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	return value as Record<string, unknown>;
 }
 
@@ -207,4 +264,10 @@ function asNumber(value: unknown): number | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
+}
+
+function asNonnegativeInteger(value: unknown): number | undefined {
+	const parsed = asNumber(value);
+	if (parsed === undefined || !Number.isSafeInteger(parsed)) return undefined;
+	return Math.max(0, parsed);
 }

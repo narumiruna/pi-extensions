@@ -31,6 +31,22 @@ export type CodexUsageReport = {
 	capturedAt: number;
 	planType?: string;
 	snapshots: NormalizedRateLimitSnapshot[];
+	resetCredits?: NormalizedRateLimitResetCredits;
+};
+
+export type NormalizedRateLimitResetCredits = {
+	availableCount: number;
+	credits?: NormalizedRateLimitResetCredit[];
+};
+
+export type NormalizedRateLimitResetCredit = {
+	id: string;
+	resetType?: string;
+	status?: string;
+	grantedAt?: number;
+	expiresAt?: number;
+	title?: string;
+	description?: string;
 };
 
 export type NormalizedRateLimitSnapshot = {
@@ -58,6 +74,11 @@ export type RateLimitStatusPayload = {
 	rate_limit?: unknown;
 	additional_rate_limits?: unknown;
 	credits?: unknown;
+	rate_limit_reset_credits?: unknown;
+};
+
+export type BackendRateLimitResetCredits = {
+	available_count?: unknown;
 };
 
 export type BackendRateLimitDetails = {
@@ -86,6 +107,22 @@ export type BackendCreditsSnapshot = {
 export type AppServerRateLimitResponse = {
 	rateLimits?: unknown;
 	rateLimitsByLimitId?: unknown;
+	rateLimitResetCredits?: unknown;
+};
+
+export type AppServerRateLimitResetCredits = {
+	availableCount?: unknown;
+	credits?: unknown;
+};
+
+export type AppServerRateLimitResetCredit = {
+	id?: unknown;
+	resetType?: unknown;
+	status?: unknown;
+	grantedAt?: unknown;
+	expiresAt?: unknown;
+	title?: unknown;
+	description?: unknown;
 };
 
 export type AppServerRateLimitSnapshot = {

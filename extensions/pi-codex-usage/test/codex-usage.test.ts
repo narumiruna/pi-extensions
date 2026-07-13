@@ -67,6 +67,7 @@ test("normalizeBackendPayload keeps primary and additional rate limits", () => {
 				primary_window: { used_percent: 25, limit_window_seconds: 18000, reset_at: 1 },
 			},
 			credits: { has_credits: true, unlimited: false, balance: "12" },
+			rate_limit_reset_credits: { available_count: 3 },
 			additional_rate_limits: [
 				{
 					limit_name: "GPT-5.3 Codex Spark",
@@ -84,6 +85,22 @@ test("normalizeBackendPayload keeps primary and additional rate limits", () => {
 	assert.equal(report.snapshots.length, 2);
 	assert.equal(report.snapshots[0]?.primary?.windowMinutes, 300);
 	assert.equal(report.snapshots[1]?.limitId, "gpt-5.3-codex-spark");
+	assert.deepEqual(report.resetCredits, { availableCount: 3 });
+});
+
+test("normalizeBackendPayload accepts a reset-credit-only usage response", () => {
+	const report = normalizeBackendPayload(
+		{
+			plan_type: "plus",
+			rate_limit_reset_credits: { available_count: "2" },
+		},
+		1500,
+		"pi-auth",
+	);
+
+	assert.deepEqual(report.snapshots, []);
+	assert.deepEqual(report.resetCredits, { availableCount: 2 });
+	assert.match(formatCodexUsageReport(report), /Usage limit resets:\s+2 available/);
 });
 
 test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => {
@@ -93,6 +110,20 @@ test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => 
 			rateLimitsByLimitId: {
 				codex: { limitId: "codex", secondary: { usedPercent: 20, windowDurationMins: 10080 } },
 			},
+			rateLimitResetCredits: {
+				availableCount: 2,
+				credits: [
+					{
+						id: "reset-1",
+						resetType: "codexRateLimits",
+						status: "available",
+						grantedAt: 1_781_654_400,
+						expiresAt: 1_784_246_400,
+						title: "Full reset (Weekly + 5 hr)",
+						description: "Ready to redeem",
+					},
+				],
+			},
 		},
 		2000,
 	);
@@ -101,6 +132,20 @@ test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => 
 	assert.equal(report.snapshots.length, 1);
 	assert.equal(report.snapshots[0]?.primary?.usedPercent, 40);
 	assert.equal(report.snapshots[0]?.secondary?.windowMinutes, 10080);
+	assert.deepEqual(report.resetCredits, {
+		availableCount: 2,
+		credits: [
+			{
+				id: "reset-1",
+				resetType: "codexRateLimits",
+				status: "available",
+				grantedAt: 1_781_654_400,
+				expiresAt: 1_784_246_400,
+				title: "Full reset (Weekly + 5 hr)",
+				description: "Ready to redeem",
+			},
+		],
+	});
 });
 
 test("scheduled statusline refresh ignores stale extension contexts", async (t) => {
@@ -344,6 +389,7 @@ test("formatters render report text and model-specific statusline buckets", () =
 	const report: CodexUsageReport = {
 		source: "pi-auth",
 		capturedAt: 0,
+		resetCredits: { availableCount: 2 },
 		snapshots: [
 			{ limitId: "codex", primary: { usedPercent: 60 }, secondary: { usedPercent: 80 } },
 			{ limitId: "gpt-5.3-codex-spark", primary: { usedPercent: 10 } },
@@ -351,6 +397,7 @@ test("formatters render report text and model-specific statusline buckets", () =
 	};
 
 	assert.match(formatCodexUsageReport(report), /5h limit:/);
+	assert.match(formatCodexUsageReport(report), /Usage limit resets:\s+2 available/);
 	assert.equal(
 		formatCodexUsageStatusline(report, {
 			id: "gpt-5.3-codex-spark",

@@ -38,6 +38,13 @@ export function formatCodexUsageReport(report: CodexUsageReport, _cacheAgeMs?: n
 		}
 	}
 
+	if (report.resetCredits) {
+		if (report.snapshots.length > 0) lines.push("");
+		lines.push(
+			`  ${"Usage limit resets:".padEnd(LIMIT_VALUE_COLUMN)}${report.resetCredits.availableCount} available`,
+		);
+	}
+
 	return lines.join("\n");
 }
 
@@ -220,37 +227,6 @@ export function formatQueryErrors(errors: UsageQueryError[]): string {
 		"Tip: use a Pi OpenAI Codex model or run /login for OpenAI ChatGPT Plus/Pro. If Pi auth is unavailable, install Codex CLI and run codex login for the fallback.",
 	);
 	return lines.join("\n");
-}
-
-function formatPlanType(planType: string): string {
-	const key = planType
-		.replace(/([a-z])([A-Z])/g, "$1_$2")
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "_");
-	if (key === "pro_lite" || key === "prolite") return "Pro Lite";
-	if (key === "team" || key === "self_serve_business_usage_based" || key === "business") {
-		return "Business";
-	}
-	if (key === "enterprise_cbp_usage_based") return "Enterprise";
-
-	const normalized = planType
-		.replace(/([a-z])([A-Z])/g, "$1 $2")
-		.replace(/[_-]+/g, " ")
-		.trim();
-	if (!normalized) return planType;
-	return normalized
-		.split(/\s+/)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-		.join(" ");
-}
-
-function formatDuration(milliseconds: number): string {
-	const seconds = Math.max(0, Math.round(milliseconds / 1000));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.round(seconds / 60);
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.round(minutes / 60);
-	return `${hours}h`;
 }
 
 function formatNumber(value: number, fallback: string): string {

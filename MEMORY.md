@@ -42,6 +42,7 @@
 
 ## TASTE
 
+- Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
 - Prefer JSON config files over environment variables for user-facing settings, including token configuration when it is appropriate for the product. Add new environment variables only when they serve a clear purpose, such as secrets, deployment workflows, automation, or compatibility with existing integrations.

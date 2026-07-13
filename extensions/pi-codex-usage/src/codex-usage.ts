@@ -1,19 +1,6 @@
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-	ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import {
-	formatCodexUsageReport,
-	formatCodexUsageStatusline,
-	formatQueryErrors,
-	showReport,
-} from "./format.js";
-import {
-	isOpenAICodexModel,
-	isStaleExtensionContextError,
-	queryUsage,
-} from "./query.js";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { formatCodexUsageStatusline, formatQueryErrors, showReport } from "./format.js";
+import { isOpenAICodexModel, isStaleExtensionContextError, queryUsage } from "./query.js";
 import type {
 	CachedReport,
 	CodexUsageModel,
@@ -34,7 +21,11 @@ interface CommandArgumentCompletion {
 
 const COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 	{ value: "--refresh", label: "--refresh", description: "Refresh usage instead of cached data" },
-	{ value: "--no-statusline", label: "--no-statusline", description: "Do not update the statusline" },
+	{
+		value: "--no-statusline",
+		label: "--no-statusline",
+		description: "Do not update the statusline",
+	},
 	{
 		value: "--clear-statusline",
 		label: "--clear-statusline",
@@ -192,8 +183,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 				}
 
 				let keepStatusline = false;
-				const statuslineStarted =
-					options.value.statusline && setStatuslineValue(ctx, "checking");
+				const statuslineStarted = options.value.statusline && setStatuslineValue(ctx, "checking");
 				try {
 					const result = await queryUsage(ctx, options.value);
 					if (!result.ok) {
@@ -333,6 +323,8 @@ export type {
 	CodexUsageModel,
 	CodexUsageReport,
 	NormalizedCredits,
+	NormalizedRateLimitResetCredit,
+	NormalizedRateLimitResetCredits,
 	NormalizedRateLimitSnapshot,
 	NormalizedRateLimitWindow,
 } from "./types.js";
