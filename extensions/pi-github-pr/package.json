@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-github-pr",
-	"version": "0.14.1",
+	"version": "0.15.0",
 	"description": "Pi extension that shows GitHub pull request review, checks, and comment status.",
 	"type": "module",
 	"license": "MIT",
