@@ -25,6 +25,7 @@
 		"pack:github-pr": "npm --workspace @narumitw/pi-github-pr pack --dry-run",
 		"pack:google-genai": "npm --workspace @narumitw/pi-google-genai pack --dry-run",
 		"pack:goal": "npm --workspace @narumitw/pi-goal pack --dry-run",
+		"pack:langfuse": "npm --workspace @narumitw/pi-langfuse pack --dry-run",
 		"pack:lsp": "npm --workspace @narumitw/pi-lsp pack --dry-run",
 		"pack:plan-mode": "npm --workspace @narumitw/pi-plan-mode pack --dry-run",
 		"pack:retry": "npm --workspace @narumitw/pi-retry pack --dry-run",

@@ -2,9 +2,9 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; ChatGPT Codex account switching and usage status; GitHub pull request checks; goal mode; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; goal mode; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
 
-**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
+**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
 ## 📦 Pi extension packages
 
@@ -21,6 +21,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
 | [`@narumitw/pi-goal`](./extensions/pi-goal) | 🎯 `/goal` mode that keeps the agent working until a verifiable task is complete. | `pi install npm:@narumitw/pi-goal` |
 | [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) | 🔎 Google GenAI grounding tools for Google Search, Maps, and URL context. | `pi install npm:@narumitw/pi-google-genai` |
+| [`@narumitw/pi-langfuse`](./extensions/pi-langfuse) | 🪢 Langfuse traces for Pi agent runs, LLM generations, token usage, costs, and tool activity. | `pi install npm:@narumitw/pi-langfuse` |
 | [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Language-agnostic LSP diagnostics and code actions for TypeScript, JavaScript, Python, JSON, CSS, and more through configured language servers. | `pi install npm:@narumitw/pi-lsp` |
 | [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) | 🧭 Codex-like read-only `/plan` collaboration mode with safe exploration and implementation-ready plans. | `pi install npm:@narumitw/pi-plan-mode` |
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for unknown provider errors, retryable Codex backend failures, websocket limits, and stalled streams. | `pi install npm:@narumitw/pi-retry` |
@@ -70,6 +71,10 @@ Use [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) to give Pi native Fire
 ### 🔎 Google GenAI grounding
 
 Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Google Search, Google Maps, and URL-context grounding through Gemini Interactions with Pi Google auth or a private `google-genai.json` config.
+
+### 🪢 LLM observability
+
+Use [`@narumitw/pi-langfuse`](./extensions/pi-langfuse) to send Pi agent, generation, token usage, cost, and tool spans to Langfuse with credentials stored in a private `pi-langfuse.json` file.
 
 ### 🔐 Codex subscription accounts
 
@@ -133,6 +138,7 @@ pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-github-pr
 pi -e ./extensions/pi-goal
 pi -e ./extensions/pi-google-genai
+pi -e ./extensions/pi-langfuse
 pi -e ./extensions/pi-lsp
 pi -e ./extensions/pi-plan-mode
 pi -e ./extensions/pi-retry
@@ -153,6 +159,7 @@ npm run pack:firecrawl
 npm run pack:github-pr
 npm run pack:goal
 npm run pack:google-genai
+npm run pack:langfuse
 npm run pack:lsp
 npm run pack:plan-mode
 npm run pack:retry
@@ -187,6 +194,7 @@ extensions/
 ├── pi-github-pr/
 ├── pi-goal/
 ├── pi-google-genai/
+├── pi-langfuse/
 ├── pi-lsp/
 ├── pi-plan-mode/
 ├── pi-retry/
