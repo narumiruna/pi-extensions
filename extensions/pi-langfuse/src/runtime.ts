@@ -10,7 +10,12 @@ import {
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { LangfuseConfig } from "./config.js";
-import type { Observation, ObservationAttributes, TraceBackend } from "./tracing.js";
+import type {
+	Observation,
+	ObservationAttributes,
+	ObservationType,
+	TraceBackend,
+} from "./tracing.js";
 
 const RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
 
@@ -58,7 +63,7 @@ class ProductionTraceBackend implements TraceBackend {
 	start(
 		name: string,
 		attributes: ObservationAttributes,
-		options: { asType: "agent" | "generation" | "tool"; parent?: Observation },
+		options: { asType: ObservationType; parent?: Observation },
 	): Observation {
 		const parent = options.parent;
 		if (parent instanceof ProductionObservation) {
@@ -156,7 +161,7 @@ const defaultFactories: RuntimeFactories = {
 function startRoot(
 	name: string,
 	attributes: ObservationAttributes,
-	type: "agent" | "generation" | "tool",
+	type: ObservationType,
 ): LangfuseObservation {
 	if (type === "agent") {
 		return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "agent" });
@@ -166,14 +171,17 @@ function startRoot(
 			asType: "generation",
 		});
 	}
-	return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool" });
+	if (type === "tool") {
+		return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool" });
+	}
+	return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "span" });
 }
 
 function startChild(
 	parent: LangfuseObservation,
 	name: string,
 	attributes: ObservationAttributes,
-	type: "agent" | "generation" | "tool",
+	type: ObservationType,
 ): LangfuseObservation {
 	if (type === "agent") {
 		return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
@@ -185,8 +193,13 @@ function startChild(
 			asType: "generation",
 		});
 	}
+	if (type === "tool") {
+		return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
+			asType: "tool",
+		});
+	}
 	return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
-		asType: "tool",
+		asType: "span",
 	});
 }
 

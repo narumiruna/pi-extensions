@@ -7,6 +7,7 @@
 ## ✨ Features
 
 - Creates a native Langfuse `agent` observation for each Pi agent run.
+- Adds a `pi.turn` span for every Pi turn, with generations and tools nested beneath it.
 - Records serialized provider payloads after context filtering and finalized assistant outputs.
 - Records provider, model, stop reason, token usage, and known non-zero reported cost.
 - Records normalized tool inputs, finalized outputs, duration, and failures as child spans.
@@ -71,8 +72,9 @@ Restart Pi after changing credentials, endpoint, environment, or release. The is
 
 Each `pi.agent` native `agent` observation contains:
 
-- a `pi.llm` native `generation` for every provider request;
-- a `pi.tool.<tool-name>` native `tool` observation for every tool execution;
+- a `pi.turn` native `span` for every Pi turn, including its index, stop reason, tool-result count, duration, and failure status;
+- a `pi.llm` native `generation` under the active turn for every provider request;
+- a `pi.tool.<tool-name>` native `tool` observation under the active turn for every tool execution;
 - the Pi session id, working directory, mode, provider, and model;
 - generation token usage and positive total cost when Pi reports a known price;
 - error levels and status messages for failed provider responses, model calls, and tools.

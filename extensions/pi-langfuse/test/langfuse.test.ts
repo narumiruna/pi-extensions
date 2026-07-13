@@ -14,6 +14,7 @@ import {
 	MAX_CAPTURE_BYTES,
 	type Observation,
 	type ObservationAttributes,
+	type ObservationType,
 	sanitizeTraceValue,
 	type TraceBackend,
 	TraceRecorder,
@@ -27,7 +28,7 @@ class FakeObservation implements Observation {
 	constructor(
 		readonly name: string,
 		readonly attributes: ObservationAttributes,
-		readonly type: "agent" | "generation" | "tool",
+		readonly type: ObservationType,
 		readonly parent?: Observation,
 	) {}
 
@@ -55,7 +56,7 @@ class FakeBackend implements TraceBackend {
 	start(
 		name: string,
 		attributes: ObservationAttributes,
-		options: { asType: "agent" | "generation" | "tool"; parent?: Observation },
+		options: { asType: ObservationType; parent?: Observation },
 	) {
 		const observation = new FakeObservation(name, attributes, options.asType, options.parent);
 		this.observations.push(observation);
@@ -333,6 +334,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		"tool_execution_start",
 		"tool_result",
 		"turn_end",
+		"turn_start",
 	]);
 
 	const { ctx } = createMockContext({
@@ -352,6 +354,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		system: "system after modifiers",
 		messages: [{ role: "user", content: "Hello after context filters" }],
 	};
+	await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
 	await mock.events.get("before_provider_request")?.[0]?.({ payload: finalPayload }, ctx);
 	await mock.events.get("turn_end")?.[0]?.(
 		{
@@ -370,17 +373,28 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	);
 	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
-	assert.equal(backend.observations.length, 2);
+	assert.equal(backend.observations.length, 3);
 	assert.equal(
 		backend.observations.every((observation) => observation.ended),
 		true,
 	);
 	assert.equal(backend.flushes, 0);
-	assert.deepEqual(backend.observations[1]?.attributes.input, finalPayload);
-	assert.deepEqual(backend.observations[1]?.updates.at(-1)?.output, [
+	const [root, turn, generation] = backend.observations;
+	assert.equal(turn?.name, "pi.turn");
+	assert.equal(turn?.parent, root);
+	assert.equal(generation?.parent, turn);
+	assert.deepEqual(turn?.attributes.metadata, { "pi.turn.index": 0 });
+	assert.deepEqual(turn?.updates.at(-1)?.metadata, {
+		"pi.turn.index": 0,
+		"pi.turn.stop_reason": "stop",
+		"pi.turn.tool_result_count": 0,
+	});
+	assert.deepEqual(generation?.attributes.input, finalPayload);
+	assert.deepEqual(generation?.updates.at(-1)?.output, [
 		{ type: "text", text: "Hi after message transforms" },
 	]);
 
+	await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 2 }, ctx);
 	await mock.events.get("before_provider_request")?.[0]?.(
 		{ payload: { messages: [{ role: "user", content: "retry" }] } },
 		ctx,
@@ -402,12 +416,14 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	);
 	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
-	assert.equal(backend.observations.length, 4);
-	assert.deepEqual(backend.observations[2]?.attributes.input, {
+	assert.equal(backend.observations.length, 6);
+	assert.deepEqual(backend.observations[3]?.attributes.input, {
 		prompt: "[automatic continuation]",
 	});
+	assert.equal(backend.observations[4]?.name, "pi.turn");
+	assert.equal(backend.observations[5]?.parent, backend.observations[4]);
 	assert.equal(
-		backend.observations.slice(2).every((observation) => observation.ended),
+		backend.observations.slice(3).every((observation) => observation.ended),
 		true,
 	);
 	assert.equal(backend.flushes, 0);
@@ -477,6 +493,7 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 		{ prompt: "edit", images: [], systemPrompt: "system" },
 		ctx,
 	);
+	await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
 	await mock.events.get("tool_execution_start")?.[0]?.(
 		{
 			toolCallId: "call-1",
@@ -510,6 +527,8 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 	);
 
 	const tool = backend.observations.at(-1);
+	assert.equal(backend.observations[1]?.name, "pi.turn");
+	assert.equal(tool?.parent, backend.observations[1]);
 	assert.equal(tool?.attributes.input, undefined);
 	assert.deepEqual(tool?.updates.find((update) => update.input !== undefined)?.input, {
 		path: "file.ts",
@@ -865,10 +884,15 @@ test("isolated runtime preserves the global provider and exports native observat
 		captureContent: true,
 	});
 	recorder.beginAgent({ prompt: "hello" });
+	recorder.beginTurn(0);
 	recorder.beginGeneration({ payload: { messages: [] } });
-	recorder.finishAssistant({ role: "assistant", content: "world" });
+	recorder.finishAssistant({ role: "assistant", content: "world", stopReason: "toolUse" });
 	recorder.beginTool("call", "read", { path: "file" });
 	recorder.finishTool("call", { content: "content" });
+	recorder.finishTurn(0, {
+		message: { role: "assistant", stopReason: "toolUse" },
+		toolResultCount: 1,
+	});
 	recorder.settle();
 	await recorder.flush();
 
@@ -876,11 +900,14 @@ test("isolated runtime preserves the global provider and exports native observat
 	assert.deepEqual(spans.map((span) => span.attributes["langfuse.observation.type"]).sort(), [
 		"agent",
 		"generation",
+		"span",
 		"tool",
 	]);
 	const root = spans.find((span) => span.name === "pi.agent");
-	for (const child of spans.filter((span) => span.name !== "pi.agent")) {
-		assert.equal(child.parentSpanContext?.spanId, root?.spanContext().spanId);
+	const turn = spans.find((span) => span.name === "pi.turn");
+	assert.equal(turn?.parentSpanContext?.spanId, root?.spanContext().spanId);
+	for (const child of spans.filter((span) => ["pi.llm", "pi.tool.read"].includes(span.name))) {
+		assert.equal(child.parentSpanContext?.spanId, turn?.spanContext().spanId);
 	}
 	await backend.shutdown();
 	await backend.shutdown();

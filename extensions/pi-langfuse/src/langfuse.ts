@@ -182,6 +182,17 @@ export function createLangfuseExtension(
 			});
 		});
 
+		pi.on("turn_start", (event, ctx) => {
+			if (!recorder) return;
+			if (!recorder.hasActiveTrace()) {
+				recorder.beginAgent({
+					prompt: "[automatic continuation]",
+					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+				});
+			}
+			recorder.beginTurn(event.turnIndex);
+		});
+
 		pi.on("before_provider_request", (event, ctx) => {
 			if (!recorder) return;
 			if (!recorder.hasActiveTrace()) {
@@ -199,6 +210,10 @@ export function createLangfuseExtension(
 
 		pi.on("turn_end", (event) => {
 			if (event.message.role === "assistant") recorder?.finishAssistant(event.message);
+			recorder?.finishTurn(event.turnIndex, {
+				message: event.message,
+				toolResultCount: event.toolResults.length,
+			});
 		});
 
 		pi.on("tool_execution_start", (event) => {

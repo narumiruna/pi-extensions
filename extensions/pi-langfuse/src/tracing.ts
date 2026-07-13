@@ -25,11 +25,13 @@ export interface Observation {
 	end(): Observation;
 }
 
+export type ObservationType = "agent" | "generation" | "span" | "tool";
+
 export interface TraceBackend {
 	start(
 		name: string,
 		attributes: ObservationAttributes,
-		options: { asType: "agent" | "generation" | "tool"; parent?: Observation },
+		options: { asType: ObservationType; parent?: Observation },
 	): Observation;
 	forceFlush(): Promise<void>;
 	shutdown(): Promise<void>;
@@ -80,8 +82,15 @@ interface ToolResult {
 	isError?: boolean;
 }
 
+interface TurnResult {
+	message: { role: string; stopReason?: string; errorMessage?: string };
+	toolResultCount: number;
+}
+
 export class TraceRecorder {
 	private root: Observation | undefined;
+	private turn: Observation | undefined;
+	private turnIndex: number | undefined;
 	private generation: Observation | undefined;
 	private readonly tools = new Map<string, Observation>();
 	private lastOutput: unknown;
@@ -121,13 +130,58 @@ export class TraceRecorder {
 		});
 	}
 
+	beginTurn(turnIndex: number): void {
+		if (!this.root) return;
+		if (this.turn) this.closeTurn("Interrupted by the next Pi turn.");
+		this.turnIndex = turnIndex;
+		this.turn = this.backend.start(
+			"pi.turn",
+			{ metadata: { "pi.turn.index": turnIndex } },
+			{ asType: "span", parent: this.root },
+		);
+	}
+
+	finishTurn(turnIndex: number, result: TurnResult): void {
+		if (!this.turn) return;
+		this.closeGeneration("Turn ended without a finalized assistant message.");
+		this.closeTools("Tool span ended when the Pi turn finished.");
+
+		const mismatched = this.turnIndex !== turnIndex;
+		const failed =
+			result.message.role === "assistant" &&
+			(result.message.stopReason === "error" || Boolean(result.message.errorMessage));
+		this.turn.update({
+			metadata: {
+				"pi.turn.index": this.turnIndex ?? turnIndex,
+				"pi.turn.tool_result_count": result.toolResultCount,
+				...(result.message.stopReason
+					? { "pi.turn.stop_reason": result.message.stopReason }
+					: {}),
+			},
+			...(failed
+				? {
+						level: "ERROR" as const,
+						statusMessage: result.message.errorMessage ?? "The Pi turn failed.",
+					}
+				: mismatched
+					? {
+							level: "WARNING" as const,
+							statusMessage: `Turn ${turnIndex} ended while turn ${this.turnIndex} was active.`,
+						}
+					: {}),
+		});
+		this.turn.end();
+		this.turn = undefined;
+		this.turnIndex = undefined;
+	}
+
 	beginGeneration(input: BeginGenerationInput): void {
 		if (!this.root) return;
 		this.closeGeneration("Interrupted by the next provider request.");
 		this.generation = this.backend.start(
 			"pi.llm",
 			{ input: this.capture(input.payload) },
-			{ asType: "generation", parent: this.root },
+			{ asType: "generation", parent: this.turn ?? this.root },
 		);
 	}
 
@@ -192,7 +246,7 @@ export class TraceRecorder {
 					...(args !== undefined ? { input: this.capture(args) } : {}),
 					metadata: { "pi.tool.call_id": toolCallId, "pi.tool.name": toolName },
 				},
-				{ asType: "tool", parent: this.root },
+				{ asType: "tool", parent: this.turn ?? this.root },
 			),
 		);
 	}
@@ -228,15 +282,7 @@ export class TraceRecorder {
 	}
 
 	private closeActiveTrace(statusMessage?: string): void {
-		this.closeGeneration(statusMessage ?? "Generation ended without an assistant message.");
-		for (const tool of this.tools.values()) {
-			tool.update({
-				level: "WARNING",
-				statusMessage: statusMessage ?? "Tool span ended when the agent settled.",
-			});
-			tool.end();
-		}
-		this.tools.clear();
+		this.closeTurn(statusMessage ?? "Pi turn ended when the agent settled.");
 
 		if (!this.root) return;
 		this.root.update({
@@ -250,6 +296,24 @@ export class TraceRecorder {
 		this.root.end();
 		this.root = undefined;
 		this.lastOutput = undefined;
+	}
+
+	private closeTurn(statusMessage: string): void {
+		this.closeGeneration(statusMessage);
+		this.closeTools(statusMessage);
+		if (!this.turn) return;
+		this.turn.update({ level: "WARNING", statusMessage });
+		this.turn.end();
+		this.turn = undefined;
+		this.turnIndex = undefined;
+	}
+
+	private closeTools(statusMessage: string): void {
+		for (const tool of this.tools.values()) {
+			tool.update({ level: "WARNING", statusMessage });
+			tool.end();
+		}
+		this.tools.clear();
 	}
 
 	private closeGeneration(statusMessage: string): void {
