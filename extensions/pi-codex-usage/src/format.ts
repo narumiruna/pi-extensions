@@ -31,11 +31,18 @@ export function formatCodexUsageReport(report: CodexUsageReport, _cacheAgeMs?: n
 		if (!isPrimaryCodexSnapshot(snapshot)) {
 			lines.push(`  ${label} limit:`);
 		}
-		if (snapshot.primary) lines.push(formatWindowLine("5h limit:", snapshot.primary));
-		if (snapshot.secondary) lines.push(formatWindowLine("Weekly limit:", snapshot.secondary));
+		if (snapshot.primary) lines.push(formatWindowLine(snapshot.primary, "5h"));
+		if (snapshot.secondary) lines.push(formatWindowLine(snapshot.secondary, "weekly"));
 		if (!snapshot.primary && !snapshot.secondary) {
 			lines.push("  Limits unavailable for this account");
 		}
+	}
+
+	if (report.resetCredits) {
+		if (report.snapshots.length > 0) lines.push("");
+		lines.push(
+			`  ${"Usage limit resets:".padEnd(LIMIT_VALUE_COLUMN)}${report.resetCredits.availableCount} available`,
+		);
 	}
 
 	return lines.join("\n");
@@ -49,8 +56,16 @@ export function formatCodexUsageStatusline(
 	if (!snapshot) return "usage unavailable";
 
 	const parts = [formatStatuslinePrefix(snapshot)];
-	if (snapshot.primary) parts.push(`${formatRemainingPercent(snapshot.primary)} 5h`);
-	if (snapshot.secondary) parts.push(`${formatRemainingPercent(snapshot.secondary)} wk`);
+	if (snapshot.primary) {
+		parts.push(
+			`${formatRemainingPercent(snapshot.primary)} ${formatWindowLabel(snapshot.primary, "5h", true)}`,
+		);
+	}
+	if (snapshot.secondary) {
+		parts.push(
+			`${formatRemainingPercent(snapshot.secondary)} ${formatWindowLabel(snapshot.secondary, "weekly", true)}`,
+		);
+	}
 	if (parts.length === 1 && snapshot.credits) parts.push(formatCredits(snapshot.credits));
 	return parts.join(" ");
 }
@@ -171,8 +186,32 @@ function isPrimaryCodexSnapshot(snapshot: NormalizedRateLimitSnapshot): boolean 
 	);
 }
 
-function formatWindowLine(label: string, window: NormalizedRateLimitWindow): string {
+function formatWindowLine(
+	window: NormalizedRateLimitWindow,
+	fallback: "5h" | "weekly",
+): string {
+	const label = `${formatWindowLabel(window, fallback, false)} limit:`;
 	return `  ${label.padEnd(LIMIT_VALUE_COLUMN)}${formatWindow(window)}`;
+}
+
+function formatWindowLabel(
+	window: NormalizedRateLimitWindow,
+	fallback: "5h" | "weekly",
+	compact: boolean,
+): string {
+	const minutes = window.windowMinutes;
+	if (!minutes || !Number.isFinite(minutes) || minutes <= 0) {
+		return compact && fallback === "weekly" ? "wk" : capitalize(fallback);
+	}
+	if (minutes === 10_080) return compact ? "wk" : "Weekly";
+	if (minutes % 10_080 === 0) return `${minutes / 10_080}w`;
+	if (minutes % 1_440 === 0) return `${minutes / 1_440}d`;
+	if (minutes % 60 === 0) return `${minutes / 60}h`;
+	return `${minutes}m`;
+}
+
+function capitalize(value: string): string {
+	return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
 }
 
 function formatWindow(window: NormalizedRateLimitWindow): string {
@@ -220,37 +259,6 @@ export function formatQueryErrors(errors: UsageQueryError[]): string {
 		"Tip: use a Pi OpenAI Codex model or run /login for OpenAI ChatGPT Plus/Pro. If Pi auth is unavailable, install Codex CLI and run codex login for the fallback.",
 	);
 	return lines.join("\n");
-}
-
-function formatPlanType(planType: string): string {
-	const key = planType
-		.replace(/([a-z])([A-Z])/g, "$1_$2")
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "_");
-	if (key === "pro_lite" || key === "prolite") return "Pro Lite";
-	if (key === "team" || key === "self_serve_business_usage_based" || key === "business") {
-		return "Business";
-	}
-	if (key === "enterprise_cbp_usage_based") return "Enterprise";
-
-	const normalized = planType
-		.replace(/([a-z])([A-Z])/g, "$1 $2")
-		.replace(/[_-]+/g, " ")
-		.trim();
-	if (!normalized) return planType;
-	return normalized
-		.split(/\s+/)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-		.join(" ");
-}
-
-function formatDuration(milliseconds: number): string {
-	const seconds = Math.max(0, Math.round(milliseconds / 1000));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.round(seconds / 60);
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.round(minutes / 60);
-	return `${hours}h`;
 }
 
 function formatNumber(value: number, fallback: string): string {

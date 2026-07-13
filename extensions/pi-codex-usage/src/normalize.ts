@@ -1,14 +1,19 @@
 import type {
 	AppServerCreditsSnapshot,
+	AppServerRateLimitResetCredit,
+	AppServerRateLimitResetCredits,
 	AppServerRateLimitResponse,
 	AppServerRateLimitSnapshot,
 	AppServerWindowSnapshot,
 	BackendAdditionalRateLimit,
 	BackendCreditsSnapshot,
 	BackendRateLimitDetails,
+	BackendRateLimitResetCredits,
 	BackendWindowSnapshot,
 	CodexUsageReport,
 	NormalizedCredits,
+	NormalizedRateLimitResetCredit,
+	NormalizedRateLimitResetCredits,
 	NormalizedRateLimitSnapshot,
 	NormalizedRateLimitWindow,
 	RateLimitStatusPayload,
@@ -29,27 +34,30 @@ export function normalizeBackendPayload(
 		? payload.additional_rate_limits
 		: [];
 	for (const item of additional) {
-		const additionalLimit = assertObject(
-			item,
-			"additional rate limit",
-		) as BackendAdditionalRateLimit;
+		const additionalLimit = asObject(item) as BackendAdditionalRateLimit | undefined;
+		if (!additionalLimit) continue;
 		const limitId =
 			asString(additionalLimit.metered_feature) ?? asString(additionalLimit.limit_name);
 		if (!limitId) continue;
-		const snapshot = normalizeBackendSnapshot(
-			limitId,
-			asString(additionalLimit.limit_name),
-			additionalLimit.rate_limit,
-			undefined,
-		);
-		if (snapshot) snapshots.push(snapshot);
+		try {
+			const snapshot = normalizeBackendSnapshot(
+				limitId,
+				asString(additionalLimit.limit_name),
+				additionalLimit.rate_limit,
+				undefined,
+			);
+			if (snapshot) snapshots.push(snapshot);
+		} catch {
+			// Optional additional buckets must not hide otherwise usable primary/reset usage.
+		}
 	}
 
-	if (snapshots.length === 0) {
-		throw new Error("Codex usage endpoint returned no displayable rate-limit windows.");
+	const resetCredits = normalizeBackendRateLimitResetCredits(payload.rate_limit_reset_credits);
+	if (snapshots.length === 0 && !resetCredits) {
+		throw new Error("Codex usage endpoint returned no displayable usage data.");
 	}
 
-	return { source, capturedAt, planType, snapshots };
+	return { source, capturedAt, planType, snapshots, resetCredits };
 }
 
 function normalizeBackendSnapshot(
@@ -95,13 +103,27 @@ function normalizeBackendCredits(value: unknown): NormalizedCredits | undefined 
 	return { hasCredits, unlimited, balance: asString(credits.balance) };
 }
 
+function normalizeBackendRateLimitResetCredits(
+	value: unknown,
+): NormalizedRateLimitResetCredits | undefined {
+	const resetCredits = asObject(value) as BackendRateLimitResetCredits | undefined;
+	const availableCount = asNonnegativeInteger(resetCredits?.available_count);
+	return availableCount === undefined ? undefined : { availableCount };
+}
+
 export function normalizeAppServerResponse(
 	response: AppServerRateLimitResponse,
 	capturedAt: number,
 ): CodexUsageReport {
 	const snapshots: NormalizedRateLimitSnapshot[] = [];
-	const addSnapshot = (raw: unknown, fallbackId: string) => {
-		const snapshot = normalizeAppServerSnapshot(raw, fallbackId);
+	const addSnapshot = (raw: unknown, fallbackId: string, optional = false) => {
+		let snapshot: NormalizedRateLimitSnapshot | undefined;
+		try {
+			snapshot = normalizeAppServerSnapshot(raw, fallbackId);
+		} catch (error) {
+			if (optional) return;
+			throw error;
+		}
 		if (!snapshot) return;
 		const existingIndex = snapshots.findIndex((item) => item.limitId === snapshot.limitId);
 		if (existingIndex >= 0)
@@ -110,18 +132,26 @@ export function normalizeAppServerResponse(
 	};
 
 	addSnapshot(response.rateLimits, "codex");
-	if (response.rateLimitsByLimitId && typeof response.rateLimitsByLimitId === "object") {
-		for (const [limitId, raw] of Object.entries(response.rateLimitsByLimitId)) {
-			addSnapshot(raw, limitId);
+	const snapshotsByLimitId = asObject(response.rateLimitsByLimitId);
+	if (snapshotsByLimitId) {
+		for (const [limitId, raw] of Object.entries(snapshotsByLimitId)) {
+			if (limitId) addSnapshot(raw, limitId, true);
 		}
 	}
 
-	if (snapshots.length === 0) {
-		throw new Error("codex app-server returned no displayable rate-limit windows.");
+	const resetCredits = normalizeAppServerRateLimitResetCredits(response.rateLimitResetCredits);
+	if (snapshots.length === 0 && !resetCredits) {
+		throw new Error("codex app-server returned no displayable usage data.");
 	}
 
 	const planType = asAppServerPlanType(response.rateLimits);
-	return { source: "codex-app-server", capturedAt, planType, snapshots };
+	return {
+		source: "codex-app-server",
+		capturedAt,
+		planType,
+		snapshots,
+		resetCredits,
+	};
 }
 
 function asAppServerPlanType(raw: unknown): string | undefined {
@@ -172,6 +202,49 @@ function normalizeAppServerCredits(value: unknown): NormalizedCredits | undefine
 	return { hasCredits, unlimited, balance: asString(credits.balance) };
 }
 
+function normalizeAppServerRateLimitResetCredits(
+	value: unknown,
+): NormalizedRateLimitResetCredits | undefined {
+	const resetCredits = asObject(value) as AppServerRateLimitResetCredits | undefined;
+	const availableCount = asNonnegativeInteger(resetCredits?.availableCount);
+	if (availableCount === undefined) return undefined;
+
+	const rawCredits = resetCredits?.credits;
+	if (!Array.isArray(rawCredits)) return { availableCount };
+
+	const credits = rawCredits
+		.map(normalizeAppServerRateLimitResetCredit)
+		.filter((credit): credit is NormalizedRateLimitResetCredit => credit !== undefined)
+		.slice(0, availableCount);
+	if (rawCredits.length > 0 && credits.length === 0 && availableCount > 0) {
+		return { availableCount };
+	}
+	return { availableCount, credits };
+}
+
+function normalizeAppServerRateLimitResetCredit(
+	value: unknown,
+): NormalizedRateLimitResetCredit | undefined {
+	const credit = asObject(value) as AppServerRateLimitResetCredit | undefined;
+	const id = asString(credit?.id);
+	if (!id) return undefined;
+
+	const normalized: NormalizedRateLimitResetCredit = { id };
+	const resetType = asString(credit?.resetType);
+	const status = asString(credit?.status);
+	const grantedAt = asNumber(credit?.grantedAt);
+	const expiresAt = asNumber(credit?.expiresAt);
+	const title = asString(credit?.title);
+	const description = asString(credit?.description);
+	if (resetType !== undefined) normalized.resetType = resetType;
+	if (status !== undefined) normalized.status = status;
+	if (grantedAt !== undefined) normalized.grantedAt = grantedAt;
+	if (expiresAt !== undefined) normalized.expiresAt = expiresAt;
+	if (title !== undefined) normalized.title = title;
+	if (description !== undefined) normalized.description = description;
+	return normalized;
+}
+
 function mergeSnapshot(
 	left: NormalizedRateLimitSnapshot,
 	right: NormalizedRateLimitSnapshot,
@@ -186,9 +259,13 @@ function mergeSnapshot(
 }
 
 function assertObject(value: unknown, description: string): Record<string, unknown> {
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		throw new Error(`${description} was not an object.`);
-	}
+	const object = asObject(value);
+	if (!object) throw new Error(`${description} was not an object.`);
+	return object;
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	return value as Record<string, unknown>;
 }
 
@@ -207,4 +284,10 @@ function asNumber(value: unknown): number | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
+}
+
+function asNonnegativeInteger(value: unknown): number | undefined {
+	const parsed = asNumber(value);
+	if (parsed === undefined || !Number.isSafeInteger(parsed)) return undefined;
+	return Math.max(0, parsed);
 }

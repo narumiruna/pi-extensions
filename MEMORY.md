@@ -17,6 +17,7 @@
 - Extension statusline entries should be activity-based: only show an extension in status when it is actively running, retrying, or needs attention; avoid permanent “configured/ready/on” statuses.
 - Codex usage can be queried without Codex CLI by sending Pi's `openai-codex` bearer token to `https://chatgpt.com/backend-api/wham/usage`; response uses Codex `RateLimitStatusPayload` snake_case fields.
 - `pi-codex-usage` statusline must select a rate-limit bucket by current model id/name; `gpt-5.3-codex-spark` can use its own returned bucket instead of primary `codex`.
+- Symptom: a primary Codex window can reset a week later while displaying “5h”. Cause: `primary`/`secondary` are positions, not guaranteed durations. Fix: derive window labels from `windowMinutes`, retaining positional fallbacks only when duration is absent.
 - Keep package metadata and CI/bump/publish workflows pinned to npm 11.16.0; npm 12.0 resolves shrinkwrapped overrides differently, prunes alternate-Pi installs, and cannot resolve its published provenance `sigstore`. Regenerate the lockfile when intentionally changing npm major versions.
 - New filesystem-writing Pi tools need a pre-review edge-case pass: workspace containment, absolute/`..` paths, symlink loops/escapes, duplicate paths, cancellation, process errors, protocol errors, and edit ordering.
 - New extension package source may match the root `.gitignore` `src/` rule; stage intended `extensions/<pkg>/src/*.ts` with `git add -f`.
@@ -42,6 +43,7 @@
 
 ## TASTE
 
+- Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
 - Prefer JSON config files over environment variables for user-facing settings, including token configuration when it is appropriate for the product. Add new environment variables only when they serve a clear purpose, such as secrets, deployment workflows, automation, or compatibility with existing integrations.

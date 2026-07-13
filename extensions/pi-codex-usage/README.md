@@ -9,8 +9,10 @@ Use it when you want a quick Codex-style usage summary without leaving Pi or req
 ## ✨ Features
 
 - Adds a `/codex-status` command to Pi.
-- Shows Codex plan, 5-hour and weekly usage windows, reset times, and credits.
+- Shows Codex usage windows, reset times, credits, and earned usage-limit resets.
+- Labels each window from its reported duration (for example, 5-hour or weekly).
 - Displays additional usage buckets when the Codex backend returns them.
+- Reads the authoritative available reset count from the current Codex usage contract.
 - Automatically shows a compact statusline item while the current Pi model uses `openai-codex`.
 - Uses Pi's own OpenAI Codex subscription auth first.
 - Falls back to `codex app-server --listen stdio://` only when Pi auth is unavailable.
@@ -59,6 +61,8 @@ information on rate limits and credits
   GPT-5.3-Codex-Spark limit:
   5h limit:                    [████████████████████] 100% left (resets 19:16)
   Weekly limit:                [████████████████████] 100% left (resets 00:10 on 21 May)
+
+  Usage limit resets:          2 available
 ```
 
 ## 📊 Statusline behavior
@@ -70,7 +74,7 @@ codex 59% 5h 61% wk
 codex spark 100% 5h 100% wk
 ```
 
-`@narumitw/pi-statusline` adds the default `📊` icon unless configured otherwise. The statusline value uses the cached usage snapshot and refreshes every five minutes while the current model remains `openai-codex`.
+`@narumitw/pi-statusline` adds the default `📊` icon unless configured otherwise. The statusline value uses the cached usage snapshot and refreshes every five minutes while the current model remains `openai-codex`. Window labels come from the duration reported by Codex, with 5-hour/weekly fallbacks for older responses that omit it.
 When the selected model has its own returned usage bucket, such as `gpt-5.3-codex-spark`, the statusline switches to that bucket instead of the default `codex` bucket.
 Switching away from an OpenAI Codex model clears the item.
 
@@ -85,6 +89,8 @@ Use `/codex-status --no-statusline` for a one-off notification without updating 
 
 This means Codex CLI is optional. Users who already use a Pi OpenAI Codex model or have logged in to Pi with ChatGPT Plus/Pro subscription auth can use the direct Pi-auth path.
 
+The direct `/wham/usage` response can include the snake_case `rate_limit_reset_credits` summary. Current Codex app-server responses expose the same authoritative count as camelCase `rateLimitResetCredits` and may also include capped detail rows. The extension accepts both forms and keeps the compact statusline focused on rate-limit windows.
+
 The extension does not read Pi or Codex auth files directly, and it does not expose bearer tokens in error messages.
 
 ## 🚧 Limitations
@@ -92,6 +98,7 @@ The extension does not read Pi or Codex auth files directly, and it does not exp
 - OpenAI API keys are not ChatGPT Codex subscription auth and do not expose this quota.
 - Usage data is a snapshot. Statusline and command results are cached for five minutes unless `--refresh` is used.
 - The fallback path requires Codex CLI to be installed and logged in.
+- `/codex-status` reports earned usage-limit resets but does not redeem them.
 
 ## 🗂️ Package layout
 
