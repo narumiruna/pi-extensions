@@ -402,7 +402,7 @@ test("registered detached spawn returns while running and publishes each in-proc
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-tools-"));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	writeFileSync(
-		path.join(agentDir, "pi-subagents-config.json"),
+		path.join(agentDir, "pi-subagents.json"),
 		JSON.stringify({ stateful: { transport: "in-process", persistence: false } }),
 	);
 	try {

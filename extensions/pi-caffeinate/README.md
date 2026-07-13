@@ -141,7 +141,7 @@ PI_CAFFEINATE_COMMAND='systemd-inhibit --what=idle:sleep --why="pi running" --mo
 
 The custom command is parsed with shell-like quoting and is run directly without a shell. `PI_CAFFEINATE_COMMAND` takes precedence over the saved mode; `/caffeinate status` reports when a custom command is active.
 
-Deprecated: `PI_CAFFEINATE_ICON` still works for now. If you use `@narumitw/pi-statusline`, move the icon to `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-statusline-settings.json`:
+Deprecated: `PI_CAFFEINATE_ICON` still works for now. If you use `@narumitw/pi-statusline`, move the icon to `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-statusline.json`:
 
 ```json
 {
@@ -151,7 +151,7 @@ Deprecated: `PI_CAFFEINATE_ICON` still works for now. If you use `@narumitw/pi-s
 }
 ```
 
-Without `@narumitw/pi-statusline`, keep using `PI_CAFFEINATE_ICON` during the compatibility window. In `pi-statusline-settings.json`, use an empty string to show the caffeinate status without an icon.
+Without `@narumitw/pi-statusline`, keep using `PI_CAFFEINATE_ICON` during the compatibility window. In `pi-statusline.json`, use an empty string to show the caffeinate status without an icon.
 
 ## 🧠 Why use pi-caffeinate?
 

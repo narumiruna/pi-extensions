@@ -53,7 +53,7 @@ Unset or invalid values fall back to `tokyo-night`. Both presets keep the same e
 
 ## ⚙️ Extension status icons
 
-Extension statuses use built-in icons by status key. Override or suppress them in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-statusline-settings.json`:
+Extension statuses use built-in icons by status key. Override or suppress them in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-statusline.json`:
 
 ```json
 {
@@ -69,6 +69,8 @@ Extension statuses use built-in icons by status key. Override or suppress them i
   }
 }
 ```
+
+Compatibility: a valid legacy `pi-statusline-settings.json` is migrated automatically to `pi-statusline.json`. If both files exist, the new filename takes precedence.
 
 - Exact status key: always wins, e.g. `"goal"` or `"foo:server"`.
 - Installed extension id: for installed packages, use the package name/source such as `"@vendor/pi-foo"`, `"npm:@vendor/pi-foo@1.2.3"`, `"pi-foo"`, or the derived key `"foo"`.

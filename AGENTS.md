@@ -25,6 +25,7 @@ Run commands from the repository root unless noted otherwise.
 - TypeScript uses `module`/`moduleResolution: NodeNext`, `target: ES2022`, `strict: true`, and `noEmit: true`.
 - Biome is authoritative: tabs, 100-column line width, double quotes, semicolons, and recommended lint rules.
 - Keep extension packages small and self-contained. Add dependencies only when they solve a current extension need.
+- Name an active extension-managed user JSON file `<unscoped-package-name>.json`; use the same basename for project overrides. Credential sensitivity changes permissions and migration handling, not the basename. Use variants such as `.local` or state filenames only when they communicate a concrete storage semantic.
 - When adding an extension, include the source in `pi.extensions`, package publish `files`, and root workspace-aware scripts/recipes if users need them.
 - When a source file exceeds 1,000 lines, it must be reviewed for decomposition. Split it along clear responsibility boundaries when doing so improves cohesion, maintainability, or testability. Do not split files mechanically solely to satisfy the line limit. Generated, vendored, migration, snapshot, and primarily declarative files may be exempt.
 

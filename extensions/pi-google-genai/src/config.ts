@@ -1,14 +1,31 @@
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+	access,
+	chmod,
+	link,
+	mkdir,
+	lstat,
+	readFile,
+	rename,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 export const DEFAULT_TIMEOUT_MS = 60_000;
 export const MAX_TIMEOUT_MS = 2_147_483_647;
-export const GOOGLE_GENAI_TOOL_NAMES = ["google_search", "google_maps", "google_url_context"] as const;
-const CONFIG_FILE_NAME = "google-genai.json";
+export const GOOGLE_GENAI_TOOL_NAMES = [
+	"google_search",
+	"google_maps",
+	"google_url_context",
+] as const;
+const CONFIG_FILE_NAME = "pi-google-genai.json";
+const LEGACY_CONFIG_FILE_NAME = "google-genai.json";
 export type GoogleGenaiToolName = (typeof GOOGLE_GENAI_TOOL_NAMES)[number];
 export interface GoogleGenaiConfig {
 	apiKey?: string;
@@ -35,11 +52,12 @@ export function normalizeGoogleGenaiSettings(value: unknown): GoogleGenaiConfig 
 export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> {
 	const path = googleGenaiConfigPath();
 	const warnings: string[] = [];
-	await ensureConfigPermissions(path, warnings);
-	const raw = await readJsonIfExists(path, warnings);
+	const readPath = await prepareGoogleGenaiConfigPath(path, warnings);
+	await ensureConfigPermissions(readPath, warnings);
+	const raw = await readJsonIfExists(readPath, warnings);
 	const configLoaded = isObject(raw);
 	if (raw !== undefined && !configLoaded) {
-		warnings.push("google-genai.json must contain a JSON object; ignoring config.");
+		warnings.push(`${basename(readPath)} must contain a JSON object; ignoring config.`);
 	}
 	const normalized = normalizeConfigWithWarnings(configLoaded ? raw : undefined);
 	return {
@@ -57,7 +75,7 @@ export async function resolveGoogleGenaiAuth(
 	if (config.apiKey) {
 		if (isUnsupportedConfigApiKey(config.apiKey)) {
 			throw new Error(
-				"Interpolation and command syntax are not supported in google-genai.json apiKey. Use a literal key, /login google, or GEMINI_API_KEY.",
+				`Interpolation and command syntax are not supported in ${CONFIG_FILE_NAME} apiKey. Use a literal key, /login google, or GEMINI_API_KEY.`,
 			);
 		}
 		return config.apiKey;
@@ -92,7 +110,10 @@ export function assertSafeApiUrl(apiUrl: string) {
 	}
 }
 
-function normalizeConfigWithWarnings(value: unknown): { config: GoogleGenaiConfig; warnings: string[] } {
+function normalizeConfigWithWarnings(value: unknown): {
+	config: GoogleGenaiConfig;
+	warnings: string[];
+} {
 	const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
 	const raw = input as Record<string, unknown>;
 	const warnings: string[] = [];
@@ -112,7 +133,7 @@ function normalizeConfigWithWarnings(value: unknown): { config: GoogleGenaiConfi
 function normalizeTools(value: unknown, warnings: string[]) {
 	if (value === undefined) return [...GOOGLE_GENAI_TOOL_NAMES];
 	if (!Array.isArray(value)) {
-		warnings.push("google-genai.json tools must be an array; defaulting to all tools enabled.");
+		warnings.push(`${CONFIG_FILE_NAME} tools must be an array; defaulting to all tools enabled.`);
 		return [...GOOGLE_GENAI_TOOL_NAMES];
 	}
 	const selected: GoogleGenaiToolName[] = [];
@@ -145,13 +166,134 @@ function normalizeConfigTimeout(value: unknown, warnings: string[]) {
 	if (value === undefined) return undefined;
 	if (isValidTimeoutMs(value)) return value;
 	warnings.push(
-		`google-genai.json timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} milliseconds; ignoring value.`,
+		`${CONFIG_FILE_NAME} timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} milliseconds; ignoring value.`,
 	);
 	return undefined;
 }
 
 function isValidTimeoutMs(value: unknown): value is number {
-	return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
+	return (
+		typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS
+	);
+}
+
+async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: string[]) {
+	const legacyPath = join(dirname(canonicalPath), LEGACY_CONFIG_FILE_NAME);
+	if (await exists(canonicalPath)) {
+		if (await exists(legacyPath)) {
+			await ensureConfigPermissions(legacyPath, warnings);
+			warnings.push(
+				`${LEGACY_CONFIG_FILE_NAME} ignored because ${CONFIG_FILE_NAME} takes precedence.`,
+			);
+		}
+		return canonicalPath;
+	}
+	if (!(await exists(legacyPath))) return canonicalPath;
+
+	await ensureConfigPermissions(legacyPath, warnings);
+	const legacyWarnings: string[] = [];
+	const legacy = await readJsonIfExists(legacyPath, legacyWarnings);
+	if (!isObject(legacy)) {
+		warnings.push(...legacyWarnings);
+		return legacyPath;
+	}
+	try {
+		const installedContents = `${JSON.stringify(legacy, null, "\t")}\n`;
+		const installedIdentity = await installPrivateConfigExclusively(
+			canonicalPath,
+			installedContents,
+		);
+		await chmod(canonicalPath, 0o600);
+		if (!(await jsonFileEquals(legacyPath, legacy))) {
+			if (
+				await removeFileIfIdentityMatches(canonicalPath, installedIdentity, installedContents)
+			) {
+				warnings.push(
+					`${LEGACY_CONFIG_FILE_NAME} changed during migration; the stale ${CONFIG_FILE_NAME} snapshot was removed and the legacy file was used for this session.`,
+				);
+				return legacyPath;
+			}
+			warnings.push(
+				`${LEGACY_CONFIG_FILE_NAME} changed during migration, but ${CONFIG_FILE_NAME} was replaced concurrently and takes precedence.`,
+			);
+			return canonicalPath;
+		}
+		try {
+			await rm(legacyPath);
+			warnings.push(
+				`Google GenAI config migrated from ${LEGACY_CONFIG_FILE_NAME} to ${CONFIG_FILE_NAME}.`,
+			);
+		} catch (error) {
+			warnings.push(
+				`Google GenAI config migrated to ${CONFIG_FILE_NAME}, but ${LEGACY_CONFIG_FILE_NAME} could not be removed: ${formatError(error)}.`,
+			);
+		}
+		return canonicalPath;
+	} catch (error) {
+		if (await exists(canonicalPath)) {
+			warnings.push(
+				`${LEGACY_CONFIG_FILE_NAME} ignored because ${CONFIG_FILE_NAME} was created concurrently.`,
+			);
+			return canonicalPath;
+		}
+		warnings.push(
+			`Google GenAI config migration failed: ${formatError(error)}. The legacy file was used for this session.`,
+		);
+		return legacyPath;
+	}
+}
+
+async function jsonFileEquals(filePath: string, expected: object) {
+	try {
+		return (
+			JSON.stringify(JSON.parse(await readFile(filePath, "utf8"))) === JSON.stringify(expected)
+		);
+	} catch {
+		return false;
+	}
+}
+
+type FileIdentity = Pick<Awaited<ReturnType<typeof lstat>>, "dev" | "ino">;
+
+async function installPrivateConfigExclusively(
+	filePath: string,
+	contents: string,
+): Promise<FileIdentity> {
+	const tempFile = join(dirname(filePath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
+	try {
+		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
+		await chmod(tempFile, 0o600);
+		const identity = await lstat(tempFile);
+		await link(tempFile, filePath);
+		return { dev: identity.dev, ino: identity.ino };
+	} finally {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+	}
+}
+
+async function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
+	try {
+		const current = await lstat(filePath);
+		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if ((await readFile(filePath, "utf8")) !== expectedContents) return false;
+		await rm(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function exists(path: string) {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function readJsonIfExists(path: string, warnings: string[]) {
@@ -159,7 +301,9 @@ async function readJsonIfExists(path: string, warnings: string[]) {
 		return JSON.parse(await readFile(path, "utf8"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-		warnings.push(`Failed to read ${path}: ${error instanceof Error ? error.message : String(error)}`);
+		warnings.push(
+			`Failed to read ${path}: ${error instanceof Error ? error.message : String(error)}`,
+		);
 		return undefined;
 	}
 }
@@ -169,7 +313,9 @@ export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig) {
 	await mkdir(dirname(path), { recursive: true });
 	const tempFile = `${path}.${process.pid}.${Date.now()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(cleanObject(config), null, "\t")}\n`, { mode: 0o600 });
+		await writeFile(tempFile, `${JSON.stringify(cleanObject(config), null, "\t")}\n`, {
+			mode: 0o600,
+		});
 		await chmod(tempFile, 0o600);
 		await rename(tempFile, path);
 		await chmod(path, 0o600);
@@ -179,13 +325,19 @@ export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig) {
 	}
 }
 
+function formatError(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
+}
+
 async function ensureConfigPermissions(path: string, warnings: string[]) {
 	try {
 		const current = await stat(path);
 		if ((current.mode & 0o777) !== 0o600) await chmod(path, 0o600);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-		warnings.push(`Failed to enforce 0600 permissions for ${path}: ${error instanceof Error ? error.message : String(error)}`);
+		warnings.push(
+			`Failed to enforce 0600 permissions for ${path}: ${error instanceof Error ? error.message : String(error)}`,
+		);
 	}
 }
 

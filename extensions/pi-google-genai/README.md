@@ -9,7 +9,7 @@
 - `google_search` for Google Search grounding.
 - `google_maps` for Google Maps/place grounding.
 - `google_url_context` for asking about specific `http://` or `https://` URLs.
-- Uses Pi auth for Google (`/login google`, `auth.json`, runtime key, or `GEMINI_API_KEY`) unless `google-genai.json` contains a literal `apiKey`.
+- Uses Pi auth for Google (`/login google`, `auth.json`, runtime key, or `GEMINI_API_KEY`) unless `pi-google-genai.json` contains a literal `apiKey`.
 - Lets `/google-genai tools` persist which of the three tools are active.
 - Truncates large outputs and writes the full raw interaction response to a private temp file only when truncation happens.
 
@@ -36,7 +36,7 @@ pi -e ./extensions/pi-google-genai
 Config lives at:
 
 ```text
-${PI_CODING_AGENT_DIR:-~/.pi/agent}/google-genai.json
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-google-genai.json
 ```
 
 Example:
@@ -53,12 +53,14 @@ Example:
 
 The file is written as `0600`.
 
-Timeout precedence is: per-call `timeoutMs` parameter, `google-genai.json` `timeoutMs`, then
+Compatibility: a valid legacy `google-genai.json` is migrated automatically to `pi-google-genai.json` while preserving private permissions. If both files exist, the new filename takes precedence.
+
+Timeout precedence is: per-call `timeoutMs` parameter, `pi-google-genai.json` `timeoutMs`, then
 the 60000ms default. Timeout values must be integer milliseconds from 1 to 2147483647.
 
 ### 🔐 Auth precedence
 
-1. Literal `apiKey` in `google-genai.json`.
+1. Literal `apiKey` in `pi-google-genai.json`.
 2. Pi Google auth via `/login google`, `auth.json`, runtime key, or `GEMINI_API_KEY`.
 3. Missing-auth tool error.
 

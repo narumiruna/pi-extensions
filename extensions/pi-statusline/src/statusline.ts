@@ -15,7 +15,7 @@ import {
 	renderStatusline,
 	type RuntimeState,
 } from "./render.js";
-import { createDefaultConfig } from "./settings.js";
+import { consumeStatuslineSettingsNotice, createDefaultConfig } from "./settings.js";
 
 const STATUSLINE_KEY = "statusline";
 const GIT_STATUS_REFRESH_INTERVAL_MS = 30_000;
@@ -162,6 +162,8 @@ export default function statusline(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", (_event, ctx) => {
+		const settingsNotice = consumeStatuslineSettingsNotice();
+		if (settingsNotice) ctx.ui.notify(settingsNotice, "warning");
 		runtime.thinkingLevel = pi.getThinkingLevel();
 		installFooter(ctx);
 	});

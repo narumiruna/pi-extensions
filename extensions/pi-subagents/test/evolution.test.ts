@@ -1215,7 +1215,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 
 		writeFileSync(
-			path.join(dir, "pi-subagents-config.json"),
+			path.join(dir, "pi-subagents.json"),
 			JSON.stringify({ stateful: { enabled: false } }),
 		);
 		const disabled = createMockPi();

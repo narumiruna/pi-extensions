@@ -19,6 +19,7 @@ import { executeSubagent } from "./execution.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
 import type { SubagentDetails } from "./runner.js";
 import { registerStatefulSubagents } from "./stateful.js";
+import { consumeSubagentSettingsNotice, readSubagentSettings } from "./settings.js";
 
 export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof SubagentParams, SubagentDetails>({
@@ -67,6 +68,15 @@ export default function (pi: ExtensionAPI) {
 		if ((event.details as (SubagentDetails & { isError?: boolean }) | undefined)?.isError) return { isError: true };
 	});
 
+	pi.on("session_start", (_event, ctx) => {
+		let notice = consumeSubagentSettingsNotice();
+		if (!notice) {
+			readSubagentSettings();
+			notice = consumeSubagentSettingsNotice();
+		}
+		if (notice) ctx.ui.notify(notice, "warning");
+	});
+
 	registerSubagentConfigCommand(pi);
 	registerStatefulSubagents(pi);
 }
@@ -75,7 +85,9 @@ export { buildPiArgs } from "./runner.js";
 export {
 	normalizeAgentSettings,
 	normalizeSubagentSettings,
+	readSubagentSettings,
 	resolveSubagentThinkingLevel,
+	saveSubagentConfig,
 	sameToolSet,
 	uniqueToolNames,
 } from "./settings.js";

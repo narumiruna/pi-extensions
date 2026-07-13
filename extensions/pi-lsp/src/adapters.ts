@@ -1,4 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	chmodSync,
+	existsSync,
+	linkSync,
+	lstatSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -75,23 +85,132 @@ export function loadConfig(cwd = process.cwd()): LspConfig {
 	return configured ?? { servers: DEFAULT_SERVER_CONFIGS };
 }
 
+let pendingConfigNotice: string | undefined;
+
 function loadConfiguredConfig(cwd: string): LspConfig | undefined {
+	pendingConfigNotice = undefined;
 	const rawConfig = process.env.PI_LSP_CONFIG?.trim();
 	if (rawConfig) return parseConfigSource(rawConfig, cwd, "PI_LSP_CONFIG");
 
-	const projectConfig = path.join(cwd, ".pi", "lsp.json");
-	if (existsSync(projectConfig)) return parseConfigFile(projectConfig);
+	const projectConfig = path.join(cwd, ".pi", "pi-lsp.json");
+	const legacyProjectConfig = path.join(cwd, ".pi", "lsp.json");
+	if (existsSync(projectConfig)) {
+		if (existsSync(legacyProjectConfig)) {
+			pendingConfigNotice = ".pi/lsp.json ignored because .pi/pi-lsp.json takes precedence.";
+		}
+		return parseConfigFile(projectConfig);
+	}
+	if (existsSync(legacyProjectConfig)) {
+		pendingConfigNotice =
+			"Using legacy .pi/lsp.json. Rename it to .pi/pi-lsp.json; the repository file was not modified automatically.";
+		return parseConfigFile(legacyProjectConfig);
+	}
 
-	const userConfig = path.join(getAgentDir(), "lsp.json");
-	if (existsSync(userConfig)) return parseConfigFile(userConfig);
+	const userConfig = path.join(getAgentDir(), "pi-lsp.json");
+	const legacyUserConfig = path.join(getAgentDir(), "lsp.json");
+	if (existsSync(userConfig)) {
+		if (existsSync(legacyUserConfig)) {
+			pendingConfigNotice = "lsp.json ignored because pi-lsp.json takes precedence.";
+		}
+		return parseConfigFile(userConfig);
+	}
+	if (!existsSync(legacyUserConfig)) return undefined;
 
-	return undefined;
+	const legacyContents = readFileSync(legacyUserConfig, "utf8");
+	const legacy = normalizeConfig(JSON.parse(legacyContents), legacyUserConfig);
+	let installedIdentity: FileIdentity;
+	try {
+		installedIdentity = installFileExclusively(
+			userConfig,
+			legacyContents,
+			statSync(legacyUserConfig).mode & 0o777,
+		);
+	} catch (error) {
+		if (existsSync(userConfig)) {
+			pendingConfigNotice = "lsp.json ignored because pi-lsp.json was created concurrently.";
+			return parseConfigFile(userConfig);
+		}
+		pendingConfigNotice = `LSP config migration failed: ${formatError(error)}. The legacy file was used for this session.`;
+		return legacy;
+	}
+	if (!fileContentsEqual(legacyUserConfig, legacyContents)) {
+		if (removeFileIfIdentityMatches(userConfig, installedIdentity, legacyContents)) {
+			pendingConfigNotice =
+				"lsp.json changed during migration; the stale pi-lsp.json snapshot was removed and the legacy file was used for this session.";
+		} else {
+			pendingConfigNotice =
+				"lsp.json changed during migration, but pi-lsp.json was replaced concurrently and takes precedence on the next load.";
+		}
+		return legacy;
+	}
+	try {
+		rmSync(legacyUserConfig);
+		pendingConfigNotice = "LSP config migrated from lsp.json to pi-lsp.json.";
+	} catch (error) {
+		pendingConfigNotice = `LSP config migrated to pi-lsp.json, but lsp.json could not be removed: ${formatError(error)}.`;
+	}
+	return legacy;
+}
+
+type FileIdentity = { dev: number; ino: number };
+
+function installFileExclusively(filePath: string, contents: string, mode: number): FileIdentity {
+	const tempFile = path.join(path.dirname(filePath), `.pi-lsp.json.${randomUUID()}.tmp`);
+	try {
+		writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx", mode });
+		chmodSync(tempFile, mode);
+		const identity = lstatSync(tempFile);
+		linkSync(tempFile, filePath);
+		return { dev: identity.dev, ino: identity.ino };
+	} finally {
+		try {
+			rmSync(tempFile, { force: true });
+		} catch {
+			// Preserve the migration result if best-effort temp cleanup fails.
+		}
+	}
+}
+
+function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
+	try {
+		const current = lstatSync(filePath);
+		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if (readFileSync(filePath, "utf8") !== expectedContents) return false;
+		rmSync(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function fileContentsEqual(filePath: string, expected: string) {
+	try {
+		return readFileSync(filePath, "utf8") === expected;
+	} catch {
+		return false;
+	}
+}
+
+export function consumeLspConfigNotice() {
+	const notice = pendingConfigNotice;
+	pendingConfigNotice = undefined;
+	return notice;
+}
+
+function formatError(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function parseConfigSource(source: string, cwd: string, label: string): LspConfig {
 	if (source.startsWith("{")) return normalizeConfig(JSON.parse(source), label);
 	const expandedSource = expandHome(source);
-	const filePath = path.isAbsolute(expandedSource) ? expandedSource : path.resolve(cwd, expandedSource);
+	const filePath = path.isAbsolute(expandedSource)
+		? expandedSource
+		: path.resolve(cwd, expandedSource);
 	return parseConfigFile(filePath);
 }
 
@@ -115,7 +234,9 @@ function normalizeConfig(value: unknown, label: string): LspConfig {
 		const timeout = normalizeTimeout(value.timeout, label);
 		const servers = value.servers;
 		if (!isRecord(servers) || Array.isArray(servers)) {
-			throw new Error(`${label}.servers must be a JSON object mapping server names to LSP server config.`);
+			throw new Error(
+				`${label}.servers must be a JSON object mapping server names to LSP server config.`,
+			);
 		}
 		return { timeout, servers: normalizeServerMap(servers, `${label}.servers`) };
 	}
@@ -128,14 +249,13 @@ function normalizeConfig(value: unknown, label: string): LspConfig {
 }
 
 function normalizeServerMap(value: Record<string, unknown>, label: string) {
-	return Object.entries(value).map(([name, server]) => normalizeServer(name, server, `${label}.${name}`));
+	return Object.entries(value).map(([name, server]) =>
+		normalizeServer(name, server, `${label}.${name}`),
+	);
 }
 
 function isServerEntry(value: unknown) {
-	return (
-		isRecord(value) &&
-		(Array.isArray(value.command) || Array.isArray(value.extensions))
-	);
+	return isRecord(value) && (Array.isArray(value.command) || Array.isArray(value.extensions));
 }
 
 function normalizeServer(name: string, value: unknown, label: string): InternalLspServer {
@@ -198,7 +318,10 @@ const LANGUAGE_IDS: Record<string, string> = {
 };
 
 function commandFromEnvName(name: string): string {
-	return name.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase();
+	return name
+		.replace(/[^a-zA-Z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.toUpperCase();
 }
 
 function envName(name: string, suffix: "COMMAND") {

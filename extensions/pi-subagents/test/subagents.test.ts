@@ -1,18 +1,31 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
+import { consumeSubagentSettingsNotice } from "../src/settings.js";
 import subagents, {
 	buildPiArgs,
 	formatTokens,
 	formatUsageStats,
 	normalizeSubagentSettings,
 	parsePositiveInteger,
+	readSubagentSettings,
 	resolveSubagentThinkingLevel,
 	sameToolSet,
+	saveSubagentConfig,
 	uniqueToolNames,
 } from "../src/subagents.js";
 
@@ -204,6 +217,68 @@ test("subagent settings normalize known override fields only", () => {
 		},
 	);
 	assert.equal(normalizeSubagentSettings({ agents: [] }), undefined);
+});
+
+test("subagent settings migrate and save to the canonical package filename", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-migration-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const legacyPath = path.join(directory, "pi-subagents-config.json");
+		const canonicalPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			legacyPath,
+			JSON.stringify({ agents: { scout: { tools: ["read"] } }, futureOption: true }),
+		);
+		const migrationMock = createMockPi();
+		subagents(migrationMock.pi);
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			agents: { scout: { tools: ["read"] } },
+			futureOption: true,
+		});
+		assert.equal(existsSync(legacyPath), false);
+		const migrationContext = createMockContext();
+		migrationMock.events.get("session_start")?.[0]?.({}, migrationContext.ctx);
+		assert.match(migrationContext.notifications[0]?.message ?? "", /migrated/i);
+
+		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["bash"] } } }));
+		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
+		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		assert.equal(existsSync(legacyPath), true);
+
+		writeFileSync(canonicalPath, "invalid");
+		assert.equal(readSubagentSettings(), undefined);
+		assert.equal(readFileSync(legacyPath, "utf8").includes("bash"), true);
+		unlinkSync(legacyPath);
+		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
+		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		assert.equal(consumeSubagentSettingsNotice(), undefined);
+		unlinkSync(canonicalPath);
+		writeFileSync(legacyPath, "invalid");
+		assert.equal(readSubagentSettings(), undefined);
+		assert.equal(existsSync(canonicalPath), false);
+
+		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
+		symlinkSync("missing-target", canonicalPath);
+		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		assert.equal(existsSync(legacyPath), true);
+
+		saveSubagentConfig({ stateful: { enabled: false } });
+		assert.equal(lstatSync(canonicalPath).isSymbolicLink(), false);
+		assert.equal(existsSync(path.join(directory, "missing-target")), false);
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			stateful: { enabled: false },
+		});
+		const ignoredMock = createMockPi();
+		subagents(ignoredMock.pi);
+		const ignoredContext = createMockContext();
+		ignoredMock.events.get("session_start")?.[0]?.({}, ignoredContext.ctx);
+		assert.match(ignoredContext.notifications[0]?.message ?? "", /ignored/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("subagent formatting and set helpers are deterministic", () => {

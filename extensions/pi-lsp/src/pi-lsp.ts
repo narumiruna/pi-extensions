@@ -1,6 +1,6 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { loadRuntime } from "./adapters.js";
+import { consumeLspConfigNotice, loadRuntime } from "./adapters.js";
 import { commandExists, commandFromEnv } from "./command.js";
 import { resolveRoot } from "./files.js";
 import { selectDiagnosticRoutes, selectFixRoute } from "./routes.js";
@@ -133,18 +133,35 @@ export default function lsp(pi: ExtensionAPI) {
 	pi.registerCommand("lsp", {
 		description: "Show shared LSP extension configuration",
 		handler: async (_args, ctx) => {
-			const { adapters } = loadRuntime(ctx.cwd);
-			ctx.ui.notify(buildStatusMessage(adapters, ctx.cwd), statusLevel(adapters, ctx.cwd));
+			try {
+				const { adapters } = loadRuntime(ctx.cwd);
+				const notice = consumeLspConfigNotice();
+				if (notice) ctx.ui.notify(notice, "warning");
+				ctx.ui.notify(buildStatusMessage(adapters, ctx.cwd), statusLevel(adapters, ctx.cwd));
+			} catch (error) {
+				ctx.ui.notify(`LSP config ignored: ${formatError(error)}`, "warning");
+			}
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		try {
+			loadRuntime(ctx.cwd);
+			const notice = consumeLspConfigNotice();
+			if (notice) ctx.ui.notify(notice, "warning");
+		} catch (error) {
+			ctx.ui.notify(`LSP config ignored: ${formatError(error)}`, "warning");
+		}
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
+}
+
+function formatError(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function textFromResult(result: { content?: Array<{ type?: string; text?: string }> }) {

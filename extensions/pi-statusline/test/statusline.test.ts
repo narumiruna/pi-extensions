@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { consumeStatuslineSettingsNotice } from "../src/settings.js";
 import type { ExtensionStatusIconAliasMap } from "../src/statusline.js";
 import statusline, {
 	buildExtensionStatusIconAliases,
@@ -403,7 +413,7 @@ test("git branch text includes compact status before PR link", () => {
 
 test("statusline settings load extension icon overrides", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-test-"));
-	const settingsPath = join(root, "pi-statusline-settings.json");
+	const settingsPath = join(root, "pi-statusline.json");
 
 	assert.deepEqual(readStatuslineSettings(settingsPath), { extensionStatusIcons: {} });
 
@@ -417,6 +427,57 @@ test("statusline settings load extension icon overrides", () => {
 
 	writeFileSync(settingsPath, "not json");
 	assert.deepEqual(readStatuslineSettings(settingsPath), { extensionStatusIcons: {} });
+});
+
+test("statusline settings migrate to the canonical package filename", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-migration-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		const legacyPath = join(root, "pi-statusline-settings.json");
+		const canonicalPath = join(root, "pi-statusline.json");
+		writeFileSync(
+			legacyPath,
+			JSON.stringify({ extensionStatusIcons: { goal: "🎯" }, futureOption: true }),
+		);
+		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "🎯" } });
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			extensionStatusIcons: { goal: "🎯" },
+			futureOption: true,
+		});
+		assert.equal(existsSync(legacyPath), false);
+
+		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "old" } }));
+		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "new" } }));
+		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "new" } });
+		assert.equal(existsSync(legacyPath), true);
+
+		writeFileSync(canonicalPath, "invalid");
+		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: {} });
+		assert.equal(readFileSync(legacyPath, "utf8").includes("old"), true);
+		unlinkSync(legacyPath);
+		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "fixed" } }));
+		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "fixed" } });
+		assert.equal(consumeStatuslineSettingsNotice(), undefined);
+		unlinkSync(canonicalPath);
+		writeFileSync(legacyPath, "invalid");
+		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: {} });
+		assert.equal(existsSync(canonicalPath), false);
+
+		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "fallback" } }));
+		symlinkSync("missing-target", canonicalPath);
+		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "fallback" } });
+		assert.equal(existsSync(legacyPath), true);
+		const mock = createMockPi();
+		statusline(mock.pi);
+		const context = createMockContext();
+		await emit(mock.events, "session_start", {}, context.ctx);
+		assert.match(context.notifications[0]?.message ?? "", /migration failed/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("extension status icons use config, leading emoji, defaults, and fallback", () => {
@@ -457,7 +518,7 @@ test("statusline render uses installed package id icon aliases from settings", a
 
 	try {
 		writeFileSync(
-			join(agentDir, "pi-statusline-settings.json"),
+			join(agentDir, "pi-statusline.json"),
 			JSON.stringify({ extensionStatusIcons: { "@vendor/pi-foo": "🧪" } }),
 		);
 		writeFileSync(

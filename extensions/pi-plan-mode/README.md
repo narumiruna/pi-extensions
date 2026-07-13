@@ -85,7 +85,7 @@ You can also exit directly. Direct exit discards the latest proposed plan instea
 
 ## ⚙️ Thinking level
 
-Plan mode inherits Pi's current thinking level by default. To request a fixed level only while Plan mode is active, create `$PI_CODING_AGENT_DIR/plan-mode.json` (normally `~/.pi/agent/plan-mode.json`):
+Plan mode inherits Pi's current thinking level by default. To request a fixed level only while Plan mode is active, create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`):
 
 ```json
 {
@@ -94,6 +94,8 @@ Plan mode inherits Pi's current thinking level by default. To request a fixed le
 ```
 
 Supported values are `inherit`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. The extension snapshots the prior level and restores it on exit only if the level still matches the value it applied; a manual change made during Plan mode is preserved. The settings file is optional, is read at session start, and never changes Pi's default setting. Invalid settings produce a warning and fall back to `inherit`.
+
+Compatibility: a valid legacy `plan-mode.json` is migrated automatically to `pi-plan-mode.json`. If both files exist, the new filename takes precedence.
 
 ## 🧠 Codex-like behavior
 

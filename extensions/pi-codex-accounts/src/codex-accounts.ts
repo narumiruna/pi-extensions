@@ -1,4 +1,16 @@
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+	chmodSync,
+	closeSync,
+	linkSync,
+	lstatSync,
+	openSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
 	FileAuthStorageBackend,
 	getAgentDir,
@@ -15,12 +27,14 @@ import {
 
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
-export const CODEX_ACCOUNTS_FILE = "codex-accounts.json";
+export const CODEX_ACCOUNTS_FILE = "pi-codex-accounts.json";
+const LEGACY_CODEX_ACCOUNTS_FILE = "codex-accounts.json";
 export const CODEX_ACCOUNTS_STATUS_KEY = "codex-accounts";
 export const DEFAULT_PI_LOGIN_LABEL = "(default pi login)";
 export const FAIL_CLOSED_API_KEY = "pi-codex-accounts-refresh-failed";
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
+let pendingAccountsMigrationNotice: string | undefined;
 const ACCOUNT_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 type RuntimeAuthStorage = {
@@ -129,6 +143,7 @@ export default function codexAccounts(
 	dependencies: CodexAccountsDependencies = {},
 ) {
 	const store = dependencies.store ?? new CodexAccountStore();
+	let migrationNotice = dependencies.store ? undefined : consumeAccountsMigrationNotice();
 	const oauthProvider = dependencies.oauthProvider ?? openaiCodexOAuthProvider;
 	// Pi's extension loader only exposes pi-ai's root, compat, and OAuth entry points.
 	// Keep cleanup injectable until the WebSocket API is available through a loader-safe export.
@@ -233,6 +248,10 @@ export default function codexAccounts(
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		if (migrationNotice) {
+			ctx.ui.notify(migrationNotice, "warning");
+			migrationNotice = undefined;
+		}
 		await sync(ctx);
 	});
 
@@ -349,7 +368,160 @@ export function isOpenAICodexModel(model: Pick<NonNullable<ExtensionContext["mod
 }
 
 function defaultAccountsPath(): string {
-	return join(getAgentDir(), CODEX_ACCOUNTS_FILE);
+	const agentDir = getAgentDir();
+	const canonicalPath = join(agentDir, CODEX_ACCOUNTS_FILE);
+	const legacyPath = join(agentDir, LEGACY_CODEX_ACCOUNTS_FILE);
+	pendingAccountsMigrationNotice = undefined;
+
+	if (pathEntryExists(canonicalPath)) {
+		const notices: string[] = [];
+		const permissionError = enforcePrivateFilePermissions(canonicalPath);
+		if (permissionError) notices.push(permissionError);
+		if (readableFileExists(canonicalPath)) {
+			if (pathEntryExists(legacyPath)) {
+				notices.push(
+					`${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} takes precedence.`,
+				);
+			}
+			pendingAccountsMigrationNotice = notices.length > 0 ? notices.join("\n") : undefined;
+			return canonicalPath;
+		}
+		if (readableFileExists(legacyPath)) {
+			const legacyPermissionError = enforcePrivateFilePermissions(legacyPath);
+			if (legacyPermissionError) notices.push(legacyPermissionError);
+			notices.push(
+				`${CODEX_ACCOUNTS_FILE} is unusable; ${LEGACY_CODEX_ACCOUNTS_FILE} will be used for this session.`,
+			);
+			pendingAccountsMigrationNotice = notices.join("\n");
+			return legacyPath;
+		}
+		pendingAccountsMigrationNotice = notices.length > 0 ? notices.join("\n") : undefined;
+		return canonicalPath;
+	}
+	if (!pathEntryExists(legacyPath)) return canonicalPath;
+
+	try {
+		return new FileAuthStorageBackend(legacyPath).withLock(() => {
+			const contents = readFileSync(legacyPath, "utf8");
+			const permissionError = enforcePrivateFilePermissions(legacyPath);
+			if (permissionError) throw new Error(permissionError);
+			let installedIdentity: FileIdentity;
+			try {
+				installedIdentity = installPrivateFileExclusively(canonicalPath, contents);
+			} catch (error) {
+				if (pathEntryExists(canonicalPath)) {
+					pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} was created concurrently.`;
+					return { result: canonicalPath };
+				}
+				throw error;
+			}
+			if (!fileContentsEqual(legacyPath, contents)) {
+				if (removeFileIfIdentityMatches(canonicalPath, installedIdentity, contents)) {
+					pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} changed during migration; the stale ${CODEX_ACCOUNTS_FILE} snapshot was removed and the legacy file will be used for this session.`;
+					return { result: legacyPath };
+				}
+				pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} changed during migration, but ${CODEX_ACCOUNTS_FILE} was replaced concurrently and takes precedence.`;
+				return { result: canonicalPath };
+			}
+			try {
+				rmSync(legacyPath);
+				pendingAccountsMigrationNotice = `Codex accounts migrated from ${LEGACY_CODEX_ACCOUNTS_FILE} to ${CODEX_ACCOUNTS_FILE}.`;
+			} catch (error) {
+				pendingAccountsMigrationNotice = `Codex accounts migrated to ${CODEX_ACCOUNTS_FILE}, but ${LEGACY_CODEX_ACCOUNTS_FILE} could not be removed: ${errorMessage(error)}.`;
+			}
+			return { result: canonicalPath };
+		});
+	} catch (error) {
+		if (pathEntryExists(canonicalPath)) {
+			pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} was created concurrently.`;
+			return canonicalPath;
+		}
+		pendingAccountsMigrationNotice = `Codex accounts migration failed: ${errorMessage(error)}. The legacy file will be used for this session.`;
+		return legacyPath;
+	}
+}
+
+function enforcePrivateFilePermissions(filePath: string): string | undefined {
+	try {
+		if (lstatSync(filePath).isDirectory()) {
+			return `Codex accounts path is a directory and permissions were not changed: ${filePath}`;
+		}
+		chmodSync(filePath, 0o600);
+		return undefined;
+	} catch (error) {
+		return `Failed to enforce 0600 permissions for ${filePath}: ${errorMessage(error)}`;
+	}
+}
+
+type FileIdentity = { dev: number; ino: number };
+
+function installPrivateFileExclusively(filePath: string, contents: string): FileIdentity {
+	const tempFile = join(dirname(filePath), `.${CODEX_ACCOUNTS_FILE}.${randomUUID()}.tmp`);
+	try {
+		writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
+		chmodSync(tempFile, 0o600);
+		const identity = lstatSync(tempFile);
+		linkSync(tempFile, filePath);
+		return { dev: identity.dev, ino: identity.ino };
+	} finally {
+		try {
+			rmSync(tempFile, { force: true });
+		} catch {
+			// Preserve the migration result if best-effort temp cleanup fails.
+		}
+	}
+}
+
+function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
+	try {
+		const current = lstatSync(filePath);
+		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if (readFileSync(filePath, "utf8") !== expectedContents) return false;
+		rmSync(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function fileContentsEqual(filePath: string, expected: string) {
+	try {
+		return readFileSync(filePath, "utf8") === expected;
+	} catch {
+		return false;
+	}
+}
+
+function pathEntryExists(filePath: string): boolean {
+	try {
+		lstatSync(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function readableFileExists(filePath: string): boolean {
+	let descriptor: number | undefined;
+	try {
+		if (!statSync(filePath).isFile()) return false;
+		descriptor = openSync(filePath, "r");
+		return true;
+	} catch {
+		return false;
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
+	}
+}
+
+function consumeAccountsMigrationNotice(): string | undefined {
+	const notice = pendingAccountsMigrationNotice;
+	pendingAccountsMigrationNotice = undefined;
+	return notice;
 }
 
 function parseStoredData(raw: string | undefined): CodexAccountsData {
@@ -359,7 +531,7 @@ function parseStoredData(raw: string | undefined): CodexAccountsData {
 	try {
 		parsed = JSON.parse(raw) as unknown;
 	} catch {
-		throw new Error("Invalid Codex accounts JSON. Fix or remove codex-accounts.json.");
+		throw new Error(`Invalid Codex accounts JSON. Fix or remove ${CODEX_ACCOUNTS_FILE}.`);
 	}
 
 	if (!isRecord(parsed)) throw new Error("Invalid Codex accounts data: expected an object.");

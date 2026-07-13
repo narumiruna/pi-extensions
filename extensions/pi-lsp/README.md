@@ -41,12 +41,14 @@ If no config is provided, pi-lsp ships compatible defaults for Biome, ty, and Ru
 Custom config can be supplied in one of these locations:
 
 1. `PI_LSP_CONFIG` as inline JSON or a path to a JSON file
-2. `<workspace>/.pi/lsp.json`
-3. `~/.pi/agent/lsp.json`
+2. `<workspace>/.pi/pi-lsp.json`
+3. `~/.pi/agent/pi-lsp.json`
 
 `PI_LSP_CONFIG` only accepts JSON or a JSON file path; JavaScript and TypeScript config files are not evaluated.
 
-`lsp.json` can be a plain object keyed by server name:
+Compatibility: a user-scoped legacy `lsp.json` is migrated automatically. A project-scoped legacy `.pi/lsp.json` remains readable with a warning but is not renamed automatically, so the extension never modifies a repository working tree. New paths take precedence when both names exist.
+
+`pi-lsp.json` can be a plain object keyed by server name:
 
 ```json
 {

@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	stat,
+	symlink,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -58,7 +68,7 @@ test("command parser and completions cover google-genai subcommands", () => {
 
 test("config loading defaults, normalizes tools, and rejects interpolation", async () => {
 	await withTempAgentDir(async (agentDir) => {
-		assert.equal(googleGenaiConfigPath(), join(agentDir, "google-genai.json"));
+		assert.equal(googleGenaiConfigPath(), join(agentDir, "pi-google-genai.json"));
 		const missingConfig = await loadGoogleGenaiConfig();
 		assert.deepEqual(missingConfig, {
 			config: {
@@ -67,7 +77,7 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 				timeoutMs: DEFAULT_TIMEOUT_MS,
 				tools: [...GOOGLE_GENAI_TOOL_NAMES],
 			},
-			path: join(agentDir, "google-genai.json"),
+			path: join(agentDir, "pi-google-genai.json"),
 			warnings: [],
 			configLoaded: false,
 		});
@@ -96,7 +106,57 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 	});
 });
 
-test("config loading validates google-genai.json timeoutMs", async () => {
+test("config loading migrates to the canonical package filename with private permissions", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const legacyPath = join(agentDir, "google-genai.json");
+		const canonicalPath = join(agentDir, "pi-google-genai.json");
+		await mkdir(agentDir, { recursive: true });
+		await writeFile(legacyPath, JSON.stringify({ apiKey: "test-key", model: "legacy" }), {
+			mode: 0o600,
+		});
+		const migrated = await loadGoogleGenaiConfig();
+		assert.equal(migrated.config.model, "legacy");
+		assert.match(migrated.warnings.join("\n"), /migrated/i);
+		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
+		await assert.rejects(stat(legacyPath));
+
+		await writeFile(legacyPath, JSON.stringify({ model: "old" }), { mode: 0o644 });
+		await chmod(legacyPath, 0o644);
+		await writeFile(canonicalPath, JSON.stringify({ model: "new" }), { mode: 0o600 });
+		const preferred = await loadGoogleGenaiConfig();
+		assert.equal(preferred.config.model, "new");
+		assert.match(preferred.warnings.join("\n"), /ignored/i);
+		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
+
+		await writeFile(canonicalPath, "invalid", { mode: 0o600 });
+		const invalidNew = await loadGoogleGenaiConfig();
+		assert.equal(invalidNew.configLoaded, false);
+		assert.match(invalidNew.warnings.join("\n"), /ignored/i);
+
+		await unlink(canonicalPath);
+		await writeFile(legacyPath, "invalid", { mode: 0o600 });
+		const invalidLegacy = await loadGoogleGenaiConfig();
+		assert.equal(invalidLegacy.configLoaded, false);
+		await assert.rejects(stat(canonicalPath));
+
+		await writeFile(legacyPath, "null", { mode: 0o600 });
+		const wrongShapeLegacy = await loadGoogleGenaiConfig();
+		assert.match(wrongShapeLegacy.warnings.join("\n"), /google-genai\.json must/);
+		assert.doesNotMatch(wrongShapeLegacy.warnings.join("\n"), /pi-google-genai\.json must/);
+		await assert.rejects(stat(canonicalPath));
+
+		await writeFile(legacyPath, JSON.stringify({ apiKey: "fallback-key", model: "fallback" }), {
+			mode: 0o600,
+		});
+		await symlink("missing-target", canonicalPath);
+		const fallback = await loadGoogleGenaiConfig();
+		assert.equal(fallback.config.model, "fallback");
+		assert.match(fallback.warnings.join("\n"), /migration failed/i);
+		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
+	});
+});
+
+test("config loading validates pi-google-genai.json timeoutMs", async () => {
 	await withTempAgentDir(async () => {
 		await writeConfig({ timeoutMs: 45_000 });
 		let loaded = await loadGoogleGenaiConfig();
@@ -118,7 +178,7 @@ test("config loading validates google-genai.json timeoutMs", async () => {
 
 test("config loading repairs permissions and ignores invalid payloads", async () => {
 	await withTempAgentDir(async (agentDir) => {
-		const path = join(agentDir, "google-genai.json");
+		const path = join(agentDir, "pi-google-genai.json");
 		await mkdir(agentDir, { recursive: true });
 		await writeFile(path, '{"apiKey":"secret"', { mode: 0o644 });
 		await chmod(path, 0o644);
@@ -509,16 +569,16 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		};
 
 		await command.handler("init", ctx);
-		const config = JSON.parse(await readFile(join(agentDir, "google-genai.json"), "utf8"));
+		const config = JSON.parse(await readFile(join(agentDir, "pi-google-genai.json"), "utf8"));
 		assert.equal(config.apiKey, "old-key");
 		assert.equal(config.model, "new-model");
 		assert.deepEqual(config.tools, ["google_search"]);
-		assert.equal((await stat(join(agentDir, "google-genai.json"))).mode & 0o777, 0o600);
+		assert.equal((await stat(join(agentDir, "pi-google-genai.json"))).mode & 0o777, 0o600);
 
 		await command.handler("tools", ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
 		assert.deepEqual(
-			JSON.parse(await readFile(join(agentDir, "google-genai.json"), "utf8")).tools,
+			JSON.parse(await readFile(join(agentDir, "pi-google-genai.json"), "utf8")).tools,
 			[],
 		);
 
@@ -649,7 +709,7 @@ async function writeConfig(value: unknown) {
 	assert.ok(agentDir);
 	await import("node:fs/promises").then(async (fs) => {
 		await fs.mkdir(agentDir, { recursive: true });
-		await fs.writeFile(join(agentDir, "google-genai.json"), JSON.stringify(value, null, "\t"));
+		await fs.writeFile(join(agentDir, "pi-google-genai.json"), JSON.stringify(value, null, "\t"));
 	});
 }
 

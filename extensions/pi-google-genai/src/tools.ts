@@ -24,7 +24,7 @@ const SearchTypesParameter = Type.Optional(
 );
 const TimeoutMsParameter = Type.Optional(
 	Type.Integer({
-		description: `Per-call timeout in milliseconds. Overrides google-genai.json timeoutMs and the ${DEFAULT_TIMEOUT_MS}ms default. Must be an integer from 1 to ${MAX_TIMEOUT_MS}.`,
+		description: `Per-call timeout in milliseconds. Overrides pi-google-genai.json timeoutMs and the ${DEFAULT_TIMEOUT_MS}ms default. Must be an integer from 1 to ${MAX_TIMEOUT_MS}.`,
 		minimum: 1,
 		maximum: MAX_TIMEOUT_MS,
 	}),

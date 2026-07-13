@@ -210,7 +210,7 @@ When `subagent_wait` starts while a turn is running, that wait consumes the turn
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
-Configure the runtime in `~/.pi/agent/pi-subagents-config.json`, then reload Pi:
+Configure the runtime in `~/.pi/agent/pi-subagents.json`, then reload Pi:
 
 ```json
 {
@@ -301,7 +301,9 @@ Built-in agents inherit the active/default Pi model instead of forcing a provide
 ## ⚙️ Configure agent tools
 
 Run `/subagents:config` in an interactive Pi session to edit the tools each subagent may use.
-The command stores settings in `~/.pi/agent/pi-subagents-config.json`.
+The command stores settings in `~/.pi/agent/pi-subagents.json`.
+
+Compatibility: a valid legacy `pi-subagents-config.json` is migrated automatically to `pi-subagents.json`. If both files exist, the new filename takes precedence.
 
 - Select an agent, then press Enter or Space to toggle tools.
 - Press `S` to save, or Esc to cancel and return to agent selection.

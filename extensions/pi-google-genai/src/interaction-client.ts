@@ -64,7 +64,7 @@ function formatTimeoutError(timeoutMs: number, timeoutAdvice?: string) {
 		`Google GenAI request timed out after ${timeoutMs}ms.`,
 		"This is a timeout, not a no-results response.",
 		timeoutAdvice ?? "Try narrowing the query or splitting broad comparison/review queries.",
-		"To allow longer calls, set google-genai.json timeoutMs or the per-call timeoutMs parameter.",
+		"To allow longer calls, set pi-google-genai.json timeoutMs or the per-call timeoutMs parameter.",
 	].join(" ");
 }
 

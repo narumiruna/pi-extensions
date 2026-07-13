@@ -214,6 +214,7 @@ export default function planMode(pi: ExtensionAPI) {
 		else if (loadedSettings.kind === "invalid") {
 			ctx.ui.notify(`pi-plan-mode settings ignored: ${loadedSettings.reason}`, "warning");
 		}
+		if (loadedSettings.notice) ctx.ui.notify(loadedSettings.notice, "warning");
 		restoreState(ctx);
 		if (pi.getFlag("plan") === true) state.enabled = true;
 		if (state.enabled) {

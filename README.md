@@ -53,7 +53,7 @@ pi -e npm:@narumitw/pi-goal -e npm:@narumitw/pi-statusline -e npm:@narumitw/pi-l
 
 ### 🧠 Shared language-server workflows
 
-Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to let Pi run configurable Language Server Protocol servers through one shared runner. Configure servers in `.pi/lsp.json`, `~/.pi/agent/lsp.json`, or `PI_LSP_CONFIG` with simple `{ command, extensions }` entries, then use Pi tools for diagnostics and source code actions. The older split packages [`@narumitw/pi-biome-lsp`](./extensions/deprecated/pi-biome-lsp) and [`@narumitw/pi-python-lsp`](./extensions/deprecated/pi-python-lsp) are deprecated, kept for reference, and excluded from active workspace scripts.
+Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to let Pi run configurable Language Server Protocol servers through one shared runner. Configure servers in `.pi/pi-lsp.json`, `~/.pi/agent/pi-lsp.json`, or `PI_LSP_CONFIG` with simple `{ command, extensions }` entries, then use Pi tools for diagnostics and source code actions. The older split packages [`@narumitw/pi-biome-lsp`](./extensions/deprecated/pi-biome-lsp) and [`@narumitw/pi-python-lsp`](./extensions/deprecated/pi-python-lsp) are deprecated, kept for reference, and excluded from active workspace scripts.
 
 ### 🧬 JavaScript and TypeScript coding with Biome
 
@@ -69,11 +69,11 @@ Use [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) to give Pi native Fire
 
 ### 🔎 Google GenAI grounding
 
-Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Google Search, Google Maps, and URL-context grounding through Gemini Interactions with Pi Google auth or a private `google-genai.json` config.
+Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Google Search, Google Maps, and URL-context grounding through Gemini Interactions with Pi Google auth or a private `pi-google-genai.json` config.
 
 ### 🔐 Codex subscription accounts
 
-Use [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) to keep multiple ChatGPT Codex subscription accounts in a private `codex-accounts.json` file and switch the active account with `/codex-account`. It does not add provider aliases or change Pi's built-in `/login` provider list.
+Use [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) to keep multiple ChatGPT Codex subscription accounts in a private `pi-codex-accounts.json` file and switch the active account with `/codex-account`. It does not add provider aliases or change Pi's built-in `/login` provider list.
 
 ### 📊 Codex usage status
 

@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
+import { consumeLspConfigNotice, loadConfig } from "../src/adapters.js";
 import { commandExists, commandFromEnv, splitCommand } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
 import lsp from "../src/pi-lsp.js";
@@ -50,6 +61,59 @@ test("command helpers split shell-like strings and honor environment overrides",
 	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
 	chmodSync(executable, 0o755);
 	assert.equal(commandExists("./tool", root), true);
+});
+
+test("LSP config uses canonical paths while preserving project legacy files", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-config-"));
+	const agentDir = path.join(root, "agent");
+	const project = path.join(root, "project");
+	mkdirSync(path.join(project, ".pi"), { recursive: true });
+	mkdirSync(agentDir, { recursive: true });
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	const config = (name: string) => ({
+		servers: { [name]: { command: [name], extensions: [`.${name}`] } },
+	});
+	try {
+		const userLegacy = path.join(agentDir, "lsp.json");
+		writeFileSync(userLegacy, JSON.stringify(config("user")));
+		chmodSync(userLegacy, 0o600);
+		assert.equal(loadConfig(project).servers[0]?.name, "user");
+		assert.equal(existsSync(path.join(agentDir, "pi-lsp.json")), true);
+		assert.equal(statSync(path.join(agentDir, "pi-lsp.json")).mode & 0o777, 0o600);
+		assert.equal(existsSync(userLegacy), false);
+
+		const projectLegacy = path.join(project, ".pi", "lsp.json");
+		writeFileSync(projectLegacy, JSON.stringify(config("legacy-project")));
+		assert.equal(loadConfig(project).servers[0]?.name, "legacy-project");
+		assert.equal(existsSync(projectLegacy), true);
+		assert.equal(existsSync(path.join(project, ".pi", "pi-lsp.json")), false);
+
+		const projectCanonical = path.join(project, ".pi", "pi-lsp.json");
+		writeFileSync(projectCanonical, JSON.stringify(config("project")));
+		assert.equal(loadConfig(project).servers[0]?.name, "project");
+
+		writeFileSync(projectCanonical, "invalid");
+		assert.throws(() => loadConfig(project));
+		assert.equal(existsSync(projectLegacy), true);
+		unlinkSync(projectCanonical);
+		unlinkSync(projectLegacy);
+
+		writeFileSync(userLegacy, JSON.stringify(config("fallback")));
+		unlinkSync(path.join(agentDir, "pi-lsp.json"));
+		symlinkSync("missing-target", path.join(agentDir, "pi-lsp.json"));
+		assert.equal(loadConfig(project).servers[0]?.name, "fallback");
+		assert.equal(existsSync(userLegacy), true);
+
+		process.env.PI_LSP_CONFIG = JSON.stringify(config("explicit"));
+		assert.equal(loadConfig(project).servers[0]?.name, "explicit");
+		assert.equal(consumeLspConfigNotice(), undefined);
+	} finally {
+		delete process.env.PI_LSP_CONFIG;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("text edit helpers apply reverse-sorted edits and detect overlaps", () => {

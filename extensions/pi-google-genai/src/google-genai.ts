@@ -143,7 +143,7 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext, pi: 
 
 async function initConfig(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
 	if (!ctx.hasUI) {
-		ctx.ui.notify("/google-genai init requires interactive UI. Edit google-genai.json manually or use /login google.", "warning");
+		ctx.ui.notify("/google-genai init requires interactive UI. Edit pi-google-genai.json manually or use /login google.", "warning");
 		return;
 	}
 	const loaded = await loadGoogleGenaiConfig();

@@ -453,7 +453,7 @@ function warnDeprecatedIcon(ctx: ExtensionContext) {
 	if (state.iconWarningShown || !process.env.PI_CAFFEINATE_ICON?.trim()) return;
 	state.iconWarningShown = true;
 	ctx.ui.notify(
-		"PI_CAFFEINATE_ICON is deprecated but still works for now. If you use @narumitw/pi-statusline, move it to pi-statusline-settings.json (extensionStatusIcons.caffeinate).",
+		"PI_CAFFEINATE_ICON is deprecated but still works for now. If you use @narumitw/pi-statusline, move it to pi-statusline.json (extensionStatusIcons.caffeinate).",
 		"warning",
 	);
 }
