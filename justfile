@@ -101,6 +101,9 @@ pack-google-genai:
 pack-goal:
     just pack goal
 
+pack-langfuse:
+    just pack langfuse
+
 pack-lsp:
     just pack lsp
 
@@ -146,6 +149,9 @@ try-google-genai:
 
 try-goal:
     just try goal
+
+try-langfuse:
+    just try langfuse
 
 try-lsp:
     just try lsp
@@ -193,6 +199,9 @@ install-google-genai:
 install-goal:
     just install goal
 
+install-langfuse:
+    just install langfuse
+
 install-lsp:
     just install lsp
 
@@ -238,6 +247,9 @@ publish-google-genai:
 
 publish-goal:
     just publish goal
+
+publish-langfuse:
+    just publish langfuse
 
 publish-lsp:
     just publish lsp
