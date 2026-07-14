@@ -100,6 +100,9 @@ interface StatusContext {
 
 const STATUS_KEY = "goal";
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
+const GOAL_COMPLETE_TOOL = "goal_complete";
+const GOAL_BLOCKED_TOOL = "goal_blocked";
+const GOAL_TOOL_NAMES = [GOAL_COMPLETE_TOOL, GOAL_BLOCKED_TOOL] as const;
 const MAX_BLOCKER_REASON_LENGTH = 1_000;
 const MAX_BLOCKER_EVIDENCE_LENGTH = 4_000;
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
@@ -139,6 +142,8 @@ interface GoalRuntime {
 	goalRecovery?: GoalRecovery;
 	budgetWrapUp?: BudgetWrapUp;
 	staleGoalToolCallsBlocked: boolean;
+	/** Once true, goal tools stay in the active set for this runtime (prompt-cache stable). */
+	goalToolsUnlocked: boolean;
 	cancelledContinuationMarkers: Set<string>;
 }
 
@@ -146,6 +151,7 @@ function createGoalRuntime(pi: ExtensionAPI): GoalRuntime {
 	return {
 		pi,
 		staleGoalToolCallsBlocked: false,
+		goalToolsUnlocked: false,
 		cancelledContinuationMarkers: new Set(),
 	};
 }
@@ -154,7 +160,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	const runtime = createGoalRuntime(pi);
 
 	const goalCompleteTool = defineTool({
-		name: "goal_complete",
+		name: GOAL_COMPLETE_TOOL,
 		label: "Goal Complete",
 		description:
 			"Mark the active /goal as complete after all required work is done and verified, using the current goal_id stale-turn guard. Do not use for partial progress, blockers, failing, or unverified work.",
@@ -266,7 +272,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	});
 
 	const goalBlockedTool = defineTool({
-		name: "goal_blocked",
+		name: GOAL_BLOCKED_TOOL,
 		label: "Goal Blocked",
 		description:
 			"Stop the active /goal only at a true impasse after the same blocker recurs for at least three consecutive goal turns, with the current goal_id and concrete evidence that user or external action is required. Do not use for ordinary clarification, uncertainty, or recoverable failures.",
@@ -359,6 +365,9 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 
 	pi.registerTool(goalCompleteTool);
 	pi.registerTool(goalBlockedTool);
+	// Do not touch the active tool set during factory registration: ExtensionAPI
+	// actions are unbound until the session binds the runtime. session_start and
+	// before_agent_start enforce visibility once actions work.
 
 	pi.registerCommand("goal", {
 		description: "Run a goal to completion: /goal [--tokens 100k] <goal_to_complete>",
@@ -401,13 +410,28 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		clearStaleGoalToolCallBlock();
 		runtime.activeGoal = loadGoalFromSession(ctx);
 		if (runtime.activeGoal) {
+			// Restored unfinished goals already activated this session lineage.
+			try {
+				revealGoalTools();
+			} catch (error) {
+				ctx.ui.notify(
+					`Restored /goal but goal tools are unavailable: ${formatError(error)}`,
+					"error",
+				);
+				persistGoal(runtime.activeGoal);
+				updateStatus(ctx, runtime.activeGoal);
+				return;
+			}
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
 				if (limitActiveGoalForBudget(ctx, false)) return;
 			}
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
-		} else ctx.ui.setStatus(STATUS_KEY, undefined);
+		} else {
+			enforceGoalToolPolicy();
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+		}
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -519,7 +543,18 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		limitActiveGoalForBudget(ctx, true);
 	});
 
-	pi.on("before_agent_start", (event) => {
+	pi.on("before_agent_start", (event, ctx) => {
+		// Reassert desired visibility every model turn so plan-mode / other
+		// setActiveTools callers cannot permanently clobber or prematurely expose
+		// goal tools after the sticky unlock policy is set.
+		try {
+			enforceGoalToolPolicy();
+		} catch (error) {
+			ctx?.ui?.notify?.(
+				`Goal tools are unavailable for this turn: ${formatError(error)}`,
+				"error",
+			);
+		}
 		markContinuationStarted(event.prompt);
 		if (runtime.activeGoal?.status !== "active") return;
 
@@ -615,6 +650,15 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 				ctx.ui.notify(`Goal kept: ${existingGoal.text}`, "info");
 				return;
 			}
+		}
+
+		// Unlock and verify terminal tools before committing goal state so a failed
+		// reveal cannot leave an active goal that the model cannot complete/block.
+		try {
+			revealGoalTools();
+		} catch (error) {
+			ctx.ui.notify(`Cannot start /goal: ${formatError(error)}`, "error");
+			return;
 		}
 
 		cancelContinuationWork();
@@ -1057,6 +1101,51 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		runtime.activeGoal = undefined;
 		clearPersistedGoal(ctx.cwd);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		// Do not clear goalToolsUnlocked: after first activation, keep tools visible
+		// for the rest of this extension runtime to avoid repeated goal-tool schema
+		// churn within the same runtime.
+	}
+
+	function isGoalToolName(name: string) {
+		return (GOAL_TOOL_NAMES as readonly string[]).includes(name);
+	}
+
+	/** Apply desired visibility: unlocked keeps both tools; locked removes both. */
+	function enforceGoalToolPolicy() {
+		if (runtime.goalToolsUnlocked) {
+			ensureGoalToolsVisible();
+			return;
+		}
+		hideGoalToolsIfLocked();
+	}
+
+	function hideGoalToolsIfLocked() {
+		if (runtime.goalToolsUnlocked) return;
+		const active = runtime.pi.getActiveTools();
+		if (!active.some(isGoalToolName)) return;
+		runtime.pi.setActiveTools(active.filter((name) => !isGoalToolName(name)));
+	}
+
+	function ensureGoalToolsVisible() {
+		const active = runtime.pi.getActiveTools();
+		const activeSet = new Set(active);
+		const missing = GOAL_TOOL_NAMES.filter((name) => !activeSet.has(name));
+		if (missing.length > 0) {
+			runtime.pi.setActiveTools([...active, ...missing]);
+		}
+		const actual = new Set(runtime.pi.getActiveTools());
+		if (!GOAL_TOOL_NAMES.every((name) => actual.has(name))) {
+			throw new Error(
+				"goal_complete and goal_blocked are unavailable; include them in the active tool allowlist.",
+			);
+		}
+	}
+
+	/** Mark tools permanently desired for this runtime and make them active now. */
+	function revealGoalTools() {
+		// Policy first so a transient ensure failure still reasserts on later turns.
+		runtime.goalToolsUnlocked = true;
+		ensureGoalToolsVisible();
 	}
 
 	function showCompletionStatus(ctx: StatusContext) {
