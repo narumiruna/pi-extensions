@@ -12,6 +12,7 @@ import type { AgentScope, SubagentThinkingLevel } from "./agents.js";
 import type { SubagentParams } from "./params.js";
 import {
 	getResultFinalOutput,
+	isResultError,
 	type SingleResult,
 	type SubagentDetails,
 } from "./runner.js";
@@ -221,7 +222,7 @@ export function renderSubagentResult(
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+				const isError = isResultError(r);
 				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getResultFinalOutput(r);
@@ -291,7 +292,7 @@ export function renderSubagentResult(
 			};
 
 			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
+				const successCount = details.results.filter((result) => !isResultError(result)).length;
 				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
 
 				if (expanded) {
@@ -308,7 +309,7 @@ export function renderSubagentResult(
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = !isResultError(r) ? theme.fg("success", "✓") : theme.fg("error", "✗");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getResultFinalOutput(r);
 
@@ -360,7 +361,7 @@ export function renderSubagentResult(
 					theme.fg("toolTitle", theme.bold("chain ")) +
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
 				for (const r of details.results) {
-					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const rIcon = !isResultError(r) ? theme.fg("success", "✓") : theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
@@ -373,12 +374,18 @@ export function renderSubagentResult(
 			}
 
 			if (details.mode === "parallel") {
-				const running = details.results.filter((r) => r.exitCode === -1).length;
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
-				const failCount = details.results.filter((r) => r.exitCode > 0).length;
+				const running = details.results.filter((result) => result.exitCode === -1).length;
+				const successCount = details.results.filter(
+					(result) => result.exitCode !== -1 && !isResultError(result),
+				).length;
+				const failCount = details.results.filter(
+					(result) => result.exitCode !== -1 && isResultError(result),
+				).length;
 				const aggregator = details.aggregator;
 				const aggregatorRunning = aggregator?.exitCode === -1;
-				const aggregatorFailed = aggregator ? aggregator.exitCode > 0 || aggregator.stopReason === "error" : false;
+				const aggregatorFailed = aggregator
+					? aggregator.exitCode !== -1 && isResultError(aggregator)
+					: false;
 				const isRunning = running > 0 || aggregatorRunning;
 				const icon = isRunning
 					? theme.fg("warning", "⏳")
@@ -404,7 +411,7 @@ export function renderSubagentResult(
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = !isResultError(r) ? theme.fg("success", "✓") : theme.fg("error", "✗");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getResultFinalOutput(r);
 
@@ -438,7 +445,9 @@ export function renderSubagentResult(
 					}
 
 					if (aggregator) {
-						const rIcon = aggregator.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = !isResultError(aggregator)
+							? theme.fg("success", "✓")
+							: theme.fg("error", "✗");
 						const displayItems = getDisplayItems(aggregator.messages);
 						const finalOutput = getResultFinalOutput(aggregator);
 
@@ -485,7 +494,7 @@ export function renderSubagentResult(
 					const rIcon =
 						r.exitCode === -1
 							? theme.fg("warning", "⏳")
-							: r.exitCode === 0
+							: !isResultError(r)
 								? theme.fg("success", "✓")
 								: theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
@@ -498,7 +507,7 @@ export function renderSubagentResult(
 					const rIcon =
 						aggregator.exitCode === -1
 							? theme.fg("warning", "⏳")
-							: aggregator.exitCode === 0
+							: !isResultError(aggregator)
 								? theme.fg("success", "✓")
 								: theme.fg("error", "✗");
 					const displayItems = getDisplayItems(aggregator.messages);

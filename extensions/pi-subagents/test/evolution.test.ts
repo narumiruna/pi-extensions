@@ -14,13 +14,21 @@ import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { buildContextSnapshot, redactPrivateText } from "../src/context.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8, truncateUtf8Tail } from "../src/limits.js";
+import {
+	DEFAULT_MAX_CONTEXT_BYTES,
+	DEFAULT_MAX_OUTPUT_BYTES,
+	DEFAULT_MAX_STDERR_BYTES,
+	truncateUtf8,
+	truncateUtf8Tail,
+} from "../src/limits.js";
 import { RootOrchestrationState } from "../src/orchestration.js";
 import { AgentPersistence } from "../src/persistence.js";
 import { JsonLineDecoder } from "../src/protocol.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import {
 	buildFanInContext,
+	formatResultFailure,
+	isResultError,
 	mapWithConcurrencyLimit,
 	runSingleAgent,
 	terminateProcess,
@@ -1360,6 +1368,136 @@ test("runSingleAgent preserves partial output on mid-stream abort and handles pr
 	);
 	assert.equal(beforeStart.aborted, true);
 	assert.equal(beforeStart.exitCode, 130);
+});
+
+test("runSingleAgent preserves final text beyond its history budget and rejects empty final output", async () => {
+	const agents = [
+		{
+			name: "test",
+			description: "test",
+			systemPrompt: "",
+			source: "built-in" as const,
+			filePath: "built-in:test",
+		},
+	];
+	const makeDetails = (results: Parameters<Parameters<typeof runSingleAgent>[10]>[0]) => ({
+		mode: "single" as const,
+		agentScope: "user" as const,
+		projectAgentsDir: null,
+		results,
+	});
+	const runScript = (script: string) =>
+		runSingleAgent(
+			process.cwd(),
+			agents,
+			"test",
+			"task",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			1_000,
+			undefined,
+			makeDetails,
+			{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+		);
+
+	const script = [
+		`const large='x'.repeat(${DEFAULT_MAX_OUTPUT_BYTES});`,
+		"const tool={role:'toolResult',toolCallId:'call-1',toolName:'read',content:[{type:'text',text:large}],isError:false,timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'tool_result_end',message:tool})+'\\n');",
+		"process.stdout.write(JSON.stringify({type:'tool_result_end',message:{...tool,toolCallId:'call-2'}})+'\\n');",
+		"const final={role:'assistant',content:[{type:'text',text:'FINAL_SURVIVES'}],stopReason:'stop',timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'message_end',message:final})+'\\n');",
+	].join("");
+	const result = await runScript(script);
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.truncated, true);
+	assert.equal(result.finalOutput, "FINAL_SURVIVES");
+	assert.match(buildFanInContext([result]), /FINAL_SURVIVES/);
+
+	const hugeFinal = await runScript(
+		[
+			`const text='界'.repeat(${DEFAULT_MAX_OUTPUT_BYTES});`,
+			"const message={role:'assistant',content:[{type:'text',text}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.ok(Buffer.byteLength(hugeFinal.finalOutput ?? "", "utf8") <= DEFAULT_MAX_OUTPUT_BYTES);
+	assert.match(hugeFinal.finalOutput ?? "", /truncated by pi-subagents/);
+
+	const providerError = await runScript(
+		[
+			`const errorMessage='E'.repeat(${DEFAULT_MAX_OUTPUT_BYTES});`,
+			"const message={role:'assistant',content:[{type:'text',text:'PARTIAL'}],stopReason:'error',errorMessage,timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.ok(
+		Buffer.byteLength(providerError.errorMessage ?? "", "utf8") <= DEFAULT_MAX_STDERR_BYTES,
+	);
+	assert.match(providerError.errorMessage ?? "", /truncated by pi-subagents/);
+	assert.equal(providerError.finalOutput, "PARTIAL");
+	assert.equal(isResultError(providerError), true);
+	const providerFailureContext = buildFanInContext([providerError]);
+	assert.match(providerFailureContext, /test \(failed\)/);
+	assert.match(providerFailureContext, /Error:\nE/);
+	assert.match(providerFailureContext, /Partial output:\nPARTIAL/);
+
+	const emptyProviderError = await runScript(
+		[
+			"const message={role:'assistant',content:[],stopReason:'error',errorMessage:'RATE_LIMIT_DETAIL',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.equal(emptyProviderError.stopReason, "error");
+	assert.equal(emptyProviderError.errorMessage, "RATE_LIMIT_DETAIL");
+	assert.equal(emptyProviderError.finalOutput, "");
+
+	const multiBlock = await runScript(
+		[
+			"const message={role:'assistant',content:[{type:'text',text:'FIRST'},{type:'text',text:'SECOND'}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.equal(multiBlock.exitCode, 0);
+	assert.equal(multiBlock.finalOutput, "FIRST\nSECOND");
+
+	const empty = await runScript(
+		[
+			"const commentary={role:'assistant',content:[{type:'text',text:'OLD_COMMENTARY'}],stopReason:'toolUse',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message:commentary})+'\\n');",
+			"const final={role:'assistant',content:[{type:'text',text:''}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message:final})+'\\n');",
+		].join(""),
+	);
+	assert.equal(empty.exitCode, 1);
+	assert.equal(empty.stopReason, "error");
+	assert.equal(empty.finalOutput, "");
+	assert.equal(empty.errorMessage, "Subagent completed without final text");
+
+	const boundedFailure = formatResultFailure({
+		agent: "test",
+		agentSource: "built-in",
+		task: "task",
+		exitCode: 124,
+		messages: [],
+		stderr: "",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			cost: 0,
+			contextTokens: 0,
+			turns: 1,
+		},
+		errorMessage: "E".repeat(20_000),
+		finalOutput: "界".repeat(DEFAULT_MAX_CONTEXT_BYTES),
+	});
+	assert.ok(Buffer.byteLength(boundedFailure, "utf8") <= DEFAULT_MAX_CONTEXT_BYTES);
+	assert.match(boundedFailure, /Partial output/);
+	assert.match(boundedFailure, /truncated by pi-subagents/);
 });
 
 test("terminateProcess escalates when a child ignores SIGTERM", {
