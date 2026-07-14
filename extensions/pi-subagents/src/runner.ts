@@ -72,9 +72,11 @@ function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
-			for (const part of msg.content) {
-				if (part.type === "text") return part.text;
-			}
+			const text = msg.content
+				.filter((part) => part.type === "text")
+				.map((part) => part.text)
+				.join("\n");
+			if (text) return text;
 		}
 	}
 	return "";
@@ -82,6 +84,22 @@ function getFinalOutput(messages: Message[]): string {
 
 export function getResultFinalOutput(result: SingleResult): string {
 	return result.finalOutput ?? getFinalOutput(result.messages);
+}
+
+export function isResultError(result: SingleResult): boolean {
+	return (
+		(result.exitCode !== 0 && result.exitCode !== -1) ||
+		result.stopReason === "error" ||
+		result.stopReason === "aborted"
+	);
+}
+
+export function formatResultFailure(result: SingleResult): string {
+	const error = result.errorMessage || result.stderr.trim();
+	const output = getResultFinalOutput(result);
+	const combined =
+		error && output ? `${error}\n\nPartial output:\n${output}` : error || output || "(no output)";
+	return truncateUtf8(combined, DEFAULT_MAX_CONTEXT_BYTES).text;
 }
 
 function boundMessageText(message: Message, maxBytes: number): { message: Message; bytes: number; truncated: boolean } {
@@ -107,13 +125,19 @@ function boundMessageText(message: Message, maxBytes: number): { message: Messag
 export function buildFanInContext(results: SingleResult[], maxBytes = DEFAULT_MAX_CONTEXT_BYTES): string {
 	const text = results
 		.map((result, index) => {
-			const status = result.exitCode === 0 ? "completed" : result.exitCode === -1 ? "running" : "failed";
+			const failed = isResultError(result);
+			const status = result.exitCode === -1 ? "running" : failed ? "failed" : "completed";
 			const output = getResultFinalOutput(result);
 			const error = result.errorMessage || result.stderr.trim();
+			const resultText = failed
+				? `${error ? "Error" : output ? "Partial output" : "Error"}:\n${formatResultFailure(result)}`
+				: output
+					? `Output:\n${output}`
+					: "Output: (no output)";
 			return [
 				`## Result ${index + 1}: ${result.agent} (${status})`,
 				`Task: ${result.task}`,
-				output ? `Output:\n${output}` : error ? `Error:\n${error}` : "Output: (no output)",
+				resultText,
 			].join("\n\n");
 		})
 		.join("\n\n---\n\n");
@@ -491,6 +515,7 @@ export async function runSingleAgent(
 		currentResult.truncated ||= final.truncated;
 		if (
 			currentResult.exitCode === 0 &&
+			currentResult.stopReason !== "error" &&
 			(currentResult.stopReason === "toolUse" || !currentResult.finalOutput.trim())
 		) {
 			currentResult.exitCode = 1;

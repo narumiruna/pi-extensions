@@ -14,7 +14,6 @@ import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { buildContextSnapshot, redactPrivateText } from "../src/context.js";
-import { formatResultFailure } from "../src/execution.js";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_OUTPUT_BYTES,
@@ -28,6 +27,8 @@ import { JsonLineDecoder } from "../src/protocol.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import {
 	buildFanInContext,
+	formatResultFailure,
+	isResultError,
 	mapWithConcurrencyLimit,
 	runSingleAgent,
 	terminateProcess,
@@ -1437,6 +1438,30 @@ test("runSingleAgent preserves final text beyond its history budget and rejects 
 	);
 	assert.match(providerError.errorMessage ?? "", /truncated by pi-subagents/);
 	assert.equal(providerError.finalOutput, "PARTIAL");
+	assert.equal(isResultError(providerError), true);
+	const providerFailureContext = buildFanInContext([providerError]);
+	assert.match(providerFailureContext, /test \(failed\)/);
+	assert.match(providerFailureContext, /Error:\nE/);
+	assert.match(providerFailureContext, /Partial output:\nPARTIAL/);
+
+	const emptyProviderError = await runScript(
+		[
+			"const message={role:'assistant',content:[],stopReason:'error',errorMessage:'RATE_LIMIT_DETAIL',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.equal(emptyProviderError.stopReason, "error");
+	assert.equal(emptyProviderError.errorMessage, "RATE_LIMIT_DETAIL");
+	assert.equal(emptyProviderError.finalOutput, "");
+
+	const multiBlock = await runScript(
+		[
+			"const message={role:'assistant',content:[{type:'text',text:'FIRST'},{type:'text',text:'SECOND'}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.equal(multiBlock.exitCode, 0);
+	assert.equal(multiBlock.finalOutput, "FIRST\nSECOND");
 
 	const empty = await runScript(
 		[

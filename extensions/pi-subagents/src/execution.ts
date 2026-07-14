@@ -6,17 +6,19 @@ import {
 	type AgentScope,
 	type SubagentThinkingLevel,
 } from "./agents.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import type { SubagentParams } from "./params.js";
 import {
 	buildFanInContext,
+	formatResultFailure,
 	getResultFinalOutput,
+	isResultError,
 	mapWithConcurrencyLimit,
-	runSingleAgent,
 	type OnUpdateCallback,
+	runSingleAgent,
 	type SingleResult,
 	type SubagentDetails,
 } from "./runner.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
-import type { SubagentParams } from "./params.js";
 import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -41,13 +43,6 @@ export function assertSubagentDepthAllowed(): void {
 	if (depth >= maxDepth) {
 		throw new Error(`Subagent recursion depth limit reached (${maxDepth})`);
 	}
-}
-
-export function formatResultFailure(result: SingleResult): string {
-	const error = result.errorMessage || result.stderr.trim();
-	const output = getResultFinalOutput(result);
-	const combined = error && output ? `${error}\n\nPartial output:\n${output}` : error || output || "(no output)";
-	return truncateUtf8(combined, DEFAULT_MAX_CONTEXT_BYTES).text;
 }
 
 interface StatusContext {
@@ -232,8 +227,7 @@ export async function executeSubagent(
 						);
 						results.push(result);
 
-						const isError =
-							result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+						const isError = isResultError(result);
 						if (isError) {
 							const errorMsg = formatResultFailure(result);
 							return {
@@ -379,14 +373,16 @@ export async function executeSubagent(
 						);
 					}
 
-					const successCount = results.filter((r) => r.exitCode === 0).length;
-					const summaries = results.map((r) => {
-						const output = getResultFinalOutput(r);
-						const error = r.errorMessage || r.stderr.trim();
-						const summaryText = output || error;
-						const preview = summaryText.slice(0, 160) + (summaryText.length > 160 ? "..." : "");
-						return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
+					const successCount = results.filter((result) => !isResultError(result)).length;
+					const summaries = results.map((result) => {
+						const failed = isResultError(result);
+						const output = getResultFinalOutput(result);
+						const error = result.errorMessage || result.stderr.trim();
+						const summaryText = failed ? formatResultFailure(result) : output || error;
+						const preview = truncateUtf8(summaryText, 160).text;
+						return `[${result.agent}] ${failed ? "failed" : "completed"}: ${preview || "(no output)"}`;
 					});
+					const aggregatorFailed = aggregatorResult ? isResultError(aggregatorResult) : false;
 					const aggregatorOutput = aggregatorResult ? getResultFinalOutput(aggregatorResult) : "";
 					const aggregatorError = aggregatorResult?.errorMessage || aggregatorResult?.stderr.trim() || "";
 					return {
@@ -394,23 +390,19 @@ export async function executeSubagent(
 							{
 								type: "text",
 								text: aggregatorResult
-									? aggregatorOutput || aggregatorError || `(aggregator ${aggregatorResult.agent} produced no output)`
+									? aggregatorFailed
+										? formatResultFailure(aggregatorResult)
+										: aggregatorOutput ||
+											aggregatorError ||
+											`(aggregator ${aggregatorResult.agent} produced no output)`
 									: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
 							},
 						],
 						details: {
 							...makeDetails("parallel")(results, aggregatorResult),
-							isError: aggregatorResult
-								? aggregatorResult.exitCode !== 0 ||
-									aggregatorResult.stopReason === "error" ||
-									aggregatorResult.stopReason === "aborted"
-								: false,
+							isError: aggregatorFailed,
 						},
-						isError: aggregatorResult
-							? aggregatorResult.exitCode !== 0 ||
-								aggregatorResult.stopReason === "error" ||
-								aggregatorResult.stopReason === "aborted"
-							: undefined,
+						isError: aggregatorResult ? aggregatorFailed : undefined,
 					};
 				} finally {
 					status.clear();
@@ -434,7 +426,7 @@ export async function executeSubagent(
 						onUpdate,
 						makeDetails("single"),
 					);
-					const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+					const isError = isResultError(result);
 					if (isError) {
 						const errorMsg = formatResultFailure(result);
 						return {

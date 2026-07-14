@@ -38,10 +38,12 @@ type SchemaObject = {
 
 type SubagentTool = {
 	execute: (...args: unknown[]) => Promise<{
+		content?: Array<{ type: string; text: string }>;
 		details?: {
 			results: Array<{ thinkingLevel?: string }>;
 			aggregator?: { thinkingLevel?: string };
 		};
+		isError?: boolean;
 	}>;
 };
 
@@ -403,4 +405,49 @@ test("subagent execute resolves thinking level in single, chain, parallel, and a
 	assert.equal(parallel.details?.results[0]?.thinkingLevel, "minimal");
 	assert.equal(parallel.details?.results[1]?.thinkingLevel, "off");
 	assert.equal(parallel.details?.aggregator?.thinkingLevel, "xhigh");
+});
+
+test("parallel summaries classify provider errors and retain partial output", async () => {
+	const mock = createMockPi();
+	subagents(mock.pi);
+	const tool = mock.tools[0] as SubagentTool;
+	const { ctx } = createMockContext();
+	const signal = new AbortController().signal;
+	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parallel-error-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"const task=process.argv.at(-1) ?? '';",
+			"const failed=task.includes('provider failure');",
+			"const message=failed",
+			"? {role:'assistant',content:[{type:'text',text:'PARTIAL'}],stopReason:'error',errorMessage:'PROVIDER_FAILED',timestamp:Date.now()}",
+			": {role:'assistant',content:[{type:'text',text:'DONE'}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const originalScript = process.argv[1];
+	process.argv[1] = fakePi;
+	try {
+		const result = await tool.execute(
+			"parallel-errors",
+			{
+				tasks: [
+					{ agent: "scout", task: "provider failure" },
+					{ agent: "scout", task: "success" },
+				],
+			},
+			signal,
+			() => undefined,
+			ctx,
+		);
+		const text = result.content?.[0]?.text ?? "";
+		assert.match(text, /Parallel: 1\/2 succeeded/);
+		assert.match(text, /\[scout\] failed: PROVIDER_FAILED/);
+		assert.match(text, /Partial output:\nPARTIAL/);
+		assert.match(text, /\[scout\] completed: DONE/);
+	} finally {
+		process.argv[1] = originalScript;
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
