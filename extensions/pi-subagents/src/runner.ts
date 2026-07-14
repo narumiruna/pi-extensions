@@ -261,6 +261,9 @@ export async function runSingleAgent(
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 
+	let latestAssistantOutput = "";
+	let terminalAssistantOutput: string | undefined;
+
 	const currentResult: SingleResult = {
 		agent: agentName,
 		agentSource: agent.source,
@@ -274,9 +277,21 @@ export async function runSingleAgent(
 		step,
 		timeoutMs,
 	};
+	const selectedAssistantOutput = () =>
+		terminalAssistantOutput !== undefined
+			? terminalAssistantOutput
+			: latestAssistantOutput || getFinalOutput(currentResult.messages);
+	const setErrorMessage = (message: string) => {
+		const bounded = truncateUtf8(message, DEFAULT_MAX_STDERR_BYTES);
+		currentResult.errorMessage = bounded.text;
+		currentResult.truncated ||= bounded.truncated;
+		return bounded.text;
+	};
 
 	const emitUpdate = () => {
-		currentResult.finalOutput = getFinalOutput(currentResult.messages);
+		const latest = truncateUtf8(selectedAssistantOutput(), DEFAULT_MAX_OUTPUT_BYTES);
+		currentResult.finalOutput = latest.text;
+		currentResult.truncated ||= latest.truncated;
 		if (onUpdate) {
 			onUpdate({
 				content: [{ type: "text", text: currentResult.finalOutput || "(running...)" }],
@@ -293,8 +308,7 @@ export async function runSingleAgent(
 			currentResult.exitCode = 1;
 			currentResult.stopReason = "error";
 			const reason = error instanceof Error ? error.message : String(error);
-			currentResult.errorMessage = `Invalid subagent cwd: ${effectiveCwd} (${reason})`;
-			currentResult.stderr = currentResult.errorMessage;
+			currentResult.stderr = setErrorMessage(`Invalid subagent cwd: ${effectiveCwd} (${reason})`);
 			return currentResult;
 		}
 
@@ -302,7 +316,7 @@ export async function runSingleAgent(
 			currentResult.exitCode = 130;
 			currentResult.aborted = true;
 			currentResult.stopReason = "aborted";
-			currentResult.errorMessage = "Subagent was aborted before start";
+			setErrorMessage("Subagent was aborted before start");
 			return currentResult;
 		}
 
@@ -356,8 +370,7 @@ export async function runSingleAgent(
 					},
 				});
 			} catch (error) {
-				currentResult.errorMessage = error instanceof Error ? error.message : String(error);
-				currentResult.stderr = currentResult.errorMessage;
+				currentResult.stderr = setErrorMessage(error instanceof Error ? error.message : String(error));
 				finish(1);
 				return;
 			}
@@ -379,6 +392,14 @@ export async function runSingleAgent(
 				const event = raw as { type?: string; message?: Message };
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message;
+					if (msg.role === "assistant") {
+						const output = truncateUtf8(getFinalOutput([msg]), DEFAULT_MAX_OUTPUT_BYTES);
+						currentResult.truncated ||= output.truncated;
+						if (output.text) latestAssistantOutput = output.text;
+						if (msg.stopReason === "stop" || msg.stopReason === "length") {
+							terminalAssistantOutput = output.text;
+						}
+					}
 					addMessage(msg);
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
@@ -393,7 +414,7 @@ export async function runSingleAgent(
 						}
 						if (!currentResult.model && msg.model) currentResult.model = msg.model;
 						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+						if (msg.errorMessage) setErrorMessage(msg.errorMessage);
 					}
 					emitUpdate();
 				} else if (event.type === "tool_result_end" && event.message) {
@@ -415,7 +436,7 @@ export async function runSingleAgent(
 				timedOut = true;
 				currentResult.timedOut = true;
 				currentResult.stopReason = "timeout";
-				currentResult.errorMessage = `Subagent timed out after ${timeoutMs}ms`;
+				setErrorMessage(`Subagent timed out after ${timeoutMs}ms`);
 				const bounded = appendBounded(
 					currentResult.stderr,
 					`\nSubagent timed out after ${timeoutMs}ms.`,
@@ -439,10 +460,10 @@ export async function runSingleAgent(
 				finish(timedOut ? 124 : wasAborted ? 130 : (code ?? 0));
 			});
 			proc.on("error", (error) => {
-				currentResult.errorMessage = error.message;
+				const message = setErrorMessage(error.message);
 				const bounded = appendBounded(
 					currentResult.stderr,
-					`${currentResult.stderr ? "\n" : ""}${error.message}`,
+					`${currentResult.stderr ? "\n" : ""}${message}`,
 					DEFAULT_MAX_STDERR_BYTES,
 				);
 				currentResult.stderr = bounded.text;
@@ -456,7 +477,7 @@ export async function runSingleAgent(
 					wasAborted = true;
 					currentResult.aborted = true;
 					currentResult.stopReason = "aborted";
-					currentResult.errorMessage = "Subagent was aborted";
+					setErrorMessage("Subagent was aborted");
 					cleanupTermination = terminateProcess(proc);
 				};
 				if (signal.aborted) abortHandler();
@@ -465,9 +486,17 @@ export async function runSingleAgent(
 		});
 
 		currentResult.exitCode = exitCode;
-		const final = truncateUtf8(getFinalOutput(currentResult.messages), DEFAULT_MAX_OUTPUT_BYTES);
+		const final = truncateUtf8(selectedAssistantOutput(), DEFAULT_MAX_OUTPUT_BYTES);
 		currentResult.finalOutput = final.text;
 		currentResult.truncated ||= final.truncated;
+		if (
+			currentResult.exitCode === 0 &&
+			(currentResult.stopReason === "toolUse" || !currentResult.finalOutput.trim())
+		) {
+			currentResult.exitCode = 1;
+			currentResult.stopReason = "error";
+			setErrorMessage("Subagent completed without final text");
+		}
 		currentResult.policy = {
 			inherited: ["environment"],
 			overridden: [

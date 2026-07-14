@@ -43,6 +43,13 @@ export function assertSubagentDepthAllowed(): void {
 	}
 }
 
+export function formatResultFailure(result: SingleResult): string {
+	const error = result.errorMessage || result.stderr.trim();
+	const output = getResultFinalOutput(result);
+	const combined = error && output ? `${error}\n\nPartial output:\n${output}` : error || output || "(no output)";
+	return truncateUtf8(combined, DEFAULT_MAX_CONTEXT_BYTES).text;
+}
+
 interface StatusContext {
 	ui: { setStatus: (key: string, value: string | undefined) => void };
 }
@@ -228,7 +235,7 @@ export async function executeSubagent(
 						const isError =
 							result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 						if (isError) {
-							const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
+							const errorMsg = formatResultFailure(result);
 							return {
 								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
 								details: { ...makeDetails("chain")(results), isError: true },
@@ -429,7 +436,7 @@ export async function executeSubagent(
 					);
 					const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 					if (isError) {
-						const errorMsg = result.errorMessage || result.stderr || getResultFinalOutput(result) || "(no output)";
+						const errorMsg = formatResultFailure(result);
 						return {
 							content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
 							details: { ...makeDetails("single")([result]), isError: true },
