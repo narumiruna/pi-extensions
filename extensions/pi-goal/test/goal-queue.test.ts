@@ -434,6 +434,74 @@ test("a pending busy skip suppresses the old goal prompt before advancement", as
 	assert.equal(result, undefined);
 });
 
+test("pending skip rejects stale completion without rewriting the skip intent", async () => {
+	let idle = false;
+	const harness = await createHarness({ isIdle: () => idle });
+	await harness.command("old head");
+	await harness.command("add next head");
+	const oldHead = stateGoals(harness.mock)[0];
+	assert.ok(oldHead);
+	await harness.command("skip");
+
+	const result = await completionTool(harness.mock).execute(
+		"complete-after-skip",
+		{ goal_id: oldHead.id, summary: "Old head completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	assert.equal(result.terminate, true);
+	assert.match(result.content?.[0]?.text ?? "", /queued to be skipped/i);
+	assert.equal(lastState(harness.mock)?.goal?.status, "active");
+	assert.deepEqual(lastState(harness.mock)?.pendingAction, {
+		kind: "advance",
+		goalId: oldHead.id,
+		reason: "skip",
+		completedText: "old head",
+	});
+
+	idle = true;
+	await settled(harness);
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text }) => text),
+		["next head"],
+	);
+});
+
+test("pending skip rejects stale blocked reports without rewriting terminal state", async () => {
+	let idle = false;
+	const harness = await createHarness({ isIdle: () => idle });
+	await harness.command("old head");
+	await harness.command("add next head");
+	const oldHead = stateGoals(harness.mock)[0];
+	assert.ok(oldHead);
+	await harness.command("skip");
+
+	const result = await blockedTool(harness.mock).execute(
+		"block-after-skip",
+		{
+			goal_id: oldHead.id,
+			reason: "External access required",
+			evidence: "Three verified attempts require external access.",
+			repeated_turns: 3,
+		},
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	assert.equal(result.terminate, true);
+	assert.match(result.content?.[0]?.text ?? "", /queued to be skipped/i);
+	assert.equal(lastState(harness.mock)?.goal?.status, "active");
+	assert.equal(lastState(harness.mock)?.pendingAction?.kind, "advance");
+
+	idle = true;
+	await settled(harness);
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text }) => text),
+		["next head"],
+	);
+});
+
 test("manual compaction dispatches pending priority instead of the old continuation", async () => {
 	const branch: Array<Record<string, unknown>> = [];
 	let idle = true;
@@ -687,7 +755,15 @@ async function settled(harness: Awaited<ReturnType<typeof createHarness>>) {
 }
 
 function completionTool(mock: ReturnType<typeof createMockPi>) {
-	const tool = mock.tools.find(({ name }) => name === "goal_complete");
+	return findGoalTool(mock, "goal_complete");
+}
+
+function blockedTool(mock: ReturnType<typeof createMockPi>) {
+	return findGoalTool(mock, "goal_blocked");
+}
+
+function findGoalTool(mock: ReturnType<typeof createMockPi>, name: string) {
+	const tool = mock.tools.find((candidate) => candidate.name === name);
 	assert.ok(tool);
 	return tool as GoalTool;
 }

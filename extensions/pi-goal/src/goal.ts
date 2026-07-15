@@ -160,6 +160,19 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					terminate: completingDuringBudgetWrapUp || undefined,
 				};
 			}
+			if (hasPendingSkipForGoal(completedGoal.id)) {
+				updateGoalUsage(completedGoal, ctx);
+				persistGoal(completedGoal);
+				updateStatus(ctx, completedGoal);
+				clearBudgetWrapUp();
+				const rejection = "Goal completion rejected: goal is queued to be skipped.";
+				ctx.ui.notify(rejection, "warning");
+				return {
+					content: [{ type: "text", text: rejection }],
+					details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+					terminate: true,
+				};
+			}
 			if (completedGoal.status !== "active" && !completingDuringBudgetWrapUp) {
 				const rejection = `Goal completion rejected: goal is ${completedGoal.status}, not active.`;
 				ctx.ui.notify(rejection, "warning");
@@ -294,7 +307,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			const evidence = typeof params.evidence === "string" ? params.evidence.trim() : "";
 			const repeatedTurns =
 				typeof params.repeated_turns === "number" ? params.repeated_turns : Number.NaN;
-			const reject = (rejectionReason: string) => {
+			const reject = (rejectionReason: string, terminate = false) => {
 				const rejection = `goal_blocked rejected: ${rejectionReason}.`;
 				ctx.ui.notify(rejection, "warning");
 				return {
@@ -306,12 +319,20 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 						evidence: evidence.slice(0, MAX_BLOCKER_EVIDENCE_LENGTH),
 						repeated_turns: Number.isFinite(repeatedTurns) ? repeatedTurns : 0,
 					} satisfies GoalBlockedDetails,
+					...(terminate ? { terminate: true as const } : {}),
 				};
 			};
 
 			if (!blockedGoal) return reject("no active goal");
 			const staleGoalRejection = goalIdRejectionReason(blockedGoal, requestedGoalId);
 			if (staleGoalRejection) return reject(staleGoalRejection);
+			if (hasPendingSkipForGoal(blockedGoal.id)) {
+				updateGoalUsage(blockedGoal, ctx);
+				persistGoal(blockedGoal);
+				updateStatus(ctx, blockedGoal);
+				clearBudgetWrapUp();
+				return reject("goal is queued to be skipped", true);
+			}
 			if (blockedGoal.status !== "active") {
 				return reject(`goal is ${blockedGoal.status}, not active`);
 			}
@@ -790,6 +811,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			if (!dispatched) dispatchContinuationIfSettled(ctx);
 		});
 	});
+
+	function hasPendingSkipForGoal(goalId: string) {
+		return (
+			runtime.pendingQueueAction?.kind === "advance" &&
+			runtime.pendingQueueAction.reason === "skip" &&
+			runtime.pendingQueueAction.goalId === goalId
+		);
+	}
 
 	function stopGoalAfterAgentEnd(
 		ctx: StatusContext,
