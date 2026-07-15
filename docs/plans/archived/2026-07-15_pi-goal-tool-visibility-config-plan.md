@@ -18,7 +18,7 @@ Add user settings at `~/.pi/agent/pi-goal.json` with this shape:
 
 Supported values are `"always"` and `"after-first-goal"`. Missing settings or an omitted property resolve to `"always"`; malformed settings warn and safely fall back to `"always"`. Do not create the file automatically.
 
-`"always"` means pi-goal never proactively hides its registered tools. `"after-first-goal"` hides them at fresh session startup, reveals them for the first successfully accepted goal activation, and keeps them desired for the remainder of that extension runtime; restoring an unfinished goal also unlocks them. Other extensions may temporarily apply a stricter tool set in either mode. pi-goal must not repeatedly overwrite that policy: if an active goal cannot access both terminal tools, it pauses safely and suppresses automatic continuation.
+`"always"` means pi-goal never proactively hides its registered tools. `"after-first-goal"` hides them at fresh session startup, reveals them for the first successfully accepted goal activation, and keeps them desired for the remainder of that extension runtime; restoring an unfinished goal also marks them unlocked without widening an active set already restricted by an earlier lifecycle handler. Other extensions may temporarily apply a stricter tool set in either mode. pi-goal must not repeatedly overwrite that policy: if an active goal cannot access both terminal tools, it pauses safely and suppresses automatic continuation.
 
 ## Non-Goals
 
@@ -30,13 +30,13 @@ Supported values are `"always"` and `"after-first-goal"`. Missing settings or an
 ## Plan
 
 - [x] Added `extensions/pi-goal/src/settings.ts` with typed synchronous loading for `pi-goal.json`, `"always"` defaults, and bounded invalid-file reporting; isolated temporary-path tests cover missing, omitted, valid, malformed, invalid-value, and unreadable inputs.
-- [x] Added lifecycle tests for both visibility modes: missing/invalid/explicit `"always"` settings keep both tools active, while `"after-first-goal"` hides them until an accepted activation or unfinished-goal restore; the tests failed before runtime integration and pass in the 427-test repository suite.
+- [x] Added lifecycle tests for both visibility modes: missing/invalid/explicit `"always"` settings keep both tools active, while `"after-first-goal"` hides them until an accepted activation or unfinished-goal restore; the tests failed before runtime integration and pass in the 432-test repository suite.
 - [x] Refactored `extensions/pi-goal/src/goal.ts` to load settings at `session_start`, scope sticky visibility to `"after-first-goal"`, restore the locked set after failed first delivery, and keep successful unlocks through completion/clear for the current runtime; lifecycle and parent/child isolation tests pass.
-- [x] Removed per-turn `setActiveTools()` reassertion and added availability guards at restore, start/resume/reactivating edit, prompt injection, `agent_end`, and continuation dispatch; allowlist, partial-reveal cleanup, busy-turn widening, exact settings-mode restoration, replacement rollback, unrelated-turn tool preservation, stop-precedence, budget-precedence, paused-state, and no-continuation assertions pass.
+- [x] Removed per-turn `setActiveTools()` reassertion and added availability guards at restore, start/resume/reactivating edit, prompt injection, `agent_end`, and continuation dispatch; allowlist, partial-reveal cleanup, busy-turn widening, exact settings-mode restoration, replacement rollback, restrictive restore ordering, Goal-owned prompt aborts, unrelated-turn tool preservation, stop-precedence, budget-precedence, paused-state, and no-continuation assertions pass.
 - [x] Added both restrictive-policy ordering scenarios, including Plan-mode-shaped whole-set replacement; tests prove the earlier removal pauses before Goal prompt injection, while later removal pauses at `agent_end` without re-adding tools or dispatching continuation.
 - [x] Documented the cross-extension ownership rule and failure-safe connection behavior in `docs/implementation-notes/pi-goal-plan-mode-tool-policy.md`; source behavior and ordering tests match the documented restrictive-policy precedence.
 - [x] Updated `extensions/pi-goal/README.md` with the `pi-goal.json` path, both values, the `"always"` default, runtime-scoped lazy semantics, malformed-config fallback, failed-kickoff rollback, and restrictive-policy pause behavior.
-- [x] Formatted and verified the completed change: targeted Biome check, package typecheck, isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 427 passing tests, and `just pack-goal` all pass; the dry run contains nine expected files including `src/settings.ts`.
+- [x] Formatted and verified the completed change: targeted Biome check, package typecheck, isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 432 passing tests, and `just pack-goal` all pass; the dry run contains nine expected files including `src/settings.ts`.
 
 ## Risks
 
@@ -56,4 +56,4 @@ Keep `"always"` behavior independent of lazy state so the optional mode can be r
 - [x] Active goals cannot start, restore, or auto-continue without both terminal tools, verified by allowlist, partial activation, exact settings-mode restoration, busy-turn, replacement, clobber-order, unrelated-turn tool preservation, status-precedence, paused-state, and no-continuation assertions.
 - [x] pi-goal no longer reasserts `setActiveTools()` from `before_agent_start`, verified by source review and both restrictive-policy ordering tests.
 - [x] User and implementation documentation matches the configuration and policy-precedence behavior, verified in `extensions/pi-goal/README.md` and `docs/implementation-notes/pi-goal-plan-mode-tool-policy.md`.
-- [x] Repository and package gates pass, verified by the isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 427 tests, and inspected nine-file `just pack-goal` output.
+- [x] Repository and package gates pass, verified by the isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 432 tests, and inspected nine-file `just pack-goal` output.

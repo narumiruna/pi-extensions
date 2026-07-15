@@ -257,6 +257,37 @@ test("restoring an unfinished goal unlocks goal tools on session_start", () => {
 	}
 });
 
+test("lazy restore does not widen an earlier restrictive session-start policy", () => {
+	const sessionGoal: StoredGoal = {
+		id: "restored-under-restriction",
+		text: "restore without widening",
+		status: "active",
+		startedAt: 1,
+		updatedAt: 2,
+		iteration: 3,
+		tokensUsed: 5,
+		timeUsedSeconds: 4,
+		baselineTokens: 0,
+	};
+	const branch = [
+		{ type: "custom", customType: "goal-state", data: { goal: sessionGoal } },
+		assistantUsageEntry({ totalTokens: 5 }),
+	];
+	const mock = createMockPi();
+	registerGoal(mock.pi, "after-first-goal");
+	// Simulate an earlier session_start handler restoring Plan mode's saved tool set.
+	mock.rawPi.setActiveTools(["read", "bash"]);
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
+	assert.equal(lastGoalStatus(mock), "paused");
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
+});
+
 test("an active goal pauses without aborting an unrelated restrictive turn", async () => {
 	let aborts = 0;
 	const mock = createMockPi({
@@ -306,6 +337,55 @@ test("missing goal tools abort an automatic continuation turn", async () => {
 
 	assert.equal(lastGoalStatus(active.mock), "paused");
 	assert.equal(aborts, 1);
+});
+
+test("missing goal tools abort kickoff, resume, and active-edit prompts", async (t) => {
+	await t.test("kickoff", async () => {
+		let aborts = 0;
+		const started = await startGoalForTest({ abort: () => aborts++ });
+		const kickoffPrompt = started.mock.sentUserMessages.at(-1)?.text ?? "";
+		started.mock.rawPi.setActiveTools(["read", "bash"]);
+
+		started.mock.events.get("before_agent_start")?.[0]?.(
+			{ prompt: `transformed by an earlier extension\n\n${kickoffPrompt}`, systemPrompt: "base" },
+			started.ctx,
+		);
+
+		assert.equal(lastGoalStatus(started.mock), "paused");
+		assert.equal(aborts, 1);
+	});
+
+	await t.test("resume", async () => {
+		let aborts = 0;
+		const resumed = restoreGoalForTest("paused", {}, "always", { abort: () => aborts++ });
+		await resumed.mock.commands.get("goal")?.handler("resume", resumed.ctx);
+		const resumePrompt = resumed.mock.sentUserMessages.at(-1)?.text ?? "";
+		resumed.mock.rawPi.setActiveTools(["read", "bash"]);
+
+		resumed.mock.events.get("before_agent_start")?.[0]?.(
+			{ prompt: resumePrompt, systemPrompt: "base" },
+			resumed.ctx,
+		);
+
+		assert.equal(lastGoalStatus(resumed.mock), "paused");
+		assert.equal(aborts, 1);
+	});
+
+	await t.test("active edit", async () => {
+		let aborts = 0;
+		const edited = await startGoalForTest({ abort: () => aborts++ });
+		await edited.mock.commands.get("goal")?.handler("edit revised objective", edited.ctx);
+		const editPrompt = edited.mock.sentUserMessages.at(-1)?.text ?? "";
+		edited.mock.rawPi.setActiveTools(["read", "bash"]);
+
+		edited.mock.events.get("before_agent_start")?.[0]?.(
+			{ prompt: editPrompt, systemPrompt: "base" },
+			edited.ctx,
+		);
+
+		assert.equal(lastGoalStatus(edited.mock), "paused");
+		assert.equal(aborts, 1);
+	});
 });
 
 test("a later restrictive tool policy pauses the goal at agent_end without continuation", async () => {
@@ -3074,6 +3154,7 @@ function restoreGoalForTest(
 	status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited",
 	overrides: { tokenBudget?: number; tokensUsed?: number; timeUsedSeconds?: number } = {},
 	toolVisibility: "always" | "after-first-goal" = "always",
+	contextOverrides: Record<string, unknown> = {},
 ) {
 	const sessionGoal = {
 		id: `restored-${status}`,
@@ -3087,13 +3168,14 @@ function restoreGoalForTest(
 		timeUsedSeconds: overrides.timeUsedSeconds ?? 4,
 		baselineTokens: 0,
 	};
-	return restoreStoredGoalForTest(sessionGoal, [], toolVisibility);
+	return restoreStoredGoalForTest(sessionGoal, [], toolVisibility, contextOverrides);
 }
 
 function restoreStoredGoalForTest(
 	sessionGoal: StoredGoal,
 	extraEntries: Array<Record<string, unknown>> = [],
 	toolVisibility: "always" | "after-first-goal" = "always",
+	contextOverrides: Record<string, unknown> = {},
 ) {
 	const branch = [
 		{
@@ -3106,6 +3188,7 @@ function restoreStoredGoalForTest(
 	const mock = createMockPi();
 	registerGoal(mock.pi, toolVisibility);
 	const context = createMockContext({
+		...contextOverrides,
 		sessionManager: { getBranch: () => branch, getEntries: () => branch },
 	});
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
