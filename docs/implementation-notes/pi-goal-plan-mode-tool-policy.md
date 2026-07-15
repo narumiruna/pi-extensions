@@ -19,7 +19,7 @@ The visibility setting controls only pi-goal's own baseline behavior:
 - `"always"` means pi-goal does not proactively hide its registered tools.
 - `"after-first-goal"` means pi-goal hides its tools at fresh runtime startup and reveals them for the first accepted goal activation or an unfinished-goal restore.
 
-Neither value grants pi-goal ownership over the global active-tool array. Plan mode or another restrictive policy may still hide the tools temporarily. Lazy mode may request the tools again during an explicit start or resume, but it does not reassert them on every model turn.
+Neither value grants pi-goal ownership over the global active-tool array. Plan mode or another restrictive policy may still hide the tools temporarily. Lazy mode may request the tools again during an explicit start or resume, but it does not reassert them on every model turn. It refuses to reveal missing tools while a turn is already running, because that could widen a restrictive turn before its owner can reapply policy.
 
 ## Fail-safe behavior
 
@@ -47,3 +47,4 @@ Tests should cover both ordering boundaries:
 2. A restrictive policy removes Goal tools after pi-goal's pre-turn check; `agent_end` pauses the goal and `agent_settled` sends no continuation.
 3. A restored active goal cannot enable both terminal tools because of an allowlist; it restores as paused.
 4. A new start, resume, or reactivating edit cannot proceed while both terminal tools are unavailable.
+5. Lazy activation cannot reveal missing tools while Pi is already running another turn.

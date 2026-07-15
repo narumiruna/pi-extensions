@@ -62,7 +62,7 @@ Configuration is optional. Create `~/.pi/agent/pi-goal.json` only when overridin
 `toolVisibility` accepts:
 
 - `"always"` (default) — pi-goal does not proactively hide `goal_complete` or `goal_blocked`, keeping the tool schema stable from session startup.
-- `"after-first-goal"` — hides both tools at fresh runtime startup, reveals them for the first accepted Goal activation or unfinished-goal restore, and keeps them desired for the remainder of that extension runtime. A failed first kickoff restores the locked tool set.
+- `"after-first-goal"` — hides both tools at fresh runtime startup, reveals them for the first accepted Goal activation or unfinished-goal restore, and keeps them desired for the remainder of that extension runtime. A failed first kickoff restores the locked tool set. If revealing the tools would widen an already-running turn, wait for Pi to become idle and retry `/goal`.
 
 Missing settings and an omitted `toolVisibility` use `"always"`. Invalid settings produce a warning and also fall back to `"always"`; pi-goal never creates the file automatically.
 

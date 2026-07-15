@@ -428,6 +428,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 		runtime.activeGoal = loadGoalFromSession(ctx);
 		if (runtime.activeGoal) {
+			if (runtime.activeGoal.status === "active") {
+				updateGoalUsage(runtime.activeGoal, ctx);
+				if (limitActiveGoalForBudget(ctx, false)) return;
+			}
 			if (runtime.settings.toolVisibility === "after-first-goal") {
 				try {
 					revealGoalTools();
@@ -441,10 +445,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			if (runtime.activeGoal.status === "active" && !goalToolsAvailable()) {
 				pauseGoalForUnavailableTools(ctx);
 				return;
-			}
-			if (runtime.activeGoal.status === "active") {
-				updateGoalUsage(runtime.activeGoal, ctx);
-				if (limitActiveGoalForBudget(ctx, false)) return;
 			}
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
@@ -580,10 +580,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 	pi.on("agent_end", (event, ctx) => {
 		if (!runtime.activeGoal) return;
-		if (runtime.activeGoal.status === "active" && !goalToolsAvailable()) {
-			pauseGoalForUnavailableTools(ctx);
-			return;
-		}
 		if (
 			runtime.activeGoal.status === "budget_limited" &&
 			runtime.budgetWrapUp?.goalId === runtime.activeGoal.id
@@ -612,6 +608,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (finalAssistant?.stopReason === "error") {
 			if (isRetryableGoalInterruption(finalAssistant)) {
 				if (limitActiveGoalForBudget(ctx, false)) return;
+				if (!goalToolsAvailable()) {
+					pauseGoalForUnavailableTools(ctx);
+					return;
+				}
 				runtime.goalRecovery = {
 					goalId,
 					kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
@@ -634,6 +634,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearGoalRecoveryForGoal(goalId);
 
 		if (limitActiveGoalForBudget(ctx, false)) return;
+		if (!goalToolsAvailable()) {
+			pauseGoalForUnavailableTools(ctx);
+			return;
+		}
 
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -675,9 +679,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		// missing tool means another policy or allowlist intentionally removed it.
 		const goalToolsWereUnlocked = runtime.goalToolsUnlocked;
 		try {
-			prepareGoalToolsForActivation();
+			prepareGoalToolsForActivation(ctx);
 		} catch (error) {
 			ctx.ui.notify(`Cannot start /goal: ${formatError(error)}`, "error");
+			if (existingGoal?.status === "active") pauseGoalForUnavailableTools(ctx);
 			return;
 		}
 
@@ -764,7 +769,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		try {
-			prepareGoalToolsForActivation();
+			prepareGoalToolsForActivation(ctx);
 		} catch (error) {
 			ctx.ui.notify(`Cannot resume /goal: ${formatError(error)}`, "error");
 			return;
@@ -851,7 +856,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		);
 		if (nextGoal.status === "active") {
 			try {
-				prepareGoalToolsForActivation();
+				prepareGoalToolsForActivation(ctx);
 			} catch (error) {
 				ctx.ui.notify(`Cannot reactivate /goal: ${formatError(error)}`, "error");
 				if (runtime.activeGoal?.status === "active") pauseGoalForUnavailableTools(ctx);
@@ -1178,8 +1183,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		assertGoalToolsAvailable();
 	}
 
-	function prepareGoalToolsForActivation() {
+	function prepareGoalToolsForActivation(ctx: StatusContext) {
 		if (runtime.settings.toolVisibility === "after-first-goal") {
+			if (!goalToolsAvailable() && ctx.isIdle?.() !== true) {
+				throw new Error("wait until Pi is idle before revealing the goal tools");
+			}
 			revealGoalTools();
 			return;
 		}

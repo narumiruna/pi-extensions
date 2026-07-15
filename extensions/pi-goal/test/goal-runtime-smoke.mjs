@@ -109,7 +109,14 @@ async function createHarness(responses, fauxOptions = {}, prepareSession) {
 		noTools: "builtin",
 	});
 	assert.deepEqual(result.extensionsResult.errors, []);
-	await result.session.bindExtensions({});
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		await result.session.bindExtensions({});
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
 	return {
 		extensions: result.extensionsResult.extensions.map((extension) => ({
 			path: extension.path,

@@ -262,36 +262,44 @@ test("after-first-goal does not fight another extension that exposes locked tool
 	]);
 });
 
-test("restored active goal pauses when terminal tools are unavailable", () => {
-	const sessionGoal: StoredGoal = {
-		id: "restored-without-tools",
-		text: "restore safely",
-		status: "active",
-		startedAt: 1,
-		updatedAt: 2,
-		iteration: 3,
-		tokenBudget: 100,
-		tokensUsed: 5,
-		timeUsedSeconds: 4,
-		baselineTokens: 0,
-	};
-	const branch = [{ type: "custom", customType: "goal-state", data: { goal: sessionGoal } }];
-	const mock = createMockPi();
-	registerGoal(mock.pi, "after-first-goal");
-	mock.rawPi.setActiveTools([]);
-	const originalSetActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
-	mock.rawPi.setActiveTools = (names: string[]) => {
-		originalSetActiveTools(names.filter((name) => !name.startsWith("goal_")));
-	};
-	const context = createMockContext({
-		sessionManager: { getBranch: () => branch, getEntries: () => branch },
-	});
+test("restored active goal applies budget limits before unavailable-tool pauses", () => {
+	for (const [tokensUsed, expectedStatus, expectedNotice] of [
+		[5, "paused", /goal tools.*paused/i],
+		[100, "budget_limited", /token budget reached/i],
+	] as const) {
+		const sessionGoal: StoredGoal = {
+			id: `restored-without-tools-${tokensUsed}`,
+			text: "restore safely",
+			status: "active",
+			startedAt: 1,
+			updatedAt: 2,
+			iteration: 3,
+			tokenBudget: 100,
+			tokensUsed,
+			timeUsedSeconds: 4,
+			baselineTokens: 0,
+		};
+		const branch = [
+			{ type: "custom", customType: "goal-state", data: { goal: sessionGoal } },
+			assistantUsageEntry({ totalTokens: tokensUsed }),
+		];
+		const mock = createMockPi();
+		registerGoal(mock.pi, "after-first-goal");
+		mock.rawPi.setActiveTools([]);
+		const originalSetActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
+		mock.rawPi.setActiveTools = (names: string[]) => {
+			originalSetActiveTools(names.filter((name) => !name.startsWith("goal_")));
+		};
+		const context = createMockContext({
+			sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		});
 
-	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		mock.events.get("session_start")?.[0]?.({}, context.ctx);
 
-	assert.equal(lastGoalStatus(mock), "paused");
-	assert.equal(mock.sentUserMessages.length, 0);
-	assert.match(context.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
+		assert.equal(lastGoalStatus(mock), expectedStatus);
+		assert.equal(mock.sentUserMessages.length, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", expectedNotice);
+	}
 });
 
 test("always visibility respects a restrictive policy when starting a goal", async () => {
@@ -307,6 +315,33 @@ test("always visibility respects a restrictive policy when starting a goal", asy
 	assert.equal(mock.sentUserMessages.length, 0);
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
 	assert.match(context.notifications.at(-1)?.message ?? "", /Cannot start \/goal/i);
+});
+
+test("after-first-goal does not widen a restrictive active turn", async () => {
+	const mock = createMockPi();
+	registerGoal(mock.pi, "after-first-goal");
+	const context = createMockContext({ isIdle: () => false });
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
+
+	assert.equal(lastGoalStatus(mock), null);
+	assert.equal(mock.sentUserMessages.length, 0);
+	assert.deepEqual(mock.rawPi.getActiveTools(), []);
+	assert.match(context.notifications.at(-1)?.message ?? "", /wait until Pi is idle/i);
+});
+
+test("failed replacement activation pauses an existing active goal without terminal tools", async () => {
+	const existing = await startGoalForTest();
+	existing.mock.rawPi.setActiveTools(["read", "bash"]);
+
+	await existing.mock.commands.get("goal")?.handler("replacement objective", existing.ctx);
+
+	const restored = requireLastGoal(existing.mock);
+	assert.equal(restored.status, "paused");
+	assert.equal(restored.text, "finish");
+	assert.equal(existing.mock.sentUserMessages.length, 1);
+	assert.match(existing.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
 });
 
 test("start fails without committing a goal when goal tools cannot become active", async () => {
@@ -2506,6 +2541,24 @@ test("agent_end maps abort, quota failure, and terminal error to distinct stoppe
 			),
 			undefined,
 		);
+	}
+});
+
+test("terminal agent errors take precedence over missing goal tools", async () => {
+	for (const [errorMessage, expectedStatus] of [
+		["You have hit your ChatGPT usage limit.", "usage_limited"],
+		["Permission denied by remote service", "blocked"],
+	] as const) {
+		const stopped = await startGoalForTest();
+		stopped.mock.rawPi.setActiveTools(["read", "bash"]);
+
+		await stopped.mock.events.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", stopReason: "error", errorMessage }] },
+			stopped.ctx,
+		);
+
+		assert.equal(lastGoalStatus(stopped.mock), expectedStatus);
+		assert.equal(stopped.mock.sentUserMessages.length, 1);
 	}
 });
 
