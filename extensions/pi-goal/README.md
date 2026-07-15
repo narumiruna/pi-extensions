@@ -17,13 +17,14 @@ Goal mode uses Codex-like persistence instructions and sends guarded continuatio
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete({ goal_id, summary })` tool for explicit completion, requiring the current goal id and rejecting missing/stale ids plus plainly contradictory summaries such as “not complete” or “tests still fail”.
 - Registers `goal_blocked({ goal_id, reason, evidence, repeated_turns })` for true impasses only; it requires the current goal id, concrete evidence, and the same blocker recurring for at least three consecutive goal turns.
-- Records continuation intent when an active turn ends early, then directly triggers exactly one next turn only after Pi reports the agent fully settled, idle, and free of pending messages.
+- Keeps both goal tools active by default for a stable tool schema; optional `"after-first-goal"` visibility hides them until the first accepted `/goal` activation or an unfinished goal is restored, then keeps them desired for the rest of that extension runtime without overriding a restrictive restore policy.
+- Records continuation intent when an active turn ends early, then directly triggers exactly one next turn only after Pi reports the agent fully settled, idle, and free of pending messages; if terminal tools disappear during a tool loop, pauses before another model turn.
 - Lets retry, compaction, steering, follow-up, and other queued work settle before automatic goal continuation.
 - Separates user interruption (`paused`), true impasse or terminal non-usage error (`blocked`), provider/account quota exhaustion (`usage_limited`), and user token budget exhaustion (`budget_limited`).
 - Detects budget exhaustion after completed tool activity when assistant usage is persisted, then injects at most one non-user-authored wrap-up instruction and blocks further substantive tools.
 - Keeps retryable provider interruptions and Pi compaction retries active without enqueueing duplicate goal continuations while Pi retries.
 - Preserves active goals across manual, threshold, and overflow compaction.
-- Guards auto-follow-ups so duplicate, replaced, stopped, cleared, completed, or budget-limited goals are not continued.
+- Guards auto-follow-ups and Goal-owned kickoff deliveries so duplicate, replaced, stopped, cleared, completed, budget-limited, or stale queued prompts cannot continue or overwrite a newer goal.
 - Rotates the completion guard id when a goal is resumed or edited so delayed old turns cannot complete the newer goal instance.
 - Blocks stale tool calls after in-flight work pauses, blocks, or reaches a usage limit, until fresh non-goal user work, successful reactivation/replacement, or clear.
 - Applies one evidence-based completion audit across kickoff, resume, edit, system, continuation, and budget-wrap-up prompts.
@@ -47,6 +48,25 @@ Try this package locally from the repository root:
 ```bash
 pi -e ./extensions/pi-goal
 ```
+
+## ⚙️ Configuration
+
+Configuration is optional. Create `~/.pi/agent/pi-goal.json` only when overriding the defaults:
+
+```json
+{
+  "toolVisibility": "always"
+}
+```
+
+`toolVisibility` accepts:
+
+- `"always"` (default) — pi-goal does not proactively hide `goal_complete` or `goal_blocked`, keeping the tool schema stable from session startup.
+- `"after-first-goal"` — hides both tools at fresh runtime startup, reveals them for the first accepted Goal activation, and treats an unfinished-goal restore as unlocked for the remainder of that extension runtime. On restore, pi-goal uses the active tools already established by earlier lifecycle handlers; it does not re-add missing terminal tools over a restrictive policy. Failed kickoff, replacement, resume, or reactivating-edit delivery restores the exact pre-activation tool set, including terminal tools exposed by another extension. If revealing the tools would widen an already-running turn, wait for Pi to become idle and retry `/goal`.
+
+Missing settings and an omitted `toolVisibility` use `"always"`. Invalid settings produce a warning and also fall back to `"always"`; pi-goal never creates the file automatically. Reload Pi after changing the file. If a live runtime reloads settings, switching to `"always"` restores only the exact tools that pi-goal previously hid, while switching to `"after-first-goal"` locks a runtime that has no unfinished goal.
+
+Tool visibility is a baseline, not ownership of Pi's global active-tool list. Plan mode or another restrictive policy may temporarily hide the tools. pi-goal does not fight that policy on restore or on every turn: activation is rejected if both tools cannot be made available, and an already-active goal is paused without automatic continuation if they disappear. The pause aborts a Goal-owned kickoff, resume, active-edit, or automatic-continuation prompt, but it does not cancel or stale-block an unrelated user or extension turn, including startup follow-ups after a restrictive restore.
 
 ## 🚀 Commands
 
@@ -72,7 +92,7 @@ Goal objectives are limited to 4,000 characters. Put longer instructions in a fi
 
 ## 🔁 Session and reload behavior
 
-Goal state is stored as Pi session state, similar to Codex's thread-owned goals. `/reload` and reopening the same Pi session can restore that session's unfinished goal. Active elapsed time is checkpointed before shutdown and restarted after reload, so offline and stopped wall-clock time is excluded. Starting a new Pi session in the same working directory does not inherit the old goal.
+Goal state is stored as Pi session state, similar to Codex's thread-owned goals. `/reload` and reopening the same Pi session can restore that session's unfinished goal. With `"after-first-goal"`, that unfinished restore marks the tools unlocked in the new extension runtime, but it does not widen an active-tool set already restricted by an earlier lifecycle handler; an active goal instead restores as paused when either terminal tool is missing. If no unfinished goal remains, a fresh runtime starts locked again. Active elapsed time is checkpointed before shutdown and restarted after reload, so offline and stopped wall-clock time is excluded. Starting a new Pi session in the same working directory does not inherit the old goal.
 
 Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed by working directory. This version no longer reads that global file, and `/goal clear` removes any legacy entry for the current working directory.
 
@@ -104,7 +124,7 @@ Before completion, the shared audit tells the agent to treat completion as unpro
 
 To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation. Paused, blocked, and usage-limited goals cannot be completed until resumed; a budget-limited goal permits completion only during its bounded in-flight wrap-up. The summary is completion evidence, not the stale-turn safety token.
 
-If a turn ends before completion, `pi-goal` records usage and creates one continuation intent. It dispatches that continuation only from Pi's `agent_settled` lifecycle after retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending. Repeated settled events cannot dispatch the same intent twice.
+If a turn ends before completion, `pi-goal` records usage and creates one continuation intent. It dispatches that continuation only from Pi's `agent_settled` lifecycle after retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending. Repeated settled events cannot dispatch the same intent twice. Goal-owned kickoff, resume, active-edit, and automatic-continuation deliveries are bound to the goal instance that created them; a delayed prompt from a replaced goal is aborted without rolling back, injecting, or stopping the newer goal.
 
 Manual compaction does not emit `agent_settled`, so its completion hook uses the same single-flight dispatcher as a narrow idle-only fallback. Pi extensions cannot reserve an idle turn atomically like Codex core; another extension can still win the race after the idle check, and its newer turn supersedes the old continuation intent.
 
@@ -132,7 +152,7 @@ A user pause or aborted turn produces `paused`; a terminal provider/account quot
 extensions/pi-goal/
 ├── src/
 │   ├── goal.ts       # Pi entrypoint and shared lifecycle state machine
-│   └── *.ts          # Package-local command, prompt, accounting, and persistence modules
+│   └── *.ts          # Package-local command, settings, prompt, accounting, and persistence modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json

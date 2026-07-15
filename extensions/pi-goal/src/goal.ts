@@ -30,6 +30,7 @@ import {
 	buildResumePrompt,
 	type GoalStatus,
 } from "./prompts.js";
+import { DEFAULT_GOAL_SETTINGS, type GoalSettings, readGoalSettings } from "./settings.js";
 
 type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
@@ -100,9 +101,14 @@ interface StatusContext {
 
 const STATUS_KEY = "goal";
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
+const GOAL_COMPLETE_TOOL = "goal_complete";
+const GOAL_BLOCKED_TOOL = "goal_blocked";
+const GOAL_TOOL_NAMES = [GOAL_COMPLETE_TOOL, GOAL_BLOCKED_TOOL] as const;
 const MAX_BLOCKER_REASON_LENGTH = 1_000;
 const MAX_BLOCKER_EVIDENCE_LENGTH = 4_000;
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
+const MAX_PENDING_GOAL_PROMPTS = 20;
+const GOAL_PROMPT_MARKER_PREFIX = "pi-goal-prompt:";
 const CONTINUATION_MARKER_PREFIX = "pi-goal-continuation:";
 const BUDGET_WRAP_UP_MESSAGE_TYPE = "goal-budget-wrap-up";
 const BUDGET_WRAP_UP_PROMPT =
@@ -130,31 +136,52 @@ const RETRYABLE_GOAL_ERROR_PATTERNS = [
 	/context[_\s-]*length[_\s-]*exceeded|input exceeds the context window/i,
 ] as const;
 
+interface GoalOptions {
+	settingsPath?: string;
+}
+
+interface GoalToolVisibilitySnapshot {
+	activeTools: string[];
+	goalToolsUnlocked: boolean;
+	goalToolsHiddenByPolicy: string[];
+}
+
 interface GoalRuntime {
 	readonly pi: ExtensionAPI;
+	settings: GoalSettings;
 	activeGoal?: ActiveGoal;
 	completionStatusTimer?: NodeJS.Timeout;
 	continuationIntent?: ContinuationTicket;
 	continuationDelivery?: ContinuationTicket;
 	goalRecovery?: GoalRecovery;
 	budgetWrapUp?: BudgetWrapUp;
+	agentRunGoalId?: string;
 	staleGoalToolCallsBlocked: boolean;
+	/** Once true, goal tools stay in the active set for this runtime (prompt-cache stable). */
+	goalToolsUnlocked: boolean;
+	/** Exact lazy goal tools this runtime removed and may restore on a mode change. */
+	goalToolsHiddenByPolicy: Set<string>;
+	pendingGoalPromptMarkers: Map<string, string>;
 	cancelledContinuationMarkers: Set<string>;
 }
 
 function createGoalRuntime(pi: ExtensionAPI): GoalRuntime {
 	return {
 		pi,
+		settings: DEFAULT_GOAL_SETTINGS,
 		staleGoalToolCallsBlocked: false,
+		goalToolsUnlocked: false,
+		goalToolsHiddenByPolicy: new Set(),
+		pendingGoalPromptMarkers: new Map(),
 		cancelledContinuationMarkers: new Set(),
 	};
 }
 
-function registerGoalRuntime(pi: ExtensionAPI) {
+function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const runtime = createGoalRuntime(pi);
 
 	const goalCompleteTool = defineTool({
-		name: "goal_complete",
+		name: GOAL_COMPLETE_TOOL,
 		label: "Goal Complete",
 		description:
 			"Mark the active /goal as complete after all required work is done and verified, using the current goal_id stale-turn guard. Do not use for partial progress, blockers, failing, or unverified work.",
@@ -266,7 +293,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	});
 
 	const goalBlockedTool = defineTool({
-		name: "goal_blocked",
+		name: GOAL_BLOCKED_TOOL,
 		label: "Goal Blocked",
 		description:
 			"Stop the active /goal only at a true impasse after the same blocker recurs for at least three consecutive goal turns, with the current goal_id and concrete evidence that user or external action is required. Do not use for ordinary clarification, uncertainty, or recoverable failures.",
@@ -359,6 +386,9 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 
 	pi.registerTool(goalCompleteTool);
 	pi.registerTool(goalBlockedTool);
+	// Do not touch the active tool set during factory registration: ExtensionAPI
+	// actions are unbound until the session binds the runtime. session_start applies
+	// baseline visibility once actions work; later hooks only enforce goal safety.
 
 	pi.registerCommand("goal", {
 		description: "Run a goal to completion: /goal [--tokens 100k] <goal_to_complete>",
@@ -396,18 +426,66 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		clearCompletionStatusTimer();
 		clearContinuationTracking();
+		clearPendingGoalPrompts();
+		runtime.agentRunGoalId = undefined;
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
+		const previousToolVisibility = runtime.settings.toolVisibility;
+		const settingsResult = readGoalSettings(options.settingsPath);
+		runtime.settings =
+			settingsResult.kind === "loaded" ? settingsResult.settings : DEFAULT_GOAL_SETTINGS;
+		if (settingsResult.kind === "invalid") {
+			ctx.ui.notify(
+				`pi-goal settings ignored: ${settingsResult.reason}. Using toolVisibility "always".`,
+				"warning",
+			);
+		}
+		if (
+			runtime.settings.toolVisibility === "after-first-goal" &&
+			previousToolVisibility === "always"
+		) {
+			runtime.goalToolsUnlocked = false;
+		}
+		if (runtime.settings.toolVisibility === "always") {
+			if (runtime.goalToolsHiddenByPolicy.size > 0) {
+				try {
+					restoreGoalToolsHiddenByPolicy();
+				} catch (error) {
+					ctx.ui.notify(
+						`Could not restore always-visible goal tools: ${formatError(error)}`,
+						"error",
+					);
+				}
+			}
+			runtime.goalToolsUnlocked = true;
+		}
+
 		runtime.activeGoal = loadGoalFromSession(ctx);
 		if (runtime.activeGoal) {
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
 				if (limitActiveGoalForBudget(ctx, false)) return;
 			}
+			if (runtime.settings.toolVisibility === "after-first-goal") {
+				// Registered tools are already active on an unrestricted fresh runtime.
+				// If an earlier session_start handler removed them, that restrictive
+				// policy wins: mark lazy visibility unlocked without widening its set.
+				runtime.goalToolsUnlocked = true;
+				runtime.goalToolsHiddenByPolicy.clear();
+			}
+			if (runtime.activeGoal.status === "active" && !goalToolsAvailable()) {
+				pauseGoalForUnavailableTools(ctx, false);
+				return;
+			}
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
-		} else ctx.ui.setStatus(STATUS_KEY, undefined);
+		} else {
+			if (runtime.settings.toolVisibility === "after-first-goal" && !runtime.goalToolsUnlocked) {
+				hideGoalToolsIfLocked();
+			}
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+		}
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -416,6 +494,8 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			persistGoal(runtime.activeGoal);
 		}
 		clearContinuationTracking();
+		clearPendingGoalPrompts();
+		runtime.agentRunGoalId = undefined;
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
@@ -516,12 +596,31 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		updateGoalUsage(runtime.activeGoal, ctx);
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
-		limitActiveGoalForBudget(ctx, true);
+		if (limitActiveGoalForBudget(ctx, true)) return;
+		if (!goalToolsAvailable()) pauseGoalForUnavailableTools(ctx);
 	});
 
-	pi.on("before_agent_start", (event) => {
-		markContinuationStarted(event.prompt);
-		if (runtime.activeGoal?.status !== "active") return;
+	pi.on("before_agent_start", (event, ctx) => {
+		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
+		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
+		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
+		if (ownedPromptGoalId && ownedPromptGoalId !== runtime.activeGoal?.id) {
+			runtime.agentRunGoalId = ownedPromptGoalId;
+			if (runtime.activeGoal?.status === "active" && !goalToolsAvailable()) {
+				pauseGoalForUnavailableTools(ctx, false);
+			}
+			abortCurrentTurn(ctx);
+			return;
+		}
+		if (runtime.activeGoal?.status !== "active") {
+			runtime.agentRunGoalId = undefined;
+			return;
+		}
+		runtime.agentRunGoalId = runtime.activeGoal.id;
+		if (!goalToolsAvailable()) {
+			pauseGoalForUnavailableTools(ctx, ownedPromptGoalId !== undefined);
+			return;
+		}
 
 		return {
 			systemPrompt: `${event.systemPrompt}\n\n${buildGoalSystemPrompt(runtime.activeGoal)}`,
@@ -529,6 +628,9 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", (event, ctx) => {
+		const agentRunGoalId = runtime.agentRunGoalId;
+		runtime.agentRunGoalId = undefined;
+		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
 		if (!runtime.activeGoal) return;
 		if (
 			runtime.activeGoal.status === "budget_limited" &&
@@ -558,6 +660,10 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		if (finalAssistant?.stopReason === "error") {
 			if (isRetryableGoalInterruption(finalAssistant)) {
 				if (limitActiveGoalForBudget(ctx, false)) return;
+				if (!goalToolsAvailable()) {
+					pauseGoalForUnavailableTools(ctx);
+					return;
+				}
 				runtime.goalRecovery = {
 					goalId,
 					kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
@@ -580,6 +686,10 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		clearGoalRecoveryForGoal(goalId);
 
 		if (limitActiveGoalForBudget(ctx, false)) return;
+		if (!goalToolsAvailable()) {
+			pauseGoalForUnavailableTools(ctx);
+			return;
+		}
 
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -617,6 +727,17 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			}
 		}
 
+		// Unlock lazy visibility only for a real activation. In always mode, a
+		// missing tool means another policy or allowlist intentionally removed it.
+		const goalToolVisibilityBeforeActivation = snapshotGoalToolVisibility();
+		try {
+			prepareGoalToolsForActivation(ctx);
+		} catch (error) {
+			ctx.ui.notify(`Cannot start /goal: ${formatError(error)}`, "error");
+			if (existingGoal?.status === "active") pauseGoalForUnavailableTools(ctx);
+			return;
+		}
+
 		cancelContinuationWork();
 		clearGoalRecovery();
 		clearBudgetWrapUp();
@@ -625,9 +746,11 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		const startedGoal = runtime.activeGoal;
-		const sent = await sendGoalPrompt(pi, ctx, startedGoal);
+		const sent = await sendOwnedGoalPrompt(pi, ctx, startedGoal.id, buildGoalPrompt(startedGoal));
 		if (!sent) {
+			let rolledBackStartedGoal = false;
 			if (runtime.activeGoal?.id === startedGoal.id) {
+				rolledBackStartedGoal = true;
 				if (existingGoal) {
 					updateGoalUsage(existingGoal, ctx);
 					if (existingGoal.status === "active") {
@@ -644,6 +767,9 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 				} else {
 					clearActiveGoal(ctx);
 				}
+			}
+			if (rolledBackStartedGoal) {
+				restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
 			}
 			return;
 		}
@@ -698,6 +824,13 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			);
 			return;
 		}
+		const goalToolVisibilityBeforeActivation = snapshotGoalToolVisibility();
+		try {
+			prepareGoalToolsForActivation(ctx);
+		} catch (error) {
+			ctx.ui.notify(`Cannot resume /goal: ${formatError(error)}`, "error");
+			return;
+		}
 		const stoppedGoal = runtime.activeGoal;
 		const stoppedStatus = stoppedGoal.status;
 		cancelContinuationWork();
@@ -715,13 +848,19 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			return;
 		}
 		const resumedGoal = runtime.activeGoal;
-		const sent = await sendResumePrompt(pi, ctx, resumedGoal, stoppedStatus);
+		const sent = await sendOwnedGoalPrompt(
+			pi,
+			ctx,
+			resumedGoal.id,
+			buildResumePrompt(resumedGoal, stoppedStatus),
+		);
 		if (!sent) {
 			if (runtime.activeGoal?.id === resumedGoal.id && runtime.activeGoal.status === "active") {
 				runtime.activeGoal = stoppedGoal;
 				persistGoal(runtime.activeGoal);
 				updateStatus(ctx, runtime.activeGoal);
 				if (blocksStaleGoalToolCalls(runtime.activeGoal.status)) blockStaleGoalToolCalls();
+				restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
 			}
 			return;
 		}
@@ -770,7 +909,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		const previousStatus = runtime.activeGoal.status;
-		runtime.activeGoal = transitionGoal(
+		const nextGoal = transitionGoal(
 			{
 				...nextGoalInstance(runtime.activeGoal),
 				text: objective,
@@ -778,13 +917,30 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			},
 			editedGoalStatus(previousStatus),
 		);
+		const goalToolVisibilityBeforeActivation =
+			nextGoal.status === "active" ? snapshotGoalToolVisibility() : undefined;
+		if (nextGoal.status === "active") {
+			try {
+				prepareGoalToolsForActivation(ctx);
+			} catch (error) {
+				ctx.ui.notify(`Cannot reactivate /goal: ${formatError(error)}`, "error");
+				if (runtime.activeGoal?.status === "active") pauseGoalForUnavailableTools(ctx);
+				return;
+			}
+		}
+		runtime.activeGoal = nextGoal;
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		const editedGoal = runtime.activeGoal;
 		if (!editedGoal) return;
 		if (editedGoal.status === "active") {
 			clearStaleGoalToolCallBlock();
-			const sent = await sendObjectiveUpdatedPrompt(pi, ctx, editedGoal);
+			const sent = await sendOwnedGoalPrompt(
+				pi,
+				ctx,
+				editedGoal.id,
+				buildObjectiveUpdatedPrompt(editedGoal),
+			);
 			if (!sent) {
 				if (runtime.activeGoal?.id === editedGoal.id) {
 					if (previousStatus === "active") {
@@ -798,6 +954,9 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 					}
 					persistGoal(runtime.activeGoal);
 					updateStatus(ctx, runtime.activeGoal);
+					if (goalToolVisibilityBeforeActivation) {
+						restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
+					}
 				}
 				return;
 			}
@@ -873,6 +1032,10 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	function dispatchContinuationIfSettled(ctx: StatusContext) {
 		const intent = runtime.continuationIntent;
 		if (!intent) return false;
+		if (runtime.activeGoal?.status === "active" && !goalToolsAvailable()) {
+			pauseGoalForUnavailableTools(ctx);
+			return false;
+		}
 		if (
 			!runtime.activeGoal ||
 			runtime.activeGoal.id !== intent.goalId ||
@@ -1009,6 +1172,40 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		runtime.cancelledContinuationMarkers.clear();
 	}
 
+	function clearPendingGoalPrompts() {
+		runtime.pendingGoalPromptMarkers.clear();
+	}
+
+	function rememberPendingGoalPrompt(goalId: string, prompt: string) {
+		const marker = randomUUID();
+		runtime.pendingGoalPromptMarkers.set(marker, goalId);
+		if (runtime.pendingGoalPromptMarkers.size > MAX_PENDING_GOAL_PROMPTS) {
+			const oldest = runtime.pendingGoalPromptMarkers.keys().next().value;
+			if (oldest) runtime.pendingGoalPromptMarkers.delete(oldest);
+		}
+		return { marker, prompt: `${prompt}\n\n<!-- ${GOAL_PROMPT_MARKER_PREFIX}${marker} -->` };
+	}
+
+	function consumePendingGoalPrompt(prompt: string) {
+		const marker = extractGoalPromptMarker(prompt);
+		if (!marker) return undefined;
+		const goalId = runtime.pendingGoalPromptMarkers.get(marker);
+		runtime.pendingGoalPromptMarkers.delete(marker);
+		return goalId;
+	}
+
+	async function sendOwnedGoalPrompt(
+		pi: ExtensionAPI,
+		ctx: StatusContext,
+		goalId: string,
+		prompt: string,
+	) {
+		const pending = rememberPendingGoalPrompt(goalId, prompt);
+		const sent = await sendPrompt(pi, ctx, pending.prompt);
+		if (!sent) runtime.pendingGoalPromptMarkers.delete(pending.marker);
+		return sent;
+	}
+
 	function cancelContinuationWork() {
 		if (runtime.continuationDelivery)
 			rememberCancelledContinuationMarker(runtime.continuationDelivery.marker);
@@ -1035,9 +1232,10 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			// unsent intent and a delivery that may have lost the non-atomic idle race;
 			// the newer work's agent_end will record a fresh intent.
 			cancelContinuationWork();
-			return;
+			return undefined;
 		}
 		if (runtime.continuationDelivery?.marker === marker) runtime.continuationDelivery = undefined;
+		return marker.split(":", 1)[0];
 	}
 
 	function persistGoal(goal: ActiveGoal) {
@@ -1057,6 +1255,131 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		runtime.activeGoal = undefined;
 		clearPersistedGoal(ctx.cwd);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		// Do not clear goalToolsUnlocked: after first activation, keep tools visible
+		// for the rest of this extension runtime to avoid repeated goal-tool schema
+		// churn within the same runtime.
+	}
+
+	function isGoalToolName(name: string) {
+		return (GOAL_TOOL_NAMES as readonly string[]).includes(name);
+	}
+
+	function goalToolsAvailable() {
+		const active = new Set(runtime.pi.getActiveTools());
+		return GOAL_TOOL_NAMES.every((name) => active.has(name));
+	}
+
+	function hideGoalToolsIfLocked() {
+		if (runtime.goalToolsUnlocked) return;
+		const active = runtime.pi.getActiveTools();
+		const hidden = active.filter(isGoalToolName);
+		if (hidden.length === 0) return;
+		runtime.pi.setActiveTools(active.filter((name) => !isGoalToolName(name)));
+		for (const name of hidden) runtime.goalToolsHiddenByPolicy.add(name);
+	}
+
+	function restoreGoalToolsHiddenByPolicy() {
+		const activeBeforeRestore = runtime.pi.getActiveTools();
+		const activeSet = new Set(activeBeforeRestore);
+		const missingOwnedTools = [...runtime.goalToolsHiddenByPolicy].filter(
+			(name) => !activeSet.has(name),
+		);
+		if (missingOwnedTools.length === 0) {
+			runtime.goalToolsHiddenByPolicy.clear();
+			return;
+		}
+		try {
+			runtime.pi.setActiveTools([...activeBeforeRestore, ...missingOwnedTools]);
+			const restored = new Set(runtime.pi.getActiveTools());
+			if (missingOwnedTools.some((name) => !restored.has(name))) {
+				throw new Error("the active tool policy rejected a previously hidden goal tool");
+			}
+			runtime.goalToolsHiddenByPolicy.clear();
+		} catch (error) {
+			runtime.pi.setActiveTools(activeBeforeRestore);
+			throw error;
+		}
+	}
+
+	function assertGoalToolsAvailable() {
+		if (goalToolsAvailable()) return;
+		throw new Error(
+			"goal_complete and goal_blocked are unavailable; include them in the active tool allowlist or leave the restrictive tool mode first.",
+		);
+	}
+
+	function ensureGoalToolsVisible() {
+		const active = runtime.pi.getActiveTools();
+		const activeSet = new Set(active);
+		const missing = GOAL_TOOL_NAMES.filter((name) => !activeSet.has(name));
+		if (missing.length > 0) runtime.pi.setActiveTools([...active, ...missing]);
+		assertGoalToolsAvailable();
+	}
+
+	function prepareGoalToolsForActivation(ctx: StatusContext) {
+		if (runtime.settings.toolVisibility === "after-first-goal") {
+			if (!goalToolsAvailable() && ctx.isIdle?.() !== true) {
+				throw new Error("wait until Pi is idle before revealing the goal tools");
+			}
+			revealGoalTools();
+			return;
+		}
+		assertGoalToolsAvailable();
+	}
+
+	/** Mark lazy tools permanently desired for this runtime and make them active now. */
+	function revealGoalTools() {
+		const activeBeforeReveal = runtime.pi.getActiveTools();
+		const wasUnlocked = runtime.goalToolsUnlocked;
+		try {
+			ensureGoalToolsVisible();
+			runtime.goalToolsUnlocked = true;
+			runtime.goalToolsHiddenByPolicy.clear();
+		} catch (error) {
+			runtime.pi.setActiveTools(activeBeforeReveal);
+			runtime.goalToolsUnlocked = wasUnlocked;
+			throw error;
+		}
+	}
+
+	function snapshotGoalToolVisibility(): GoalToolVisibilitySnapshot {
+		return {
+			activeTools: runtime.pi.getActiveTools(),
+			goalToolsUnlocked: runtime.goalToolsUnlocked,
+			goalToolsHiddenByPolicy: [...runtime.goalToolsHiddenByPolicy],
+		};
+	}
+
+	function restoreGoalToolVisibility(snapshot: GoalToolVisibilitySnapshot) {
+		runtime.pi.setActiveTools(snapshot.activeTools);
+		runtime.goalToolsUnlocked = snapshot.goalToolsUnlocked;
+		runtime.goalToolsHiddenByPolicy.clear();
+		for (const name of snapshot.goalToolsHiddenByPolicy) {
+			runtime.goalToolsHiddenByPolicy.add(name);
+		}
+	}
+
+	function pauseGoalForUnavailableTools(ctx: StatusContext, abortTurn = true) {
+		const goal = runtime.activeGoal;
+		if (goal?.status !== "active") return false;
+		updateGoalUsage(goal, ctx);
+		cancelContinuationWork();
+		clearGoalRecoveryForGoal(goal.id);
+		clearBudgetWrapUp();
+		if (abortTurn) {
+			blockStaleGoalToolCalls();
+			abortCurrentTurn(ctx);
+		} else {
+			clearStaleGoalToolCallBlock();
+		}
+		runtime.activeGoal = transitionGoal(goal, "paused");
+		persistGoal(runtime.activeGoal);
+		updateStatus(ctx, runtime.activeGoal);
+		ctx.ui.notify(
+			"Goal tools are unavailable, so the active goal was paused. Restore the tools and run /goal resume.",
+			"warning",
+		);
+		return true;
 	}
 
 	function showCompletionStatus(ctx: StatusContext) {
@@ -1125,23 +1448,6 @@ function editedGoalStatus(status: GoalStatus): GoalStatus {
 
 function incrementGoal(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
-}
-
-async function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	return sendPrompt(pi, ctx, buildGoalPrompt(goal));
-}
-
-async function sendObjectiveUpdatedPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	return sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
-}
-
-async function sendResumePrompt(
-	pi: ExtensionAPI,
-	ctx: StatusContext,
-	goal: ActiveGoal,
-	stoppedStatus: GoalStatus,
-) {
-	return sendPrompt(pi, ctx, buildResumePrompt(goal, stoppedStatus));
 }
 
 async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
@@ -1294,9 +1600,16 @@ function escapeRegExpText(value: string) {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const GOAL_PROMPT_MARKER_PATTERN = new RegExp(
+	`<!--\\s*${escapeRegExpText(GOAL_PROMPT_MARKER_PREFIX)}([^\\s>]+)\\s*-->`,
+);
 const CONTINUATION_MARKER_PATTERN = new RegExp(
 	`<!--\\s*${escapeRegExpText(CONTINUATION_MARKER_PREFIX)}([^\\s>]+)\\s*-->`,
 );
+
+function extractGoalPromptMarker(prompt: string) {
+	return GOAL_PROMPT_MARKER_PATTERN.exec(prompt)?.[1];
+}
 
 function extractContinuationMarker(prompt: string) {
 	return CONTINUATION_MARKER_PATTERN.exec(prompt)?.[1];
@@ -1358,8 +1671,8 @@ function truncateNotification(value: string) {
 	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
 }
 
-export default function goal(pi: ExtensionAPI) {
-	registerGoalRuntime(pi);
+export default function goal(pi: ExtensionAPI, options: GoalOptions = {}) {
+	registerGoalRuntime(pi, options);
 }
 
 export {
