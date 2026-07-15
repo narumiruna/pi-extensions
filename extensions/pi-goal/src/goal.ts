@@ -500,6 +500,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.activeGoal = activateQueuedGoal(runtime.activeGoal, currentTokenTotal(ctx));
 			startRestoredQueuedGoal = true;
 		}
+		if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 		if (runtime.activeGoal) {
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
@@ -533,7 +534,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					updateStatus(ctx, runtime.activeGoal);
 				}
 			}
-			if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 		} else {
 			if (runtime.settings.toolVisibility === "after-first-goal" && !runtime.goalToolsUnlocked) {
 				hideGoalToolsIfLocked();
@@ -574,6 +574,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		cancelContinuationWork();
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
+		if (runtime.pendingQueueAction) return;
 		if (limitActiveGoalForBudget(ctx, false)) return { cancel: true as const };
 	});
 
@@ -581,6 +582,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (runtime.queueFrozen) return;
 		if (runtime.activeGoal?.status !== "active") {
 			clearGoalRecovery();
+			if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 			return;
 		}
 
@@ -593,15 +595,15 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		updateGoalUsage(runtime.activeGoal, ctx);
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
+		if (runtime.pendingQueueAction) {
+			await dispatchPendingQueueActionIfSettled(ctx);
+			return;
+		}
 		if (limitActiveGoalForBudget(ctx, false)) return;
 
 		const wasPiRetry = isPiOwnedCompactionRetry(event, runtime.activeGoal.id);
 		clearGoalRecoveryForGoal(runtime.activeGoal.id);
 		if (wasPiRetry) return;
-		if (runtime.pendingQueueAction) {
-			await dispatchPendingQueueActionIfSettled(ctx);
-			return;
-		}
 		requestContinuation(runtime.activeGoal);
 		// Manual compaction does not emit agent_settled. This common dispatcher is
 		// therefore the narrow fallback; threshold compaction leaves the intent for
@@ -685,16 +687,17 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.agentRunGoalId = undefined;
 			return;
 		}
+		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
+		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
+		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		if (
 			runtime.pendingQueueAction?.kind === "advance" &&
 			runtime.pendingQueueAction.goalId === runtime.activeGoal?.id
 		) {
-			runtime.agentRunGoalId = runtime.activeGoal.id;
+			runtime.agentRunGoalId = ownedPromptGoalId ?? runtime.activeGoal.id;
+			if (ownedPromptGoalId) abortCurrentTurn(ctx);
 			return;
 		}
-		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
-		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
-		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		if (ownedPromptGoalId && ownedPromptGoalId !== runtime.activeGoal?.id) {
 			runtime.agentRunGoalId = ownedPromptGoalId;
 			if (runtime.activeGoal?.status === "active" && !goalToolsAvailable()) {

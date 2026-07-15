@@ -321,6 +321,29 @@ test("pending prioritize survives abrupt reload and starts before the displaced 
 	);
 });
 
+test("restored priority dispatches before the displaced head is budget-limited", async () => {
+	const state: GoalStateEntryData = {
+		goal: { ...storedGoal("budgeted head", "active"), tokenBudget: 10 },
+		pendingAction: { kind: "prioritize", objective: "urgent goal" },
+	};
+	const branch = [
+		assistantUsageEntry(12),
+		{ type: "custom", customType: "goal-state", data: state },
+	];
+	const restored = await createHarness({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+
+	assert.deepEqual(
+		stateGoals(restored.mock).map(({ text, status }) => ({ text, status })),
+		[
+			{ text: "urgent goal", status: "active" },
+			{ text: "budgeted head", status: "queued" },
+		],
+	);
+	assert.equal(lastState(restored.mock)?.pendingAction, undefined);
+});
+
 test("pending prioritize survives shutdown with independent accounting", async () => {
 	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(100)];
 	const interrupted = await createHarness({
@@ -421,17 +444,72 @@ test("pending busy skip survives reload without reactivating the old head", asyn
 	);
 });
 
-test("a pending busy skip suppresses the old goal prompt before advancement", async () => {
-	const harness = await createHarness({ isIdle: () => false });
+test("restored skip dispatches before the skipped head is budget-limited", async () => {
+	const oldHead = { ...storedGoal("budgeted head", "active"), tokenBudget: 10 };
+	const state: GoalStateEntryData = {
+		goal: oldHead,
+		queue: [storedGoal("next head", "queued")],
+		pendingAction: {
+			kind: "advance",
+			goalId: oldHead.id,
+			reason: "skip",
+			completedText: oldHead.text,
+		},
+	};
+	const branch = [
+		assistantUsageEntry(12),
+		{ type: "custom", customType: "goal-state", data: state },
+	];
+	const restored = await createHarness({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+
+	assert.deepEqual(
+		stateGoals(restored.mock).map(({ text, status }) => ({ text, status })),
+		[{ text: "next head", status: "active" }],
+	);
+	assert.equal(lastState(restored.mock)?.pendingAction, undefined);
+});
+
+test("a pending busy skip aborts its already-queued owned prompt before advancement", async () => {
+	let aborts = 0;
+	const harness = await createHarness({
+		isIdle: () => false,
+		abort: () => {
+			aborts += 1;
+		},
+	});
+	await harness.command("old head");
+	const ownedPrompt = harness.mock.sentUserMessages.at(-1)?.text;
+	assert.ok(ownedPrompt);
+	await harness.command("add next head");
+	await harness.command("skip");
+
+	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
+	const result = await beforeStart?.({ prompt: ownedPrompt, systemPrompt: "base" }, harness.ctx);
+	assert.equal(result, undefined);
+	assert.equal(aborts, 1);
+});
+
+test("a pending busy skip does not abort unrelated user work before advancement", async () => {
+	let aborts = 0;
+	const harness = await createHarness({
+		isIdle: () => false,
+		abort: () => {
+			aborts += 1;
+		},
+	});
 	await harness.command("old head");
 	await harness.command("add next head");
 	await harness.command("skip");
+
 	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
 	const result = await beforeStart?.(
 		{ prompt: "newer unrelated work", systemPrompt: "base" },
 		harness.ctx,
 	);
 	assert.equal(result, undefined);
+	assert.equal(aborts, 0);
 });
 
 test("pending skip rejects stale completion without rewriting the skip intent", async () => {
@@ -502,27 +580,36 @@ test("pending skip rejects stale blocked reports without rewriting terminal stat
 	);
 });
 
-test("manual compaction dispatches pending priority instead of the old continuation", async () => {
+test("manual compaction dispatches pending priority before old-head budget limiting", async () => {
 	const branch: Array<Record<string, unknown>> = [];
 	let idle = true;
 	const harness = await createHarness({
 		isIdle: () => idle,
 		sessionManager: { getBranch: () => branch, getEntries: () => branch },
 	});
-	await harness.command("old head");
+	await harness.command("--tokens 10 old head");
 	await harness.command("add tail");
 	idle = false;
 	await harness.command("prioritize urgent head");
 	const state = lastState(harness.mock);
-	branch.push({ type: "custom", customType: "goal-state", data: state });
+	branch.push(assistantUsageEntry(12), { type: "custom", customType: "goal-state", data: state });
 	idle = true;
+	const beforeCompact = await harness.mock.events.get("session_before_compact")?.[0]?.(
+		{ reason: "manual", willRetry: false },
+		harness.ctx,
+	);
+	assert.equal(beforeCompact, undefined);
 	await harness.mock.events.get("session_compact")?.[0]?.(
 		{ reason: "manual", willRetry: false },
 		harness.ctx,
 	);
 	assert.deepEqual(
-		stateGoals(harness.mock).map(({ text }) => text),
-		["urgent head", "old head", "tail"],
+		stateGoals(harness.mock).map(({ text, status }) => ({ text, status })),
+		[
+			{ text: "urgent head", status: "active" },
+			{ text: "old head", status: "queued" },
+			{ text: "tail", status: "queued" },
+		],
 	);
 	assert.doesNotMatch(harness.mock.sentUserMessages.at(-1)?.text ?? "", /pi-goal-continuation:/i);
 });
