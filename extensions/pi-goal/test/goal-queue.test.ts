@@ -284,12 +284,31 @@ test("pending prioritize excludes unrelated usage during shutdown", async () => 
 
 	const persisted = lastState(harness.mock);
 	const restoredBranch = [...branch, { type: "custom", customType: "goal-state", data: persisted }];
+	let restoredIdle = false;
 	const restored = await createHarness({
+		isIdle: () => restoredIdle,
 		sessionManager: {
 			getBranch: () => restoredBranch,
 			getEntries: () => restoredBranch,
 		},
 	});
+	await restored.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		restored.ctx,
+	);
+	assert.deepEqual(
+		stateGoals(restored.mock).map(({ text, status, tokensUsed, iteration }) => ({
+			text,
+			status,
+			tokensUsed,
+			iteration,
+		})),
+		[{ text: "original goal", status: "active", tokensUsed: 0, iteration: 0 }],
+	);
+	assert.equal(lastState(restored.mock)?.pendingAction?.kind, "prioritize");
+
+	restoredIdle = true;
+	await settled(restored);
 	assert.deepEqual(
 		stateGoals(restored.mock).map(({ text, status, tokensUsed }) => ({ text, status, tokensUsed })),
 		[
@@ -834,6 +853,40 @@ test("pending skip terminates blocked reports before missing or mismatched id re
 		reason: "skip",
 		completedText: "old head",
 	});
+});
+
+test("finalized priority dispatches from idle manual compaction", async () => {
+	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(100)];
+	let idle = false;
+	const harness = await createHarness({
+		isIdle: () => idle,
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await harness.command("old head");
+	await harness.command("prioritize urgent head");
+	await harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "unrelated user work", systemPrompt: "base" },
+		harness.ctx,
+	);
+	const finalizedState = lastState(harness.mock);
+	branch.push(assistantUsageEntry(25), {
+		type: "custom",
+		customType: "goal-state",
+		data: finalizedState,
+	});
+
+	idle = true;
+	await harness.mock.events.get("session_compact")?.[0]?.(
+		{ reason: "manual", willRetry: false },
+		harness.ctx,
+	);
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text, status, tokensUsed }) => ({ text, status, tokensUsed })),
+		[
+			{ text: "urgent head", status: "active", tokensUsed: 0 },
+			{ text: "old head", status: "queued", tokensUsed: 0 },
+		],
+	);
 });
 
 test("manual compaction dispatches pending priority before old-head budget limiting", async () => {

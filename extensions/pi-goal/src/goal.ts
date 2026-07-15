@@ -604,13 +604,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.queuedGoals = restoredState.queue;
 			runtime.pendingQueueAction = restoredState.pendingAction;
 		}
-		if (!updateGoalUsage(runtime.activeGoal, ctx)) return;
-		persistGoal(runtime.activeGoal);
-		updateStatus(ctx, runtime.activeGoal);
+		const usageRecorded = updateGoalUsage(runtime.activeGoal, ctx);
+		if (usageRecorded) {
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
+		}
 		if (runtime.pendingQueueAction) {
 			await dispatchPendingQueueActionIfSettled(ctx);
 			return;
 		}
+		if (!usageRecorded) return;
 		if (limitActiveGoalForBudget(ctx, false)) return;
 
 		const wasPiRetry = isPiOwnedCompactionRetry(event, runtime.activeGoal.id);
@@ -755,7 +758,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (runtime.queueFrozen) return;
 		const agentRunGoalId = runtime.agentRunGoalId;
 		runtime.agentRunGoalId = undefined;
-		if (agentRunGoalId === null) return;
+		if (agentRunGoalId === null || !runtime.canRecordGoalUsage()) return;
 		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
 		if (!runtime.activeGoal) return;
 		if (
