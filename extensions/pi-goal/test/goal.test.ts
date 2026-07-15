@@ -599,6 +599,49 @@ test("failed first prompt delivery preserves a preexisting external goal-tool se
 	]);
 });
 
+test("a stale first kickoff cannot run or roll back a newer replacement", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	registerGoal(mock.pi, "after-first-goal");
+	let aborts = 0;
+	const context = createMockContext({ abort: () => aborts++ });
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	const sentPrompts: string[] = [];
+	let rejectFirstSend: ((error: Error) => void) | undefined;
+	mock.rawPi.sendUserMessage = (prompt: string) => {
+		sentPrompts.push(prompt);
+		if (sentPrompts.length === 1) {
+			return new Promise<void>((_resolve, reject) => {
+				rejectFirstSend = reject;
+			});
+		}
+	};
+
+	const firstStart = mock.commands.get("goal")?.handler("first objective", context.ctx);
+	await Promise.resolve();
+	await mock.commands.get("goal")?.handler("replacement objective", context.ctx);
+	const replacement = requireLastGoal(mock);
+	assert.equal(replacement.text, "replacement objective");
+	assert.equal(replacement.status, "active");
+
+	const staleStartResult = mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: sentPrompts[0], systemPrompt: "base" },
+		context.ctx,
+	);
+	assert.equal(staleStartResult, undefined);
+	assert.equal(aborts, 1);
+	assert.equal(requireLastGoal(mock).id, replacement.id);
+	mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "aborted" }] },
+		context.ctx,
+	);
+	assert.equal(requireLastGoal(mock).status, "active");
+
+	rejectFirstSend?.(new Error("late first delivery failure"));
+	await firstStart;
+	assert.equal(requireLastGoal(mock).id, replacement.id);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
+});
+
 test("parent and child goal tool unlock policies stay isolated", async () => {
 	const root = createMockPi({ activeTools: ["read", "bash"] });
 	registerGoal(root.pi, "after-first-goal");
@@ -2163,6 +2206,35 @@ test("newer work supersedes an accepted continuation delivery that lost the star
 	await raced.mock.events.get("agent_settled")?.[0]?.({}, raced.ctx);
 	assert.equal(raced.mock.sentUserMessages.length, 3);
 	assert.notEqual(raced.mock.sentUserMessages.at(-1)?.text, staleContinuation);
+});
+
+test("a stale continuation that crossed input cannot stop a replacement goal", async () => {
+	let aborts = 0;
+	const replaced = await startGoalForTest({ abort: () => aborts++ });
+	await replaced.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		replaced.ctx,
+	);
+	await replaced.mock.events.get("agent_settled")?.[0]?.({}, replaced.ctx);
+	const staleContinuation = replaced.mock.sentUserMessages.at(-1)?.text ?? "";
+	const originalGoal = requireLastGoal(replaced.mock);
+
+	await replaced.mock.commands.get("goal")?.handler("replacement objective", replaced.ctx);
+	const replacement = requireLastGoal(replaced.mock);
+	assert.notEqual(replacement.id, originalGoal.id);
+
+	const staleResult = replaced.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: staleContinuation, systemPrompt: "base" },
+		replaced.ctx,
+	);
+	assert.equal(staleResult, undefined);
+	assert.equal(aborts, 1);
+	replaced.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "aborted" }] },
+		replaced.ctx,
+	);
+	assert.equal(requireLastGoal(replaced.mock).id, replacement.id);
+	assert.equal(lastGoalStatus(replaced.mock), "active");
 });
 
 test("pause aborts the current turn, blocks stale tools, and persists paused state", async () => {

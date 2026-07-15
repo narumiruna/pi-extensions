@@ -24,7 +24,7 @@ Goal mode uses Codex-like persistence instructions and sends guarded continuatio
 - Detects budget exhaustion after completed tool activity when assistant usage is persisted, then injects at most one non-user-authored wrap-up instruction and blocks further substantive tools.
 - Keeps retryable provider interruptions and Pi compaction retries active without enqueueing duplicate goal continuations while Pi retries.
 - Preserves active goals across manual, threshold, and overflow compaction.
-- Guards auto-follow-ups so duplicate, replaced, stopped, cleared, completed, or budget-limited goals are not continued.
+- Guards auto-follow-ups and Goal-owned kickoff deliveries so duplicate, replaced, stopped, cleared, completed, budget-limited, or stale queued prompts cannot continue or overwrite a newer goal.
 - Rotates the completion guard id when a goal is resumed or edited so delayed old turns cannot complete the newer goal instance.
 - Blocks stale tool calls after in-flight work pauses, blocks, or reaches a usage limit, until fresh non-goal user work, successful reactivation/replacement, or clear.
 - Applies one evidence-based completion audit across kickoff, resume, edit, system, continuation, and budget-wrap-up prompts.
@@ -124,7 +124,7 @@ Before completion, the shared audit tells the agent to treat completion as unpro
 
 To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation. Paused, blocked, and usage-limited goals cannot be completed until resumed; a budget-limited goal permits completion only during its bounded in-flight wrap-up. The summary is completion evidence, not the stale-turn safety token.
 
-If a turn ends before completion, `pi-goal` records usage and creates one continuation intent. It dispatches that continuation only from Pi's `agent_settled` lifecycle after retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending. Repeated settled events cannot dispatch the same intent twice.
+If a turn ends before completion, `pi-goal` records usage and creates one continuation intent. It dispatches that continuation only from Pi's `agent_settled` lifecycle after retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending. Repeated settled events cannot dispatch the same intent twice. Goal-owned kickoff, resume, active-edit, and automatic-continuation deliveries are bound to the goal instance that created them; a delayed prompt from a replaced goal is aborted without rolling back, injecting, or stopping the newer goal.
 
 Manual compaction does not emit `agent_settled`, so its completion hook uses the same single-flight dispatcher as a narrow idle-only fallback. Pi extensions cannot reserve an idle turn atomically like Codex core; another extension can still win the race after the idle check, and its newer turn supersedes the old continuation intent.
 

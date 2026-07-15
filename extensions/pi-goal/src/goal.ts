@@ -155,12 +155,13 @@ interface GoalRuntime {
 	continuationDelivery?: ContinuationTicket;
 	goalRecovery?: GoalRecovery;
 	budgetWrapUp?: BudgetWrapUp;
+	agentRunGoalId?: string;
 	staleGoalToolCallsBlocked: boolean;
 	/** Once true, goal tools stay in the active set for this runtime (prompt-cache stable). */
 	goalToolsUnlocked: boolean;
 	/** Exact lazy goal tools this runtime removed and may restore on a mode change. */
 	goalToolsHiddenByPolicy: Set<string>;
-	pendingGoalPromptMarkers: Set<string>;
+	pendingGoalPromptMarkers: Map<string, string>;
 	cancelledContinuationMarkers: Set<string>;
 }
 
@@ -171,7 +172,7 @@ function createGoalRuntime(pi: ExtensionAPI): GoalRuntime {
 		staleGoalToolCallsBlocked: false,
 		goalToolsUnlocked: false,
 		goalToolsHiddenByPolicy: new Set(),
-		pendingGoalPromptMarkers: new Set(),
+		pendingGoalPromptMarkers: new Map(),
 		cancelledContinuationMarkers: new Set(),
 	};
 }
@@ -426,6 +427,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearCompletionStatusTimer();
 		clearContinuationTracking();
 		clearPendingGoalPrompts();
+		runtime.agentRunGoalId = undefined;
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
@@ -493,6 +495,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		}
 		clearContinuationTracking();
 		clearPendingGoalPrompts();
+		runtime.agentRunGoalId = undefined;
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
@@ -597,11 +600,24 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
-		const isGoalPrompt = consumePendingGoalPrompt(event.prompt);
-		const isGoalContinuation = markContinuationStarted(event.prompt);
-		if (runtime.activeGoal?.status !== "active") return;
+		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
+		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
+		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
+		if (ownedPromptGoalId && ownedPromptGoalId !== runtime.activeGoal?.id) {
+			runtime.agentRunGoalId = ownedPromptGoalId;
+			if (runtime.activeGoal?.status === "active" && !goalToolsAvailable()) {
+				pauseGoalForUnavailableTools(ctx, false);
+			}
+			abortCurrentTurn(ctx);
+			return;
+		}
+		if (runtime.activeGoal?.status !== "active") {
+			runtime.agentRunGoalId = undefined;
+			return;
+		}
+		runtime.agentRunGoalId = runtime.activeGoal.id;
 		if (!goalToolsAvailable()) {
-			pauseGoalForUnavailableTools(ctx, isGoalPrompt || isGoalContinuation);
+			pauseGoalForUnavailableTools(ctx, ownedPromptGoalId !== undefined);
 			return;
 		}
 
@@ -611,6 +627,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("agent_end", (event, ctx) => {
+		const agentRunGoalId = runtime.agentRunGoalId;
+		runtime.agentRunGoalId = undefined;
+		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
 		if (!runtime.activeGoal) return;
 		if (
 			runtime.activeGoal.status === "budget_limited" &&
@@ -726,9 +745,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		const startedGoal = runtime.activeGoal;
-		const sent = await sendOwnedGoalPrompt(pi, ctx, buildGoalPrompt(startedGoal));
+		const sent = await sendOwnedGoalPrompt(pi, ctx, startedGoal.id, buildGoalPrompt(startedGoal));
 		if (!sent) {
+			let rolledBackStartedGoal = false;
 			if (runtime.activeGoal?.id === startedGoal.id) {
+				rolledBackStartedGoal = true;
 				if (existingGoal) {
 					updateGoalUsage(existingGoal, ctx);
 					if (existingGoal.status === "active") {
@@ -746,7 +767,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					clearActiveGoal(ctx);
 				}
 			}
-			if (!goalToolVisibilityBeforeActivation.goalToolsUnlocked && !existingGoal) {
+			if (
+				rolledBackStartedGoal &&
+				!goalToolVisibilityBeforeActivation.goalToolsUnlocked &&
+				!existingGoal
+			) {
 				restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
 			}
 			return;
@@ -825,7 +850,12 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		const resumedGoal = runtime.activeGoal;
-		const sent = await sendOwnedGoalPrompt(pi, ctx, buildResumePrompt(resumedGoal, stoppedStatus));
+		const sent = await sendOwnedGoalPrompt(
+			pi,
+			ctx,
+			resumedGoal.id,
+			buildResumePrompt(resumedGoal, stoppedStatus),
+		);
 		if (!sent) {
 			if (runtime.activeGoal?.id === resumedGoal.id && runtime.activeGoal.status === "active") {
 				runtime.activeGoal = stoppedGoal;
@@ -904,7 +934,12 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (!editedGoal) return;
 		if (editedGoal.status === "active") {
 			clearStaleGoalToolCallBlock();
-			const sent = await sendOwnedGoalPrompt(pi, ctx, buildObjectiveUpdatedPrompt(editedGoal));
+			const sent = await sendOwnedGoalPrompt(
+				pi,
+				ctx,
+				editedGoal.id,
+				buildObjectiveUpdatedPrompt(editedGoal),
+			);
 			if (!sent) {
 				if (runtime.activeGoal?.id === editedGoal.id) {
 					if (previousStatus === "active") {
@@ -1137,11 +1172,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.pendingGoalPromptMarkers.clear();
 	}
 
-	function rememberPendingGoalPrompt(prompt: string) {
+	function rememberPendingGoalPrompt(goalId: string, prompt: string) {
 		const marker = randomUUID();
-		runtime.pendingGoalPromptMarkers.add(marker);
+		runtime.pendingGoalPromptMarkers.set(marker, goalId);
 		if (runtime.pendingGoalPromptMarkers.size > MAX_PENDING_GOAL_PROMPTS) {
-			const oldest = runtime.pendingGoalPromptMarkers.values().next().value;
+			const oldest = runtime.pendingGoalPromptMarkers.keys().next().value;
 			if (oldest) runtime.pendingGoalPromptMarkers.delete(oldest);
 		}
 		return { marker, prompt: `${prompt}\n\n<!-- ${GOAL_PROMPT_MARKER_PREFIX}${marker} -->` };
@@ -1149,11 +1184,19 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 	function consumePendingGoalPrompt(prompt: string) {
 		const marker = extractGoalPromptMarker(prompt);
-		return marker ? runtime.pendingGoalPromptMarkers.delete(marker) : false;
+		if (!marker) return undefined;
+		const goalId = runtime.pendingGoalPromptMarkers.get(marker);
+		runtime.pendingGoalPromptMarkers.delete(marker);
+		return goalId;
 	}
 
-	async function sendOwnedGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
-		const pending = rememberPendingGoalPrompt(prompt);
+	async function sendOwnedGoalPrompt(
+		pi: ExtensionAPI,
+		ctx: StatusContext,
+		goalId: string,
+		prompt: string,
+	) {
+		const pending = rememberPendingGoalPrompt(goalId, prompt);
 		const sent = await sendPrompt(pi, ctx, pending.prompt);
 		if (!sent) runtime.pendingGoalPromptMarkers.delete(pending.marker);
 		return sent;
@@ -1185,10 +1228,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			// unsent intent and a delivery that may have lost the non-atomic idle race;
 			// the newer work's agent_end will record a fresh intent.
 			cancelContinuationWork();
-			return false;
+			return undefined;
 		}
 		if (runtime.continuationDelivery?.marker === marker) runtime.continuationDelivery = undefined;
-		return true;
+		return marker.split(":", 1)[0];
 	}
 
 	function persistGoal(goal: ActiveGoal) {
