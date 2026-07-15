@@ -64,9 +64,9 @@ Configuration is optional. Create `~/.pi/agent/pi-goal.json` only when overridin
 - `"always"` (default) — pi-goal does not proactively hide `goal_complete` or `goal_blocked`, keeping the tool schema stable from session startup.
 - `"after-first-goal"` — hides both tools at fresh runtime startup, reveals them for the first accepted Goal activation or unfinished-goal restore, and keeps them desired for the remainder of that extension runtime. A failed first kickoff restores the locked tool set. If revealing the tools would widen an already-running turn, wait for Pi to become idle and retry `/goal`.
 
-Missing settings and an omitted `toolVisibility` use `"always"`. Invalid settings produce a warning and also fall back to `"always"`; pi-goal never creates the file automatically.
+Missing settings and an omitted `toolVisibility` use `"always"`. Invalid settings produce a warning and also fall back to `"always"`; pi-goal never creates the file automatically. Reload Pi after changing the file. If a live runtime reloads settings, switching to `"always"` restores only tools that pi-goal previously hid, while switching to `"after-first-goal"` locks a runtime that has no unfinished goal.
 
-Tool visibility is a baseline, not ownership of Pi's global active-tool list. Plan mode or another restrictive policy may temporarily hide the tools. pi-goal does not fight that policy on every turn: activation is rejected if both tools cannot be made available, and an already-active goal is paused without automatic continuation if they disappear.
+Tool visibility is a baseline, not ownership of Pi's global active-tool list. Plan mode or another restrictive policy may temporarily hide the tools. pi-goal does not fight that policy on every turn: activation is rejected if both tools cannot be made available, and an already-active goal is paused without automatic continuation if they disappear. The pause aborts a Goal-owned automatic continuation, but it does not cancel an unrelated user or extension turn that exposed the restriction.
 
 ## 🚀 Commands
 

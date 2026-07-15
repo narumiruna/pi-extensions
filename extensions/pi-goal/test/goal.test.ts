@@ -172,6 +172,58 @@ test("after-first-goal hides tools until activation, then keeps them visible", a
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 });
 
+test("switching from locked lazy visibility to always restores tools hidden by pi-goal", () => {
+	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "visibility-reload.json");
+	writeFileSync(settingsPath, '{"toolVisibility":"after-first-goal"}\n');
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoalWithSettingsPath(mock.pi, settingsPath);
+	const context = createMockContext();
+
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
+
+	writeFileSync(settingsPath, '{"toolVisibility":"always"}\n');
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
+});
+
+test("switching from always to lazy visibility locks a runtime without an unfinished goal", () => {
+	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "visibility-lock-reload.json");
+	writeFileSync(settingsPath, '{"toolVisibility":"always"}\n');
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoalWithSettingsPath(mock.pi, settingsPath);
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	writeFileSync(settingsPath, '{"toolVisibility":"after-first-goal"}\n');
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
+});
+
+test("failed always-mode restoration preserves the restrictive set and retries later", () => {
+	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "visibility-reload-retry.json");
+	writeFileSync(settingsPath, '{"toolVisibility":"after-first-goal"}\n');
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoalWithSettingsPath(mock.pi, settingsPath);
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	writeFileSync(settingsPath, '{"toolVisibility":"always"}\n');
+
+	const originalSetActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
+	mock.rawPi.setActiveTools = (names: string[]) => {
+		originalSetActiveTools(names.filter((name) => name !== "goal_blocked"));
+	};
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Could not restore.*goal tools/i);
+
+	mock.rawPi.setActiveTools = originalSetActiveTools;
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
+});
+
 test("restoring an unfinished goal unlocks goal tools on session_start", () => {
 	for (const status of [
 		"active",
@@ -189,12 +241,13 @@ test("restoring an unfinished goal unlocks goal tools on session_start", () => {
 	}
 });
 
-test("an active goal pauses instead of overriding an earlier restrictive tool policy", async () => {
+test("an active goal pauses without aborting an unrelated restrictive turn", async () => {
+	let aborts = 0;
 	const mock = createMockPi({
 		activeTools: ["read", "bash", "scrape", "goal_complete", "goal_blocked"],
 	});
 	registerGoal(mock.pi, "after-first-goal");
-	const context = createMockContext();
+	const context = createMockContext({ abort: () => aborts++ });
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
 
@@ -207,7 +260,29 @@ test("an active goal pauses instead of overriding an earlier restrictive tool po
 	assert.equal(result, undefined);
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "scrape"]);
 	assert.equal(lastGoalStatus(mock), "paused");
+	assert.equal(aborts, 0);
 	assert.match(context.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
+});
+
+test("missing goal tools abort an automatic continuation turn", async () => {
+	let aborts = 0;
+	const active = await startGoalForTest({ abort: () => aborts++ });
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	const continuationPrompt = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.match(continuationPrompt, /pi-goal-continuation:/);
+	active.mock.rawPi.setActiveTools(["read", "bash"]);
+
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuationPrompt, systemPrompt: "base" },
+		active.ctx,
+	);
+
+	assert.equal(lastGoalStatus(active.mock), "paused");
+	assert.equal(aborts, 1);
 });
 
 test("a later restrictive tool policy pauses the goal at agent_end without continuation", async () => {

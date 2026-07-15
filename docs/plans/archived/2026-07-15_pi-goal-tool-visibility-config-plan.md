@@ -30,13 +30,13 @@ Supported values are `"always"` and `"after-first-goal"`. Missing settings or an
 ## Plan
 
 - [x] Added `extensions/pi-goal/src/settings.ts` with typed synchronous loading for `pi-goal.json`, `"always"` defaults, and bounded invalid-file reporting; isolated temporary-path tests cover missing, omitted, valid, malformed, invalid-value, and unreadable inputs.
-- [x] Added lifecycle tests for both visibility modes: missing/invalid/explicit `"always"` settings keep both tools active, while `"after-first-goal"` hides them until an accepted activation or unfinished-goal restore; the tests failed before runtime integration and pass in the 422-test repository suite.
+- [x] Added lifecycle tests for both visibility modes: missing/invalid/explicit `"always"` settings keep both tools active, while `"after-first-goal"` hides them until an accepted activation or unfinished-goal restore; the tests failed before runtime integration and pass in the 426-test repository suite.
 - [x] Refactored `extensions/pi-goal/src/goal.ts` to load settings at `session_start`, scope sticky visibility to `"after-first-goal"`, restore the locked set after failed first delivery, and keep successful unlocks through completion/clear for the current runtime; lifecycle and parent/child isolation tests pass.
-- [x] Removed per-turn `setActiveTools()` reassertion and added availability guards at restore, start/resume/reactivating edit, prompt injection, `agent_end`, and continuation dispatch; allowlist, partial-reveal cleanup, busy-turn widening, replacement rollback, stop-precedence, budget-precedence, paused-state, and no-continuation assertions pass.
+- [x] Removed per-turn `setActiveTools()` reassertion and added availability guards at restore, start/resume/reactivating edit, prompt injection, `agent_end`, and continuation dispatch; allowlist, partial-reveal cleanup, busy-turn widening, settings-mode restoration, replacement rollback, unrelated-turn preservation, stop-precedence, budget-precedence, paused-state, and no-continuation assertions pass.
 - [x] Added both restrictive-policy ordering scenarios, including Plan-mode-shaped whole-set replacement; tests prove the earlier removal pauses before Goal prompt injection, while later removal pauses at `agent_end` without re-adding tools or dispatching continuation.
 - [x] Documented the cross-extension ownership rule and failure-safe connection behavior in `docs/implementation-notes/pi-goal-plan-mode-tool-policy.md`; source behavior and ordering tests match the documented restrictive-policy precedence.
 - [x] Updated `extensions/pi-goal/README.md` with the `pi-goal.json` path, both values, the `"always"` default, runtime-scoped lazy semantics, malformed-config fallback, failed-kickoff rollback, and restrictive-policy pause behavior.
-- [x] Formatted and verified the completed change: targeted Biome check, package typecheck, isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 422 passing tests, and `just pack-goal` all pass; the dry run contains nine expected files including `src/settings.ts`.
+- [x] Formatted and verified the completed change: targeted Biome check, package typecheck, isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 426 passing tests, and `just pack-goal` all pass; the dry run contains nine expected files including `src/settings.ts`.
 
 ## Risks
 
@@ -53,7 +53,7 @@ Keep `"always"` behavior independent of lazy state so the optional mode can be r
 
 - [x] Missing, valid, and invalid `pi-goal.json` behavior is verified by isolated settings tests; `"always"` is the default and source contains no config-file write path.
 - [x] Both visibility modes and runtime reset/restore semantics are verified by lifecycle tests that assert exact active-tool sets.
-- [x] Active goals cannot start, restore, or auto-continue without both terminal tools, verified by allowlist, partial activation, busy-turn, replacement, clobber-order, status-precedence, paused-state, and no-continuation assertions.
+- [x] Active goals cannot start, restore, or auto-continue without both terminal tools, verified by allowlist, partial activation, settings-mode restoration, busy-turn, replacement, clobber-order, unrelated-turn preservation, status-precedence, paused-state, and no-continuation assertions.
 - [x] pi-goal no longer reasserts `setActiveTools()` from `before_agent_start`, verified by source review and both restrictive-policy ordering tests.
 - [x] User and implementation documentation matches the configuration and policy-precedence behavior, verified in `extensions/pi-goal/README.md` and `docs/implementation-notes/pi-goal-plan-mode-tool-policy.md`.
-- [x] Repository and package gates pass, verified by the isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 422 tests, and inspected nine-file `just pack-goal` output.
+- [x] Repository and package gates pass, verified by the isolated-agent-dir runtime smoke, canonical-`TMPDIR` `npm run check` with 426 tests, and inspected nine-file `just pack-goal` output.
