@@ -25,111 +25,130 @@ async function createHarness(responses, fauxOptions = {}, prepareSession) {
 	const cwd = join(root, "workspace");
 	await mkdir(cwd, { recursive: true });
 
-	const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-	const modelRegistry = ModelRegistry.inMemory(authStorage);
-	const faux = createFauxCore({
-		api: `pi-goal-faux-${crypto.randomUUID()}`,
-		provider: `pi-goal-faux-${crypto.randomUUID()}`,
-		...fauxOptions,
-	});
-	const provider = faux.getModel().provider;
-	modelRegistry.registerProvider(provider, {
-		api: faux.api,
-		apiKey: "runtime-smoke",
-		baseUrl: "http://localhost",
-		streamSimple: faux.streamSimple,
-		models: faux.models.map((model) => ({
-			id: model.id,
-			name: model.name,
-			api: model.api,
-			baseUrl: model.baseUrl,
-			reasoning: model.reasoning,
-			input: model.input,
-			cost: model.cost,
-			contextWindow: model.contextWindow,
-			maxTokens: model.maxTokens,
-		})),
-	});
-	const model = modelRegistry.find(provider, faux.getModel().id);
-	assert.ok(model, "expected registered faux model");
-	faux.setResponses(responses);
-
-	const settingsManager = SettingsManager.inMemory({
-		compaction: { enabled: false },
-		retry: { enabled: false },
-	});
-	const lifecycleEvents = [];
-	const resourceLoader = new DefaultResourceLoader({
-		cwd,
-		agentDir,
-		settingsManager,
-		additionalExtensionPaths: [extensionPath],
-		extensionFactories: [
-			{
-				name: "runtime-smoke-observer",
-				factory: (pi) => {
-					pi.registerTool({
-						name: "budget_probe",
-						label: "Budget Probe",
-						description: "No-op tool for lifecycle smoke coverage",
-						parameters: Type.Object({}),
-						async execute() {
-							lifecycleEvents.push("budget_probe_execute");
-							return { content: [{ type: "text", text: "probe complete" }] };
-						},
-					});
-					pi.on("session_start", () => lifecycleEvents.push("session_start"));
-					pi.on("message_end", (event) => {
-						if (event.message.role === "assistant") lifecycleEvents.push("assistant_message_end");
-					});
-					pi.on("tool_execution_end", () => lifecycleEvents.push("tool_execution_end"));
-					pi.on("session_before_compact", () => lifecycleEvents.push("session_before_compact"));
-					pi.on("session_compact", (_event, ctx) =>
-						lifecycleEvents.push(
-							`session_compact:idle=${ctx.isIdle()}:pending=${ctx.hasPendingMessages()}`,
-						),
-					);
-					pi.on("agent_settled", () => lifecycleEvents.push("agent_settled"));
-				},
-			},
-		],
-	});
-	await resourceLoader.reload();
-	const sessionManager = SessionManager.inMemory(cwd);
-	prepareSession?.(sessionManager);
-	const result = await createAgentSession({
-		cwd,
-		agentDir,
-		authStorage,
-		modelRegistry,
-		model,
-		resourceLoader,
-		sessionManager,
-		settingsManager,
-		noTools: "builtin",
-	});
-	assert.deepEqual(result.extensionsResult.errors, []);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = agentDir;
-	try {
-		await result.session.bindExtensions({});
-	} finally {
+	let createdSession;
+	let agentDirRestored = false;
+	const restoreAgentDir = () => {
+		if (agentDirRestored) return;
+		agentDirRestored = true;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-	}
-	return {
-		extensions: result.extensionsResult.extensions.map((extension) => ({
-			path: extension.path,
-			handlers: [...extension.handlers.keys()],
-		})),
-		faux,
-		lifecycleEvents,
-		session: result.session,
-		async cleanup() {
-			result.session.dispose();
-			await rm(root, { recursive: true, force: true });
-		},
 	};
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	const cleanupResources = async () => {
+		try {
+			createdSession?.dispose();
+		} finally {
+			try {
+				await rm(root, { recursive: true, force: true });
+			} finally {
+				restoreAgentDir();
+			}
+		}
+	};
+
+	try {
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		const modelRegistry = ModelRegistry.inMemory(authStorage);
+		const faux = createFauxCore({
+			api: `pi-goal-faux-${crypto.randomUUID()}`,
+			provider: `pi-goal-faux-${crypto.randomUUID()}`,
+			...fauxOptions,
+		});
+		const provider = faux.getModel().provider;
+		modelRegistry.registerProvider(provider, {
+			api: faux.api,
+			apiKey: "runtime-smoke",
+			baseUrl: "http://localhost",
+			streamSimple: faux.streamSimple,
+			models: faux.models.map((model) => ({
+				id: model.id,
+				name: model.name,
+				api: model.api,
+				baseUrl: model.baseUrl,
+				reasoning: model.reasoning,
+				input: model.input,
+				cost: model.cost,
+				contextWindow: model.contextWindow,
+				maxTokens: model.maxTokens,
+			})),
+		});
+		const model = modelRegistry.find(provider, faux.getModel().id);
+		assert.ok(model, "expected registered faux model");
+		faux.setResponses(responses);
+
+		const settingsManager = SettingsManager.inMemory({
+			compaction: { enabled: false },
+			retry: { enabled: false },
+		});
+		const lifecycleEvents = [];
+		const resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			additionalExtensionPaths: [extensionPath],
+			extensionFactories: [
+				{
+					name: "runtime-smoke-observer",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "budget_probe",
+							label: "Budget Probe",
+							description: "No-op tool for lifecycle smoke coverage",
+							parameters: Type.Object({}),
+							async execute() {
+								lifecycleEvents.push("budget_probe_execute");
+								return { content: [{ type: "text", text: "probe complete" }] };
+							},
+						});
+						pi.on("session_start", () => lifecycleEvents.push("session_start"));
+						pi.on("message_end", (event) => {
+							if (event.message.role === "assistant") lifecycleEvents.push("assistant_message_end");
+						});
+						pi.on("tool_execution_end", () => lifecycleEvents.push("tool_execution_end"));
+						pi.on("session_before_compact", () => lifecycleEvents.push("session_before_compact"));
+						pi.on("session_compact", (_event, ctx) =>
+							lifecycleEvents.push(
+								`session_compact:idle=${ctx.isIdle()}:pending=${ctx.hasPendingMessages()}`,
+							),
+						);
+						pi.on("agent_settled", () => lifecycleEvents.push("agent_settled"));
+					},
+				},
+			],
+		});
+		await resourceLoader.reload();
+		const sessionManager = SessionManager.inMemory(cwd);
+		prepareSession?.(sessionManager);
+		const result = await createAgentSession({
+			cwd,
+			agentDir,
+			authStorage,
+			modelRegistry,
+			model,
+			resourceLoader,
+			sessionManager,
+			settingsManager,
+			noTools: "builtin",
+		});
+		assert.deepEqual(result.extensionsResult.errors, []);
+		createdSession = result.session;
+		await result.session.bindExtensions({});
+		return {
+			agentDir,
+			extensions: result.extensionsResult.extensions.map((extension) => ({
+				path: extension.path,
+				handlers: [...extension.handlers.keys()],
+			})),
+			faux,
+			lifecycleEvents,
+			session: result.session,
+			cleanup: cleanupResources,
+		};
+	} catch (error) {
+		await cleanupResources();
+		throw error;
+	}
 }
 
 function completionResponse(context) {
@@ -151,6 +170,17 @@ function userMessageText(message) {
 		.filter((part) => part?.type === "text")
 		.map((part) => part.text)
 		.join("\n");
+}
+
+async function agentDirectoryIsolationScenario() {
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const harness = await createHarness([]);
+	try {
+		assert.equal(process.env.PI_CODING_AGENT_DIR, harness.agentDir);
+	} finally {
+		await harness.cleanup();
+	}
+	assert.equal(process.env.PI_CODING_AGENT_DIR, previousAgentDir);
 }
 
 function persistedGoalStatus(session) {
@@ -379,6 +409,7 @@ async function manualCompactionScenario() {
 	}
 }
 
+await agentDirectoryIsolationScenario();
 await normalContinuationScenario();
 await queuedInputScenario();
 await pauseScenario();
