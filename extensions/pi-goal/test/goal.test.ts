@@ -599,6 +599,55 @@ test("failed first prompt delivery preserves a preexisting external goal-tool se
 	]);
 });
 
+test("failed lazy reactivation deliveries restore the restrictive tool set", async (t) => {
+	await t.test("stopped-goal replacement", async () => {
+		const replaced = restoreGoalForTest("paused", {}, "after-first-goal");
+		const original = requireLastGoal(replaced.mock);
+		replaced.mock.rawPi.setActiveTools(["read", "bash"]);
+		replaced.mock.rawPi.sendUserMessage = () => {
+			throw new Error("replacement delivery failed");
+		};
+
+		await replaced.mock.commands.get("goal")?.handler("replacement objective", replaced.ctx);
+
+		assert.equal(requireLastGoal(replaced.mock).id, original.id);
+		assert.equal(lastGoalStatus(replaced.mock), "paused");
+		assert.deepEqual(replaced.mock.rawPi.getActiveTools(), ["read", "bash"]);
+	});
+
+	await t.test("resume", async () => {
+		const resumed = restoreGoalForTest("paused", {}, "after-first-goal");
+		const original = requireLastGoal(resumed.mock);
+		resumed.mock.rawPi.setActiveTools(["read", "bash"]);
+		resumed.mock.rawPi.sendUserMessage = () => {
+			throw new Error("resume delivery failed");
+		};
+
+		await resumed.mock.commands.get("goal")?.handler("resume", resumed.ctx);
+
+		assert.equal(requireLastGoal(resumed.mock).id, original.id);
+		assert.equal(lastGoalStatus(resumed.mock), "paused");
+		assert.deepEqual(resumed.mock.rawPi.getActiveTools(), ["read", "bash"]);
+	});
+
+	await t.test("budget-increase edit", async () => {
+		const edited = restoreGoalForTest("budget_limited", {}, "after-first-goal");
+		const original = requireLastGoal(edited.mock);
+		edited.mock.rawPi.setActiveTools(["read", "bash"]);
+		edited.mock.rawPi.sendUserMessage = () => {
+			throw new Error("edit delivery failed");
+		};
+
+		await edited.mock.commands
+			.get("goal")
+			?.handler("edit --tokens 20 revised objective", edited.ctx);
+
+		assert.equal(requireLastGoal(edited.mock).id, original.id);
+		assert.equal(lastGoalStatus(edited.mock), "budget_limited");
+		assert.deepEqual(edited.mock.rawPi.getActiveTools(), ["read", "bash"]);
+	});
+});
+
 test("a stale first kickoff cannot run or roll back a newer replacement", async () => {
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
 	registerGoal(mock.pi, "after-first-goal");
@@ -2379,6 +2428,32 @@ test("state changes between agent_end and agent_settled cancel stale continuatio
 			`${action} must not dispatch the stale continuation`,
 		);
 	}
+});
+
+test("tool_execution_end pauses a goal before another turn when terminal tools disappear", async () => {
+	let aborts = 0;
+	const active = await startGoalForTest({ abort: () => aborts++ });
+	const kickoffPrompt = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: kickoffPrompt, systemPrompt: "base" },
+		active.ctx,
+	);
+	active.mock.rawPi.setActiveTools(["read", "bash"]);
+
+	active.mock.events.get("tool_execution_end")?.[0]?.(
+		{ toolCallId: "restricted-tool", toolName: "read", result: {}, isError: false },
+		active.ctx,
+	);
+
+	assert.equal(lastGoalStatus(active.mock), "paused");
+	assert.equal(aborts, 1);
+	assert.deepEqual(
+		active.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "next-tool", input: {} },
+			active.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
 });
 
 test("tool_execution_end enforces budget once and injects one bounded wrap-up", async () => {

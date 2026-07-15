@@ -23,7 +23,7 @@ Neither value grants pi-goal ownership over the global active-tool array. Plan m
 
 ## Fail-safe behavior
 
-An autonomous active goal requires both `goal_complete` and `goal_blocked`. pi-goal checks that invariant at activation, restore, prompt injection, turn completion, and continuation dispatch.
+An autonomous active goal requires both `goal_complete` and `goal_blocked`. pi-goal checks that invariant at activation, restore, prompt injection, each completed tool boundary, turn completion, and continuation dispatch.
 
 - A new activation or resume is rejected before state changes when both tools are unavailable.
 - A restored or running active goal is transitioned to `paused` if the tools disappear.
@@ -51,5 +51,6 @@ Tests should cover both ordering boundaries:
 4. A new start, resume, or reactivating edit cannot proceed while both terminal tools are unavailable.
 5. Lazy activation cannot reveal missing tools while Pi is already running another turn.
 6. Switching a live runtime from locked lazy visibility to `"always"` restores only the exact tools previously hidden by pi-goal, rolls back partial restoration, and retries after a restrictive policy exits; switching back to lazy locks a runtime without an unfinished goal.
-7. A failed first lazy kickoff restores the exact active set from before activation instead of removing terminal tools already exposed by another extension.
+7. A failed lazy kickoff, stopped-goal replacement, resume, or reactivating edit restores the exact active set from before activation instead of retaining a widened set or removing terminal tools already exposed by another extension.
 8. If an asynchronous first kickoff is replaced before its delivery fails, its late failure cannot roll back the newer goal's tools; if a stale queued kickoff or continuation starts, its goal-instance marker aborts it and its eventual `agent_end` is ignored without injecting or stopping the replacement goal.
+9. If a later policy removes terminal tools after prompt injection, the first `tool_execution_end` pauses and aborts Goal-owned work before Pi can make another model turn.

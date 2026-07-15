@@ -596,7 +596,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		updateGoalUsage(runtime.activeGoal, ctx);
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
-		limitActiveGoalForBudget(ctx, true);
+		if (limitActiveGoalForBudget(ctx, true)) return;
+		if (!goalToolsAvailable()) pauseGoalForUnavailableTools(ctx);
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
@@ -767,11 +768,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					clearActiveGoal(ctx);
 				}
 			}
-			if (
-				rolledBackStartedGoal &&
-				!goalToolVisibilityBeforeActivation.goalToolsUnlocked &&
-				!existingGoal
-			) {
+			if (rolledBackStartedGoal) {
 				restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
 			}
 			return;
@@ -827,6 +824,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			);
 			return;
 		}
+		const goalToolVisibilityBeforeActivation = snapshotGoalToolVisibility();
 		try {
 			prepareGoalToolsForActivation(ctx);
 		} catch (error) {
@@ -862,6 +860,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				persistGoal(runtime.activeGoal);
 				updateStatus(ctx, runtime.activeGoal);
 				if (blocksStaleGoalToolCalls(runtime.activeGoal.status)) blockStaleGoalToolCalls();
+				restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
 			}
 			return;
 		}
@@ -918,6 +917,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			},
 			editedGoalStatus(previousStatus),
 		);
+		const goalToolVisibilityBeforeActivation =
+			nextGoal.status === "active" ? snapshotGoalToolVisibility() : undefined;
 		if (nextGoal.status === "active") {
 			try {
 				prepareGoalToolsForActivation(ctx);
@@ -953,6 +954,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					}
 					persistGoal(runtime.activeGoal);
 					updateStatus(ctx, runtime.activeGoal);
+					if (goalToolVisibilityBeforeActivation) {
+						restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
+					}
 				}
 				return;
 			}
