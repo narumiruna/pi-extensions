@@ -277,7 +277,9 @@ test("lazy restore does not widen an earlier restrictive session-start policy", 
 	registerGoal(mock.pi, "after-first-goal");
 	// Simulate an earlier session_start handler restoring Plan mode's saved tool set.
 	mock.rawPi.setActiveTools(["read", "bash"]);
+	let aborts = 0;
 	const context = createMockContext({
+		abort: () => aborts++,
 		sessionManager: { getBranch: () => branch, getEntries: () => branch },
 	});
 
@@ -285,6 +287,18 @@ test("lazy restore does not widen an earlier restrictive session-start policy", 
 
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
 	assert.equal(lastGoalStatus(mock), "paused");
+	assert.equal(aborts, 0);
+	mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: "startup follow-up", streamingBehavior: undefined },
+		context.ctx,
+	);
+	assert.equal(
+		mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "startup-extension-read", input: {} },
+			context.ctx,
+		),
+		undefined,
+	);
 	assert.match(context.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
 });
 
@@ -559,6 +573,30 @@ test("failed first prompt delivery restores the locked tool set", async () => {
 	await mock.commands.get("goal")?.handler("finish the work again", context.ctx);
 	assert.equal(lastGoalStatus(mock), "active");
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
+});
+
+test("failed first prompt delivery preserves a preexisting external goal-tool set", async () => {
+	const mock = createMockPi({
+		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
+	});
+	registerGoal(mock.pi, "after-first-goal");
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	// Another extension exposes both terminal tools while pi-goal remains locked.
+	mock.rawPi.setActiveTools(["read", "goal_complete", "goal_blocked", "scrape"]);
+	mock.rawPi.sendUserMessage = () => {
+		throw new Error("delivery failed");
+	};
+
+	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
+
+	assert.equal(lastGoalStatus(mock), null);
+	assert.deepEqual(mock.rawPi.getActiveTools(), [
+		"read",
+		"goal_complete",
+		"goal_blocked",
+		"scrape",
+	]);
 });
 
 test("parent and child goal tool unlock policies stay isolated", async () => {

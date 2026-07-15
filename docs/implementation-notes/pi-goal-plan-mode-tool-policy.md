@@ -27,6 +27,7 @@ An autonomous active goal requires both `goal_complete` and `goal_blocked`. pi-g
 
 - A new activation or resume is rejected before state changes when both tools are unavailable.
 - A restored or running active goal is transitioned to `paused` if the tools disappear.
+- A startup restore pause does not abort or stale-block later unrelated extension follow-ups.
 - Pending continuation work is cancelled, and no new automatic continuation is sent.
 - A Goal-owned kickoff, resume, active-edit, or automatic-continuation prompt is aborted and stale-blocked, while an unrelated user or extension turn and its allowed tools can proceed after the goal pauses.
 - The fail-safe pause path leaves the restrictive active-tool set unchanged.
@@ -46,7 +47,8 @@ Tests should cover both ordering boundaries:
 
 1. A restrictive policy removes Goal tools before pi-goal's `before_agent_start`; pi-goal pauses without injecting Goal instructions or restoring the tools, aborting Goal-owned kickoff, resume, active-edit, and automatic-continuation prompts but not an unrelated turn.
 2. A restrictive policy removes Goal tools after pi-goal's pre-turn check; `agent_end` pauses the goal and `agent_settled` sends no continuation.
-3. An earlier restrictive `session_start` policy removes terminal tools before pi-goal restores an active goal; pi-goal leaves that set unchanged and restores the goal as paused.
+3. An earlier restrictive `session_start` policy removes terminal tools before pi-goal restores an active goal; pi-goal leaves that set unchanged, restores the goal as paused, and allows later unrelated extension prompts to use the restrictive set.
 4. A new start, resume, or reactivating edit cannot proceed while both terminal tools are unavailable.
 5. Lazy activation cannot reveal missing tools while Pi is already running another turn.
 6. Switching a live runtime from locked lazy visibility to `"always"` restores only the exact tools previously hidden by pi-goal, rolls back partial restoration, and retries after a restrictive policy exits; switching back to lazy locks a runtime without an unfinished goal.
+7. A failed first lazy kickoff restores the exact active set from before activation instead of removing terminal tools already exposed by another extension.

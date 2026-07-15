@@ -140,6 +140,12 @@ interface GoalOptions {
 	settingsPath?: string;
 }
 
+interface GoalToolVisibilitySnapshot {
+	activeTools: string[];
+	goalToolsUnlocked: boolean;
+	goalToolsHiddenByPolicy: string[];
+}
+
 interface GoalRuntime {
 	readonly pi: ExtensionAPI;
 	settings: GoalSettings;
@@ -467,7 +473,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				runtime.goalToolsHiddenByPolicy.clear();
 			}
 			if (runtime.activeGoal.status === "active" && !goalToolsAvailable()) {
-				pauseGoalForUnavailableTools(ctx);
+				pauseGoalForUnavailableTools(ctx, false);
 				return;
 			}
 			persistGoal(runtime.activeGoal);
@@ -703,7 +709,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 		// Unlock lazy visibility only for a real activation. In always mode, a
 		// missing tool means another policy or allowlist intentionally removed it.
-		const goalToolsWereUnlocked = runtime.goalToolsUnlocked;
+		const goalToolVisibilityBeforeActivation = snapshotGoalToolVisibility();
 		try {
 			prepareGoalToolsForActivation(ctx);
 		} catch (error) {
@@ -740,7 +746,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					clearActiveGoal(ctx);
 				}
 			}
-			if (!goalToolsWereUnlocked && !existingGoal) rollbackGoalToolUnlock();
+			if (!goalToolVisibilityBeforeActivation.goalToolsUnlocked && !existingGoal) {
+				restoreGoalToolVisibility(goalToolVisibilityBeforeActivation);
+			}
 			return;
 		}
 		ctx.ui.notify(
@@ -1287,10 +1295,21 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		}
 	}
 
-	function rollbackGoalToolUnlock() {
-		if (runtime.settings.toolVisibility !== "after-first-goal") return;
-		runtime.goalToolsUnlocked = false;
-		hideGoalToolsIfLocked();
+	function snapshotGoalToolVisibility(): GoalToolVisibilitySnapshot {
+		return {
+			activeTools: runtime.pi.getActiveTools(),
+			goalToolsUnlocked: runtime.goalToolsUnlocked,
+			goalToolsHiddenByPolicy: [...runtime.goalToolsHiddenByPolicy],
+		};
+	}
+
+	function restoreGoalToolVisibility(snapshot: GoalToolVisibilitySnapshot) {
+		runtime.pi.setActiveTools(snapshot.activeTools);
+		runtime.goalToolsUnlocked = snapshot.goalToolsUnlocked;
+		runtime.goalToolsHiddenByPolicy.clear();
+		for (const name of snapshot.goalToolsHiddenByPolicy) {
+			runtime.goalToolsHiddenByPolicy.add(name);
+		}
 	}
 
 	function pauseGoalForUnavailableTools(ctx: StatusContext, abortTurn = true) {
