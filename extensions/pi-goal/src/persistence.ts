@@ -34,6 +34,7 @@ export type PendingQueueAction =
 			kind: "prioritize";
 			objective: string;
 			tokenBudget?: number;
+			displacedUsageFinalized?: boolean;
 	  }
 	| {
 			kind: "advance";
@@ -158,11 +159,18 @@ function loadLegacyGoalsState(data: unknown): LoadedGoalState {
 function normalizePendingQueueAction(value: unknown): PendingQueueAction | undefined {
 	if (!isRecord(value)) return undefined;
 	if (value.kind === "prioritize") {
-		if (!validObjective(value.objective)) return undefined;
+		if (
+			!validObjective(value.objective) ||
+			(Object.hasOwn(value, "displacedUsageFinalized") &&
+				typeof value.displacedUsageFinalized !== "boolean")
+		) {
+			return undefined;
+		}
 		return {
 			kind: "prioritize",
 			objective: value.objective,
 			tokenBudget: normalizeTokenBudget(value.tokenBudget),
+			...(value.displacedUsageFinalized === true ? { displacedUsageFinalized: true } : {}),
 		};
 	}
 	if (value.kind === "advance") {

@@ -139,6 +139,26 @@ export class GoalRuntime {
 		this.pi = pi;
 	}
 
+	canRecordGoalUsage() {
+		return (
+			this.agentRunGoalId !== null &&
+			!(
+				this.pendingQueueAction?.kind === "prioritize" &&
+				this.pendingQueueAction.displacedUsageFinalized === true
+			)
+		);
+	}
+
+	recordGoalUsage(
+		goal: ActiveGoal,
+		ctx: StatusContext,
+		checkpointActiveTime = goal.status === "active",
+	) {
+		if (!this.canRecordGoalUsage()) return false;
+		updateGoalUsage(goal, ctx, checkpointActiveTime);
+		return true;
+	}
+
 	requestContinuation(goal: ActiveGoal) {
 		if (this.hasContinuationWorkForGoal(goal.id)) return false;
 		const marker = continuationMarker(goal);
@@ -458,10 +478,10 @@ export class GoalRuntime {
 		}
 	}
 
-	pauseGoalForUnavailableTools(ctx: StatusContext, abortTurn = true) {
+	pauseGoalForUnavailableTools(ctx: StatusContext, abortTurn = true, recordUsage = true) {
 		const goal = this.activeGoal;
 		if (goal?.status !== "active") return false;
-		updateGoalUsage(goal, ctx);
+		if (recordUsage) this.recordGoalUsage(goal, ctx);
 		this.cancelContinuationWork();
 		this.clearGoalRecoveryForGoal(goal.id);
 		this.clearBudgetWrapUp();

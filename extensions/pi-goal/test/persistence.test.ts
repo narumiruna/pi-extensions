@@ -27,6 +27,7 @@ test("canonical persistence restores queue and pending prioritize safely", () =>
 		kind: "prioritize" as const,
 		objective: "urgent",
 		tokenBudget: 2_000,
+		displacedUsageFinalized: true,
 	};
 	const loaded = loadGoalStateFromSession(
 		branch({
@@ -143,6 +144,17 @@ test("malformed canonical or plural queue state fails closed", () => {
 			{
 				goal: active,
 				pendingAction: { kind: "advance", goalId: active.id, reason: "skip", completedText: "" },
+			},
+		],
+		[
+			"goal-state",
+			{
+				goal: active,
+				pendingAction: {
+					kind: "prioritize",
+					objective: "urgent",
+					displacedUsageFinalized: "yes",
+				},
 			},
 		],
 		["goal-state", { goal: active, queue: [storedGoal("done", "complete")] }],

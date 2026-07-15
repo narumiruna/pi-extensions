@@ -211,8 +211,9 @@ test("busy prioritize preserves intent and excludes old-run tokens from the urge
 test("pending prioritize does not inject or account the old goal on unrelated turns", async () => {
 	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(100)];
 	let aborts = 0;
+	let idle = false;
 	const harness = await createHarness({
-		isIdle: () => false,
+		isIdle: () => idle,
 		abort: () => {
 			aborts += 1;
 		},
@@ -220,7 +221,6 @@ test("pending prioritize does not inject or account the old goal on unrelated tu
 	});
 	await harness.command("original goal");
 	await harness.command("prioritize urgent goal");
-	branch.push(assistantUsageEntry(25));
 
 	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
 	const result = await beforeStart?.(
@@ -229,6 +229,22 @@ test("pending prioritize does not inject or account the old goal on unrelated tu
 	);
 	assert.equal(result, undefined);
 	assert.equal(aborts, 0);
+	branch.push(assistantUsageEntry(25));
+
+	await harness.mock.events.get("tool_execution_end")?.[0]?.({}, harness.ctx);
+	assert.equal(stateGoals(harness.mock)[0]?.tokensUsed, 0);
+	await harness.mock.events.get("session_before_compact")?.[0]?.(
+		{ reason: "threshold", willRetry: false },
+		harness.ctx,
+	);
+	assert.equal(stateGoals(harness.mock)[0]?.tokensUsed, 0);
+	await harness.mock.events.get("session_compact")?.[0]?.(
+		{ reason: "threshold", willRetry: false },
+		harness.ctx,
+	);
+	assert.equal(stateGoals(harness.mock)[0]?.tokensUsed, 0);
+	await harness.command("");
+	assert.equal(stateGoals(harness.mock)[0]?.tokensUsed, 0);
 
 	await harness.mock.events.get("agent_end")?.[0]?.(
 		{ messages: [{ role: "assistant", stopReason: "stop" }] },
@@ -236,6 +252,115 @@ test("pending prioritize does not inject or account the old goal on unrelated tu
 	);
 	assert.equal(stateGoals(harness.mock)[0]?.tokensUsed, 0);
 	assert.equal(lastState(harness.mock)?.pendingAction?.kind, "prioritize");
+
+	idle = true;
+	await settled(harness);
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text, status, tokensUsed }) => ({ text, status, tokensUsed })),
+		[
+			{ text: "urgent goal", status: "active", tokensUsed: 0 },
+			{ text: "original goal", status: "queued", tokensUsed: 0 },
+		],
+	);
+});
+
+test("pending prioritize excludes unrelated usage during shutdown", async () => {
+	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(100)];
+	const harness = await createHarness({
+		isIdle: () => false,
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await harness.command("original goal");
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "unrelated user work", systemPrompt: "base" },
+		harness.ctx,
+	);
+	branch.push(assistantUsageEntry(25));
+
+	await harness.mock.events.get("session_shutdown")?.[0]?.({}, harness.ctx);
+	assert.equal(stateGoals(harness.mock)[0]?.tokensUsed, 0);
+	assert.equal(lastState(harness.mock)?.pendingAction?.kind, "prioritize");
+
+	const persisted = lastState(harness.mock);
+	const restoredBranch = [...branch, { type: "custom", customType: "goal-state", data: persisted }];
+	const restored = await createHarness({
+		sessionManager: {
+			getBranch: () => restoredBranch,
+			getEntries: () => restoredBranch,
+		},
+	});
+	assert.deepEqual(
+		stateGoals(restored.mock).map(({ text, status, tokensUsed }) => ({ text, status, tokensUsed })),
+		[
+			{ text: "urgent goal", status: "active", tokensUsed: 0 },
+			{ text: "original goal", status: "queued", tokensUsed: 0 },
+		],
+	);
+});
+
+test("pending prioritize rejects terminal reports from unrelated turns", async () => {
+	const harness = await createHarness({ isIdle: () => false });
+	await harness.command("original goal");
+	const original = stateGoals(harness.mock)[0];
+	assert.ok(original);
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "unrelated user work", systemPrompt: "base" },
+		harness.ctx,
+	);
+
+	const result = await completionTool(harness.mock).execute(
+		"unowned-completion",
+		{ goal_id: original.id, summary: "Original goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	assert.match(result.content?.[0]?.text ?? "", /does not own the active goal/i);
+	assert.equal(result.terminate, undefined);
+
+	const blocked = await blockedTool(harness.mock).execute(
+		"unowned-blocked",
+		{
+			goal_id: original.id,
+			reason: "External access required",
+			evidence: "Three verified attempts require external access.",
+			repeated_turns: 3,
+		},
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	assert.match(blocked.content?.[0]?.text ?? "", /does not own the active goal/i);
+	assert.equal(blocked.terminate, undefined);
+	assert.equal(stateGoals(harness.mock)[0]?.status, "active");
+	assert.equal(lastState(harness.mock)?.pendingAction?.kind, "prioritize");
+});
+
+test("failed finalized priority activation pauses without absorbing unrelated usage", async () => {
+	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(100)];
+	let idle = false;
+	const harness = await createHarness({
+		isIdle: () => idle,
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await harness.command("original goal");
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "unrelated user work", systemPrompt: "base" },
+		harness.ctx,
+	);
+	branch.push(assistantUsageEntry(25));
+	harness.mock.rawPi.setActiveTools(["goal_complete"]);
+
+	idle = true;
+	await settled(harness);
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text, status, tokensUsed }) => ({ text, status, tokensUsed })),
+		[{ text: "original goal", status: "paused", tokensUsed: 0 }],
+	);
+	assert.equal(lastState(harness.mock)?.pendingAction, undefined);
 });
 
 test("pending prioritize aborts an already-queued displaced-goal prompt", async () => {

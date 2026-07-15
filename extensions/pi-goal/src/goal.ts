@@ -1,6 +1,6 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { currentTokenTotal, updateGoalUsage } from "./accounting.js";
+import { currentTokenTotal } from "./accounting.js";
 import { completeGoalArguments, parseCommand } from "./command.js";
 import { GoalCommandController } from "./commands.js";
 import { type ActiveGoal, loadGoalStateFromSession } from "./persistence.js";
@@ -69,6 +69,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const clearBudgetWrapUp = runtime.clearBudgetWrapUp.bind(runtime);
 	const clearStaleGoalToolCallBlock = runtime.clearStaleGoalToolCallBlock.bind(runtime);
 	const persistGoal = runtime.persistGoal.bind(runtime);
+	const updateGoalUsage = runtime.recordGoalUsage.bind(runtime);
 	const updateStatus = runtime.updateStatus.bind(runtime);
 	const limitActiveGoalForBudget = runtime.limitActiveGoalForBudget.bind(runtime);
 	const hideGoalToolsIfLocked = runtime.hideGoalToolsIfLocked.bind(runtime);
@@ -133,6 +134,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				const rejection = "Goal completion rejected: no active goal.";
 				ctx.ui.notify(rejection, "warning");
 
+				return {
+					content: [{ type: "text", text: rejection }],
+					details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+				};
+			}
+			if (!runtime.canRecordGoalUsage()) {
+				const rejection = "Goal completion rejected: current run does not own the active goal.";
+				ctx.ui.notify(rejection, "warning");
 				return {
 					content: [{ type: "text", text: rejection }],
 					details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
@@ -324,6 +333,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			};
 
 			if (!blockedGoal) return reject("no active goal");
+			if (!runtime.canRecordGoalUsage()) {
+				return reject("current run does not own the active goal");
+			}
 			if (hasPendingSkipForGoal(blockedGoal.id)) {
 				updateGoalUsage(blockedGoal, ctx);
 				persistGoal(blockedGoal);
@@ -570,7 +582,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		if (runtime.activeGoal?.status !== "active") return;
-		updateGoalUsage(runtime.activeGoal, ctx);
+		if (!updateGoalUsage(runtime.activeGoal, ctx)) return;
 		cancelContinuationWork();
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -592,7 +604,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.queuedGoals = restoredState.queue;
 			runtime.pendingQueueAction = restoredState.pendingAction;
 		}
-		updateGoalUsage(runtime.activeGoal, ctx);
+		if (!updateGoalUsage(runtime.activeGoal, ctx)) return;
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		if (runtime.pendingQueueAction) {
@@ -675,7 +687,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 		// AgentSession persists assistant message_end before tool execution events,
 		// so the completed assistant call's usage is authoritative at this boundary.
-		updateGoalUsage(runtime.activeGoal, ctx);
+		if (!updateGoalUsage(runtime.activeGoal, ctx)) return;
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		if (limitActiveGoalForBudget(ctx, true)) return;
@@ -692,7 +704,18 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		if (runtime.pendingQueueAction?.kind === "prioritize") {
 			// A turn that starts after priority intent is committed belongs to neither
-			// the displaced goal nor the not-yet-activated urgent goal.
+			// the displaced goal nor the not-yet-activated urgent goal. Persist the
+			// displaced goal's final accounting boundary so reload cannot absorb this run.
+			if (!runtime.pendingQueueAction.displacedUsageFinalized) {
+				if (runtime.activeGoal?.status === "active") {
+					updateGoalUsage(runtime.activeGoal, ctx, false);
+				}
+				runtime.pendingQueueAction.displacedUsageFinalized = true;
+				if (runtime.activeGoal) {
+					persistGoal(runtime.activeGoal);
+					updateStatus(ctx, runtime.activeGoal);
+				}
+			}
 			runtime.agentRunGoalId = null;
 			if (ownedPromptGoalId) abortCurrentTurn(ctx);
 			return;
