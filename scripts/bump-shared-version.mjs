@@ -5,10 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 const bump = process.argv[2];
+const listPackages = bump === "--list-packages";
 const allowedBumps = new Set(["major", "minor", "patch"]);
 
-if (!allowedBumps.has(bump)) {
-	throw new Error(`Usage: scripts/bump-shared-version.mjs <major|minor|patch>`);
+if (!listPackages && !allowedBumps.has(bump)) {
+	throw new Error("Usage: scripts/bump-shared-version.mjs <major|minor|patch|--list-packages>");
 }
 
 const rootPackagePath = "package.json";
@@ -21,15 +22,24 @@ for (const workspace of rootPackage.workspaces ?? []) {
 	}
 
 	const workspaceRoot = workspace.slice(0, -2);
+	if (!fs.existsSync(workspaceRoot)) continue;
 	for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
 
 		const packagePath = path.join(workspaceRoot, entry.name, "package.json");
-		if (fs.existsSync(packagePath)) packagePaths.add(packagePath);
+		if (!fs.existsSync(packagePath)) continue;
+		if (isExperimentalPackagePath(packagePath) || readPackage(packagePath).private) continue;
+		packagePaths.add(packagePath);
 	}
 }
 
-const packages = [...packagePaths].map((packagePath) => ({
+const sortedPackagePaths = [...packagePaths].sort();
+if (listPackages) {
+	console.log(JSON.stringify(sortedPackagePaths));
+	process.exit(0);
+}
+
+const packages = sortedPackagePaths.map((packagePath) => ({
 	packagePath,
 	packageJson: readPackage(packagePath),
 }));
@@ -51,6 +61,11 @@ execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts"], {
 });
 
 console.log(newVersion);
+
+function isExperimentalPackagePath(packagePath) {
+	const [topLevel, category] = path.normalize(packagePath).split(path.sep);
+	return topLevel === "extensions" && category === "experimental";
+}
 
 function readPackage(packagePath) {
 	return JSON.parse(fs.readFileSync(packagePath, "utf8"));

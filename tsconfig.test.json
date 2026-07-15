@@ -5,5 +5,11 @@
 		"outDir": "node_modules/.cache/pi-extensions-test",
 		"rootDir": "."
 	},
-	"include": ["extensions/*/src/**/*.ts", "extensions/*/test/**/*.ts", "test/**/*.ts"]
+	"include": [
+		"extensions/*/src/**/*.ts",
+		"extensions/*/test/**/*.ts",
+		"extensions/experimental/*/src/**/*.ts",
+		"extensions/experimental/*/test/**/*.ts",
+		"test/**/*.ts"
+	]
 }

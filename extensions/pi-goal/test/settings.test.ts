@@ -5,17 +5,33 @@ import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_GOAL_SETTINGS, normalizeGoalSettings, readGoalSettings } from "../src/settings.js";
 
-test("normalizeGoalSettings defaults visibility and accepts both supported modes", () => {
+test("normalizeGoalSettings defaults visibility and experimental goals", () => {
 	assert.deepEqual(normalizeGoalSettings({}), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ futureOption: true }), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ toolVisibility: "always" }), {
 		toolVisibility: "always",
+		experimental: { goals: false },
 	});
 	assert.deepEqual(normalizeGoalSettings({ toolVisibility: "after-first-goal" }), {
 		toolVisibility: "after-first-goal",
+		experimental: { goals: false },
 	});
+	assert.deepEqual(
+		normalizeGoalSettings({ experimental: { goals: true, futureOption: "kept-compatible" } }),
+		{
+			toolVisibility: "always",
+			experimental: { goals: true },
+		},
+	);
 
-	for (const value of [null, [], "always", { toolVisibility: "sometimes" }]) {
+	for (const value of [
+		null,
+		[],
+		"always",
+		{ toolVisibility: "sometimes" },
+		{ experimental: true },
+		{ experimental: { goals: "yes" } },
+	]) {
 		assert.equal(normalizeGoalSettings(value), undefined);
 	}
 });
@@ -27,10 +43,17 @@ test("readGoalSettings distinguishes missing, loaded, malformed, and unreadable 
 
 	assert.deepEqual(readGoalSettings(settingsPath), { kind: "missing" });
 
-	await writeFile(settingsPath, '{"toolVisibility":"after-first-goal"}\n', "utf8");
+	await writeFile(
+		settingsPath,
+		'{"toolVisibility":"after-first-goal","experimental":{"goals":true}}\n',
+		"utf8",
+	);
 	assert.deepEqual(readGoalSettings(settingsPath), {
 		kind: "loaded",
-		settings: { toolVisibility: "after-first-goal" },
+		settings: {
+			toolVisibility: "after-first-goal",
+			experimental: { goals: true },
+		},
 	});
 
 	await writeFile(settingsPath, "{invalid", "utf8");

@@ -9,9 +9,15 @@ export type GoalToolVisibility = (typeof GOAL_TOOL_VISIBILITIES)[number];
 
 export interface GoalSettings {
 	toolVisibility: GoalToolVisibility;
+	experimental: {
+		goals: boolean;
+	};
 }
 
-export const DEFAULT_GOAL_SETTINGS: GoalSettings = { toolVisibility: "always" };
+export const DEFAULT_GOAL_SETTINGS: GoalSettings = {
+	toolVisibility: "always",
+	experimental: { goals: false },
+};
 
 export type GoalSettingsLoadResult =
 	| { kind: "missing" }
@@ -24,7 +30,28 @@ export function normalizeGoalSettings(value: unknown): GoalSettings | undefined 
 		? Reflect.get(value, "toolVisibility")
 		: DEFAULT_GOAL_SETTINGS.toolVisibility;
 	if (!GOAL_TOOL_VISIBILITIES.includes(toolVisibility as GoalToolVisibility)) return undefined;
-	return { toolVisibility: toolVisibility as GoalToolVisibility };
+
+	const experimentalValue = Object.hasOwn(value, "experimental")
+		? Reflect.get(value, "experimental")
+		: undefined;
+	if (
+		experimentalValue !== undefined &&
+		(typeof experimentalValue !== "object" ||
+			experimentalValue === null ||
+			Array.isArray(experimentalValue))
+	) {
+		return undefined;
+	}
+	const goals =
+		experimentalValue && Object.hasOwn(experimentalValue, "goals")
+			? Reflect.get(experimentalValue, "goals")
+			: DEFAULT_GOAL_SETTINGS.experimental.goals;
+	if (typeof goals !== "boolean") return undefined;
+
+	return {
+		toolVisibility: toolVisibility as GoalToolVisibility,
+		experimental: { goals },
+	};
 }
 
 export function readGoalSettings(

@@ -2,6 +2,7 @@ import { formatTokenCount } from "./accounting.js";
 
 export type GoalStatus =
 	| "active"
+	| "queued"
 	| "paused"
 	| "blocked"
 	| "usage_limited"
@@ -23,22 +24,28 @@ export interface GoalPromptContext {
 }
 
 export function buildGoalPrompt(goal: GoalPromptContext) {
-	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
+	const budgetLine =
+		goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
 	return `Goal mode is active. Complete this goal fully:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalModeRules("this goal")}`;
 }
 
 export function buildObjectiveUpdatedPrompt(goal: GoalPromptContext) {
-	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+	const budgetLine =
+		goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
 	return `The active /goal objective was updated. The updated objective supersedes every previous goal objective. Avoid continuing work that only served the previous objective unless it also advances the updated objective:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalModeRules("the updated goal")}`;
 }
 
 export function buildResumePrompt(goal: GoalPromptContext, stoppedStatus: GoalStatus) {
-	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+	const budgetLine =
+		goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
 	return `The user explicitly resumed the ${stoppedStatusLabel(stoppedStatus)} /goal. Continue working toward this goal:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalModeRules("this goal")}`;
 }
 
 export function buildGoalSystemPrompt(goal: GoalPromptContext) {
-	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
+	const budgetLine =
+		goal.tokenBudget === undefined
+			? ""
+			: `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
 	return `Active /goal:\n${goalContextBlock(goal)}\n\n${goalModeRules("the active goal")}${budgetLine}`;
 }
 
