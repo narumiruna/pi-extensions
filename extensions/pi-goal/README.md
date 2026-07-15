@@ -179,9 +179,11 @@ A user pause or aborted turn produces `paused`; a terminal provider/account quot
 ```txt
 extensions/pi-goal/
 ├── src/
-│   ├── goal.ts       # Pi entrypoint and per-factory lifecycle coordinator
+│   ├── goal.ts       # Pi entrypoint, tool contracts, and lifecycle orchestration
+│   ├── commands.ts   # Per-factory user-command and queue mutation controller
+│   ├── runtime.ts    # Per-factory state, prompt ownership, budgets, and tool policy
 │   ├── queue.ts      # Pure ordered-goal transitions
-│   └── *.ts          # Package-local command, settings, prompt, accounting, and persistence modules
+│   └── *.ts          # Package-local parsing, settings, prompts, accounting, and persistence
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
