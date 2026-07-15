@@ -22,6 +22,7 @@ for (const workspace of rootPackage.workspaces ?? []) {
 	}
 
 	const workspaceRoot = workspace.slice(0, -2);
+	if (!fs.existsSync(workspaceRoot)) continue;
 	for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
 

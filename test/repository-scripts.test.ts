@@ -36,6 +36,30 @@ test("shared-version discovery skips publishable experimental workspaces", () =>
 	}
 });
 
+test("shared-version discovery skips workspace roots that are not present", () => {
+	const fixture = mkdtempSync(path.join(tmpdir(), "pi-workspaces-missing-"));
+	try {
+		writeJson(path.join(fixture, "package.json"), {
+			name: "fixture-root",
+			private: true,
+			version: "1.2.3",
+			workspaces: ["extensions/*", "extensions/experimental/*"],
+		});
+		writeJson(path.join(fixture, "extensions/pi-public/package.json"), {
+			name: "@fixture/public",
+			version: "1.2.3",
+		});
+
+		const output = execFileSync(process.execPath, [bumpScript, "--list-packages"], {
+			cwd: fixture,
+			encoding: "utf8",
+		});
+		assert.deepEqual(JSON.parse(output), ["extensions/pi-public/package.json", "package.json"]);
+	} finally {
+		rmSync(fixture, { recursive: true, force: true });
+	}
+});
+
 test("experimental publishing is manual-only", () => {
 	const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/publish.yml"), "utf8");
 	const justfile = readFileSync(path.join(repositoryRoot, "justfile"), "utf8");
