@@ -1,6 +1,6 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { currentTokenTotal, updateGoalUsage } from "./accounting.js";
+import { currentTokenTotal } from "./accounting.js";
 import { completeGoalArguments, parseCommand } from "./command.js";
 import { GoalCommandController } from "./commands.js";
 import { type ActiveGoal, loadGoalStateFromSession } from "./persistence.js";
@@ -69,6 +69,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const clearBudgetWrapUp = runtime.clearBudgetWrapUp.bind(runtime);
 	const clearStaleGoalToolCallBlock = runtime.clearStaleGoalToolCallBlock.bind(runtime);
 	const persistGoal = runtime.persistGoal.bind(runtime);
+	const updateGoalUsage = runtime.recordGoalUsage.bind(runtime);
 	const updateStatus = runtime.updateStatus.bind(runtime);
 	const limitActiveGoalForBudget = runtime.limitActiveGoalForBudget.bind(runtime);
 	const hideGoalToolsIfLocked = runtime.hideGoalToolsIfLocked.bind(runtime);
@@ -138,11 +139,15 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
 				};
 			}
-
-			const completingDuringBudgetWrapUp =
-				completedGoal.status === "budget_limited" &&
-				runtime.budgetWrapUp?.goalId === completedGoal.id &&
-				runtime.budgetWrapUp.delivered;
+			const completingDuringBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
+			if (!runtime.canRecordGoalUsage() && !completingDuringBudgetWrapUp) {
+				const rejection = "Goal completion rejected: current run does not own the active goal.";
+				ctx.ui.notify(rejection, "warning");
+				return {
+					content: [{ type: "text", text: rejection }],
+					details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+				};
+			}
 			if (hasPendingSkipForGoal(completedGoal.id)) {
 				updateGoalUsage(completedGoal, ctx);
 				persistGoal(completedGoal);
@@ -324,6 +329,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			};
 
 			if (!blockedGoal) return reject("no active goal");
+			if (!runtime.canRecordGoalUsage()) {
+				return reject("current run does not own the active goal");
+			}
 			if (hasPendingSkipForGoal(blockedGoal.id)) {
 				updateGoalUsage(blockedGoal, ctx);
 				persistGoal(blockedGoal);
@@ -498,7 +506,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		let startRestoredQueuedGoal = false;
 		if (runtime.activeGoal?.status === "queued" && !runtime.pendingQueueAction) {
 			runtime.activeGoal = activateQueuedGoal(runtime.activeGoal, currentTokenTotal(ctx));
-			startRestoredQueuedGoal = true;
+			startRestoredQueuedGoal = runtime.activeGoal.status === "active";
 		}
 		if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 		if (runtime.activeGoal) {
@@ -570,7 +578,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		if (runtime.activeGoal?.status !== "active") return;
-		updateGoalUsage(runtime.activeGoal, ctx);
+		if (!updateGoalUsage(runtime.activeGoal, ctx)) return;
 		cancelContinuationWork();
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -592,13 +600,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.queuedGoals = restoredState.queue;
 			runtime.pendingQueueAction = restoredState.pendingAction;
 		}
-		updateGoalUsage(runtime.activeGoal, ctx);
-		persistGoal(runtime.activeGoal);
-		updateStatus(ctx, runtime.activeGoal);
+		const usageRecorded = updateGoalUsage(runtime.activeGoal, ctx);
+		if (usageRecorded) {
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
+		}
 		if (runtime.pendingQueueAction) {
 			await dispatchPendingQueueActionIfSettled(ctx);
 			return;
 		}
+		if (!usageRecorded) return;
 		if (limitActiveGoalForBudget(ctx, false)) return;
 
 		const wasPiRetry = isPiOwnedCompactionRetry(event, runtime.activeGoal.id);
@@ -675,7 +686,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 		// AgentSession persists assistant message_end before tool execution events,
 		// so the completed assistant call's usage is authoritative at this boundary.
-		updateGoalUsage(runtime.activeGoal, ctx);
+		if (!updateGoalUsage(runtime.activeGoal, ctx)) return;
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		if (limitActiveGoalForBudget(ctx, true)) return;
@@ -690,6 +701,34 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
+		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
+		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
+		if (
+			runtime.pendingQueueAction?.kind === "prioritize" &&
+			!activeBudgetWrapUp &&
+			!activeGoalRecovery
+		) {
+			// A turn that starts after priority intent is committed belongs to neither
+			// the displaced goal nor the not-yet-activated urgent goal. Persist the
+			// displaced goal's final accounting boundary so reload cannot absorb this run.
+			if (!runtime.pendingQueueAction.displacedUsageFinalized) {
+				if (runtime.activeGoal?.status === "active") {
+					updateGoalUsage(runtime.activeGoal, ctx, false);
+				}
+				runtime.pendingQueueAction.displacedUsageFinalized = true;
+				if (runtime.activeGoal) {
+					persistGoal(runtime.activeGoal);
+					updateStatus(ctx, runtime.activeGoal);
+				}
+			}
+			runtime.agentRunGoalId = null;
+			if (ownedPromptGoalId) abortCurrentTurn(ctx);
+			return;
+		}
+		if (activeBudgetWrapUp && runtime.activeGoal) {
+			runtime.agentRunGoalId = runtime.activeGoal.id;
+			return;
+		}
 		if (
 			runtime.pendingQueueAction?.kind === "advance" &&
 			runtime.pendingQueueAction.goalId === runtime.activeGoal?.id
@@ -725,6 +764,12 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (runtime.queueFrozen) return;
 		const agentRunGoalId = runtime.agentRunGoalId;
 		runtime.agentRunGoalId = undefined;
+		if (
+			agentRunGoalId === null ||
+			(!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp())
+		) {
+			return;
+		}
 		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
 		if (!runtime.activeGoal) return;
 		if (

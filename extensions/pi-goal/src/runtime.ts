@@ -123,7 +123,8 @@ export class GoalRuntime {
 	continuationDelivery?: ContinuationTicket;
 	goalRecovery?: GoalRecovery;
 	budgetWrapUp?: BudgetWrapUp;
-	agentRunGoalId?: string;
+	/** `null` marks a run that must not be charged to the active goal. */
+	agentRunGoalId?: string | null;
 	staleGoalToolCallsBlocked = false;
 	/** Once true, goal tools stay in the active set for this runtime (prompt-cache stable). */
 	goalToolsUnlocked = false;
@@ -132,7 +133,43 @@ export class GoalRuntime {
 	pendingGoalPromptMarkers = new Map<string, string>();
 	cancelledContinuationMarkers = new Set<string>();
 
-	constructor(readonly pi: ExtensionAPI) {}
+	readonly pi: ExtensionAPI;
+
+	constructor(pi: ExtensionAPI) {
+		this.pi = pi;
+	}
+
+	canRecordGoalUsage() {
+		return (
+			this.agentRunGoalId !== null &&
+			!(
+				this.pendingQueueAction?.kind === "prioritize" &&
+				this.pendingQueueAction.displacedUsageFinalized === true
+			)
+		);
+	}
+
+	hasActiveBudgetWrapUp() {
+		return (
+			this.activeGoal?.status === "budget_limited" &&
+			this.budgetWrapUp?.goalId === this.activeGoal.id &&
+			this.budgetWrapUp.delivered
+		);
+	}
+
+	hasActiveGoalRecovery() {
+		return Boolean(this.activeGoal && this.goalRecovery?.goalId === this.activeGoal.id);
+	}
+
+	recordGoalUsage(
+		goal: ActiveGoal,
+		ctx: StatusContext,
+		checkpointActiveTime = goal.status === "active",
+	) {
+		if (!this.canRecordGoalUsage()) return false;
+		updateGoalUsage(goal, ctx, checkpointActiveTime);
+		return true;
+	}
 
 	requestContinuation(goal: ActiveGoal) {
 		if (this.hasContinuationWorkForGoal(goal.id)) return false;
@@ -453,10 +490,10 @@ export class GoalRuntime {
 		}
 	}
 
-	pauseGoalForUnavailableTools(ctx: StatusContext, abortTurn = true) {
+	pauseGoalForUnavailableTools(ctx: StatusContext, abortTurn = true, recordUsage = true) {
 		const goal = this.activeGoal;
 		if (goal?.status !== "active") return false;
-		updateGoalUsage(goal, ctx);
+		if (recordUsage) this.recordGoalUsage(goal, ctx);
 		this.cancelContinuationWork();
 		this.clearGoalRecoveryForGoal(goal.id);
 		this.clearBudgetWrapUp();

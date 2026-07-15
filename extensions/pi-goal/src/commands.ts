@@ -1,4 +1,4 @@
-import { currentTokenTotal, updateGoalUsage } from "./accounting.js";
+import { currentTokenTotal } from "./accounting.js";
 import { validateObjective } from "./command.js";
 import { buildGoalPrompt, buildObjectiveUpdatedPrompt, buildResumePrompt } from "./prompts.js";
 import {
@@ -30,7 +30,11 @@ import {
 // User-command mutations are kept separate from Pi event wiring. Every controller
 // receives exactly one per-factory GoalRuntime, preserving session isolation.
 export class GoalCommandController {
-	constructor(private readonly runtime: GoalRuntime) {}
+	private readonly runtime: GoalRuntime;
+
+	constructor(runtime: GoalRuntime) {
+		this.runtime = runtime;
+	}
 
 	async startGoal(objective: string, tokenBudget: number | undefined, ctx: StatusContext) {
 		const validationError = validateObjective(objective);
@@ -85,7 +89,7 @@ export class GoalCommandController {
 				rolledBackStartedGoal = true;
 				if (existingGoal) {
 					this.runtime.queuedGoals = existingQueuedGoals;
-					updateGoalUsage(existingGoal, ctx);
+					this.runtime.recordGoalUsage(existingGoal, ctx);
 					if (existingGoal.status === "active") {
 						abortCurrentTurn(ctx);
 						this.runtime.activeGoal = transitionGoal(existingGoal, "paused");
@@ -184,7 +188,7 @@ export class GoalCommandController {
 			ctx.ui.notify(`Goal skipped: ${currentGoal.text}. No goals remain.`, "warning");
 			return;
 		}
-		if (currentGoal.status === "active") updateGoalUsage(currentGoal, ctx);
+		if (currentGoal.status === "active") this.runtime.recordGoalUsage(currentGoal, ctx);
 		this.runtime.cancelContinuationWork();
 		this.runtime.clearGoalRecovery();
 		this.runtime.clearBudgetWrapUp();
@@ -208,7 +212,12 @@ export class GoalCommandController {
 		if (ctx.isIdle?.() !== true || hasPendingMessages(ctx)) return false;
 		if (pending.kind === "prioritize") {
 			this.runtime.pendingQueueAction = undefined;
-			return this.activatePrioritizedGoal(pending.objective, pending.tokenBudget, ctx);
+			return this.activatePrioritizedGoal(
+				pending.objective,
+				pending.tokenBudget,
+				ctx,
+				pending.displacedUsageFinalized === true,
+			);
 		}
 		if (
 			!this.runtime.activeGoal ||
@@ -309,7 +318,7 @@ export class GoalCommandController {
 			);
 			return;
 		}
-		updateGoalUsage(this.runtime.activeGoal, ctx);
+		this.runtime.recordGoalUsage(this.runtime.activeGoal, ctx);
 		this.runtime.cancelContinuationWork();
 		this.runtime.clearBudgetWrapUp();
 		this.runtime.blockStaleGoalToolCalls();
@@ -420,7 +429,7 @@ export class GoalCommandController {
 			return;
 		}
 
-		updateGoalUsage(this.runtime.activeGoal, ctx);
+		this.runtime.recordGoalUsage(this.runtime.activeGoal, ctx);
 		const previousGoal = { ...this.runtime.activeGoal };
 		this.runtime.cancelContinuationWork();
 		this.runtime.clearGoalRecovery();
@@ -496,7 +505,7 @@ export class GoalCommandController {
 			return;
 		}
 		if (!this.runtime.queueFrozen) {
-			updateGoalUsage(this.runtime.activeGoal, ctx);
+			this.runtime.recordGoalUsage(this.runtime.activeGoal, ctx);
 			this.runtime.persistGoal(this.runtime.activeGoal);
 			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 		}
@@ -515,13 +524,16 @@ export class GoalCommandController {
 		objective: string,
 		tokenBudget: number | undefined,
 		ctx: StatusContext,
+		displacedUsageFinalized = false,
 	) {
 		const currentGoal = this.runtime.activeGoal;
 		if (!currentGoal) {
 			await this.startGoal(objective, tokenBudget, ctx);
 			return true;
 		}
-		if (currentGoal.status === "active") updateGoalUsage(currentGoal, ctx);
+		if (currentGoal.status === "active" && !displacedUsageFinalized) {
+			this.runtime.recordGoalUsage(currentGoal, ctx);
+		}
 		const previousGoal = { ...currentGoal };
 		const previousQueue = [...this.runtime.queuedGoals];
 		const visibilityBeforeActivation = this.runtime.snapshotGoalToolVisibility();
@@ -532,14 +544,19 @@ export class GoalCommandController {
 			if (currentGoal.status === "complete") {
 				// Completion already committed, so retain the priority intent for a
 				// later /reload after the tool policy is restored.
-				this.runtime.pendingQueueAction = { kind: "prioritize", objective, tokenBudget };
+				this.runtime.pendingQueueAction = {
+					kind: "prioritize",
+					objective,
+					tokenBudget,
+					...(displacedUsageFinalized ? { displacedUsageFinalized: true } : {}),
+				};
 				this.runtime.persistGoal(currentGoal);
 			} else {
 				// Roll back an activation that never started. An active displaced goal
 				// cannot continue safely without its terminal tools, so make it resumable.
 				this.runtime.pendingQueueAction = undefined;
 				if (currentGoal.status === "active") {
-					this.runtime.pauseGoalForUnavailableTools(ctx);
+					this.runtime.pauseGoalForUnavailableTools(ctx, true, !displacedUsageFinalized);
 				} else {
 					this.runtime.persistGoal(currentGoal);
 				}
