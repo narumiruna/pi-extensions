@@ -30,7 +30,11 @@ import {
 // User-command mutations are kept separate from Pi event wiring. Every controller
 // receives exactly one per-factory GoalRuntime, preserving session isolation.
 export class GoalCommandController {
-	constructor(private readonly runtime: GoalRuntime) {}
+	private readonly runtime: GoalRuntime;
+
+	constructor(runtime: GoalRuntime) {
+		this.runtime = runtime;
+	}
 
 	async startGoal(objective: string, tokenBudget: number | undefined, ctx: StatusContext) {
 		const validationError = validateObjective(objective);

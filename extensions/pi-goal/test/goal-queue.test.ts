@@ -208,6 +208,59 @@ test("busy prioritize preserves intent and excludes old-run tokens from the urge
 	assert.equal(goals[1]?.tokensUsed, 70);
 });
 
+test("pending prioritize does not inject or account the old goal on unrelated turns", async () => {
+	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(100)];
+	let aborts = 0;
+	const harness = await createHarness({
+		isIdle: () => false,
+		abort: () => {
+			aborts += 1;
+		},
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await harness.command("original goal");
+	await harness.command("prioritize urgent goal");
+	branch.push(assistantUsageEntry(25));
+
+	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
+	const result = await beforeStart?.(
+		{ prompt: "unrelated user work", systemPrompt: "base" },
+		harness.ctx,
+	);
+	assert.equal(result, undefined);
+	assert.equal(aborts, 0);
+
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		harness.ctx,
+	);
+	assert.equal(stateGoals(harness.mock)[0]?.tokensUsed, 0);
+	assert.equal(lastState(harness.mock)?.pendingAction?.kind, "prioritize");
+});
+
+test("pending prioritize aborts an already-queued displaced-goal prompt", async () => {
+	let aborts = 0;
+	const harness = await createHarness({
+		isIdle: () => false,
+		abort: () => {
+			aborts += 1;
+		},
+	});
+	await harness.command("original goal");
+	const displacedPrompt = harness.mock.sentUserMessages.at(-1)?.text;
+	assert.ok(displacedPrompt);
+	await harness.command("prioritize urgent goal");
+
+	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
+	const result = await beforeStart?.(
+		{ prompt: displacedPrompt, systemPrompt: "base" },
+		harness.ctx,
+	);
+	assert.equal(result, undefined);
+	assert.equal(aborts, 1);
+	assert.equal(lastState(harness.mock)?.pendingAction?.kind, "prioritize");
+});
+
 test("a completed head is dropped when a busy prioritize intent wins", async () => {
 	let idle = false;
 	const harness = await createHarness({ isIdle: () => idle });
@@ -235,6 +288,23 @@ test("a completed head is dropped when a busy prioritize intent wins", async () 
 			{ text: "later goal", status: "queued" },
 		],
 	);
+});
+
+test("restored exhausted queued heads remain budget-limited without a kickoff prompt", async () => {
+	const exhausted = {
+		...storedGoal("exhausted queued head", "queued"),
+		tokenBudget: 10,
+		tokensUsed: 10,
+	};
+	const state: GoalStateEntryData = { goal: exhausted };
+	const branch = [{ type: "custom", customType: "goal-state", data: state }];
+	const restored = await createHarness({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+
+	assert.equal(restored.mock.sentUserMessages.length, 0);
+	assert.equal(stateGoals(restored.mock)[0]?.status, "budget_limited");
+	assert.equal(restored.statuses.get("goal"), "budget 10/10");
 });
 
 test("pending priority survives reload after the displaced head completes", async () => {

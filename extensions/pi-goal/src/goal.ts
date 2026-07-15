@@ -498,7 +498,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		let startRestoredQueuedGoal = false;
 		if (runtime.activeGoal?.status === "queued" && !runtime.pendingQueueAction) {
 			runtime.activeGoal = activateQueuedGoal(runtime.activeGoal, currentTokenTotal(ctx));
-			startRestoredQueuedGoal = true;
+			startRestoredQueuedGoal = runtime.activeGoal.status === "active";
 		}
 		if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 		if (runtime.activeGoal) {
@@ -690,6 +690,13 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
+		if (runtime.pendingQueueAction?.kind === "prioritize") {
+			// A turn that starts after priority intent is committed belongs to neither
+			// the displaced goal nor the not-yet-activated urgent goal.
+			runtime.agentRunGoalId = null;
+			if (ownedPromptGoalId) abortCurrentTurn(ctx);
+			return;
+		}
 		if (
 			runtime.pendingQueueAction?.kind === "advance" &&
 			runtime.pendingQueueAction.goalId === runtime.activeGoal?.id
@@ -725,6 +732,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (runtime.queueFrozen) return;
 		const agentRunGoalId = runtime.agentRunGoalId;
 		runtime.agentRunGoalId = undefined;
+		if (agentRunGoalId === null) return;
 		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
 		if (!runtime.activeGoal) return;
 		if (

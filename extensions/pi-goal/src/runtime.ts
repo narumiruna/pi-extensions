@@ -123,7 +123,8 @@ export class GoalRuntime {
 	continuationDelivery?: ContinuationTicket;
 	goalRecovery?: GoalRecovery;
 	budgetWrapUp?: BudgetWrapUp;
-	agentRunGoalId?: string;
+	/** `null` marks a run that must not be charged to the active goal. */
+	agentRunGoalId?: string | null;
 	staleGoalToolCallsBlocked = false;
 	/** Once true, goal tools stay in the active set for this runtime (prompt-cache stable). */
 	goalToolsUnlocked = false;
@@ -132,7 +133,11 @@ export class GoalRuntime {
 	pendingGoalPromptMarkers = new Map<string, string>();
 	cancelledContinuationMarkers = new Set<string>();
 
-	constructor(readonly pi: ExtensionAPI) {}
+	readonly pi: ExtensionAPI;
+
+	constructor(pi: ExtensionAPI) {
+		this.pi = pi;
+	}
 
 	requestContinuation(goal: ActiveGoal) {
 		if (this.hasContinuationWorkForGoal(goal.id)) return false;
