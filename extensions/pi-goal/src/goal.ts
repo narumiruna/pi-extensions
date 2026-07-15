@@ -150,8 +150,8 @@ interface GoalRuntime {
 	staleGoalToolCallsBlocked: boolean;
 	/** Once true, goal tools stay in the active set for this runtime (prompt-cache stable). */
 	goalToolsUnlocked: boolean;
-	/** True only when this runtime actually removed lazy goal tools and may restore them. */
-	goalToolsHiddenByPolicy: boolean;
+	/** Exact lazy goal tools this runtime removed and may restore on a mode change. */
+	goalToolsHiddenByPolicy: Set<string>;
 	cancelledContinuationMarkers: Set<string>;
 }
 
@@ -161,7 +161,7 @@ function createGoalRuntime(pi: ExtensionAPI): GoalRuntime {
 		settings: DEFAULT_GOAL_SETTINGS,
 		staleGoalToolCallsBlocked: false,
 		goalToolsUnlocked: false,
-		goalToolsHiddenByPolicy: false,
+		goalToolsHiddenByPolicy: new Set(),
 		cancelledContinuationMarkers: new Set(),
 	};
 }
@@ -435,9 +435,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.goalToolsUnlocked = false;
 		}
 		if (runtime.settings.toolVisibility === "always") {
-			if (runtime.goalToolsHiddenByPolicy) {
+			if (runtime.goalToolsHiddenByPolicy.size > 0) {
 				try {
-					revealGoalTools();
+					restoreGoalToolsHiddenByPolicy();
 				} catch (error) {
 					ctx.ui.notify(
 						`Could not restore always-visible goal tools: ${formatError(error)}`,
@@ -1187,9 +1187,33 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	function hideGoalToolsIfLocked() {
 		if (runtime.goalToolsUnlocked) return;
 		const active = runtime.pi.getActiveTools();
-		if (!active.some(isGoalToolName)) return;
+		const hidden = active.filter(isGoalToolName);
+		if (hidden.length === 0) return;
 		runtime.pi.setActiveTools(active.filter((name) => !isGoalToolName(name)));
-		runtime.goalToolsHiddenByPolicy = true;
+		for (const name of hidden) runtime.goalToolsHiddenByPolicy.add(name);
+	}
+
+	function restoreGoalToolsHiddenByPolicy() {
+		const activeBeforeRestore = runtime.pi.getActiveTools();
+		const activeSet = new Set(activeBeforeRestore);
+		const missingOwnedTools = [...runtime.goalToolsHiddenByPolicy].filter(
+			(name) => !activeSet.has(name),
+		);
+		if (missingOwnedTools.length === 0) {
+			runtime.goalToolsHiddenByPolicy.clear();
+			return;
+		}
+		try {
+			runtime.pi.setActiveTools([...activeBeforeRestore, ...missingOwnedTools]);
+			const restored = new Set(runtime.pi.getActiveTools());
+			if (missingOwnedTools.some((name) => !restored.has(name))) {
+				throw new Error("the active tool policy rejected a previously hidden goal tool");
+			}
+			runtime.goalToolsHiddenByPolicy.clear();
+		} catch (error) {
+			runtime.pi.setActiveTools(activeBeforeRestore);
+			throw error;
+		}
 	}
 
 	function assertGoalToolsAvailable() {
@@ -1225,7 +1249,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		try {
 			ensureGoalToolsVisible();
 			runtime.goalToolsUnlocked = true;
-			runtime.goalToolsHiddenByPolicy = false;
+			runtime.goalToolsHiddenByPolicy.clear();
 		} catch (error) {
 			runtime.pi.setActiveTools(activeBeforeReveal);
 			runtime.goalToolsUnlocked = wasUnlocked;
@@ -1246,8 +1270,12 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		cancelContinuationWork();
 		clearGoalRecoveryForGoal(goal.id);
 		clearBudgetWrapUp();
-		blockStaleGoalToolCalls();
-		if (abortTurn) abortCurrentTurn(ctx);
+		if (abortTurn) {
+			blockStaleGoalToolCalls();
+			abortCurrentTurn(ctx);
+		} else {
+			clearStaleGoalToolCallBlock();
+		}
 		runtime.activeGoal = transitionGoal(goal, "paused");
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);

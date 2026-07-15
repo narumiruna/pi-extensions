@@ -188,6 +188,22 @@ test("switching from locked lazy visibility to always restores tools hidden by p
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 });
 
+test("always mode restores only the exact goal tools hidden by lazy mode", () => {
+	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "visibility-partial-reload.json");
+	writeFileSync(settingsPath, '{"toolVisibility":"after-first-goal"}\n');
+	const mock = createMockPi({ activeTools: ["read", "goal_complete", "goal_blocked"] });
+	registerGoalWithSettingsPath(mock.pi, settingsPath);
+	mock.rawPi.setActiveTools(["read", "goal_complete"]);
+	const context = createMockContext();
+
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+	writeFileSync(settingsPath, '{"toolVisibility":"always"}\n');
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "goal_complete"]);
+});
+
 test("switching from always to lazy visibility locks a runtime without an unfinished goal", () => {
 	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "visibility-lock-reload.json");
 	writeFileSync(settingsPath, '{"toolVisibility":"always"}\n');
@@ -261,6 +277,13 @@ test("an active goal pauses without aborting an unrelated restrictive turn", asy
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "scrape"]);
 	assert.equal(lastGoalStatus(mock), "paused");
 	assert.equal(aborts, 0);
+	assert.equal(
+		mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "plan-read", input: {} },
+			context.ctx,
+		),
+		undefined,
+	);
 	assert.match(context.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
 });
 

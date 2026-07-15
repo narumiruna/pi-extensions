@@ -28,7 +28,7 @@ An autonomous active goal requires both `goal_complete` and `goal_blocked`. pi-g
 - A new activation or resume is rejected before state changes when both tools are unavailable.
 - A restored or running active goal is transitioned to `paused` if the tools disappear.
 - Pending continuation work is cancelled, and no new automatic continuation is sent.
-- A Goal-owned automatic continuation is aborted, while an unrelated user or extension turn is allowed to proceed after the goal pauses.
+- A Goal-owned automatic continuation is aborted and stale-blocked, while an unrelated user or extension turn and its allowed tools can proceed after the goal pauses.
 - The fail-safe pause path leaves the restrictive active-tool set unchanged.
 - After the restrictive mode exits, the user can run `/goal resume`; lazy mode requests its baseline tools again at that explicit activation boundary.
 
@@ -49,4 +49,4 @@ Tests should cover both ordering boundaries:
 3. A restored active goal cannot enable both terminal tools because of an allowlist; it restores as paused.
 4. A new start, resume, or reactivating edit cannot proceed while both terminal tools are unavailable.
 5. Lazy activation cannot reveal missing tools while Pi is already running another turn.
-6. Switching a live runtime from locked lazy visibility to `"always"` restores only tools previously hidden by pi-goal, rolls back partial restoration, and retries after a restrictive policy exits; switching back to lazy locks a runtime without an unfinished goal.
+6. Switching a live runtime from locked lazy visibility to `"always"` restores only the exact tools previously hidden by pi-goal, rolls back partial restoration, and retries after a restrictive policy exits; switching back to lazy locks a runtime without an unfinished goal.
