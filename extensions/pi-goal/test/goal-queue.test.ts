@@ -546,6 +546,34 @@ test("pending skip rejects stale completion without rewriting the skip intent", 
 	);
 });
 
+test("pending skip terminates completion before missing or mismatched id rejection", async () => {
+	const harness = await createHarness({ isIdle: () => false });
+	await harness.command("old head");
+	await harness.command("add next head");
+	const oldHead = stateGoals(harness.mock)[0];
+	assert.ok(oldHead);
+	await harness.command("skip");
+
+	for (const goalId of ["", "different-goal-id"]) {
+		const result = await completionTool(harness.mock).execute(
+			`stale-complete-after-skip-${goalId || "missing"}`,
+			{ goal_id: goalId, summary: "Old head completed and verified." },
+			new AbortController().signal,
+			() => undefined,
+			harness.ctx,
+		);
+		assert.equal(result.terminate, true);
+		assert.match(result.content?.[0]?.text ?? "", /queued to be skipped/i);
+	}
+	assert.equal(lastState(harness.mock)?.goal?.status, "active");
+	assert.deepEqual(lastState(harness.mock)?.pendingAction, {
+		kind: "advance",
+		goalId: oldHead.id,
+		reason: "skip",
+		completedText: "old head",
+	});
+});
+
 test("pending skip rejects stale blocked reports without rewriting terminal state", async () => {
 	let idle = false;
 	const harness = await createHarness({ isIdle: () => idle });
@@ -578,6 +606,39 @@ test("pending skip rejects stale blocked reports without rewriting terminal stat
 		stateGoals(harness.mock).map(({ text }) => text),
 		["next head"],
 	);
+});
+
+test("pending skip terminates blocked reports before missing or mismatched id rejection", async () => {
+	const harness = await createHarness({ isIdle: () => false });
+	await harness.command("old head");
+	await harness.command("add next head");
+	const oldHead = stateGoals(harness.mock)[0];
+	assert.ok(oldHead);
+	await harness.command("skip");
+
+	for (const goalId of ["", "different-goal-id"]) {
+		const result = await blockedTool(harness.mock).execute(
+			`stale-block-after-skip-${goalId || "missing"}`,
+			{
+				goal_id: goalId,
+				reason: "External access required",
+				evidence: "Three verified attempts require external access.",
+				repeated_turns: 3,
+			},
+			new AbortController().signal,
+			() => undefined,
+			harness.ctx,
+		);
+		assert.equal(result.terminate, true);
+		assert.match(result.content?.[0]?.text ?? "", /queued to be skipped/i);
+	}
+	assert.equal(lastState(harness.mock)?.goal?.status, "active");
+	assert.deepEqual(lastState(harness.mock)?.pendingAction, {
+		kind: "advance",
+		goalId: oldHead.id,
+		reason: "skip",
+		completedText: "old head",
+	});
 });
 
 test("manual compaction dispatches pending priority before old-head budget limiting", async () => {
