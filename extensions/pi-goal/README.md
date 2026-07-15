@@ -17,7 +17,7 @@ Goal mode uses Codex-like persistence instructions and sends guarded continuatio
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete({ goal_id, summary })` tool for explicit completion, requiring the current goal id and rejecting missing/stale ids plus plainly contradictory summaries such as “not complete” or “tests still fail”.
 - Registers `goal_blocked({ goal_id, reason, evidence, repeated_turns })` for true impasses only; it requires the current goal id, concrete evidence, and the same blocker recurring for at least three consecutive goal turns.
-- Keeps both goal tools out of the model-visible active tool set until the first `/goal` activation or an unfinished goal is restored for the session; after that unlock they stay desired for the rest of the extension runtime, and each model turn reasserts the policy so other `setActiveTools` callers cannot permanently hide or prematurely expose them (avoids repeated goal-tool schema churn within the same runtime).
+- Keeps both goal tools active by default for a stable tool schema; optional `"after-first-goal"` visibility hides them until the first accepted `/goal` activation or an unfinished goal is restored, then keeps them desired for the rest of that extension runtime.
 - Records continuation intent when an active turn ends early, then directly triggers exactly one next turn only after Pi reports the agent fully settled, idle, and free of pending messages.
 - Lets retry, compaction, steering, follow-up, and other queued work settle before automatic goal continuation.
 - Separates user interruption (`paused`), true impasse or terminal non-usage error (`blocked`), provider/account quota exhaustion (`usage_limited`), and user token budget exhaustion (`budget_limited`).
@@ -49,6 +49,25 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-goal
 ```
 
+## ⚙️ Configuration
+
+Configuration is optional. Create `~/.pi/agent/pi-goal.json` only when overriding the defaults:
+
+```json
+{
+  "toolVisibility": "always"
+}
+```
+
+`toolVisibility` accepts:
+
+- `"always"` (default) — pi-goal does not proactively hide `goal_complete` or `goal_blocked`, keeping the tool schema stable from session startup.
+- `"after-first-goal"` — hides both tools at fresh runtime startup, reveals them for the first accepted Goal activation or unfinished-goal restore, and keeps them desired for the remainder of that extension runtime. A failed first kickoff restores the locked tool set.
+
+Missing settings and an omitted `toolVisibility` use `"always"`. Invalid settings produce a warning and also fall back to `"always"`; pi-goal never creates the file automatically.
+
+Tool visibility is a baseline, not ownership of Pi's global active-tool list. Plan mode or another restrictive policy may temporarily hide the tools. pi-goal does not fight that policy on every turn: activation is rejected if both tools cannot be made available, and an already-active goal is paused without automatic continuation if they disappear.
+
 ## 🚀 Commands
 
 ```text
@@ -73,7 +92,7 @@ Goal objectives are limited to 4,000 characters. Put longer instructions in a fi
 
 ## 🔁 Session and reload behavior
 
-Goal state is stored as Pi session state, similar to Codex's thread-owned goals. `/reload` and reopening the same Pi session can restore that session's unfinished goal. Active elapsed time is checkpointed before shutdown and restarted after reload, so offline and stopped wall-clock time is excluded. Starting a new Pi session in the same working directory does not inherit the old goal.
+Goal state is stored as Pi session state, similar to Codex's thread-owned goals. `/reload` and reopening the same Pi session can restore that session's unfinished goal. With `"after-first-goal"`, that unfinished restore unlocks the tools in the new extension runtime; if no unfinished goal remains, a fresh runtime starts locked again. Active elapsed time is checkpointed before shutdown and restarted after reload, so offline and stopped wall-clock time is excluded. Starting a new Pi session in the same working directory does not inherit the old goal.
 
 Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed by working directory. This version no longer reads that global file, and `/goal clear` removes any legacy entry for the current working directory.
 
@@ -133,7 +152,7 @@ A user pause or aborted turn produces `paused`; a terminal provider/account quot
 extensions/pi-goal/
 ├── src/
 │   ├── goal.ts       # Pi entrypoint and shared lifecycle state machine
-│   └── *.ts          # Package-local command, prompt, accounting, and persistence modules
+│   └── *.ts          # Package-local command, settings, prompt, accounting, and persistence modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json

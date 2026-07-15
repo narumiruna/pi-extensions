@@ -30,6 +30,7 @@ import {
 	buildResumePrompt,
 	type GoalStatus,
 } from "./prompts.js";
+import { DEFAULT_GOAL_SETTINGS, type GoalSettings, readGoalSettings } from "./settings.js";
 
 type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
@@ -133,8 +134,13 @@ const RETRYABLE_GOAL_ERROR_PATTERNS = [
 	/context[_\s-]*length[_\s-]*exceeded|input exceeds the context window/i,
 ] as const;
 
+interface GoalOptions {
+	settingsPath?: string;
+}
+
 interface GoalRuntime {
 	readonly pi: ExtensionAPI;
+	settings: GoalSettings;
 	activeGoal?: ActiveGoal;
 	completionStatusTimer?: NodeJS.Timeout;
 	continuationIntent?: ContinuationTicket;
@@ -150,13 +156,14 @@ interface GoalRuntime {
 function createGoalRuntime(pi: ExtensionAPI): GoalRuntime {
 	return {
 		pi,
+		settings: DEFAULT_GOAL_SETTINGS,
 		staleGoalToolCallsBlocked: false,
 		goalToolsUnlocked: false,
 		cancelledContinuationMarkers: new Set(),
 	};
 }
 
-function registerGoalRuntime(pi: ExtensionAPI) {
+function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const runtime = createGoalRuntime(pi);
 
 	const goalCompleteTool = defineTool({
@@ -408,18 +415,31 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
+		const settingsResult = readGoalSettings(options.settingsPath);
+		runtime.settings =
+			settingsResult.kind === "loaded" ? settingsResult.settings : DEFAULT_GOAL_SETTINGS;
+		if (settingsResult.kind === "invalid") {
+			ctx.ui.notify(
+				`pi-goal settings ignored: ${settingsResult.reason}. Using toolVisibility "always".`,
+				"warning",
+			);
+		}
+		if (runtime.settings.toolVisibility === "always") runtime.goalToolsUnlocked = true;
+
 		runtime.activeGoal = loadGoalFromSession(ctx);
 		if (runtime.activeGoal) {
-			// Restored unfinished goals already activated this session lineage.
-			try {
-				revealGoalTools();
-			} catch (error) {
-				ctx.ui.notify(
-					`Restored /goal but goal tools are unavailable: ${formatError(error)}`,
-					"error",
-				);
-				persistGoal(runtime.activeGoal);
-				updateStatus(ctx, runtime.activeGoal);
+			if (runtime.settings.toolVisibility === "after-first-goal") {
+				try {
+					revealGoalTools();
+				} catch (error) {
+					ctx.ui.notify(
+						`Restored /goal but goal tools are unavailable: ${formatError(error)}`,
+						"error",
+					);
+				}
+			}
+			if (runtime.activeGoal.status === "active" && !goalToolsAvailable()) {
+				pauseGoalForUnavailableTools(ctx);
 				return;
 			}
 			if (runtime.activeGoal.status === "active") {
@@ -429,7 +449,9 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
 		} else {
-			enforceGoalToolPolicy();
+			if (runtime.settings.toolVisibility === "after-first-goal" && !runtime.goalToolsUnlocked) {
+				hideGoalToolsIfLocked();
+			}
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 		}
 	});
@@ -544,19 +566,12 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
-		// Reassert desired visibility every model turn so plan-mode / other
-		// setActiveTools callers cannot permanently clobber or prematurely expose
-		// goal tools after the sticky unlock policy is set.
-		try {
-			enforceGoalToolPolicy();
-		} catch (error) {
-			ctx?.ui?.notify?.(
-				`Goal tools are unavailable for this turn: ${formatError(error)}`,
-				"error",
-			);
-		}
 		markContinuationStarted(event.prompt);
 		if (runtime.activeGoal?.status !== "active") return;
+		if (!goalToolsAvailable()) {
+			pauseGoalForUnavailableTools(ctx);
+			return;
+		}
 
 		return {
 			systemPrompt: `${event.systemPrompt}\n\n${buildGoalSystemPrompt(runtime.activeGoal)}`,
@@ -565,6 +580,10 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 
 	pi.on("agent_end", (event, ctx) => {
 		if (!runtime.activeGoal) return;
+		if (runtime.activeGoal.status === "active" && !goalToolsAvailable()) {
+			pauseGoalForUnavailableTools(ctx);
+			return;
+		}
 		if (
 			runtime.activeGoal.status === "budget_limited" &&
 			runtime.budgetWrapUp?.goalId === runtime.activeGoal.id
@@ -652,10 +671,11 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			}
 		}
 
-		// Unlock and verify terminal tools before committing goal state so a failed
-		// reveal cannot leave an active goal that the model cannot complete/block.
+		// Unlock lazy visibility only for a real activation. In always mode, a
+		// missing tool means another policy or allowlist intentionally removed it.
+		const goalToolsWereUnlocked = runtime.goalToolsUnlocked;
 		try {
-			revealGoalTools();
+			prepareGoalToolsForActivation();
 		} catch (error) {
 			ctx.ui.notify(`Cannot start /goal: ${formatError(error)}`, "error");
 			return;
@@ -689,6 +709,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 					clearActiveGoal(ctx);
 				}
 			}
+			if (!goalToolsWereUnlocked && !existingGoal) rollbackGoalToolUnlock();
 			return;
 		}
 		ctx.ui.notify(
@@ -740,6 +761,12 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 				`Goal token budget is still reached: ${formatBudget(runtime.activeGoal)}`,
 				"warning",
 			);
+			return;
+		}
+		try {
+			prepareGoalToolsForActivation();
+		} catch (error) {
+			ctx.ui.notify(`Cannot resume /goal: ${formatError(error)}`, "error");
 			return;
 		}
 		const stoppedGoal = runtime.activeGoal;
@@ -814,7 +841,7 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		const previousStatus = runtime.activeGoal.status;
-		runtime.activeGoal = transitionGoal(
+		const nextGoal = transitionGoal(
 			{
 				...nextGoalInstance(runtime.activeGoal),
 				text: objective,
@@ -822,6 +849,16 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 			},
 			editedGoalStatus(previousStatus),
 		);
+		if (nextGoal.status === "active") {
+			try {
+				prepareGoalToolsForActivation();
+			} catch (error) {
+				ctx.ui.notify(`Cannot reactivate /goal: ${formatError(error)}`, "error");
+				if (runtime.activeGoal?.status === "active") pauseGoalForUnavailableTools(ctx);
+				return;
+			}
+		}
+		runtime.activeGoal = nextGoal;
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		const editedGoal = runtime.activeGoal;
@@ -917,6 +954,10 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 	function dispatchContinuationIfSettled(ctx: StatusContext) {
 		const intent = runtime.continuationIntent;
 		if (!intent) return false;
+		if (runtime.activeGoal?.status === "active" && !goalToolsAvailable()) {
+			pauseGoalForUnavailableTools(ctx);
+			return false;
+		}
 		if (
 			!runtime.activeGoal ||
 			runtime.activeGoal.id !== intent.goalId ||
@@ -1110,13 +1151,9 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		return (GOAL_TOOL_NAMES as readonly string[]).includes(name);
 	}
 
-	/** Apply desired visibility: unlocked keeps both tools; locked removes both. */
-	function enforceGoalToolPolicy() {
-		if (runtime.goalToolsUnlocked) {
-			ensureGoalToolsVisible();
-			return;
-		}
-		hideGoalToolsIfLocked();
+	function goalToolsAvailable() {
+		const active = new Set(runtime.pi.getActiveTools());
+		return GOAL_TOOL_NAMES.every((name) => active.has(name));
 	}
 
 	function hideGoalToolsIfLocked() {
@@ -1126,26 +1163,66 @@ function registerGoalRuntime(pi: ExtensionAPI) {
 		runtime.pi.setActiveTools(active.filter((name) => !isGoalToolName(name)));
 	}
 
+	function assertGoalToolsAvailable() {
+		if (goalToolsAvailable()) return;
+		throw new Error(
+			"goal_complete and goal_blocked are unavailable; include them in the active tool allowlist or leave the restrictive tool mode first.",
+		);
+	}
+
 	function ensureGoalToolsVisible() {
 		const active = runtime.pi.getActiveTools();
 		const activeSet = new Set(active);
 		const missing = GOAL_TOOL_NAMES.filter((name) => !activeSet.has(name));
-		if (missing.length > 0) {
-			runtime.pi.setActiveTools([...active, ...missing]);
+		if (missing.length > 0) runtime.pi.setActiveTools([...active, ...missing]);
+		assertGoalToolsAvailable();
+	}
+
+	function prepareGoalToolsForActivation() {
+		if (runtime.settings.toolVisibility === "after-first-goal") {
+			revealGoalTools();
+			return;
 		}
-		const actual = new Set(runtime.pi.getActiveTools());
-		if (!GOAL_TOOL_NAMES.every((name) => actual.has(name))) {
-			throw new Error(
-				"goal_complete and goal_blocked are unavailable; include them in the active tool allowlist.",
-			);
+		assertGoalToolsAvailable();
+	}
+
+	/** Mark lazy tools permanently desired for this runtime and make them active now. */
+	function revealGoalTools() {
+		const activeBeforeReveal = runtime.pi.getActiveTools();
+		const wasUnlocked = runtime.goalToolsUnlocked;
+		try {
+			ensureGoalToolsVisible();
+			runtime.goalToolsUnlocked = true;
+		} catch (error) {
+			runtime.pi.setActiveTools(activeBeforeReveal);
+			runtime.goalToolsUnlocked = wasUnlocked;
+			throw error;
 		}
 	}
 
-	/** Mark tools permanently desired for this runtime and make them active now. */
-	function revealGoalTools() {
-		// Policy first so a transient ensure failure still reasserts on later turns.
-		runtime.goalToolsUnlocked = true;
-		ensureGoalToolsVisible();
+	function rollbackGoalToolUnlock() {
+		if (runtime.settings.toolVisibility !== "after-first-goal") return;
+		runtime.goalToolsUnlocked = false;
+		hideGoalToolsIfLocked();
+	}
+
+	function pauseGoalForUnavailableTools(ctx: StatusContext) {
+		const goal = runtime.activeGoal;
+		if (goal?.status !== "active") return false;
+		updateGoalUsage(goal, ctx);
+		cancelContinuationWork();
+		clearGoalRecoveryForGoal(goal.id);
+		clearBudgetWrapUp();
+		blockStaleGoalToolCalls();
+		abortCurrentTurn(ctx);
+		runtime.activeGoal = transitionGoal(goal, "paused");
+		persistGoal(runtime.activeGoal);
+		updateStatus(ctx, runtime.activeGoal);
+		ctx.ui.notify(
+			"Goal tools are unavailable, so the active goal was paused. Restore the tools and run /goal resume.",
+			"warning",
+		);
+		return true;
 	}
 
 	function showCompletionStatus(ctx: StatusContext) {
@@ -1447,8 +1524,8 @@ function truncateNotification(value: string) {
 	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
 }
 
-export default function goal(pi: ExtensionAPI) {
-	registerGoalRuntime(pi);
+export default function goal(pi: ExtensionAPI, options: GoalOptions = {}) {
+	registerGoalRuntime(pi, options);
 }
 
 export {

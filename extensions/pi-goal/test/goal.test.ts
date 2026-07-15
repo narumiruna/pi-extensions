@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test, { after } from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import goal, {
 	assistantUsageTokens,
@@ -25,12 +28,36 @@ import goal, {
 
 const STALE_GOAL_TOOL_REASON =
 	"Blocked stale /goal tool call after the goal stopped or was interrupted.";
+const GOAL_SETTINGS_DIRECTORY = mkdtempSync(join(tmpdir(), "pi-goal-test-settings-"));
+const ALWAYS_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "always.json");
+const LAZY_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "after-first-goal.json");
+const INVALID_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "invalid.json");
+const MISSING_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "missing.json");
+writeFileSync(ALWAYS_SETTINGS_PATH, '{"toolVisibility":"always"}\n');
+writeFileSync(LAZY_SETTINGS_PATH, '{"toolVisibility":"after-first-goal"}\n');
+writeFileSync(INVALID_SETTINGS_PATH, '{"toolVisibility":"sometimes"}\n');
+after(() => rmSync(GOAL_SETTINGS_DIRECTORY, { recursive: true, force: true }));
+
+function registerGoal(
+	pi: Parameters<typeof goal>[0],
+	toolVisibility: "always" | "after-first-goal" = "always",
+) {
+	registerGoalWithSettingsPath(
+		pi,
+		toolVisibility === "always" ? ALWAYS_SETTINGS_PATH : LAZY_SETTINGS_PATH,
+	);
+}
+
+function registerGoalWithSettingsPath(pi: Parameters<typeof goal>[0], settingsPath: string) {
+	pi.setActiveTools([...new Set([...pi.getActiveTools(), "goal_complete", "goal_blocked"])]);
+	goal(pi, { settingsPath });
+}
 
 test("goal registers command, status tools, and lifecycle hooks", () => {
 	// Production leaves extension tools active until session_start; factory registration
 	// itself does not call setActiveTools (actions may still be unbound).
 	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
-	goal(mock.pi);
+	registerGoal(mock.pi);
 
 	assert.ok(mock.commands.has("goal"));
 	assert.equal(typeof mock.commands.get("goal")?.getArgumentCompletions, "function");
@@ -41,8 +68,8 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
-	// Empty session hides goal tools until the first /goal activation.
-	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
+	// Default settings keep goal tools active for a stable schema.
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 	const completionParameters = mock.tools.find((tool) => tool.name === "goal_complete")
 		?.parameters as { required?: string[]; properties?: Record<string, unknown> } | undefined;
 	assert.deepEqual(completionParameters?.required, ["goal_id", "summary"]);
@@ -88,11 +115,36 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	]);
 });
 
-test("goal tools stay hidden until the first /goal activation, then remain visible", async () => {
+test("missing and invalid settings fall back to always-visible tools", () => {
+	for (const [settingsPath, expectsWarning] of [
+		[MISSING_SETTINGS_PATH, false],
+		[INVALID_SETTINGS_PATH, true],
+	] as const) {
+		const mock = createMockPi({
+			activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
+		});
+		registerGoalWithSettingsPath(mock.pi, settingsPath);
+		const context = createMockContext();
+		mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"read",
+			"bash",
+			"goal_complete",
+			"goal_blocked",
+		]);
+		assert.equal(
+			context.notifications.some((notice) => /settings ignored/.test(notice.message)),
+			expectsWarning,
+		);
+	}
+});
+
+test("after-first-goal hides tools until activation, then keeps them visible", async () => {
 	const mock = createMockPi({
 		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
 	});
-	goal(mock.pi);
+	registerGoal(mock.pi, "after-first-goal");
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
@@ -128,7 +180,7 @@ test("restoring an unfinished goal unlocks goal tools on session_start", () => {
 		"usage_limited",
 		"budget_limited",
 	] as const) {
-		const { mock } = restoreGoalForTest(status);
+		const { mock } = restoreGoalForTest(status, {}, "after-first-goal");
 		assert.deepEqual(
 			mock.rawPi.getActiveTools(),
 			["goal_complete", "goal_blocked"],
@@ -137,40 +189,61 @@ test("restoring an unfinished goal unlocks goal tools on session_start", () => {
 	}
 });
 
-test("before_agent_start reasserts goal tools after external setActiveTools clobber", async () => {
-	const mock = createMockPi({ activeTools: ["read", "bash", "scrape"] });
-	goal(mock.pi);
+test("an active goal pauses instead of overriding an earlier restrictive tool policy", async () => {
+	const mock = createMockPi({
+		activeTools: ["read", "bash", "scrape", "goal_complete", "goal_blocked"],
+	});
+	registerGoal(mock.pi, "after-first-goal");
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
-	assert.deepEqual(mock.rawPi.getActiveTools(), [
-		"read",
-		"bash",
-		"scrape",
-		"goal_complete",
-		"goal_blocked",
-	]);
 
-	// Plan-mode style whole-set restore drops goal tools and keeps unrelated ones.
+	// Plan-mode style whole-set replacement drops goal tools and keeps unrelated ones.
 	mock.rawPi.setActiveTools(["read", "bash", "scrape"]);
-	mock.events.get("before_agent_start")?.[0]?.(
+	const result = mock.events.get("before_agent_start")?.[0]?.(
 		{ prompt: "continue work", systemPrompt: "base" },
 		context.ctx,
 	);
-	assert.deepEqual(mock.rawPi.getActiveTools(), [
-		"read",
-		"bash",
-		"scrape",
-		"goal_complete",
-		"goal_blocked",
-	]);
+	assert.equal(result, undefined);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "scrape"]);
+	assert.equal(lastGoalStatus(mock), "paused");
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
 });
 
-test("before_agent_start re-hides goal tools while locked if another extension re-adds them", () => {
+test("a later restrictive tool policy pauses the goal at agent_end without continuation", async () => {
 	const mock = createMockPi({
 		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
 	});
-	goal(mock.pi);
+	registerGoal(mock.pi, "after-first-goal");
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
+
+	const promptResult = mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "continue work", systemPrompt: "base" },
+		context.ctx,
+	);
+	assert.match(
+		String((promptResult as { systemPrompt?: string } | undefined)?.systemPrompt),
+		/Active \/goal/,
+	);
+	mock.rawPi.setActiveTools(["read", "bash"]);
+	mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		context.ctx,
+	);
+	mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+
+	assert.equal(lastGoalStatus(mock), "paused");
+	assert.equal(mock.sentUserMessages.length, 1);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
+});
+
+test("after-first-goal does not fight another extension that exposes locked tools", () => {
+	const mock = createMockPi({
+		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
+	});
+	registerGoal(mock.pi, "after-first-goal");
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
@@ -180,19 +253,72 @@ test("before_agent_start re-hides goal tools while locked if another extension r
 		{ prompt: "normal chat", systemPrompt: "base" },
 		context.ctx,
 	);
-	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "scrape"]);
+	assert.deepEqual(mock.rawPi.getActiveTools(), [
+		"read",
+		"bash",
+		"goal_complete",
+		"goal_blocked",
+		"scrape",
+	]);
+});
+
+test("restored active goal pauses when terminal tools are unavailable", () => {
+	const sessionGoal: StoredGoal = {
+		id: "restored-without-tools",
+		text: "restore safely",
+		status: "active",
+		startedAt: 1,
+		updatedAt: 2,
+		iteration: 3,
+		tokenBudget: 100,
+		tokensUsed: 5,
+		timeUsedSeconds: 4,
+		baselineTokens: 0,
+	};
+	const branch = [{ type: "custom", customType: "goal-state", data: { goal: sessionGoal } }];
+	const mock = createMockPi();
+	registerGoal(mock.pi, "after-first-goal");
+	mock.rawPi.setActiveTools([]);
+	const originalSetActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
+	mock.rawPi.setActiveTools = (names: string[]) => {
+		originalSetActiveTools(names.filter((name) => !name.startsWith("goal_")));
+	};
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	assert.equal(lastGoalStatus(mock), "paused");
+	assert.equal(mock.sentUserMessages.length, 0);
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
+});
+
+test("always visibility respects a restrictive policy when starting a goal", async () => {
+	const mock = createMockPi();
+	registerGoal(mock.pi);
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	mock.rawPi.setActiveTools(["read", "bash"]);
+
+	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
+
+	assert.equal(lastGoalStatus(mock), null);
+	assert.equal(mock.sentUserMessages.length, 0);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Cannot start \/goal/i);
 });
 
 test("start fails without committing a goal when goal tools cannot become active", async () => {
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
-	goal(mock.pi);
+	registerGoal(mock.pi, "after-first-goal");
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 
 	const originalSetActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
 	mock.rawPi.setActiveTools = (names: string[]) => {
-		// Simulate Pi silently ignoring names filtered out of the tool registry.
-		originalSetActiveTools(names.filter((name) => !name.startsWith("goal_")));
+		// Simulate Pi accepting only one of the two required names.
+		originalSetActiveTools(names.filter((name) => name !== "goal_blocked"));
 	};
 
 	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
@@ -202,9 +328,9 @@ test("start fails without committing a goal when goal tools cannot become active
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
 });
 
-test("failed first prompt delivery keeps tools unlocked for later starts", async () => {
+test("failed first prompt delivery restores the locked tool set", async () => {
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
-	goal(mock.pi);
+	registerGoal(mock.pi, "after-first-goal");
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 
@@ -214,7 +340,7 @@ test("failed first prompt delivery keeps tools unlocked for later starts", async
 	};
 	await mock.commands.get("goal")?.handler("finish the work", context.ctx);
 	assert.equal(lastGoalStatus(mock), null);
-	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash"]);
 
 	mock.rawPi.sendUserMessage = sendUserMessage;
 	await mock.commands.get("goal")?.handler("finish the work again", context.ctx);
@@ -224,7 +350,7 @@ test("failed first prompt delivery keeps tools unlocked for later starts", async
 
 test("parent and child goal tool unlock policies stay isolated", async () => {
 	const root = createMockPi({ activeTools: ["read", "bash"] });
-	goal(root.pi);
+	registerGoal(root.pi, "after-first-goal");
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("parent objective", rootContext.ctx);
@@ -233,7 +359,7 @@ test("parent and child goal tool unlock policies stay isolated", async () => {
 	const child = createMockPi({
 		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
 	});
-	goal(child.pi);
+	registerGoal(child.pi, "after-first-goal");
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	assert.deepEqual(child.rawPi.getActiveTools(), ["read", "bash"]);
@@ -248,7 +374,7 @@ test("parent and child goal tool unlock policies stay isolated", async () => {
 test("child session initialization does not erase or reroute the parent goal", async () => {
 	const rootBranch: Array<Record<string, unknown>> = [];
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext({
 		sessionManager: { getBranch: () => rootBranch, getEntries: () => rootBranch },
 	});
@@ -265,7 +391,7 @@ test("child session initialization does not erase or reroute the parent goal", a
 	const rootEntriesBeforeChild = root.entries.length;
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext({
 		sessionManager: { getBranch: () => [], getEntries: () => [] },
 	});
@@ -313,13 +439,13 @@ test("child session initialization does not erase or reroute the parent goal", a
 
 test("independent goal instances keep distinct concurrent active goals", async () => {
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	await child.commands.get("goal")?.handler("child objective", childContext.ctx);
@@ -340,13 +466,13 @@ test("independent goal instances keep distinct concurrent active goals", async (
 
 test("independent goal instances keep completion local", async () => {
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	await child.commands.get("goal")?.handler("child objective", childContext.ctx);
@@ -394,7 +520,7 @@ test("independent goal instances keep completion local", async () => {
 test("tool lifecycle persistence stays on the owning goal instance", async () => {
 	const rootBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 1 })];
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext({
 		sessionManager: { getBranch: () => rootBranch, getEntries: () => rootBranch },
 	});
@@ -403,7 +529,7 @@ test("tool lifecycle persistence stays on the owning goal instance", async () =>
 
 	const childBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 2 })];
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext({
 		sessionManager: { getBranch: () => childBranch, getEntries: () => childBranch },
 	});
@@ -440,7 +566,7 @@ test("tool lifecycle persistence stays on the owning goal instance", async () =>
 
 test("goal_blocked ownership stays on the root instance after child start", async () => {
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
@@ -449,7 +575,7 @@ test("goal_blocked ownership stays on the root instance after child start", asyn
 	const rootEntriesBeforeChild = root.entries.length;
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	assert.equal(lastGoalStatus(child), null);
@@ -487,7 +613,7 @@ test("goal_blocked ownership stays on the root instance after child start", asyn
 test("pending continuation and budget state survive later child startup", async () => {
 	const rootBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 0 })];
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext({
 		sessionManager: { getBranch: () => rootBranch, getEntries: () => rootBranch },
 	});
@@ -503,7 +629,7 @@ test("pending continuation and budget state survive later child startup", async 
 		rootContext.ctx,
 	);
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	root.events.get("agent_settled")?.[0]?.({}, rootContext.ctx);
@@ -525,7 +651,7 @@ test("pending continuation and budget state survive later child startup", async 
 	assert.equal(wrapUp?.details?.goalId, rootGoal.id);
 
 	const laterChild = createMockPi();
-	goal(laterChild.pi);
+	registerGoal(laterChild.pi);
 	const laterChildContext = createMockContext();
 	laterChild.events.get("session_start")?.[0]?.({}, laterChildContext.ctx);
 	const contextMessages = [
@@ -562,14 +688,14 @@ test("pending continuation and budget state survive later child startup", async 
 
 test("stale tool guard survives later child startup", async () => {
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
 	await root.commands.get("goal")?.handler("pause", rootContext.ctx);
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	const rootToolCall = root.events.get("tool_call")?.[0];
@@ -600,7 +726,7 @@ test("stale tool guard survives later child startup", async () => {
 
 test("pending compaction recovery survives later child startup", async () => {
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
@@ -621,7 +747,7 @@ test("pending compaction recovery survives later child startup", async () => {
 	);
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	const retryPrompt = root.events.get("before_agent_start")?.[0]?.(
@@ -645,7 +771,7 @@ test("pending compaction recovery survives later child startup", async () => {
 test("completion status timer survives later child startup", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
@@ -660,7 +786,7 @@ test("completion status timer survives later child startup", async (t) => {
 	assert.equal(rootContext.statuses.get("goal"), "complete");
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	t.mock.timers.tick(8_000);
@@ -673,7 +799,7 @@ test("completion status timer survives later child startup", async (t) => {
 
 test("child shutdown does not clear the parent goal", async () => {
 	const root = createMockPi();
-	goal(root.pi);
+	registerGoal(root.pi);
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
@@ -681,7 +807,7 @@ test("child shutdown does not clear the parent goal", async () => {
 	const rootEntriesBeforeChild = root.entries.length;
 
 	const child = createMockPi();
-	goal(child.pi);
+	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
@@ -1286,7 +1412,7 @@ test("goal_complete rejects stale goal_id after replacement, pause/resume, and c
 
 test("goal_blocked rejects calls without an active goal", async () => {
 	const mock = createMockPi();
-	goal(mock.pi);
+	registerGoal(mock.pi);
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	const blockerTool = requireGoalTool(mock, "goal_blocked");
@@ -1522,9 +1648,52 @@ test("failed resume delivery restores the stopped state and original goal_id", a
 	);
 });
 
+test("resume stays stopped when another policy hides terminal tools", async () => {
+	const restored = restoreGoalForTest("paused");
+	const originalId = restored.sessionGoal.id;
+	const originalSetActiveTools = restored.mock.rawPi.setActiveTools.bind(restored.mock.rawPi);
+	originalSetActiveTools(["read", "bash"]);
+
+	await restored.mock.commands.get("goal")?.handler("resume", restored.ctx);
+
+	assert.equal(lastGoalStatus(restored.mock), "paused");
+	assert.equal(requireLastGoal(restored.mock).id, originalId);
+	assert.equal(restored.mock.sentUserMessages.length, 0);
+	assert.match(restored.notifications.at(-1)?.message ?? "", /Cannot resume \/goal/i);
+});
+
+test("after-first-goal resume can restore tools after a restrictive mode exits", async () => {
+	const restored = restoreGoalForTest("paused", {}, "after-first-goal");
+	restored.mock.rawPi.setActiveTools(["read", "bash"]);
+
+	await restored.mock.commands.get("goal")?.handler("resume", restored.ctx);
+
+	assert.equal(lastGoalStatus(restored.mock), "active");
+	assert.equal(restored.mock.sentUserMessages.length, 1);
+	assert.deepEqual(restored.mock.rawPi.getActiveTools(), [
+		"read",
+		"bash",
+		"goal_complete",
+		"goal_blocked",
+	]);
+});
+
+test("active edit pauses when another policy hides terminal tools", async () => {
+	const edited = await startGoalForTest();
+	edited.mock.rawPi.setActiveTools(["read", "bash"]);
+
+	await edited.mock.commands.get("goal")?.handler("edit changed objective", edited.ctx);
+
+	const restored = requireLastGoal(edited.mock);
+	assert.equal(restored.status, "paused");
+	assert.equal(restored.text, "finish");
+	assert.equal(edited.mock.sentUserMessages.length, 1);
+	assert.match(edited.notifications.at(-1)?.message ?? "", /goal tools.*paused/i);
+});
+
 test("failed start delivery clears a new goal and restores a replaced stopped goal", async () => {
 	const freshMock = createMockPi();
-	goal(freshMock.pi);
+	registerGoal(freshMock.pi);
 	const freshContext = createMockContext();
 	freshMock.events.get("session_start")?.[0]?.({}, freshContext.ctx);
 	freshMock.rawPi.sendUserMessage = () => {
@@ -2753,6 +2922,7 @@ function requireGoalTool(mock: ReturnType<typeof createMockPi>, name: string) {
 function restoreGoalForTest(
 	status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited",
 	overrides: { tokenBudget?: number; tokensUsed?: number; timeUsedSeconds?: number } = {},
+	toolVisibility: "always" | "after-first-goal" = "always",
 ) {
 	const sessionGoal = {
 		id: `restored-${status}`,
@@ -2766,12 +2936,13 @@ function restoreGoalForTest(
 		timeUsedSeconds: overrides.timeUsedSeconds ?? 4,
 		baselineTokens: 0,
 	};
-	return restoreStoredGoalForTest(sessionGoal);
+	return restoreStoredGoalForTest(sessionGoal, [], toolVisibility);
 }
 
 function restoreStoredGoalForTest(
 	sessionGoal: StoredGoal,
 	extraEntries: Array<Record<string, unknown>> = [],
+	toolVisibility: "always" | "after-first-goal" = "always",
 ) {
 	const branch = [
 		{
@@ -2782,7 +2953,7 @@ function restoreStoredGoalForTest(
 		...extraEntries,
 	];
 	const mock = createMockPi();
-	goal(mock.pi);
+	registerGoal(mock.pi, toolVisibility);
 	const context = createMockContext({
 		sessionManager: { getBranch: () => branch, getEntries: () => branch },
 	});
@@ -2792,7 +2963,7 @@ function restoreStoredGoalForTest(
 
 async function startGoalForTest(overrides: Record<string, unknown> = {}, command = "finish") {
 	const mock = createMockPi();
-	goal(mock.pi);
+	registerGoal(mock.pi);
 	const context = createMockContext(overrides);
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	await mock.commands.get("goal")?.handler(command, context.ctx);
