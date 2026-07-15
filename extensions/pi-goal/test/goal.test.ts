@@ -38,12 +38,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 		mock.tools.map((tool) => tool.name),
 		["goal_complete", "goal_blocked"],
 	);
-	assert.deepEqual(mock.rawPi.getActiveTools(), [
-		"read",
-		"bash",
-		"goal_complete",
-		"goal_blocked",
-	]);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 	const context = createMockContext();
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	// Empty session hides goal tools until the first /goal activation.
@@ -233,12 +228,7 @@ test("parent and child goal tool unlock policies stay isolated", async () => {
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("parent objective", rootContext.ctx);
-	assert.deepEqual(root.rawPi.getActiveTools(), [
-		"read",
-		"bash",
-		"goal_complete",
-		"goal_blocked",
-	]);
+	assert.deepEqual(root.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 
 	const child = createMockPi({
 		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
@@ -247,27 +237,12 @@ test("parent and child goal tool unlock policies stay isolated", async () => {
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	assert.deepEqual(child.rawPi.getActiveTools(), ["read", "bash"]);
-	assert.deepEqual(root.rawPi.getActiveTools(), [
-		"read",
-		"bash",
-		"goal_complete",
-		"goal_blocked",
-	]);
+	assert.deepEqual(root.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 
 	await child.commands.get("goal")?.handler("child objective", childContext.ctx);
-	assert.deepEqual(child.rawPi.getActiveTools(), [
-		"read",
-		"bash",
-		"goal_complete",
-		"goal_blocked",
-	]);
+	assert.deepEqual(child.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 	await child.commands.get("goal")?.handler("clear", childContext.ctx);
-	assert.deepEqual(root.rawPi.getActiveTools(), [
-		"read",
-		"bash",
-		"goal_complete",
-		"goal_blocked",
-	]);
+	assert.deepEqual(root.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
 });
 
 test("child session initialization does not erase or reroute the parent goal", async () => {
