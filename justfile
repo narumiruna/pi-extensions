@@ -153,10 +153,6 @@ try-goal:
 try-langfuse:
     just try langfuse
 
-# Try the local-only experimental goals extension explicitly
-try-goals:
-    pi -e ./extensions/experimental/pi-goals
-
 try-lsp:
     just try lsp
 

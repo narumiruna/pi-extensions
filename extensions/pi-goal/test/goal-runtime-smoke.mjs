@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
@@ -19,11 +19,15 @@ import {
 
 const extensionPath = resolve(import.meta.dirname, "../src/goal.ts");
 
-async function createHarness(responses, fauxOptions = {}, prepareSession) {
+async function createHarness(responses, fauxOptions = {}, prepareSession, goalSettings) {
 	const root = await mkdtemp(join(tmpdir(), "pi-goal-runtime-"));
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "workspace");
 	await mkdir(cwd, { recursive: true });
+	if (goalSettings) {
+		await mkdir(agentDir, { recursive: true });
+		await writeFile(join(agentDir, "pi-goal.json"), `${JSON.stringify(goalSettings)}\n`, "utf8");
+	}
 
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	let createdSession;
@@ -183,12 +187,15 @@ async function agentDirectoryIsolationScenario() {
 	assert.equal(process.env.PI_CODING_AGENT_DIR, previousAgentDir);
 }
 
-function persistedGoalStatus(session) {
-	const entry = session.sessionManager
+function persistedGoalState(session) {
+	return session.sessionManager
 		.getBranch()
 		.filter((candidate) => candidate.type === "custom" && candidate.customType === "goal-state")
-		.at(-1);
-	return entry?.data?.goal?.status ?? null;
+		.at(-1)?.data;
+}
+
+function persistedGoalStatus(session) {
+	return persistedGoalState(session)?.goal?.status ?? null;
 }
 
 async function waitFor(predicate, description, timeoutMs = 10_000) {
@@ -219,6 +226,57 @@ async function normalContinuationScenario() {
 		);
 	} finally {
 		unsubscribe();
+		await harness.cleanup();
+	}
+}
+
+async function orderedQueueScenario() {
+	const now = Date.now();
+	const harness = await createHarness(
+		[completionResponse, completionResponse],
+		{},
+		(sessionManager) => {
+			sessionManager.appendCustomEntry("goal-state", {
+				goal: {
+					id: crypto.randomUUID(),
+					text: "runtime queue head",
+					status: "active",
+					startedAt: now,
+					updatedAt: now,
+					iteration: 0,
+					tokensUsed: 0,
+					timeUsedSeconds: 0,
+					baselineTokens: 0,
+				},
+				queue: [
+					{
+						id: crypto.randomUUID(),
+						text: "runtime queue tail",
+						status: "queued",
+						startedAt: now,
+						updatedAt: now,
+						iteration: 0,
+						tokensUsed: 0,
+						timeUsedSeconds: 0,
+						baselineTokens: 0,
+					},
+				],
+			});
+		},
+		{ experimental: { goals: true } },
+	);
+	try {
+		const toolNames = harness.session.getAllTools().map(({ name }) => name);
+		assert.ok(toolNames.includes("goal_complete"));
+		assert.ok(toolNames.includes("goal_blocked"));
+		assert.equal(toolNames.includes("goals_complete"), false);
+		assert.equal(toolNames.includes("goals_blocked"), false);
+		await harness.session.prompt("continue the restored ordered queue");
+		await waitFor(() => harness.faux.state.callCount === 2, "ordered queue advancement");
+		await harness.session.agent.waitForIdle();
+		assert.equal(persistedGoalStatus(harness.session), null);
+		assert.equal(persistedGoalState(harness.session)?.queue, undefined);
+	} finally {
 		await harness.cleanup();
 	}
 }
@@ -411,6 +469,7 @@ async function manualCompactionScenario() {
 
 await agentDirectoryIsolationScenario();
 await normalContinuationScenario();
+await orderedQueueScenario();
 await queuedInputScenario();
 await pauseScenario();
 await budgetBoundaryScenario();
@@ -418,5 +477,5 @@ await budgetViolationScenario();
 await budgetAgentEndFallbackScenario();
 await manualCompactionScenario();
 console.log(
-	"pi-goal runtime smoke: normal, queued input, pause, bounded budget behavior, and manual compaction passed",
+	"pi-goal runtime smoke: normal, ordered queue, queued input, pause, bounded budget behavior, and manual compaction passed",
 );

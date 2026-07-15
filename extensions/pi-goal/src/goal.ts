@@ -19,8 +19,9 @@ import { completeGoalArguments, parseCommand, validateObjective } from "./comman
 import {
 	type ActiveGoal,
 	clearLegacyPersistedGoal,
-	type GoalStateEntryData,
-	loadGoalFromSession,
+	loadGoalStateFromSession,
+	type PendingQueueAction,
+	serializeGoalState,
 } from "./persistence.js";
 import {
 	buildContinuePrompt,
@@ -30,16 +31,24 @@ import {
 	buildResumePrompt,
 	type GoalStatus,
 } from "./prompts.js";
+import {
+	activateQueuedGoal,
+	appendGoal,
+	createQueuedGoal,
+	dropLastGoal as dropLastQueuedGoal,
+	prioritizeGoal as prioritizeQueuedGoal,
+	skipGoal as skipQueuedGoal,
+} from "./queue.js";
 import { DEFAULT_GOAL_SETTINGS, type GoalSettings, readGoalSettings } from "./settings.js";
 
 type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
-// Per-factory GoalRuntime owns mutable goal/continuation/budget/recovery state
-// so concurrent in-process AgentSessions cannot clobber each other. Pure helpers
-// live at module scope (single source of truth). registerGoalRuntime still keeps
-// the orchestration handlers together so mutable ownership does not fragment
-// across files; a file-size split is deferred until that ownership boundary is
-// stable under isolation tests.
+// Per-factory GoalRuntime owns mutable active/queued goal, continuation, queue-action,
+// budget, and recovery state so concurrent in-process AgentSessions cannot clobber
+// each other. Pure command, persistence, accounting, prompt, and queue transitions
+// live in focused modules. registerGoalRuntime keeps the lifecycle coordinator in one
+// place because splitting race-sensitive ownership across handlers would obscure the
+// settled-boundary and stale-run invariants; isolation and queue tests cover that boundary.
 
 interface GoalCompleteDetails {
 	goal: string;
@@ -101,6 +110,8 @@ interface StatusContext {
 
 const STATUS_KEY = "goal";
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
+const EXPERIMENTAL_GOALS_WARNING =
+	"Experimental ordered goals are enabled for pi-goal. Queue behavior and persisted state may change.";
 const GOAL_COMPLETE_TOOL = "goal_complete";
 const GOAL_BLOCKED_TOOL = "goal_blocked";
 const GOAL_TOOL_NAMES = [GOAL_COMPLETE_TOOL, GOAL_BLOCKED_TOOL] as const;
@@ -150,6 +161,9 @@ interface GoalRuntime {
 	readonly pi: ExtensionAPI;
 	settings: GoalSettings;
 	activeGoal?: ActiveGoal;
+	queuedGoals: ActiveGoal[];
+	pendingQueueAction?: PendingQueueAction;
+	queueFrozen: boolean;
 	completionStatusTimer?: NodeJS.Timeout;
 	continuationIntent?: ContinuationTicket;
 	continuationDelivery?: ContinuationTicket;
@@ -169,6 +183,8 @@ function createGoalRuntime(pi: ExtensionAPI): GoalRuntime {
 	return {
 		pi,
 		settings: DEFAULT_GOAL_SETTINGS,
+		queuedGoals: [],
+		queueFrozen: false,
 		staleGoalToolCallsBlocked: false,
 		goalToolsUnlocked: false,
 		goalToolsHiddenByPolicy: new Set(),
@@ -277,6 +293,48 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 			runtime.activeGoal = transitionGoal(completedGoal, "complete");
 			updateGoalUsage(runtime.activeGoal, ctx);
+			if (runtime.pendingQueueAction?.kind === "prioritize") {
+				persistGoal(runtime.activeGoal);
+				ctx.ui.setStatus(STATUS_KEY, "complete");
+				ctx.ui.notify(`Goal complete: ${goal}. Priority goal waits for Pi to settle.`, "info");
+				return {
+					content: [{ type: "text", text: `Goal complete: ${summary}` }],
+					details: {
+						goal,
+						goal_id: requestedGoalId,
+						summary,
+					} satisfies GoalCompleteDetails,
+					terminate: true,
+				};
+			}
+			if (runtime.queuedGoals.length > 0) {
+				runtime.pendingQueueAction = {
+					kind: "advance",
+					goalId: runtime.activeGoal.id,
+					reason: "complete",
+					completedText: goal,
+				};
+				persistGoal(runtime.activeGoal);
+				ctx.ui.setStatus(STATUS_KEY, "complete");
+				ctx.ui.notify(
+					`Goal complete: ${goal}. Next goal queued: ${runtime.queuedGoals[0]?.text}`,
+					"info",
+				);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Goal complete: ${summary}\nNext goal queued: ${runtime.queuedGoals[0]?.text}`,
+						},
+					],
+					details: {
+						goal,
+						goal_id: requestedGoalId,
+						summary,
+					} satisfies GoalCompleteDetails,
+					terminate: true,
+				};
+			}
 			persistGoal(runtime.activeGoal);
 
 			ctx.ui.setStatus(STATUS_KEY, formatStatus(runtime.activeGoal));
@@ -392,11 +450,29 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 	pi.registerCommand("goal", {
 		description: "Run a goal to completion: /goal [--tokens 100k] <goal_to_complete>",
-		getArgumentCompletions: completeGoalArguments,
+		getArgumentCompletions: (prefix) =>
+			completeGoalArguments(prefix, {
+				experimentalGoals: runtime.settings.experimental.goals,
+			}),
 		handler: async (args, ctx) => {
-			const result = parseCommand(args);
+			const result = parseCommand(args, {
+				experimentalGoals: runtime.settings.experimental.goals,
+			});
 			if (typeof result === "string") {
 				ctx.ui.notify(result, "warning");
+				return;
+			}
+			if (runtime.queueFrozen) {
+				if (result.kind === "show") showGoal(ctx);
+				else if (result.kind === "clear") clearGoal(ctx);
+				else notifyFrozenQueue(ctx);
+				return;
+			}
+			if (runtime.pendingQueueAction && result.kind !== "show" && result.kind !== "clear") {
+				ctx.ui.notify(
+					"A queued goal change is waiting for Pi to settle. Retry after it finishes.",
+					"warning",
+				);
 				return;
 			}
 
@@ -416,6 +492,18 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				case "edit":
 					await editGoal(result.objective ?? "", result.tokenBudget, runtime.pi, ctx);
 					return;
+				case "add":
+					await addGoal(result.objective ?? "", result.tokenBudget, runtime.pi, ctx);
+					return;
+				case "prioritize":
+					await prioritizeGoal(result.objective ?? "", result.tokenBudget, ctx);
+					return;
+				case "drop-last":
+					dropLastGoal(ctx);
+					return;
+				case "skip":
+					await skipGoal(ctx);
+					return;
 				case "start":
 					await startGoal(result.objective ?? "", result.tokenBudget, runtime.pi, ctx);
 					return;
@@ -423,7 +511,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		clearCompletionStatusTimer();
 		clearContinuationTracking();
 		clearPendingGoalPrompts();
@@ -431,15 +519,21 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
+		runtime.queuedGoals = [];
+		runtime.pendingQueueAction = undefined;
+		runtime.queueFrozen = false;
 		const previousToolVisibility = runtime.settings.toolVisibility;
 		const settingsResult = readGoalSettings(options.settingsPath);
 		runtime.settings =
 			settingsResult.kind === "loaded" ? settingsResult.settings : DEFAULT_GOAL_SETTINGS;
 		if (settingsResult.kind === "invalid") {
 			ctx.ui.notify(
-				`pi-goal settings ignored: ${settingsResult.reason}. Using toolVisibility "always".`,
+				`pi-goal settings ignored: ${settingsResult.reason}. Using default settings.`,
 				"warning",
 			);
+		}
+		if (runtime.settings.experimental.goals) {
+			ctx.ui.notify(EXPERIMENTAL_GOALS_WARNING, "warning");
 		}
 		if (
 			runtime.settings.toolVisibility === "after-first-goal" &&
@@ -461,7 +555,26 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.goalToolsUnlocked = true;
 		}
 
-		runtime.activeGoal = loadGoalFromSession(ctx);
+		const loaded = loadGoalStateFromSession(ctx);
+		runtime.activeGoal = loaded.goal;
+		runtime.queuedGoals = loaded.queue;
+		runtime.pendingQueueAction = loaded.pendingAction;
+		runtime.queueFrozen = loaded.hasExperimentalQueueState && !runtime.settings.experimental.goals;
+		if (runtime.queueFrozen) {
+			if (runtime.activeGoal) persistGoal(runtime.activeGoal);
+			ctx.ui.setStatus(STATUS_KEY, "queue off");
+			ctx.ui.notify(
+				"An experimental goal queue is frozen because experimental.goals is disabled. Re-enable it and run /reload to continue, or use /goal clear.",
+				"warning",
+			);
+			return;
+		}
+
+		let startRestoredQueuedGoal = false;
+		if (runtime.activeGoal?.status === "queued" && !runtime.pendingQueueAction) {
+			runtime.activeGoal = activateQueuedGoal(runtime.activeGoal, currentTokenTotal(ctx));
+			startRestoredQueuedGoal = true;
+		}
 		if (runtime.activeGoal) {
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
@@ -480,6 +593,22 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			}
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
+			if (startRestoredQueuedGoal) {
+				const restoredGoal = runtime.activeGoal;
+				const sent = await sendOwnedGoalPrompt(
+					runtime.pi,
+					ctx,
+					restoredGoal.id,
+					buildGoalPrompt(restoredGoal),
+				);
+				if (!sent && runtime.activeGoal?.id === restoredGoal.id) {
+					runtime.activeGoal = transitionGoal(restoredGoal, "paused");
+					blockStaleGoalToolCalls();
+					persistGoal(runtime.activeGoal);
+					updateStatus(ctx, runtime.activeGoal);
+				}
+			}
+			if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 		} else {
 			if (runtime.settings.toolVisibility === "after-first-goal" && !runtime.goalToolsUnlocked) {
 				hideGoalToolsIfLocked();
@@ -490,7 +619,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (runtime.activeGoal) {
-			updateGoalUsage(runtime.activeGoal, ctx, false);
+			if (!runtime.queueFrozen && runtime.activeGoal.status === "active") {
+				updateGoalUsage(runtime.activeGoal, ctx, false);
+			}
 			persistGoal(runtime.activeGoal);
 		}
 		clearContinuationTracking();
@@ -499,11 +630,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
+		runtime.activeGoal = undefined;
+		runtime.queuedGoals = [];
+		runtime.pendingQueueAction = undefined;
+		runtime.queueFrozen = false;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearCompletionStatusTimer();
 	});
 
 	pi.on("session_before_compact", (event, ctx) => {
+		if (runtime.queueFrozen) return;
 		if (runtime.activeGoal?.status === "budget_limited") {
 			if ((event as { willRetry?: boolean }).willRetry === true) return { cancel: true as const };
 			return;
@@ -516,14 +652,19 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (limitActiveGoalForBudget(ctx, false)) return { cancel: true as const };
 	});
 
-	pi.on("session_compact", (event, ctx) => {
+	pi.on("session_compact", async (event, ctx) => {
+		if (runtime.queueFrozen) return;
 		if (runtime.activeGoal?.status !== "active") {
 			clearGoalRecovery();
 			return;
 		}
 
-		const restoredGoal = loadGoalFromSession(ctx);
-		if (restoredGoal?.id === runtime.activeGoal.id) runtime.activeGoal = restoredGoal;
+		const restoredState = loadGoalStateFromSession(ctx);
+		if (restoredState.goal?.id === runtime.activeGoal.id) {
+			runtime.activeGoal = restoredState.goal;
+			runtime.queuedGoals = restoredState.queue;
+			runtime.pendingQueueAction = restoredState.pendingAction;
+		}
 		updateGoalUsage(runtime.activeGoal, ctx);
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -532,6 +673,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const wasPiRetry = isPiOwnedCompactionRetry(event, runtime.activeGoal.id);
 		clearGoalRecoveryForGoal(runtime.activeGoal.id);
 		if (wasPiRetry) return;
+		if (runtime.pendingQueueAction) {
+			await dispatchPendingQueueActionIfSettled(ctx);
+			return;
+		}
 		requestContinuation(runtime.activeGoal);
 		// Manual compaction does not emit agent_settled. This common dispatcher is
 		// therefore the narrow fallback; threshold compaction leaves the intent for
@@ -540,6 +685,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("input", (event) => {
+		if (runtime.queueFrozen) return;
 		if (event.source === "extension") {
 			if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
 			return;
@@ -556,6 +702,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("tool_call", (event, ctx) => {
+		if (runtime.queueFrozen) {
+			if (!isGoalToolName(event.toolName)) return;
+			return {
+				block: true,
+				reason:
+					"The experimental goal queue is frozen. Re-enable experimental.goals and run /reload, or use /goal clear.",
+			};
+		}
 		if (
 			runtime.activeGoal?.status === "budget_limited" &&
 			runtime.budgetWrapUp?.goalId === runtime.activeGoal.id &&
@@ -581,6 +735,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("tool_execution_end", (_event, ctx) => {
+		if (runtime.queueFrozen) return;
 		if (
 			runtime.activeGoal?.status === "budget_limited" &&
 			runtime.budgetWrapUp?.goalId === runtime.activeGoal.id &&
@@ -601,6 +756,17 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
+		if (runtime.queueFrozen) {
+			runtime.agentRunGoalId = undefined;
+			return;
+		}
+		if (
+			runtime.pendingQueueAction?.kind === "advance" &&
+			runtime.pendingQueueAction.goalId === runtime.activeGoal?.id
+		) {
+			runtime.agentRunGoalId = runtime.activeGoal.id;
+			return;
+		}
 		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
@@ -628,6 +794,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("agent_end", (event, ctx) => {
+		if (runtime.queueFrozen) return;
 		const agentRunGoalId = runtime.agentRunGoalId;
 		runtime.agentRunGoalId = undefined;
 		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
@@ -643,6 +810,15 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		if (runtime.activeGoal.status !== "active") return;
+		if (
+			runtime.pendingQueueAction?.kind === "advance" &&
+			runtime.pendingQueueAction.goalId === runtime.activeGoal.id
+		) {
+			updateGoalUsage(runtime.activeGoal, ctx);
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
+			return;
+		}
 
 		const goalId = runtime.activeGoal.id;
 		const alreadyAwaitingContinuation = hasContinuationWorkForGoal(goalId);
@@ -696,11 +872,19 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 		const currentGoal = runtime.activeGoal;
 		if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
+		if (runtime.pendingQueueAction?.kind === "prioritize") return;
 		requestContinuation(currentGoal);
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {
-		dispatchContinuationIfSettled(ctx);
+		if (runtime.queueFrozen) return;
+		if (!runtime.pendingQueueAction) {
+			dispatchContinuationIfSettled(ctx);
+			return;
+		}
+		return dispatchPendingQueueActionIfSettled(ctx).then((dispatched) => {
+			if (!dispatched) dispatchContinuationIfSettled(ctx);
+		});
 	});
 
 	async function startGoal(
@@ -716,6 +900,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		}
 
 		const existingGoal = runtime.activeGoal?.status !== "complete" ? runtime.activeGoal : undefined;
+		const existingQueuedGoals = [...runtime.queuedGoals];
 		if (existingGoal) {
 			const shouldReplace = await ctx.ui.confirm(
 				"Replace goal?",
@@ -742,6 +927,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
+		runtime.queuedGoals = [];
+		runtime.pendingQueueAction = undefined;
 		runtime.activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -752,6 +939,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			if (runtime.activeGoal?.id === startedGoal.id) {
 				rolledBackStartedGoal = true;
 				if (existingGoal) {
+					runtime.queuedGoals = existingQueuedGoals;
 					updateGoalUsage(existingGoal, ctx);
 					if (existingGoal.status === "active") {
 						abortCurrentTurn(ctx);
@@ -776,6 +964,257 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		ctx.ui.notify(
 			existingGoal ? `Goal replaced: ${objective}` : `Goal started: ${objective}`,
 			"info",
+		);
+	}
+
+	async function addGoal(
+		objective: string,
+		tokenBudget: number | undefined,
+		pi: ExtensionAPI,
+		ctx: StatusContext,
+	) {
+		const validationError = validateObjective(objective);
+		if (validationError) {
+			ctx.ui.notify(validationError, "warning");
+			return;
+		}
+		if (!runtime.activeGoal) {
+			await startGoal(objective, tokenBudget, pi, ctx);
+			return;
+		}
+		runtime.queuedGoals = appendGoal(runtime.queuedGoals, createQueuedGoal(objective, tokenBudget));
+		persistGoal(runtime.activeGoal);
+		ctx.ui.notify(`Goal added at position ${runtime.queuedGoals.length + 1}: ${objective}`, "info");
+	}
+
+	async function prioritizeGoal(
+		objective: string,
+		tokenBudget: number | undefined,
+		ctx: StatusContext,
+	) {
+		const validationError = validateObjective(objective);
+		if (validationError) {
+			ctx.ui.notify(validationError, "warning");
+			return;
+		}
+		if (!runtime.activeGoal) {
+			await startGoal(objective, tokenBudget, runtime.pi, ctx);
+			return;
+		}
+		cancelContinuationWork();
+		runtime.pendingQueueAction = { kind: "prioritize", objective, tokenBudget };
+		persistGoal(runtime.activeGoal);
+		if (ctx.isIdle?.() !== true || hasPendingMessages(ctx)) {
+			ctx.ui.notify(`Priority goal queued until Pi settles: ${objective}`, "info");
+			return;
+		}
+		await dispatchPendingQueueActionIfSettled(ctx);
+	}
+
+	async function activatePrioritizedGoal(
+		objective: string,
+		tokenBudget: number | undefined,
+		ctx: StatusContext,
+	) {
+		const currentGoal = runtime.activeGoal;
+		if (!currentGoal) {
+			await startGoal(objective, tokenBudget, runtime.pi, ctx);
+			return true;
+		}
+		if (currentGoal.status === "active") updateGoalUsage(currentGoal, ctx);
+		const previousGoal = { ...currentGoal };
+		const previousQueue = [...runtime.queuedGoals];
+		const visibilityBeforeActivation = snapshotGoalToolVisibility();
+		try {
+			prepareGoalToolsForActivation(ctx);
+		} catch (error) {
+			ctx.ui.notify(`Cannot prioritize /goal: ${formatError(error)}`, "error");
+			runtime.pendingQueueAction = { kind: "prioritize", objective, tokenBudget };
+			persistGoal(currentGoal);
+			return false;
+		}
+
+		cancelContinuationWork();
+		clearGoalRecovery();
+		clearBudgetWrapUp();
+		clearStaleGoalToolCallBlock();
+		const prioritized = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
+		const next =
+			currentGoal.status === "complete"
+				? { goal: prioritized, queue: [...runtime.queuedGoals] }
+				: prioritizeQueuedGoal(currentGoal, runtime.queuedGoals, prioritized);
+		runtime.activeGoal = next.goal;
+		runtime.queuedGoals = next.queue;
+		runtime.pendingQueueAction = undefined;
+		if (!runtime.activeGoal) return false;
+		persistGoal(runtime.activeGoal);
+		updateStatus(ctx, runtime.activeGoal);
+		const sent = await sendOwnedGoalPrompt(
+			runtime.pi,
+			ctx,
+			runtime.activeGoal.id,
+			buildGoalPrompt(runtime.activeGoal),
+		);
+		if (!sent && runtime.activeGoal.id === prioritized.id) {
+			runtime.queuedGoals = previousQueue;
+			if (previousGoal.status === "active") {
+				abortCurrentTurn(ctx);
+				runtime.activeGoal = transitionGoal(previousGoal, "paused");
+				blockStaleGoalToolCalls();
+			} else {
+				runtime.activeGoal = previousGoal;
+				if (previousGoal.status === "complete") {
+					runtime.pendingQueueAction = { kind: "prioritize", objective, tokenBudget };
+				} else if (blocksStaleGoalToolCalls(previousGoal.status)) {
+					blockStaleGoalToolCalls();
+				}
+			}
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
+			restoreGoalToolVisibility(visibilityBeforeActivation);
+			return false;
+		}
+		ctx.ui.notify(`Goal prioritized: ${objective}`, "info");
+		return true;
+	}
+
+	function dropLastGoal(ctx: StatusContext) {
+		const currentGoal = runtime.activeGoal;
+		if (!currentGoal) {
+			ctx.ui.notify("No goals to drop.", "info");
+			return;
+		}
+		const result = dropLastQueuedGoal(currentGoal, runtime.queuedGoals);
+		if (!result.goal) {
+			clearActiveGoal(ctx);
+			ctx.ui.notify(`Goal dropped: ${result.removed?.text ?? currentGoal.text}`, "warning");
+			return;
+		}
+		runtime.queuedGoals = result.queue;
+		persistGoal(result.goal);
+		ctx.ui.notify(`Goal dropped: ${result.removed?.text ?? "unknown goal"}`, "warning");
+	}
+
+	async function skipGoal(ctx: StatusContext) {
+		const currentGoal = runtime.activeGoal;
+		if (!currentGoal) {
+			ctx.ui.notify("No goals to skip.", "info");
+			return;
+		}
+		if (runtime.queuedGoals.length === 0) {
+			clearActiveGoal(ctx);
+			ctx.ui.notify(`Goal skipped: ${currentGoal.text}. No goals remain.`, "warning");
+			return;
+		}
+		if (currentGoal.status === "active") updateGoalUsage(currentGoal, ctx);
+		cancelContinuationWork();
+		clearGoalRecovery();
+		clearBudgetWrapUp();
+		clearStaleGoalToolCallBlock();
+		runtime.pendingQueueAction = {
+			kind: "advance",
+			goalId: currentGoal.id,
+			reason: "skip",
+			completedText: currentGoal.text,
+		};
+		persistGoal(currentGoal);
+		ctx.ui.notify(`Goal skip queued until Pi settles: ${currentGoal.text}`, "info");
+		if (ctx.isIdle?.() === true && !hasPendingMessages(ctx)) {
+			await dispatchPendingQueueActionIfSettled(ctx);
+		}
+	}
+
+	async function dispatchPendingQueueActionIfSettled(ctx: StatusContext) {
+		const pending = runtime.pendingQueueAction;
+		if (!pending || runtime.queueFrozen) return false;
+		if (ctx.isIdle?.() !== true || hasPendingMessages(ctx)) return false;
+		if (pending.kind === "prioritize") {
+			runtime.pendingQueueAction = undefined;
+			return activatePrioritizedGoal(pending.objective, pending.tokenBudget, ctx);
+		}
+		if (
+			!runtime.activeGoal ||
+			runtime.activeGoal.id !== pending.goalId ||
+			(runtime.activeGoal.status !== "complete" && pending.reason === "complete")
+		) {
+			runtime.pendingQueueAction = undefined;
+			if (runtime.activeGoal) persistGoal(runtime.activeGoal);
+			return false;
+		}
+
+		const previousText = pending.completedText;
+		const reason = pending.reason;
+		runtime.pendingQueueAction = undefined;
+		cancelContinuationWork();
+		clearGoalRecovery();
+		clearBudgetWrapUp();
+		clearStaleGoalToolCallBlock();
+		const next = skipQueuedGoal(runtime.queuedGoals);
+		runtime.queuedGoals = next.queue;
+		runtime.activeGoal = next.goal
+			? activateQueuedGoal(next.goal, currentTokenTotal(ctx))
+			: undefined;
+		if (!runtime.activeGoal) {
+			clearActiveGoal(ctx);
+			ctx.ui.notify(
+				reason === "complete"
+					? `Goal complete: ${previousText}. No goals remain.`
+					: `Goal skipped: ${previousText}. No goals remain.`,
+				"info",
+			);
+			return true;
+		}
+
+		persistGoal(runtime.activeGoal);
+		updateStatus(ctx, runtime.activeGoal);
+		if (runtime.activeGoal.status !== "active") {
+			if (blocksStaleGoalToolCalls(runtime.activeGoal.status)) blockStaleGoalToolCalls();
+			ctx.ui.notify(
+				`${reason === "complete" ? "Goal complete" : "Goal skipped"}: ${previousText}. Next goal remains ${runtime.activeGoal.status}: ${runtime.activeGoal.text}`,
+				"info",
+			);
+			return true;
+		}
+
+		try {
+			prepareGoalToolsForActivation(ctx);
+		} catch (error) {
+			runtime.activeGoal = transitionGoal(runtime.activeGoal, "paused");
+			blockStaleGoalToolCalls();
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
+			ctx.ui.notify(`Cannot start the next /goal: ${formatError(error)}`, "error");
+			return false;
+		}
+		const activatedGoal = runtime.activeGoal;
+		const sent = await sendOwnedGoalPrompt(
+			runtime.pi,
+			ctx,
+			activatedGoal.id,
+			buildGoalPrompt(activatedGoal),
+		);
+		if (!sent && runtime.activeGoal?.id === activatedGoal.id) {
+			runtime.activeGoal = transitionGoal(activatedGoal, "paused");
+			blockStaleGoalToolCalls();
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
+			ctx.ui.notify(
+				`Next goal paused after prompt delivery failed: ${activatedGoal.text}`,
+				"warning",
+			);
+			return false;
+		}
+		ctx.ui.notify(
+			`${reason === "complete" ? "Goal complete" : "Goal skipped"}: ${previousText}. Started next goal: ${activatedGoal.text}`,
+			"info",
+		);
+		return true;
+	}
+
+	function notifyFrozenQueue(ctx: StatusContext) {
+		ctx.ui.notify(
+			"The experimental goal queue is frozen. Re-enable experimental.goals in pi-goal.json and run /reload, or use /goal clear.",
+			"warning",
 		);
 	}
 
@@ -974,10 +1413,20 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
 		}
-		updateGoalUsage(runtime.activeGoal, ctx);
-		persistGoal(runtime.activeGoal);
-		updateStatus(ctx, runtime.activeGoal);
-		ctx.ui.notify(goalSummary(runtime.activeGoal), "info");
+		if (!runtime.queueFrozen) {
+			updateGoalUsage(runtime.activeGoal, ctx);
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
+		}
+		ctx.ui.notify(
+			goalSummary(
+				runtime.activeGoal,
+				runtime.queuedGoals,
+				runtime.settings.experimental.goals,
+				runtime.queueFrozen,
+			),
+			"info",
+		);
 	}
 
 	function stopGoalAfterAgentEnd(
@@ -1239,11 +1688,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	}
 
 	function persistGoal(goal: ActiveGoal) {
-		runtime.pi.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal });
+		runtime.pi.appendEntry(
+			GOAL_STATE_ENTRY_TYPE,
+			serializeGoalState(goal, runtime.queuedGoals, runtime.pendingQueueAction),
+		);
 	}
 
 	function clearPersistedGoal(cwd: string) {
-		runtime.pi.appendEntry<GoalStateEntryData>(GOAL_STATE_ENTRY_TYPE, { goal: null });
+		runtime.pi.appendEntry(GOAL_STATE_ENTRY_TYPE, serializeGoalState(undefined, [], undefined));
 		clearLegacyPersistedGoal(cwd);
 	}
 
@@ -1253,6 +1705,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
 		runtime.activeGoal = undefined;
+		runtime.queuedGoals = [];
+		runtime.pendingQueueAction = undefined;
+		runtime.queueFrozen = false;
 		clearPersistedGoal(ctx.cwd);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		// Do not clear goalToolsUnlocked: after first activation, keep tools visible
@@ -1466,6 +1921,7 @@ async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) 
 export function formatStatus(goal: ActiveGoal | undefined) {
 	if (!goal) return undefined;
 	if (goal.status === "complete") return "complete";
+	if (goal.status === "queued") return "queued";
 	if (goal.status === "paused") return "paused";
 	if (goal.status === "blocked") return "blocked";
 	if (goal.status === "usage_limited") return "usage";
@@ -1478,23 +1934,49 @@ function formatBudget(goal: ActiveGoal) {
 	return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
 }
 
-function goalSummary(goal: ActiveGoal) {
-	return [
+function goalSummary(
+	goal: ActiveGoal,
+	queuedGoals: readonly ActiveGoal[] = [],
+	experimentalGoals = false,
+	queueFrozen = false,
+) {
+	const summary = [
 		`Goal: ${goal.text}`,
-		`Status: ${goal.status}`,
+		`Status: ${queueFrozen ? "queue off" : goal.status}`,
 		`Iteration: ${goal.iteration}`,
 		`Active elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
 		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
-		`Commands: ${goalCommandHint(goal.status)}`,
-	].join("\n");
+	];
+	if (experimentalGoals || queuedGoals.length > 0 || queueFrozen) {
+		summary.push(
+			`Goals (${queuedGoals.length + 1}):`,
+			...[goal, ...queuedGoals].map(
+				(queuedGoal, index) => `${index + 1}. [${queuedGoal.status}] ${queuedGoal.text}`,
+			),
+		);
+	}
+	if (queueFrozen) {
+		summary.push(
+			"Queue is frozen. Re-enable experimental.goals and run /reload, or use /goal clear.",
+			"Commands: /goal, /goal clear",
+		);
+	} else {
+		summary.push(`Commands: ${goalCommandHint(goal.status, experimentalGoals)}`);
+	}
+	return summary.join("\n");
 }
 
-function goalCommandHint(status: GoalStatus) {
-	if (status === "active") return "/goal edit <objective>, /goal pause, /goal clear";
-	if (isResumableGoalStatus(status)) {
-		return "/goal edit <objective>, /goal resume, /goal clear";
+function goalCommandHint(status: GoalStatus, experimentalGoals = false) {
+	const queueCommands = experimentalGoals
+		? ", /goal add <objective>, /goal prioritize <objective>, /goal drop-last, /goal skip"
+		: "";
+	if (status === "active") {
+		return `/goal edit <objective>, /goal pause, /goal clear${queueCommands}`;
 	}
-	return "/goal edit <objective>, /goal clear";
+	if (isResumableGoalStatus(status)) {
+		return `/goal edit <objective>, /goal resume, /goal clear${queueCommands}`;
+	}
+	return `/goal edit <objective>, /goal clear${queueCommands}`;
 }
 
 function hasPendingMessages(ctx: StatusContext) {
