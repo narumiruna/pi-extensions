@@ -626,6 +626,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (runtime.queueFrozen) return;
 		if (event.source === "extension") {
 			if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
+			clearGoalRecovery();
 			return;
 		}
 		if (/^\/goal(?:\s|$)/u.test(event.text.trimStart())) return;

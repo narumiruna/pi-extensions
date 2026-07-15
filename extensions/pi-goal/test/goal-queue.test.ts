@@ -436,6 +436,53 @@ test("pending prioritize preserves Pi-owned retry turns", async () => {
 	assert.equal(stateGoals(harness.mock)[0]?.text, "urgent goal");
 });
 
+test("extension input cannot claim a pending Pi retry under priority", async () => {
+	let idle = false;
+	const harness = await createHarness({ isIdle: () => idle });
+	await harness.command("recovering goal");
+	const recovering = stateGoals(harness.mock)[0];
+	const ownedPrompt = harness.mock.sentUserMessages.at(-1)?.text;
+	assert.ok(recovering);
+	assert.ok(ownedPrompt);
+	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
+	await beforeStart?.({ prompt: ownedPrompt, systemPrompt: "base" }, harness.ctx);
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{ role: "assistant", stopReason: "error", errorMessage: "rate limit; please retry" },
+			],
+		},
+		harness.ctx,
+	);
+	await harness.mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: "unrelated extension work" },
+		harness.ctx,
+	);
+
+	const unrelatedStart = await beforeStart?.(
+		{ prompt: "unrelated extension work", systemPrompt: "base" },
+		harness.ctx,
+	);
+	assert.equal(unrelatedStart, undefined);
+	const staleCompletion = await completionTool(harness.mock).execute(
+		"extension-stale-completion",
+		{ goal_id: recovering.id, summary: "Recovering goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	assert.match(staleCompletion.content?.[0]?.text ?? "", /does not own the active goal/i);
+
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		harness.ctx,
+	);
+	idle = true;
+	await settled(harness);
+	assert.equal(stateGoals(harness.mock)[0]?.text, "urgent goal");
+});
+
 test("pending prioritize rejects terminal reports from unrelated turns", async () => {
 	const harness = await createHarness({ isIdle: () => false });
 	await harness.command("original goal");
