@@ -396,7 +396,7 @@ export class LspClient {
 }
 
 function isUnsupportedMethodError(error: unknown) {
-	return error instanceof Error && /method not found|not supported|unsupported/i.test(error.message);
+	return error instanceof Error && /method not found|unhandled method|not supported|unsupported/i.test(error.message);
 }
 
 function formatErrorMessage(error: unknown) {
