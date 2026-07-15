@@ -318,6 +318,124 @@ test("pending prioritize excludes unrelated usage during shutdown", async () => 
 	);
 });
 
+test("pending prioritize preserves budget wrap-up completion ownership", async () => {
+	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(0)];
+	let idle = false;
+	const harness = await createHarness({
+		isIdle: () => idle,
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await harness.command("--tokens 10 budgeted goal");
+	const budgeted = stateGoals(harness.mock)[0];
+	assert.ok(budgeted);
+	branch.push(assistantUsageEntry(12));
+	await harness.mock.events.get("tool_execution_end")?.[0]?.({}, harness.ctx);
+	assert.equal(stateGoals(harness.mock)[0]?.status, "budget_limited");
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "budget wrap-up", systemPrompt: "base" },
+		harness.ctx,
+	);
+
+	const result = await completionTool(harness.mock).execute(
+		"budget-wrap-completion",
+		{ goal_id: budgeted.id, summary: "Budgeted goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	assert.match(result.content?.[0]?.text ?? "", /^Goal complete:/);
+	assert.equal(result.terminate, true);
+
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "toolUse" }] },
+		harness.ctx,
+	);
+	idle = true;
+	await settled(harness);
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text, status }) => ({ text, status })),
+		[{ text: "urgent goal", status: "active" }],
+	);
+});
+
+test("pending priority lets an unfinished budget wrap-up close at agent_end", async () => {
+	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(0)];
+	let idle = false;
+	const harness = await createHarness({
+		isIdle: () => idle,
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await harness.command("--tokens 10 budgeted goal");
+	branch.push(assistantUsageEntry(12));
+	await harness.mock.events.get("tool_execution_end")?.[0]?.({}, harness.ctx);
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "budget wrap-up", systemPrompt: "base" },
+		harness.ctx,
+	);
+
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		harness.ctx,
+	);
+	const toolGate = await harness.mock.events.get("tool_call")?.[0]?.(
+		{ toolName: "bash", input: { command: "pwd" } },
+		harness.ctx,
+	);
+	assert.equal(toolGate, undefined);
+
+	idle = true;
+	await settled(harness);
+	assert.equal(stateGoals(harness.mock)[0]?.text, "urgent goal");
+});
+
+test("pending prioritize preserves Pi-owned retry turns", async () => {
+	let idle = false;
+	const harness = await createHarness({ isIdle: () => idle });
+	await harness.command("recovering goal");
+	const recovering = stateGoals(harness.mock)[0];
+	const ownedPrompt = harness.mock.sentUserMessages.at(-1)?.text;
+	assert.ok(recovering);
+	assert.ok(ownedPrompt);
+	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
+	await beforeStart?.({ prompt: ownedPrompt, systemPrompt: "base" }, harness.ctx);
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{ role: "assistant", stopReason: "error", errorMessage: "rate limit; please retry" },
+			],
+		},
+		harness.ctx,
+	);
+
+	const retryStart = await beforeStart?.(
+		{ prompt: "automatic provider retry", systemPrompt: "base" },
+		harness.ctx,
+	);
+	assert.match(
+		String((retryStart as { systemPrompt?: string } | undefined)?.systemPrompt),
+		/recovering goal/,
+	);
+	const completed = await completionTool(harness.mock).execute(
+		"retry-completion",
+		{ goal_id: recovering.id, summary: "Recovering goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	assert.match(completed.content?.[0]?.text ?? "", /^Goal complete:/);
+
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "toolUse" }] },
+		harness.ctx,
+	);
+	idle = true;
+	await settled(harness);
+	assert.equal(stateGoals(harness.mock)[0]?.text, "urgent goal");
+});
+
 test("pending prioritize rejects terminal reports from unrelated turns", async () => {
 	const harness = await createHarness({ isIdle: () => false });
 	await harness.command("original goal");

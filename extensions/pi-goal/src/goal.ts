@@ -139,7 +139,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
 				};
 			}
-			if (!runtime.canRecordGoalUsage()) {
+			const completingDuringBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
+			if (!runtime.canRecordGoalUsage() && !completingDuringBudgetWrapUp) {
 				const rejection = "Goal completion rejected: current run does not own the active goal.";
 				ctx.ui.notify(rejection, "warning");
 				return {
@@ -147,11 +148,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
 				};
 			}
-
-			const completingDuringBudgetWrapUp =
-				completedGoal.status === "budget_limited" &&
-				runtime.budgetWrapUp?.goalId === completedGoal.id &&
-				runtime.budgetWrapUp.delivered;
 			if (hasPendingSkipForGoal(completedGoal.id)) {
 				updateGoalUsage(completedGoal, ctx);
 				persistGoal(completedGoal);
@@ -705,7 +701,13 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
-		if (runtime.pendingQueueAction?.kind === "prioritize") {
+		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
+		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
+		if (
+			runtime.pendingQueueAction?.kind === "prioritize" &&
+			!activeBudgetWrapUp &&
+			!activeGoalRecovery
+		) {
 			// A turn that starts after priority intent is committed belongs to neither
 			// the displaced goal nor the not-yet-activated urgent goal. Persist the
 			// displaced goal's final accounting boundary so reload cannot absorb this run.
@@ -721,6 +723,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			}
 			runtime.agentRunGoalId = null;
 			if (ownedPromptGoalId) abortCurrentTurn(ctx);
+			return;
+		}
+		if (activeBudgetWrapUp && runtime.activeGoal) {
+			runtime.agentRunGoalId = runtime.activeGoal.id;
 			return;
 		}
 		if (
@@ -758,7 +764,12 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (runtime.queueFrozen) return;
 		const agentRunGoalId = runtime.agentRunGoalId;
 		runtime.agentRunGoalId = undefined;
-		if (agentRunGoalId === null || !runtime.canRecordGoalUsage()) return;
+		if (
+			agentRunGoalId === null ||
+			(!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp())
+		) {
+			return;
+		}
 		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
 		if (!runtime.activeGoal) return;
 		if (

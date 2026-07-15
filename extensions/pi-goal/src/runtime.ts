@@ -149,6 +149,18 @@ export class GoalRuntime {
 		);
 	}
 
+	hasActiveBudgetWrapUp() {
+		return (
+			this.activeGoal?.status === "budget_limited" &&
+			this.budgetWrapUp?.goalId === this.activeGoal.id &&
+			this.budgetWrapUp.delivered
+		);
+	}
+
+	hasActiveGoalRecovery() {
+		return Boolean(this.activeGoal && this.goalRecovery?.goalId === this.activeGoal.id);
+	}
+
 	recordGoalUsage(
 		goal: ActiveGoal,
 		ctx: StatusContext,
