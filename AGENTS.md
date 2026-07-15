@@ -27,7 +27,7 @@ Run commands from the repository root unless noted otherwise.
 - Keep extension packages small and self-contained. Add dependencies only when they solve a current extension need.
 - Name an active extension-managed user JSON file `<unscoped-package-name>.json`; use the same basename for project overrides. Credential sensitivity changes permissions and migration handling, not the basename. Use variants such as `.local` or state filenames only when they communicate a concrete storage semantic.
 - Production extensions include source in `pi.extensions`, publish `files`, and root workspace-aware scripts/recipes when users need them.
-- Experimental extensions must live under `extensions/experimental/`, show a user-facing experimental warning, remain covered by root checks, and stay excluded from automated publish/version workflows.
+- Standalone experimental extension packages must live under `extensions/experimental/`, show a user-facing warning, remain covered by root checks, and stay excluded from automated publish/version workflows. An opt-in experimental feature may remain inside a production package only when its default behavior stays compatible, configuration explicitly gates it, and enabling it shows a warning.
 - When a source file exceeds 1,000 lines, it must be reviewed for decomposition. Split it along clear responsibility boundaries when doing so improves cohesion, maintainability, or testability. Do not split files mechanically solely to satisfy the line limit. Generated, vendored, migration, snapshot, and primarily declarative files may be exempt.
 
 ## Testing and verification
