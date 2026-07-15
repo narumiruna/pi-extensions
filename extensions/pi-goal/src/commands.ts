@@ -529,8 +529,21 @@ export class GoalCommandController {
 			this.runtime.prepareGoalToolsForActivation(ctx);
 		} catch (error) {
 			ctx.ui.notify(`Cannot prioritize /goal: ${formatError(error)}`, "error");
-			this.runtime.pendingQueueAction = { kind: "prioritize", objective, tokenBudget };
-			this.runtime.persistGoal(currentGoal);
+			if (currentGoal.status === "complete") {
+				// Completion already committed, so retain the priority intent for a
+				// later /reload after the tool policy is restored.
+				this.runtime.pendingQueueAction = { kind: "prioritize", objective, tokenBudget };
+				this.runtime.persistGoal(currentGoal);
+			} else {
+				// Roll back an activation that never started. An active displaced goal
+				// cannot continue safely without its terminal tools, so make it resumable.
+				this.runtime.pendingQueueAction = undefined;
+				if (currentGoal.status === "active") {
+					this.runtime.pauseGoalForUnavailableTools(ctx);
+				} else {
+					this.runtime.persistGoal(currentGoal);
+				}
+			}
 			return false;
 		}
 

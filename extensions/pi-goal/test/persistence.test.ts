@@ -45,6 +45,42 @@ test("canonical persistence restores queue and pending prioritize safely", () =>
 	assert.equal(loaded.hasExperimentalQueueState, true);
 });
 
+test("a queued head is experimental state even without a queued tail", () => {
+	for (const [customType, data] of [
+		["goal-state", { goal: queued }],
+		["goals-state", { goals: [queued] }],
+	] as const) {
+		const loaded = loadGoalStateFromSession(branch({ customType, data }));
+		assert.equal(loaded.goal?.status, "queued");
+		assert.deepEqual(loaded.queue, []);
+		assert.equal(loaded.hasExperimentalQueueState, true);
+	}
+});
+
+test("canonical state retains a completed head until pending priority can settle", () => {
+	const completed = { ...active, status: "complete" as const };
+	const pendingAction = {
+		kind: "prioritize" as const,
+		objective: "urgent after completion",
+		tokenBudget: 2_000,
+	};
+	const loaded = loadGoalStateFromSession(
+		branch({
+			customType: "goal-state",
+			data: serializeGoalState(completed, [queued], pendingAction),
+		}),
+	);
+
+	assert.equal(loaded.goal?.status, "complete");
+	assert.equal(loaded.goal?.text, "active");
+	assert.deepEqual(
+		loaded.queue.map(({ text }) => text),
+		["queued"],
+	);
+	assert.deepEqual(loaded.pendingAction, pendingAction);
+	assert.equal(loaded.hasExperimentalQueueState, true);
+});
+
 test("canonical entries take precedence over older plural state, including explicit clear", () => {
 	const plural = { goals: [storedGoal("legacy", "active"), storedGoal("later", "queued")] };
 	const loaded = loadGoalStateFromSession(
@@ -92,7 +128,24 @@ test("a legacy single goal becomes ordinary singular state", () => {
 
 test("malformed canonical or plural queue state fails closed", () => {
 	for (const [customType, data] of [
+		["goal-state", { goal: { ...active, id: "" } }],
+		["goal-state", { goal: { ...active, text: "   " } }],
 		["goal-state", { goal: active, queue: [{ nope: true }] }],
+		[
+			"goal-state",
+			{
+				goal: active,
+				pendingAction: { kind: "advance", goalId: " ", reason: "skip", completedText: "active" },
+			},
+		],
+		[
+			"goal-state",
+			{
+				goal: active,
+				pendingAction: { kind: "advance", goalId: active.id, reason: "skip", completedText: "" },
+			},
+		],
+		["goal-state", { goal: active, queue: [storedGoal("done", "complete")] }],
 		["goals-state", { goals: [active, { nope: true }] }],
 	] as const) {
 		const loaded = loadGoalStateFromSession(branch({ customType, data }));

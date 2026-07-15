@@ -107,7 +107,9 @@ function loadCanonicalGoalState(data: unknown): LoadedGoalState {
 	const rawGoal = data.goal;
 	if (rawGoal !== null && !isGoal(rawGoal)) return emptyGoalState("canonical");
 	const rawQueue = Object.hasOwn(data, "queue") ? data.queue : [];
-	if (!Array.isArray(rawQueue) || !rawQueue.every(isGoal)) return emptyGoalState("canonical");
+	if (!Array.isArray(rawQueue) || !rawQueue.every(isQueueGoal)) {
+		return emptyGoalState("canonical");
+	}
 	const pendingAction = normalizePendingQueueAction(data.pendingAction);
 	if (Object.hasOwn(data, "pendingAction") && !pendingAction) {
 		return emptyGoalState("canonical");
@@ -115,13 +117,14 @@ function loadCanonicalGoalState(data: unknown): LoadedGoalState {
 
 	const queue = rawQueue.map(normalizeQueuedGoal);
 	let goal = rawGoal === null ? undefined : normalizeLoadedGoal(rawGoal);
-	if (goal?.status === "complete" && pendingAction?.kind !== "advance") goal = undefined;
+	if (goal?.status === "complete" && !pendingAction) goal = undefined;
 	if (!goal && (queue.length > 0 || pendingAction)) return emptyGoalState("canonical");
 	return {
 		goal,
 		queue,
 		pendingAction,
-		hasExperimentalQueueState: queue.length > 0 || pendingAction !== undefined,
+		hasExperimentalQueueState:
+			goal?.status === "queued" || queue.length > 0 || pendingAction !== undefined,
 		source: "canonical",
 	};
 }
@@ -146,7 +149,8 @@ function loadLegacyGoalsState(data: unknown): LoadedGoalState {
 		goal: goals[0],
 		queue: goals.slice(1),
 		pendingAction,
-		hasExperimentalQueueState: goals.length > 1 || pendingAction !== undefined,
+		hasExperimentalQueueState:
+			goals[0]?.status === "queued" || goals.length > 1 || pendingAction !== undefined,
 		source: "legacy-goals",
 	};
 }
@@ -165,8 +169,9 @@ function normalizePendingQueueAction(value: unknown): PendingQueueAction | undef
 		if (
 			typeof value.goalId !== "string" ||
 			!value.goalId ||
+			value.goalId !== value.goalId.trim() ||
 			(value.reason !== "complete" && value.reason !== "skip") ||
-			typeof value.completedText !== "string"
+			!validObjective(value.completedText)
 		) {
 			return undefined;
 		}
@@ -239,7 +244,9 @@ function isGoal(value: unknown): value is ActiveGoal {
 	if (!isRecord(value)) return false;
 	return (
 		typeof value.id === "string" &&
-		typeof value.text === "string" &&
+		Boolean(value.id) &&
+		value.id === value.id.trim() &&
+		validObjective(value.text) &&
 		[
 			"active",
 			"queued",
@@ -257,6 +264,10 @@ function isGoal(value: unknown): value is ActiveGoal {
 		typeof value.baselineTokens === "number" &&
 		(value.activeStartedAt === undefined || typeof value.activeStartedAt === "number")
 	);
+}
+
+function isQueueGoal(value: unknown): value is ActiveGoal {
+	return isGoal(value) && value.status !== "complete";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

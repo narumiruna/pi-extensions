@@ -155,6 +155,32 @@ test("goal_complete advances only after the finishing run settles", async () => 
 	);
 });
 
+test("pending completion advance survives reload before settlement", async () => {
+	const interrupted = await createHarness({ isIdle: () => false });
+	await interrupted.command("first goal");
+	await interrupted.command("add second goal");
+	const first = stateGoals(interrupted.mock)[0];
+	assert.ok(first);
+	await completionTool(interrupted.mock).execute(
+		"complete-before-reload",
+		{ goal_id: first.id, summary: "First goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		interrupted.ctx,
+	);
+	const persisted = lastState(interrupted.mock);
+	assert.equal(persisted?.pendingAction?.kind, "advance");
+
+	const branch = [{ type: "custom", customType: "goal-state", data: persisted }];
+	const restored = await createHarness({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	assert.deepEqual(
+		stateGoals(restored.mock).map(({ text, status }) => ({ text, status })),
+		[{ text: "second goal", status: "active" }],
+	);
+});
+
 test("busy prioritize preserves intent and excludes old-run tokens from the urgent goal", async () => {
 	const branch: Array<Record<string, unknown>> = [assistantUsageEntry(100)];
 	let idle = false;
@@ -208,6 +234,70 @@ test("a completed head is dropped when a busy prioritize intent wins", async () 
 			{ text: "urgent goal", status: "active" },
 			{ text: "later goal", status: "queued" },
 		],
+	);
+});
+
+test("pending priority survives reload after the displaced head completes", async () => {
+	const interrupted = await createHarness({ isIdle: () => false });
+	await interrupted.command("finishing goal");
+	await interrupted.command("add later goal");
+	await interrupted.command("prioritize urgent goal");
+	const finishing = stateGoals(interrupted.mock)[0];
+	assert.ok(finishing);
+	await completionTool(interrupted.mock).execute(
+		"complete-before-reload",
+		{ goal_id: finishing.id, summary: "Finishing goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		interrupted.ctx,
+	);
+	const persisted = lastState(interrupted.mock);
+	assert.equal(persisted?.goal?.status, "complete");
+	assert.equal(persisted?.pendingAction?.kind, "prioritize");
+
+	const branch = [{ type: "custom", customType: "goal-state", data: persisted }];
+	const restored = await createHarness({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	assert.deepEqual(
+		stateGoals(restored.mock).map(({ text, status }) => ({ text, status })),
+		[
+			{ text: "urgent goal", status: "active" },
+			{ text: "later goal", status: "queued" },
+		],
+	);
+});
+
+test("completed head retains pending priority when terminal tools are temporarily unavailable", async () => {
+	let idle = false;
+	const interrupted = await createHarness({ isIdle: () => idle });
+	await interrupted.command("finishing goal");
+	await interrupted.command("add later goal");
+	await interrupted.command("prioritize urgent goal");
+	const finishing = stateGoals(interrupted.mock)[0];
+	assert.ok(finishing);
+	await completionTool(interrupted.mock).execute(
+		"complete-before-tool-policy",
+		{ goal_id: finishing.id, summary: "Finishing goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		interrupted.ctx,
+	);
+
+	interrupted.mock.rawPi.setActiveTools(["goal_complete"]);
+	idle = true;
+	await settled(interrupted);
+	const retained = lastState(interrupted.mock);
+	assert.equal(retained?.goal?.status, "complete");
+	assert.equal(retained?.pendingAction?.kind, "prioritize");
+
+	const branch = [{ type: "custom", customType: "goal-state", data: retained }];
+	const restored = await createHarness({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	assert.deepEqual(
+		stateGoals(restored.mock).map(({ text }) => text),
+		["urgent goal", "later goal"],
 	);
 });
 
@@ -428,6 +518,18 @@ test("failed priority delivery restores and pauses the previous active head", as
 	harness.mock.rawPi.sendUserMessage = () => {
 		throw new Error("priority delivery unavailable");
 	};
+	await harness.command("prioritize urgent goal");
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text, status }) => ({ text, status })),
+		[{ text: "original goal", status: "paused" }],
+	);
+	assert.equal(lastState(harness.mock)?.pendingAction, undefined);
+});
+
+test("failed priority tool preparation clears intent and pauses the active head", async () => {
+	const harness = await createHarness();
+	await harness.command("original goal");
+	harness.mock.rawPi.setActiveTools(["goal_complete"]);
 	await harness.command("prioritize urgent goal");
 	assert.deepEqual(
 		stateGoals(harness.mock).map(({ text, status }) => ({ text, status })),
