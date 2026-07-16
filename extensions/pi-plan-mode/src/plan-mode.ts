@@ -1,21 +1,16 @@
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-	ToolInfo,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import {
+	normalizePlanModeCompletion,
 	PLAN_MODE_COMPLETE_PARAMS,
 	PLAN_MODE_COMPLETE_TOOL_NAME,
-	normalizePlanModeCompletion,
 	planModeCompleted,
 } from "./completion-tool.js";
 import {
-	extractProposedPlan,
 	isEmptyAssistantMessage,
 	latestAssistantText,
-	parseProposedPlan,
 	messageContainsInactivePlanModeArtifact,
 	messageContainsLegacyPlanModeContextArtifact,
+	parseProposedPlan,
 	stripPlanModeCompletionCallsFromMessage,
 	stripProposedPlanBlocksFromMessage,
 } from "./message-transform.js";
@@ -29,6 +24,12 @@ import {
 	planModeQuestionCancelled,
 } from "./question-tool.js";
 import {
+	configuredThinkingLevel,
+	type PlanModeSettings,
+	readPlanModeSettings,
+} from "./settings.js";
+import { type PlanCompletionSource, type PlanModeState, restorePlanModeState } from "./state.js";
+import {
 	canSelectToolInPlanMode,
 	classifyPlanModeTool,
 	isBuiltinTool,
@@ -36,16 +37,6 @@ import {
 	readCommand,
 	SAFE_BUILTIN_PLAN_TOOLS,
 } from "./tool-policy.js";
-import {
-	configuredThinkingLevel,
-	readPlanModeSettings,
-	type PlanModeSettings,
-} from "./settings.js";
-import {
-	restorePlanModeState,
-	type PlanCompletionSource,
-	type PlanModeState,
-} from "./state.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const STATUS_KEY = "plan-mode";
@@ -66,11 +57,6 @@ interface ReadyPresentationIntent {
 	plan: string;
 	source: PlanCompletionSource;
 }
-
-type TextBlock = {
-	type?: string;
-	text?: string;
-};
 
 const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 	{ value: "show", label: "show", description: "Show the completed plan" },
@@ -405,11 +391,7 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 	}
 
-	function acceptCompletedPlan(
-		plan: string,
-		source: PlanCompletionSource,
-		ctx: ExtensionContext,
-	) {
+	function acceptCompletedPlan(plan: string, source: PlanCompletionSource, ctx: ExtensionContext) {
 		if (
 			state.enabled &&
 			state.awaitingAction &&
@@ -449,7 +431,10 @@ export default function planMode(pi: ExtensionAPI) {
 	function showStoredPlan(ctx: ExtensionContext) {
 		const plan = state.latestPlan?.trim();
 		if (!state.enabled || !plan) {
-			ctx.ui.notify("No completed plan is available. Use /plan finalize when planning is complete.", "info");
+			ctx.ui.notify(
+				"No completed plan is available. Use /plan finalize when planning is complete.",
+				"info",
+			);
 			return;
 		}
 		try {
@@ -514,12 +499,7 @@ export default function planMode(pi: ExtensionAPI) {
 					"Stay in Plan mode",
 					"Exit Plan mode",
 				]
-			: [
-					"Request final plan",
-					"Configure Plan-mode tools",
-					"Stay in Plan mode",
-					"Exit Plan mode",
-				];
+			: ["Request final plan", "Configure Plan-mode tools", "Stay in Plan mode", "Exit Plan mode"];
 		const choice = await ctx.ui.select(planStatusText(), choices);
 		if (choice === "Show latest proposed plan") {
 			showStoredPlan(ctx);
@@ -637,7 +617,12 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function planModeToolNames() {
 		const tools = selectableTools();
-		if (tools.length === 0) {
+		if (
+			tools.length === 0 &&
+			state.selectedToolNames === undefined &&
+			state.selectedToolKeys === undefined &&
+			settings.defaultPlanTools === undefined
+		) {
 			return ["read", "bash", PLAN_MODE_QUESTION_TOOL_NAME, PLAN_MODE_COMPLETE_TOOL_NAME];
 		}
 
@@ -662,6 +647,9 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function defaultPlanModeToolNames(tools: ToolInfo[]) {
+		if (settings.defaultPlanTools !== undefined) {
+			return filterAvailableSelectedNames(settings.defaultPlanTools, tools);
+		}
 		return tools
 			.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name))
 			.map((tool) => tool.name);
@@ -808,7 +796,8 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function planStatusText() {
 		if (!state.enabled) return "Plan mode is off.";
-		if (state.latestPlan) return `Plan mode is active and a proposed plan is ready. ${formatToolSummary()}`;
+		if (state.latestPlan)
+			return `Plan mode is active and a proposed plan is ready. ${formatToolSummary()}`;
 		return `Plan mode is active. ${formatToolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
 	}
 
