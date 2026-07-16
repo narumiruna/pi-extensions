@@ -53,7 +53,7 @@
 - Symptom: Pi compaction event docs may mention `reason`/`willRetry` while project target typings lack them. Cause: local/global `@earendil-works/pi-coding-agent` version skew. Fix: run `npm install`, verify target version, and treat compaction event fields as optional.
 - `fs.watch` on a single file can miss branch HEAD writes on some platforms; watch the parent directory and filter the `HEAD` filename instead.
 - Symptom: Pi 0.79 CI rejects `ProviderHeaders` imports from `@earendil-works/pi-ai`. Cause: that root type export is newer than the supported compatibility floor. Fix: use the compatible local `Record<string, string>` auth-header shape when an extension must typecheck across the 0.79/0.80 matrix.
-- Pi 0.80.8 no longer root-exports `AuthStorage` or its file/in-memory backends; extension runtime imports fail even though the classes remain internal. Keep extension-owned credential storage independent of those exports and test both the compatibility floor and latest Pi.
+- Pi 0.80.8 no longer root-exports `AuthStorage` or its file/in-memory backends, and `@earendil-works/pi-ai/oauth` retains only compatibility types. Keep extension credential storage package-owned, obtain built-in OAuth through `providers/all`, and test both the compatibility floor and latest Pi.
 
 ## TASTE
 
