@@ -300,7 +300,17 @@ test("subagent formatting and set helpers are deterministic", () => {
 			"gpt",
 			"high",
 		),
-		"2 turns ↑1.5k ↓20 $0.0123 gpt thinking:high",
+		"2 turns ↑1.5k ↓20 $0.0123 gpt requested-thinking:high",
+	);
+	assert.equal(
+		formatUsageStats(
+			{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+			"requested-alias",
+			"high",
+			"actual-provider",
+			"actual-model",
+		),
+		"actual-provider/actual-model requested-thinking:high",
 	);
 	assert.deepEqual(uniqueToolNames(["read", "read", "bash"]), ["read", "bash"]);
 	assert.equal(sameToolSet(["read", "bash"], ["bash", "read"]), true);
