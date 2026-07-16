@@ -9,7 +9,7 @@ Pi 0.80.8 stopped exporting `FileAuthStorageBackend`, made the legacy OAuth entr
 ## Plan
 
 - [x] Replace the removed Pi auth-storage dependency with package-owned locked file and in-memory backends; `npm test` passes all 524 tests, including private writes and migrations.
-- [x] Adapt OAuth and runtime API-key application to Pi 0.80.3 and 0.80.8; the extension uses provider-owned OAuth, regression tests pass, Pi 0.80.8 typechecking passes, and an isolated active-account print-mode smoke completes session start and reset.
+- [x] Adapt OAuth and runtime API-key application to Pi 0.80.3 and 0.80.8; the extension uses the legacy OAuth value when available and lazily falls back to provider-owned OAuth, regression tests pass, and isolated active-account print-mode smokes complete on both versions.
 - [x] Add Pi 0.80.3 to `.github/workflows/ci.yml`; matrix inspection passes and `npm run check` passes against the local Pi 0.80.3 dependency floor.
 - [x] Update package metadata/docs and inspect the publish payload; `just pack-codex-accounts` includes both source modules, metadata, README, and license.
 

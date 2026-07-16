@@ -69,7 +69,7 @@ Remove one self-managed account:
 
 The canonical credential file is `~/.pi/agent/pi-codex-accounts.json`. A legacy-only `codex-accounts.json` is migrated under the existing credential-file lock, copied with `0600` permissions, and removed only after the canonical file is installed. If both files exist, the canonical file takes precedence and the legacy file is retained.
 
-When an active self-managed account is set, the extension applies that account's access token as Pi's runtime key for the native `openai-codex` provider. Login and refresh use Pi's provider-owned Codex OAuth implementation. Runtime key application supports both Pi 0.80.3's auth-storage shape and Pi 0.80.8's model-runtime shape.
+When an active self-managed account is set, the extension applies that account's access token as Pi's runtime key for the native `openai-codex` provider. Login and refresh use Pi's built-in Codex OAuth implementation through the loader entry point supported by the running Pi version. Runtime key application supports both Pi 0.80.3's auth-storage shape and Pi 0.80.8's model-runtime shape.
 
 When no self-managed account is active, the extension removes its runtime override and Pi uses its normal `openai-codex` auth resolution. That means existing `/login openai-codex`, `auth.json`, or environment behavior still works.
 

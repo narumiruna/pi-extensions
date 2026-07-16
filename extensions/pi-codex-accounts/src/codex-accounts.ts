@@ -11,8 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import * as piAiOAuth from "@earendil-works/pi-ai/oauth";
 import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
@@ -52,6 +51,13 @@ type DeviceCodeInfo = {
 	expiresInSeconds?: number;
 };
 
+type OAuthCredentials = piAiOAuth.OAuthCredentials;
+type OAuthLoginCallbacks = piAiOAuth.OAuthLoginCallbacks;
+type BuiltinProvider = ReturnType<
+	typeof import("@earendil-works/pi-ai/providers/all").builtinProviders
+>[number];
+type ProviderOwnedOAuth = NonNullable<BuiltinProvider["auth"]["oauth"]>;
+
 type CodexOAuthCallbacks = OAuthLoginCallbacks & {
 	onDeviceCode?: (info: DeviceCodeInfo) => void;
 };
@@ -62,7 +68,8 @@ type CodexOAuthProvider = {
 	getApiKey(credentials: OAuthCredentials): string | Promise<string>;
 };
 
-let builtinCodexOAuthProvider: CodexOAuthProvider | undefined;
+let defaultCodexOAuthProvider: CodexOAuthProvider | undefined;
+let providerOwnedOAuthPromise: Promise<ProviderOwnedOAuth> | undefined;
 
 type RefreshOnlyCodexOAuthProvider = Pick<CodexOAuthProvider, "refreshToken" | "getApiKey">;
 
@@ -153,7 +160,7 @@ export default function codexAccounts(
 ) {
 	const store = dependencies.store ?? new CodexAccountStore();
 	let migrationNotice = dependencies.store ? undefined : consumeAccountsMigrationNotice();
-	const oauthProvider = dependencies.oauthProvider ?? getBuiltinCodexOAuthProvider();
+	const oauthProvider = dependencies.oauthProvider ?? getDefaultCodexOAuthProvider();
 	// Keep cleanup injectable until WebSocket controls are available through a loader-safe export.
 	const closeWebSocketSessions = dependencies.closeWebSocketSessions ?? (() => undefined);
 	let appliedAuthIdentity: string | undefined;
@@ -312,7 +319,7 @@ export async function ensureActiveCodexAuth(
 		return { status: "inactive" };
 	}
 
-	const oauthProvider = options.oauthProvider ?? getBuiltinCodexOAuthProvider();
+	const oauthProvider = options.oauthProvider ?? getDefaultCodexOAuthProvider();
 	if (credential.expires <= (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
 		let refreshError: unknown;
 		const current = await store.updateAsync(async (latest) => {
@@ -624,15 +631,19 @@ function normalizeCredential(
 			};
 }
 
-function getBuiltinCodexOAuthProvider(): CodexOAuthProvider {
-	if (builtinCodexOAuthProvider) return builtinCodexOAuthProvider;
-	const oauth = builtinProviders().find((provider) => provider.id === CODEX_PROVIDER_ID)?.auth
-		.oauth;
-	if (!oauth) throw new Error("Pi's built-in OpenAI Codex OAuth provider is unavailable.");
+function getDefaultCodexOAuthProvider(): CodexOAuthProvider {
+	if (defaultCodexOAuthProvider) return defaultCodexOAuthProvider;
+	const legacyProvider = (piAiOAuth as unknown as { openaiCodexOAuthProvider?: CodexOAuthProvider })
+		.openaiCodexOAuthProvider;
+	defaultCodexOAuthProvider = legacyProvider ?? createProviderOwnedCodexOAuthAdapter();
+	return defaultCodexOAuthProvider;
+}
 
-	builtinCodexOAuthProvider = {
-		login: (callbacks) =>
-			oauth.login({
+function createProviderOwnedCodexOAuthAdapter(): CodexOAuthProvider {
+	return {
+		login: async (callbacks) => {
+			const oauth = await loadProviderOwnedCodexOAuth();
+			return oauth.login({
 				signal: callbacks.signal,
 				prompt: async (prompt) => {
 					if (prompt.type === "select") {
@@ -674,16 +685,32 @@ function getBuiltinCodexOAuthProvider(): CodexOAuthProvider {
 							break;
 					}
 				},
-			}),
-		refreshToken: (credentials) => oauth.refresh(asOAuthCredential(credentials)),
+			});
+		},
+		refreshToken: async (credentials) => {
+			const oauth = await loadProviderOwnedCodexOAuth();
+			return oauth.refresh(asOAuthCredential(credentials));
+		},
 		getApiKey: async (credentials) => {
+			const oauth = await loadProviderOwnedCodexOAuth();
 			const auth = await oauth.toAuth(asOAuthCredential(credentials));
 			if (!auth.apiKey)
 				throw new Error("Pi's built-in OpenAI Codex OAuth provider returned no access token.");
 			return auth.apiKey;
 		},
 	};
-	return builtinCodexOAuthProvider;
+}
+
+function loadProviderOwnedCodexOAuth(): Promise<ProviderOwnedOAuth> {
+	providerOwnedOAuthPromise ??= import("@earendil-works/pi-ai/providers/all").then(
+		({ builtinProviders }) => {
+			const oauth = builtinProviders().find((provider) => provider.id === CODEX_PROVIDER_ID)?.auth
+				.oauth;
+			if (!oauth) throw new Error("Pi's built-in OpenAI Codex OAuth provider is unavailable.");
+			return oauth;
+		},
+	);
+	return providerOwnedOAuthPromise;
 }
 
 function asOAuthCredential(credentials: OAuthCredentials) {
