@@ -41,7 +41,7 @@ Extend the user-global settings file with an optional additive property:
 
 ## Plan
 
-- [ ] Extract the existing shell/tool-policy tests from `extensions/pi-plan-mode/test/plan-mode.test.ts` into `extensions/pi-plan-mode/test/tool-policy.test.ts` without changing behavior; verify the responsibility split with `npm test`.
+- [x] Extracted the existing shell/tool-policy tests into `extensions/pi-plan-mode/test/tool-policy.test.ts` and question-tool tests into `extensions/pi-plan-mode/test/question-tool.test.ts` without changing behavior; `plan-mode.test.ts` is now 986 lines and `npm test` passes 515/515.
 - [ ] Add failing policy tests showing all six requested examples are blocked by default, become allowed only when their named vetted policies are enabled, and remain composable only in pipelines/lists whose every segment is safe; verify the new assertions fail before implementation.
 - [ ] Add adversarial failing tests for unknown configured names, `cat-file` filter/textconv execution, output-writing flags, malformed Git option/subcommand layouts, and existing mutating `branch`/`remote` forms under the broadest opt-in; verify each case fails for one clear policy reason before implementation.
 - [ ] Extend `PlanModeSettings` normalization in `extensions/pi-plan-mode/src/settings.ts` with deduplicated, strictly validated `additionalSafeGitSubcommands`, preserving omitted/empty defaults, canonical migration behavior, and any previously implemented `defaultPlanTools` semantics; verify with settings tests and `npm run typecheck --workspace @narumitw/pi-plan-mode`.
