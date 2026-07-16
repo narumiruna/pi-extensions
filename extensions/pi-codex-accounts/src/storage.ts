@@ -1,11 +1,4 @@
-import {
-	chmodSync,
-	closeSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 

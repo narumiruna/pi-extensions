@@ -11,21 +11,15 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import {
-	getAgentDir,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
+	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import {
-	openaiCodexOAuthProvider,
-	type OAuthCredentials,
-	type OAuthLoginCallbacks,
-} from "@earendil-works/pi-ai/oauth";
-import {
-	type CodexAccountStorageBackend,
-	FileCodexAccountStorageBackend,
-} from "./storage.js";
+import { type CodexAccountStorageBackend, FileCodexAccountStorageBackend } from "./storage.js";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
@@ -60,8 +54,10 @@ type CodexOAuthCallbacks = OAuthLoginCallbacks & {
 type CodexOAuthProvider = {
 	login(callbacks: CodexOAuthCallbacks): Promise<OAuthCredentials>;
 	refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-	getApiKey(credentials: OAuthCredentials): string;
+	getApiKey(credentials: OAuthCredentials): string | Promise<string>;
 };
+
+let builtinCodexOAuthProvider: CodexOAuthProvider | undefined;
 
 type RefreshOnlyCodexOAuthProvider = Pick<CodexOAuthProvider, "refreshToken" | "getApiKey">;
 
@@ -116,7 +112,9 @@ export class CodexAccountStore {
 		await this.updateAsync(async () => data);
 	}
 
-	async update(mutator: (data: CodexAccountsData) => CodexAccountsData): Promise<CodexAccountsData> {
+	async update(
+		mutator: (data: CodexAccountsData) => CodexAccountsData,
+	): Promise<CodexAccountsData> {
 		return this.updateAsync(async (data) => mutator(data));
 	}
 
@@ -150,9 +148,8 @@ export default function codexAccounts(
 ) {
 	const store = dependencies.store ?? new CodexAccountStore();
 	let migrationNotice = dependencies.store ? undefined : consumeAccountsMigrationNotice();
-	const oauthProvider = dependencies.oauthProvider ?? openaiCodexOAuthProvider;
-	// Pi's extension loader only exposes pi-ai's root, compat, and OAuth entry points.
-	// Keep cleanup injectable until the WebSocket API is available through a loader-safe export.
+	const oauthProvider = dependencies.oauthProvider ?? getBuiltinCodexOAuthProvider();
+	// Keep cleanup injectable until WebSocket controls are available through a loader-safe export.
 	const closeWebSocketSessions = dependencies.closeWebSocketSessions ?? (() => undefined);
 	let appliedAuthIdentity: string | undefined;
 	let authIdentityInitialized = false;
@@ -223,9 +220,10 @@ export default function codexAccounts(
 
 	pi.registerCommand("codex-logout", {
 		description: "Remove a self-managed Codex account",
-		getArgumentCompletions: (prefix) => completeStoredAccountArguments(prefix, store, {
-			includeDefault: false,
-		}),
+		getArgumentCompletions: (prefix) =>
+			completeStoredAccountArguments(prefix, store, {
+				includeDefault: false,
+			}),
 		handler: async (args, ctx) => {
 			const parsedName = parseAccountName(args);
 			if (!parsedName.ok) {
@@ -275,13 +273,16 @@ export default function codexAccounts(
 	});
 }
 
-export function parseAccountName(input: string): { ok: true; name: string } | { ok: false; error: string } {
+export function parseAccountName(
+	input: string,
+): { ok: true; name: string } | { ok: false; error: string } {
 	const name = input.trim();
 	if (!name) return { ok: false, error: "Account name is required." };
 	if (!ACCOUNT_NAME_RE.test(name)) {
 		return {
 			ok: false,
-			error: "Account names must be 1-64 characters using letters, numbers, dot, underscore, or hyphen.",
+			error:
+				"Account names must be 1-64 characters using letters, numbers, dot, underscore, or hyphen.",
 		};
 	}
 	return { ok: true, name };
@@ -306,7 +307,7 @@ export async function ensureActiveCodexAuth(
 		return { status: "inactive" };
 	}
 
-	const oauthProvider = options.oauthProvider ?? openaiCodexOAuthProvider;
+	const oauthProvider = options.oauthProvider ?? getBuiltinCodexOAuthProvider();
 	if (credential.expires <= (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
 		let refreshError: unknown;
 		const current = await store.updateAsync(async (latest) => {
@@ -317,9 +318,7 @@ export async function ensureActiveCodexAuth(
 				return latest;
 			}
 			try {
-				const refreshed = normalizeCredential(
-					await oauthProvider.refreshToken(latestCredential),
-				);
+				const refreshed = normalizeCredential(await oauthProvider.refreshToken(latestCredential));
 				credential = refreshed;
 				return {
 					...latest,
@@ -343,7 +342,7 @@ export async function ensureActiveCodexAuth(
 		}
 	}
 
-	await setRuntimeCodexApiKey(ctx, oauthProvider.getApiKey(credential));
+	await setRuntimeCodexApiKey(ctx, await oauthProvider.getApiKey(credential));
 	return { status: "active", accountName: active };
 }
 
@@ -361,7 +360,13 @@ export function completeStoredAccountArguments(
 	}
 
 	const items: CommandArgumentCompletion[] = includeDefault
-		? [{ value: "default", label: DEFAULT_PI_LOGIN_LABEL, description: "Use Pi's built-in Codex login" }]
+		? [
+				{
+					value: "default",
+					label: DEFAULT_PI_LOGIN_LABEL,
+					description: "Use Pi's built-in Codex login",
+				},
+			]
 		: [];
 	for (const name of names) items.push({ value: name, label: name });
 
@@ -369,7 +374,9 @@ export function completeStoredAccountArguments(
 	return prefix ? items.filter((item) => item.value.startsWith(prefix)) : items;
 }
 
-export function isOpenAICodexModel(model: Pick<NonNullable<ExtensionContext["model"]>, "provider"> | undefined): boolean {
+export function isOpenAICodexModel(
+	model: Pick<NonNullable<ExtensionContext["model"]>, "provider"> | undefined,
+): boolean {
 	return model?.provider === CODEX_PROVIDER_ID;
 }
 
@@ -548,7 +555,8 @@ function parseStoredData(raw: string | undefined): CodexAccountsData {
 
 function parseAccounts(rawAccounts: unknown): Record<string, StoredCodexCredential> {
 	if (rawAccounts === undefined) return {};
-	if (!isRecord(rawAccounts)) throw new Error("Invalid Codex accounts data: accounts must be an object.");
+	if (!isRecord(rawAccounts))
+		throw new Error("Invalid Codex accounts data: accounts must be an object.");
 
 	const accounts: Record<string, StoredCodexCredential> = {};
 	for (const [name, rawCredential] of Object.entries(rawAccounts)) {
@@ -573,23 +581,108 @@ function stringifyStoredData(data: CodexAccountsData): string {
 	return `${JSON.stringify(parseStoredData(JSON.stringify(data)), null, 2)}\n`;
 }
 
-function normalizeCredential(rawCredential: unknown, accountName = "account"): StoredCodexCredential {
+function normalizeCredential(
+	rawCredential: unknown,
+	accountName = "account",
+): StoredCodexCredential {
 	if (!isRecord(rawCredential)) {
 		throw new Error(`Invalid Codex accounts data: ${accountName} credential must be an object.`);
 	}
 	if (typeof rawCredential.access !== "string" || !rawCredential.access) {
-		throw new Error(`Invalid Codex accounts data: ${accountName} credential is missing access token.`);
+		throw new Error(
+			`Invalid Codex accounts data: ${accountName} credential is missing access token.`,
+		);
 	}
 	if (typeof rawCredential.refresh !== "string" || !rawCredential.refresh) {
-		throw new Error(`Invalid Codex accounts data: ${accountName} credential is missing refresh token.`);
+		throw new Error(
+			`Invalid Codex accounts data: ${accountName} credential is missing refresh token.`,
+		);
 	}
 	if (typeof rawCredential.expires !== "number" || !Number.isFinite(rawCredential.expires)) {
-		throw new Error(`Invalid Codex accounts data: ${accountName} credential has invalid expiration.`);
+		throw new Error(
+			`Invalid Codex accounts data: ${accountName} credential has invalid expiration.`,
+		);
 	}
-	const accountId = typeof rawCredential.accountId === "string" ? rawCredential.accountId : undefined;
+	const accountId =
+		typeof rawCredential.accountId === "string" ? rawCredential.accountId : undefined;
 	return accountId
-		? { access: rawCredential.access, refresh: rawCredential.refresh, expires: rawCredential.expires, accountId }
-		: { access: rawCredential.access, refresh: rawCredential.refresh, expires: rawCredential.expires };
+		? {
+				access: rawCredential.access,
+				refresh: rawCredential.refresh,
+				expires: rawCredential.expires,
+				accountId,
+			}
+		: {
+				access: rawCredential.access,
+				refresh: rawCredential.refresh,
+				expires: rawCredential.expires,
+			};
+}
+
+function getBuiltinCodexOAuthProvider(): CodexOAuthProvider {
+	if (builtinCodexOAuthProvider) return builtinCodexOAuthProvider;
+	const oauth = builtinProviders().find((provider) => provider.id === CODEX_PROVIDER_ID)?.auth
+		.oauth;
+	if (!oauth) throw new Error("Pi's built-in OpenAI Codex OAuth provider is unavailable.");
+
+	builtinCodexOAuthProvider = {
+		login: (callbacks) =>
+			oauth.login({
+				signal: callbacks.signal,
+				prompt: async (prompt) => {
+					if (prompt.type === "select") {
+						const selected = await callbacks.onSelect({
+							message: prompt.message,
+							options: prompt.options.map(({ id, label }) => ({ id, label })),
+						});
+						if (selected === undefined) throw new Error("Login cancelled");
+						return selected;
+					}
+					if (prompt.type === "manual_code" && callbacks.onManualCodeInput) {
+						return callbacks.onManualCodeInput();
+					}
+					return callbacks.onPrompt({
+						message: prompt.message,
+						placeholder: prompt.placeholder,
+					});
+				},
+				notify: (event) => {
+					if ((event as { type: string }).type === "info") {
+						const info = event as unknown as {
+							message: string;
+							links?: ReadonlyArray<{ url: string }>;
+						};
+						callbacks.onProgress?.(
+							[info.message, ...(info.links ?? []).map((link) => link.url)].join("\n"),
+						);
+						return;
+					}
+					switch (event.type) {
+						case "auth_url":
+							callbacks.onAuth({ url: event.url, instructions: event.instructions });
+							break;
+						case "device_code":
+							callbacks.onDeviceCode?.(event);
+							break;
+						case "progress":
+							callbacks.onProgress?.(event.message);
+							break;
+					}
+				},
+			}),
+		refreshToken: (credentials) => oauth.refresh(asOAuthCredential(credentials)),
+		getApiKey: async (credentials) => {
+			const auth = await oauth.toAuth(asOAuthCredential(credentials));
+			if (!auth.apiKey)
+				throw new Error("Pi's built-in OpenAI Codex OAuth provider returned no access token.");
+			return auth.apiKey;
+		},
+	};
+	return builtinCodexOAuthProvider;
+}
+
+function asOAuthCredential(credentials: OAuthCredentials) {
+	return { ...credentials, type: "oauth" as const };
 }
 
 async function loginCodexAccount(
@@ -613,7 +706,10 @@ async function loginCodexAccount(
 			return value ?? "";
 		},
 		onProgress: (message: string) => ctx.ui.notify(message, "info"),
-		onSelect: async (prompt: { message: string; options: Array<{ id: string; label: string }> }) => {
+		onSelect: async (prompt: {
+			message: string;
+			options: Array<{ id: string; label: string }>;
+		}) => {
 			const selected = await ctx.ui.select(
 				prompt.message,
 				prompt.options.map((option) => option.label),
@@ -681,7 +777,10 @@ async function activateStoredAccount(
 		return;
 	}
 	const result = await sync(ctx);
-	ctx.ui.notify(formatActivatedMessage("Activated", name, result), result.status === "error" ? "error" : "info");
+	ctx.ui.notify(
+		formatActivatedMessage("Activated", name, result),
+		result.status === "error" ? "error" : "info",
+	);
 }
 
 async function clearActiveAccount(
@@ -696,14 +795,22 @@ async function clearActiveAccount(
 
 function isDefaultPiLoginArg(arg: string): boolean {
 	const normalized = arg.trim().toLowerCase();
-	return normalized === "default" || normalized === "--default" || normalized === DEFAULT_PI_LOGIN_LABEL;
+	return (
+		normalized === "default" || normalized === "--default" || normalized === DEFAULT_PI_LOGIN_LABEL
+	);
 }
 
-async function selectDefaultCodexModelIfUnknown(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
+async function selectDefaultCodexModelIfUnknown(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
 	if (!isUnknownModel(ctx.model)) return;
 	const model = ctx.modelRegistry.find(CODEX_PROVIDER_ID, DEFAULT_CODEX_MODEL_ID);
 	if (!model) {
-		ctx.ui.notify(`Logged in, but ${CODEX_PROVIDER_ID}/${DEFAULT_CODEX_MODEL_ID} was not found.`, "warning");
+		ctx.ui.notify(
+			`Logged in, but ${CODEX_PROVIDER_ID}/${DEFAULT_CODEX_MODEL_ID} was not found.`,
+			"warning",
+		);
 		return;
 	}
 	const ok = await pi.setModel(model);
@@ -808,7 +915,10 @@ function isRuntimeAuthStorage(value: unknown): value is RuntimeAuthStorage & obj
 }
 
 function isStaleExtensionContextError(error: unknown): boolean {
-	return error instanceof Error && error.message.includes("This extension ctx is stale after session replacement or reload");
+	return (
+		error instanceof Error &&
+		error.message.includes("This extension ctx is stale after session replacement or reload")
+	);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
