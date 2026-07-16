@@ -12,9 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-	FileAuthStorageBackend,
 	getAgentDir,
-	type AuthStorageBackend,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
@@ -24,6 +22,10 @@ import {
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
 } from "@earendil-works/pi-ai/oauth";
+import {
+	type CodexAccountStorageBackend,
+	FileCodexAccountStorageBackend,
+} from "./storage.js";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
@@ -38,9 +40,11 @@ let pendingAccountsMigrationNotice: string | undefined;
 const ACCOUNT_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 type RuntimeAuthStorage = {
-	setRuntimeApiKey(provider: string, apiKey: string): void;
-	removeRuntimeApiKey(provider: string): void;
+	setRuntimeApiKey(provider: string, apiKey: string): void | Promise<void>;
+	removeRuntimeApiKey(provider: string): void | Promise<void>;
 };
+
+const appliedRuntimeOverrides = new WeakMap<object, Map<string, string>>();
 
 type DeviceCodeInfo = {
 	userCode: string;
@@ -91,10 +95,12 @@ export type CodexAccountsDependencies = {
 };
 
 export class CodexAccountStore {
-	private readonly backend: AuthStorageBackend;
+	private readonly backend: CodexAccountStorageBackend;
 	private operationTail: Promise<void> = Promise.resolve();
 
-	constructor(backend: AuthStorageBackend = new FileAuthStorageBackend(defaultAccountsPath())) {
+	constructor(
+		backend: CodexAccountStorageBackend = new FileCodexAccountStorageBackend(defaultAccountsPath()),
+	) {
 		this.backend = backend;
 	}
 
@@ -263,8 +269,8 @@ export default function codexAccounts(
 		await sync(ctx);
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
-		clearRuntimeCodexAuth(ctx);
+	pi.on("session_shutdown", async (_event, ctx) => {
+		await clearRuntimeCodexAuth(ctx);
 		setStatus(ctx, undefined);
 	});
 }
@@ -289,14 +295,14 @@ export async function ensureActiveCodexAuth(
 	const data = await store.readAsync();
 	const active = data.active;
 	if (!active) {
-		clearRuntimeCodexAuth(ctx);
+		await clearRuntimeCodexAuth(ctx);
 		return { status: "inactive" };
 	}
 
 	let credential = data.accounts[active];
 	if (!credential) {
 		await store.update((current) => ({ ...current, active: undefined }));
-		clearRuntimeCodexAuth(ctx);
+		await clearRuntimeCodexAuth(ctx);
 		return { status: "inactive" };
 	}
 
@@ -328,7 +334,7 @@ export async function ensureActiveCodexAuth(
 			return ensureActiveCodexAuth(ctx, store, options);
 		}
 		if (refreshError !== undefined) {
-			setRuntimeCodexApiKey(ctx, FAIL_CLOSED_API_KEY);
+			await setRuntimeCodexApiKey(ctx, FAIL_CLOSED_API_KEY);
 			return {
 				status: "error",
 				accountName: active,
@@ -337,7 +343,7 @@ export async function ensureActiveCodexAuth(
 		}
 	}
 
-	setRuntimeCodexApiKey(ctx, oauthProvider.getApiKey(credential));
+	await setRuntimeCodexApiKey(ctx, oauthProvider.getApiKey(credential));
 	return { status: "active", accountName: active };
 }
 
@@ -401,7 +407,7 @@ function defaultAccountsPath(): string {
 	if (!pathEntryExists(legacyPath)) return canonicalPath;
 
 	try {
-		return new FileAuthStorageBackend(legacyPath).withLock(() => {
+		return new FileCodexAccountStorageBackend(legacyPath).withLock(() => {
 			const contents = readFileSync(legacyPath, "utf8");
 			const permissionError = enforcePrivateFilePermissions(legacyPath);
 			if (permissionError) throw new Error(permissionError);
@@ -757,16 +763,48 @@ function setStatus(ctx: ExtensionContext, value: string | undefined): void {
 	}
 }
 
-function setRuntimeCodexApiKey(ctx: ExtensionContext, apiKey: string): void {
-	getRuntimeAuthStorage(ctx)?.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
+async function setRuntimeCodexApiKey(ctx: ExtensionContext, apiKey: string): Promise<void> {
+	const target = getRuntimeAuthStorage(ctx);
+	if (!target) throw new Error("This Pi version does not expose runtime provider authentication.");
+	let overrides = appliedRuntimeOverrides.get(target);
+	if (!overrides) {
+		overrides = new Map();
+		appliedRuntimeOverrides.set(target, overrides);
+	}
+	if (overrides.get(CODEX_PROVIDER_ID) === apiKey) return;
+	await target.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
+	overrides.set(CODEX_PROVIDER_ID, apiKey);
 }
 
-function clearRuntimeCodexAuth(ctx: ExtensionContext): void {
-	getRuntimeAuthStorage(ctx)?.removeRuntimeApiKey(CODEX_PROVIDER_ID);
+async function clearRuntimeCodexAuth(ctx: ExtensionContext): Promise<void> {
+	const target = getRuntimeAuthStorage(ctx);
+	if (!target) return;
+	const overrides = appliedRuntimeOverrides.get(target);
+	if (!overrides?.has(CODEX_PROVIDER_ID)) return;
+	await target.removeRuntimeApiKey(CODEX_PROVIDER_ID);
+	overrides.delete(CODEX_PROVIDER_ID);
 }
 
-function getRuntimeAuthStorage(ctx: ExtensionContext): RuntimeAuthStorage | undefined {
-	return (ctx.modelRegistry as unknown as { authStorage?: RuntimeAuthStorage }).authStorage;
+function getRuntimeAuthStorage(ctx: ExtensionContext): (RuntimeAuthStorage & object) | undefined {
+	const registry = ctx.modelRegistry as unknown as {
+		authStorage?: unknown;
+		runtime?: unknown;
+	};
+	for (const candidate of [registry, registry.runtime, registry.authStorage]) {
+		if (isRuntimeAuthStorage(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+function isRuntimeAuthStorage(value: unknown): value is RuntimeAuthStorage & object {
+	return (
+		!!value &&
+		typeof value === "object" &&
+		"setRuntimeApiKey" in value &&
+		typeof value.setRuntimeApiKey === "function" &&
+		"removeRuntimeApiKey" in value &&
+		typeof value.removeRuntimeApiKey === "function"
+	);
 }
 
 function isStaleExtensionContextError(error: unknown): boolean {

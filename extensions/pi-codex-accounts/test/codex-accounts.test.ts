@@ -3,10 +3,6 @@ import { access, chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import {
-	FileAuthStorageBackend,
-	InMemoryAuthStorageBackend,
-} from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexAccounts, {
 	CODEX_ACCOUNTS_FILE,
@@ -21,6 +17,10 @@ import codexAccounts, {
 	isOpenAICodexModel,
 	parseAccountName,
 } from "../src/codex-accounts.js";
+import {
+	FileCodexAccountStorageBackend as FileAuthStorageBackend,
+	InMemoryCodexAccountStorageBackend as InMemoryAuthStorageBackend,
+} from "../src/storage.js";
 
 const validCred = (suffix = "") => ({
 	access: `access-${suffix}`,
@@ -94,7 +94,14 @@ test("default store migrates credentials to the canonical package filename", asy
 		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
 		await assert.rejects(access(legacyPath));
 
-		const context = createMockContext();
+		const context = createMockContext({
+			modelRegistry: {
+				authStorage: {
+					setRuntimeApiKey: () => undefined,
+					removeRuntimeApiKey: () => undefined,
+				},
+			},
+		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		assert.match(context.notifications[0]?.message ?? "", /migrated/i);
 	} finally {
@@ -185,7 +192,7 @@ test("default store falls back to legacy credentials for a broken canonical syml
 	}
 });
 
-test("ensureActiveCodexAuth clears runtime auth when no self-managed account is active", async () => {
+test("ensureActiveCodexAuth leaves normal Pi auth unchanged when no account override was applied", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	const calls: string[] = [];
 	const { ctx } = createMockContext({
@@ -200,7 +207,7 @@ test("ensureActiveCodexAuth clears runtime auth when no self-managed account is 
 	const result = await ensureActiveCodexAuth(ctx, store);
 
 	assert.deepEqual(result, { status: "inactive" });
-	assert.deepEqual(calls, [`remove:${CODEX_PROVIDER_ID}`]);
+	assert.deepEqual(calls, []);
 });
 
 test("ensureActiveCodexAuth applies active account access tokens", async () => {
@@ -220,6 +227,45 @@ test("ensureActiveCodexAuth applies active account access tokens", async () => {
 
 	assert.deepEqual(result, { status: "active", accountName: "work" });
 	assert.deepEqual(calls, [`set:${CODEX_PROVIDER_ID}:access-work`]);
+});
+
+test("ensureActiveCodexAuth supports and awaits Pi's model runtime auth overrides", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	const calls: string[] = [];
+	let releaseSet: (() => void) | undefined;
+	const setBlocked = new Promise<void>((resolve) => {
+		releaseSet = resolve;
+	});
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				async setRuntimeApiKey(provider: string, key: string) {
+					calls.push(`start:${provider}:${key}`);
+					await setBlocked;
+					calls.push(`finish:${provider}:${key}`);
+				},
+				async removeRuntimeApiKey(provider: string) {
+					calls.push(`remove:${provider}`);
+				},
+			},
+		},
+	});
+
+	let settled = false;
+	const auth = ensureActiveCodexAuth(ctx, store).finally(() => {
+		settled = true;
+	});
+	await new Promise<void>((resolve) => setImmediate(resolve));
+
+	assert.equal(settled, false);
+	assert.deepEqual(calls, [`start:${CODEX_PROVIDER_ID}:access-work`]);
+	releaseSet?.();
+	assert.deepEqual(await auth, { status: "active", accountName: "work" });
+	assert.deepEqual(calls, [
+		`start:${CODEX_PROVIDER_ID}:access-work`,
+		`finish:${CODEX_PROVIDER_ID}:access-work`,
+	]);
 });
 
 test("ensureActiveCodexAuth refreshes near-expired active accounts", async () => {
@@ -283,7 +329,7 @@ test("concurrent auth checks refresh an expiring account only once", async () =>
 	]);
 
 	assert.equal(refreshCalls, 1);
-	assert.deepEqual(runtimeKeys, ["access-new", "access-new"]);
+	assert.deepEqual(runtimeKeys, ["access-new"]);
 });
 
 test("ensureActiveCodexAuth fails closed when active account refresh fails", async () => {
@@ -601,6 +647,8 @@ test("codex-logout deletes accounts and clears active runtime auth", async () =>
 		},
 	});
 
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	runtimeCalls.length = 0;
 	await command.handler("home", ctx);
 	let data = await store.readAsync();
 	assert.equal(data.active, "work");
