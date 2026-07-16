@@ -58,7 +58,7 @@ When Plan mode is active, ask the agent to design the change. The agent may insp
 
 By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, available read-only built-ins such as `grep`, `find`, and `ls`, plus the required `plan_mode_question` and `plan_mode_complete` tools. Built-in `edit` and `write` are blocked. `update_plan` is also blocked because it tracks execution progress rather than conversational planning. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
 
-Limited `bash` uses a fail-closed policy. It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`. It rejects output/input redirects, command substitution, subshells, background jobs, mutating flags, dependency changes, editors, and unknown commands. Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted. This is extension-level risk reduction, not an OS sandbox.
+Limited `bash` uses a fail-closed policy. It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`. It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, mutating flags, dependency changes, editors, and unknown commands. Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted. This is extension-level risk reduction, not an OS sandbox.
 
 `plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path. If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 
@@ -90,7 +90,11 @@ Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-m
 ```json
 {
   "thinkingLevel": "inherit",
-  "defaultPlanTools": ["read", "bash", "grep", "find", "ls"]
+  "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
+  "safeSubcommands": {
+    "git": ["status", "log", "rev-parse", "blame"],
+    "gh": ["pr view", "pr list", "issue view", "issue list"]
+  }
 }
 ```
 
@@ -101,6 +105,39 @@ Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-m
 Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. A tool registered after Plan mode is already active is not added automatically; re-enter Plan mode or reopen `/plan tools` to reapply the selection. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them with `/plan tools`. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead.
 
 A selection made with `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes. The global setting remains the baseline for fresh sessions and sessions without an explicit selection.
+
+### Safe shell subcommands
+
+`safeSubcommands` adds reviewed command validators to limited `bash`; it is not a raw shell allowlist. Only the following exact values are accepted:
+
+- `git`: `status`, `log`, `diff`, `show`, `branch`, `remote`, `ls-files`, `grep`, `rev-parse`, `blame`, `describe`, `merge-base`, `ls-tree`, and `cat-file`.
+- `gh`: `pr view`, `pr list`, `issue view`, and `issue list`.
+
+The first eight Git validators are built in and remain enabled when omitted, so listing them is valid but redundant. The other six Git validators and every `gh` path require an explicit opt-in. Git entries select one exact subcommand; `gh` entries select one exact two-word path, so `"pr view"` never enables `pr merge`, `pr close`, or `pr edit`. Omitted `safeSubcommands`, an empty object, and empty arrays preserve the default policy. Duplicate values are removed in first-seen order.
+
+With the example configuration above, commands such as these are accepted:
+
+```bash
+git rev-parse --show-toplevel
+git blame -- src/plan-mode.ts
+gh pr view 218
+gh issue list --state open
+```
+
+The command-specific validators still reject unsafe forms, including:
+
+```bash
+git cat-file --filters HEAD
+git show --ext-diff HEAD
+gh pr merge 218
+gh pr view 218 --web
+gh pr view 218 > pr.txt
+gh pr list && gh pr merge 218
+```
+
+Redirects, shell expansion and substitution, pagers or browsers, external diff/textconv/filter helpers, output flags, malformed command layouts, and any chain containing an unsafe segment fail closed. Unknown `safeSubcommands` keys or values, non-array values, and non-string entries invalidate the entire settings file and trigger the normal warning/default fallback on session start.
+
+Read-only does not mean private: Git inspection can expose repository history and tracked secrets, while `gh` queries can expose remote repository, pull request, and issue data available to your authenticated account. The policy reduces accidental mutation and helper execution; it is not a sandbox or a confidentiality boundary.
 
 ### Thinking level
 

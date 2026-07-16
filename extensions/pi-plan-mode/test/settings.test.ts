@@ -63,6 +63,48 @@ test("Plan-mode settings normalize default tool names strictly", async () => {
 	}
 });
 
+test("Plan-mode settings validate safe subcommands strictly", async () => {
+	assert.deepEqual(
+		normalizePlanModeSettings({
+			thinkingLevel: "medium",
+			defaultPlanTools: ["read", "bash"],
+			safeSubcommands: {
+				git: ["status", "rev-parse", "status", "cat-file"],
+				gh: ["pr view", "issue list", "pr view"],
+			},
+		}),
+		{
+			thinkingLevel: "medium",
+			defaultPlanTools: ["read", "bash"],
+			safeSubcommands: {
+				git: ["status", "rev-parse", "cat-file"],
+				gh: ["pr view", "issue list"],
+			},
+		},
+	);
+	assert.deepEqual(normalizePlanModeSettings({ safeSubcommands: {} }), {
+		thinkingLevel: "inherit",
+		safeSubcommands: {},
+	});
+	assert.deepEqual(normalizePlanModeSettings({ safeSubcommands: { git: [], gh: [] } }), {
+		thinkingLevel: "inherit",
+		safeSubcommands: { git: [], gh: [] },
+	});
+
+	for (const safeSubcommands of [
+		null,
+		[],
+		{ kubectl: ["get"] },
+		{ git: "status" },
+		{ git: ["checkout"] },
+		{ git: ["status", 42] },
+		{ gh: ["pr merge"] },
+		{ gh: ["pr view", ""] },
+	]) {
+		assert.equal(normalizePlanModeSettings({ safeSubcommands }), undefined);
+	}
+});
+
 test("Plan-mode settings migrate to the canonical package filename", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-migration-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -70,13 +112,14 @@ test("Plan-mode settings migrate to the canonical package filename", async () =>
 	try {
 		await writeFile(
 			join(directory, "plan-mode.json"),
-			'{"thinkingLevel":"high","futureOption":true}',
+			'{"thinkingLevel":"high","safeSubcommands":{"gh":["pr view"]},"futureOption":true}',
 		);
 		const loaded = await readPlanModeSettings();
 		assert.equal(loaded.kind, "loaded");
 		assert.match(loaded.notice ?? "", /migrated/i);
 		assert.deepEqual(JSON.parse(await readFile(join(directory, "pi-plan-mode.json"), "utf8")), {
 			thinkingLevel: "high",
+			safeSubcommands: { gh: ["pr view"] },
 			futureOption: true,
 		});
 		await assert.rejects(access(join(directory, "plan-mode.json")));

@@ -1,71 +1,71 @@
 ## Goal
 
-Add an opt-in, additive configuration for a small vetted set of read-only Git inspection subcommands so Plan mode can run the issue #212 examples without allowing arbitrary Git or weakening existing argument-level mutation and command-execution protections.
+Add a global, additive `safeSubcommands` setting to `pi-plan-mode.json`. Support vetted `git` and `gh` command paths while ensuring configuration only selects code-owned validators and never acts as a raw shell allowlist.
 
 ## Context
 
-`isSafeCommand()` currently permits eight built-in Git subcommands and applies extra checks to risky `branch`, `remote`, diff/textconv, pager, and output forms. The policy is evaluated by `pi-plan-mode` before another permission extension can participate, so the opt-in must live in this extension.
-
-This is the recommended second sequential change for issue #212, after `docs/plans/2026-07-16_pi-plan-mode-default-tools-plan.md`. If implemented independently, rebase its settings-schema and test-file changes before starting rather than duplicating them.
+Plan mode currently permits eight built-in Git inspection subcommands and blocks `gh` as unknown. Issue #212 requests more read-only Git inspection commands. The owner chose a command-keyed settings shape that can support additional reviewed CLIs later without adding one top-level property per command.
 
 ## Architecture
 
-Extend the user-global settings file with an optional additive property:
-
 ```json
 {
-  "additionalSafeGitSubcommands": [
-    "rev-parse",
-    "blame",
-    "describe",
-    "merge-base",
-    "ls-tree",
-    "cat-file"
-  ]
+  "thinkingLevel": "inherit",
+  "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
+  "safeSubcommands": {
+    "git": ["status", "log", "rev-parse", "blame"],
+    "gh": ["pr view", "pr list", "issue view", "issue list"]
+  }
 }
 ```
 
-- The built-in Git policy remains active regardless of this setting; the property can add vetted policies but cannot replace or remove built-ins.
-- Omitted or empty configuration preserves current behavior.
-- Accepted values are a documented, versioned set of subcommands for which the extension implements argument validation. Unknown strings and malformed items invalidate the settings file through the existing warning/fallback path rather than becoming arbitrary allowlist entries.
-- Refactor Git handling into a registry of named subcommand validators. Configuration activates validators; it never turns a string directly into permission.
-- Shared Git guards continue rejecting output files, external diff/textconv execution, editor/pager execution paths, and unsupported shell syntax. Subcommand-specific guards must reject execution-capable forms such as `git cat-file --filters` and retain all existing mutating `branch`/`remote` rejections.
-- `isSafeCommand()` receives the resolved opt-in policy explicitly, while its default call remains backward-compatible and strict. The active Plan-mode `tool_call` hook passes the session’s loaded policy.
+- Extend `PlanModeSettings` with optional `safeSubcommands.git` and `safeSubcommands.gh` arrays.
+- Accept existing built-in Git names `status`, `log`, `diff`, `show`, `branch`, `remote`, `ls-files`, and `grep`; these validators remain active even when omitted from configuration.
+- Add opt-in Git validators for `rev-parse`, `blame`, `describe`, `merge-base`, `ls-tree`, and `cat-file`.
+- Add exact opt-in `gh` paths `pr view`, `pr list`, `issue view`, and `issue list`. Configuring one path must not enable a sibling such as `pr merge`.
+- Omitted `safeSubcommands`, `{}`, and empty arrays preserve current behavior. Deduplicate entries in first-seen order.
+- Reject the entire settings file through the existing warning/fallback path when a command key, value, array item, or path is unsupported or malformed.
+- Refactor shell policy into command-owned validator registries. Configuration resolves names to these validators; it never directly grants permission.
+- Keep shared rejection of redirects, substitutions, subshells, background jobs, output writes, external diff/textconv/filter execution, browser-opening flags, and malformed option/subcommand layouts.
+- Preserve `isSafeCommand(command)` as the strict default, add an explicit optional policy argument, and pass the session-loaded policy from the active Plan-mode `tool_call` hook.
 
 ## Non-Goals
 
-- Do not allow user-defined arbitrary Git subcommands, shell fragments, regular expressions, or command templates.
-- Do not make `bash` unrestricted or delegate blocked commands to a later permission extension.
-- Do not claim that read-only Git access hides repository history, tracked secrets, hooks, filters, or project-defined behavior; this remains extension-level risk reduction, not a sandbox.
-- Do not broaden unrelated shell commands or add write-capable Git operations such as checkout, switch, reset, clean, commit, tag mutation, config mutation, remote mutation, or branch mutation.
+- Do not support `kubectl` in this change; the map shape leaves room for a later vetted validator.
+- Do not accept arbitrary commands, aliases, regular expressions, shell snippets, or user-defined validators.
+- Do not add mutating Git or GitHub CLI operations.
+- Do not claim sandbox-level safety or hide repository history, tracked secrets, or remote GitHub data.
 
 ## Plan
 
-- [x] Extracted the existing shell/tool-policy tests into `extensions/pi-plan-mode/test/tool-policy.test.ts` and question-tool tests into `extensions/pi-plan-mode/test/question-tool.test.ts` without changing behavior; `plan-mode.test.ts` is now 986 lines and `npm test` passes 515/515.
-- [ ] Add failing policy tests showing all six requested examples are blocked by default, become allowed only when their named vetted policies are enabled, and remain composable only in pipelines/lists whose every segment is safe; verify the new assertions fail before implementation.
-- [ ] Add adversarial failing tests for unknown configured names, `cat-file` filter/textconv execution, output-writing flags, malformed Git option/subcommand layouts, and existing mutating `branch`/`remote` forms under the broadest opt-in; verify each case fails for one clear policy reason before implementation.
-- [ ] Extend `PlanModeSettings` normalization in `extensions/pi-plan-mode/src/settings.ts` with deduplicated, strictly validated `additionalSafeGitSubcommands`, preserving omitted/empty defaults, canonical migration behavior, and any previously implemented `defaultPlanTools` semantics; verify with settings tests and `npm run typecheck --workspace @narumitw/pi-plan-mode`.
-- [ ] Refactor `extensions/pi-plan-mode/src/tool-policy.ts` to resolve Git subcommands through built-in and opt-in validator registries, centralize shared no-write/no-external-execution guards, and pass the optional policy through `isSafeCommand()`; make the smallest implementation that passes the positive and adversarial matrices without loosening defaults.
-- [ ] Load and pass the resolved policy from `extensions/pi-plan-mode/src/plan-mode.ts` into the active Plan-mode `tool_call` gate, reset it on every `session_start`, and add lifecycle tests proving valid configuration applies, removed/invalid configuration falls back on the next session, and inactive Plan mode is unchanged.
-- [ ] Update `extensions/pi-plan-mode/README.md` with the additive setting, exact supported values, enabled examples, rejected dangerous counterparts, and the limitation that repository contents/history remain readable; verify documentation against the executable matrix and inspect `just pack-plan-mode` output.
-- [ ] Perform a focused sibling scan across every Git validator and shell-segment path for aliases, global options, redirects, substitutions, pagers, filters, external commands, and chained segments; fix only plausible bypasses demonstrated by regression tests, then run `npm run check`.
+- [x] Keep the merged test decomposition: policy coverage lives in `extensions/pi-plan-mode/test/tool-policy.test.ts`, question coverage lives in `question-tool.test.ts`, and `plan-mode.test.ts` remains below 1,000 lines.
+- [x] Added policy tests for all six requested Git examples, default denial, exact opt-in, and all-segment pipeline/list composition; the configured-positive assertions fail before implementation.
+- [x] Added `gh` tests for exact opt-in paths and sibling denial, including the four allowed paths plus mutating siblings, aliases, `--web`, redirects, malformed layouts, and unsafe chains; configured-positive assertions fail before implementation.
+- [x] Added maximal-policy adversarial Git tests for unknown policy names, output flags, external diff/textconv/filter execution, malformed layouts, global helper/alias options, and existing mutating `branch`/`remote` forms.
+- [x] Extended settings normalization with strict `safeSubcommands` validation, ordered deduplication, only the `git` and `gh` keys, empty-value behavior, and preservation of `thinkingLevel`, `defaultPlanTools`, canonical migration bytes, and invalid-file fallback.
+- [x] Refactored `extensions/pi-plan-mode/src/tool-policy.ts` around command-owned validator registries, shared guards, and policy-aware validation of every shell segment while preserving the strict default.
+- [x] Passed session-loaded policy from the active `tool_call` hook and added lifecycle tests for valid config, removal/reload fallback, invalid warnings, active enforcement, and unchanged inactive behavior.
+- [x] Updated `extensions/pi-plan-mode/README.md` with the complete schema, exact values, additive semantics, accepted/rejected examples, exact `gh` paths, and data-visibility warnings.
+- [x] Completed a focused bypass scan across aliases, global options, redirects, expansions/substitutions, pagers, browsers, filters, helpers, chained segments, and siblings; added regressions for environment, pathname, and brace expansion plus newline command separation; environment/glob expansion was hardened after the scan exposed option-injection risk.
+- [x] Ran targeted Biome with `--vcs-use-ignore-file=false`, pi-plan-mode typecheck, `npm test` (521 passing), full `npm run check`, an isolated `pi -ne -e ./extensions/pi-plan-mode --help` load smoke, and `just pack-plan-mode`; the dry run contains the expected 11 files.
+- [ ] Archive this completed plan, commit focused changes, push the feature branch, create a PR referencing issue #212, and verify both GitHub CI matrix jobs pass with no actionable review comments.
 
 ## Risks
 
-- Git options that appear read-only can execute configured helpers, filters, textconv drivers, difftools, editors, or pagers. Validators must reject uncertain execution paths rather than infer safety from the subcommand name.
-- A generic configurable string allowlist would convert future or aliased Git behavior into an accidental escape hatch; configuration must select code-owned validators only.
-- Refactoring the current Git branch may regress its established `branch`, `remote`, output, and external-diff checks; preserve the old matrix and run it under both empty and maximal opt-in policies.
-- `cat-file` can expose deleted history or tracked secrets even when it does not mutate the repository. Document this capability plainly.
+- Read-looking flags can execute configured filters, textconv drivers, difftools, browsers, editors, or pagers. Reject uncertain execution paths rather than infer safety from the command name.
+- A generic settings map can look like an arbitrary allowlist. Strict command keys, exact supported paths, and code-owned validators must remain the enforcement boundary.
+- Refactoring Git handling can regress established `branch`, `remote`, output, and external-diff checks; preserve the default matrix and run it with empty and maximal opt-in policies.
+- `cat-file` can expose deleted history or tracked secrets, and `gh` can expose remote repository data, even when neither mutates state. Document these capabilities plainly.
 
 ## Rollback / Recovery
 
-Because the setting is additive and omitted by default, recovery is to ignore the optional list with a warning and retain the built-in validator registry. Do not remove or weaken the built-in Git policy if an optional validator proves unsafe.
+Because the setting is additive and omitted by default, recovery is to ignore optional entries with a warning and retain built-in Git validators. Never remove or weaken the built-in Git policy if an optional validator proves unsafe.
 
 ## Completion Checklist
 
-- [ ] Default Plan-mode Git behavior remains equivalent at the policy boundary, verified by the pre-existing command matrix with no opt-in configuration.
-- [ ] The six issue #212 inspection examples are accepted only when their vetted validators are configured, verified by positive and default-denial tests.
-- [ ] Unknown names, malformed settings, mutating Git forms, output writes, filters/textconv, helper execution, and unsafe chained segments fail closed, verified by adversarial tests.
-- [ ] Configuration is additive and resets on session reload/removal without affecting inactive Plan mode, verified by settings and lifecycle tests.
-- [ ] README examples and warnings match the supported validator registry and security limitations, verified by source/test comparison and inspected `just pack-plan-mode` contents.
-- [ ] Repository verification passes with `npm run check`, with no unresolved same-pattern bypass found in the final Git/shell policy scan.
+- [x] Default Git behavior remains equivalent when `safeSubcommands` is absent or empty.
+- [x] The six issue #212 Git commands require and honor exact opt-ins.
+- [x] The four initial `gh` paths require and honor exact path opt-ins without allowing mutating siblings.
+- [x] Unknown settings, unsafe flags, helper execution paths, redirects, malformed layouts, and mixed safe/unsafe chains fail closed.
+- [x] Session reload/removal resets optional policy without affecting inactive Plan mode.
+- [x] README, tests, package contents, and local verification match the implemented contract; PR CI remains tracked in the final task above.
