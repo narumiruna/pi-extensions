@@ -146,6 +146,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 				footer = value;
 			},
 			confirm: overrides.confirm ?? (async () => true),
+			input: overrides.input ?? (async () => undefined),
 			select: overrides.select ?? (async () => undefined),
 			editor: overrides.editor ?? (async () => undefined),
 			custom: overrides.custom ?? (async () => undefined),

@@ -543,6 +543,51 @@ test("codex-login stores credentials, activates the account, and does not change
 	assert.match(notifications.at(-1)?.message ?? "", /Logged in Codex account "work"/);
 });
 
+test("codex-login forwards per-prompt abort signals to UI dialogs", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	const promptController = new AbortController();
+	let inputSignal: AbortSignal | undefined;
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login(callbacks) {
+				const code = await callbacks.onPrompt({
+					message: "Paste the authorization code",
+					placeholder: "code#state",
+					signal: promptController.signal,
+				});
+				assert.equal(code, "manual-code");
+				return validCred("work");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const command = mock.commands.get("codex-login");
+	assert.ok(command);
+	const { ctx } = createMockContext({
+		hasUI: true,
+		input: async (_title: string, _placeholder: string, options?: { signal?: AbortSignal }) => {
+			inputSignal = options?.signal;
+			return "manual-code";
+		},
+		model: { provider: "anthropic", id: "claude", api: "anthropic-messages" },
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: () => undefined,
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	await command.handler("work", ctx);
+
+	assert.equal(inputSignal, promptController.signal);
+});
+
 test("codex-login selects the default Codex model only from unknown/unknown", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	const mock = createMockPi();

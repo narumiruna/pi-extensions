@@ -19,7 +19,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	type CodexOAuthCallbacks,
+	type CodexOAuthPrompt,
 	type CodexOAuthProvider,
+	type CodexOAuthSelectPrompt,
 	type DeviceCodeInfo,
 	getDefaultCodexOAuthProvider,
 	type OAuthCredentials,
@@ -651,21 +653,21 @@ async function loginCodexAccount(
 		onDeviceCode: (info: DeviceCodeInfo) => {
 			ctx.ui.notify(formatDeviceCodeMessage(info), "info");
 		},
-		onPrompt: async (prompt: { message: string; placeholder?: string; allowEmpty?: boolean }) => {
-			const value = await ctx.ui.input(prompt.message, prompt.placeholder ?? "");
+		onPrompt: async (prompt: CodexOAuthPrompt) => {
+			const value = await ctx.ui.input(prompt.message, prompt.placeholder ?? "", {
+				signal: prompt.signal,
+			});
 			if ((value === undefined || value === "") && !prompt.allowEmpty) {
 				throw new Error("Login cancelled");
 			}
 			return value ?? "";
 		},
 		onProgress: (message: string) => ctx.ui.notify(message, "info"),
-		onSelect: async (prompt: {
-			message: string;
-			options: Array<{ id: string; label: string }>;
-		}) => {
+		onSelect: async (prompt: CodexOAuthSelectPrompt) => {
 			const selected = await ctx.ui.select(
 				prompt.message,
 				prompt.options.map((option) => option.label),
+				{ signal: prompt.signal },
 			);
 			return prompt.options.find((option) => option.label === selected)?.id;
 		},

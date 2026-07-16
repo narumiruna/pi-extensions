@@ -9,13 +9,25 @@ export type DeviceCodeInfo = {
 
 export type OAuthCredentials = piAiOAuth.OAuthCredentials;
 type OAuthLoginCallbacks = piAiOAuth.OAuthLoginCallbacks;
+export type CodexOAuthPrompt = Parameters<OAuthLoginCallbacks["onPrompt"]>[0] & {
+	signal?: AbortSignal;
+};
+export type CodexOAuthSelectPrompt = Parameters<OAuthLoginCallbacks["onSelect"]>[0] & {
+	signal?: AbortSignal;
+};
 type BuiltinProvider = ReturnType<
 	typeof import("@earendil-works/pi-ai/providers/all").builtinProviders
 >[number];
 type ProviderOwnedOAuth = NonNullable<BuiltinProvider["auth"]["oauth"]>;
 
-export type CodexOAuthCallbacks = OAuthLoginCallbacks & {
+export type CodexOAuthCallbacks = Omit<
+	OAuthLoginCallbacks,
+	"onManualCodeInput" | "onPrompt" | "onSelect"
+> & {
 	onDeviceCode?: (info: DeviceCodeInfo) => void;
+	onManualCodeInput?: (signal?: AbortSignal) => Promise<string>;
+	onPrompt: (prompt: CodexOAuthPrompt) => Promise<string>;
+	onSelect: (prompt: CodexOAuthSelectPrompt) => Promise<string | undefined>;
 };
 
 export type CodexOAuthProvider = {
@@ -48,16 +60,18 @@ function createProviderOwnedCodexOAuthAdapter(providerId: string): CodexOAuthPro
 						const selected = await callbacks.onSelect({
 							message: prompt.message,
 							options: prompt.options.map(({ id, label }) => ({ id, label })),
+							signal: prompt.signal,
 						});
 						if (selected === undefined) throw new Error("Login cancelled");
 						return selected;
 					}
 					if (prompt.type === "manual_code" && callbacks.onManualCodeInput) {
-						return callbacks.onManualCodeInput();
+						return callbacks.onManualCodeInput(prompt.signal);
 					}
 					return callbacks.onPrompt({
 						message: prompt.message,
 						placeholder: prompt.placeholder,
+						signal: prompt.signal,
 					});
 				},
 				notify: (event) => {
