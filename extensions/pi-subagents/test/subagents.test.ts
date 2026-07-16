@@ -417,6 +417,59 @@ test("subagent execute resolves thinking level in single, chain, parallel, and a
 	assert.equal(parallel.details?.aggregator?.thinkingLevel, "xhigh");
 });
 
+test("parallel updates keep failed fan-out pending while fan-in starts", async () => {
+	const mock = createMockPi();
+	subagents(mock.pi);
+	const tool = mock.tools[0] as SubagentTool;
+	const { ctx } = createMockContext();
+	const signal = new AbortController().signal;
+	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-pending-fan-in-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"const task=process.argv.at(-1) ?? '';",
+			"const failed=task.includes('RUN_FANOUT_FAILURE')&&!task.includes('RUN_AGGREGATOR');",
+			"const message=failed",
+			"? {role:'assistant',content:[{type:'text',text:'FANOUT_PARTIAL'}],stopReason:'error',errorMessage:'FANOUT_FAILED',timestamp:Date.now()}",
+			": {role:'assistant',content:[{type:'text',text:'FAN_IN_COMPLETE'}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const updates: Array<{
+		details?: {
+			results: Array<{ stopReason?: string }>;
+			aggregator?: { exitCode: number };
+		};
+	}> = [];
+	const originalScript = process.argv[1];
+	process.argv[1] = fakePi;
+	try {
+		const result = await tool.execute(
+			"pending-fan-in",
+			{
+				tasks: [{ agent: "scout", task: "RUN_FANOUT_FAILURE" }],
+				aggregator: { agent: "scout", task: "RUN_AGGREGATOR" },
+			},
+			signal,
+			(update: unknown) => updates.push(update as (typeof updates)[number]),
+			ctx,
+		);
+		assert.match(result.content?.[0]?.text ?? "", /FAN_IN_COMPLETE/);
+		assert.ok(
+			updates.some(
+				(update) =>
+					update.details?.results[0]?.stopReason === "error" &&
+					update.details.aggregator?.exitCode === -1,
+			),
+			"expected a failed fan-out update with a pending fan-in result",
+		);
+	} finally {
+		process.argv[1] = originalScript;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("parallel summaries classify provider errors and retain partial output", async () => {
 	const mock = createMockPi();
 	subagents(mock.pi);

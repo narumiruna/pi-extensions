@@ -564,10 +564,10 @@ test("renderSubagentResult keeps partial views running and renders final-only pr
 		},
 		finalOutput,
 	});
-	const render = (details: unknown, isPartial: boolean) =>
+	const render = (details: unknown, isPartial: boolean, expanded = false) =>
 		renderSubagentResult(
 			{ content: [], details } as never,
-			{ expanded: false, isPartial } as never,
+			{ expanded, isPartial } as never,
 			identityTheme as never,
 		)
 			.render(120)
@@ -655,6 +655,82 @@ test("renderSubagentResult keeps partial views running and renders final-only pr
 	assert.match(fanInTimeout, /fan-in → fan-in ✗/);
 	assert.match(fanInTimeout, /Error: fan-in timed out/);
 	assert.doesNotMatch(fanInTimeout, /running/);
+
+	const failedWithOutput = (agent: string) => ({
+		...result(agent, `${agent.toUpperCase()}_PARTIAL`),
+		stopReason: "error",
+		errorMessage: `${agent} provider failed`,
+	});
+	const singleFailure = render(
+		{
+			mode: "single",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [failedWithOutput("single-failed")],
+		},
+		true,
+	);
+	assert.match(singleFailure, /Error: single-failed provider failed/);
+	assert.match(singleFailure, /SINGLE-FAILED_PARTIAL/);
+
+	const chainTimeoutDetails = {
+		mode: "chain",
+		agentScope: "user",
+		projectAgentsDir: null,
+		results: [
+			{
+				...timedOutResult("chain-timeout", -1),
+				step: 1,
+				finalOutput: "CHAIN_TIMEOUT_PARTIAL",
+			},
+		],
+	};
+	for (const chainTimeout of [
+		render(chainTimeoutDetails, true),
+		render(chainTimeoutDetails, true, true),
+	]) {
+		assert.match(chainTimeout, /Error: chain-timeout timed out/);
+		assert.match(chainTimeout, /CHAIN_TIMEOUT_PARTIAL/);
+		assert.doesNotMatch(chainTimeout, /running/);
+	}
+
+	const parallelFailure = render(
+		{
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [failedWithOutput("parallel-failed")],
+		},
+		true,
+	);
+	assert.match(parallelFailure, /Error: parallel-failed provider failed/);
+	assert.match(parallelFailure, /PARALLEL-FAILED_PARTIAL/);
+
+	const failedFanOutPendingFanIn = render(
+		{
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [failedWithOutput("fan-out-failed")],
+			aggregator: result("fan-in-pending", "", -1),
+		},
+		true,
+	);
+	assert.match(failedFanOutPendingFanIn, /^⏳ parallel 1\/1 done, fan-in running/);
+	assert.doesNotMatch(failedFanOutPendingFanIn, /Total:/);
+
+	const fanInFailure = render(
+		{
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [result("done")],
+			aggregator: failedWithOutput("fan-in-failed"),
+		},
+		true,
+	);
+	assert.match(fanInFailure, /Error: fan-in-failed provider failed/);
+	assert.match(fanInFailure, /FAN-IN-FAILED_PARTIAL/);
 
 	const chainPartial = render(
 		{

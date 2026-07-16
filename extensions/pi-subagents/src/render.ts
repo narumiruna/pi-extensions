@@ -315,14 +315,14 @@ export function renderSubagentResult(
 		let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 		if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 		if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
-		else if (collapsed.items.length > 0) {
+		if (collapsed.items.length > 0) {
 			text += `\n${renderDisplayItems(collapsed.items, COLLAPSED_ITEM_COUNT, collapsed.total)}`;
 			if (collapsed.total > COLLAPSED_ITEM_COUNT)
 				text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 		} else if (finalOutput.trim()) {
 			text += `\n${theme.fg("toolOutput", finalOutput.trim().split("\n").slice(0, 3).join("\n"))}`;
-		} else {
-			text += `\n${theme.fg("muted", isPartial ? "(running...)" : "(no output)")}`;
+		} else if (!isError || !r.errorMessage) {
+			text += `\n${theme.fg("muted", isPartial && !isError ? "(running...)" : "(no output)")}`;
 		}
 		const usageStr = formatResultUsageStats(r);
 		if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
@@ -369,7 +369,8 @@ export function renderSubagentResult(
 			);
 
 			for (const r of details.results) {
-				const rIcon = isResultError(r)
+				const rFailed = isResultError(r);
+				const rIcon = rFailed
 					? theme.fg("error", "✗")
 					: currentIsRunning && r === currentResult
 						? theme.fg("warning", "⏳")
@@ -386,6 +387,8 @@ export function renderSubagentResult(
 					),
 				);
 				container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+				if (rFailed && r.errorMessage)
+					container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 
 				// Show tool calls
 				for (const item of displayItems) {
@@ -426,7 +429,8 @@ export function renderSubagentResult(
 			theme.fg("toolTitle", theme.bold("chain ")) +
 			theme.fg("accent", `${successCount}/${details.results.length} steps`);
 		for (const r of details.results) {
-			const rIcon = isResultError(r)
+			const rFailed = isResultError(r);
+			const rIcon = rFailed
 				? theme.fg("error", "✗")
 				: currentIsRunning && r === currentResult
 					? theme.fg("warning", "⏳")
@@ -434,13 +438,15 @@ export function renderSubagentResult(
 			const collapsed = getCollapsedDisplayItems(r);
 			const finalOutput = getResultFinalOutput(r).trim();
 			text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+			if (rFailed && r.errorMessage)
+				text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 			if (collapsed.items.length > 0)
 				text += `\n${renderDisplayItems(collapsed.items, 5, collapsed.total)}`;
 			else if (currentIsRunning && r === currentResult)
 				text += `\n${theme.fg("muted", "(running...)")}`;
 			else if (finalOutput)
 				text += `\n${theme.fg("toolOutput", finalOutput.split("\n").slice(0, 3).join("\n"))}`;
-			else text += `\n${theme.fg("muted", "(no output)")}`;
+			else if (!rFailed || !r.errorMessage) text += `\n${theme.fg("muted", "(no output)")}`;
 		}
 		const usageStr = formatUsageStats(aggregateUsage(details.results));
 		if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
@@ -599,12 +605,12 @@ export function renderSubagentResult(
 			text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
 			if (rFailed && r.errorMessage)
 				text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
-			else if (collapsed.items.length > 0)
+			if (collapsed.items.length > 0)
 				text += `\n${renderDisplayItems(collapsed.items, 5, collapsed.total)}`;
 			else if (rRunning) text += `\n${theme.fg("muted", "(running...)")}`;
 			else if (finalOutput)
 				text += `\n${theme.fg("toolOutput", finalOutput.split("\n").slice(0, 3).join("\n"))}`;
-			else text += `\n${theme.fg("muted", "(no output)")}`;
+			else if (!rFailed || !r.errorMessage) text += `\n${theme.fg("muted", "(no output)")}`;
 		}
 		if (aggregator) {
 			const rIcon = aggregatorFailed
@@ -617,12 +623,13 @@ export function renderSubagentResult(
 			text += `\n\n${theme.fg("muted", "─── fan-in → ")}${theme.fg("accent", aggregator.agent)} ${rIcon}`;
 			if (aggregatorFailed && aggregator.errorMessage)
 				text += `\n${theme.fg("error", `Error: ${aggregator.errorMessage}`)}`;
-			else if (collapsed.items.length > 0)
+			if (collapsed.items.length > 0)
 				text += `\n${renderDisplayItems(collapsed.items, 5, collapsed.total)}`;
 			else if (aggregatorRunning) text += `\n${theme.fg("muted", "(running...)")}`;
 			else if (finalOutput)
 				text += `\n${theme.fg("toolOutput", finalOutput.split("\n").slice(0, 3).join("\n"))}`;
-			else text += `\n${theme.fg("muted", "(no output)")}`;
+			else if (!aggregatorFailed || !aggregator.errorMessage)
+				text += `\n${theme.fg("muted", "(no output)")}`;
 		}
 		if (!isRunning) {
 			const usageResults = aggregator ? [...details.results, aggregator] : details.results;
