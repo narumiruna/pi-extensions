@@ -582,6 +582,8 @@ test("cancelled login followed by account activation installs usable runtime aut
 			},
 			getApiKeyForProvider: async (provider: string) =>
 				provider === CODEX_PROVIDER_ID && mock.providers.has(provider) ? runtimeKey : undefined,
+			// Pi 0.80.3 reports stored auth even when its runtime key wins resolution.
+			getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
 		},
 	});
 
@@ -937,6 +939,8 @@ test("runtime auth bridge restores another extension's provider configuration", 
 	mock.rawPi.registerProvider(CODEX_PROVIDER_ID, {
 		baseUrl: "https://proxy.example.test",
 		apiKey: "other-extension-key",
+		authHeader: true,
+		headers: { "X-Proxy-Key": "proxy-secret" },
 	});
 	codexAccounts(mock.pi, { store });
 	const command = mock.commands.get("codex-account");
@@ -962,12 +966,22 @@ test("runtime auth bridge restores another extension's provider configuration", 
 	assert.deepEqual(mock.providers.get(CODEX_PROVIDER_ID), {
 		baseUrl: "https://proxy.example.test",
 		apiKey: FAIL_CLOSED_API_KEY,
+		authHeader: true,
+		headers: { "X-Proxy-Key": "proxy-secret" },
+	});
+	assert.deepEqual(mock.providerRegistrations.at(-1)?.config, {
+		baseUrl: "https://proxy.example.test",
+		apiKey: FAIL_CLOSED_API_KEY,
+		authHeader: true,
+		headers: { "X-Proxy-Key": "proxy-secret" },
 	});
 
 	await command.handler("default", ctx);
 	assert.deepEqual(mock.providers.get(CODEX_PROVIDER_ID), {
 		baseUrl: "https://proxy.example.test",
 		apiKey: "other-extension-key",
+		authHeader: true,
+		headers: { "X-Proxy-Key": "proxy-secret" },
 	});
 });
 

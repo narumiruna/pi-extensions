@@ -41,7 +41,7 @@ export class RuntimeApiKeyBridge {
 		this.previousProviderApiKey = current
 			? { present: Object.hasOwn(current, "apiKey"), value: current.apiKey }
 			: { present: false };
-		this.pi.registerProvider(this.providerId, { apiKey: this.fallbackApiKey });
+		this.pi.registerProvider(this.providerId, { ...current, apiKey: this.fallbackApiKey });
 		this.registered = true;
 	}
 
@@ -133,16 +133,9 @@ export class RuntimeApiKeyController {
 	): Promise<boolean | undefined> {
 		const registry = ctx.modelRegistry as unknown as {
 			getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
-			getProviderAuthStatus?: (provider: string) => { source?: string };
 		};
 		if (typeof registry.getApiKeyForProvider !== "function") return undefined;
 		try {
-			if (
-				typeof registry.getProviderAuthStatus === "function" &&
-				registry.getProviderAuthStatus(this.providerId).source !== "runtime"
-			) {
-				return false;
-			}
 			return (await registry.getApiKeyForProvider(this.providerId)) === expectedApiKey;
 		} catch {
 			return false;
