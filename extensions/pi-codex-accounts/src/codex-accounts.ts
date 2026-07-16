@@ -143,14 +143,16 @@ export default function codexAccounts(
 	const closeWebSocketSessions = dependencies.closeWebSocketSessions ?? (() => undefined);
 	let appliedAuthIdentity: string | undefined;
 	let authIdentityInitialized = false;
+	let abortCodexTurn = false;
 	const runtimeApiKeyBridge = new RuntimeApiKeyBridge(pi, CODEX_PROVIDER_ID, FAIL_CLOSED_API_KEY);
 
 	const sync = async (ctx: ExtensionContext, model = ctx.model) => {
+		const bridgeOperation = runtimeApiKeyBridge.beginOperation();
 		const result = await ensureActiveCodexAuth(ctx, store, {
 			oauthProvider,
-			prepareRuntimeApiKey: () => runtimeApiKeyBridge.prepare(ctx),
+			prepareRuntimeApiKey: () => runtimeApiKeyBridge.prepare(ctx, bridgeOperation),
 		});
-		if (result.status === "inactive") runtimeApiKeyBridge.remove(ctx);
+		if (result.status === "inactive") runtimeApiKeyBridge.remove(ctx, bridgeOperation);
 		const authIdentity = await getActiveAuthIdentity(store, result);
 		if (!authIdentityInitialized || appliedAuthIdentity !== authIdentity) {
 			await closeWebSocketSessions(ctx.sessionManager.getSessionId());
@@ -266,14 +268,29 @@ export default function codexAccounts(
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
-		await sync(ctx);
+		abortCodexTurn = false;
+		try {
+			const result = await sync(ctx);
+			abortCodexTurn = result.status === "error" && isOpenAICodexModel(ctx.model);
+		} catch (error) {
+			abortCodexTurn = isOpenAICodexModel(ctx.model);
+			throw error;
+		}
+	});
+
+	pi.on("turn_start", (_event, ctx) => {
+		if (!abortCodexTurn || !isOpenAICodexModel(ctx.model)) return;
+		abortCodexTurn = false;
+		ctx.abort();
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		const bridgeOperation = runtimeApiKeyBridge.beginOperation();
+		runtimeCodexAuth.invalidate(ctx);
 		try {
 			await runtimeCodexAuth.clear(ctx);
 		} finally {
-			runtimeApiKeyBridge.remove(ctx);
+			runtimeApiKeyBridge.remove(ctx, bridgeOperation);
 			setStatus(ctx, undefined);
 		}
 	});
@@ -401,11 +418,16 @@ export async function ensureActiveCodexAuth(
 	const applied = await runtimeCodexAuth.apply(ctx, runtimeOverride, apiKey);
 	if (applied === "stale") return { status: "inactive" };
 	if (applied === "unavailable") {
-		await runtimeCodexAuth.apply(ctx, runtimeOverride, FAIL_CLOSED_API_KEY);
+		const failClosed = await runtimeCodexAuth.apply(ctx, runtimeOverride, FAIL_CLOSED_API_KEY);
+		if (failClosed === "stale") return { status: "inactive" };
+		const runtimeMessage =
+			failClosed === "unavailable"
+				? " Pi did not accept the fail-closed runtime credential; Codex turns will be aborted."
+				: "";
 		return {
 			status: "error",
 			accountName: active,
-			message: "Pi did not retain the runtime OpenAI Codex credential.",
+			message: `Pi did not retain the runtime OpenAI Codex credential.${runtimeMessage}`,
 		};
 	}
 	return { status: "active", accountName: active };

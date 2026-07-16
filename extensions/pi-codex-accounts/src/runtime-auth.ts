@@ -27,6 +27,7 @@ export class RuntimeApiKeyBridge {
 	private readonly providerId: string;
 	private readonly fallbackApiKey: string;
 	private registered = false;
+	private operationGeneration = 0;
 	private previousProviderApiKey: { present: boolean; value?: string } | undefined;
 
 	constructor(pi: ExtensionAPI, providerId: string, fallbackApiKey: string) {
@@ -35,8 +36,13 @@ export class RuntimeApiKeyBridge {
 		this.fallbackApiKey = fallbackApiKey;
 	}
 
-	prepare(ctx: ExtensionContext): void {
-		if (this.registered) return;
+	beginOperation(): number {
+		this.operationGeneration += 1;
+		return this.operationGeneration;
+	}
+
+	prepare(ctx: ExtensionContext, operationGeneration: number): void {
+		if (operationGeneration !== this.operationGeneration || this.registered) return;
 		const current = this.getRegisteredProviderConfig(ctx);
 		this.previousProviderApiKey = current
 			? { present: Object.hasOwn(current, "apiKey"), value: current.apiKey }
@@ -45,8 +51,8 @@ export class RuntimeApiKeyBridge {
 		this.registered = true;
 	}
 
-	remove(ctx: ExtensionContext): void {
-		if (!this.registered) return;
+	remove(ctx: ExtensionContext, operationGeneration: number): void {
+		if (operationGeneration !== this.operationGeneration || !this.registered) return;
 		const current = this.getRegisteredProviderConfig(ctx);
 		if (current && current.apiKey !== this.fallbackApiKey) {
 			this.reset();
@@ -111,6 +117,13 @@ export class RuntimeApiKeyController {
 		if (matches !== false) return "applied";
 		if (!(await this.set(snapshot, apiKey, true))) return "stale";
 		return (await this.matches(ctx, apiKey)) === false ? "unavailable" : "applied";
+	}
+
+	invalidate(ctx: ExtensionContext): void {
+		const target = getRuntimeAuthStorage(ctx);
+		if (!target) return;
+		const state = this.states.get(target);
+		if (state) state.generation += 1;
 	}
 
 	async clear(ctx: ExtensionContext): Promise<void> {

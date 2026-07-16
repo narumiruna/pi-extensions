@@ -39,6 +39,7 @@ test("codex-accounts registers commands and lifecycle hooks", () => {
 		"model_select",
 		"session_shutdown",
 		"session_start",
+		"turn_start",
 	]);
 });
 
@@ -223,6 +224,65 @@ test("account reset removes an async runtime override that is still being applie
 	]);
 });
 
+test("account reactivation overlapping an async reset keeps the provider bridge installed", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	const mock = createMockPi();
+	codexAccounts(mock.pi, { store });
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+
+	let runtimeKey: string | undefined;
+	let blockRemoval = false;
+	let signalRemovalStarted: (() => void) | undefined;
+	const removalStarted = new Promise<void>((resolve) => {
+		signalRemovalStarted = resolve;
+	});
+	let releaseRemoval: (() => void) | undefined;
+	const removalBlocked = new Promise<void>((resolve) => {
+		releaseRemoval = resolve;
+	});
+	const { ctx, notifications } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				setRuntimeApiKey: (_provider: string, key: string) => {
+					runtimeKey = key;
+				},
+				async removeRuntimeApiKey() {
+					runtimeKey = undefined;
+					if (!blockRemoval) return;
+					signalRemovalStarted?.();
+					await removalBlocked;
+				},
+			},
+			getApiKeyForProvider: async (provider: string) =>
+				provider === CODEX_PROVIDER_ID && mock.providers.has(provider) ? runtimeKey : undefined,
+			getRegisteredProviderConfig: (provider: string) => mock.providers.get(provider),
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	assert.equal(runtimeKey, "access-work");
+	assert.equal(mock.providers.has(CODEX_PROVIDER_ID), true);
+
+	blockRemoval = true;
+	const reset = command.handler("default", ctx);
+	await removalStarted;
+	const reactivate = command.handler("work", ctx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	releaseRemoval?.();
+	await Promise.all([reset, reactivate]);
+
+	assert.equal((await store.readAsync()).active, "work");
+	assert.equal(runtimeKey, "access-work");
+	assert.equal(mock.providers.has(CODEX_PROVIDER_ID), true);
+	assert.equal(
+		notifications
+			.filter((notification) => /Activated Codex account/.test(notification.message))
+			.at(-1)?.level,
+		"info",
+	);
+});
+
 test("account reset during API-key conversion cannot restore a stale runtime override", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	await store.write({ active: "work", accounts: { work: validCred("work") } });
@@ -316,9 +376,13 @@ test("session shutdown during API-key conversion cannot restore a runtime overri
 
 	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
 	await conversionStarted;
-	await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+	const queuedSync = mock.events.get("model_select")?.[0]?.(
+		{ model: { provider: CODEX_PROVIDER_ID } },
+		ctx,
+	);
+	const shutdown = mock.events.get("session_shutdown")?.[0]?.({}, ctx);
 	releaseConversion?.();
-	await startup;
+	await Promise.all([startup, queuedSync, shutdown]);
 
 	assert.deepEqual(runtimeCalls, []);
 	assert.equal(statuses.get(CODEX_ACCOUNTS_STATUS_KEY), undefined);
@@ -663,6 +727,48 @@ test("account activation reports an error when Pi cannot resolve the runtime cre
 	assert.ok(runtimeKeys.includes(FAIL_CLOSED_API_KEY));
 	assert.match(notifications.at(-1)?.message ?? "", /did not retain the runtime/);
 	assert.equal(notifications.at(-1)?.level, "error");
+});
+
+test("auth failure aborts Codex at turn start instead of falling back to stored Pi auth", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "home", accounts: { home: validCred("home") } });
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("unexpected login");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const runtimeKeys: string[] = [];
+	let aborts = 0;
+	const { ctx } = createMockContext({
+		model: { provider: CODEX_PROVIDER_ID },
+		abort: () => {
+			aborts += 1;
+		},
+		modelRegistry: {
+			runtime: {
+				setRuntimeApiKey: (_provider: string, key: string) => runtimeKeys.push(key),
+				removeRuntimeApiKey: () => undefined,
+			},
+			// Simulate Pi continuing to resolve its stored login over every runtime attempt.
+			getApiKeyForProvider: async () => "stored-pi-key",
+		},
+	});
+
+	await mock.events.get("before_agent_start")?.[0]?.({}, ctx);
+	assert.equal(aborts, 0);
+	await mock.events.get("turn_start")?.[0]?.({}, ctx);
+
+	assert.ok(runtimeKeys.includes("access-home"));
+	assert.ok(runtimeKeys.includes(FAIL_CLOSED_API_KEY));
+	assert.equal(aborts, 1);
 });
 
 test("cancelled login preserves an already active account and runtime credential", async () => {
