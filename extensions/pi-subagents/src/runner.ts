@@ -95,6 +95,8 @@ export function getResultFinalOutput(result: SingleResult): string {
 export function isResultError(result: SingleResult): boolean {
 	return (
 		(result.exitCode !== 0 && result.exitCode !== -1) ||
+		result.timedOut === true ||
+		result.stopReason === "timeout" ||
 		result.stopReason === "error" ||
 		result.stopReason === "aborted"
 	);
@@ -209,8 +211,9 @@ function appendRecentActivity(result: SingleResult, message: Message): void {
 		}
 	};
 	for (const part of message.content) {
-		if (part.type === "text" && part.text.trim()) {
-			append({ type: "text", text: truncateUtf8(part.text, 1024).text });
+		if (part.type === "text") {
+			const text = part.text.trim();
+			if (text) append({ type: "text", text: truncateUtf8(text, 1024).text });
 		} else if (part.type === "toolCall") {
 			append({
 				type: "toolCall",

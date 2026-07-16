@@ -150,9 +150,12 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 	for (const msg of messages) {
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
-				if (part.type === "text" && part.text.trim()) items.push({ type: "text", text: part.text });
-				else if (part.type === "toolCall")
+				if (part.type === "text") {
+					const text = part.text.trim();
+					if (text) items.push({ type: "text", text });
+				} else if (part.type === "toolCall") {
 					items.push({ type: "toolCall", name: part.name, args: part.arguments });
+				}
 			}
 		}
 	}

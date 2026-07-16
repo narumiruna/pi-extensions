@@ -1466,6 +1466,14 @@ test("runSingleAgent preserves final text beyond its history budget and rejects 
 	assert.equal(multiBlock.exitCode, 0);
 	assert.equal(multiBlock.finalOutput, "FIRST\nSECOND");
 
+	const paddedActivity = await runScript(
+		[
+			"const message={role:'assistant',content:[{type:'text',text:'\\n'.repeat(2048)+'LATEST_ACTIVITY\\n\\n'}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.deepEqual(paddedActivity.recentActivity, [{ type: "text", text: "LATEST_ACTIVITY" }]);
+
 	const empty = await runScript(
 		[
 			"const commentary={role:'assistant',content:[{type:'text',text:'OLD_COMMENTARY'}],stopReason:'toolUse',timestamp:Date.now()};",
@@ -1830,6 +1838,26 @@ test("renderSubagentResult keeps partial views running and renders final-only pr
 	);
 	assert.match(singlePartial, /^⏳ single/);
 	assert.doesNotMatch(singlePartial, /^✓/);
+
+	const timedOutPartial = render(
+		{
+			mode: "single",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [
+				{
+					...result("timed-out"),
+					timedOut: true,
+					stopReason: "timeout",
+					errorMessage: "Subagent timed out after 1000ms",
+				},
+			],
+		},
+		true,
+	);
+	assert.match(timedOutPartial, /^✗ timed-out .*\[timeout\]/);
+	assert.match(timedOutPartial, /Error: Subagent timed out after 1000ms/);
+	assert.doesNotMatch(timedOutPartial, /\(running\.\.\.\)/);
 
 	const chainPartial = render(
 		{
