@@ -38,7 +38,12 @@ type RuntimeAuthStorage = {
 	removeRuntimeApiKey(provider: string): void | Promise<void>;
 };
 
-const appliedRuntimeOverrides = new WeakMap<object, Map<string, string>>();
+type RuntimeOverrideState = {
+	appliedApiKey?: string;
+	operationTail: Promise<void>;
+};
+
+const runtimeOverrideStates = new WeakMap<object, RuntimeOverrideState>();
 
 type DeviceCodeInfo = {
 	userCode: string;
@@ -873,23 +878,42 @@ function setStatus(ctx: ExtensionContext, value: string | undefined): void {
 async function setRuntimeCodexApiKey(ctx: ExtensionContext, apiKey: string): Promise<void> {
 	const target = getRuntimeAuthStorage(ctx);
 	if (!target) throw new Error("This Pi version does not expose runtime provider authentication.");
-	let overrides = appliedRuntimeOverrides.get(target);
-	if (!overrides) {
-		overrides = new Map();
-		appliedRuntimeOverrides.set(target, overrides);
-	}
-	if (overrides.get(CODEX_PROVIDER_ID) === apiKey) return;
-	await target.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
-	overrides.set(CODEX_PROVIDER_ID, apiKey);
+	const state = getRuntimeOverrideState(target);
+	await enqueueRuntimeOverrideMutation(state, async () => {
+		if (state.appliedApiKey === apiKey) return;
+		await target.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
+		state.appliedApiKey = apiKey;
+	});
 }
 
 async function clearRuntimeCodexAuth(ctx: ExtensionContext): Promise<void> {
 	const target = getRuntimeAuthStorage(ctx);
 	if (!target) return;
-	const overrides = appliedRuntimeOverrides.get(target);
-	if (!overrides?.has(CODEX_PROVIDER_ID)) return;
-	await target.removeRuntimeApiKey(CODEX_PROVIDER_ID);
-	overrides.delete(CODEX_PROVIDER_ID);
+	const state = runtimeOverrideStates.get(target);
+	if (!state) return;
+	await enqueueRuntimeOverrideMutation(state, async () => {
+		if (state.appliedApiKey === undefined) return;
+		await target.removeRuntimeApiKey(CODEX_PROVIDER_ID);
+		state.appliedApiKey = undefined;
+	});
+}
+
+function getRuntimeOverrideState(target: object): RuntimeOverrideState {
+	let state = runtimeOverrideStates.get(target);
+	if (!state) {
+		state = { operationTail: Promise.resolve() };
+		runtimeOverrideStates.set(target, state);
+	}
+	return state;
+}
+
+function enqueueRuntimeOverrideMutation(
+	state: RuntimeOverrideState,
+	mutate: () => Promise<void>,
+): Promise<void> {
+	const operation = state.operationTail.then(mutate);
+	state.operationTail = operation.catch(() => undefined);
+	return operation;
 }
 
 function getRuntimeAuthStorage(ctx: ExtensionContext): (RuntimeAuthStorage & object) | undefined {

@@ -268,6 +268,54 @@ test("ensureActiveCodexAuth supports and awaits Pi's model runtime auth override
 	]);
 });
 
+test("account reset removes an async runtime override that is still being applied", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	const mock = createMockPi();
+	codexAccounts(mock.pi, { store });
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+
+	const calls: string[] = [];
+	let releaseSet: (() => void) | undefined;
+	const setBlocked = new Promise<void>((resolve) => {
+		releaseSet = resolve;
+	});
+	let signalSetStarted: (() => void) | undefined;
+	const setStarted = new Promise<void>((resolve) => {
+		signalSetStarted = resolve;
+	});
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				async setRuntimeApiKey(provider: string, key: string) {
+					calls.push(`start:${provider}:${key}`);
+					signalSetStarted?.();
+					await setBlocked;
+					calls.push(`finish:${provider}:${key}`);
+				},
+				async removeRuntimeApiKey(provider: string) {
+					calls.push(`remove:${provider}`);
+				},
+			},
+		},
+	});
+
+	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await setStarted;
+	const reset = command.handler("default", ctx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	releaseSet?.();
+	await Promise.all([startup, reset]);
+
+	assert.equal((await store.readAsync()).active, undefined);
+	assert.deepEqual(calls, [
+		`start:${CODEX_PROVIDER_ID}:access-work`,
+		`finish:${CODEX_PROVIDER_ID}:access-work`,
+		`remove:${CODEX_PROVIDER_ID}`,
+	]);
+});
+
 test("ensureActiveCodexAuth refreshes near-expired active accounts", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	await store.write({
