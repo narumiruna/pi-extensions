@@ -286,6 +286,34 @@ export async function executeSubagent(
 					const emitParallelUpdate = () => {
 						status.update(parallelStatus(doneCount, allResults.length, runningCount));
 						if (onUpdate) {
+							const aggregator = params.aggregator;
+							const pendingAggregator: SingleResult | undefined =
+								aggregator && !signal?.aborted && doneCount === allResults.length
+									? {
+											agent: aggregator.agent,
+											agentSource:
+												agents.find((agent) => agent.name === aggregator.agent)?.source ?? "unknown",
+											task: aggregator.task,
+											exitCode: -1,
+											messages: [],
+											stderr: "",
+											usage: {
+												input: 0,
+												output: 0,
+												cacheRead: 0,
+												cacheWrite: 0,
+												cost: 0,
+												contextTokens: 0,
+												turns: 0,
+											},
+											thinkingLevel: resolveThinkingLevel(
+												aggregator.agent,
+												aggregator.thinkingLevel,
+											),
+											timeoutMs: resolveTimeoutMs(aggregator.agent, aggregator.timeoutMs),
+											finalOutput: "",
+										}
+									: undefined;
 							onUpdate({
 								content: [
 									{
@@ -293,7 +321,7 @@ export async function executeSubagent(
 										text: `Parallel: ${doneCount}/${allResults.length} done, ${runningCount} running...`,
 									},
 								],
-								details: makeDetails("parallel")([...allResults]),
+								details: makeDetails("parallel")([...allResults], pendingAggregator),
 							});
 						}
 					};
