@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexAccounts, {
@@ -544,6 +547,195 @@ test("codex-login stores credentials, activates the account, and does not change
 	assert.match(notifications.at(-1)?.message ?? "", /Logged in Codex account "work"/);
 });
 
+test("cancelled login followed by account activation installs usable runtime auth", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ accounts: { home: validCred("home") } });
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("Login cancelled");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const loginCommand = mock.commands.get("codex-login");
+	const accountCommand = mock.commands.get("codex-account");
+	assert.ok(loginCommand);
+	assert.ok(accountCommand);
+
+	let runtimeKey: string | undefined;
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		modelRegistry: {
+			runtime: {
+				setRuntimeApiKey: (_provider: string, key: string) => {
+					runtimeKey = key;
+				},
+				removeRuntimeApiKey: () => {
+					runtimeKey = undefined;
+				},
+			},
+			getApiKeyForProvider: async (provider: string) =>
+				provider === CODEX_PROVIDER_ID && mock.providers.has(provider) ? runtimeKey : undefined,
+		},
+	});
+
+	await loginCommand.handler("work", ctx);
+	assert.match(notifications.at(-1)?.message ?? "", /Codex login failed: Login cancelled/);
+
+	await accountCommand.handler("home", ctx);
+
+	assert.equal(mock.providerRegistrations.length, 1);
+	assert.equal(mock.providerRegistrations[0]?.name, CODEX_PROVIDER_ID);
+	assert.deepEqual(mock.providerRegistrations[0]?.config, { apiKey: FAIL_CLOSED_API_KEY });
+	assert.equal(runtimeKey, "access-home");
+	assert.match(notifications.at(-1)?.message ?? "", /Activated Codex account "home"/);
+	assert.equal(notifications.at(-1)?.level, "info");
+});
+
+test("provider bridge setup failure still installs a fail-closed runtime credential", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ accounts: { home: validCred("home") } });
+	const mock = createMockPi();
+	mock.rawPi.registerProvider = () => {
+		throw new Error("provider bridge failed");
+	};
+	codexAccounts(mock.pi, { store });
+	const accountCommand = mock.commands.get("codex-account");
+	assert.ok(accountCommand);
+	const runtimeKeys: string[] = [];
+	const { ctx, notifications } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				setRuntimeApiKey: (_provider: string, key: string) => runtimeKeys.push(key),
+				removeRuntimeApiKey: () => undefined,
+			},
+			getApiKeyForProvider: async () => undefined,
+		},
+	});
+
+	await accountCommand.handler("home", ctx);
+
+	assert.ok(runtimeKeys.includes(FAIL_CLOSED_API_KEY));
+	assert.match(notifications.at(-1)?.message ?? "", /Runtime authentication setup failed/);
+	assert.equal(notifications.at(-1)?.level, "error");
+});
+
+test("account activation reports an error when Pi cannot resolve the runtime credential", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ accounts: { home: validCred("home") } });
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("unexpected login");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const accountCommand = mock.commands.get("codex-account");
+	assert.ok(accountCommand);
+	const runtimeKeys: string[] = [];
+	const { ctx, notifications } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				setRuntimeApiKey: (_provider: string, key: string) => runtimeKeys.push(key),
+				removeRuntimeApiKey: () => undefined,
+			},
+			getApiKeyForProvider: async () => undefined,
+		},
+	});
+
+	await accountCommand.handler("home", ctx);
+
+	assert.ok(runtimeKeys.includes("access-home"));
+	assert.ok(runtimeKeys.includes(FAIL_CLOSED_API_KEY));
+	assert.match(notifications.at(-1)?.message ?? "", /did not retain the runtime/);
+	assert.equal(notifications.at(-1)?.level, "error");
+});
+
+test("cancelled login preserves an already active account and runtime credential", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "home", accounts: { home: validCred("home") } });
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("Login cancelled");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	let runtimeKey: string | undefined;
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		modelRegistry: {
+			runtime: {
+				setRuntimeApiKey: (_provider: string, key: string) => {
+					runtimeKey = key;
+				},
+				removeRuntimeApiKey: () => {
+					runtimeKey = undefined;
+				},
+			},
+			getApiKeyForProvider: async () => runtimeKey,
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	const loginCommand = mock.commands.get("codex-login");
+	assert.ok(loginCommand);
+
+	await loginCommand.handler("work", ctx);
+
+	assert.equal((await store.readAsync()).active, "home");
+	assert.equal(runtimeKey, "access-home");
+	assert.equal(mock.providers.has(CODEX_PROVIDER_ID), true);
+	assert.match(notifications.at(-1)?.message ?? "", /Codex login failed: Login cancelled/);
+});
+
+test("Pi model runtime resolves Codex runtime keys through the native-provider bridge", async (t) => {
+	const piModule = (await import("@earendil-works/pi-coding-agent")) as unknown as {
+		ModelRuntime?: {
+			create(options: { authPath: string; modelsPath: null; allowModelNetwork: boolean }): Promise<{
+				registerProvider(provider: string, config: { apiKey: string }): void;
+				setRuntimeApiKey(provider: string, apiKey: string): Promise<void>;
+				getAuth(provider: string): Promise<{ auth: { apiKey?: string } } | undefined>;
+			}>;
+		};
+	};
+	if (!piModule.ModelRuntime) {
+		t.skip("Pi version has no public ModelRuntime");
+		return;
+	}
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-codex-runtime-"));
+	try {
+		const runtime = await piModule.ModelRuntime.create({
+			authPath: path.join(directory, "auth.json"),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		runtime.registerProvider(CODEX_PROVIDER_ID, { apiKey: FAIL_CLOSED_API_KEY });
+		await runtime.setRuntimeApiKey(CODEX_PROVIDER_ID, "isolated-test-key");
+
+		assert.equal((await runtime.getAuth(CODEX_PROVIDER_ID))?.auth.apiKey, "isolated-test-key");
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("codex-login forwards per-prompt abort signals to UI dialogs", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	const promptController = new AbortController();
@@ -722,16 +914,60 @@ test("codex-account can switch accounts or return to default Pi login", async ()
 					runtimeCalls.push(`set:${provider}:${key}`),
 				removeRuntimeApiKey: (provider: string) => runtimeCalls.push(`remove:${provider}`),
 			},
+			getRegisteredProviderConfig: (provider: string) => mock.providers.get(provider),
 		},
 	});
 
 	await command.handler("home", ctx);
 	assert.equal((await store.readAsync()).active, "home");
 	assert.deepEqual(runtimeCalls.at(-1), `set:${CODEX_PROVIDER_ID}:access-home`);
+	assert.deepEqual(mock.providers.get(CODEX_PROVIDER_ID), { apiKey: FAIL_CLOSED_API_KEY });
 
 	await command.handler("default", ctx);
 	assert.equal((await store.readAsync()).active, undefined);
 	assert.deepEqual(runtimeCalls.at(-1), `remove:${CODEX_PROVIDER_ID}`);
+	assert.equal(mock.providers.has(CODEX_PROVIDER_ID), false);
+	assert.deepEqual(mock.providerUnregistrations, [CODEX_PROVIDER_ID]);
+});
+
+test("runtime auth bridge restores another extension's provider configuration", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ accounts: { home: validCred("home") } });
+	const mock = createMockPi();
+	mock.rawPi.registerProvider(CODEX_PROVIDER_ID, {
+		baseUrl: "https://proxy.example.test",
+		apiKey: "other-extension-key",
+	});
+	codexAccounts(mock.pi, { store });
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+	let runtimeKey: string | undefined;
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: (_provider: string, key: string) => {
+					runtimeKey = key;
+				},
+				removeRuntimeApiKey: () => {
+					runtimeKey = undefined;
+				},
+			},
+			getApiKeyForProvider: async () => runtimeKey,
+			getRegisteredProviderConfig: (provider: string) => mock.providers.get(provider),
+		},
+	});
+
+	await command.handler("home", ctx);
+	assert.deepEqual(mock.providers.get(CODEX_PROVIDER_ID), {
+		baseUrl: "https://proxy.example.test",
+		apiKey: FAIL_CLOSED_API_KEY,
+	});
+
+	await command.handler("default", ctx);
+	assert.deepEqual(mock.providers.get(CODEX_PROVIDER_ID), {
+		baseUrl: "https://proxy.example.test",
+		apiKey: "other-extension-key",
+	});
 });
 
 test("codex-account default does not let an in-flight refresh restore the previous account", async () => {

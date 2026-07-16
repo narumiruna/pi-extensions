@@ -4,7 +4,7 @@
 
 `@narumitw/pi-codex-accounts` is a native [Pi coding agent](https://pi.dev) extension that lets you log in to, switch between, and remove multiple ChatGPT Plus/Pro Codex subscription accounts.
 
-It keeps using Pi's built-in `openai-codex` provider. It does **not** add provider aliases, register OAuth providers, or change Pi's built-in `/login` and `/logout` provider lists.
+It keeps using Pi's built-in `openai-codex` provider and does **not** add provider aliases or register another OAuth provider. While a named account is active, it temporarily adds API-key resolution to that native provider so Pi can consume the account's runtime access token; returning to the default Pi login removes the overlay.
 
 ## ✨ Features
 
@@ -13,7 +13,8 @@ It keeps using Pi's built-in `openai-codex` provider. It does **not** add provid
 - Adds `/codex-logout <name>` for deleting one self-managed account.
 - Adds `(default pi login)` in the selector to clear the active self-managed account and return to Pi's normal `openai-codex` auth.
 - Stores credentials in `~/.pi/agent/pi-codex-accounts.json` with private file permissions.
-- Sets only the runtime API key for Pi's native `openai-codex` provider.
+- Sets a runtime API key on Pi's native `openai-codex` provider and verifies that Pi can resolve it before reporting activation success.
+- Temporarily installs the native-provider API-key bridge required by Pi's OAuth-only Codex provider, then removes it when self-managed auth becomes inactive.
 - Leaves your selected `/model` unchanged, matching Pi's built-in `/login` behavior, except it may select `openai-codex/gpt-5.5` when the current model is `unknown/unknown`.
 - Shows `codex:<name>` in the statusline only while the current model provider is `openai-codex`.
 - Fails closed if an active self-managed account cannot refresh or produce a runtime key, so Pi does not silently fall back to a different Codex account.
@@ -69,9 +70,9 @@ Remove one self-managed account:
 
 The canonical credential file is `~/.pi/agent/pi-codex-accounts.json`. A legacy-only `codex-accounts.json` is migrated under the existing credential-file lock, copied with `0600` permissions, and removed only after the canonical file is installed. If both files exist, the canonical file takes precedence and the legacy file is retained.
 
-When an active self-managed account is set, the extension applies that account's access token as Pi's runtime key for the native `openai-codex` provider. Login and refresh use Pi's built-in Codex OAuth implementation through the loader entry point supported by the running Pi version. Runtime key application supports both Pi 0.80.3's auth-storage shape and Pi 0.80.8's model-runtime shape.
+When an active self-managed account is set, the extension temporarily overlays Pi's native `openai-codex` provider with an API-key resolver, applies the account's access token as a runtime key, and verifies the resolved key before reporting success. This bridge is necessary because Pi 0.80.8's native Codex provider is OAuth-only: recording an `api_key` runtime credential without an API-key resolver leaves the provider unavailable. Login and refresh still use Pi's built-in Codex OAuth implementation through the loader entry point supported by the running Pi version. Runtime key application supports both Pi 0.80.3's auth-storage shape and Pi 0.80.8's model-runtime shape.
 
-When no self-managed account is active, the extension removes its runtime override and Pi uses its normal `openai-codex` auth resolution. That means existing `/login openai-codex`, `auth.json`, or environment behavior still works.
+When no self-managed account is active, the extension removes its runtime override and native-provider overlay, and Pi uses its normal `openai-codex` auth resolution. That means existing `/login openai-codex`, `auth.json`, or environment behavior still works. Return to `/codex-account default` before using Pi's built-in `/login` or `/logout` flow.
 
 If the active self-managed account cannot refresh or produce an API key, the extension keeps a non-empty failing runtime key in place. This prevents accidental fallback to a different Codex account.
 
@@ -91,6 +92,7 @@ extensions/pi-codex-accounts/
 ├── src/
 │   ├── codex-accounts.ts
 │   ├── oauth.ts
+│   ├── runtime-auth.ts
 │   └── storage.ts
 ├── test/
 │   ├── codex-accounts-storage.test.ts

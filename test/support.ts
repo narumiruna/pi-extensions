@@ -23,6 +23,8 @@ type MockPiApi = {
 	registerCommand(name: string, command: unknown): void;
 	registerFlag(name: string, flag: unknown): void;
 	registerTool(tool: unknown): void;
+	registerProvider(name: string, config: unknown): void;
+	unregisterProvider(name: string): void;
 	on(name: string, handler: MockHandler): void;
 	getFlag(name: string): unknown;
 	getActiveTools(): string[];
@@ -48,6 +50,9 @@ export function createMockPi(
 	const flags = new Map<string, MockFlag>();
 	const events = new Map<string, MockHandler[]>();
 	const tools: MockTool[] = [];
+	const providers = new Map<string, unknown>();
+	const providerRegistrations: Array<{ name: string; config: unknown }> = [];
+	const providerUnregistrations: string[] = [];
 	const entries: Array<{ customType: string; data: unknown }> = [];
 	const sentUserMessages: Array<{ text: string; options?: unknown }> = [];
 	const sentMessages: Array<{ message: unknown; options?: unknown }> = [];
@@ -66,6 +71,24 @@ export function createMockPi(
 		},
 		registerTool(tool: unknown) {
 			tools.push(tool as MockTool);
+		},
+		registerProvider(name: string, config: unknown) {
+			const previous = providers.get(name);
+			const effective =
+				previous &&
+				typeof previous === "object" &&
+				!Array.isArray(previous) &&
+				config &&
+				typeof config === "object" &&
+				!Array.isArray(config)
+					? { ...previous, ...config }
+					: config;
+			providers.set(name, effective);
+			providerRegistrations.push({ name, config });
+		},
+		unregisterProvider(name: string) {
+			providers.delete(name);
+			providerUnregistrations.push(name);
 		},
 		on(name: string, handler: MockHandler) {
 			events.set(name, [...(events.get(name) ?? []), handler]);
@@ -111,6 +134,9 @@ export function createMockPi(
 		flags,
 		events,
 		tools,
+		providers,
+		providerRegistrations,
+		providerUnregistrations,
 		entries,
 		sentUserMessages,
 		sentMessages,
