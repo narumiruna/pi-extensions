@@ -106,7 +106,7 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 test("configured Git validators are additive and exact", () => {
 	const cases = [
 		["rev-parse", "git rev-parse --show-toplevel"],
-		["blame", "git blame -- path/to/file"],
+		["blame", "git blame --no-textconv -- path/to/file"],
 		["describe", "git describe --always"],
 		["merge-base", "git merge-base HEAD origin/main"],
 		["ls-tree", "git ls-tree HEAD path/to/dir"],
@@ -191,17 +191,28 @@ test("maximal Git opt-in preserves execution and mutation guards", () => {
 	for (const command of [
 		"git cat-file --filters HEAD",
 		"git cat-file --filters=blob HEAD",
+		"git cat-file --filter HEAD:file.foo",
+		"git cat-file --filt HEAD:file.foo",
 		"git cat-file --textconv HEAD",
+		"git cat-file --textc HEAD:file.foo",
 		"git cat-file --textconv=true HEAD",
 		"git cat-file -p HEAD --output=copy",
 		"git --exec-path=/tmp cat-file -p HEAD",
 		"git --paginate cat-file -p HEAD",
 		"git -c alias.x='!touch output' x",
 		"git branch -D old",
+		"git branch -mrenamed",
+		"git branch -uorigin/main",
+		"git branch --e",
+		"git branch --u",
+		"git branch --creat",
 		"git branch --set-upstream-to=origin/main",
 		"git remote add origin url",
 		"git remote update",
 		"git diff --ext-diff",
+		"git grep --textc needle",
+		"git grep --open=less needle",
+		"git grep --ext-grep needle",
 		"git show --ext-diff=true HEAD",
 		"git show --textconv HEAD",
 		"git rev-parse $PI_PLAN_GIT_ARGUMENTS",
@@ -213,6 +224,40 @@ test("maximal Git opt-in preserves execution and mutation guards", () => {
 		isSafeCommandWithPolicy("git checkout main", { git: ["checkout"] }),
 		false,
 		"unknown configured names must not become permissions",
+	);
+});
+
+test("Git validators require guards for implicit external helpers", () => {
+	for (const command of [
+		"git diff",
+		"git diff --no-ext-diff",
+		"git diff --no-textconv",
+		"git show HEAD",
+		"git log -p -1",
+		"git log -U3 -1",
+		"git log --binary -1",
+		"git log --patch-with-stat -1",
+		"git log --show-signature -1",
+		"git log --format=%G? -1",
+		"git status --help",
+		"git remote show origin",
+	]) {
+		assert.equal(isSafeCommandWithPolicy(command), false, command);
+	}
+	assert.equal(isSafeCommandWithPolicy("git blame -- path/to/file", { git: ["blame"] }), false);
+
+	for (const command of [
+		"git diff --check",
+		"git diff --no-ext-diff --no-textconv HEAD~1",
+		"git show --no-textconv HEAD",
+		"git log -p --no-textconv -1",
+		"git remote show -n origin",
+	]) {
+		assert.equal(isSafeCommandWithPolicy(command), true, command);
+	}
+	assert.equal(
+		isSafeCommandWithPolicy("git blame --no-textconv -- path/to/file", { git: ["blame"] }),
+		true,
 	);
 });
 

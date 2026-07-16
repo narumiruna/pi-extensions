@@ -49,6 +49,7 @@ Plan mode currently permits eight built-in Git inspection subcommands and blocks
 - [x] Completed a focused bypass scan across aliases, global options, redirects, expansions/substitutions, pagers, browsers, filters, helpers, chained segments, and siblings; added regressions for environment, pathname, and brace expansion plus newline command separation; environment/glob expansion was hardened after the scan exposed option-injection risk.
 - [x] Ran targeted Biome with `--vcs-use-ignore-file=false`, pi-plan-mode typecheck, `npm test` (521 passing), full `npm run check`, an isolated `pi -ne -e ./extensions/pi-plan-mode --help` load smoke, and `just pack-plan-mode`; the dry run contains the expected 11 files.
 - [x] Committed focused changes as `b197ed4`, pushed the feature branch, opened PR #220 referencing issue #212, and verified both GitHub CI matrix jobs passed with no actionable review comments; archive this completed ledger with the final documentation commit.
+- [x] A follow-up edge-case audit blocked implicit textconv/external-diff/signature/transport helpers, dangerous abbreviated Git options, and attached or abbreviated branch mutations; `npm run check` passes 522 tests, the extension load smoke passes, and the 11-file package dry run remains correct.
 
 ## Risks
 

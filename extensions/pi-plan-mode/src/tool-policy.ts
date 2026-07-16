@@ -344,22 +344,21 @@ type ArgumentValidator = (args: string[]) => boolean;
 const allowReadOnlyArguments: ArgumentValidator = () => true;
 const BUILTIN_GIT_VALIDATORS: Record<BuiltinSafeGitSubcommand, ArgumentValidator> = {
 	status: allowReadOnlyArguments,
-	log: allowReadOnlyArguments,
-	diff: allowReadOnlyArguments,
-	show: allowReadOnlyArguments,
+	log: isSafeGitLogArguments,
+	diff: isSafeGitDiffArguments,
+	show: requiresNoTextconv,
 	branch: isSafeGitBranchArguments,
 	remote: isSafeGitRemoteArguments,
 	"ls-files": allowReadOnlyArguments,
-	grep: allowReadOnlyArguments,
+	grep: isSafeGitGrepArguments,
 };
 const CONFIGURABLE_GIT_VALIDATORS: Record<ConfigurableSafeGitSubcommand, ArgumentValidator> = {
 	"rev-parse": allowReadOnlyArguments,
-	blame: allowReadOnlyArguments,
+	blame: requiresNoTextconv,
 	describe: allowReadOnlyArguments,
 	"merge-base": allowReadOnlyArguments,
 	"ls-tree": allowReadOnlyArguments,
-	"cat-file": (args) =>
-		!args.some((argument) => argument === "--filters" || argument.startsWith("--filters=")),
+	"cat-file": isSafeGitCatFileArguments,
 };
 const GH_VALIDATORS: Record<SafeGhSubcommandPath, ArgumentValidator> = {
 	"pr view": isSafeGhReadArguments,
@@ -446,6 +445,10 @@ function isSafeGitCommand(args: string[], safeSubcommands: SafeSubcommands) {
 function hasSafeGitArguments(subcommand: string, args: string[]) {
 	return !args.some(
 		(argument) =>
+			argument === "--help" ||
+			argument === "--show-signature" ||
+			argument.startsWith("--show-signature=") ||
+			argument.includes("%G") ||
 			argument === "--output" ||
 			argument.startsWith("--output=") ||
 			argument === "--ext-diff" ||
@@ -459,29 +462,84 @@ function hasSafeGitArguments(subcommand: string, args: string[]) {
 	);
 }
 
+function isSafeGitCatFileArguments(args: string[]) {
+	return !args.some(
+		(argument) =>
+			matchesLongOptionPrefix(argument, "--filters", "--fi") ||
+			matchesLongOptionPrefix(argument, "--textconv", "--t"),
+	);
+}
+
+function isSafeGitGrepArguments(args: string[]) {
+	return !args.some(
+		(argument) =>
+			matchesLongOptionPrefix(argument, "--textconv", "--textc") ||
+			matchesLongOptionPrefix(argument, "--open-files-in-pager", "--op") ||
+			matchesLongOptionPrefix(argument, "--ext-grep", "--ext"),
+	);
+}
+
+function matchesLongOptionPrefix(argument: string, option: string, shortest: string) {
+	const optionName = argument.split("=", 1)[0] ?? "";
+	return optionName.length >= shortest.length && option.startsWith(optionName);
+}
+
+function isSafeGitDiffArguments(args: string[]) {
+	return (
+		args.includes("--check") || (args.includes("--no-ext-diff") && args.includes("--no-textconv"))
+	);
+}
+
+function isSafeGitLogArguments(args: string[]) {
+	if (args.includes("--no-textconv")) return true;
+	return !args.some(
+		(argument) =>
+			argument === "-p" ||
+			argument.startsWith("-p") ||
+			argument === "-u" ||
+			argument.startsWith("-U") ||
+			argument === "-c" ||
+			argument === "--patch" ||
+			argument.startsWith("--patch=") ||
+			argument.startsWith("--patch-with-") ||
+			argument === "--unified" ||
+			argument.startsWith("--unified=") ||
+			argument === "--binary" ||
+			argument === "--cc" ||
+			argument === "--remerge-diff",
+	);
+}
+
+function requiresNoTextconv(args: string[]) {
+	return args.includes("--no-textconv");
+}
+
 function isSafeGitBranchArguments(args: string[]) {
 	if (args.some((argument) => !argument.startsWith("-"))) return false;
 	return !args.some(
 		(argument) =>
-			[
-				"-d",
-				"-D",
-				"-m",
-				"-M",
-				"-c",
-				"-C",
-				"--delete",
-				"--move",
-				"--copy",
-				"--edit-description",
-				"--unset-upstream",
-			].includes(argument) || argument.startsWith("--set-upstream-to"),
+			/^-[^-]*[dDmMcCu]/.test(argument) ||
+			matchesLongOptionPrefix(argument, "--delete", "--del") ||
+			matchesLongOptionPrefix(argument, "--move", "--mov") ||
+			matchesLongOptionPrefix(argument, "--copy", "--cop") ||
+			matchesLongOptionPrefix(argument, "--edit-description", "--e") ||
+			matchesLongOptionPrefix(argument, "--unset-upstream", "--u") ||
+			matchesLongOptionPrefix(argument, "--set-upstream-to", "--set-u") ||
+			matchesLongOptionPrefix(argument, "--create-reflog", "--creat"),
 	);
 }
 
 function isSafeGitRemoteArguments(args: string[]) {
-	const action = args.find((argument) => !argument.startsWith("-"));
-	return action === undefined || action === "show" || action === "get-url";
+	const actionIndex = args.findIndex((argument) => !argument.startsWith("-"));
+	if (actionIndex < 0) return true;
+	const action = args[actionIndex];
+	if (action === "get-url") return true;
+	if (action !== "show") return false;
+
+	const showArgs = args.slice(actionIndex + 1);
+	if (showArgs.includes("--")) return false;
+	const remotes = showArgs.filter((argument) => !argument.startsWith("-"));
+	return remotes.length === 0 || (remotes.length === 1 && showArgs.includes("-n"));
 }
 
 function isSafeGhCommand(args: string[], safeSubcommands: SafeSubcommands) {
