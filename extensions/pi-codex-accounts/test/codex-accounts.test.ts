@@ -1,15 +1,7 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
-import {
-	FileAuthStorageBackend,
-	InMemoryAuthStorageBackend,
-} from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexAccounts, {
-	CODEX_ACCOUNTS_FILE,
 	CODEX_ACCOUNTS_STATUS_KEY,
 	CODEX_PROVIDER_ID,
 	CodexAccountStore,
@@ -21,6 +13,7 @@ import codexAccounts, {
 	isOpenAICodexModel,
 	parseAccountName,
 } from "../src/codex-accounts.js";
+import { InMemoryCodexAccountStorageBackend as InMemoryAuthStorageBackend } from "../src/storage.js";
 
 const validCred = (suffix = "") => ({
 	access: `access-${suffix}`,
@@ -54,138 +47,7 @@ test("parseAccountName accepts small account labels and rejects unsafe names", (
 	assert.equal(parseAccountName("a".repeat(65)).ok, false);
 });
 
-test("store writes private account files and redacts invalid JSON", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-"));
-	const file = join(dir, "pi-codex-accounts.json");
-	const store = new CodexAccountStore(new FileAuthStorageBackend(file));
-
-	await store.write({ active: "work", accounts: { work: validCred("work") } });
-	const mode = (await stat(file)).mode & 0o777;
-	assert.equal(mode, 0o600);
-
-	await store.writeRawForTest('{"active":"work","accounts":{"work":{"access":"secret-token"}}');
-	await assert.rejects(store.readAsync(), (error) => {
-		assert.ok(error instanceof Error);
-		assert.match(error.message, /Invalid Codex accounts JSON/);
-		assert.doesNotMatch(error.message, /secret-token/);
-		return true;
-	});
-});
-
-test("default store migrates credentials to the canonical package filename", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-migration-"));
-	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = dir;
-	try {
-		const legacyPath = join(dir, "codex-accounts.json");
-		const canonicalPath = join(dir, "pi-codex-accounts.json");
-		const raw = JSON.stringify({
-			active: "work",
-			accounts: { work: validCred("work") },
-			futureOption: true,
-		});
-		await writeFile(legacyPath, raw, { mode: 0o644 });
-		await chmod(legacyPath, 0o644);
-
-		const mock = createMockPi();
-		codexAccounts(mock.pi);
-		assert.equal(CODEX_ACCOUNTS_FILE, "pi-codex-accounts.json");
-		assert.equal(await readFile(canonicalPath, "utf8"), raw);
-		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
-		await assert.rejects(access(legacyPath));
-
-		const context = createMockContext();
-		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		assert.match(context.notifications[0]?.message ?? "", /migrated/i);
-	} finally {
-		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(dir, { recursive: true, force: true });
-	}
-});
-
-test("migration preserves malformed credential data without leaking tokens", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-invalid-migration-"));
-	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = dir;
-	try {
-		const legacyPath = join(dir, "codex-accounts.json");
-		const canonicalPath = join(dir, "pi-codex-accounts.json");
-		await writeFile(legacyPath, '{"accounts":{"work":{"access":"secret-token"}}', {
-			mode: 0o600,
-		});
-		const store = new CodexAccountStore();
-
-		await assert.rejects(store.readAsync(), (error) => {
-			assert.ok(error instanceof Error);
-			assert.match(error.message, /pi-codex-accounts\.json/);
-			assert.doesNotMatch(error.message, /secret-token/);
-			return true;
-		});
-		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
-		await assert.rejects(access(legacyPath));
-	} finally {
-		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(dir, { recursive: true, force: true });
-	}
-});
-
-test("canonical Codex accounts file wins without deleting the legacy file", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-precedence-"));
-	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = dir;
-	try {
-		const legacyPath = join(dir, "codex-accounts.json");
-		const canonicalPath = join(dir, "pi-codex-accounts.json");
-		await writeFile(
-			legacyPath,
-			JSON.stringify({ active: "old", accounts: { old: validCred("old") } }),
-			{ mode: 0o600 },
-		);
-		await writeFile(
-			canonicalPath,
-			JSON.stringify({ active: "new", accounts: { new: validCred("new") } }),
-			{ mode: 0o644 },
-		);
-		await chmod(canonicalPath, 0o644);
-
-		const store = new CodexAccountStore();
-		assert.equal(store.read().active, "new");
-		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
-		assert.equal((await stat(legacyPath)).isFile(), true);
-	} finally {
-		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(dir, { recursive: true, force: true });
-	}
-});
-
-test("default store falls back to legacy credentials for a broken canonical symlink", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-broken-canonical-"));
-	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = dir;
-	try {
-		const legacyPath = join(dir, "codex-accounts.json");
-		const canonicalPath = join(dir, "pi-codex-accounts.json");
-		await writeFile(
-			legacyPath,
-			JSON.stringify({ active: "legacy", accounts: { legacy: validCred("legacy") } }),
-			{ mode: 0o600 },
-		);
-		await symlink("missing-target", canonicalPath);
-
-		const store = new CodexAccountStore();
-		assert.equal(store.read().active, "legacy");
-		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
-	} finally {
-		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(dir, { recursive: true, force: true });
-	}
-});
-
-test("ensureActiveCodexAuth clears runtime auth when no self-managed account is active", async () => {
+test("ensureActiveCodexAuth leaves normal Pi auth unchanged when no account override was applied", async () => {
 	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
 	const calls: string[] = [];
 	const { ctx } = createMockContext({
@@ -200,7 +62,7 @@ test("ensureActiveCodexAuth clears runtime auth when no self-managed account is 
 	const result = await ensureActiveCodexAuth(ctx, store);
 
 	assert.deepEqual(result, { status: "inactive" });
-	assert.deepEqual(calls, [`remove:${CODEX_PROVIDER_ID}`]);
+	assert.deepEqual(calls, []);
 });
 
 test("ensureActiveCodexAuth applies active account access tokens", async () => {
@@ -220,6 +82,271 @@ test("ensureActiveCodexAuth applies active account access tokens", async () => {
 
 	assert.deepEqual(result, { status: "active", accountName: "work" });
 	assert.deepEqual(calls, [`set:${CODEX_PROVIDER_ID}:access-work`]);
+});
+
+test("missing-account cleanup preserves a concurrently selected account", async () => {
+	const missingSnapshot = JSON.stringify({ active: "missing", accounts: {} });
+	const currentSnapshot = JSON.stringify({ active: "home", accounts: { home: validCred("home") } });
+	let raw = missingSnapshot;
+	let replaceAfterRead = true;
+	const backend = {
+		withLock<T>(mutator: (current: string | undefined) => { result: T; next?: string }): T {
+			const { result, next } = mutator(raw);
+			if (next !== undefined) raw = next;
+			return result;
+		},
+		async withLockAsync<T>(
+			mutator: (current: string | undefined) => Promise<{ result: T; next?: string }>,
+		): Promise<T> {
+			const { result, next } = await mutator(raw);
+			if (next !== undefined) raw = next;
+			else if (replaceAfterRead) {
+				replaceAfterRead = false;
+				raw = currentSnapshot;
+			}
+			return result;
+		},
+	};
+	const store = new CodexAccountStore(backend);
+	const runtimeCalls: string[] = [];
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: (provider: string, key: string) =>
+					runtimeCalls.push(`set:${provider}:${key}`),
+				removeRuntimeApiKey: (provider: string) => runtimeCalls.push(`remove:${provider}`),
+			},
+		},
+	});
+
+	const result = await ensureActiveCodexAuth(ctx, store, {
+		oauthProvider: {
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+
+	assert.deepEqual(result, { status: "active", accountName: "home" });
+	assert.equal((await store.readAsync()).active, "home");
+	assert.deepEqual(runtimeCalls, [`set:${CODEX_PROVIDER_ID}:access-home`]);
+});
+
+test("ensureActiveCodexAuth supports and awaits Pi's model runtime auth overrides", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	const calls: string[] = [];
+	let releaseSet: (() => void) | undefined;
+	const setBlocked = new Promise<void>((resolve) => {
+		releaseSet = resolve;
+	});
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				async setRuntimeApiKey(provider: string, key: string) {
+					calls.push(`start:${provider}:${key}`);
+					await setBlocked;
+					calls.push(`finish:${provider}:${key}`);
+				},
+				async removeRuntimeApiKey(provider: string) {
+					calls.push(`remove:${provider}`);
+				},
+			},
+		},
+	});
+
+	let settled = false;
+	const auth = ensureActiveCodexAuth(ctx, store).finally(() => {
+		settled = true;
+	});
+	await new Promise<void>((resolve) => setImmediate(resolve));
+
+	assert.equal(settled, false);
+	assert.deepEqual(calls, [`start:${CODEX_PROVIDER_ID}:access-work`]);
+	releaseSet?.();
+	assert.deepEqual(await auth, { status: "active", accountName: "work" });
+	assert.deepEqual(calls, [
+		`start:${CODEX_PROVIDER_ID}:access-work`,
+		`finish:${CODEX_PROVIDER_ID}:access-work`,
+	]);
+});
+
+test("account reset removes an async runtime override that is still being applied", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	const mock = createMockPi();
+	codexAccounts(mock.pi, { store });
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+
+	const calls: string[] = [];
+	let releaseSet: (() => void) | undefined;
+	const setBlocked = new Promise<void>((resolve) => {
+		releaseSet = resolve;
+	});
+	let signalSetStarted: (() => void) | undefined;
+	const setStarted = new Promise<void>((resolve) => {
+		signalSetStarted = resolve;
+	});
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				async setRuntimeApiKey(provider: string, key: string) {
+					calls.push(`start:${provider}:${key}`);
+					signalSetStarted?.();
+					await setBlocked;
+					calls.push(`finish:${provider}:${key}`);
+				},
+				async removeRuntimeApiKey(provider: string) {
+					calls.push(`remove:${provider}`);
+				},
+			},
+		},
+	});
+
+	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await setStarted;
+	const reset = command.handler("default", ctx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	releaseSet?.();
+	await Promise.all([startup, reset]);
+
+	assert.equal((await store.readAsync()).active, undefined);
+	assert.deepEqual(calls, [
+		`start:${CODEX_PROVIDER_ID}:access-work`,
+		`finish:${CODEX_PROVIDER_ID}:access-work`,
+		`remove:${CODEX_PROVIDER_ID}`,
+	]);
+});
+
+test("account reset during API-key conversion cannot restore a stale runtime override", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	let releaseConversion: (() => void) | undefined;
+	const conversionBlocked = new Promise<void>((resolve) => {
+		releaseConversion = resolve;
+	});
+	let signalConversionStarted: (() => void) | undefined;
+	const conversionStarted = new Promise<void>((resolve) => {
+		signalConversionStarted = resolve;
+	});
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("unexpected login");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			async getApiKey(credential) {
+				signalConversionStarted?.();
+				await conversionBlocked;
+				return credential.access;
+			},
+		},
+	});
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+	const runtimeCalls: string[] = [];
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: (provider: string, key: string) =>
+					runtimeCalls.push(`set:${provider}:${key}`),
+				removeRuntimeApiKey: (provider: string) => runtimeCalls.push(`remove:${provider}`),
+			},
+		},
+	});
+
+	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await conversionStarted;
+	await command.handler("default", ctx);
+	releaseConversion?.();
+	await startup;
+
+	assert.equal((await store.readAsync()).active, undefined);
+	assert.deepEqual(runtimeCalls, []);
+});
+
+test("session shutdown during API-key conversion cannot restore a runtime override", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	let releaseConversion: (() => void) | undefined;
+	const conversionBlocked = new Promise<void>((resolve) => {
+		releaseConversion = resolve;
+	});
+	let signalConversionStarted: (() => void) | undefined;
+	const conversionStarted = new Promise<void>((resolve) => {
+		signalConversionStarted = resolve;
+	});
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("unexpected login");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			async getApiKey(credential) {
+				signalConversionStarted?.();
+				await conversionBlocked;
+				return credential.access;
+			},
+		},
+	});
+	const runtimeCalls: string[] = [];
+	const { ctx, statuses } = createMockContext({
+		model: { provider: CODEX_PROVIDER_ID },
+		modelRegistry: {
+			runtime: {
+				setRuntimeApiKey: (provider: string, key: string) =>
+					runtimeCalls.push(`set:${provider}:${key}`),
+				removeRuntimeApiKey: (provider: string) => runtimeCalls.push(`remove:${provider}`),
+			},
+		},
+	});
+
+	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await conversionStarted;
+	await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+	releaseConversion?.();
+	await startup;
+
+	assert.deepEqual(runtimeCalls, []);
+	assert.equal(statuses.get(CODEX_ACCOUNTS_STATUS_KEY), undefined);
+});
+
+test("a partially failed runtime setter remains removable", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	const runtimeCalls: string[] = [];
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			runtime: {
+				async setRuntimeApiKey(provider: string, key: string) {
+					runtimeCalls.push(`set:${provider}:${key}`);
+					throw new Error("model refresh failed after applying the key");
+				},
+				removeRuntimeApiKey(provider: string) {
+					runtimeCalls.push(`remove:${provider}`);
+				},
+			},
+		},
+	});
+
+	await assert.rejects(ensureActiveCodexAuth(ctx, store), /model refresh failed/);
+	await store.update((data) => ({ ...data, active: undefined }));
+	assert.deepEqual(await ensureActiveCodexAuth(ctx, store), { status: "inactive" });
+
+	assert.deepEqual(runtimeCalls, [
+		`set:${CODEX_PROVIDER_ID}:access-work`,
+		`remove:${CODEX_PROVIDER_ID}`,
+	]);
 });
 
 test("ensureActiveCodexAuth refreshes near-expired active accounts", async () => {
@@ -283,7 +410,7 @@ test("concurrent auth checks refresh an expiring account only once", async () =>
 	]);
 
 	assert.equal(refreshCalls, 1);
-	assert.deepEqual(runtimeKeys, ["access-new", "access-new"]);
+	assert.deepEqual(runtimeKeys, ["access-new"]);
 });
 
 test("ensureActiveCodexAuth fails closed when active account refresh fails", async () => {
@@ -313,6 +440,70 @@ test("ensureActiveCodexAuth fails closed when active account refresh fails", asy
 
 	assert.equal(result.status, "error");
 	assert.deepEqual(calls, [`set:${CODEX_PROVIDER_ID}:${FAIL_CLOSED_API_KEY}`]);
+});
+
+test("ensureActiveCodexAuth fails closed and redacts API-key conversion errors", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	const credential = {
+		access: "opaque-access-secret",
+		refresh: "opaque-refresh-secret",
+		expires: Date.now() + 60 * 60 * 1000,
+	};
+	await store.write({ active: "work", accounts: { work: credential } });
+	const runtimeCalls: string[] = [];
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: (provider: string, key: string) =>
+					runtimeCalls.push(`set:${provider}:${key}`),
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	const result = await ensureActiveCodexAuth(ctx, store, {
+		oauthProvider: {
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey() {
+				throw new Error(`conversion failed for ${credential.access} / ${credential.refresh}`);
+			},
+		},
+	});
+
+	assert.equal(result.status, "error");
+	if (result.status !== "error") assert.fail("expected an auth error");
+	assert.doesNotMatch(result.message, /opaque-(access|refresh)-secret/);
+	assert.deepEqual(runtimeCalls, [`set:${CODEX_PROVIDER_ID}:${FAIL_CLOSED_API_KEY}`]);
+});
+
+test("codex-login rejects the reserved default account name", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	let loginCalls = 0;
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				loginCalls += 1;
+				return validCred("default");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const command = mock.commands.get("codex-login");
+	assert.ok(command);
+	const { ctx, notifications } = createMockContext({ hasUI: true });
+
+	await command.handler("DEFAULT", ctx);
+
+	assert.equal(loginCalls, 0);
+	assert.deepEqual(await store.readAsync(), { accounts: {} });
+	assert.match(notifications.at(-1)?.message ?? "", /reserved/i);
 });
 
 test("codex-login stores credentials, activates the account, and does not change non-unknown models", async () => {
@@ -351,6 +542,51 @@ test("codex-login stores credentials, activates the account, and does not change
 	assert.deepEqual(runtimeCalls, [`set:${CODEX_PROVIDER_ID}:access-work`]);
 	assert.equal(mock.setModels.length, 0);
 	assert.match(notifications.at(-1)?.message ?? "", /Logged in Codex account "work"/);
+});
+
+test("codex-login forwards per-prompt abort signals to UI dialogs", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	const promptController = new AbortController();
+	let inputSignal: AbortSignal | undefined;
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login(callbacks) {
+				const code = await callbacks.onPrompt({
+					message: "Paste the authorization code",
+					placeholder: "code#state",
+					signal: promptController.signal,
+				});
+				assert.equal(code, "manual-code");
+				return validCred("work");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const command = mock.commands.get("codex-login");
+	assert.ok(command);
+	const { ctx } = createMockContext({
+		hasUI: true,
+		input: async (_title: string, _placeholder: string, options?: { signal?: AbortSignal }) => {
+			inputSignal = options?.signal;
+			return "manual-code";
+		},
+		model: { provider: "anthropic", id: "claude", api: "anthropic-messages" },
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: () => undefined,
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	await command.handler("work", ctx);
+
+	assert.equal(inputSignal, promptController.signal);
 });
 
 test("codex-login selects the default Codex model only from unknown/unknown", async () => {
@@ -601,6 +837,8 @@ test("codex-logout deletes accounts and clears active runtime auth", async () =>
 		},
 	});
 
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	runtimeCalls.length = 0;
 	await command.handler("home", ctx);
 	let data = await store.readAsync();
 	assert.equal(data.active, "work");

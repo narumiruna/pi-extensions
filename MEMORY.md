@@ -54,6 +54,12 @@
 - Symptom: Pi compaction event docs may mention `reason`/`willRetry` while project target typings lack them. Cause: local/global `@earendil-works/pi-coding-agent` version skew. Fix: run `npm install`, verify target version, and treat compaction event fields as optional.
 - `fs.watch` on a single file can miss branch HEAD writes on some platforms; watch the parent directory and filter the `HEAD` filename instead.
 - Symptom: Pi 0.79 CI rejects `ProviderHeaders` imports from `@earendil-works/pi-ai`. Cause: that root type export is newer than the supported compatibility floor. Fix: use the compatible local `Record<string, string>` auth-header shape when an extension must typecheck across the 0.79/0.80 matrix.
+- Pi 0.80.8 no longer root-exports `AuthStorage` or its file/in-memory backends, and `@earendil-works/pi-ai/oauth` retains only compatibility types. Keep extension credential storage package-owned; for cross-version OAuth, use the legacy `/oauth` value when present and lazily fall back to `providers/all` only on loaders that support it.
+- Provider-owned OAuth can abort an individual prompt after an out-of-band callback wins; preserve each prompt's signal through compatibility adapters and pass it to Pi's UI dialog options.
+- Pi runtime API-key set/remove methods and OAuth key conversion may be asynchronous; serialize mutations per target, mark possible ownership before awaiting a setter, revalidate selected credentials, and invalidate captured generations on clear/shutdown.
+- Legacy credential migration must wait through transient cross-process lock contention; do not bind a store to the legacy path after `ELOCKED`, because the winning process may remove that file and install the canonical one.
+- Treat parsed credential maps as own-property dictionaries: names such as `__proto__` and `constructor` must not mutate or resolve through `Object.prototype`.
+- Active-account API-key conversion failures must fail closed, and user-facing errors must redact the exact current access and refresh secrets rather than relying only on token-shape regexes.
 
 ## TASTE
 

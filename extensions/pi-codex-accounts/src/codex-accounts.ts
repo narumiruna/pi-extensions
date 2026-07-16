@@ -12,18 +12,22 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-	FileAuthStorageBackend,
-	getAgentDir,
-	type AuthStorageBackend,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
+	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import {
-	openaiCodexOAuthProvider,
+	type CodexOAuthCallbacks,
+	type CodexOAuthPrompt,
+	type CodexOAuthProvider,
+	type CodexOAuthSelectPrompt,
+	type DeviceCodeInfo,
+	getDefaultCodexOAuthProvider,
 	type OAuthCredentials,
-	type OAuthLoginCallbacks,
-} from "@earendil-works/pi-ai/oauth";
+	type RefreshOnlyCodexOAuthProvider,
+} from "./oauth.js";
+import { type CodexAccountStorageBackend, FileCodexAccountStorageBackend } from "./storage.js";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
@@ -34,32 +38,29 @@ export const DEFAULT_PI_LOGIN_LABEL = "(default pi login)";
 export const FAIL_CLOSED_API_KEY = "pi-codex-accounts-refresh-failed";
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
+const MIGRATION_LOCK_TIMEOUT_MS = 30_000;
 let pendingAccountsMigrationNotice: string | undefined;
 const ACCOUNT_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 type RuntimeAuthStorage = {
-	setRuntimeApiKey(provider: string, apiKey: string): void;
-	removeRuntimeApiKey(provider: string): void;
+	setRuntimeApiKey(provider: string, apiKey: string): void | Promise<void>;
+	removeRuntimeApiKey(provider: string): void | Promise<void>;
 };
 
-type DeviceCodeInfo = {
-	userCode: string;
-	verificationUri: string;
-	intervalSeconds?: number;
-	expiresInSeconds?: number;
+type RuntimeOverrideState = {
+	appliedApiKey?: string;
+	generation: number;
+	mayHaveOverride: boolean;
+	operationTail: Promise<void>;
 };
 
-type CodexOAuthCallbacks = OAuthLoginCallbacks & {
-	onDeviceCode?: (info: DeviceCodeInfo) => void;
+type RuntimeOverrideSnapshot = {
+	target: RuntimeAuthStorage & object;
+	state: RuntimeOverrideState;
+	generation: number;
 };
 
-type CodexOAuthProvider = {
-	login(callbacks: CodexOAuthCallbacks): Promise<OAuthCredentials>;
-	refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-	getApiKey(credentials: OAuthCredentials): string;
-};
-
-type RefreshOnlyCodexOAuthProvider = Pick<CodexOAuthProvider, "refreshToken" | "getApiKey">;
+const runtimeOverrideStates = new WeakMap<object, RuntimeOverrideState>();
 
 export type StoredCodexCredential = {
 	access: string;
@@ -91,10 +92,12 @@ export type CodexAccountsDependencies = {
 };
 
 export class CodexAccountStore {
-	private readonly backend: AuthStorageBackend;
+	private readonly backend: CodexAccountStorageBackend;
 	private operationTail: Promise<void> = Promise.resolve();
 
-	constructor(backend: AuthStorageBackend = new FileAuthStorageBackend(defaultAccountsPath())) {
+	constructor(
+		backend: CodexAccountStorageBackend = new FileCodexAccountStorageBackend(defaultAccountsPath()),
+	) {
 		this.backend = backend;
 	}
 
@@ -110,7 +113,9 @@ export class CodexAccountStore {
 		await this.updateAsync(async () => data);
 	}
 
-	async update(mutator: (data: CodexAccountsData) => CodexAccountsData): Promise<CodexAccountsData> {
+	async update(
+		mutator: (data: CodexAccountsData) => CodexAccountsData,
+	): Promise<CodexAccountsData> {
 		return this.updateAsync(async (data) => mutator(data));
 	}
 
@@ -144,9 +149,9 @@ export default function codexAccounts(
 ) {
 	const store = dependencies.store ?? new CodexAccountStore();
 	let migrationNotice = dependencies.store ? undefined : consumeAccountsMigrationNotice();
-	const oauthProvider = dependencies.oauthProvider ?? openaiCodexOAuthProvider;
-	// Pi's extension loader only exposes pi-ai's root, compat, and OAuth entry points.
-	// Keep cleanup injectable until the WebSocket API is available through a loader-safe export.
+	const oauthProvider =
+		dependencies.oauthProvider ?? getDefaultCodexOAuthProvider(CODEX_PROVIDER_ID);
+	// Keep cleanup injectable until WebSocket controls are available through a loader-safe export.
 	const closeWebSocketSessions = dependencies.closeWebSocketSessions ?? (() => undefined);
 	let appliedAuthIdentity: string | undefined;
 	let authIdentityInitialized = false;
@@ -169,6 +174,10 @@ export default function codexAccounts(
 			const parsedName = parseAccountName(args);
 			if (!parsedName.ok) {
 				ctx.ui.notify(parsedName.error, "warning");
+				return;
+			}
+			if (isDefaultPiLoginArg(parsedName.name)) {
+				ctx.ui.notify(`"${parsedName.name}" is reserved for Pi's default Codex login.`, "warning");
 				return;
 			}
 			if (!ctx.hasUI) {
@@ -217,9 +226,10 @@ export default function codexAccounts(
 
 	pi.registerCommand("codex-logout", {
 		description: "Remove a self-managed Codex account",
-		getArgumentCompletions: (prefix) => completeStoredAccountArguments(prefix, store, {
-			includeDefault: false,
-		}),
+		getArgumentCompletions: (prefix) =>
+			completeStoredAccountArguments(prefix, store, {
+				includeDefault: false,
+			}),
 		handler: async (args, ctx) => {
 			const parsedName = parseAccountName(args);
 			if (!parsedName.ok) {
@@ -230,7 +240,7 @@ export default function codexAccounts(
 			let removed = false;
 			let removedActive = false;
 			await store.update((data) => {
-				if (!data.accounts[parsedName.name]) return data;
+				if (!getOwnStoredAccount(data.accounts, parsedName.name)) return data;
 				removed = true;
 				removedActive = data.active === parsedName.name;
 				const accounts = { ...data.accounts };
@@ -263,19 +273,22 @@ export default function codexAccounts(
 		await sync(ctx);
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
-		clearRuntimeCodexAuth(ctx);
+	pi.on("session_shutdown", async (_event, ctx) => {
+		await clearRuntimeCodexAuth(ctx);
 		setStatus(ctx, undefined);
 	});
 }
 
-export function parseAccountName(input: string): { ok: true; name: string } | { ok: false; error: string } {
+export function parseAccountName(
+	input: string,
+): { ok: true; name: string } | { ok: false; error: string } {
 	const name = input.trim();
 	if (!name) return { ok: false, error: "Account name is required." };
 	if (!ACCOUNT_NAME_RE.test(name)) {
 		return {
 			ok: false,
-			error: "Account names must be 1-64 characters using letters, numbers, dot, underscore, or hyphen.",
+			error:
+				"Account names must be 1-64 characters using letters, numbers, dot, underscore, or hyphen.",
 		};
 	}
 	return { ok: true, name };
@@ -286,34 +299,37 @@ export async function ensureActiveCodexAuth(
 	store: CodexAccountStore,
 	options: { oauthProvider?: RefreshOnlyCodexOAuthProvider; now?: number } = {},
 ): Promise<EnsureActiveCodexAuthResult> {
+	const runtimeOverride = captureRuntimeOverride(ctx);
 	const data = await store.readAsync();
 	const active = data.active;
 	if (!active) {
-		clearRuntimeCodexAuth(ctx);
+		await clearRuntimeCodexAuth(ctx);
 		return { status: "inactive" };
 	}
 
-	let credential = data.accounts[active];
+	let credential = getOwnStoredAccount(data.accounts, active);
 	if (!credential) {
-		await store.update((current) => ({ ...current, active: undefined }));
-		clearRuntimeCodexAuth(ctx);
+		const current = await store.update((latest) => {
+			if (latest.active !== active || getOwnStoredAccount(latest.accounts, active)) return latest;
+			return { ...latest, active: undefined };
+		});
+		if (current.active) return ensureActiveCodexAuth(ctx, store, options);
+		await clearRuntimeCodexAuth(ctx);
 		return { status: "inactive" };
 	}
 
-	const oauthProvider = options.oauthProvider ?? openaiCodexOAuthProvider;
+	const oauthProvider = options.oauthProvider ?? getDefaultCodexOAuthProvider(CODEX_PROVIDER_ID);
 	if (credential.expires <= (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
 		let refreshError: unknown;
 		const current = await store.updateAsync(async (latest) => {
-			if (latest.active !== active || !latest.accounts[active]) return latest;
-			const latestCredential = latest.accounts[active];
+			const latestCredential = getOwnStoredAccount(latest.accounts, active);
+			if (latest.active !== active || !latestCredential) return latest;
+			credential = latestCredential;
 			if (latestCredential.expires > (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
-				credential = latestCredential;
 				return latest;
 			}
 			try {
-				const refreshed = normalizeCredential(
-					await oauthProvider.refreshToken(latestCredential),
-				);
+				const refreshed = normalizeCredential(await oauthProvider.refreshToken(latestCredential));
 				credential = refreshed;
 				return {
 					...latest,
@@ -324,21 +340,64 @@ export async function ensureActiveCodexAuth(
 				return latest;
 			}
 		});
-		if (current.active !== active) {
+		if (current.active !== active || !getOwnStoredAccount(current.accounts, active)) {
 			return ensureActiveCodexAuth(ctx, store, options);
 		}
 		if (refreshError !== undefined) {
-			setRuntimeCodexApiKey(ctx, FAIL_CLOSED_API_KEY);
+			if (!(await activeCredentialMatches(store, active, credential))) {
+				return ensureActiveCodexAuth(ctx, store, options);
+			}
+			if (!(await setRuntimeCodexApiKey(runtimeOverride, FAIL_CLOSED_API_KEY))) {
+				return { status: "inactive" };
+			}
 			return {
 				status: "error",
 				accountName: active,
-				message: redactTokenText(errorMessage(refreshError)),
+				message: redactCredentialError(refreshError, credential),
 			};
 		}
 	}
 
-	setRuntimeCodexApiKey(ctx, oauthProvider.getApiKey(credential));
+	let apiKey: string;
+	try {
+		apiKey = await oauthProvider.getApiKey(credential);
+	} catch (error) {
+		if (!(await activeCredentialMatches(store, active, credential))) {
+			return ensureActiveCodexAuth(ctx, store, options);
+		}
+		if (!(await setRuntimeCodexApiKey(runtimeOverride, FAIL_CLOSED_API_KEY))) {
+			return { status: "inactive" };
+		}
+		return {
+			status: "error",
+			accountName: active,
+			message: redactCredentialError(error, credential),
+		};
+	}
+	if (!(await activeCredentialMatches(store, active, credential))) {
+		return ensureActiveCodexAuth(ctx, store, options);
+	}
+	if (!(await setRuntimeCodexApiKey(runtimeOverride, apiKey))) {
+		return { status: "inactive" };
+	}
 	return { status: "active", accountName: active };
+}
+
+async function activeCredentialMatches(
+	store: CodexAccountStore,
+	accountName: string,
+	expected: StoredCodexCredential,
+): Promise<boolean> {
+	const latest = await store.readAsync();
+	const current = getOwnStoredAccount(latest.accounts, accountName);
+	return (
+		latest.active === accountName &&
+		current !== undefined &&
+		current.access === expected.access &&
+		current.refresh === expected.refresh &&
+		current.expires === expected.expires &&
+		current.accountId === expected.accountId
+	);
 }
 
 export function completeStoredAccountArguments(
@@ -355,7 +414,13 @@ export function completeStoredAccountArguments(
 	}
 
 	const items: CommandArgumentCompletion[] = includeDefault
-		? [{ value: "default", label: DEFAULT_PI_LOGIN_LABEL, description: "Use Pi's built-in Codex login" }]
+		? [
+				{
+					value: "default",
+					label: DEFAULT_PI_LOGIN_LABEL,
+					description: "Use Pi's built-in Codex login",
+				},
+			]
 		: [];
 	for (const name of names) items.push({ value: name, label: name });
 
@@ -363,7 +428,9 @@ export function completeStoredAccountArguments(
 	return prefix ? items.filter((item) => item.value.startsWith(prefix)) : items;
 }
 
-export function isOpenAICodexModel(model: Pick<NonNullable<ExtensionContext["model"]>, "provider"> | undefined): boolean {
+export function isOpenAICodexModel(
+	model: Pick<NonNullable<ExtensionContext["model"]>, "provider"> | undefined,
+): boolean {
 	return model?.provider === CODEX_PROVIDER_ID;
 }
 
@@ -401,7 +468,9 @@ function defaultAccountsPath(): string {
 	if (!pathEntryExists(legacyPath)) return canonicalPath;
 
 	try {
-		return new FileAuthStorageBackend(legacyPath).withLock(() => {
+		return new FileCodexAccountStorageBackend(legacyPath, {
+			syncLockTimeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
+		}).withLock(() => {
 			const contents = readFileSync(legacyPath, "utf8");
 			const permissionError = enforcePrivateFilePermissions(legacyPath);
 			if (permissionError) throw new Error(permissionError);
@@ -436,6 +505,7 @@ function defaultAccountsPath(): string {
 			pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} was created concurrently.`;
 			return canonicalPath;
 		}
+		if (hasErrorCode(error, "ELOCKED")) throw error;
 		pendingAccountsMigrationNotice = `Codex accounts migration failed: ${errorMessage(error)}. The legacy file will be used for this session.`;
 		return legacyPath;
 	}
@@ -540,15 +610,28 @@ function parseStoredData(raw: string | undefined): CodexAccountsData {
 	return active ? { active, accounts } : { accounts };
 }
 
+function getOwnStoredAccount(
+	accounts: Record<string, StoredCodexCredential>,
+	name: string,
+): StoredCodexCredential | undefined {
+	return Object.hasOwn(accounts, name) ? accounts[name] : undefined;
+}
+
 function parseAccounts(rawAccounts: unknown): Record<string, StoredCodexCredential> {
 	if (rawAccounts === undefined) return {};
-	if (!isRecord(rawAccounts)) throw new Error("Invalid Codex accounts data: accounts must be an object.");
+	if (!isRecord(rawAccounts))
+		throw new Error("Invalid Codex accounts data: accounts must be an object.");
 
 	const accounts: Record<string, StoredCodexCredential> = {};
 	for (const [name, rawCredential] of Object.entries(rawAccounts)) {
 		const parsedName = parseAccountName(name);
 		if (!parsedName.ok) throw new Error(`Invalid Codex accounts data: bad account name "${name}".`);
-		accounts[name] = normalizeCredential(rawCredential, name);
+		Object.defineProperty(accounts, name, {
+			configurable: true,
+			enumerable: true,
+			value: normalizeCredential(rawCredential, name),
+			writable: true,
+		});
 	}
 	return accounts;
 }
@@ -567,23 +650,42 @@ function stringifyStoredData(data: CodexAccountsData): string {
 	return `${JSON.stringify(parseStoredData(JSON.stringify(data)), null, 2)}\n`;
 }
 
-function normalizeCredential(rawCredential: unknown, accountName = "account"): StoredCodexCredential {
+function normalizeCredential(
+	rawCredential: unknown,
+	accountName = "account",
+): StoredCodexCredential {
 	if (!isRecord(rawCredential)) {
 		throw new Error(`Invalid Codex accounts data: ${accountName} credential must be an object.`);
 	}
 	if (typeof rawCredential.access !== "string" || !rawCredential.access) {
-		throw new Error(`Invalid Codex accounts data: ${accountName} credential is missing access token.`);
+		throw new Error(
+			`Invalid Codex accounts data: ${accountName} credential is missing access token.`,
+		);
 	}
 	if (typeof rawCredential.refresh !== "string" || !rawCredential.refresh) {
-		throw new Error(`Invalid Codex accounts data: ${accountName} credential is missing refresh token.`);
+		throw new Error(
+			`Invalid Codex accounts data: ${accountName} credential is missing refresh token.`,
+		);
 	}
 	if (typeof rawCredential.expires !== "number" || !Number.isFinite(rawCredential.expires)) {
-		throw new Error(`Invalid Codex accounts data: ${accountName} credential has invalid expiration.`);
+		throw new Error(
+			`Invalid Codex accounts data: ${accountName} credential has invalid expiration.`,
+		);
 	}
-	const accountId = typeof rawCredential.accountId === "string" ? rawCredential.accountId : undefined;
+	const accountId =
+		typeof rawCredential.accountId === "string" ? rawCredential.accountId : undefined;
 	return accountId
-		? { access: rawCredential.access, refresh: rawCredential.refresh, expires: rawCredential.expires, accountId }
-		: { access: rawCredential.access, refresh: rawCredential.refresh, expires: rawCredential.expires };
+		? {
+				access: rawCredential.access,
+				refresh: rawCredential.refresh,
+				expires: rawCredential.expires,
+				accountId,
+			}
+		: {
+				access: rawCredential.access,
+				refresh: rawCredential.refresh,
+				expires: rawCredential.expires,
+			};
 }
 
 async function loginCodexAccount(
@@ -599,18 +701,21 @@ async function loginCodexAccount(
 		onDeviceCode: (info: DeviceCodeInfo) => {
 			ctx.ui.notify(formatDeviceCodeMessage(info), "info");
 		},
-		onPrompt: async (prompt: { message: string; placeholder?: string; allowEmpty?: boolean }) => {
-			const value = await ctx.ui.input(prompt.message, prompt.placeholder ?? "");
+		onPrompt: async (prompt: CodexOAuthPrompt) => {
+			const value = await ctx.ui.input(prompt.message, prompt.placeholder ?? "", {
+				signal: prompt.signal,
+			});
 			if ((value === undefined || value === "") && !prompt.allowEmpty) {
 				throw new Error("Login cancelled");
 			}
 			return value ?? "";
 		},
 		onProgress: (message: string) => ctx.ui.notify(message, "info"),
-		onSelect: async (prompt: { message: string; options: Array<{ id: string; label: string }> }) => {
+		onSelect: async (prompt: CodexOAuthSelectPrompt) => {
 			const selected = await ctx.ui.select(
 				prompt.message,
 				prompt.options.map((option) => option.label),
+				{ signal: prompt.signal },
 			);
 			return prompt.options.find((option) => option.label === selected)?.id;
 		},
@@ -666,7 +771,7 @@ async function activateStoredAccount(
 ): Promise<void> {
 	let activated = false;
 	await store.update((data) => {
-		if (!data.accounts[name]) return data;
+		if (!getOwnStoredAccount(data.accounts, name)) return data;
 		activated = true;
 		return { ...data, active: name };
 	});
@@ -675,7 +780,10 @@ async function activateStoredAccount(
 		return;
 	}
 	const result = await sync(ctx);
-	ctx.ui.notify(formatActivatedMessage("Activated", name, result), result.status === "error" ? "error" : "info");
+	ctx.ui.notify(
+		formatActivatedMessage("Activated", name, result),
+		result.status === "error" ? "error" : "info",
+	);
 }
 
 async function clearActiveAccount(
@@ -690,14 +798,22 @@ async function clearActiveAccount(
 
 function isDefaultPiLoginArg(arg: string): boolean {
 	const normalized = arg.trim().toLowerCase();
-	return normalized === "default" || normalized === "--default" || normalized === DEFAULT_PI_LOGIN_LABEL;
+	return (
+		normalized === "default" || normalized === "--default" || normalized === DEFAULT_PI_LOGIN_LABEL
+	);
 }
 
-async function selectDefaultCodexModelIfUnknown(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
+async function selectDefaultCodexModelIfUnknown(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
 	if (!isUnknownModel(ctx.model)) return;
 	const model = ctx.modelRegistry.find(CODEX_PROVIDER_ID, DEFAULT_CODEX_MODEL_ID);
 	if (!model) {
-		ctx.ui.notify(`Logged in, but ${CODEX_PROVIDER_ID}/${DEFAULT_CODEX_MODEL_ID} was not found.`, "warning");
+		ctx.ui.notify(
+			`Logged in, but ${CODEX_PROVIDER_ID}/${DEFAULT_CODEX_MODEL_ID} was not found.`,
+			"warning",
+		);
 		return;
 	}
 	const ok = await pi.setModel(model);
@@ -714,7 +830,7 @@ function formatActivatedMessage(
 	result: EnsureActiveCodexAuthResult,
 ): string {
 	if (result.status === "error") {
-		return `${action} Codex account "${name}", but refresh failed; Codex requests will fail closed: ${result.message}`;
+		return `${action} Codex account "${name}", but authentication failed; Codex requests will fail closed: ${result.message}`;
 	}
 	return `${action} Codex account "${name}".`;
 }
@@ -726,7 +842,7 @@ async function getActiveAuthIdentity(
 	if (result.status === "inactive") return "default";
 	if (result.status === "error") return `error:${result.accountName}`;
 	const data = await store.readAsync();
-	return `${result.accountName}:${data.accounts[result.accountName]?.access ?? "missing"}`;
+	return `${result.accountName}:${getOwnStoredAccount(data.accounts, result.accountName)?.access ?? "missing"}`;
 }
 
 function updateStatus(
@@ -757,34 +873,128 @@ function setStatus(ctx: ExtensionContext, value: string | undefined): void {
 	}
 }
 
-function setRuntimeCodexApiKey(ctx: ExtensionContext, apiKey: string): void {
-	getRuntimeAuthStorage(ctx)?.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
+async function setRuntimeCodexApiKey(
+	snapshot: RuntimeOverrideSnapshot | undefined,
+	apiKey: string,
+): Promise<boolean> {
+	if (!snapshot)
+		throw new Error("This Pi version does not expose runtime provider authentication.");
+	const { generation, state, target } = snapshot;
+	return enqueueRuntimeOverrideMutation(state, async () => {
+		if (state.generation !== generation) return false;
+		if (state.appliedApiKey === apiKey) return true;
+		state.appliedApiKey = undefined;
+		state.mayHaveOverride = true;
+		await target.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
+		state.appliedApiKey = apiKey;
+		return state.generation === generation;
+	});
 }
 
-function clearRuntimeCodexAuth(ctx: ExtensionContext): void {
-	getRuntimeAuthStorage(ctx)?.removeRuntimeApiKey(CODEX_PROVIDER_ID);
+async function clearRuntimeCodexAuth(ctx: ExtensionContext): Promise<void> {
+	const target = getRuntimeAuthStorage(ctx);
+	if (!target) return;
+	const state = runtimeOverrideStates.get(target);
+	if (!state) return;
+	state.generation += 1;
+	await enqueueRuntimeOverrideMutation(state, async () => {
+		if (!state.mayHaveOverride) return;
+		await target.removeRuntimeApiKey(CODEX_PROVIDER_ID);
+		state.appliedApiKey = undefined;
+		state.mayHaveOverride = false;
+	});
 }
 
-function getRuntimeAuthStorage(ctx: ExtensionContext): RuntimeAuthStorage | undefined {
-	return (ctx.modelRegistry as unknown as { authStorage?: RuntimeAuthStorage }).authStorage;
+function captureRuntimeOverride(ctx: ExtensionContext): RuntimeOverrideSnapshot | undefined {
+	const target = getRuntimeAuthStorage(ctx);
+	if (!target) return undefined;
+	const state = getRuntimeOverrideState(target);
+	return { target, state, generation: state.generation };
+}
+
+function getRuntimeOverrideState(target: object): RuntimeOverrideState {
+	let state = runtimeOverrideStates.get(target);
+	if (!state) {
+		state = {
+			generation: 0,
+			mayHaveOverride: false,
+			operationTail: Promise.resolve(),
+		};
+		runtimeOverrideStates.set(target, state);
+	}
+	return state;
+}
+
+function enqueueRuntimeOverrideMutation<T>(
+	state: RuntimeOverrideState,
+	mutate: () => Promise<T>,
+): Promise<T> {
+	const operation = state.operationTail.then(mutate);
+	state.operationTail = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	return operation;
+}
+
+function getRuntimeAuthStorage(ctx: ExtensionContext): (RuntimeAuthStorage & object) | undefined {
+	const registry = ctx.modelRegistry as unknown as {
+		authStorage?: unknown;
+		runtime?: unknown;
+	};
+	for (const candidate of [registry, registry.runtime, registry.authStorage]) {
+		if (isRuntimeAuthStorage(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+function isRuntimeAuthStorage(value: unknown): value is RuntimeAuthStorage & object {
+	return (
+		!!value &&
+		typeof value === "object" &&
+		"setRuntimeApiKey" in value &&
+		typeof value.setRuntimeApiKey === "function" &&
+		"removeRuntimeApiKey" in value &&
+		typeof value.removeRuntimeApiKey === "function"
+	);
 }
 
 function isStaleExtensionContextError(error: unknown): boolean {
-	return error instanceof Error && error.message.includes("This extension ctx is stale after session replacement or reload");
+	return (
+		error instanceof Error &&
+		error.message.includes("This extension ctx is stale after session replacement or reload")
+	);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function hasErrorCode(error: unknown, code: string): boolean {
+	return error instanceof Error && "code" in error && error.code === code;
+}
+
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function redactTokenText(text: string): string {
-	return text
+function redactCredentialError(error: unknown, credential: StoredCodexCredential): string {
+	return redactTokenText(errorMessage(error), [credential.access, credential.refresh]);
+}
+
+function redactTokenText(text: string, exactSecrets: readonly string[] = []): string {
+	const secrets = [...new Set(exactSecrets.filter(Boolean))].sort(
+		(left, right) => right.length - left.length,
+	);
+	const exactSecretPattern =
+		secrets.length > 0
+			? new RegExp(secrets.map((secret) => escapeRegExp(secret)).join("|"), "g")
+			: undefined;
+	return (exactSecretPattern ? text.replace(exactSecretPattern, "<redacted>") : text)
 		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <redacted>")
 		.replace(/"access"\s*:\s*"[^"]+"/gi, '"access":"<redacted>"')
 		.replace(/"refresh"\s*:\s*"[^"]+"/gi, '"refresh":"<redacted>"')
 		.replace(/\b(access|refresh)[_-][A-Za-z0-9._~+/=-]+/gi, "$1-<redacted>");
 }
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
