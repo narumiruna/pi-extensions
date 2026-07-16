@@ -49,7 +49,15 @@ type RuntimeAuthStorage = {
 
 type RuntimeOverrideState = {
 	appliedApiKey?: string;
+	generation: number;
+	mayHaveOverride: boolean;
 	operationTail: Promise<void>;
+};
+
+type RuntimeOverrideSnapshot = {
+	target: RuntimeAuthStorage & object;
+	state: RuntimeOverrideState;
+	generation: number;
 };
 
 const runtimeOverrideStates = new WeakMap<object, RuntimeOverrideState>();
@@ -168,6 +176,10 @@ export default function codexAccounts(
 				ctx.ui.notify(parsedName.error, "warning");
 				return;
 			}
+			if (isDefaultPiLoginArg(parsedName.name)) {
+				ctx.ui.notify(`"${parsedName.name}" is reserved for Pi's default Codex login.`, "warning");
+				return;
+			}
 			if (!ctx.hasUI) {
 				ctx.ui.notify("/codex-login requires interactive UI", "error");
 				return;
@@ -228,7 +240,7 @@ export default function codexAccounts(
 			let removed = false;
 			let removedActive = false;
 			await store.update((data) => {
-				if (!data.accounts[parsedName.name]) return data;
+				if (!getOwnStoredAccount(data.accounts, parsedName.name)) return data;
 				removed = true;
 				removedActive = data.active === parsedName.name;
 				const accounts = { ...data.accounts };
@@ -287,6 +299,7 @@ export async function ensureActiveCodexAuth(
 	store: CodexAccountStore,
 	options: { oauthProvider?: RefreshOnlyCodexOAuthProvider; now?: number } = {},
 ): Promise<EnsureActiveCodexAuthResult> {
+	const runtimeOverride = captureRuntimeOverride(ctx);
 	const data = await store.readAsync();
 	const active = data.active;
 	if (!active) {
@@ -294,9 +307,13 @@ export async function ensureActiveCodexAuth(
 		return { status: "inactive" };
 	}
 
-	let credential = data.accounts[active];
+	let credential = getOwnStoredAccount(data.accounts, active);
 	if (!credential) {
-		await store.update((current) => ({ ...current, active: undefined }));
+		const current = await store.update((latest) => {
+			if (latest.active !== active || getOwnStoredAccount(latest.accounts, active)) return latest;
+			return { ...latest, active: undefined };
+		});
+		if (current.active) return ensureActiveCodexAuth(ctx, store, options);
 		await clearRuntimeCodexAuth(ctx);
 		return { status: "inactive" };
 	}
@@ -305,8 +322,8 @@ export async function ensureActiveCodexAuth(
 	if (credential.expires <= (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
 		let refreshError: unknown;
 		const current = await store.updateAsync(async (latest) => {
-			if (latest.active !== active || !latest.accounts[active]) return latest;
-			const latestCredential = latest.accounts[active];
+			const latestCredential = getOwnStoredAccount(latest.accounts, active);
+			if (latest.active !== active || !latestCredential) return latest;
 			credential = latestCredential;
 			if (latestCredential.expires > (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
 				return latest;
@@ -323,27 +340,46 @@ export async function ensureActiveCodexAuth(
 				return latest;
 			}
 		});
-		if (current.active !== active) {
+		if (current.active !== active || !getOwnStoredAccount(current.accounts, active)) {
 			return ensureActiveCodexAuth(ctx, store, options);
 		}
 		if (refreshError !== undefined) {
 			if (!(await activeCredentialMatches(store, active, credential))) {
 				return ensureActiveCodexAuth(ctx, store, options);
 			}
-			await setRuntimeCodexApiKey(ctx, FAIL_CLOSED_API_KEY);
+			if (!(await setRuntimeCodexApiKey(runtimeOverride, FAIL_CLOSED_API_KEY))) {
+				return { status: "inactive" };
+			}
 			return {
 				status: "error",
 				accountName: active,
-				message: redactTokenText(errorMessage(refreshError)),
+				message: redactCredentialError(refreshError, credential),
 			};
 		}
 	}
 
-	const apiKey = await oauthProvider.getApiKey(credential);
+	let apiKey: string;
+	try {
+		apiKey = await oauthProvider.getApiKey(credential);
+	} catch (error) {
+		if (!(await activeCredentialMatches(store, active, credential))) {
+			return ensureActiveCodexAuth(ctx, store, options);
+		}
+		if (!(await setRuntimeCodexApiKey(runtimeOverride, FAIL_CLOSED_API_KEY))) {
+			return { status: "inactive" };
+		}
+		return {
+			status: "error",
+			accountName: active,
+			message: redactCredentialError(error, credential),
+		};
+	}
 	if (!(await activeCredentialMatches(store, active, credential))) {
 		return ensureActiveCodexAuth(ctx, store, options);
 	}
-	await setRuntimeCodexApiKey(ctx, apiKey);
+	if (!(await setRuntimeCodexApiKey(runtimeOverride, apiKey))) {
+		return { status: "inactive" };
+	}
 	return { status: "active", accountName: active };
 }
 
@@ -353,7 +389,7 @@ async function activeCredentialMatches(
 	expected: StoredCodexCredential,
 ): Promise<boolean> {
 	const latest = await store.readAsync();
-	const current = latest.accounts[accountName];
+	const current = getOwnStoredAccount(latest.accounts, accountName);
 	return (
 		latest.active === accountName &&
 		current !== undefined &&
@@ -574,6 +610,13 @@ function parseStoredData(raw: string | undefined): CodexAccountsData {
 	return active ? { active, accounts } : { accounts };
 }
 
+function getOwnStoredAccount(
+	accounts: Record<string, StoredCodexCredential>,
+	name: string,
+): StoredCodexCredential | undefined {
+	return Object.hasOwn(accounts, name) ? accounts[name] : undefined;
+}
+
 function parseAccounts(rawAccounts: unknown): Record<string, StoredCodexCredential> {
 	if (rawAccounts === undefined) return {};
 	if (!isRecord(rawAccounts))
@@ -583,7 +626,12 @@ function parseAccounts(rawAccounts: unknown): Record<string, StoredCodexCredenti
 	for (const [name, rawCredential] of Object.entries(rawAccounts)) {
 		const parsedName = parseAccountName(name);
 		if (!parsedName.ok) throw new Error(`Invalid Codex accounts data: bad account name "${name}".`);
-		accounts[name] = normalizeCredential(rawCredential, name);
+		Object.defineProperty(accounts, name, {
+			configurable: true,
+			enumerable: true,
+			value: normalizeCredential(rawCredential, name),
+			writable: true,
+		});
 	}
 	return accounts;
 }
@@ -723,7 +771,7 @@ async function activateStoredAccount(
 ): Promise<void> {
 	let activated = false;
 	await store.update((data) => {
-		if (!data.accounts[name]) return data;
+		if (!getOwnStoredAccount(data.accounts, name)) return data;
 		activated = true;
 		return { ...data, active: name };
 	});
@@ -782,7 +830,7 @@ function formatActivatedMessage(
 	result: EnsureActiveCodexAuthResult,
 ): string {
 	if (result.status === "error") {
-		return `${action} Codex account "${name}", but refresh failed; Codex requests will fail closed: ${result.message}`;
+		return `${action} Codex account "${name}", but authentication failed; Codex requests will fail closed: ${result.message}`;
 	}
 	return `${action} Codex account "${name}".`;
 }
@@ -794,7 +842,7 @@ async function getActiveAuthIdentity(
 	if (result.status === "inactive") return "default";
 	if (result.status === "error") return `error:${result.accountName}`;
 	const data = await store.readAsync();
-	return `${result.accountName}:${data.accounts[result.accountName]?.access ?? "missing"}`;
+	return `${result.accountName}:${getOwnStoredAccount(data.accounts, result.accountName)?.access ?? "missing"}`;
 }
 
 function updateStatus(
@@ -825,14 +873,21 @@ function setStatus(ctx: ExtensionContext, value: string | undefined): void {
 	}
 }
 
-async function setRuntimeCodexApiKey(ctx: ExtensionContext, apiKey: string): Promise<void> {
-	const target = getRuntimeAuthStorage(ctx);
-	if (!target) throw new Error("This Pi version does not expose runtime provider authentication.");
-	const state = getRuntimeOverrideState(target);
-	await enqueueRuntimeOverrideMutation(state, async () => {
-		if (state.appliedApiKey === apiKey) return;
+async function setRuntimeCodexApiKey(
+	snapshot: RuntimeOverrideSnapshot | undefined,
+	apiKey: string,
+): Promise<boolean> {
+	if (!snapshot)
+		throw new Error("This Pi version does not expose runtime provider authentication.");
+	const { generation, state, target } = snapshot;
+	return enqueueRuntimeOverrideMutation(state, async () => {
+		if (state.generation !== generation) return false;
+		if (state.appliedApiKey === apiKey) return true;
+		state.appliedApiKey = undefined;
+		state.mayHaveOverride = true;
 		await target.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
 		state.appliedApiKey = apiKey;
+		return state.generation === generation;
 	});
 }
 
@@ -841,28 +896,44 @@ async function clearRuntimeCodexAuth(ctx: ExtensionContext): Promise<void> {
 	if (!target) return;
 	const state = runtimeOverrideStates.get(target);
 	if (!state) return;
+	state.generation += 1;
 	await enqueueRuntimeOverrideMutation(state, async () => {
-		if (state.appliedApiKey === undefined) return;
+		if (!state.mayHaveOverride) return;
 		await target.removeRuntimeApiKey(CODEX_PROVIDER_ID);
 		state.appliedApiKey = undefined;
+		state.mayHaveOverride = false;
 	});
+}
+
+function captureRuntimeOverride(ctx: ExtensionContext): RuntimeOverrideSnapshot | undefined {
+	const target = getRuntimeAuthStorage(ctx);
+	if (!target) return undefined;
+	const state = getRuntimeOverrideState(target);
+	return { target, state, generation: state.generation };
 }
 
 function getRuntimeOverrideState(target: object): RuntimeOverrideState {
 	let state = runtimeOverrideStates.get(target);
 	if (!state) {
-		state = { operationTail: Promise.resolve() };
+		state = {
+			generation: 0,
+			mayHaveOverride: false,
+			operationTail: Promise.resolve(),
+		};
 		runtimeOverrideStates.set(target, state);
 	}
 	return state;
 }
 
-function enqueueRuntimeOverrideMutation(
+function enqueueRuntimeOverrideMutation<T>(
 	state: RuntimeOverrideState,
-	mutate: () => Promise<void>,
-): Promise<void> {
+	mutate: () => Promise<T>,
+): Promise<T> {
 	const operation = state.operationTail.then(mutate);
-	state.operationTail = operation.catch(() => undefined);
+	state.operationTail = operation.then(
+		() => undefined,
+		() => undefined,
+	);
 	return operation;
 }
 
@@ -907,10 +978,23 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function redactTokenText(text: string): string {
-	return text
+function redactCredentialError(error: unknown, credential: StoredCodexCredential): string {
+	return redactTokenText(errorMessage(error), [credential.access, credential.refresh]);
+}
+
+function redactTokenText(text: string, exactSecrets: readonly string[] = []): string {
+	const secrets = [...new Set(exactSecrets.filter(Boolean))].sort(
+		(left, right) => right.length - left.length,
+	);
+	const exactSecretPattern =
+		secrets.length > 0
+			? new RegExp(secrets.map((secret) => escapeRegExp(secret)).join("|"), "g")
+			: undefined;
+	return (exactSecretPattern ? text.replace(exactSecretPattern, "<redacted>") : text)
 		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <redacted>")
 		.replace(/"access"\s*:\s*"[^"]+"/gi, '"access":"<redacted>"')
 		.replace(/"refresh"\s*:\s*"[^"]+"/gi, '"refresh":"<redacted>"')
 		.replace(/\b(access|refresh)[_-][A-Za-z0-9._~+/=-]+/gi, "$1-<redacted>");
 }
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
