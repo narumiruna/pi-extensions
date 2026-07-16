@@ -492,21 +492,28 @@ function isSafeGitDiffArguments(args: string[]) {
 
 function isSafeGitLogArguments(args: string[]) {
 	if (args.includes("--no-textconv")) return true;
-	return !args.some(
-		(argument) =>
-			argument === "-p" ||
-			argument.startsWith("-p") ||
-			argument === "-u" ||
-			argument.startsWith("-U") ||
-			argument === "-c" ||
-			argument === "--patch" ||
-			argument.startsWith("--patch=") ||
-			argument.startsWith("--patch-with-") ||
-			argument === "--unified" ||
-			argument.startsWith("--unified=") ||
-			argument === "--binary" ||
-			argument === "--cc" ||
-			argument === "--remerge-diff",
+	return !args.some(requiresTextconvGuardForGitLog);
+}
+
+function requiresTextconvGuardForGitLog(argument: string) {
+	return (
+		argument === "-p" ||
+		argument.startsWith("-p") ||
+		argument === "-u" ||
+		argument.startsWith("-U") ||
+		argument === "-c" ||
+		argument === "--patch" ||
+		argument.startsWith("--patch=") ||
+		argument.startsWith("--patch-with-") ||
+		argument === "--unified" ||
+		argument.startsWith("--unified=") ||
+		argument === "--binary" ||
+		argument === "--cc" ||
+		argument === "--remerge-diff" ||
+		argument.startsWith("-S") ||
+		argument.startsWith("-G") ||
+		argument === "--find-object" ||
+		argument.startsWith("--find-object=")
 	);
 }
 
@@ -553,17 +560,37 @@ function isSafeGhCommand(args: string[], safeSubcommands: SafeSubcommands) {
 }
 
 function isSafeGhReadArguments(args: string[]) {
-	return !args.some(
-		(argument) =>
-			argument.startsWith("-w") ||
-			argument === "--web" ||
-			argument.startsWith("--web=") ||
-			argument === "--browser" ||
-			argument.startsWith("--browser=") ||
-			argument === "--paginate" ||
-			argument === "--pager" ||
-			argument.startsWith("--pager=") ||
-			argument === "--output" ||
-			argument.startsWith("--output="),
+	return !args.some(isUnsafeGhReadArgument) && hasGhJsonOutput(args);
+}
+
+function isUnsafeGhReadArgument(argument: string) {
+	return (
+		argument.startsWith("-w") ||
+		argument === "--web" ||
+		argument.startsWith("--web=") ||
+		argument === "--browser" ||
+		argument.startsWith("--browser=") ||
+		argument === "--paginate" ||
+		argument === "--pager" ||
+		argument.startsWith("--pager=") ||
+		argument === "--output" ||
+		argument.startsWith("--output=")
 	);
+}
+
+function hasGhJsonOutput(args: string[]) {
+	let hasJson = false;
+	for (let index = 0; index < args.length; index += 1) {
+		const argument = args[index];
+		if (argument === "--json") {
+			const value = args[index + 1];
+			if (!value || value.startsWith("-")) return false;
+			hasJson = true;
+			index += 1;
+		} else if (argument.startsWith("--json=")) {
+			if (argument === "--json=") return false;
+			hasJson = true;
+		}
+	}
+	return hasJson;
 }

@@ -41,12 +41,18 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
 			undefined,
 		);
 		assert.equal(
-			await hook({ toolName: "bash", input: { command: "gh pr view 218" } }, context.ctx),
+			await hook(
+				{ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } },
+				context.ctx,
+			),
 			undefined,
 		);
 		assert.match(
 			(
-				(await hook({ toolName: "bash", input: { command: "gh pr list" } }, context.ctx)) as {
+				(await hook(
+					{ toolName: "bash", input: { command: "gh pr list --json number" } },
+					context.ctx,
+				)) as {
 					reason?: string;
 				}
 			).reason ?? "",
@@ -74,7 +80,10 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		await mock.commands.get("plan")?.handler("", context.ctx);
 		assert.equal(
-			await hook({ toolName: "bash", input: { command: "gh pr view 218" } }, context.ctx),
+			await hook(
+				{ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } },
+				context.ctx,
+			),
 			undefined,
 		);
 		await mock.commands.get("plan")?.handler("exit", context.ctx);
@@ -82,14 +91,24 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
 		await rm(settingsPath);
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		await mock.commands.get("plan")?.handler("", context.ctx);
-		assert.ok(await hook({ toolName: "bash", input: { command: "gh pr view 218" } }, context.ctx));
+		assert.ok(
+			await hook(
+				{ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } },
+				context.ctx,
+			),
+		);
 		await mock.commands.get("plan")?.handler("exit", context.ctx);
 
 		await writeFile(settingsPath, JSON.stringify({ safeSubcommands: { gh: ["pr merge"] } }));
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /settings ignored/i);
 		await mock.commands.get("plan")?.handler("", context.ctx);
-		assert.ok(await hook({ toolName: "bash", input: { command: "gh pr view 218" } }, context.ctx));
+		assert.ok(
+			await hook(
+				{ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } },
+				context.ctx,
+			),
+		);
 	});
 });
 

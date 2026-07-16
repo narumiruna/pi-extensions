@@ -120,8 +120,8 @@ With the example configuration above, commands such as these are accepted:
 ```bash
 git rev-parse --show-toplevel
 git blame --no-textconv -- src/plan-mode.ts
-gh pr view 218
-gh issue list --state open
+gh pr view 218 --json number,title,state
+gh issue list --state open --json number,title,state
 ```
 
 The command-specific validators still reject unsafe forms, including:
@@ -130,15 +130,17 @@ The command-specific validators still reject unsafe forms, including:
 git blame -- src/plan-mode.ts
 git cat-file --filters HEAD
 git diff
+git log -Ssecret
 git remote show origin
 git show --ext-diff HEAD
 gh pr merge 218
+gh pr view 218
 gh pr view 218 --web
 gh pr view 218 > pr.txt
-gh pr list && gh pr merge 218
+gh pr list --json number,title && gh pr merge 218
 ```
 
-Redirects, shell expansion and substitution, pagers or browsers, external diff/textconv/filter/signature helpers, output flags, malformed command layouts, and any chain containing an unsafe segment fail closed. Commands that can invoke configured Git helpers implicitly require explicit guards: use `--no-textconv` with `blame`, `show`, and patch-producing `log`; use both `--no-ext-diff` and `--no-textconv` with content-producing `diff` (`git diff --check` remains accepted); and use `git remote show -n` to avoid invoking a transport helper. Unknown `safeSubcommands` keys or values, non-array values, and non-string entries invalidate the entire settings file and trigger the normal warning/default fallback on session start.
+Redirects, shell expansion and substitution, pagers or browsers, external diff/textconv/filter/signature helpers, output flags, malformed command layouts, and any chain containing an unsafe segment fail closed. Commands that can invoke configured Git helpers implicitly require explicit guards: use `--no-textconv` with `blame`, `show`, and patch-producing or pickaxe/searching `log`; use both `--no-ext-diff` and `--no-textconv` with content-producing `diff` (`git diff --check` remains accepted); and use `git remote show -n` to avoid invoking a transport helper. GitHub CLI read paths require `--json <fields>` output so Plan mode does not rely on `GH_PAGER`, `PAGER`, or gh pager configuration. Unknown `safeSubcommands` keys or values, non-array values, and non-string entries invalidate the entire settings file and trigger the normal warning/default fallback on session start.
 
 Read-only does not mean private: Git inspection can expose repository history and tracked secrets, while `gh` queries can expose remote repository, pull request, and issue data available to your authenticated account. The policy reduces accidental mutation and helper execution; it is not a sandbox or a confidentiality boundary.
 
