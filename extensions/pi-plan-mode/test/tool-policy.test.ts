@@ -34,6 +34,8 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"git branch --show-current",
 		"git remote get-url origin",
 		"rg -n 'plan' src | head -20",
+		"rg '*.ts' src",
+		"rg '$value' README.md",
 		"npm test -- --help",
 		"npm run typecheck",
 		"cargo test --no-run",
@@ -45,6 +47,9 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"rm -rf build",
 		"npm install",
 		"echo $(rm file)",
+		"git log *",
+		"git log {--output=log.txt,HEAD}",
+		'rg "$value" README.md',
 		"cat file > copy",
 		"git status; touch file",
 		"cat file & touch file",
@@ -98,6 +103,164 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 	}
 });
 
+test("configured Git validators are additive and exact", () => {
+	const cases = [
+		["rev-parse", "git rev-parse --show-toplevel"],
+		["blame", "git blame --no-textconv -- path/to/file"],
+		["describe", "git describe --always"],
+		["merge-base", "git merge-base HEAD origin/main"],
+		["ls-tree", "git ls-tree HEAD path/to/dir"],
+		["cat-file", "git cat-file -p HEAD"],
+	] as const;
+
+	for (const [subcommand, command] of cases) {
+		assert.equal(isSafeCommandWithPolicy(command), false, `default: ${command}`);
+		assert.equal(
+			isSafeCommandWithPolicy(command, { git: [subcommand] }),
+			true,
+			`configured: ${command}`,
+		);
+	}
+	assert.equal(
+		isSafeCommandWithPolicy("git rev-parse --show-toplevel | head -1", {
+			git: ["rev-parse"],
+		}),
+		true,
+	);
+	assert.equal(
+		isSafeCommandWithPolicy("git rev-parse --show-toplevel && git status --short", {
+			git: ["rev-parse"],
+		}),
+		true,
+	);
+	assert.equal(
+		isSafeCommandWithPolicy("git rev-parse --show-toplevel && git blame -- file", {
+			git: ["rev-parse"],
+		}),
+		false,
+	);
+	assert.equal(
+		isSafeCommandWithPolicy("git rev-parse --show-toplevel | touch output", {
+			git: ["rev-parse"],
+		}),
+		false,
+	);
+});
+
+test("configured gh validators require exact read-only paths", () => {
+	const cases = [
+		["pr view", "gh pr view 218"],
+		["pr list", "gh pr list --limit 20"],
+		["issue view", "gh issue view 212 --comments"],
+		["issue list", "gh issue list --state open"],
+	] as const;
+
+	for (const [path, command] of cases) {
+		assert.equal(isSafeCommandWithPolicy(command), false, `default: ${command}`);
+		assert.equal(isSafeCommandWithPolicy(command, { gh: [path] }), true, `configured: ${command}`);
+	}
+	const allGh = { gh: cases.map(([path]) => path) };
+	for (const command of [
+		"gh pr merge 218",
+		"gh pr close 218",
+		"gh pr edit 218 --title changed",
+		"gh issue edit 212 --title changed",
+		"gh issue close 212",
+		"gh issue create --title changed",
+		"gh alias list",
+		"gh co 218",
+		"gh pr view 218 --web",
+		"gh pr view 218 --web=true",
+		"gh pr view 218 -w",
+		"gh pr view 218 -w=true",
+		"gh pr view 218 --pager=less",
+		"gh pr view $PI_PLAN_GH_ARGUMENTS",
+		"gh issue view 212 --web",
+		"gh --repo owner/repo pr view 218",
+		"gh pr --help view",
+		"gh pr view 218 > output",
+		"gh pr view 218 && gh pr merge 218",
+	]) {
+		assert.equal(isSafeCommandWithPolicy(command, allGh), false, command);
+	}
+	assert.equal(isSafeCommandWithPolicy("gh pr view 218 && gh issue list --limit 5", allGh), true);
+});
+
+test("maximal Git opt-in preserves execution and mutation guards", () => {
+	const git = ["rev-parse", "blame", "describe", "merge-base", "ls-tree", "cat-file"];
+	for (const command of [
+		"git cat-file --filters HEAD",
+		"git cat-file --filters=blob HEAD",
+		"git cat-file --filter HEAD:file.foo",
+		"git cat-file --filt HEAD:file.foo",
+		"git cat-file --textconv HEAD",
+		"git cat-file --textc HEAD:file.foo",
+		"git cat-file --textconv=true HEAD",
+		"git cat-file -p HEAD --output=copy",
+		"git --exec-path=/tmp cat-file -p HEAD",
+		"git --paginate cat-file -p HEAD",
+		"git -c alias.x='!touch output' x",
+		"git branch -D old",
+		"git branch -mrenamed",
+		"git branch -uorigin/main",
+		"git branch --e",
+		"git branch --u",
+		"git branch --creat",
+		"git branch --set-upstream-to=origin/main",
+		"git remote add origin url",
+		"git remote update",
+		"git diff --ext-diff",
+		"git grep --textc needle",
+		"git grep --open=less needle",
+		"git grep --ext-grep needle",
+		"git show --ext-diff=true HEAD",
+		"git show --textconv HEAD",
+		"git rev-parse $PI_PLAN_GIT_ARGUMENTS",
+		"git status\ngit rev-parse --show-toplevel",
+	]) {
+		assert.equal(isSafeCommandWithPolicy(command, { git }), false, command);
+	}
+	assert.equal(
+		isSafeCommandWithPolicy("git checkout main", { git: ["checkout"] }),
+		false,
+		"unknown configured names must not become permissions",
+	);
+});
+
+test("Git validators require guards for implicit external helpers", () => {
+	for (const command of [
+		"git diff",
+		"git diff --no-ext-diff",
+		"git diff --no-textconv",
+		"git show HEAD",
+		"git log -p -1",
+		"git log -U3 -1",
+		"git log --binary -1",
+		"git log --patch-with-stat -1",
+		"git log --show-signature -1",
+		"git log --format=%G? -1",
+		"git status --help",
+		"git remote show origin",
+	]) {
+		assert.equal(isSafeCommandWithPolicy(command), false, command);
+	}
+	assert.equal(isSafeCommandWithPolicy("git blame -- path/to/file", { git: ["blame"] }), false);
+
+	for (const command of [
+		"git diff --check",
+		"git diff --no-ext-diff --no-textconv HEAD~1",
+		"git show --no-textconv HEAD",
+		"git log -p --no-textconv -1",
+		"git remote show -n origin",
+	]) {
+		assert.equal(isSafeCommandWithPolicy(command), true, command);
+	}
+	assert.equal(
+		isSafeCommandWithPolicy("git blame --no-textconv -- path/to/file", { git: ["blame"] }),
+		true,
+	);
+});
+
 test("tool policy classifies built-ins and extension tools consistently", () => {
 	type PlanTool = Parameters<typeof classifyPlanModeTool>[0];
 	assert.equal(classifyPlanModeTool(builtinTool("read") as PlanTool), "read-only");
@@ -105,6 +268,12 @@ test("tool policy classifies built-ins and extension tools consistently", () => 
 	assert.equal(classifyPlanModeTool(builtinTool("write") as PlanTool), "blocked");
 	assert.equal(classifyPlanModeTool(extensionTool("custom") as PlanTool), "user-opt-in");
 });
+
+type TestSafeSubcommands = { git?: readonly string[]; gh?: readonly string[] };
+const isSafeCommandWithPolicy = isSafeCommand as unknown as (
+	command: string,
+	safeSubcommands?: TestSafeSubcommands,
+) => boolean;
 
 test("active Plan mode blocks update_plan and blocked built-ins at the tool hook", async () => {
 	const mock = createMockPi({

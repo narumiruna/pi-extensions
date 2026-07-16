@@ -259,7 +259,7 @@ export default function planMode(pi: ExtensionAPI) {
 		if (event.toolName !== "bash" || !isBuiltinToolName(event.toolName)) return;
 
 		const command = readCommand(event.input);
-		if (!isSafeCommand(command)) {
+		if (!isSafeCommand(command, settings.safeSubcommands)) {
 			return {
 				block: true,
 				reason: `Plan mode blocks mutating or non-allowlisted bash commands.\nCommand: ${command}`,

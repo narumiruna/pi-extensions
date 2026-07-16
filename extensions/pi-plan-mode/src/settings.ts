@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 import { access, link, lstat, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+	SAFE_GH_SUBCOMMAND_PATHS,
+	SAFE_GIT_SUBCOMMANDS,
+	type SafeGhSubcommandPath,
+	type SafeGitSubcommand,
+	type SafeSubcommands,
+} from "./tool-policy.js";
 
 export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
 const LEGACY_PLAN_MODE_SETTINGS_FILE = "plan-mode.json";
@@ -21,6 +28,7 @@ export type PlanModeFixedThinkingLevel = Exclude<PlanModeThinkingLevel, "inherit
 export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
 	defaultPlanTools?: string[];
+	safeSubcommands?: SafeSubcommands;
 }
 export type PlanModeSettingsLoadResult =
 	| { kind: "missing"; notice?: string }
@@ -35,19 +43,54 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 	if (!PLAN_MODE_THINKING_LEVELS.includes(thinkingLevel as PlanModeThinkingLevel)) {
 		return undefined;
 	}
-	if (!Object.hasOwn(value, "defaultPlanTools")) {
-		return { thinkingLevel: thinkingLevel as PlanModeThinkingLevel };
+	const settings: PlanModeSettings = {
+		thinkingLevel: thinkingLevel as PlanModeThinkingLevel,
+	};
+	if (Object.hasOwn(value, "defaultPlanTools")) {
+		const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
+		if (!defaultPlanTools) return undefined;
+		settings.defaultPlanTools = defaultPlanTools;
 	}
-	const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
-	return defaultPlanTools
-		? { thinkingLevel: thinkingLevel as PlanModeThinkingLevel, defaultPlanTools }
-		: undefined;
+	if (Object.hasOwn(value, "safeSubcommands")) {
+		const safeSubcommands = normalizeSafeSubcommands(Reflect.get(value, "safeSubcommands"));
+		if (!safeSubcommands) return undefined;
+		settings.safeSubcommands = safeSubcommands;
+	}
+	return settings;
 }
 
 function normalizeToolNames(value: unknown) {
 	if (
 		!Array.isArray(value) ||
 		!value.every((item): item is string => typeof item === "string" && item.trim().length > 0)
+	) {
+		return undefined;
+	}
+	return Array.from(new Set(value));
+}
+
+function normalizeSafeSubcommands(value: unknown): SafeSubcommands | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	if (Object.keys(value).some((key) => key !== "git" && key !== "gh")) return undefined;
+
+	const safeSubcommands: SafeSubcommands = {};
+	if (Object.hasOwn(value, "git")) {
+		const git = normalizeKnownValues(Reflect.get(value, "git"), SAFE_GIT_SUBCOMMANDS);
+		if (!git) return undefined;
+		safeSubcommands.git = git as SafeGitSubcommand[];
+	}
+	if (Object.hasOwn(value, "gh")) {
+		const gh = normalizeKnownValues(Reflect.get(value, "gh"), SAFE_GH_SUBCOMMAND_PATHS);
+		if (!gh) return undefined;
+		safeSubcommands.gh = gh as SafeGhSubcommandPath[];
+	}
+	return safeSubcommands;
+}
+
+function normalizeKnownValues(value: unknown, supported: readonly string[]) {
+	if (
+		!Array.isArray(value) ||
+		!value.every((item): item is string => typeof item === "string" && supported.includes(item))
 	) {
 		return undefined;
 	}

@@ -1,5 +1,38 @@
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 
+export const BUILTIN_SAFE_GIT_SUBCOMMANDS = [
+	"status",
+	"log",
+	"diff",
+	"show",
+	"branch",
+	"remote",
+	"ls-files",
+	"grep",
+] as const;
+export const CONFIGURABLE_SAFE_GIT_SUBCOMMANDS = [
+	"rev-parse",
+	"blame",
+	"describe",
+	"merge-base",
+	"ls-tree",
+	"cat-file",
+] as const;
+export const SAFE_GIT_SUBCOMMANDS = [
+	...BUILTIN_SAFE_GIT_SUBCOMMANDS,
+	...CONFIGURABLE_SAFE_GIT_SUBCOMMANDS,
+] as const;
+export const SAFE_GH_SUBCOMMAND_PATHS = ["pr view", "pr list", "issue view", "issue list"] as const;
+
+export type BuiltinSafeGitSubcommand = (typeof BUILTIN_SAFE_GIT_SUBCOMMANDS)[number];
+export type ConfigurableSafeGitSubcommand = (typeof CONFIGURABLE_SAFE_GIT_SUBCOMMANDS)[number];
+export type SafeGitSubcommand = (typeof SAFE_GIT_SUBCOMMANDS)[number];
+export type SafeGhSubcommandPath = (typeof SAFE_GH_SUBCOMMAND_PATHS)[number];
+export interface SafeSubcommands {
+	git?: SafeGitSubcommand[];
+	gh?: SafeGhSubcommandPath[];
+}
+
 export const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "bash", "grep", "find", "ls"]);
 export type PlanModeToolPolicy = "read-only" | "limited" | "user-opt-in" | "blocked";
 
@@ -88,9 +121,13 @@ export function readCommand(input: unknown) {
 	return typeof command?.command === "string" ? command.command : "";
 }
 
-export function isSafeCommand(command: string) {
+export function isSafeCommand(command: string, safeSubcommands: SafeSubcommands = {}) {
 	const segments = splitShellSegments(command);
-	return segments !== undefined && segments.length > 0 && segments.every(isSafeSegment);
+	return (
+		segments !== undefined &&
+		segments.length > 0 &&
+		segments.every((segment) => isSafeSegment(segment, safeSubcommands))
+	);
 }
 
 function splitShellSegments(command: string): string[] | undefined {
@@ -146,8 +183,10 @@ function splitShellSegments(command: string): string[] | undefined {
 	return segments;
 }
 
-function isSafeSegment(segment: string) {
-	if (/\$\(|\$\{|(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) return false;
+function isSafeSegment(segment: string, safeSubcommands: SafeSubcommands) {
+	if (hasShellExpansion(segment) || /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) {
+		return false;
+	}
 	const tokens = shellWords(segment);
 	if (!tokens || tokens.length === 0) return false;
 	const command = tokens[0]?.toLowerCase();
@@ -155,7 +194,33 @@ function isSafeSegment(segment: string) {
 	const args = tokens.slice(1);
 	if (!hasSafeArguments(command, args)) return false;
 	if (READ_ONLY_COMMANDS.has(command)) return true;
-	return isSafeStructuredCommand(command, args);
+	return isSafeStructuredCommand(command, args, safeSubcommands);
+}
+
+function hasShellExpansion(segment: string) {
+	let quote: "'" | '"' | undefined;
+	let escaped = false;
+	for (const character of segment) {
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (character === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (character === quote) quote = undefined;
+			else if (character === "$" && quote === '"') return true;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		if (["$", "*", "?", "[", "{"].includes(character)) return true;
+	}
+	return false;
 }
 
 function shellWords(segment: string): string[] | undefined {
@@ -212,7 +277,10 @@ function hasSafeArguments(command: string, args: string[]) {
 	) {
 		return false;
 	}
-	if (command === "date" && args.some((argument) => argument === "-s" || argument.startsWith("--set"))) {
+	if (
+		command === "date" &&
+		args.some((argument) => argument === "-s" || argument.startsWith("--set"))
+	) {
 		return false;
 	}
 	if (
@@ -272,7 +340,41 @@ function hasSafeArguments(command: string, args: string[]) {
 	return true;
 }
 
-function isSafeStructuredCommand(command: string, args: string[]) {
+type ArgumentValidator = (args: string[]) => boolean;
+const allowReadOnlyArguments: ArgumentValidator = () => true;
+const BUILTIN_GIT_VALIDATORS: Record<BuiltinSafeGitSubcommand, ArgumentValidator> = {
+	status: allowReadOnlyArguments,
+	log: isSafeGitLogArguments,
+	diff: isSafeGitDiffArguments,
+	show: requiresNoTextconv,
+	branch: isSafeGitBranchArguments,
+	remote: isSafeGitRemoteArguments,
+	"ls-files": allowReadOnlyArguments,
+	grep: isSafeGitGrepArguments,
+};
+const CONFIGURABLE_GIT_VALIDATORS: Record<ConfigurableSafeGitSubcommand, ArgumentValidator> = {
+	"rev-parse": allowReadOnlyArguments,
+	blame: requiresNoTextconv,
+	describe: allowReadOnlyArguments,
+	"merge-base": allowReadOnlyArguments,
+	"ls-tree": allowReadOnlyArguments,
+	"cat-file": isSafeGitCatFileArguments,
+};
+const GH_VALIDATORS: Record<SafeGhSubcommandPath, ArgumentValidator> = {
+	"pr view": isSafeGhReadArguments,
+	"pr list": isSafeGhReadArguments,
+	"issue view": isSafeGhReadArguments,
+	"issue list": isSafeGhReadArguments,
+};
+
+function isSafeStructuredCommand(
+	command: string,
+	args: string[],
+	safeSubcommands: SafeSubcommands,
+) {
+	if (command === "git") return isSafeGitCommand(args, safeSubcommands);
+	if (command === "gh") return isSafeGhCommand(args, safeSubcommands);
+
 	const subcommandIndex = args.findIndex((argument) => !argument.startsWith("-"));
 	const subcommand = args[subcommandIndex]?.toLowerCase();
 	const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
@@ -283,48 +385,6 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 			(args.includes("-n") || args.some((argument) => /^-[^-]*n[^-]*$/.test(argument))) &&
 			/^\d+(,\d+)?p$/.test(script ?? "")
 		);
-	}
-	if (command === "git") {
-		if (!subcommand || !["status", "log", "diff", "show", "branch", "remote", "ls-files", "grep"].includes(subcommand)) return false;
-		if (subcommand === "branch" && subcommandArgs.some((argument) => !argument.startsWith("-"))) return false;
-		if (
-			subcommand === "branch" &&
-			subcommandArgs.some(
-				(argument) =>
-					[
-						"-d",
-						"-D",
-						"-m",
-						"-M",
-						"-c",
-						"-C",
-						"--delete",
-						"--move",
-						"--copy",
-						"--edit-description",
-						"--unset-upstream",
-					].includes(argument) || argument.startsWith("--set-upstream-to"),
-			)
-		)
-			return false;
-		if (subcommand === "remote") {
-			const action = subcommandArgs.find((argument) => !argument.startsWith("-"));
-			if (action && action !== "show" && action !== "get-url") return false;
-		}
-		if (
-			args.some(
-				(argument) =>
-					argument === "--output" ||
-					argument.startsWith("--output=") ||
-					argument === "--ext-diff" ||
-					argument === "--textconv" ||
-					argument === "--open-files-in-pager" ||
-					argument.startsWith("--open-files-in-pager=") ||
-					(subcommand === "grep" && (argument === "-O" || argument.startsWith("-O"))),
-			)
-		)
-			return false;
-		return true;
 	}
 	if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
 		if (args.includes("--version")) return true;
@@ -344,13 +404,166 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 	}
 	if (command === "npm") {
 		if (subcommand === "audit" && subcommandArgs.includes("fix")) return false;
-		if (["list", "ls", "view", "info", "search", "outdated", "audit", "test"].includes(subcommand ?? "")) {
+		if (
+			["list", "ls", "view", "info", "search", "outdated", "audit", "test"].includes(
+				subcommand ?? "",
+			)
+		) {
 			return true;
 		}
 		return subcommand === "run" && ["test", "check", "typecheck", "lint"].includes(args[1] ?? "");
 	}
 	if (["cargo", "go", "pytest", "vitest", "jest"].includes(command)) {
-		return ["test", "check"].includes(subcommand ?? "") || ["pytest", "vitest", "jest"].includes(command);
+		return (
+			["test", "check"].includes(subcommand ?? "") || ["pytest", "vitest", "jest"].includes(command)
+		);
 	}
 	return false;
+}
+
+function isSafeGitCommand(args: string[], safeSubcommands: SafeSubcommands) {
+	let subcommandIndex = 0;
+	while (args[subcommandIndex] === "--no-pager") subcommandIndex += 1;
+	const subcommand = args[subcommandIndex]?.toLowerCase();
+	if (!subcommand || subcommand.startsWith("-")) return false;
+	const subcommandArgs = args.slice(subcommandIndex + 1);
+	const builtinValidator = (BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[
+		subcommand
+	];
+	const configuredValidator = (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[
+		subcommand
+	];
+	const configured = safeSubcommands.git?.includes(subcommand as SafeGitSubcommand) === true;
+	const validator = builtinValidator ?? (configured ? configuredValidator : undefined);
+	return (
+		validator !== undefined &&
+		hasSafeGitArguments(subcommand, subcommandArgs) &&
+		validator(subcommandArgs)
+	);
+}
+
+function hasSafeGitArguments(subcommand: string, args: string[]) {
+	return !args.some(
+		(argument) =>
+			argument === "--help" ||
+			argument === "--show-signature" ||
+			argument.startsWith("--show-signature=") ||
+			argument.includes("%G") ||
+			argument === "--output" ||
+			argument.startsWith("--output=") ||
+			argument === "--ext-diff" ||
+			argument.startsWith("--ext-diff=") ||
+			argument === "--textconv" ||
+			argument.startsWith("--textconv=") ||
+			argument === "--paginate" ||
+			argument === "--open-files-in-pager" ||
+			argument.startsWith("--open-files-in-pager=") ||
+			(subcommand === "grep" && (argument === "-O" || argument.startsWith("-O"))),
+	);
+}
+
+function isSafeGitCatFileArguments(args: string[]) {
+	return !args.some(
+		(argument) =>
+			matchesLongOptionPrefix(argument, "--filters", "--fi") ||
+			matchesLongOptionPrefix(argument, "--textconv", "--t"),
+	);
+}
+
+function isSafeGitGrepArguments(args: string[]) {
+	return !args.some(
+		(argument) =>
+			matchesLongOptionPrefix(argument, "--textconv", "--textc") ||
+			matchesLongOptionPrefix(argument, "--open-files-in-pager", "--op") ||
+			matchesLongOptionPrefix(argument, "--ext-grep", "--ext"),
+	);
+}
+
+function matchesLongOptionPrefix(argument: string, option: string, shortest: string) {
+	const optionName = argument.split("=", 1)[0] ?? "";
+	return optionName.length >= shortest.length && option.startsWith(optionName);
+}
+
+function isSafeGitDiffArguments(args: string[]) {
+	return (
+		args.includes("--check") || (args.includes("--no-ext-diff") && args.includes("--no-textconv"))
+	);
+}
+
+function isSafeGitLogArguments(args: string[]) {
+	if (args.includes("--no-textconv")) return true;
+	return !args.some(
+		(argument) =>
+			argument === "-p" ||
+			argument.startsWith("-p") ||
+			argument === "-u" ||
+			argument.startsWith("-U") ||
+			argument === "-c" ||
+			argument === "--patch" ||
+			argument.startsWith("--patch=") ||
+			argument.startsWith("--patch-with-") ||
+			argument === "--unified" ||
+			argument.startsWith("--unified=") ||
+			argument === "--binary" ||
+			argument === "--cc" ||
+			argument === "--remerge-diff",
+	);
+}
+
+function requiresNoTextconv(args: string[]) {
+	return args.includes("--no-textconv");
+}
+
+function isSafeGitBranchArguments(args: string[]) {
+	if (args.some((argument) => !argument.startsWith("-"))) return false;
+	return !args.some(
+		(argument) =>
+			/^-[^-]*[dDmMcCu]/.test(argument) ||
+			matchesLongOptionPrefix(argument, "--delete", "--del") ||
+			matchesLongOptionPrefix(argument, "--move", "--mov") ||
+			matchesLongOptionPrefix(argument, "--copy", "--cop") ||
+			matchesLongOptionPrefix(argument, "--edit-description", "--e") ||
+			matchesLongOptionPrefix(argument, "--unset-upstream", "--u") ||
+			matchesLongOptionPrefix(argument, "--set-upstream-to", "--set-u") ||
+			matchesLongOptionPrefix(argument, "--create-reflog", "--creat"),
+	);
+}
+
+function isSafeGitRemoteArguments(args: string[]) {
+	const actionIndex = args.findIndex((argument) => !argument.startsWith("-"));
+	if (actionIndex < 0) return true;
+	const action = args[actionIndex];
+	if (action === "get-url") return true;
+	if (action !== "show") return false;
+
+	const showArgs = args.slice(actionIndex + 1);
+	if (showArgs.includes("--")) return false;
+	const remotes = showArgs.filter((argument) => !argument.startsWith("-"));
+	return remotes.length === 0 || (remotes.length === 1 && showArgs.includes("-n"));
+}
+
+function isSafeGhCommand(args: string[], safeSubcommands: SafeSubcommands) {
+	const group = args[0]?.toLowerCase();
+	const action = args[1]?.toLowerCase();
+	if (!group || !action || group.startsWith("-") || action.startsWith("-")) return false;
+	const path = `${group} ${action}` as SafeGhSubcommandPath;
+	if (!safeSubcommands.gh?.includes(path)) return false;
+	const validator = (GH_VALIDATORS as Record<string, ArgumentValidator>)[path];
+	return validator?.(args.slice(2)) ?? false;
+}
+
+function isSafeGhReadArguments(args: string[]) {
+	return !args.some(
+		(argument) =>
+			argument.startsWith("-w") ||
+			argument === "--web" ||
+			argument.startsWith("--web=") ||
+			argument === "--browser" ||
+			argument.startsWith("--browser=") ||
+			argument === "--paginate" ||
+			argument === "--pager" ||
+			argument.startsWith("--pager=") ||
+			argument === "--output" ||
+			argument.startsWith("--output="),
+	);
 }
