@@ -69,8 +69,15 @@ export class RuntimeApiKeyBridge {
 	private getRegisteredProviderConfig(ctx: ExtensionContext): RuntimeProviderConfig | undefined {
 		const registry = ctx.modelRegistry as unknown as {
 			getRegisteredProviderConfig?: (provider: string) => RuntimeProviderConfig | undefined;
+			registeredProviders?: Map<string, RuntimeProviderConfig>;
 		};
-		return registry.getRegisteredProviderConfig?.(this.providerId);
+		if (typeof registry.getRegisteredProviderConfig === "function") {
+			return registry.getRegisteredProviderConfig(this.providerId);
+		}
+		// Pi 0.79/0.80.3 have the same provider merge semantics but expose only this map.
+		return registry.registeredProviders instanceof Map
+			? registry.registeredProviders.get(this.providerId)
+			: undefined;
 	}
 
 	private reset(): void {

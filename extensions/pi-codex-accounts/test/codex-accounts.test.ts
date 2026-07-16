@@ -953,7 +953,8 @@ test("runtime auth bridge restores another extension's provider configuration", 
 				},
 			},
 			getApiKeyForProvider: async () => runtimeKey,
-			getRegisteredProviderConfig: (provider: string) => mock.providers.get(provider),
+			// Pi 0.79/0.80.3 retain dynamic providers in this internal map but expose no getter.
+			registeredProviders: mock.providers,
 		},
 	});
 
