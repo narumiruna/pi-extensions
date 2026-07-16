@@ -90,6 +90,7 @@ Account switches and token refreshes also close any cached Codex WebSocket for t
 extensions/pi-codex-accounts/
 ├── src/
 │   ├── codex-accounts.ts
+│   ├── oauth.ts
 │   └── storage.ts
 ├── test/
 │   └── codex-accounts.test.ts

@@ -3,6 +3,9 @@ import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 
 const PRIVATE_FILE_WRITE_OPTIONS = { encoding: "utf8", mode: 0o600 } as const;
+const DEFAULT_SYNC_LOCK_TIMEOUT_MS = 200;
+const SYNC_LOCK_RETRY_INTERVAL_MS = 20;
+const syncSleepState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 type StorageLockResult<T> = {
 	result: T;
@@ -17,7 +20,10 @@ export interface CodexAccountStorageBackend {
 }
 
 export class FileCodexAccountStorageBackend implements CodexAccountStorageBackend {
-	constructor(private readonly filePath: string) {}
+	constructor(
+		private readonly filePath: string,
+		private readonly options: { syncLockTimeoutMs?: number } = {},
+	) {}
 
 	withLock<T>(mutator: (current: string | undefined) => StorageLockResult<T>): T {
 		this.ensureFileExists();
@@ -88,23 +94,18 @@ export class FileCodexAccountStorageBackend implements CodexAccountStorageBacken
 	}
 
 	private acquireLockSyncWithRetry(): () => void {
-		const maxAttempts = 10;
-		let lastError: unknown;
-		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		const timeoutMs = this.options.syncLockTimeoutMs ?? DEFAULT_SYNC_LOCK_TIMEOUT_MS;
+		const deadline = Date.now() + timeoutMs;
+		while (true) {
 			try {
 				return lockfile.lockSync(this.filePath, { realpath: false });
 			} catch (error) {
-				if (!isNodeError(error) || error.code !== "ELOCKED" || attempt === maxAttempts) {
-					throw error;
-				}
-				lastError = error;
-				const start = Date.now();
-				while (Date.now() - start < 20) {
-					// The synchronous API cannot use timed retries.
-				}
+				if (!isNodeError(error) || error.code !== "ELOCKED") throw error;
+				const remainingMs = deadline - Date.now();
+				if (remainingMs <= 0) throw error;
+				Atomics.wait(syncSleepState, 0, 0, Math.min(SYNC_LOCK_RETRY_INTERVAL_MS, remainingMs));
 			}
 		}
-		throw lastError ?? new Error("Failed to acquire Codex account storage lock");
 	}
 
 	private writePrivate(contents: string): void {

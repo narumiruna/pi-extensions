@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { access, chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -105,6 +107,49 @@ test("default store migrates credentials to the canonical package filename", asy
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		assert.match(context.notifications[0]?.message ?? "", /migrated/i);
 	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("concurrent startup waits for an in-progress legacy account migration", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-migration-lock-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	let lockHolder: ReturnType<typeof spawn> | undefined;
+	try {
+		const legacyPath = join(dir, "codex-accounts.json");
+		const canonicalPath = join(dir, "pi-codex-accounts.json");
+		const raw = JSON.stringify({ active: "work", accounts: { work: validCred("work") } });
+		await writeFile(legacyPath, raw, { mode: 0o600 });
+		lockHolder = spawn(
+			process.execPath,
+			[
+				"-e",
+				`const lockfile = require("proper-lockfile");
+(async () => {
+	const release = await lockfile.lock(process.argv[1], { realpath: false });
+	process.stdout.write("locked\\n");
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	await release();
+})().catch((error) => { console.error(error); process.exitCode = 1; });`,
+				legacyPath,
+			],
+			{ stdio: ["ignore", "pipe", "inherit"] },
+		);
+		const lockHolderExit = once(lockHolder, "exit");
+		assert.ok(lockHolder.stdout);
+		await once(lockHolder.stdout, "data");
+
+		const store = new CodexAccountStore();
+		assert.equal(store.read().active, "work");
+		assert.equal(await readFile(canonicalPath, "utf8"), raw);
+		await assert.rejects(access(legacyPath));
+		const [exitCode] = await lockHolderExit;
+		assert.equal(exitCode, 0);
+	} finally {
+		lockHolder?.kill();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		await rm(dir, { recursive: true, force: true });
@@ -314,6 +359,57 @@ test("account reset removes an async runtime override that is still being applie
 		`finish:${CODEX_PROVIDER_ID}:access-work`,
 		`remove:${CODEX_PROVIDER_ID}`,
 	]);
+});
+
+test("account reset during API-key conversion cannot restore a stale runtime override", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	await store.write({ active: "work", accounts: { work: validCred("work") } });
+	let releaseConversion: (() => void) | undefined;
+	const conversionBlocked = new Promise<void>((resolve) => {
+		releaseConversion = resolve;
+	});
+	let signalConversionStarted: (() => void) | undefined;
+	const conversionStarted = new Promise<void>((resolve) => {
+		signalConversionStarted = resolve;
+	});
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				throw new Error("unexpected login");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			async getApiKey(credential) {
+				signalConversionStarted?.();
+				await conversionBlocked;
+				return credential.access;
+			},
+		},
+	});
+	const command = mock.commands.get("codex-account");
+	assert.ok(command);
+	const runtimeCalls: string[] = [];
+	const { ctx } = createMockContext({
+		modelRegistry: {
+			authStorage: {
+				setRuntimeApiKey: (provider: string, key: string) =>
+					runtimeCalls.push(`set:${provider}:${key}`),
+				removeRuntimeApiKey: (provider: string) => runtimeCalls.push(`remove:${provider}`),
+			},
+		},
+	});
+
+	const startup = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await conversionStarted;
+	await command.handler("default", ctx);
+	releaseConversion?.();
+	await startup;
+
+	assert.equal((await store.readAsync()).active, undefined);
+	assert.deepEqual(runtimeCalls, []);
 });
 
 test("ensureActiveCodexAuth refreshes near-expired active accounts", async () => {

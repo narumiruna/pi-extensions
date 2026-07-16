@@ -11,13 +11,20 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import * as piAiOAuth from "@earendil-works/pi-ai/oauth";
 import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import {
+	type CodexOAuthCallbacks,
+	type CodexOAuthProvider,
+	type DeviceCodeInfo,
+	getDefaultCodexOAuthProvider,
+	type OAuthCredentials,
+	type RefreshOnlyCodexOAuthProvider,
+} from "./oauth.js";
 import { type CodexAccountStorageBackend, FileCodexAccountStorageBackend } from "./storage.js";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
@@ -29,6 +36,7 @@ export const DEFAULT_PI_LOGIN_LABEL = "(default pi login)";
 export const FAIL_CLOSED_API_KEY = "pi-codex-accounts-refresh-failed";
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
+const MIGRATION_LOCK_TIMEOUT_MS = 30_000;
 let pendingAccountsMigrationNotice: string | undefined;
 const ACCOUNT_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -43,35 +51,6 @@ type RuntimeOverrideState = {
 };
 
 const runtimeOverrideStates = new WeakMap<object, RuntimeOverrideState>();
-
-type DeviceCodeInfo = {
-	userCode: string;
-	verificationUri: string;
-	intervalSeconds?: number;
-	expiresInSeconds?: number;
-};
-
-type OAuthCredentials = piAiOAuth.OAuthCredentials;
-type OAuthLoginCallbacks = piAiOAuth.OAuthLoginCallbacks;
-type BuiltinProvider = ReturnType<
-	typeof import("@earendil-works/pi-ai/providers/all").builtinProviders
->[number];
-type ProviderOwnedOAuth = NonNullable<BuiltinProvider["auth"]["oauth"]>;
-
-type CodexOAuthCallbacks = OAuthLoginCallbacks & {
-	onDeviceCode?: (info: DeviceCodeInfo) => void;
-};
-
-type CodexOAuthProvider = {
-	login(callbacks: CodexOAuthCallbacks): Promise<OAuthCredentials>;
-	refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-	getApiKey(credentials: OAuthCredentials): string | Promise<string>;
-};
-
-let defaultCodexOAuthProvider: CodexOAuthProvider | undefined;
-let providerOwnedOAuthPromise: Promise<ProviderOwnedOAuth> | undefined;
-
-type RefreshOnlyCodexOAuthProvider = Pick<CodexOAuthProvider, "refreshToken" | "getApiKey">;
 
 export type StoredCodexCredential = {
 	access: string;
@@ -160,7 +139,8 @@ export default function codexAccounts(
 ) {
 	const store = dependencies.store ?? new CodexAccountStore();
 	let migrationNotice = dependencies.store ? undefined : consumeAccountsMigrationNotice();
-	const oauthProvider = dependencies.oauthProvider ?? getDefaultCodexOAuthProvider();
+	const oauthProvider =
+		dependencies.oauthProvider ?? getDefaultCodexOAuthProvider(CODEX_PROVIDER_ID);
 	// Keep cleanup injectable until WebSocket controls are available through a loader-safe export.
 	const closeWebSocketSessions = dependencies.closeWebSocketSessions ?? (() => undefined);
 	let appliedAuthIdentity: string | undefined;
@@ -319,14 +299,14 @@ export async function ensureActiveCodexAuth(
 		return { status: "inactive" };
 	}
 
-	const oauthProvider = options.oauthProvider ?? getDefaultCodexOAuthProvider();
+	const oauthProvider = options.oauthProvider ?? getDefaultCodexOAuthProvider(CODEX_PROVIDER_ID);
 	if (credential.expires <= (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
 		let refreshError: unknown;
 		const current = await store.updateAsync(async (latest) => {
 			if (latest.active !== active || !latest.accounts[active]) return latest;
 			const latestCredential = latest.accounts[active];
+			credential = latestCredential;
 			if (latestCredential.expires > (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
-				credential = latestCredential;
 				return latest;
 			}
 			try {
@@ -345,6 +325,9 @@ export async function ensureActiveCodexAuth(
 			return ensureActiveCodexAuth(ctx, store, options);
 		}
 		if (refreshError !== undefined) {
+			if (!(await activeCredentialMatches(store, active, credential))) {
+				return ensureActiveCodexAuth(ctx, store, options);
+			}
 			await setRuntimeCodexApiKey(ctx, FAIL_CLOSED_API_KEY);
 			return {
 				status: "error",
@@ -354,8 +337,29 @@ export async function ensureActiveCodexAuth(
 		}
 	}
 
-	await setRuntimeCodexApiKey(ctx, await oauthProvider.getApiKey(credential));
+	const apiKey = await oauthProvider.getApiKey(credential);
+	if (!(await activeCredentialMatches(store, active, credential))) {
+		return ensureActiveCodexAuth(ctx, store, options);
+	}
+	await setRuntimeCodexApiKey(ctx, apiKey);
 	return { status: "active", accountName: active };
+}
+
+async function activeCredentialMatches(
+	store: CodexAccountStore,
+	accountName: string,
+	expected: StoredCodexCredential,
+): Promise<boolean> {
+	const latest = await store.readAsync();
+	const current = latest.accounts[accountName];
+	return (
+		latest.active === accountName &&
+		current !== undefined &&
+		current.access === expected.access &&
+		current.refresh === expected.refresh &&
+		current.expires === expected.expires &&
+		current.accountId === expected.accountId
+	);
 }
 
 export function completeStoredAccountArguments(
@@ -426,7 +430,9 @@ function defaultAccountsPath(): string {
 	if (!pathEntryExists(legacyPath)) return canonicalPath;
 
 	try {
-		return new FileCodexAccountStorageBackend(legacyPath).withLock(() => {
+		return new FileCodexAccountStorageBackend(legacyPath, {
+			syncLockTimeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
+		}).withLock(() => {
 			const contents = readFileSync(legacyPath, "utf8");
 			const permissionError = enforcePrivateFilePermissions(legacyPath);
 			if (permissionError) throw new Error(permissionError);
@@ -461,6 +467,7 @@ function defaultAccountsPath(): string {
 			pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} was created concurrently.`;
 			return canonicalPath;
 		}
+		if (hasErrorCode(error, "ELOCKED")) throw error;
 		pendingAccountsMigrationNotice = `Codex accounts migration failed: ${errorMessage(error)}. The legacy file will be used for this session.`;
 		return legacyPath;
 	}
@@ -629,92 +636,6 @@ function normalizeCredential(
 				refresh: rawCredential.refresh,
 				expires: rawCredential.expires,
 			};
-}
-
-function getDefaultCodexOAuthProvider(): CodexOAuthProvider {
-	if (defaultCodexOAuthProvider) return defaultCodexOAuthProvider;
-	const legacyProvider = (piAiOAuth as unknown as { openaiCodexOAuthProvider?: CodexOAuthProvider })
-		.openaiCodexOAuthProvider;
-	defaultCodexOAuthProvider = legacyProvider ?? createProviderOwnedCodexOAuthAdapter();
-	return defaultCodexOAuthProvider;
-}
-
-function createProviderOwnedCodexOAuthAdapter(): CodexOAuthProvider {
-	return {
-		login: async (callbacks) => {
-			const oauth = await loadProviderOwnedCodexOAuth();
-			return oauth.login({
-				signal: callbacks.signal,
-				prompt: async (prompt) => {
-					if (prompt.type === "select") {
-						const selected = await callbacks.onSelect({
-							message: prompt.message,
-							options: prompt.options.map(({ id, label }) => ({ id, label })),
-						});
-						if (selected === undefined) throw new Error("Login cancelled");
-						return selected;
-					}
-					if (prompt.type === "manual_code" && callbacks.onManualCodeInput) {
-						return callbacks.onManualCodeInput();
-					}
-					return callbacks.onPrompt({
-						message: prompt.message,
-						placeholder: prompt.placeholder,
-					});
-				},
-				notify: (event) => {
-					if ((event as { type: string }).type === "info") {
-						const info = event as unknown as {
-							message: string;
-							links?: ReadonlyArray<{ url: string }>;
-						};
-						callbacks.onProgress?.(
-							[info.message, ...(info.links ?? []).map((link) => link.url)].join("\n"),
-						);
-						return;
-					}
-					switch (event.type) {
-						case "auth_url":
-							callbacks.onAuth({ url: event.url, instructions: event.instructions });
-							break;
-						case "device_code":
-							callbacks.onDeviceCode?.(event);
-							break;
-						case "progress":
-							callbacks.onProgress?.(event.message);
-							break;
-					}
-				},
-			});
-		},
-		refreshToken: async (credentials) => {
-			const oauth = await loadProviderOwnedCodexOAuth();
-			return oauth.refresh(asOAuthCredential(credentials));
-		},
-		getApiKey: async (credentials) => {
-			const oauth = await loadProviderOwnedCodexOAuth();
-			const auth = await oauth.toAuth(asOAuthCredential(credentials));
-			if (!auth.apiKey)
-				throw new Error("Pi's built-in OpenAI Codex OAuth provider returned no access token.");
-			return auth.apiKey;
-		},
-	};
-}
-
-function loadProviderOwnedCodexOAuth(): Promise<ProviderOwnedOAuth> {
-	providerOwnedOAuthPromise ??= import("@earendil-works/pi-ai/providers/all").then(
-		({ builtinProviders }) => {
-			const oauth = builtinProviders().find((provider) => provider.id === CODEX_PROVIDER_ID)?.auth
-				.oauth;
-			if (!oauth) throw new Error("Pi's built-in OpenAI Codex OAuth provider is unavailable.");
-			return oauth;
-		},
-	);
-	return providerOwnedOAuthPromise;
-}
-
-function asOAuthCredential(credentials: OAuthCredentials) {
-	return { ...credentials, type: "oauth" as const };
 }
 
 async function loginCodexAccount(
@@ -974,6 +895,10 @@ function isStaleExtensionContextError(error: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+	return error instanceof Error && "code" in error && error.code === code;
 }
 
 function errorMessage(error: unknown): string {
