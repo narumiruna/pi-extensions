@@ -149,10 +149,10 @@ test("configured Git validators are additive and exact", () => {
 
 test("configured gh validators require exact read-only paths", () => {
 	const cases = [
-		["pr view", "gh pr view 218"],
-		["pr list", "gh pr list --limit 20"],
-		["issue view", "gh issue view 212 --comments"],
-		["issue list", "gh issue list --state open"],
+		["pr view", "gh pr view 218 --json number,title,state"],
+		["pr list", "gh pr list --limit 20 --json=number,title"],
+		["issue view", "gh issue view 212 --comments --json number,title"],
+		["issue list", "gh issue list --state open --json number,title"],
 	] as const;
 
 	for (const [path, command] of cases) {
@@ -169,6 +169,13 @@ test("configured gh validators require exact read-only paths", () => {
 		"gh issue create --title changed",
 		"gh alias list",
 		"gh co 218",
+		"gh pr view 218",
+		"gh pr list --limit 20",
+		"gh issue view 212 --comments",
+		"gh issue list --state open",
+		"gh pr view 218 --json",
+		"gh pr view 218 --json --comments",
+		"gh pr view 218 --json=",
 		"gh pr view 218 --web",
 		"gh pr view 218 --web=true",
 		"gh pr view 218 -w",
@@ -183,7 +190,13 @@ test("configured gh validators require exact read-only paths", () => {
 	]) {
 		assert.equal(isSafeCommandWithPolicy(command, allGh), false, command);
 	}
-	assert.equal(isSafeCommandWithPolicy("gh pr view 218 && gh issue list --limit 5", allGh), true);
+	assert.equal(
+		isSafeCommandWithPolicy(
+			"gh pr view 218 --json number,title --jq .number && gh issue list --limit 5 --json number,title",
+			allGh,
+		),
+		true,
+	);
 });
 
 test("maximal Git opt-in preserves execution and mutation guards", () => {
@@ -237,6 +250,9 @@ test("Git validators require guards for implicit external helpers", () => {
 		"git log -U3 -1",
 		"git log --binary -1",
 		"git log --patch-with-stat -1",
+		"git log -Ssecret -1",
+		"git log -Gsecret -1",
+		"git log --find-object=0123456789abcdef -1",
 		"git log --show-signature -1",
 		"git log --format=%G? -1",
 		"git status --help",
@@ -251,6 +267,9 @@ test("Git validators require guards for implicit external helpers", () => {
 		"git diff --no-ext-diff --no-textconv HEAD~1",
 		"git show --no-textconv HEAD",
 		"git log -p --no-textconv -1",
+		"git log -Ssecret --no-textconv -1",
+		"git log -Gregex --no-textconv -1",
+		"git log --find-object=0123456789abcdef --no-textconv -1",
 		"git remote show -n origin",
 	]) {
 		assert.equal(isSafeCommandWithPolicy(command), true, command);
