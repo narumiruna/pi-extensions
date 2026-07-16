@@ -20,6 +20,7 @@ export type PlanModeThinkingLevel = (typeof PLAN_MODE_THINKING_LEVELS)[number];
 export type PlanModeFixedThinkingLevel = Exclude<PlanModeThinkingLevel, "inherit">;
 export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
+	defaultPlanTools?: string[];
 }
 export type PlanModeSettingsLoadResult =
 	| { kind: "missing"; notice?: string }
@@ -31,9 +32,26 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 	const thinkingLevel = Object.hasOwn(value, "thinkingLevel")
 		? Reflect.get(value, "thinkingLevel")
 		: "inherit";
-	return PLAN_MODE_THINKING_LEVELS.includes(thinkingLevel as PlanModeThinkingLevel)
-		? { thinkingLevel: thinkingLevel as PlanModeThinkingLevel }
+	if (!PLAN_MODE_THINKING_LEVELS.includes(thinkingLevel as PlanModeThinkingLevel)) {
+		return undefined;
+	}
+	if (!Object.hasOwn(value, "defaultPlanTools")) {
+		return { thinkingLevel: thinkingLevel as PlanModeThinkingLevel };
+	}
+	const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
+	return defaultPlanTools
+		? { thinkingLevel: thinkingLevel as PlanModeThinkingLevel, defaultPlanTools }
 		: undefined;
+}
+
+function normalizeToolNames(value: unknown) {
+	if (
+		!Array.isArray(value) ||
+		!value.every((item): item is string => typeof item === "string" && item.trim().length > 0)
+	) {
+		return undefined;
+	}
+	return Array.from(new Set(value));
 }
 
 export async function readPlanModeSettings(
@@ -59,10 +77,7 @@ export async function readPlanModeSettings(
 	if (legacy.kind !== "loaded") return legacy;
 	let installedIdentity: FileIdentity;
 	try {
-		installedIdentity = await installFileExclusively(
-			canonicalPath,
-			legacySnapshot.contents ?? "",
-		);
+		installedIdentity = await installFileExclusively(canonicalPath, legacySnapshot.contents ?? "");
 	} catch (error) {
 		const created = await readSettingsFile(canonicalPath);
 		if (created.kind !== "missing") {

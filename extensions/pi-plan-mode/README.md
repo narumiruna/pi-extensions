@@ -83,19 +83,30 @@ You can also exit directly. Direct exit discards the latest proposed plan instea
 /plan exit
 ```
 
-## ⚙️ Thinking level
+## ⚙️ Settings
 
-Plan mode inherits Pi's current thinking level by default. To request a fixed level only while Plan mode is active, create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`):
+Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) to configure Plan mode globally. The file is optional, is read at session start, and is never created automatically.
 
 ```json
 {
-  "thinkingLevel": "medium"
+  "thinkingLevel": "inherit",
+  "defaultPlanTools": ["read", "bash", "grep", "find", "ls"]
 }
 ```
 
-Supported values are `inherit`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. The extension snapshots the prior level and restores it on exit only if the level still matches the value it applied; a manual change made during Plan mode is preserved. The settings file is optional, is read at session start, and never changes Pi's default setting. Invalid settings produce a warning and fall back to `inherit`.
+### Default Plan tools
 
-Compatibility: a valid legacy `plan-mode.json` is migrated automatically to `pi-plan-mode.json`. If both files exist, the new filename takes precedence.
+`defaultPlanTools` defines the initial tool selection when a session has no stored `/plan tools` selection. Omit it to keep the available safe built-ins as the default. An explicit empty array is valid and enables only the required `plan_mode_question` and `plan_mode_complete` tools.
+
+Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. A tool registered after Plan mode is already active is not added automatically; re-enter Plan mode or reopen `/plan tools` to reapply the selection. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them with `/plan tools`. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead.
+
+A selection made with `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes. The global setting remains the baseline for fresh sessions and sessions without an explicit selection.
+
+### Thinking level
+
+Plan mode inherits Pi's current thinking level by default. Set `thinkingLevel` to request a fixed level only while Plan mode is active. Supported values are `inherit`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. The extension snapshots the prior level and restores it on exit only if the level still matches the value it applied; a manual change made during Plan mode is preserved. The setting never changes Pi's default thinking level.
+
+Invalid settings produce a warning and fall back to inherited thinking plus the available safe-built-in tool defaults. Compatibility: a valid legacy `plan-mode.json` is migrated automatically to `pi-plan-mode.json`. If both files exist, the new filename takes precedence.
 
 ## 🧠 Codex-like behavior
 
