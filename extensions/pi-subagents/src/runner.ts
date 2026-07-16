@@ -343,7 +343,11 @@ export function terminateProcess(
 	proc: ReturnType<typeof spawn>,
 	graceMs = KILL_GRACE_MS,
 ): () => void {
-	let closed = proc.exitCode !== null || proc.signalCode !== null;
+	const leaderExited = proc.exitCode !== null || proc.signalCode !== null;
+	const capturedOutputClosed = [proc.stdout, proc.stderr].every(
+		(stream) => !stream || stream.readableEnded || stream.destroyed,
+	);
+	let closed = leaderExited && capturedOutputClosed;
 	const onClose = () => {
 		closed = true;
 	};
