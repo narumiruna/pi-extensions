@@ -48,7 +48,7 @@ Plan mode currently permits eight built-in Git inspection subcommands and blocks
 - [x] Updated `extensions/pi-plan-mode/README.md` with the complete schema, exact values, additive semantics, accepted/rejected examples, exact `gh` paths, and data-visibility warnings.
 - [x] Completed a focused bypass scan across aliases, global options, redirects, expansions/substitutions, pagers, browsers, filters, helpers, chained segments, and siblings; added regressions for environment, pathname, and brace expansion plus newline command separation; environment/glob expansion was hardened after the scan exposed option-injection risk.
 - [x] Ran targeted Biome with `--vcs-use-ignore-file=false`, pi-plan-mode typecheck, `npm test` (521 passing), full `npm run check`, an isolated `pi -ne -e ./extensions/pi-plan-mode --help` load smoke, and `just pack-plan-mode`; the dry run contains the expected 11 files.
-- [ ] Archive this completed plan, commit focused changes, push the feature branch, create a PR referencing issue #212, and verify both GitHub CI matrix jobs pass with no actionable review comments.
+- [x] Committed focused changes as `b197ed4`, pushed the feature branch, opened PR #220 referencing issue #212, and verified both GitHub CI matrix jobs passed with no actionable review comments; archive this completed ledger with the final documentation commit.
 
 ## Risks
 
@@ -68,4 +68,4 @@ Because the setting is additive and omitted by default, recovery is to ignore op
 - [x] The four initial `gh` paths require and honor exact path opt-ins without allowing mutating siblings.
 - [x] Unknown settings, unsafe flags, helper execution paths, redirects, malformed layouts, and mixed safe/unsafe chains fail closed.
 - [x] Session reload/removal resets optional policy without affecting inactive Plan mode.
-- [x] README, tests, package contents, and local verification match the implemented contract; PR CI remains tracked in the final task above.
+- [x] README, tests, package contents, local verification, and PR #220 CI match the implemented contract.
