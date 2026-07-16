@@ -1466,6 +1466,14 @@ test("runSingleAgent preserves final text beyond its history budget and rejects 
 	assert.equal(multiBlock.exitCode, 0);
 	assert.equal(multiBlock.finalOutput, "FIRST\nSECOND");
 
+	const paddedActivity = await runScript(
+		[
+			"const message={role:'assistant',content:[{type:'text',text:'\\n'.repeat(2048)+'LATEST_ACTIVITY\\n\\n'}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.deepEqual(paddedActivity.recentActivity, [{ type: "text", text: "LATEST_ACTIVITY" }]);
+
 	const empty = await runScript(
 		[
 			"const commentary={role:'assistant',content:[{type:'text',text:'OLD_COMMENTARY'}],stopReason:'toolUse',timestamp:Date.now()};",
@@ -1831,6 +1839,82 @@ test("renderSubagentResult keeps partial views running and renders final-only pr
 	assert.match(singlePartial, /^⏳ single/);
 	assert.doesNotMatch(singlePartial, /^✓/);
 
+	const timedOutPartial = render(
+		{
+			mode: "single",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [
+				{
+					...result("timed-out"),
+					timedOut: true,
+					stopReason: "timeout",
+					errorMessage: "Subagent timed out after 1000ms",
+				},
+			],
+		},
+		true,
+	);
+	assert.match(timedOutPartial, /^✗ timed-out .*\[timeout\]/);
+	assert.match(timedOutPartial, /Error: Subagent timed out after 1000ms/);
+	assert.doesNotMatch(timedOutPartial, /\(running\.\.\.\)/);
+
+	const timedOutResult = (agent: string, exitCode: number) => ({
+		...result(agent, "", exitCode),
+		timedOut: true,
+		stopReason: "timeout",
+		errorMessage: `${agent} timed out`,
+	});
+	const parallelTimeout = render(
+		{
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [result("done"), timedOutResult("timed-task", -1)],
+		},
+		true,
+	);
+	assert.match(parallelTimeout, /timed-task ✗/);
+	assert.match(parallelTimeout, /Error: timed-task timed out/);
+	assert.doesNotMatch(parallelTimeout, /running/);
+
+	const mixedParallel = render(
+		{
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [timedOutResult("timed-task", -1), result("still-running", "", -1)],
+		},
+		true,
+	);
+	assert.match(mixedParallel, /^⏳ parallel 1\/2 done, 1 running/);
+	assert.match(mixedParallel, /still-running ⏳/);
+
+	const settlingParallel = render(
+		{
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [result("done")],
+		},
+		true,
+	);
+	assert.match(settlingParallel, /^⏳ parallel 1\/1 done, running/);
+
+	const fanInTimeout = render(
+		{
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [result("done")],
+			aggregator: timedOutResult("fan-in", 0),
+		},
+		true,
+	);
+	assert.match(fanInTimeout, /fan-in → fan-in ✗/);
+	assert.match(fanInTimeout, /Error: fan-in timed out/);
+	assert.doesNotMatch(fanInTimeout, /running/);
+
 	const chainPartial = render(
 		{
 			mode: "chain",
@@ -1962,6 +2046,52 @@ test("terminateProcess escalates when a child ignores SIGTERM", {
 	terminateProcess(child, 30);
 	await new Promise<void>((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error("child did not exit")), 1000);
+		child.once("close", () => {
+			clearTimeout(timer);
+			resolve();
+		});
+	});
+	assert.ok(Date.now() - started < 1000);
+});
+
+test("terminateProcess cleans a group whose leader exited before inherited stdout closed", {
+	skip: process.platform === "win32",
+}, async () => {
+	const child = spawn(
+		process.execPath,
+		[
+			"-e",
+			"require('node:child_process').spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.stdout.write('descendant-ready\\\\n');setTimeout(()=>{},2000)\"],{stdio:['ignore','inherit','ignore']}).unref()",
+		],
+		{ detached: true, stdio: ["ignore", "pipe", "ignore"] },
+	);
+	const leaderExited = new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error("process-group leader did not exit")), 1000);
+		child.once("exit", () => {
+			clearTimeout(timer);
+			resolve();
+		});
+		child.once("error", reject);
+	});
+	const descendantReady = new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(
+			() => reject(new Error("process-group descendant did not start")),
+			1000,
+		);
+		child.stdout?.once("data", () => {
+			clearTimeout(timer);
+			resolve();
+		});
+	});
+	await Promise.all([leaderExited, descendantReady]);
+
+	const started = Date.now();
+	terminateProcess(child, 30);
+	await new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(
+			() => reject(new Error("descendant kept inherited stdout open")),
+			3000,
+		);
 		child.once("close", () => {
 			clearTimeout(timer);
 			resolve();

@@ -95,6 +95,8 @@ export function getResultFinalOutput(result: SingleResult): string {
 export function isResultError(result: SingleResult): boolean {
 	return (
 		(result.exitCode !== 0 && result.exitCode !== -1) ||
+		result.timedOut === true ||
+		result.stopReason === "timeout" ||
 		result.stopReason === "error" ||
 		result.stopReason === "aborted"
 	);
@@ -209,8 +211,9 @@ function appendRecentActivity(result: SingleResult, message: Message): void {
 		}
 	};
 	for (const part of message.content) {
-		if (part.type === "text" && part.text.trim()) {
-			append({ type: "text", text: truncateUtf8(part.text, 1024).text });
+		if (part.type === "text") {
+			const text = part.text.trim();
+			if (text) append({ type: "text", text: truncateUtf8(text, 1024).text });
 		} else if (part.type === "toolCall") {
 			append({
 				type: "toolCall",
@@ -340,7 +343,11 @@ export function terminateProcess(
 	proc: ReturnType<typeof spawn>,
 	graceMs = KILL_GRACE_MS,
 ): () => void {
-	let closed = proc.exitCode !== null || proc.signalCode !== null;
+	const leaderExited = proc.exitCode !== null || proc.signalCode !== null;
+	const capturedOutputClosed = [proc.stdout, proc.stderr].every(
+		(stream) => !stream || stream.readableEnded || stream.destroyed,
+	);
+	let closed = leaderExited && capturedOutputClosed;
 	const onClose = () => {
 		closed = true;
 	};

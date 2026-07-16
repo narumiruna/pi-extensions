@@ -150,9 +150,12 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 	for (const msg of messages) {
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
-				if (part.type === "text" && part.text.trim()) items.push({ type: "text", text: part.text });
-				else if (part.type === "toolCall")
+				if (part.type === "text") {
+					const text = part.text.trim();
+					if (text) items.push({ type: "text", text });
+				} else if (part.type === "toolCall") {
 					items.push({ type: "toolCall", name: part.name, args: part.arguments });
+				}
 			}
 		}
 	}
@@ -446,26 +449,28 @@ export function renderSubagentResult(
 	}
 
 	if (details.mode === "parallel") {
-		const running = details.results.filter((result) => result.exitCode === -1).length;
+		const resultIsRunning = (result: SingleResult) =>
+			result.exitCode === -1 && !isResultError(result);
+		const running = details.results.filter(resultIsRunning).length;
 		const successCount = details.results.filter(
 			(result) => result.exitCode !== -1 && !isResultError(result),
 		).length;
-		const failCount = details.results.filter(
-			(result) => result.exitCode !== -1 && isResultError(result),
-		).length;
+		const failCount = details.results.filter(isResultError).length;
 		const aggregator = details.aggregator;
-		const aggregatorRunning = aggregator?.exitCode === -1;
-		const aggregatorFailed = aggregator
-			? aggregator.exitCode !== -1 && isResultError(aggregator)
+		const aggregatorFailed = aggregator ? isResultError(aggregator) : false;
+		const aggregatorRunning = aggregator
+			? !aggregatorFailed && (isPartial || aggregator.exitCode === -1)
 			: false;
-		const isRunning = isPartial || running > 0 || aggregatorRunning;
+		const pendingSuccessfulSettlement =
+			isPartial && !aggregator && running === 0 && failCount === 0;
+		const isRunning = running > 0 || aggregatorRunning || pendingSuccessfulSettlement;
 		const icon = isRunning
 			? theme.fg("warning", "⏳")
 			: failCount > 0 || aggregatorFailed
 				? theme.fg("warning", "◐")
 				: theme.fg("success", "✓");
 		const status = isRunning
-			? isPartial && aggregator
+			? aggregatorRunning
 				? `${successCount + failCount}/${details.results.length} done, fan-in running`
 				: running > 0
 					? `${successCount + failCount}/${details.results.length} done, ${running} running`
@@ -485,9 +490,10 @@ export function renderSubagentResult(
 			);
 
 			for (const r of details.results) {
-				const rIcon = isResultError(r)
+				const rFailed = isResultError(r);
+				const rIcon = rFailed
 					? theme.fg("error", "✗")
-					: isPartial
+					: resultIsRunning(r)
 						? theme.fg("warning", "⏳")
 						: theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
@@ -498,6 +504,8 @@ export function renderSubagentResult(
 					new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
 				);
 				container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+				if (rFailed && r.errorMessage)
+					container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 
 				// Show tool calls
 				for (const item of displayItems) {
@@ -524,9 +532,9 @@ export function renderSubagentResult(
 			}
 
 			if (aggregator) {
-				const rIcon = isResultError(aggregator)
+				const rIcon = aggregatorFailed
 					? theme.fg("error", "✗")
-					: isPartial
+					: aggregatorRunning
 						? theme.fg("warning", "⏳")
 						: theme.fg("success", "✓");
 				const displayItems = getDisplayItems(aggregator.messages);
@@ -543,6 +551,10 @@ export function renderSubagentResult(
 				container.addChild(
 					new Text(theme.fg("muted", "Task: ") + theme.fg("dim", aggregator.task), 0, 0),
 				);
+				if (aggregatorFailed && aggregator.errorMessage)
+					container.addChild(
+						new Text(theme.fg("error", `Error: ${aggregator.errorMessage}`), 0, 0),
+					);
 				for (const item of displayItems) {
 					if (item.type === "toolCall") {
 						container.addChild(
@@ -575,34 +587,39 @@ export function renderSubagentResult(
 		// Collapsed view (or still running)
 		let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
 		for (const r of details.results) {
-			const rIcon = isResultError(r)
+			const rFailed = isResultError(r);
+			const rRunning = resultIsRunning(r);
+			const rIcon = rFailed
 				? theme.fg("error", "✗")
-				: r.exitCode === -1
+				: rRunning
 					? theme.fg("warning", "⏳")
 					: theme.fg("success", "✓");
 			const collapsed = getCollapsedDisplayItems(r);
 			const finalOutput = getResultFinalOutput(r).trim();
 			text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
-			if (collapsed.items.length > 0)
+			if (rFailed && r.errorMessage)
+				text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+			else if (collapsed.items.length > 0)
 				text += `\n${renderDisplayItems(collapsed.items, 5, collapsed.total)}`;
-			else if (r.exitCode === -1) text += `\n${theme.fg("muted", "(running...)")}`;
+			else if (rRunning) text += `\n${theme.fg("muted", "(running...)")}`;
 			else if (finalOutput)
 				text += `\n${theme.fg("toolOutput", finalOutput.split("\n").slice(0, 3).join("\n"))}`;
 			else text += `\n${theme.fg("muted", "(no output)")}`;
 		}
 		if (aggregator) {
-			const rIcon = isResultError(aggregator)
+			const rIcon = aggregatorFailed
 				? theme.fg("error", "✗")
-				: isPartial || aggregator.exitCode === -1
+				: aggregatorRunning
 					? theme.fg("warning", "⏳")
 					: theme.fg("success", "✓");
 			const collapsed = getCollapsedDisplayItems(aggregator);
 			const finalOutput = getResultFinalOutput(aggregator).trim();
 			text += `\n\n${theme.fg("muted", "─── fan-in → ")}${theme.fg("accent", aggregator.agent)} ${rIcon}`;
-			if (collapsed.items.length > 0)
+			if (aggregatorFailed && aggregator.errorMessage)
+				text += `\n${theme.fg("error", `Error: ${aggregator.errorMessage}`)}`;
+			else if (collapsed.items.length > 0)
 				text += `\n${renderDisplayItems(collapsed.items, 5, collapsed.total)}`;
-			else if (isPartial || aggregator.exitCode === -1)
-				text += `\n${theme.fg("muted", "(running...)")}`;
+			else if (aggregatorRunning) text += `\n${theme.fg("muted", "(running...)")}`;
 			else if (finalOutput)
 				text += `\n${theme.fg("toolOutput", finalOutput.split("\n").slice(0, 3).join("\n"))}`;
 			else text += `\n${theme.fg("muted", "(no output)")}`;
