@@ -31,7 +31,11 @@ const ContextModeSchema = Type.Union([
 	StringEnum(["none", "all", "summary"] as const),
 	Type.Number({ minimum: 1, description: "Include the most recent N user turns." }),
 ]);
-const ScopeSchema = StringEnum(["user", "project", "both"] as const);
+const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
+	description:
+		'Per-invocation custom agent scope for this spawn. Default: "user". Use "project" for project-local agents or "both" for user and project agents; the selected scope is retained for follow-ups.',
+	default: "user",
+});
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 const MAX_COMPLETION_ERROR_BYTES = 512;
 

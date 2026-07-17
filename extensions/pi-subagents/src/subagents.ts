@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Parallel mode may include an aggregator fan-in step that receives all task outputs.",
 			'Default agent scope is "user" (from ~/.pi/agent/agents).',
-			'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
+			'To enable project-local agents in .pi/agents, pass agentScope: "both" (or "project") as a top-level argument for that call.',
 		].join(" "),
 		promptSnippet:
 			"Decide whether to spawn 0, 1, or multiple subagents for independent research, review, verification, or multi-step work in isolated Pi processes.",
