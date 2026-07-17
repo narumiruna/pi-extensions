@@ -61,6 +61,7 @@
 - Provider-owned OAuth can abort an individual prompt after an out-of-band callback wins; preserve each prompt's signal through compatibility adapters and pass it to Pi's UI dialog options.
 - Symptom: account reset or shutdown hangs behind in-flight OAuth conversion when the whole auth sync is serialized. Cause: cleanup cannot invalidate work queued ahead of it. Fix: serialize runtime mutations per target, invalidate captured generations, and version provider-bridge transitions instead of queueing the full auth lifecycle.
 - Legacy credential migration must wait through transient cross-process lock contention; do not bind a store to the legacy path after `ELOCKED`, because the winning process may remove that file and install the canonical one.
+- Symptom: official Pi standalone crashes on the second `proper-lockfile` access with a Proxy invariant in `mtime-precision.js`. Cause: the library caches precision as a non-configurable symbol on Bun's loader-proxied `graceful-fs` object. Fix: pass one stable plain Node `fs` adapter through the `fs` option for both async and sync locks.
 - Treat parsed credential maps as own-property dictionaries: names such as `__proto__` and `constructor` must not mutate or resolve through `Object.prototype`.
 - Active-account API-key conversion failures must fail closed, and user-facing errors must redact the exact current access and refresh secrets rather than relying only on token-shape regexes.
 
