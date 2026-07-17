@@ -32,7 +32,8 @@
 		"pack:retry": "npm --workspace @narumitw/pi-retry pack --dry-run",
 		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run",
 		"pack:sync": "npm --workspace @narumitw/pi-sync pack --dry-run",
-		"pack:subagents": "npm --workspace @narumitw/pi-subagents pack --dry-run"
+		"pack:subagents": "npm --workspace @narumitw/pi-subagents pack --dry-run",
+		"pack:telegraph": "npm --workspace @narumitw/pi-telegraph pack --dry-run"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.3",

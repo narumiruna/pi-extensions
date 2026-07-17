@@ -122,6 +122,9 @@ pack-sync:
 pack-subagents:
     just pack subagents
 
+pack-telegraph:
+    just pack telegraph
+
 # Try individual packages from this working tree as temporary pi packages
 try-btw:
     just try btw
@@ -170,6 +173,9 @@ try-sync:
 
 try-subagents:
     just try subagents
+
+try-telegraph:
+    just try telegraph
 
 # Install individual packages through pi
 install-btw:
@@ -220,6 +226,9 @@ install-sync:
 install-subagents:
     just install subagents
 
+install-telegraph:
+    just install telegraph
+
 # Publish individual packages to npm
 publish-btw:
     just publish btw
@@ -268,6 +277,9 @@ publish-sync:
 
 publish-subagents:
     just publish subagents
+
+publish-telegraph:
+    just publish telegraph
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch
