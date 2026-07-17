@@ -29,8 +29,8 @@ Do not patch `node_modules`, monkey-patch `graceful-fs`, or replace the locking 
 - [x] Update `extensions/pi-codex-accounts/src/storage.ts` to construct one module-scoped plain adapter with every callback/sync method required by `proper-lockfile`, and supply it in the `fs` option to both async and sync acquisition paths; focused storage tests pass without changing retries, stale timing, release handling, or compromised-lock propagation.
 - [x] Scan adjacent storage behavior for regressions by exercising repeated `CodexAccountStore.readAsync()` and `read()`, writes, private permissions, migration, and cross-process lock contention; the focused storage suite passes 10/10 and the full root suite passes.
 - [x] Run isolated official-standalone smokes with temporary agent directories and no credentials; Pi 0.80.9 macOS arm64, Pi 0.80.10 macOS arm64, and Pi 0.80.10 Linux arm64 each complete two async and two sync store reads without the Proxy error.
-- [x] Verify the prior OAuth-only-provider fix through an isolated latest-Pi runtime in CI, run `TMPDIR="$(realpath "${TMPDIR:-/tmp}")" npm run check`, and inspect publish contents with `just pack-codex-accounts`; local checks pass and latest-Pi CI runs the real bridge test without a skip.
-- [x] Review the final diff for credential leakage, generated files, and unrelated changes, then create a focused PR with `Fixes #224`; PR #229 is open, mergeable, and CI run 29559534122 passes all three jobs.
+- [x] Not applicable: the user explicitly removed the isolated latest-Pi auth smoke as unrelated to the standalone lock fix; the existing 0.17.1 runtime bridge is unchanged. `TMPDIR="$(realpath "${TMPDIR:-/tmp}")" npm run check` and `just pack-codex-accounts` still pass.
+- [x] Review the final diff for credential leakage, generated files, and unrelated changes, then create a focused PR with `Fixes #224`; PR #229 is open and mergeable, and its three compatibility jobs pass.
 
 ## Risks
 
@@ -44,6 +44,6 @@ Do not patch `node_modules`, monkey-patch `graceful-fs`, or replace the locking 
 - [x] Repeated async and sync account-store access no longer reaches Bun's proxied `graceful-fs`, verified by `plain lockfile fs adapter survives repeated probes from a Bun-like source proxy`, `file store supports repeated async and sync access`, and both `fs: LOCKFILE_FS_ADAPTER` call sites in `storage.ts`.
 - [x] Official standalone Pi 0.80.10 completes two async and two sync isolated store reads without the Proxy invariant, verified by exit code 0 on macOS arm64 and Linux arm64; Pi 0.80.9 macOS arm64 also passes.
 - [x] Existing permissions, migration, contention, retry, release, and compromised-lock behavior remains passing, verified by the 10/10 focused storage suite and `TMPDIR="$(realpath "${TMPDIR:-/tmp}")" npm run check` (543 passed, 1 expected skip with the pinned local Pi).
-- [x] Stored Codex runtime keys remain resolvable through the native-provider bridge, verified by the non-skipped real `ModelRuntime` test in latest-Pi CI job 87818831006 (544 passed, 0 skipped).
+- [x] Not applicable: the user explicitly kept the previously released OAuth bridge outside this focused lock-crash PR; no runtime-auth code changed, and its existing compatibility test remains intact.
 - [x] The npm payload still contains all required source and runtime dependencies, verified by `just pack-codex-accounts` listing seven expected package files including `src/storage.ts` and the unchanged `proper-lockfile` runtime dependency in `package.json`.
-- [x] PR #229 links `Fixes #224`, is open and mergeable, and is green across Pi 0.79.10, 0.80.3, and latest in CI run 29559534122.
+- [x] PR #229 links `Fixes #224`, is open and mergeable, and is green across Pi 0.79.10, 0.80.3, and latest on the final pushed commit.

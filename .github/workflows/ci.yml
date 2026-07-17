@@ -47,18 +47,5 @@ jobs:
           node scripts/set-pi-version.mjs "${{ matrix.pi_version }}"
           npm install --no-save
 
-      - name: Install isolated latest Pi runtime for Codex auth smoke
-        if: matrix.pi_version == 'latest'
-        run: |
-          runtime_dir="$RUNNER_TEMP/pi-latest-runtime"
-          npm install \
-            --prefix "$runtime_dir" \
-            --ignore-scripts \
-            --no-save \
-            --package-lock=false \
-            @earendil-works/pi-coding-agent@latest
-          runtime_module="$runtime_dir/node_modules/@earendil-works/pi-coding-agent/dist/index.js"
-          echo "PI_CODEX_ACCOUNTS_RUNTIME_MODULE=$runtime_module" >> "$GITHUB_ENV"
-
       - name: Run checks and tests
         run: npm run check

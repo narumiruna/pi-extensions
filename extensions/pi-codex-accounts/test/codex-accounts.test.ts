@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexAccounts, {
 	CODEX_ACCOUNTS_STATUS_KEY,
@@ -816,11 +815,7 @@ test("cancelled login preserves an already active account and runtime credential
 });
 
 test("Pi model runtime resolves Codex runtime keys through the native-provider bridge", async (t) => {
-	const runtimeModulePath = process.env.PI_CODEX_ACCOUNTS_RUNTIME_MODULE;
-	const runtimeModule = runtimeModulePath
-		? pathToFileURL(runtimeModulePath).href
-		: "@earendil-works/pi-coding-agent";
-	const piModule = (await import(runtimeModule)) as unknown as {
+	const piModule = (await import("@earendil-works/pi-coding-agent")) as unknown as {
 		ModelRuntime?: {
 			create(options: { authPath: string; modelsPath: null; allowModelNetwork: boolean }): Promise<{
 				registerProvider(provider: string, config: { apiKey: string }): void;
@@ -830,8 +825,6 @@ test("Pi model runtime resolves Codex runtime keys through the native-provider b
 		};
 	};
 	if (!piModule.ModelRuntime) {
-		if (runtimeModulePath)
-			assert.fail(`Pi runtime module has no public ModelRuntime: ${runtimeModulePath}`);
 		t.skip("Pi version has no public ModelRuntime");
 		return;
 	}
