@@ -14,7 +14,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
-import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+	driveCustomSelector,
+} from "../../../test/support.js";
 import googleGenai, {
 	buildStatusMessage,
 	commandCompletions,
@@ -628,6 +633,48 @@ test("Google GenAI tool selection keeps the cursor on the toggled row", async ()
 	});
 });
 
+test("Google GenAI tool persistence recovers after a transient save failure", async () => {
+	await withTempAgentDir(async () => {
+		const configPath = googleGenaiConfigPath();
+		await mkdir(configPath);
+		const mock = createMockPi({ activeTools: ["read", ...GOOGLE_GENAI_TOOL_NAMES] });
+		googleGenai(mock.pi);
+		let notificationLog: Array<{ message: string }> = [];
+		const context = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+				await waitFor(() =>
+					notificationLog.some((item) =>
+						/Google GenAI tool selection save failed/.test(item.message),
+					),
+				);
+
+				await rm(configPath, { recursive: true, force: true });
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+				await waitFor(async () => {
+					try {
+						return (await loadGoogleGenaiConfig()).config.tools.join(",") === "google_search";
+					} catch {
+						return false;
+					}
+				});
+				assert.ok(harness.render().some((line) => line.includes("› [ ] google_url_context")));
+				harness.handleInput("tui.select.cancel");
+				return harness.result;
+			},
+		});
+		notificationLog = context.notifications;
+		await mock.commands.get("google-genai")?.handler("tools", context.ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "google_search"]);
+		assert.deepEqual((await loadGoogleGenaiConfig()).config.tools, ["google_search"]);
+	});
+});
+
 test("status reports unsupported config apiKey interpolation as invalid", async () => {
 	await withTempAgentDir(async () => {
 		await writeConfig({ apiKey: "$GEMINI_API_KEY" });
@@ -726,6 +773,14 @@ async function withTempAgentDir(fn: (agentDir: string) => Promise<void>) {
 		else process.env.PI_CODING_AGENT_DIR = previous;
 		await rm(agentDir, { recursive: true, force: true });
 	}
+}
+
+async function waitFor(predicate: () => boolean | Promise<boolean>) {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (await predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error("Timed out waiting for condition");
 }
 
 function countLines(content: string) {

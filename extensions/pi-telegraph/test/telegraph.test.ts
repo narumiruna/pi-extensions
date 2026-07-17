@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
-import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+	driveCustomSelector,
+} from "../../../test/support.js";
 import { MAX_ERROR_DETAIL_BYTES, telegraphRequest } from "../src/client.js";
 import { loadTelegraphConfig, writeTelegraphConfig } from "../src/config.js";
 import telegraph, {
@@ -206,6 +211,43 @@ test("/telegraph tools keeps the cursor on the toggled custom-selector row", asy
 		assert.equal(customCalled, true);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "telegraph_get_page"]);
 		assert.deepEqual((await loadTelegraphConfig()).config.tools, ["telegraph_get_page"]);
+	});
+});
+
+test("/telegraph tools keeps runtime and selector state unchanged when persistence fails", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		await writeTelegraphConfig({
+			shortName: "existing",
+			accessToken: "keep-secret",
+			tools: [],
+		});
+		const configPath = (await loadTelegraphConfig()).path;
+		const backupPath = path.join(agentDir, "telegraph-backup.json");
+		await rename(configPath, backupPath);
+		await symlink(backupPath, configPath);
+
+		const mock = createMockPi({ activeTools: ["read"] });
+		telegraph(mock.pi);
+		let notificationLog: Array<{ message: string }> = [];
+		const context = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+				await waitFor(() =>
+					notificationLog.some((item) => /Unable to update Telegraph tools/.test(item.message)),
+				);
+				assert.ok(harness.render().some((line) => line.includes("› [ ] telegraph_get_page")));
+				harness.handleInput("tui.select.cancel");
+				return harness.result;
+			},
+		});
+		notificationLog = context.notifications;
+		await mock.commands.get("telegraph")?.handler("tools", context.ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+		assert.deepEqual(JSON.parse(await readFile(backupPath, "utf8")).tools, []);
 	});
 });
 

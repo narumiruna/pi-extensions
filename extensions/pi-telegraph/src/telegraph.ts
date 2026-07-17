@@ -290,15 +290,23 @@ async function showTelegraphToolSelector(pi: ExtensionAPI, ctx: ExtensionCommand
 	}
 
 	let selectedTools = new Set(activeTelegraphTools(pi));
+	let appliedTools = orderedTelegraphTools(selectedTools);
 	let persistQueue = Promise.resolve();
-	const commitSelectedTools = () => {
+	const commitSelectedTools = (requestRender: () => void) => {
 		const nextTools = orderedTelegraphTools(selectedTools);
-		applyTelegraphTools(pi, nextTools);
-		persistQueue = persistQueue
-			.then(() => saveTelegraphToolSelection(nextTools))
-			.catch((error) => {
+		persistQueue = persistQueue.then(async () => {
+			try {
+				await saveTelegraphToolSelection(nextTools);
+				applyTelegraphTools(pi, nextTools);
+				appliedTools = nextTools;
+			} catch (error) {
+				if (sameToolSelection(selectedTools, nextTools)) {
+					selectedTools = new Set(appliedTools);
+					requestRender();
+				}
 				ui.notify(`Unable to update Telegraph tools: ${formatError(error)}`, "error");
-			});
+			}
+		});
 	};
 
 	const customResult = await ui.custom<"closed" | undefined>((tui, theme, keybindings, done) => {
@@ -313,17 +321,17 @@ async function showTelegraphToolSelector(pi: ExtensionAPI, ctx: ExtensionCommand
 			if (row.kind === "tool") {
 				if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
 				else selectedTools.add(row.toolName);
-				commitSelectedTools();
+				commitSelectedTools(() => tui.requestRender());
 				return;
 			}
 			if (row.action === "enableAll") {
 				selectedTools = new Set(allTelegraphTools());
-				commitSelectedTools();
+				commitSelectedTools(() => tui.requestRender());
 				return;
 			}
 			if (row.action === "disableAll") {
 				selectedTools = new Set();
-				commitSelectedTools();
+				commitSelectedTools(() => tui.requestRender());
 				return;
 			}
 			done("closed");
@@ -429,6 +437,17 @@ function formatToolSelectorRow(
 
 function toolSelectorTitle(selectedTools: ReadonlySet<TelegraphToolName>) {
 	return `Telegraph tools (${selectedTools.size}/${TELEGRAPH_TOOL_NAMES.length})`;
+}
+
+function sameToolSelection(
+	selectedTools: ReadonlySet<TelegraphToolName>,
+	expectedTools: readonly TelegraphToolName[],
+) {
+	const ordered = orderedTelegraphTools(selectedTools);
+	return (
+		ordered.length === expectedTools.length &&
+		ordered.every((toolName, index) => toolName === expectedTools[index])
+	);
 }
 
 function clipLine(value: string, width: number) {

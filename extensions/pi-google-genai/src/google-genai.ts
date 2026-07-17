@@ -192,7 +192,12 @@ async function selectTools(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
 	const commitSelectedTools = () => {
 		const nextTools = orderedGoogleTools(selectedTools);
 		applyGoogleToolSelection(pi, nextTools);
-		persistQueue = persistQueue.then(() => saveToolSelection(nextTools));
+		persistQueue = persistQueue
+			.then(() => saveToolSelection(nextTools))
+			.catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Google GenAI tool selection save failed: ${message}`, "warning");
+			});
 	};
 	const customResult = await ctx.ui.custom<"closed" | undefined>(
 		(tui, theme, keybindings, done) => {
