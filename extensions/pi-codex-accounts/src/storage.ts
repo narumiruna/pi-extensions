@@ -1,4 +1,20 @@
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	closeSync,
+	mkdir,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	realpath,
+	realpathSync,
+	rmdir,
+	rmdirSync,
+	stat,
+	statSync,
+	utimes,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 
@@ -6,6 +22,49 @@ const PRIVATE_FILE_WRITE_OPTIONS = { encoding: "utf8", mode: 0o600 } as const;
 const DEFAULT_SYNC_LOCK_TIMEOUT_MS = 200;
 const SYNC_LOCK_RETRY_INTERVAL_MS = 20;
 const syncSleepState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
+type LockfileFsAdapter = {
+	mkdir: typeof mkdir;
+	mkdirSync: typeof mkdirSync;
+	realpath: typeof realpath;
+	realpathSync: typeof realpathSync;
+	rmdir: typeof rmdir;
+	rmdirSync: typeof rmdirSync;
+	stat: typeof stat;
+	statSync: typeof statSync;
+	utimes: typeof utimes;
+	utimesSync: typeof utimesSync;
+};
+
+export function createLockfileFsAdapter(source: LockfileFsAdapter): LockfileFsAdapter {
+	return {
+		mkdir: source.mkdir,
+		mkdirSync: source.mkdirSync,
+		realpath: source.realpath,
+		realpathSync: source.realpathSync,
+		rmdir: source.rmdir,
+		rmdirSync: source.rmdirSync,
+		stat: source.stat,
+		statSync: source.statSync,
+		utimes: source.utimes,
+		utimesSync: source.utimesSync,
+	};
+}
+
+// proper-lockfile caches mtime precision as a non-configurable symbol on this object.
+// Keep it plain and stable instead of exposing Bun's loader-proxied filesystem module.
+const LOCKFILE_FS_ADAPTER = createLockfileFsAdapter({
+	mkdir,
+	mkdirSync,
+	realpath,
+	realpathSync,
+	rmdir,
+	rmdirSync,
+	stat,
+	statSync,
+	utimes,
+	utimesSync,
+});
 
 type StorageLockResult<T> = {
 	result: T;
@@ -50,6 +109,7 @@ export class FileCodexAccountStorageBackend implements CodexAccountStorageBacken
 
 		try {
 			release = await lockfile.lock(this.filePath, {
+				fs: LOCKFILE_FS_ADAPTER,
 				realpath: false,
 				retries: {
 					retries: 10,
@@ -98,7 +158,10 @@ export class FileCodexAccountStorageBackend implements CodexAccountStorageBacken
 		const deadline = Date.now() + timeoutMs;
 		while (true) {
 			try {
-				return lockfile.lockSync(this.filePath, { realpath: false });
+				return lockfile.lockSync(this.filePath, {
+					fs: LOCKFILE_FS_ADAPTER,
+					realpath: false,
+				});
 			} catch (error) {
 				if (!isNodeError(error) || error.code !== "ELOCKED") throw error;
 				const remainingMs = deadline - Date.now();

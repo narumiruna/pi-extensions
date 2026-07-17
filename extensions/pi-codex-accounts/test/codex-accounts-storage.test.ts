@@ -1,10 +1,23 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import {
+	mkdir as mkdirCallback,
+	mkdirSync,
+	realpath as realpathCallback,
+	realpathSync,
+	rmdir as rmdirCallback,
+	rmdirSync,
+	stat as statCallback,
+	statSync,
+	utimes as utimesCallback,
+	utimesSync,
+} from "node:fs";
 import { access, chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import lockfile from "proper-lockfile";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexAccounts, {
 	CODEX_ACCOUNTS_FILE,
@@ -12,6 +25,7 @@ import codexAccounts, {
 	ensureActiveCodexAuth,
 } from "../src/codex-accounts.js";
 import {
+	createLockfileFsAdapter,
 	FileCodexAccountStorageBackend as FileAuthStorageBackend,
 	InMemoryCodexAccountStorageBackend as InMemoryAuthStorageBackend,
 } from "../src/storage.js";
@@ -39,6 +53,72 @@ test("store writes private account files and redacts invalid JSON", async () => 
 		assert.doesNotMatch(error.message, /secret-token/);
 		return true;
 	});
+});
+
+test("file store supports repeated async and sync access", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-repeated-access-"));
+	const file = join(dir, "pi-codex-accounts.json");
+	const store = new CodexAccountStore(new FileAuthStorageBackend(file));
+	const expected = { active: "work", accounts: { work: validCred("repeated") } };
+
+	try {
+		await store.write(expected);
+		assert.deepEqual(await store.readAsync(), expected);
+		assert.deepEqual(await store.readAsync(), expected);
+		assert.deepEqual(store.read(), expected);
+		assert.deepEqual(store.read(), expected);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("plain lockfile fs adapter survives repeated probes from a Bun-like source proxy", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-codex-accounts-lockfile-fs-"));
+	const file = join(dir, "pi-codex-accounts.json");
+	await writeFile(file, "", { mode: 0o600 });
+	const source = new Proxy(
+		{
+			mkdir: mkdirCallback,
+			mkdirSync,
+			realpath: realpathCallback,
+			realpathSync,
+			rmdir: rmdirCallback,
+			rmdirSync,
+			stat: statCallback,
+			statSync,
+			utimes: utimesCallback,
+			utimesSync,
+		},
+		{
+			get(target, property, receiver) {
+				const value = Reflect.get(target, property, receiver);
+				if (typeof property !== "symbol" || value === undefined) return value;
+				return value === "ms" ? "s" : "ms";
+			},
+		},
+	);
+	const adapter = createLockfileFsAdapter(source);
+
+	try {
+		assert.notEqual(adapter, source);
+		assert.equal(Object.getPrototypeOf(adapter), Object.prototype);
+		for (let index = 0; index < 2; index += 1) {
+			const release = await lockfile.lock(file, { fs: adapter, realpath: false });
+			await release();
+		}
+		const precisionSymbols = Object.getOwnPropertySymbols(adapter);
+		assert.equal(precisionSymbols.length, 1);
+		assert.equal(
+			Object.getOwnPropertyDescriptor(adapter, precisionSymbols[0])?.configurable,
+			false,
+		);
+		for (let index = 0; index < 2; index += 1) {
+			const release = lockfile.lockSync(file, { fs: adapter, realpath: false });
+			release();
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 test("stored account maps preserve prototype-like account names as own entries", async () => {
