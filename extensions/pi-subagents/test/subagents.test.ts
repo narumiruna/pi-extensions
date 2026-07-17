@@ -15,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
+import { ToolToggleList } from "../src/config-ui.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
 import subagents, {
 	buildPiArgs,
@@ -99,6 +100,13 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 		),
 		{ isError: true },
 	);
+});
+
+test("subagent tool selection keeps the cursor on the toggled row", () => {
+	const list = new ToolToggleList(["first", "second", "third"], new Set());
+	list.handleInput("\u001b[B");
+	list.handleInput("\r");
+	assert.ok(list.render(100).some((line) => line.includes("> ✓ second")));
 });
 
 test("subagent recursion guard rejects nested delegation before spawning", async () => {

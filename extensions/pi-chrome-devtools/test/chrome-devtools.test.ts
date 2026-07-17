@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import chromeDevtools, {
 	commandCompletions,
 	formatHostForUrl,
@@ -245,6 +245,36 @@ test("endpoint helpers normalize ports, hosts, and launch quoting", () => {
 	assert.equal(isLocalDevToolsHost("[::1]"), true);
 	assert.equal(isLocalDevToolsHost("example.com"), false);
 	assert.equal(quoteCommandPart("/Applications/Google Chrome"), '"/Applications/Google Chrome"');
+});
+
+test("Chrome DevTools tool selection keeps the cursor on the toggled row", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		chromeDevtools(mock.pi);
+		const toolNames = mock.tools.map((tool) => String(tool.name));
+		mock.rawPi.setActiveTools(["other_tool", ...toolNames]);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const { renders, result } = driveCustomSelector(factory, [
+					"tui.select.down",
+					"tui.select.confirm",
+					"tui.select.cancel",
+				]);
+				assert.ok(renders[1]?.some((line) => line.includes("› [ ] chrome_devtools_select_page")));
+				return result;
+			},
+		});
+		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"other_tool",
+			...toolNames.filter((name) => name !== "chrome_devtools_select_page"),
+		]);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [
+			...toolNames.filter((name) => name !== "chrome_devtools_select_page"),
+		]);
+	});
 });
 
 test("resolveScreenshotPath confines explicit paths to cwd or temp", () => {

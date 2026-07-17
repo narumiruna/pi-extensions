@@ -206,6 +206,44 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 	};
 }
 
+export function driveCustomSelector(
+	factory: unknown,
+	inputs: readonly string[],
+	width = 100,
+): { renders: string[][]; result: unknown } {
+	if (typeof factory !== "function") throw new Error("Expected a custom component factory");
+	let result: unknown;
+	const component = (
+		factory as (...args: unknown[]) => {
+			render(width: number): string[];
+			handleInput(data: string): void;
+		}
+	)(
+		{ requestRender() {} },
+		{
+			fg(_color: string, text: string) {
+				return text;
+			},
+			bold(text: string) {
+				return text;
+			},
+		},
+		{
+			matches(data: string, key: string) {
+				return data === key;
+			},
+		},
+		(value: unknown) => {
+			result = value;
+		},
+	);
+	const renders = inputs.map((input) => {
+		component.handleInput(input);
+		return component.render(width);
+	});
+	return { renders, result };
+}
+
 export function builtinTool(name: string) {
 	return {
 		name,

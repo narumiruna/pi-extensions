@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import { MAX_ERROR_DETAIL_BYTES, telegraphRequest } from "../src/client.js";
 import { loadTelegraphConfig, writeTelegraphConfig } from "../src/config.js";
 import telegraph, {
@@ -179,6 +179,33 @@ test("/telegraph tools selects individual tools and persists atomically", async 
 			allowFilesOutsideWorkspace: false,
 		});
 		assert.equal((await stat((await loadTelegraphConfig()).path)).mode & 0o777, 0o600);
+	});
+});
+
+test("/telegraph tools keeps the cursor on the toggled custom-selector row", async () => {
+	await withTempAgentDir(async () => {
+		await writeTelegraphConfig({ shortName: "existing", accessToken: "keep-secret" });
+		const mock = createMockPi({ activeTools: ["read"] });
+		telegraph(mock.pi);
+		let customCalled = false;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				customCalled = true;
+				const { renders, result } = driveCustomSelector(factory, [
+					"tui.select.down",
+					"tui.select.confirm",
+					"tui.select.cancel",
+				]);
+				assert.ok(renders[1]?.some((line) => line.includes("› [x] telegraph_get_page")));
+				return result;
+			},
+		});
+		await mock.commands.get("telegraph")?.handler("tools", ctx);
+
+		assert.equal(customCalled, true);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "telegraph_get_page"]);
+		assert.deepEqual((await loadTelegraphConfig()).config.tools, ["telegraph_get_page"]);
 	});
 });
 

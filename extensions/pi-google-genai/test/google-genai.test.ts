@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import googleGenai, {
 	buildStatusMessage,
 	commandCompletions,
@@ -563,6 +563,7 @@ test("commands init, status, and tool selection merge config and preserve unrela
 				},
 				input: async () => inputs.shift(),
 				select: async () => selections.shift() ?? "Done",
+				custom: async () => undefined,
 				setStatus() {},
 			},
 			modelRegistry: { getApiKeyForProvider: async () => "pi-key" },
@@ -594,6 +595,36 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		await command.handler("status", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /auth: config apiKey/);
 		assert.match(buildStatusMessage(await loadGoogleGenaiConfig(), "config apiKey"), /apiUrl:/);
+	});
+});
+
+test("Google GenAI tool selection keeps the cursor on the toggled row", async () => {
+	await withTempAgentDir(async () => {
+		await writeConfig({ tools: [...GOOGLE_GENAI_TOOL_NAMES] });
+		const mock = createMockPi({ activeTools: ["read", ...GOOGLE_GENAI_TOOL_NAMES] });
+		googleGenai(mock.pi);
+		let customCalled = false;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				customCalled = true;
+				const { renders, result } = driveCustomSelector(factory, [
+					"tui.select.down",
+					"tui.select.confirm",
+					"tui.select.cancel",
+				]);
+				assert.ok(renders[1]?.some((line) => line.includes("› [ ] google_maps")));
+				return result;
+			},
+		});
+		await mock.commands.get("google-genai")?.handler("tools", ctx);
+
+		assert.equal(customCalled, true);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "google_search", "google_url_context"]);
+		assert.deepEqual((await loadGoogleGenaiConfig()).config.tools, [
+			"google_search",
+			"google_url_context",
+		]);
 	});
 });
 

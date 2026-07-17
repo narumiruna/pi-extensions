@@ -30,6 +30,10 @@ const TOOL_SELECTOR_ENABLE_ALL = "Enable all Telegraph tools";
 const TOOL_SELECTOR_DISABLE_ALL = "Disable all Telegraph tools";
 const TOOL_SELECTOR_DONE = "Done";
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
+type ToolSelectorAction = "enableAll" | "disableAll" | "done";
+type ToolSelectorRow =
+	| { kind: "tool"; toolName: TelegraphToolName }
+	| { kind: "action"; action: ToolSelectorAction; label: string };
 
 interface MarkdownPublicationFile {
 	title: string;
@@ -285,40 +289,150 @@ async function showTelegraphToolSelector(pi: ExtensionAPI, ctx: ExtensionCommand
 		return;
 	}
 
-	let selected = new Set(activeTelegraphTools(pi));
+	let selectedTools = new Set(activeTelegraphTools(pi));
+	let persistQueue = Promise.resolve();
+	const commitSelectedTools = () => {
+		const nextTools = orderedTelegraphTools(selectedTools);
+		applyTelegraphTools(pi, nextTools);
+		persistQueue = persistQueue
+			.then(() => saveTelegraphToolSelection(nextTools))
+			.catch((error) => {
+				ui.notify(`Unable to update Telegraph tools: ${formatError(error)}`, "error");
+			});
+	};
+
+	const customResult = await ui.custom<"closed" | undefined>((tui, theme, keybindings, done) => {
+		const rows = telegraphToolSelectorRows();
+		let selectedIndex = 0;
+		const moveSelection = (delta: number) => {
+			selectedIndex = (selectedIndex + delta + rows.length) % rows.length;
+		};
+		const activateSelectedRow = () => {
+			const row = rows[selectedIndex];
+			if (!row) return;
+			if (row.kind === "tool") {
+				if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+				else selectedTools.add(row.toolName);
+				commitSelectedTools();
+				return;
+			}
+			if (row.action === "enableAll") {
+				selectedTools = new Set(allTelegraphTools());
+				commitSelectedTools();
+				return;
+			}
+			if (row.action === "disableAll") {
+				selectedTools = new Set();
+				commitSelectedTools();
+				return;
+			}
+			done("closed");
+		};
+
+		return {
+			invalidate() {},
+			render(width: number) {
+				return [
+					theme.fg("accent", theme.bold(clipLine(toolSelectorTitle(selectedTools), width))),
+					"",
+					...rows.map((row, index) => {
+						const prefix = index === selectedIndex ? "› " : "  ";
+						const line = clipLine(`${prefix}${formatToolSelectorRow(row, selectedTools)}`, width);
+						return index === selectedIndex ? theme.fg("accent", line) : line;
+					}),
+					"",
+					theme.fg("dim", clipLine("↑↓ navigate • Enter/Space toggle • Esc close", width)),
+				];
+			},
+			handleInput(data: string) {
+				if (keybindings.matches(data, "tui.select.up")) {
+					moveSelection(-1);
+					tui.requestRender();
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.down")) {
+					moveSelection(1);
+					tui.requestRender();
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.pageUp")) {
+					selectedIndex = 0;
+					tui.requestRender();
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.pageDown")) {
+					selectedIndex = rows.length - 1;
+					tui.requestRender();
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.confirm") || data === " ") {
+					activateSelectedRow();
+					tui.requestRender();
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.cancel")) done("closed");
+			},
+		};
+	});
+
+	if (customResult !== "closed") {
+		await showDialogTelegraphToolSelector(pi, ui);
+		return;
+	}
+	await persistQueue;
+}
+
+async function showDialogTelegraphToolSelector(
+	pi: ExtensionAPI,
+	ui: ExtensionCommandContext["ui"],
+) {
+	let selectedTools = new Set(activeTelegraphTools(pi));
 	while (true) {
-		const rows = [
-			...TELEGRAPH_TOOL_NAMES.map((name) => `${selected.has(name) ? "[x]" : "[ ]"} ${name}`),
-			TOOL_SELECTOR_ENABLE_ALL,
-			TOOL_SELECTOR_DISABLE_ALL,
-			TOOL_SELECTOR_DONE,
-		];
-		const choice = await ui.select(
-			`Telegraph tools (${selected.size}/${TELEGRAPH_TOOL_NAMES.length})`,
-			rows,
-		);
-		if (!choice || choice === TOOL_SELECTOR_DONE) return;
-
-		let next = new Set(selected);
-		if (choice === TOOL_SELECTOR_ENABLE_ALL) {
-			next = new Set(allTelegraphTools());
-		} else if (choice === TOOL_SELECTOR_DISABLE_ALL) {
-			next = new Set();
-		} else {
-			const toolName = TELEGRAPH_TOOL_NAMES.find((name) => choice.endsWith(` ${name}`));
-			if (!toolName) continue;
-			if (next.has(toolName)) next.delete(toolName);
-			else next.add(toolName);
+		const rows = telegraphToolSelectorRows();
+		const choices = rows.map((row) => formatToolSelectorRow(row, selectedTools));
+		const choice = await ui.select(toolSelectorTitle(selectedTools), choices);
+		if (!choice) return;
+		const row = rows[choices.indexOf(choice)];
+		if (!row || (row.kind === "action" && row.action === "done")) return;
+		if (row.kind === "tool") {
+			if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+			else selectedTools.add(row.toolName);
+		} else if (row.action === "enableAll") {
+			selectedTools = new Set(allTelegraphTools());
+		} else if (row.action === "disableAll") {
+			selectedTools = new Set();
 		}
-
-		const ordered = orderedTelegraphTools(next);
 		try {
-			await setSelectedTelegraphTools(pi, ordered);
-			selected = new Set(ordered);
+			await setSelectedTelegraphTools(pi, orderedTelegraphTools(selectedTools));
 		} catch (error) {
 			ui.notify(`Unable to update Telegraph tools: ${formatError(error)}`, "error");
 		}
 	}
+}
+
+function telegraphToolSelectorRows(): ToolSelectorRow[] {
+	return [
+		...TELEGRAPH_TOOL_NAMES.map((toolName) => ({ kind: "tool" as const, toolName })),
+		{ kind: "action", action: "enableAll", label: TOOL_SELECTOR_ENABLE_ALL },
+		{ kind: "action", action: "disableAll", label: TOOL_SELECTOR_DISABLE_ALL },
+		{ kind: "action", action: "done", label: TOOL_SELECTOR_DONE },
+	];
+}
+
+function formatToolSelectorRow(
+	row: ToolSelectorRow,
+	selectedTools: ReadonlySet<TelegraphToolName>,
+) {
+	if (row.kind === "action") return row.label;
+	return `${selectedTools.has(row.toolName) ? "[x]" : "[ ]"} ${row.toolName}`;
+}
+
+function toolSelectorTitle(selectedTools: ReadonlySet<TelegraphToolName>) {
+	return `Telegraph tools (${selectedTools.size}/${TELEGRAPH_TOOL_NAMES.length})`;
+}
+
+function clipLine(value: string, width: number) {
+	return Array.from(value).slice(0, Math.max(0, width)).join("");
 }
 
 async function loadMarkdownPublicationFile(
