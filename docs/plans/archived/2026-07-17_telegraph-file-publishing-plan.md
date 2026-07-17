@@ -29,10 +29,10 @@ Make all Telegraph tools opt-in while adding a tool-independent `/telegraph crea
 - [x] Add failing config and runtime-selection tests for default-disabled tools, strict config normalization, settings preservation, fail-closed startup, unrelated-tool preservation, and `/telegraph tools|enable|disable` persistence; verified the initial compile failure and behavior regressions before implementation.
 - [x] Implement canonical tool names, config persistence, startup activation, status reporting, and interactive selection; focused config/selection suite passes 26/26.
 - [x] Add failing file-command tests for title precedence, H1 preservation, quoting, disabled-tool operation, cancellation, malformed/empty/oversized files, file type/extension checks, workspace confinement, symlink escapes, and configured outside access; verified four expected command regressions before implementation.
-- [x] Extract shared create-page logic and implement the bounded workspace-aware Markdown loader and `/telegraph create <file>` command; all 38 focused Telegraph tests pass.
+- [x] Extract shared create-page logic and implement the bounded workspace-aware Markdown loader and `/telegraph create <file>` command; all 40 focused Telegraph tests pass.
 - [x] Update README and command help with default-disabled behavior, config fields, tool controls, file scope, frontmatter/title rules, confirmation, and examples; focused help/config/file tests match the documented behavior.
 - [x] Run explicit Biome checks, `npm run check`, and `just pack-telegraph`; `npm run check` passed with 583 tests plus 1 compatibility skip, and the dry-run package contains the intended 10 files without external mutation.
-- [ ] Review the diff for token leakage, active-tool clobbering, path escapes, and duplicated publication logic; create a focused Conventional Commit and PR with verification evidence.
+- [x] Review the diff for token leakage, active-tool clobbering, path escapes, and duplicated publication logic; no unresolved findings remained, commit `61a40c8` was pushed, and PR #233 includes verification evidence.
 
 ## Risks
 
@@ -48,4 +48,4 @@ Make all Telegraph tools opt-in while adding a tool-independent `/telegraph crea
 - [x] README/help/config examples match implementation and identify the default change.
 - [x] `just pack-telegraph` contains only the intended ten package files.
 - [x] Verification performed no live Telegraph or npm publication.
-- [ ] Final branch is clean and the PR records verification plus the live-API test gap.
+- [x] Final implementation branch was clean after commit, and PR #233 records verification plus the live-API test gap.
