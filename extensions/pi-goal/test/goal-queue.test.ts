@@ -547,7 +547,7 @@ test("failed finalized priority activation pauses without absorbing unrelated us
 	assert.equal(lastState(harness.mock)?.pendingAction, undefined);
 });
 
-test("pending prioritize aborts an already-queued displaced-goal prompt", async () => {
+test("pending prioritize consumes an accepted displaced-goal prompt before startup", async () => {
 	let aborts = 0;
 	const harness = await createHarness({
 		isIdle: () => false,
@@ -560,13 +560,12 @@ test("pending prioritize aborts an already-queued displaced-goal prompt", async 
 	assert.ok(displacedPrompt);
 	await harness.command("prioritize urgent goal");
 
-	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
-	const result = await beforeStart?.(
-		{ prompt: displacedPrompt, systemPrompt: "base" },
+	const result = await harness.mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: displacedPrompt },
 		harness.ctx,
 	);
-	assert.equal(result, undefined);
-	assert.equal(aborts, 1);
+	assert.deepEqual(result, { action: "handled" });
+	assert.equal(aborts, 0);
 	assert.equal(lastState(harness.mock)?.pendingAction?.kind, "prioritize");
 });
 
@@ -850,7 +849,7 @@ test("restored skip dispatches before the skipped head is budget-limited", async
 	assert.equal(lastState(restored.mock)?.pendingAction, undefined);
 });
 
-test("a pending busy skip aborts its already-queued owned prompt before advancement", async () => {
+test("a pending busy skip consumes an accepted owned prompt before advancement", async () => {
 	let aborts = 0;
 	const harness = await createHarness({
 		isIdle: () => false,
@@ -864,10 +863,12 @@ test("a pending busy skip aborts its already-queued owned prompt before advancem
 	await harness.command("add next head");
 	await harness.command("skip");
 
-	const beforeStart = harness.mock.events.get("before_agent_start")?.[0];
-	const result = await beforeStart?.({ prompt: ownedPrompt, systemPrompt: "base" }, harness.ctx);
-	assert.equal(result, undefined);
-	assert.equal(aborts, 1);
+	const result = await harness.mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: ownedPrompt },
+		harness.ctx,
+	);
+	assert.deepEqual(result, { action: "handled" });
+	assert.equal(aborts, 0);
 });
 
 test("a pending busy skip does not abort unrelated user work before advancement", async () => {

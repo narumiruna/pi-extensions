@@ -86,6 +86,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const cancelContinuationWork = runtime.cancelContinuationWork.bind(runtime);
 	const consumeCancelledContinuationPrompt =
 		runtime.consumeCancelledContinuationPrompt.bind(runtime);
+	const consumeStaleOwnedGoalPrompt = runtime.consumeStaleOwnedGoalPrompt.bind(runtime);
 	const consumePendingGoalPrompt = runtime.consumeOwnedGoalPrompt.bind(runtime);
 	const markContinuationStarted = runtime.markContinuationStarted.bind(runtime);
 	const hasContinuationWorkForGoal = runtime.hasContinuationWorkForGoal.bind(runtime);
@@ -623,12 +624,18 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("input", (event) => {
-		if (runtime.queueFrozen) return;
 		if (event.source === "extension") {
-			if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
+			if (
+				consumeCancelledContinuationPrompt(event.text) ||
+				consumeStaleOwnedGoalPrompt(event.text)
+			) {
+				return { action: "handled" as const };
+			}
+			if (runtime.queueFrozen) return;
 			clearGoalRecovery();
 			return;
 		}
+		if (runtime.queueFrozen) return;
 		if (/^\/goal(?:\s|$)/u.test(event.text.trimStart())) return;
 		clearGoalRecovery();
 		clearBudgetWrapUp();

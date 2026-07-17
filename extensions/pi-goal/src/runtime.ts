@@ -350,6 +350,23 @@ export class GoalRuntime {
 		return marker ? this.cancelledContinuationMarkers.delete(marker) : false;
 	}
 
+	consumeStaleOwnedGoalPrompt(prompt: string) {
+		const marker = extractGoalPromptMarker(prompt);
+		if (!marker) return false;
+		const goalId = this.pendingGoalPromptMarkers.get(marker);
+		if (!goalId) return false;
+		if (
+			!this.queueFrozen &&
+			!this.pendingQueueAction &&
+			this.activeGoal?.id === goalId &&
+			this.activeGoal.status === "active"
+		) {
+			return false;
+		}
+		this.pendingGoalPromptMarkers.delete(marker);
+		return true;
+	}
+
 	markContinuationStarted(prompt: string) {
 		const marker = extractContinuationMarker(prompt);
 		if (!marker) {
