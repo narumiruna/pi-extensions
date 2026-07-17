@@ -1,0 +1,46 @@
+{
+	"name": "@narumitw/pi-telegraph",
+	"version": "0.17.2",
+	"description": "Pi extension for creating, reading, and editing Telegraph pages.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"telegraph",
+		"telegra.ph",
+		"publishing",
+		"markdown"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/telegraph.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"marked": "^18.0.5",
+		"typebox": "^1.3.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.3",
+		"@earendil-works/pi-coding-agent": "0.80.3",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-telegraph"
+	}
+}

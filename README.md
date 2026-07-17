@@ -2,9 +2,9 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across TypeScript, JavaScript, Python, JSON, CSS, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; public Telegraph page publishing; retry handling; side questions; and keep-awake automation.
 
-**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
+**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, Telegraph publishing, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
 ## 📦 Pi extension packages
 
@@ -28,6 +28,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch/status, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
+| [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) | 📝 Create, read, and edit public Telegraph pages from Markdown or raw Telegraph nodes. | `pi install npm:@narumitw/pi-telegraph` |
 
 ## 🚀 Quick start
 
@@ -71,6 +72,10 @@ Use [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) to give Pi native Fire
 ### 🔎 Google GenAI grounding
 
 Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Google Search, Google Maps, and URL-context grounding through Gemini Interactions with Pi Google auth or a private `pi-google-genai.json` config.
+
+### 📝 Public Telegraph publishing
+
+Use [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) to publish Markdown or raw Telegraph nodes as public pages, retrieve them as Markdown/JSON, and safely apply confirmed partial edits with credentials stored in a private `pi-telegraph.json` file.
 
 ### 🪢 LLM observability
 
@@ -145,6 +150,7 @@ pi -e ./extensions/pi-retry
 pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
+pi -e ./extensions/pi-telegraph
 ```
 
 Preview npm package contents before publishing:
@@ -166,6 +172,7 @@ npm run pack:retry
 npm run pack:statusline
 npm run pack:sync
 npm run pack:subagents
+npm run pack:telegraph
 ```
 
 Publishing note for new scoped packages: `just npm-public @narumitw/pi-new-extension` only changes visibility for an already-published package. If npm returns 404 for a brand-new package, create it first with the new package's workspace name, for example:
@@ -200,7 +207,8 @@ extensions/
 ├── pi-retry/
 ├── pi-statusline/
 ├── pi-sync/
-└── pi-subagents/
+├── pi-subagents/
+└── pi-telegraph/
 ```
 
 Each production extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Experimental extensions live under `extensions/experimental/`, remain covered by root checks, and may be published only through an explicit local maintainer recipe—not `publish-all` or GitHub workflows. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
