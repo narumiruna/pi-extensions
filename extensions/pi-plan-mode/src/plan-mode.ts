@@ -261,7 +261,8 @@ export default function planMode(pi: ExtensionAPI) {
 				reason: `Plan mode blocks built-in tool '${event.toolName}' because its metadata is unavailable.`,
 			};
 		}
-		if (event.toolName !== "bash" || !isBuiltinToolName(event.toolName)) return;
+		// Built-in-compatible overrides retain the canonical name but replace its source metadata.
+		if (event.toolName !== "bash") return;
 
 		const command = readCommand(event.input);
 		if (!isSafeCommand(command, settings.safeSubcommands)) {
@@ -855,11 +856,6 @@ export default function planMode(pi: ExtensionAPI) {
 	function formatToolSummary() {
 		const names = planModeToolNames();
 		return `Tools: ${names.length > 0 ? names.join(", ") : "none"}`;
-	}
-
-	function isBuiltinToolName(toolName: string) {
-		const tool = toolByName(toolName);
-		return tool ? isBuiltinTool(tool) : toolName === "bash";
 	}
 
 	function toolByName(toolName: string) {
