@@ -1,7 +1,7 @@
 import { lexer, type Token, type Tokens } from "marked";
 
 export const MAX_CONTENT_BYTES = 64 * 1024;
-const MAX_MARKDOWN_BYTES = MAX_CONTENT_BYTES * 4;
+export const MAX_MARKDOWN_BYTES = MAX_CONTENT_BYTES * 4;
 const MAX_NODE_DEPTH = 64;
 const MAX_NODE_COUNT = 10_000;
 const TELEGRAPH_TAGS = new Set([

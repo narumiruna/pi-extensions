@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,6 +13,8 @@ import telegraph, {
 	normalizeTelegraphPath,
 	parseCommand,
 } from "../src/telegraph.js";
+
+const TELEGRAPH_TOOL_NAMES = ["telegraph_create_page", "telegraph_get_page", "telegraph_edit_page"];
 
 test("telegraph registers lifecycle tools, command, and session hooks", () => {
 	const mock = createMockPi();
@@ -29,22 +31,166 @@ test("telegraph registers lifecycle tools, command, and session hooks", () => {
 });
 
 test("command parsing, completion, and status remain secret-safe", () => {
-	assert.equal(parseCommand(""), "status");
-	assert.equal(parseCommand("status"), "status");
-	assert.equal(parseCommand("init"), "init");
-	assert.equal(parseCommand("help"), "help");
-	assert.equal(parseCommand("wat"), "unknown");
+	assert.deepEqual(parseCommand(""), { action: "status" });
+	assert.deepEqual(parseCommand("status"), { action: "status" });
+	assert.deepEqual(parseCommand("init"), { action: "init" });
+	assert.deepEqual(parseCommand("tools"), { action: "tools" });
+	assert.deepEqual(parseCommand("enable"), { action: "enable" });
+	assert.deepEqual(parseCommand("disable"), { action: "disable" });
+	assert.deepEqual(parseCommand("create docs/post.md"), {
+		action: "create",
+		filePath: "docs/post.md",
+	});
+	assert.deepEqual(parseCommand('create "docs/my post.md"'), {
+		action: "create",
+		filePath: "docs/my post.md",
+	});
+	assert.deepEqual(parseCommand("wat"), { action: "unknown" });
 	assert.deepEqual(commandCompletions("st"), [
-		{ value: "status", label: "status", description: "Show redacted Telegraph config status" },
+		{ value: "status", label: "status", description: "Show Telegraph config and tool status" },
 	]);
 	assert.equal(commandCompletions("status now"), null);
-	const message = buildStatusMessage({
-		config: { shortName: "pi", authorName: "Writer", accessToken: "very-secret" },
+	const mock = createMockPi({ activeTools: ["read", "telegraph_get_page"] });
+	const message = buildStatusMessage(mock.pi, {
+		config: {
+			shortName: "pi",
+			authorName: "Writer",
+			accessToken: "very-secret",
+			tools: ["telegraph_get_page"],
+			allowFilesOutsideWorkspace: true,
+		} as never,
 		path: "/tmp/pi-telegraph.json",
 		exists: true,
 	});
 	assert.match(message, /account token: configured/);
+	assert.match(message, /1\/3 active/i);
+	assert.match(message, /telegraph_get_page/);
+	assert.match(message, /outside workspace.*enabled/i);
+	assert.match(message, /other active tools: 1/i);
 	assert.doesNotMatch(message, /very-secret/);
+});
+
+test("session startup defaults tools off, applies subsets, and fails closed", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const missingMock = createMockPi({
+			activeTools: ["read", ...TELEGRAPH_TOOL_NAMES],
+		});
+		telegraph(missingMock.pi);
+		const missingContext = createMockContext();
+		await missingMock.events.get("session_start")?.[0]?.({}, missingContext.ctx);
+		assert.deepEqual(missingMock.rawPi.getActiveTools(), ["read"]);
+
+		await writeFile(
+			path.join(agentDir, "pi-telegraph.json"),
+			'{"shortName":"legacy","accessToken":"legacy-secret"}\n',
+			{ mode: 0o600 },
+		);
+		const legacyMock = createMockPi({ activeTools: ["read", ...TELEGRAPH_TOOL_NAMES] });
+		telegraph(legacyMock.pi);
+		await legacyMock.events.get("session_start")?.[0]?.({}, createMockContext().ctx);
+		assert.deepEqual(legacyMock.rawPi.getActiveTools(), ["read"]);
+
+		await writeTelegraphConfig({
+			shortName: "configured",
+			tools: ["telegraph_get_page"],
+			allowFilesOutsideWorkspace: false,
+		} as never);
+		const configuredMock = createMockPi({
+			activeTools: ["read", ...TELEGRAPH_TOOL_NAMES],
+		});
+		telegraph(configuredMock.pi);
+		await configuredMock.events.get("session_start")?.[0]?.({}, createMockContext().ctx);
+		assert.deepEqual(configuredMock.rawPi.getActiveTools(), ["read", "telegraph_get_page"]);
+
+		await writeFile(
+			path.join(agentDir, "pi-telegraph.json"),
+			'{"shortName":"bad","tools":["telegraph_unknown"]}\n',
+			{ mode: 0o600 },
+		);
+		const invalidMock = createMockPi({
+			activeTools: ["read", ...TELEGRAPH_TOOL_NAMES],
+		});
+		telegraph(invalidMock.pi);
+		const invalidContext = createMockContext();
+		await invalidMock.events.get("session_start")?.[0]?.({}, invalidContext.ctx);
+		assert.deepEqual(invalidMock.rawPi.getActiveTools(), ["read"]);
+		assert.match(
+			invalidContext.notifications.map((item) => item.message).join("\n"),
+			/config ignored.*tools/i,
+		);
+	});
+});
+
+test("tool control commands apply immediately and preserve config credentials", async () => {
+	await withTempAgentDir(async () => {
+		await writeTelegraphConfig({
+			shortName: "existing",
+			accessToken: "keep-secret",
+			tools: [],
+			allowFilesOutsideWorkspace: true,
+		} as never);
+		const mock = createMockPi({ activeTools: ["read"] });
+		telegraph(mock.pi);
+		const { ctx } = createMockContext();
+		const command = mock.commands.get("telegraph");
+
+		await command?.handler("enable", ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...TELEGRAPH_TOOL_NAMES]);
+		assert.deepEqual((await loadTelegraphConfig()).config, {
+			shortName: "existing",
+			accessToken: "keep-secret",
+			tools: TELEGRAPH_TOOL_NAMES,
+			allowFilesOutsideWorkspace: true,
+		});
+
+		await command?.handler("disable", ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+		assert.deepEqual((await loadTelegraphConfig()).config, {
+			shortName: "existing",
+			accessToken: "keep-secret",
+			tools: [],
+			allowFilesOutsideWorkspace: true,
+		});
+	});
+});
+
+test("/telegraph tools selects individual tools and persists atomically", async () => {
+	await withTempAgentDir(async () => {
+		await writeTelegraphConfig({
+			shortName: "existing",
+			accessToken: "keep-secret",
+			tools: [],
+			allowFilesOutsideWorkspace: false,
+		} as never);
+		const answers = ["[ ] telegraph_get_page", "Done"];
+		const mock = createMockPi({ activeTools: ["read"] });
+		telegraph(mock.pi);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			select: async () => answers.shift(),
+		});
+		await mock.commands.get("telegraph")?.handler("tools", ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "telegraph_get_page"]);
+		assert.deepEqual((await loadTelegraphConfig()).config, {
+			shortName: "existing",
+			accessToken: "keep-secret",
+			tools: ["telegraph_get_page"],
+			allowFilesOutsideWorkspace: false,
+		});
+		assert.equal((await stat((await loadTelegraphConfig()).path)).mode & 0o777, 0o600);
+	});
+});
+
+test("/telegraph help documents tool defaults and file-title safety rules", async () => {
+	const mock = createMockPi();
+	telegraph(mock.pi);
+	const context = createMockContext();
+	await mock.commands.get("telegraph")?.handler("help", context.ctx);
+	const message = context.notifications.map((item) => item.message).join("\n");
+	assert.match(message, /tools are disabled by default/i);
+	assert.match(message, /YAML frontmatter title.*first H1.*filename/i);
+	assert.match(message, /allowFilesOutsideWorkspace/);
 });
 
 test("/telegraph init writes non-secret defaults and preserves imported credentials", async () => {
@@ -63,6 +209,8 @@ test("/telegraph init writes non-secret defaults and preserves imported credenti
 			authorName: "Writer",
 			authorUrl: "https://example.com/writer",
 			accessToken: "keep-secret",
+			tools: [],
+			allowFilesOutsideWorkspace: false,
 		});
 		assert.doesNotMatch(notifications.map((item) => item.message).join("\n"), /keep-secret/);
 	});
@@ -143,7 +291,12 @@ test("headless create requires confirmed true, creates one account, persists it,
 		assert.deepEqual(JSON.parse(form(calls[1]).get("content") ?? ""), [
 			{ tag: "p", children: ["world"] },
 		]);
-		assert.equal((await loadTelegraphConfig()).config.accessToken, "generated-secret");
+		assert.deepEqual((await loadTelegraphConfig()).config, {
+			shortName: "pi-telegraph",
+			accessToken: "generated-secret",
+			tools: [],
+			allowFilesOutsideWorkspace: false,
+		});
 	});
 });
 

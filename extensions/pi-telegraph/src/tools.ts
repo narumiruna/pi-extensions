@@ -40,6 +40,13 @@ interface TelegraphPage {
 }
 
 type ContentParams = { markdown?: unknown; nodes?: unknown };
+export type CreatePageInput = ContentParams & {
+	title: unknown;
+	authorName?: unknown;
+	authorUrl?: unknown;
+	confirmed?: boolean;
+};
+type MutationContext = Pick<ExtensionContext, "hasUI" | "ui">;
 
 const contentProperties = {
 	markdown: Type.Optional(
@@ -84,56 +91,64 @@ export const createPageTool = defineTool({
 		...mutationProperties,
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		const title = validateTitle(params.title);
-		const content = resolveContent(params, true);
-		const hasAuthorName = Object.hasOwn(params, "authorName");
-		const hasAuthorUrl = Object.hasOwn(params, "authorUrl");
-		const authorName = validateAuthorName(params.authorName, hasAuthorName);
-		const authorUrl = validateAuthorUrl(params.authorUrl, hasAuthorUrl);
-		if (
-			!(await confirmMutation(ctx, params.confirmed, `Publish public Telegraph page “${title}”?`))
-		) {
-			return cancelledResult("Telegraph page publication cancelled by the user. Do not retry it.");
-		}
-
-		return withStatus(ctx, "publishing", async () => {
-			const account = await ensureTelegraphAccount(signal);
-			const accessToken = account.config.accessToken;
-			if (!accessToken) throw new Error("Telegraph account setup did not produce an access token.");
-			const page = parsePage(
-				await telegraphRequest(
-					"createPage",
-					undefined,
-					{
-						access_token: accessToken,
-						title,
-						author_name: hasAuthorName ? authorName : account.config.authorName,
-						author_url: hasAuthorUrl ? authorUrl : account.config.authorUrl,
-						content: JSON.stringify(content),
-						return_content: false,
-					},
-					signal,
-				),
-				false,
-			);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: [
-							"Published Telegraph page.",
-							`Title: ${page.title}`,
-							`URL: ${page.url}`,
-							`Path: ${page.path}`,
-							`Account created: ${account.accountCreated ? "yes" : "no"}`,
-						].join("\n"),
-					},
-				],
-				details: { page: pageMetadata(page), accountCreated: account.accountCreated },
-			};
-		});
+		return executeCreatePage(params, signal, ctx);
 	},
 });
+
+export async function executeCreatePage(
+	params: CreatePageInput,
+	signal: AbortSignal | undefined,
+	ctx: MutationContext,
+) {
+	const title = validateTitle(params.title);
+	const content = resolveContent(params, true);
+	const hasAuthorName = Object.hasOwn(params, "authorName");
+	const hasAuthorUrl = Object.hasOwn(params, "authorUrl");
+	const authorName = validateAuthorName(params.authorName, hasAuthorName);
+	const authorUrl = validateAuthorUrl(params.authorUrl, hasAuthorUrl);
+	if (
+		!(await confirmMutation(ctx, params.confirmed, `Publish public Telegraph page “${title}”?`))
+	) {
+		return cancelledResult("Telegraph page publication cancelled by the user. Do not retry it.");
+	}
+
+	return withStatus(ctx, "publishing", async () => {
+		const account = await ensureTelegraphAccount(signal);
+		const accessToken = account.config.accessToken;
+		if (!accessToken) throw new Error("Telegraph account setup did not produce an access token.");
+		const page = parsePage(
+			await telegraphRequest(
+				"createPage",
+				undefined,
+				{
+					access_token: accessToken,
+					title,
+					author_name: hasAuthorName ? authorName : account.config.authorName,
+					author_url: hasAuthorUrl ? authorUrl : account.config.authorUrl,
+					content: JSON.stringify(content),
+					return_content: false,
+				},
+				signal,
+			),
+			false,
+		);
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: [
+						"Published Telegraph page.",
+						`Title: ${page.title}`,
+						`URL: ${page.url}`,
+						`Path: ${page.path}`,
+						`Account created: ${account.accountCreated ? "yes" : "no"}`,
+					].join("\n"),
+				},
+			],
+			details: { page: pageMetadata(page), accountCreated: account.accountCreated },
+		};
+	});
+}
 
 export const getPageTool = defineTool({
 	name: "telegraph_get_page",
@@ -449,7 +464,7 @@ function validateAuthorUrl(value: unknown, allowEmpty = false) {
 }
 
 async function confirmMutation(
-	ctx: ExtensionContext,
+	ctx: MutationContext,
 	confirmed: boolean | undefined,
 	message: string,
 ) {
@@ -480,7 +495,11 @@ export function clearTelegraphStatus(ctx: Pick<ExtensionContext, "ui">) {
 	setStatusSafely(ui, undefined);
 }
 
-async function withStatus<T>(ctx: ExtensionContext, status: string, callback: () => Promise<T>) {
+async function withStatus<T>(
+	ctx: Pick<ExtensionContext, "ui">,
+	status: string,
+	callback: () => Promise<T>,
+) {
 	const ui = ctx.ui;
 	let state = statusStates.get(ui);
 	if (!state) {
