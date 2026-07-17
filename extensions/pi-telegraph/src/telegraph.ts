@@ -1,5 +1,5 @@
-import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { type FileHandle, open, realpath, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
 	type ExtensionAPI,
@@ -360,17 +360,32 @@ async function loadMarkdownPublicationFile(
 	const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 	let contents: string;
 	try {
-		const stats = await handle.stat();
-		if (!stats.isFile()) throw new Error(`Markdown path must be a regular file: ${requestedPath}.`);
-		if (stats.size > MAX_MARKDOWN_BYTES) {
+		const before = await handle.stat();
+		if (!before.isFile()) {
+			throw new Error(`Markdown path must be a regular file: ${requestedPath}.`);
+		}
+		if (before.size > MAX_MARKDOWN_BYTES) {
 			throw new Error(`Markdown file is too large; maximum size is ${MAX_MARKDOWN_BYTES} bytes.`);
 		}
-		contents = await handle.readFile("utf8");
+		contents = await readBoundedUtf8(handle, MAX_MARKDOWN_BYTES);
+		const after = await handle.stat();
+		if (
+			after.size !== before.size ||
+			after.mtimeMs !== before.mtimeMs ||
+			after.ctimeMs !== before.ctimeMs
+		) {
+			throw new Error(`Markdown file changed while it was being read: ${requestedPath}.`);
+		}
+		await revalidateOpenedMarkdownFile(
+			handle,
+			candidate,
+			workspace,
+			target,
+			before,
+			allowFilesOutsideWorkspace,
+		);
 	} finally {
 		await handle.close();
-	}
-	if (Buffer.byteLength(contents) > MAX_MARKDOWN_BYTES) {
-		throw new Error(`Markdown file is too large; maximum size is ${MAX_MARKDOWN_BYTES} bytes.`);
 	}
 
 	const normalizedContents = contents.startsWith("\uFEFF") ? contents.slice(1) : contents;
@@ -399,6 +414,73 @@ async function loadMarkdownPublicationFile(
 	title ??= requestedName.slice(0, requestedName.length - extname(requestedName).length);
 
 	return { title, markdown };
+}
+
+export async function readBoundedUtf8(handle: Pick<FileHandle, "read">, maxBytes: number) {
+	if (!Number.isInteger(maxBytes) || maxBytes < 0) {
+		throw new Error("Markdown read limit must be a non-negative integer.");
+	}
+	const buffer = Buffer.alloc(maxBytes + 1);
+	let offset = 0;
+	while (offset < buffer.length) {
+		const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, null);
+		if (bytesRead === 0) break;
+		offset += bytesRead;
+	}
+	if (offset > maxBytes) {
+		throw new Error(`Markdown file is too large; maximum size is ${maxBytes} bytes.`);
+	}
+	return buffer.subarray(0, offset).toString("utf8");
+}
+
+export async function revalidateOpenedMarkdownFile(
+	openedFile: Pick<FileHandle, "fd">,
+	candidate: string,
+	workspace: string,
+	expectedTarget: string,
+	openedIdentity: Pick<Stats, "dev" | "ino">,
+	allowFilesOutsideWorkspace: boolean,
+) {
+	const descriptorTarget = await openedDescriptorTarget(openedFile.fd);
+	if (descriptorTarget && !allowFilesOutsideWorkspace && !isWithin(workspace, descriptorTarget)) {
+		throw new Error("Opened Markdown file resolves outside the workspace.");
+	}
+	if (descriptorTarget && descriptorTarget !== expectedTarget) {
+		throw new Error("Markdown file changed while it was being read.");
+	}
+
+	let currentTarget: string;
+	try {
+		currentTarget = await realpath(candidate);
+	} catch {
+		throw new Error("Markdown file changed while it was being read.");
+	}
+	if (!allowFilesOutsideWorkspace && !isWithin(workspace, currentTarget)) {
+		throw new Error("Markdown file resolves outside the workspace after it was opened.");
+	}
+	if (currentTarget !== expectedTarget) {
+		throw new Error("Markdown file changed while it was being read.");
+	}
+	const current = await stat(currentTarget);
+	if (
+		!current.isFile() ||
+		current.dev !== openedIdentity.dev ||
+		current.ino !== openedIdentity.ino
+	) {
+		throw new Error("Markdown file changed while it was being read.");
+	}
+}
+
+async function openedDescriptorTarget(fd: number) {
+	const descriptorPaths = process.platform === "linux" ? [`/proc/self/fd/${fd}`] : [];
+	for (const descriptorPath of descriptorPaths) {
+		try {
+			return await realpath(descriptorPath);
+		} catch {
+			// Fall back to path/identity revalidation when descriptor paths are unavailable.
+		}
+	}
+	return undefined;
 }
 
 function firstH1Text(markdown: string) {

@@ -1,15 +1,85 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadTelegraphConfig, writeTelegraphConfig } from "../src/config.js";
-import telegraph from "../src/telegraph.js";
+import telegraph, { readBoundedUtf8, revalidateOpenedMarkdownFile } from "../src/telegraph.js";
 
 const TELEGRAPH_TOOL_NAMES = ["telegraph_create_page", "telegraph_get_page", "telegraph_edit_page"];
 
 type FetchCall = { url: string; init: RequestInit };
+
+test("bounded Markdown reads stop after maxBytes plus one", async () => {
+	const oversized = Buffer.from("x".repeat(100));
+	let oversizedOffset = 0;
+	const oversizedHandle = {
+		async read(buffer: Buffer, offset: number, length: number) {
+			const bytesRead = Math.min(length, oversized.length - oversizedOffset);
+			oversized.copy(buffer, offset, oversizedOffset, oversizedOffset + bytesRead);
+			oversizedOffset += bytesRead;
+			return { bytesRead, buffer };
+		},
+	};
+	await assert.rejects(readBoundedUtf8(oversizedHandle as never, 8), /maximum size.*8 bytes/i);
+	assert.equal(oversizedOffset, 9);
+
+	const exact = Buffer.from("12345678");
+	let exactOffset = 0;
+	const exactHandle = {
+		async read(buffer: Buffer, offset: number, length: number) {
+			const bytesRead = Math.min(length, exact.length - exactOffset);
+			exact.copy(buffer, offset, exactOffset, exactOffset + bytesRead);
+			exactOffset += bytesRead;
+			return { bytesRead, buffer };
+		},
+	};
+	assert.equal(await readBoundedUtf8(exactHandle as never, 8), "12345678");
+	assert.equal(exactOffset, 8);
+});
+
+test("opened Markdown identity rejects an intermediate symlink swap even after restoration", async () => {
+	const workspace = await mkdtemp(path.join(os.tmpdir(), "pi-telegraph-symlink-race-"));
+	const outside = await mkdtemp(path.join(os.tmpdir(), "pi-telegraph-symlink-race-outside-"));
+	try {
+		const directory = path.join(workspace, "docs");
+		const movedDirectory = path.join(workspace, "docs-original");
+		await mkdir(directory);
+		await writeFile(path.join(directory, "post.md"), "inside\n");
+		await writeFile(path.join(outside, "post.md"), "outside\n");
+		const candidate = path.join(directory, "post.md");
+		const expectedTarget = await realpath(candidate);
+		const workspaceTarget = await realpath(workspace);
+
+		await rename(directory, movedDirectory);
+		await symlink(outside, directory);
+		const outsideHandle = await open(candidate, "r");
+		const openedStats = await outsideHandle.stat();
+		await rm(directory);
+		await rename(movedDirectory, directory);
+		try {
+			await assert.rejects(
+				revalidateOpenedMarkdownFile(
+					outsideHandle,
+					candidate,
+					workspaceTarget,
+					expectedTarget,
+					openedStats,
+					false,
+				),
+				/outside the workspace|changed while it was being read/i,
+			);
+		} finally {
+			await outsideHandle.close();
+		}
+	} finally {
+		await Promise.all([
+			rm(workspace, { recursive: true, force: true }),
+			rm(outside, { recursive: true, force: true }),
+		]);
+	}
+});
 
 test("/telegraph create publishes files with frontmatter, H1, and basename title precedence", async () => {
 	await withTempAgentDir(async () => {
