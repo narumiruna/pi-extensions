@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, open, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadTelegraphConfig, writeTelegraphConfig } from "../src/config.js";
 import telegraph, { readBoundedUtf8, revalidateOpenedMarkdownFile } from "../src/telegraph.js";
@@ -10,6 +12,7 @@ import telegraph, { readBoundedUtf8, revalidateOpenedMarkdownFile } from "../src
 const TELEGRAPH_TOOL_NAMES = ["telegraph_create_page", "telegraph_get_page", "telegraph_edit_page"];
 
 type FetchCall = { url: string; init: RequestInit };
+const execFileAsync = promisify(execFile);
 
 test("bounded Markdown reads stop after maxBytes plus one", async () => {
 	const oversized = Buffer.from("x".repeat(100));
@@ -245,6 +248,38 @@ test("/telegraph create rejects invalid files and workspace escapes before reque
 				rm(workspace, { recursive: true, force: true }),
 				rm(outside, { recursive: true, force: true }),
 			]);
+		}
+	});
+});
+
+test("/telegraph create rejects FIFO paths without waiting for a writer", {
+	skip: process.platform === "win32",
+}, async () => {
+	await withTempAgentDir(async () => {
+		const workspace = await mkdtemp(path.join(os.tmpdir(), "pi-telegraph-fifo-"));
+		try {
+			await execFileAsync("mkfifo", [path.join(workspace, "pipe.md")]);
+			const mock = createMockPi();
+			telegraph(mock.pi);
+			const context = createMockContext({
+				cwd: workspace,
+				hasUI: true,
+				confirm: async () => true,
+			});
+			const calls: FetchCall[] = [];
+			await withMockFetch(
+				calls,
+				async () => {
+					throw new Error("unexpected fetch");
+				},
+				async () => {
+					await mock.commands.get("telegraph")?.handler("create pipe.md", context.ctx);
+				},
+			);
+			assert.equal(calls.length, 0);
+			assert.match(context.notifications.map((item) => item.message).join("\n"), /regular file/i);
+		} finally {
+			await rm(workspace, { recursive: true, force: true });
 		}
 	});
 });

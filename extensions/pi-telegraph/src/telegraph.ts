@@ -357,7 +357,8 @@ async function loadMarkdownPublicationFile(
 		throw new Error(`Markdown file resolves outside the workspace: ${requestedPath}.`);
 	}
 
-	const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+	const nonBlocking = process.platform === "win32" ? 0 : (constants.O_NONBLOCK ?? 0);
+	const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | nonBlocking);
 	let contents: string;
 	try {
 		const before = await handle.stat();
