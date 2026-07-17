@@ -10,7 +10,7 @@ It is designed for long-running coding, refactoring, debugging, web research, an
 
 - Starts an OS sleep inhibitor when Pi begins processing (`agent_start`).
 - Releases the inhibitor when processing ends (`agent_end`) or the session shuts down.
-- Publishes the active keep-awake mode as status while an inhibitor is active.
+- Publishes the active keep-awake mode as status while an inhibitor is active, unless quiet mode is enabled.
 - Supports macOS, Windows, WSL, and Linux.
 - Defaults to display-awake mode on every supported OS: prevent system sleep and keep the screen/display awake.
 - Provides a single `/caffeinate` command with menu-based controls and direct subcommands.
@@ -112,10 +112,11 @@ Example:
 ```
 
 Set `"quiet": true` to hide the routine `Keeping computer awake (...)` and
-`Released pi-caffeinate (agent finished)` lifecycle notifications. Quiet mode does not hide
-warnings, status updates, or feedback from `/caffeinate` commands such as `status`, mode changes,
-help, and manual stop. It defaults to `false` when omitted. The file is read at startup and on
-`/reload`; run `/reload` after editing it in a running Pi session before using mode commands.
+`Released pi-caffeinate (agent finished)` lifecycle notifications and keep the `caffeinate` status
+item clear while active or unavailable. Quiet mode does not hide warnings or explicit feedback from
+`/caffeinate` commands such as `status`, mode changes, help, and manual stop. It defaults to `false`
+when omitted. The file is read at startup and on `/reload`; run `/reload` after editing it in a
+running Pi session before using mode commands.
 
 Missing, invalid, or deleted settings default back to `display` mode with quiet mode disabled on
 every supported OS.
