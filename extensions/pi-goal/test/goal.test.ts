@@ -672,17 +672,16 @@ test("a stale first kickoff cannot run or roll back a newer replacement", async 
 	assert.equal(replacement.text, "replacement objective");
 	assert.equal(replacement.status, "active");
 
-	const staleStartResult = mock.events.get("before_agent_start")?.[0]?.(
-		{ prompt: sentPrompts[0], systemPrompt: "base" },
-		context.ctx,
+	assert.deepEqual(
+		mock.events.get("input")?.[0]?.({ source: "extension", text: sentPrompts[0] }, context.ctx),
+		{ action: "handled" },
 	);
-	assert.equal(staleStartResult, undefined);
-	assert.equal(aborts, 1);
+	assert.equal(
+		mock.events.get("input")?.[0]?.({ source: "extension", text: sentPrompts[1] }, context.ctx),
+		undefined,
+	);
+	assert.equal(aborts, 0);
 	assert.equal(requireLastGoal(mock).id, replacement.id);
-	mock.events.get("agent_end")?.[0]?.(
-		{ messages: [{ role: "assistant", stopReason: "aborted" }] },
-		context.ctx,
-	);
 	assert.equal(requireLastGoal(mock).status, "active");
 
 	rejectFirstSend?.(new Error("late first delivery failure"));
