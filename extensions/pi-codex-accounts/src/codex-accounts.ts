@@ -27,6 +27,7 @@ import {
 	type OAuthCredentials,
 	type RefreshOnlyCodexOAuthProvider,
 } from "./oauth.js";
+import { RuntimeApiKeyBridge, RuntimeApiKeyController } from "./runtime-auth.js";
 import { type CodexAccountStorageBackend, FileCodexAccountStorageBackend } from "./storage.js";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
@@ -37,30 +38,11 @@ export const CODEX_ACCOUNTS_STATUS_KEY = "codex-accounts";
 export const DEFAULT_PI_LOGIN_LABEL = "(default pi login)";
 export const FAIL_CLOSED_API_KEY = "pi-codex-accounts-refresh-failed";
 
+const runtimeCodexAuth = new RuntimeApiKeyController(CODEX_PROVIDER_ID);
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const MIGRATION_LOCK_TIMEOUT_MS = 30_000;
 let pendingAccountsMigrationNotice: string | undefined;
 const ACCOUNT_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
-
-type RuntimeAuthStorage = {
-	setRuntimeApiKey(provider: string, apiKey: string): void | Promise<void>;
-	removeRuntimeApiKey(provider: string): void | Promise<void>;
-};
-
-type RuntimeOverrideState = {
-	appliedApiKey?: string;
-	generation: number;
-	mayHaveOverride: boolean;
-	operationTail: Promise<void>;
-};
-
-type RuntimeOverrideSnapshot = {
-	target: RuntimeAuthStorage & object;
-	state: RuntimeOverrideState;
-	generation: number;
-};
-
-const runtimeOverrideStates = new WeakMap<object, RuntimeOverrideState>();
 
 export type StoredCodexCredential = {
 	access: string;
@@ -89,6 +71,12 @@ export type CodexAccountsDependencies = {
 	store?: CodexAccountStore;
 	oauthProvider?: CodexOAuthProvider;
 	closeWebSocketSessions?: (sessionId?: string) => unknown;
+};
+
+type EnsureActiveCodexAuthOptions = {
+	oauthProvider?: RefreshOnlyCodexOAuthProvider;
+	now?: number;
+	prepareRuntimeApiKey?: () => void | Promise<void>;
 };
 
 export class CodexAccountStore {
@@ -155,9 +143,16 @@ export default function codexAccounts(
 	const closeWebSocketSessions = dependencies.closeWebSocketSessions ?? (() => undefined);
 	let appliedAuthIdentity: string | undefined;
 	let authIdentityInitialized = false;
+	let abortCodexTurn = false;
+	const runtimeApiKeyBridge = new RuntimeApiKeyBridge(pi, CODEX_PROVIDER_ID, FAIL_CLOSED_API_KEY);
 
 	const sync = async (ctx: ExtensionContext, model = ctx.model) => {
-		const result = await ensureActiveCodexAuth(ctx, store, { oauthProvider });
+		const bridgeOperation = runtimeApiKeyBridge.beginOperation();
+		const result = await ensureActiveCodexAuth(ctx, store, {
+			oauthProvider,
+			prepareRuntimeApiKey: () => runtimeApiKeyBridge.prepare(ctx, bridgeOperation),
+		});
+		if (result.status === "inactive") runtimeApiKeyBridge.remove(ctx, bridgeOperation);
 		const authIdentity = await getActiveAuthIdentity(store, result);
 		if (!authIdentityInitialized || appliedAuthIdentity !== authIdentity) {
 			await closeWebSocketSessions(ctx.sessionManager.getSessionId());
@@ -193,7 +188,10 @@ export default function codexAccounts(
 				}));
 				const result = await sync(ctx);
 				await selectDefaultCodexModelIfUnknown(pi, ctx);
-				ctx.ui.notify(formatActivatedMessage("Logged in", parsedName.name, result), "info");
+				ctx.ui.notify(
+					formatActivatedMessage("Logged in", parsedName.name, result),
+					result.status === "active" ? "info" : "error",
+				);
 			} catch (error) {
 				ctx.ui.notify(`Codex login failed: ${redactTokenText(errorMessage(error))}`, "error");
 			}
@@ -270,12 +268,31 @@ export default function codexAccounts(
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
-		await sync(ctx);
+		abortCodexTurn = false;
+		try {
+			const result = await sync(ctx);
+			abortCodexTurn = result.status === "error" && isOpenAICodexModel(ctx.model);
+		} catch (error) {
+			abortCodexTurn = isOpenAICodexModel(ctx.model);
+			throw error;
+		}
+	});
+
+	pi.on("turn_start", (_event, ctx) => {
+		if (!abortCodexTurn || !isOpenAICodexModel(ctx.model)) return;
+		abortCodexTurn = false;
+		ctx.abort();
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		await clearRuntimeCodexAuth(ctx);
-		setStatus(ctx, undefined);
+		const bridgeOperation = runtimeApiKeyBridge.beginOperation();
+		runtimeCodexAuth.invalidate(ctx);
+		try {
+			await runtimeCodexAuth.clear(ctx);
+		} finally {
+			runtimeApiKeyBridge.remove(ctx, bridgeOperation);
+			setStatus(ctx, undefined);
+		}
 	});
 }
 
@@ -297,13 +314,13 @@ export function parseAccountName(
 export async function ensureActiveCodexAuth(
 	ctx: ExtensionContext,
 	store: CodexAccountStore,
-	options: { oauthProvider?: RefreshOnlyCodexOAuthProvider; now?: number } = {},
+	options: EnsureActiveCodexAuthOptions = {},
 ): Promise<EnsureActiveCodexAuthResult> {
-	const runtimeOverride = captureRuntimeOverride(ctx);
+	const runtimeOverride = runtimeCodexAuth.capture(ctx);
 	const data = await store.readAsync();
 	const active = data.active;
 	if (!active) {
-		await clearRuntimeCodexAuth(ctx);
+		await runtimeCodexAuth.clear(ctx);
 		return { status: "inactive" };
 	}
 
@@ -314,11 +331,30 @@ export async function ensureActiveCodexAuth(
 			return { ...latest, active: undefined };
 		});
 		if (current.active) return ensureActiveCodexAuth(ctx, store, options);
-		await clearRuntimeCodexAuth(ctx);
+		await runtimeCodexAuth.clear(ctx);
 		return { status: "inactive" };
 	}
 
 	const oauthProvider = options.oauthProvider ?? getDefaultCodexOAuthProvider(CODEX_PROVIDER_ID);
+	try {
+		await options.prepareRuntimeApiKey?.();
+	} catch (error) {
+		let failClosedMessage = "";
+		try {
+			const applied = await runtimeCodexAuth.apply(ctx, runtimeOverride, FAIL_CLOSED_API_KEY);
+			if (applied === "stale") return { status: "inactive" };
+			if (applied === "unavailable") {
+				failClosedMessage = " Pi did not accept the fail-closed runtime credential.";
+			}
+		} catch {
+			failClosedMessage = " Pi could not apply the fail-closed runtime credential.";
+		}
+		return {
+			status: "error",
+			accountName: active,
+			message: `Runtime authentication setup failed: ${redactCredentialError(error, credential)}${failClosedMessage}`,
+		};
+	}
 	if (credential.expires <= (options.now ?? Date.now()) + REFRESH_SKEW_MS) {
 		let refreshError: unknown;
 		const current = await store.updateAsync(async (latest) => {
@@ -347,13 +383,14 @@ export async function ensureActiveCodexAuth(
 			if (!(await activeCredentialMatches(store, active, credential))) {
 				return ensureActiveCodexAuth(ctx, store, options);
 			}
-			if (!(await setRuntimeCodexApiKey(runtimeOverride, FAIL_CLOSED_API_KEY))) {
-				return { status: "inactive" };
-			}
+			const applied = await runtimeCodexAuth.apply(ctx, runtimeOverride, FAIL_CLOSED_API_KEY);
+			if (applied === "stale") return { status: "inactive" };
+			const runtimeMessage =
+				applied === "unavailable" ? " Pi did not accept the fail-closed runtime credential." : "";
 			return {
 				status: "error",
 				accountName: active,
-				message: redactCredentialError(refreshError, credential),
+				message: `${redactCredentialError(refreshError, credential)}${runtimeMessage}`,
 			};
 		}
 	}
@@ -365,20 +402,33 @@ export async function ensureActiveCodexAuth(
 		if (!(await activeCredentialMatches(store, active, credential))) {
 			return ensureActiveCodexAuth(ctx, store, options);
 		}
-		if (!(await setRuntimeCodexApiKey(runtimeOverride, FAIL_CLOSED_API_KEY))) {
-			return { status: "inactive" };
-		}
+		const applied = await runtimeCodexAuth.apply(ctx, runtimeOverride, FAIL_CLOSED_API_KEY);
+		if (applied === "stale") return { status: "inactive" };
+		const runtimeMessage =
+			applied === "unavailable" ? " Pi did not accept the fail-closed runtime credential." : "";
 		return {
 			status: "error",
 			accountName: active,
-			message: redactCredentialError(error, credential),
+			message: `${redactCredentialError(error, credential)}${runtimeMessage}`,
 		};
 	}
 	if (!(await activeCredentialMatches(store, active, credential))) {
 		return ensureActiveCodexAuth(ctx, store, options);
 	}
-	if (!(await setRuntimeCodexApiKey(runtimeOverride, apiKey))) {
-		return { status: "inactive" };
+	const applied = await runtimeCodexAuth.apply(ctx, runtimeOverride, apiKey);
+	if (applied === "stale") return { status: "inactive" };
+	if (applied === "unavailable") {
+		const failClosed = await runtimeCodexAuth.apply(ctx, runtimeOverride, FAIL_CLOSED_API_KEY);
+		if (failClosed === "stale") return { status: "inactive" };
+		const runtimeMessage =
+			failClosed === "unavailable"
+				? " Pi did not accept the fail-closed runtime credential; Codex turns will be aborted."
+				: "";
+		return {
+			status: "error",
+			accountName: active,
+			message: `Pi did not retain the runtime OpenAI Codex credential.${runtimeMessage}`,
+		};
 	}
 	return { status: "active", accountName: active };
 }
@@ -782,7 +832,7 @@ async function activateStoredAccount(
 	const result = await sync(ctx);
 	ctx.ui.notify(
 		formatActivatedMessage("Activated", name, result),
-		result.status === "error" ? "error" : "info",
+		result.status === "active" ? "info" : "error",
 	);
 }
 
@@ -832,6 +882,9 @@ function formatActivatedMessage(
 	if (result.status === "error") {
 		return `${action} Codex account "${name}", but authentication failed; Codex requests will fail closed: ${result.message}`;
 	}
+	if (result.status === "inactive") {
+		return `${action} Codex account "${name}" was cancelled before runtime authentication was applied.`;
+	}
 	return `${action} Codex account "${name}".`;
 }
 
@@ -871,92 +924,6 @@ function setStatus(ctx: ExtensionContext, value: string | undefined): void {
 	} catch (error) {
 		if (!isStaleExtensionContextError(error)) throw error;
 	}
-}
-
-async function setRuntimeCodexApiKey(
-	snapshot: RuntimeOverrideSnapshot | undefined,
-	apiKey: string,
-): Promise<boolean> {
-	if (!snapshot)
-		throw new Error("This Pi version does not expose runtime provider authentication.");
-	const { generation, state, target } = snapshot;
-	return enqueueRuntimeOverrideMutation(state, async () => {
-		if (state.generation !== generation) return false;
-		if (state.appliedApiKey === apiKey) return true;
-		state.appliedApiKey = undefined;
-		state.mayHaveOverride = true;
-		await target.setRuntimeApiKey(CODEX_PROVIDER_ID, apiKey);
-		state.appliedApiKey = apiKey;
-		return state.generation === generation;
-	});
-}
-
-async function clearRuntimeCodexAuth(ctx: ExtensionContext): Promise<void> {
-	const target = getRuntimeAuthStorage(ctx);
-	if (!target) return;
-	const state = runtimeOverrideStates.get(target);
-	if (!state) return;
-	state.generation += 1;
-	await enqueueRuntimeOverrideMutation(state, async () => {
-		if (!state.mayHaveOverride) return;
-		await target.removeRuntimeApiKey(CODEX_PROVIDER_ID);
-		state.appliedApiKey = undefined;
-		state.mayHaveOverride = false;
-	});
-}
-
-function captureRuntimeOverride(ctx: ExtensionContext): RuntimeOverrideSnapshot | undefined {
-	const target = getRuntimeAuthStorage(ctx);
-	if (!target) return undefined;
-	const state = getRuntimeOverrideState(target);
-	return { target, state, generation: state.generation };
-}
-
-function getRuntimeOverrideState(target: object): RuntimeOverrideState {
-	let state = runtimeOverrideStates.get(target);
-	if (!state) {
-		state = {
-			generation: 0,
-			mayHaveOverride: false,
-			operationTail: Promise.resolve(),
-		};
-		runtimeOverrideStates.set(target, state);
-	}
-	return state;
-}
-
-function enqueueRuntimeOverrideMutation<T>(
-	state: RuntimeOverrideState,
-	mutate: () => Promise<T>,
-): Promise<T> {
-	const operation = state.operationTail.then(mutate);
-	state.operationTail = operation.then(
-		() => undefined,
-		() => undefined,
-	);
-	return operation;
-}
-
-function getRuntimeAuthStorage(ctx: ExtensionContext): (RuntimeAuthStorage & object) | undefined {
-	const registry = ctx.modelRegistry as unknown as {
-		authStorage?: unknown;
-		runtime?: unknown;
-	};
-	for (const candidate of [registry, registry.runtime, registry.authStorage]) {
-		if (isRuntimeAuthStorage(candidate)) return candidate;
-	}
-	return undefined;
-}
-
-function isRuntimeAuthStorage(value: unknown): value is RuntimeAuthStorage & object {
-	return (
-		!!value &&
-		typeof value === "object" &&
-		"setRuntimeApiKey" in value &&
-		typeof value.setRuntimeApiKey === "function" &&
-		"removeRuntimeApiKey" in value &&
-		typeof value.removeRuntimeApiKey === "function"
-	);
 }
 
 function isStaleExtensionContextError(error: unknown): boolean {
