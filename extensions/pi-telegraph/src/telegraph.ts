@@ -1,9 +1,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type LoadedTelegraphConfig, loadTelegraphConfig, saveTelegraphSetup } from "./config.js";
 import { cleanupTemporaryOutputs } from "./outputs.js";
-import { createPageTool, editPageTool, getPageTool } from "./tools.js";
+import { clearTelegraphStatus, createPageTool, editPageTool, getPageTool } from "./tools.js";
 
-const STATUS_KEY = "telegraph";
 const COMMAND_COMPLETIONS = [
 	{ value: "status", label: "status", description: "Show redacted Telegraph config status" },
 	{ value: "init", label: "init", description: "Set non-secret Telegraph account defaults" },
@@ -26,7 +25,7 @@ export default function telegraph(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		clearTelegraphStatus(ctx);
 		try {
 			await loadTelegraphConfig();
 		} catch (error) {
@@ -35,7 +34,7 @@ export default function telegraph(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		clearTelegraphStatus(ctx);
 		await cleanupTemporaryOutputs();
 	});
 }

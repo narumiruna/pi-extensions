@@ -246,6 +246,58 @@ test("concurrent first creates share one lazy account registration", async () =>
 	});
 });
 
+test("concurrent tools retain and restore status until every operation finishes", async () => {
+	await withTempAgentDir(async () => {
+		await writeTelegraphConfig({ shortName: "existing", accessToken: "status-secret" });
+		const mock = createMockPi();
+		telegraph(mock.pi);
+		const create = tool(mock, "telegraph_create_page");
+		const get = tool(mock, "telegraph_get_page");
+		const { ctx, statuses } = createMockContext({ hasUI: false });
+		const createResponse = deferred<Response>();
+		const getResponse = deferred<Response>();
+		const calls: FetchCall[] = [];
+		await withMockFetch(
+			calls,
+			async (url) => {
+				if (url.endsWith("/createPage")) return createResponse.promise;
+				if (url.includes("/getPage/")) return getResponse.promise;
+				throw new Error(`unexpected request: ${url}`);
+			},
+			async () => {
+				const creating = execute(
+					create,
+					{ title: "Status", markdown: "body", confirmed: true },
+					ctx,
+				);
+				await waitFor(() => calls.some((call) => call.url.endsWith("/createPage")));
+				assert.equal(statuses.get("telegraph"), "publishing");
+
+				const getting = execute(get, { path: "Sample-01-01" }, ctx);
+				await waitFor(() => calls.some((call) => call.url.includes("/getPage/")));
+				assert.equal(statuses.get("telegraph"), "fetching");
+
+				getResponse.resolve(pageResponse());
+				await getting;
+				assert.equal(statuses.get("telegraph"), "publishing");
+
+				createResponse.resolve(
+					jsonResponse({
+						ok: true,
+						result: {
+							path: "Status-01-01",
+							url: "https://telegra.ph/Status-01-01",
+							title: "Status",
+						},
+					}),
+				);
+				await creating;
+				assert.equal(statuses.get("telegraph"), undefined);
+			},
+		);
+	});
+});
+
 test("get normalizes bare paths and Telegraph URLs and rejects foreign URLs", async () => {
 	assert.equal(normalizeTelegraphPath("/Sample-Page-12-15"), "Sample-Page-12-15");
 	assert.equal(normalizeTelegraphPath("https://telegra.ph/Sample-Page-12-15"), "Sample-Page-12-15");
@@ -570,6 +622,24 @@ async function withMockFetch(
 	} finally {
 		globalThis.fetch = previous;
 	}
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
+async function waitFor(predicate: () => boolean) {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error("Timed out waiting for condition");
 }
 
 async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {

@@ -18,6 +18,13 @@ import {
 import { saveTemporaryOutput } from "./outputs.js";
 
 const STATUS_KEY = "telegraph";
+interface StatusOperation {
+	status: string;
+}
+interface StatusState {
+	operations: StatusOperation[];
+}
+const statusStates = new WeakMap<object, StatusState>();
 
 interface TelegraphPage {
 	path: string;
@@ -458,12 +465,42 @@ function cancelledResult(message: string) {
 	};
 }
 
+export function clearTelegraphStatus(ctx: Pick<ExtensionContext, "ui">) {
+	statusStates.delete(ctx.ui);
+	setStatusSafely(ctx, undefined);
+}
+
 async function withStatus<T>(ctx: ExtensionContext, status: string, callback: () => Promise<T>) {
-	ctx.ui.setStatus(STATUS_KEY, status);
+	let state = statusStates.get(ctx.ui);
+	if (!state) {
+		state = { operations: [] };
+		statusStates.set(ctx.ui, state);
+	}
+	const operation: StatusOperation = { status };
+	state.operations.push(operation);
+	setStatusSafely(ctx, status);
 	try {
 		return await callback();
 	} finally {
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (statusStates.get(ctx.ui) === state) {
+			const index = state.operations.indexOf(operation);
+			if (index >= 0) state.operations.splice(index, 1);
+			const active = state.operations.at(-1);
+			if (active) {
+				setStatusSafely(ctx, active.status);
+			} else {
+				statusStates.delete(ctx.ui);
+				setStatusSafely(ctx, undefined);
+			}
+		}
+	}
+}
+
+function setStatusSafely(ctx: Pick<ExtensionContext, "ui">, status: string | undefined) {
+	try {
+		ctx.ui.setStatus(STATUS_KEY, status);
+	} catch {
+		// Status is best-effort; a session replacement can invalidate a captured context.
 	}
 }
 
