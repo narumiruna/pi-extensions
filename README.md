@@ -28,7 +28,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch/status, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
-| [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) | 📝 Create, read, and edit public Telegraph pages from Markdown or raw Telegraph nodes. | `pi install npm:@narumitw/pi-telegraph` |
+| [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) | 📝 Publish Markdown files and optionally enable agent tools to create, read, or edit public Telegraph pages. | `pi install npm:@narumitw/pi-telegraph` |
 
 ## 🚀 Quick start
 
@@ -75,7 +75,7 @@ Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Googl
 
 ### 📝 Public Telegraph publishing
 
-Use [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) to publish Markdown or raw Telegraph nodes as public pages, retrieve them as Markdown/JSON, and safely apply confirmed partial edits with credentials stored in a private `pi-telegraph.json` file.
+Use [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) to publish local Markdown files with `/telegraph create`, or opt into agent tools that create raw/Markdown pages, retrieve them as Markdown/JSON, and apply confirmed partial edits. Credentials and tool selection stay in a private `pi-telegraph.json` file.
 
 ### 🪢 LLM observability
 

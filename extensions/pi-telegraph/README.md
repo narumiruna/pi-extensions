@@ -8,6 +8,8 @@ It accepts ergonomic Markdown or advanced Telegraph Node arrays, confirms public
 
 ## ✨ Features
 
+- Publish a workspace Markdown file with `/telegraph create <file.md>`, even while agent tools are disabled.
+- Keep all three agent tools disabled by default, then enable any subset through config or `/telegraph tools`.
 - Publish Markdown as a public Telegraph page.
 - Publish validated raw Telegraph Node arrays for exact content control.
 - Read a page as Markdown or raw node JSON without credentials.
@@ -42,6 +44,8 @@ pi -e ./extensions/pi-telegraph
 ```
 
 ## 🛠️ Pi tools
+
+All Telegraph tools are registered but **disabled by default**. Enable an individual subset with `/telegraph tools`, enable all with `/telegraph enable`, or set the `tools` array in `pi-telegraph.json`. Tool selection preserves unrelated active Pi tools.
 
 ### `telegraph_create_page`
 
@@ -117,8 +121,9 @@ Editing requires the page owner's `accessToken` in `pi-telegraph.json`. The exte
 
 Create and edit are public external mutations:
 
-- **TUI/RPC:** Pi always opens a confirmation dialog. A cancellation returns a non-error cancelled result and sends no Telegraph request.
-- **Print/JSON:** the tool call must include `"confirmed": true`. The model is instructed to set it only after the user explicitly requests publication or editing.
+- **TUI/RPC tools:** Pi always opens a confirmation dialog. A cancellation returns a non-error cancelled result and sends no Telegraph request.
+- **Print/JSON tools:** the tool call must include `"confirmed": true`. The model is instructed to set it only after the user explicitly requests publication or editing.
+- **File command:** `/telegraph create <file>` requires interactive UI and always confirms before account registration or page creation.
 - **Get:** reading is public and non-mutating, so it requires no confirmation.
 
 Do not retry a create/edit call after the user cancels it.
@@ -133,13 +138,18 @@ Run:
 
 The command interactively stores only non-secret defaults: `shortName`, `authorName`, and `authorUrl`. It preserves an existing token and never prompts for or displays secrets.
 
-Config status and help:
+Tool controls, status, and help:
 
 ```text
 /telegraph
 /telegraph status
+/telegraph tools
+/telegraph enable
+/telegraph disable
 /telegraph help
 ```
+
+`/telegraph tools` opens an interactive selector for individual tools plus enable-all and disable-all actions. Every accepted change applies immediately and is persisted atomically.
 
 The canonical config path is:
 
@@ -154,19 +164,55 @@ Example:
   "shortName": "pi-telegraph",
   "authorName": "Optional default author",
   "authorUrl": "https://example.com",
-  "accessToken": "optional-existing-or-generated-token"
+  "accessToken": "optional-existing-or-generated-token",
+  "tools": [],
+  "allowFilesOutsideWorkspace": false
 }
 ```
 
 - `shortName` is required by Telegraph account creation and defaults to `pi-telegraph`.
 - `authorName` and `authorUrl` are optional page defaults.
 - `accessToken` is optional. The first confirmed create call generates and saves one when absent.
+- `tools` accepts a duplicate-free subset of `telegraph_create_page`, `telegraph_get_page`, and `telegraph_edit_page`. Missing `tools` defaults to `[]`, so existing configs without this field disable all Telegraph tools after reload.
+- `allowFilesOutsideWorkspace` defaults to `false`. Set it to `true` only when `/telegraph create` must read an absolute, parent-relative, or outside-symlink path.
 - To import an existing account, edit the private file and add its literal token.
 - Telegraph-specific environment variables and command/interpolation token syntax are intentionally unsupported.
 - The extension enforces regular-file storage and mode `0600`, uses atomic writes, and rejects symlink credential paths.
 - Status, tool results, and errors never display the access token or Telegraph authorization URL.
 
 Deleting the config does **not** delete published pages or revoke the account. Keep a backup if you need to edit those pages later.
+
+## 📄 Publish a Markdown file
+
+Publish a local file without enabling any agent tool:
+
+```text
+/telegraph create docs/article.md
+/telegraph create "docs/article with spaces.markdown"
+```
+
+The command accepts regular `.md` and `.markdown` files case-insensitively, up to 256 KiB. It removes YAML frontmatter from the published body and chooses the page title in this order:
+
+1. a non-empty string `title` in YAML frontmatter;
+2. plain text from the first `# H1` (the H1 remains in the body);
+3. the filename basename without its extension.
+
+If frontmatter explicitly contains `title`, it must be a non-empty string; invalid values fail instead of falling back. Other frontmatter fields are ignored for publication.
+
+Example:
+
+```markdown
+---
+title: Telegraph article title
+category: ignored-by-telegraph
+---
+
+# This heading remains in the page body
+
+Public article content.
+```
+
+By default, paths are resolved from Pi's current workspace. Absolute paths, `..` traversal, and symlinks resolving outside the real workspace are rejected. Internal symlinks are accepted. Setting `allowFilesOutsideWorkspace` to `true` explicitly opens outside paths, but regular-file, extension, size, content, and confirmation checks still apply.
 
 ## 🧾 Content support
 
@@ -181,8 +227,8 @@ Advanced raw nodes are limited to Telegraph's documented tags and `href`/`src` a
 ```txt
 extensions/pi-telegraph/
 ├── src/
-│   ├── telegraph.ts  # Pi entrypoint and /telegraph command
-│   ├── tools.ts      # Create, get, and edit tools
+│   ├── telegraph.ts  # Pi entrypoint, tool controls, and file command
+│   ├── tools.ts      # Create, get, edit, and shared create execution
 │   ├── content.ts    # Markdown/node conversion and validation
 │   ├── client.ts     # Bounded Telegraph API client
 │   ├── config.ts     # Private config and lock handling

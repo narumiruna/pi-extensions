@@ -4,19 +4,39 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 export const DEFAULT_SHORT_NAME = "pi-telegraph";
+export const TELEGRAPH_TOOL_NAMES = [
+	"telegraph_create_page",
+	"telegraph_get_page",
+	"telegraph_edit_page",
+] as const;
+export type TelegraphToolName = (typeof TELEGRAPH_TOOL_NAMES)[number];
 const CONFIG_FILE_NAME = "pi-telegraph.json";
 const LOCK_FILE_NAME = `${CONFIG_FILE_NAME}.lock`;
 const LOCK_WAIT_MS = 5_000;
 const LOCK_RETRY_MS = 25;
 const LOCK_STALE_MS = 60_000;
-const KNOWN_FIELDS = new Set(["shortName", "authorName", "authorUrl", "accessToken"]);
+const KNOWN_FIELDS = new Set([
+	"shortName",
+	"authorName",
+	"authorUrl",
+	"accessToken",
+	"tools",
+	"allowFilesOutsideWorkspace",
+]);
 
 export interface TelegraphConfig {
 	shortName: string;
 	authorName?: string;
 	authorUrl?: string;
 	accessToken?: string;
+	tools: TelegraphToolName[];
+	allowFilesOutsideWorkspace: boolean;
 }
+
+export type TelegraphConfigInput = Omit<TelegraphConfig, "tools" | "allowFilesOutsideWorkspace"> & {
+	tools?: TelegraphToolName[];
+	allowFilesOutsideWorkspace?: boolean;
+};
 
 export interface LoadedTelegraphConfig {
 	config: TelegraphConfig;
@@ -55,7 +75,21 @@ export function normalizeTelegraphConfig(value: unknown): TelegraphConfig {
 		);
 	}
 
-	return cleanObject({ shortName, authorName, authorUrl, accessToken });
+	const tools = normalizeTools(value.tools);
+	const allowFilesOutsideWorkspace = optionalBoolean(
+		value.allowFilesOutsideWorkspace,
+		"allowFilesOutsideWorkspace",
+		false,
+	);
+
+	return cleanObject({
+		shortName,
+		authorName,
+		authorUrl,
+		accessToken,
+		tools,
+		allowFilesOutsideWorkspace,
+	});
 }
 
 export async function loadTelegraphConfig(
@@ -66,7 +100,15 @@ export async function loadTelegraphConfig(
 		before = await lstat(filePath);
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") {
-			return { config: { shortName: DEFAULT_SHORT_NAME }, path: filePath, exists: false };
+			return {
+				config: {
+					shortName: DEFAULT_SHORT_NAME,
+					tools: [],
+					allowFilesOutsideWorkspace: false,
+				},
+				path: filePath,
+				exists: false,
+			};
 		}
 		throw error;
 	}
@@ -93,7 +135,7 @@ export async function loadTelegraphConfig(
 }
 
 export async function writeTelegraphConfig(
-	config: TelegraphConfig,
+	config: TelegraphConfigInput,
 	filePath = telegraphConfigPath(),
 ) {
 	const normalized = normalizeTelegraphConfig(config);
@@ -130,7 +172,17 @@ export async function saveTelegraphSetup(setup: TelegraphSetup) {
 			authorName: normalized.authorName,
 			authorUrl: normalized.authorUrl,
 			accessToken: current.config.accessToken,
+			tools: current.config.tools,
+			allowFilesOutsideWorkspace: current.config.allowFilesOutsideWorkspace,
 		});
+	});
+}
+
+export async function saveTelegraphToolSelection(tools: readonly TelegraphToolName[]) {
+	const normalizedTools = normalizeTools(tools);
+	return withTelegraphConfigLock(undefined, async () => {
+		const current = await loadTelegraphConfig();
+		await writeTelegraphConfig({ ...current.config, tools: normalizedTools });
 	});
 }
 
@@ -324,6 +376,36 @@ function optionalUrl(value: unknown, field: string, maxLength: number) {
 		throw new Error(`${CONFIG_FILE_NAME} ${field} must be an HTTP or HTTPS URL.`);
 	}
 	return normalized;
+}
+
+export function orderedTelegraphTools(tools: ReadonlySet<TelegraphToolName>) {
+	return TELEGRAPH_TOOL_NAMES.filter((name) => tools.has(name));
+}
+
+function isTelegraphToolName(value: unknown): value is TelegraphToolName {
+	return typeof value === "string" && TELEGRAPH_TOOL_NAMES.includes(value as TelegraphToolName);
+}
+
+function normalizeTools(value: unknown): TelegraphToolName[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) {
+		throw new Error(`${CONFIG_FILE_NAME} tools must be an array of Telegraph tool names.`);
+	}
+	if (!value.every(isTelegraphToolName)) {
+		throw new Error(`${CONFIG_FILE_NAME} tools contains an unknown Telegraph tool name.`);
+	}
+	if (new Set(value).size !== value.length) {
+		throw new Error(`${CONFIG_FILE_NAME} tools must not contain duplicate names.`);
+	}
+	return orderedTelegraphTools(new Set(value));
+}
+
+function optionalBoolean(value: unknown, field: string, defaultValue: boolean) {
+	if (value === undefined) return defaultValue;
+	if (typeof value !== "boolean") {
+		throw new Error(`${CONFIG_FILE_NAME} ${field} must be a boolean.`);
+	}
+	return value;
 }
 
 function processExists(pid: number) {

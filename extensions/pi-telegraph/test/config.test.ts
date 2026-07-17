@@ -13,20 +13,28 @@ import {
 	writeTelegraphConfig,
 } from "../src/config.js";
 
-test("config normalization applies defaults and validates credential fields", () => {
-	assert.deepEqual(normalizeTelegraphConfig({}), { shortName: DEFAULT_SHORT_NAME });
+test("config normalization defaults tools off and validates settings and credentials", () => {
+	assert.deepEqual(normalizeTelegraphConfig({}), {
+		shortName: DEFAULT_SHORT_NAME,
+		tools: [],
+		allowFilesOutsideWorkspace: false,
+	});
 	assert.deepEqual(
 		normalizeTelegraphConfig({
 			shortName: " account ",
 			authorName: " Author ",
 			authorUrl: " https://example.com/me ",
 			accessToken: " secret ",
+			tools: ["telegraph_edit_page", "telegraph_get_page"],
+			allowFilesOutsideWorkspace: true,
 		}),
 		{
 			shortName: "account",
 			authorName: "Author",
 			authorUrl: "https://example.com/me",
 			accessToken: "secret",
+			tools: ["telegraph_get_page", "telegraph_edit_page"],
+			allowFilesOutsideWorkspace: true,
 		},
 	);
 	assert.throws(() => normalizeTelegraphConfig(null), /JSON object/i);
@@ -35,6 +43,16 @@ test("config normalization applies defaults and validates credential fields", ()
 	assert.throws(() => normalizeTelegraphConfig({ authorUrl: "javascript:bad" }), /authorUrl/i);
 	assert.throws(() => normalizeTelegraphConfig({ accessToken: "$TOKEN" }), /literal/i);
 	assert.throws(() => normalizeTelegraphConfig({ accessToken: "!command" }), /literal/i);
+	assert.throws(() => normalizeTelegraphConfig({ tools: "all" }), /tools/i);
+	assert.throws(() => normalizeTelegraphConfig({ tools: ["telegraph_unknown"] }), /tools/i);
+	assert.throws(
+		() => normalizeTelegraphConfig({ tools: ["telegraph_get_page", "telegraph_get_page"] }),
+		/duplicate/i,
+	);
+	assert.throws(
+		() => normalizeTelegraphConfig({ allowFilesOutsideWorkspace: "yes" }),
+		/allowFilesOutsideWorkspace/i,
+	);
 });
 
 test("config uses the canonical private pi-telegraph.json path and atomic 0600 writes", async () => {
@@ -42,7 +60,11 @@ test("config uses the canonical private pi-telegraph.json path and atomic 0600 w
 		assert.equal(telegraphConfigPath(), path.join(agentDir, "pi-telegraph.json"));
 		const missing = await loadTelegraphConfig();
 		assert.deepEqual(missing, {
-			config: { shortName: DEFAULT_SHORT_NAME },
+			config: {
+				shortName: DEFAULT_SHORT_NAME,
+				tools: [],
+				allowFilesOutsideWorkspace: false,
+			},
 			path: path.join(agentDir, "pi-telegraph.json"),
 			exists: false,
 		});
@@ -52,6 +74,8 @@ test("config uses the canonical private pi-telegraph.json path and atomic 0600 w
 		assert.deepEqual(JSON.parse(await readFile(telegraphConfigPath(), "utf8")), {
 			shortName: "private",
 			accessToken: "secret",
+			tools: [],
+			allowFilesOutsideWorkspace: false,
 		});
 
 		const loaded = await loadTelegraphConfig();
@@ -76,9 +100,14 @@ test("config repairs readable files but rejects symlink and non-regular paths", 
 	});
 });
 
-test("setup updates defaults under lock while preserving an existing token", async () => {
+test("setup updates defaults under lock while preserving token and runtime settings", async () => {
 	await withTempAgentDir(async () => {
-		await writeTelegraphConfig({ shortName: "old", accessToken: "keep-me" });
+		await writeTelegraphConfig({
+			shortName: "old",
+			accessToken: "keep-me",
+			tools: ["telegraph_get_page"],
+			allowFilesOutsideWorkspace: true,
+		} as never);
 		await saveTelegraphSetup({
 			shortName: "new",
 			authorName: "Writer",
@@ -89,6 +118,8 @@ test("setup updates defaults under lock while preserving an existing token", asy
 			authorName: "Writer",
 			authorUrl: "https://example.com/writer",
 			accessToken: "keep-me",
+			tools: ["telegraph_get_page"],
+			allowFilesOutsideWorkspace: true,
 		});
 	});
 });
