@@ -335,7 +335,43 @@ You are an API review subagent. Do not edit files. Check compatibility,
 test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
 ```
 
-By default, `subagent` loads user agents only. Set `agentScope` to `"project"` or `"both"` to load project-local agents. Interactive sessions ask for confirmation before using project agents unless `confirmProjectAgents` is disabled.
+`agentScope` is a top-level tool argument supplied per invocation. It is not a setting in
+`~/.pi/agent/pi-subagents.json` and does not belong in agent frontmatter. The scope selects which
+custom agent directories are loaded; built-in agents remain available in every scope:
+
+| `agentScope` | Custom agents loaded |
+| --- | --- |
+| `"user"` (default) | User agents only. |
+| `"project"` | Project-local agents only. |
+| `"both"` | User and project-local agents. Project definitions override same-named user definitions. |
+
+For example, invoke a project-local agent with the blocking `subagent` tool:
+
+```json
+{
+  "agent": "api-reviewer",
+  "task": "Review this project's API changes",
+  "agentScope": "project"
+}
+```
+
+Or select the scope when creating a stateful agent with `subagent_spawn`:
+
+```json
+{
+  "agent": "api-reviewer",
+  "task": "Review this project's API changes",
+  "agentScope": "project"
+}
+```
+
+A stateful agent retains the scope selected by `subagent_spawn` for its follow-ups. Every new
+blocking `subagent` invocation or `subagent_spawn` call that needs project agents must supply
+`agentScope: "project"` or `"both"` again.
+
+Project-local agents require a trusted Pi project. Interactive sessions also ask for confirmation
+before using them by default. Passing `confirmProjectAgents: false` as another top-level tool
+argument skips that confirmation dialog, but it does not bypass the project trust requirement.
 
 ## ⏱️ Runtime limits and thinking levels
 

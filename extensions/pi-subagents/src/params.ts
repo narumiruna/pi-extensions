@@ -37,7 +37,8 @@ const AggregatorItem = Type.Object({
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
+	description:
+		'Per-invocation custom agent scope. Default: "user". Use "project" for project-local agents or "both" for user and project agents; this is a tool argument, not a pi-subagents.json setting.',
 	default: "user",
 });
 
