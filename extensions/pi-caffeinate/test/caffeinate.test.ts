@@ -127,23 +127,31 @@ test("caffeinate loads the new settings file without a migration warning", async
 	});
 });
 
-test("session reload applies manual quiet mode changes", async () => {
+test("session reload applies quiet mode and clears an active status", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, NEW_SETTINGS_FILE, "display");
+		process.env.PI_CAFFEINATE_COMMAND = longRunningCustomCommand();
 		const caffeinateModule = await importFreshCaffeinate();
 		const mock = createMockPi();
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications, statuses } = createMockContext();
 
 		caffeinateModule.default(mock.pi);
 		const sessionStart = mock.events.get("session_start")?.[0];
 		await sessionStart?.({ reason: "startup" }, ctx);
-		await mock.commands.get("caffeinate")?.handler("status", ctx);
-		assert.match(notifications.at(-1)?.message ?? "", /Quiet mode: disabled/);
+		await mock.events.get("agent_start")?.[0]?.({}, ctx);
+		assert.equal(statuses.get("caffeinate"), "custom");
 
 		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
 		await sessionStart?.({ reason: "reload" }, ctx);
+		const quietStatus = statuses.get("caffeinate");
+
 		await mock.commands.get("caffeinate")?.handler("status", ctx);
-		assert.match(notifications.at(-1)?.message ?? "", /Quiet mode: enabled/);
+		const statusMessage = notifications.at(-1)?.message ?? "";
+		await mock.events.get("agent_end")?.[0]?.({}, ctx);
+
+		assert.equal(quietStatus, undefined);
+		assert.match(statusMessage, /pi-caffeinate is active/);
+		assert.match(statusMessage, /Quiet mode: enabled/);
 	});
 });
 
@@ -297,7 +305,7 @@ test("caffeinate saves mode only to the new settings file and preserves quiet mo
 	});
 });
 
-test("quiet mode keeps lifecycle and status active without routine notifications", async () => {
+test("quiet mode keeps the inhibitor active without lifecycle UI output", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
 		process.env.PI_CAFFEINATE_COMMAND = longRunningCustomCommand();
@@ -309,10 +317,18 @@ test("quiet mode keeps lifecycle and status active without routine notifications
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 		await mock.events.get("agent_start")?.[0]?.({}, ctx);
 		const activeStatus = statuses.get("caffeinate");
+		const lifecycleNotificationCount = notifications.length;
+
+		await mock.commands.get("caffeinate")?.handler("status", ctx);
+		const statusMessage = notifications[0]?.message ?? "";
+		const statusAfterCommand = statuses.get("caffeinate");
 		await mock.events.get("agent_end")?.[0]?.({}, ctx);
 
-		assert.equal(notifications.length, 0);
-		assert.equal(activeStatus, "custom");
+		assert.equal(lifecycleNotificationCount, 0);
+		assert.equal(activeStatus, undefined);
+		assert.match(statusMessage, /pi-caffeinate is active/);
+		assert.equal(statusAfterCommand, undefined);
+		assert.equal(notifications.length, 1);
 		assert.equal(statuses.get("caffeinate"), undefined);
 	});
 });
@@ -347,12 +363,12 @@ test("quiet mode preserves inhibitor failure warnings", async () => {
 		caffeinateModule.default(mock.pi);
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 		await mock.events.get("agent_start")?.[0]?.({}, ctx);
-		await waitFor(() => notifications.length > 0 && statuses.get("caffeinate") === "unavailable");
+		await waitFor(() => notifications.length > 0);
 
 		assert.equal(notifications.length, 1);
 		assert.equal(notifications[0]?.level, "warning");
 		assert.match(notifications[0]?.message ?? "", /exited unexpectedly \(code 7\)/);
-		assert.equal(statuses.get("caffeinate"), "unavailable");
+		assert.equal(statuses.get("caffeinate"), undefined);
 	});
 });
 

@@ -333,7 +333,7 @@ function stopInhibitor(ctx: ExtensionContext, reason: string, options: { notify?
 }
 
 function updateStatus(ctx: ExtensionContext) {
-	if (state.disabled) {
+	if (state.disabled || state.quiet) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
 	}
