@@ -203,7 +203,7 @@ export class GoalRuntime {
 		this.continuationIntent = undefined;
 		this.continuationDelivery = intent;
 		try {
-			this.pi.sendUserMessage(intent.prompt);
+			this.pi.sendUserMessage(intent.prompt, { deliverAs: "followUp" });
 			return true;
 		} catch (error) {
 			if (this.continuationDelivery?.marker === intent.marker) {
@@ -757,10 +757,7 @@ export function truncateNotification(value: string) {
 
 async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
 	try {
-		const sent = ctx.isIdle?.()
-			? (pi.sendUserMessage(prompt) as void | Promise<void>)
-			: (pi.sendUserMessage(prompt, { deliverAs: "followUp" }) as void | Promise<void>);
-		await sent;
+		await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 		return true;
 	} catch (error) {
 		ctx.ui.notify(`Goal prompt failed: ${formatError(error)}`, "error");

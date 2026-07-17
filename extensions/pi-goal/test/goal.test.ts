@@ -1495,6 +1495,7 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
 	const started = await startGoalForTest();
 	const initialGoal = requireLastGoal(started.mock);
 	const initialPrompt = started.mock.sentUserMessages[0]?.text ?? "";
+	assert.deepEqual(started.mock.sentUserMessages[0]?.options, { deliverAs: "followUp" });
 	assertPromptHasGoalId(initialPrompt, initialGoal.id);
 	assertHardenedGoalPrompt(initialPrompt);
 
@@ -1512,6 +1513,9 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
 	assert.equal(started.mock.sentUserMessages.length, 1);
 	await started.mock.events.get("agent_settled")?.[0]?.({}, started.ctx);
 	const continuationPrompt = started.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.deepEqual(started.mock.sentUserMessages.at(-1)?.options, {
+		deliverAs: "followUp",
+	});
 	assertPromptHasGoalId(continuationPrompt, initialGoal.id);
 	assertHardenedGoalPrompt(continuationPrompt);
 	assert.match(continuationPrompt, /automatic continuation #1/i);
@@ -1521,6 +1525,9 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
 	await started.mock.commands.get("goal")?.handler("resume", started.ctx);
 	const resumedGoal = requireLastGoal(started.mock);
 	const resumedPrompt = started.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.deepEqual(started.mock.sentUserMessages.at(-1)?.options, {
+		deliverAs: "followUp",
+	});
 	assertPromptHasGoalId(resumedPrompt, resumedGoal.id);
 	assertHardenedGoalPrompt(resumedPrompt);
 	assert.match(resumedPrompt, /explicitly resumed the paused \/goal/i);
@@ -1528,6 +1535,9 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
 	await started.mock.commands.get("goal")?.handler("edit verify edited objective", started.ctx);
 	const editedGoal = requireLastGoal(started.mock);
 	const editedPrompt = started.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.deepEqual(started.mock.sentUserMessages.at(-1)?.options, {
+		deliverAs: "followUp",
+	});
 	assertPromptHasGoalId(editedPrompt, editedGoal.id);
 	assertHardenedGoalPrompt(editedPrompt);
 	assert.match(editedPrompt, /updated objective supersedes every previous goal objective/i);
@@ -2160,7 +2170,9 @@ test("agent_settled dispatches one idle continuation after agent_end records int
 
 	await settled.mock.events.get("agent_settled")?.[0]?.({}, settled.ctx);
 	assert.equal(settled.mock.sentUserMessages.length, 2);
-	assert.equal(settled.mock.sentUserMessages.at(-1)?.options, undefined);
+	assert.deepEqual(settled.mock.sentUserMessages.at(-1)?.options, {
+		deliverAs: "followUp",
+	});
 	assert.match(settled.mock.sentUserMessages.at(-1)?.text ?? "", /automatic continuation #1/i);
 
 	await settled.mock.events.get("agent_settled")?.[0]?.({}, settled.ctx);
