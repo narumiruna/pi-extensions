@@ -4,8 +4,8 @@ import {
 	Container,
 	Key,
 	matchesKey,
-	SelectList,
 	type SelectItem,
+	SelectList,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -20,7 +20,7 @@ import {
 	uniqueToolNames,
 } from "./settings.js";
 
-class ToolToggleList {
+export class ToolToggleList {
 	private items: { name: string; selected: boolean }[];
 	private cursor = 0;
 	private cachedWidth?: number;
@@ -98,6 +98,7 @@ export function registerSubagentConfigCommand(pi: ExtensionAPI) {
 			}
 
 			// Loop: agent selection → tool toggle (Esc in tools returns here)
+			let selectedAgentIndex = 0;
 			while (true) {
 				// Step 1: pick an agent to configure
 				const agentItems: SelectItem[] = agents.map((a) => {
@@ -133,7 +134,20 @@ export function registerSubagentConfigCommand(pi: ExtensionAPI) {
 						scrollInfo: (t: string) => theme.fg("dim", t),
 						noMatch: (t: string) => theme.fg("warning", t),
 					});
-					selectList.onSelect = (item) => done(item.value);
+					selectList.setSelectedIndex(selectedAgentIndex);
+					selectList.onSelectionChange = (item) => {
+						selectedAgentIndex = Math.max(
+							0,
+							agentItems.findIndex((candidate) => candidate.value === item.value),
+						);
+					};
+					selectList.onSelect = (item) => {
+						selectedAgentIndex = Math.max(
+							0,
+							agentItems.findIndex((candidate) => candidate.value === item.value),
+						);
+						done(item.value);
+					};
 					selectList.onCancel = () => done(null);
 					container.addChild(selectList);
 					container.addChild(
@@ -193,7 +207,11 @@ export function registerSubagentConfigCommand(pi: ExtensionAPI) {
 					);
 					container.addChild(new Spacer(1));
 					container.addChild(
-						new Text(theme.fg("muted", "Toggle tools with Enter/Space. S to save, Esc to cancel."), 1, 0),
+						new Text(
+							theme.fg("muted", "Toggle tools with Enter/Space. S to save, Esc to cancel."),
+							1,
+							0,
+						),
 					);
 					container.addChild(new Spacer(1));
 
@@ -206,7 +224,11 @@ export function registerSubagentConfigCommand(pi: ExtensionAPI) {
 
 					container.addChild(new Spacer(1));
 					container.addChild(
-						new Text(theme.fg("dim", "↑↓ navigate · enter/space toggle · S save · esc cancel"), 1, 0),
+						new Text(
+							theme.fg("dim", "↑↓ navigate · enter/space toggle · S save · esc cancel"),
+							1,
+							0,
+						),
 					);
 					container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 

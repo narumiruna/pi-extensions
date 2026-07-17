@@ -1,28 +1,21 @@
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_API_URL,
 	DEFAULT_MODEL,
 	DEFAULT_TIMEOUT_MS,
 	GOOGLE_GENAI_TOOL_NAMES,
+	type GoogleGenaiConfig,
+	type GoogleGenaiToolName,
 	googleGenaiConfigPath,
 	isGoogleGenaiToolName,
 	isUnsupportedConfigApiKey,
-	loadGoogleGenaiConfig,
-	type GoogleGenaiConfig,
-	type GoogleGenaiToolName,
 	type LoadedGoogleGenaiConfig,
+	loadGoogleGenaiConfig,
 	saveToolSelection,
 	writeGoogleGenaiConfig,
 } from "./config.js";
 import { cleanupRawResponseDirectory } from "./response-format.js";
-import {
-	googleMapsTool,
-	googleSearchTool,
-	googleUrlContextTool,
-} from "./tools.js";
+import { googleMapsTool, googleSearchTool, googleUrlContextTool } from "./tools.js";
 
 const STATUS_KEY = "google-genai";
 const COMMAND_COMPLETIONS = [
@@ -35,6 +28,10 @@ const COMMAND_COMPLETIONS = [
 	{ value: "disable", label: "disable", description: "Disable all Google GenAI tools" },
 ];
 type CommandAction = "status" | "init" | "help" | "tools" | "enable" | "disable" | "unknown";
+type ToolSelectorAction = "enableAll" | "disableAll" | "done";
+type ToolSelectorRow =
+	| { kind: "tool"; toolName: GoogleGenaiToolName }
+	| { kind: "action"; action: ToolSelectorAction; label: string };
 
 export default function googleGenai(pi: ExtensionAPI) {
 	pi.registerTool(googleSearchTool);
@@ -133,7 +130,10 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext, pi: 
 		case "disable":
 			await saveToolSelection([]);
 			applyGoogleToolSelection(pi, []);
-			ctx.ui.notify("Disabled all Google GenAI tools. Use /google-genai enable to restore them.", "info");
+			ctx.ui.notify(
+				"Disabled all Google GenAI tools. Use /google-genai enable to restore them.",
+				"info",
+			);
 			return;
 		case "unknown":
 			ctx.ui.notify(helpText(), "warning");
@@ -143,7 +143,10 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext, pi: 
 
 async function initConfig(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
 	if (!ctx.hasUI) {
-		ctx.ui.notify("/google-genai init requires interactive UI. Edit pi-google-genai.json manually or use /login google.", "warning");
+		ctx.ui.notify(
+			"/google-genai init requires interactive UI. Edit pi-google-genai.json manually or use /login google.",
+			"warning",
+		);
 		return;
 	}
 	const loaded = await loadGoogleGenaiConfig();
@@ -184,33 +187,158 @@ async function selectTools(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
 		return;
 	}
 
-	let selected = new Set(currentGoogleTools(pi));
+	let selectedTools = new Set(currentGoogleTools(pi));
+	let persistQueue = Promise.resolve();
+	const commitSelectedTools = () => {
+		const nextTools = orderedGoogleTools(selectedTools);
+		applyGoogleToolSelection(pi, nextTools);
+		persistQueue = persistQueue
+			.then(() => saveToolSelection(nextTools))
+			.catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Google GenAI tool selection save failed: ${message}`, "warning");
+			});
+	};
+	const customResult = await ctx.ui.custom<"closed" | undefined>(
+		(tui, theme, keybindings, done) => {
+			const rows = googleToolSelectorRows();
+			let selectedIndex = 0;
+			const moveSelection = (delta: number) => {
+				selectedIndex = (selectedIndex + delta + rows.length) % rows.length;
+			};
+			const activateSelectedRow = () => {
+				const row = rows[selectedIndex];
+				if (!row) return;
+				if (row.kind === "tool") {
+					if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+					else selectedTools.add(row.toolName);
+					commitSelectedTools();
+					return;
+				}
+				if (row.action === "enableAll") {
+					selectedTools = new Set(GOOGLE_GENAI_TOOL_NAMES);
+					commitSelectedTools();
+					return;
+				}
+				if (row.action === "disableAll") {
+					selectedTools = new Set();
+					commitSelectedTools();
+					return;
+				}
+				done("closed");
+			};
+
+			return {
+				invalidate() {},
+				render(width: number) {
+					return [
+						theme.fg("accent", theme.bold(clipLine(googleToolSelectorTitle(selectedTools), width))),
+						"",
+						...rows.map((row, index) => {
+							const prefix = index === selectedIndex ? "› " : "  ";
+							const line = clipLine(
+								`${prefix}${formatGoogleToolSelectorRow(row, selectedTools)}`,
+								width,
+							);
+							return index === selectedIndex ? theme.fg("accent", line) : line;
+						}),
+						"",
+						theme.fg("dim", clipLine("↑↓ navigate • Enter/Space toggle • Esc close", width)),
+					];
+				},
+				handleInput(data: string) {
+					if (keybindings.matches(data, "tui.select.up")) {
+						moveSelection(-1);
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.down")) {
+						moveSelection(1);
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.pageUp")) {
+						selectedIndex = 0;
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.pageDown")) {
+						selectedIndex = rows.length - 1;
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.confirm") || data === " ") {
+						activateSelectedRow();
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.cancel")) done("closed");
+				},
+			};
+		},
+	);
+
+	if (customResult !== "closed") {
+		await showDialogToolSelector(ctx, pi);
+		return;
+	}
+	await persistQueue;
+}
+
+async function showDialogToolSelector(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
+	let selectedTools = new Set(currentGoogleTools(pi));
 	while (true) {
-		const rows = [
-			...GOOGLE_GENAI_TOOL_NAMES.map((toolName) => `${selected.has(toolName) ? "[x]" : "[ ]"} ${toolName}`),
-			"Enable all Google GenAI tools",
-			"Disable all Google GenAI tools",
-			"Done",
-		];
-		const choice = await ctx.ui.select(
-			`Google GenAI tools (${selected.size}/${GOOGLE_GENAI_TOOL_NAMES.length})`,
-			rows,
-		);
-		if (!choice || choice === "Done") return;
-		if (choice === "Enable all Google GenAI tools") {
-			selected = new Set(GOOGLE_GENAI_TOOL_NAMES);
-		} else if (choice === "Disable all Google GenAI tools") {
-			selected = new Set();
-		} else {
-			const toolName = GOOGLE_GENAI_TOOL_NAMES.find((name) => choice.endsWith(name));
-			if (!toolName) continue;
-			if (selected.has(toolName)) selected.delete(toolName);
-			else selected.add(toolName);
+		const rows = googleToolSelectorRows();
+		const choices = rows.map((row) => formatGoogleToolSelectorRow(row, selectedTools));
+		const choice = await ctx.ui.select(googleToolSelectorTitle(selectedTools), choices);
+		if (!choice) return;
+		const row = rows[choices.indexOf(choice)];
+		if (!row || (row.kind === "action" && row.action === "done")) return;
+		if (row.kind === "tool") {
+			if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+			else selectedTools.add(row.toolName);
+		} else if (row.action === "enableAll") {
+			selectedTools = new Set(GOOGLE_GENAI_TOOL_NAMES);
+		} else if (row.action === "disableAll") {
+			selectedTools = new Set();
 		}
-		const ordered = orderedGoogleTools(selected);
+		const ordered = orderedGoogleTools(selectedTools);
 		applyGoogleToolSelection(pi, ordered);
 		await saveToolSelection(ordered);
 	}
+}
+
+function googleToolSelectorRows(): ToolSelectorRow[] {
+	return [
+		...GOOGLE_GENAI_TOOL_NAMES.map((toolName) => ({ kind: "tool" as const, toolName })),
+		{
+			kind: "action",
+			action: "enableAll",
+			label: "Enable all Google GenAI tools",
+		},
+		{
+			kind: "action",
+			action: "disableAll",
+			label: "Disable all Google GenAI tools",
+		},
+		{ kind: "action", action: "done", label: "Done" },
+	];
+}
+
+function formatGoogleToolSelectorRow(
+	row: ToolSelectorRow,
+	selectedTools: ReadonlySet<GoogleGenaiToolName>,
+) {
+	if (row.kind === "action") return row.label;
+	return `${selectedTools.has(row.toolName) ? "[x]" : "[ ]"} ${row.toolName}`;
+}
+
+function googleToolSelectorTitle(selectedTools: ReadonlySet<GoogleGenaiToolName>) {
+	return `Google GenAI tools (${selectedTools.size}/${GOOGLE_GENAI_TOOL_NAMES.length})`;
+}
+
+function clipLine(value: string, width: number) {
+	return Array.from(value).slice(0, Math.max(0, width)).join("");
 }
 
 function authSource(config: GoogleGenaiConfig, ctx: ExtensionCommandContext) {
@@ -262,17 +390,23 @@ function helpText() {
 		"Auth: config apiKey, /login google, or GEMINI_API_KEY.",
 	].join("\n");
 }
+
+export type { GoogleGenaiConfig, LoadedGoogleGenaiConfig } from "./config.js";
 export {
 	DEFAULT_API_URL,
 	DEFAULT_MODEL,
 	DEFAULT_TIMEOUT_MS,
 	GOOGLE_GENAI_TOOL_NAMES,
-	MAX_TIMEOUT_MS,
 	googleGenaiConfigPath,
 	loadGoogleGenaiConfig,
+	MAX_TIMEOUT_MS,
 	normalizeGoogleGenaiSettings,
 	resolveGoogleGenaiAuth,
 } from "./config.js";
 export { formatToolResult } from "./response-format.js";
-export { validateMapsLocation, validateSearchTypes, validateTimeoutMs, validateUrls } from "./tools.js";
-export type { GoogleGenaiConfig, LoadedGoogleGenaiConfig } from "./config.js";
+export {
+	validateMapsLocation,
+	validateSearchTypes,
+	validateTimeoutMs,
+	validateUrls,
+} from "./tools.js";

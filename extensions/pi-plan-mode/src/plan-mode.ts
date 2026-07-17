@@ -23,6 +23,7 @@ import {
 	planModeQuestionAnswered,
 	planModeQuestionCancelled,
 } from "./question-tool.js";
+import { showPersistentSelector } from "./selector-ui.js";
 import {
 	configuredThinkingLevel,
 	type PlanModeSettings,
@@ -57,6 +58,10 @@ interface ReadyPresentationIntent {
 	plan: string;
 	source: PlanCompletionSource;
 }
+
+type PlanToolSelectorValue =
+	| { kind: "tool"; tool: ToolInfo }
+	| { kind: "action"; action: "previous" | "next" | "done" };
 
 const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 	{ value: "show", label: "show", description: "Show the completed plan" },
@@ -547,6 +552,56 @@ export default function planMode(pi: ExtensionAPI) {
 			return;
 		}
 
+		const tools = selectableTools();
+		const pageCount = toolSelectorPageCount(tools);
+		let pageIndex = 0;
+		const customHandled = await showPersistentSelector(
+			ctx,
+			() => {
+				pageIndex = Math.min(pageIndex, pageCount - 1);
+				const pageStart = pageIndex * TOOL_SELECTOR_PAGE_SIZE;
+				const pageTools = tools.slice(pageStart, pageStart + TOOL_SELECTOR_PAGE_SIZE);
+				const selectedNames = planModeSelectedNames(tools);
+				const rows: Array<{ value: PlanToolSelectorValue; label: string }> = pageTools.map(
+					(tool, index) => ({
+						value: { kind: "tool", tool },
+						label: formatToolChoice(tool, selectedNames.has(tool.name), pageStart + index),
+					}),
+				);
+				if (pageIndex > 0) {
+					rows.push({ value: { kind: "action", action: "previous" }, label: "Previous page" });
+				}
+				if (pageIndex < pageCount - 1) {
+					rows.push({ value: { kind: "action", action: "next" }, label: "Next page" });
+				}
+				rows.push({ value: { kind: "action", action: "done" }, label: "Done" });
+				return {
+					title: `Plan-mode tools (${pageIndex + 1}/${pageCount}). Non-built-in tools run at user risk.`,
+					rows,
+				};
+			},
+			(value) => {
+				if (value.kind === "action") {
+					if (value.action === "done") return "close";
+					pageIndex += value.action === "previous" ? -1 : 1;
+					return "reset";
+				}
+				if (!canSelectToolInPlanMode(value.tool)) {
+					ctx.ui.notify(`${value.tool.name} is blocked in Plan mode.`, "warning");
+					return "stay";
+				}
+				togglePlanModeTool(value.tool, tools, ctx);
+				return "stay";
+			},
+		);
+		if (!customHandled) await showDialogToolSelector(ctx);
+
+		applyPlanModeTools();
+		persistState();
+		updateUi(ctx);
+	}
+
+	async function showDialogToolSelector(ctx: ExtensionContext) {
 		let pageIndex = 0;
 		while (true) {
 			const tools = selectableTools();
@@ -570,7 +625,7 @@ export default function planMode(pi: ExtensionAPI) {
 				`Plan-mode tools (${pageIndex + 1}/${pageCount}). Non-built-in tools run at user risk.`,
 				[...choices, ...navigationChoices],
 			);
-			if (!choice || choice === doneChoice) break;
+			if (!choice || choice === doneChoice) return;
 			if (choice === previousChoice) {
 				pageIndex = Math.max(0, pageIndex - 1);
 				continue;
@@ -579,28 +634,24 @@ export default function planMode(pi: ExtensionAPI) {
 				pageIndex = Math.min(pageCount - 1, pageIndex + 1);
 				continue;
 			}
-
-			const selectedIndex = choices.indexOf(choice);
-			const tool = pageTools[selectedIndex];
+			const tool = pageTools[choices.indexOf(choice)];
 			if (!tool) continue;
 			if (!canSelectToolInPlanMode(tool)) {
 				ctx.ui.notify(`${tool.name} is blocked in Plan mode.`, "warning");
 				continue;
 			}
-
-			const nextSelectedNames = planModeSelectedNames(tools);
-			if (nextSelectedNames.has(tool.name)) nextSelectedNames.delete(tool.name);
-			else nextSelectedNames.add(tool.name);
-
-			state = {
-				...state,
-				selectedToolNames: filterAvailableSelectedNames(Array.from(nextSelectedNames), tools),
-			};
-			applyPlanModeTools();
-			persistState();
-			updateUi(ctx);
+			togglePlanModeTool(tool, tools, ctx);
 		}
+	}
 
+	function togglePlanModeTool(tool: ToolInfo, tools: ToolInfo[], ctx: ExtensionContext) {
+		const nextSelectedNames = planModeSelectedNames(tools);
+		if (nextSelectedNames.has(tool.name)) nextSelectedNames.delete(tool.name);
+		else nextSelectedNames.add(tool.name);
+		state = {
+			...state,
+			selectedToolNames: filterAvailableSelectedNames(Array.from(nextSelectedNames), tools),
+		};
 		applyPlanModeTools();
 		persistState();
 		updateUi(ctx);

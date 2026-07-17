@@ -11,7 +11,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import firecrawl, {
 	cleanObject,
 	commandCompletions,
@@ -271,6 +271,37 @@ test("firecrawl does not fall back to legacy settings when the new file is inval
 		assert.match(notifications[0]?.message ?? "", /legacy settings ignored/i);
 		assert.match(notifications[1]?.message ?? "", /settings ignored/i);
 		assert.match(notifications[1]?.message ?? "", /pi-firecrawl\.json/);
+	});
+});
+
+test("Firecrawl tool selection keeps the cursor on the toggled row", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		firecrawl(mock.pi);
+		const toolNames = mock.tools.map((tool) => String(tool.name));
+		mock.rawPi.setActiveTools(["other_tool", ...toolNames]);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const { renders, result } = driveCustomSelector(factory, [
+					"tui.select.down",
+					"tui.select.confirm",
+					"tui.select.cancel",
+				]);
+				assert.ok(renders[1]?.some((line) => line.includes("› [ ] firecrawl_crawl")));
+				return result;
+			},
+		});
+		await mock.commands.get("firecrawl")?.handler("tools", ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"other_tool",
+			...toolNames.filter((name) => name !== CRAWL_TOOL),
+		]);
+		assert.deepEqual(
+			readSettings(agentDir, NEW_SETTINGS_FILE).tools,
+			toolNames.filter((name) => name !== CRAWL_TOOL),
+		);
 	});
 });
 

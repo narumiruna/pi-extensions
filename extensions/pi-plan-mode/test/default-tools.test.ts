@@ -7,6 +7,7 @@ import {
 	builtinTool,
 	createMockContext,
 	createMockPi,
+	driveCustomSelector,
 	extensionTool,
 } from "../../../test/support.js";
 import planMode from "../src/plan-mode.js";
@@ -252,6 +253,49 @@ test("the tool selector persists a session override and shutdown restores prior 
 		});
 		await resumed.events.get("session_start")?.[0]?.({}, resumedContext.ctx);
 		assert.deepEqual(resumed.rawPi.getActiveTools(), [
+			"bash",
+			"read",
+			"custom",
+			...REQUIRED_PLAN_TOOLS,
+		]);
+	});
+});
+
+test("the Plan-mode tool selector keeps the cursor on the toggled row", async () => {
+	await withAgentDir(async (agentDir) => {
+		await writeFile(
+			join(agentDir, "pi-plan-mode.json"),
+			JSON.stringify({ defaultPlanTools: ["bash", "custom"] }),
+		);
+		const allTools = [
+			builtinTool("read"),
+			builtinTool("bash"),
+			builtinTool("write"),
+			extensionTool("custom"),
+		];
+		const mock = createMockPi({ activeTools: ["write"], allTools });
+		planMode(mock.pi);
+		let customCalled = false;
+		const context = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				customCalled = true;
+				const { renders, result } = driveCustomSelector(factory, [
+					"tui.select.down",
+					"tui.select.confirm",
+					"tui.select.cancel",
+				]);
+				assert.ok(renders[1]?.some((line) => line.includes("› [x] 2. read")));
+				return result;
+			},
+		});
+
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("tools", context.ctx);
+
+		assert.equal(customCalled, true);
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"bash",
 			"read",
 			"custom",

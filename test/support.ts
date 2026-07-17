@@ -206,6 +206,57 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 	};
 }
 
+export function createCustomSelectorHarness(factory: unknown, width = 100) {
+	if (typeof factory !== "function") throw new Error("Expected a custom component factory");
+	let result: unknown;
+	const component = (
+		factory as (...args: unknown[]) => {
+			render(width: number): string[];
+			handleInput(data: string): void;
+		}
+	)(
+		{ requestRender() {} },
+		{
+			fg(_color: string, text: string) {
+				return text;
+			},
+			bold(text: string) {
+				return text;
+			},
+		},
+		{
+			matches(data: string, key: string) {
+				return data === key;
+			},
+		},
+		(value: unknown) => {
+			result = value;
+		},
+	);
+	return {
+		handleInput(data: string) {
+			component.handleInput(data);
+			return component.render(width);
+		},
+		render() {
+			return component.render(width);
+		},
+		get result() {
+			return result;
+		},
+	};
+}
+
+export function driveCustomSelector(
+	factory: unknown,
+	inputs: readonly string[],
+	width = 100,
+): { renders: string[][]; result: unknown } {
+	const harness = createCustomSelectorHarness(factory, width);
+	const renders = inputs.map((input) => harness.handleInput(input));
+	return { renders, result: harness.result };
+}
+
 export function builtinTool(name: string) {
 	return {
 		name,
