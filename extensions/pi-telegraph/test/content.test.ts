@@ -91,6 +91,49 @@ test("raw Telegraph node validation rejects cycles, deep trees, and oversized co
 	);
 });
 
+test("node URLs are trimmed and Markdown destinations preserve parentheses", () => {
+	const nodes = validateTelegraphNodes([
+		{
+			tag: "p",
+			children: [
+				{
+					tag: "a",
+					attrs: { href: " https://example.com/a)b " },
+					children: ["link"],
+				},
+			],
+		},
+	]);
+
+	assert.deepEqual(nodes, [
+		{
+			tag: "p",
+			children: [
+				{
+					tag: "a",
+					attrs: { href: "https://example.com/a)b" },
+					children: ["link"],
+				},
+			],
+		},
+	]);
+	assert.equal(telegraphNodesToMarkdown(nodes), "[link](<https://example.com/a)b>)\n");
+});
+
+test("node-to-Markdown code fences exceed every backtick run in the content", () => {
+	const markdown = telegraphNodesToMarkdown([
+		{ tag: "p", children: [{ tag: "code", children: ["a``b"] }] },
+		{ tag: "p", children: [{ tag: "code", children: ["`quoted`"] }] },
+		{ tag: "p", children: [{ tag: "code", children: [" spaced "] }] },
+		{ tag: "pre", children: ["before ```` after"] },
+	]);
+
+	assert.equal(
+		markdown,
+		"```a``b```\n\n`` `quoted` ``\n\n`  spaced  `\n\n`````\nbefore ```` after\n`````\n",
+	);
+});
+
 test("Telegraph nodes convert back to deterministic readable Markdown", () => {
 	const markdown = telegraphNodesToMarkdown([
 		{ tag: "h3", children: ["Heading"] },

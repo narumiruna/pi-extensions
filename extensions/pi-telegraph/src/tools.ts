@@ -148,12 +148,13 @@ export const getPageTool = defineTool({
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const path = normalizeTelegraphPath(params.path);
+		const outputOwner = ctx.sessionManager;
 		return withStatus(ctx, "fetching", async () => {
 			const page = parsePage(
 				await telegraphRequest("getPage", path, { return_content: true }, signal),
 				true,
 			);
-			return formatFetchedPage(page, params.rawNodes === true);
+			return formatFetchedPage(outputOwner, page, params.rawNodes === true);
 		});
 	},
 });
@@ -274,7 +275,11 @@ export function normalizeTelegraphPath(value: string) {
 	return path;
 }
 
-async function formatFetchedPage(page: TelegraphPage, rawNodes: boolean) {
+async function formatFetchedPage(
+	owner: ExtensionContext["sessionManager"],
+	page: TelegraphPage,
+	rawNodes: boolean,
+) {
 	const content = page.content ?? [];
 	const fullOutput = rawNodes
 		? JSON.stringify({ ...pageMetadata(page), content }, null, 2)
@@ -296,7 +301,11 @@ async function formatFetchedPage(page: TelegraphPage, rawNodes: boolean) {
 	let text = fullOutput;
 	let fullOutputPath: string | undefined;
 	if (truncated.truncated) {
-		fullOutputPath = await saveTemporaryOutput(`${fullOutput}\n`, rawNodes ? ".json" : ".md");
+		fullOutputPath = await saveTemporaryOutput(
+			owner,
+			`${fullOutput}\n`,
+			rawNodes ? ".json" : ".md",
+		);
 		const note = `[Output truncated. Full output saved to: ${fullOutputPath}]`;
 		truncated = truncateHead(fullOutput, {
 			maxBytes: Math.max(1, DEFAULT_MAX_BYTES - Buffer.byteLength(`\n\n${note}`)),
@@ -466,41 +475,43 @@ function cancelledResult(message: string) {
 }
 
 export function clearTelegraphStatus(ctx: Pick<ExtensionContext, "ui">) {
-	statusStates.delete(ctx.ui);
-	setStatusSafely(ctx, undefined);
+	const ui = ctx.ui;
+	statusStates.delete(ui);
+	setStatusSafely(ui, undefined);
 }
 
 async function withStatus<T>(ctx: ExtensionContext, status: string, callback: () => Promise<T>) {
-	let state = statusStates.get(ctx.ui);
+	const ui = ctx.ui;
+	let state = statusStates.get(ui);
 	if (!state) {
 		state = { operations: [] };
-		statusStates.set(ctx.ui, state);
+		statusStates.set(ui, state);
 	}
 	const operation: StatusOperation = { status };
 	state.operations.push(operation);
-	setStatusSafely(ctx, status);
+	setStatusSafely(ui, status);
 	try {
 		return await callback();
 	} finally {
-		if (statusStates.get(ctx.ui) === state) {
+		if (statusStates.get(ui) === state) {
 			const index = state.operations.indexOf(operation);
 			if (index >= 0) state.operations.splice(index, 1);
 			const active = state.operations.at(-1);
 			if (active) {
-				setStatusSafely(ctx, active.status);
+				setStatusSafely(ui, active.status);
 			} else {
-				statusStates.delete(ctx.ui);
-				setStatusSafely(ctx, undefined);
+				statusStates.delete(ui);
+				setStatusSafely(ui, undefined);
 			}
 		}
 	}
 }
 
-function setStatusSafely(ctx: Pick<ExtensionContext, "ui">, status: string | undefined) {
+function setStatusSafely(ui: ExtensionContext["ui"], status: string | undefined) {
 	try {
-		ctx.ui.setStatus(STATUS_KEY, status);
+		ui.setStatus(STATUS_KEY, status);
 	} catch {
-		// Status is best-effort; a session replacement can invalidate a captured context.
+		// Status is best-effort; a session replacement can invalidate other context accessors.
 	}
 }
 

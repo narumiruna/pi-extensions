@@ -22,6 +22,7 @@
 - Detached orchestration recovery is more reliable when `agent_end` queues a `deliverAs: "followUp"` prompt and `agent_settled` retries retained intent if no pending message remains; settled-only `sendUserMessage` can be accepted yet lose the print-mode start race.
 - Extension statusline entries should be activity-based: only show an extension in status when it is actively running, retrying, or needs attention; avoid permanent “configured/ready/on” statuses.
 - Symptom: concurrent tools sharing one extension status key can clear or mislabel a still-running sibling. Cause: each call unconditionally owns set/clear. Fix: track active statuses per UI/session, restore the latest remaining status, and invalidate the tracker on session teardown.
+- Headless Pi runners can share a no-op UI object; key session-owned resources such as temporary output files by `sessionManager`, not `ctx.ui`.
 - Codex usage can be queried without Codex CLI by sending Pi's `openai-codex` bearer token to `https://chatgpt.com/backend-api/wham/usage`; response uses Codex `RateLimitStatusPayload` snake_case fields.
 - `pi-codex-usage` statusline must select a rate-limit bucket by current model id/name; `gpt-5.3-codex-spark` can use its own returned bucket instead of primary `codex`.
 - Symptom: a primary Codex window can reset a week later while displaying “5h”. Cause: `primary`/`secondary` are positions, not guaranteed durations. Fix: derive window labels from `windowMinutes`, retaining positional fallbacks only when duration is absent.

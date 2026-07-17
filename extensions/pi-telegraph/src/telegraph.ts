@@ -35,7 +35,7 @@ export default function telegraph(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		clearTelegraphStatus(ctx);
-		await cleanupTemporaryOutputs();
+		await cleanupTemporaryOutputs(ctx.sessionManager);
 	});
 }
 

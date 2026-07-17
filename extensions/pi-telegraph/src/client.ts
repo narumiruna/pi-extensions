@@ -1,5 +1,7 @@
 const API_BASE_URL = "https://api.telegra.ph";
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+export const MAX_ERROR_DETAIL_BYTES = 8 * 1024;
+const ERROR_TRUNCATION_SUFFIX = "\n[Remote error detail truncated]";
 
 type TelegraphMethod = "createAccount" | "createPage" | "getPage" | "editPage";
 type FormValue = string | number | boolean | undefined;
@@ -48,7 +50,7 @@ export async function telegraphRequest(
 			if (signal?.aborted) throw abortReason(signal);
 			if (controller.signal.reason === timeoutError) throw timeoutError;
 			throw new Error(
-				redactSecrets(`Telegraph ${method} ${phase} failed: ${formatError(error)}`, secrets),
+				`Telegraph ${method} ${phase} failed: ${formatRemoteDetail(formatError(error), secrets)}`,
 			);
 		}
 
@@ -57,10 +59,7 @@ export async function telegraphRequest(
 			payload = JSON.parse(responseText) as unknown;
 		} catch {
 			throw new Error(
-				redactSecrets(
-					`Telegraph ${method} returned invalid JSON (${response.status}): ${responseText}`,
-					secrets,
-				),
+				`Telegraph ${method} returned invalid JSON (${response.status}): ${formatRemoteDetail(responseText, secrets)}`,
 			);
 		}
 		if (!isPlainObject(payload) || typeof payload.ok !== "boolean") {
@@ -69,10 +68,7 @@ export async function telegraphRequest(
 		if (!response.ok || !payload.ok) {
 			const detail = typeof payload.error === "string" ? payload.error : response.statusText;
 			throw new Error(
-				redactSecrets(
-					`Telegraph ${method} failed (${response.status}): ${detail || "unknown error"}`,
-					secrets,
-				),
+				`Telegraph ${method} failed (${response.status}): ${formatRemoteDetail(detail || "unknown error", secrets)}`,
 			);
 		}
 		if (!Object.hasOwn(payload, "result")) {
@@ -91,6 +87,24 @@ export function redactSecrets(value: string, secrets: readonly string[]) {
 		if (secret) redacted = redacted.split(secret).join("[REDACTED]");
 	}
 	return redacted;
+}
+
+function formatRemoteDetail(value: string, secrets: readonly string[]) {
+	return truncateUtf8(redactSecrets(value, secrets), MAX_ERROR_DETAIL_BYTES);
+}
+
+function truncateUtf8(value: string, maxBytes: number) {
+	if (Buffer.byteLength(value) <= maxBytes) return value;
+	const contentBudget = maxBytes - Buffer.byteLength(ERROR_TRUNCATION_SUFFIX);
+	let bytes = 0;
+	let output = "";
+	for (const character of value) {
+		const characterBytes = Buffer.byteLength(character);
+		if (bytes + characterBytes > contentBudget) break;
+		output += character;
+		bytes += characterBytes;
+	}
+	return `${output}${ERROR_TRUNCATION_SUFFIX}`;
 }
 
 function abortReason(signal: AbortSignal) {

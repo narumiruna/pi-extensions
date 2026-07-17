@@ -201,18 +201,18 @@ function inlineTokensToNodes(tokens: Token[]): TelegraphNode[] {
 				break;
 			case "link": {
 				const link = token as Tokens.Link;
-				assertSafeAttribute("a", "href", link.href);
+				const href = normalizeSafeAttribute("a", "href", link.href);
 				nodes.push({
 					tag: "a",
-					attrs: { href: link.href },
+					attrs: { href },
 					children: inlineTokensToNodes(link.tokens),
 				});
 				break;
 			}
 			case "image": {
 				const image = token as Tokens.Image;
-				assertSafeAttribute("img", "src", image.href);
-				const imageNode: TelegraphNodeElement = { tag: "img", attrs: { src: image.href } };
+				const src = normalizeSafeAttribute("img", "src", image.href);
+				const imageNode: TelegraphNodeElement = { tag: "img", attrs: { src } };
 				nodes.push(
 					image.text
 						? {
@@ -279,16 +279,16 @@ function validateAttributes(tag: string, value: unknown) {
 		) {
 			throw new Error(`Telegraph ${name} is not supported on ${tag}.`);
 		}
-		assertSafeAttribute(tag, name, item);
-		result[name] = item;
+		result[name] = normalizeSafeAttribute(tag, name, item);
 	}
 	return result;
 }
 
-function assertSafeAttribute(tag: string, name: "href" | "src", value: string) {
+function normalizeSafeAttribute(tag: string, name: "href" | "src", value: string) {
+	const normalized = value.trim();
 	let protocol: string;
 	try {
-		protocol = new URL(value, "https://telegra.ph").protocol;
+		protocol = new URL(normalized, "https://telegra.ph").protocol;
 	} catch {
 		throw new Error(`Unsafe ${name} URL on Telegraph ${tag}: ${value}.`);
 	}
@@ -296,6 +296,7 @@ function assertSafeAttribute(tag: string, name: "href" | "src", value: string) {
 	if (!allowed.includes(protocol)) {
 		throw new Error(`Unsafe ${name} URL scheme on Telegraph ${tag}: ${protocol}.`);
 	}
+	return normalized;
 }
 
 function containsMeaningfulContent(nodes: TelegraphNode[]): boolean {
@@ -330,7 +331,7 @@ function renderBlock(node: TelegraphNode, depth: number): string {
 		}
 		case "pre": {
 			const content = inlineNodesToPlainText(node.children ?? []);
-			const fence = content.includes("```") ? "````" : "```";
+			const fence = backtickFence(content, 3);
 			return `${fence}\n${content}\n${fence}\n\n`;
 		}
 		case "ul":
@@ -387,13 +388,13 @@ function renderInline(node: TelegraphNode): string {
 		case "code":
 			return renderCode(inlineNodesToPlainText(node.children ?? []));
 		case "a":
-			return `[${children || "Link"}](${node.attrs?.href ?? ""})`;
+			return `[${children || "Link"}](${markdownDestination(node.attrs?.href ?? "")})`;
 		case "img":
-			return `![](${node.attrs?.src ?? ""})`;
+			return `![](${markdownDestination(node.attrs?.src ?? "")})`;
 		case "iframe":
-			return `[Embedded content](${node.attrs?.src ?? ""})`;
+			return `[Embedded content](${markdownDestination(node.attrs?.src ?? "")})`;
 		case "video":
-			return `[Video](${node.attrs?.src ?? ""})`;
+			return `[Video](${markdownDestination(node.attrs?.src ?? "")})`;
 		case "br":
 			return "  \n";
 		case "hr":
@@ -403,9 +404,27 @@ function renderInline(node: TelegraphNode): string {
 	}
 }
 
+function markdownDestination(value: string) {
+	const escaped = value.replaceAll("<", "%3C").replaceAll(">", "%3E");
+	return /[()\s]/u.test(escaped) ? `<${escaped}>` : escaped;
+}
+
 function renderCode(content: string) {
-	const fence = content.includes("`") ? "``" : "`";
-	return `${fence}${content}${fence}`;
+	const fence = backtickFence(content, 1);
+	const needsPadding =
+		content.startsWith("`") ||
+		content.endsWith("`") ||
+		(content.startsWith(" ") && content.endsWith(" ") && content.trim().length > 0);
+	const padding = needsPadding ? " " : "";
+	return `${fence}${padding}${content}${padding}${fence}`;
+}
+
+function backtickFence(content: string, minimumLength: number) {
+	let longestRun = 0;
+	for (const match of content.matchAll(/`+/g)) {
+		longestRun = Math.max(longestRun, match[0].length);
+	}
+	return "`".repeat(Math.max(minimumLength, longestRun + 1));
 }
 
 function inlineNodesToPlainText(nodes: TelegraphNode[]): string {

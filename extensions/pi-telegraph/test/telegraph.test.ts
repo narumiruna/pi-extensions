@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { telegraphRequest } from "../src/client.js";
+import { MAX_ERROR_DETAIL_BYTES, telegraphRequest } from "../src/client.js";
 import { loadTelegraphConfig, writeTelegraphConfig } from "../src/config.js";
 import telegraph, {
 	buildStatusMessage,
@@ -298,6 +298,48 @@ test("concurrent tools retain and restore status until every operation finishes"
 	});
 });
 
+test("tool completion does not reuse a stale extension context after replacement", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi();
+		telegraph(mock.pi);
+		const get = tool(mock, "telegraph_get_page");
+		const base = createMockContext({ hasUI: false });
+		const baseCtx = base.ctx as unknown as Record<string, unknown> & { ui: unknown };
+		let stale = false;
+		const ctx = {
+			...baseCtx,
+			get ui() {
+				if (stale) throw new Error("stale extension ctx");
+				return baseCtx.ui;
+			},
+		};
+		const response = deferred<Response>();
+		const calls: FetchCall[] = [];
+		await withMockFetch(
+			calls,
+			async () => response.promise,
+			async () => {
+				const getting = execute(get, { path: "Stale-01-01" }, ctx);
+				await waitFor(() => calls.length === 1);
+				stale = true;
+				response.resolve(
+					jsonResponse({
+						ok: true,
+						result: {
+							path: "Stale-01-01",
+							url: "https://telegra.ph/Stale-01-01",
+							title: "Stale",
+							content: [{ tag: "p", children: ["body"] }],
+						},
+					}),
+				);
+				await getting;
+				assert.equal(base.statuses.get("telegraph"), undefined);
+			},
+		);
+	});
+});
+
 test("get normalizes bare paths and Telegraph URLs and rejects foreign URLs", async () => {
 	assert.equal(normalizeTelegraphPath("/Sample-Page-12-15"), "Sample-Page-12-15");
 	assert.equal(normalizeTelegraphPath("https://telegra.ph/Sample-Page-12-15"), "Sample-Page-12-15");
@@ -408,6 +450,26 @@ test("client rejects malformed, invalid JSON, and unsuccessful HTTP responses", 
 	assert.equal(calls.length, 3);
 });
 
+test("client bounds oversized remote error details after redacting credentials", async () => {
+	const calls: FetchCall[] = [];
+	await withMockFetch(
+		calls,
+		async () => new Response(`error-secret ${"x".repeat(MAX_ERROR_DETAIL_BYTES * 4)}`),
+		async () => {
+			await assert.rejects(
+				telegraphRequest("createPage", undefined, { access_token: "error-secret" }, undefined, 100),
+				(error: Error) => {
+					assert.doesNotMatch(error.message, /error-secret/);
+					assert.match(error.message, /\[REDACTED\]/);
+					assert.match(error.message, /truncated/i);
+					assert.ok(Buffer.byteLength(error.message) <= MAX_ERROR_DETAIL_BYTES + 256);
+					return true;
+				},
+			);
+		},
+	);
+});
+
 test("API failures redact tokens and status is cleared on errors and aborts", async () => {
 	await withTempAgentDir(async () => {
 		await writeTelegraphConfig({ shortName: "existing", accessToken: "top-secret-token" });
@@ -499,6 +561,57 @@ test("request timeout covers both connection and response-body reads without ret
 		},
 	);
 	assert.equal(calls.length, 1);
+});
+
+test("temporary outputs are isolated across concurrent extension sessions", async () => {
+	await withTempAgentDir(async () => {
+		const firstMock = createMockPi();
+		const secondMock = createMockPi();
+		telegraph(firstMock.pi);
+		telegraph(secondMock.pi);
+		const firstContext = createMockContext();
+		const firstCtx = firstContext.ctx as unknown as { ui: unknown };
+		const secondContext = createMockContext({ ui: firstCtx.ui });
+		const calls: FetchCall[] = [];
+		let firstPath: string | undefined;
+		let secondPath: string | undefined;
+		await withMockFetch(
+			calls,
+			async (url) => {
+				const path = url.endsWith("/First-01-01") ? "First-01-01" : "Second-01-01";
+				return jsonResponse({
+					ok: true,
+					result: {
+						path,
+						url: `https://telegra.ph/${path}`,
+						title: path.startsWith("First") ? "First" : "Second",
+						content: [{ tag: "p", children: ["x".repeat(60_000)] }],
+					},
+				});
+			},
+			async () => {
+				const firstResult = await execute(
+					tool(firstMock, "telegraph_get_page"),
+					{ path: "First-01-01" },
+					firstContext.ctx,
+				);
+				const secondResult = await execute(
+					tool(secondMock, "telegraph_get_page"),
+					{ path: "Second-01-01" },
+					secondContext.ctx,
+				);
+				firstPath = (firstResult.details as { fullOutputPath?: string }).fullOutputPath;
+				secondPath = (secondResult.details as { fullOutputPath?: string }).fullOutputPath;
+			},
+		);
+		assert.ok(firstPath);
+		assert.ok(secondPath);
+		await firstMock.events.get("session_shutdown")?.[0]?.({}, firstContext.ctx);
+		await assert.rejects(stat(firstPath));
+		assert.equal((await stat(secondPath)).isFile(), true);
+		await secondMock.events.get("session_shutdown")?.[0]?.({}, secondContext.ctx);
+		await assert.rejects(stat(secondPath));
+	});
 });
 
 test("large get output is truncated to Pi limits, saved privately, and cleaned on shutdown", async () => {
