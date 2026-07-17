@@ -12,7 +12,7 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Adds `--plan` to start a session in Plan mode.
 - Enables built-in read-only tools by default while Plan mode is active.
 - Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
-- Blocks `update_plan`, mutating built-in tools, and unsafe shell forms such as writes, substitutions, background jobs, dependency installs, and mutating Git commands.
+- Blocks `update_plan`, mutating built-in tools, and unsafe `bash` forms such as writes, substitutions, background jobs, dependency installs, and mutating Git commands.
 - Injects Codex-like Plan mode instructions: explore first, ask decision questions for high-impact ambiguity, do not mutate files, and finalize only when decision-complete.
 - Adds required `plan_mode_question` and `plan_mode_complete` tools for structured questions and completion.
 - Presents the complete plan and prompts you to implement, stay in Plan mode, or exit and discard it.
@@ -58,7 +58,7 @@ When Plan mode is active, ask the agent to design the change. The agent may insp
 
 By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, available read-only built-ins such as `grep`, `find`, and `ls`, plus the required `plan_mode_question` and `plan_mode_complete` tools. Built-in `edit` and `write` are blocked. `update_plan` is also blocked because it tracks execution progress rather than conversational planning. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
 
-Limited `bash` uses a fail-closed policy. It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`. It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, mutating flags, dependency changes, editors, and unknown commands. Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted. This is extension-level risk reduction, not an OS sandbox.
+Limited `bash` uses a fail-closed policy, including when an extension overrides the canonical `bash` tool name. It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`. It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, mutating flags, dependency changes, editors, and unknown commands. Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted. This is extension-level risk reduction, not an OS sandbox.
 
 `plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path. If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 
@@ -102,7 +102,7 @@ Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-m
 
 `defaultPlanTools` defines the initial tool selection when a session has no stored `/plan tools` selection. Omit it to keep the available safe built-ins as the default. An explicit empty array is valid and enables only the required `plan_mode_question` and `plan_mode_complete` tools.
 
-Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. A tool registered after Plan mode is already active is not added automatically; re-enter Plan mode or reopen `/plan tools` to reapply the selection. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them with `/plan tools`. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead.
+Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. A tool registered after Plan mode is already active is not added automatically; re-enter Plan mode or reopen `/plan tools` to reapply the selection. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them with `/plan tools`. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead. An effective tool named `bash` remains subject to the limited-shell policy regardless of its source metadata.
 
 A selection made with `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes. The global setting remains the baseline for fresh sessions and sessions without an explicit selection.
 
@@ -160,7 +160,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 - The agent completes with a standalone `plan_mode_complete` tool call instead of relying on semantic prose detection.
 - `update_plan` checklist use is blocked while Plan mode is active.
 - The implementation boundary is explicit: Plan mode restores tools before starting implementation, choosing implementation immediately triggers a normal agent turn with full tool access, and plain exit/off discards the stored plan.
-- Pi extension safety is approximated with tool classification and fail-closed bash filtering; non-built-in tools remain user-selected at user risk because Pi does not expose standardized tool mutability metadata.
+- Pi extension safety is approximated with tool classification and fail-closed filtering for every effective tool named `bash`; other non-built-in tools remain user-selected at user risk because Pi does not expose standardized tool mutability metadata.
 - Unlike native Codex, this extension uses a terminating Pi tool plus an `agent_settled` ready flow; Pi cannot provide sandbox-level enforcement.
 
 ## 🗂️ Package layout

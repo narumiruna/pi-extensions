@@ -3,7 +3,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { builtinTool, createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	builtinTool,
+	createMockContext,
+	createMockPi,
+	extensionTool,
+} from "../../../test/support.js";
 import planMode from "../src/plan-mode.js";
 
 test("active Plan mode enforces session-loaded safe subcommands", async () => {
@@ -57,6 +62,51 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
 				}
 			).reason ?? "",
 			/non-allowlisted bash commands/,
+		);
+	});
+});
+
+test("active Plan mode enforces limited policy for effective bash overrides", async () => {
+	await withAgentDir(async (agentDir) => {
+		await writeFile(
+			join(agentDir, "pi-plan-mode.json"),
+			JSON.stringify({
+				thinkingLevel: "inherit",
+				defaultPlanTools: ["read", "bash", "grep", "find", "ls"],
+				safeSubcommands: {
+					git: ["rev-parse", "blame", "describe", "merge-base", "ls-tree", "cat-file"],
+				},
+			}),
+		);
+		const mock = createMockPi({
+			activeTools: ["read", "bash", "grep", "find", "ls"],
+			allTools: [
+				builtinTool("read"),
+				extensionTool("bash"),
+				builtinTool("grep"),
+				builtinTool("find"),
+				builtinTool("ls"),
+			],
+		});
+		planMode(mock.pi);
+		const context = createMockContext();
+		const hook = mock.events.get("tool_call")?.[0];
+		assert.ok(hook);
+
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await mock.commands.get("plan")?.handler("", context.ctx);
+		assert.ok(mock.rawPi.getActiveTools().includes("bash"));
+
+		const heredoc = `python - <<'PY'\nfrom pathlib import Path\nPath("plan-mode-write-probe.txt").write_text("unexpected write\\n", encoding="utf-8")\nPY`;
+		const blocked = await hook({ toolName: "bash", input: { command: heredoc } }, context.ctx);
+		assert.ok(blocked);
+		assert.match((blocked as { reason?: string }).reason ?? "", /non-allowlisted bash commands/);
+		assert.equal(
+			await hook(
+				{ toolName: "bash", input: { command: "git rev-parse --show-toplevel" } },
+				context.ctx,
+			),
+			undefined,
 		);
 	});
 });
