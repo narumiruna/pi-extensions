@@ -36,7 +36,16 @@ pi -e ./extensions/pi-lsp
 
 ## ⚙️ Configuration
 
-If no config is provided, pi-lsp ships compatible defaults for Biome, ty, and Ruff.
+If no config is provided, pi-lsp ships compatible defaults for Biome, ty, Ruff, rust-analyzer, and gopls. Servers are started only when matching files are requested, and each server command must be available on `PATH`.
+
+Install the Rust and Go defaults with their official toolchains:
+
+```bash
+rustup component add rust-analyzer rust-src
+go install golang.org/x/tools/gopls@latest
+```
+
+Ensure the Go install directory (`$GOBIN` or `$(go env GOPATH)/bin`) is also on `PATH`.
 
 Custom config can be supplied in one of these locations:
 
@@ -48,7 +57,7 @@ Custom config can be supplied in one of these locations:
 
 Compatibility: a user-scoped legacy `lsp.json` is migrated automatically. A project-scoped legacy `.pi/lsp.json` remains readable with a warning but is not renamed automatically, so the extension never modifies a repository working tree. New paths take precedence when both names exist.
 
-`pi-lsp.json` can be a plain object keyed by server name:
+Providing custom config replaces the default server map. `pi-lsp.json` can be a plain object keyed by server name:
 
 ```json
 {
@@ -76,6 +85,14 @@ Compatibility: a user-scoped legacy `lsp.json` is migrated automatically. A proj
       ".tsx",
       ".vue"
     ]
+  },
+  "rust-analyzer": {
+    "command": ["rust-analyzer"],
+    "extensions": [".rs"]
+  },
+  "gopls": {
+    "command": ["gopls"],
+    "extensions": [".go"]
   }
 }
 ```

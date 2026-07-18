@@ -31,6 +31,8 @@ const COMMON_SKIP_DIRECTORIES = new Set([
 	"dist",
 	"node_modules",
 	"out",
+	"target",
+	"vendor",
 	"venv",
 ]);
 
@@ -69,6 +71,16 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		name: "ruff",
 		command: ["ruff", "server"],
 		extensions: [".py", ".pyi"],
+	},
+	{
+		name: "rust-analyzer",
+		command: ["rust-analyzer"],
+		extensions: [".rs"],
+	},
+	{
+		name: "gopls",
+		command: ["gopls"],
+		extensions: [".go"],
 	},
 ];
 
@@ -305,6 +317,7 @@ function languageIdFor(_config: InternalLspServer, filePath: string) {
 const LANGUAGE_IDS: Record<string, string> = {
 	".cjs": "javascript",
 	".cts": "typescript",
+	".go": "go",
 	".gql": "graphql",
 	".js": "javascript",
 	".jsx": "javascriptreact",
@@ -313,6 +326,7 @@ const LANGUAGE_IDS: Record<string, string> = {
 	".mts": "typescript",
 	".py": "python",
 	".pyi": "python",
+	".rs": "rust",
 	".ts": "typescript",
 	".tsx": "typescriptreact",
 };
