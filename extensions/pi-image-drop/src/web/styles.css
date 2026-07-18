@@ -223,6 +223,18 @@ main {
 	height: 100%;
 	object-fit: contain;
 }
+.preview-button {
+	width: 100%;
+	min-height: 0;
+	border: 0;
+	border-radius: 0;
+	padding: 0;
+	background: var(--surface-alt);
+	cursor: zoom-in;
+}
+.preview-button:hover:not(:disabled) {
+	border-color: transparent;
+}
 .placeholder {
 	display: grid;
 	width: 3rem;
@@ -311,6 +323,49 @@ dialog {
 }
 dialog::backdrop {
 	background: rgb(11 17 30 / 60%);
+}
+.image-preview-dialog {
+	width: min(96vw, 1400px);
+	max-width: none;
+	height: 94dvh;
+	max-height: none;
+	overflow: hidden;
+	padding: 0;
+}
+.image-preview-dialog::backdrop {
+	background: rgb(11 17 30 / 88%);
+}
+.image-preview-content {
+	display: grid;
+	height: 100%;
+	grid-template-rows: auto minmax(0, 1fr);
+}
+.image-preview-content header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	border-bottom: 1px solid var(--line);
+	padding: 0.75rem 1rem;
+}
+.image-preview-content h2 {
+	margin: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 1rem;
+}
+.image-preview-stage {
+	display: grid;
+	min-height: 0;
+	place-items: center;
+	padding: 1rem;
+	background: var(--surface-alt);
+}
+.image-preview-stage img {
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
 }
 .dialog-actions {
 	display: flex;

@@ -23,6 +23,10 @@ const ui = {
 	connectionTitle: $("#connection-title"),
 	connectionMessage: $("#connection-message"),
 	dialog: $("#clear-dialog"),
+	previewDialog: $("#image-preview-dialog"),
+	previewTitle: $("#image-preview-title"),
+	previewImage: $("#image-preview"),
+	previewClose: $("#image-preview-close"),
 };
 const clientId = crypto.randomUUID();
 const pendingFiles = new Map();
@@ -78,6 +82,13 @@ function wire() {
 	});
 	ui.dialog.addEventListener("close", () => {
 		if (ui.dialog.returnValue === "confirm") void clearAll();
+	});
+	ui.previewClose.addEventListener("click", () => ui.previewDialog.close());
+	ui.previewDialog.addEventListener("click", (event) => {
+		if (event.target === ui.previewDialog) ui.previewDialog.close();
+	});
+	ui.previewDialog.addEventListener("close", () => {
+		ui.previewImage.removeAttribute("src");
 	});
 }
 
@@ -264,14 +275,19 @@ function card(item, index, mutable) {
 		draggedId = undefined;
 	});
 
-	const preview = element("div", "preview");
+	let preview;
 	if (item.status === "ready") {
+		preview = element("button", "preview preview-button");
+		preview.type = "button";
+		preview.setAttribute("aria-label", `Enlarge preview of ${item.name}`);
+		preview.addEventListener("click", () => openPreview(item));
 		const image = document.createElement("img");
 		image.src = `/api/items/${item.id}/preview?revision=${state.batch.revision}`;
 		image.alt = `Preview of ${item.name}`;
 		image.loading = "lazy";
 		preview.append(image);
 	} else {
+		preview = element("div", "preview");
 		const placeholder = element("span", "placeholder", item.status === "error" ? "!" : "…");
 		placeholder.setAttribute("aria-hidden", "true");
 		preview.append(placeholder);
@@ -310,6 +326,13 @@ function card(item, index, mutable) {
 	actions.append(button("Delete", "Delete", !mutable, () => remove(item.id), "delete"));
 	article.append(actions);
 	return article;
+}
+
+function openPreview(item) {
+	ui.previewTitle.textContent = item.name;
+	ui.previewImage.src = `/api/items/${item.id}/preview?revision=${state.batch.revision}`;
+	ui.previewImage.alt = `Enlarged preview of ${item.name}`;
+	ui.previewDialog.showModal();
 }
 
 function button(label, text, disabled, action, className = "") {
