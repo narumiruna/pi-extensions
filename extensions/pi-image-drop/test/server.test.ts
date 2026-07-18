@@ -110,6 +110,15 @@ test("bootstrap tokens rotate, replay fails, and clean pages require the session
 		assert.equal(page.headers.get("cache-control"), "no-store");
 		assert.equal(page.headers.get("x-content-type-options"), "nosniff");
 		assert.equal(page.headers.get("access-control-allow-origin"), null);
+
+		const html = await page.text();
+		const app = await (await api(server, "/app.js", { cookie })).text();
+		const styles = await (await api(server, "/styles.css", { cookie })).text();
+		assert.match(html, /<dialog id="image-preview-dialog"/);
+		assert.match(html, /id="image-preview-close"/);
+		assert.match(app, /showModal\(\)/);
+		assert.match(app, /Enlarge preview of/);
+		assert.match(styles, /\.image-preview-dialog/);
 	} finally {
 		await server.close();
 	}
