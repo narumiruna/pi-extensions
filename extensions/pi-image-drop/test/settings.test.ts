@@ -6,7 +6,14 @@ import test from "node:test";
 import { DEFAULT_SETTINGS, HARD_LIMITS, loadSettings, normalizeSettings } from "../src/settings.js";
 
 test("settings normalize partial values and reject unknown, inconsistent, and unsafe values", () => {
+	assert.equal(DEFAULT_SETTINGS.startOnSessionStart, false);
 	assert.deepEqual(normalizeSettings({ maxImages: 4 }), { ...DEFAULT_SETTINGS, maxImages: 4 });
+	assert.deepEqual(normalizeSettings({ startOnSessionStart: true }), {
+		...DEFAULT_SETTINGS,
+		startOnSessionStart: true,
+	});
+	assert.deepEqual(normalizeSettings({ startOnSessionStart: false }), DEFAULT_SETTINGS);
+	assert.equal(normalizeSettings({ startOnSessionStart: "yes" }), undefined);
 	assert.equal(normalizeSettings({ unknown: 1 }), undefined);
 	assert.equal(normalizeSettings({ maxImages: 0 }), undefined);
 	assert.equal(normalizeSettings({ maxImages: HARD_LIMITS.maxImages + 1 }), undefined);
@@ -22,16 +29,20 @@ test("settings loading distinguishes missing, valid, warned, and invalid files",
 			kind: "missing",
 			settings: { ...DEFAULT_SETTINGS },
 		});
-		await writeFile(settingsPath, '{"maxImages":4}\n');
+		await writeFile(settingsPath, '{"maxImages":4,"startOnSessionStart":true}\n');
 		assert.deepEqual(await loadSettings(settingsPath), {
 			kind: "loaded",
-			settings: { ...DEFAULT_SETTINGS, maxImages: 4 },
+			settings: { ...DEFAULT_SETTINGS, maxImages: 4, startOnSessionStart: true },
 			warning: undefined,
 		});
 		await writeFile(settingsPath, '{"maxImages":16}\n');
 		const warned = await loadSettings(settingsPath);
 		assert.equal(warned.kind, "loaded");
 		assert.match("warning" in warned ? (warned.warning ?? "") : "", /raises maxImages/i);
+		await writeFile(settingsPath, '{"startOnSessionStart":"yes"}\n');
+		const invalidBoolean = await loadSettings(settingsPath);
+		assert.equal(invalidBoolean.kind, "invalid");
+		assert.deepEqual(invalidBoolean.settings, DEFAULT_SETTINGS);
 		await writeFile(settingsPath, '{"maxImages":"many"}\n');
 		const invalid = await loadSettings(settingsPath);
 		assert.equal(invalid.kind, "invalid");

@@ -5,11 +5,15 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export const SETTINGS_FILE = "pi-image-drop.json";
 const MIB = 1024 * 1024;
 
-export interface ImageDropSettings {
+export interface ImageDropLimits {
 	maxImages: number;
 	maxImageBytes: number;
 	maxBatchBytes: number;
 	maxImagePixels: number;
+}
+
+export interface ImageDropSettings extends ImageDropLimits {
+	startOnSessionStart: boolean;
 }
 
 export const DEFAULT_SETTINGS: Readonly<ImageDropSettings> = Object.freeze({
@@ -17,21 +21,23 @@ export const DEFAULT_SETTINGS: Readonly<ImageDropSettings> = Object.freeze({
 	maxImageBytes: 10 * MIB,
 	maxBatchBytes: 40 * MIB,
 	maxImagePixels: 50_000_000,
+	startOnSessionStart: false,
 });
 
-export const HARD_LIMITS: Readonly<ImageDropSettings> = Object.freeze({
+export const HARD_LIMITS: Readonly<ImageDropLimits> = Object.freeze({
 	maxImages: 32,
 	maxImageBytes: 50 * MIB,
 	maxBatchBytes: 200 * MIB,
 	maxImagePixels: 100_000_000,
 });
 
-const SETTING_KEYS = new Set<keyof ImageDropSettings>([
+const LIMIT_KEYS = new Set<keyof ImageDropLimits>([
 	"maxImages",
 	"maxImageBytes",
 	"maxBatchBytes",
 	"maxImagePixels",
 ]);
+const SETTING_KEYS = new Set<keyof ImageDropSettings>([...LIMIT_KEYS, "startOnSessionStart"]);
 
 export type SettingsLoadResult =
 	| { kind: "missing"; settings: ImageDropSettings }
@@ -43,7 +49,7 @@ export function normalizeSettings(value: unknown): ImageDropSettings | undefined
 		return undefined;
 	}
 	const settings: ImageDropSettings = { ...DEFAULT_SETTINGS };
-	for (const key of SETTING_KEYS) {
+	for (const key of LIMIT_KEYS) {
 		if (!Object.hasOwn(value, key)) continue;
 		const candidate = Reflect.get(value, key);
 		if (
@@ -55,6 +61,10 @@ export function normalizeSettings(value: unknown): ImageDropSettings | undefined
 			return undefined;
 		}
 		settings[key] = candidate;
+	}
+	if (Object.hasOwn(value, "startOnSessionStart")) {
+		if (typeof value.startOnSessionStart !== "boolean") return undefined;
+		settings.startOnSessionStart = value.startOnSessionStart;
 	}
 	if (settings.maxImageBytes > settings.maxBatchBytes) return undefined;
 	return settings;
@@ -79,7 +89,7 @@ export async function loadSettings(
 	try {
 		const settings = normalizeSettings(JSON.parse(text) as unknown);
 		if (!settings) return invalid(path, "invalid settings shape or value");
-		const raised = (Object.keys(DEFAULT_SETTINGS) as Array<keyof ImageDropSettings>).filter(
+		const raised = [...LIMIT_KEYS].filter(
 			(key) => settings[key] > DEFAULT_SETTINGS[key],
 		);
 		return {

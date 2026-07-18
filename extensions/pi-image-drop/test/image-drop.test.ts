@@ -30,6 +30,7 @@ test("settings expose the agreed defaults", () => {
 		maxImageBytes: 10 * 1024 * 1024,
 		maxBatchBytes: 40 * 1024 * 1024,
 		maxImagePixels: 50_000_000,
+		startOnSessionStart: false,
 	});
 	assert.deepEqual(normalizeSettings({}), DEFAULT_SETTINGS);
 });

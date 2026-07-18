@@ -63,14 +63,7 @@ export class ImageDropRuntime {
 				this.context = ctx;
 				await this.recoverOrphanedReservation(ctx);
 				try {
-					const server = await this.ensureServer(ctx);
-					const link = server.issueLink();
-					if (this.batch?.publicState().phase === "empty") {
-						ctx.ui.setWidget(WIDGET_KEY, [`🖼️ Image Drop: ${link}`]);
-					} else {
-						this.updateWidget(ctx);
-					}
-					ctx.ui.notify(`Image Drop: ${link}`, "info");
+					await this.presentLink(ctx);
 				} catch (error) {
 					ctx.ui.notify(`Image Drop could not start: ${formatError(error)}`, "error");
 				}
@@ -110,6 +103,13 @@ export class ImageDropRuntime {
 			ctx.ui.notify(warning ?? "Image Drop settings ignored.", "warning");
 		}
 		this.updateWidget(ctx);
+		if (!result.settings.startOnSessionStart) return;
+		try {
+			await this.presentLink(ctx);
+		} catch (error) {
+			if (generation !== this.generation || this.closed) return;
+			ctx.ui.notify(`Image Drop could not start: ${formatError(error)}`, "error");
+		}
 	}
 
 	async shutdown(ctx: ExtensionContext): Promise<void> {
@@ -257,6 +257,17 @@ export class ImageDropRuntime {
 		}
 		this.updateWidget(ctx);
 		return true;
+	}
+
+	private async presentLink(ctx: ExtensionContext): Promise<void> {
+		const server = await this.ensureServer(ctx);
+		const link = server.issueLink();
+		if (this.batch?.publicState().phase === "empty") {
+			ctx.ui.setWidget(WIDGET_KEY, [`🖼️ Image Drop: ${link}`]);
+		} else {
+			this.updateWidget(ctx);
+		}
+		ctx.ui.notify(`Image Drop: ${link}`, "info");
 	}
 
 	private async ensureServer(ctx: ExtensionContext): Promise<ServerControl> {
