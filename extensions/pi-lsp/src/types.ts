@@ -66,6 +66,7 @@ export interface ConfiguredLspServer {
 	extensions: string[];
 	env?: Record<string, string>;
 	initialization?: Record<string, unknown>;
+	skipDirectories?: string[];
 }
 
 export interface LspConfig {

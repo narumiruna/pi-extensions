@@ -39,7 +39,7 @@ test("lsp registers diagnostics/fix tools, command, and status hooks", () => {
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
 });
 
-test("default Rust and Go routes skip build and vendored files unless requested", () => {
+test("default catalog routes common languages and skips generated trees", () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-defaults-"));
 	const agentDir = path.join(root, "agent");
 	const project = path.join(root, "project");
@@ -80,6 +80,228 @@ test("default Rust and Go routes skip build and vendored files unless requested"
 		assert.deepEqual(collectSupportedFiles(gopls, project, ["vendor"], 50), [
 			path.join(project, "vendor", "dependency.go"),
 		]);
+
+		const catalog: Array<{
+			name: string;
+			command: string[];
+			extensions: string[];
+			sample: string;
+			languageId: string;
+			skipDirectories?: string[];
+			initialization?: Record<string, unknown>;
+		}> = [
+			{
+				name: "rubocop",
+				command: ["rubocop", "--lsp"],
+				extensions: [".rb", ".rake", ".gemspec", ".ru"],
+				sample: "Rakefile.rake",
+				languageId: "ruby",
+			},
+			{
+				name: "elixir-ls",
+				command: ["elixir-ls"],
+				extensions: [".ex", ".exs"],
+				sample: "lib/app.exs",
+				languageId: "elixir",
+				skipDirectories: ["_build", "deps"],
+			},
+			{
+				name: "zls",
+				command: ["zls"],
+				extensions: [".zig", ".zon"],
+				sample: "build.zig.zon",
+				languageId: "zig",
+				skipDirectories: [".zig-cache", "zig-out"],
+			},
+			{
+				name: "csharp",
+				command: ["roslyn-language-server", "--stdio", "--autoLoadProjects"],
+				extensions: [".cs", ".csx"],
+				sample: "Program.csx",
+				languageId: "csharp",
+				skipDirectories: ["bin", "obj"],
+			},
+			{
+				name: "fsharp",
+				command: ["fsautocomplete"],
+				extensions: [".fs", ".fsi", ".fsx", ".fsscript"],
+				sample: "Program.fsx",
+				languageId: "fsharp",
+				skipDirectories: ["bin", "obj"],
+			},
+			{
+				name: "sourcekit-lsp",
+				command: ["sourcekit-lsp"],
+				extensions: [".swift", ".m", ".mm"],
+				sample: "Sources/App.swift",
+				languageId: "swift",
+				skipDirectories: [".build", "DerivedData"],
+			},
+			{
+				name: "clangd",
+				command: ["clangd", "--background-index", "--clang-tidy"],
+				extensions: [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
+				sample: "include/app.hpp",
+				languageId: "cpp",
+				skipDirectories: ["build"],
+			},
+			{
+				name: "jdtls",
+				command: ["jdtls"],
+				extensions: [".java"],
+				sample: "src/App.java",
+				languageId: "java",
+				skipDirectories: [".gradle", "build"],
+			},
+			{
+				name: "kotlin-lsp",
+				command: ["kotlin-lsp", "--stdio"],
+				extensions: [".kt", ".kts"],
+				sample: "src/App.kts",
+				languageId: "kotlin",
+				skipDirectories: [".gradle", "build"],
+			},
+			{
+				name: "yaml-language-server",
+				command: ["yaml-language-server", "--stdio"],
+				extensions: [".yaml", ".yml"],
+				sample: "config.yml",
+				languageId: "yaml",
+			},
+			{
+				name: "lua-language-server",
+				command: ["lua-language-server"],
+				extensions: [".lua"],
+				sample: "init.lua",
+				languageId: "lua",
+			},
+			{
+				name: "intelephense",
+				command: ["intelephense", "--stdio"],
+				extensions: [".php"],
+				sample: "index.php",
+				languageId: "php",
+				initialization: { telemetry: { enabled: false } },
+			},
+			{
+				name: "prisma",
+				command: ["prisma", "language-server"],
+				extensions: [".prisma"],
+				sample: "schema.prisma",
+				languageId: "prisma",
+			},
+			{
+				name: "dart",
+				command: ["dart", "language-server", "--lsp"],
+				extensions: [".dart"],
+				sample: "lib/main.dart",
+				languageId: "dart",
+				skipDirectories: [".dart_tool", "build"],
+			},
+			{
+				name: "ocaml-lsp",
+				command: ["ocamllsp"],
+				extensions: [".ml", ".mli"],
+				sample: "lib/app.mli",
+				languageId: "ocaml",
+				skipDirectories: ["_build"],
+			},
+			{
+				name: "bash-language-server",
+				command: ["bash-language-server", "start"],
+				extensions: [".sh", ".bash", ".zsh", ".ksh"],
+				sample: "scripts/build.zsh",
+				languageId: "shellscript",
+			},
+			{
+				name: "terraform-ls",
+				command: ["terraform-ls", "serve"],
+				extensions: [".tf", ".tfvars"],
+				sample: "prod.tfvars",
+				languageId: "terraform-vars",
+				skipDirectories: [".terraform"],
+				initialization: {
+					experimentalFeatures: { prefillRequiredFields: true, validateOnSave: true },
+				},
+			},
+			{
+				name: "texlab",
+				command: ["texlab"],
+				extensions: [".tex", ".bib"],
+				sample: "references.bib",
+				languageId: "bibtex",
+			},
+			{
+				name: "gleam",
+				command: ["gleam", "lsp"],
+				extensions: [".gleam"],
+				sample: "src/app.gleam",
+				languageId: "gleam",
+				skipDirectories: ["build"],
+			},
+			{
+				name: "clojure-lsp",
+				command: ["clojure-lsp", "listen"],
+				extensions: [".clj", ".cljs", ".cljc", ".edn"],
+				sample: "deps.edn",
+				languageId: "clojure",
+				skipDirectories: [".cpcache"],
+			},
+			{
+				name: "nixd",
+				command: ["nixd"],
+				extensions: [".nix"],
+				sample: "flake.nix",
+				languageId: "nix",
+			},
+			{
+				name: "tinymist",
+				command: ["tinymist"],
+				extensions: [".typ", ".typc"],
+				sample: "main.typc",
+				languageId: "typst",
+			},
+			{
+				name: "haskell-language-server",
+				command: ["haskell-language-server-wrapper", "--lsp"],
+				extensions: [".hs", ".lhs"],
+				sample: "src/Main.lhs",
+				languageId: "haskell",
+				skipDirectories: [".stack-work", "dist-newstyle"],
+			},
+			{
+				name: "julia-language-server",
+				command: [
+					"julia",
+					"--startup-file=no",
+					"--history-file=no",
+					"-e",
+					"using LanguageServer; runserver()",
+				],
+				extensions: [".jl"],
+				sample: "src/app.jl",
+				languageId: "julia",
+			},
+		];
+
+		for (const expected of catalog) {
+			const adapter = adapters.find((candidate) => candidate.name === expected.name);
+			assert.ok(adapter, `missing default adapter: ${expected.name}`);
+			assert.deepEqual(adapter.defaultCommand, {
+				command: expected.command[0],
+				args: expected.command.slice(1),
+			});
+			assert.deepEqual(adapter.extensions, expected.extensions);
+			assert.equal(adapter.languageIdFor(expected.sample), expected.languageId);
+			assert.deepEqual(adapter.initialization, expected.initialization);
+			for (const directory of expected.skipDirectories ?? []) {
+				assert.equal(
+					adapter.skipDirectories.has(directory),
+					true,
+					`${expected.name} skips ${directory}`,
+				);
+			}
+		}
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -162,6 +384,57 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 		delete process.env.PI_LSP_CONFIG;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("LSP config applies safe server-specific skip directories", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-skip-directories-"));
+	const agentDir = path.join(root, "agent");
+	const project = path.join(root, "project");
+	mkdirSync(agentDir);
+	mkdirSync(path.join(project, "src"), { recursive: true });
+	mkdirSync(path.join(project, "generated"));
+	writeFileSync(path.join(project, "src", "main.foo"), "source\n");
+	writeFileSync(path.join(project, "generated", "output.foo"), "generated\n");
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousConfig = process.env.PI_LSP_CONFIG;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+
+	try {
+		process.env.PI_LSP_CONFIG = JSON.stringify({
+			servers: {
+				custom: {
+					command: ["custom-lsp"],
+					extensions: [".foo"],
+					skipDirectories: ["generated"],
+				},
+			},
+		});
+		const adapter = loadRuntime(project).adapters[0];
+		assert.ok(adapter);
+		assert.deepEqual(collectSupportedFiles(adapter, project, undefined, 50), [
+			path.join(project, "src", "main.foo"),
+		]);
+		assert.deepEqual(collectSupportedFiles(adapter, project, ["generated"], 50), [
+			path.join(project, "generated", "output.foo"),
+		]);
+
+		process.env.PI_LSP_CONFIG = JSON.stringify({
+			servers: {
+				custom: {
+					command: ["custom-lsp"],
+					extensions: [".foo"],
+					skipDirectories: ["../generated"],
+				},
+			},
+		});
+		assert.throws(() => loadConfig(project), /skipDirectories.*directory names/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		if (previousConfig === undefined) delete process.env.PI_LSP_CONFIG;
+		else process.env.PI_LSP_CONFIG = previousConfig;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

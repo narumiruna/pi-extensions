@@ -36,9 +36,41 @@ pi -e ./extensions/pi-lsp
 
 ## ⚙️ Configuration
 
-If no config is provided, pi-lsp ships compatible defaults for Biome, ty, Ruff, rust-analyzer, and gopls. Servers are started only when matching files are requested, and each server command must be available on `PATH`.
+If no config is provided, pi-lsp ships a broad catalog of direct-command defaults. Servers are started only when matching files are requested. pi-lsp does not download language servers, so install the commands you need and make them available on `PATH`.
 
-Install the Rust and Go defaults with their official toolchains:
+| Language or format | Default server | Startup command | Extensions |
+| --- | --- | --- | --- |
+| JavaScript, TypeScript, JSON, CSS, GraphQL, HTML, Vue, Astro, Svelte | `biome` | `biome lsp-proxy` | `.js`, `.jsx`, `.ts`, `.tsx`, `.json`, `.jsonc`, `.css`, `.graphql`, `.gql`, `.html`, `.vue`, `.astro`, `.svelte`, and module variants |
+| Python typing | `ty` | `ty server` | `.py`, `.pyi` |
+| Python linting and fixes | `ruff` | `ruff server` | `.py`, `.pyi` |
+| Rust | `rust-analyzer` | `rust-analyzer` | `.rs` |
+| Go | `gopls` | `gopls` | `.go` |
+| Ruby | `rubocop` | `rubocop --lsp` | `.rb`, `.rake`, `.gemspec`, `.ru` |
+| Elixir | `elixir-ls` | `elixir-ls` | `.ex`, `.exs` |
+| Zig | `zls` | `zls` | `.zig`, `.zon` |
+| C# | `csharp` | `roslyn-language-server --stdio --autoLoadProjects` | `.cs`, `.csx` |
+| F# | `fsharp` | `fsautocomplete` | `.fs`, `.fsi`, `.fsx`, `.fsscript` |
+| Swift and Objective-C | `sourcekit-lsp` | `sourcekit-lsp` | `.swift`, `.m`, `.mm` |
+| C and C++ | `clangd` | `clangd --background-index --clang-tidy` | C/C++ source and header extensions |
+| Java | `jdtls` | `jdtls` | `.java` |
+| Kotlin | `kotlin-lsp` | `kotlin-lsp --stdio` | `.kt`, `.kts` |
+| YAML | `yaml-language-server` | `yaml-language-server --stdio` | `.yaml`, `.yml` |
+| Lua | `lua-language-server` | `lua-language-server` | `.lua` |
+| PHP | `intelephense` | `intelephense --stdio` | `.php` |
+| Prisma | `prisma` | `prisma language-server` | `.prisma` |
+| Dart | `dart` | `dart language-server --lsp` | `.dart` |
+| OCaml | `ocaml-lsp` | `ocamllsp` | `.ml`, `.mli` |
+| Shell | `bash-language-server` | `bash-language-server start` | `.sh`, `.bash`, `.zsh`, `.ksh` |
+| Terraform | `terraform-ls` | `terraform-ls serve` | `.tf`, `.tfvars` |
+| LaTeX and BibTeX | `texlab` | `texlab` | `.tex`, `.bib` |
+| Gleam | `gleam` | `gleam lsp` | `.gleam` |
+| Clojure | `clojure-lsp` | `clojure-lsp listen` | `.clj`, `.cljs`, `.cljc`, `.edn` |
+| Nix | `nixd` | `nixd` | `.nix` |
+| Typst | `tinymist` | `tinymist` | `.typ`, `.typc` |
+| Haskell | `haskell-language-server` | `haskell-language-server-wrapper --lsp` | `.hs`, `.lhs` |
+| Julia | `julia-language-server` | `julia --startup-file=no --history-file=no -e "using LanguageServer; runserver()"` | `.jl` |
+
+For example, install the Rust and Go servers with their official toolchains:
 
 ```bash
 rustup component add rust-analyzer rust-src
@@ -57,7 +89,7 @@ Custom config can be supplied in one of these locations:
 
 Compatibility: a user-scoped legacy `lsp.json` is migrated automatically. A project-scoped legacy `.pi/lsp.json` remains readable with a warning but is not renamed automatically, so the extension never modifies a repository working tree. New paths take precedence when both names exist.
 
-Providing custom config replaces the default server map. `pi-lsp.json` can be a plain object keyed by server name:
+Providing custom config replaces the default server map. The following `pi-lsp.json` example intentionally keeps five selected servers:
 
 ```json
 {
@@ -111,7 +143,8 @@ Use `servers` when you need global pi-lsp options such as timeout:
       },
       "initialization": {
         "settings": {}
-      }
+      },
+      "skipDirectories": ["generated"]
     }
   }
 }
@@ -123,6 +156,7 @@ Each server entry supports:
 - `extensions`: file extensions that should route to this server.
 - `env`: extra environment variables for the LSP server process.
 - `initialization`: LSP initialization options and workspace configuration values.
+- `skipDirectories`: additional directory names to exclude from recursive discovery. Explicitly requested paths remain available.
 
 Global options:
 

@@ -82,6 +82,150 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		command: ["gopls"],
 		extensions: [".go"],
 	},
+	{
+		name: "rubocop",
+		command: ["rubocop", "--lsp"],
+		extensions: [".rb", ".rake", ".gemspec", ".ru"],
+	},
+	{
+		name: "elixir-ls",
+		command: ["elixir-ls"],
+		extensions: [".ex", ".exs"],
+		skipDirectories: ["_build", "deps"],
+	},
+	{
+		name: "zls",
+		command: ["zls"],
+		extensions: [".zig", ".zon"],
+		skipDirectories: [".zig-cache", "zig-out"],
+	},
+	{
+		name: "csharp",
+		command: ["roslyn-language-server", "--stdio", "--autoLoadProjects"],
+		extensions: [".cs", ".csx"],
+		skipDirectories: ["bin", "obj"],
+	},
+	{
+		name: "fsharp",
+		command: ["fsautocomplete"],
+		extensions: [".fs", ".fsi", ".fsx", ".fsscript"],
+		skipDirectories: ["bin", "obj"],
+	},
+	{
+		name: "sourcekit-lsp",
+		command: ["sourcekit-lsp"],
+		extensions: [".swift", ".m", ".mm"],
+		skipDirectories: [".build", "DerivedData"],
+	},
+	{
+		name: "clangd",
+		command: ["clangd", "--background-index", "--clang-tidy"],
+		extensions: [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
+		skipDirectories: ["build"],
+	},
+	{
+		name: "jdtls",
+		command: ["jdtls"],
+		extensions: [".java"],
+		skipDirectories: [".gradle", "build"],
+	},
+	{
+		name: "kotlin-lsp",
+		command: ["kotlin-lsp", "--stdio"],
+		extensions: [".kt", ".kts"],
+		skipDirectories: [".gradle", "build"],
+	},
+	{
+		name: "yaml-language-server",
+		command: ["yaml-language-server", "--stdio"],
+		extensions: [".yaml", ".yml"],
+	},
+	{
+		name: "lua-language-server",
+		command: ["lua-language-server"],
+		extensions: [".lua"],
+	},
+	{
+		name: "intelephense",
+		command: ["intelephense", "--stdio"],
+		extensions: [".php"],
+		initialization: { telemetry: { enabled: false } },
+	},
+	{
+		name: "prisma",
+		command: ["prisma", "language-server"],
+		extensions: [".prisma"],
+	},
+	{
+		name: "dart",
+		command: ["dart", "language-server", "--lsp"],
+		extensions: [".dart"],
+		skipDirectories: [".dart_tool", "build"],
+	},
+	{
+		name: "ocaml-lsp",
+		command: ["ocamllsp"],
+		extensions: [".ml", ".mli"],
+		skipDirectories: ["_build"],
+	},
+	{
+		name: "bash-language-server",
+		command: ["bash-language-server", "start"],
+		extensions: [".sh", ".bash", ".zsh", ".ksh"],
+	},
+	{
+		name: "terraform-ls",
+		command: ["terraform-ls", "serve"],
+		extensions: [".tf", ".tfvars"],
+		skipDirectories: [".terraform"],
+		initialization: {
+			experimentalFeatures: { prefillRequiredFields: true, validateOnSave: true },
+		},
+	},
+	{
+		name: "texlab",
+		command: ["texlab"],
+		extensions: [".tex", ".bib"],
+	},
+	{
+		name: "gleam",
+		command: ["gleam", "lsp"],
+		extensions: [".gleam"],
+		skipDirectories: ["build"],
+	},
+	{
+		name: "clojure-lsp",
+		command: ["clojure-lsp", "listen"],
+		extensions: [".clj", ".cljs", ".cljc", ".edn"],
+		skipDirectories: [".cpcache"],
+	},
+	{
+		name: "nixd",
+		command: ["nixd"],
+		extensions: [".nix"],
+	},
+	{
+		name: "tinymist",
+		command: ["tinymist"],
+		extensions: [".typ", ".typc"],
+	},
+	{
+		name: "haskell-language-server",
+		command: ["haskell-language-server-wrapper", "--lsp"],
+		extensions: [".hs", ".lhs"],
+		skipDirectories: [".stack-work", "dist-newstyle"],
+	},
+	{
+		name: "julia-language-server",
+		command: [
+			"julia",
+			"--startup-file=no",
+			"--history-file=no",
+			"-e",
+			"using LanguageServer; runserver()",
+		],
+		extensions: [".jl"],
+	},
 ];
 
 export function loadRuntime(cwd = process.cwd()) {
@@ -280,6 +424,7 @@ function normalizeServer(name: string, value: unknown, label: string): InternalL
 		extensions,
 		env: optionalStringRecordField(value, "env", label),
 		initialization: optionalRecordField(value, "initialization", label),
+		skipDirectories: optionalDirectoryNamesField(value, "skipDirectories", label),
 	};
 }
 
@@ -303,7 +448,7 @@ function configToAdapter(config: InternalLspServer): LspServerAdapter {
 		extensions: config.extensions,
 		env: config.env,
 		initialization: config.initialization,
-		skipDirectories: COMMON_SKIP_DIRECTORIES,
+		skipDirectories: new Set([...COMMON_SKIP_DIRECTORIES, ...(config.skipDirectories ?? [])]),
 		isSupportedFile: (filePath) => extensionSet.has(path.extname(filePath)),
 		languageIdFor: (filePath) => languageIdFor(config, filePath),
 	};
@@ -315,20 +460,73 @@ function languageIdFor(_config: InternalLspServer, filePath: string) {
 }
 
 const LANGUAGE_IDS: Record<string, string> = {
+	".bash": "shellscript",
+	".bib": "bibtex",
+	".c": "c",
+	".c++": "cpp",
+	".cc": "cpp",
 	".cjs": "javascript",
+	".clj": "clojure",
+	".cljc": "clojure",
+	".cljs": "clojure",
+	".cpp": "cpp",
+	".cs": "csharp",
+	".csx": "csharp",
 	".cts": "typescript",
+	".cxx": "cpp",
+	".dart": "dart",
+	".edn": "clojure",
+	".ex": "elixir",
+	".exs": "elixir",
+	".fs": "fsharp",
+	".fsi": "fsharp",
+	".fsscript": "fsharp",
+	".fsx": "fsharp",
+	".gemspec": "ruby",
 	".go": "go",
 	".gql": "graphql",
+	".h": "c",
+	".h++": "cpp",
+	".hh": "cpp",
+	".hpp": "cpp",
+	".hs": "haskell",
+	".hxx": "cpp",
+	".jl": "julia",
 	".js": "javascript",
 	".jsx": "javascriptreact",
 	".jsonc": "jsonc",
+	".ksh": "shellscript",
+	".kt": "kotlin",
+	".kts": "kotlin",
+	".lhs": "haskell",
+	".m": "objective-c",
 	".mjs": "javascript",
+	".ml": "ocaml",
+	".mli": "ocaml",
+	".mm": "objective-cpp",
 	".mts": "typescript",
+	".nix": "nix",
+	".php": "php",
 	".py": "python",
 	".pyi": "python",
+	".rake": "ruby",
+	".rb": "ruby",
 	".rs": "rust",
+	".ru": "ruby",
+	".sh": "shellscript",
+	".swift": "swift",
+	".tex": "latex",
+	".tf": "terraform",
+	".tfvars": "terraform-vars",
 	".ts": "typescript",
 	".tsx": "typescriptreact",
+	".typ": "typst",
+	".typc": "typst",
+	".yaml": "yaml",
+	".yml": "yaml",
+	".zig": "zig",
+	".zon": "zig",
+	".zsh": "shellscript",
 };
 
 function commandFromEnvName(name: string): string {
@@ -373,6 +571,25 @@ function optionalRecordField(value: Record<string, unknown>, field: string, labe
 		throw new Error(`${label}.${field} must be an object.`);
 	}
 	return fieldValue;
+}
+
+function optionalDirectoryNamesField(value: Record<string, unknown>, field: string, label: string) {
+	const fieldValue = value[field];
+	if (fieldValue === undefined) return undefined;
+	if (!Array.isArray(fieldValue) || !fieldValue.every((item) => typeof item === "string")) {
+		throw new Error(`${label}.${field} must be an array of directory names.`);
+	}
+	const names = fieldValue.map((item) => item.trim());
+	if (
+		names.some(
+			(name) => !name || name === "." || name === ".." || name.includes("/") || name.includes("\\"),
+		)
+	) {
+		throw new Error(
+			`${label}.${field} must contain non-empty directory names without path separators.`,
+		);
+	}
+	return [...new Set(names)];
 }
 
 function expandHome(filePath: string) {
