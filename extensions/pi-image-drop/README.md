@@ -24,15 +24,15 @@ This package targets the latest Pi release and uses its `agent_settled` lifecycl
 
 ## Workflow
 
-1. Run `/image-drop` in an interactive Pi session.
-2. Pi prints and displays a clickable one-time `http://127.0.0.1:<port>/...` link. The extension does **not** open a browser.
+1. Run `/image-drop` in an interactive Pi session. You can instead set `startOnSessionStart: true` to start the service with every Pi session.
+2. Pi prints and displays a clickable one-time `http://127.0.0.1:<port>/...` link. The extension does **not** open a browser, including when session startup is enabled.
 3. Open the link. Paste images anywhere, drop files, or select **Choose images**.
 4. Review previews and processing details. Drag to reorder, use the keyboard-accessible arrow buttons, retry failures, delete individual items, or use confirmed **Clear all**.
 5. Write and submit a non-empty message in Pi. The ready images are appended after any attachments already on that message, in browser order.
 
 The `🖼️` widget above Pi's editor reports ready, uploading, error, and queued counts. Uploading or failed items block the whole batch and preserve the Pi editor text. Image-only messages are not supported.
 
-Each `/image-drop` invocation rotates the unused one-time link. A browser refresh keeps the current in-memory batch. Opening the authenticated page in another tab gives the new tab the editing lease and makes the old tab stale.
+By default, the loopback service starts lazily when you run `/image-drop`. With `startOnSessionStart: true`, it starts after each Pi session initializes and displays the link in Pi automatically. Each later `/image-drop` invocation reuses the service and rotates the unused one-time link. A browser refresh keeps the current in-memory batch. Opening the authenticated page in another tab gives the new tab the editing lease and makes the old tab stale.
 
 ## Supported images
 
@@ -63,6 +63,7 @@ Example:
 
 ```json
 {
+  "startOnSessionStart": true,
   "maxImages": 8,
   "maxImageBytes": 10485760,
   "maxBatchBytes": 41943040,
@@ -70,14 +71,18 @@ Example:
 }
 ```
 
-| Setting | Safe default | Hard ceiling |
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `startOnSessionStart` | `false` | Start the loopback service and display a link after each Pi session initializes. This never opens a browser. |
+
+| Limit setting | Safe default | Hard ceiling |
 | --- | ---: | ---: |
 | `maxImages` | 8 | 32 |
 | `maxImageBytes` | 10 MiB | 50 MiB |
 | `maxBatchBytes` | 40 MiB | 200 MiB |
 | `maxImagePixels` | 50 megapixels | 100 megapixels |
 
-Values are positive integer counts/bytes/pixels. `maxImageBytes` cannot exceed `maxBatchBytes`. Unknown fields, malformed JSON, invalid values, symlinks, or values above a hard ceiling cause the **whole file** to be ignored with one warning and safe defaults to be used. Values above a safe default but within a hard ceiling produce a memory/provider-limit warning.
+Limit values are positive integer counts/bytes/pixels, and `startOnSessionStart` must be a boolean. `maxImageBytes` cannot exceed `maxBatchBytes`. Unknown fields, malformed JSON, invalid values, symlinks, or values above a hard ceiling cause the **whole file** to be ignored with one warning and safe defaults to be used. Limit values above a safe default but within a hard ceiling produce a memory/provider-limit warning.
 
 At upload and submission time, the extension also re-reads Pi's documented global and trusted-project `images.autoResize` and `images.blockImages` settings. `blockImages: true` or a text-only current model blocks processing/submission without discarding the draft.
 

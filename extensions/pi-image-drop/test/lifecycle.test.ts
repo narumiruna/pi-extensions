@@ -4,7 +4,7 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { digestImages, type ProcessedImage } from "../src/batch.js";
 import { ImageDropRuntime } from "../src/runtime.js";
 import type { ImageDropServerOptions } from "../src/server.js";
-import { DEFAULT_SETTINGS } from "../src/settings.js";
+import { DEFAULT_SETTINGS, type ImageDropSettings } from "../src/settings.js";
 
 const PNG = Buffer.from("processed-png");
 const PROCESSED: ProcessedImage = {
@@ -21,7 +21,14 @@ const PROCESSED: ProcessedImage = {
 	notes: [],
 };
 
-function createHarness(options: { idle?: () => boolean; pending?: () => boolean } = {}) {
+function createHarness(
+	options: {
+		idle?: () => boolean;
+		pending?: () => boolean;
+		settings?: Partial<ImageDropSettings>;
+		startError?: Error;
+	} = {},
+) {
 	const mock = createMockPi();
 	let serverOptions: ImageDropServerOptions | undefined;
 	let serverStarts = 0;
@@ -35,11 +42,15 @@ function createHarness(options: { idle?: () => boolean; pending?: () => boolean 
 		},
 	};
 	const runtime = new ImageDropRuntime(mock.pi, {
-		loadSettings: async () => ({ kind: "missing", settings: { ...DEFAULT_SETTINGS } }),
+		loadSettings: async () => ({
+			kind: "missing",
+			settings: { ...DEFAULT_SETTINGS, ...options.settings },
+		}),
 		readPiSettings: async () => ({ autoResize: true, blockImages: false, warnings: [] }),
 		startServer: async (received) => {
 			serverStarts += 1;
 			serverOptions = received;
+			if (options.startError) throw options.startError;
 			return server;
 		},
 	});
@@ -178,6 +189,46 @@ test("/image-drop lazily starts one server, rotates links, and shutdown releases
 	await emit(harness.mock, "session_shutdown", {}, harness.context.ctx);
 	assert.equal(harness.serverCloses, 1);
 	assert.equal(harness.context.widgets.get("image-drop"), undefined);
+});
+
+test("startOnSessionStart starts once, presents a link, and reuses the server", async () => {
+	const harness = createHarness({ settings: { startOnSessionStart: true } });
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	assert.equal(harness.serverStarts, 1);
+	assert.match(harness.context.notifications[0]?.message ?? "", /token=1/);
+	assert.match(String(harness.context.widgets.get("image-drop")), /token=1/);
+
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.equal(harness.serverStarts, 1);
+	assert.match(harness.context.notifications[1]?.message ?? "", /token=2/);
+	assert.match(String(harness.context.widgets.get("image-drop")), /token=2/);
+	await emit(harness.mock, "session_shutdown", {}, harness.context.ctx);
+	assert.equal(harness.serverCloses, 1);
+});
+
+test("startOnSessionStart replaces and closes the session-owned server", async () => {
+	const harness = createHarness({ settings: { startOnSessionStart: true } });
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	assert.equal(harness.serverStarts, 2);
+	assert.equal(harness.serverCloses, 1);
+	assert.match(harness.context.notifications[1]?.message ?? "", /token=2/);
+	await emit(harness.mock, "session_shutdown", {}, harness.context.ctx);
+	assert.equal(harness.serverCloses, 2);
+});
+
+test("startOnSessionStart failure warns without failing session startup", async () => {
+	const harness = createHarness({
+		settings: { startOnSessionStart: true },
+		startError: new Error("listener unavailable"),
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	assert.equal(harness.serverStarts, 1);
+	assert.match(
+		harness.context.notifications[0]?.message ?? "",
+		/could not start.*listener unavailable/i,
+	);
+	assert.equal(harness.runtime.getBatchForTesting()?.publicState().phase, "empty");
 });
 
 test("browser processing re-reads Pi settings and guards model and blockImages", async () => {
