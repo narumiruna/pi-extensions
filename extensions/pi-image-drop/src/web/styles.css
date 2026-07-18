@@ -362,7 +362,21 @@ dialog::backdrop {
 	padding: 1rem;
 	background: var(--surface-alt);
 }
-.image-preview-stage img {
+.image-preview-dismiss {
+	display: grid;
+	max-width: 100%;
+	max-height: 100%;
+	min-height: 0;
+	border: 0;
+	border-radius: 0;
+	padding: 0;
+	background: transparent;
+	cursor: zoom-out;
+}
+.image-preview-dismiss:hover:not(:disabled) {
+	border-color: transparent;
+}
+.image-preview-dismiss img {
 	max-width: 100%;
 	max-height: 100%;
 	object-fit: contain;

@@ -115,10 +115,14 @@ test("bootstrap tokens rotate, replay fails, and clean pages require the session
 		const app = await (await api(server, "/app.js", { cookie })).text();
 		const styles = await (await api(server, "/styles.css", { cookie })).text();
 		assert.match(html, /<dialog id="image-preview-dialog"/);
-		assert.match(html, /id="image-preview-close"/);
+		assert.doesNotMatch(html, /id="image-preview-close"/);
+		assert.match(html, /<button id="image-preview-dismiss"[^>]*aria-label="Close enlarged image"/);
 		assert.match(app, /showModal\(\)/);
 		assert.match(app, /Enlarge preview of/);
+		assert.match(app, /previewDismiss\.addEventListener\("click", closePreview\)/);
+		assert.match(app, /event\.target === ui\.previewDialog\) closePreview\(\)/);
 		assert.match(styles, /\.image-preview-dialog/);
+		assert.match(styles, /\.image-preview-dismiss\s*{[^}]*cursor: zoom-out/s);
 	} finally {
 		await server.close();
 	}
