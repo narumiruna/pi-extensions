@@ -36,11 +36,13 @@
 				</div>
 			</section>
 
+			<p class="collection-note">Sensitive image metadata removed from processed images.</p>
+
 			<section class="batch draft" aria-labelledby="batch-title">
 				<div class="batch-toolbar">
 					<div>
 						<h2 id="batch-title">Ready for next message</h2>
-						<p id="status">No images staged</p>
+						<p id="status" hidden></p>
 						<p id="next-step" class="next-step" role="status" aria-live="polite">Choose images to add them to your next Pi message.</p>
 					</div>
 					<button id="clear-all" class="danger-secondary" type="button" hidden disabled>Clear all</button>
@@ -50,14 +52,14 @@
 			</section>
 
 			<section class="history" aria-labelledby="history-title">
-				<div class="batch-toolbar">
-					<div>
+				<header class="history-toolbar">
+					<div class="history-summary">
 						<h2 id="history-title">Previously sent</h2>
 						<p id="history-status" role="status" aria-live="polite">No images sent yet</p>
+						<p class="history-note"><span id="history-retention">0 images retained</span>. Images here are not attached again unless you choose <strong>Add again</strong>. The oldest are removed at the configured memory limit, and all are cleared when this Pi session ends.</p>
 					</div>
 					<button id="clear-history" class="danger-secondary" type="button" hidden disabled>Clear history</button>
-				</div>
-				<p class="history-note"><span id="history-retention">0 images retained</span>. Images here are not attached again unless you choose <strong>Add again</strong>. The oldest are removed at the configured memory limit, and all are cleared when this Pi session ends.</p>
+				</header>
 				<div id="history-grid" class="image-grid" aria-live="polite"></div>
 			</section>
 

@@ -19,6 +19,8 @@ type StateHelpers = {
 		maxBytes: number;
 	};
 	draftGuidance(batch: unknown): string;
+	draftPresentation(batch: unknown): { status: string; guidance: string };
+	visibleItemNotes(notes: unknown): string[];
 	moveItem(ids: string[], id: string, direction: number): string[];
 	moveItemBefore(ids: string[], id: string, target: string): string[];
 	canMutate(batch: { phase: string }): boolean;
@@ -95,40 +97,76 @@ test("web history helpers separate concise status from secondary retention limit
 	);
 });
 
-test("draft guidance names the next valid action for every lifecycle state", () => {
-	assert.equal(
-		helpers.draftGuidance({ phase: "empty", items: [] }),
-		"Choose images to add them to your next Pi message.",
+test("draft presentation keeps empty copy concise and separates progress from guidance", () => {
+	const cases = [
+		{
+			batch: { phase: "empty", items: [], totalSourceBytes: 0 },
+			status: "",
+			guidance: "Choose images to add them to your next Pi message.",
+		},
+		{
+			batch: {
+				phase: "editing",
+				items: [{ status: "processing" }, { status: "processing" }],
+				totalSourceBytes: 2048,
+			},
+			status: "0/2 ready · 2 uploading · 2.0 KB",
+			guidance: "Wait for 2 images to finish processing before sending from Pi.",
+		},
+		{
+			batch: {
+				phase: "blocked",
+				items: [{ status: "ready" }, { status: "error" }],
+				totalSourceBytes: 1024,
+			},
+			status: "1/2 ready · 1 need attention · 1.0 KB",
+			guidance: "Fix or delete 1 image that needs attention before sending from Pi.",
+		},
+		{
+			batch: { phase: "ready", items: [{ status: "ready" }], totalSourceBytes: 512 },
+			status: "1/1 ready · 512 B",
+			guidance:
+				"Return to Pi and send a non-empty message. 1 ready image will be attached automatically.",
+		},
+		{
+			batch: {
+				phase: "reserved",
+				items: [{ status: "ready" }, { status: "ready" }],
+				totalSourceBytes: 4096,
+			},
+			status: "2 images queued with Pi · 4.0 KB",
+			guidance: "Queued with Pi. These images will be attached when Pi sends this message.",
+		},
+		{
+			batch: { phase: "closed", items: [{ status: "ready" }], totalSourceBytes: 512 },
+			status: "1/1 ready · 512 B",
+			guidance: "This Pi session is no longer accepting images.",
+		},
+	];
+
+	for (const { batch, status, guidance } of cases) {
+		assert.deepEqual(helpers.draftPresentation(batch), { status, guidance });
+		assert.equal(helpers.draftGuidance(batch), guidance);
+	}
+});
+
+test("only the shared metadata notice is removed from per-image notes", () => {
+	assert.deepEqual(
+		helpers.visibleItemNotes([
+			"Sensitive image metadata removed",
+			"Converted from TIFF to PNG",
+			"Resized from 4000×3000 to 2000×1500",
+		]),
+		["Converted from TIFF to PNG", "Resized from 4000×3000 to 2000×1500"],
 	);
-	assert.equal(
-		helpers.draftGuidance({
-			phase: "editing",
-			items: [{ status: "processing" }, { status: "processing" }],
-		}),
-		"Wait for 2 images to finish processing before sending from Pi.",
+	assert.deepEqual(
+		helpers.visibleItemNotes([
+			"sensitive image metadata removed",
+			"Sensitive image metadata removed after conversion",
+		]),
+		["sensitive image metadata removed", "Sensitive image metadata removed after conversion"],
 	);
-	assert.equal(
-		helpers.draftGuidance({
-			phase: "blocked",
-			items: [{ status: "ready" }, { status: "error" }],
-		}),
-		"Fix or delete 1 image that needs attention before sending from Pi.",
-	);
-	assert.equal(
-		helpers.draftGuidance({ phase: "ready", items: [{ status: "ready" }] }),
-		"Return to Pi and send a non-empty message. 1 ready image will be attached automatically.",
-	);
-	assert.equal(
-		helpers.draftGuidance({
-			phase: "reserved",
-			items: [{ status: "ready" }, { status: "ready" }],
-		}),
-		"Queued with Pi. These images will be attached when Pi sends this message.",
-	);
-	assert.equal(
-		helpers.draftGuidance({ phase: "closed", items: [{ status: "ready" }] }),
-		"This Pi session is no longer accepting images.",
-	);
+	assert.deepEqual(helpers.visibleItemNotes(undefined), []);
 });
 
 test("web ordering helpers are immutable and bounded", () => {

@@ -1,13 +1,14 @@
 import {
 	attemptMutation,
 	canMutate,
-	draftGuidance,
+	draftPresentation,
 	formatBytes,
 	moveItem,
 	moveItemBefore,
 	preferNewestState,
 	summarizeBatch,
 	summarizeHistory,
+	visibleItemNotes,
 } from "/state.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -291,8 +292,10 @@ function render() {
 		: state.projectName;
 	ui.cwd.textContent = state.cwd;
 	const summary = summarizeBatch(state.batch);
-	ui.status.textContent = `${summary.label} · ${formatBytes(summary.bytes)}`;
-	ui.nextStep.textContent = draftGuidance(state.batch);
+	const presentation = draftPresentation(state.batch);
+	ui.status.textContent = presentation.status;
+	ui.status.hidden = presentation.status === "";
+	ui.nextStep.textContent = presentation.guidance;
 	const mutable = canMutate(state.batch);
 	ui.clear.hidden = summary.total === 0;
 	ui.clear.disabled = !mutable || summary.total === 0;
@@ -363,7 +366,7 @@ function card(item, index, mutable) {
 				`${item.sourceFormat.toUpperCase()} → ${item.outputFormat.toUpperCase()}`,
 			),
 		);
-	for (const note of item.notes ?? []) body.append(element("p", "note", note));
+	for (const note of visibleItemNotes(item.notes)) body.append(element("p", "note", note));
 	if (item.error) body.append(element("p", "item-error", item.error));
 	article.append(body);
 
@@ -407,7 +410,7 @@ function historyCard(item, index, mutable) {
 	body.append(
 		element("p", "meta", `${index + 1} · ${formatBytes(item.size)} · ${item.width}×${item.height}`),
 	);
-	for (const note of item.notes ?? []) body.append(element("p", "note", note));
+	for (const note of visibleItemNotes(item.notes)) body.append(element("p", "note", note));
 	article.append(body);
 
 	const actions = element("div", "card-actions");

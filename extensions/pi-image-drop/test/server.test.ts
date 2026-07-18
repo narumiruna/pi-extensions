@@ -145,7 +145,7 @@ test("bootstrap tokens rotate, replay fails, and clean pages require the session
 		assert.match(app, /event\.target === ui\.previewDialog\) closePreview\(\)/);
 		assert.match(app, /showModal\(\)/);
 		assert.match(app, /Enlarge preview of/);
-		assert.match(app, /draftGuidance/);
+		assert.match(app, /draftPresentation/);
 		assert.match(
 			app,
 			/button\("Delete", "Delete", !mutable, \(\) => remove\(item\.id\), "danger-secondary"\)/,
