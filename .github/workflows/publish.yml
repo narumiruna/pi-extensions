@@ -67,10 +67,14 @@ jobs:
           fi
 
       - name: Publish unpublished workspace packages
+        id: publish
         env:
           NPM_CONFIG_PROVENANCE: "true"
         run: |
           set -euo pipefail
+
+          : > /tmp/pi-published.tsv
+          : > /tmp/pi-skipped.tsv
 
           while IFS=$'\t' read -r package version; do
             if [[ -z "$package" || -z "$version" ]]; then
@@ -79,9 +83,56 @@ jobs:
 
             if npm view "${package}@${version}" version >/dev/null 2>&1; then
               echo "${package}@${version} already exists; skipping publish."
+              printf '%s\t%s\n' "$package" "$version" >> /tmp/pi-skipped.tsv
               continue
             fi
 
             echo "Publishing ${package}@${version}..."
             npm --workspace "$package" publish --access public --loglevel verbose
+            printf '%s\t%s\n' "$package" "$version" >> /tmp/pi-published.tsv
           done < /tmp/pi-workspaces.tsv
+
+      - name: Write publish summary
+        if: always()
+        env:
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## npm publish summary"
+            echo
+
+            case "$PUBLISH_OUTCOME" in
+              success) echo "Publish step completed successfully. ✅" ;;
+              failure) echo "Publish step failed; packages listed below completed before the failure. ❌" ;;
+              *) echo "Publish step did not run (outcome: ${PUBLISH_OUTCOME}). ⚠️" ;;
+            esac
+            echo
+
+            if [[ -s /tmp/pi-published.tsv ]]; then
+              echo "### Published extensions"
+              echo
+              echo "| Extension | Version |"
+              echo "| --- | --- |"
+              while IFS=$'\t' read -r package version; do
+                printf '| [%s](https://www.npmjs.com/package/%s) | `%s` |\n' "$package" "$package" "$version"
+              done < /tmp/pi-published.tsv
+            else
+              echo "### Published extensions"
+              echo
+              echo "No extensions were published."
+            fi
+
+            if [[ -s /tmp/pi-skipped.tsv ]]; then
+              echo
+              echo "<details>"
+              echo "<summary>Already published (skipped)</summary>"
+              echo
+              while IFS=$'\t' read -r package version; do
+                echo "- ${package}@${version}"
+              done < /tmp/pi-skipped.tsv
+              echo
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -69,6 +69,10 @@ test("publish workflow selects changed tag packages and all manual recovery pack
 	assert.match(workflow, /list-publish-workspaces\.mjs --all/);
 	assert.match(workflow, /npm view "\$\{package\}@\$\{version\}" version/);
 	assert.match(workflow, /NPM_CONFIG_PROVENANCE: "true"/);
+	assert.match(workflow, /printf '%s\\t%s\\n'.*>> \/tmp\/pi-published\.tsv/);
+	assert.match(workflow, /if: always\(\)/);
+	assert.match(workflow, /PUBLISH_OUTCOME: \$\{\{ steps\.publish\.outcome \}\}/);
+	assert.match(workflow, />> "\$GITHUB_STEP_SUMMARY"/);
 });
 
 test("experimental publishing is manual-only", () => {
