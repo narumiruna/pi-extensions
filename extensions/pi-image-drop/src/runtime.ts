@@ -83,6 +83,7 @@ export class ImageDropRuntime {
 		this.pi.on("before_agent_start", async () => this.batch?.markPreflightStarted());
 		this.pi.on("message_start", async (event, ctx) => this.handleMessageStart(event, ctx));
 		(this.pi as LatestExtensionAPI).on("agent_settled", async (_event, ctx) => {
+			if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
 			await this.recoverReservation(ctx, "Queued image message was not delivered; restored it.");
 		});
 	}
@@ -151,7 +152,12 @@ export class ImageDropRuntime {
 			ctx.ui.notify("The current model does not support image input.", "warning");
 			return { action: "handled" };
 		}
+		const generation = this.generation;
+		const batch = this.batch;
 		const piSettings = await this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted());
+		if (generation !== this.generation || batch !== this.batch || this.closed) {
+			return { action: "handled" };
+		}
 		this.notifyPiSettingsWarnings(ctx, piSettings.warnings);
 		if (piSettings.blockImages) {
 			this.restoreEditor(ctx, event.text);
@@ -163,7 +169,7 @@ export class ImageDropRuntime {
 		}
 
 		try {
-			const reservation = this.batch.reserveMessage(event.text, event.streamingBehavior);
+			const reservation = batch.reserveMessage(event.text, event.streamingBehavior);
 			this.server?.broadcastState();
 			this.updateWidget(ctx);
 			return {
@@ -231,19 +237,18 @@ export class ImageDropRuntime {
 						if (!(failure instanceof BatchError) || failure.code !== "not-found") throw failure;
 					}
 				} finally {
-					this.server?.broadcastState();
+					if (generation === this.generation) this.server?.broadcastState();
 				}
 			}),
 		);
-		if (generation !== this.generation || batch.publicState().phase !== "ready") {
+		if (generation !== this.generation) return false;
+		if (batch.publicState().phase !== "ready") {
 			this.restoreEditor(ctx, text);
-			if (generation === this.generation) {
-				ctx.ui.notify(
-					"Images could not be updated for the current auto-resize setting.",
-					"warning",
-				);
-				this.updateWidget(ctx);
-			}
+			ctx.ui.notify(
+				"Images could not be updated for the current auto-resize setting.",
+				"warning",
+			);
+			this.updateWidget(ctx);
 			return false;
 		}
 		this.updateWidget(ctx);

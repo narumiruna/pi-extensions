@@ -151,6 +151,10 @@ test("agent_settled restores a queued reservation that never became a user messa
 	);
 
 	idle = true;
+	await emit(mock, "agent_settled", {}, context.ctx);
+	assert.equal(context.editorText, "");
+	assert.equal(runtime.getBatchForTesting()?.publicState().phase, "reserved");
+
 	pending = false;
 	await emit(mock, "agent_settled", {}, context.ctx);
 	assert.equal(context.editorText, "queued prompt");
@@ -392,6 +396,59 @@ test("session replacement closes the old server and clears every staged byte", a
 	assert.equal(harness.serverCloses, 1);
 	assert.equal(harness.runtime.getBatchForTesting()?.publicState().phase, "empty");
 	assert.equal(harness.context.widgets.get("image-drop"), undefined);
+});
+
+test("a stale input settings read cannot consume the replacement session batch", async () => {
+	const mock = createMockPi();
+	let resolvePiSettings!: (value: {
+		autoResize: boolean;
+		blockImages: boolean;
+		warnings: string[];
+	}) => void;
+	let markSettingsRead!: () => void;
+	const settingsRead = new Promise<void>((resolve) => {
+		markSettingsRead = resolve;
+	});
+	const runtime = new ImageDropRuntime(mock.pi, {
+		loadSettings: async () => ({ kind: "missing", settings: { ...DEFAULT_SETTINGS } }),
+		readPiSettings: () => {
+			markSettingsRead();
+			return new Promise((resolve) => {
+				resolvePiSettings = resolve;
+			});
+		},
+	});
+	runtime.register();
+	const oldContext = createMockContext({
+		cwd: "/workspace/old",
+		model: { id: "vision", provider: "test", input: ["text", "image"] },
+	});
+	const newContext = createMockContext({
+		cwd: "/workspace/new",
+		model: { id: "vision", provider: "test", input: ["text", "image"] },
+	});
+	await emit(mock, "session_start", {}, oldContext.ctx);
+	runtime.addReadyImageForTesting("old", "old.png", Buffer.from("old"), PROCESSED);
+	const staleInput = emit(
+		mock,
+		"input",
+		{ type: "input", text: "old prompt", source: "interactive" },
+		oldContext.ctx,
+	);
+	await settingsRead;
+	await emit(mock, "session_start", {}, newContext.ctx);
+	runtime.addReadyImageForTesting("new", "new.png", Buffer.from("new"), {
+		...PROCESSED,
+		hash: "hash-new",
+	});
+	const replacementBatch = runtime.getBatchForTesting();
+	resolvePiSettings({ autoResize: true, blockImages: false, warnings: [] });
+	const result = (await staleInput) as { action: string };
+	assert.equal(result.action, "handled");
+	assert.equal(runtime.getBatchForTesting(), replacementBatch);
+	assert.equal(replacementBatch?.publicState().phase, "ready");
+	assert.equal(oldContext.editorText, "");
+	assert.equal(newContext.editorText, "");
 });
 
 test("an overlapping stale session start cannot replace the newer session", async () => {
