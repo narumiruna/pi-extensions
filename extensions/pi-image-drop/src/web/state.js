@@ -13,6 +13,21 @@ export function summarizeBatch(batch) {
 	};
 }
 
+export function summarizeHistory(history) {
+	const total = (history?.items ?? []).length;
+	const bytes = Number(history?.totalBytes ?? 0);
+	const maxImages = Number(history?.maxImages ?? 0);
+	const maxBytes = Number(history?.maxBytes ?? 0);
+	const usage = `${total}/${maxImages} images · ${formatBytes(bytes)} of ${formatBytes(maxBytes)}`;
+	return {
+		total,
+		bytes,
+		maxImages,
+		maxBytes,
+		label: total === 0 ? `No images sent this session · ${usage}` : usage,
+	};
+}
+
 export function statusLabel(phase, counts, total) {
 	if (phase === "empty" || total === 0) return "No images staged";
 	if (phase === "reserved") return `${total} ${plural(total, "image")} queued with Pi`;

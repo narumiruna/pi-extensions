@@ -46,8 +46,20 @@
 				<div id="grid" class="image-grid" aria-live="polite"></div>
 			</section>
 
+			<section class="history" aria-labelledby="history-title">
+				<div class="batch-toolbar">
+					<div>
+						<h2 id="history-title">Sent this session</h2>
+						<p id="history-status" role="status" aria-live="polite">No images sent this session</p>
+					</div>
+					<button id="clear-history" class="danger-secondary" type="button" disabled>Clear history</button>
+				</div>
+				<p class="history-note">Sent images are not attached again unless you choose <strong>Add again</strong>. The oldest history is removed automatically at the configured memory limit, and all history is cleared when this Pi session ends.</p>
+				<div id="history-grid" class="image-grid" aria-live="polite"></div>
+			</section>
+
 			<p class="privacy">
-				Images stay in this Pi process until you submit a Pi message. They are then sent to your configured model provider with that message.
+				Draft and sent-history images stay only in this Pi process. Sending a Pi message also sends its staged images to your configured model provider; local sent history remains until deleted, automatically evicted at the limit, or the Pi session ends.
 			</p>
 		</main>
 
@@ -65,6 +77,17 @@
 				<div class="dialog-actions">
 					<button type="submit" value="cancel">Cancel</button>
 					<button type="submit" class="danger" value="confirm">Clear all</button>
+				</div>
+			</form>
+		</dialog>
+
+		<dialog id="clear-history-dialog">
+			<form method="dialog">
+				<h2>Clear sent image history?</h2>
+				<p>This releases every retained image from this Pi session. Images already sent to Pi or a model provider are unaffected.</p>
+				<div class="dialog-actions">
+					<button type="submit" value="cancel">Cancel</button>
+					<button type="submit" class="danger" value="confirm">Clear history</button>
 				</div>
 			</form>
 		</dialog>

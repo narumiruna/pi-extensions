@@ -176,9 +176,15 @@ export class ImageDropServer {
 			const previewMatch = /^\/api\/items\/([A-Za-z0-9_-]{1,80})\/preview$/.exec(url.pathname);
 			if (request.method === "GET" && previewMatch) {
 				const preview = this.options.batch.preview(previewMatch[1] as string);
-				response.setHeader("Content-Type", preview.mimeType);
-				response.setHeader("Content-Length", preview.bytes.byteLength);
-				response.writeHead(200).end(preview.bytes);
+				this.image(response, preview);
+				return;
+			}
+			const historyPreviewMatch = /^\/api\/history\/([A-Za-z0-9_-]{1,80})\/preview$/.exec(
+				url.pathname,
+			);
+			if (request.method === "GET" && historyPreviewMatch) {
+				const preview = this.options.batch.historyPreview(historyPreviewMatch[1] as string);
+				this.image(response, preview);
 				return;
 			}
 			if (request.method === "POST" && url.pathname === "/api/lease") {
@@ -195,6 +201,31 @@ export class ImageDropServer {
 			}
 			this.assertMutation(request);
 			const lease = this.assertActiveClient(request);
+			if (request.method === "POST" && url.pathname === "/api/history/restage") {
+				const body = await readJson(request, JSON_LIMIT);
+				this.assertLease(lease);
+				const items = arrayField(body, "items").map((item) => {
+					if (!isRecord(item)) throw new HttpError(400, "Invalid history restage item");
+					return { historyId: stringField(item, "historyId"), id: stringField(item, "id") };
+				});
+				const restage = this.options.batch.restageHistory(items, integerField(body, "revision"));
+				this.broadcastState();
+				this.json(response, 200, { ...this.statePayload(), restage });
+				return;
+			}
+			const historyMatch = /^\/api\/history\/([A-Za-z0-9_-]{1,80})$/.exec(url.pathname);
+			if (request.method === "DELETE" && historyMatch) {
+				this.options.batch.deleteHistory(historyMatch[1] as string, queryInteger(url, "revision"));
+				this.respondWithState(response);
+				return;
+			}
+			if (request.method === "POST" && url.pathname === "/api/history/clear") {
+				const body = await readJson(request, JSON_LIMIT);
+				this.assertLease(lease);
+				this.options.batch.clearHistory(integerField(body, "revision"));
+				this.respondWithState(response);
+				return;
+			}
 			if (request.method === "POST" && url.pathname === "/api/items") {
 				const body = await readJson(request, JSON_LIMIT);
 				this.assertLease(lease);
@@ -406,7 +437,14 @@ export class ImageDropServer {
 			cwd: this.options.cwd,
 			activeClientId: this.activeClientId,
 			batch: this.options.batch.publicState(),
+			history: this.options.batch.publicHistoryState(),
 		};
+	}
+
+	private image(response: ServerResponse, image: { bytes: Buffer; mimeType: string }): void {
+		response.setHeader("Content-Type", image.mimeType);
+		response.setHeader("Content-Length", image.bytes.byteLength);
+		response.writeHead(200).end(image.bytes);
 	}
 
 	private respondWithState(response: ServerResponse): void {
