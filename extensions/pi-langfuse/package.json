@@ -30,14 +30,14 @@
 	},
 	"dependencies": {
 		"@langfuse/otel": "^5.9.1",
-		"@langfuse/tracing": "^4.0.0",
+		"@langfuse/tracing": "^5.9.1",
 		"@opentelemetry/api": "^1.9.1",
 		"@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
 		"@opentelemetry/sdk-trace-base": "^2.9.0",
 		"@opentelemetry/sdk-trace-node": "^2.9.0"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.3",
+		"@biomejs/biome": "2.5.4",
 		"@earendil-works/pi-coding-agent": "0.80.10",
 		"@types/node": "26.1.1",
 		"typescript": "7.0.2"
