@@ -2,7 +2,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import {
+	isCallExpression,
+	isExportDeclaration,
+	isExternalModuleReference,
+	isIdentifier,
+	isImportDeclaration,
+	isImportEqualsDeclaration,
+	isNoSubstitutionTemplateLiteral,
+	isStringLiteral,
+	SyntaxKind,
+} from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 
 const EXTENSION_PACKAGE_RE = /^@narumitw\/pi-/;
 const DEPENDENCY_FIELDS = [
@@ -33,21 +44,35 @@ const experimentalPackageCount = activePackages.filter(({ directory }) =>
 	directory.startsWith(experimentalDirectory),
 ).length;
 const failures = [];
+const sourcePaths = activePackages.flatMap((extensionPackage) => {
+	const sourceDirectory = path.join(extensionPackage.directory, "src");
+	return fs.existsSync(sourceDirectory) ? listSourceFiles(sourceDirectory) : [];
+});
+const compilerApi = new API({ cwd: rootDirectory });
+const compilerSnapshot = compilerApi.updateSnapshot({
+	openFiles: sourcePaths,
+	openProjects: [path.join(rootDirectory, "tsconfig.json")],
+});
 
-for (const extensionPackage of activePackages) {
-	checkPackageDependencies(extensionPackage);
-	checkSourceImports(extensionPackage);
+try {
+	for (const extensionPackage of activePackages) {
+		checkPackageDependencies(extensionPackage);
+		checkSourceImports(extensionPackage);
+	}
+} finally {
+	compilerSnapshot.dispose();
+	compilerApi.close();
 }
 
 if (failures.length > 0) {
 	console.error("Extension boundary check failed:");
 	for (const failure of failures) console.error(`- ${failure}`);
-	process.exit(1);
+	process.exitCode = 1;
+} else {
+	console.log(
+		`Extension boundary check passed: ${activePackages.length} active packages (${experimentalPackageCount} experimental) have no extension-to-extension dependencies.`,
+	);
 }
-
-console.log(
-	`Extension boundary check passed: ${activePackages.length} active packages (${experimentalPackageCount} experimental) have no extension-to-extension dependencies.`,
-);
 
 function findActiveExtensionPackages(directory) {
 	const packages = [];
@@ -100,8 +125,7 @@ function checkSourceImports(extensionPackage) {
 	if (!fs.existsSync(sourceDirectory)) return;
 
 	for (const sourcePath of listSourceFiles(sourceDirectory)) {
-		const source = fs.readFileSync(sourcePath, "utf8");
-		for (const specifier of moduleSpecifiers(sourcePath, source)) {
+		for (const specifier of moduleSpecifiers(sourcePath)) {
 			if (!isForbiddenExtensionReference(extensionPackage.name, specifier)) continue;
 
 			failures.push(`${relative(sourcePath)} must not import ${specifier}.`);
@@ -126,33 +150,29 @@ function isSourceFile(fileName) {
 	return SOURCE_FILE_SUFFIXES.some((suffix) => fileName.endsWith(suffix));
 }
 
-function moduleSpecifiers(sourcePath, source) {
-	const sourceFile = ts.createSourceFile(
-		sourcePath,
-		source,
-		ts.ScriptTarget.Latest,
-		true,
-		scriptKindFor(sourcePath),
-	);
+function moduleSpecifiers(sourcePath) {
+	const project = compilerSnapshot.getDefaultProjectForFile(sourcePath);
+	const sourceFile = project?.program.getSourceFile(sourcePath);
+	if (!sourceFile) throw new Error(`TypeScript could not parse ${relative(sourcePath)}.`);
 	const specifiers = [];
 
 	const visit = (node) => {
-		if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+		if (isImportDeclaration(node) || isExportDeclaration(node)) {
 			const specifier = node.moduleSpecifier && stringLiteralText(node.moduleSpecifier);
 			if (specifier) specifiers.push(specifier);
-		} else if (ts.isImportEqualsDeclaration(node)) {
+		} else if (isImportEqualsDeclaration(node)) {
 			const reference = node.moduleReference;
-			const specifier = ts.isExternalModuleReference(reference)
+			const specifier = isExternalModuleReference(reference)
 				? stringLiteralText(reference.expression)
 				: undefined;
 			if (specifier) specifiers.push(specifier);
-		} else if (ts.isCallExpression(node)) {
+		} else if (isCallExpression(node)) {
 			const firstArgument = node.arguments[0];
 			const specifier = firstArgument && stringLiteralText(firstArgument);
 			if (specifier && isModuleLoaderCall(node)) specifiers.push(specifier);
 		}
 
-		ts.forEachChild(node, visit);
+		node.forEachChild(visit);
 	};
 
 	visit(sourceFile);
@@ -161,34 +181,13 @@ function moduleSpecifiers(sourcePath, source) {
 
 function isModuleLoaderCall(node) {
 	return (
-		node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-		(ts.isIdentifier(node.expression) && node.expression.text === "require")
+		node.expression.kind === SyntaxKind.ImportKeyword ||
+		(isIdentifier(node.expression) && node.expression.text === "require")
 	);
 }
 
 function stringLiteralText(node) {
-	return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
-		? node.text
-		: undefined;
-}
-
-function scriptKindFor(filePath) {
-	if (filePath.endsWith(".d.ts") || filePath.endsWith(".d.mts") || filePath.endsWith(".d.cts")) {
-		return ts.ScriptKind.TS;
-	}
-
-	switch (path.extname(filePath)) {
-		case ".cjs":
-		case ".js":
-		case ".mjs":
-			return ts.ScriptKind.JS;
-		case ".jsx":
-			return ts.ScriptKind.JSX;
-		case ".tsx":
-			return ts.ScriptKind.TSX;
-		default:
-			return ts.ScriptKind.TS;
-	}
+	return isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node) ? node.text : undefined;
 }
 
 function isForbiddenExtensionReference(packageName, specifier) {

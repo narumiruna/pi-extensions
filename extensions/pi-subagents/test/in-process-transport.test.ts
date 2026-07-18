@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { AuthStorage, ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
+import { type ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { AgentConfig } from "../src/agents.js";
 import {
@@ -47,6 +47,55 @@ function agentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 		filePath: "built-in:scout",
 		...overrides,
 	};
+}
+
+interface TestAuthStorage {
+	setRuntimeApiKey(provider: string, apiKey: string): void;
+}
+
+interface TestCodingAgentModule {
+	AuthStorage?: { inMemory(): TestAuthStorage };
+	ModelRegistry: {
+		new (runtime: unknown): ModelRegistry;
+		inMemory?(auth: TestAuthStorage): ModelRegistry;
+	};
+	ModelRuntime?: {
+		create(options: { authPath: string; modelsPath: null }): Promise<unknown>;
+	};
+}
+
+async function createTestModelRegistry(): Promise<{
+	modelRegistry: ModelRegistry;
+	dispose(): void;
+}> {
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-model-runtime-"));
+	try {
+		const codingAgentModule = (await import(
+			"@earendil-works/pi-coding-agent"
+		)) as unknown as TestCodingAgentModule;
+		if (codingAgentModule.ModelRuntime) {
+			const runtime = await codingAgentModule.ModelRuntime.create({
+				authPath: path.join(agentDir, "auth.json"),
+				modelsPath: null,
+			});
+			return {
+				modelRegistry: new codingAgentModule.ModelRegistry(runtime),
+				dispose: () => rmSync(agentDir, { recursive: true, force: true }),
+			};
+		}
+		if (!codingAgentModule.AuthStorage || !codingAgentModule.ModelRegistry.inMemory) {
+			throw new Error("Pi SDK does not expose a compatible model registry factory");
+		}
+		const auth = codingAgentModule.AuthStorage.inMemory();
+		auth.setRuntimeApiKey("child-smoke", "test-key");
+		return {
+			modelRegistry: codingAgentModule.ModelRegistry.inMemory(auth),
+			dispose: () => rmSync(agentDir, { recursive: true, force: true }),
+		};
+	} catch (error) {
+		rmSync(agentDir, { recursive: true, force: true });
+		throw error;
+	}
 }
 
 class FakeChildSession implements ChildSession {
@@ -524,10 +573,10 @@ test("registered detached spawn returns while running and publishes each in-proc
 	}
 });
 
-test("public SDK child-session adapter completes a deterministic in-memory turn and disposes", async () => {
-	const auth = AuthStorage.inMemory();
-	auth.setRuntimeApiKey("child-smoke", "test-key");
-	const modelRegistry = ModelRegistry.inMemory(auth);
+test("public SDK child-session adapter completes a deterministic in-memory turn and disposes", async (t) => {
+	const fixture = await createTestModelRegistry();
+	t.after(fixture.dispose);
+	const { modelRegistry } = fixture;
 	modelRegistry.registerProvider("child-smoke", {
 		api: "openai-completions",
 		apiKey: "test-key",
@@ -584,7 +633,8 @@ test("public SDK child-session adapter completes a deterministic in-memory turn 
 		modelRegistry,
 		parentRuntime: { model: undefined, thinkingLevel: "off" },
 	});
-	assert.equal(explicit.model, model);
+	assert.equal(explicit.model.provider, model.provider);
+	assert.equal(explicit.model.id, model.id);
 	assert.equal(explicit.thinkingLevel, "high");
 	const childCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-turn-"));
 	const child = await createSdkChildSession({

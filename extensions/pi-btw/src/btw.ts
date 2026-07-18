@@ -75,6 +75,7 @@ export const BTW_THINKING_LEVELS = [
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ] as const;
 
 export type BtwThinkingLevel = (typeof BTW_THINKING_LEVELS)[number];
@@ -272,7 +273,9 @@ export async function completeSideQuestion({
 		env: auth.env,
 		signal,
 	};
-	if (thinkingLevel !== "off") streamOptions.reasoning = thinkingLevel;
+	if (thinkingLevel !== "off") {
+		(streamOptions as unknown as { reasoning?: BtwThinkingLevel }).reasoning = thinkingLevel;
+	}
 
 	return runCompleteSimple(model, { systemPrompt: SYSTEM_PROMPT, messages: [userMessage] }, streamOptions);
 }
