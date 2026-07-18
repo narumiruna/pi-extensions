@@ -66,6 +66,7 @@ export interface ConfiguredLspServer {
 	extensions: string[];
 	env?: Record<string, string>;
 	initialization?: Record<string, unknown>;
+	skipDirectories?: string[];
 }
 
 export interface LspConfig {
@@ -75,10 +76,12 @@ export interface LspConfig {
 
 export interface InternalLspServer extends ConfiguredLspServer {
 	name: string;
+	isDefault?: boolean;
 }
 
 export interface LspServerAdapter {
 	name: string;
+	isDefault: boolean;
 	defaultCommand: ServerCommand;
 	commandEnvVar: string;
 	missingCommandHint: string;

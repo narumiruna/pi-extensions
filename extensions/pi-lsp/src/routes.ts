@@ -1,4 +1,5 @@
 import path from "node:path";
+import { commandExists, commandFromEnv, commandPathValue } from "./command.js";
 import { collectSupportedFiles, resolveRoot } from "./files.js";
 import type { LspServerAdapter } from "./types.js";
 
@@ -38,14 +39,33 @@ export function selectDiagnosticRoutes(
 ) {
 	const root = resolveRoot(params.root);
 	const candidates = filterAdapters(adapters, params.server);
-	const filesByExtensions = new Map<string, string[]>();
-	const routes = candidates
+	const skipped: DiagnosticRoute[] = [];
+	const runnableCandidates = params.server
+		? candidates
+		: candidates.filter((adapter) => {
+				if (!adapter.isDefault) return true;
+				const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
+				if (commandExists(command.command, root, commandPathValue(adapter.env))) return true;
+				skipped.push({ adapter, reason: `${adapter.name} command missing`, files: [] });
+				return false;
+			});
+
+	if (runnableCandidates.length === 0 && skipped.length > 0) {
+		const names = skipped.map((route) => route.adapter.name).join(", ");
+		throw new Error(
+			`No available default LSP commands: ${names}. ` +
+				"Install a matching server command or explicitly select a configured server.",
+		);
+	}
+
+	const filesByPolicy = new Map<string, string[]>();
+	const routes = runnableCandidates
 		.map((adapter) => {
-			const key = adapter.extensions.join("\0");
-			let files = filesByExtensions.get(key);
+			const key = diagnosticFilePolicyKey(adapter);
+			let files = filesByPolicy.get(key);
 			if (!files) {
 				files = collectSupportedFiles(adapter, root, params.paths, params.limit ?? defaultLimit);
-				filesByExtensions.set(key, files);
+				filesByPolicy.set(key, files);
 			}
 			return { adapter, reason: `${adapter.name} diagnostics`, files };
 		})
@@ -53,16 +73,26 @@ export function selectDiagnosticRoutes(
 
 	if (routes.length === 0) {
 		const scope = params.paths?.length ? ` in requested paths: ${params.paths.join(", ")}` : "";
+		if (skipped.length > 0) {
+			const names = skipped.map((route) => route.adapter.name).join(", ");
+			throw new Error(
+				`No supported files found for available LSP commands${scope}. ` +
+					`Skipped unavailable default LSP commands: ${names}. ` +
+					"Install a matching server command or explicitly select a configured server.",
+			);
+		}
 		throw new Error(`No supported files found${scope}. ${SUPPORTED_SERVER_DESCRIPTION}`);
 	}
 
-	return { root, routes };
+	return { root, routes, skipped };
 }
 
 export function selectFixRoute(adapters: LspServerAdapter[], params: SingleFileRouteParams) {
 	const root = resolveRoot(params.root);
 	const file = path.resolve(root, params.path);
-	const candidates = filterAdapters(adapters, params.server).filter((adapter) => adapter.isSupportedFile(file));
+	const candidates = filterAdapters(adapters, params.server).filter((adapter) =>
+		adapter.isSupportedFile(file),
+	);
 	if (candidates.length === 0) throw unsupportedFileError("fix", params.path, params.server);
 	if (!params.server && candidates.length > 1) {
 		throw new Error(
@@ -80,11 +110,18 @@ export function selectFixRoute(adapters: LspServerAdapter[], params: SingleFileR
 	};
 }
 
+function diagnosticFilePolicyKey(adapter: LspServerAdapter) {
+	return JSON.stringify([
+		adapter.extensions,
+		[...adapter.skipDirectories].sort((left, right) => left.localeCompare(right)),
+	]);
+}
+
 function filterAdapters(adapters: LspServerAdapter[], selected: string | string[] | undefined) {
 	if (!selected) return adapters;
-	const names = [...new Set((Array.isArray(selected) ? selected : [selected]).map((name) => name.trim()))].filter(
-		(name) => name.length > 0,
-	);
+	const names = [
+		...new Set((Array.isArray(selected) ? selected : [selected]).map((name) => name.trim())),
+	].filter((name) => name.length > 0);
 	if (names.length === 0) throw new Error("LSP server parameter must not be blank.");
 	const matched = adapters.filter((adapter) => names.includes(adapter.name));
 	const missing = names.filter((name) => !adapters.some((adapter) => adapter.name === name));
@@ -94,5 +131,7 @@ function filterAdapters(adapters: LspServerAdapter[], selected: string | string[
 
 function unsupportedFileError(action: LspAction, filePath: string, server: string | undefined) {
 	const override = server ? ` for server '${server}'` : "";
-	return new Error(`No ${action} route supports ${filePath}${override}. ${SUPPORTED_SERVER_DESCRIPTION}`);
+	return new Error(
+		`No ${action} route supports ${filePath}${override}. ${SUPPORTED_SERVER_DESCRIPTION}`,
+	);
 }
