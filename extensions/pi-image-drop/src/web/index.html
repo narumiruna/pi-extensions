@@ -14,8 +14,8 @@
 				<h1>Image Drop</h1>
 				<p id="session-label" class="session-label">Connecting to Pi…</p>
 			</div>
-			<details>
-				<summary>Details</summary>
+			<details class="session-details">
+				<summary>Session details</summary>
 				<dl>
 					<dt>Working directory</dt>
 					<dd id="cwd">—</dd>
@@ -27,20 +27,23 @@
 			<section id="drop-zone" class="drop-zone" aria-labelledby="drop-title">
 				<div class="drop-copy">
 					<span class="drop-icon" aria-hidden="true">🖼️</span>
-					<h2 id="drop-title">Paste or drop images anywhere</h2>
-					<p>Use Ctrl+V or Command+V, drag files here, or choose files.</p>
+					<div>
+						<h2 id="drop-title">Add images</h2>
+						<p>Paste anywhere, drop files here, or choose images.</p>
+					</div>
 					<button id="choose-files" class="primary" type="button">Choose images</button>
 					<input id="file-input" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/heic,image/heif,image/avif,.bmp,.tif,.tiff,.heic,.heif,.avif" hidden />
 				</div>
 			</section>
 
-			<section class="batch" aria-labelledby="batch-title">
+			<section class="batch draft" aria-labelledby="batch-title">
 				<div class="batch-toolbar">
 					<div>
-						<h2 id="batch-title">Next Pi message</h2>
-						<p id="status" role="status" aria-live="polite">No images staged</p>
+						<h2 id="batch-title">Ready for next message</h2>
+						<p id="status">No images staged</p>
+						<p id="next-step" class="next-step" role="status" aria-live="polite">Choose images to add them to your next Pi message.</p>
 					</div>
-					<button id="clear-all" class="danger-secondary" type="button" disabled>Clear all</button>
+					<button id="clear-all" class="danger-secondary" type="button" hidden disabled>Clear all</button>
 				</div>
 				<div id="error-banner" class="banner error" role="alert" hidden></div>
 				<div id="grid" class="image-grid" aria-live="polite"></div>
@@ -49,17 +52,17 @@
 			<section class="history" aria-labelledby="history-title">
 				<div class="batch-toolbar">
 					<div>
-						<h2 id="history-title">Sent this session</h2>
-						<p id="history-status" role="status" aria-live="polite">No images sent this session</p>
+						<h2 id="history-title">Previously sent</h2>
+						<p id="history-status" role="status" aria-live="polite">No images sent yet</p>
 					</div>
-					<button id="clear-history" class="danger-secondary" type="button" disabled>Clear history</button>
+					<button id="clear-history" class="danger-secondary" type="button" hidden disabled>Clear history</button>
 				</div>
-				<p class="history-note">Sent images are not attached again unless you choose <strong>Add again</strong>. The oldest history is removed automatically at the configured memory limit, and all history is cleared when this Pi session ends.</p>
+				<p class="history-note"><span id="history-retention">0 images retained</span>. Images here are not attached again unless you choose <strong>Add again</strong>. The oldest are removed at the configured memory limit, and all are cleared when this Pi session ends.</p>
 				<div id="history-grid" class="image-grid" aria-live="polite"></div>
 			</section>
 
 			<p class="privacy">
-				Draft and sent-history images stay only in this Pi process. Sending a Pi message also sends its staged images to your configured model provider; local sent history remains until deleted, automatically evicted at the limit, or the Pi session ends.
+				Draft and previously sent images stay in this Pi process until removed, evicted at the retention limit, or the session ends. Sending a Pi message sends its staged images to your configured model provider; deleting local history does not retract images already sent.
 			</p>
 		</main>
 

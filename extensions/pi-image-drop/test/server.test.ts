@@ -126,9 +126,15 @@ test("bootstrap tokens rotate, replay fails, and clean pages require the session
 		const html = await page.text();
 		const app = await (await api(server, "/app.js", { cookie })).text();
 		const styles = await (await api(server, "/styles.css", { cookie })).text();
+		assert.match(html, /<summary>Session details<\/summary>/);
+		assert.match(html, /<h2 id="batch-title">Ready for next message<\/h2>/);
+		assert.match(html, /id="next-step"[^>]*role="status"/);
+		assert.match(html, /id="clear-all"[^>]*hidden/);
 		assert.match(html, /<section class="history" aria-labelledby="history-title">/);
+		assert.match(html, /<h2 id="history-title">Previously sent<\/h2>/);
+		assert.match(html, /id="history-retention"/);
 		assert.match(html, /id="history-grid"/);
-		assert.match(html, /id="clear-history"/);
+		assert.match(html, /id="clear-history"[^>]*hidden/);
 		assert.match(html, /<dialog id="clear-history-dialog"/);
 		assert.match(html, /<dialog id="image-preview-dialog"/);
 		assert.doesNotMatch(html, /id="image-preview-close"/);
@@ -139,6 +145,11 @@ test("bootstrap tokens rotate, replay fails, and clean pages require the session
 		assert.match(app, /event\.target === ui\.previewDialog\) closePreview\(\)/);
 		assert.match(app, /showModal\(\)/);
 		assert.match(app, /Enlarge preview of/);
+		assert.match(app, /draftGuidance/);
+		assert.match(
+			app,
+			/button\("Delete", "Delete", !mutable, \(\) => remove\(item\.id\), "danger-secondary"\)/,
+		);
 		assert.match(styles, /\.history/);
 		assert.match(styles, /\.image-preview-dialog/);
 		assert.match(styles, /\.image-preview-dismiss\s*{[^}]*width: 100%[^}]*height: 100%/s);

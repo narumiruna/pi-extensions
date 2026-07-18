@@ -61,14 +61,17 @@ button.primary {
 button.primary:hover:not(:disabled) {
 	background: var(--accent-strong);
 }
-button.danger,
-button.delete {
+button.danger {
 	border-color: var(--danger);
 	color: white;
 	background: var(--danger);
 }
 button.danger-secondary {
+	border-color: transparent;
+	background: transparent;
 	color: var(--danger);
+}
+button.danger-secondary:hover:not(:disabled) {
 	border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
 }
 
@@ -104,6 +107,9 @@ h1 {
 details {
 	max-width: min(28rem, 100%);
 }
+.session-details {
+	align-self: center;
+}
 summary {
 	min-height: 44px;
 	padding: 0.6rem;
@@ -129,14 +135,13 @@ main {
 }
 .drop-zone {
 	display: grid;
-	min-height: 260px;
+	min-height: 160px;
 	place-items: center;
 	border: 2px dashed #9da7ba;
 	border-radius: 18px;
-	padding: 2rem;
+	padding: 1.5rem 2rem;
 	background: var(--surface);
 	box-shadow: var(--shadow);
-	text-align: center;
 	transition:
 		border-color 0.15s,
 		background 0.15s,
@@ -151,22 +156,33 @@ main {
 	opacity: 0.66;
 }
 .drop-copy {
-	max-width: 36rem;
+	display: grid;
+	width: min(48rem, 100%);
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 1rem;
 }
 .drop-copy h2 {
-	margin: 0.4rem 0;
+	margin: 0;
 }
 .drop-copy p {
-	margin: 0.25rem 0 1.25rem;
+	margin: 0.15rem 0 0;
 	color: var(--muted);
 }
 .drop-icon {
-	font-size: 2.6rem;
+	font-size: 2.2rem;
 }
 
-.batch,
+.batch {
+	margin-top: 1.25rem;
+}
 .history {
-	margin-top: 1.5rem;
+	margin-top: 2rem;
+	border-top: 1px solid var(--line);
+	padding-top: 1.5rem;
+}
+.history h2 {
+	font-size: 1.25rem;
 }
 .batch-toolbar {
 	display: flex;
@@ -182,10 +198,20 @@ main {
 .batch-toolbar p {
 	color: var(--muted);
 }
+.batch-toolbar .next-step {
+	max-width: 48rem;
+	margin-top: 0.2rem;
+	color: var(--text);
+	font-weight: 600;
+}
 .history-note {
+	max-width: 58rem;
 	margin: 0 0 0.8rem;
 	color: var(--muted);
 	font-size: 0.9rem;
+}
+.history .image-card {
+	box-shadow: none;
 }
 .banner {
 	margin: 0.75rem 0;
@@ -444,6 +470,12 @@ dialog::backdrop {
 	.drop-zone {
 		min-height: 210px;
 		padding: 1rem;
+		text-align: center;
+	}
+	.drop-copy {
+		grid-template-columns: 1fr;
+		justify-items: center;
+		gap: 0.65rem;
 	}
 	.batch-toolbar {
 		align-items: start;
