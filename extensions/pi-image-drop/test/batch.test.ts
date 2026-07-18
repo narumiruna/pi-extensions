@@ -143,6 +143,19 @@ test("lease replacement cancels uploading and processing items without dropping 
 	assert.equal(batch.cancelInFlight("Again"), false);
 });
 
+test("lease replacement preserves Pi-side auto-resize reprocessing", () => {
+	const batch = new BatchStore(DEFAULT_SETTINGS);
+	const source = Buffer.from("source");
+	batch.reserveItems([{ id: "one", name: "one.png", size: source.byteLength }]);
+	batch.startProcessing("one", source);
+	batch.complete("one", processed("one"), true);
+
+	assert.deepEqual(batch.beginAutoResizeReprocessing(false), [{ id: "one", source }]);
+	assert.equal(batch.cancelInFlight("Page was replaced"), false);
+	assert.deepEqual(batch.complete("one", processed("one-again"), false), { kind: "ready" });
+	assert.equal(batch.publicState().phase, "ready");
+});
+
 test("reorder, delete, and clear require exact current revisions", () => {
 	const batch = new BatchStore(DEFAULT_SETTINGS);
 	ready(batch, "one");
