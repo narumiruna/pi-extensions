@@ -30,6 +30,7 @@ interface BatchItem extends ItemReservation {
 	source?: Buffer;
 	processed?: ProcessedImage;
 	processedAutoResize?: boolean;
+	processingOwner?: "browser" | "runtime";
 	error?: string;
 }
 
@@ -153,6 +154,7 @@ export class BatchStore {
 		item.processedAutoResize = undefined;
 		item.error = undefined;
 		item.status = "processing";
+		item.processingOwner = "browser";
 		return this.bump();
 	}
 
@@ -176,6 +178,7 @@ export class BatchStore {
 		item.processed = cloneProcessed(processed);
 		item.processedAutoResize = autoResize;
 		item.status = "ready";
+		item.processingOwner = undefined;
 		item.error = undefined;
 		if (duplicates.length > 0) {
 			const laterIds = new Set(duplicates.map(({ candidate }) => candidate.id));
@@ -195,6 +198,7 @@ export class BatchStore {
 		item.error = sanitizeError(error);
 		item.processed = undefined;
 		item.processedAutoResize = undefined;
+		item.processingOwner = undefined;
 		return this.bump();
 	}
 
@@ -214,7 +218,9 @@ export class BatchStore {
 		this.assertOpen();
 		if (this.reservation) return false;
 		const inFlight = this.items.filter(
-			(item) => item.status === "uploading" || item.status === "processing",
+			(item) =>
+				item.status === "uploading" ||
+				(item.status === "processing" && item.processingOwner === "browser"),
 		);
 		if (inFlight.length === 0) return false;
 		for (const item of inFlight) {
@@ -222,6 +228,7 @@ export class BatchStore {
 			item.error = sanitizeError(error);
 			item.processed = undefined;
 			item.processedAutoResize = undefined;
+			item.processingOwner = undefined;
 		}
 		this.bump();
 		return true;
@@ -245,6 +252,7 @@ export class BatchStore {
 			item.status = "processing";
 			item.processed = undefined;
 			item.processedAutoResize = undefined;
+			item.processingOwner = "runtime";
 			item.error = undefined;
 		}
 		this.bump();
@@ -259,6 +267,7 @@ export class BatchStore {
 			throw new BatchError("Image cannot be retried without uploaded source bytes", "not-ready");
 		}
 		item.status = "processing";
+		item.processingOwner = "browser";
 		item.error = undefined;
 		item.processedAutoResize = undefined;
 		this.bump();
