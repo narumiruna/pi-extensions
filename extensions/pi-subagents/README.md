@@ -67,7 +67,7 @@ Common controls:
 
 - `cwd` — run a job from a different working directory.
 - `timeoutMs` — set a hard subprocess timeout.
-- `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, or `xhigh` thinking for the spawned Pi process.
+- `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process.
 
 ## 🧭 Proactive use
 
@@ -381,7 +381,7 @@ Each subprocess has a hard timeout to avoid runaway workers.
 - Set `timeoutMs` on a task, chain step, or aggregator to override it locally.
 - If omitted, the default is `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset.
 
-Set `thinkingLevel` to pass Pi's `--thinking <level>` to a subprocess. Supported values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`.
+Set `thinkingLevel` to pass Pi's `--thinking <level>` to a subprocess. Supported values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 
 Thinking-level precedence is: task/chain step/aggregator `thinkingLevel` → top-level `thinkingLevel` → agent default from config or frontmatter → Pi subprocess default. Omit `thinkingLevel` to preserve existing behavior. Pi still owns model capability clamping, so unsupported thinking levels are handled by the spawned Pi process.
 

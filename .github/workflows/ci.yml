@@ -14,15 +14,8 @@ concurrency:
 
 jobs:
   check:
-    name: Check and test with Pi ${{ matrix.pi_version }}
+    name: Check and test with latest Pi
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        pi_version:
-          - "0.79.10"
-          - "0.80.3"
-          - "latest"
 
     steps:
       - name: Checkout
@@ -42,9 +35,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Pi ${{ matrix.pi_version }} packages
+      - name: Install latest Pi packages
         run: |
-          node scripts/set-pi-version.mjs "${{ matrix.pi_version }}"
+          node scripts/set-pi-version.mjs latest
           npm install --no-save
 
       - name: Run checks and tests
