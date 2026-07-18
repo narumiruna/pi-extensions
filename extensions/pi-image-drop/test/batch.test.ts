@@ -321,6 +321,26 @@ test("history FIFO eviction also enforces the combined resident-byte budget", ()
 	assert.equal(batch.publicHistoryState().totalBytes, 6);
 });
 
+test("queued Base64 images participate in FIFO resident-byte eviction", () => {
+	const batch = new BatchStore({
+		...DEFAULT_SETTINGS,
+		maxRetainedImages: 100,
+		maxRetainedBytes: 25,
+	});
+	ready(batch, "one", "123456");
+	const first = batch.reserveMessage("send one");
+	batch.commitReservation(first.digest);
+	ready(batch, "two", "abcdef");
+	assert.deepEqual(
+		batch.publicHistoryState().items.map((item) => item.name),
+		["one.png"],
+	);
+
+	batch.reserveMessage("queue two");
+	assert.equal(batch.publicState().phase, "reserved");
+	assert.deepEqual(batch.publicHistoryState().items, []);
+});
+
 test("failed reservation recovery never enters history and close releases draft and history", () => {
 	const batch = new BatchStore(DEFAULT_SETTINGS);
 	ready(batch, "one", "one");

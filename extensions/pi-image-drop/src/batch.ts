@@ -391,6 +391,7 @@ export class BatchStore {
 			preflightStarted: false,
 		};
 		this.reservation = reservation;
+		this.evictHistoryToBudget();
 		this.bump();
 		return cloneReservation(reservation);
 	}
@@ -567,11 +568,14 @@ export class BatchStore {
 	}
 
 	private draftResidentBytes(): number {
-		return this.items.reduce(
+		const itemBytes = this.items.reduce(
 			(sum, item) =>
 				sum + (item.source?.byteLength ?? item.size) + (item.processed?.bytes.byteLength ?? 0),
 			0,
 		);
+		const queuedBase64Bytes =
+			this.reservation?.images.reduce((sum, image) => sum + Buffer.byteLength(image.data), 0) ?? 0;
+		return itemBytes + queuedBase64Bytes;
 	}
 
 	private evictHistoryToBudget(): void {
