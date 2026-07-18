@@ -194,7 +194,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			},
 			{
 				name: "dart",
-				command: ["dart", "language-server", "--lsp"],
+				command: ["dart", "language-server"],
 				extensions: [".dart"],
 				sample: "lib/main.dart",
 				languageId: "dart",
@@ -588,6 +588,15 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
 			["missing"],
 		);
 		assert.equal(missingFileChecks > 0, true);
+		missingFileChecks = 0;
+		const unrelated = testAdapter("unrelated", [".bar"]);
+		unrelated.defaultCommand = { command: "./available-lsp", args: [] };
+		unrelated.isDefault = true;
+		assert.throws(
+			() => selectDiagnosticRoutes([unrelated, missing], { root }, 50),
+			/No supported files found for available LSP commands.*Skipped unavailable.*missing/,
+		);
+		assert.equal(missingFileChecks, 0);
 		assert.throws(
 			() => selectDiagnosticRoutes([missing], { root }, 50),
 			/No available default LSP commands.*missing/,

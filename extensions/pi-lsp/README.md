@@ -58,7 +58,7 @@ If no config is provided, pi-lsp ships a broad catalog of direct-command default
 | Lua | `lua-language-server` | `lua-language-server` | `.lua` |
 | PHP | `intelephense` | `intelephense --stdio` | `.php` |
 | Prisma | `prisma` | `prisma-language-server --stdio` | `.prisma` |
-| Dart | `dart` | `dart language-server --lsp` | `.dart` |
+| Dart | `dart` | `dart language-server` | `.dart` |
 | OCaml | `ocaml-lsp` | `ocamllsp` | `.ml`, `.mli` |
 | Bash | `bash-language-server` | `bash-language-server start` | `.sh`, `.bash` |
 | Terraform | `terraform-ls` | `terraform-ls serve` | `.tf`, `.tfvars` |

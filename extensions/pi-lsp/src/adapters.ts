@@ -159,7 +159,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 	},
 	{
 		name: "dart",
-		command: ["dart", "language-server", "--lsp"],
+		command: ["dart", "language-server"],
 		extensions: [".dart"],
 		skipDirectories: [".dart_tool", "build"],
 	},

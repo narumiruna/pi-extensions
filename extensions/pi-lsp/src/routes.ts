@@ -73,6 +73,14 @@ export function selectDiagnosticRoutes(
 
 	if (routes.length === 0) {
 		const scope = params.paths?.length ? ` in requested paths: ${params.paths.join(", ")}` : "";
+		if (skipped.length > 0) {
+			const names = skipped.map((route) => route.adapter.name).join(", ");
+			throw new Error(
+				`No supported files found for available LSP commands${scope}. ` +
+					`Skipped unavailable default LSP commands: ${names}. ` +
+					"Install a matching server command or explicitly select a configured server.",
+			);
+		}
 		throw new Error(`No supported files found${scope}. ${SUPPORTED_SERVER_DESCRIPTION}`);
 	}
 
