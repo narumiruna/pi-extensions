@@ -2,9 +2,9 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; public Telegraph page publishing; retry handling; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; public Telegraph page publishing; retry handling; side questions; and keep-awake automation.
 
-**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, Telegraph publishing, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
+**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, image attachments, Telegraph publishing, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
 ## 📦 Pi extension packages
 
@@ -21,6 +21,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
 | [`@narumitw/pi-goal`](./extensions/pi-goal) | 🎯 `/goal` mode that keeps the agent working until verified completion, with an opt-in experimental ordered queue. | `pi install npm:@narumitw/pi-goal` |
 | [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) | 🔎 Google GenAI grounding tools for Google Search, Maps, and URL context. | `pi install npm:@narumitw/pi-google-genai` |
+| [`@narumitw/pi-image-drop`](./extensions/pi-image-drop) | 🖼️ `/image-drop` browser staging for ordered, memory-only image attachments on the next Pi message. | `pi install npm:@narumitw/pi-image-drop` |
 | [`@narumitw/pi-langfuse`](./extensions/pi-langfuse) | 🪢 Langfuse traces for Pi agent runs, LLM generations, token usage, costs, and tool activity. | `pi install npm:@narumitw/pi-langfuse` |
 | [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Language-agnostic LSP diagnostics and code actions for JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
 | [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) | 🧭 Codex-like read-only `/plan` collaboration mode with safe exploration and implementation-ready plans. | `pi install npm:@narumitw/pi-plan-mode` |
@@ -72,6 +73,10 @@ Use [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) to give Pi native Fire
 ### 🔎 Google GenAI grounding
 
 Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Google Search, Google Maps, and URL-context grounding through Gemini Interactions with Pi Google auth or a private `pi-google-genai.json` config.
+
+### 🖼️ Local image staging
+
+Use [`@narumitw/pi-image-drop`](./extensions/pi-image-drop) to paste, drop, preview, and order images on a private loopback page, then attach the memory-only batch to the next non-empty interactive Pi message. `/image-drop` prints a one-time link and never launches a browser automatically.
 
 ### 📝 Public Telegraph publishing
 
@@ -143,6 +148,7 @@ pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-github-pr
 pi -e ./extensions/pi-goal
 pi -e ./extensions/pi-google-genai
+pi -e ./extensions/pi-image-drop
 pi -e ./extensions/pi-langfuse
 pi -e ./extensions/pi-lsp
 pi -e ./extensions/pi-plan-mode
@@ -165,6 +171,7 @@ npm run pack:firecrawl
 npm run pack:github-pr
 npm run pack:goal
 npm run pack:google-genai
+npm run pack:image-drop
 npm run pack:langfuse
 npm run pack:lsp
 npm run pack:plan-mode
@@ -201,6 +208,7 @@ extensions/
 ├── pi-github-pr/
 ├── pi-goal/
 ├── pi-google-genai/
+├── pi-image-drop/
 ├── pi-langfuse/
 ├── pi-lsp/
 ├── pi-plan-mode/

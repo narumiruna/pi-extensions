@@ -1,0 +1,51 @@
+{
+	"name": "@narumitw/pi-image-drop",
+	"version": "0.18.0",
+	"description": "Pi extension for staging browser images and attaching them to the next message.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"images",
+		"attachments",
+		"browser"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/image-drop.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"bmp-js": "^0.1.0",
+		"heic-decode": "^2.1.0",
+		"sharp": "^0.35.3"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.3",
+		"@earendil-works/pi-ai": "0.80.3",
+		"@earendil-works/pi-coding-agent": "0.80.3",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-image-drop"
+	}
+}

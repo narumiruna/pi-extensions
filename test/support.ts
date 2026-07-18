@@ -153,6 +153,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 	const statuses = new Map<string, string | undefined>();
 	const widgets = new Map<string, unknown>();
 	let footer: unknown;
+	let editorText = String(overrides.editorText ?? "");
 
 	const ctx = {
 		cwd: overrides.cwd ?? process.cwd(),
@@ -171,6 +172,12 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 			setFooter(value: unknown) {
 				footer = value;
 			},
+			setEditorText(value: string) {
+				editorText = value;
+			},
+			getEditorText() {
+				return editorText;
+			},
 			confirm: overrides.confirm ?? (async () => true),
 			input: overrides.input ?? (async () => undefined),
 			select: overrides.select ?? (async () => undefined),
@@ -179,11 +186,13 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 		},
 		isIdle: overrides.isIdle ?? (() => true),
 		hasPendingMessages: overrides.hasPendingMessages ?? (() => false),
+		isProjectTrusted: overrides.isProjectTrusted ?? (() => false),
 		abort: overrides.abort ?? (() => undefined),
 		reload: overrides.reload ?? (async () => undefined),
 		getContextUsage: overrides.getContextUsage ?? (() => undefined),
 		sessionManager: overrides.sessionManager ?? {
 			getSessionId: () => "test-session",
+			getSessionName: () => undefined,
 			getBranch: () => [],
 			getEntries: () => [],
 		},
@@ -202,6 +211,9 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 		widgets,
 		get footer() {
 			return footer;
+		},
+		get editorText() {
+			return editorText;
 		},
 	};
 }
