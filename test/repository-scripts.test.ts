@@ -60,10 +60,24 @@ test("shared-version discovery skips workspace roots that are not present", () =
 	}
 });
 
-test("experimental publishing is manual-only", () => {
+test("publish workflow selects changed tag packages and all manual recovery packages", () => {
 	const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/publish.yml"), "utf8");
+	assert.match(workflow, /fetch-depth: 0/);
+	assert.match(workflow, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);
+	assert.match(workflow, /RELEASE_TAG: \$\{\{ github\.ref_name \}\}/);
+	assert.match(workflow, /list-publish-workspaces\.mjs --release "\$RELEASE_TAG"/);
+	assert.match(workflow, /list-publish-workspaces\.mjs --all/);
+	assert.match(workflow, /npm view "\$\{package\}@\$\{version\}" version/);
+	assert.match(workflow, /NPM_CONFIG_PROVENANCE: "true"/);
+});
+
+test("experimental publishing is manual-only", () => {
+	const selector = readFileSync(
+		path.join(repositoryRoot, "scripts/list-publish-workspaces.mjs"),
+		"utf8",
+	);
 	const justfile = readFileSync(path.join(repositoryRoot, "justfile"), "utf8");
-	assert.match(workflow, /dirent\.name === "experimental"/);
+	assert.match(selector, /new Set\(\["deprecated", "experimental"\]\)/);
 	assert.match(justfile, /package_json="\.\/extensions\/experimental\/pi-\$name\/package\.json"/);
 	assert.match(justfile, /WARNING: manually publishing experimental Pi extension/);
 	assert.match(justfile, /publish name otp=""/);
