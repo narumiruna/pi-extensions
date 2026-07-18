@@ -1,4 +1,5 @@
 import {
+	attemptMutation,
 	canMutate,
 	formatBytes,
 	moveItem,
@@ -198,8 +199,9 @@ async function retry(id) {
 }
 
 async function remove(id) {
-	await mutate(`/api/items/${id}?revision=${state.batch.revision}`, { method: "DELETE" });
-	pendingFiles.delete(id);
+	if (await mutate(`/api/items/${id}?revision=${state.batch.revision}`, { method: "DELETE" })) {
+		pendingFiles.delete(id);
+	}
 }
 
 async function reorder(ids) {
@@ -208,18 +210,21 @@ async function reorder(ids) {
 }
 
 async function clearAll() {
-	await mutate("/api/clear", { method: "POST", json: { revision: state.batch.revision } });
-	pendingFiles.clear();
+	if (await mutate("/api/clear", { method: "POST", json: { revision: state.batch.revision } })) {
+		pendingFiles.clear();
+	}
 }
 
 async function mutate(path, options) {
-	try {
-		applyState(await request(path, options));
-		clearError();
-		render();
-	} catch (error) {
-		showError(errorMessage(error));
+	const result = await attemptMutation(() => request(path, options));
+	if (!result.ok) {
+		showError(errorMessage(result.error));
+		return false;
 	}
+	applyState(result.value);
+	clearError();
+	render();
+	return true;
 }
 
 function render() {

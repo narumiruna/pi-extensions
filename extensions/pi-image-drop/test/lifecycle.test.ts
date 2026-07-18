@@ -354,10 +354,11 @@ test("follow-up input commits only after the matching ordered image message star
 		context.ctx,
 	);
 	assert.equal(runtime.getBatchForTesting()?.publicState().phase, "reserved");
+	const laterImage = { type: "image", data: "later", mimeType: "image/jpeg" };
 	await emit(
 		mock,
 		"message_start",
-		{ message: { role: "user", content: transformed.images } },
+		{ message: { role: "user", content: [...transformed.images, laterImage] } },
 		context.ctx,
 	);
 	assert.equal(runtime.getBatchForTesting()?.publicState().phase, "empty");
@@ -391,6 +392,32 @@ test("session replacement closes the old server and clears every staged byte", a
 	assert.equal(harness.serverCloses, 1);
 	assert.equal(harness.runtime.getBatchForTesting()?.publicState().phase, "empty");
 	assert.equal(harness.context.widgets.get("image-drop"), undefined);
+});
+
+test("an overlapping stale session start cannot replace the newer session", async () => {
+	const mock = createMockPi();
+	let resolveFirst!: (value: { kind: "missing"; settings: typeof DEFAULT_SETTINGS }) => void;
+	let calls = 0;
+	const runtime = new ImageDropRuntime(mock.pi, {
+		loadSettings: () => {
+			calls += 1;
+			if (calls === 1) {
+				return new Promise((resolve) => {
+					resolveFirst = resolve;
+				});
+			}
+			return Promise.resolve({ kind: "missing", settings: { ...DEFAULT_SETTINGS } });
+		},
+	});
+	const oldContext = createMockContext({ cwd: "/workspace/old" });
+	const newContext = createMockContext({ cwd: "/workspace/new" });
+	const staleStart = runtime.start(oldContext.ctx);
+	await new Promise((resolve) => setImmediate(resolve));
+	await runtime.start(newContext.ctx);
+	const currentBatch = runtime.getBatchForTesting();
+	resolveFirst({ kind: "missing", settings: { ...DEFAULT_SETTINGS } });
+	await staleStart;
+	assert.equal(runtime.getBatchForTesting(), currentBatch);
 });
 
 test("non-ready batches block submission and restore editor text", async () => {

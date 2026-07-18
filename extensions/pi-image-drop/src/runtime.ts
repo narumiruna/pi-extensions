@@ -88,12 +88,13 @@ export class ImageDropRuntime {
 	}
 
 	async start(ctx: ExtensionContext): Promise<void> {
-		this.generation += 1;
+		const generation = ++this.generation;
 		this.closed = true;
 		this.sessionAbort.abort();
 		await this.releaseServer();
 		this.batch?.close();
 		const result = await this.dependencies.loadSettings();
+		if (generation !== this.generation) return;
 		this.settings = result.settings;
 		this.batch = new BatchStore(result.settings);
 		this.processor = this.dependencies.createProcessor();
@@ -318,9 +319,7 @@ export class ImageDropRuntime {
 		const reservation = this.batch?.currentReservation();
 		if (!reservation) return;
 		const images = userMessageImages(event);
-		if (images.length < reservation.images.length) return;
-		const attached = images.slice(-reservation.images.length);
-		if (digestImages(attached) !== reservation.digest) return;
+		if (!containsImageSequence(images, reservation.images.length, reservation.digest)) return;
 		this.batch?.commitReservation(reservation.digest);
 		this.server?.broadcastState();
 		this.updateWidget(ctx);
@@ -396,6 +395,13 @@ function userMessageImages(event: unknown): ImageContent[] {
 	const content = event.message.content;
 	if (!Array.isArray(content)) return [];
 	return content.filter(isImageContent);
+}
+
+function containsImageSequence(images: ImageContent[], length: number, digest: string): boolean {
+	for (let start = 0; start + length <= images.length; start += 1) {
+		if (digestImages(images.slice(start, start + length)) === digest) return true;
+	}
+	return false;
 }
 
 function isImageContent(value: unknown): value is ImageContent {

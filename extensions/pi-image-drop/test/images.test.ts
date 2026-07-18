@@ -43,10 +43,14 @@ function tinyBmp(): Buffer {
 	return buffer;
 }
 
-async function animatedGif(): Promise<Buffer> {
-	const pixels = Buffer.from([255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255]);
+async function animatedGif(width = 2, pageHeight = 1): Promise<Buffer> {
+	const framePixels = width * pageHeight;
+	const pixels = Buffer.alloc(framePixels * 2 * 4);
+	for (let index = 0; index < framePixels * 2; index += 1) {
+		pixels.set(index < framePixels ? [255, 0, 0, 255] : [0, 255, 0, 255], index * 4);
+	}
 	return sharp(pixels, {
-		raw: { width: 2, height: 2, channels: 4, pageHeight: 1 },
+		raw: { width, height: pageHeight * 2, channels: 4, pageHeight },
 	})
 		.gif({ delay: [100, 200], loop: 0 })
 		.toBuffer();
@@ -120,8 +124,25 @@ test("animated GIF remains animated after sanitization", async () => {
 	});
 	const metadata = await sharp(result.bytes, { animated: true }).metadata();
 	assert.equal(result.outputFormat, "gif");
+	assert.equal(metadata.width, 2);
+	assert.equal(metadata.height, 2);
+	assert.equal(metadata.pageHeight, 1);
 	assert.equal(metadata.pages, 2);
 	assert.deepEqual(metadata.delay, [100, 200]);
+});
+
+test("animated GIF resize preserves per-frame geometry", async () => {
+	const result = await processImage(await animatedGif(2100, 21), {
+		autoResize: true,
+		maxImagePixels: 1_000_000,
+	});
+	const metadata = await sharp(result.bytes, { animated: true }).metadata();
+	assert.equal(result.width, 2000);
+	assert.equal(result.height, 20);
+	assert.equal(metadata.width, 2000);
+	assert.equal(metadata.pageHeight, 20);
+	assert.equal(metadata.height, 40);
+	assert.equal(metadata.pages, 2);
 });
 
 test("auto-resize enforces dimensions and Base64 payload while no-resize rejects unsafe output", async () => {

@@ -14,6 +14,9 @@ type StateHelpers = {
 	moveItemBefore(ids: string[], id: string, target: string): string[];
 	canMutate(batch: { phase: string }): boolean;
 	preferNewestState<T extends { batch: { revision: number } }>(current: T | undefined, next: T): T;
+	attemptMutation<T>(
+		operation: () => Promise<T>,
+	): Promise<{ ok: true; value: T } | { ok: false; error: unknown }>;
 	formatBytes(value: number): string;
 };
 
@@ -54,6 +57,18 @@ test("web ordering helpers are immutable and bounded", () => {
 	assert.deepEqual(helpers.moveItem(ids, "one", -1), ids);
 	assert.deepEqual(helpers.moveItemBefore(ids, "three", "one"), ["three", "one", "two"]);
 	assert.deepEqual(ids, ["one", "two", "three"]);
+});
+
+test("web mutation attempts expose failures so local retry files can be retained", async () => {
+	const failure = new Error("stale revision");
+	assert.deepEqual(await helpers.attemptMutation(async () => Promise.reject(failure)), {
+		ok: false,
+		error: failure,
+	});
+	assert.deepEqual(await helpers.attemptMutation(async () => "updated"), {
+		ok: true,
+		value: "updated",
+	});
 });
 
 test("web helpers gate frozen state, reject stale events, and format bounded sizes", () => {

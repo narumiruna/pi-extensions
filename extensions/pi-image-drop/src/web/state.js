@@ -49,6 +49,14 @@ export function preferNewestState(current, next) {
 	return current;
 }
 
+export async function attemptMutation(operation) {
+	try {
+		return { ok: true, value: await operation() };
+	} catch (error) {
+		return { ok: false, error };
+	}
+}
+
 export function formatBytes(value) {
 	const bytes = Math.max(0, Number(value) || 0);
 	if (bytes < 1024) return `${bytes} B`;

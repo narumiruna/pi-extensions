@@ -347,6 +347,52 @@ test("an interrupted browser upload becomes a visible deletable error after refr
 	}
 });
 
+test("a stale lease cannot complete processing after a new page takes control", async () => {
+	const batch = new BatchStore(SETTINGS);
+	let release!: () => void;
+	let processing!: () => void;
+	const started = new Promise<void>((resolve) => {
+		processing = resolve;
+	});
+	const server = await ImageDropServer.start({
+		batch,
+		settings: SETTINGS,
+		projectName: "demo",
+		cwd: "/workspace/demo",
+		process: async (source) => {
+			processing();
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return result(source);
+		},
+		getAutoResize: async () => true,
+	});
+	try {
+		const cookie = await authenticate(server);
+		const oldClient = await lease(server, cookie, "old-client");
+		await api(server, "/api/items", {
+			method: "POST",
+			cookie,
+			client: oldClient,
+			body: JSON.stringify({ revision: 0, items: [{ id: "one", name: "one.png", size: 3 }] }),
+		});
+		const upload = api(server, "/api/items/one/content", {
+			method: "PUT",
+			cookie,
+			client: oldClient,
+			body: Buffer.from("one"),
+		});
+		await started;
+		await lease(server, cookie, "new-client");
+		release();
+		assert.equal((await upload).status, 409);
+		assert.notEqual(batch.publicState().items[0]?.status, "ready");
+	} finally {
+		await server.close();
+	}
+});
+
 test("deleting an item during processing discards late native output", async () => {
 	const batch = new BatchStore(SETTINGS);
 	let release!: () => void;

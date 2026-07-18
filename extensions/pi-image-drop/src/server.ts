@@ -28,6 +28,11 @@ interface SseClient {
 	response: ServerResponse;
 }
 
+interface ClientLease {
+	clientId: string;
+	generation: number;
+}
+
 class HttpError extends Error {
 	constructor(
 		readonly status: number,
@@ -47,6 +52,7 @@ export class ImageDropServer {
 	private readonly sockets = new Set<Socket>();
 	private readonly sseClients = new Set<SseClient>();
 	private activeClientId?: string;
+	private activeClientGeneration = 0;
 	private closed = false;
 	private closePromise?: Promise<void>;
 
@@ -187,9 +193,10 @@ export class ImageDropServer {
 				return;
 			}
 			this.assertMutation(request);
-			this.assertActiveClient(request);
+			const lease = this.assertActiveClient(request);
 			if (request.method === "POST" && url.pathname === "/api/items") {
 				const body = await readJson(request, JSON_LIMIT);
+				this.assertLease(lease);
 				const revision = integerField(body, "revision");
 				const inputs = arrayField(body, "items").map((item) => {
 					if (!isRecord(item)) throw new HttpError(400, "Invalid item reservation");
@@ -210,6 +217,7 @@ export class ImageDropServer {
 				try {
 					source = await readBody(request, this.options.settings.maxImageBytes);
 				} catch (error) {
+					this.assertLease(lease);
 					try {
 						this.options.batch.failUpload(id, `Upload failed: ${formatError(error)}`);
 					} catch (failure) {
@@ -218,9 +226,10 @@ export class ImageDropServer {
 					this.broadcastState();
 					throw error;
 				}
+				this.assertLease(lease);
 				this.options.batch.startProcessing(id, source);
 				this.broadcastState();
-				const completed = await this.processItem(id, source, request);
+				const completed = await this.processItem(id, source, request, lease);
 				this.broadcastState();
 				this.json(response, 200, { ...this.statePayload(), duplicateOf: completed.duplicateOf });
 				return;
@@ -228,6 +237,7 @@ export class ImageDropServer {
 			const failureMatch = /^\/api\/items\/([A-Za-z0-9_-]{1,80})\/fail$/.exec(url.pathname);
 			if (request.method === "POST" && failureMatch) {
 				const body = await readJson(request, JSON_LIMIT);
+				this.assertLease(lease);
 				this.options.batch.failUpload(failureMatch[1] as string, stringField(body, "error"));
 				this.respondWithState(response);
 				return;
@@ -237,7 +247,7 @@ export class ImageDropServer {
 				const id = retryMatch[1] as string;
 				const source = this.options.batch.retrySource(id);
 				this.broadcastState();
-				const completed = await this.processItem(id, source, request);
+				const completed = await this.processItem(id, source, request, lease);
 				this.broadcastState();
 				this.json(response, 200, { ...this.statePayload(), duplicateOf: completed.duplicateOf });
 				return;
@@ -250,6 +260,7 @@ export class ImageDropServer {
 			}
 			if (request.method === "PUT" && url.pathname === "/api/order") {
 				const body = await readJson(request, JSON_LIMIT);
+				this.assertLease(lease);
 				const ids = arrayField(body, "ids").map((id) => {
 					if (typeof id !== "string") throw new HttpError(400, "Invalid image order");
 					return id;
@@ -260,6 +271,7 @@ export class ImageDropServer {
 			}
 			if (request.method === "POST" && url.pathname === "/api/clear") {
 				const body = await readJson(request, JSON_LIMIT);
+				this.assertLease(lease);
 				this.options.batch.clear(integerField(body, "revision"));
 				this.respondWithState(response);
 				return;
@@ -295,15 +307,26 @@ export class ImageDropServer {
 		if (request.headers.origin !== this.origin) throw new HttpError(403, "Unexpected Origin");
 	}
 
-	private assertActiveClient(request: IncomingMessage): void {
-		const client = request.headers["x-image-drop-client"];
-		if (typeof client !== "string" || client !== this.activeClientId) {
+	private assertActiveClient(request: IncomingMessage): ClientLease {
+		const clientId = request.headers["x-image-drop-client"];
+		if (typeof clientId !== "string" || clientId !== this.activeClientId) {
+			throw new HttpError(409, "This page no longer owns the editing lease");
+		}
+		return { clientId, generation: this.activeClientGeneration };
+	}
+
+	private assertLease(lease: ClientLease): void {
+		if (
+			lease.clientId !== this.activeClientId ||
+			lease.generation !== this.activeClientGeneration
+		) {
 			throw new HttpError(409, "This page no longer owns the editing lease");
 		}
 	}
 
 	private takeLease(clientId: string): void {
 		const previous = this.activeClientId;
+		if (previous !== clientId) this.activeClientGeneration += 1;
 		this.activeClientId = clientId;
 		if (previous && previous !== clientId) {
 			for (const client of [...this.sseClients]) {
@@ -335,21 +358,26 @@ export class ImageDropServer {
 		id: string,
 		source: Buffer,
 		request: IncomingMessage,
+		lease: ClientLease,
 	): Promise<{ duplicateOf?: string }> {
 		const requestAbort = new AbortController();
 		request.once("aborted", () => requestAbort.abort());
 		const signal = AbortSignal.any([this.abortController.signal, requestAbort.signal]);
 		try {
 			const autoResize = await this.options.getAutoResize();
+			this.assertLease(lease);
 			const processed = await this.options.process(source, {
 				autoResize,
 				maxImagePixels: this.options.settings.maxImagePixels,
 				signal,
 			});
+			this.assertLease(lease);
 			const completion = this.options.batch.complete(id, processed, autoResize);
 			return completion.kind === "duplicate" ? { duplicateOf: completion.existingId } : {};
 		} catch (error) {
+			if (error instanceof HttpError) throw error;
 			if (this.closed || signal.aborted || isDiscardedItemError(error)) return {};
+			this.assertLease(lease);
 			if (!this.failItem(id, formatError(error))) return {};
 			throw new HttpError(422, formatError(error));
 		} finally {
