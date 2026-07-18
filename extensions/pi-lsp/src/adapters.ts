@@ -70,6 +70,16 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		command: ["ruff", "server"],
 		extensions: [".py", ".pyi"],
 	},
+	{
+		name: "rust-analyzer",
+		command: ["rust-analyzer"],
+		extensions: [".rs"],
+	},
+	{
+		name: "gopls",
+		command: ["gopls"],
+		extensions: [".go"],
+	},
 ];
 
 export function loadRuntime(cwd = process.cwd()) {
@@ -305,6 +315,7 @@ function languageIdFor(_config: InternalLspServer, filePath: string) {
 const LANGUAGE_IDS: Record<string, string> = {
 	".cjs": "javascript",
 	".cts": "typescript",
+	".go": "go",
 	".gql": "graphql",
 	".js": "javascript",
 	".jsx": "javascriptreact",
@@ -313,6 +324,7 @@ const LANGUAGE_IDS: Record<string, string> = {
 	".mts": "typescript",
 	".py": "python",
 	".pyi": "python",
+	".rs": "rust",
 	".ts": "typescript",
 	".tsx": "typescriptreact",
 };

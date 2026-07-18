@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
-import { consumeLspConfigNotice, loadConfig } from "../src/adapters.js";
+import { consumeLspConfigNotice, loadConfig, loadRuntime } from "../src/adapters.js";
 import { commandExists, commandFromEnv, splitCommand } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
 import lsp from "../src/pi-lsp.js";
@@ -37,6 +37,38 @@ test("lsp registers diagnostics/fix tools, command, and status hooks", () => {
 	);
 	assert.ok(mock.commands.has("lsp"));
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
+});
+
+test("default LSP config routes Rust and Go through their official servers", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-defaults-"));
+	const agentDir = path.join(root, "agent");
+	const project = path.join(root, "project");
+	mkdirSync(agentDir);
+	mkdirSync(project);
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousConfig = process.env.PI_LSP_CONFIG;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	delete process.env.PI_LSP_CONFIG;
+
+	try {
+		const { adapters } = loadRuntime(project);
+		const rustAnalyzer = adapters.find((adapter) => adapter.name === "rust-analyzer");
+		const gopls = adapters.find((adapter) => adapter.name === "gopls");
+		assert.ok(rustAnalyzer);
+		assert.ok(gopls);
+		assert.deepEqual(rustAnalyzer.defaultCommand, { command: "rust-analyzer", args: [] });
+		assert.deepEqual(rustAnalyzer.extensions, [".rs"]);
+		assert.equal(rustAnalyzer.languageIdFor("src/main.rs"), "rust");
+		assert.deepEqual(gopls.defaultCommand, { command: "gopls", args: [] });
+		assert.deepEqual(gopls.extensions, [".go"]);
+		assert.equal(gopls.languageIdFor("main.go"), "go");
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		if (previousConfig === undefined) delete process.env.PI_LSP_CONFIG;
+		else process.env.PI_LSP_CONFIG = previousConfig;
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("command helpers split shell-like strings and honor environment overrides", () => {
