@@ -173,8 +173,13 @@ main {
 	font-size: 2.2rem;
 }
 
+.collection-note {
+	margin: 1rem 0 0;
+	color: var(--muted);
+	font-size: 0.9rem;
+}
 .batch {
-	margin-top: 1.25rem;
+	margin-top: 0.75rem;
 }
 .history {
 	margin-top: 2rem;
@@ -204,10 +209,26 @@ main {
 	color: var(--text);
 	font-weight: 600;
 }
-.history-note {
+.history-toolbar {
+	display: flex;
+	align-items: start;
+	justify-content: flex-start;
+	gap: 1rem;
+	margin-bottom: 0.8rem;
+}
+.history-summary {
+	min-width: 0;
 	max-width: 58rem;
-	margin: 0 0 0.8rem;
+}
+.history-summary h2,
+.history-summary p {
+	margin: 0;
+}
+.history-summary > p {
 	color: var(--muted);
+}
+.history-note {
+	margin-top: 0.35rem;
 	font-size: 0.9rem;
 }
 .history .image-card {
@@ -225,7 +246,7 @@ main {
 }
 .image-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(min(100%, 245px), 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 245px), 1fr));
 	gap: 1rem;
 }
 .image-card {
@@ -237,6 +258,9 @@ main {
 	border-radius: 14px;
 	background: var(--surface);
 	box-shadow: 0 4px 16px rgb(19 33 68 / 7%);
+}
+.image-card:only-child {
+	max-width: 360px;
 }
 .image-card.status-error {
 	border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
@@ -479,6 +503,12 @@ dialog::backdrop {
 	}
 	.batch-toolbar {
 		align-items: start;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.history-toolbar {
+		flex-direction: column;
+		gap: 0.5rem;
 	}
 	.image-grid {
 		grid-template-columns: 1fr;

@@ -28,6 +28,16 @@ export function summarizeHistory(history) {
 	};
 }
 
+const SHARED_METADATA_NOTE = "Sensitive image metadata removed";
+
+export function draftPresentation(batch) {
+	const summary = summarizeBatch(batch);
+	return {
+		status: summary.total === 0 ? "" : `${summary.label} · ${formatBytes(summary.bytes)}`,
+		guidance: draftGuidance(batch),
+	};
+}
+
 export function draftGuidance(batch) {
 	const summary = summarizeBatch(batch);
 	if (batch.phase === "closed") return "This Pi session is no longer accepting images.";
@@ -51,6 +61,10 @@ export function statusLabel(phase, counts, total) {
 	if (counts.uploading > 0) parts.push(`${counts.uploading} uploading`);
 	if (counts.error > 0) parts.push(`${counts.error} need attention`);
 	return parts.join(" · ");
+}
+
+export function visibleItemNotes(notes) {
+	return Array.isArray(notes) ? notes.filter((note) => note !== SHARED_METADATA_NOTE) : [];
 }
 
 export function moveItem(ids, id, direction) {
