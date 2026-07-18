@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { discoverAgents, type AgentScope } from "./agents.js";
+import { discoverAgents, type AgentScope, isThinkingLevel } from "./agents.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
@@ -830,10 +830,7 @@ export function resolveStatefulTransportKind(
 }
 
 function normalizeRuntimeThinkingLevel(value: string): ParentRuntimeSnapshot["thinkingLevel"] {
-	if (value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh") {
-		return value;
-	}
-	return value === "max" ? "xhigh" : "off";
+	return isThinkingLevel(value) ? value : "off";
 }
 
 export {

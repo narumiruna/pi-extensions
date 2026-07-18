@@ -10,6 +10,7 @@ import type { AgentConfig } from "../src/agents.js";
 import {
 	type ChildSession,
 	type ChildSessionCreateOptions,
+	copyRegisteredProviders,
 	createInProcessResourceLoader,
 	createSdkChildSession,
 	InProcessTransport,
@@ -378,6 +379,33 @@ test("in-process tool validation rejects unavailable extension tools without wid
 	);
 });
 
+test("registered providers copy config and native definitions into child runtimes", () => {
+	const config = { baseUrl: "https://config.example" };
+	const nativeProvider = { id: "native-provider" };
+	const configRegistrations: Array<[string, unknown]> = [];
+	const nativeRegistrations: unknown[] = [];
+	const parentRegistry = {
+		getRegisteredProviderIds: () => ["config-provider", "native-provider"],
+		getRegisteredProviderConfig: (provider: string) =>
+			provider === "config-provider" ? config : undefined,
+		getRegisteredNativeProvider: (provider: string) =>
+			provider === "native-provider" ? nativeProvider : undefined,
+	};
+	const childRuntime = {
+		registerProvider: (provider: string, providerConfig: unknown) => {
+			configRegistrations.push([provider, providerConfig]);
+		},
+		registerNativeProvider: (provider: unknown) => {
+			nativeRegistrations.push(provider);
+		},
+	};
+
+	copyRegisteredProviders(parentRegistry as never, childRuntime as never);
+
+	assert.deepEqual(configRegistrations, [["config-provider", config]]);
+	assert.deepEqual(nativeRegistrations, [nativeProvider]);
+});
+
 test("InProcessTransport normalizes unsupported tools without creating a child", async () => {
 	let creations = 0;
 	const transport = new InProcessTransport({
@@ -473,7 +501,7 @@ test("registered detached spawn returns while running and publishes each in-proc
 		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		mock.events.get("model_select")?.[0]?.({ model: selectedModel }, context.ctx);
-		mock.events.get("thinking_level_select")?.[0]?.({ level: "high" }, context.ctx);
+		mock.events.get("thinking_level_select")?.[0]?.({ level: "max" }, context.ctx);
 		const execute = async (name: string, params: Record<string, unknown>) => {
 			const tool = mock.tools.find((candidate) => candidate.name === name) as {
 				execute: (...args: unknown[]) => Promise<unknown>;
@@ -544,7 +572,7 @@ test("registered detached spawn returns while running and publishes each in-proc
 		assert.deepEqual(child.prompts, ["first", "second", "interrupt me", "recovered"]);
 		assert.equal(created.length, 1);
 		assert.equal(created[0].parentRuntime.model, selectedModel);
-		assert.equal(created[0].parentRuntime.thinkingLevel, "high");
+		assert.equal(created[0].parentRuntime.thinkingLevel, "max");
 		assert.equal(child.disposals, 1);
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.equal(
@@ -628,14 +656,14 @@ test("public SDK child-session adapter completes a deterministic in-memory turn 
 	assert.equal(inherited.thinkingLevel, "medium");
 	const explicit = await resolveChildModel({
 		agent: managedAgent(),
-		agentConfig: agentConfig({ model: "child-smoke/child-model:high", thinkingLevel: undefined }),
+		agentConfig: agentConfig({ model: "child-smoke/child-model:max", thinkingLevel: undefined }),
 		history: [],
 		modelRegistry,
 		parentRuntime: { model: undefined, thinkingLevel: "off" },
 	});
 	assert.equal(explicit.model.provider, model.provider);
 	assert.equal(explicit.model.id, model.id);
-	assert.equal(explicit.thinkingLevel, "high");
+	assert.equal(explicit.thinkingLevel, "max");
 	const childCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-turn-"));
 	const child = await createSdkChildSession({
 		agent: managedAgent({ cwd: childCwd }),

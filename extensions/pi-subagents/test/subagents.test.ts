@@ -75,10 +75,13 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	assert.match(guidanceText, /hard max 8/i);
 
 	const parameters = tool?.parameters as SchemaObject | undefined;
-	const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+	const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 	assert.deepEqual(parameters?.properties?.thinkingLevel?.enum, thinkingLevels);
 	assert.doesNotMatch(parameters?.properties?.thinkingLevel?.enum?.join(",") ?? "", /huge/);
-	assert.match(parameters?.properties?.thinkingLevel?.description ?? "", /off.*minimal.*xhigh/);
+	assert.match(
+		parameters?.properties?.thinkingLevel?.description ?? "",
+		/off.*minimal.*xhigh.*max/,
+	);
 	assert.deepEqual(
 		parameters?.properties?.tasks?.items?.properties?.thinkingLevel?.enum,
 		thinkingLevels,

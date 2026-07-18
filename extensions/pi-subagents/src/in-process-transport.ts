@@ -8,7 +8,12 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { type AgentConfig, discoverAgents, type SubagentThinkingLevel } from "./agents.js";
+import {
+	type AgentConfig,
+	discoverAgents,
+	isThinkingLevel,
+	type SubagentThinkingLevel,
+} from "./agents.js";
 import { redactPrivateText } from "./context.js";
 import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
@@ -22,6 +27,7 @@ const DEFAULT_ABORT_GRACE_MS = 5_000;
 interface ChildModelRuntime {
 	getModel(provider: string, modelId: string): Model<Api> | undefined;
 	registerProvider(provider: string, config: unknown): void;
+	registerNativeProvider?(provider: unknown): void;
 	setRuntimeApiKey(provider: string, apiKey: string): Promise<void> | void;
 }
 
@@ -34,6 +40,7 @@ interface CodingAgentRuntimeModule {
 interface RegisteredProviderRegistry {
 	getRegisteredProviderConfig?(provider: string): unknown;
 	getRegisteredProviderIds?(): readonly string[];
+	getRegisteredNativeProvider?(provider: string): unknown;
 }
 
 export interface ParentRuntimeSnapshot {
@@ -403,13 +410,25 @@ async function createChildModelRuntime(
 		modelsPath: join(agentDir, "models.json"),
 	});
 	const registeredProviders = modelRegistry as unknown as RegisteredProviderRegistry;
-	for (const provider of registeredProviders.getRegisteredProviderIds?.() ?? []) {
-		const config = registeredProviders.getRegisteredProviderConfig?.(provider);
-		if (config) modelRuntime.registerProvider(provider, config);
-	}
+	copyRegisteredProviders(registeredProviders, modelRuntime);
 	const auth = await modelRegistry.getApiKeyAndHeaders(model);
 	if (auth.ok && auth.apiKey) await modelRuntime.setRuntimeApiKey(model.provider, auth.apiKey);
 	return modelRuntime;
+}
+
+export function copyRegisteredProviders(
+	registeredProviders: RegisteredProviderRegistry,
+	modelRuntime: ChildModelRuntime,
+): void {
+	for (const provider of registeredProviders.getRegisteredProviderIds?.() ?? []) {
+		const config = registeredProviders.getRegisteredProviderConfig?.(provider);
+		if (config !== undefined) {
+			modelRuntime.registerProvider(provider, config);
+			continue;
+		}
+		const nativeProvider = registeredProviders.getRegisteredNativeProvider?.(provider);
+		if (nativeProvider) modelRuntime.registerNativeProvider?.(nativeProvider);
+	}
 }
 
 export async function resolveChildModel(options: ChildSessionCreateOptions): Promise<{
@@ -443,14 +462,7 @@ function parseModelRequest(value: string): {
 	const separator = requested.lastIndexOf(":");
 	if (separator > 0) {
 		const suffix = requested.slice(separator + 1);
-		if (
-			suffix === "off" ||
-			suffix === "minimal" ||
-			suffix === "low" ||
-			suffix === "medium" ||
-			suffix === "high" ||
-			suffix === "xhigh"
-		) {
+		if (isThinkingLevel(suffix)) {
 			return { model: requested.slice(0, separator), thinkingLevel: suffix };
 		}
 	}

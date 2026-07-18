@@ -9,7 +9,8 @@ const TimeoutMs = Type.Number({
 });
 
 const ThinkingLevelSchema = StringEnum(THINKING_LEVELS, {
-	description: "Pi thinking level for the subagent process: off, minimal, low, medium, high, or xhigh.",
+	description:
+		"Pi thinking level for the subagent process: off, minimal, low, medium, high, xhigh, or max.",
 });
 
 const TaskItem = Type.Object({
