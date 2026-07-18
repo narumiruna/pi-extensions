@@ -10,6 +10,8 @@ export interface ImageDropLimits {
 	maxImageBytes: number;
 	maxBatchBytes: number;
 	maxImagePixels: number;
+	maxRetainedImages: number;
+	maxRetainedBytes: number;
 }
 
 export interface ImageDropSettings extends ImageDropLimits {
@@ -21,6 +23,8 @@ export const DEFAULT_SETTINGS: Readonly<ImageDropSettings> = Object.freeze({
 	maxImageBytes: 10 * MIB,
 	maxBatchBytes: 40 * MIB,
 	maxImagePixels: 50_000_000,
+	maxRetainedImages: 128,
+	maxRetainedBytes: 512 * MIB,
 	startOnSessionStart: false,
 });
 
@@ -29,6 +33,8 @@ export const HARD_LIMITS: Readonly<ImageDropLimits> = Object.freeze({
 	maxImageBytes: 50 * MIB,
 	maxBatchBytes: 200 * MIB,
 	maxImagePixels: 100_000_000,
+	maxRetainedImages: 256,
+	maxRetainedBytes: 1024 * MIB,
 });
 
 const LIMIT_KEYS = new Set<keyof ImageDropLimits>([
@@ -36,6 +42,8 @@ const LIMIT_KEYS = new Set<keyof ImageDropLimits>([
 	"maxImageBytes",
 	"maxBatchBytes",
 	"maxImagePixels",
+	"maxRetainedImages",
+	"maxRetainedBytes",
 ]);
 const SETTING_KEYS = new Set<keyof ImageDropSettings>([...LIMIT_KEYS, "startOnSessionStart"]);
 
@@ -89,15 +97,13 @@ export async function loadSettings(
 	try {
 		const settings = normalizeSettings(JSON.parse(text) as unknown);
 		if (!settings) return invalid(path, "invalid settings shape or value");
-		const raised = [...LIMIT_KEYS].filter(
-			(key) => settings[key] > DEFAULT_SETTINGS[key],
-		);
+		const raised = [...LIMIT_KEYS].filter((key) => settings[key] > DEFAULT_SETTINGS[key]);
 		return {
 			kind: "loaded",
 			settings,
 			warning:
 				raised.length > 0
-					? `${SETTINGS_FILE} raises ${raised.join(", ")} above the safe defaults; large provider requests may fail.`
+					? `${SETTINGS_FILE} raises ${raised.join(", ")} above the safe defaults; memory use or provider request size may increase.`
 					: undefined,
 		};
 	} catch (error) {

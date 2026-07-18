@@ -44,6 +44,18 @@ async function harness() {
 	return { batch, server };
 }
 
+function commitHistory(batch: BatchStore, id: string, marker = id): string {
+	const source = Buffer.from(marker);
+	batch.reserveItems([{ id, name: `${id}.png`, size: source.byteLength }]);
+	batch.startProcessing(id, source);
+	batch.complete(id, result(source), true);
+	const reservation = batch.reserveMessage(`send ${id}`);
+	assert.equal(batch.commitReservation(reservation.digest), true);
+	const historyId = batch.publicHistoryState().items.at(-1)?.id;
+	assert.ok(historyId);
+	return historyId;
+}
+
 async function authenticate(server: ImageDropServer) {
 	const link = server.issueLink();
 	const response = await fetch(link, { redirect: "manual" });
@@ -114,15 +126,26 @@ test("bootstrap tokens rotate, replay fails, and clean pages require the session
 		const html = await page.text();
 		const app = await (await api(server, "/app.js", { cookie })).text();
 		const styles = await (await api(server, "/styles.css", { cookie })).text();
+		assert.match(html, /<section class="history" aria-labelledby="history-title">/);
+		assert.match(html, /id="history-grid"/);
+		assert.match(html, /id="clear-history"/);
+		assert.match(html, /<dialog id="clear-history-dialog"/);
 		assert.match(html, /<dialog id="image-preview-dialog"/);
 		assert.doesNotMatch(html, /id="image-preview-close"/);
 		assert.match(html, /<button id="image-preview-dismiss"[^>]*aria-label="Close enlarged image"/);
-		assert.match(app, /showModal\(\)/);
-		assert.match(app, /Enlarge preview of/);
+		assert.match(app, /summarizeHistory/);
+		assert.match(app, /\/api\/history\//);
 		assert.match(app, /previewDismiss\.addEventListener\("click", closePreview\)/);
 		assert.match(app, /event\.target === ui\.previewDialog\) closePreview\(\)/);
+		assert.match(app, /showModal\(\)/);
+		assert.match(app, /Enlarge preview of/);
+		assert.match(styles, /\.history/);
 		assert.match(styles, /\.image-preview-dialog/);
-		assert.match(styles, /\.image-preview-dismiss\s*{[^}]*cursor: zoom-out/s);
+		assert.match(styles, /\.image-preview-dismiss\s*{[^}]*width: 100%[^}]*height: 100%/s);
+		assert.match(
+			styles,
+			/\.image-preview-dismiss img\s*{[^}]*width: 100%[^}]*height: 100%[^}]*cursor: zoom-out/s,
+		);
 	} finally {
 		await server.close();
 	}
@@ -286,6 +309,106 @@ test("reserve, upload, state, reorder, delete, retry errors, and clear use revis
 			200,
 		);
 		assert.equal(batch.publicState().phase, "empty");
+	} finally {
+		await server.close();
+	}
+});
+
+test("history preview, restage, delete, and clear enforce auth, lease, and revisions", async () => {
+	const { batch, server } = await harness();
+	try {
+		const cookie = await authenticate(server);
+		const client = await lease(server, cookie, "history-client");
+		const historyId = commitHistory(batch, "sent", "sent-bytes");
+		assert.equal((await api(server, `/api/history/${historyId}/preview`)).status, 401);
+		const preview = await api(server, `/api/history/${historyId}/preview`, { cookie });
+		assert.equal(preview.status, 200);
+		assert.deepEqual(Buffer.from(await preview.arrayBuffer()), Buffer.from("sent-bytes"));
+
+		const staleRevision = batch.publicState().revision;
+		const restaged = await api(server, "/api/history/restage", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				revision: staleRevision,
+				items: [{ historyId, id: "restaged" }],
+			}),
+		});
+		assert.equal(restaged.status, 200);
+		const restagedState = (await restaged.json()) as {
+			batch: { revision: number; items: Array<{ id: string }> };
+			history: { items: Array<{ id: string }> };
+			restage: { addedIds: string[]; duplicates: unknown[] };
+		};
+		assert.deepEqual(
+			restagedState.batch.items.map((item) => item.id),
+			["restaged"],
+		);
+		assert.deepEqual(restagedState.restage, { addedIds: ["restaged"], duplicates: [] });
+
+		const duplicate = await api(server, "/api/history/restage", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				revision: restagedState.batch.revision,
+				items: [{ historyId, id: "duplicate" }],
+			}),
+		});
+		assert.equal(duplicate.status, 200);
+		assert.deepEqual(
+			((await duplicate.json()) as { restage: { addedIds: string[] } }).restage.addedIds,
+			[],
+		);
+
+		assert.equal(
+			(
+				await api(server, `/api/history/${historyId}?revision=${staleRevision}`, {
+					method: "DELETE",
+					cookie,
+					client,
+				})
+			).status,
+			409,
+		);
+		assert.equal(
+			(
+				await api(server, `/api/history/${historyId}?revision=${batch.publicState().revision}`, {
+					method: "DELETE",
+					cookie,
+					client,
+				})
+			).status,
+			200,
+		);
+
+		batch.clear(batch.publicState().revision);
+		commitHistory(batch, "new-history");
+		await lease(server, cookie, "new-history-client");
+		assert.equal(
+			(
+				await api(server, "/api/history/clear", {
+					method: "POST",
+					cookie,
+					client,
+					body: JSON.stringify({ revision: batch.publicState().revision }),
+				})
+			).status,
+			409,
+		);
+		assert.equal(
+			(
+				await api(server, "/api/history/clear", {
+					method: "POST",
+					cookie,
+					client: "new-history-client",
+					body: JSON.stringify({ revision: batch.publicState().revision }),
+				})
+			).status,
+			200,
+		);
+		assert.deepEqual(batch.publicHistoryState().items, []);
 	} finally {
 		await server.close();
 	}

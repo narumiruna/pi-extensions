@@ -6,6 +6,7 @@ import {
 	moveItemBefore,
 	preferNewestState,
 	summarizeBatch,
+	summarizeHistory,
 } from "/state.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -19,10 +20,14 @@ const ui = {
 	clear: $("#clear-all"),
 	error: $("#error-banner"),
 	grid: $("#grid"),
+	historyStatus: $("#history-status"),
+	historyClear: $("#clear-history"),
+	historyGrid: $("#history-grid"),
 	overlay: $("#connection-overlay"),
 	connectionTitle: $("#connection-title"),
 	connectionMessage: $("#connection-message"),
 	dialog: $("#clear-dialog"),
+	historyDialog: $("#clear-history-dialog"),
 	previewDialog: $("#image-preview-dialog"),
 	previewTitle: $("#image-preview-title"),
 	previewDismiss: $("#image-preview-dismiss"),
@@ -82,6 +87,13 @@ function wire() {
 	});
 	ui.dialog.addEventListener("close", () => {
 		if (ui.dialog.returnValue === "confirm") void clearAll();
+	});
+	ui.historyClear.addEventListener("click", () => {
+		ui.historyDialog.returnValue = "cancel";
+		ui.historyDialog.showModal();
+	});
+	ui.historyDialog.addEventListener("close", () => {
+		if (ui.historyDialog.returnValue === "confirm") void clearHistory();
 	});
 	ui.previewDismiss.addEventListener("click", closePreview);
 	ui.previewDialog.addEventListener("click", (event) => {
@@ -226,6 +238,36 @@ async function clearAll() {
 	}
 }
 
+async function restageHistory(historyId) {
+	try {
+		const response = await request("/api/history/restage", {
+			method: "POST",
+			json: {
+				revision: state.batch.revision,
+				items: [{ historyId, id: crypto.randomUUID() }],
+			},
+		});
+		applyState(response);
+		clearError();
+		render();
+		const target = response.restage.addedIds[0] ?? response.restage.duplicates[0]?.existingId;
+		if (target) highlight(target);
+	} catch (error) {
+		showError(errorMessage(error));
+	}
+}
+
+async function deleteHistory(id) {
+	await mutate(`/api/history/${id}?revision=${state.batch.revision}`, { method: "DELETE" });
+}
+
+async function clearHistory() {
+	await mutate("/api/history/clear", {
+		method: "POST",
+		json: { revision: state.batch.revision },
+	});
+}
+
 async function mutate(path, options) {
 	const result = await attemptMutation(() => request(path, options));
 	if (!result.ok) {
@@ -254,6 +296,12 @@ function render() {
 	ui.drop.classList.toggle("disabled", !mutable);
 	ui.drop.setAttribute("aria-disabled", String(!mutable));
 	ui.grid.replaceChildren(...state.batch.items.map((item, index) => card(item, index, mutable)));
+	const history = summarizeHistory(state.history);
+	ui.historyStatus.textContent = history.label;
+	ui.historyClear.disabled = history.total === 0;
+	ui.historyGrid.replaceChildren(
+		...(state.history?.items ?? []).map((item, index) => historyCard(item, index, mutable)),
+	);
 }
 
 function card(item, index, mutable) {
@@ -280,7 +328,7 @@ function card(item, index, mutable) {
 		preview = element("button", "preview preview-button");
 		preview.type = "button";
 		preview.setAttribute("aria-label", `Enlarge preview of ${item.name}`);
-		preview.addEventListener("click", () => openPreview(item));
+		preview.addEventListener("click", () => openPreview(item, "items"));
 		const image = document.createElement("img");
 		image.src = `/api/items/${item.id}/preview?revision=${state.batch.revision}`;
 		image.alt = `Preview of ${item.name}`;
@@ -328,9 +376,51 @@ function card(item, index, mutable) {
 	return article;
 }
 
-function openPreview(item) {
+function historyCard(item, index, mutable) {
+	const article = document.createElement("article");
+	article.className = "image-card history-card";
+	article.tabIndex = 0;
+	article.setAttribute("aria-label", `${index + 1}. ${item.name}, sent this session`);
+
+	const preview = element("button", "preview preview-button");
+	preview.type = "button";
+	preview.setAttribute("aria-label", `Enlarge preview of ${item.name}`);
+	preview.addEventListener("click", () => openPreview(item, "history"));
+	const image = document.createElement("img");
+	image.src = `/api/history/${item.id}/preview?revision=${state.batch.revision}`;
+	image.alt = `Preview of sent image ${item.name}`;
+	image.loading = "lazy";
+	preview.append(image);
+	article.append(preview);
+
+	const body = element("div", "card-body");
+	body.append(element("h3", "", item.name));
+	body.append(
+		element("p", "meta", `${index + 1} · ${formatBytes(item.size)} · ${item.width}×${item.height}`),
+	);
+	for (const note of item.notes ?? []) body.append(element("p", "note", note));
+	article.append(body);
+
+	const actions = element("div", "card-actions");
+	actions.append(
+		button("Add sent image to the next Pi message", "Add again", !mutable, () =>
+			restageHistory(item.id),
+		),
+		button(
+			"Delete sent image from session history",
+			"Delete",
+			false,
+			() => deleteHistory(item.id),
+			"delete",
+		),
+	);
+	article.append(actions);
+	return article;
+}
+
+function openPreview(item, collection) {
 	ui.previewTitle.textContent = item.name;
-	ui.previewImage.src = `/api/items/${item.id}/preview?revision=${state.batch.revision}`;
+	ui.previewImage.src = `/api/${collection}/${item.id}/preview?revision=${state.batch.revision}`;
 	ui.previewImage.alt = `Enlarged preview of ${item.name}`;
 	ui.previewDialog.showModal();
 }

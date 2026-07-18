@@ -29,10 +29,11 @@ This package targets the latest Pi release and uses its `agent_settled` lifecycl
 3. Open the link. Paste images anywhere, drop files, or select **Choose images**.
 4. Review previews and processing details. Drag to reorder, use the keyboard-accessible arrow buttons, retry failures, delete individual items, or use confirmed **Clear all**.
 5. Write and submit a non-empty message in Pi. The ready images are appended after any attachments already on that message, in browser order.
+6. After Pi records that user message, the sent images move to **Sent this session**. They are not attached to later prompts unless you explicitly choose **Add again**. You can preview, re-add, delete, or clear retained images from the browser page.
 
 The `🖼️` widget above Pi's editor reports ready, uploading, error, and queued counts. Uploading or failed items block the whole batch and preserve the Pi editor text. Image-only messages are not supported.
 
-By default, the loopback service starts lazily when you run `/image-drop`. With `startOnSessionStart: true`, it starts after each Pi session initializes and displays the link in Pi automatically. Each later `/image-drop` invocation reuses the service and rotates the unused one-time link. A browser refresh keeps the current in-memory batch. Opening the authenticated page in another tab gives the new tab the editing lease and makes the old tab stale.
+By default, the loopback service starts lazily when you run `/image-drop`. With `startOnSessionStart: true`, it starts after each Pi session initializes and displays the link in Pi automatically. Each later `/image-drop` invocation reuses the service and rotates the unused one-time link. A browser refresh keeps the current in-memory batch and sent-image history. Opening the authenticated page in another tab gives the new tab the editing lease and makes the old tab stale. Reloading, replacing, forking, or shutting down the Pi session releases both the draft and all retained history.
 
 ## Supported images
 
@@ -67,7 +68,9 @@ Example:
   "maxImages": 8,
   "maxImageBytes": 10485760,
   "maxBatchBytes": 41943040,
-  "maxImagePixels": 50000000
+  "maxImagePixels": 50000000,
+  "maxRetainedImages": 128,
+  "maxRetainedBytes": 536870912
 }
 ```
 
@@ -81,6 +84,10 @@ Example:
 | `maxImageBytes` | 10 MiB | 50 MiB |
 | `maxBatchBytes` | 40 MiB | 200 MiB |
 | `maxImagePixels` | 50 megapixels | 100 megapixels |
+| `maxRetainedImages` | 128 | 256 |
+| `maxRetainedBytes` | 512 MiB | 1 GiB |
+
+`maxRetainedImages` and `maxRetainedBytes` govern how much sent history can coexist with the current draft, using combined image-count and resident-byte accounting. When either limit is reached, Image Drop removes the oldest sent-history entries first until the new draft fits. It never automatically removes the active or queued draft and does not reject a new image merely because retained history is full; the draft remains independently bounded by the batch limits above.
 
 Limit values are positive integer counts/bytes/pixels, and `startOnSessionStart` must be a boolean. `maxImageBytes` cannot exceed `maxBatchBytes`. Unknown fields, malformed JSON, invalid values, symlinks, or values above a hard ceiling cause the **whole file** to be ignored with one warning and safe defaults to be used. Limit values above a safe default but within a hard ceiling produce a memory/provider-limit warning.
 
@@ -92,8 +99,9 @@ At upload and submission time, the extension also re-reads Pi's documented globa
 - A rotating bootstrap token is exchanged once for an HttpOnly, `SameSite=Strict` session cookie, then removed from the URL.
 - Exact Host, mutation Origin, session-cookie, and active-client checks are enforced. No permissive CORS headers are sent.
 - Pages use a restrictive Content Security Policy plus no-store, no-referrer, MIME-sniffing, and frame-denial headers.
-- Raw request bodies, decoded pixels, source bytes, previews, and provider-ready bytes are bounded and stay in the Pi process memory. The extension creates no image cache or temporary image files.
-- Bytes are released after Pi records the matching user message, after Delete/Clear all, and on reload, session replacement/fork, or shutdown. Once Pi records a message, normal Pi/provider retention rules apply.
+- Raw request bodies, decoded pixels, source bytes, previews, and provider-ready bytes are bounded and stay in the Pi process memory. The extension creates no image cache, temporary image files, browser storage, or session-file entries.
+- After Pi records the matching user message, only sanitized provider-ready bytes and display metadata move to sent history; original uploaded source bytes are released. History remains available for preview and explicit re-adding until you delete it, FIFO retention limits remove it, or the Pi session reaches reload, replacement/fork, or shutdown.
+- Once Pi records a message, normal Pi/provider retention rules apply independently of deleting Image Drop's in-process history.
 
 A loopback page is local to your operating-system network namespace. Do not expose the port to a LAN or public interface.
 
@@ -115,14 +123,15 @@ Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop do
 - A non-empty interactive Pi message is required. RPC, extension-generated, slash-command, and image-only inputs do not consume the batch.
 - All items must be ready. One uploading or failed item blocks submission until it is retried or deleted.
 - Provider aggregate request limits vary. Raising the defaults to the hard ceilings does not guarantee that a provider accepts the final multi-image request.
-- Batches are intentionally not persisted or shown as recent history.
+- Sent history exists only for the current live Pi session. It is not reconstructed from the transcript, persisted across sessions, or shared with another Pi process.
+- FIFO retention can remove the oldest sent images automatically at the configured count or memory limit; the browser displays the current usage and limit.
 
 ## Package layout
 
 ```text
 src/image-drop.ts       Pi extension entrypoint
 src/runtime.ts          Pi lifecycle and message orchestration
-src/batch.ts            in-memory batch state machine
+src/batch.ts            in-memory draft and sent-history state machine
 src/images.ts           bounded image processing
 src/server.ts           authenticated loopback HTTP/SSE server
 src/settings.ts         extension settings

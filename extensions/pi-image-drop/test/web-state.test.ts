@@ -10,6 +10,13 @@ type StateHelpers = {
 		uploading: number;
 		error: number;
 	};
+	summarizeHistory(history: unknown): {
+		label: string;
+		total: number;
+		bytes: number;
+		maxImages: number;
+		maxBytes: number;
+	};
 	moveItem(ids: string[], id: string, direction: number): string[];
 	moveItemBefore(ids: string[], id: string, target: string): string[];
 	canMutate(batch: { phase: string }): boolean;
@@ -48,6 +55,33 @@ test("web state helpers summarize every visible batch state without color-only m
 		helpers.summarizeBatch({ phase: "reserved", items: [{ status: "ready" }], totalSourceBytes: 1 })
 			.label,
 		"1 image queued with Pi",
+	);
+});
+
+test("web history helpers report session retention and memory limits", () => {
+	assert.deepEqual(
+		helpers.summarizeHistory({
+			items: [],
+			totalBytes: 0,
+			maxImages: 128,
+			maxBytes: 512 * 1024 * 1024,
+		}),
+		{
+			total: 0,
+			bytes: 0,
+			maxImages: 128,
+			maxBytes: 512 * 1024 * 1024,
+			label: "No images sent this session · 0/128 images · 0 B of 512 MB",
+		},
+	);
+	assert.equal(
+		helpers.summarizeHistory({
+			items: [{}, {}],
+			totalBytes: 5 * 1024 * 1024,
+			maxImages: 128,
+			maxBytes: 512 * 1024 * 1024,
+		}).label,
+		"2/128 images · 5.0 MB of 512 MB",
 	);
 });
 

@@ -132,7 +132,18 @@ test("interactive input appends one ready ordered batch and commits on matching 
 		context.ctx,
 	);
 	assert.equal(runtime.getBatchForTesting()?.publicState().phase, "empty");
+	assert.equal(runtime.getBatchForTesting()?.publicHistoryState().items.length, 1);
 	assert.equal(context.widgets.get("image-drop"), undefined);
+
+	const ordinary = (await emit(
+		mock,
+		"input",
+		{ type: "input", text: "text only next", source: "interactive" },
+		context.ctx,
+	)) as { action: string; images?: unknown[] };
+	assert.equal(ordinary.action, "continue");
+	assert.equal(ordinary.images, undefined);
+	assert.equal(runtime.getBatchForTesting()?.publicHistoryState().items.length, 1);
 });
 
 test("agent_settled restores a queued reservation that never became a user message", async () => {
@@ -186,8 +197,15 @@ test("/image-drop lazily starts one server, rotates links, and shutdown releases
 	assert.match(harness.context.notifications[0]?.message ?? "", /token=1/);
 	assert.match(harness.context.notifications[1]?.message ?? "", /token=2/);
 	assert.match(String(harness.context.widgets.get("image-drop")), /127\.0\.0\.1/);
+	harness.runtime.addReadyImageForTesting("one", "one.png", Buffer.from("source"), PROCESSED);
+	const closingBatch = harness.runtime.getBatchForTesting();
+	const sent = closingBatch?.reserveMessage("sent");
+	assert.ok(sent);
+	closingBatch?.commitReservation(sent.digest);
+	assert.equal(closingBatch?.publicHistoryState().items.length, 1);
 	await emit(harness.mock, "session_shutdown", {}, harness.context.ctx);
 	assert.equal(harness.serverCloses, 1);
+	assert.deepEqual(closingBatch?.publicHistoryState().items, []);
 	assert.equal(harness.context.widgets.get("image-drop"), undefined);
 });
 
@@ -293,6 +311,55 @@ test("submission reprocesses retained sources after autoResize changes", async (
 	assert.equal(result.action, "transform");
 	assert.deepEqual(seen, [false]);
 	assert.equal(result.images[0]?.data, Buffer.from("reprocessed").toString("base64"));
+});
+
+test("a sent history image can be restaged and reprocessed for the current autoResize setting", async () => {
+	const mock = createMockPi();
+	const seen: Array<{ source: string; autoResize: boolean }> = [];
+	let autoResize = true;
+	const runtime = new ImageDropRuntime(mock.pi, {
+		loadSettings: async () => ({ kind: "missing", settings: { ...DEFAULT_SETTINGS } }),
+		readPiSettings: async () => ({ autoResize, blockImages: false, warnings: [] }),
+		createProcessor: () => ({
+			process: async (source, options) => {
+				seen.push({ source: Buffer.from(source).toString(), autoResize: options.autoResize });
+				return { ...PROCESSED, bytes: Buffer.from("restaged-output"), hash: "restaged-output" };
+			},
+		}),
+	});
+	runtime.register();
+	const context = createMockContext({
+		model: { id: "vision", provider: "test", input: ["text", "image"] },
+	});
+	await emit(mock, "session_start", {}, context.ctx);
+	runtime.addReadyImageForTesting("one", "one.png", Buffer.from("raw-source"), PROCESSED);
+	const first = (await emit(
+		mock,
+		"input",
+		{ type: "input", text: "first send", source: "interactive" },
+		context.ctx,
+	)) as { images: Array<{ type: string; data: string; mimeType: string }> };
+	await emit(
+		mock,
+		"message_start",
+		{ message: { role: "user", content: [{ type: "text", text: "first send" }, ...first.images] } },
+		context.ctx,
+	);
+	const batch = runtime.getBatchForTesting();
+	autoResize = false;
+	const historyId = batch?.publicHistoryState().items[0]?.id;
+	assert.ok(historyId);
+	batch?.restageHistory([{ historyId, id: "restaged" }]);
+
+	const second = (await emit(
+		mock,
+		"input",
+		{ type: "input", text: "send again", source: "interactive" },
+		context.ctx,
+	)) as { action: string; images: Array<{ data: string }> };
+	assert.equal(second.action, "transform");
+	assert.deepEqual(seen, [{ source: PNG.toString(), autoResize: false }]);
+	assert.equal(second.images[0]?.data, Buffer.from("restaged-output").toString("base64"));
 });
 
 test("failed setting-change reprocessing restores text and blocks the batch", async () => {
@@ -438,14 +505,21 @@ test("empty image-only interactive input does not consume the browser batch", as
 	assert.equal(runtime.getBatchForTesting()?.publicState().phase, "ready");
 });
 
-test("session replacement closes the old server and clears every staged byte", async () => {
+test("session replacement closes the old server and clears every staged and retained byte", async () => {
 	const harness = createHarness();
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
 	harness.runtime.addReadyImageForTesting("one", "one.png", Buffer.from("source"), PROCESSED);
+	const oldBatch = harness.runtime.getBatchForTesting();
+	const reservation = oldBatch?.reserveMessage("sent");
+	assert.ok(reservation);
+	oldBatch?.commitReservation(reservation.digest);
+	assert.equal(oldBatch?.publicHistoryState().items.length, 1);
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	assert.equal(harness.serverCloses, 1);
+	assert.deepEqual(oldBatch?.publicHistoryState().items, []);
 	assert.equal(harness.runtime.getBatchForTesting()?.publicState().phase, "empty");
+	assert.deepEqual(harness.runtime.getBatchForTesting()?.publicHistoryState().items, []);
 	assert.equal(harness.context.widgets.get("image-drop"), undefined);
 });
 

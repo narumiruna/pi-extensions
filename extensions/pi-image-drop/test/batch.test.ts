@@ -210,6 +210,131 @@ test("message reservation freezes mutations and supports digest-bounded commit o
 	assert.equal(batch.publicState().phase, "empty");
 });
 
+test("matching commits move sanitized images into independent session history", () => {
+	const batch = new BatchStore(DEFAULT_SETTINGS);
+	ready(batch, "one", "one");
+	ready(batch, "two", "two");
+	const sent = batch.reserveMessage("send both");
+	assert.equal(batch.commitReservation(sent.digest), true);
+	assert.equal(batch.publicState().phase, "empty");
+	assert.deepEqual(
+		batch.publicHistoryState().items.map((item) => ({ name: item.name, size: item.size })),
+		[
+			{ name: "one.png", size: 3 },
+			{ name: "two.png", size: 3 },
+		],
+	);
+
+	ready(batch, "three", "three");
+	const next = batch.reserveMessage("only new image");
+	assert.deepEqual(
+		next.images.map((image) => image.data),
+		[Buffer.from("three").toString("base64")],
+	);
+	assert.equal(batch.restoreReservation()?.text, "only new image");
+	assert.equal(batch.publicHistoryState().items.length, 2);
+});
+
+test("history restaging preserves selection order, collapses duplicates, and clones bytes", () => {
+	const batch = new BatchStore(DEFAULT_SETTINGS);
+	ready(batch, "one", "one");
+	ready(batch, "two", "two");
+	const sent = batch.reserveMessage("send");
+	batch.commitReservation(sent.digest);
+	const [one, two] = batch.publicHistoryState().items;
+	assert.ok(one && two);
+	const preview = batch.historyPreview(one.id);
+	preview.bytes[0] = 0;
+	assert.deepEqual(batch.historyPreview(one.id).bytes, Buffer.from("one"));
+
+	assert.deepEqual(
+		batch.restageHistory(
+			[
+				{ historyId: two.id, id: "restaged-two" },
+				{ historyId: one.id, id: "restaged-one" },
+			],
+			batch.publicState().revision,
+		),
+		{ addedIds: ["restaged-two", "restaged-one"], duplicates: [] },
+	);
+	assert.deepEqual(
+		batch
+			.reserveMessage("again")
+			.images.map((image) => Buffer.from(image.data, "base64").toString()),
+		["two", "one"],
+	);
+	batch.restoreReservation();
+	assert.deepEqual(batch.restageHistory([{ historyId: one.id, id: "duplicate-one" }]), {
+		addedIds: [],
+		duplicates: [{ historyId: one.id, existingId: "restaged-one" }],
+	});
+});
+
+test("history mutations require current revisions and FIFO-evict oldest entries for new images", () => {
+	const batch = new BatchStore({
+		...DEFAULT_SETTINGS,
+		maxRetainedImages: 2,
+		maxRetainedBytes: 100,
+	});
+	for (const id of ["one", "two"]) {
+		ready(batch, id, id);
+		const reservation = batch.reserveMessage(`send ${id}`);
+		batch.commitReservation(reservation.digest);
+	}
+	const staleRevision = batch.publicState().revision;
+	const firstHistoryId = batch.publicHistoryState().items[0]?.id;
+	ready(batch, "three", "three");
+	assert.deepEqual(
+		batch.publicHistoryState().items.map((item) => item.name),
+		["two.png"],
+	);
+	assert.throws(() => batch.deleteHistory(firstHistoryId ?? "missing", staleRevision), /stale/i);
+	const historyId = batch.publicHistoryState().items[0]?.id;
+	assert.ok(historyId);
+	batch.deleteHistory(historyId, batch.publicState().revision);
+	assert.deepEqual(batch.publicHistoryState().items, []);
+
+	const reservation = batch.reserveMessage("send three");
+	batch.commitReservation(reservation.digest);
+	batch.clearHistory(batch.publicState().revision);
+	assert.deepEqual(batch.publicHistoryState().items, []);
+});
+
+test("history FIFO eviction also enforces the combined resident-byte budget", () => {
+	const batch = new BatchStore({
+		...DEFAULT_SETTINGS,
+		maxRetainedImages: 100,
+		maxRetainedBytes: 10,
+	});
+	for (const [id, marker] of [
+		["one", "123456"],
+		["two", "abcdef"],
+	] as const) {
+		ready(batch, id, marker);
+		const reservation = batch.reserveMessage(`send ${id}`);
+		batch.commitReservation(reservation.digest);
+	}
+	assert.deepEqual(
+		batch.publicHistoryState().items.map((item) => item.name),
+		["two.png"],
+	);
+	assert.equal(batch.publicHistoryState().totalBytes, 6);
+});
+
+test("failed reservation recovery never enters history and close releases draft and history", () => {
+	const batch = new BatchStore(DEFAULT_SETTINGS);
+	ready(batch, "one", "one");
+	batch.reserveMessage("not delivered");
+	batch.restoreReservation();
+	assert.deepEqual(batch.publicHistoryState().items, []);
+	const sent = batch.reserveMessage("delivered");
+	batch.commitReservation(sent.digest);
+	assert.equal(batch.publicHistoryState().items.length, 1);
+	batch.close();
+	assert.deepEqual(batch.publicState().items, []);
+	assert.deepEqual(batch.publicHistoryState().items, []);
+});
+
 test("not-ready and closed batches reject reservation and stale async completion", () => {
 	const batch = new BatchStore(DEFAULT_SETTINGS);
 	batch.reserveItems([{ id: "one", name: "one.png", size: 1 }]);

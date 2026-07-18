@@ -7,6 +7,10 @@ import { DEFAULT_SETTINGS, HARD_LIMITS, loadSettings, normalizeSettings } from "
 
 test("settings normalize partial values and reject unknown, inconsistent, and unsafe values", () => {
 	assert.equal(DEFAULT_SETTINGS.startOnSessionStart, false);
+	assert.equal(DEFAULT_SETTINGS.maxRetainedImages, 128);
+	assert.equal(DEFAULT_SETTINGS.maxRetainedBytes, 512 * 1024 * 1024);
+	assert.equal(HARD_LIMITS.maxRetainedImages, 256);
+	assert.equal(HARD_LIMITS.maxRetainedBytes, 1024 * 1024 * 1024);
 	assert.deepEqual(normalizeSettings({ maxImages: 4 }), { ...DEFAULT_SETTINGS, maxImages: 4 });
 	assert.deepEqual(normalizeSettings({ startOnSessionStart: true }), {
 		...DEFAULT_SETTINGS,
@@ -18,6 +22,14 @@ test("settings normalize partial values and reject unknown, inconsistent, and un
 	assert.equal(normalizeSettings({ maxImages: 0 }), undefined);
 	assert.equal(normalizeSettings({ maxImages: HARD_LIMITS.maxImages + 1 }), undefined);
 	assert.equal(normalizeSettings({ maxImageBytes: DEFAULT_SETTINGS.maxBatchBytes + 1 }), undefined);
+	assert.equal(
+		normalizeSettings({ maxRetainedImages: HARD_LIMITS.maxRetainedImages + 1 }),
+		undefined,
+	);
+	assert.equal(
+		normalizeSettings({ maxRetainedBytes: HARD_LIMITS.maxRetainedBytes + 1 }),
+		undefined,
+	);
 	assert.equal(normalizeSettings([]), undefined);
 });
 
@@ -29,10 +41,19 @@ test("settings loading distinguishes missing, valid, warned, and invalid files",
 			kind: "missing",
 			settings: { ...DEFAULT_SETTINGS },
 		});
-		await writeFile(settingsPath, '{"maxImages":4,"startOnSessionStart":true}\n');
+		await writeFile(
+			settingsPath,
+			'{"maxImages":4,"maxRetainedImages":32,"maxRetainedBytes":268435456,"startOnSessionStart":true}\n',
+		);
 		assert.deepEqual(await loadSettings(settingsPath), {
 			kind: "loaded",
-			settings: { ...DEFAULT_SETTINGS, maxImages: 4, startOnSessionStart: true },
+			settings: {
+				...DEFAULT_SETTINGS,
+				maxImages: 4,
+				maxRetainedImages: 32,
+				maxRetainedBytes: 256 * 1024 * 1024,
+				startOnSessionStart: true,
+			},
 			warning: undefined,
 		});
 		await writeFile(settingsPath, '{"maxImages":16}\n');

@@ -34,6 +34,13 @@ interface BatchItem extends ItemReservation {
 	error?: string;
 }
 
+interface HistoryItem {
+	id: string;
+	name: string;
+	processed: ProcessedImage;
+	processedAutoResize?: boolean;
+}
+
 export interface PublicBatchItem extends ItemReservation {
 	status: ItemStatus;
 	error?: string;
@@ -53,6 +60,39 @@ export interface PublicBatchState {
 	phase: BatchPhase;
 	items: PublicBatchItem[];
 	totalSourceBytes: number;
+}
+
+export interface PublicHistoryItem {
+	id: string;
+	name: string;
+	size: number;
+	mimeType: string;
+	width: number;
+	height: number;
+	originalWidth: number;
+	originalHeight: number;
+	sourceFormat: string;
+	outputFormat: string;
+	resized: boolean;
+	notes: string[];
+}
+
+export interface PublicHistoryState {
+	revision: number;
+	items: PublicHistoryItem[];
+	totalBytes: number;
+	maxImages: number;
+	maxBytes: number;
+}
+
+export interface HistoryRestageInput {
+	historyId: string;
+	id: string;
+}
+
+export interface HistoryRestageResult {
+	addedIds: string[];
+	duplicates: Array<{ historyId: string; existingId: string }>;
 }
 
 export interface MessageReservation {
@@ -77,6 +117,7 @@ export class BatchError extends Error {
 
 export class BatchStore {
 	private items: BatchItem[] = [];
+	private history: HistoryItem[] = [];
 	private revision = 0;
 	private reservation?: MessageReservation;
 	private closed = false;
@@ -104,6 +145,29 @@ export class BatchStore {
 				notes: [...(item.processed?.notes ?? [])],
 			})),
 			totalSourceBytes: this.items.reduce((sum, item) => sum + item.size, 0),
+		};
+	}
+
+	publicHistoryState(): PublicHistoryState {
+		return {
+			revision: this.revision,
+			items: this.history.map((item) => ({
+				id: item.id,
+				name: item.name,
+				size: item.processed.bytes.byteLength,
+				mimeType: item.processed.mimeType,
+				width: item.processed.width,
+				height: item.processed.height,
+				originalWidth: item.processed.originalWidth,
+				originalHeight: item.processed.originalHeight,
+				sourceFormat: item.processed.sourceFormat,
+				outputFormat: item.processed.outputFormat,
+				resized: item.processed.resized,
+				notes: [...item.processed.notes],
+			})),
+			totalBytes: this.historyBytes(),
+			maxImages: this.settings.maxRetainedImages,
+			maxBytes: this.settings.maxRetainedBytes,
 		};
 	}
 
@@ -136,6 +200,7 @@ export class BatchStore {
 			throw new BatchError("Batch exceeds the byte limit", "limit");
 		}
 		this.items.push(...inputs.map((input) => ({ ...input, status: "uploading" as const })));
+		this.evictHistoryToBudget();
 		return this.bump();
 	}
 
@@ -172,6 +237,7 @@ export class BatchStore {
 		const earlier = duplicates.find(({ index }) => index < itemIndex);
 		if (earlier) {
 			this.items = this.items.filter((candidate) => candidate.id !== id);
+			this.evictHistoryToBudget();
 			this.bump();
 			return { kind: "duplicate", existingId: earlier.candidate.id };
 		}
@@ -183,9 +249,11 @@ export class BatchStore {
 		if (duplicates.length > 0) {
 			const laterIds = new Set(duplicates.map(({ candidate }) => candidate.id));
 			this.items = this.items.filter((candidate) => !laterIds.has(candidate.id));
+			this.evictHistoryToBudget();
 			this.bump();
 			return { kind: "duplicate", existingId: item.id };
 		}
+		this.evictHistoryToBudget();
 		this.bump();
 		return { kind: "ready" };
 	}
@@ -342,10 +410,101 @@ export class BatchStore {
 		return { bytes: Buffer.from(processed.bytes), mimeType: processed.mimeType };
 	}
 
+	historyPreview(id: string): { bytes: Buffer; mimeType: string } {
+		this.assertOpen();
+		const processed = this.historyItem(id).processed;
+		return { bytes: Buffer.from(processed.bytes), mimeType: processed.mimeType };
+	}
+
+	restageHistory(
+		inputs: readonly HistoryRestageInput[],
+		expectedRevision = this.revision,
+	): HistoryRestageResult {
+		this.assertMutable(expectedRevision);
+		if (inputs.length === 0) throw new BatchError("No history images supplied", "invalid");
+		if (new Set(inputs.map((input) => input.historyId)).size !== inputs.length) {
+			throw new BatchError("History selection contains duplicates", "invalid");
+		}
+		const draftIds = new Set(this.items.map((item) => item.id));
+		const draftHashes = new Map(
+			this.items.flatMap((item) =>
+				item.processed ? [[item.processed.hash, item.id] as const] : [],
+			),
+		);
+		const additions: BatchItem[] = [];
+		const duplicates: HistoryRestageResult["duplicates"] = [];
+		for (const input of inputs) {
+			if (!isSafeIdentifier(input.id) || draftIds.has(input.id)) {
+				throw new BatchError("Image id is invalid or duplicated", "invalid");
+			}
+			draftIds.add(input.id);
+			const history = this.historyItem(input.historyId);
+			const existingId = draftHashes.get(history.processed.hash);
+			if (existingId) {
+				duplicates.push({ historyId: input.historyId, existingId });
+				continue;
+			}
+			const processed = cloneProcessed(history.processed);
+			additions.push({
+				id: input.id,
+				name: history.name,
+				size: processed.bytes.byteLength,
+				status: "ready",
+				source: Buffer.from(processed.bytes),
+				processed,
+				processedAutoResize: history.processedAutoResize,
+			});
+			draftHashes.set(processed.hash, input.id);
+		}
+		if (this.items.length + additions.length > this.settings.maxImages) {
+			throw new BatchError("Batch exceeds the image-count limit", "limit");
+		}
+		const currentBytes = this.items.reduce((sum, item) => sum + item.size, 0);
+		const addedBytes = additions.reduce((sum, item) => sum + item.size, 0);
+		if (currentBytes + addedBytes > this.settings.maxBatchBytes) {
+			throw new BatchError("Batch exceeds the byte limit", "limit");
+		}
+		if (additions.length > 0) {
+			this.items.push(...additions);
+			this.evictHistoryToBudget();
+			this.bump();
+		}
+		return { addedIds: additions.map((item) => item.id), duplicates };
+	}
+
+	deleteHistory(id: string, expectedRevision = this.revision): number {
+		this.assertHistoryMutation(expectedRevision);
+		const before = this.history.length;
+		this.history = this.history.filter((item) => item.id !== id);
+		if (this.history.length === before)
+			throw new BatchError("History image not found", "not-found");
+		return this.bump();
+	}
+
+	clearHistory(expectedRevision = this.revision): number {
+		this.assertHistoryMutation(expectedRevision);
+		if (this.history.length === 0) return this.revision;
+		this.history = [];
+		return this.bump();
+	}
+
 	commitReservation(digest: string): boolean {
 		if (!this.reservation || this.reservation.digest !== digest) return false;
+		for (const [index, item] of this.items.entries()) {
+			if (!item.processed) continue;
+			this.history = this.history.filter(
+				(history) => history.processed.hash !== item.processed?.hash,
+			);
+			this.history.push({
+				id: historyId(this.revision, index, item.processed.hash),
+				name: item.name,
+				processed: cloneProcessed(item.processed),
+				processedAutoResize: item.processedAutoResize,
+			});
+		}
 		this.reservation = undefined;
 		this.items = [];
+		this.evictHistoryToBudget();
 		this.bump();
 		return true;
 	}
@@ -363,6 +522,7 @@ export class BatchStore {
 		this.closed = true;
 		this.reservation = undefined;
 		this.items = [];
+		this.history = [];
 		this.bump();
 	}
 
@@ -380,8 +540,12 @@ export class BatchStore {
 	}
 
 	private assertMutable(expectedRevision: number): void {
-		this.assertOpen();
+		this.assertHistoryMutation(expectedRevision);
 		if (this.reservation) throw new BatchError("Batch is frozen", "frozen");
+	}
+
+	private assertHistoryMutation(expectedRevision: number): void {
+		this.assertOpen();
 		if (expectedRevision !== this.revision)
 			throw new BatchError("Batch revision is stale", "stale");
 	}
@@ -390,6 +554,34 @@ export class BatchStore {
 		const item = this.items.find((candidate) => candidate.id === id);
 		if (!item) throw new BatchError("Image not found", "not-found");
 		return item;
+	}
+
+	private historyItem(id: string): HistoryItem {
+		const item = this.history.find((candidate) => candidate.id === id);
+		if (!item) throw new BatchError("History image not found", "not-found");
+		return item;
+	}
+
+	private historyBytes(): number {
+		return this.history.reduce((sum, item) => sum + item.processed.bytes.byteLength, 0);
+	}
+
+	private draftResidentBytes(): number {
+		return this.items.reduce(
+			(sum, item) =>
+				sum + (item.source?.byteLength ?? item.size) + (item.processed?.bytes.byteLength ?? 0),
+			0,
+		);
+	}
+
+	private evictHistoryToBudget(): void {
+		while (
+			this.history.length > 0 &&
+			(this.history.length + this.items.length > this.settings.maxRetainedImages ||
+				this.historyBytes() + this.draftResidentBytes() > this.settings.maxRetainedBytes)
+		) {
+			this.history.shift();
+		}
 	}
 
 	private bump(): number {
@@ -437,6 +629,13 @@ function isControlCharacter(character: string): boolean {
 
 function isSafeIdentifier(id: string): boolean {
 	return /^[A-Za-z0-9_-]{1,80}$/.test(id);
+}
+
+function historyId(revision: number, index: number, hash: string): string {
+	return createHash("sha256")
+		.update(`history\0${revision}\0${index}\0${hash}`)
+		.digest("hex")
+		.slice(0, 24);
 }
 
 function cryptoId(revision: number, images: readonly ImageContent[]): string {
