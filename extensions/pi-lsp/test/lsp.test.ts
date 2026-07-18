@@ -99,7 +99,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			},
 			{
 				name: "elixir-ls",
-				command: ["elixir-ls"],
+				command: [process.platform === "win32" ? "language_server.bat" : "language_server.sh"],
 				extensions: [".ex", ".exs"],
 				sample: "lib/app.exs",
 				languageId: "elixir",
@@ -128,6 +128,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				sample: "Program.fsx",
 				languageId: "fsharp",
 				skipDirectories: ["bin", "obj"],
+				initialization: { AutomaticWorkspaceInit: true },
 			},
 			{
 				name: "sourcekit-lsp",
@@ -204,12 +205,12 @@ test("default catalog routes common languages and skips generated trees", () => 
 				extensions: [".ml", ".mli"],
 				sample: "lib/app.mli",
 				languageId: "ocaml",
-				skipDirectories: ["_build"],
+				skipDirectories: ["_build", "_opam"],
 			},
 			{
 				name: "bash-language-server",
 				command: ["bash-language-server", "start"],
-				extensions: [".sh", ".bash", ".zsh", ".ksh"],
+				extensions: [".sh", ".bash"],
 				sample: "scripts/build.zsh",
 				languageId: "shellscript",
 			},

@@ -46,7 +46,7 @@ If no config is provided, pi-lsp ships a broad catalog of direct-command default
 | Rust | `rust-analyzer` | `rust-analyzer` | `.rs` |
 | Go | `gopls` | `gopls` | `.go` |
 | Ruby | `rubocop` | `rubocop --lsp` | `.rb`, `.rake`, `.gemspec`, `.ru` |
-| Elixir | `elixir-ls` | `elixir-ls` | `.ex`, `.exs` |
+| Elixir | `elixir-ls` | `language_server.sh` (`language_server.bat` on Windows) | `.ex`, `.exs` |
 | Zig | `zls` | `zls` | `.zig`, `.zon` |
 | C# | `csharp` | `roslyn-language-server --stdio --autoLoadProjects` | `.cs`, `.csx` |
 | F# | `fsharp` | `fsautocomplete` | `.fs`, `.fsi`, `.fsx`, `.fsscript` |
@@ -60,7 +60,7 @@ If no config is provided, pi-lsp ships a broad catalog of direct-command default
 | Prisma | `prisma` | `prisma-language-server` | `.prisma` |
 | Dart | `dart` | `dart language-server --lsp` | `.dart` |
 | OCaml | `ocaml-lsp` | `ocamllsp` | `.ml`, `.mli` |
-| Shell | `bash-language-server` | `bash-language-server start` | `.sh`, `.bash`, `.zsh`, `.ksh` |
+| Bash | `bash-language-server` | `bash-language-server start` | `.sh`, `.bash` |
 | Terraform | `terraform-ls` | `terraform-ls serve` | `.tf`, `.tfvars` |
 | LaTeX and BibTeX | `texlab` | `texlab` | `.tex`, `.bib` |
 | Gleam | `gleam` | `gleam lsp` | `.gleam` |

@@ -89,7 +89,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 	},
 	{
 		name: "elixir-ls",
-		command: ["elixir-ls"],
+		command: [process.platform === "win32" ? "language_server.bat" : "language_server.sh"],
 		extensions: [".ex", ".exs"],
 		skipDirectories: ["_build", "deps"],
 	},
@@ -110,6 +110,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		command: ["fsautocomplete"],
 		extensions: [".fs", ".fsi", ".fsx", ".fsscript"],
 		skipDirectories: ["bin", "obj"],
+		initialization: { AutomaticWorkspaceInit: true },
 	},
 	{
 		name: "sourcekit-lsp",
@@ -166,12 +167,12 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		name: "ocaml-lsp",
 		command: ["ocamllsp"],
 		extensions: [".ml", ".mli"],
-		skipDirectories: ["_build"],
+		skipDirectories: ["_build", "_opam"],
 	},
 	{
 		name: "bash-language-server",
 		command: ["bash-language-server", "start"],
-		extensions: [".sh", ".bash", ".zsh", ".ksh"],
+		extensions: [".sh", ".bash"],
 	},
 	{
 		name: "terraform-ls",
