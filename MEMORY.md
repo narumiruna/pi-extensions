@@ -81,6 +81,7 @@
 
 ## TASTE
 
+- Prefer validating extensions against the latest Pi release only; do not maintain compatibility matrices for older Pi versions.
 - Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
