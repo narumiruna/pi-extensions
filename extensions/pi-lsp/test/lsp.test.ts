@@ -15,7 +15,7 @@ import path from "node:path";
 import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
 import { consumeLspConfigNotice, loadConfig, loadRuntime } from "../src/adapters.js";
-import { commandExists, commandFromEnv, splitCommand } from "../src/command.js";
+import { commandExists, commandFromEnv, resolveCommandPath, splitCommand } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
 import { resolveSpawnCommand } from "../src/lsp-client.js";
 import lsp from "../src/pi-lsp.js";
@@ -306,15 +306,21 @@ test("default catalog routes common languages and skips generated trees", () => 
 });
 
 test("command helpers split shell-like strings and honor environment overrides", () => {
+	const windowsBin = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-bin-"));
+	const commandShim = path.join(windowsBin, "language-server.cmd");
+	writeFileSync(commandShim, "@echo off\r\n");
+	const resolvedShim = resolveCommandPath("language-server", windowsBin, "win32", windowsBin);
+	assert.ok(resolvedShim);
+	assert.equal(resolvedShim, commandShim);
 	assert.deepEqual(
 		resolveSpawnCommand(
-			{ command: "language_server.bat", args: [] },
+			{ command: resolvedShim, args: ["--stdio"] },
 			"win32",
 			"C:\\Windows\\System32\\cmd.exe",
 		),
 		{
 			command: "C:\\Windows\\System32\\cmd.exe",
-			args: ["/d", "/s", "/c", "language_server.bat"],
+			args: ["/d", "/s", "/c", commandShim, "--stdio"],
 		},
 	);
 	assert.deepEqual(resolveSpawnCommand({ command: "language_server.sh", args: [] }, "linux"), {
@@ -342,6 +348,18 @@ test("command helpers split shell-like strings and honor environment overrides",
 	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
 	chmodSync(executable, 0o755);
 	assert.equal(commandExists("./tool", root), true);
+	assert.equal(resolveCommandPath("tool", root, process.platform, ""), executable);
+	const relativeBin = path.join(root, "bin");
+	const relativeExecutable = path.join(relativeBin, "relative-tool");
+	mkdirSync(relativeBin);
+	writeFileSync(relativeExecutable, "#!/bin/sh\nexit 0\n");
+	chmodSync(relativeExecutable, 0o755);
+	assert.equal(
+		resolveCommandPath("relative-tool", root, process.platform, "bin"),
+		relativeExecutable,
+	);
+	rmSync(windowsBin, { recursive: true, force: true });
+	rmSync(root, { recursive: true, force: true });
 });
 
 test("LSP config uses canonical paths while preserving project legacy files", () => {
@@ -557,7 +575,8 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
 	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
 	chmodSync(executable, 0o755);
 	const available = testAdapter("available", [".foo"]);
-	available.defaultCommand = { command: "./available-lsp", args: [] };
+	available.defaultCommand = { command: "available-lsp", args: [] };
+	available.env = { PATH: root };
 	available.isDefault = true;
 	const missing = testAdapter("missing", [".foo"]);
 	missing.defaultCommand = { command: "./missing-lsp", args: [] };
@@ -590,7 +609,8 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
 		assert.equal(missingFileChecks > 0, true);
 		missingFileChecks = 0;
 		const unrelated = testAdapter("unrelated", [".bar"]);
-		unrelated.defaultCommand = { command: "./available-lsp", args: [] };
+		unrelated.defaultCommand = { command: "available-lsp", args: [] };
+		unrelated.env = { PATH: root };
 		unrelated.isDefault = true;
 		assert.throws(
 			() => selectDiagnosticRoutes([unrelated, missing], { root }, 50),

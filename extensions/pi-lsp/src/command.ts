@@ -13,28 +13,55 @@ export function commandFromEnv(envVar: string, fallback: ServerCommand): ServerC
 	return fallback;
 }
 
-export function commandExists(command: string, cwd = process.cwd()) {
-	if (command.includes("/") || command.includes("\\")) {
-		return isRunnableFile(path.isAbsolute(command) ? command : path.resolve(cwd, command));
-	}
-
-	const pathValue = process.env.PATH ?? "";
-	const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
-	for (const directory of pathValue.split(process.platform === "win32" ? ";" : ":")) {
-		if (!directory) continue;
-		for (const extension of extensions) {
-			if (isRunnableFile(path.join(directory, `${command}${extension}`))) return true;
-		}
-	}
-
-	return false;
+export function commandExists(
+	command: string,
+	cwd = process.cwd(),
+	pathValue = process.env.PATH ?? "",
+) {
+	return resolveCommandPath(command, cwd, process.platform, pathValue) !== undefined;
 }
 
-function isRunnableFile(filePath: string) {
+export function commandPathValue(env: Record<string, string> | undefined) {
+	return env?.PATH ?? process.env.PATH ?? "";
+}
+
+export function resolveCommandPath(
+	command: string,
+	cwd = process.cwd(),
+	platform: NodeJS.Platform = process.platform,
+	pathValue = process.env.PATH ?? "",
+) {
+	const extensions = platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+	if (command.includes("/") || command.includes("\\")) {
+		const commandPath = path.isAbsolute(command) ? command : path.resolve(cwd, command);
+		return resolveRunnableFile(commandPath, extensions, platform);
+	}
+
+	for (const directory of pathValue.split(platform === "win32" ? ";" : ":")) {
+		const resolved = resolveRunnableFile(
+			path.resolve(cwd, directory || ".", command),
+			extensions,
+			platform,
+		);
+		if (resolved) return resolved;
+	}
+
+	return undefined;
+}
+
+function resolveRunnableFile(filePath: string, extensions: string[], platform: NodeJS.Platform) {
+	for (const extension of extensions) {
+		const candidate = `${filePath}${extension}`;
+		if (isRunnableFile(candidate, platform)) return candidate;
+	}
+	return undefined;
+}
+
+function isRunnableFile(filePath: string, platform: NodeJS.Platform) {
 	if (!existsSync(filePath)) return false;
 	try {
 		if (!statSync(filePath).isFile()) return false;
-		if (process.platform !== "win32") accessSync(filePath, constants.X_OK);
+		if (platform !== "win32") accessSync(filePath, constants.X_OK);
 		return true;
 	} catch {
 		return false;

@@ -1,7 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { commandExists } from "./command.js";
+import { commandPathValue, resolveCommandPath } from "./command.js";
 import { directoryUri } from "./files.js";
 import { positionAt } from "./text-edits.js";
 import type {
@@ -59,13 +59,19 @@ export class LspClient {
 	}
 
 	async start() {
-		if (!commandExists(this.#command.command, this.#cwd)) {
+		const commandPath = resolveCommandPath(
+			this.#command.command,
+			this.#cwd,
+			process.platform,
+			commandPathValue(this.#adapter.env),
+		);
+		if (!commandPath) {
 			throw new Error(
 				`${this.#adapter.name} LSP command not found: ${this.#command.command}. ${this.#adapter.missingCommandHint}`,
 			);
 		}
 
-		const spawnCommand = resolveSpawnCommand(this.#command);
+		const spawnCommand = resolveSpawnCommand({ ...this.#command, command: commandPath });
 		const child = spawn(spawnCommand.command, spawnCommand.args, {
 			cwd: this.#cwd,
 			env: { ...process.env, ...this.#adapter.env },
