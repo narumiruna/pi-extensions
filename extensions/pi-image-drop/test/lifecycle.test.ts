@@ -451,6 +451,83 @@ test("a stale input settings read cannot consume the replacement session batch",
 	assert.equal(newContext.editorText, "");
 });
 
+test("a stale session start cannot close the newer batch after slow server shutdown", async () => {
+	const mock = createMockPi();
+	let markClosing!: () => void;
+	let releaseClose!: () => void;
+	const closing = new Promise<void>((resolve) => {
+		markClosing = resolve;
+	});
+	const runtime = new ImageDropRuntime(mock.pi, {
+		loadSettings: async () => ({ kind: "missing", settings: { ...DEFAULT_SETTINGS } }),
+		startServer: async () => ({
+			issueLink: () => "http://127.0.0.1/link",
+			broadcastState() {},
+			close: () => {
+				markClosing();
+				return new Promise<void>((resolve) => {
+					releaseClose = resolve;
+				});
+			},
+		}),
+	});
+	runtime.register();
+	const initialContext = createMockContext({ cwd: "/workspace/initial" });
+	const staleContext = createMockContext({ cwd: "/workspace/stale" });
+	const currentContext = createMockContext({ cwd: "/workspace/current" });
+	await runtime.start(initialContext.ctx);
+	await mock.commands.get("image-drop")?.handler("", initialContext.ctx);
+
+	const staleStart = runtime.start(staleContext.ctx);
+	await closing;
+	await runtime.start(currentContext.ctx);
+	const currentBatch = runtime.getBatchForTesting();
+	runtime.addReadyImageForTesting("current", "current.png", Buffer.from("current"), PROCESSED);
+	releaseClose();
+	await staleStart;
+
+	assert.equal(runtime.getBatchForTesting(), currentBatch);
+	assert.equal(currentBatch?.publicState().phase, "ready");
+});
+
+test("a stale shutdown cannot clear a newer batch after slow server shutdown", async () => {
+	const mock = createMockPi();
+	let markClosing!: () => void;
+	let releaseClose!: () => void;
+	const closing = new Promise<void>((resolve) => {
+		markClosing = resolve;
+	});
+	const runtime = new ImageDropRuntime(mock.pi, {
+		loadSettings: async () => ({ kind: "missing", settings: { ...DEFAULT_SETTINGS } }),
+		startServer: async () => ({
+			issueLink: () => "http://127.0.0.1/link",
+			broadcastState() {},
+			close: () => {
+				markClosing();
+				return new Promise<void>((resolve) => {
+					releaseClose = resolve;
+				});
+			},
+		}),
+	});
+	runtime.register();
+	const oldContext = createMockContext({ cwd: "/workspace/old" });
+	const currentContext = createMockContext({ cwd: "/workspace/current" });
+	await runtime.start(oldContext.ctx);
+	await mock.commands.get("image-drop")?.handler("", oldContext.ctx);
+
+	const staleShutdown = runtime.shutdown(oldContext.ctx);
+	await closing;
+	await runtime.start(currentContext.ctx);
+	const currentBatch = runtime.getBatchForTesting();
+	runtime.addReadyImageForTesting("current", "current.png", Buffer.from("current"), PROCESSED);
+	releaseClose();
+	await staleShutdown;
+
+	assert.equal(runtime.getBatchForTesting(), currentBatch);
+	assert.equal(currentBatch?.publicState().phase, "ready");
+});
+
 test("an overlapping stale session start cannot replace the newer session", async () => {
 	const mock = createMockPi();
 	let resolveFirst!: (value: { kind: "missing"; settings: typeof DEFAULT_SETTINGS }) => void;

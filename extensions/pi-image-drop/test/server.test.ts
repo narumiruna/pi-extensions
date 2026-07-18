@@ -347,10 +347,11 @@ test("an interrupted browser upload becomes a visible deletable error after refr
 	}
 });
 
-test("a stale lease cannot complete processing after a new page takes control", async () => {
+test("a stale lease resets in-flight processing for the new page to retry", async () => {
 	const batch = new BatchStore(SETTINGS);
 	let release!: () => void;
 	let processing!: () => void;
+	let attempts = 0;
 	const started = new Promise<void>((resolve) => {
 		processing = resolve;
 	});
@@ -360,10 +361,13 @@ test("a stale lease cannot complete processing after a new page takes control", 
 		projectName: "demo",
 		cwd: "/workspace/demo",
 		process: async (source) => {
-			processing();
-			await new Promise<void>((resolve) => {
-				release = resolve;
-			});
+			attempts += 1;
+			if (attempts === 1) {
+				processing();
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+			}
 			return result(source);
 		},
 		getAutoResize: async () => true,
@@ -384,10 +388,80 @@ test("a stale lease cannot complete processing after a new page takes control", 
 			body: Buffer.from("one"),
 		});
 		await started;
-		await lease(server, cookie, "new-client");
+		const newClient = await lease(server, cookie, "new-client");
+		assert.equal(batch.publicState().items[0]?.status, "error");
+		assert.match(batch.publicState().items[0]?.error ?? "", /page was replaced/i);
 		release();
 		assert.equal((await upload).status, 409);
-		assert.notEqual(batch.publicState().items[0]?.status, "ready");
+		assert.equal(
+			(
+				await api(server, "/api/items/one/retry", {
+					method: "POST",
+					cookie,
+					client: newClient,
+				})
+			).status,
+			200,
+		);
+		assert.equal(batch.publicState().items[0]?.status, "ready");
+	} finally {
+		await server.close();
+	}
+});
+
+test("duplicate content uploads cannot overtake an in-flight retry", async () => {
+	const batch = new BatchStore(SETTINGS);
+	let release!: () => void;
+	let processing!: () => void;
+	let attempts = 0;
+	const started = new Promise<void>((resolve) => {
+		processing = resolve;
+	});
+	const server = await ImageDropServer.start({
+		batch,
+		settings: SETTINGS,
+		projectName: "demo",
+		cwd: "/workspace/demo",
+		process: async (source) => {
+			attempts += 1;
+			if (attempts === 1) {
+				processing();
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+			}
+			return result(source);
+		},
+		getAutoResize: async () => true,
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await lease(server, cookie);
+		await api(server, "/api/items", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({ revision: 0, items: [{ id: "one", name: "one.png", size: 3 }] }),
+		});
+		batch.failUpload("one", "browser upload failed");
+		const first = api(server, "/api/items/one/content", {
+			method: "PUT",
+			cookie,
+			client,
+			body: Buffer.from("one"),
+		});
+		await started;
+		const duplicate = await api(server, "/api/items/one/content", {
+			method: "PUT",
+			cookie,
+			client,
+			body: Buffer.from("one"),
+		});
+		assert.equal(duplicate.status, 409);
+		assert.equal(attempts, 1);
+		release();
+		assert.equal((await first).status, 200);
+		assert.equal(batch.publicState().items[0]?.status, "ready");
 	} finally {
 		await server.close();
 	}

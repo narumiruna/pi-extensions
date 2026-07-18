@@ -189,6 +189,7 @@ export class ImageDropServer {
 					throw new HttpError(400, "Invalid client id");
 				}
 				this.takeLease(clientId);
+				this.broadcastState();
 				this.json(response, 200, this.statePayload());
 				return;
 			}
@@ -329,6 +330,9 @@ export class ImageDropServer {
 		if (previous !== clientId) this.activeClientGeneration += 1;
 		this.activeClientId = clientId;
 		if (previous && previous !== clientId) {
+			this.options.batch.cancelInFlight(
+				"Upload cancelled because the Image Drop page was replaced.",
+			);
 			for (const client of [...this.sseClients]) {
 				if (client.id !== previous) continue;
 				writeSse(client.response, "stale", { message: "Image Drop opened in another tab" });

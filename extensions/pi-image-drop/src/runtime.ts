@@ -90,10 +90,12 @@ export class ImageDropRuntime {
 
 	async start(ctx: ExtensionContext): Promise<void> {
 		const generation = ++this.generation;
+		const previousBatch = this.batch;
 		this.closed = true;
 		this.sessionAbort.abort();
 		await this.releaseServer();
-		this.batch?.close();
+		previousBatch?.close();
+		if (generation !== this.generation) return;
 		const result = await this.dependencies.loadSettings();
 		if (generation !== this.generation) return;
 		this.settings = result.settings;
@@ -111,11 +113,13 @@ export class ImageDropRuntime {
 	}
 
 	async shutdown(ctx: ExtensionContext): Promise<void> {
-		this.generation += 1;
+		const generation = ++this.generation;
+		const previousBatch = this.batch;
 		this.closed = true;
 		this.sessionAbort.abort();
 		await this.releaseServer();
-		this.batch?.close();
+		previousBatch?.close();
+		if (generation !== this.generation) return;
 		this.batch = undefined;
 		this.settings = undefined;
 		this.processor = undefined;
@@ -306,10 +310,10 @@ export class ImageDropRuntime {
 
 	private async releaseServer(): Promise<void> {
 		const server = this.server;
-		this.server = undefined;
-		if (server) await server.close();
 		const starting = this.serverStarting;
+		this.server = undefined;
 		this.serverStarting = undefined;
+		if (server) await server.close();
 		if (starting) {
 			try {
 				await (await starting).close();
