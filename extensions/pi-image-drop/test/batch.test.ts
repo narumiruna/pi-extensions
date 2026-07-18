@@ -122,6 +122,27 @@ test("error items retain uploaded bytes for retry and sanitize displayed errors"
 	assert.equal(batch.publicState().items[0]?.status, "ready");
 });
 
+test("lease replacement cancels uploading and processing items without dropping retry sources", () => {
+	const batch = new BatchStore(DEFAULT_SETTINGS);
+	batch.reserveItems([
+		{ id: "uploading", name: "uploading.png", size: 3 },
+		{ id: "processing", name: "processing.png", size: 3 },
+	]);
+	batch.startProcessing("processing", Buffer.from("two"));
+	assert.equal(batch.cancelInFlight("Page was replaced"), true);
+	assert.deepEqual(
+		batch.publicState().items.map((item) => ({ status: item.status, error: item.error })),
+		[
+			{ status: "error", error: "Page was replaced" },
+			{ status: "error", error: "Page was replaced" },
+		],
+	);
+	assert.throws(() => batch.retrySource("uploading"), /without uploaded source/i);
+	assert.deepEqual(batch.retrySource("processing"), Buffer.from("two"));
+	assert.equal(batch.cancelInFlight("Again"), true);
+	assert.equal(batch.cancelInFlight("Again"), false);
+});
+
 test("reorder, delete, and clear require exact current revisions", () => {
 	const batch = new BatchStore(DEFAULT_SETTINGS);
 	ready(batch, "one");

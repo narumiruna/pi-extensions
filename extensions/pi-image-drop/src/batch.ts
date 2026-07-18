@@ -142,6 +142,9 @@ export class BatchStore {
 		this.assertOpen();
 		if (this.reservation) throw new BatchError("Batch is frozen", "frozen");
 		const item = this.item(id);
+		if (item.status !== "uploading" && item.status !== "error") {
+			throw new BatchError("Image is already processing or ready", "not-ready");
+		}
 		if (source.byteLength !== item.size) {
 			throw new BatchError("Uploaded size does not match the reservation", "invalid");
 		}
@@ -205,6 +208,23 @@ export class BatchStore {
 		item.status = "error";
 		item.error = sanitizeError(error);
 		return this.bump();
+	}
+
+	cancelInFlight(error: string): boolean {
+		this.assertOpen();
+		if (this.reservation) return false;
+		const inFlight = this.items.filter(
+			(item) => item.status === "uploading" || item.status === "processing",
+		);
+		if (inFlight.length === 0) return false;
+		for (const item of inFlight) {
+			item.status = "error";
+			item.error = sanitizeError(error);
+			item.processed = undefined;
+			item.processedAutoResize = undefined;
+		}
+		this.bump();
+		return true;
 	}
 
 	beginAutoResizeReprocessing(autoResize: boolean): Array<{ id: string; source: Buffer }> {
