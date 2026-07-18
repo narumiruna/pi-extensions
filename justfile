@@ -101,6 +101,9 @@ pack-google-genai:
 pack-goal:
     just pack goal
 
+pack-image-drop:
+    just pack image-drop
+
 pack-langfuse:
     just pack langfuse
 
@@ -152,6 +155,9 @@ try-google-genai:
 
 try-goal:
     just try goal
+
+try-image-drop:
+    just try image-drop
 
 try-langfuse:
     just try langfuse
@@ -205,6 +211,9 @@ install-google-genai:
 install-goal:
     just install goal
 
+install-image-drop:
+    just install image-drop
+
 install-langfuse:
     just install langfuse
 
@@ -256,6 +265,9 @@ publish-google-genai:
 
 publish-goal:
     just publish goal
+
+publish-image-drop:
+    just publish image-drop
 
 publish-langfuse:
     just publish langfuse

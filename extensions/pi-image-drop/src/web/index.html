@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>Pi Image Drop</title>
+		<link rel="stylesheet" href="/styles.css" />
+	</head>
+	<body>
+		<header class="page-header">
+			<div>
+				<p class="eyebrow">Pi local image staging</p>
+				<h1>Image Drop</h1>
+				<p id="session-label" class="session-label">Connecting to Pi…</p>
+			</div>
+			<details>
+				<summary>Details</summary>
+				<dl>
+					<dt>Working directory</dt>
+					<dd id="cwd">—</dd>
+				</dl>
+			</details>
+		</header>
+
+		<main>
+			<section id="drop-zone" class="drop-zone" aria-labelledby="drop-title">
+				<div class="drop-copy">
+					<span class="drop-icon" aria-hidden="true">🖼️</span>
+					<h2 id="drop-title">Paste or drop images anywhere</h2>
+					<p>Use Ctrl+V or Command+V, drag files here, or choose files.</p>
+					<button id="choose-files" class="primary" type="button">Choose images</button>
+					<input id="file-input" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/heic,image/heif,image/avif,.bmp,.tif,.tiff,.heic,.heif,.avif" hidden />
+				</div>
+			</section>
+
+			<section class="batch" aria-labelledby="batch-title">
+				<div class="batch-toolbar">
+					<div>
+						<h2 id="batch-title">Next Pi message</h2>
+						<p id="status" role="status" aria-live="polite">No images staged</p>
+					</div>
+					<button id="clear-all" class="danger-secondary" type="button" disabled>Clear all</button>
+				</div>
+				<div id="error-banner" class="banner error" role="alert" hidden></div>
+				<div id="grid" class="image-grid" aria-live="polite"></div>
+			</section>
+
+			<p class="privacy">
+				Images stay in this Pi process until you submit a Pi message. They are then sent to your configured model provider with that message.
+			</p>
+		</main>
+
+		<div id="connection-overlay" class="connection-overlay" role="alert" hidden>
+			<div>
+				<h2 id="connection-title">Connection lost</h2>
+				<p id="connection-message">Run <code>/image-drop</code> in Pi for a new link.</p>
+			</div>
+		</div>
+
+		<dialog id="clear-dialog">
+			<form method="dialog">
+				<h2>Clear every staged image?</h2>
+				<p>This removes the current batch from Pi memory.</p>
+				<div class="dialog-actions">
+					<button type="submit" value="cancel">Cancel</button>
+					<button type="submit" class="danger" value="confirm">Clear all</button>
+				</div>
+			</form>
+		</dialog>
+
+		<script type="module" src="/app.js"></script>
+	</body>
+</html>
