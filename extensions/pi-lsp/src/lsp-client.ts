@@ -12,6 +12,18 @@ import type {
 	ServerCommand,
 } from "./types.js";
 
+export function resolveSpawnCommand(
+	command: ServerCommand,
+	platform: NodeJS.Platform = process.platform,
+	comSpec = process.env.ComSpec,
+): ServerCommand {
+	if (platform !== "win32" || !/\.(?:bat|cmd)$/i.test(command.command)) return command;
+	return {
+		command: comSpec?.trim() || "cmd.exe",
+		args: ["/d", "/s", "/c", command.command, ...command.args],
+	};
+}
+
 export class LspClient {
 	#child?: ChildProcessWithoutNullStreams;
 	#buffer = Buffer.alloc(0);
@@ -53,7 +65,8 @@ export class LspClient {
 			);
 		}
 
-		const child = spawn(this.#command.command, this.#command.args, {
+		const spawnCommand = resolveSpawnCommand(this.#command);
+		const child = spawn(spawnCommand.command, spawnCommand.args, {
 			cwd: this.#cwd,
 			env: { ...process.env, ...this.#adapter.env },
 			stdio: "pipe",
@@ -233,7 +246,9 @@ export class LspClient {
 			const timeout = setTimeout(() => {
 				this.#pending.delete(id);
 				reject(
-					new Error(`${this.#adapter.name} LSP request timed out: ${method}.${this.#formatStderr()}`),
+					new Error(
+						`${this.#adapter.name} LSP request timed out: ${method}.${this.#formatStderr()}`,
+					),
 				);
 			}, this.#timeoutMs);
 			this.#pending.set(id, { resolve, reject, timeout });
@@ -334,7 +349,8 @@ export class LspClient {
 				resolve,
 				reject,
 				timeout: setTimeout(() => {
-					const waiters = this.#diagnosticWaiters.get(uri)?.filter((entry) => entry !== waiter) ?? [];
+					const waiters =
+						this.#diagnosticWaiters.get(uri)?.filter((entry) => entry !== waiter) ?? [];
 					if (waiters.length) this.#diagnosticWaiters.set(uri, waiters);
 					else this.#diagnosticWaiters.delete(uri);
 					reject(
@@ -396,7 +412,10 @@ export class LspClient {
 }
 
 function isUnsupportedMethodError(error: unknown) {
-	return error instanceof Error && /method not found|unhandled method|not supported|unsupported/i.test(error.message);
+	return (
+		error instanceof Error &&
+		/method not found|unhandled method|not supported|unsupported/i.test(error.message)
+	);
 }
 
 function formatErrorMessage(error: unknown) {

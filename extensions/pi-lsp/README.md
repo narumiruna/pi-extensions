@@ -36,7 +36,7 @@ pi -e ./extensions/pi-lsp
 
 ## ⚙️ Configuration
 
-If no config is provided, pi-lsp ships a broad catalog of direct-command defaults. Servers are started only when matching files are requested. pi-lsp does not download language servers, so install the commands you need and make them available on `PATH`. During no-config diagnostics, unavailable default commands are skipped when another matching server can run; explicitly selected or custom-configured missing commands still report an error.
+If no config is provided, pi-lsp ships a broad catalog of direct-command defaults. Servers are started only when matching files are requested. pi-lsp does not download language servers, so install the commands you need and make them available on `PATH`. During no-config diagnostics, unavailable default commands are filtered before workspace discovery; explicitly selected or custom-configured missing commands still report an error.
 
 | Language or format | Default server | Startup command | Extensions |
 | --- | --- | --- | --- |
@@ -50,14 +50,14 @@ If no config is provided, pi-lsp ships a broad catalog of direct-command default
 | Zig | `zls` | `zls` | `.zig`, `.zon` |
 | C# | `csharp` | `roslyn-language-server --stdio --autoLoadProjects` | `.cs`, `.csx` |
 | F# | `fsharp` | `fsautocomplete` | `.fs`, `.fsi`, `.fsx`, `.fsscript` |
-| Swift and Objective-C | `sourcekit-lsp` | `sourcekit-lsp` | `.swift`, `.m`, `.mm` |
+| Swift and Objective-C++ | `sourcekit-lsp` | `sourcekit-lsp` | `.swift`, `.mm` |
 | C and C++ | `clangd` | `clangd --background-index --clang-tidy` | C/C++ source and header extensions |
 | Java | `jdtls` | `jdtls` | `.java` |
 | Kotlin | `kotlin-lsp` | `kotlin-lsp --stdio` | `.kt`, `.kts` |
 | YAML | `yaml-language-server` | `yaml-language-server --stdio` | `.yaml`, `.yml` |
 | Lua | `lua-language-server` | `lua-language-server` | `.lua` |
 | PHP | `intelephense` | `intelephense --stdio` | `.php` |
-| Prisma | `prisma` | `prisma-language-server` | `.prisma` |
+| Prisma | `prisma` | `prisma-language-server --stdio` | `.prisma` |
 | Dart | `dart` | `dart language-server --lsp` | `.dart` |
 | OCaml | `ocaml-lsp` | `ocamllsp` | `.ml`, `.mli` |
 | Bash | `bash-language-server` | `bash-language-server start` | `.sh`, `.bash` |

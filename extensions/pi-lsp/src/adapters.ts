@@ -115,7 +115,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 	{
 		name: "sourcekit-lsp",
 		command: ["sourcekit-lsp"],
-		extensions: [".swift", ".m", ".mm"],
+		extensions: [".swift", ".mm"],
 		skipDirectories: [".build", "DerivedData"],
 	},
 	{
@@ -154,7 +154,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 	},
 	{
 		name: "prisma",
-		command: ["prisma-language-server"],
+		command: ["prisma-language-server", "--stdio"],
 		extensions: [".prisma"],
 	},
 	{
@@ -516,7 +516,7 @@ const LANGUAGE_IDS: Record<string, string> = {
 	".ts": "typescript",
 	".tsx": "typescriptreact",
 	".typ": "typst",
-	".typc": "typst",
+	".typc": "typst-code",
 	".yaml": "yaml",
 	".yml": "yaml",
 	".zig": "zig",

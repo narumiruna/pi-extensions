@@ -17,6 +17,7 @@ import { createMockPi } from "../../../test/support.js";
 import { consumeLspConfigNotice, loadConfig, loadRuntime } from "../src/adapters.js";
 import { commandExists, commandFromEnv, splitCommand } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
+import { resolveSpawnCommand } from "../src/lsp-client.js";
 import lsp from "../src/pi-lsp.js";
 import { selectDiagnosticRoutes, selectFixRoute } from "../src/routes.js";
 import {
@@ -133,7 +134,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			{
 				name: "sourcekit-lsp",
 				command: ["sourcekit-lsp"],
-				extensions: [".swift", ".m", ".mm"],
+				extensions: [".swift", ".mm"],
 				sample: "Sources/App.swift",
 				languageId: "swift",
 				skipDirectories: [".build", "DerivedData"],
@@ -186,7 +187,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			},
 			{
 				name: "prisma",
-				command: ["prisma-language-server"],
+				command: ["prisma-language-server", "--stdio"],
 				extensions: [".prisma"],
 				sample: "schema.prisma",
 				languageId: "prisma",
@@ -260,7 +261,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				command: ["tinymist"],
 				extensions: [".typ", ".typc"],
 				sample: "main.typc",
-				languageId: "typst",
+				languageId: "typst-code",
 			},
 			{
 				name: "haskell-language-server",
@@ -305,6 +306,21 @@ test("default catalog routes common languages and skips generated trees", () => 
 });
 
 test("command helpers split shell-like strings and honor environment overrides", () => {
+	assert.deepEqual(
+		resolveSpawnCommand(
+			{ command: "language_server.bat", args: [] },
+			"win32",
+			"C:\\Windows\\System32\\cmd.exe",
+		),
+		{
+			command: "C:\\Windows\\System32\\cmd.exe",
+			args: ["/d", "/s", "/c", "language_server.bat"],
+		},
+	);
+	assert.deepEqual(resolveSpawnCommand({ command: "language_server.sh", args: [] }, "linux"), {
+		command: "language_server.sh",
+		args: [],
+	});
 	assert.deepEqual(splitCommand("cmd --flag 'two words' a\\ b"), [
 		"cmd",
 		"--flag",
@@ -546,6 +562,11 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
 	const missing = testAdapter("missing", [".foo"]);
 	missing.defaultCommand = { command: "./missing-lsp", args: [] };
 	missing.isDefault = true;
+	let missingFileChecks = 0;
+	missing.isSupportedFile = (filePath) => {
+		missingFileChecks += 1;
+		return filePath.endsWith(".foo");
+	};
 
 	try {
 		const selection = selectDiagnosticRoutes([available, missing], { root }, 50) as ReturnType<
@@ -559,12 +580,14 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
 			selection.skipped?.map((route) => route.adapter.name),
 			["missing"],
 		);
+		assert.equal(missingFileChecks, 0);
 		assert.deepEqual(
 			selectDiagnosticRoutes([missing], { root, server: "missing" }, 50).routes.map(
 				(route) => route.adapter.name,
 			),
 			["missing"],
 		);
+		assert.equal(missingFileChecks > 0, true);
 		assert.throws(
 			() => selectDiagnosticRoutes([missing], { root }, 50),
 			/No available default LSP commands.*missing/,

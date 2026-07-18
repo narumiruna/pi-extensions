@@ -39,8 +39,27 @@ export function selectDiagnosticRoutes(
 ) {
 	const root = resolveRoot(params.root);
 	const candidates = filterAdapters(adapters, params.server);
+	const skipped: DiagnosticRoute[] = [];
+	const runnableCandidates = params.server
+		? candidates
+		: candidates.filter((adapter) => {
+				if (!adapter.isDefault) return true;
+				const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
+				if (commandExists(command.command, root)) return true;
+				skipped.push({ adapter, reason: `${adapter.name} command missing`, files: [] });
+				return false;
+			});
+
+	if (runnableCandidates.length === 0 && skipped.length > 0) {
+		const names = skipped.map((route) => route.adapter.name).join(", ");
+		throw new Error(
+			`No available default LSP commands: ${names}. ` +
+				"Install a matching server command or explicitly select a configured server.",
+		);
+	}
+
 	const filesByPolicy = new Map<string, string[]>();
-	const matchedRoutes = candidates
+	const routes = runnableCandidates
 		.map((adapter) => {
 			const key = diagnosticFilePolicyKey(adapter);
 			let files = filesByPolicy.get(key);
@@ -52,28 +71,9 @@ export function selectDiagnosticRoutes(
 		})
 		.filter((route) => route.files.length > 0);
 
-	if (matchedRoutes.length === 0) {
+	if (routes.length === 0) {
 		const scope = params.paths?.length ? ` in requested paths: ${params.paths.join(", ")}` : "";
 		throw new Error(`No supported files found${scope}. ${SUPPORTED_SERVER_DESCRIPTION}`);
-	}
-
-	const skipped: DiagnosticRoute[] = [];
-	const routes = params.server
-		? matchedRoutes
-		: matchedRoutes.filter((route) => {
-				if (!route.adapter.isDefault) return true;
-				const command = commandFromEnv(route.adapter.commandEnvVar, route.adapter.defaultCommand);
-				if (commandExists(command.command, root)) return true;
-				skipped.push({ ...route, reason: `${route.adapter.name} command missing` });
-				return false;
-			});
-
-	if (routes.length === 0) {
-		const names = skipped.map((route) => route.adapter.name).join(", ");
-		throw new Error(
-			`No available default LSP commands for supported files: ${names}. ` +
-				"Install a matching server command or explicitly select a configured server.",
-		);
 	}
 
 	return { root, routes, skipped };
