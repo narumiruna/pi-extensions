@@ -16,7 +16,7 @@ Replace open Dependabot PRs #238–#243 with one verified PR that applies all si
 - [x] Consolidate the six manifest/workflow upgrades, align direct Pi package versions at 0.80.10, and regenerate `package-lock.json` with npm 11.16.0; verified with a clean `npm ci` and `npm ls --all`.
 - [x] Migrate the boundary checker to TypeScript 7's supported API and add cross-version Pi compatibility adaptations without weakening the 0.79.10/0.80.3 matrix; verified by focused typechecks, SDK smoke coverage, and the boundary check.
 - [x] Run the full local gate and reproduce all three Pi matrix variants; `npm run check` passed with Pi 0.79.10, Pi 0.80.3, and the committed Pi 0.80.10 dependency state.
-- [ ] Inspect the final diff, commit only intended files, push the branch, open the replacement PR, and close superseded PRs #238–#243 with a link to it; verify GitHub reports the new PR and closure state.
+- [x] Inspect the final diff, commit only intended files, push the branch, open the replacement PR, and close superseded PRs #238–#243 with a link to it; verified by open PR #246 and closed PR states for #238–#243.
 
 ## Risks
 
@@ -29,4 +29,4 @@ Replace open Dependabot PRs #238–#243 with one verified PR that applies all si
 - [x] All six requested updates are present in the branch, verified by the manifest, lockfile, and workflow diffs.
 - [x] TypeScript 7 boundary checking and Pi 0.80.10 runtime/type changes are covered by passing regression tests.
 - [x] `npm run check` and all three Pi compatibility variants pass locally.
-- [ ] The branch is committed and pushed, the replacement PR is open, and PRs #238–#243 are closed as superseded.
+- [x] The branch is committed and pushed, replacement PR #246 is open, and PRs #238–#243 are closed as superseded.
