@@ -1,7 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { commandPathValue, resolveCommandPath } from "./command.js";
+import { commandPathValue, mergeEnvironment, resolveCommandPath } from "./command.js";
 import { directoryUri } from "./files.js";
 import { positionAt } from "./text-edits.js";
 import type {
@@ -74,7 +74,7 @@ export class LspClient {
 		const spawnCommand = resolveSpawnCommand({ ...this.#command, command: commandPath });
 		const child = spawn(spawnCommand.command, spawnCommand.args, {
 			cwd: this.#cwd,
-			env: { ...process.env, ...this.#adapter.env },
+			env: mergeEnvironment(this.#adapter.env),
 			stdio: "pipe",
 		});
 		this.#child = child;

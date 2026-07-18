@@ -150,7 +150,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		name: "intelephense",
 		command: ["intelephense", "--stdio"],
 		extensions: [".php"],
-		initialization: { telemetry: { enabled: false } },
+		initialization: { intelephense: { telemetry: { enabled: false } } },
 	},
 	{
 		name: "prisma",
@@ -180,7 +180,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		extensions: [".tf", ".tfvars"],
 		skipDirectories: [".terraform"],
 		initialization: {
-			experimentalFeatures: { prefillRequiredFields: true, validateOnSave: true },
+			experimentalFeatures: { prefillRequiredFields: true },
 		},
 	},
 	{
@@ -493,11 +493,11 @@ const LANGUAGE_IDS: Record<string, string> = {
 	".ksh": "shellscript",
 	".kt": "kotlin",
 	".kts": "kotlin",
-	".lhs": "haskell",
+	".lhs": "lhaskell",
 	".m": "objective-c",
 	".mjs": "javascript",
 	".ml": "ocaml",
-	".mli": "ocaml",
+	".mli": "ocaml.interface",
 	".mm": "objective-cpp",
 	".mts": "typescript",
 	".nix": "nix",

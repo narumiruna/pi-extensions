@@ -15,7 +15,14 @@ import path from "node:path";
 import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
 import { consumeLspConfigNotice, loadConfig, loadRuntime } from "../src/adapters.js";
-import { commandExists, commandFromEnv, resolveCommandPath, splitCommand } from "../src/command.js";
+import {
+	commandExists,
+	commandFromEnv,
+	commandPathValue,
+	mergeEnvironment,
+	resolveCommandPath,
+	splitCommand,
+} from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
 import { resolveSpawnCommand } from "../src/lsp-client.js";
 import lsp from "../src/pi-lsp.js";
@@ -183,7 +190,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				extensions: [".php"],
 				sample: "index.php",
 				languageId: "php",
-				initialization: { telemetry: { enabled: false } },
+				initialization: { intelephense: { telemetry: { enabled: false } } },
 			},
 			{
 				name: "prisma",
@@ -205,7 +212,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				command: ["ocamllsp"],
 				extensions: [".ml", ".mli"],
 				sample: "lib/app.mli",
-				languageId: "ocaml",
+				languageId: "ocaml.interface",
 				skipDirectories: ["_build", "_opam"],
 			},
 			{
@@ -223,7 +230,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				languageId: "terraform-vars",
 				skipDirectories: [".terraform"],
 				initialization: {
-					experimentalFeatures: { prefillRequiredFields: true, validateOnSave: true },
+					experimentalFeatures: { prefillRequiredFields: true },
 				},
 			},
 			{
@@ -268,7 +275,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				command: ["haskell-language-server-wrapper", "--lsp"],
 				extensions: [".hs", ".lhs"],
 				sample: "src/Main.lhs",
-				languageId: "haskell",
+				languageId: "lhaskell",
 				skipDirectories: [".stack-work", "dist-newstyle"],
 			},
 		];
@@ -309,6 +316,13 @@ test("command helpers split shell-like strings and honor environment overrides",
 	const windowsBin = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-bin-"));
 	const commandShim = path.join(windowsBin, "language-server.cmd");
 	writeFileSync(commandShim, "@echo off\r\n");
+	assert.equal(commandPathValue({ Path: windowsBin }, "win32"), windowsBin);
+	assert.deepEqual(
+		Object.entries(mergeEnvironment({ Path: windowsBin }, "win32")).filter(
+			([key]) => key.toLowerCase() === "path",
+		),
+		[["Path", windowsBin]],
+	);
 	const resolvedShim = resolveCommandPath("language-server", windowsBin, "win32", windowsBin);
 	assert.ok(resolvedShim);
 	assert.equal(resolvedShim, commandShim);

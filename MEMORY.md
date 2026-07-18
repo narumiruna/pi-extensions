@@ -20,6 +20,7 @@
 - Keep pi-lsp's built-in catalog to direct-command, non-overlapping routes unless project-marker selection is added; mark defaults so unavailable optional commands can be skipped, keep explicit/custom selections fail-closed, and cache discovery by both extensions and skip policy.
 - pi-lsp catalog entries must target actual standalone launchers, handle platform wrappers, and include initialization needed by a stateless client; do not infer server readiness from a toolchain executable or route ambiguous/partially supported dialects.
 - On Windows, extensionless LSP commands can resolve to `.cmd`/`.bat` PATH shims; resolve with the adapter's effective `PATH` and child cwd before wrapping batch launchers through `%ComSpec%`.
+- pi-lsp defaults must use dialect-specific language IDs, nest workspace settings under the server-requested section, and avoid save-only settings unless diagnostics emit `didSave`.
 - pi-statusline is display-only; avoid prompt interception or customization commands unless intentionally reintroduced.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.
 - Symptom: extension actions from `agent_end` may not trigger a new turn. Cause: follow-ups can miss the late drain point. Fix: on Pi 0.80.6+, record intent in `agent_end` and dispatch from `agent_settled`; standalone manual compaction does not emit `agent_settled`, so use a narrowly idle-gated `session_compact` fallback when needed.
