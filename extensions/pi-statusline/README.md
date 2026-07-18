@@ -4,12 +4,12 @@
 
 `@narumitw/pi-statusline` is a native [Pi coding agent](https://pi.dev) extension that replaces Pi's footer with a beautiful, information-rich terminal statusline.
 
-Use it to monitor model selection, thinking level, git branch, working directory, active tools, context usage, token totals, estimated cost, time, and statuses from other Pi extensions.
+Use it to monitor provider, model selection, thinking level, git branch, working directory, active tools, context usage, token totals, estimated cost, time, and statuses from other Pi extensions.
 
 ## ✨ Features
 
 - Replaces the default Pi footer with a compact preset-based statusline.
-- Shows model, thinking level, git branch/status, project directory, active tool, context usage, tokens, cost, and clock.
+- Shows provider, model, thinking level, git branch/status, project directory, active tool, context usage, tokens, cost, and clock.
 - Displays compact statuses published through Pi's generic extension status API.
 - Owns extension status icons through optional JSON config, including per-extension icon suppression with `""`.
 - Warns when the same extension package is installed from multiple sources.
@@ -88,6 +88,7 @@ During the `PI_CAFFEINATE_ICON` deprecation window, a leading emoji from `pi-caf
 The default `tokyo-night` statusline uses a Starship-inspired `░▒▓` / `` powerline layout and includes:
 
 - `π` brand marker.
+- 🔌 current provider.
 - 🤖 current model.
 - 🧠 thinking level.
 - 📁 current project directory.
@@ -117,7 +118,7 @@ Examples:
 ## 🧠 Use cases
 
 - Track agent context usage during long coding sessions.
-- See which model and thinking level are active.
+- See which provider, model, and thinking level are active.
 - Monitor token totals and estimated cost.
 - Keep git branch and project directory visible.
 - Make Pi terminal sessions easier to scan at a glance.

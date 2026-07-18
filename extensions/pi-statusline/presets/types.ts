@@ -2,6 +2,7 @@ import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 
 export type SegmentName =
 	| "brand"
+	| "provider"
 	| "model"
 	| "thinking"
 	| "cwd"

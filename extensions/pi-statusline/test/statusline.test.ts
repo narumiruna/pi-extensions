@@ -121,6 +121,52 @@ test("statusline renders max thinking with the latest theme color", async () => 
 	}
 });
 
+test("statusline renders provider next to the model", async () => {
+	const previousPreset = process.env.PI_STATUSLINE_PRESET;
+	process.env.PI_STATUSLINE_PRESET = "classic";
+	try {
+		const mock = createMockPi();
+		statusline(mock.pi);
+		const context = createMockContext({
+			mode: "tui",
+			model: { id: "claude-sonnet-4", provider: "anthropic" },
+		});
+
+		await emit(mock.events, "session_start", {}, context.ctx);
+		const footerFactory = context.footer as (
+			tui: { requestRender(): void },
+			theme: { fg(color: string, text: string): string; bold(text: string): string },
+			footerData: {
+				getGitBranch(): string | null;
+				getExtensionStatuses(): ReadonlyMap<string, string>;
+				onBranchChange(callback: () => void): () => void;
+			},
+		) => { render(width: number): string[]; dispose(): void };
+		const footer = footerFactory(
+			{ requestRender() {} },
+			{
+				fg(_color, text) {
+					return text;
+				},
+				bold: (text) => text,
+			},
+			{
+				getGitBranch: () => null,
+				getExtensionStatuses: () => new Map(),
+				onBranchChange: () => () => undefined,
+			},
+		);
+
+		const line = footer.render(200)[0] ?? "";
+		assert.match(line, /🔌 anthropic/);
+		assert.match(line, /🤖 sonnet-4/);
+		footer.dispose();
+	} finally {
+		if (previousPreset === undefined) delete process.env.PI_STATUSLINE_PRESET;
+		else process.env.PI_STATUSLINE_PRESET = previousPreset;
+	}
+});
+
 test("statusline skips git status refreshes outside TUI mode", async () => {
 	const mock = createMockPi();
 	let execCalls = 0;
