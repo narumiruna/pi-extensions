@@ -36,7 +36,7 @@ pi -e ./extensions/pi-lsp
 
 ## ⚙️ Configuration
 
-If no config is provided, pi-lsp ships a broad catalog of direct-command defaults. Servers are started only when matching files are requested. pi-lsp does not download language servers, so install the commands you need and make them available on `PATH`.
+If no config is provided, pi-lsp ships a broad catalog of direct-command defaults. Servers are started only when matching files are requested. pi-lsp does not download language servers, so install the commands you need and make them available on `PATH`. During no-config diagnostics, unavailable default commands are skipped when another matching server can run; explicitly selected or custom-configured missing commands still report an error.
 
 | Language or format | Default server | Startup command | Extensions |
 | --- | --- | --- | --- |
@@ -57,7 +57,7 @@ If no config is provided, pi-lsp ships a broad catalog of direct-command default
 | YAML | `yaml-language-server` | `yaml-language-server --stdio` | `.yaml`, `.yml` |
 | Lua | `lua-language-server` | `lua-language-server` | `.lua` |
 | PHP | `intelephense` | `intelephense --stdio` | `.php` |
-| Prisma | `prisma` | `prisma language-server` | `.prisma` |
+| Prisma | `prisma` | `prisma-language-server` | `.prisma` |
 | Dart | `dart` | `dart language-server --lsp` | `.dart` |
 | OCaml | `ocaml-lsp` | `ocamllsp` | `.ml`, `.mli` |
 | Shell | `bash-language-server` | `bash-language-server start` | `.sh`, `.bash`, `.zsh`, `.ksh` |
@@ -68,7 +68,6 @@ If no config is provided, pi-lsp ships a broad catalog of direct-command default
 | Nix | `nixd` | `nixd` | `.nix` |
 | Typst | `tinymist` | `tinymist` | `.typ`, `.typc` |
 | Haskell | `haskell-language-server` | `haskell-language-server-wrapper --lsp` | `.hs`, `.lhs` |
-| Julia | `julia-language-server` | `julia --startup-file=no --history-file=no -e "using LanguageServer; runserver()"` | `.jl` |
 
 For example, install the Rust and Go servers with their official toolchains:
 

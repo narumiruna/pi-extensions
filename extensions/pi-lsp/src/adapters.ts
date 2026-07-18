@@ -153,7 +153,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 	},
 	{
 		name: "prisma",
-		command: ["prisma", "language-server"],
+		command: ["prisma-language-server"],
 		extensions: [".prisma"],
 	},
 	{
@@ -215,17 +215,6 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		extensions: [".hs", ".lhs"],
 		skipDirectories: [".stack-work", "dist-newstyle"],
 	},
-	{
-		name: "julia-language-server",
-		command: [
-			"julia",
-			"--startup-file=no",
-			"--history-file=no",
-			"-e",
-			"using LanguageServer; runserver()",
-		],
-		extensions: [".jl"],
-	},
 ];
 
 export function loadRuntime(cwd = process.cwd()) {
@@ -238,7 +227,11 @@ export function loadRuntime(cwd = process.cwd()) {
 
 export function loadConfig(cwd = process.cwd()): LspConfig {
 	const configured = loadConfiguredConfig(cwd);
-	return configured ?? { servers: DEFAULT_SERVER_CONFIGS };
+	return (
+		configured ?? {
+			servers: DEFAULT_SERVER_CONFIGS.map((server) => ({ ...server, isDefault: true })),
+		}
+	);
 }
 
 let pendingConfigNotice: string | undefined;
@@ -442,6 +435,7 @@ function configToAdapter(config: InternalLspServer): LspServerAdapter {
 	if (!command) throw new Error(`${config.name}.command must contain at least one string.`);
 	return {
 		name: config.name,
+		isDefault: config.isDefault ?? false,
 		defaultCommand: { command, args },
 		commandEnvVar: envName(config.name, "COMMAND"),
 		missingCommandHint: `Install ${config.name} or set ${envName(config.name, "COMMAND")}.`,

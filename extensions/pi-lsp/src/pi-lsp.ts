@@ -60,7 +60,7 @@ const lspDiagnosticsTool = defineTool({
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const requestedRoot = resolveRoot(params.root);
 		const { adapters, timeoutMs } = loadRuntime(requestedRoot);
-		const { root, routes } = selectDiagnosticRoutes(
+		const { root, routes, skipped } = selectDiagnosticRoutes(
 			adapters,
 			{ ...params, root: requestedRoot },
 			DEFAULT_FILE_LIMIT,
@@ -78,11 +78,23 @@ const lspDiagnosticsTool = defineTool({
 			results.push({ route, result });
 		}
 
-		const text = results
-			.map(({ route, result }) => `${route.reason}\n\n${textFromResult(result)}`)
-			.join("\n\n---\n\n");
-		return textResult(text, {
+		const sections = results.map(
+			({ route, result }) => `${route.reason}\n\n${textFromResult(result)}`,
+		);
+		if (skipped.length) {
+			sections.push(
+				`Skipped unavailable default LSP server(s): ${skipped
+					.map((route) => route.adapter.name)
+					.join(", ")}.`,
+			);
+		}
+		return textResult(sections.join("\n\n---\n\n"), {
 			root,
+			skipped: skipped.map((route) => ({
+				server: route.adapter.name,
+				reason: route.reason,
+				files: route.files,
+			})),
 			routes: results.map(({ route, result }) => ({
 				server: route.adapter.name,
 				backend: route.adapter.name,

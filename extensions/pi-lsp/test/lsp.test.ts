@@ -185,7 +185,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			},
 			{
 				name: "prisma",
-				command: ["prisma", "language-server"],
+				command: ["prisma-language-server"],
 				extensions: [".prisma"],
 				sample: "schema.prisma",
 				languageId: "prisma",
@@ -269,24 +269,16 @@ test("default catalog routes common languages and skips generated trees", () => 
 				languageId: "haskell",
 				skipDirectories: [".stack-work", "dist-newstyle"],
 			},
-			{
-				name: "julia-language-server",
-				command: [
-					"julia",
-					"--startup-file=no",
-					"--history-file=no",
-					"-e",
-					"using LanguageServer; runserver()",
-				],
-				extensions: [".jl"],
-				sample: "src/app.jl",
-				languageId: "julia",
-			},
 		];
+		assert.equal(
+			adapters.some((adapter) => adapter.name === "julia-language-server"),
+			false,
+		);
 
 		for (const expected of catalog) {
 			const adapter = adapters.find((candidate) => candidate.name === expected.name);
 			assert.ok(adapter, `missing default adapter: ${expected.name}`);
+			assert.equal(adapter.isDefault, true);
 			assert.deepEqual(adapter.defaultCommand, {
 				command: expected.command[0],
 				args: expected.command.slice(1),
@@ -413,6 +405,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 		});
 		const adapter = loadRuntime(project).adapters[0];
 		assert.ok(adapter);
+		assert.equal(adapter.isDefault, false);
 		assert.deepEqual(collectSupportedFiles(adapter, project, undefined, 50), [
 			path.join(project, "src", "main.foo"),
 		]);
@@ -517,9 +510,73 @@ test("route selection handles server filters and ambiguous fix routes", () => {
 	);
 });
 
+test("diagnostic route caches keep per-server skip policies isolated", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-route-cache-"));
+	mkdirSync(path.join(root, "generated"));
+	mkdirSync(path.join(root, "src"));
+	writeFileSync(path.join(root, "generated", "output.foo"), "generated\n");
+	writeFileSync(path.join(root, "src", "main.foo"), "source\n");
+	const skipGenerated = testAdapter("skip-generated", [".foo"]);
+	const includeGenerated = testAdapter("include-generated", [".foo"]);
+	skipGenerated.skipDirectories.add("generated");
+
+	try {
+		const selection = selectDiagnosticRoutes([skipGenerated, includeGenerated], { root }, 50);
+		const routes = new Map(selection.routes.map((route) => [route.adapter.name, route.files]));
+		assert.deepEqual(routes.get("skip-generated"), [path.join(root, "src", "main.foo")]);
+		assert.deepEqual(routes.get("include-generated"), [
+			path.join(root, "generated", "output.foo"),
+			path.join(root, "src", "main.foo"),
+		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("diagnostic routes skip missing defaults but preserve explicit selection", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-route-availability-"));
+	writeFileSync(path.join(root, "main.foo"), "source\n");
+	const executable = path.join(root, "available-lsp");
+	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+	chmodSync(executable, 0o755);
+	const available = testAdapter("available", [".foo"]);
+	available.defaultCommand = { command: "./available-lsp", args: [] };
+	available.isDefault = true;
+	const missing = testAdapter("missing", [".foo"]);
+	missing.defaultCommand = { command: "./missing-lsp", args: [] };
+	missing.isDefault = true;
+
+	try {
+		const selection = selectDiagnosticRoutes([available, missing], { root }, 50) as ReturnType<
+			typeof selectDiagnosticRoutes
+		> & { skipped?: Array<{ adapter: LspServerAdapter }> };
+		assert.deepEqual(
+			selection.routes.map((route) => route.adapter.name),
+			["available"],
+		);
+		assert.deepEqual(
+			selection.skipped?.map((route) => route.adapter.name),
+			["missing"],
+		);
+		assert.deepEqual(
+			selectDiagnosticRoutes([missing], { root, server: "missing" }, 50).routes.map(
+				(route) => route.adapter.name,
+			),
+			["missing"],
+		);
+		assert.throws(
+			() => selectDiagnosticRoutes([missing], { root }, 50),
+			/No available default LSP commands.*missing/,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 function testAdapter(name: string, extensions: string[]): LspServerAdapter {
 	return {
 		name,
+		isDefault: false,
 		extensions,
 		skipDirectories: new Set(["node_modules"]),
 		commandEnvVar: `PI_${name.toUpperCase()}_COMMAND`,
