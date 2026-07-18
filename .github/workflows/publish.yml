@@ -20,8 +20,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout tag
+      - name: Checkout ref
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -42,34 +44,36 @@ jobs:
       - name: Verify packages
         run: npm run check
 
+      - name: Select workspace packages
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            node scripts/list-publish-workspaces.mjs --release "$RELEASE_TAG" > /tmp/pi-workspaces.tsv
+          else
+            node scripts/list-publish-workspaces.mjs --all > /tmp/pi-workspaces.tsv
+          fi
+
+          if [[ -s /tmp/pi-workspaces.tsv ]]; then
+            echo "Selected workspace packages:"
+            while IFS=$'\t' read -r package version; do
+              echo "- ${package}@${version}"
+            done < /tmp/pi-workspaces.tsv
+          else
+            echo "No workspace packages selected for publishing."
+          fi
+
       - name: Publish unpublished workspace packages
         env:
           NPM_CONFIG_PROVENANCE: "true"
         run: |
           set -euo pipefail
 
-          node - <<'NODE' > /tmp/pi-workspaces.tsv
-          const fs = require("node:fs");
-          const path = require("node:path");
-
-          const extensionsDir = "extensions";
-          for (const dirent of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
-            if (!dirent.isDirectory()) continue;
-            // Experimental packages may be published only through an explicit local just recipe.
-            if (dirent.name === "experimental" || dirent.name === "deprecated") continue;
-
-            const packageJsonPath = path.join(extensionsDir, dirent.name, "package.json");
-            if (!fs.existsSync(packageJsonPath)) continue;
-
-            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-            if (packageJson.private) continue;
-
-            console.log(`${packageJson.name}\t${packageJson.version}`);
-          }
-          NODE
-
           while IFS=$'\t' read -r package version; do
-            if [ -z "$package" ] || [ -z "$version" ]; then
+            if [[ -z "$package" || -z "$version" ]]; then
               continue
             fi
 

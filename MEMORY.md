@@ -29,6 +29,7 @@
 - Symptom: concurrent tools sharing one extension status key can clear or mislabel a still-running sibling. Cause: each call unconditionally owns set/clear. Fix: track active statuses per UI/session, restore the latest remaining status, and invalidate the tracker on session teardown.
 - Reopening `ctx.ui.select()` after every toggle resets its cursor to row one; use one `ctx.ui.custom()` selector with a persistent selected index, retaining the dialog loop only as a fallback. Serialize selector saves, recover the queue after each failure, and preserve prior save/apply ordering; roll back optimistic UI state when persistence fails.
 - Run Biome `--write` only on intended files during bounded work; formatting whole extension trees can rewrite unrelated source that is currently outside the root's normal ignore-aware formatting path.
+- Root Biome checks reject nested Git worktrees that contain another root `biome.json`; create worktrees outside the repository or locally ignore their parent directory during verification.
 - Headless Pi runners can share a no-op UI object; key session-owned resources such as temporary output files by `sessionManager`, not `ctx.ui`.
 - Codex usage can be queried without Codex CLI by sending Pi's `openai-codex` bearer token to `https://chatgpt.com/backend-api/wham/usage`; response uses Codex `RateLimitStatusPayload` snake_case fields.
 - `pi-codex-usage` statusline must select a rate-limit bucket by current model id/name; `gpt-5.3-codex-spark` can use its own returned bucket instead of primary `codex`.
