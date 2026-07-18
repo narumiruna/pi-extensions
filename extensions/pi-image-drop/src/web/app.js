@@ -25,8 +25,8 @@ const ui = {
 	dialog: $("#clear-dialog"),
 	previewDialog: $("#image-preview-dialog"),
 	previewTitle: $("#image-preview-title"),
+	previewDismiss: $("#image-preview-dismiss"),
 	previewImage: $("#image-preview"),
-	previewClose: $("#image-preview-close"),
 };
 const clientId = crypto.randomUUID();
 const pendingFiles = new Map();
@@ -83,9 +83,9 @@ function wire() {
 	ui.dialog.addEventListener("close", () => {
 		if (ui.dialog.returnValue === "confirm") void clearAll();
 	});
-	ui.previewClose.addEventListener("click", () => ui.previewDialog.close());
+	ui.previewDismiss.addEventListener("click", closePreview);
 	ui.previewDialog.addEventListener("click", (event) => {
-		if (event.target === ui.previewDialog) ui.previewDialog.close();
+		if (event.target === ui.previewDialog) closePreview();
 	});
 	ui.previewDialog.addEventListener("close", () => {
 		ui.previewImage.removeAttribute("src");
@@ -333,6 +333,10 @@ function openPreview(item) {
 	ui.previewImage.src = `/api/items/${item.id}/preview?revision=${state.batch.revision}`;
 	ui.previewImage.alt = `Enlarged preview of ${item.name}`;
 	ui.previewDialog.showModal();
+}
+
+function closePreview() {
+	ui.previewDialog.close();
 }
 
 function button(label, text, disabled, action, className = "") {
