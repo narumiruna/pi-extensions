@@ -14,11 +14,11 @@ concurrency:
 
 jobs:
   release:
-    name: Create GitHub Release
+    name: Create GitHub release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Create GitHub Release
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

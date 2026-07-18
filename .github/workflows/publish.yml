@@ -20,19 +20,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout ref
+      - name: Check out source revision
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
-      - name: Setup npm
+      - name: Set up npm
         run: |
           npm install -g npm@11.16.0
           npm --version
@@ -41,10 +41,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify packages
+      - name: Validate packages
         run: npm run check
 
-      - name: Select workspace packages
+      - name: Select packages to publish
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -58,15 +58,15 @@ jobs:
           fi
 
           if [[ -s /tmp/pi-workspaces.tsv ]]; then
-            echo "Selected workspace packages:"
+            echo "Packages selected for publishing:"
             while IFS=$'\t' read -r package version; do
               echo "- ${package}@${version}"
             done < /tmp/pi-workspaces.tsv
           else
-            echo "No workspace packages selected for publishing."
+            echo "No packages were selected for publishing."
           fi
 
-      - name: Publish unpublished workspace packages
+      - name: Publish new package versions
         id: publish
         env:
           NPM_CONFIG_PROVENANCE: "true"
@@ -82,7 +82,7 @@ jobs:
             fi
 
             if npm view "${package}@${version}" version >/dev/null 2>&1; then
-              echo "${package}@${version} already exists; skipping publish."
+              echo "${package}@${version} is already published; skipping."
               printf '%s\t%s\n' "$package" "$version" >> /tmp/pi-skipped.tsv
               continue
             fi
@@ -92,7 +92,7 @@ jobs:
             printf '%s\t%s\n' "$package" "$version" >> /tmp/pi-published.tsv
           done < /tmp/pi-workspaces.tsv
 
-      - name: Write publish summary
+      - name: Write publication summary
         if: always()
         env:
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
@@ -100,13 +100,13 @@ jobs:
           set -euo pipefail
 
           {
-            echo "## npm publish summary"
+            echo "## npm publishing summary"
             echo
 
             case "$PUBLISH_OUTCOME" in
-              success) echo "Publish step completed successfully. ✅" ;;
-              failure) echo "Publish step failed; packages listed below completed before the failure. ❌" ;;
-              *) echo "Publish step did not run (outcome: ${PUBLISH_OUTCOME}). ⚠️" ;;
+              success) echo "Package publishing completed successfully. ✅" ;;
+              failure) echo "Package publishing failed; the versions listed below were published before the failure. ❌" ;;
+              *) echo "Package publishing did not run (outcome: ${PUBLISH_OUTCOME}). ⚠️" ;;
             esac
             echo
 
