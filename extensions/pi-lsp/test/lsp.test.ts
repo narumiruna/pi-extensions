@@ -39,12 +39,18 @@ test("lsp registers diagnostics/fix tools, command, and status hooks", () => {
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
 });
 
-test("default LSP config routes Rust and Go through their official servers", () => {
+test("default Rust and Go routes skip build and vendored files unless requested", () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-defaults-"));
 	const agentDir = path.join(root, "agent");
 	const project = path.join(root, "project");
 	mkdirSync(agentDir);
-	mkdirSync(project);
+	mkdirSync(path.join(project, "src"), { recursive: true });
+	mkdirSync(path.join(project, "target"));
+	mkdirSync(path.join(project, "vendor"));
+	writeFileSync(path.join(project, "src", "main.rs"), "fn main() {}\n");
+	writeFileSync(path.join(project, "src", "main.go"), "package main\n");
+	writeFileSync(path.join(project, "target", "generated.rs"), "fn generated() {}\n");
+	writeFileSync(path.join(project, "vendor", "dependency.go"), "package dependency\n");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const previousConfig = process.env.PI_LSP_CONFIG;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -59,9 +65,21 @@ test("default LSP config routes Rust and Go through their official servers", () 
 		assert.deepEqual(rustAnalyzer.defaultCommand, { command: "rust-analyzer", args: [] });
 		assert.deepEqual(rustAnalyzer.extensions, [".rs"]);
 		assert.equal(rustAnalyzer.languageIdFor("src/main.rs"), "rust");
+		assert.deepEqual(collectSupportedFiles(rustAnalyzer, project, undefined, 50), [
+			path.join(project, "src", "main.rs"),
+		]);
+		assert.deepEqual(collectSupportedFiles(rustAnalyzer, project, ["target"], 50), [
+			path.join(project, "target", "generated.rs"),
+		]);
 		assert.deepEqual(gopls.defaultCommand, { command: "gopls", args: [] });
 		assert.deepEqual(gopls.extensions, [".go"]);
 		assert.equal(gopls.languageIdFor("main.go"), "go");
+		assert.deepEqual(collectSupportedFiles(gopls, project, undefined, 50), [
+			path.join(project, "src", "main.go"),
+		]);
+		assert.deepEqual(collectSupportedFiles(gopls, project, ["vendor"], 50), [
+			path.join(project, "vendor", "dependency.go"),
+		]);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

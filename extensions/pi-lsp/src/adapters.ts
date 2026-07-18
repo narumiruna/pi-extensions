@@ -31,6 +31,8 @@ const COMMON_SKIP_DIRECTORIES = new Set([
 	"dist",
 	"node_modules",
 	"out",
+	"target",
+	"vendor",
 	"venv",
 ]);
 
