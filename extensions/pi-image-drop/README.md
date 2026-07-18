@@ -29,7 +29,7 @@ This package targets the latest Pi release and uses its `agent_settled` lifecycl
 3. Open the link. Paste images anywhere, drop files, or select **Choose images**.
 4. Review previews and processing details. Drag to reorder, use the keyboard-accessible arrow buttons, retry failures, delete individual items, or use confirmed **Clear all**.
 5. Write and submit a non-empty message in Pi. The ready images are appended after any attachments already on that message, in browser order.
-6. After Pi records that user message, the sent images move to **Sent this session**. They are not attached to later prompts unless you explicitly choose **Add again**. You can preview, re-add, delete, or clear retained images from the browser page.
+6. After Pi records that user message, the sent images move to **Previously sent**. They are not attached to later prompts unless you explicitly choose **Add again**. You can preview, re-add, delete, or clear retained images from the browser page.
 
 The `🖼️` widget above Pi's editor reports ready, uploading, error, and queued counts. Uploading or failed items block the whole batch and preserve the Pi editor text. Image-only messages are not supported.
 

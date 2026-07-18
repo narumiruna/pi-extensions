@@ -1,6 +1,7 @@
 import {
 	attemptMutation,
 	canMutate,
+	draftGuidance,
 	formatBytes,
 	moveItem,
 	moveItemBefore,
@@ -17,10 +18,12 @@ const ui = {
 	choose: $("#choose-files"),
 	input: $("#file-input"),
 	status: $("#status"),
+	nextStep: $("#next-step"),
 	clear: $("#clear-all"),
 	error: $("#error-banner"),
 	grid: $("#grid"),
 	historyStatus: $("#history-status"),
+	historyRetention: $("#history-retention"),
 	historyClear: $("#clear-history"),
 	historyGrid: $("#history-grid"),
 	overlay: $("#connection-overlay"),
@@ -289,7 +292,9 @@ function render() {
 	ui.cwd.textContent = state.cwd;
 	const summary = summarizeBatch(state.batch);
 	ui.status.textContent = `${summary.label} · ${formatBytes(summary.bytes)}`;
+	ui.nextStep.textContent = draftGuidance(state.batch);
 	const mutable = canMutate(state.batch);
+	ui.clear.hidden = summary.total === 0;
 	ui.clear.disabled = !mutable || summary.total === 0;
 	ui.choose.disabled = !mutable;
 	ui.input.disabled = !mutable;
@@ -298,6 +303,8 @@ function render() {
 	ui.grid.replaceChildren(...state.batch.items.map((item, index) => card(item, index, mutable)));
 	const history = summarizeHistory(state.history);
 	ui.historyStatus.textContent = history.label;
+	ui.historyRetention.textContent = history.usage;
+	ui.historyClear.hidden = history.total === 0;
 	ui.historyClear.disabled = history.total === 0;
 	ui.historyGrid.replaceChildren(
 		...(state.history?.items ?? []).map((item, index) => historyCard(item, index, mutable)),
@@ -371,7 +378,9 @@ function card(item, index, mutable) {
 	);
 	if (item.status === "error")
 		actions.append(button("Retry", "Retry", !mutable, () => retry(item.id)));
-	actions.append(button("Delete", "Delete", !mutable, () => remove(item.id), "delete"));
+	actions.append(
+		button("Delete", "Delete", !mutable, () => remove(item.id), "danger-secondary"),
+	);
 	article.append(actions);
 	return article;
 }
@@ -411,7 +420,7 @@ function historyCard(item, index, mutable) {
 			"Delete",
 			false,
 			() => deleteHistory(item.id),
-			"delete",
+			"danger-secondary",
 		),
 	);
 	article.append(actions);

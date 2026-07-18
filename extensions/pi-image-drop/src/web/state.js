@@ -18,14 +18,30 @@ export function summarizeHistory(history) {
 	const bytes = Number(history?.totalBytes ?? 0);
 	const maxImages = Number(history?.maxImages ?? 0);
 	const maxBytes = Number(history?.maxBytes ?? 0);
-	const usage = `${total}/${maxImages} images · ${formatBytes(bytes)} of ${formatBytes(maxBytes)}`;
 	return {
 		total,
 		bytes,
 		maxImages,
 		maxBytes,
-		label: total === 0 ? `No images sent this session · ${usage}` : usage,
+		label: total === 0 ? "No images sent yet" : `${total} ${plural(total, "image")} · ${formatBytes(bytes)}`,
+		usage: `${total}/${maxImages} images · ${formatBytes(bytes)} of ${formatBytes(maxBytes)}`,
 	};
+}
+
+export function draftGuidance(batch) {
+	const summary = summarizeBatch(batch);
+	if (batch.phase === "closed") return "This Pi session is no longer accepting images.";
+	if (batch.phase === "reserved") {
+		return "Queued with Pi. These images will be attached when Pi sends this message.";
+	}
+	if (summary.total === 0) return "Choose images to add them to your next Pi message.";
+	if (summary.error > 0) {
+		return `Fix or delete ${summary.error} ${plural(summary.error, "image")} that ${summary.error === 1 ? "needs" : "need"} attention before sending from Pi.`;
+	}
+	if (summary.uploading > 0) {
+		return `Wait for ${summary.uploading} ${plural(summary.uploading, "image")} to finish processing before sending from Pi.`;
+	}
+	return `Return to Pi and send a non-empty message. ${summary.ready} ready ${plural(summary.ready, "image")} will be attached automatically.`;
 }
 
 export function statusLabel(phase, counts, total) {

@@ -12,11 +12,13 @@ type StateHelpers = {
 	};
 	summarizeHistory(history: unknown): {
 		label: string;
+		usage: string;
 		total: number;
 		bytes: number;
 		maxImages: number;
 		maxBytes: number;
 	};
+	draftGuidance(batch: unknown): string;
 	moveItem(ids: string[], id: string, direction: number): string[];
 	moveItemBefore(ids: string[], id: string, target: string): string[];
 	canMutate(batch: { phase: string }): boolean;
@@ -58,7 +60,7 @@ test("web state helpers summarize every visible batch state without color-only m
 	);
 });
 
-test("web history helpers report session retention and memory limits", () => {
+test("web history helpers separate concise status from secondary retention limits", () => {
 	assert.deepEqual(
 		helpers.summarizeHistory({
 			items: [],
@@ -71,17 +73,61 @@ test("web history helpers report session retention and memory limits", () => {
 			bytes: 0,
 			maxImages: 128,
 			maxBytes: 512 * 1024 * 1024,
-			label: "No images sent this session · 0/128 images · 0 B of 512 MB",
+			label: "No images sent yet",
+			usage: "0/128 images · 0 B of 512 MB",
 		},
 	);
-	assert.equal(
+	assert.deepEqual(
 		helpers.summarizeHistory({
 			items: [{}, {}],
 			totalBytes: 5 * 1024 * 1024,
 			maxImages: 128,
 			maxBytes: 512 * 1024 * 1024,
-		}).label,
-		"2/128 images · 5.0 MB of 512 MB",
+		}),
+		{
+			total: 2,
+			bytes: 5 * 1024 * 1024,
+			maxImages: 128,
+			maxBytes: 512 * 1024 * 1024,
+			label: "2 images · 5.0 MB",
+			usage: "2/128 images · 5.0 MB of 512 MB",
+		},
+	);
+});
+
+test("draft guidance names the next valid action for every lifecycle state", () => {
+	assert.equal(
+		helpers.draftGuidance({ phase: "empty", items: [] }),
+		"Choose images to add them to your next Pi message.",
+	);
+	assert.equal(
+		helpers.draftGuidance({
+			phase: "editing",
+			items: [{ status: "processing" }, { status: "processing" }],
+		}),
+		"Wait for 2 images to finish processing before sending from Pi.",
+	);
+	assert.equal(
+		helpers.draftGuidance({
+			phase: "blocked",
+			items: [{ status: "ready" }, { status: "error" }],
+		}),
+		"Fix or delete 1 image that needs attention before sending from Pi.",
+	);
+	assert.equal(
+		helpers.draftGuidance({ phase: "ready", items: [{ status: "ready" }] }),
+		"Return to Pi and send a non-empty message. 1 ready image will be attached automatically.",
+	);
+	assert.equal(
+		helpers.draftGuidance({
+			phase: "reserved",
+			items: [{ status: "ready" }, { status: "ready" }],
+		}),
+		"Queued with Pi. These images will be attached when Pi sends this message.",
+	);
+	assert.equal(
+		helpers.draftGuidance({ phase: "closed", items: [{ status: "ready" }] }),
+		"This Pi session is no longer accepting images.",
 	);
 });
 
