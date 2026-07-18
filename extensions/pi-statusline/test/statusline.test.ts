@@ -77,6 +77,50 @@ test("statusline registers lifecycle handlers without reading thinking level at 
 	assert.ok(mock.events.has("tool_execution_start"));
 });
 
+test("statusline renders max thinking with the latest theme color", async () => {
+	const previousPreset = process.env.PI_STATUSLINE_PRESET;
+	process.env.PI_STATUSLINE_PRESET = "classic";
+	try {
+		const mock = createMockPi({ thinkingLevel: "max" });
+		statusline(mock.pi);
+		const context = createMockContext({ mode: "tui" });
+
+		await emit(mock.events, "session_start", {}, context.ctx);
+		const footerFactory = context.footer as (
+			tui: { requestRender(): void },
+			theme: { fg(color: string, text: string): string; bold(text: string): string },
+			footerData: {
+				getGitBranch(): string | null;
+				getExtensionStatuses(): ReadonlyMap<string, string>;
+				onBranchChange(callback: () => void): () => void;
+			},
+		) => { render(width: number): string[]; dispose(): void };
+		const colors: string[] = [];
+		const footer = footerFactory(
+			{ requestRender() {} },
+			{
+				fg(color, text) {
+					colors.push(color);
+					return text;
+				},
+				bold: (text) => text,
+			},
+			{
+				getGitBranch: () => null,
+				getExtensionStatuses: () => new Map(),
+				onBranchChange: () => () => undefined,
+			},
+		);
+
+		assert.match(footer.render(200)[0] ?? "", /🧠 max/);
+		assert.ok(colors.includes("thinkingMax"));
+		footer.dispose();
+	} finally {
+		if (previousPreset === undefined) delete process.env.PI_STATUSLINE_PRESET;
+		else process.env.PI_STATUSLINE_PRESET = previousPreset;
+	}
+});
+
 test("statusline skips git status refreshes outside TUI mode", async () => {
 	const mock = createMockPi();
 	let execCalls = 0;

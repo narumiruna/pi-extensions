@@ -26,6 +26,7 @@ import {
 import { showPersistentSelector } from "./selector-ui.js";
 import {
 	configuredThinkingLevel,
+	type PlanModeFixedThinkingLevel,
 	type PlanModeSettings,
 	readPlanModeSettings,
 } from "./settings.js";
@@ -46,6 +47,20 @@ const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 const TOOL_SELECTOR_PAGE_SIZE = 10;
+
+type AgentSettledHandler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+function onAgentSettled(pi: ExtensionAPI, handler: AgentSettledHandler) {
+	(
+		pi as unknown as {
+			on(event: "agent_settled", callback: AgentSettledHandler): void;
+		}
+	).on("agent_settled", handler);
+}
+
+function setPlanThinkingLevel(pi: ExtensionAPI, level: PlanModeFixedThinkingLevel) {
+	(pi.setThinkingLevel as unknown as (level: PlanModeFixedThinkingLevel) => void)(level);
+}
 
 interface CommandArgumentCompletion {
 	value: string;
@@ -322,7 +337,7 @@ export default function planMode(pi: ExtensionAPI) {
 		acceptCompletedPlan(parsedPlan.plan, "legacy_proposed_plan", ctx);
 	});
 
-	pi.on("agent_settled", async (_event, ctx) => {
+	onAgentSettled(pi, async (_event, ctx) => {
 		const intent = readyPresentationIntent;
 		if (!intent || !readyPresentationIsCurrent(intent)) return;
 		if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
@@ -749,7 +764,7 @@ export default function planMode(pi: ExtensionAPI) {
 	function applyPlanThinkingLevel() {
 		if (state.manualThinkingLevel) {
 			if (pi.getThinkingLevel() !== state.manualThinkingLevel) {
-				pi.setThinkingLevel(state.manualThinkingLevel);
+				setPlanThinkingLevel(pi, state.manualThinkingLevel);
 			}
 			return;
 		}
@@ -764,7 +779,7 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 		const current = pi.getThinkingLevel();
 		if (!state.appliedThinkingLevel) state.previousThinkingLevel = current;
-		if (current !== configured) pi.setThinkingLevel(configured);
+		if (current !== configured) setPlanThinkingLevel(pi, configured);
 		state.appliedThinkingLevel = pi.getThinkingLevel();
 	}
 
@@ -788,7 +803,7 @@ export default function planMode(pi: ExtensionAPI) {
 			previousThinkingLevel &&
 			pi.getThinkingLevel() === appliedThinkingLevel
 		) {
-			pi.setThinkingLevel(previousThinkingLevel);
+			setPlanThinkingLevel(pi, previousThinkingLevel);
 		}
 		state = { ...state, appliedThinkingLevel: undefined, previousThinkingLevel: undefined };
 	}

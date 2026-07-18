@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
@@ -17,6 +18,23 @@ import type { SubagentTransport } from "./transport.js";
 
 const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 const DEFAULT_ABORT_GRACE_MS = 5_000;
+
+interface ChildModelRuntime {
+	getModel(provider: string, modelId: string): Model<Api> | undefined;
+	registerProvider(provider: string, config: unknown): void;
+	setRuntimeApiKey(provider: string, apiKey: string): Promise<void> | void;
+}
+
+interface CodingAgentRuntimeModule {
+	ModelRuntime?: {
+		create(options?: { authPath?: string; modelsPath?: string | null }): Promise<ChildModelRuntime>;
+	};
+}
+
+interface RegisteredProviderRegistry {
+	getRegisteredProviderConfig?(provider: string): unknown;
+	getRegisteredProviderIds?(): readonly string[];
+}
 
 export interface ParentRuntimeSnapshot {
 	model: Model<Api> | undefined;
@@ -316,20 +334,31 @@ export async function createSdkChildSession(
 		options.agent.agentScope === "project" || options.agent.agentScope === "both",
 	);
 	const resolved = await resolveChildModel(options);
+	const modelRuntime = await createChildModelRuntime(
+		options.modelRegistry,
+		resolved.model,
+		agentDir,
+	);
+	const model =
+		modelRuntime?.getModel(resolved.model.provider, resolved.model.id) ?? resolved.model;
 	const sessionManager = SessionManager.inMemory(options.agent.cwd);
-	seedChildSessionManager(sessionManager, options, resolved.model);
-	const created = await createAgentSession({
+	seedChildSessionManager(sessionManager, options, model);
+	const sessionOptions: Record<string, unknown> = {
 		cwd: options.agent.cwd,
 		agentDir,
-		model: resolved.model,
+		model,
 		thinkingLevel: resolved.thinkingLevel,
-		modelRegistry: options.modelRegistry,
 		resourceLoader,
 		settingsManager,
 		sessionManager,
 		tools: options.tools,
 		noTools: options.tools?.length === 0 ? "all" : undefined,
-	});
+	};
+	if (modelRuntime) sessionOptions.modelRuntime = modelRuntime;
+	else sessionOptions.modelRegistry = options.modelRegistry;
+	const created = await createAgentSession(
+		sessionOptions as NonNullable<Parameters<typeof createAgentSession>[0]>,
+	);
 	const session = created.session;
 	if (options.tools !== undefined) {
 		const active = session.getActiveToolNames();
@@ -357,6 +386,30 @@ export async function createSdkChildSession(
 		dispose: () => session.dispose(),
 		getActiveToolNames: () => session.getActiveToolNames(),
 	};
+}
+
+async function createChildModelRuntime(
+	modelRegistry: ModelRegistry,
+	model: Model<Api>,
+	agentDir: string,
+): Promise<ChildModelRuntime | undefined> {
+	const codingAgentModule = (await import(
+		"@earendil-works/pi-coding-agent"
+	)) as unknown as CodingAgentRuntimeModule;
+	if (!codingAgentModule.ModelRuntime) return undefined;
+
+	const modelRuntime = await codingAgentModule.ModelRuntime.create({
+		authPath: join(agentDir, "auth.json"),
+		modelsPath: join(agentDir, "models.json"),
+	});
+	const registeredProviders = modelRegistry as unknown as RegisteredProviderRegistry;
+	for (const provider of registeredProviders.getRegisteredProviderIds?.() ?? []) {
+		const config = registeredProviders.getRegisteredProviderConfig?.(provider);
+		if (config) modelRuntime.registerProvider(provider, config);
+	}
+	const auth = await modelRegistry.getApiKeyAndHeaders(model);
+	if (auth.ok && auth.apiKey) await modelRuntime.setRuntimeApiKey(model.provider, auth.apiKey);
+	return modelRuntime;
 }
 
 export async function resolveChildModel(options: ChildSessionCreateOptions): Promise<{

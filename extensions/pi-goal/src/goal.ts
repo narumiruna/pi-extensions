@@ -56,6 +56,16 @@ const EXPERIMENTAL_GOALS_WARNING =
 const MAX_BLOCKER_REASON_LENGTH = 1_000;
 const MAX_BLOCKER_EVIDENCE_LENGTH = 4_000;
 
+type AgentSettledHandler = (event: unknown, ctx: StatusContext) => unknown;
+
+function onAgentSettled(pi: ExtensionAPI, handler: AgentSettledHandler) {
+	(
+		pi as unknown as {
+			on(event: "agent_settled", callback: AgentSettledHandler): void;
+		}
+	).on("agent_settled", handler);
+}
+
 function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const runtime = new GoalRuntime(pi);
 	const commands = new GoalCommandController(runtime);
@@ -857,7 +867,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		requestContinuation(currentGoal);
 	});
 
-	pi.on("agent_settled", (_event, ctx) => {
+	onAgentSettled(pi, (_event, ctx) => {
 		if (runtime.queueFrozen) return;
 		if (!runtime.pendingQueueAction) {
 			dispatchContinuationIfSettled(ctx);

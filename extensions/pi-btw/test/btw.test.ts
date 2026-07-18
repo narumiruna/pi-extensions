@@ -19,7 +19,7 @@ import btw, {
 	sanitizeSingleLine,
 } from "../src/btw.js";
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 async function withTempSettings(run: (settingsPath: string) => Promise<void>): Promise<void> {
 	const directory = await mkdtemp(join(tmpdir(), "pi-btw-test-"));
@@ -93,7 +93,6 @@ test("normalizeBtwSettings accepts optional model and thinking level", () => {
 	assert.equal(normalizeBtwSettings({ model: "provider/model " }), undefined);
 	assert.equal(normalizeBtwSettings({ model: "provider/\nmodel" }), undefined);
 	assert.equal(normalizeBtwSettings({ thinkingLevel: null }), undefined);
-	assert.equal(normalizeBtwSettings({ thinkingLevel: "max" }), undefined);
 	assert.equal(normalizeBtwSettings({ thinkingLevel: "huge" }), undefined);
 });
 

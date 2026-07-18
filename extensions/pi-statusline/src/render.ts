@@ -164,7 +164,7 @@ function pickColor(config: StatuslineConfig, index: number): ThemeColor {
 }
 
 function thinkingColor(level: ThinkingLevel): ThemeColor {
-	switch (level) {
+	switch (level as string) {
 		case "off":
 			return "dim";
 		case "minimal":
@@ -177,6 +177,10 @@ function thinkingColor(level: ThinkingLevel): ThemeColor {
 			return "thinkingHigh";
 		case "xhigh":
 			return "thinkingXhigh";
+		case "max":
+			return "thinkingMax" as ThemeColor;
+		default:
+			return "dim";
 	}
 }
 
