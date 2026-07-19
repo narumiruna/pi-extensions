@@ -8,7 +8,14 @@ const transcript = (await import(
 )) as {
 	toolPhaseLabel(tool?: { phase?: string; isError?: boolean }): string;
 	toolCommandPreview(tool?: { args?: unknown }): string;
+	isCollapsibleMessageRole(role: string): boolean;
 };
+
+test("standalone tool-result messages use collapsed disclosure", () => {
+	assert.equal(transcript.isCollapsibleMessageRole("toolResult"), true);
+	assert.equal(transcript.isCollapsibleMessageRole("assistant"), false);
+	assert.equal(transcript.isCollapsibleMessageRole("user"), false);
+});
 
 test("tool phase labels describe user-visible state", () => {
 	assert.equal(transcript.toolPhaseLabel(undefined), "Requested");

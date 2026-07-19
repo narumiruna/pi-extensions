@@ -219,6 +219,20 @@ main {
 	background: color-mix(in srgb, var(--surface-secondary) 55%, transparent);
 }
 
+.message.toolResult {
+	padding-block: 0.25rem 0.75rem;
+}
+
+.tool-result-disclosure > summary {
+	min-height: 44px;
+	padding-block: 0.55rem;
+	cursor: pointer;
+}
+
+.tool-result-disclosure[open] > summary {
+	margin-bottom: 0.35rem;
+}
+
 .message-heading {
 	margin-bottom: 0.35rem;
 	color: var(--muted);

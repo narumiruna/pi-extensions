@@ -76,6 +76,7 @@ test("image input supports picker and paste with visible removable previews", ()
 test("tool, thinking, and Markdown rendering use safe DOM construction", () => {
 	assert.match(transcript, /createElement\("details"\)/);
 	assert.match(transcript, /summary\.textContent = "Thinking"/);
+	assert.match(transcript, /tool-result-disclosure/);
 	assert.match(app, /createTranscriptRenderer/);
 	assert.match(markdown, /createTextNode|textContent/);
 	assert.doesNotMatch(

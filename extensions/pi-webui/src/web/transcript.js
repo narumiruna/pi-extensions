@@ -13,7 +13,7 @@ export function createTranscriptRenderer({ documentRef = document, list }) {
 				retained.add(message.id);
 				let view = messages.get(message.id);
 				if (!view) {
-					view = createMessageView(documentRef);
+					view = createMessageView(message.role, documentRef);
 					messages.set(message.id, view);
 				}
 				if (updateMessageView(view, message, toolById, documentRef)) changed.push(message.id);
@@ -30,6 +30,10 @@ export function createTranscriptRenderer({ documentRef = document, list }) {
 	};
 }
 
+export function isCollapsibleMessageRole(role) {
+	return role === "toolResult";
+}
+
 export function toolPhaseLabel(tool) {
 	if (tool?.isError) return "Failed";
 	if (tool?.phase === "end") return "Completed";
@@ -43,13 +47,23 @@ export function toolCommandPreview(tool) {
 	return command.length > 120 ? `${command.slice(0, 120)}…` : command;
 }
 
-function createMessageView(documentRef) {
+function createMessageView(role, documentRef) {
 	const node = documentRef.createElement("li");
-	const heading = documentRef.createElement("div");
-	heading.className = "message-heading";
 	const body = documentRef.createElement("div");
 	body.className = "message-body";
-	node.append(heading, body);
+	let heading;
+	if (isCollapsibleMessageRole(role)) {
+		const disclosure = documentRef.createElement("details");
+		disclosure.className = "tool-result-disclosure";
+		heading = documentRef.createElement("summary");
+		heading.className = "message-heading";
+		disclosure.append(heading, body);
+		node.append(disclosure);
+	} else {
+		heading = documentRef.createElement("div");
+		heading.className = "message-heading";
+		node.append(heading, body);
+	}
 	return { node, heading, body, blocks: new Map(), role: "", final: undefined };
 }
 
