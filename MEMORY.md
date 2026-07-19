@@ -27,7 +27,6 @@
 - Detached orchestration recovery is more reliable when `agent_end` queues a `deliverAs: "followUp"` prompt and `agent_settled` retries retained intent if no pending message remains; settled-only `sendUserMessage` can be accepted yet lose the print-mode start race.
 - Extension statusline entries should be activity-based: only show an extension in status when it is actively running, retrying, or needs attention; avoid permanent “configured/ready/on” statuses.
 - Symptom: concurrent tools sharing one extension status key can clear or mislabel a still-running sibling. Cause: each call unconditionally owns set/clear. Fix: track active statuses per UI/session, restore the latest remaining status, and invalidate the tracker on session teardown.
-- Reopening `ctx.ui.select()` after every toggle resets its cursor to row one; use one `ctx.ui.custom()` selector with a persistent selected index, retaining the dialog loop only as a fallback. Serialize selector saves, recover the queue after each failure, and preserve prior save/apply ordering; roll back optimistic UI state when persistence fails.
 - Run Biome `--write` only on intended files during bounded work; formatting whole extension trees can rewrite unrelated source that is currently outside the root's normal ignore-aware formatting path.
 - Root Biome checks reject nested Git worktrees that contain another root `biome.json`; create worktrees outside the repository or locally ignore their parent directory during verification.
 - Headless Pi runners can share a no-op UI object; key session-owned resources such as temporary output files by `sessionManager`, not `ctx.ui`.
@@ -42,7 +41,6 @@
 - Symptom: Plan mode can skip limited-shell validation for an effective `bash` override. Cause: built-in-compatible overrides retain the canonical name but replace built-in source metadata. Fix: enforce the shell policy by the canonical `bash` name, regardless of provenance.
 - Read-looking Git commands can invoke configured helpers implicitly: content-producing `diff`/`log`/`show`/`blame`, queried `remote show`, and abbreviated `cat-file`/`grep` flags need explicit helper-disabling guards or command-specific prefix rejection.
 - GitHub CLI read commands can invoke configured pagers from `GH_PAGER`, `PAGER`, or gh config; plan-mode allowlists should require non-paged output such as `--json <fields>` instead of accepting plain text views.
-- Config filename migrations should validate but copy the original JSON bytes, not normalized settings, so unknown forward-compatible fields survive; before deleting legacy files, recheck that their contents did not change.
 - New extension package source may match the root `.gitignore` `src/` rule; stage intended `extensions/<pkg>/src/*.ts` with `git add -f`. Biome also honors that ignore, so format/check changed source explicitly with `--vcs-use-ignore-file=false`.
 - Loopback HTTP cookies are shared by hostname across ports; simultaneous Pi servers on `127.0.0.1` need per-server cookie names, not only per-server cookie values.
 - Symptom: an authenticated browser SSE client remains “reconnecting” when the replay is empty. Cause: `writeHead()` alone may not flush EventSource headers. Fix: call `flushHeaders()` and write an initial SSE comment before waiting for events.
@@ -92,7 +90,6 @@
 - Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
-- Prefer JSON config files over environment variables for user-facing settings, including token configuration when it is appropriate for the product. Add new environment variables only when they serve a clear purpose, such as secrets, deployment workflows, automation, or compatibility with existing integrations.
 - Keep `just` install recipes resilient by verifying registry visibility and falling back only when it solves the current install path.
 - New extension README files should mirror the existing style: emoji title, npm/Pi/license badges, Features, Install, Usage/What it does, Package layout, Keywords, and License.
 - New slash-command extensions should include argument autocomplete when the command has known subcommands, modes, or flags.
