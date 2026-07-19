@@ -13,6 +13,9 @@ export function initialState() {
 		readingImages: 0,
 		leaseClaimed: false,
 		leaseGeneration: 0,
+		draftRevision: 0,
+		authoritativeText: "",
+		textDirty: false,
 		attachmentRevision: 0,
 		attachmentPhase: "empty",
 		following: true,
@@ -37,7 +40,41 @@ export function applySnapshot(current, snapshot) {
 			needsSnapshot: false,
 		};
 	}
-	return applyAttachments(next, snapshot?.attachments);
+	return applyAttachments(applyDraft(next, snapshot?.draft), snapshot?.attachments);
+}
+
+export function applyDraft(current, draft) {
+	if (
+		!Number.isSafeInteger(draft?.revision) ||
+		draft.revision < current.draftRevision ||
+		typeof draft.text !== "string"
+	) {
+		return current;
+	}
+	const preserveLocal = current.textDirty && current.text !== draft.text;
+	return {
+		...current,
+		draftRevision: draft.revision,
+		authoritativeText: draft.text,
+		text: preserveLocal ? current.text : draft.text,
+		textDirty: preserveLocal,
+	};
+}
+
+export function editDraftText(current, text) {
+	return invalidateSendAttempt({
+		...current,
+		text,
+		textDirty: text !== current.authoritativeText,
+		error: "",
+	});
+}
+
+export function acknowledgeDraftText(current, draft, submittedText) {
+	if (current.text === submittedText) {
+		return applyDraft({ ...current, textDirty: false }, draft);
+	}
+	return applyDraft(current, draft);
 }
 
 export function applyAttachments(current, attachments) {
@@ -114,6 +151,7 @@ export function prepareSend(current, requestId, delivery = "next") {
 	const attempt = current.outbox ?? {
 		requestId,
 		text: current.text,
+		draftRevision: current.draftRevision,
 		attachmentRevision: current.attachmentRevision,
 		attachmentIds: current.images.map((image) => image.id),
 		images: [...current.images],

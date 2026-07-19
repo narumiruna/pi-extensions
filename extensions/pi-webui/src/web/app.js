@@ -1,12 +1,15 @@
 import {
+	acknowledgeDraftText,
 	applyAttachments,
 	applyConversationEvent,
+	applyDraft,
 	applyLease,
 	applySnapshot,
 	busyLabel,
 	canSend,
 	completeSend,
 	deliveryNotice,
+	editDraftText,
 	failSend,
 	followLatest,
 	initialState,
@@ -31,6 +34,8 @@ let transcriptAnnouncement = "";
 let dragDepth = 0;
 let previewReturnFocus;
 let mutatingAttachments = false;
+let draftSaveTimer;
+let draftSaveQueue = Promise.resolve();
 const retryFiles = new Map();
 const uploadProgress = new Map();
 
@@ -82,7 +87,8 @@ const ui = {
 const transcriptRenderer = createTranscriptRenderer({ documentRef: document, list: ui.transcript });
 
 ui.input.addEventListener("input", () => {
-	model = invalidateSendAttempt({ ...model, text: ui.input.value, error: "" });
+	model = editDraftText(model, ui.input.value);
+	scheduleDraftSave();
 	resizeInput();
 	renderComposer();
 });
@@ -210,6 +216,7 @@ async function claimLease() {
 	});
 	if (!response.ok) throw new Error(await responseError(response));
 	model = applyLease(model, await response.json(), clientId, true);
+	if (model.textDirty) scheduleDraftSave();
 	render();
 }
 
@@ -220,6 +227,7 @@ function connectEvents() {
 	events.addEventListener("open", () => {
 		reconnectDelay = 500;
 		model = { ...model, connected: true, error: "" };
+		if (model.textDirty) scheduleDraftSave();
 		render();
 	});
 	events.addEventListener("conversation", (event) => {
@@ -241,6 +249,10 @@ function connectEvents() {
 	events.addEventListener("lease", (event) => {
 		model = applyLease(model, JSON.parse(event.data), clientId);
 		render();
+	});
+	events.addEventListener("draft", (event) => {
+		model = applyDraft(model, JSON.parse(event.data));
+		renderComposer();
 	});
 	events.addEventListener("attachments", (event) => {
 		model = applyAttachments(model, JSON.parse(event.data));
@@ -283,15 +295,21 @@ function connectionFailure(error) {
 
 async function send(steer) {
 	if (!canSend(model)) return;
+	try {
+		await flushDraftText();
+	} catch (error) {
+		model = { ...model, error: errorMessage(error) };
+		render();
+		return;
+	}
+	if (!canSend(model) || model.textDirty) return;
 	const prepared = prepareSend(model, crypto.randomUUID(), steer ? "steer" : "next");
 	const attempt = prepared.attempt;
 	model = prepared.state;
 	renderComposer();
 	const payload = {
 		requestId: attempt.requestId,
-		text: attempt.text,
-		attachmentRevision: attempt.attachmentRevision,
-		attachmentIds: attempt.attachmentIds,
+		draftRevision: attempt.draftRevision,
 		delivery: attempt.delivery,
 	};
 	try {
@@ -306,6 +324,7 @@ async function send(steer) {
 			throw new Error(message);
 		}
 		const accepted = await response.json();
+		if (accepted.draft) model = applyDraft(model, accepted.draft);
 		if (accepted.attachments) model = applyAttachments(model, accepted.attachments);
 		if (attempt.attachmentIds.includes(ui.previewImage.dataset.imageId)) {
 			ui.previewDialog.close();
@@ -440,6 +459,50 @@ async function retryImage(id) {
 		mutatingAttachments = false;
 		renderComposer();
 	}
+}
+
+function scheduleDraftSave() {
+	clearTimeout(draftSaveTimer);
+	if (!model.textDirty || model.closed || model.stale || !model.connected) return;
+	draftSaveTimer = setTimeout(() => {
+		draftSaveTimer = undefined;
+		void flushDraftText().catch((error) => {
+			model = { ...model, error: errorMessage(error) };
+			render();
+		});
+	}, 180);
+}
+
+function flushDraftText() {
+	clearTimeout(draftSaveTimer);
+	draftSaveTimer = undefined;
+	draftSaveQueue = draftSaveQueue
+		.catch(() => undefined)
+		.then(async () => {
+			while (model.textDirty) {
+				if (model.closed || model.stale || !model.connected) {
+					throw new Error("Reconnect the active tab to save this draft.");
+				}
+				const submittedText = model.text;
+				const response = await fetch("/api/draft", {
+					method: "POST",
+					headers: { "Content-Type": "application/json", "X-Pi-Web-Client": clientId },
+					body: JSON.stringify({
+						requestId: crypto.randomUUID(),
+						revision: model.draftRevision,
+						text: submittedText,
+					}),
+				});
+				if (response.status === 409) {
+					await refreshSnapshot();
+					continue;
+				}
+				if (!response.ok) throw new Error(await responseError(response));
+				model = acknowledgeDraftText(model, await response.json(), submittedText);
+				renderComposer();
+			}
+		});
+	return draftSaveQueue;
 }
 
 function isSupportedImageFile(file) {
@@ -586,7 +649,7 @@ function renderComposer() {
 	ui.send.disabled = !canSend(model);
 	ui.steer.hidden = model.activity !== "running";
 	ui.steer.disabled = !canSend(model);
-	ui.input.disabled = locked;
+	ui.input.disabled = model.closed || model.stale;
 	const admissionLocked = locked || model.readingImages > 0;
 	ui.imageInput.disabled = admissionLocked;
 	ui.addImages.classList.toggle("disabled", admissionLocked);
