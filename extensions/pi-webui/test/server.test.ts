@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import { ConversationProjection } from "../src/conversation.js";
-import { type WebSendRequest, WebUIServer } from "../src/server.js";
+import { type WebSendRequest, type WebSendResult, WebUIServer } from "../src/server.js";
 
 async function harness() {
 	const conversation = new ConversationProjection({
@@ -188,6 +188,120 @@ test("a new tab lease aborts an in-flight asynchronous send before mutation", as
 		await takeLease(server, cookie, "second");
 		assert.equal((await sending).status, 409);
 		assert.equal(mutated, false);
+	} finally {
+		await server.close();
+	}
+});
+
+test("a completed upload aborts when its response connection closes", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const started = deferred<void>();
+	let aborted = false;
+	const server = await WebUIServer.start({
+		conversation,
+		send: async (request) => {
+			started.resolve(undefined);
+			await new Promise<void>((resolve) => {
+				request.signal?.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						resolve();
+					},
+					{ once: true },
+				);
+			});
+			throw new Error("cancelled");
+		},
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		const request = rawMessageRequest(server, cookie, client, {
+			requestId: "disconnect",
+			text: "hello",
+			images: [],
+			delivery: "next",
+		});
+		await started.promise;
+		request.destroy();
+		await Promise.race([
+			waitFor(() => aborted),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("send was not aborted")), 500)),
+		]);
+		assert.equal(aborted, true);
+	} finally {
+		await server.close();
+	}
+});
+
+test("in-flight request ids remain deduplicated when the completed-result cache is full", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const gate = deferred<WebSendResult>();
+	let attempts = 0;
+	const server = await WebUIServer.start({
+		conversation,
+		send: async () => {
+			attempts += 1;
+			return gate.promise;
+		},
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		const send = (requestId: string) =>
+			api(server, "/api/messages", {
+				method: "POST",
+				cookie,
+				client,
+				body: JSON.stringify({ requestId, text: requestId, images: [], delivery: "next" }),
+			});
+		const originals = Array.from({ length: 129 }, (_, index) => send(`pending-${index}`));
+		await waitFor(() => attempts === 129);
+		const replay = send("pending-0");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const attemptsAfterReplay = attempts;
+		gate.resolve({ delivery: "immediate" });
+		const responses = await Promise.all([...originals, replay]);
+		assert.equal(attemptsAfterReplay, 129);
+		assert.equal(
+			responses.every((response) => response.status === 202),
+			true,
+		);
+	} finally {
+		await server.close();
+	}
+});
+
+test("failed sends release their request id for an unchanged browser retry", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	let attempts = 0;
+	const server = await WebUIServer.start({
+		conversation,
+		send: async () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error("temporary validation failure");
+			return { delivery: "immediate" };
+		},
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		const body = JSON.stringify({
+			requestId: "retryable",
+			text: "hello",
+			images: [],
+			delivery: "next",
+		});
+		assert.equal(
+			(await api(server, "/api/messages", { method: "POST", cookie, client, body })).status,
+			500,
+		);
+		assert.equal(
+			(await api(server, "/api/messages", { method: "POST", cookie, client, body })).status,
+			202,
+		);
+		assert.equal(attempts, 2);
 	} finally {
 		await server.close();
 	}
@@ -417,6 +531,44 @@ test("close ends connections and is idempotent", async () => {
 	await server.close();
 	await assert.rejects(() => fetch(`${server.origin}/api/state`));
 });
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	while (!predicate()) await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+function rawMessageRequest(
+	server: WebUIServer,
+	cookie: string,
+	client: string,
+	body: object,
+): http.ClientRequest {
+	const url = new URL(server.origin);
+	const encoded = JSON.stringify(body);
+	const request = http.request({
+		hostname: url.hostname,
+		port: Number(url.port),
+		path: "/api/messages",
+		method: "POST",
+		headers: {
+			Cookie: cookie,
+			Origin: server.origin,
+			"Content-Type": "application/json",
+			"Content-Length": Buffer.byteLength(encoded),
+			"X-Pi-Web-Client": client,
+		},
+	});
+	request.once("error", () => undefined);
+	request.end(encoded);
+	return request;
+}
 
 function cancelRequest(server: WebUIServer, cookie: string, client: string): Promise<void> {
 	const url = new URL(server.origin);

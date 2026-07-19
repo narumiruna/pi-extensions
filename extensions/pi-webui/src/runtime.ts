@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -30,6 +31,8 @@ import {
 } from "./settings.js";
 
 const WIDGET_KEY = "webui";
+const INPUT_HEADER = /^<pi-webui-input nonce="([0-9a-f-]+)">\n/;
+const INPUT_FOOTER = "\n</pi-webui-input>";
 const COMMAND_USAGE = "Usage: /webui [settings|status|help|init]";
 const COMMAND_COMPLETIONS = [
 	{ value: "settings", label: "settings", description: "Open WebUI settings" },
@@ -43,6 +46,12 @@ type LatestEventHandler = (event: unknown, ctx: ExtensionContext) => void | Prom
 type LatestExtensionAPI = ExtensionAPI & {
 	on(event: "agent_settled", handler: LatestEventHandler): void;
 };
+
+interface PendingBrowserInput {
+	resolve(): void;
+	reject(error: Error): void;
+	text: string;
+}
 
 export interface RuntimeDependencies {
 	loadSettings: typeof loadSettings;
@@ -78,6 +87,8 @@ export class WebUIRuntime {
 	private nextLiveMessageId = 0;
 	private readonly activeMessageIds = new Map<string, string>();
 	private readonly finalMessageTimers = new Set<ReturnType<typeof setTimeout>>();
+	private readonly pendingBrowserInputs = new Map<string, PendingBrowserInput>();
+	private readonly acceptedBrowserInputs = new Map<string, string>();
 	private settings: WebUISettings = { ...DEFAULT_SETTINGS };
 	private settingsDocument?: Record<string, unknown> = {};
 	private settingsPath = "pi-webui.json";
@@ -146,9 +157,22 @@ export class WebUIRuntime {
 			this.captureContext(ctx);
 			this.conversation?.updateSession({ name: event.name });
 		});
+		this.pi.on("input", (event) => {
+			if (event.source !== "extension") return;
+			// Keep the envelope through later handlers so copied internal markers remain browser-originated.
+			const wrapped = parseBrowserInput(event.text);
+			if (!wrapped) return;
+			const pending = this.pendingBrowserInputs.get(wrapped.nonce);
+			if (!pending) return;
+			this.acceptedBrowserInputs.set(wrapped.nonce, pending.text);
+			this.settleBrowserInput(wrapped.nonce);
+		});
 		this.pi.on("message_start", async (event, ctx) => {
 			this.captureContext(ctx);
-			this.recordMessage("start", event);
+			this.recordMessage(
+				"start",
+				sanitizeBrowserMessageEvent(event, this.acceptedBrowserInputs, false),
+			);
 		});
 		this.pi.on("message_update", async (event, ctx) => {
 			this.captureContext(ctx);
@@ -156,7 +180,12 @@ export class WebUIRuntime {
 		});
 		this.pi.on("message_end", async (event, ctx) => {
 			this.captureContext(ctx);
-			this.recordMessage("end", event);
+			const sanitized = sanitizeBrowserMessageEvent(event, this.acceptedBrowserInputs, true);
+			this.recordMessage("end", sanitized);
+			// Pi applies this replacement before persistence and before the prompt reaches the model.
+			if (sanitized !== event && isRecord(sanitized) && isRecord(sanitized.message)) {
+				return { message: sanitized.message as unknown as typeof event.message };
+			}
 		});
 		this.pi.on("tool_execution_start", async (event, ctx) => {
 			this.captureContext(ctx);
@@ -176,7 +205,10 @@ export class WebUIRuntime {
 		});
 		(this.pi as LatestExtensionAPI).on("agent_settled", async (_event, ctx) => {
 			this.captureContext(ctx);
-			if (ctx.isIdle() && !ctx.hasPendingMessages()) this.conversation?.setActivity("idle");
+			if (ctx.isIdle() && !ctx.hasPendingMessages()) {
+				this.acceptedBrowserInputs.clear();
+				this.conversation?.setActivity("idle");
+			}
 		});
 	}
 
@@ -186,6 +218,8 @@ export class WebUIRuntime {
 		this.closed = true;
 		this.sessionAbort.abort();
 		this.cancelPendingMessages();
+		this.cancelBrowserInputs("The Pi session changed before the browser prompt was accepted.");
+		this.acceptedBrowserInputs.clear();
 		previousConversation?.close();
 		await this.releaseServer();
 		if (generation !== this.generation) return;
@@ -223,6 +257,8 @@ export class WebUIRuntime {
 		this.closed = true;
 		this.sessionAbort.abort();
 		this.cancelPendingMessages();
+		this.cancelBrowserInputs("The Pi session ended before the browser prompt was accepted.");
+		this.acceptedBrowserInputs.clear();
 		this.conversation?.close();
 		await this.releaseServer();
 		if (generation !== this.generation) return;
@@ -483,16 +519,27 @@ export class WebUIRuntime {
 			images.length === 0
 				? text
 				: [...(text.trim() ? ([{ type: "text", text }] satisfies TextContent[]) : []), ...images];
-		if (request.delivery === "steer") {
-			this.pi.sendUserMessage(content, { deliverAs: "steer" });
-			return { delivery: "steer" };
+		const wrapped = this.createBrowserInput(content);
+		const delivery =
+			request.delivery === "steer"
+				? "steer"
+				: !ctx.isIdle() || ctx.hasPendingMessages()
+					? "followUp"
+					: "immediate";
+		try {
+			this.pi.sendUserMessage(wrapped.content, {
+				deliverAs: delivery === "steer" ? "steer" : "followUp",
+			});
+			await wrapped.accepted;
+		} catch (error) {
+			this.settleBrowserInput(
+				wrapped.nonce,
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			await wrapped.accepted.catch(() => undefined);
+			throw error;
 		}
-		if (!ctx.isIdle() || ctx.hasPendingMessages()) {
-			this.pi.sendUserMessage(content, { deliverAs: "followUp" });
-			return { delivery: "followUp" };
-		}
-		this.pi.sendUserMessage(content, { deliverAs: "followUp" });
-		return { delivery: "immediate" };
+		return { delivery };
 	}
 
 	private async preflightIdlePrompt(
@@ -527,6 +574,41 @@ export class WebUIRuntime {
 		if (ctx.model !== model) throw new Error("The Pi model changed; retry the browser message.");
 	}
 
+	private createBrowserInput(content: string | Array<TextContent | ImageContent>): {
+		nonce: string;
+		content: string | Array<TextContent | ImageContent>;
+		accepted: Promise<void>;
+	} {
+		const nonce = randomUUID();
+		const text = typeof content === "string" ? content : contentText(content);
+		const envelope = `<pi-webui-input nonce="${nonce}">\n${INPUT_FOOTER}`;
+		const wrappedContent =
+			typeof content === "string"
+				? envelope
+				: [
+						{ type: "text" as const, text: envelope },
+						...content.filter((part): part is ImageContent => part.type === "image"),
+					];
+		const accepted = new Promise<void>((resolve, reject) => {
+			this.pendingBrowserInputs.set(nonce, { resolve, reject, text });
+		});
+		return { nonce, content: wrappedContent, accepted };
+	}
+
+	private settleBrowserInput(nonce: string, error?: Error): void {
+		const pending = this.pendingBrowserInputs.get(nonce);
+		if (!pending) return;
+		this.pendingBrowserInputs.delete(nonce);
+		if (error) pending.reject(error);
+		else pending.resolve();
+	}
+
+	private cancelBrowserInputs(message: string): void {
+		for (const nonce of [...this.pendingBrowserInputs.keys()]) {
+			this.settleBrowserInput(nonce, new Error(message));
+		}
+	}
+
 	private notifySettingsWarnings(ctx: ExtensionContext, warnings: string[]): void {
 		const message = warnings.join("\n");
 		if (!message || message === this.lastSettingsWarning) return;
@@ -548,6 +630,58 @@ export class WebUIRuntime {
 			}
 		}
 	}
+}
+
+function parseBrowserInput(text: string): { nonce: string } | undefined {
+	const header = INPUT_HEADER.exec(text);
+	if (
+		!header?.[1] ||
+		!text.endsWith(INPUT_FOOTER) ||
+		text.slice(header[0].length, -INPUT_FOOTER.length) !== ""
+	) {
+		return undefined;
+	}
+	return { nonce: header[1] };
+}
+
+function contentText(content: Array<TextContent | ImageContent>): string {
+	return content
+		.filter((part): part is TextContent => part.type === "text")
+		.map((part) => part.text)
+		.join("\n");
+}
+
+function sanitizeBrowserMessageEvent(
+	event: unknown,
+	acceptedNonces: Map<string, string>,
+	consume: boolean,
+): unknown {
+	if (!isRecord(event) || !isRecord(event.message) || event.message.role !== "user") return event;
+	const content = event.message.content;
+	if (typeof content === "string") {
+		const wrapped = parseBrowserInput(content);
+		if (!wrapped || !acceptedNonces.has(wrapped.nonce)) return event;
+		const text = acceptedNonces.get(wrapped.nonce) ?? "";
+		if (consume) acceptedNonces.delete(wrapped.nonce);
+		return { ...event, message: { ...event.message, content: text } };
+	}
+	if (!Array.isArray(content)) return event;
+	let changed = false;
+	const consumed = new Set<string>();
+	const sanitized = content.flatMap((part) => {
+		if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") return [part];
+		const wrapped = parseBrowserInput(part.text);
+		if (!wrapped || !acceptedNonces.has(wrapped.nonce)) return [part];
+		const text = acceptedNonces.get(wrapped.nonce) ?? "";
+		changed = true;
+		consumed.add(wrapped.nonce);
+		return text ? [{ ...part, text }] : [];
+	});
+	if (!changed) return event;
+	if (consume) {
+		for (const nonce of consumed) acceptedNonces.delete(nonce);
+	}
+	return { ...event, message: { ...event.message, content: sanitized } };
 }
 
 function messageLifecycleKey(message: Record<string, unknown>): string {
