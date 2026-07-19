@@ -103,7 +103,11 @@ The initial transcript comes from the active session branch. Browser refresh doe
 
 The server checks file signatures instead of trusting browser MIME types or filename extensions. It rejects corrupt/unknown formats, more than 8 images, individual source images over 10 MiB, combined image input over 40 MiB, images over 50 megapixels, and provider-ready Base64 content over Pi's approximately 4.5 MB inline limit. Images over 2,000 pixels on either side are resized when Pi's `images.autoResize` setting is enabled and rejected when it is disabled.
 
-Drag thumbnails or use their visible arrow controls to set provider order before sending. Remove images individually, or use the confirmed **Clear attachments** action when a draft contains several images. Processing applies image orientation, re-encodes provider-ready output, strips EXIF and other private metadata, preserves ICC color profiles and animated GIF timing where supported, and does not retain browser source bytes after the message request is accepted. Pi's effective global and trusted-project `images.autoResize` and `images.blockImages` settings plus the current model's image capability are checked at send time. BMP and HEIC use bounded portable decoders because the prebuilt `sharp`/libvips distribution does not decode those inputs consistently across supported platforms.
+Choosing, pasting, or dropping images first reserves an ordered server-side batch, uploads each source as a bounded raw request, and processes it before Send becomes available. Each thumbnail reports Uploading, Processing, Ready, or Needs attention; upload progress is shown when the browser reports a byte total. A failed item can be retried without reselecting successful siblings, and every item can be removed independently. Refreshing the active tab restores the authoritative staged batch, while another tab taking the editing lease cancels in-flight work safely.
+
+Drag thumbnails or use their visible arrow controls to set provider order before sending. Remove images individually, or use the confirmed **Clear attachments** action when a draft contains several images. Conversion and resize summaries appear only on affected items, while the metadata-removal guarantee is stated once for the collection. Processing applies image orientation, re-encodes provider-ready output, strips EXIF and other private metadata, preserves ICC color profiles and animated GIF timing where supported, and releases each source after successful sanitation. Failed processing retains only that bounded source for Retry; Ready provider bytes remain in the Pi process until accepted send, removal, clear, lease/session teardown, or failed-send retry. Image bytes are never embedded in the message JSON protocol.
+
+Pi's effective global and trusted-project `images.autoResize` and `images.blockImages` settings plus the current model's image capability and authentication are checked again at send time. A failed send leaves the exact Ready batch available for an idempotent retry. BMP and HEIC use bounded portable decoders because the prebuilt `sharp`/libvips distribution does not decode those inputs consistently across supported platforms.
 
 ## Security and privacy
 
@@ -111,7 +115,7 @@ Drag thumbnails or use their visible arrow controls to set provider order before
 - A rotating bootstrap token is exchanged once for a per-server HttpOnly, `SameSite=Strict` cookie and removed from the URL.
 - Every endpoint requires the cookie. Mutations also require exact Host and Origin values plus the active browser-tab lease.
 - Responses use no-store, no-referrer, MIME-sniffing, frame-denial, same-origin resource, and restrictive Content Security Policy headers.
-- Transcript projection retains at most the newest 500 messages and 500 tool records, event replay keeps 256 updates, and request-id records keep 128 sends. The page uses no localStorage, sessionStorage, IndexedDB, cookies of its own, or image/transcript cache.
+- Transcript projection retains at most the newest 500 messages and 500 tool records, event replay keeps 256 updates, and request-id records keep 128 sends. Unsent staged images live only in bounded Pi-process memory; the page uses no localStorage, sessionStorage, IndexedDB, script-readable cookies, or image/transcript cache.
 - Tool arguments/results, paths, images, and model thinking can be sensitive. Thinking is collapsed by default; only open a link issued by a Pi process you trust.
 - Reload, session replacement/fork, or Pi shutdown closes sockets, invalidates old callbacks, ends the page, and releases in-memory state.
 
@@ -136,7 +140,8 @@ src/webui.ts         Pi extension entrypoint
 src/runtime.ts       Pi lifecycle, commands, event projection, and browser message routing
 src/settings.ts      global WebUI settings validation and atomic persistence
 src/conversation.ts  bounded transcript snapshot and ordered event replay
-src/server.ts        authenticated loopback HTTP/SSE server
+src/attachments.ts   revisioned staged-image state, processing queue, and byte ownership
+src/server.ts        authenticated loopback HTTP/SSE server and raw attachment protocol
 src/images.ts        bounded provider-ready image processing
 src/pi-settings.ts   effective Pi image settings reader
 src/web/             framework-free browser page

@@ -8,6 +8,7 @@ const state = (await import(
 )) as {
 	initialState(): WebState;
 	applySnapshot(current: WebState, snapshot: Snapshot): WebState;
+	applyAttachments(current: WebState, attachments: Record<string, unknown>): WebState;
 	applyConversationEvent(current: WebState, event: ConversationEvent): WebState;
 	applyLease(
 		current: WebState,
@@ -42,6 +43,8 @@ const state = (await import(
 interface WebImage {
 	id: string;
 	name?: string;
+	status?: string;
+	notes?: string[];
 }
 
 interface WebState {
@@ -58,6 +61,8 @@ interface WebState {
 	readingImages: number;
 	leaseClaimed: boolean;
 	leaseGeneration: number;
+	attachmentRevision: number;
+	attachmentPhase: string;
 	following: boolean;
 	unseenUpdateIds: string[];
 	text: string;
@@ -69,6 +74,8 @@ interface WebState {
 interface SendAttempt {
 	requestId: string;
 	text: string;
+	attachmentRevision: number;
+	attachmentIds: string[];
 	images: Array<{ id: string }>;
 	delivery: "next" | "steer";
 }
@@ -118,6 +125,59 @@ test("older snapshots cannot roll browser state back", () => {
 	assert.equal(older, current);
 	assert.equal(older.sequence, 3);
 	assert.deepEqual(older.messages, [{ id: "one" }]);
+});
+
+test("server attachment revisions replace browser images and ignore stale updates", () => {
+	const initial = state.initialState();
+	const ready = state.applyAttachments(initial, {
+		revision: 2,
+		phase: "ready",
+		items: [{ id: "one", status: "ready" }],
+	});
+	assert.equal(ready.attachmentRevision, 2);
+	assert.equal(ready.attachmentPhase, "ready");
+	assert.deepEqual(ready.images, [{ id: "one", status: "ready", notes: [] }]);
+	assert.equal(ready.readingImages, 0);
+	const stale = state.applyAttachments(ready, { revision: 1, phase: "empty", items: [] });
+	assert.equal(stale, ready);
+	const processing = state.applyAttachments(ready, {
+		revision: 3,
+		phase: "processing",
+		items: [{ id: "one", status: "processing" }],
+	});
+	assert.equal(processing.readingImages, 1);
+	assert.equal(state.canSend({ ...processing, connected: true, text: "send" }), false);
+});
+
+test("attachment snapshots clone item notes and gate every non-ready batch phase", () => {
+	const source = {
+		revision: 1,
+		phase: "processing",
+		items: [
+			{
+				id: "one",
+				name: "one.bmp",
+				status: "processing",
+				notes: ["Converted BMP to PNG"],
+			},
+		],
+	};
+	const processing = state.applyAttachments(state.initialState(), source);
+	source.items[0]?.notes.push("mutated");
+	assert.deepEqual(processing.images[0]?.notes, ["Converted BMP to PNG"]);
+	assert.equal(processing.readingImages, 1);
+	assert.equal(state.canSend({ ...processing, connected: true, text: "send" }), false);
+	for (const phase of ["uploading", "processing", "blocked", "reserved"]) {
+		assert.equal(
+			state.canSend({
+				...processing,
+				connected: true,
+				readingImages: 0,
+				attachmentPhase: phase,
+			}),
+			false,
+		);
+	}
 });
 
 test("ordered conversation events replace messages/tools and sequence gaps request snapshots", () => {
@@ -201,7 +261,15 @@ test("send availability and labels distinguish immediate, follow-up, and disconn
 	assert.equal(state.busyLabel({ ...base, connected: false }), "Reconnect to send");
 	assert.equal(state.canSend({ ...base, pending: true }), false);
 	assert.equal(state.canSend({ ...base, readingImages: 1 }), false);
-	assert.equal(state.canSend({ ...base, text: "", images: [{ id: "image" }] }), true);
+	assert.equal(
+		state.canSend({
+			...base,
+			text: "",
+			images: [{ id: "image", status: "ready" }],
+			attachmentPhase: "ready",
+		}),
+		true,
+	);
 });
 
 test("failed sends retain one idempotent attempt until the draft changes", () => {
@@ -302,6 +370,8 @@ test("send attempts freeze the displayed image order until the draft changes", (
 		prepared.attempt.images.map((image) => image.id),
 		["two", "one"],
 	);
+	assert.equal(prepared.attempt.attachmentRevision, 0);
+	assert.deepEqual(prepared.attempt.attachmentIds, ["two", "one"]);
 	images.reverse();
 	assert.deepEqual(
 		prepared.attempt.images.map((image) => image.id),

@@ -1,5 +1,12 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { detectImageFormat, type ProcessImageOptions, processImage } from "./image-pipeline.js";
+import {
+	detectImageFormat,
+	type ProcessedBrowserImage,
+	type ProcessImageOptions,
+	processImage,
+} from "./image-pipeline.js";
+
+export type { ProcessedBrowserImage } from "./image-pipeline.js";
 
 export { detectImageFormat } from "./image-pipeline.js";
 
@@ -108,6 +115,26 @@ export class ImageProcessor {
 				});
 		}
 	}
+}
+
+export async function processStagedImage(
+	source: Uint8Array,
+	options: ProcessBrowserImageOptions = {},
+): Promise<ProcessedBrowserImage> {
+	const limits = { ...DEFAULT_IMAGE_LIMITS, ...definedLimits(options) };
+	if (options.blockImages) throw new Error("Pi image sending is disabled.");
+	if (options.supportsImages === false)
+		throw new Error("The current model does not support images.");
+	assertNotAborted(options.signal);
+	if (source.byteLength === 0) throw new Error("Image is empty.");
+	if (source.byteLength > limits.maxImageBytes) throw new Error("Image is too large.");
+	return processImage(source, {
+		autoResize: options.autoResize !== false,
+		maxPixels: limits.maxPixels,
+		maxDimension: limits.maxDimension,
+		maxBase64Bytes: limits.maxBase64Bytes,
+		signal: options.signal,
+	});
 }
 
 export async function processBrowserImages(

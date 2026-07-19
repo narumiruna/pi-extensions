@@ -8,11 +8,14 @@ import {
 	getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import type { PreparedAttachment } from "./attachments.js";
 import { ConversationProjection, projectBranchMessages } from "./conversation.js";
 import {
 	type BrowserImageInput,
 	type ProcessBrowserImageOptions,
+	type ProcessedBrowserImage,
 	processBrowserImages,
+	processStagedImage,
 } from "./images.js";
 import { type EffectivePiImageSettings, readEffectivePiImageSettings } from "./pi-settings.js";
 import {
@@ -63,6 +66,10 @@ export interface RuntimeDependencies {
 		inputs: BrowserImageInput[],
 		options?: ProcessBrowserImageOptions,
 	): Promise<ImageContent[]>;
+	processAttachment(
+		source: Uint8Array,
+		options?: ProcessBrowserImageOptions,
+	): Promise<ProcessedBrowserImage>;
 }
 
 const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
@@ -72,6 +79,7 @@ const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
 	startServer: (options) => WebUIServer.start(options),
 	readPiSettings: readEffectivePiImageSettings,
 	processImages: processBrowserImages,
+	processAttachment: processStagedImage,
 };
 
 export class WebUIRuntime {
@@ -465,6 +473,8 @@ export class WebUIRuntime {
 			const starting = this.dependencies.startServer({
 				conversation,
 				send: (request) => this.sendBrowserMessage(request, generation),
+				processAttachment: (source, signal) =>
+					this.processStagedAttachment(source, generation, signal),
 			});
 			this.serverStarting = starting.then(async (server) => {
 				if (generation !== this.generation || this.closed || conversation !== this.conversation) {
@@ -481,6 +491,35 @@ export class WebUIRuntime {
 		} finally {
 			if (this.serverStarting === starting) this.serverStarting = undefined;
 		}
+	}
+
+	private async processStagedAttachment(
+		source: Uint8Array,
+		generation: number,
+		signal?: AbortSignal,
+	): Promise<PreparedAttachment> {
+		const ctx = this.context;
+		if (!ctx || this.closed || generation !== this.generation) {
+			throw new Error("The Pi session has ended.");
+		}
+		const combinedSignal = signal
+			? AbortSignal.any([this.sessionAbort.signal, signal])
+			: this.sessionAbort.signal;
+		const settings = await this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted());
+		this.notifySettingsWarnings(ctx, settings.warnings);
+		const image = await this.dependencies.processAttachment(source, {
+			autoResize: settings.autoResize,
+			blockImages: settings.blockImages,
+			supportsImages: ctx.model?.input.includes("image") ?? false,
+			signal: combinedSignal,
+		});
+		if (combinedSignal.aborted || generation !== this.generation || this.closed) {
+			throw new Error("Image processing was cancelled.");
+		}
+		return {
+			...image,
+			notes: attachmentNotes(image),
+		};
 	}
 
 	private async sendBrowserMessage(
@@ -501,13 +540,13 @@ export class WebUIRuntime {
 		if (request.images.length > 0) {
 			const settings = await this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted());
 			this.notifySettingsWarnings(ctx, settings.warnings);
-			images = await this.dependencies.processImages(request.images, {
-				autoResize: settings.autoResize,
-				blockImages: settings.blockImages,
-				supportsImages: ctx.model?.input.includes("image") ?? false,
-				signal,
-			});
+			if (settings.blockImages) throw new Error("Pi image sending is disabled.");
 			await this.validateCurrentModel(ctx, generation, signal, true);
+			images = request.images.map((image) => ({
+				type: "image" as const,
+				data: image.data,
+				mimeType: image.mimeType ?? "image/png",
+			}));
 		}
 		if (signal.aborted) throw new Error("The browser message was cancelled.");
 		if (!this.context || this.closed || generation !== this.generation) {
@@ -682,6 +721,21 @@ function sanitizeBrowserMessageEvent(
 		for (const nonce of consumed) acceptedNonces.delete(nonce);
 	}
 	return { ...event, message: { ...event.message, content: sanitized } };
+}
+
+function attachmentNotes(image: ProcessedBrowserImage): string[] {
+	const notes: string[] = [];
+	if (image.sourceFormat !== image.outputFormat) {
+		notes.push(
+			`Converted ${image.sourceFormat.toUpperCase()} to ${image.outputFormat.toUpperCase()}`,
+		);
+	}
+	if (image.resized) {
+		notes.push(
+			`Resized ${image.originalWidth}×${image.originalHeight} to ${image.width}×${image.height}`,
+		);
+	}
+	return notes;
 }
 
 function messageLifecycleKey(message: Record<string, unknown>): string {

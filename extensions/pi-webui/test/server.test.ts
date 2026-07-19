@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
+import type { PreparedAttachment } from "../src/attachments.js";
 import { ConversationProjection } from "../src/conversation.js";
 import { type WebSendRequest, type WebSendResult, WebUIServer } from "../src/server.js";
 
@@ -36,15 +37,16 @@ async function api(
 		method?: string;
 		cookie?: string;
 		client?: string;
-		body?: string;
+		body?: BodyInit;
 		origin?: string;
+		contentType?: string;
 	} = {},
 ) {
 	const headers = new Headers();
 	if (options.cookie) headers.set("cookie", options.cookie);
 	if (options.client) headers.set("x-pi-web-client", options.client);
 	if (options.method && options.method !== "GET") {
-		headers.set("content-type", "application/json");
+		headers.set("content-type", options.contentType ?? "application/json");
 		headers.set("origin", options.origin ?? server.origin);
 	}
 	return fetch(`${server.origin}${path}`, {
@@ -139,7 +141,13 @@ test("mutations require exact Origin, Host, cookie, and current tab lease", asyn
 					method: "POST",
 					cookie,
 					client: "one",
-					body: JSON.stringify({ requestId: "r1", text: "hello", images: [], delivery: "next" }),
+					body: JSON.stringify({
+						requestId: "r1",
+						text: "hello",
+						attachmentRevision: 0,
+						attachmentIds: [],
+						delivery: "next",
+					}),
 				})
 			).status,
 			409,
@@ -180,7 +188,8 @@ test("a new tab lease aborts an in-flight asynchronous send before mutation", as
 			body: JSON.stringify({
 				requestId: "in-flight",
 				text: "hello",
-				images: [{ data: "raw" }],
+				attachmentRevision: 0,
+				attachmentIds: [],
 				delivery: "next",
 			}),
 		});
@@ -220,7 +229,8 @@ test("a completed upload aborts when its response connection closes", async () =
 		const request = rawMessageRequest(server, cookie, client, {
 			requestId: "disconnect",
 			text: "hello",
-			images: [],
+			attachmentRevision: 0,
+			attachmentIds: [],
 			delivery: "next",
 		});
 		await started.promise;
@@ -254,7 +264,13 @@ test("in-flight request ids remain deduplicated when the completed-result cache 
 				method: "POST",
 				cookie,
 				client,
-				body: JSON.stringify({ requestId, text: requestId, images: [], delivery: "next" }),
+				body: JSON.stringify({
+					requestId,
+					text: requestId,
+					attachmentRevision: 0,
+					attachmentIds: [],
+					delivery: "next",
+				}),
 			});
 		const originals = Array.from({ length: 129 }, (_, index) => send(`pending-${index}`));
 		await waitFor(() => attempts === 129);
@@ -290,7 +306,8 @@ test("failed sends release their request id for an unchanged browser retry", asy
 		const body = JSON.stringify({
 			requestId: "retryable",
 			text: "hello",
-			images: [],
+			attachmentRevision: 0,
+			attachmentIds: [],
 			delivery: "next",
 		});
 		assert.equal(
@@ -315,7 +332,8 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 		const body = JSON.stringify({
 			requestId: "request-1",
 			text: "hello",
-			images: [],
+			attachmentRevision: 0,
+			attachmentIds: [],
 			delivery: "next",
 		});
 		const first = await api(server, "/api/messages", { method: "POST", cookie, client, body });
@@ -327,6 +345,13 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 			accepted: true,
 			requestId: "request-1",
 			delivery: "immediate",
+			attachments: {
+				revision: 0,
+				phase: "empty",
+				items: [],
+				totalSourceBytes: 0,
+				totalResidentBytes: 0,
+			},
 		});
 		const conflict = await api(server, "/api/messages", {
 			method: "POST",
@@ -335,7 +360,8 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 			body: JSON.stringify({
 				requestId: "request-1",
 				text: "changed",
-				images: [],
+				attachmentRevision: 0,
+				attachmentIds: [],
 				delivery: "next",
 			}),
 		});
@@ -346,7 +372,13 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 					method: "POST",
 					cookie,
 					client,
-					body: JSON.stringify({ requestId: "empty", text: "  ", images: [], delivery: "next" }),
+					body: JSON.stringify({
+						requestId: "empty",
+						text: "  ",
+						attachmentRevision: 0,
+						attachmentIds: [],
+						delivery: "next",
+					}),
 				})
 			).status,
 			400,
@@ -377,7 +409,8 @@ test("oversized and cancelled request bodies do not mutate or stop the server", 
 			body: JSON.stringify({
 				requestId: "large",
 				text: "x".repeat(300),
-				images: [],
+				attachmentRevision: 0,
+				attachmentIds: [],
 				delivery: "next",
 			}),
 		});
@@ -387,6 +420,236 @@ test("oversized and cancelled request bodies do not mutate or stop the server", 
 		assert.equal(sends, 0);
 		assert.equal((await api(server, "/api/state", { cookie })).status, 200);
 	} finally {
+		await server.close();
+	}
+});
+
+test("attachment endpoints reserve, upload, preview, retry, reorder, delete, and clear by revision", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	let failOnce = true;
+	const server = await WebUIServer.start({
+		conversation,
+		attachmentLimits: { maxImages: 3, maxImageBytes: 8, maxPromptBytes: 16 },
+		processAttachment: async (source) => {
+			if (Buffer.from(source).toString() === "bad" && failOnce) {
+				failOnce = false;
+				throw new Error("decoder failed");
+			}
+			return preparedAttachment(`safe-${Buffer.from(source).toString()}`);
+		},
+		send: async () => ({ delivery: "immediate" }),
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		assert.equal(
+			(
+				await api(server, "/api/attachments/reserve", {
+					method: "POST",
+					cookie,
+					client: "stale-client",
+					body: JSON.stringify({
+						revision: 0,
+						items: [{ id: "one", name: "one.png", size: 3 }],
+					}),
+				})
+			).status,
+			409,
+		);
+		let response = await api(server, "/api/attachments/reserve", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				revision: 0,
+				items: [
+					{ id: "one", name: "one.png", size: 3 },
+					{ id: "two", name: "two.png", size: 3 },
+				],
+			}),
+		});
+		assert.equal(response.status, 201);
+		let attachments = (await response.json()) as { revision: number };
+		response = await api(server, `/api/attachments/one/upload?revision=${attachments.revision}`, {
+			method: "POST",
+			cookie,
+			client,
+			contentType: "application/octet-stream",
+			body: Buffer.from("one"),
+		});
+		assert.equal(response.status, 200);
+		await waitForAttachmentPhase(server, cookie, "uploading");
+		attachments = await attachmentState(server, cookie);
+		response = await api(server, `/api/attachments/two/upload?revision=${attachments.revision}`, {
+			method: "POST",
+			cookie,
+			client,
+			contentType: "application/octet-stream",
+			body: Buffer.from("bad"),
+		});
+		assert.equal(response.status, 200);
+		await waitForAttachmentPhase(server, cookie, "blocked");
+		attachments = await attachmentState(server, cookie);
+		response = await api(server, "/api/attachments/two/retry", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({ revision: attachments.revision }),
+		});
+		assert.equal(response.status, 200);
+		await waitForAttachmentPhase(server, cookie, "ready");
+		const preview = await api(server, "/api/attachments/one/preview", { cookie });
+		assert.equal(preview.status, 200);
+		assert.equal(await preview.text(), "safe-one");
+		attachments = await attachmentState(server, cookie);
+		response = await api(server, "/api/attachments/reorder", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({ revision: attachments.revision, ids: ["two", "one"] }),
+		});
+		assert.equal(response.status, 200);
+		attachments = (await response.json()) as { revision: number };
+		response = await api(server, `/api/attachments/one?revision=${attachments.revision}`, {
+			method: "DELETE",
+			cookie,
+			client,
+		});
+		assert.equal(response.status, 200);
+		attachments = (await response.json()) as { revision: number };
+		response = await api(server, "/api/attachments/clear", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({ revision: attachments.revision }),
+		});
+		assert.equal(response.status, 200);
+		assert.equal(((await response.json()) as { phase: string }).phase, "empty");
+	} finally {
+		await server.close();
+	}
+});
+
+test("raw attachment uploads enforce actual bytes, duplicate state, and declared limits", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const gate = deferred<void>();
+	const server = await WebUIServer.start({
+		conversation,
+		attachmentLimits: { maxImages: 2, maxImageBytes: 4, maxPromptBytes: 8 },
+		processAttachment: async (source) => {
+			await gate.promise;
+			return preparedAttachment(Buffer.from(source).toString());
+		},
+		send: async () => ({ delivery: "immediate" }),
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		const response = await api(server, "/api/attachments/reserve", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				revision: 0,
+				items: [
+					{ id: "one", name: "one.png", size: 4 },
+					{ id: "two", name: "two.png", size: 4 },
+				],
+			}),
+		});
+		const revision = ((await response.json()) as { revision: number }).revision;
+		let rawResponse = await rawUpload(
+			server,
+			cookie,
+			client,
+			"one",
+			revision,
+			Buffer.from("12345"),
+			false,
+		);
+		assert.equal(rawResponse.statusCode, 413);
+		const failedUpload = await attachmentState(server, cookie);
+		assert.equal(failedUpload.phase, "blocked");
+		assert.equal(failedUpload.items?.[0]?.status, "error");
+		rawResponse = await rawUpload(
+			server,
+			cookie,
+			client,
+			"one",
+			revision,
+			Buffer.from("1234"),
+			false,
+		);
+		assert.equal(rawResponse.statusCode, 200);
+		const processingRevision = (await attachmentState(server, cookie)).revision;
+		rawResponse = await rawUpload(
+			server,
+			cookie,
+			client,
+			"one",
+			processingRevision,
+			Buffer.from("1234"),
+			true,
+		);
+		assert.equal(rawResponse.statusCode, 409);
+		gate.resolve(undefined);
+		await waitForAttachmentPhase(server, cookie, "uploading");
+	} finally {
+		gate.resolve(undefined);
+		await server.close();
+	}
+});
+
+test("lease takeover and deletion cancel processing without stale completion resurrection", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const releases: Array<() => void> = [];
+	const signals: AbortSignal[] = [];
+	const server = await WebUIServer.start({
+		conversation,
+		attachmentLimits: { maxImages: 2, maxImageBytes: 8, maxPromptBytes: 16 },
+		processAttachment: async (source, signal) => {
+			signals.push(signal ?? new AbortController().signal);
+			await new Promise<void>((resolve) => releases.push(resolve));
+			return preparedAttachment(Buffer.from(source).toString());
+		},
+		send: async () => ({ delivery: "immediate" }),
+	});
+	try {
+		const cookie = await authenticate(server);
+		let client = await takeLease(server, cookie, "first");
+		let response = await api(server, "/api/attachments/reserve", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				revision: 0,
+				items: [{ id: "one", name: "one.png", size: 3 }],
+			}),
+		});
+		let revision = ((await response.json()) as { revision: number }).revision;
+		await api(server, `/api/attachments/one/upload?revision=${revision}`, {
+			method: "POST",
+			cookie,
+			client,
+			contentType: "application/octet-stream",
+			body: Buffer.from("one"),
+		});
+		await waitFor(() => signals.length === 1);
+		client = await takeLease(server, cookie, "second");
+		await waitFor(() => signals[0]?.aborted === true);
+		assert.equal((await attachmentState(server, cookie)).phase, "blocked");
+		releases.shift()?.();
+		await waitForAttachmentPhase(server, cookie, "blocked");
+		revision = (await attachmentState(server, cookie)).revision;
+		response = await api(server, `/api/attachments/one?revision=${revision}`, {
+			method: "DELETE",
+			cookie,
+			client,
+		});
+		assert.equal(response.status, 200);
+		assert.equal(((await response.json()) as { phase: string }).phase, "empty");
+	} finally {
+		for (const release of releases) release();
 		await server.close();
 	}
 });
@@ -540,8 +803,8 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-	while (!predicate()) await new Promise((resolve) => setTimeout(resolve, 5));
+async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
+	while (!(await predicate())) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
 function rawMessageRequest(
@@ -589,6 +852,78 @@ function cancelRequest(server: WebUIServer, cookie: string, client: string): Pro
 		request.write('{"requestId":"cancelled"');
 		request.destroy();
 		setTimeout(resolve, 20);
+	});
+}
+
+function preparedAttachment(marker: string): PreparedAttachment {
+	return {
+		bytes: Buffer.from(marker),
+		mimeType: "image/png",
+		width: 1,
+		height: 1,
+		originalWidth: 1,
+		originalHeight: 1,
+		sourceFormat: "png",
+		outputFormat: "png",
+		resized: false,
+		notes: [],
+	};
+}
+
+async function attachmentState(
+	server: WebUIServer,
+	cookie: string,
+): Promise<{ revision: number; phase?: string; items?: Array<{ id: string; status: string }> }> {
+	const state = (await (await api(server, "/api/state", { cookie })).json()) as {
+		attachments: {
+			revision: number;
+			phase: string;
+			items: Array<{ id: string; status: string }>;
+		};
+	};
+	return state.attachments;
+}
+
+async function waitForAttachmentPhase(
+	server: WebUIServer,
+	cookie: string,
+	phase: string,
+): Promise<void> {
+	await waitFor(async () => (await attachmentState(server, cookie)).phase === phase);
+}
+
+function rawUpload(
+	server: WebUIServer,
+	cookie: string,
+	client: string,
+	id: string,
+	revision: number,
+	body: Buffer,
+	declareLength: boolean,
+): Promise<http.IncomingMessage> {
+	const url = new URL(server.origin);
+	return new Promise((resolve, reject) => {
+		const request = http.request(
+			{
+				hostname: url.hostname,
+				port: Number(url.port),
+				path: `/api/attachments/${id}/upload?revision=${revision}`,
+				method: "POST",
+				headers: {
+					Cookie: cookie,
+					Origin: server.origin,
+					"Content-Type": "application/octet-stream",
+					"X-Pi-Web-Client": client,
+					...(declareLength ? { "Content-Length": String(body.byteLength) } : {}),
+				},
+			},
+			(response) => {
+				response.resume();
+				response.once("end", () => resolve(response));
+			},
+		);
+		request.once("error", reject);
+		request.end(body);
 	});
 }
 

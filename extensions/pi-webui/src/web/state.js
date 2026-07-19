@@ -13,6 +13,8 @@ export function initialState() {
 		readingImages: 0,
 		leaseClaimed: false,
 		leaseGeneration: 0,
+		attachmentRevision: 0,
+		attachmentPhase: "empty",
 		following: true,
 		unseenUpdateIds: [],
 		text: "",
@@ -22,17 +24,47 @@ export function initialState() {
 }
 
 export function applySnapshot(current, snapshot) {
-	if (!Number.isSafeInteger(snapshot?.sequence) || snapshot.sequence < current.sequence)
+	let next = current;
+	if (Number.isSafeInteger(snapshot?.sequence) && snapshot.sequence >= current.sequence) {
+		next = {
+			...current,
+			sequence: snapshot.sequence,
+			session: snapshot.session,
+			messages: Array.isArray(snapshot.messages) ? snapshot.messages : [],
+			tools: Array.isArray(snapshot.tools) ? snapshot.tools : [],
+			activity: snapshot.activity ?? "idle",
+			closed: Boolean(snapshot.closed),
+			needsSnapshot: false,
+		};
+	}
+	return applyAttachments(next, snapshot?.attachments);
+}
+
+export function applyAttachments(current, attachments) {
+	if (
+		!Number.isSafeInteger(attachments?.revision) ||
+		attachments.revision < current.attachmentRevision ||
+		!Array.isArray(attachments.items)
+	) {
 		return current;
+	}
+	const revisionChanged = attachments.revision !== current.attachmentRevision;
+	const images = attachments.items
+		.filter((item) => item && typeof item.id === "string" && typeof item.status === "string")
+		.map((item) => ({
+			...item,
+			notes: Array.isArray(item.notes) ? [...item.notes] : [],
+		}));
 	return {
 		...current,
-		sequence: snapshot.sequence,
-		session: snapshot.session,
-		messages: Array.isArray(snapshot.messages) ? snapshot.messages : [],
-		tools: Array.isArray(snapshot.tools) ? snapshot.tools : [],
-		activity: snapshot.activity ?? "idle",
-		closed: Boolean(snapshot.closed),
-		needsSnapshot: false,
+		attachmentRevision: attachments.revision,
+		attachmentPhase: typeof attachments.phase === "string" ? attachments.phase : "blocked",
+		images,
+		readingImages: images.filter(
+			(image) => image.status === "uploading" || image.status === "processing",
+		).length,
+		outbox: revisionChanged ? undefined : current.outbox,
+		lastDelivery: revisionChanged ? undefined : current.lastDelivery,
 	};
 }
 
@@ -82,6 +114,8 @@ export function prepareSend(current, requestId, delivery = "next") {
 	const attempt = current.outbox ?? {
 		requestId,
 		text: current.text,
+		attachmentRevision: current.attachmentRevision,
+		attachmentIds: current.images.map((image) => image.id),
 		images: [...current.images],
 		delivery,
 	};
@@ -174,6 +208,7 @@ export function canSend(current) {
 			!current.stale &&
 			!current.pending &&
 			current.readingImages === 0 &&
+			(current.images.length === 0 || current.attachmentPhase === "ready") &&
 			(current.text.trim() || current.images.length > 0),
 	);
 }
