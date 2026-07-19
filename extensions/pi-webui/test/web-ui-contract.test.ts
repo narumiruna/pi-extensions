@@ -27,6 +27,12 @@ test("page hierarchy keeps session context, transcript, and composer in reading 
 	assert.match(html, /id="steer"[^>]*hidden[^>]*>Steer<\/button>/);
 	assert.match(html, /id="composer-status"[^>]*role="status"/);
 	assert.match(html, /id="blocking-state"[^>]*role="alert"[^>]*hidden/);
+	assert.match(html, /id="attachment-summary"[^>]*hidden/);
+	assert.doesNotMatch(html, /id="attachment-summary"[^>]*aria-live/);
+	assert.match(
+		html,
+		/id="attachment-announcement"[^>]*class="visually-hidden"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
+	);
 });
 
 test("browser logic authenticates a lease, reconnects from sequence, and keeps failed drafts", () => {
@@ -91,7 +97,10 @@ test("image input stages authenticated per-item uploads with visible status and 
 	assert.doesNotMatch(app, /URL\.createObjectURL|URL\.revokeObjectURL/);
 	assert.match(html, /Paste, drop, or choose/);
 	assert.match(html, /id="image-preview-dialog"/);
-	assert.match(html, /id="attachment-status"[^>]*aria-live="polite"/);
+	assert.match(app, /model\.imageLimits\?\.maxImages \?\? model\.images\.length/);
+	assert.match(app, /\$\{model\.images\.length\}\/\$\{maximum\} images attached/);
+	assert.match(app, /Sensitive metadata is removed before sending\./);
+	assert.match(app, /attachmentAnnouncement/);
 	assert.match(app, /showModal/);
 	assert.match(app, /previewReturnFocus.*focus/s);
 	assert.match(app, /drag-active/);
@@ -99,8 +108,13 @@ test("image input stages authenticated per-item uploads with visible status and 
 	assert.match(app, /moveImage/);
 	assert.match(app, /item\.draggable = image\.status === "ready"/);
 	assert.match(app, /addEventListener\("dragstart"/);
-	assert.match(app, /Move image backward/);
-	assert.match(app, /Move image forward/);
+	assert.match(app, /model\.images\.length > 1/);
+	assert.match(app, /attachment-order-context/);
+	assert.match(app, /Order \$\{index \+ 1\} of \$\{model\.images\.length\}/);
+	assert.match(app, /Move image earlier/);
+	assert.match(app, /Move image later/);
+	assert.match(app, /const label = `\$\{action\}: \$\{image\.name\}`/);
+	assert.match(app, /button\.title = label/);
 	assert.match(app, /focusOrderingControl/);
 	assert.match(html, /id="clear-attachments"[^>]*hidden/);
 	assert.match(html, /id="clear-attachments-dialog"/);
@@ -125,13 +139,23 @@ test("sent-image actions stay contextual, authenticated, and distinguish expirat
 	assert.doesNotMatch(html, /sent-image-gallery|retained-image-gallery/);
 });
 
-test("attachment copy keeps routine status local and states metadata removal once", () => {
+test("attachment copy keeps summary, item state, and announcements non-duplicative", () => {
 	for (const label of ["Uploading", "Processing", "Ready", "Needs attention", "Retry", "Remove"]) {
 		assert.match(app, new RegExp(label));
 	}
 	assert.equal((app.match(/Sensitive metadata is removed before sending\./g) ?? []).length, 1);
+	assert.doesNotMatch(app, /images attached[^\n]*attachmentPhaseLabel/);
 	assert.match(app, /image\.notes\.join\(" · "\)/);
 	assert.doesNotMatch(app, /alert\(/);
+});
+
+test("composer actions and attachment cards preserve visual priority and reflow", () => {
+	assert.match(styles, /\.image-previews\s*\{[\s\S]*grid-template-columns:\s*repeat\(auto-fit/);
+	assert.match(styles, /\.remove-image\s*\{[\s\S]*background:\s*transparent/);
+	assert.match(styles, /\.remove-image:hover:not\(:disabled\)[\s\S]*text-decoration:\s*underline/);
+	assert.match(styles, /\.remove-image:disabled\s*\{[\s\S]*background:\s*transparent/);
+	assert.match(styles, /textarea:focus-visible[\s\S]*border-color:\s*transparent/);
+	assert.match(styles, /\.image-order-actions[\s\S]*grid-column:\s*1 \/ -1/);
 });
 
 test("tool, thinking, and Markdown rendering use safe DOM construction", () => {

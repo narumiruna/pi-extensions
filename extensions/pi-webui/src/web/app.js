@@ -33,6 +33,7 @@ let snapshotRefresh;
 let snapshotTarget = 0;
 let transcriptFrame;
 let transcriptAnnouncement = "";
+let lastAttachmentAnnouncement = "";
 let dragDepth = 0;
 let previewReturnFocus;
 let mutatingAttachments = false;
@@ -74,7 +75,8 @@ const ui = {
 	clearDialog: document.querySelector("#clear-attachments-dialog"),
 	clearMessage: document.querySelector("#clear-attachments-message"),
 	previews: document.querySelector("#image-previews"),
-	attachmentStatus: document.querySelector("#attachment-status"),
+	attachmentSummary: document.querySelector("#attachment-summary"),
+	attachmentAnnouncement: document.querySelector("#attachment-announcement"),
 	status: document.querySelector("#composer-status"),
 	error: document.querySelector("#composer-error"),
 	send: document.querySelector("#send-next"),
@@ -743,13 +745,17 @@ function renderComposer() {
 	ui.status.textContent = composerStatus();
 	ui.error.hidden = !model.error;
 	ui.error.textContent = model.error;
-	ui.attachmentStatus.hidden = model.images.length === 0;
-	const attachmentStatus =
-		model.images.length === 0
-			? ""
-			: `${model.images.length} of 8 images staged · ${attachmentPhaseLabel(model.attachmentPhase)} · Sensitive metadata is removed before sending.`;
-	if (ui.attachmentStatus.textContent !== attachmentStatus) {
-		ui.attachmentStatus.textContent = attachmentStatus;
+	const maximum = model.imageLimits?.maxImages ?? model.images.length;
+	ui.attachmentSummary.hidden = model.images.length === 0;
+	ui.attachmentSummary.textContent = model.images.length
+		? `${model.images.length}/${maximum} images attached · Sensitive metadata is removed before sending.`
+		: "";
+	const attachmentAnnouncement = model.images.length
+		? `Attachment state: ${attachmentPhaseLabel(model.attachmentPhase)}.`
+		: "";
+	if (attachmentAnnouncement !== lastAttachmentAnnouncement) {
+		lastAttachmentAnnouncement = attachmentAnnouncement;
+		ui.attachmentAnnouncement.textContent = attachmentAnnouncement;
 	}
 	ui.previews.replaceChildren();
 	for (const [index, image] of model.images.entries()) {
@@ -781,7 +787,7 @@ function renderComposer() {
 			if (orderingLocked || !draggedId || draggedId === image.id) return;
 			event.preventDefault();
 			event.stopPropagation();
-			void reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId, "forward");
+			void reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId, "later");
 		});
 		const previewButton = document.createElement("button");
 		previewButton.type = "button";
@@ -809,30 +815,34 @@ function renderComposer() {
 			summary.textContent = image.notes.join(" · ");
 			details.append(summary);
 		}
+		if (model.images.length > 1) {
+			const order = document.createElement("span");
+			order.className = "attachment-order-context";
+			order.textContent = `Order ${index + 1} of ${model.images.length}`;
+			details.append(order);
+		}
 		const actions = document.createElement("div");
 		actions.className = "image-order-actions";
-		const backward = document.createElement("button");
-		backward.type = "button";
-		backward.className = "move-image";
-		backward.textContent = "←";
-		backward.dataset.orderAction = "backward";
-		backward.disabled = orderingLocked || index === 0;
-		backward.setAttribute("aria-label", `Move image backward: ${image.name}`);
-		backward.addEventListener(
-			"click",
-			() => void reorderImages(moveImage(model.images, image.id, -1), image.id, "backward"),
-		);
-		const forward = document.createElement("button");
-		forward.type = "button";
-		forward.className = "move-image";
-		forward.textContent = "→";
-		forward.dataset.orderAction = "forward";
-		forward.disabled = orderingLocked || index === model.images.length - 1;
-		forward.setAttribute("aria-label", `Move image forward: ${image.name}`);
-		forward.addEventListener(
-			"click",
-			() => void reorderImages(moveImage(model.images, image.id, 1), image.id, "forward"),
-		);
+		if (model.images.length > 1) {
+			actions.append(
+				orderingButton(
+					image,
+					"earlier",
+					"Move image earlier",
+					"←",
+					-1,
+					orderingLocked || index === 0,
+				),
+				orderingButton(
+					image,
+					"later",
+					"Move image later",
+					"→",
+					1,
+					orderingLocked || index === model.images.length - 1,
+				),
+			);
+		}
 		const remove = document.createElement("button");
 		remove.type = "button";
 		remove.className = "remove-image";
@@ -850,11 +860,28 @@ function renderComposer() {
 			retry.addEventListener("click", () => void retryImage(image.id));
 			actions.append(retry);
 		}
-		actions.append(backward, forward, remove);
+		actions.append(remove);
 		item.append(previewButton, details, actions);
 		ui.previews.append(item);
 	}
 	document.documentElement.style.setProperty("--composer-height", `${ui.composer.offsetHeight}px`);
+}
+
+function orderingButton(image, direction, action, symbol, delta, disabled) {
+	const button = document.createElement("button");
+	const label = `${action}: ${image.name}`;
+	button.type = "button";
+	button.className = "move-image";
+	button.textContent = symbol;
+	button.title = label;
+	button.dataset.orderAction = direction;
+	button.disabled = disabled;
+	button.setAttribute("aria-label", label);
+	button.addEventListener(
+		"click",
+		() => void reorderImages(moveImage(model.images, image.id, delta), image.id, direction),
+	);
+	return button;
 }
 
 function renderBlocking() {
