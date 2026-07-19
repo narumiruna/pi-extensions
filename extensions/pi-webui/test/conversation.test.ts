@@ -123,21 +123,43 @@ test("projection emits ordered replaceable updates and suppresses exact duplicat
 
 test("tool projection bounds property scans and contains cycles before serialization", () => {
 	let reads = 0;
-	const details: Record<string, unknown> = {};
+	let descriptorReads = 0;
+	const source: Record<string, unknown> = {};
 	for (let index = 0; index < 5_000; index += 1) {
-		Object.defineProperty(details, `key${index}`, {
+		Object.defineProperty(source, `key${index}`, {
 			enumerable: true,
+			configurable: true,
 			get() {
 				reads += 1;
 				return index;
 			},
 		});
 	}
-	details.self = details;
+	const details = new Proxy(source, {
+		getOwnPropertyDescriptor(target, property) {
+			descriptorReads += 1;
+			return Reflect.getOwnPropertyDescriptor(target, property);
+		},
+	});
+	source.self = details;
 	const projection = new ConversationProjection(session);
 	projection.recordTool("end", "bounded", "custom", {}, { details });
 	assert.ok(reads <= 101, `read ${reads} properties`);
+	assert.ok(descriptorReads <= 202, `scanned ${descriptorReads} property descriptors`);
 	assert.ok(JSON.stringify(projection.snapshot()).length < 50_000);
+});
+
+test("tool projection preserves own dangerous property names without prototype mutation", () => {
+	const details: Record<string, unknown> = {};
+	Object.defineProperty(details, "__proto__", {
+		value: "literal",
+		enumerable: true,
+	});
+	const projection = new ConversationProjection(session);
+	projection.recordTool("end", "keys", "custom", {}, details);
+	const result = projection.snapshot().tools[0]?.result as Record<string, unknown>;
+	assert.equal(Object.hasOwn(result, "__proto__"), true);
+	assert.equal(Object.getOwnPropertyDescriptor(result, "__proto__")?.value, "literal");
 });
 
 test("transcript and tool snapshots retain only the newest bounded records", () => {

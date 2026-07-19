@@ -11,6 +11,7 @@ const JSON_LIMIT = 64 * 1024 * 1024;
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,120}$/;
 const MAX_REQUESTS = 128;
+const SSE_FLUSH_TIMEOUT_MS = 250;
 
 export interface WebSendRequest {
 	requestId: string;
@@ -122,8 +123,9 @@ export class WebUIServer {
 		this.unsubscribe();
 		for (const controller of this.activeSendControllers) controller.abort();
 		this.activeSendControllers.clear();
+		const responses = [...this.sseClients].map((client) => client.response);
 		this.broadcastControl("session-ended", { message: "Pi session ended" });
-		for (const client of this.sseClients) client.response.end();
+		await Promise.all(responses.map((response) => finishResponse(response)));
 		this.sseClients.clear();
 		this.server.closeAllConnections?.();
 		for (const socket of this.sockets) socket.destroy();
@@ -159,7 +161,13 @@ export class WebUIServer {
 				return;
 			}
 			if (request.method === "GET" && url.pathname === "/api/state") {
-				this.json(response, 200, this.options.conversation.snapshot());
+				this.json(response, 200, {
+					...this.options.conversation.snapshot(),
+					lease: {
+						...(this.activeClientId ? { activeClientId: this.activeClientId } : {}),
+						generation: this.leaseGeneration,
+					},
+				});
 				return;
 			}
 			if (request.method === "GET" && url.pathname === "/api/events") {
@@ -355,6 +363,26 @@ export class WebUIServer {
 		});
 		response.end(body);
 	}
+}
+
+function finishResponse(response: ServerResponse): Promise<void> {
+	if (response.destroyed || response.writableFinished) return Promise.resolve();
+	return new Promise((resolve) => {
+		let settled = false;
+		const done = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			resolve();
+		};
+		const timeout = setTimeout(done, SSE_FLUSH_TIMEOUT_MS);
+		if (response.writableEnded) {
+			response.once("finish", done);
+			response.once("close", done);
+		} else {
+			response.end(done);
+		}
+	});
 }
 
 async function readAsset(name: string): Promise<Buffer> {

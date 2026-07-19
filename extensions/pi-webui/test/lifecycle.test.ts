@@ -208,7 +208,7 @@ test("browser sends immediately when idle, follows up when busy, and steers expl
 		delivery: "steer",
 	});
 	assert.deepEqual(h.sent, [
-		{ content: "idle" },
+		{ content: "idle", options: { deliverAs: "followUp" } },
 		{ content: "later", options: { deliverAs: "followUp" } },
 		{ content: "now", options: { deliverAs: "steer" } },
 	]);

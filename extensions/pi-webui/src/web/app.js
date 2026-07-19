@@ -104,7 +104,11 @@ async function refreshSnapshot(requiredSequence = 0) {
 			do {
 				const response = await fetch("/api/state", { cache: "no-store" });
 				if (!response.ok) throw new Error(await responseError(response));
-				model = applySnapshot(model, await response.json());
+				const snapshot = await response.json();
+				model = applySnapshot(model, snapshot);
+				if (typeof snapshot.lease?.activeClientId === "string") {
+					model = applyLease(model, snapshot.lease, clientId);
+				}
 				render();
 			} while (model.sequence < snapshotTarget);
 		})().finally(() => {
@@ -121,7 +125,7 @@ async function claimLease() {
 		body: JSON.stringify({ clientId }),
 	});
 	if (!response.ok) throw new Error(await responseError(response));
-	model = applyLease(model, await response.json(), clientId);
+	model = applyLease(model, await response.json(), clientId, true);
 	render();
 }
 

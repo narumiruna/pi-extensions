@@ -254,7 +254,7 @@ export class WebUIRuntime {
 			this.pi.sendUserMessage(content, { deliverAs: "followUp" });
 			return { delivery: "followUp" };
 		}
-		this.pi.sendUserMessage(content);
+		this.pi.sendUserMessage(content, { deliverAs: "followUp" });
 		return { delivery: "immediate" };
 	}
 

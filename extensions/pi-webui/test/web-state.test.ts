@@ -9,7 +9,12 @@ const state = (await import(
 	initialState(): WebState;
 	applySnapshot(current: WebState, snapshot: Snapshot): WebState;
 	applyConversationEvent(current: WebState, event: ConversationEvent): WebState;
-	applyLease(current: WebState, lease: { activeClientId: string }, clientId: string): WebState;
+	applyLease(
+		current: WebState,
+		lease: { activeClientId: string },
+		clientId: string,
+		claimed?: boolean,
+	): WebState;
 	prepareSend(
 		current: WebState,
 		requestId: string,
@@ -145,8 +150,14 @@ test("session-ended and lease events disable mutation without relying on color",
 	let current = { ...state.initialState(), connected: true, text: "hello" };
 	current = state.applyLease(current, { activeClientId: "other" }, "this-tab");
 	assert.equal(current.stale, true);
-	assert.equal(current.leaseClaimed, true);
+	assert.equal(current.leaseClaimed, false);
 	assert.equal(state.canSend(current), false);
+	current = state.applyLease(current, { activeClientId: "this-tab" }, "this-tab", true);
+	assert.equal(current.stale, false);
+	assert.equal(current.leaseClaimed, true);
+	current = state.applyLease(current, { activeClientId: "other" }, "this-tab");
+	assert.equal(current.stale, true);
+	assert.equal(current.leaseClaimed, true);
 	current = state.applyConversationEvent(
 		{ ...current, sequence: 0 },
 		{ sequence: 1, type: "session-ended", payload: {} },

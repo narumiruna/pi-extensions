@@ -293,24 +293,44 @@ function sanitizeJson(
 		return result;
 	}
 	const result: Record<string, unknown> = {};
-	const keys = Object.keys(value).slice(0, 100);
-	for (const rawKey of keys) {
-		if (budget.remaining <= 0 || budget.nodes <= 0) break;
+	let scannedKeys = 0;
+	let ownKeys = 0;
+	let omitted = false;
+	for (const rawKey in value) {
+		scannedKeys += 1;
+		if (scannedKeys > 200) {
+			omitted = true;
+			break;
+		}
+		if (!Object.hasOwn(value, rawKey)) continue;
+		if (ownKeys >= 100 || budget.remaining <= 0 || budget.nodes <= 0) {
+			omitted = true;
+			break;
+		}
+		ownKeys += 1;
 		const key = truncateToBudget(rawKey, Math.min(500, budget.remaining));
 		budget.remaining -= Buffer.byteLength(key);
 		try {
-			result[key] = sanitizeJson(
-				(value as Record<string, unknown>)[rawKey],
-				budget,
-				seen,
-				depth + 1,
+			setOwn(
+				result,
+				key,
+				sanitizeJson((value as Record<string, unknown>)[rawKey], budget, seen, depth + 1),
 			);
 		} catch {
-			result[key] = "[Unreadable]";
+			setOwn(result, key, "[Unreadable]");
 		}
 	}
-	if (Object.keys(value).length > keys.length) result["…"] = "More properties omitted";
+	if (omitted) setOwn(result, "…", "More properties omitted");
 	return result;
+}
+
+function setOwn(target: Record<string, unknown>, key: string, value: unknown): void {
+	Object.defineProperty(target, key, {
+		value,
+		enumerable: true,
+		configurable: true,
+		writable: true,
+	});
 }
 
 function truncateToBudget(text: string, maxBytes: number): string {

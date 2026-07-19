@@ -126,6 +126,8 @@ test("mutations require exact Origin, Host, cookie, and current tab lease", asyn
 		);
 		await takeLease(server, cookie, "one");
 		await takeLease(server, cookie, "two");
+		const state = await (await api(server, "/api/state", { cookie })).json();
+		assert.deepEqual(state.lease, { activeClientId: "two", generation: 2 });
 		assert.equal(
 			(
 				await api(server, "/api/messages", {
@@ -347,6 +349,32 @@ test("SSE sequence gaps receive an authoritative snapshot", async () => {
 	} finally {
 		await server.close();
 	}
+});
+
+test("close waits for terminal SSE data to flush before destroying connections", async () => {
+	const { server } = await harness();
+	let finish: (() => void) | undefined;
+	let settled = false;
+	const response = {
+		destroyed: false,
+		writableEnded: false,
+		write: () => true,
+		end: (callback?: () => void) => {
+			finish = callback;
+			return response;
+		},
+	};
+	const clients = (server as unknown as { sseClients: Set<{ response: typeof response }> })
+		.sseClients;
+	clients.add({ response });
+	const closing = server.close().then(() => {
+		settled = true;
+	});
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.equal(settled, false);
+	assert.ok(finish);
+	finish();
+	await closing;
 });
 
 test("close ends connections and is idempotent", async () => {

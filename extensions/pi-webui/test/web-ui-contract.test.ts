@@ -38,6 +38,8 @@ test("browser logic authenticates a lease, reconnects from sequence, and keeps f
 	assert.match(app, /completeSend/);
 	assert.match(app, /failSend/);
 	assert.match(app, /if \(!model\.leaseClaimed\) await claimLease\(\)/);
+	assert.match(app, /applyLease\(model, snapshot\.lease, clientId\)/);
+	assert.match(app, /applyLease\(model, await response\.json\(\), clientId, true\)/);
 	assert.match(app, /snapshotRefresh/);
 	assert.match(app, /if \(!response\.ok\) throw new Error/);
 	assert.doesNotMatch(app, /localStorage|sessionStorage|indexedDB/i);

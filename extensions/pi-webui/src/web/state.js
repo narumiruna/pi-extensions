@@ -62,8 +62,12 @@ export function applyConversationEvent(current, event) {
 	return next;
 }
 
-export function applyLease(current, lease, clientId) {
-	return { ...current, leaseClaimed: true, stale: lease?.activeClientId !== clientId };
+export function applyLease(current, lease, clientId, claimed = false) {
+	return {
+		...current,
+		leaseClaimed: current.leaseClaimed || claimed,
+		stale: lease?.activeClientId !== clientId,
+	};
 }
 
 export function prepareSend(current, requestId, delivery = "next") {
