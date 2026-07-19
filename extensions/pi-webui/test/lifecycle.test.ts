@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { type RuntimeDependencies, WebUIRuntime } from "../src/runtime.js";
 import type { WebSendRequest, WebUIServerOptions } from "../src/server.js";
+import { DEFAULT_SETTINGS } from "../src/settings.js";
 
 function nextTask(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
@@ -130,6 +131,15 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 		},
 	};
 	const dependencies: RuntimeDependencies = {
+		loadSettings: async () => ({
+			kind: "missing",
+			path: "/agent/pi-webui.json",
+			settings: { ...DEFAULT_SETTINGS },
+			source: "defaults",
+			document: {},
+		}),
+		saveSettings: async (settings, document) => ({ ...document, ...settings }),
+		initializeSettings: async () => "created",
 		startServer: async (options) => {
 			starts += 1;
 			serverOptions = options;
@@ -205,6 +215,57 @@ test("/webui lazily starts one server, rotates links, and projects the existing 
 	assert.equal(h.links, 2);
 	assert.match(String(h.widgets.get("webui")), /127\.0\.0\.1/);
 	assert.equal(h.serverOptions?.conversation.snapshot().messages[0]?.id, "existing");
+});
+
+test("startOnSessionStart starts automatically for every initialized session and reuses the link server", async () => {
+	const h = harness({
+		loadSettings: async () => ({
+			kind: "loaded",
+			path: "/agent/pi-webui.json",
+			settings: { startOnSessionStart: true },
+			source: "settings file",
+			document: { startOnSessionStart: true },
+		}),
+	});
+	for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
+		await h.emit("session_start", { reason });
+		assert.equal(h.starts, h.links);
+	}
+	assert.equal(h.starts, 5);
+	assert.equal(h.closes, 4);
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	assert.equal(h.starts, 5);
+	assert.equal(h.links, 6);
+});
+
+test("invalid settings warn and automatic startup failures remain non-fatal", async () => {
+	const invalid = harness({
+		loadSettings: async () => ({
+			kind: "invalid",
+			path: "/agent/pi-webui.json",
+			settings: { ...DEFAULT_SETTINGS },
+			source: "defaults",
+			warning: "pi-webui.json ignored; using defaults",
+		}),
+	});
+	await invalid.emit("session_start");
+	assert.equal(invalid.starts, 0);
+	assert.match(invalid.notifications.join("\n"), /ignored/i);
+
+	const failing = harness({
+		loadSettings: async () => ({
+			kind: "loaded",
+			path: "/agent/pi-webui.json",
+			settings: { startOnSessionStart: true },
+			source: "settings file",
+			document: { startOnSessionStart: true },
+		}),
+		startServer: async () => {
+			throw new Error("listener unavailable");
+		},
+	});
+	await failing.emit("session_start");
+	assert.match(failing.notifications.join("\n"), /could not start.*listener unavailable/i);
 });
 
 test("Pi message, tool, and activity events update the browser projection", async () => {
