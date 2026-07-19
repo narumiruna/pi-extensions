@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import test from "node:test";
 import webUI from "../src/webui.js";
+
+test("package Biome scripts explicitly include ignored production source", async () => {
+	const packageJson = JSON.parse(
+		await readFile(resolve("extensions/pi-webui/package.json"), "utf8"),
+	) as { scripts?: Record<string, string> };
+	for (const name of ["check", "format"]) {
+		const script = packageJson.scripts?.[name] ?? "";
+		assert.match(script, /--vcs-use-ignore-file=false/);
+		assert.match(script, /(?:^| )src(?: |$)/);
+	}
+});
 
 test("webui registers /webui and session lifecycle events", () => {
 	const commands = new Map<string, unknown>();
