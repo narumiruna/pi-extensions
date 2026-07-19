@@ -3,7 +3,7 @@
 ## Project structure
 
 - This is a Node/TypeScript monorepo for independently installable Pi extension packages plus explicitly local-only experiments.
-- Production extension code lives under `extensions/<package>/src/*.ts`; experimental code lives under `extensions/experimental/<package>/src/*.ts`; each package has its own `package.json`, `README.md`, `LICENSE`, and `tsconfig.json`.
+- Production extension code lives under `extensions/<package>/src/*.ts`; experimental code lives under `extensions/experimental/<package>/src/*.ts`; deprecated reference packages live under `deprecated/<package>/`; each package has its own `package.json`, `README.md`, `LICENSE`, and `tsconfig.json`.
 - Root config owns shared tooling: `package.json`, `package-lock.json`, `biome.json`, `tsconfig.json`, `justfile`, and `.github/workflows/*`.
 - Do not hand-edit generated dependency output such as `node_modules/`. Keep package contents aligned with each package `files` list and `pi.extensions` entry.
 
@@ -32,7 +32,7 @@ Run commands from the repository root unless noted otherwise.
 
 ## Testing and verification
 
-- Extension tests live under `extensions/<package>/test/*.test.ts` or `extensions/experimental/<package>/test/*.test.ts` and run with `npm test`.
+- Active extension tests live under `extensions/<package>/test/*.test.ts` or `extensions/experimental/<package>/test/*.test.ts` and run with `npm test`; archived tests under `deprecated/` are excluded.
 - Use `npm run check` as the CI-equivalent local gate; it runs Biome, boundary checks, workspace typechecks, and tests.
 - For package metadata or publishing changes, also run the relevant `just pack-*` dry run and inspect the tarball contents.
 - For Pi runtime behavior, prefer `pi -e ./extensions/<package>` or the matching `just try-*` recipe before publishing.

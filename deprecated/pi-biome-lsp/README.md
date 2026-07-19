@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-biome-lsp)](https://www.npmjs.com/package/@narumitw/pi-biome-lsp) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> Deprecated: use [`@narumitw/pi-lsp`](../../pi-lsp) instead. This package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set.
+> Deprecated: use [`@narumitw/pi-lsp`](../../extensions/pi-lsp) instead. This package is kept for reference under `deprecated/` and is no longer part of the active workspace package set.
 
 `@narumitw/pi-biome-lsp` is a native [Pi coding agent](https://pi.dev) extension that exposes [Biome](https://biomejs.dev/) language-server tools.
 
@@ -33,7 +33,7 @@ pi -e npm:@narumitw/pi-biome-lsp
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/deprecated/pi-biome-lsp
+pi -e ./deprecated/pi-biome-lsp
 ```
 
 ## ✅ Requirements
@@ -47,13 +47,13 @@ npm install -D @biomejs/biome
 Or provide a custom server command:
 
 ```bash
-PI_BIOME_LSP_COMMAND="npx biome lsp-proxy" pi -e ./extensions/deprecated/pi-biome-lsp
+PI_BIOME_LSP_COMMAND="npx biome lsp-proxy" pi -e ./deprecated/pi-biome-lsp
 ```
 
 Optional timeout override:
 
 ```bash
-PI_BIOME_LSP_TIMEOUT_MS=30000 pi -e ./extensions/deprecated/pi-biome-lsp
+PI_BIOME_LSP_TIMEOUT_MS=30000 pi -e ./deprecated/pi-biome-lsp
 ```
 
 ## 🛠️ Pi tools
@@ -68,7 +68,7 @@ Check a project subset with Biome diagnostics:
 
 ```json
 {
-  "paths": ["src", "extensions/deprecated/pi-biome-lsp/src"],
+  "paths": ["src", "deprecated/pi-biome-lsp/src"],
   "limit": 100
 }
 ```
@@ -105,7 +105,7 @@ Shows the configured Biome LSP command and whether it is available on `PATH`.
 ## 🗂️ Package layout
 
 ```txt
-extensions/deprecated/pi-biome-lsp/
+deprecated/pi-biome-lsp/
 ├── src/
 │   └── biome-lsp.ts
 ├── README.md

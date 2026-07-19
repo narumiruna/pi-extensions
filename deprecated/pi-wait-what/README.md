@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-wait-what)](https://www.npmjs.com/package/@narumitw/pi-wait-what) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> Deprecated: this package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set. Manually pausing the agent and using [`/btw`](../../pi-btw) provides the same core workflow through a side question.
+> Deprecated: this package is kept for reference under `deprecated/` and is no longer part of the active workspace package set. Manually pausing the agent and using [`/btw`](../../extensions/pi-btw) provides the same core workflow through a side question.
 
 `@narumitw/pi-wait-what` is a native [Pi coding agent](https://pi.dev) extension that adds `/wait-what`, a quick command for pausing the main conversation and asking the agent to explain surprising behavior.
 
@@ -33,7 +33,7 @@ pi -e npm:@narumitw/pi-wait-what
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/deprecated/pi-wait-what
+pi -e ./deprecated/pi-wait-what
 ```
 
 ## 🚀 Usage
@@ -78,7 +78,7 @@ If you need to continue after the explanation, just type a normal reply such as 
 ## 🗂️ Package layout
 
 ```txt
-extensions/deprecated/pi-wait-what/
+deprecated/pi-wait-what/
 ├── src/
 │   └── wait-what.ts
 ├── README.md

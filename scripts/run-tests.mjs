@@ -37,7 +37,7 @@ run(process.execPath, ["--test", ...testFiles]);
 function activeExtensionDirectories(directory = path.join(root, "extensions")) {
 	const directories = [];
 	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-		if (!entry.isDirectory() || entry.name === "deprecated" || entry.name === "node_modules") {
+		if (!entry.isDirectory() || entry.name === "node_modules") {
 			continue;
 		}
 		const entryPath = path.join(directory, entry.name);

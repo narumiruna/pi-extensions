@@ -1,7 +1,7 @@
 {
-	"name": "@narumitw/pi-biome-lsp",
-	"version": "0.1.20",
-	"description": "Deprecated Pi extension that exposes Biome language-server tools for diagnostics, formatting, and fixes.",
+	"name": "@narumitw/pi-auto-thinking",
+	"version": "0.1.15",
+	"description": "Deprecated Pi extension that automatically adjusts thinking level from model capability and task difficulty.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -9,10 +9,9 @@
 		"pi-package",
 		"pi-extension",
 		"pi",
-		"biome",
-		"lsp",
-		"lint",
-		"format"
+		"thinking",
+		"reasoning",
+		"automation"
 	],
 	"files": [
 		"src",
@@ -21,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/biome-lsp.ts"
+			"./src/auto-thinking.ts"
 		]
 	},
 	"scripts": {
@@ -29,18 +28,15 @@
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit"
 	},
-	"dependencies": {
-		"typebox": "^1.1.37"
-	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.14",
-		"@mariozechner/pi-coding-agent": "0.73.0",
+		"@earendil-works/pi-coding-agent": "0.74.0",
 		"@types/node": "25.6.0",
 		"typescript": "6.0.3"
 	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/deprecated/pi-biome-lsp"
+		"directory": "deprecated/pi-auto-thinking"
 	}
 }

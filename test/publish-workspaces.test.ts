@@ -22,7 +22,7 @@ test("canonical releases select only changed production extensions in determinis
 			{ directory: "pi-alpha", name: "@fixture/alpha" },
 			{ directory: "pi-private", name: "@fixture/private", private: true },
 			{ directory: "experimental/pi-experiment", name: "@fixture/experiment" },
-			{ directory: "deprecated/pi-legacy", name: "@fixture/legacy" },
+			{ directory: "pi-legacy", name: "@fixture/legacy", root: "deprecated" },
 		],
 		(repository) => {
 			tag(repository, "v1.0.0");
@@ -35,7 +35,7 @@ test("canonical releases select only changed production extensions in determinis
 				"extensions/experimental/pi-experiment/src/index.ts",
 				"experimental change\n",
 			);
-			write(repository, "extensions/deprecated/pi-legacy/src/index.ts", "legacy change\n");
+			write(repository, "deprecated/pi-legacy/src/index.ts", "legacy change\n");
 			addPackage(repository, { directory: "pi-middle", name: "@fixture/middle" });
 			refreshLockfile(repository);
 			commit(repository, "feat: change selected extensions");
@@ -163,7 +163,7 @@ test("all-packages mode is deterministic and excludes non-production workspaces"
 			{ directory: "pi-alpha", name: "@fixture/alpha" },
 			{ directory: "pi-private", name: "@fixture/private", private: true },
 			{ directory: "experimental/pi-experiment", name: "@fixture/experiment" },
-			{ directory: "deprecated/pi-legacy", name: "@fixture/legacy" },
+			{ directory: "pi-legacy", name: "@fixture/legacy", root: "deprecated" },
 		],
 		(repository) => {
 			assert.deepEqual(select(repository, "--all"), [
@@ -178,6 +178,7 @@ type PackageFixture = {
 	directory: string;
 	name: string;
 	private?: boolean;
+	root?: "deprecated";
 };
 
 function withRepository(packages: PackageFixture[], run: (repository: string) => void) {
@@ -200,12 +201,13 @@ function withRepository(packages: PackageFixture[], run: (repository: string) =>
 }
 
 function addPackage(repository: string, packageFixture: PackageFixture) {
-	writeJson(repository, `extensions/${packageFixture.directory}/package.json`, {
+	const packageRoot = packageFixture.root ?? "extensions";
+	writeJson(repository, `${packageRoot}/${packageFixture.directory}/package.json`, {
 		name: packageFixture.name,
 		version: "0.0.0",
 		...(packageFixture.private ? { private: true } : {}),
 	});
-	write(repository, `extensions/${packageFixture.directory}/src/index.ts`, "export {};\n");
+	write(repository, `${packageRoot}/${packageFixture.directory}/src/index.ts`, "export {};\n");
 }
 
 function createRelease(repository: string, tagName: string) {
@@ -258,7 +260,7 @@ function refreshLockfile(repository: string) {
 function productionPackageDirectories(repository: string) {
 	return listPackageDirectories(repository).filter((directory) => {
 		if (directory.includes("/")) return false;
-		if (directory === "experimental" || directory === "deprecated") return false;
+		if (directory === "experimental") return false;
 		const packageJson = readJson(path.join(repository, "extensions", directory, "package.json"));
 		return packageJson.private !== true;
 	});

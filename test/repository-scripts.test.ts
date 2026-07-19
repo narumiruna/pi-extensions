@@ -81,7 +81,7 @@ test("experimental publishing is manual-only", () => {
 		"utf8",
 	);
 	const justfile = readFileSync(path.join(repositoryRoot, "justfile"), "utf8");
-	assert.match(selector, /new Set\(\["deprecated", "experimental"\]\)/);
+	assert.match(selector, /new Set\(\["experimental"\]\)/);
 	assert.match(justfile, /package_json="\.\/extensions\/experimental\/pi-\$name\/package\.json"/);
 	assert.match(justfile, /WARNING: manually publishing experimental Pi extension/);
 	assert.match(justfile, /publish name otp=""/);

@@ -1,7 +1,7 @@
 {
-	"name": "@narumitw/pi-auto-thinking",
-	"version": "0.1.15",
-	"description": "Deprecated Pi extension that automatically adjusts thinking level from model capability and task difficulty.",
+	"name": "@narumitw/pi-telegram-bot",
+	"version": "0.1.29",
+	"description": "Deprecated Pi extension that connects the current Pi session to a Telegram bot without custom tools.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -9,9 +9,10 @@
 		"pi-package",
 		"pi-extension",
 		"pi",
-		"thinking",
-		"reasoning",
-		"automation"
+		"telegram",
+		"bot",
+		"remote-control",
+		"session"
 	],
 	"files": [
 		"src",
@@ -20,13 +21,16 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/auto-thinking.ts"
+			"./src/telegram-bot.ts"
 		]
 	},
 	"scripts": {
 		"check": "biome check . && npm run typecheck",
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.14",
@@ -37,6 +41,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/deprecated/pi-auto-thinking"
+		"directory": "deprecated/pi-telegram-bot"
 	}
 }

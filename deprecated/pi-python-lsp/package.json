@@ -43,6 +43,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/deprecated/pi-python-lsp"
+		"directory": "deprecated/pi-python-lsp"
 	}
 }
