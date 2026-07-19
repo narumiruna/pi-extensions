@@ -67,6 +67,8 @@ export interface ConfiguredLspServer {
 	env?: Record<string, string>;
 	initialization?: Record<string, unknown>;
 	skipDirectories?: string[];
+	// ms to wait after an empty publish for a later non-empty one before settling.
+	diagnosticsSettleMs?: number;
 }
 
 export interface LspConfig {
@@ -89,6 +91,7 @@ export interface LspServerAdapter {
 	env?: Record<string, string>;
 	initialization?: Record<string, unknown>;
 	skipDirectories: Set<string>;
+	diagnosticsSettleMs?: number;
 	isSupportedFile: (filePath: string) => boolean;
 	languageIdFor: (filePath: string) => string;
 }
