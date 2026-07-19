@@ -179,8 +179,15 @@ export async function runGhPrView(
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<PullRequestStatus> {
-	const args = ["pr", "view", "--json", GH_PR_FIELDS.join(",")];
-	const result = await execGh(pi, args, cwd, signal, "gh pr view");
+	const invocation = ghPrViewInvocation();
+	const result = await execGh(
+		pi,
+		invocation.command,
+		invocation.args,
+		cwd,
+		signal,
+		"gh pr view",
+	);
 	if (result.killed) throw new Error("gh pr view timed out or was cancelled.");
 	if (result.code !== 0) throw new Error(formatGhFailure("gh pr view", result));
 
@@ -460,6 +467,7 @@ async function runGhPrCountQuery(
 	const { host, owner, name, number } = parsePrCoordinates(pr);
 	const result = await execGh(
 		pi,
+		"gh",
 		[
 			"api",
 			"graphql",
@@ -493,19 +501,32 @@ async function runGhPrCountQuery(
 	}
 }
 
+export function ghPrViewInvocation(
+	ghHost = process.env.GH_HOST,
+	platform: NodeJS.Platform = process.platform,
+	comSpec = process.env.ComSpec,
+): { command: string; args: string[] } {
+	const args = ["pr", "view", "--json", GH_PR_FIELDS.join(",")];
+	if (!ghHost) return { command: "gh", args };
+	if (platform === "win32") {
+		return {
+			command: comSpec ?? "cmd.exe",
+			args: ["/d", "/s", "/c", `set "GH_HOST=" && gh ${args.join(" ")}`],
+		};
+	}
+	return { command: "env", args: ["-u", "GH_HOST", "gh", ...args] };
+}
+
 async function execGh(
 	pi: Pick<ExtensionAPI, "exec">,
+	executable: string,
 	args: string[],
 	cwd: string,
 	signal: AbortSignal | undefined,
 	command: string,
 ): Promise<ExecResult> {
 	try {
-		return await pi.exec(
-			"gh",
-			args,
-			{ cwd, signal, timeout: GH_TIMEOUT_MS },
-		);
+		return await pi.exec(executable, args, { cwd, signal, timeout: GH_TIMEOUT_MS });
 	} catch (error) {
 		const message = formatError(error);
 		if (isGhExecutableMissingMessage(message.toLowerCase())) {
@@ -536,6 +557,12 @@ function isGhExecutableMissingMessage(lowerMessage: string): boolean {
 		/\b(?:gh|gh\.exe)\b.*\benoent\b|\benoent\b.*\b(?:gh|gh\.exe)\b/.test(lowerMessage) ||
 		/\b(?:gh|gh\.exe): (?:command )?not found\b/.test(lowerMessage) ||
 		/\bcommand not found: (?:gh|gh\.exe)\b/.test(lowerMessage) ||
+		/\benv:\s+['"‘’]?(?:gh|gh\.exe)['"‘’]?: no such file or directory\b/.test(
+			lowerMessage,
+		) ||
+		/['"‘’]?(?:gh|gh\.exe)['"‘’]? is not recognized as an internal or external command\b/.test(
+			lowerMessage,
+		) ||
 		/\b(?:gh|gh\.exe): no such file or directory\b/.test(lowerMessage)
 	);
 }
