@@ -55,8 +55,15 @@
 					rows="1"
 					placeholder="Ask Pi to do something…"
 				></textarea>
+				<p id="attachment-summary" class="attachment-summary" hidden></p>
 				<ul id="image-previews" class="image-previews" aria-label="Attached images"></ul>
-				<p id="attachment-status" class="attachment-status" role="status" aria-live="polite" hidden></p>
+				<p
+					id="attachment-announcement"
+					class="visually-hidden"
+					role="status"
+					aria-live="polite"
+					aria-atomic="true"
+				></p>
 				<p id="composer-error" class="composer-error" role="alert" hidden></p>
 				<div class="composer-bottom">
 					<div class="composer-support">

@@ -482,6 +482,12 @@ textarea {
 	overflow-y: auto;
 }
 
+textarea:focus-visible {
+	border-color: transparent;
+	outline-width: 2px;
+	outline-offset: 1px;
+}
+
 textarea:disabled {
 	opacity: 0.68;
 }
@@ -509,22 +515,22 @@ textarea:disabled {
 
 .composer-status,
 .composer-error,
-.attachment-status {
+.attachment-summary {
 	margin: 0;
 	font-size: 0.84rem;
 }
 
 .composer-status,
-.attachment-status {
+.attachment-summary {
 	color: var(--muted);
 }
 
 .image-previews {
-	display: flex;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
 	gap: 0.6rem;
 	margin: 0;
 	padding: 0;
-	overflow-x: auto;
 	list-style: none;
 }
 
@@ -534,8 +540,8 @@ textarea:disabled {
 
 .image-preview-item {
 	display: grid;
-	min-width: 340px;
-	grid-template-columns: 68px minmax(6rem, 1fr) auto;
+	min-width: 0;
+	grid-template-columns: 68px minmax(0, 1fr);
 	align-items: center;
 	gap: 0.5rem;
 	padding: 0.4rem;
@@ -572,15 +578,22 @@ textarea:disabled {
 	color: var(--danger);
 }
 
-.attachment-conversion-summary {
+.attachment-conversion-summary,
+.attachment-order-context {
 	color: var(--muted);
 	font-size: 0.74rem;
 	line-height: 1.35;
 }
 
+.attachment-order-context {
+	font-weight: 650;
+}
+
 .image-order-actions {
 	display: flex;
+	grid-column: 1 / -1;
 	align-items: center;
+	justify-content: flex-end;
 	gap: 0.35rem;
 }
 
@@ -653,11 +666,29 @@ button {
 
 .button.secondary,
 .move-image,
-.remove-image,
 .retry-image {
 	border-color: var(--border);
 	color: var(--text);
 	background: var(--surface);
+}
+
+.remove-image {
+	border-color: transparent;
+	color: var(--muted);
+	background: transparent;
+	font-weight: 600;
+}
+
+.remove-image:hover:not(:disabled) {
+	border-color: var(--border);
+	color: var(--text);
+	text-decoration: underline;
+	text-underline-offset: 0.18em;
+}
+
+.remove-image:focus-visible {
+	border-color: var(--border);
+	color: var(--text);
 }
 
 button:disabled,
@@ -668,6 +699,11 @@ button:disabled,
 	color: var(--muted);
 	background: var(--surface-secondary);
 	border-color: var(--border);
+}
+
+.remove-image:disabled {
+	border-color: transparent;
+	background: transparent;
 }
 
 .button.disabled {
@@ -853,19 +889,10 @@ footer p {
 	}
 
 	.image-previews {
-		flex-wrap: wrap;
-		overflow-x: visible;
-	}
-
-	.image-preview-item {
-		width: 100%;
-		min-width: 0;
-		grid-template-columns: 68px minmax(0, 1fr);
+		grid-template-columns: minmax(0, 1fr);
 	}
 
 	.image-order-actions {
-		grid-column: 1 / -1;
-		justify-content: flex-end;
 		flex-wrap: wrap;
 	}
 }
