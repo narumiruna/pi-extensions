@@ -1,5 +1,4 @@
 import { basename } from "node:path";
-import process from "node:process";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -18,8 +17,8 @@ import type {
 	TokyoNightBlockName,
 } from "../presets/types.js";
 import {
-	formatExtensionStatuses,
 	type ExtensionStatusRuntime,
+	formatExtensionStatuses,
 	wrapExtensionStatusline,
 } from "./extension-status.js";
 import { formatGitBranchText, type GitStatusSummary } from "./git-status.js";
@@ -235,7 +234,7 @@ export function prContextFromStatuses(statuses: ReadonlyMap<string, string>): st
 	const link = prLinkFromStatuses(statuses);
 	if (!value || !link) return undefined;
 
-	const state = compactPrState(value);
+	const state = compactPrState(value.replace(link, ""));
 	return state ? `${link} · ${state}` : undefined;
 }
 

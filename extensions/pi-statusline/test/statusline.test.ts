@@ -510,7 +510,7 @@ test("prLinkFromStatuses keeps the linked PR token and drops the tail and non-PR
 });
 
 test("prContextFromStatuses chooses one actionable state by precedence", () => {
-	const link = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
+	const link = "\x1b]8;;https://github.com/o/draft-approved/pull/123\x07#123\x1b]8;;\x07";
 	const context = (details: string) =>
 		prContextFromStatuses(new Map([["github-pr", `PR ${link}: ${details}`]]));
 

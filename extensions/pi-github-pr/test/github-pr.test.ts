@@ -399,7 +399,7 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 
 test("recent terminal pull request status clears when its 24-hour lifetime expires", async () => {
 	const mock = createMockPi();
-	const mergedAt = new Date(Date.now() - 24 * 60 * 60 * 1000 + 300).toISOString();
+	const mergedAt = new Date(Date.now() - 24 * 60 * 60 * 1000 + 1_000).toISOString();
 	const calls = installExec(mock, async (_command, args) =>
 		okResult(args[0] === "pr" ? { ...samplePr, state: "MERGED", mergedAt } : sampleCounts),
 	);
@@ -410,14 +410,18 @@ test("recent terminal pull request status clears when its 24-hour lifetime expir
 	assert.ok(sessionStart);
 	assert.ok(sessionShutdown);
 
-	await sessionStart({}, context.ctx);
-	assert.match(context.statuses.get("github-pr") ?? "", /: merged$/);
-	await waitFor(
-		() => context.statuses.get("github-pr") === undefined,
-		"terminal pull request status expires",
-	);
-	assert.equal(calls.length, 3);
-	await sessionShutdown({}, context.ctx);
+	try {
+		await sessionStart({}, context.ctx);
+		assert.match(context.statuses.get("github-pr") ?? "", /: merged$/);
+		await waitFor(
+			() => context.statuses.get("github-pr") === undefined,
+			"terminal pull request status expires",
+			2_000,
+		);
+		assert.equal(calls.length, 3);
+	} finally {
+		await sessionShutdown({}, context.ctx);
+	}
 });
 
 test("branch changes clear stale PR status and stale refreshes cannot restore it", async () => {
