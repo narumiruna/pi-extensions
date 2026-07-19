@@ -153,12 +153,12 @@ test("attachment copy keeps summary, item state, and announcements non-duplicati
 test("composer actions and attachment cards preserve visual priority and reflow", () => {
 	assert.match(styles, /\.image-previews\s*\{[\s\S]*flex-wrap:\s*wrap/);
 	assert.doesNotMatch(styles, /\.image-previews\s*\{[^}]*grid-template-columns/);
-	assert.match(styles, /\.image-preview-item\s*\{[^}]*flex:\s*0 1 18rem/);
-	assert.match(styles, /\.image-preview-item\s*\{[^}]*width:\s*min\(100%, 18rem\)/);
-	assert.match(styles, /\.image-preview-item\.has-retry\s*\{[^}]*flex-basis:\s*22rem/);
+	assert.match(styles, /\.image-preview-item\s*\{[^}]*width:\s*fit-content/);
+	assert.match(styles, /\.image-preview-item\s*\{[^}]*max-width:\s*100%/);
+	assert.match(styles, /\.image-preview-item\s*\{[^}]*flex:\s*0 1 auto/);
 	assert.match(
 		styles,
-		/\.image-preview-item\s*\{[^}]*grid-template-columns:\s*68px minmax\(0, 1fr\) auto/,
+		/\.image-preview-item\s*\{[^}]*grid-template-columns:\s*68px fit-content\(14rem\) auto/,
 	);
 	assert.match(styles, /\.remove-image\s*\{[^}]*background:\s*transparent/);
 	assert.match(
@@ -200,6 +200,6 @@ test("responsive and accessibility CSS covers focus, targets, reflow, dark mode,
 	assert.match(styles, /\.image-previews\s*\{[\s\S]*flex-wrap:\s*wrap/);
 	assert.match(
 		styles,
-		/\.image-preview-item\s*\{[\s\S]*grid-template-columns:\s*68px minmax\(0, 1fr\)/,
+		/\.image-preview-item\s*\{[\s\S]*grid-template-columns:\s*68px fit-content\(14rem\) auto/,
 	);
 });

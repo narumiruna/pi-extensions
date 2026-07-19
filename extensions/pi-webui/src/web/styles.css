@@ -540,21 +540,17 @@ textarea:disabled {
 
 .image-preview-item {
 	display: grid;
-	width: min(100%, 18rem);
+	width: fit-content;
+	max-width: 100%;
 	min-width: 0;
-	flex: 0 1 18rem;
-	grid-template-columns: 68px minmax(0, 1fr) auto;
+	flex: 0 1 auto;
+	grid-template-columns: 68px fit-content(14rem) auto;
 	align-items: center;
 	gap: 0.5rem;
 	padding: 0.4rem;
 	border: 1px solid var(--border);
 	border-radius: 10px;
 	background: var(--surface-secondary);
-}
-
-.image-preview-item.has-retry {
-	width: min(100%, 22rem);
-	flex-basis: 22rem;
 }
 
 .image-preview-item[draggable="true"] {

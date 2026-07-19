@@ -758,7 +758,6 @@ function renderComposer() {
 		item.className = "image-preview-item";
 		item.dataset.imageId = image.id;
 		const retryable = image.status === "error" && (image.retryable || retryFiles.has(image.id));
-		item.classList.toggle("has-retry", retryable);
 		const orderingLocked = locked || model.attachmentPhase !== "ready";
 		item.draggable = model.images.length > 1 && image.status === "ready" && !orderingLocked;
 		if (item.draggable) {
