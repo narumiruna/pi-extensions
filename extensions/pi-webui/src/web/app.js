@@ -611,7 +611,7 @@ async function clearAttachments() {
 	ui.input.focus();
 }
 
-async function reorderImages(images, focusId, focusDirection) {
+async function reorderImages(images, focusId) {
 	if (composerLocked()) return;
 	const state = await mutateAttachmentState("/api/attachments/reorder", {
 		method: "POST",
@@ -620,19 +620,14 @@ async function reorderImages(images, focusId, focusDirection) {
 			ids: images.map((image) => image.id),
 		}),
 	});
-	if (state) focusOrderingControl(focusId, focusDirection);
+	if (state) focusImageItem(focusId);
 }
 
-function focusOrderingControl(id, direction) {
+function focusImageItem(id) {
 	requestAnimationFrame(() => {
 		const escapedId = CSS.escape(id);
 		const item = ui.previews.querySelector(`[data-image-id="${escapedId}"]`);
-		const preferred = item?.querySelector(`[data-order-action="${direction}"]`);
-		const target =
-			preferred && !preferred.disabled
-				? preferred
-				: item?.querySelector("[data-order-action]:not(:disabled), .remove-image");
-		target?.focus();
+		(item?.tabIndex === 0 ? item : item?.querySelector(".remove-image"))?.focus();
 	});
 }
 
@@ -762,8 +757,32 @@ function renderComposer() {
 		const item = document.createElement("li");
 		item.className = "image-preview-item";
 		item.dataset.imageId = image.id;
+		const retryable = image.status === "error" && (image.retryable || retryFiles.has(image.id));
 		const orderingLocked = locked || model.attachmentPhase !== "ready";
-		item.draggable = image.status === "ready" && !orderingLocked;
+		item.draggable = model.images.length > 1 && image.status === "ready" && !orderingLocked;
+		if (item.draggable) {
+			item.tabIndex = 0;
+			item.setAttribute(
+				"aria-label",
+				`${image.name}, image ${index + 1} of ${model.images.length}. Drag to reorder or press Alt plus Up or Down Arrow.`,
+			);
+			item.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
+		}
+		item.addEventListener("keydown", (event) => {
+			if (
+				event.target !== item ||
+				orderingLocked ||
+				!event.altKey ||
+				event.ctrlKey ||
+				event.metaKey
+			)
+				return;
+			const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+			if (direction === 0 || index + direction < 0 || index + direction >= model.images.length)
+				return;
+			event.preventDefault();
+			void reorderImages(moveImage(model.images, image.id, direction), image.id);
+		});
 		item.addEventListener("dragstart", (event) => {
 			if (orderingLocked || !event.dataTransfer) return;
 			event.dataTransfer.effectAllowed = "move";
@@ -787,7 +806,7 @@ function renderComposer() {
 			if (orderingLocked || !draggedId || draggedId === image.id) return;
 			event.preventDefault();
 			event.stopPropagation();
-			void reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId, "later");
+			void reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId);
 		});
 		const previewButton = document.createElement("button");
 		previewButton.type = "button";
@@ -822,35 +841,16 @@ function renderComposer() {
 			details.append(order);
 		}
 		const actions = document.createElement("div");
-		actions.className = "image-order-actions";
-		if (model.images.length > 1) {
-			actions.append(
-				orderingButton(
-					image,
-					"earlier",
-					"Move image earlier",
-					"←",
-					-1,
-					orderingLocked || index === 0,
-				),
-				orderingButton(
-					image,
-					"later",
-					"Move image later",
-					"→",
-					1,
-					orderingLocked || index === model.images.length - 1,
-				),
-			);
-		}
+		actions.className = "image-actions";
 		const remove = document.createElement("button");
 		remove.type = "button";
 		remove.className = "remove-image";
-		remove.textContent = "Remove";
 		remove.disabled = locked;
 		remove.setAttribute("aria-label", `Remove image ${image.name}`);
+		remove.title = `Remove ${image.name}`;
+		remove.append(createTrashIcon());
 		remove.addEventListener("click", () => void removeImage(image.id));
-		if (image.status === "error" && (image.retryable || retryFiles.has(image.id))) {
+		if (retryable) {
 			const retry = document.createElement("button");
 			retry.type = "button";
 			retry.className = "retry-image";
@@ -867,21 +867,14 @@ function renderComposer() {
 	document.documentElement.style.setProperty("--composer-height", `${ui.composer.offsetHeight}px`);
 }
 
-function orderingButton(image, direction, action, symbol, delta, disabled) {
-	const button = document.createElement("button");
-	const label = `${action}: ${image.name}`;
-	button.type = "button";
-	button.className = "move-image";
-	button.textContent = symbol;
-	button.title = label;
-	button.dataset.orderAction = direction;
-	button.disabled = disabled;
-	button.setAttribute("aria-label", label);
-	button.addEventListener(
-		"click",
-		() => void reorderImages(moveImage(model.images, image.id, delta), image.id, direction),
-	);
-	return button;
+function createTrashIcon() {
+	const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+	icon.setAttribute("viewBox", "0 0 24 24");
+	icon.setAttribute("aria-hidden", "true");
+	const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+	path.setAttribute("d", "M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6");
+	icon.append(path);
+	return icon;
 }
 
 function renderBlocking() {
