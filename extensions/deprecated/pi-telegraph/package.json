@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-telegraph",
 	"version": "0.20.2",
-	"description": "Pi extension for creating, reading, and editing Telegraph pages.",
+	"description": "Deprecated Pi extension for creating, reading, and editing Telegraph pages.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -41,6 +41,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-telegraph"
+		"directory": "extensions/deprecated/pi-telegraph"
 	}
 }
