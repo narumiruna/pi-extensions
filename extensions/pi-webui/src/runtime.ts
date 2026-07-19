@@ -48,6 +48,9 @@ export class WebUIRuntime {
 	private generation = 0;
 	private closed = true;
 	private lastSettingsWarning = "";
+	private nextLiveMessageId = 0;
+	private readonly activeMessageIds = new Map<string, string>();
+	private readonly finalMessageTimers = new Set<ReturnType<typeof setTimeout>>();
 
 	constructor(
 		private readonly pi: ExtensionAPI,
@@ -76,6 +79,7 @@ export class WebUIRuntime {
 		this.pi.on("session_shutdown", async (_event, ctx) => this.shutdown(ctx));
 		this.pi.on("session_tree", async (_event, ctx) => {
 			this.captureContext(ctx);
+			this.cancelPendingMessages();
 			this.conversation?.replaceBranch(projectBranchMessages(ctx.sessionManager.getBranch()));
 		});
 		this.pi.on("session_info_changed", async (event, ctx) => {
@@ -84,15 +88,15 @@ export class WebUIRuntime {
 		});
 		this.pi.on("message_start", async (event, ctx) => {
 			this.captureContext(ctx);
-			this.recordMessage(event, false);
+			this.recordMessage("start", event);
 		});
 		this.pi.on("message_update", async (event, ctx) => {
 			this.captureContext(ctx);
-			this.recordMessage(event, false);
+			this.recordMessage("update", event);
 		});
 		this.pi.on("message_end", async (event, ctx) => {
 			this.captureContext(ctx);
-			this.recordMessage(event, true);
+			this.recordMessage("end", event);
 		});
 		this.pi.on("tool_execution_start", async (event, ctx) => {
 			this.captureContext(ctx);
@@ -121,6 +125,7 @@ export class WebUIRuntime {
 		const previousConversation = this.conversation;
 		this.closed = true;
 		this.sessionAbort.abort();
+		this.cancelPendingMessages();
 		previousConversation?.close();
 		await this.releaseServer();
 		if (generation !== this.generation) return;
@@ -146,6 +151,7 @@ export class WebUIRuntime {
 		++this.generation;
 		this.closed = true;
 		this.sessionAbort.abort();
+		this.cancelPendingMessages();
 		this.conversation?.close();
 		await this.releaseServer();
 		this.context = undefined;
@@ -157,13 +163,42 @@ export class WebUIRuntime {
 		if (!this.closed) this.context = ctx;
 	}
 
-	private recordMessage(event: unknown, final: boolean): void {
-		if (!isRecord(event) || !("message" in event)) return;
+	private recordMessage(phase: "start" | "update" | "end", event: unknown): void {
+		if (!isRecord(event) || !isRecord(event.message) || typeof event.message.role !== "string") {
+			return;
+		}
+		const key = messageLifecycleKey(event.message);
+		let id = this.activeMessageIds.get(key);
+		if (phase === "start" || !id) {
+			id = `web-live:${++this.nextLiveMessageId}`;
+			this.activeMessageIds.set(key, id);
+		}
+		if (phase !== "end") {
+			this.recordProjectedMessage(event.message, false, id);
+			return;
+		}
+		this.activeMessageIds.delete(key);
+		const generation = this.generation;
+		const timer = setTimeout(() => {
+			this.finalMessageTimers.delete(timer);
+			if (generation !== this.generation || this.closed) return;
+			this.recordProjectedMessage(event.message, true, id);
+		}, 0);
+		this.finalMessageTimers.add(timer);
+	}
+
+	private recordProjectedMessage(message: unknown, final: boolean, id: string): void {
 		try {
-			this.conversation?.recordMessage(event.message, final);
+			this.conversation?.recordMessage(message, final, id);
 		} catch {
 			// Unknown custom message shapes do not block the supported transcript.
 		}
+	}
+
+	private cancelPendingMessages(): void {
+		this.activeMessageIds.clear();
+		for (const timer of this.finalMessageTimers) clearTimeout(timer);
+		this.finalMessageTimers.clear();
 	}
 
 	private recordTool(phase: "start" | "update" | "end", event: unknown): void {
@@ -225,6 +260,7 @@ export class WebUIRuntime {
 			? AbortSignal.any([this.sessionAbort.signal, request.signal])
 			: this.sessionAbort.signal;
 		if (signal.aborted) throw new Error("The browser message was cancelled.");
+		await this.preflightIdlePrompt(ctx, request, generation, signal);
 		let images: ImageContent[] = [];
 		if (request.images.length > 0) {
 			const settings = await this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted());
@@ -258,6 +294,26 @@ export class WebUIRuntime {
 		return { delivery: "immediate" };
 	}
 
+	private async preflightIdlePrompt(
+		ctx: ExtensionContext,
+		request: WebSendRequest,
+		generation: number,
+		signal: AbortSignal,
+	): Promise<void> {
+		if (request.delivery === "steer" || !ctx.isIdle() || ctx.hasPendingMessages()) return;
+		const model = ctx.model;
+		if (!model) throw new Error("No model is selected in Pi.");
+		if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
+			const apiKey = await ctx.modelRegistry.getApiKeyForProvider(model.provider);
+			if (!apiKey) throw new Error(`No authentication is available for "${model.provider}".`);
+		}
+		if (signal.aborted) throw new Error("The browser message was cancelled.");
+		if (!this.context || this.closed || generation !== this.generation) {
+			throw new Error("The Pi session changed while the message was being prepared.");
+		}
+		if (ctx.model !== model) throw new Error("The Pi model changed; retry the browser message.");
+	}
+
 	private notifySettingsWarnings(ctx: ExtensionContext, warnings: string[]): void {
 		const message = warnings.join("\n");
 		if (!message || message === this.lastSettingsWarning) return;
@@ -279,6 +335,10 @@ export class WebUIRuntime {
 			}
 		}
 	}
+}
+
+function messageLifecycleKey(message: Record<string, unknown>): string {
+	return `${message.role}:${typeof message.timestamp === "number" ? message.timestamp : "untimed"}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

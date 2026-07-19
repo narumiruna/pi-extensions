@@ -12,6 +12,7 @@ export function initialState() {
 		pending: false,
 		readingImages: 0,
 		leaseClaimed: false,
+		leaseGeneration: 0,
 		following: true,
 		unseenUpdateIds: [],
 		text: "",
@@ -65,9 +66,14 @@ export function applyConversationEvent(current, event) {
 }
 
 export function applyLease(current, lease, clientId, claimed = false) {
+	const generation = Number.isSafeInteger(lease?.generation) ? lease.generation : 0;
+	if (generation < current.leaseGeneration) {
+		return claimed && !current.leaseClaimed ? { ...current, leaseClaimed: true } : current;
+	}
 	return {
 		...current,
 		leaseClaimed: current.leaseClaimed || claimed,
+		leaseGeneration: generation,
 		stale: lease?.activeClientId !== clientId,
 	};
 }

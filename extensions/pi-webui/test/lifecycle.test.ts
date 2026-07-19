@@ -3,6 +3,10 @@ import test from "node:test";
 import { type RuntimeDependencies, WebUIRuntime } from "../src/runtime.js";
 import type { WebSendRequest, WebUIServerOptions } from "../src/server.js";
 
+function nextTask(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function deferred<T>() {
 	let resolve!: (value: T) => void;
 	const promise = new Promise<T>((done) => {
@@ -19,6 +23,12 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 	const widgets = new Map<string, unknown>();
 	let idle = true;
 	let pending = false;
+	let model: { provider: string; id: string; input: string[] } | undefined = {
+		provider: "test",
+		id: "test-model",
+		input: ["text", "image"],
+	};
+	let auth: { ok: boolean; error?: string; apiKey?: string } = { ok: true, apiKey: "test" };
 	let branch: unknown[] = [
 		{
 			type: "message",
@@ -52,7 +62,17 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 	};
 	const ctx = {
 		cwd: "/workspace/demo",
-		model: { input: ["text", "image"] },
+		get model() {
+			return model;
+		},
+		modelRegistry: {
+			hasConfiguredAuth() {
+				return auth.ok;
+			},
+			async getApiKeyForProvider() {
+				return auth.ok ? auth.apiKey : undefined;
+			},
+		},
 		isProjectTrusted: () => true,
 		isIdle: () => idle,
 		hasPendingMessages: () => pending,
@@ -108,8 +128,14 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 		get starts() {
 			return starts;
 		},
+		setAuth(value: { ok: boolean; error?: string; apiKey?: string }) {
+			auth = value;
+		},
 		setIdle(value: boolean) {
 			idle = value;
+		},
+		setModel(value: { provider: string; id: string; input: string[] } | undefined) {
+			model = value;
 		},
 		setPending(value: boolean) {
 			pending = value;
@@ -165,12 +191,69 @@ test("Pi message, tool, and activity events update the browser projection", asyn
 	await h.emit("message_end", {
 		message: { role: "assistant", content: [{ type: "text", text: "abc" }], timestamp: 2 },
 	});
+	await nextTask();
 	await h.emit("agent_settled");
 	const snapshot = h.serverOptions?.conversation.snapshot();
 	assert.equal(snapshot?.messages.at(-1)?.final, true);
 	assert.deepEqual(snapshot?.messages.at(-1)?.content, [{ type: "text", text: "abc" }]);
 	assert.equal(snapshot?.tools[0]?.phase, "end");
 	assert.equal(snapshot?.activity, "idle");
+});
+
+test("final message projection observes later extension replacements", async () => {
+	const h = harness();
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	const message = {
+		role: "assistant",
+		content: [{ type: "text", text: "original" }],
+		timestamp: 3,
+	};
+	await h.emit("message_start", { message });
+	await h.emit("message_end", { message });
+	message.content = [{ type: "text", text: "replaced" }];
+	await nextTask();
+	assert.deepEqual(h.serverOptions?.conversation.snapshot().messages.at(-1)?.content, [
+		{ type: "text", text: "replaced" },
+	]);
+});
+
+test("deferred final projection cannot leak into a replacement session", async () => {
+	const h = harness();
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	const message = { role: "assistant", content: "old final", timestamp: 4 };
+	await h.emit("message_start", { message });
+	await h.emit("message_end", { message });
+	await h.emit("session_start", { reason: "reload" });
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	await nextTask();
+	assert.equal(
+		h.serverOptions?.conversation
+			.snapshot()
+			.messages.some((entry) =>
+				entry.content.some((block) => block.type === "text" && block.text === "old final"),
+			),
+		false,
+	);
+});
+
+test("same-millisecond message lifecycles retain distinct transcript entries", async () => {
+	const h = harness();
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	for (const text of ["first", "second"]) {
+		const message = { role: "user", content: text, timestamp: 5 };
+		await h.emit("message_start", { message });
+		await h.emit("message_end", { message });
+	}
+	await nextTask();
+	const messages = h.serverOptions?.conversation.snapshot().messages.slice(-2);
+	assert.deepEqual(
+		messages?.map((message) => message.content),
+		[[{ type: "text", text: "first" }], [{ type: "text", text: "second" }]],
+	);
+	assert.notEqual(messages?.[0]?.id, messages?.[1]?.id);
 });
 
 test("tree navigation and session rename publish authoritative snapshots", async () => {
@@ -212,6 +295,26 @@ test("browser sends immediately when idle, follows up when busy, and steers expl
 		{ content: "later", options: { deliverAs: "followUp" } },
 		{ content: "now", options: { deliverAs: "steer" } },
 	]);
+});
+
+test("idle browser sends fail before acknowledgement when model authentication is unavailable", async () => {
+	const h = harness();
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	const send = h.serverOptions?.send;
+	assert.ok(send);
+	h.setModel(undefined);
+	await assert.rejects(
+		() => send({ requestId: "missing-model", text: "hello", images: [], delivery: "next" }),
+		/model/i,
+	);
+	h.setModel({ provider: "test", id: "test-model", input: ["text", "image"] });
+	h.setAuth({ ok: false, error: "No API key found for test" });
+	await assert.rejects(
+		() => send({ requestId: "missing-auth", text: "hello", images: [], delivery: "next" }),
+		/authentication/i,
+	);
+	assert.equal(h.sent.length, 0);
 });
 
 test("browser images are processed under live Pi guards and sent with text", async () => {

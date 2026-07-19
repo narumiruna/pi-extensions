@@ -11,7 +11,7 @@ const state = (await import(
 	applyConversationEvent(current: WebState, event: ConversationEvent): WebState;
 	applyLease(
 		current: WebState,
-		lease: { activeClientId: string },
+		lease: { activeClientId: string; generation: number },
 		clientId: string,
 		claimed?: boolean,
 	): WebState;
@@ -49,6 +49,7 @@ interface WebState {
 	pending: boolean;
 	readingImages: number;
 	leaseClaimed: boolean;
+	leaseGeneration: number;
 	following: boolean;
 	unseenUpdateIds: string[];
 	text: string;
@@ -153,16 +154,29 @@ test("sequenced snapshot events replace state after tree navigation", () => {
 
 test("session-ended and lease events disable mutation without relying on color", () => {
 	let current = { ...state.initialState(), connected: true, text: "hello" };
-	current = state.applyLease(current, { activeClientId: "other" }, "this-tab");
+	current = state.applyLease(current, { activeClientId: "other", generation: 1 }, "this-tab");
 	assert.equal(current.stale, true);
 	assert.equal(current.leaseClaimed, false);
 	assert.equal(state.canSend(current), false);
-	current = state.applyLease(current, { activeClientId: "this-tab" }, "this-tab", true);
+	current = state.applyLease(
+		current,
+		{ activeClientId: "this-tab", generation: 2 },
+		"this-tab",
+		true,
+	);
 	assert.equal(current.stale, false);
 	assert.equal(current.leaseClaimed, true);
-	current = state.applyLease(current, { activeClientId: "other" }, "this-tab");
+	current = state.applyLease(current, { activeClientId: "other", generation: 3 }, "this-tab");
 	assert.equal(current.stale, true);
 	assert.equal(current.leaseClaimed, true);
+	const staleSnapshot = state.applyLease(
+		current,
+		{ activeClientId: "this-tab", generation: 2 },
+		"this-tab",
+	);
+	assert.equal(staleSnapshot, current);
+	assert.equal(staleSnapshot.stale, true);
+	assert.equal(staleSnapshot.leaseGeneration, 3);
 	current = state.applyConversationEvent(
 		{ ...current, sequence: 0 },
 		{ sequence: 1, type: "session-ended", payload: {} },
