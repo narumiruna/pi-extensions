@@ -8,6 +8,7 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import githubPr, {
 	formatCompactStatus,
 	formatLinkedStatus,
+	isPullRequestVisible,
 	normalizeGhPrView,
 	runGhPrView,
 } from "../src/github-pr.js";
@@ -43,6 +44,9 @@ const sampleCounts = {
 
 const samplePr = {
 	number: 123,
+	state: "OPEN",
+	closedAt: null,
+	mergedAt: null,
 	isDraft: false,
 	url: "https://github.com/narumiruna/pi-extensions/pull/123",
 	reviewDecision: "APPROVED",
@@ -153,7 +157,36 @@ test("normalizeGhPrView summarizes pending, changes-requested, draft, and commen
 	);
 	assert.deepEqual(draft.comments, { issue: 0, reviews: 0, total: 0 });
 	assert.equal(formatCompactStatus(draft), "PR #123: no checks, draft, no comments");
-	assert.equal(formatCompactStatus(commented), "PR #123: checks passing, commented, 3 comments");
+	assert.equal(
+		formatCompactStatus(commented),
+		"PR #123: checks passing, review required, 3 comments",
+	);
+});
+
+test("terminal pull requests use their terminal state and expire after 24 hours", () => {
+	const now = Date.parse("2026-06-26T12:00:00.000Z");
+	const merged = normalizeGhPrView({
+		...samplePr,
+		state: "MERGED",
+		mergedAt: "2026-06-25T12:00:00.001Z",
+	});
+	const closed = normalizeGhPrView({
+		...samplePr,
+		state: "CLOSED",
+		closedAt: "2026-06-25T12:00:00.000Z",
+	});
+
+	assert.equal(formatCompactStatus(merged), "PR #123: merged");
+	assert.equal(formatCompactStatus(closed), "PR #123: closed");
+	assert.equal(isPullRequestVisible(merged, now), true);
+	assert.equal(isPullRequestVisible(closed, now), false);
+	assert.equal(isPullRequestVisible({ ...merged, mergedAt: undefined }, now), false);
+	assert.equal(isPullRequestVisible({ ...closed, closedAt: "invalid" }, now), false);
+	assert.equal(isPullRequestVisible(normalizeGhPrView(samplePr), now), true);
+	assert.equal(
+		isPullRequestVisible(normalizeGhPrView({ ...samplePr, closedAt: "invalid" }), now),
+		true,
+	);
 });
 
 test("normalizeGhPrView accepts count-only review and comment payloads", () => {
@@ -185,7 +218,7 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 			"pr",
 			"view",
 			"--json",
-			"number,isDraft,url,reviewDecision,latestReviews,statusCheckRollup",
+			"number,isDraft,url,state,closedAt,mergedAt,reviewDecision,latestReviews,statusCheckRollup",
 		],
 		options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
 	});
@@ -362,6 +395,29 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.equal(context.statuses.get("github-pr"), undefined);
 	assert.equal(context.widgets.size, 0);
 	assert.equal(context.notifications.length, 0);
+});
+
+test("recent terminal pull request status clears when its 24-hour lifetime expires", async () => {
+	const mock = createMockPi();
+	const mergedAt = new Date(Date.now() - 24 * 60 * 60 * 1000 + 300).toISOString();
+	const calls = installExec(mock, async (_command, args) =>
+		okResult(args[0] === "pr" ? { ...samplePr, state: "MERGED", mergedAt } : sampleCounts),
+	);
+	githubPr(mock.pi);
+	const context = createMockContext({ cwd: "/repo" });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(sessionShutdown);
+
+	await sessionStart({}, context.ctx);
+	assert.match(context.statuses.get("github-pr") ?? "", /: merged$/);
+	await waitFor(
+		() => context.statuses.get("github-pr") === undefined,
+		"terminal pull request status expires",
+	);
+	assert.equal(calls.length, 3);
+	await sessionShutdown({}, context.ctx);
 });
 
 test("branch changes clear stale PR status and stale refreshes cannot restore it", async () => {

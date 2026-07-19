@@ -4,6 +4,7 @@ import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works
 
 export type ReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "UNKNOWN";
 export type CheckState = "pass" | "fail" | "pending" | "none";
+export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -31,6 +32,9 @@ export interface CommentSummary {
 export interface PullRequestStatus {
 	number: number;
 	url: string;
+	state: PullRequestState;
+	closedAt?: string;
+	mergedAt?: string;
 	isDraft: boolean;
 	review: ReviewSummary;
 	checks: CheckSummary;
@@ -41,10 +45,14 @@ const STATUS_KEY = "github-pr";
 const GH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
 const BRANCH_REFRESH_DEBOUNCE_MS = 100;
+const TERMINAL_PR_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const GH_PR_FIELDS = [
 	"number",
 	"isDraft",
 	"url",
+	"state",
+	"closedAt",
+	"mergedAt",
 	"reviewDecision",
 	"latestReviews",
 	"statusCheckRollup",
@@ -73,14 +81,18 @@ export default function githubPr(pi: ExtensionAPI) {
 	) => {
 		try {
 			const status = await runGhPrView(pi, ctx.cwd, signal);
-			if (generation === branchWatch.generation) renderStatus(ctx, status);
+			if (generation === branchWatch.generation) renderStatus(ctx, status, branchWatch, generation);
 		} catch (error) {
-			if (generation === branchWatch.generation) renderAmbientFailure(ctx, error);
+			if (generation === branchWatch.generation) {
+				clearExpiryTimer(branchWatch);
+				renderAmbientFailure(ctx, error);
+			}
 		}
 	};
 	const scheduleBranchRefresh = (ctx: ExtensionContext) => {
 		branchWatch.generation += 1;
 		const generation = branchWatch.generation;
+		clearExpiryTimer(branchWatch);
 		clearStatus(ctx);
 		if (branchWatch.timer) clearTimeout(branchWatch.timer);
 		branchWatch.timer = setTimeout(() => {
@@ -92,6 +104,7 @@ export default function githubPr(pi: ExtensionAPI) {
 	const closeBranchWatcher = () => {
 		if (branchWatch.timer) clearTimeout(branchWatch.timer);
 		branchWatch.timer = undefined;
+		clearExpiryTimer(branchWatch);
 		branchWatch.watcher?.close();
 		branchWatch.watcher = undefined;
 	};
@@ -129,6 +142,7 @@ interface BranchWatchState {
 	session: number;
 	watcher?: FSWatcher;
 	timer?: ReturnType<typeof setTimeout>;
+	expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
 async function createBranchWatcher(
@@ -190,6 +204,9 @@ export function normalizeGhPrView(value: unknown): PullRequestStatus {
 	return {
 		number: requiredNumber(pr.number, "number"),
 		url: optionalString(pr.url) ?? "",
+		state: pullRequestState(pr.state),
+		closedAt: optionalString(pr.closedAt),
+		mergedAt: optionalString(pr.mergedAt),
 		isDraft: pr.isDraft === true,
 		review: summarizeReviews(pr.reviewDecision, latestReviews.length > 0 ? latestReviews : reviews),
 		checks: summarizeChecks(pr.statusCheckRollup),
@@ -287,6 +304,11 @@ function reviewDecision(value: unknown): ReviewDecision {
 	return "UNKNOWN";
 }
 
+function pullRequestState(value: unknown): PullRequestState {
+	if (value === "OPEN" || value === "CLOSED" || value === "MERGED") return value;
+	throw new Error("Missing valid PR state");
+}
+
 function authorLogin(review: JsonRecord): string | undefined {
 	const author = objectRecord(review.author);
 	return optionalString(author.login);
@@ -300,6 +322,8 @@ function checkOverall(checks: CheckSummary): CheckState {
 }
 
 export function formatCompactStatus(status: PullRequestStatus): string {
+	if (status.state === "MERGED") return `PR #${status.number}: merged`;
+	if (status.state === "CLOSED") return `PR #${status.number}: closed`;
 	return `PR #${status.number}: ${[
 		formatCheckCompact(status.checks),
 		formatReviewCompact(status),
@@ -335,14 +359,51 @@ function formatReviewCompact(status: PullRequestStatus): string {
 		case "CHANGES_REQUESTED":
 			return "changes requested";
 		case "REVIEW_REQUIRED":
-			return review.commentedBy.length > 0 ? "commented" : "review required";
+			return "review required";
 		case "UNKNOWN":
 			return review.commentedBy.length > 0 ? "commented" : "review ?";
 	}
 }
 
-function renderStatus(ctx: ExtensionContext, status: PullRequestStatus) {
+function renderStatus(
+	ctx: ExtensionContext,
+	status: PullRequestStatus,
+	branchWatch: BranchWatchState,
+	generation: number,
+) {
+	clearExpiryTimer(branchWatch);
+	const now = Date.now();
+	const expiresAt = pullRequestExpiresAt(status);
+	if (!isPullRequestVisible(status, now)) {
+		clearStatus(ctx);
+		return;
+	}
+
 	ctx.ui.setStatus(STATUS_KEY, formatLinkedStatus(status));
+	if (expiresAt === undefined) return;
+	branchWatch.expiryTimer = setTimeout(() => {
+		branchWatch.expiryTimer = undefined;
+		if (generation === branchWatch.generation) clearStatus(ctx);
+	}, expiresAt - now);
+}
+
+export function isPullRequestVisible(status: PullRequestStatus, now = Date.now()): boolean {
+	if (status.state === "OPEN") return true;
+	const expiresAt = pullRequestExpiresAt(status);
+	return expiresAt !== undefined && now < expiresAt;
+}
+
+function pullRequestExpiresAt(status: PullRequestStatus): number | undefined {
+	if (status.state === "OPEN") return undefined;
+	const timestamp = status.state === "MERGED" ? status.mergedAt : status.closedAt;
+	if (!timestamp) return undefined;
+	const terminalAt = Date.parse(timestamp);
+	return Number.isFinite(terminalAt) ? terminalAt + TERMINAL_PR_LIFETIME_MS : undefined;
+}
+
+function clearExpiryTimer(branchWatch: BranchWatchState) {
+	if (branchWatch.expiryTimer) clearTimeout(branchWatch.expiryTimer);
+	branchWatch.expiryTimer = undefined;
 }
 
 export function formatLinkedStatus(status: PullRequestStatus): string {

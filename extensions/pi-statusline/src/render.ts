@@ -41,6 +41,7 @@ interface TokenTotals {
 	cost: number;
 }
 const GITHUB_PR_KEY = "github-pr";
+const GITHUB_PR_STATUS_KEYS = new Set([GITHUB_PR_KEY]);
 const PALETTES: Record<PaletteName, ThemeColor[]> = {
 	ocean: ["accent", "muted", "success", "warning"],
 	sunset: ["warning", "accent", "success", "muted"],
@@ -82,8 +83,18 @@ export function renderExtensionStatusline(
 	theme: Theme,
 	config: StatuslineConfig,
 	runtime: RuntimeState,
+	mainLine: string,
 ): string[] {
-	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme, config, runtime);
+	const statuses = footerData.getExtensionStatuses();
+	const prContext = prContextFromStatuses(statuses);
+	const rendersPrInline = prContext !== undefined && mainLine.includes(prContext);
+	const status = formatExtensionStatuses(
+		statuses,
+		theme,
+		config,
+		runtime,
+		rendersPrInline ? GITHUB_PR_STATUS_KEYS : undefined,
+	);
 	return wrapExtensionStatusline(status, width);
 }
 
@@ -113,7 +124,7 @@ function buildSegment(
 			);
 		case "branch": {
 			const branch = footerData.getGitBranch();
-			const pr = branch ? prLinkFromStatuses(footerData.getExtensionStatuses()) : undefined;
+			const pr = branch ? prContextFromStatuses(footerData.getExtensionStatuses()) : undefined;
 			return segment(name, formatGitBranchText(branch, runtime.gitStatus, pr), color, "git");
 		}
 		case "cwd":
@@ -217,6 +228,33 @@ export function prLinkFromStatuses(statuses: ReadonlyMap<string, string>): strin
 	const closeMarker = "\x1b]8;;\x07";
 	const close = value.indexOf(closeMarker, open + 1);
 	return close === -1 ? undefined : value.slice(open, close + closeMarker.length);
+}
+
+export function prContextFromStatuses(statuses: ReadonlyMap<string, string>): string | undefined {
+	const value = statuses.get(GITHUB_PR_KEY);
+	const link = prLinkFromStatuses(statuses);
+	if (!value || !link) return undefined;
+
+	const state = compactPrState(value);
+	return state ? `${link} · ${state}` : undefined;
+}
+
+function compactPrState(value: string): string | undefined {
+	if (/:\s*merged\s*$/.test(value)) return "merged";
+	if (/:\s*closed\s*$/.test(value)) return "closed";
+	if (/\bdraft\b/.test(value)) return "draft";
+
+	const failing = /\bchecks failing \((\d+)\)/.exec(value);
+	if (failing) return `${failing[1]} failing`;
+	if (/\bchanges requested\b/.test(value)) return "changes requested";
+
+	const pending = /\bchecks pending \((\d+)\)/.exec(value);
+	if (pending) return `${pending[1]} pending`;
+	if (/\bapproved\b/.test(value)) return "approved";
+	if (/\breview required\b/.test(value)) return "review required";
+	if (/\bchecks passing\b/.test(value)) return "checks passing";
+	if (/\bno checks\b/.test(value)) return "no checks";
+	return undefined;
 }
 
 function getTokenTotals(ctx: ExtensionContext): TokenTotals {
