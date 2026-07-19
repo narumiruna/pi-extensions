@@ -289,6 +289,18 @@ export function moveImageBefore(images, id, targetId) {
 	return next;
 }
 
+export function moveImageAfter(images, id, targetId) {
+	if (id === targetId) return [...images];
+	const from = images.findIndex((image) => image.id === id);
+	const target = images.findIndex((image) => image.id === targetId);
+	if (from === -1 || target === -1) return [...images];
+	const next = images.filter((image) => image.id !== id);
+	const targetIndex = next.findIndex((image) => image.id === targetId);
+	if (targetIndex === -1) return [...images];
+	next.splice(targetIndex + 1, 0, images[from]);
+	return next;
+}
+
 export function upsertById(items, value) {
 	const index = items.findIndex((item) => item.id === value.id);
 	if (index < 0) return [...items, value];

@@ -4,12 +4,13 @@ import path from "node:path";
 import test from "node:test";
 
 const root = path.join(process.cwd(), "extensions/pi-webui/src/web");
-const [html, app, styles, transcript, markdown] = await Promise.all([
+const [html, app, styles, transcript, markdown, imageDrag] = await Promise.all([
 	readFile(path.join(root, "index.html"), "utf8"),
 	readFile(path.join(root, "app.js"), "utf8"),
 	readFile(path.join(root, "styles.css"), "utf8"),
 	readFile(path.join(root, "transcript.js"), "utf8"),
 	readFile(path.join(root, "markdown.js"), "utf8"),
+	readFile(path.join(root, "image-drag.js"), "utf8"),
 ]);
 
 test("page hierarchy keeps session context, transcript, and composer in reading order", () => {
@@ -105,18 +106,20 @@ test("image input stages authenticated per-item uploads with visible status and 
 	assert.match(app, /previewReturnFocus.*focus/s);
 	assert.match(app, /drag-active/);
 	assert.match(app, /moveImageBefore/);
+	assert.match(app, /moveImageAfter/);
 	assert.match(app, /moveImage/);
 	assert.match(
 		app,
 		/item\.draggable =\s*model\.images\.length > 1 && image\.status === "ready" && !orderingLocked/,
 	);
-	assert.match(app, /addEventListener\("dragstart"/);
+	assert.match(imageDrag, /addEventListener\("dragstart"/);
 	assert.match(app, /addEventListener\("keydown"/);
 	assert.match(app, /aria-keyshortcuts/);
 	assert.match(app, /attachment-order-context/);
 	assert.match(app, /Order \$\{index \+ 1\} of \$\{model\.images\.length\}/);
 	assert.doesNotMatch(app, /Move image earlier|Move image later|data-order-action/);
-	assert.match(app, /focusImageItem/);
+	assert.match(app, /imageDrag\.focus/);
+	assert.match(imageDrag, /function focus\(id\)/);
 	assert.match(html, /id="clear-attachments"[^>]*hidden/);
 	assert.match(html, /id="clear-attachments-dialog"/);
 	assert.match(html, /id="confirm-clear-attachments"/);
@@ -125,6 +128,20 @@ test("image input stages authenticated per-item uploads with visible status and 
 	assert.match(app, /retryFiles\.delete/);
 	assert.match(app, /clearDialog\.showModal/);
 	assert.match(app, /returnValue !== "confirm"/);
+});
+
+test("drag ordering gives directional feedback and updates before the request settles", () => {
+	assert.match(app, /createImageDragController/);
+	assert.match(imageDrag, /dropAfterTarget/);
+	assert.match(imageDrag, /setDropTarget/);
+	assert.match(imageDrag, /clearDropTargets/);
+	assert.match(imageDrag, /imagesStackVertically/);
+	assert.match(app, /model = \{ \.\.\.model, images \}/);
+	assert.match(app, /preview\.draggable = false/);
+	assert.match(styles, /\.image-preview-item\.drag-before/);
+	assert.match(styles, /\.image-preview-item\.drag-after/);
+	assert.match(styles, /\.image-previews\.vertical-drop/);
+	assert.doesNotMatch(styles, /\.image-preview-item\.drag-target/);
 });
 
 test("sent-image actions stay contextual, authenticated, and distinguish expiration", () => {

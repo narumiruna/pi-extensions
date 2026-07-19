@@ -42,6 +42,7 @@ const state = (await import(
 	followLatest(current: WebState): WebState;
 	moveImage(images: WebImage[], id: string, direction: number): WebImage[];
 	moveImageBefore(images: WebImage[], id: string, targetId: string): WebImage[];
+	moveImageAfter(images: WebImage[], id: string, targetId: string): WebImage[];
 	clearDraftImages(current: WebState): WebState;
 	canSend(current: WebState): boolean;
 	busyLabel(current: WebState): string;
@@ -446,8 +447,18 @@ test("image ordering helpers are immutable and bounded", () => {
 		state.moveImageBefore(images, "three", "one").map((image) => image.id),
 		["three", "one", "two"],
 	);
+	assert.deepEqual(
+		state.moveImageAfter(images, "one", "three").map((image) => image.id),
+		["two", "three", "one"],
+	);
+	assert.deepEqual(
+		state.moveImageAfter(images, "one", "two").map((image) => image.id),
+		["two", "one", "three"],
+	);
 	assert.deepEqual(state.moveImageBefore(images, "one", "one"), images);
 	assert.deepEqual(state.moveImageBefore(images, "missing", "one"), images);
+	assert.deepEqual(state.moveImageAfter(images, "one", "one"), images);
+	assert.deepEqual(state.moveImageAfter(images, "missing", "one"), images);
 	assert.deepEqual(
 		images.map((image) => image.id),
 		["one", "two", "three"],
