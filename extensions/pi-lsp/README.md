@@ -156,6 +156,7 @@ Each server entry supports:
 - `env`: extra environment variables for the LSP server process.
 - `initialization`: LSP initialization options and workspace configuration values.
 - `skipDirectories`: additional directory names to exclude from recursive discovery. Explicitly requested paths remain available.
+- `diagnosticsSettleMs`: positive number of milliseconds without another push-diagnostics publication before using the latest result. Defaults to `800`; the built-in intelephense route uses `4000`. The global timeout remains the upper bound.
 
 Global options:
 

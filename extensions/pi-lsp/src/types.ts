@@ -67,7 +67,7 @@ export interface ConfiguredLspServer {
 	env?: Record<string, string>;
 	initialization?: Record<string, unknown>;
 	skipDirectories?: string[];
-	// ms to wait after an empty publish for a later non-empty one before settling.
+	// Quiet period in ms after the latest push-diagnostics publication.
 	diagnosticsSettleMs?: number;
 }
 

@@ -24,8 +24,7 @@ export function resolveSpawnCommand(
 	};
 }
 
-// Quiet period (ms) to wait after an empty publish for a later non-empty one
-// before settling. Non-empty publishes settle immediately.
+// Quiet period (ms) after each publish before treating push diagnostics as settled.
 const PUBLISHED_DIAGNOSTICS_SETTLE_MS = 800;
 
 export class LspClient {
@@ -44,7 +43,7 @@ export class LspClient {
 	#diagnosticWaiters = new Map<
 		string,
 		Set<{
-			onPublish: (diagnostics: LspDiagnostic[]) => void;
+			onPublish: () => void;
 			reject: (reason: unknown) => void;
 			dispose: () => void;
 		}>
@@ -175,18 +174,13 @@ export class LspClient {
 		if (!this.#serverCapabilities.diagnosticProvider) {
 			return this.#waitForPublishedDiagnostics(uri);
 		}
-		try {
-			const response = await this.request("textDocument/diagnostic", {
-				textDocument: { uri },
-				identifier: null,
-				previousResultId: null,
-			});
-			const result = response.result as { items?: LspDiagnostic[] } | undefined;
-			return result?.items ?? [];
-		} catch {
-			// Advertised pull but the request failed; fall back to pushed diagnostics.
-			return this.#waitForPublishedDiagnostics(uri);
-		}
+		const response = await this.request("textDocument/diagnostic", {
+			textDocument: { uri },
+			identifier: null,
+			previousResultId: null,
+		});
+		const result = response.result as { items?: LspDiagnostic[] } | undefined;
+		return result?.items ?? [];
 	}
 
 	async codeActions(uri: string, text: string, diagnostics: LspDiagnostic[], kind: string) {
@@ -349,7 +343,7 @@ export class LspClient {
 				this.#publishedDiagnostics.set(params.uri, diagnostics);
 				const waiters = this.#diagnosticWaiters.get(params.uri);
 				if (waiters) {
-					for (const waiter of [...waiters]) waiter.onPublish(diagnostics);
+					for (const waiter of [...waiters]) waiter.onPublish();
 				}
 			}
 			return;
@@ -381,11 +375,7 @@ export class LspClient {
 				dispose();
 				reject(reason);
 			};
-			const onPublish = (diagnostics: LspDiagnostic[]) => {
-				if (diagnostics.length > 0) {
-					settleWith(diagnostics);
-					return;
-				}
+			const onPublish = () => {
 				if (settleTimer) clearTimeout(settleTimer);
 				settleTimer = setTimeout(
 					() => settleWith(this.#publishedDiagnostics.get(uri) ?? []),
@@ -411,8 +401,7 @@ export class LspClient {
 				}
 			}, this.#timeoutMs);
 
-			const existing = this.#publishedDiagnostics.get(uri);
-			if (existing !== undefined) onPublish(existing);
+			if (this.#publishedDiagnostics.has(uri)) onPublish();
 		});
 	}
 
