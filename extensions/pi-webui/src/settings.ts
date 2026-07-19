@@ -9,12 +9,18 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+	DEFAULT_IMAGE_LIMITS,
+	IMAGE_HARD_LIMITS,
+	type ImageLimits,
+	imageLimits,
+} from "./image-limits.js";
 
 export const SETTINGS_FILE = "pi-webui.json";
 
 const MIB = 1024 * 1024;
 
-export interface WebUISettings {
+export interface WebUISettings extends ImageLimits {
 	startOnSessionStart: boolean;
 	retainSentImages: boolean;
 	maxRetainedImages: number;
@@ -26,6 +32,7 @@ export const DEFAULT_SETTINGS: Readonly<WebUISettings> = Object.freeze({
 	retainSentImages: false,
 	maxRetainedImages: 32,
 	maxRetainedBytes: 128 * MIB,
+	...DEFAULT_IMAGE_LIMITS,
 });
 
 export const RETENTION_HARD_LIMITS = Object.freeze({
@@ -68,19 +75,26 @@ export function normalizeSettings(value: unknown): WebUISettings | undefined {
 	) {
 		return undefined;
 	}
-	for (const key of ["maxRetainedImages", "maxRetainedBytes"] as const) {
+	for (const [key, maximum] of [
+		["maxRetainedImages", RETENTION_HARD_LIMITS.maxRetainedImages],
+		["maxRetainedBytes", RETENTION_HARD_LIMITS.maxRetainedBytes],
+		["maxImages", IMAGE_HARD_LIMITS.maxImages],
+		["maxImageBytes", IMAGE_HARD_LIMITS.maxImageBytes],
+		["maxBatchBytes", IMAGE_HARD_LIMITS.maxBatchBytes],
+		["maxImagePixels", IMAGE_HARD_LIMITS.maxImagePixels],
+	] as const) {
 		if (!Object.hasOwn(value, key)) continue;
 		const candidate = value[key];
 		if (
 			typeof candidate !== "number" ||
 			!Number.isSafeInteger(candidate) ||
 			candidate <= 0 ||
-			candidate > RETENTION_HARD_LIMITS[key]
+			candidate > maximum
 		) {
 			return undefined;
 		}
 	}
-	return {
+	const normalized = {
 		startOnSessionStart:
 			typeof value.startOnSessionStart === "boolean"
 				? value.startOnSessionStart
@@ -97,7 +111,24 @@ export function normalizeSettings(value: unknown): WebUISettings | undefined {
 			typeof value.maxRetainedBytes === "number"
 				? value.maxRetainedBytes
 				: DEFAULT_SETTINGS.maxRetainedBytes,
+		...imageLimits({
+			maxImages: typeof value.maxImages === "number" ? value.maxImages : DEFAULT_SETTINGS.maxImages,
+			maxImageBytes:
+				typeof value.maxImageBytes === "number"
+					? value.maxImageBytes
+					: DEFAULT_SETTINGS.maxImageBytes,
+			maxBatchBytes:
+				typeof value.maxBatchBytes === "number"
+					? value.maxBatchBytes
+					: DEFAULT_SETTINGS.maxBatchBytes,
+			maxImagePixels:
+				typeof value.maxImagePixels === "number"
+					? value.maxImagePixels
+					: DEFAULT_SETTINGS.maxImagePixels,
+		}),
 	};
+	if (normalized.maxImageBytes > normalized.maxBatchBytes) return undefined;
+	return normalized;
 }
 
 export async function loadSettings(path = settingsFilePath()): Promise<SettingsLoadResult> {
@@ -125,7 +156,15 @@ export async function loadSettings(path = settingsFilePath()): Promise<SettingsL
 		if (!isRecord(document)) return invalid(path, "the top level must be a JSON object");
 		const settings = normalizeSettings(document);
 		if (!settings) return invalid(path, "recognized settings have an invalid type or limit");
-		return { kind: "loaded", path, settings, source: "settings file", document };
+		const warning = elevatedLimitWarning(settings);
+		return {
+			kind: "loaded",
+			path,
+			settings,
+			source: "settings file",
+			document,
+			...(warning ? { warning } : {}),
+		};
 	} catch (error) {
 		return invalid(path, formatError(error));
 	}
@@ -143,6 +182,10 @@ export async function saveSettings(
 		retainSentImages: settings.retainSentImages,
 		maxRetainedImages: settings.maxRetainedImages,
 		maxRetainedBytes: settings.maxRetainedBytes,
+		maxImages: settings.maxImages,
+		maxImageBytes: settings.maxImageBytes,
+		maxBatchBytes: settings.maxBatchBytes,
+		maxImagePixels: settings.maxImagePixels,
 	};
 	const directory = dirname(path);
 	await mkdir(directory, { recursive: true });
@@ -189,6 +232,14 @@ export async function initializeSettings(
 	} finally {
 		await unlink(temporaryPath).catch(() => undefined);
 	}
+}
+
+function elevatedLimitWarning(settings: WebUISettings): string | undefined {
+	const elevated = (Object.keys(DEFAULT_IMAGE_LIMITS) as Array<keyof ImageLimits>).filter(
+		(key) => settings[key] > DEFAULT_IMAGE_LIMITS[key],
+	);
+	if (elevated.length === 0) return undefined;
+	return `${SETTINGS_FILE} uses image limits above safe defaults: ${elevated.join(", ")}. Higher limits increase Pi-process memory and processing cost.`;
 }
 
 function invalid(path: string, reason: string): SettingsLoadResult {

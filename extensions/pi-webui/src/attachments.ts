@@ -14,6 +14,7 @@ export interface AttachmentLimits {
 	maxImages: number;
 	maxImageBytes: number;
 	maxPromptBytes: number;
+	maxPreparedImageBytes?: number;
 }
 
 export interface AttachmentReservationInput {
@@ -235,6 +236,7 @@ export class AttachmentStore {
 			const reservation = normalizeReservation(
 				{ id: input.id, name: input.name, size: prepared.bytes.byteLength },
 				this.options.limits,
+				preparedImageLimit(this.options.limits),
 			);
 			if (ids.has(reservation.id)) throw new AttachmentError("Attachment id is duplicate.", 400);
 			ids.add(reservation.id);
@@ -502,8 +504,13 @@ export class AttachmentStore {
 			if (otherPreparedBytes + prepared.bytes.byteLength > this.options.limits.maxPromptBytes) {
 				throw new Error("Combined processed attachments are too large.");
 			}
+			if (prepared.bytes.byteLength > preparedImageLimit(this.options.limits)) {
+				throw new Error("Processed attachment exceeds Pi's provider-ready byte limit.");
+			}
 			const maximumResident =
-				this.options.limits.maxPromptBytes + this.options.limits.maxImageBytes * this.concurrency;
+				this.options.limits.maxPromptBytes +
+				Math.max(this.options.limits.maxImageBytes, preparedImageLimit(this.options.limits)) *
+					this.concurrency;
 			if (this.residentBytes() + prepared.bytes.byteLength > maximumResident) {
 				throw new Error("Attachment memory limit exceeded.");
 			}
@@ -597,6 +604,7 @@ export class AttachmentStore {
 function normalizeReservation(
 	input: AttachmentReservationInput,
 	limits: AttachmentLimits,
+	maxImageBytes = limits.maxImageBytes,
 ): AttachmentReservationInput {
 	if (!input || typeof input.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(input.id)) {
 		throw new AttachmentError("Attachment id is invalid.", 400);
@@ -612,7 +620,7 @@ function normalizeReservation(
 	if (!Number.isSafeInteger(input.size) || input.size <= 0) {
 		throw new AttachmentError("Attachment size is invalid.", 400);
 	}
-	if (input.size > limits.maxImageBytes) {
+	if (input.size > maxImageBytes) {
 		throw new AttachmentError("Attachment exceeds the per-image maximum.", 413);
 	}
 	if (
@@ -632,7 +640,7 @@ function validatePrepared(
 		!prepared ||
 		!Buffer.isBuffer(prepared.bytes) ||
 		prepared.bytes.length === 0 ||
-		prepared.bytes.length > limits.maxImageBytes ||
+		prepared.bytes.length > preparedImageLimit(limits) ||
 		typeof prepared.mimeType !== "string" ||
 		!/^image\/[a-z0-9.+-]{1,64}$/i.test(prepared.mimeType)
 	) {
@@ -652,8 +660,17 @@ function additionsContainBytes(
 		.some((input) => Buffer.isBuffer(input.prepared?.bytes) && input.prepared.bytes.equals(bytes));
 }
 
+function preparedImageLimit(limits: AttachmentLimits): number {
+	return limits.maxPreparedImageBytes ?? limits.maxImageBytes;
+}
+
 function validateLimits(limits: AttachmentLimits): void {
-	for (const value of [limits.maxImages, limits.maxImageBytes, limits.maxPromptBytes]) {
+	for (const value of [
+		limits.maxImages,
+		limits.maxImageBytes,
+		limits.maxPromptBytes,
+		preparedImageLimit(limits),
+	]) {
 		if (!Number.isSafeInteger(value) || value <= 0) {
 			throw new Error("Attachment limits must be positive integers.");
 		}

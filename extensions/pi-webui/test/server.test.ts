@@ -940,6 +940,81 @@ test("accepted sanitized images can be previewed, reattached atomically, forgott
 	}
 });
 
+test("effective image limits drive public state, admission, upload, and batch memory", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const limits = {
+		maxImages: 1,
+		maxImageBytes: 3,
+		maxBatchBytes: 3,
+		maxImagePixels: 10,
+	};
+	const server = await WebUIServer.start({
+		conversation,
+		imageLimits: limits,
+		processAttachment: async (source) => preparedAttachment(Buffer.from(source).toString()),
+		send: async () => ({ delivery: "immediate" }),
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		const state = (await (await api(server, "/api/state", { cookie })).json()) as {
+			imageLimits: typeof limits;
+		};
+		assert.deepEqual(state.imageLimits, limits);
+		assert.equal(
+			(
+				await api(server, "/api/attachments/reserve", {
+					method: "POST",
+					cookie,
+					client,
+					body: JSON.stringify({
+						revision: 0,
+						items: [
+							{ id: "one", name: "one.png", size: 1 },
+							{ id: "two", name: "two.png", size: 1 },
+						],
+					}),
+				})
+			).status,
+			413,
+		);
+		assert.equal(
+			(
+				await api(server, "/api/attachments/reserve", {
+					method: "POST",
+					cookie,
+					client,
+					body: JSON.stringify({
+						revision: 0,
+						items: [{ id: "large", name: "large.png", size: 4 }],
+					}),
+				})
+			).status,
+			413,
+		);
+		let response = await api(server, "/api/attachments/reserve", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				revision: 0,
+				items: [{ id: "exact", name: "exact.png", size: 3 }],
+			}),
+		});
+		const reserved = (await response.json()) as { revision: number };
+		response = await api(server, `/api/attachments/exact/upload?revision=${reserved.revision}`, {
+			method: "POST",
+			cookie,
+			client,
+			contentType: "application/octet-stream",
+			body: Buffer.from("four"),
+		});
+		assert.equal(response.status, 413);
+	} finally {
+		await server.close();
+	}
+});
+
 test("empty SSE streams flush immediately and remain available for later events", async () => {
 	const { conversation, server } = await harness();
 	try {

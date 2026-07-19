@@ -1,4 +1,5 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
+import { DEFAULT_IMAGE_LIMITS, type ImageLimits, PROVIDER_IMAGE_LIMITS } from "./image-limits.js";
 import {
 	detectImageFormat,
 	type ProcessedBrowserImage,
@@ -6,18 +7,10 @@ import {
 	processImage,
 } from "./image-pipeline.js";
 
+export { DEFAULT_IMAGE_LIMITS, PROVIDER_IMAGE_LIMITS } from "./image-limits.js";
 export type { ProcessedBrowserImage } from "./image-pipeline.js";
 
 export { detectImageFormat } from "./image-pipeline.js";
-
-export const DEFAULT_IMAGE_LIMITS = {
-	maxImages: 8,
-	maxImageBytes: 10 * 1024 * 1024,
-	maxPromptBytes: 40 * 1024 * 1024,
-	maxPixels: 50_000_000,
-	maxDimension: 2_000,
-	maxBase64Bytes: 4_500_000,
-} as const;
 
 export interface BrowserImageInput {
 	name?: string;
@@ -75,8 +68,8 @@ export class ImageProcessor {
 	process(source: Uint8Array, options: ImageProcessorOptions): Promise<ImageContent> {
 		const resolved: ProcessImageOptions = {
 			...options,
-			maxDimension: options.maxDimension ?? DEFAULT_IMAGE_LIMITS.maxDimension,
-			maxBase64Bytes: options.maxBase64Bytes ?? DEFAULT_IMAGE_LIMITS.maxBase64Bytes,
+			maxDimension: options.maxDimension ?? PROVIDER_IMAGE_LIMITS.maxDimension,
+			maxBase64Bytes: options.maxBase64Bytes ?? PROVIDER_IMAGE_LIMITS.maxBase64Bytes,
 		};
 		assertNotAborted(resolved.signal);
 		return new Promise((resolve, reject) => {
@@ -117,11 +110,25 @@ export class ImageProcessor {
 	}
 }
 
+export function validateStagedBrowserImages(
+	inputs: readonly BrowserImageInput[],
+	limits: Readonly<ImageLimits> = DEFAULT_IMAGE_LIMITS,
+): void {
+	if (inputs.length > limits.maxImages) {
+		throw new Error(`Too many images; maximum is ${limits.maxImages}.`);
+	}
+	let total = 0;
+	for (const [index, input] of inputs.entries()) {
+		total += decodeInput(input, index, PROVIDER_IMAGE_LIMITS.maxBase64Bytes, false).byteLength;
+		if (total > limits.maxBatchBytes) throw new Error("Combined image input is too large.");
+	}
+}
+
 export async function processStagedImage(
 	source: Uint8Array,
 	options: ProcessBrowserImageOptions = {},
 ): Promise<ProcessedBrowserImage> {
-	const limits = { ...DEFAULT_IMAGE_LIMITS, ...definedLimits(options) };
+	const limits = resolvedLimits(options);
 	if (options.blockImages) throw new Error("Pi image sending is disabled.");
 	if (options.supportsImages === false)
 		throw new Error("The current model does not support images.");
@@ -141,7 +148,7 @@ export async function processBrowserImages(
 	inputs: BrowserImageInput[],
 	options: ProcessBrowserImageOptions = {},
 ): Promise<ImageContent[]> {
-	const limits = { ...DEFAULT_IMAGE_LIMITS, ...definedLimits(options) };
+	const limits = resolvedLimits(options);
 	if (options.blockImages) throw new Error("Pi image sending is disabled.");
 	if (options.supportsImages === false)
 		throw new Error("The current model does not support images.");
@@ -177,8 +184,23 @@ export async function processBrowserImages(
 	return output;
 }
 
-function definedLimits(options: ProcessBrowserImageOptions): Partial<typeof DEFAULT_IMAGE_LIMITS> {
-	const result: Record<string, number> = {};
+function resolvedLimits(options: ProcessBrowserImageOptions): {
+	maxImages: number;
+	maxImageBytes: number;
+	maxPromptBytes: number;
+	maxPixels: number;
+	maxDimension: number;
+	maxBase64Bytes: number;
+} {
+	const result = {
+		maxImages: DEFAULT_IMAGE_LIMITS.maxImages,
+		maxImageBytes: DEFAULT_IMAGE_LIMITS.maxImageBytes,
+		maxPromptBytes: DEFAULT_IMAGE_LIMITS.maxBatchBytes,
+		maxPixels: DEFAULT_IMAGE_LIMITS.maxImagePixels,
+		maxDimension: PROVIDER_IMAGE_LIMITS.maxDimension,
+		maxBase64Bytes: PROVIDER_IMAGE_LIMITS.maxBase64Bytes,
+	};
+	const mutable = result as Record<keyof typeof result, number>;
 	for (const key of [
 		"maxImages",
 		"maxImageBytes",
@@ -190,12 +212,17 @@ function definedLimits(options: ProcessBrowserImageOptions): Partial<typeof DEFA
 		const value = options[key];
 		if (value === undefined) continue;
 		if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`Invalid image limit: ${key}`);
-		result[key] = value;
+		mutable[key] = value;
 	}
 	return result;
 }
 
-function decodeInput(input: BrowserImageInput, index: number, maxImageBytes: number): Buffer {
+function decodeInput(
+	input: BrowserImageInput,
+	index: number,
+	maxImageBytes: number,
+	requireFormat = true,
+): Buffer {
 	if (!input || typeof input.data !== "string")
 		throw new Error(`Image ${index + 1} has invalid data.`);
 	if (!input.data) throw new Error(`Image ${index + 1} is empty.`);
@@ -207,7 +234,9 @@ function decodeInput(input: BrowserImageInput, index: number, maxImageBytes: num
 	const bytes = Buffer.from(input.data, "base64");
 	if (bytes.byteLength === 0) throw new Error(`Image ${index + 1} is empty.`);
 	if (bytes.byteLength > maxImageBytes) throw new Error(`Image ${index + 1} is too large.`);
-	if (!detectImageFormat(bytes)) throw new Error(`Image ${index + 1} uses an unsupported format.`);
+	if (requireFormat && !detectImageFormat(bytes)) {
+		throw new Error(`Image ${index + 1} uses an unsupported format.`);
+	}
 	return bytes;
 }
 

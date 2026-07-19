@@ -13,7 +13,8 @@ import {
 } from "./attachments.js";
 import type { ConversationEvent, ConversationProjection } from "./conversation.js";
 import { DraftError, DraftStore, type PublicDraftState } from "./drafts.js";
-import { type BrowserImageInput, DEFAULT_IMAGE_LIMITS } from "./images.js";
+import { type ImageLimits, imageLimits, PROVIDER_IMAGE_LIMITS } from "./image-limits.js";
+import type { BrowserImageInput } from "./images.js";
 import { SentImageError, type SentImageSettings, SentImageStore } from "./sent-images.js";
 
 const JSON_LIMIT = 64 * 1024 * 1024;
@@ -49,6 +50,7 @@ export interface WebUIServerOptions {
 	send: (request: WebSendRequest) => Promise<WebSendResult>;
 	processAttachment?: (source: Uint8Array, signal?: AbortSignal) => Promise<PreparedAttachment>;
 	attachmentLimits?: AttachmentLimits;
+	imageLimits?: Readonly<ImageLimits>;
 	sentImageSettings?: SentImageSettings;
 	maxDraftTextBytes?: number;
 	maxRequestBytes?: number;
@@ -86,6 +88,7 @@ export class WebUIServer {
 	private readonly activeAttachmentControllers = new Set<AbortController>();
 	private readonly attachments: AttachmentStore;
 	private readonly attachmentLimits: AttachmentLimits;
+	private readonly imageLimits: Readonly<ImageLimits>;
 	private readonly draft: DraftStore;
 	private readonly sentImages: SentImageStore;
 	private readonly imageResidentBudget: number;
@@ -101,10 +104,18 @@ export class WebUIServer {
 		port: number,
 	) {
 		this.origin = `http://127.0.0.1:${port}`;
-		this.attachmentLimits = options.attachmentLimits ?? {
-			maxImages: DEFAULT_IMAGE_LIMITS.maxImages,
-			maxImageBytes: DEFAULT_IMAGE_LIMITS.maxImageBytes,
-			maxPromptBytes: DEFAULT_IMAGE_LIMITS.maxPromptBytes,
+		this.imageLimits = options.imageLimits
+			? imageLimits(options.imageLimits)
+			: imageLimits({
+					maxImages: options.attachmentLimits?.maxImages,
+					maxImageBytes: options.attachmentLimits?.maxImageBytes,
+					maxBatchBytes: options.attachmentLimits?.maxPromptBytes,
+				});
+		this.attachmentLimits = {
+			maxImages: this.imageLimits.maxImages,
+			maxImageBytes: this.imageLimits.maxImageBytes,
+			maxPromptBytes: this.imageLimits.maxBatchBytes,
+			maxPreparedImageBytes: PROVIDER_IMAGE_LIMITS.maxBase64Bytes,
 		};
 		this.draft = new DraftStore({
 			maxTextBytes: options.maxDraftTextBytes ?? DEFAULT_MAX_DRAFT_TEXT_BYTES,
@@ -117,7 +128,12 @@ export class WebUIServer {
 		this.sentImages = new SentImageStore(sentImageSettings);
 		this.imageResidentBudget = Math.max(
 			sentImageSettings.maxBytes,
-			this.attachmentLimits.maxPromptBytes + this.attachmentLimits.maxImageBytes * 2,
+			this.attachmentLimits.maxPromptBytes +
+				Math.max(
+					this.attachmentLimits.maxImageBytes,
+					this.attachmentLimits.maxPreparedImageBytes ?? 0,
+				) *
+					2,
 		);
 		this.attachments = new AttachmentStore({
 			limits: this.attachmentLimits,
@@ -232,6 +248,7 @@ export class WebUIServer {
 					lease: this.leaseSnapshot(),
 					draft: this.draft.publicState(),
 					attachments: this.attachments.publicState(),
+					imageLimits: this.imageLimits,
 					sentImages: this.sentImages.publicState(),
 				});
 				return;
@@ -653,6 +670,7 @@ export class WebUIServer {
 		this.writeSse(client, "lease", this.leaseSnapshot());
 		this.writeSse(client, "draft", this.draft.publicState());
 		this.writeSse(client, "attachments", this.attachments.publicState());
+		this.writeSse(client, "image-limits", this.imageLimits);
 		this.writeSse(client, "sent-images", this.sentImages.publicState());
 		const replay = this.options.conversation.eventsAfter(since);
 		if (replay === undefined) {
@@ -690,7 +708,12 @@ export class WebUIServer {
 
 	private reconcileSentImageBytes(attachments = this.attachments.publicState()): void {
 		const processingReserve =
-			attachments.phase === "processing" ? this.attachmentLimits.maxImageBytes * 2 : 0;
+			attachments.phase === "processing"
+				? Math.max(
+						this.attachmentLimits.maxImageBytes,
+						this.attachmentLimits.maxPreparedImageBytes ?? 0,
+					) * 2
+				: 0;
 		const before = this.sentImages.publicState().revision;
 		const retained = this.sentImages.reconcile(
 			attachments.totalResidentBytes + processingReserve,

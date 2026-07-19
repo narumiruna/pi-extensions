@@ -73,12 +73,18 @@ test("webui command completes and routes settings, status, help, and invalid arg
 	await command.handler("status", context.ctx);
 	const status = context.notifications.at(-1)?.message ?? "";
 	assert.match(status, /startOnSessionStart: false.*defaults/is);
+	assert.match(
+		status,
+		/Image limits \(defaults\): 8 images, 10 MiB\/image, 40 MiB\/batch, 50,000,000 pixels\/image/,
+	);
 	assert.match(status, /server: stopped/i);
 	assert.doesNotMatch(status, /token=/i);
 	await command.handler("help", context.ctx);
 	const help = context.notifications.at(-1)?.message ?? "";
 	assert.match(help, /\/webui \[settings\|status\|help\|init\]/i);
 	assert.match(help, /"startOnSessionStart": false/);
+	assert.match(help, /maxImages.*maxImageBytes.*maxBatchBytes.*maxImagePixels/i);
+	assert.match(help, /provider-ready dimension\/Base64 limits are fixed/i);
 	assert.doesNotMatch(help, /token=/i);
 	await command.handler("unknown", context.ctx);
 	assert.match(context.notifications.at(-1)?.message ?? "", /usage:/i);
@@ -160,6 +166,10 @@ test("settings changes save in action order and update effective status", async 
 		mode: "tui",
 		custom: async (factory: unknown) => {
 			const selector = createCustomSelectorHarness(factory);
+			assert.doesNotMatch(
+				selector.render().join("\n"),
+				/maxImages|maxImageBytes|maxBatchBytes|maxImagePixels/,
+			);
 			selector.handleInput("\r");
 			selector.handleInput("\r");
 			await waitFor(() => requested.length === 1);
