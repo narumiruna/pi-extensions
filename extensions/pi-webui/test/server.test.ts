@@ -143,9 +143,7 @@ test("mutations require exact Origin, Host, cookie, and current tab lease", asyn
 					client: "one",
 					body: JSON.stringify({
 						requestId: "r1",
-						text: "hello",
-						attachmentRevision: 0,
-						attachmentIds: [],
+						draftRevision: 0,
 						delivery: "next",
 					}),
 				})
@@ -181,15 +179,14 @@ test("a new tab lease aborts an in-flight asynchronous send before mutation", as
 	try {
 		const cookie = await authenticate(server);
 		const firstClient = await takeLease(server, cookie, "first");
+		const draft = await setDraftText(server, cookie, firstClient, "hello");
 		const sending = api(server, "/api/messages", {
 			method: "POST",
 			cookie,
 			client: firstClient,
 			body: JSON.stringify({
 				requestId: "in-flight",
-				text: "hello",
-				attachmentRevision: 0,
-				attachmentIds: [],
+				draftRevision: draft.revision,
 				delivery: "next",
 			}),
 		});
@@ -226,11 +223,10 @@ test("a completed upload aborts when its response connection closes", async () =
 	try {
 		const cookie = await authenticate(server);
 		const client = await takeLease(server, cookie);
+		const draft = await setDraftText(server, cookie, client, "hello");
 		const request = rawMessageRequest(server, cookie, client, {
 			requestId: "disconnect",
-			text: "hello",
-			attachmentRevision: 0,
-			attachmentIds: [],
+			draftRevision: draft.revision,
 			delivery: "next",
 		});
 		await started.promise;
@@ -259,6 +255,7 @@ test("in-flight request ids remain deduplicated when the completed-result cache 
 	try {
 		const cookie = await authenticate(server);
 		const client = await takeLease(server, cookie);
+		const draft = await setDraftText(server, cookie, client, "stress");
 		const send = (requestId: string) =>
 			api(server, "/api/messages", {
 				method: "POST",
@@ -266,9 +263,7 @@ test("in-flight request ids remain deduplicated when the completed-result cache 
 				client,
 				body: JSON.stringify({
 					requestId,
-					text: requestId,
-					attachmentRevision: 0,
-					attachmentIds: [],
+					draftRevision: draft.revision,
 					delivery: "next",
 				}),
 			});
@@ -303,11 +298,10 @@ test("failed sends release their request id for an unchanged browser retry", asy
 	try {
 		const cookie = await authenticate(server);
 		const client = await takeLease(server, cookie);
+		const draft = await setDraftText(server, cookie, client, "hello");
 		const body = JSON.stringify({
 			requestId: "retryable",
-			text: "hello",
-			attachmentRevision: 0,
-			attachmentIds: [],
+			draftRevision: draft.revision,
 			delivery: "next",
 		});
 		assert.equal(
@@ -324,16 +318,56 @@ test("failed sends release their request id for an unchanged browser retry", asy
 	}
 });
 
+test("accepted sends clear only their snapshot while preserving text edited during the request", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const started = deferred<void>();
+	const gate = deferred<WebSendResult>();
+	const server = await WebUIServer.start({
+		conversation,
+		send: async () => {
+			started.resolve(undefined);
+			return gate.promise;
+		},
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		const original = await setDraftText(server, cookie, client, "old", 0, "old");
+		const sending = api(server, "/api/messages", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				requestId: "pending",
+				draftRevision: original.revision,
+				delivery: "next",
+			}),
+		});
+		await started.promise;
+		const newer = await setDraftText(server, cookie, client, "new", original.revision, "new");
+		gate.resolve({ delivery: "immediate" });
+		const accepted = await sending;
+		assert.equal(accepted.status, 202);
+		assert.deepEqual(((await accepted.json()) as { draft: unknown }).draft, newer);
+		const recovered = (await (await api(server, "/api/state", { cookie })).json()) as {
+			draft: { text: string };
+		};
+		assert.equal(recovered.draft.text, "new");
+	} finally {
+		gate.resolve({ delivery: "immediate" });
+		await server.close();
+	}
+});
+
 test("message requests validate, deduplicate, and reject request-id payload conflicts", async () => {
 	const { sends, server } = await harness();
 	try {
 		const cookie = await authenticate(server);
 		const client = await takeLease(server, cookie);
+		const draft = await setDraftText(server, cookie, client, "hello");
 		const body = JSON.stringify({
 			requestId: "request-1",
-			text: "hello",
-			attachmentRevision: 0,
-			attachmentIds: [],
+			draftRevision: draft.revision,
 			delivery: "next",
 		});
 		const first = await api(server, "/api/messages", { method: "POST", cookie, client, body });
@@ -345,6 +379,12 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 			accepted: true,
 			requestId: "request-1",
 			delivery: "immediate",
+			draft: {
+				revision: 2,
+				text: "",
+				attachmentRevision: 0,
+				attachmentIds: [],
+			},
 			attachments: {
 				revision: 0,
 				phase: "empty",
@@ -359,10 +399,8 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 			client,
 			body: JSON.stringify({
 				requestId: "request-1",
-				text: "changed",
-				attachmentRevision: 0,
-				attachmentIds: [],
-				delivery: "next",
+				draftRevision: draft.revision,
+				delivery: "steer",
 			}),
 		});
 		assert.equal(conflict.status, 409);
@@ -374,9 +412,7 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 					client,
 					body: JSON.stringify({
 						requestId: "empty",
-						text: "  ",
-						attachmentRevision: 0,
-						attachmentIds: [],
+						draftRevision: 2,
 						delivery: "next",
 					}),
 				})
@@ -408,10 +444,9 @@ test("oversized and cancelled request bodies do not mutate or stop the server", 
 			client,
 			body: JSON.stringify({
 				requestId: "large",
-				text: "x".repeat(300),
-				attachmentRevision: 0,
-				attachmentIds: [],
+				draftRevision: 0,
 				delivery: "next",
+				padding: "x".repeat(300),
 			}),
 		});
 		assert.equal(oversized.status, 413);
@@ -419,6 +454,88 @@ test("oversized and cancelled request bodies do not mutate or stop the server", 
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		assert.equal(sends, 0);
 		assert.equal((await api(server, "/api/state", { cookie })).status, 200);
+	} finally {
+		await server.close();
+	}
+});
+
+test("draft mutations enforce auth, lease, revisions, deduplication, and UTF-8 body bounds", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const server = await WebUIServer.start({
+		conversation,
+		maxDraftTextBytes: 8,
+		send: async () => ({ delivery: "immediate" }),
+	});
+	try {
+		const cookie = await authenticate(server);
+		let client = await takeLease(server, cookie, "first");
+		assert.equal(
+			(
+				await api(server, "/api/draft", {
+					method: "POST",
+					client,
+					body: JSON.stringify({ requestId: "missing-cookie", revision: 0, text: "x" }),
+				})
+			).status,
+			401,
+		);
+		const first = await setDraftText(server, cookie, client, "hello", 0, "same");
+		assert.equal(first.revision, 1);
+		assert.deepEqual(await setDraftText(server, cookie, client, "hello", 0, "same"), first);
+		assert.equal(
+			(
+				await api(server, "/api/draft", {
+					method: "POST",
+					cookie,
+					client,
+					body: JSON.stringify({ requestId: "same", revision: 1, text: "changed" }),
+				})
+			).status,
+			409,
+		);
+		assert.equal(
+			(
+				await api(server, "/api/draft", {
+					method: "POST",
+					cookie,
+					client,
+					body: JSON.stringify({ requestId: "stale", revision: 0, text: "stale" }),
+				})
+			).status,
+			409,
+		);
+		assert.equal(
+			(
+				await api(server, "/api/draft", {
+					method: "POST",
+					cookie,
+					client,
+					body: JSON.stringify({ requestId: "large", revision: 1, text: "界界界" }),
+				})
+			).status,
+			413,
+		);
+		client = await takeLease(server, cookie, "second");
+		const recovered = (await (await api(server, "/api/state", { cookie })).json()) as {
+			draft: { text: string; revision: number };
+		};
+		assert.deepEqual(recovered.draft, {
+			text: "hello",
+			revision: 1,
+			attachmentRevision: 0,
+			attachmentIds: [],
+		});
+		assert.equal(
+			(
+				await api(server, "/api/draft", {
+					method: "POST",
+					cookie,
+					client: "first",
+					body: JSON.stringify({ requestId: "old-tab", revision: 1, text: "lost" }),
+				})
+			).status,
+			409,
+		);
 	} finally {
 		await server.close();
 	}
@@ -853,6 +970,24 @@ function cancelRequest(server: WebUIServer, cookie: string, client: string): Pro
 		request.destroy();
 		setTimeout(resolve, 20);
 	});
+}
+
+async function setDraftText(
+	server: WebUIServer,
+	cookie: string,
+	client: string,
+	text: string,
+	revision = 0,
+	requestId = `draft-${revision}-${text.length}`,
+): Promise<{ revision: number; text: string; attachmentIds: string[] }> {
+	const response = await api(server, "/api/draft", {
+		method: "POST",
+		cookie,
+		client,
+		body: JSON.stringify({ requestId, revision, text }),
+	});
+	assert.equal(response.status, 200);
+	return response.json() as Promise<{ revision: number; text: string; attachmentIds: string[] }>;
 }
 
 function preparedAttachment(marker: string): PreparedAttachment {

@@ -34,6 +34,11 @@ test("browser logic authenticates a lease, reconnects from sequence, and keeps f
 	assert.match(app, /\/api\/lease/);
 	assert.match(app, /new EventSource\(`\/api\/events\?since=\$\{model\.sequence\}`\)/);
 	assert.match(app, /\/api\/messages/);
+	assert.match(app, /\/api\/draft/);
+	assert.match(app, /scheduleDraftSave\(\)/);
+	assert.match(app, /flushDraftText\(\)/);
+	assert.match(app, /acknowledgeDraftText/);
+	assert.match(app, /draftRevision: attempt\.draftRevision/);
 	assert.match(app, /prepareSend\(model, crypto\.randomUUID\(\), steer \? "steer" : "next"\)/);
 	assert.match(app, /delivery: attempt\.delivery/);
 	assert.match(app, /deliveryNotice\(model\)/);
@@ -43,6 +48,7 @@ test("browser logic authenticates a lease, reconnects from sequence, and keeps f
 	assert.match(app, /completeSend/);
 	assert.match(app, /failSend/);
 	assert.match(app, /if \(!model\.leaseClaimed\) await claimLease\(\)/);
+	assert.match(app, /events\.addEventListener\("draft"/);
 	assert.match(app, /applyLease\(model, snapshot\.lease, clientId\)/);
 	assert.match(app, /applyLease\(model, await response\.json\(\), clientId, true\)/);
 	assert.match(app, /snapshotRefresh/);

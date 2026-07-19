@@ -86,7 +86,7 @@ In print, JSON, and RPC modes, `/webui settings` does not open custom TUI or wri
 
 WebUI mirrors Pi's semantic session events, not terminal pixels. It displays conversation content, streaming assistant state, tool calls/results, errors, and activity using browser-native presentation. It does not reproduce ANSI colors, terminal wrapping, footer/widgets, built-in dialogs, arbitrary custom TUI components, or unsent terminal editor text.
 
-The initial transcript comes from the active session branch. Browser refresh does not create a second transcript or alter Pi's session tree.
+The initial transcript comes from the active session branch. Unsent browser message text and ordered attachment references are authoritative in the live Pi process, so refresh, reconnect, and active-tab takeover restore the same draft without creating a second transcript or altering Pi's session tree. Text edits are revisioned and saved with bounded, deduplicated mutations; stale or delayed responses cannot overwrite newer typing.
 
 ## Images
 
@@ -115,7 +115,7 @@ Pi's effective global and trusted-project `images.autoResize` and `images.blockI
 - A rotating bootstrap token is exchanged once for a per-server HttpOnly, `SameSite=Strict` cookie and removed from the URL.
 - Every endpoint requires the cookie. Mutations also require exact Host and Origin values plus the active browser-tab lease.
 - Responses use no-store, no-referrer, MIME-sniffing, frame-denial, same-origin resource, and restrictive Content Security Policy headers.
-- Transcript projection retains at most the newest 500 messages and 500 tool records, event replay keeps 256 updates, and request-id records keep 128 sends. Unsent staged images live only in bounded Pi-process memory; the page uses no localStorage, sessionStorage, IndexedDB, script-readable cookies, or image/transcript cache.
+- Transcript projection retains at most the newest 500 messages and 500 tool records, event replay keeps 256 updates, and request-id records keep 128 sends. Unsent message text, ordered attachment references, and staged image bytes live only in bounded Pi-process memory until cleared, accepted, or the session ends; the page uses no localStorage, sessionStorage, IndexedDB, script-readable cookies, or image/transcript cache.
 - Tool arguments/results, paths, images, and model thinking can be sensitive. Thinking is collapsed by default; only open a link issued by a Pi process you trust.
 - Reload, session replacement/fork, or Pi shutdown closes sockets, invalidates old callbacks, ends the page, and releases in-memory state.
 
@@ -140,6 +140,7 @@ src/webui.ts         Pi extension entrypoint
 src/runtime.ts       Pi lifecycle, commands, event projection, and browser message routing
 src/settings.ts      global WebUI settings validation and atomic persistence
 src/conversation.ts  bounded transcript snapshot and ordered event replay
+src/drafts.ts        authoritative in-memory text and attachment-reference revisions
 src/attachments.ts   revisioned staged-image state, processing queue, and byte ownership
 src/server.ts        authenticated loopback HTTP/SSE server and raw attachment protocol
 src/images.ts        bounded provider-ready image processing

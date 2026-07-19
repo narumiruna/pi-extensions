@@ -12,12 +12,14 @@ import {
 	type PublicAttachmentState,
 } from "./attachments.js";
 import type { ConversationEvent, ConversationProjection } from "./conversation.js";
+import { DraftError, DraftStore, type PublicDraftState } from "./drafts.js";
 import { type BrowserImageInput, DEFAULT_IMAGE_LIMITS } from "./images.js";
 
 const JSON_LIMIT = 64 * 1024 * 1024;
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,120}$/;
 const MAX_REQUESTS = 128;
+const DEFAULT_MAX_DRAFT_TEXT_BYTES = 1024 * 1024;
 const SSE_FLUSH_TIMEOUT_MS = 250;
 
 export interface WebSendRequest {
@@ -32,9 +34,7 @@ export interface WebSendRequest {
 
 interface ParsedSendRequest {
 	requestId: string;
-	text: string;
-	attachmentRevision: number;
-	attachmentIds: string[];
+	draftRevision: number;
 	delivery: "next" | "steer";
 }
 
@@ -47,6 +47,7 @@ export interface WebUIServerOptions {
 	send: (request: WebSendRequest) => Promise<WebSendResult>;
 	processAttachment?: (source: Uint8Array, signal?: AbortSignal) => Promise<PreparedAttachment>;
 	attachmentLimits?: AttachmentLimits;
+	maxDraftTextBytes?: number;
 	maxRequestBytes?: number;
 }
 
@@ -82,6 +83,7 @@ export class WebUIServer {
 	private readonly activeAttachmentControllers = new Set<AbortController>();
 	private readonly attachments: AttachmentStore;
 	private readonly attachmentLimits: AttachmentLimits;
+	private readonly draft: DraftStore;
 	private activeClientId?: string;
 	private leaseGeneration = 0;
 	private closed = false;
@@ -99,6 +101,9 @@ export class WebUIServer {
 			maxImageBytes: DEFAULT_IMAGE_LIMITS.maxImageBytes,
 			maxPromptBytes: DEFAULT_IMAGE_LIMITS.maxPromptBytes,
 		};
+		this.draft = new DraftStore({
+			maxTextBytes: options.maxDraftTextBytes ?? DEFAULT_MAX_DRAFT_TEXT_BYTES,
+		});
 		this.attachments = new AttachmentStore({
 			limits: this.attachmentLimits,
 			process:
@@ -163,6 +168,7 @@ export class WebUIServer {
 		this.activeSendControllers.clear();
 		this.activeAttachmentControllers.clear();
 		this.attachments.close();
+		this.draft.close();
 		this.requests.clear();
 		const responses = [...this.sseClients].map((client) => client.response);
 		this.broadcastControl("session-ended", { message: "Pi session ended" });
@@ -205,6 +211,7 @@ export class WebUIServer {
 				this.json(response, 200, {
 					...this.options.conversation.snapshot(),
 					lease: this.leaseSnapshot(),
+					draft: this.draft.publicState(),
 					attachments: this.attachments.publicState(),
 				});
 				return;
@@ -247,6 +254,25 @@ export class WebUIServer {
 				return;
 			}
 			const lease = this.assertActiveClient(request);
+			if (request.method === "POST" && url.pathname === "/api/draft") {
+				const body = requireRecord(
+					await readJson(
+						request,
+						(this.options.maxDraftTextBytes ?? DEFAULT_MAX_DRAFT_TEXT_BYTES) + 8192,
+					),
+					"draft mutation",
+				);
+				this.assertLease(lease);
+				const state = this.draft.setText(
+					stringField(body, "text"),
+					numberField(body, "revision"),
+					stringField(body, "requestId"),
+				);
+				this.assertLease(lease);
+				this.broadcastDraft(state);
+				this.json(response, 200, state);
+				return;
+			}
 			if (request.method === "POST" && url.pathname === "/api/attachments/reserve") {
 				const body = requireRecord(await readJson(request, 64 * 1024), "attachment reservation");
 				this.assertLease(lease);
@@ -255,6 +281,7 @@ export class WebUIServer {
 					numberField(body, "revision"),
 				);
 				this.assertLease(lease);
+				this.syncDraftAttachments(state);
 				this.json(response, 201, state);
 				return;
 			}
@@ -296,6 +323,7 @@ export class WebUIServer {
 			if (request.method === "DELETE" && deleteId) {
 				const state = this.attachments.remove(deleteId, revisionParameter(url));
 				this.assertLease(lease);
+				this.syncDraftAttachments(state);
 				this.json(response, 200, state);
 				return;
 			}
@@ -307,6 +335,7 @@ export class WebUIServer {
 					numberField(body, "revision"),
 				);
 				this.assertLease(lease);
+				this.syncDraftAttachments(state);
 				this.json(response, 200, state);
 				return;
 			}
@@ -315,6 +344,7 @@ export class WebUIServer {
 				this.assertLease(lease);
 				const state = this.attachments.clear(numberField(body, "revision"));
 				this.assertLease(lease);
+				this.syncDraftAttachments(state);
 				this.json(response, 200, state);
 				return;
 			}
@@ -327,6 +357,7 @@ export class WebUIServer {
 					accepted: true,
 					requestId: message.requestId,
 					...result,
+					draft: this.draft.publicState(),
 					attachments: this.attachments.publicState(),
 				});
 				return;
@@ -334,7 +365,11 @@ export class WebUIServer {
 			throw new HttpError(404, "Not found");
 		} catch (error) {
 			const status =
-				error instanceof HttpError || error instanceof AttachmentError ? error.status : 500;
+				error instanceof HttpError ||
+				error instanceof AttachmentError ||
+				error instanceof DraftError
+					? error.status
+					: 500;
 			if (error instanceof HttpError && error.closeConnection)
 				response.setHeader("Connection", "close");
 			this.json(response, status, { error: formatError(error) });
@@ -413,21 +448,53 @@ export class WebUIServer {
 				throw new HttpError(409, "Request id was reused with different content");
 			return current.promise;
 		}
-		const reservation =
-			message.attachmentIds.length > 0
-				? this.attachments.beginSend(message.attachmentIds, message.attachmentRevision)
-				: undefined;
+		const draftReservation = this.draft.beginSend(message.draftRevision);
+		const attachmentState = this.attachments.publicState();
+		if (
+			!sameIds(
+				draftReservation.attachmentIds,
+				attachmentState.items.map((item) => item.id),
+			)
+		) {
+			this.draft.finishSend(draftReservation.token, false);
+			throw new HttpError(409, "Draft attachment references are stale");
+		}
+		let attachmentReservation: ReturnType<AttachmentStore["beginSend"]> | undefined;
+		try {
+			attachmentReservation =
+				draftReservation.attachmentIds.length > 0
+					? this.attachments.beginSend(draftReservation.attachmentIds, attachmentState.revision)
+					: undefined;
+		} catch (error) {
+			this.draft.finishSend(draftReservation.token, false);
+			throw error;
+		}
 		const controller = new AbortController();
 		this.activeSendControllers.add(controller);
 		const abort = () => controller.abort();
 		request.once("aborted", abort);
 		response.once("close", abort);
-		let attachmentReservationSettled = false;
+		let reservationsSettled = false;
 		const promise = this.options
-			.send({ ...message, images: reservation?.images ?? [], signal: controller.signal })
+			.send({
+				requestId: message.requestId,
+				text: draftReservation.text,
+				attachmentRevision: attachmentState.revision,
+				attachmentIds: draftReservation.attachmentIds,
+				images: attachmentReservation?.images ?? [],
+				delivery: message.delivery,
+				signal: controller.signal,
+			})
 			.then((result) => {
-				if (reservation) this.attachments.finishSend(reservation.token, true);
-				attachmentReservationSettled = true;
+				const nextAttachments = attachmentReservation
+					? this.attachments.finishSend(attachmentReservation.token, true)
+					: this.attachments.publicState();
+				const nextDraft = this.draft.finishSend(draftReservation.token, true, {
+					revision: nextAttachments.revision,
+					ids: nextAttachments.items.map((item) => item.id),
+				});
+				this.broadcastDraft(nextDraft);
+				reservationsSettled = true;
 				const record = this.requests.get(message.requestId);
 				if (record?.promise === promise) {
 					record.settled = true;
@@ -436,13 +503,16 @@ export class WebUIServer {
 				return result;
 			})
 			.catch((error) => {
-				if (reservation && !attachmentReservationSettled) {
+				if (!reservationsSettled) {
 					try {
-						this.attachments.finishSend(reservation.token, false);
+						if (attachmentReservation) {
+							this.attachments.finishSend(attachmentReservation.token, false);
+						}
+						this.draft.finishSend(draftReservation.token, false);
 					} catch {
-						// Session shutdown may already have released the reservation.
+						// Session shutdown may already have released the reservations.
 					}
-					attachmentReservationSettled = true;
+					reservationsSettled = true;
 				}
 				if (this.requests.get(message.requestId)?.promise === promise) {
 					this.requests.delete(message.requestId);
@@ -489,6 +559,7 @@ export class WebUIServer {
 			return;
 		}
 		this.writeSse(client, "lease", this.leaseSnapshot());
+		this.writeSse(client, "draft", this.draft.publicState());
 		this.writeSse(client, "attachments", this.attachments.publicState());
 		const replay = this.options.conversation.eventsAfter(since);
 		if (replay === undefined) {
@@ -504,6 +575,20 @@ export class WebUIServer {
 			...(this.activeClientId ? { activeClientId: this.activeClientId } : {}),
 			generation: this.leaseGeneration,
 		};
+	}
+
+	private syncDraftAttachments(attachments: PublicAttachmentState): PublicDraftState {
+		const before = this.draft.publicState().revision;
+		const next = this.draft.syncAttachments(
+			attachments.items.map((item) => item.id),
+			attachments.revision,
+		);
+		if (next.revision !== before) this.broadcastDraft(next);
+		return next;
+	}
+
+	private broadcastDraft(state: PublicDraftState): void {
+		this.broadcastControl("draft", state);
 	}
 
 	private broadcastEvent(event: ConversationEvent): void {
@@ -587,13 +672,7 @@ async function readAsset(name: string): Promise<Buffer> {
 
 function messageDigest(message: ParsedSendRequest): string {
 	const hash = createHash("sha256");
-	for (const value of [
-		message.requestId,
-		message.delivery,
-		message.text,
-		String(message.attachmentRevision),
-		...message.attachmentIds,
-	]) {
+	for (const value of [message.requestId, message.delivery, String(message.draftRevision)]) {
 		hash
 			.update(String(Buffer.byteLength(value)))
 			.update(":")
@@ -606,15 +685,11 @@ function parseSendRequest(value: unknown): ParsedSendRequest {
 	if (!isRecord(value)) throw new HttpError(400, "Invalid message request");
 	const requestId = stringField(value, "requestId");
 	if (!REQUEST_ID.test(requestId)) throw new HttpError(400, "Invalid request id");
-	const text = stringField(value, "text");
-	const attachmentRevision = numberField(value, "attachmentRevision");
-	const attachmentIds = stringArrayField(value, "attachmentIds");
-	if (!text.trim() && attachmentIds.length === 0)
-		throw new HttpError(400, "Message cannot be empty");
+	const draftRevision = numberField(value, "draftRevision");
 	const delivery = value.delivery;
 	if (delivery !== "next" && delivery !== "steer")
 		throw new HttpError(400, "Invalid delivery mode");
-	return { requestId, text, attachmentRevision, attachmentIds, delivery };
+	return { requestId, draftRevision, delivery };
 }
 
 async function readBytes(request: IncomingMessage, limit: number): Promise<Buffer> {
@@ -709,6 +784,10 @@ function attachmentPathId(
 	const suffix = action ? `/${action}` : "";
 	const match = new RegExp(`^/api/attachments/([A-Za-z0-9_-]{1,128})${suffix}$`).exec(pathname);
 	return match?.[1];
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 function token(): string {

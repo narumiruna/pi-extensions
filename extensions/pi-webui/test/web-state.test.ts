@@ -8,6 +8,13 @@ const state = (await import(
 )) as {
 	initialState(): WebState;
 	applySnapshot(current: WebState, snapshot: Snapshot): WebState;
+	applyDraft(current: WebState, draft: Record<string, unknown>): WebState;
+	editDraftText(current: WebState, text: string): WebState;
+	acknowledgeDraftText(
+		current: WebState,
+		draft: Record<string, unknown>,
+		submittedText: string,
+	): WebState;
 	applyAttachments(current: WebState, attachments: Record<string, unknown>): WebState;
 	applyConversationEvent(current: WebState, event: ConversationEvent): WebState;
 	applyLease(
@@ -61,6 +68,9 @@ interface WebState {
 	readingImages: number;
 	leaseClaimed: boolean;
 	leaseGeneration: number;
+	draftRevision: number;
+	authoritativeText: string;
+	textDirty: boolean;
 	attachmentRevision: number;
 	attachmentPhase: string;
 	following: boolean;
@@ -74,6 +84,7 @@ interface WebState {
 interface SendAttempt {
 	requestId: string;
 	text: string;
+	draftRevision: number;
 	attachmentRevision: number;
 	attachmentIds: string[];
 	images: Array<{ id: string }>;
@@ -113,6 +124,41 @@ test("snapshots replace authoritative server state without discarding the browse
 	assert.equal(next.text, "draft");
 	assert.deepEqual(next.images, [{ id: "image" }]);
 	assert.equal(next.needsSnapshot, false);
+});
+
+test("authoritative drafts hydrate refreshes without overwriting newer local input", () => {
+	let current = state.applyDraft(state.initialState(), { revision: 1, text: "restored" });
+	assert.equal(current.text, "restored");
+	assert.equal(current.authoritativeText, "restored");
+	current = state.editDraftText(current, "new local text");
+	assert.equal(current.textDirty, true);
+	const refreshed = state.applyDraft(current, { revision: 2, text: "remote text" });
+	assert.equal(refreshed.text, "new local text");
+	assert.equal(refreshed.authoritativeText, "remote text");
+	assert.equal(refreshed.draftRevision, 2);
+	assert.equal(state.applyDraft(refreshed, { revision: 1, text: "stale" }), refreshed);
+});
+
+test("delayed text acknowledgements never overwrite input typed after the request", () => {
+	let current = state.applyDraft(state.initialState(), { revision: 1, text: "one" });
+	current = state.editDraftText(current, "submitted");
+	const submitted = current.text;
+	current = state.editDraftText(current, "typed later");
+	const acknowledged = state.acknowledgeDraftText(
+		current,
+		{ revision: 2, text: "submitted" },
+		submitted,
+	);
+	assert.equal(acknowledged.text, "typed later");
+	assert.equal(acknowledged.authoritativeText, "submitted");
+	assert.equal(acknowledged.textDirty, true);
+	const final = state.acknowledgeDraftText(
+		acknowledged,
+		{ revision: 3, text: "typed later" },
+		"typed later",
+	);
+	assert.equal(final.text, "typed later");
+	assert.equal(final.textDirty, false);
 });
 
 test("older snapshots cannot roll browser state back", () => {
