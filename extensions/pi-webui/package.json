@@ -33,12 +33,14 @@
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",
-		"@earendil-works/pi-coding-agent": "*"
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.3",
 		"@earendil-works/pi-ai": "0.80.10",
 		"@earendil-works/pi-coding-agent": "0.80.10",
+		"@earendil-works/pi-tui": "0.80.10",
 		"typescript": "7.0.2"
 	},
 	"repository": {
