@@ -132,6 +132,29 @@ export function followLatest(current) {
 	return { ...current, following: true, unseenUpdateIds: [] };
 }
 
+export function moveImage(images, id, direction) {
+	const from = images.findIndex((image) => image.id === id);
+	if (from === -1) return [...images];
+	const to = Math.max(0, Math.min(images.length - 1, from + direction));
+	if (to === from) return [...images];
+	const next = [...images];
+	const [image] = next.splice(from, 1);
+	if (image) next.splice(to, 0, image);
+	return next;
+}
+
+export function moveImageBefore(images, id, targetId) {
+	if (id === targetId) return [...images];
+	const from = images.findIndex((image) => image.id === id);
+	const target = images.findIndex((image) => image.id === targetId);
+	if (from === -1 || target === -1) return [...images];
+	const next = images.filter((image) => image.id !== id);
+	const targetIndex = next.findIndex((image) => image.id === targetId);
+	if (targetIndex === -1) return [...images];
+	next.splice(targetIndex, 0, images[from]);
+	return next;
+}
+
 export function upsertById(items, value) {
 	const index = items.findIndex((item) => item.id === value.id);
 	if (index < 0) return [...items, value];

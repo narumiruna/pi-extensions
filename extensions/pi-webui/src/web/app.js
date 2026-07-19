@@ -10,6 +10,8 @@ import {
 	followLatest,
 	initialState,
 	invalidateSendAttempt,
+	moveImage,
+	moveImageBefore,
 	noteUnseenUpdate,
 	prepareSend,
 	setNearBottom,
@@ -349,8 +351,28 @@ function isSupportedImageFile(file) {
 	);
 }
 
+function reorderImages(images, focusId, focusDirection) {
+	if (composerLocked()) return;
+	model = invalidateSendAttempt({ ...model, images, error: "" });
+	render();
+	focusOrderingControl(focusId, focusDirection);
+}
+
+function focusOrderingControl(id, direction) {
+	requestAnimationFrame(() => {
+		const escapedId = CSS.escape(id);
+		const item = ui.previews.querySelector(`[data-image-id="${escapedId}"]`);
+		const preferred = item?.querySelector(`[data-order-action="${direction}"]`);
+		const target =
+			preferred && !preferred.disabled
+				? preferred
+				: item?.querySelector("[data-order-action]:not(:disabled), .remove-image");
+		target?.focus();
+	});
+}
+
 function removeImage(id) {
-	if (model.pending) return;
+	if (composerLocked()) return;
 	const removed = model.images.find((image) => image.id === id);
 	if (removed) {
 		if (ui.previewImage.src === removed.previewUrl) ui.previewDialog.close();
@@ -446,14 +468,41 @@ function renderComposer() {
 		ui.attachmentStatus.textContent = attachmentStatus;
 	}
 	ui.previews.replaceChildren();
-	for (const image of model.images) {
+	for (const [index, image] of model.images.entries()) {
 		const item = document.createElement("li");
 		item.className = "image-preview-item";
+		item.dataset.imageId = image.id;
+		item.draggable = !model.pending && !locked;
+		item.addEventListener("dragstart", (event) => {
+			if (locked || !event.dataTransfer) return;
+			event.dataTransfer.effectAllowed = "move";
+			event.dataTransfer.setData("application/x-pi-webui-image", image.id);
+			item.classList.add("dragging");
+		});
+		item.addEventListener("dragend", () => {
+			item.classList.remove("dragging");
+			for (const candidate of ui.previews.children) candidate.classList.remove("drag-target");
+		});
+		item.addEventListener("dragover", (event) => {
+			const draggedId = event.dataTransfer?.getData("application/x-pi-webui-image");
+			if (locked || !draggedId || draggedId === image.id) return;
+			event.preventDefault();
+			item.classList.add("drag-target");
+		});
+		item.addEventListener("dragleave", () => item.classList.remove("drag-target"));
+		item.addEventListener("drop", (event) => {
+			const draggedId = event.dataTransfer?.getData("application/x-pi-webui-image");
+			item.classList.remove("drag-target");
+			if (locked || !draggedId || draggedId === image.id) return;
+			event.preventDefault();
+			event.stopPropagation();
+			reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId, "forward");
+		});
 		const previewButton = document.createElement("button");
 		previewButton.type = "button";
 		previewButton.className = "attachment-preview";
 		previewButton.setAttribute("aria-label", `Preview image ${image.name}`);
-		previewButton.disabled = model.pending;
+		previewButton.disabled = locked;
 		previewButton.addEventListener("click", () => openImagePreview(image));
 		const preview = document.createElement("img");
 		preview.src = image.previewUrl;
@@ -461,14 +510,37 @@ function renderComposer() {
 		previewButton.append(preview);
 		const name = document.createElement("span");
 		name.textContent = image.name;
+		const actions = document.createElement("div");
+		actions.className = "image-order-actions";
+		const backward = document.createElement("button");
+		backward.type = "button";
+		backward.className = "move-image";
+		backward.textContent = "←";
+		backward.dataset.orderAction = "backward";
+		backward.disabled = locked || index === 0;
+		backward.setAttribute("aria-label", `Move image backward: ${image.name}`);
+		backward.addEventListener("click", () =>
+			reorderImages(moveImage(model.images, image.id, -1), image.id, "backward"),
+		);
+		const forward = document.createElement("button");
+		forward.type = "button";
+		forward.className = "move-image";
+		forward.textContent = "→";
+		forward.dataset.orderAction = "forward";
+		forward.disabled = locked || index === model.images.length - 1;
+		forward.setAttribute("aria-label", `Move image forward: ${image.name}`);
+		forward.addEventListener("click", () =>
+			reorderImages(moveImage(model.images, image.id, 1), image.id, "forward"),
+		);
 		const remove = document.createElement("button");
 		remove.type = "button";
 		remove.className = "remove-image";
 		remove.textContent = "Remove";
-		remove.disabled = model.pending;
+		remove.disabled = locked;
 		remove.setAttribute("aria-label", `Remove image ${image.name}`);
 		remove.addEventListener("click", () => removeImage(image.id));
-		item.append(previewButton, name, remove);
+		actions.append(backward, forward, remove);
+		item.append(previewButton, name, actions);
 		ui.previews.append(item);
 	}
 	document.documentElement.style.setProperty("--composer-height", `${ui.composer.offsetHeight}px`);

@@ -74,6 +74,13 @@ test("image input supports picker and paste with visible removable previews", ()
 	assert.match(app, /showModal/);
 	assert.match(app, /previewReturnFocus.*focus/s);
 	assert.match(app, /drag-active/);
+	assert.match(app, /moveImageBefore/);
+	assert.match(app, /moveImage/);
+	assert.match(app, /draggable = !model\.pending/);
+	assert.match(app, /addEventListener\("dragstart"/);
+	assert.match(app, /Move image backward/);
+	assert.match(app, /Move image forward/);
+	assert.match(app, /focusOrderingControl/);
 });
 
 test("tool, thinking, and Markdown rendering use safe DOM construction", () => {

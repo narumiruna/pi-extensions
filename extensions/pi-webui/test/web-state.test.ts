@@ -30,11 +30,18 @@ const state = (await import(
 	setNearBottom(current: WebState, nearBottom: boolean): WebState;
 	noteUnseenUpdate(current: WebState, key: string): WebState;
 	followLatest(current: WebState): WebState;
+	moveImage(images: WebImage[], id: string, direction: number): WebImage[];
+	moveImageBefore(images: WebImage[], id: string, targetId: string): WebImage[];
 	canSend(current: WebState): boolean;
 	busyLabel(current: WebState): string;
 	deliveryNotice(current: WebState): string;
 	upsertById<T extends { id: string }>(items: T[], value: T): T[];
 };
+
+interface WebImage {
+	id: string;
+	name?: string;
+}
 
 interface WebState {
 	sequence: number;
@@ -53,7 +60,7 @@ interface WebState {
 	following: boolean;
 	unseenUpdateIds: string[];
 	text: string;
-	images: Array<{ id: string }>;
+	images: WebImage[];
 	outbox?: SendAttempt;
 	lastDelivery?: "immediate" | "followUp" | "steer";
 }
@@ -240,6 +247,57 @@ test("send completion removes only the submitted draft", () => {
 	assert.deepEqual(completed.images, [newer]);
 	assert.equal(completed.pending, false);
 	assert.equal(completed.lastDelivery, "immediate");
+});
+
+test("image ordering helpers are immutable and bounded", () => {
+	const images: WebImage[] = [{ id: "one" }, { id: "two" }, { id: "three" }];
+	assert.deepEqual(
+		state.moveImage(images, "two", -1).map((image) => image.id),
+		["two", "one", "three"],
+	);
+	assert.deepEqual(
+		state.moveImage(images, "two", 1).map((image) => image.id),
+		["one", "three", "two"],
+	);
+	assert.deepEqual(state.moveImage(images, "one", -1), images);
+	assert.deepEqual(state.moveImage(images, "three", 1), images);
+	assert.deepEqual(state.moveImage(images, "missing", 1), images);
+	assert.deepEqual(
+		state.moveImageBefore(images, "three", "one").map((image) => image.id),
+		["three", "one", "two"],
+	);
+	assert.deepEqual(state.moveImageBefore(images, "one", "one"), images);
+	assert.deepEqual(state.moveImageBefore(images, "missing", "one"), images);
+	assert.deepEqual(
+		images.map((image) => image.id),
+		["one", "two", "three"],
+	);
+	assert.notEqual(state.moveImage(images, "one", -1), images);
+});
+
+test("send attempts freeze the displayed image order until the draft changes", () => {
+	const images: WebImage[] = [{ id: "two" }, { id: "one" }];
+	const prepared = state.prepareSend(
+		{ ...state.initialState(), connected: true, images },
+		"request-1",
+	);
+	assert.deepEqual(
+		prepared.attempt.images.map((image) => image.id),
+		["two", "one"],
+	);
+	images.reverse();
+	assert.deepEqual(
+		prepared.attempt.images.map((image) => image.id),
+		["two", "one"],
+	);
+	const retry = state.prepareSend(
+		state.failSend(prepared.state, prepared.attempt, "failed"),
+		"new",
+	);
+	assert.deepEqual(
+		retry.attempt.images.map((image) => image.id),
+		["two", "one"],
+	);
 });
 
 test("live transcript follows only near the bottom and deduplicates unseen updates", () => {

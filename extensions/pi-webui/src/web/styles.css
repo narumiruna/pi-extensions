@@ -515,7 +515,7 @@ textarea:disabled {
 
 .image-preview-item {
 	display: grid;
-	min-width: 270px;
+	min-width: 340px;
 	grid-template-columns: 68px minmax(6rem, 1fr) auto;
 	align-items: center;
 	gap: 0.5rem;
@@ -523,6 +523,33 @@ textarea:disabled {
 	border: 1px solid var(--border);
 	border-radius: 10px;
 	background: var(--surface-secondary);
+}
+
+.image-preview-item[draggable="true"] {
+	cursor: grab;
+}
+
+.image-preview-item.dragging {
+	opacity: 0.55;
+}
+
+.image-preview-item.drag-target {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.image-order-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+}
+
+.move-image {
+	width: 44px;
+	padding-inline: 0;
+	border-color: var(--border);
+	color: var(--text);
+	background: var(--surface);
 }
 
 .attachment-preview {
@@ -579,6 +606,7 @@ button {
 }
 
 .button.secondary,
+.move-image,
 .remove-image {
 	border-color: var(--border);
 	color: var(--text);
@@ -742,7 +770,7 @@ footer p {
 	}
 
 	.image-preview-item {
-		min-width: min(100%, 270px);
+		min-width: min(100%, 340px);
 	}
 }
 
