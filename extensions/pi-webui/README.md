@@ -44,6 +44,44 @@ The package targets the latest Pi release.
 
 If another installed extension also registers `/webui`, Pi assigns numeric command suffixes according to extension load order. Check Pi's command provenance and invoke the WebUI entry.
 
+## Commands
+
+| Command | Behavior |
+| --- | --- |
+| `/webui` | Start or reuse the current session server and display a fresh one-time link. |
+| `/webui settings` | Open the interactive settings screen in TUI mode. Other modes report the manual settings path when notifications are available. |
+| `/webui status` | Show the effective startup preference and source, settings path, and whether the current session server is running. It never issues a bootstrap link. |
+| `/webui help` | Show command and manual-settings help. |
+| `/webui init` | Create the defaults file without overwriting existing content, then open settings in TUI mode. |
+
+Argument completion is available for all subcommands. Bare `/webui` remains the direct browser-link action.
+
+## Settings
+
+WebUI has one optional, **global-only** JSON settings file:
+
+```text
+<getAgentDir()>/pi-webui.json
+```
+
+The normal default path is `~/.pi/agent/pi-webui.json`. Pi installations that use another agent directory are resolved through Pi's `getAgentDir()` API; WebUI adds no environment variable or project override.
+
+```json
+{
+  "startOnSessionStart": false
+}
+```
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `startOnSessionStart` | `false` | Start WebUI and display a fresh one-time link after every Pi session initialization, including startup, reload, new, resume, and fork. It never opens a browser. |
+
+A missing file uses defaults. The file must contain a top-level JSON object, and `startOnSessionStart` must be a boolean when present. Malformed JSON or an invalid recognized value causes the file to be ignored with a warning and leaves it untouched. Unknown fields are accepted and preserved by the settings screen for forward compatibility.
+
+Settings are reloaded on every `session_start`. Changes made in `/webui settings` are saved atomically and update the in-memory preference immediately, but they intentionally do not start or stop the server in the current session; they take effect at the next session initialization or `/reload`. `/webui init` creates formatted defaults once and refuses to overwrite valid or invalid existing content.
+
+In print, JSON, and RPC modes, `/webui settings` does not open custom TUI or write protocol-breaking output. Use `/webui status`, `/webui help`, or edit the reported path manually.
+
 ## What synchronization means
 
 WebUI mirrors Pi's semantic session events, not terminal pixels. It displays conversation content, streaming assistant state, tool calls/results, errors, and activity using browser-native presentation. It does not reproduce ANSI colors, terminal wrapping, footer/widgets, built-in dialogs, arbitrary custom TUI components, or unsent terminal editor text.
@@ -90,13 +128,14 @@ The page uses semantic headings, native disclosure/dialog controls, concise stat
 ## Package layout
 
 ```text
-src/webui.ts       Pi extension entrypoint
-src/runtime.ts        Pi lifecycle, event projection, and browser message routing
-src/conversation.ts   bounded transcript snapshot and ordered event replay
-src/server.ts         authenticated loopback HTTP/SSE server
-src/images.ts         bounded provider-ready image processing
-src/pi-settings.ts    effective Pi image settings reader
-src/web/              framework-free browser page
+src/webui.ts         Pi extension entrypoint
+src/runtime.ts       Pi lifecycle, commands, event projection, and browser message routing
+src/settings.ts      global WebUI settings validation and atomic persistence
+src/conversation.ts  bounded transcript snapshot and ordered event replay
+src/server.ts        authenticated loopback HTTP/SSE server
+src/images.ts        bounded provider-ready image processing
+src/pi-settings.ts   effective Pi image settings reader
+src/web/             framework-free browser page
 ```
 
 ## Development
