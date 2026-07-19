@@ -9,6 +9,10 @@ const transcript = (await import(
 	toolPhaseLabel(tool?: { phase?: string; isError?: boolean }): string;
 	toolCommandPreview(tool?: { args?: unknown }): string;
 	isCollapsibleMessageRole(role: string): boolean;
+	retainedImageStatus(
+		block: { retainedImageId?: string },
+		ids: Set<string>,
+	): "none" | "eligible" | "expired";
 };
 
 test("standalone tool-result messages use collapsed disclosure", () => {
@@ -23,6 +27,13 @@ test("tool phase labels describe user-visible state", () => {
 	assert.equal(transcript.toolPhaseLabel({ phase: "update" }), "Running");
 	assert.equal(transcript.toolPhaseLabel({ phase: "end" }), "Completed");
 	assert.equal(transcript.toolPhaseLabel({ phase: "end", isError: true }), "Failed");
+});
+
+test("retained image chips distinguish eligible, expired, and terminal-origin images", () => {
+	const active = new Set(["sent-one"]);
+	assert.equal(transcript.retainedImageStatus({}, active), "none");
+	assert.equal(transcript.retainedImageStatus({ retainedImageId: "sent-one" }, active), "eligible");
+	assert.equal(transcript.retainedImageStatus({ retainedImageId: "sent-old" }, active), "expired");
 });
 
 test("tool command preview accepts only a compact string command", () => {

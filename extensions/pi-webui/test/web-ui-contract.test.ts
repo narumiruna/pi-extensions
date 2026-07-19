@@ -105,6 +105,19 @@ test("image input stages authenticated per-item uploads with visible status and 
 	assert.match(app, /returnValue !== "confirm"/);
 });
 
+test("sent-image actions stay contextual, authenticated, and distinguish expiration", () => {
+	assert.match(app, /events\.addEventListener\("sent-images"/);
+	assert.match(app, /\/api\/sent-images\/reattach/);
+	assert.match(app, /\/api\/sent-images\/\$\{encodeURIComponent\(retainedImageId\)\}/);
+	assert.match(transcript, /Attach again/);
+	assert.match(transcript, /Forget/);
+	assert.match(transcript, /Expired/);
+	assert.match(transcript, /retainedImageStatus/);
+	assert.match(transcript, /aria-label.*Attach image again/);
+	assert.match(styles, /\.message-image-action/);
+	assert.doesNotMatch(html, /sent-image-gallery|retained-image-gallery/);
+});
+
 test("attachment copy keeps routine status local and states metadata removal once", () => {
 	for (const label of ["Uploading", "Processing", "Ready", "Needs attention", "Retry", "Remove"]) {
 		assert.match(app, new RegExp(label));
@@ -134,4 +147,9 @@ test("responsive and accessibility CSS covers focus, targets, reflow, dark mode,
 	assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
 	assert.match(styles, /overflow-wrap:\s*anywhere/);
 	assert.match(styles, /max-width:\s*100%/);
+	assert.match(styles, /\.image-previews\s*\{[\s\S]*flex-wrap:\s*wrap/);
+	assert.match(
+		styles,
+		/\.image-preview-item\s*\{[\s\S]*grid-template-columns:\s*68px minmax\(0, 1fr\)/,
+	);
 });

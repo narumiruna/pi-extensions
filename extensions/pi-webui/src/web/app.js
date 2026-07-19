@@ -4,6 +4,7 @@ import {
 	applyConversationEvent,
 	applyDraft,
 	applyLease,
+	applySentImages,
 	applySnapshot,
 	busyLabel,
 	canSend,
@@ -84,7 +85,12 @@ const ui = {
 	previewDismiss: document.querySelector("#image-preview-dismiss"),
 };
 
-const transcriptRenderer = createTranscriptRenderer({ documentRef: document, list: ui.transcript });
+const transcriptRenderer = createTranscriptRenderer({
+	documentRef: document,
+	list: ui.transcript,
+	onReattach: (id) => void reattachSentImage(id),
+	onForget: (id) => void forgetSentImage(id),
+});
 
 ui.input.addEventListener("input", () => {
 	model = editDraftText(model, ui.input.value);
@@ -258,6 +264,10 @@ function connectEvents() {
 		model = applyAttachments(model, JSON.parse(event.data));
 		render();
 	});
+	events.addEventListener("sent-images", (event) => {
+		model = applySentImages(model, JSON.parse(event.data));
+		render({ updateKey: "sent-images" });
+	});
 	events.addEventListener("session-ended", () => {
 		model = { ...model, closed: true, activity: "ended", connected: false };
 		events?.close();
@@ -326,6 +336,7 @@ async function send(steer) {
 		const accepted = await response.json();
 		if (accepted.draft) model = applyDraft(model, accepted.draft);
 		if (accepted.attachments) model = applyAttachments(model, accepted.attachments);
+		if (accepted.sentImages) model = applySentImages(model, accepted.sentImages);
 		if (attempt.attachmentIds.includes(ui.previewImage.dataset.imageId)) {
 			ui.previewDialog.close();
 		}
@@ -512,6 +523,54 @@ function isSupportedImageFile(file) {
 	);
 }
 
+async function reattachSentImage(retainedImageId) {
+	if (composerLocked() || !retainedImageId) return;
+	if (model.attachmentPhase !== "empty" && model.attachmentPhase !== "ready") {
+		model = { ...model, error: "Wait for current images to finish before attaching again." };
+		render();
+		return;
+	}
+	mutatingAttachments = true;
+	renderComposer();
+	try {
+		const response = await attachmentMutation("/api/sent-images/reattach", {
+			method: "POST",
+			body: JSON.stringify({
+				revision: model.attachmentRevision,
+				items: [{ retainedId: retainedImageId, id: crypto.randomUUID() }],
+			}),
+		});
+		model = applyDraft(model, response.draft);
+		model = applyAttachments(model, response.attachments);
+		model = applySentImages(model, response.sentImages);
+		model = { ...model, error: "" };
+		render();
+	} catch (error) {
+		model = { ...model, error: errorMessage(error) };
+		render();
+	} finally {
+		mutatingAttachments = false;
+		renderComposer();
+	}
+}
+
+async function forgetSentImage(retainedImageId) {
+	if (composerLocked() || !retainedImageId) return;
+	if (!window.confirm("Forget this retained image? This does not retract provider content."))
+		return;
+	try {
+		const response = await attachmentMutation(
+			`/api/sent-images/${encodeURIComponent(retainedImageId)}?revision=${model.sentImages.revision}`,
+			{ method: "DELETE" },
+		);
+		model = applySentImages(model, response);
+		render({ updateKey: "sent-images" });
+	} catch (error) {
+		model = { ...model, error: errorMessage(error) };
+		render();
+	}
+}
+
 async function clearAttachments() {
 	if (composerLocked() || model.images.length < 2) return;
 	const clearedIds = model.images.map((image) => image.id);
@@ -629,7 +688,7 @@ function queueTranscriptRender(updateKey, announcement) {
 	if (transcriptFrame) return;
 	transcriptFrame = requestAnimationFrame(() => {
 		transcriptFrame = undefined;
-		transcriptRenderer.render(model.messages, model.tools);
+		transcriptRenderer.render(model.messages, model.tools, model.sentImages);
 		ui.empty.hidden = model.messages.length > 0;
 		if (transcriptAnnouncement) {
 			ui.transcriptStatus.textContent = transcriptAnnouncement;

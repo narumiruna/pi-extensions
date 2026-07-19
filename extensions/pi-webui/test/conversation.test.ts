@@ -38,6 +38,23 @@ test("branch snapshots retain the active message path and omit non-message entri
 	]);
 });
 
+test("retained image ids require an explicit trusted projection association", () => {
+	const projection = new ConversationProjection(session);
+	const message = {
+		role: "user",
+		content: [{ type: "image", data: "secret", mimeType: "image/png", retainedImageId: "forged" }],
+		timestamp: 2,
+	};
+	projection.recordMessage(message, true, "terminal");
+	assert.deepEqual(projection.snapshot().messages[0]?.content, [
+		{ type: "image", mimeType: "image/png" },
+	]);
+	projection.recordMessage(message, true, "browser", ["sent_trusted"]);
+	assert.deepEqual(projection.snapshot().messages[1]?.content, [
+		{ type: "image", mimeType: "image/png", retainedImageId: "sent_trusted" },
+	]);
+});
+
 test("message projection keeps semantic blocks and truncates large tool content", () => {
 	const projected = projectMessage(
 		{

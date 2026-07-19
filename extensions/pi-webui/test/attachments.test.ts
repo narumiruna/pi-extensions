@@ -203,6 +203,45 @@ test("reorder, delete, and clear require exact revisions and release every byte"
 	assert.equal(store.residentBytes(), 0);
 });
 
+test("reattaching prepared images is atomic, ordered, bounded, and rejects draft duplicates", async () => {
+	const store = createStore();
+	const state = store.attachPrepared(
+		[
+			{ id: "two", name: "two.png", prepared: prepared(Buffer.from("two")) },
+			{ id: "one", name: "one.png", prepared: prepared(Buffer.from("one")) },
+		],
+		0,
+	);
+	assert.deepEqual(
+		state.items.map((item) => item.id),
+		["two", "one"],
+	);
+	assert.equal(state.phase, "ready");
+	assert.throws(
+		() =>
+			store.attachPrepared(
+				[{ id: "duplicate", name: "duplicate.png", prepared: prepared(Buffer.from("two")) }],
+				state.revision,
+			),
+		/duplicate/i,
+	);
+	assert.throws(
+		() =>
+			store.attachPrepared(
+				[
+					{ id: "three", name: "three.png", prepared: prepared(Buffer.from("three")) },
+					{ id: "four", name: "four.png", prepared: prepared(Buffer.from("four")) },
+				],
+				state.revision,
+			),
+		/maximum/i,
+	);
+	assert.deepEqual(
+		store.publicState().items.map((item) => item.id),
+		["two", "one"],
+	);
+});
+
 test("send reservation transfers sanitized bytes and commits only a matching ready snapshot", async () => {
 	const store = createStore();
 	store.reserve([{ id: "one", name: "one.png", size: 3 }], 0);

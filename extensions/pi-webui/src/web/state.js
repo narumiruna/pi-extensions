@@ -18,6 +18,14 @@ export function initialState() {
 		textDirty: false,
 		attachmentRevision: 0,
 		attachmentPhase: "empty",
+		sentImages: {
+			revision: 0,
+			enabled: false,
+			items: [],
+			totalBytes: 0,
+			maxImages: 0,
+			maxBytes: 0,
+		},
 		following: true,
 		unseenUpdateIds: [],
 		text: "",
@@ -40,7 +48,10 @@ export function applySnapshot(current, snapshot) {
 			needsSnapshot: false,
 		};
 	}
-	return applyAttachments(applyDraft(next, snapshot?.draft), snapshot?.attachments);
+	return applySentImages(
+		applyAttachments(applyDraft(next, snapshot?.draft), snapshot?.attachments),
+		snapshot?.sentImages,
+	);
 }
 
 export function applyDraft(current, draft) {
@@ -75,6 +86,29 @@ export function acknowledgeDraftText(current, draft, submittedText) {
 		return applyDraft({ ...current, textDirty: false }, draft);
 	}
 	return applyDraft(current, draft);
+}
+
+export function applySentImages(current, sentImages) {
+	if (
+		!Number.isSafeInteger(sentImages?.revision) ||
+		sentImages.revision < current.sentImages.revision ||
+		!Array.isArray(sentImages.items)
+	) {
+		return current;
+	}
+	return {
+		...current,
+		sentImages: {
+			revision: sentImages.revision,
+			enabled: Boolean(sentImages.enabled),
+			items: sentImages.items
+				.filter((item) => item && typeof item.id === "string")
+				.map((item) => ({ ...item })),
+			totalBytes: Number.isSafeInteger(sentImages.totalBytes) ? sentImages.totalBytes : 0,
+			maxImages: Number.isSafeInteger(sentImages.maxImages) ? sentImages.maxImages : 0,
+			maxBytes: Number.isSafeInteger(sentImages.maxBytes) ? sentImages.maxBytes : 0,
+		},
+	};
 }
 
 export function applyAttachments(current, attachments) {

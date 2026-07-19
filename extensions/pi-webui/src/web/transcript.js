@@ -1,11 +1,17 @@
 import { renderMarkdown } from "./markdown.js";
 
-export function createTranscriptRenderer({ documentRef = document, list }) {
+export function createTranscriptRenderer({
+	documentRef = document,
+	list,
+	onReattach = () => undefined,
+	onForget = () => undefined,
+}) {
 	const messages = new Map();
 
 	return {
-		render(nextMessages, tools) {
+		render(nextMessages, tools, sentImages = { items: [] }) {
 			const toolById = new Map(tools.map((tool) => [tool.id, tool]));
+			const retainedImageIds = new Set((sentImages.items ?? []).map((item) => item.id));
 			const retained = new Set();
 			const changed = [];
 			let cursor = list.firstChild;
@@ -16,7 +22,18 @@ export function createTranscriptRenderer({ documentRef = document, list }) {
 					view = createMessageView(message.role, documentRef);
 					messages.set(message.id, view);
 				}
-				if (updateMessageView(view, message, toolById, documentRef)) changed.push(message.id);
+				if (
+					updateMessageView(
+						view,
+						message,
+						toolById,
+						retainedImageIds,
+						{ onReattach, onForget },
+						documentRef,
+					)
+				) {
+					changed.push(message.id);
+				}
 				if (view.node !== cursor) list.insertBefore(view.node, cursor);
 				cursor = view.node.nextSibling;
 			}
@@ -39,6 +56,11 @@ export function toolPhaseLabel(tool) {
 	if (tool?.phase === "end") return "Completed";
 	if (tool?.phase === "start" || tool?.phase === "update") return "Running";
 	return "Requested";
+}
+
+export function retainedImageStatus(block, retainedImageIds) {
+	if (!block?.retainedImageId) return "none";
+	return retainedImageIds?.has(block.retainedImageId) ? "eligible" : "expired";
 }
 
 export function toolCommandPreview(tool) {
@@ -67,7 +89,7 @@ function createMessageView(role, documentRef) {
 	return { node, heading, body, blocks: new Map(), role: "", final: undefined };
 }
 
-function updateMessageView(view, message, toolById, documentRef) {
+function updateMessageView(view, message, toolById, retainedImageIds, actions, documentRef) {
 	let changed = false;
 	const role = knownRole(message.role);
 	if (view.role !== role) {
@@ -93,7 +115,18 @@ function updateMessageView(view, message, toolById, documentRef) {
 			view.blocks.set(key, blockView);
 			changed = true;
 		}
-		if (updateBlockView(blockView, block, toolById.get(block.id), documentRef)) changed = true;
+		if (
+			updateBlockView(
+				blockView,
+				block,
+				toolById.get(block.id),
+				retainedImageIds,
+				actions,
+				documentRef,
+			)
+		) {
+			changed = true;
+		}
 		if (blockView.node !== cursor) view.body.insertBefore(blockView.node, cursor);
 		cursor = blockView.node.nextSibling;
 	}
@@ -141,7 +174,7 @@ function createBlockView(block, documentRef) {
 	return { type: block.type, node, value: undefined };
 }
 
-function updateBlockView(view, block, tool, documentRef) {
+function updateBlockView(view, block, tool, retainedImageIds, actions, documentRef) {
 	if (block.type === "text") {
 		if (view.value === block.text) return false;
 		view.value = block.text;
@@ -155,10 +188,34 @@ function updateBlockView(view, block, tool, documentRef) {
 		return true;
 	}
 	if (block.type === "image") {
+		const status = retainedImageStatus(block, retainedImageIds);
 		const label = `Image${block.mimeType ? ` · ${block.mimeType}` : ""}`;
-		if (view.value === label) return false;
-		view.value = label;
-		view.node.textContent = label;
+		const value = `${label}:${status}`;
+		if (view.value === value) return false;
+		view.value = value;
+		const text = documentRef.createElement("span");
+		text.textContent = label;
+		view.node.replaceChildren(text);
+		if (status === "eligible") {
+			const attach = documentRef.createElement("button");
+			attach.type = "button";
+			attach.className = "message-image-action";
+			attach.textContent = "Attach again";
+			attach.setAttribute("aria-label", `Attach image again: ${label}`);
+			attach.addEventListener("click", () => actions.onReattach(block.retainedImageId));
+			const forget = documentRef.createElement("button");
+			forget.type = "button";
+			forget.className = "message-image-action subtle";
+			forget.textContent = "Forget";
+			forget.setAttribute("aria-label", `Forget retained image: ${label}`);
+			forget.addEventListener("click", () => actions.onForget(block.retainedImageId));
+			view.node.append(attach, forget);
+		} else if (status === "expired") {
+			const expired = documentRef.createElement("span");
+			expired.className = "message-image-expired";
+			expired.textContent = "Expired";
+			view.node.append(expired);
+		}
 		return true;
 	}
 	if (block.type === "toolCall") return updateToolView(view, block, tool);

@@ -12,12 +12,25 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const SETTINGS_FILE = "pi-webui.json";
 
+const MIB = 1024 * 1024;
+
 export interface WebUISettings {
 	startOnSessionStart: boolean;
+	retainSentImages: boolean;
+	maxRetainedImages: number;
+	maxRetainedBytes: number;
 }
 
 export const DEFAULT_SETTINGS: Readonly<WebUISettings> = Object.freeze({
 	startOnSessionStart: false,
+	retainSentImages: false,
+	maxRetainedImages: 32,
+	maxRetainedBytes: 128 * MIB,
+});
+
+export const RETENTION_HARD_LIMITS = Object.freeze({
+	maxRetainedImages: 128,
+	maxRetainedBytes: 512 * MIB,
 });
 
 export interface SettingsLoadResult {
@@ -49,16 +62,41 @@ export function settingsFilePath(): string {
 export function normalizeSettings(value: unknown): WebUISettings | undefined {
 	if (!isRecord(value)) return undefined;
 	if (
-		Object.hasOwn(value, "startOnSessionStart") &&
-		typeof value.startOnSessionStart !== "boolean"
+		(Object.hasOwn(value, "startOnSessionStart") &&
+			typeof value.startOnSessionStart !== "boolean") ||
+		(Object.hasOwn(value, "retainSentImages") && typeof value.retainSentImages !== "boolean")
 	) {
 		return undefined;
+	}
+	for (const key of ["maxRetainedImages", "maxRetainedBytes"] as const) {
+		if (!Object.hasOwn(value, key)) continue;
+		const candidate = value[key];
+		if (
+			typeof candidate !== "number" ||
+			!Number.isSafeInteger(candidate) ||
+			candidate <= 0 ||
+			candidate > RETENTION_HARD_LIMITS[key]
+		) {
+			return undefined;
+		}
 	}
 	return {
 		startOnSessionStart:
 			typeof value.startOnSessionStart === "boolean"
 				? value.startOnSessionStart
 				: DEFAULT_SETTINGS.startOnSessionStart,
+		retainSentImages:
+			typeof value.retainSentImages === "boolean"
+				? value.retainSentImages
+				: DEFAULT_SETTINGS.retainSentImages,
+		maxRetainedImages:
+			typeof value.maxRetainedImages === "number"
+				? value.maxRetainedImages
+				: DEFAULT_SETTINGS.maxRetainedImages,
+		maxRetainedBytes:
+			typeof value.maxRetainedBytes === "number"
+				? value.maxRetainedBytes
+				: DEFAULT_SETTINGS.maxRetainedBytes,
 	};
 }
 
@@ -86,7 +124,7 @@ export async function loadSettings(path = settingsFilePath()): Promise<SettingsL
 		const document = JSON.parse(text) as unknown;
 		if (!isRecord(document)) return invalid(path, "the top level must be a JSON object");
 		const settings = normalizeSettings(document);
-		if (!settings) return invalid(path, "startOnSessionStart must be a boolean");
+		if (!settings) return invalid(path, "recognized settings have an invalid type or limit");
 		return { kind: "loaded", path, settings, source: "settings file", document };
 	} catch (error) {
 		return invalid(path, formatError(error));
@@ -99,7 +137,13 @@ export async function saveSettings(
 	path = settingsFilePath(),
 	operations: Partial<SettingsFileOperations> = {},
 ): Promise<Record<string, unknown>> {
-	const nextDocument = { ...document, startOnSessionStart: settings.startOnSessionStart };
+	const nextDocument = {
+		...document,
+		startOnSessionStart: settings.startOnSessionStart,
+		retainSentImages: settings.retainSentImages,
+		maxRetainedImages: settings.maxRetainedImages,
+		maxRetainedBytes: settings.maxRetainedBytes,
+	};
 	const directory = dirname(path);
 	await mkdir(directory, { recursive: true });
 	const temporaryPath = temporaryFilePath(path);

@@ -12,7 +12,7 @@ export interface SessionDescriptor {
 export type PublicContent =
 	| { type: "text"; text: string }
 	| { type: "thinking"; text: string }
-	| { type: "image"; mimeType?: string }
+	| { type: "image"; mimeType?: string; retainedImageId?: string }
 	| { type: "toolCall"; id: string; name: string; arguments: unknown };
 
 export interface PublicMessage {
@@ -116,8 +116,13 @@ export class ConversationProjection {
 		this.publishSnapshot();
 	}
 
-	recordMessage(message: unknown, final = true, entryId?: string): void {
-		const projected = projectMessage(message, entryId, final);
+	recordMessage(
+		message: unknown,
+		final = true,
+		entryId?: string,
+		retainedImageIds: readonly string[] = [],
+	): void {
+		const projected = projectMessage(message, entryId, final, retainedImageIds);
 		const previous = this.messages.get(projected.id);
 		if (previous && JSON.stringify(previous) === JSON.stringify(projected)) return;
 		this.messages.set(projected.id, projected);
@@ -194,12 +199,17 @@ export function projectBranchMessages(branch: unknown): PublicMessage[] {
 	return messages;
 }
 
-export function projectMessage(message: unknown, entryId?: string, final = true): PublicMessage {
+export function projectMessage(
+	message: unknown,
+	entryId?: string,
+	final = true,
+	retainedImageIds: readonly string[] = [],
+): PublicMessage {
 	if (!isRecord(message) || typeof message.role !== "string") {
 		throw new Error("Invalid Pi message");
 	}
 	const timestamp = typeof message.timestamp === "number" ? message.timestamp : undefined;
-	const content = projectContent(message.content);
+	const content = projectContent(message.content, retainedImageIds);
 	const id = entryId ?? messageId(message, timestamp, content);
 	return {
 		id,
@@ -217,10 +227,14 @@ export function projectMessage(message: unknown, entryId?: string, final = true)
 	};
 }
 
-function projectContent(content: unknown): PublicContent[] {
+function projectContent(
+	content: unknown,
+	retainedImageIds: readonly string[] = [],
+): PublicContent[] {
 	if (typeof content === "string") return [{ type: "text", text: truncateText(content) }];
 	if (!Array.isArray(content)) return [];
 	const projected: PublicContent[] = [];
+	let imageIndex = 0;
 	for (const block of content) {
 		if (!isRecord(block) || typeof block.type !== "string") continue;
 		if (block.type === "text" && typeof block.text === "string") {
@@ -228,9 +242,12 @@ function projectContent(content: unknown): PublicContent[] {
 		} else if (block.type === "thinking" && typeof block.thinking === "string") {
 			projected.push({ type: "thinking", text: truncateText(block.thinking) });
 		} else if (block.type === "image") {
+			const retainedImageId = retainedImageIds[imageIndex];
+			imageIndex += 1;
 			projected.push({
 				type: "image",
 				...(typeof block.mimeType === "string" ? { mimeType: block.mimeType } : {}),
+				...(typeof retainedImageId === "string" ? { retainedImageId } : {}),
 			});
 		} else if (
 			block.type === "toolCall" &&
