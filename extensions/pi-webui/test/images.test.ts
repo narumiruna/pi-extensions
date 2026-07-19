@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { DEFAULT_IMAGE_LIMITS, processBrowserImages } from "../src/images.js";
+import {
+	DEFAULT_IMAGE_LIMITS,
+	detectImageFormat,
+	ImageProcessor,
+	processBrowserImages,
+} from "../src/images.js";
+
+const FIXTURE_DIR = path.join(process.cwd(), "extensions/pi-webui/test/fixtures");
 
 async function png(width = 2, height = 2, withMetadata = false): Promise<Buffer> {
 	let image = sharp({
@@ -13,6 +22,36 @@ async function png(width = 2, height = 2, withMetadata = false): Promise<Buffer>
 
 function input(bytes: Buffer, mimeType = "image/png") {
 	return { name: "pasted.png", mimeType, data: bytes.toString("base64") };
+}
+
+async function solid(format: "png" | "jpeg" | "webp" | "tiff" | "avif") {
+	let pipeline = sharp({
+		create: { width: 12, height: 8, channels: 4, background: { r: 20, g: 40, b: 60, alpha: 1 } },
+	});
+	if (format === "png") pipeline = pipeline.png();
+	if (format === "jpeg") pipeline = pipeline.jpeg();
+	if (format === "webp") pipeline = pipeline.webp();
+	if (format === "tiff") pipeline = pipeline.tiff();
+	if (format === "avif") pipeline = pipeline.avif();
+	return pipeline.toBuffer();
+}
+
+function tinyBmp(): Buffer {
+	const width = 2;
+	const height = 1;
+	const rowBytes = 8;
+	const buffer = Buffer.alloc(54 + rowBytes);
+	buffer.write("BM", 0, "ascii");
+	buffer.writeUInt32LE(buffer.length, 2);
+	buffer.writeUInt32LE(54, 10);
+	buffer.writeUInt32LE(40, 14);
+	buffer.writeInt32LE(width, 18);
+	buffer.writeInt32LE(height, 22);
+	buffer.writeUInt16LE(1, 26);
+	buffer.writeUInt16LE(24, 28);
+	buffer.writeUInt32LE(rowBytes, 34);
+	buffer.set([0, 0, 255, 0, 255, 0, 0, 0], 54);
+	return buffer;
 }
 
 async function animatedGif(width: number, pageHeight: number, pages: number): Promise<Buffer> {
@@ -39,6 +78,82 @@ test("image defaults stay bounded", () => {
 		maxDimension: 2_000,
 		maxBase64Bytes: 4_500_000,
 	});
+});
+
+test("magic-byte detection accepts every supported WebUI raster format", async () => {
+	assert.equal(detectImageFormat(await solid("png")), "png");
+	assert.equal(detectImageFormat(await solid("jpeg")), "jpeg");
+	assert.equal(detectImageFormat(await solid("webp")), "webp");
+	assert.equal(detectImageFormat(await animatedGif(2, 1, 2)), "gif");
+	assert.equal(detectImageFormat(tinyBmp()), "bmp");
+	assert.equal(detectImageFormat(await solid("tiff")), "tiff");
+	assert.equal(detectImageFormat(await solid("avif")), "avif");
+	assert.equal(
+		detectImageFormat(await readFile(path.join(FIXTURE_DIR, "colors-no-alpha.heic"))),
+		"heic",
+	);
+	assert.equal(detectImageFormat(Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>>")), null);
+});
+
+test("advanced formats normalize to provider-ready PNG", async () => {
+	const sources: Array<[string, Buffer]> = [
+		["bmp", tinyBmp()],
+		["tiff", await solid("tiff")],
+		["avif", await solid("avif")],
+		["heic", await readFile(path.join(FIXTURE_DIR, "colors-no-alpha.heic"))],
+	];
+	for (const [format, source] of sources) {
+		const [result] = await processBrowserImages([input(source)]);
+		assert.equal(result?.mimeType, "image/png", format);
+		assert.equal((await sharp(Buffer.from(result?.data ?? "", "base64")).metadata()).format, "png");
+	}
+});
+
+test("image processing preserves ICC profiles while stripping private metadata", async () => {
+	const source = await sharp({
+		create: { width: 3, height: 2, channels: 3, background: "#c08040" },
+	})
+		.jpeg()
+		.withIccProfile("srgb")
+		.withMetadata({ orientation: 6 })
+		.withExifMerge({
+			IFD0: { ImageDescription: "private note" },
+			IFD3: { GPSLatitude: "1/1 2/1 3/1" },
+		})
+		.toBuffer();
+	const [result] = await processBrowserImages([input(source)]);
+	const metadata = await sharp(Buffer.from(result?.data ?? "", "base64")).metadata();
+	assert.equal(metadata.width, 2);
+	assert.equal(metadata.height, 3);
+	assert.equal(metadata.exif, undefined);
+	assert.equal(metadata.xmp, undefined);
+	assert.ok(metadata.icc && metadata.icc.byteLength > 0);
+});
+
+test("ImageProcessor bounds concurrent image work while preserving result order", async () => {
+	let active = 0;
+	let peak = 0;
+	const releases: Array<() => void> = [];
+	const processor = new ImageProcessor(2, async (source) => {
+		active += 1;
+		peak = Math.max(peak, active);
+		await new Promise<void>((resolve) => releases.push(resolve));
+		active -= 1;
+		return { type: "image" as const, mimeType: "image/png", data: source.toString() };
+	});
+	const pending = ["one", "two", "three"].map((value) =>
+		processor.process(Buffer.from(value), { autoResize: true, maxPixels: 100 }),
+	);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(releases.length, 2);
+	releases.shift()?.();
+	await new Promise((resolve) => setImmediate(resolve));
+	while (releases.length > 0) releases.shift()?.();
+	assert.deepEqual(
+		(await Promise.all(pending)).map((result) => result.data),
+		["one", "two", "three"],
+	);
+	assert.equal(peak, 2);
 });
 
 test("PNG input is signature checked, sanitized, and converted to Pi content", async () => {

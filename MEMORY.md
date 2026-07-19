@@ -84,6 +84,7 @@
 - Symptom: official Pi standalone crashes on the second `proper-lockfile` access with a Proxy invariant in `mtime-precision.js`. Cause: the library caches precision as a non-configurable symbol on Bun's loader-proxied `graceful-fs` object. Fix: pass one stable plain Node `fs` adapter through the `fs` option for both async and sync locks.
 - Treat parsed credential maps as own-property dictionaries: names such as `__proto__` and `constructor` must not mutate or resolve through `Object.prototype`.
 - Active-account API-key conversion failures must fail closed, and user-facing errors must redact the exact current access and refresh secrets rather than relying only on token-shape regexes.
+- Symptom: a compiled pi-webui server smoke serves stale browser assets from another checkout. Cause: when cache-local `src/web` is absent, asset loading falls back through `process.cwd()`. Fix: launch the smoke with cwd set to the target worktree.
 
 ## TASTE
 

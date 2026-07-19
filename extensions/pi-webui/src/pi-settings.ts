@@ -43,15 +43,20 @@ async function readPatch(
 	}
 	try {
 		const parsed = JSON.parse(text) as unknown;
-		if (!isRecord(parsed) || !isRecord(parsed.images)) return undefined;
+		if (!isRecord(parsed)) return undefined;
+		const images = parsed.images;
+		if (images === undefined) return undefined;
+		if (!isRecord(images)) {
+			warnings.push(`Ignored invalid Pi images settings in ${path}.`);
+			return undefined;
+		}
 		const patch: ImageSettingsPatch = {};
-		if (typeof parsed.images.autoResize === "boolean") patch.autoResize = parsed.images.autoResize;
-		else if (parsed.images.autoResize !== undefined) {
+		if (typeof images.autoResize === "boolean") patch.autoResize = images.autoResize;
+		else if (images.autoResize !== undefined) {
 			warnings.push(`Ignored non-boolean images.autoResize in ${path}.`);
 		}
-		if (typeof parsed.images.blockImages === "boolean")
-			patch.blockImages = parsed.images.blockImages;
-		else if (parsed.images.blockImages !== undefined) {
+		if (typeof images.blockImages === "boolean") patch.blockImages = images.blockImages;
+		else if (images.blockImages !== undefined) {
 			warnings.push(`Ignored non-boolean images.blockImages in ${path}.`);
 		}
 		return patch;
