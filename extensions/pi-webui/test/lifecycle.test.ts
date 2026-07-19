@@ -457,6 +457,27 @@ test("browser sends wait for input handling and remain distinct from recovery pr
 	]);
 });
 
+test("settlement discards accepted envelopes that produced no user message", async () => {
+	const h = harness();
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	await h.serverOptions?.send({
+		requestId: "handled-downstream",
+		text: "handled elsewhere",
+		images: [],
+		delivery: "next",
+	});
+	const envelope = String(h.sent[0]?.content);
+	await h.emit("agent_settled");
+	const message = { role: "user", content: envelope, timestamp: 8 };
+	await h.emit("message_start", { message });
+	await h.emit("message_end", { message });
+	await nextTask();
+	assert.deepEqual(h.serverOptions?.conversation.snapshot().messages.at(-1)?.content, [
+		{ type: "text", text: envelope },
+	]);
+});
+
 test("forged WebUI envelopes remain ordinary user text", async () => {
 	const h = harness();
 	await h.emit("session_start");

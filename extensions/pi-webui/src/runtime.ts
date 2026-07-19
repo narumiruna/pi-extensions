@@ -204,7 +204,10 @@ export class WebUIRuntime {
 		});
 		(this.pi as LatestExtensionAPI).on("agent_settled", async (_event, ctx) => {
 			this.captureContext(ctx);
-			if (ctx.isIdle() && !ctx.hasPendingMessages()) this.conversation?.setActivity("idle");
+			if (ctx.isIdle() && !ctx.hasPendingMessages()) {
+				this.acceptedBrowserInputs.clear();
+				this.conversation?.setActivity("idle");
+			}
 		});
 	}
 

@@ -38,6 +38,7 @@ interface SseClient {
 interface RequestRecord {
 	hash: string;
 	promise: Promise<WebSendResult>;
+	settled: boolean;
 }
 
 class HttpError extends Error {
@@ -123,6 +124,7 @@ export class WebUIServer {
 		this.unsubscribe();
 		for (const controller of this.activeSendControllers) controller.abort();
 		this.activeSendControllers.clear();
+		this.requests.clear();
 		const responses = [...this.sseClients].map((client) => client.response);
 		this.broadcastControl("session-ended", { message: "Pi session ended" });
 		await Promise.all(responses.map((response) => finishResponse(response)));
@@ -270,6 +272,14 @@ export class WebUIServer {
 		response.once("close", abort);
 		const promise = this.options
 			.send({ ...message, signal: controller.signal })
+			.then((result) => {
+				const record = this.requests.get(message.requestId);
+				if (record?.promise === promise) {
+					record.settled = true;
+					this.trimRequests();
+				}
+				return result;
+			})
 			.catch((error) => {
 				if (this.requests.get(message.requestId)?.promise === promise) {
 					this.requests.delete(message.requestId);
@@ -282,13 +292,18 @@ export class WebUIServer {
 				response.off("close", abort);
 				this.activeSendControllers.delete(controller);
 			});
-		this.requests.set(message.requestId, { hash, promise });
-		while (this.requests.size > MAX_REQUESTS) {
-			const oldest = this.requests.keys().next().value;
-			if (typeof oldest !== "string") break;
-			this.requests.delete(oldest);
-		}
+		this.requests.set(message.requestId, { hash, promise, settled: false });
+		this.trimRequests();
 		return promise;
+	}
+
+	private trimRequests(): void {
+		if (this.requests.size <= MAX_REQUESTS) return;
+		for (const [requestId, record] of this.requests) {
+			if (!record.settled) continue;
+			this.requests.delete(requestId);
+			if (this.requests.size <= MAX_REQUESTS) return;
+		}
 	}
 
 	private events(url: URL, request: IncomingMessage, response: ServerResponse): void {

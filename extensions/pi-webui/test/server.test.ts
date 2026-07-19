@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import { ConversationProjection } from "../src/conversation.js";
-import { type WebSendRequest, WebUIServer } from "../src/server.js";
+import { type WebSendRequest, type WebSendResult, WebUIServer } from "../src/server.js";
 
 async function harness() {
 	const conversation = new ConversationProjection({
@@ -230,6 +230,44 @@ test("a completed upload aborts when its response connection closes", async () =
 			new Promise((_, reject) => setTimeout(() => reject(new Error("send was not aborted")), 500)),
 		]);
 		assert.equal(aborted, true);
+	} finally {
+		await server.close();
+	}
+});
+
+test("in-flight request ids remain deduplicated when the completed-result cache is full", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	const gate = deferred<WebSendResult>();
+	let attempts = 0;
+	const server = await WebUIServer.start({
+		conversation,
+		send: async () => {
+			attempts += 1;
+			return gate.promise;
+		},
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		const send = (requestId: string) =>
+			api(server, "/api/messages", {
+				method: "POST",
+				cookie,
+				client,
+				body: JSON.stringify({ requestId, text: requestId, images: [], delivery: "next" }),
+			});
+		const originals = Array.from({ length: 129 }, (_, index) => send(`pending-${index}`));
+		await waitFor(() => attempts === 129);
+		const replay = send("pending-0");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const attemptsAfterReplay = attempts;
+		gate.resolve({ delivery: "immediate" });
+		const responses = await Promise.all([...originals, replay]);
+		assert.equal(attemptsAfterReplay, 129);
+		assert.equal(
+			responses.every((response) => response.status === 202),
+			true,
+		);
 	} finally {
 		await server.close();
 	}

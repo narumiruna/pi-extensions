@@ -45,6 +45,7 @@
 - Loopback HTTP cookies are shared by hostname across ports; simultaneous Pi servers on `127.0.0.1` need per-server cookie names, not only per-server cookie values.
 - Symptom: an authenticated browser SSE client remains “reconnecting” when the replay is empty. Cause: `writeHead()` alone may not flush EventSource headers. Fix: call `flushHeaders()` and write an initial SSE comment before waiting for events.
 - Browser request deduplication survives a lost response only when an unchanged retry retains the exact request id and payload, including its delivery mode; definitive HTTP rejections can invalidate that attempt.
+- Bounded request-dedup caches must evict only settled records; evicting an in-flight promise lets a repeated request id start the mutation twice.
 - New framework-free browser modules must be added to the authenticated server asset allowlist as well as the package; cover each runtime module with an HTTP asset test and pack dry run.
 - Lease snapshots and non-replayed lease events must carry and compare a monotonic generation; an older HTTP snapshot must never clear stale state established by a newer SSE event.
 - Pi's extension `sendUserMessage()` is fire-and-forget, so browser APIs must explicitly preflight idle model/auth state before acknowledging; final message projection must run in a later task because subsequent `message_end` handlers can replace the message in place.
