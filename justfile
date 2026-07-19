@@ -128,6 +128,9 @@ pack-subagents:
 pack-telegraph:
     just pack telegraph
 
+pack-webui:
+    just pack webui
+
 # Try individual packages from this working tree as temporary pi packages
 try-btw:
     just try btw
@@ -182,6 +185,9 @@ try-subagents:
 
 try-telegraph:
     just try telegraph
+
+try-webui:
+    just try webui
 
 # Install individual packages through pi
 install-btw:
@@ -238,6 +244,9 @@ install-subagents:
 install-telegraph:
     just install telegraph
 
+install-webui:
+    just install webui
+
 # Publish individual packages to npm
 publish-btw:
     just publish btw
@@ -292,6 +301,9 @@ publish-subagents:
 
 publish-telegraph:
     just publish telegraph
+
+publish-webui:
+    just publish webui
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch

@@ -1,0 +1,49 @@
+{
+	"name": "@narumitw/pi-webui",
+	"version": "0.20.2",
+	"description": "Lightweight local web companion for the current Pi terminal session.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"web",
+		"chat",
+		"browser"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/webui.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"sharp": "^0.35.3"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.3",
+		"@earendil-works/pi-ai": "0.80.10",
+		"@earendil-works/pi-coding-agent": "0.80.10",
+		"typescript": "7.0.2"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-webui"
+	}
+}

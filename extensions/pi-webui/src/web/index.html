@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>Pi WebUI</title>
+		<link rel="stylesheet" href="/styles.css" />
+	</head>
+	<body>
+		<a class="skip-link" href="#message-input">Skip to message</a>
+		<header class="session-header">
+			<div>
+				<p class="eyebrow">Pi WebUI</p>
+				<h1 id="project-name">Connecting…</h1>
+				<p id="session-name" class="session-name"></p>
+			</div>
+			<p id="connection-status" class="connection" role="status">Connecting…</p>
+		</header>
+
+		<main>
+			<section class="conversation" aria-labelledby="conversation-title">
+				<h2 id="conversation-title" class="visually-hidden">Current Pi conversation</h2>
+				<div id="empty-state" class="empty-state">
+					<strong>No messages yet</strong>
+					<span>Messages from this Pi session will appear here.</span>
+				</div>
+				<ol id="transcript" aria-live="polite" aria-relevant="additions text"></ol>
+			</section>
+
+			<section id="blocking-state" class="blocking-state" role="alert" hidden>
+				<strong id="blocking-title">This page is read-only</strong>
+				<span id="blocking-message"></span>
+			</section>
+
+			<form id="composer" class="composer">
+				<label for="message-input">Message Pi</label>
+				<textarea
+					id="message-input"
+					aria-label="Message Pi"
+					rows="3"
+					placeholder="Ask Pi to do something…"
+				></textarea>
+				<ul id="image-previews" class="image-previews" aria-label="Attached images"></ul>
+				<p id="composer-status" class="composer-status" role="status">
+					Messages send immediately while Pi is idle.
+				</p>
+				<p id="composer-error" class="composer-error" role="alert" hidden></p>
+				<div class="composer-actions">
+					<label class="button secondary" for="image-input">Add images</label>
+					<input
+						id="image-input"
+						type="file"
+						accept="image/png,image/jpeg,image/webp,image/gif"
+						multiple
+						hidden
+					/>
+					<div class="send-actions">
+						<button id="steer" class="button secondary" type="button" hidden>Steer now</button>
+						<button id="send-next" class="button primary" type="submit">Send now</button>
+					</div>
+				</div>
+			</form>
+		</main>
+
+		<footer>
+			<details>
+				<summary>Privacy and limitations</summary>
+				<p>
+					This loopback page reflects semantic Pi messages, not terminal pixels. Data stays in
+					this live Pi process and browser tab. Thinking is collapsed by default.
+				</p>
+			</details>
+		</footer>
+		<script type="module" src="/app.js"></script>
+	</body>
+</html>
