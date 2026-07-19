@@ -1,3 +1,4 @@
+import { createImageDragController } from "./image-drag.js";
 import {
 	acknowledgeDraftText,
 	applyAttachments,
@@ -17,6 +18,7 @@ import {
 	initialState,
 	invalidateSendAttempt,
 	moveImage,
+	moveImageAfter,
 	moveImageBefore,
 	noteUnseenUpdate,
 	prepareSend,
@@ -87,6 +89,16 @@ const ui = {
 	previewClose: document.querySelector("#image-preview-close"),
 	previewDismiss: document.querySelector("#image-preview-dismiss"),
 };
+
+const imageDrag = createImageDragController(ui.previews, {
+	isLocked: composerLocked,
+	onDrop: ({ sourceId, targetId, after }) => {
+		const images = after
+			? moveImageAfter(model.images, sourceId, targetId)
+			: moveImageBefore(model.images, sourceId, targetId);
+		void reorderImages(images, sourceId);
+	},
+});
 
 const transcriptRenderer = createTranscriptRenderer({
 	documentRef: document,
@@ -311,7 +323,7 @@ function connectionFailure(error) {
 }
 
 async function send(steer) {
-	if (!canSend(model)) return;
+	if (composerLocked() || !canSend(model)) return;
 	try {
 		await flushDraftText();
 	} catch (error) {
@@ -319,7 +331,7 @@ async function send(steer) {
 		render();
 		return;
 	}
-	if (!canSend(model) || model.textDirty) return;
+	if (composerLocked() || !canSend(model) || model.textDirty) return;
 	const prepared = prepareSend(model, crypto.randomUUID(), steer ? "steer" : "next");
 	const attempt = prepared.attempt;
 	model = prepared.state;
@@ -613,22 +625,38 @@ async function clearAttachments() {
 
 async function reorderImages(images, focusId) {
 	if (composerLocked()) return;
-	const state = await mutateAttachmentState("/api/attachments/reorder", {
-		method: "POST",
-		body: JSON.stringify({
-			revision: model.attachmentRevision,
-			ids: images.map((image) => image.id),
-		}),
-	});
-	if (state) focusImageItem(focusId);
-}
-
-function focusImageItem(id) {
-	requestAnimationFrame(() => {
-		const escapedId = CSS.escape(id);
-		const item = ui.previews.querySelector(`[data-image-id="${escapedId}"]`);
-		(item?.tabIndex === 0 ? item : item?.querySelector(".remove-image"))?.focus();
-	});
+	if (images.every((image, index) => image.id === model.images[index]?.id)) {
+		imageDrag.focus(focusId);
+		return;
+	}
+	const previousImages = model.images;
+	const previousRevision = model.attachmentRevision;
+	model = { ...model, images };
+	mutatingAttachments = true;
+	renderComposer();
+	imageDrag.focus(focusId);
+	ui.previews.setAttribute("aria-busy", "true");
+	try {
+		const state = await attachmentMutation("/api/attachments/reorder", {
+			method: "POST",
+			body: JSON.stringify({
+				revision: previousRevision,
+				ids: images.map((image) => image.id),
+			}),
+		});
+		model = applyAttachments(model, state);
+		model = { ...model, error: "" };
+	} catch (error) {
+		if (model.attachmentRevision === previousRevision) {
+			model = { ...model, images: previousImages };
+		}
+		model = { ...model, error: errorMessage(error) };
+	} finally {
+		mutatingAttachments = false;
+		ui.previews.removeAttribute("aria-busy");
+		render();
+		imageDrag.focus(focusId);
+	}
 }
 
 async function removeImage(id) {
@@ -727,9 +755,9 @@ function renderComposer() {
 	const locked = composerLocked();
 	ui.composer.classList.toggle("locked", locked);
 	ui.send.textContent = busyLabel(model);
-	ui.send.disabled = !canSend(model);
+	ui.send.disabled = locked || !canSend(model);
 	ui.steer.hidden = model.activity !== "running";
-	ui.steer.disabled = !canSend(model);
+	ui.steer.disabled = locked || !canSend(model);
 	ui.input.disabled = model.closed || model.stale;
 	const admissionLocked = locked || model.readingImages > 0;
 	ui.imageInput.disabled = admissionLocked;
@@ -759,8 +787,9 @@ function renderComposer() {
 		item.dataset.imageId = image.id;
 		const retryable = image.status === "error" && (image.retryable || retryFiles.has(image.id));
 		const orderingLocked = locked || model.attachmentPhase !== "ready";
+		const reorderable = model.images.length > 1 && image.status === "ready";
 		item.draggable = model.images.length > 1 && image.status === "ready" && !orderingLocked;
-		if (item.draggable) {
+		if (reorderable) {
 			item.tabIndex = 0;
 			item.setAttribute(
 				"aria-label",
@@ -771,6 +800,7 @@ function renderComposer() {
 		item.addEventListener("keydown", (event) => {
 			if (
 				event.target !== item ||
+				composerLocked() ||
 				orderingLocked ||
 				!event.altKey ||
 				event.ctrlKey ||
@@ -783,31 +813,7 @@ function renderComposer() {
 			event.preventDefault();
 			void reorderImages(moveImage(model.images, image.id, direction), image.id);
 		});
-		item.addEventListener("dragstart", (event) => {
-			if (orderingLocked || !event.dataTransfer) return;
-			event.dataTransfer.effectAllowed = "move";
-			event.dataTransfer.setData("application/x-pi-webui-image", image.id);
-			item.classList.add("dragging");
-		});
-		item.addEventListener("dragend", () => {
-			item.classList.remove("dragging");
-			for (const candidate of ui.previews.children) candidate.classList.remove("drag-target");
-		});
-		item.addEventListener("dragover", (event) => {
-			const draggedId = event.dataTransfer?.getData("application/x-pi-webui-image");
-			if (orderingLocked || !draggedId || draggedId === image.id) return;
-			event.preventDefault();
-			item.classList.add("drag-target");
-		});
-		item.addEventListener("dragleave", () => item.classList.remove("drag-target"));
-		item.addEventListener("drop", (event) => {
-			const draggedId = event.dataTransfer?.getData("application/x-pi-webui-image");
-			item.classList.remove("drag-target");
-			if (orderingLocked || !draggedId || draggedId === image.id) return;
-			event.preventDefault();
-			event.stopPropagation();
-			void reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId);
-		});
+		imageDrag.bind(item, { id: image.id, orderingLocked });
 		const previewButton = document.createElement("button");
 		previewButton.type = "button";
 		previewButton.className = "attachment-preview";
@@ -819,6 +825,7 @@ function renderComposer() {
 			preview.src = `/api/attachments/${encodeURIComponent(image.id)}/preview?v=${model.attachmentRevision}`;
 		}
 		preview.alt = "";
+		preview.draggable = false;
 		previewButton.append(preview);
 		const details = document.createElement("span");
 		details.className = "attachment-details";

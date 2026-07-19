@@ -233,7 +233,9 @@ export class WebUIServer {
 			}
 			if (
 				request.method === "GET" &&
-				["/app.js", "/state.js", "/markdown.js", "/transcript.js"].includes(url.pathname)
+				["/app.js", "/state.js", "/markdown.js", "/transcript.js", "/image-drag.js"].includes(
+					url.pathname,
+				)
 			) {
 				await this.asset(response, url.pathname.slice(1), "text/javascript; charset=utf-8");
 				return;

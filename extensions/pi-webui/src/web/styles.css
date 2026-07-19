@@ -551,6 +551,10 @@ textarea:disabled {
 	border: 1px solid var(--border);
 	border-radius: 10px;
 	background: var(--surface-secondary);
+	transition:
+		border-color 0.12s ease,
+		box-shadow 0.12s ease,
+		transform 0.12s ease;
 }
 
 .image-preview-item[draggable="true"] {
@@ -562,12 +566,26 @@ textarea:disabled {
 }
 
 .image-preview-item.dragging {
-	opacity: 0.55;
+	opacity: 0.5;
+	transform: scale(0.985);
 }
 
-.image-preview-item.drag-target {
+.image-preview-item.drag-before {
 	border-color: var(--accent);
-	box-shadow: 0 0 0 2px var(--accent-soft);
+	box-shadow: inset 3px 0 var(--accent);
+}
+
+.image-preview-item.drag-after {
+	border-color: var(--accent);
+	box-shadow: inset -3px 0 var(--accent);
+}
+
+.image-previews.vertical-drop .image-preview-item.drag-before {
+	box-shadow: inset 0 3px var(--accent);
+}
+
+.image-previews.vertical-drop .image-preview-item.drag-after {
+	box-shadow: inset 0 -3px var(--accent);
 }
 
 .attachment-details {
