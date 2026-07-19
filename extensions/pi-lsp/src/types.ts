@@ -67,6 +67,8 @@ export interface ConfiguredLspServer {
 	env?: Record<string, string>;
 	initialization?: Record<string, unknown>;
 	skipDirectories?: string[];
+	// Quiet period in ms after the latest push-diagnostics publication.
+	diagnosticsSettleMs?: number;
 }
 
 export interface LspConfig {
@@ -89,6 +91,7 @@ export interface LspServerAdapter {
 	env?: Record<string, string>;
 	initialization?: Record<string, unknown>;
 	skipDirectories: Set<string>;
+	diagnosticsSettleMs?: number;
 	isSupportedFile: (filePath: string) => boolean;
 	languageIdFor: (filePath: string) => string;
 }

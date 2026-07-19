@@ -151,6 +151,8 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		command: ["intelephense", "--stdio"],
 		extensions: [".php"],
 		initialization: { intelephense: { telemetry: { enabled: false } } },
+		// Publishes empty on didOpen, then real diagnostics ~0.2-3s later.
+		diagnosticsSettleMs: 4000,
 	},
 	{
 		name: "prisma",
@@ -419,6 +421,7 @@ function normalizeServer(name: string, value: unknown, label: string): InternalL
 		env: optionalStringRecordField(value, "env", label),
 		initialization: optionalRecordField(value, "initialization", label),
 		skipDirectories: optionalDirectoryNamesField(value, "skipDirectories", label),
+		diagnosticsSettleMs: optionalPositiveNumberField(value, "diagnosticsSettleMs", label),
 	};
 }
 
@@ -444,6 +447,7 @@ function configToAdapter(config: InternalLspServer): LspServerAdapter {
 		env: config.env,
 		initialization: config.initialization,
 		skipDirectories: new Set([...COMMON_SKIP_DIRECTORIES, ...(config.skipDirectories ?? [])]),
+		diagnosticsSettleMs: config.diagnosticsSettleMs,
 		isSupportedFile: (filePath) => extensionSet.has(path.extname(filePath)),
 		languageIdFor: (filePath) => languageIdFor(config, filePath),
 	};
@@ -543,6 +547,15 @@ function stringArrayField(value: Record<string, unknown>, field: string, label: 
 	const fieldValue = value[field];
 	if (!Array.isArray(fieldValue) || !fieldValue.every((item) => typeof item === "string")) {
 		throw new Error(`${label}.${field} must be an array of strings.`);
+	}
+	return fieldValue;
+}
+
+function optionalPositiveNumberField(value: Record<string, unknown>, field: string, label: string) {
+	const fieldValue = value[field];
+	if (fieldValue === undefined) return undefined;
+	if (typeof fieldValue !== "number" || !Number.isFinite(fieldValue) || fieldValue <= 0) {
+		throw new Error(`${label}.${field} must be a positive number.`);
 	}
 	return fieldValue;
 }

@@ -97,6 +97,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			languageId: string;
 			skipDirectories?: string[];
 			initialization?: Record<string, unknown>;
+			diagnosticsSettleMs?: number;
 		}> = [
 			{
 				name: "rubocop",
@@ -191,6 +192,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				sample: "index.php",
 				languageId: "php",
 				initialization: { intelephense: { telemetry: { enabled: false } } },
+				diagnosticsSettleMs: 4000,
 			},
 			{
 				name: "prisma",
@@ -295,6 +297,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			assert.deepEqual(adapter.extensions, expected.extensions);
 			assert.equal(adapter.languageIdFor(expected.sample), expected.languageId);
 			assert.deepEqual(adapter.initialization, expected.initialization);
+			assert.equal(adapter.diagnosticsSettleMs, expected.diagnosticsSettleMs);
 			for (const directory of expected.skipDirectories ?? []) {
 				assert.equal(
 					adapter.skipDirectories.has(directory),
@@ -449,12 +452,14 @@ test("LSP config applies safe server-specific skip directories", () => {
 					command: ["custom-lsp"],
 					extensions: [".foo"],
 					skipDirectories: ["generated"],
+					diagnosticsSettleMs: 250,
 				},
 			},
 		});
 		const adapter = loadRuntime(project).adapters[0];
 		assert.ok(adapter);
 		assert.equal(adapter.isDefault, false);
+		assert.equal(adapter.diagnosticsSettleMs, 250);
 		assert.deepEqual(collectSupportedFiles(adapter, project, undefined, 50), [
 			path.join(project, "src", "main.foo"),
 		]);
@@ -472,6 +477,17 @@ test("LSP config applies safe server-specific skip directories", () => {
 			},
 		});
 		assert.throws(() => loadConfig(project), /skipDirectories.*directory names/);
+
+		process.env.PI_LSP_CONFIG = JSON.stringify({
+			servers: {
+				custom: {
+					command: ["custom-lsp"],
+					extensions: [".foo"],
+					diagnosticsSettleMs: 0,
+				},
+			},
+		});
+		assert.throws(() => loadConfig(project), /diagnosticsSettleMs.*positive number/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

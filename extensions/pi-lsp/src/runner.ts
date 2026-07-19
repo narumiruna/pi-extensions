@@ -47,26 +47,32 @@ export async function runDiagnostics(
 		await client.start();
 		await client.initialize(root);
 
-		const entries: DiagnosticEntry[] = [];
-		for (const file of files) {
-			throwIfAborted(signal, adapter);
-			const uri = pathToFileURL(file).href;
-			const text = readFileSync(file, "utf8");
-			client.didOpen(uri, text, adapter.languageIdFor(file));
-			try {
-				const diagnostics = await client.diagnostics(uri);
-				entries.push({ path: path.relative(root, file) || file, uri, diagnostics });
-			} finally {
-				client.didClose(uri);
+		const openedFiles: Array<{ file: string; uri: string }> = [];
+		try {
+			for (const file of files) {
+				throwIfAborted(signal, adapter);
+				const uri = pathToFileURL(file).href;
+				const text = readFileSync(file, "utf8");
+				client.didOpen(uri, text, adapter.languageIdFor(file));
+				openedFiles.push({ file, uri });
 			}
-		}
 
-		return textResult(formatDiagnostics(adapter, entries), {
-			root,
-			command,
-			files: entries,
-			summary: summarize(entries),
-		});
+			const entries: DiagnosticEntry[] = await Promise.all(
+				openedFiles.map(async ({ file, uri }) => ({
+					path: path.relative(root, file) || file,
+					uri,
+					diagnostics: await client.diagnostics(uri),
+				})),
+			);
+			return textResult(formatDiagnostics(adapter, entries), {
+				root,
+				command,
+				files: entries,
+				summary: summarize(entries),
+			});
+		} finally {
+			for (const { uri } of openedFiles) client.didClose(uri);
+		}
 	} finally {
 		ctx.ui.setStatus(statusKey, undefined);
 		signal?.removeEventListener("abort", abort);
