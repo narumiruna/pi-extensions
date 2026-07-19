@@ -637,6 +637,42 @@ footer p {
 	margin-top: 0;
 }
 
+.confirmation-dialog {
+	width: min(92vw, 30rem);
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	padding: 1.25rem;
+	color: var(--text);
+	background: var(--surface);
+	box-shadow: var(--shadow);
+}
+
+.confirmation-dialog::backdrop {
+	background: rgb(11 17 30 / 72%);
+}
+
+.confirmation-dialog h2 {
+	margin-block: 0 0.5rem;
+	font-size: 1.15rem;
+}
+
+.confirmation-dialog p {
+	margin-block: 0 1rem;
+	color: var(--muted);
+}
+
+.dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.6rem;
+}
+
+.danger {
+	border-color: var(--danger);
+	color: var(--danger);
+	background: var(--danger-soft);
+}
+
 .image-preview-dialog {
 	width: min(96vw, 1400px);
 	max-width: none;

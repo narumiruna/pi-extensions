@@ -32,6 +32,7 @@ const state = (await import(
 	followLatest(current: WebState): WebState;
 	moveImage(images: WebImage[], id: string, direction: number): WebImage[];
 	moveImageBefore(images: WebImage[], id: string, targetId: string): WebImage[];
+	clearDraftImages(current: WebState): WebState;
 	canSend(current: WebState): boolean;
 	busyLabel(current: WebState): string;
 	deliveryNotice(current: WebState): string;
@@ -247,6 +248,22 @@ test("send completion removes only the submitted draft", () => {
 	assert.deepEqual(completed.images, [newer]);
 	assert.equal(completed.pending, false);
 	assert.equal(completed.lastDelivery, "immediate");
+});
+
+test("clearing attachments preserves text and invalidates the pending retry attempt", () => {
+	const images: WebImage[] = [{ id: "one" }, { id: "two" }];
+	const prepared = state.prepareSend(
+		{ ...state.initialState(), connected: true, text: "keep me", images },
+		"request-1",
+	);
+	const failed = state.failSend(prepared.state, prepared.attempt, "failed");
+	const cleared = state.clearDraftImages(failed);
+	assert.equal(cleared.text, "keep me");
+	assert.deepEqual(cleared.images, []);
+	assert.equal(cleared.outbox, undefined);
+	assert.equal(cleared.lastDelivery, undefined);
+	assert.equal(cleared.pending, false);
+	assert.equal(failed.images.length, 2);
 });
 
 test("image ordering helpers are immutable and bounded", () => {
