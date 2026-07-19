@@ -4,6 +4,7 @@ import {
 	applySnapshot,
 	busyLabel,
 	canSend,
+	clearDraftImages,
 	completeSend,
 	deliveryNotice,
 	failSend,
@@ -59,6 +60,9 @@ const ui = {
 	input: document.querySelector("#message-input"),
 	imageInput: document.querySelector("#image-input"),
 	addImages: document.querySelector('label[for="image-input"]'),
+	clearAttachments: document.querySelector("#clear-attachments"),
+	clearDialog: document.querySelector("#clear-attachments-dialog"),
+	clearMessage: document.querySelector("#clear-attachments-message"),
 	previews: document.querySelector("#image-previews"),
 	attachmentStatus: document.querySelector("#attachment-status"),
 	status: document.querySelector("#composer-status"),
@@ -87,6 +91,19 @@ ui.steer.addEventListener("click", () => void send(true));
 ui.imageInput.addEventListener("change", () => {
 	void addFiles(ui.imageInput.files);
 	ui.imageInput.value = "";
+});
+ui.clearAttachments.addEventListener("click", () => {
+	if (composerLocked() || model.images.length < 2) return;
+	ui.clearDialog.returnValue = "cancel";
+	ui.clearMessage.textContent = `Remove all ${model.images.length} unsent image attachments? Message text will be kept.`;
+	ui.clearDialog.showModal();
+});
+ui.clearDialog.addEventListener("close", () => {
+	if (ui.clearDialog.returnValue !== "confirm") {
+		requestAnimationFrame(() => ui.clearAttachments.focus());
+		return;
+	}
+	clearAttachments();
 });
 ui.input.addEventListener("keydown", (event) => {
 	if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -351,6 +368,17 @@ function isSupportedImageFile(file) {
 	);
 }
 
+function clearAttachments() {
+	if (composerLocked() || model.images.length < 2) return;
+	if (model.images.some((image) => image.previewUrl === ui.previewImage.src)) {
+		ui.previewDialog.close();
+	}
+	for (const image of model.images) URL.revokeObjectURL(image.previewUrl);
+	model = clearDraftImages(model);
+	render();
+	ui.input.focus();
+}
+
 function reorderImages(images, focusId, focusDirection) {
 	if (composerLocked()) return;
 	model = invalidateSendAttempt({ ...model, images, error: "" });
@@ -456,6 +484,8 @@ function renderComposer() {
 	ui.imageInput.disabled = locked;
 	ui.addImages.classList.toggle("disabled", locked);
 	ui.addImages.setAttribute("aria-disabled", String(locked));
+	ui.clearAttachments.hidden = model.images.length < 2;
+	ui.clearAttachments.disabled = locked;
 	ui.status.textContent = composerStatus();
 	ui.error.hidden = !model.error;
 	ui.error.textContent = model.error;

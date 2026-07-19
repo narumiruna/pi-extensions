@@ -69,6 +69,9 @@
 							hidden
 						/>
 						<span class="image-hint">Paste, drop, or choose images.</span>
+						<button id="clear-attachments" class="button secondary" type="button" hidden>
+							Clear attachments
+						</button>
 					</div>
 					<div class="send-actions">
 						<button id="steer" class="button secondary" type="button" hidden>Steer</button>
@@ -90,6 +93,19 @@
 				</p>
 			</details>
 		</footer>
+
+		<dialog id="clear-attachments-dialog" class="confirmation-dialog" aria-labelledby="clear-attachments-title">
+			<form method="dialog">
+				<h2 id="clear-attachments-title">Clear attachments?</h2>
+				<p id="clear-attachments-message">Remove all unsent image attachments? Message text will be kept.</p>
+				<div class="dialog-actions">
+					<button type="submit" value="cancel">Cancel</button>
+					<button id="confirm-clear-attachments" class="danger" type="submit" value="confirm">
+						Clear attachments
+					</button>
+				</div>
+			</form>
+		</dialog>
 
 		<dialog id="image-preview-dialog" class="image-preview-dialog" aria-labelledby="image-preview-title">
 			<div class="image-preview-content">

@@ -117,6 +117,10 @@ export function invalidateSendAttempt(current) {
 	return { ...current, outbox: undefined, lastDelivery: undefined };
 }
 
+export function clearDraftImages(current) {
+	return invalidateSendAttempt({ ...current, images: [], error: "" });
+}
+
 export function setNearBottom(current, nearBottom) {
 	if (!nearBottom) return current.following ? { ...current, following: false } : current;
 	if (current.following && current.unseenUpdateIds.length === 0) return current;

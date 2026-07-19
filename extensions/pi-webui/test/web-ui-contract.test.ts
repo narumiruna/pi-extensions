@@ -81,6 +81,14 @@ test("image input supports picker and paste with visible removable previews", ()
 	assert.match(app, /Move image backward/);
 	assert.match(app, /Move image forward/);
 	assert.match(app, /focusOrderingControl/);
+	assert.match(html, /id="clear-attachments"[^>]*hidden/);
+	assert.match(html, /id="clear-attachments-dialog"/);
+	assert.match(html, /id="confirm-clear-attachments"/);
+	assert.match(app, /model\.images\.length < 2/);
+	assert.match(app, /clearDraftImages/);
+	assert.match(app, /for \(const image of model\.images\) URL\.revokeObjectURL/);
+	assert.match(app, /clearDialog\.showModal/);
+	assert.match(app, /returnValue !== "confirm"/);
 });
 
 test("tool, thinking, and Markdown rendering use safe DOM construction", () => {
