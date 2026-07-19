@@ -1,4 +1,9 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionAPI,
+	type ExtensionContext,
+	getAgentDir,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 
 const UNKNOWN_NO_DETAILS_RE = /Unknown error \(no error details in response\)/i;
 const CODEX_WEBSOCKET_CONNECTION_LIMIT_RE =
@@ -20,7 +25,18 @@ const STALL_TIMEOUT_ENV = "PI_RETRY_STALL_TIMEOUT_MS";
 
 type StatusContext = Pick<ExtensionContext, "hasUI" | "ui">;
 
+type RetryPolicyContext = Pick<ExtensionContext, "cwd" | "isProjectTrusted">;
+
 type WatchdogContext = StatusContext & Pick<ExtensionContext, "abort" | "isIdle">;
+
+export type RetryPolicy = {
+	enabled: boolean | undefined;
+	errors: string[];
+};
+
+export type RetryOptions = {
+	readRetryPolicy?: (ctx: RetryPolicyContext) => RetryPolicy;
+};
 
 type MessageShape = {
 	role?: string;
@@ -43,7 +59,20 @@ export function parseStallTimeoutMs(value: unknown): number | undefined {
 	return Math.trunc(timeoutMs);
 }
 
-export default function retry(pi: ExtensionAPI) {
+export function readPiRetryPolicy(ctx: RetryPolicyContext, agentDir = getAgentDir()): RetryPolicy {
+	const settingsManager = SettingsManager.create(ctx.cwd, agentDir, {
+		projectTrusted: ctx.isProjectTrusted(),
+	});
+	const errors = settingsManager
+		.drainErrors()
+		.map(({ scope, error }) => `${scope} settings: ${error.message}`);
+	return {
+		enabled: settingsManager.getRetrySettings().enabled,
+		errors,
+	};
+}
+
+export default function retry(pi: ExtensionAPI, options: RetryOptions = {}) {
 	pi.registerFlag(STALL_TIMEOUT_FLAG, {
 		description: `Abort and auto-retry stalled provider streams after this many ms; use 0/off/false to disable. Defaults to ${DEFAULT_STALL_TIMEOUT_MS}.`,
 		type: "string",
@@ -54,6 +83,9 @@ export default function retry(pi: ExtensionAPI) {
 	let stallTimer: NodeJS.Timeout | undefined;
 	let providerWatchdogActive = false;
 	let waitingForStallAbortMessage = false;
+	let retryPolicyEnabled = true;
+	let warnedRetryPolicyDisabled = false;
+	let warnedRetryPolicyReadFailure = false;
 
 	const getStallTimeoutMs = () =>
 		parseStallTimeoutMs(pi.getFlag(STALL_TIMEOUT_FLAG)) ??
@@ -67,7 +99,12 @@ export default function retry(pi: ExtensionAPI) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	};
 
-	const setTransientStatus = (ctx: StatusContext, mode: StatusMode, text: string, visibleMs: number) => {
+	const setTransientStatus = (
+		ctx: StatusContext,
+		mode: StatusMode,
+		text: string,
+		visibleMs: number,
+	) => {
 		if (clearStatusTimer) clearTimeout(clearStatusTimer);
 		if (statusMode !== mode) ctx.ui.setStatus(STATUS_KEY, text);
 		statusMode = mode;
@@ -96,8 +133,39 @@ export default function retry(pi: ExtensionAPI) {
 		stallTimer = undefined;
 	};
 
+	const refreshRetryPolicy = (ctx: RetryPolicyContext & StatusContext) => {
+		const policy = (options.readRetryPolicy ?? readPiRetryPolicy)(ctx);
+		if (policy.errors.length > 0 && ctx.hasUI && !warnedRetryPolicyReadFailure) {
+			warnedRetryPolicyReadFailure = true;
+			ctx.ui.notify(
+				`pi-retry could not read Pi retry settings; preserving the last known policy. ${policy.errors.join("; ")}`,
+				"warning",
+			);
+		}
+		if (policy.enabled === undefined) return;
+
+		retryPolicyEnabled = policy.enabled;
+		if (retryPolicyEnabled) return;
+
+		disarmStallWatchdog();
+		providerWatchdogActive = false;
+		waitingForStallAbortMessage = false;
+		clearStatus(ctx);
+		if (ctx.hasUI && !warnedRetryPolicyDisabled) {
+			warnedRetryPolicyDisabled = true;
+			ctx.ui.notify(
+				'pi-retry requires Pi setting "retry.enabled": true; retry hints and stall recovery are inactive while it is disabled.',
+				"warning",
+			);
+		}
+	};
+
 	const armStallWatchdog = (ctx: WatchdogContext) => {
 		disarmStallWatchdog();
+		if (!retryPolicyEnabled) {
+			providerWatchdogActive = false;
+			return;
+		}
 
 		const timeoutMs = getStallTimeoutMs();
 		if (timeoutMs === 0) {
@@ -134,6 +202,7 @@ export default function retry(pi: ExtensionAPI) {
 		providerWatchdogActive = false;
 		waitingForStallAbortMessage = false;
 		clearStatus(ctx);
+		refreshRetryPolicy(ctx);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -144,6 +213,7 @@ export default function retry(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_provider_request", (_event, ctx) => {
+		refreshRetryPolicy(ctx);
 		if (ctx.hasUI) clearIncomingStatus(ctx);
 		armStallWatchdog(ctx);
 	});
@@ -233,7 +303,7 @@ export default function retry(pi: ExtensionAPI) {
 		// call agent.continue() with the normal retry settings/backoff.
 		const errorMessage = `${message.errorMessage}\n\n${matchedError.tag} ${RETRYABLE_HINT}; treating ${matchedError.label} as retryable.`;
 
-		if (ctx.hasUI) {
+		if (ctx.hasUI && retryPolicyEnabled) {
 			showRetryStatus(ctx);
 			ctx.ui.notify?.(matchedError.notification, "warning");
 		}
