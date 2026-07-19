@@ -184,7 +184,6 @@ test("Pi message, tool, and activity events update the browser projection", asyn
 	await h.emit("tool_execution_end", {
 		toolCallId: "call",
 		toolName: "bash",
-		args: { command: "pwd" },
 		result: { content: [{ type: "text", text: "/workspace" }] },
 		isError: false,
 	});
@@ -197,6 +196,7 @@ test("Pi message, tool, and activity events update the browser projection", asyn
 	assert.equal(snapshot?.messages.at(-1)?.final, true);
 	assert.deepEqual(snapshot?.messages.at(-1)?.content, [{ type: "text", text: "abc" }]);
 	assert.equal(snapshot?.tools[0]?.phase, "end");
+	assert.deepEqual(snapshot?.tools[0]?.args, { command: "pwd" });
 	assert.equal(snapshot?.activity, "idle");
 });
 
@@ -398,6 +398,35 @@ test("image preparation cannot deliver into a replacement session", async () => 
 	processing.resolve([{ type: "image", data: "safe", mimeType: "image/png" }]);
 	await assert.rejects(() => sending, /cancelled|changed/i);
 	assert.equal(h.sent.length, 0);
+});
+
+test("a slow stale shutdown cannot clear a replacement session", async () => {
+	const firstClose = deferred<void>();
+	let serverStarts = 0;
+	const h = harness({
+		startServer: async () => {
+			serverStarts += 1;
+			const current = serverStarts;
+			return {
+				issueLink: () => `http://127.0.0.1:1234/bootstrap?token=${current}`,
+				close: async () => {
+					if (current === 1) await firstClose.promise;
+				},
+			};
+		},
+	});
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	const shuttingDown = h.emit("session_shutdown");
+	await Promise.resolve();
+	await h.emit("session_start", { reason: "reload" });
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	assert.match(String(h.widgets.get("webui")), /token=2/);
+	firstClose.resolve(undefined);
+	await shuttingDown;
+	assert.match(String(h.widgets.get("webui")), /token=2/);
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	assert.doesNotMatch(h.notifications.at(-1) ?? "", /could not start/i);
 });
 
 test("replacement and shutdown close stale servers and invalidate send callbacks", async () => {

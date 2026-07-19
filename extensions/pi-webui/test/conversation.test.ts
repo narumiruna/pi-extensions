@@ -121,6 +121,20 @@ test("projection emits ordered replaceable updates and suppresses exact duplicat
 	);
 });
 
+test("tool completion preserves arguments from the running record", () => {
+	const projection = new ConversationProjection(session);
+	projection.recordTool("start", "call", "bash", { command: "npm test" });
+	projection.recordTool("end", "call", "bash", undefined, { output: "passed" }, false);
+	assert.deepEqual(projection.snapshot().tools[0], {
+		id: "call",
+		name: "bash",
+		phase: "end",
+		args: { command: "npm test" },
+		result: { output: "passed" },
+		isError: false,
+	});
+});
+
 test("tool projection bounds property scans and contains cycles before serialization", () => {
 	let reads = 0;
 	let descriptorReads = 0;

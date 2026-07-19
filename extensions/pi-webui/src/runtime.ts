@@ -148,12 +148,13 @@ export class WebUIRuntime {
 	}
 
 	async shutdown(ctx: ExtensionContext): Promise<void> {
-		++this.generation;
+		const generation = ++this.generation;
 		this.closed = true;
 		this.sessionAbort.abort();
 		this.cancelPendingMessages();
 		this.conversation?.close();
 		await this.releaseServer();
+		if (generation !== this.generation) return;
 		this.context = undefined;
 		this.conversation = undefined;
 		ctx.ui.setWidget(WIDGET_KEY, undefined);

@@ -134,11 +134,12 @@ export class ConversationProjection {
 		isError?: boolean,
 	): void {
 		const previous = this.tools.get(id);
+		const projectedArgs = args === undefined ? previous?.args : boundedJson(args);
 		const tool: PublicTool = {
 			id,
 			name,
 			phase,
-			...(args === undefined ? {} : { args: boundedJson(args) }),
+			...(projectedArgs === undefined ? {} : { args: projectedArgs }),
 			...(result === undefined ? {} : { result: boundedJson(result) }),
 			...(isError === undefined ? {} : { isError }),
 		};
