@@ -570,8 +570,12 @@ test("route selection handles server filters and ambiguous fix routes", () => {
 		"also-ts",
 	);
 	assert.throws(
-		() => selectDiagnosticRoutes([ts], { root, server: "missing" }, 50),
-		/Unknown LSP server/,
+		() => selectDiagnosticRoutes([ts, alsoTs], { root, server: "missing" }, 50),
+		(error: unknown) =>
+			error instanceof Error &&
+			error.message ===
+				"Unknown LSP server(s): missing. Configured LSP servers: ts, also-ts. " +
+					"Omit the server parameter to select matching servers automatically.",
 	);
 });
 
@@ -642,14 +646,19 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
 		unrelated.defaultCommand = { command: "available-lsp", args: [] };
 		unrelated.env = { PATH: root };
 		unrelated.isDefault = true;
-		assert.throws(
-			() => selectDiagnosticRoutes([unrelated, missing], { root }, 50),
-			/No supported files found for available LSP commands.*Skipped unavailable.*missing/,
+		const partiallyUnavailable = selectDiagnosticRoutes([unrelated, missing], { root }, 50);
+		assert.deepEqual(partiallyUnavailable.routes, []);
+		assert.deepEqual(
+			partiallyUnavailable.skipped.map((route) => route.adapter.name),
+			["missing"],
 		);
 		assert.equal(missingFileChecks, 0);
-		assert.throws(
-			() => selectDiagnosticRoutes([missing], { root }, 50),
-			/No available default LSP commands.*missing/,
+
+		const unavailable = selectDiagnosticRoutes([missing], { root }, 50);
+		assert.deepEqual(unavailable.routes, []);
+		assert.deepEqual(
+			unavailable.skipped.map((route) => route.adapter.name),
+			["missing"],
 		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

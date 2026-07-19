@@ -50,14 +50,6 @@ export function selectDiagnosticRoutes(
 				return false;
 			});
 
-	if (runnableCandidates.length === 0 && skipped.length > 0) {
-		const names = skipped.map((route) => route.adapter.name).join(", ");
-		throw new Error(
-			`No available default LSP commands: ${names}. ` +
-				"Install a matching server command or explicitly select a configured server.",
-		);
-	}
-
 	const filesByPolicy = new Map<string, string[]>();
 	const routes = runnableCandidates
 		.map((adapter) => {
@@ -71,16 +63,8 @@ export function selectDiagnosticRoutes(
 		})
 		.filter((route) => route.files.length > 0);
 
-	if (routes.length === 0) {
+	if (routes.length === 0 && skipped.length === 0) {
 		const scope = params.paths?.length ? ` in requested paths: ${params.paths.join(", ")}` : "";
-		if (skipped.length > 0) {
-			const names = skipped.map((route) => route.adapter.name).join(", ");
-			throw new Error(
-				`No supported files found for available LSP commands${scope}. ` +
-					`Skipped unavailable default LSP commands: ${names}. ` +
-					"Install a matching server command or explicitly select a configured server.",
-			);
-		}
 		throw new Error(`No supported files found${scope}. ${SUPPORTED_SERVER_DESCRIPTION}`);
 	}
 
@@ -125,7 +109,13 @@ function filterAdapters(adapters: LspServerAdapter[], selected: string | string[
 	if (names.length === 0) throw new Error("LSP server parameter must not be blank.");
 	const matched = adapters.filter((adapter) => names.includes(adapter.name));
 	const missing = names.filter((name) => !adapters.some((adapter) => adapter.name === name));
-	if (missing.length) throw new Error(`Unknown LSP server(s): ${missing.join(", ")}.`);
+	if (missing.length) {
+		const configured = adapters.map((adapter) => adapter.name).join(", ") || "none";
+		throw new Error(
+			`Unknown LSP server(s): ${missing.join(", ")}. Configured LSP servers: ${configured}. ` +
+				"Omit the server parameter to select matching servers automatically.",
+		);
+	}
 	return matched;
 }
 

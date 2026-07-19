@@ -36,7 +36,7 @@ pi -e ./extensions/pi-lsp
 
 ## ⚙️ Configuration
 
-If no config is provided, pi-lsp ships a broad catalog of direct-command defaults. Servers are started only when matching files are requested. pi-lsp does not download language servers, so install the commands you need and make them available on `PATH`. During no-config diagnostics, unavailable default commands are filtered before workspace discovery; explicitly selected or custom-configured missing commands still report an error.
+If no config is provided, pi-lsp ships a broad catalog of direct-command defaults. Servers are started only when matching files are requested. pi-lsp does not download language servers, so install the commands you need and make them available on `PATH`. During no-config diagnostics, unavailable default commands are filtered before workspace discovery. If none can run, diagnostics completes successfully and reports the skipped servers. Explicitly selected or custom-configured missing commands still report an error.
 
 | Language or format | Default server | Startup command | Extensions |
 | --- | --- | --- | --- |
