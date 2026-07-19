@@ -272,6 +272,7 @@ export class WebUIRuntime {
 				supportsImages: ctx.model?.input.includes("image") ?? false,
 				signal,
 			});
+			await this.validateCurrentModel(ctx, generation, signal, true);
 		}
 		if (signal.aborted) throw new Error("The browser message was cancelled.");
 		if (!this.context || this.closed || generation !== this.generation) {
@@ -302,8 +303,20 @@ export class WebUIRuntime {
 		signal: AbortSignal,
 	): Promise<void> {
 		if (request.delivery === "steer" || !ctx.isIdle() || ctx.hasPendingMessages()) return;
+		await this.validateCurrentModel(ctx, generation, signal, false);
+	}
+
+	private async validateCurrentModel(
+		ctx: ExtensionContext,
+		generation: number,
+		signal: AbortSignal,
+		requireImages: boolean,
+	): Promise<void> {
 		const model = ctx.model;
 		if (!model) throw new Error("No model is selected in Pi.");
+		if (requireImages && !model.input.includes("image")) {
+			throw new Error("The selected Pi model does not support images.");
+		}
 		if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
 			const apiKey = await ctx.modelRegistry.getApiKeyForProvider(model.provider);
 			if (!apiKey) throw new Error(`No authentication is available for "${model.provider}".`);

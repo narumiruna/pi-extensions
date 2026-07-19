@@ -163,10 +163,7 @@ export class WebUIServer {
 			if (request.method === "GET" && url.pathname === "/api/state") {
 				this.json(response, 200, {
 					...this.options.conversation.snapshot(),
-					lease: {
-						...(this.activeClientId ? { activeClientId: this.activeClientId } : {}),
-						generation: this.leaseGeneration,
-					},
+					lease: this.leaseSnapshot(),
 				});
 				return;
 			}
@@ -307,6 +304,7 @@ export class WebUIServer {
 			response.end();
 			return;
 		}
+		this.writeSse(client, "lease", this.leaseSnapshot());
 		const replay = this.options.conversation.eventsAfter(since);
 		if (replay === undefined) {
 			this.writeSse(client, "snapshot", this.options.conversation.snapshot());
@@ -314,6 +312,13 @@ export class WebUIServer {
 			for (const event of replay) this.writeSse(client, "conversation", event);
 		}
 		request.once("close", () => this.sseClients.delete(client));
+	}
+
+	private leaseSnapshot(): { activeClientId?: string; generation: number } {
+		return {
+			...(this.activeClientId ? { activeClientId: this.activeClientId } : {}),
+			generation: this.leaseGeneration,
+		};
 	}
 
 	private broadcastEvent(event: ConversationEvent): void {

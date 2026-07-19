@@ -352,6 +352,42 @@ test("browser images are processed under live Pi guards and sent with text", asy
 	]);
 });
 
+test("image sends revalidate model capabilities and authentication after processing", async () => {
+	const runRace = async (
+		mutate: (h: ReturnType<typeof harness>) => void,
+		pattern: RegExp,
+	): Promise<void> => {
+		const started = deferred<void>();
+		const processing = deferred<Array<{ type: "image"; data: string; mimeType: string }>>();
+		const h = harness({
+			processImages: async () => {
+				started.resolve(undefined);
+				return processing.promise;
+			},
+		});
+		await h.emit("session_start");
+		await h.commands.get("webui")?.handler("", h.ctx as never);
+		const sending = h.serverOptions?.send({
+			requestId: "image-race",
+			text: "look",
+			images: [{ data: "raw", mimeType: "image/png" }],
+			delivery: "next",
+		});
+		assert.ok(sending);
+		await started.promise;
+		mutate(h);
+		processing.resolve([{ type: "image", data: "safe", mimeType: "image/png" }]);
+		await assert.rejects(() => sending, pattern);
+		assert.equal(h.sent.length, 0);
+	};
+
+	await runRace(
+		(h) => h.setModel({ provider: "test", id: "text-only", input: ["text"] }),
+		/image/i,
+	);
+	await runRace((h) => h.setAuth({ ok: false }), /authentication/i);
+});
+
 test("send callbacks fail closed after session replacement and Pi send errors propagate", async () => {
 	const h = harness();
 	await h.emit("session_start");

@@ -301,6 +301,34 @@ test("empty SSE streams flush immediately and remain available for later events"
 	}
 });
 
+test("new SSE streams receive the current lease before relying on broadcasts", async () => {
+	const { conversation, server } = await harness();
+	try {
+		const cookie = await authenticate(server);
+		await takeLease(server, cookie, "first");
+		await takeLease(server, cookie, "second");
+		const controller = new AbortController();
+		const response = await fetch(`${server.origin}/api/events?since=0`, {
+			headers: { cookie },
+			signal: controller.signal,
+		});
+		const reader = response.body?.getReader();
+		assert.ok(reader);
+		let text = new TextDecoder().decode((await reader.read()).value);
+		if (!text.includes("event: lease")) {
+			conversation.setActivity("running");
+			text += new TextDecoder().decode((await reader.read()).value);
+		}
+		assert.match(text, /event: lease/);
+		assert.match(text, /"activeClientId":"second"/);
+		assert.match(text, /"generation":2/);
+		controller.abort();
+		await reader.cancel().catch(() => undefined);
+	} finally {
+		await server.close();
+	}
+});
+
 test("SSE replays retained events and sends a snapshot after a sequence gap", async () => {
 	const { conversation, server } = await harness();
 	try {
