@@ -10,6 +10,8 @@ export function initialState() {
 		stale: false,
 		needsSnapshot: false,
 		pending: false,
+		readingImages: 0,
+		leaseClaimed: false,
 		text: "",
 		images: [],
 		error: "",
@@ -17,6 +19,8 @@ export function initialState() {
 }
 
 export function applySnapshot(current, snapshot) {
+	if (!Number.isSafeInteger(snapshot?.sequence) || snapshot.sequence < current.sequence)
+		return current;
 	return {
 		...current,
 		sequence: snapshot.sequence,
@@ -59,7 +63,46 @@ export function applyConversationEvent(current, event) {
 }
 
 export function applyLease(current, lease, clientId) {
-	return { ...current, stale: lease?.activeClientId !== clientId };
+	return { ...current, leaseClaimed: true, stale: lease?.activeClientId !== clientId };
+}
+
+export function prepareSend(current, requestId, delivery = "next") {
+	const attempt = current.outbox ?? {
+		requestId,
+		text: current.text,
+		images: [...current.images],
+		delivery,
+	};
+	return {
+		state: { ...current, pending: true, error: "", outbox: attempt },
+		attempt,
+	};
+}
+
+export function completeSend(current, attempt, delivery) {
+	const submittedImageIds = new Set(attempt.images.map((image) => image.id));
+	return {
+		...current,
+		pending: false,
+		text: current.text === attempt.text ? "" : current.text,
+		images: current.images.filter((image) => !submittedImageIds.has(image.id)),
+		outbox: current.outbox === attempt ? undefined : current.outbox,
+		error: "",
+		lastDelivery: delivery,
+	};
+}
+
+export function failSend(current, attempt, error) {
+	return {
+		...current,
+		pending: false,
+		outbox: current.outbox === attempt ? attempt : current.outbox,
+		error,
+	};
+}
+
+export function invalidateSendAttempt(current) {
+	return { ...current, outbox: undefined, lastDelivery: undefined };
 }
 
 export function upsertById(items, value) {
@@ -76,6 +119,7 @@ export function canSend(current) {
 			!current.closed &&
 			!current.stale &&
 			!current.pending &&
+			current.readingImages === 0 &&
 			(current.text.trim() || current.images.length > 0),
 	);
 }

@@ -4,8 +4,12 @@ import {
 	applySnapshot,
 	busyLabel,
 	canSend,
+	completeSend,
 	deliveryNotice,
+	failSend,
 	initialState,
+	invalidateSendAttempt,
+	prepareSend,
 } from "./state.js";
 
 const clientId = crypto.randomUUID();
@@ -13,6 +17,8 @@ let model = initialState();
 let events;
 let reconnectTimer;
 let reconnectDelay = 500;
+let snapshotRefresh;
+let snapshotTarget = 0;
 
 const ui = {
 	project: document.querySelector("#project-name"),
@@ -34,7 +40,7 @@ const ui = {
 };
 
 ui.input.addEventListener("input", () => {
-	model = { ...model, text: ui.input.value, error: "", lastDelivery: undefined };
+	model = invalidateSendAttempt({ ...model, text: ui.input.value, error: "" });
 	renderComposer();
 });
 ui.composer.addEventListener("submit", (event) => {
@@ -56,12 +62,15 @@ document.addEventListener("paste", (event) => {
 	const files = [...(event.clipboardData?.files ?? [])].filter((file) =>
 		file.type.startsWith("image/"),
 	);
-	if (files.length === 0) return;
+	if (files.length === 0 || model.pending) return;
 	event.preventDefault();
 	void addFiles(files);
 });
 ui.composer.addEventListener("dragover", (event) => {
-	if ([...(event.dataTransfer?.items ?? [])].some((item) => item.kind === "file")) {
+	if (
+		!model.pending &&
+		[...(event.dataTransfer?.items ?? [])].some((item) => item.kind === "file")
+	) {
 		event.preventDefault();
 	}
 });
@@ -69,7 +78,7 @@ ui.composer.addEventListener("drop", (event) => {
 	const files = [...(event.dataTransfer?.files ?? [])].filter((file) =>
 		file.type.startsWith("image/"),
 	);
-	if (files.length === 0) return;
+	if (files.length === 0 || model.pending) return;
 	event.preventDefault();
 	void addFiles(files);
 });
@@ -88,11 +97,21 @@ async function initialize() {
 	}
 }
 
-async function refreshSnapshot() {
-	const response = await fetch("/api/state", { cache: "no-store" });
-	if (!response.ok) throw new Error(await responseError(response));
-	model = applySnapshot(model, await response.json());
-	render();
+async function refreshSnapshot(requiredSequence = 0) {
+	snapshotTarget = Math.max(snapshotTarget, requiredSequence);
+	if (!snapshotRefresh) {
+		snapshotRefresh = (async () => {
+			do {
+				const response = await fetch("/api/state", { cache: "no-store" });
+				if (!response.ok) throw new Error(await responseError(response));
+				model = applySnapshot(model, await response.json());
+				render();
+			} while (model.sequence < snapshotTarget);
+		})().finally(() => {
+			snapshotRefresh = undefined;
+		});
+	}
+	return snapshotRefresh;
 }
 
 async function claimLease() {
@@ -116,9 +135,10 @@ function connectEvents() {
 		render();
 	});
 	events.addEventListener("conversation", (event) => {
-		model = applyConversationEvent(model, JSON.parse(event.data));
+		const conversationEvent = JSON.parse(event.data);
+		model = applyConversationEvent(model, conversationEvent);
 		if (model.needsSnapshot) {
-			void refreshSnapshot().catch(connectionFailure);
+			void refreshSnapshot(conversationEvent.sequence).catch(connectionFailure);
 			return;
 		}
 		render();
@@ -151,6 +171,7 @@ function scheduleReconnect() {
 		reconnectTimer = undefined;
 		try {
 			await refreshSnapshot();
+			if (!model.leaseClaimed) await claimLease();
 			connectEvents();
 		} catch (error) {
 			connectionFailure(error);
@@ -167,14 +188,15 @@ function connectionFailure(error) {
 
 async function send(steer) {
 	if (!canSend(model)) return;
-	model = { ...model, pending: true, error: "" };
+	const prepared = prepareSend(model, crypto.randomUUID(), steer ? "steer" : "next");
+	const attempt = prepared.attempt;
+	model = prepared.state;
 	renderComposer();
-	const requestId = crypto.randomUUID();
 	const payload = {
-		requestId,
-		text: model.text,
-		images: model.images.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
-		delivery: steer ? "steer" : "next",
+		requestId: attempt.requestId,
+		text: attempt.text,
+		images: attempt.images.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+		delivery: attempt.delivery,
 	};
 	try {
 		const response = await fetch("/api/messages", {
@@ -182,26 +204,24 @@ async function send(steer) {
 			headers: { "Content-Type": "application/json", "X-Pi-Web-Client": clientId },
 			body: JSON.stringify(payload),
 		});
-		if (!response.ok) throw new Error(await responseError(response));
+		if (!response.ok) {
+			const message = await responseError(response);
+			model = invalidateSendAttempt(model);
+			throw new Error(message);
+		}
 		const accepted = await response.json();
-		for (const image of model.images) URL.revokeObjectURL(image.previewUrl);
-		model = {
-			...model,
-			pending: false,
-			text: "",
-			images: [],
-			error: "",
-			lastDelivery: accepted.delivery,
-		};
+		for (const image of attempt.images) URL.revokeObjectURL(image.previewUrl);
+		model = completeSend(model, attempt, accepted.delivery);
 		render();
 		ui.input.focus();
 	} catch (error) {
-		model = { ...model, pending: false, error: errorMessage(error) };
+		model = failSend(model, attempt, errorMessage(error));
 		render();
 	}
 }
 
 async function addFiles(fileList) {
+	if (model.pending) return;
 	const supported = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 	const files = [...(fileList ?? [])];
 	if (model.images.length + files.length > 8) {
@@ -209,45 +229,61 @@ async function addFiles(fileList) {
 		render();
 		return;
 	}
-	for (const file of files) {
-		if (!supported.has(file.type)) {
-			model = { ...model, error: `${file.name || "Image"} is not a supported image.` };
-			render();
-			continue;
+	model = { ...model, readingImages: model.readingImages + 1 };
+	renderComposer();
+	try {
+		for (const file of files) {
+			if (model.images.length >= 8) {
+				model = { ...model, error: "You can attach at most 8 images." };
+				render();
+				break;
+			}
+			if (!supported.has(file.type)) {
+				model = { ...model, error: `${file.name || "Image"} is not a supported image.` };
+				render();
+				continue;
+			}
+			if (file.size > 10 * 1024 * 1024) {
+				model = { ...model, error: `${file.name || "Image"} is larger than 10 MB.` };
+				render();
+				continue;
+			}
+			try {
+				const data = await readBase64(file);
+				model = invalidateSendAttempt({
+					...model,
+					images: [
+						...model.images,
+						{
+							id: crypto.randomUUID(),
+							name: file.name || "Pasted image",
+							mimeType: file.type,
+							data,
+							previewUrl: URL.createObjectURL(file),
+						},
+					],
+					error: "",
+				});
+				render();
+			} catch (error) {
+				model = { ...model, error: errorMessage(error) };
+				render();
+			}
 		}
-		if (file.size > 10 * 1024 * 1024) {
-			model = { ...model, error: `${file.name || "Image"} is larger than 10 MB.` };
-			render();
-			continue;
-		}
-		try {
-			const data = await readBase64(file);
-			model = {
-				...model,
-				images: [
-					...model.images,
-					{
-						id: crypto.randomUUID(),
-						name: file.name || "Pasted image",
-						mimeType: file.type,
-						data,
-						previewUrl: URL.createObjectURL(file),
-					},
-				],
-				error: "",
-			};
-			render();
-		} catch (error) {
-			model = { ...model, error: errorMessage(error) };
-			render();
-		}
+	} finally {
+		model = { ...model, readingImages: Math.max(0, model.readingImages - 1) };
+		renderComposer();
 	}
 }
 
 function removeImage(id) {
+	if (model.pending) return;
 	const removed = model.images.find((image) => image.id === id);
 	if (removed) URL.revokeObjectURL(removed.previewUrl);
-	model = { ...model, images: model.images.filter((image) => image.id !== id) };
+	model = invalidateSendAttempt({
+		...model,
+		images: model.images.filter((image) => image.id !== id),
+	});
 	render();
 }
 
@@ -359,13 +395,17 @@ function renderComposer() {
 	ui.send.disabled = !canSend(model);
 	ui.steer.hidden = model.activity !== "running";
 	ui.steer.disabled = !canSend(model);
-	ui.input.disabled = model.closed || model.stale;
-	ui.status.textContent = model.pending
-		? "Submitting message…"
-		: deliveryNotice(model) ||
-			(model.activity === "running"
-				? "Send next waits until Pi finishes. Steer interrupts after the current tool batch."
-				: "Messages send immediately while Pi is idle.");
+	ui.input.disabled = model.closed || model.stale || model.pending;
+	ui.imageInput.disabled = model.closed || model.stale || model.pending;
+	ui.status.textContent =
+		model.readingImages > 0
+			? "Preparing images…"
+			: model.pending
+				? "Submitting message…"
+				: deliveryNotice(model) ||
+					(model.activity === "running"
+						? "Send next waits until Pi finishes. Steer interrupts after the current tool batch."
+						: "Messages send immediately while Pi is idle.");
 	ui.error.hidden = !model.error;
 	ui.error.textContent = model.error;
 	ui.previews.replaceChildren();
@@ -380,6 +420,7 @@ function renderComposer() {
 		remove.type = "button";
 		remove.className = "remove-image";
 		remove.textContent = "Remove";
+		remove.disabled = model.pending;
 		remove.setAttribute("aria-label", `Remove image ${image.name}`);
 		remove.addEventListener("click", () => removeImage(image.id));
 		item.append(preview, name, remove);

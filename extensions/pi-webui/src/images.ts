@@ -123,9 +123,7 @@ async function processOne(
 		limitInputPixels: limits.maxPixels,
 	}).metadata();
 	assertNotAborted(signal);
-	validateMetadata(metadata, limits.maxPixels);
-	const width = metadata.width as number;
-	const height = metadata.height as number;
+	const { width, height } = validatedDimensions(metadata, limits.maxPixels);
 	const oversized = width > limits.maxDimension || height > limits.maxDimension;
 	if (oversized && !autoResize) throw new Error("Image dimensions exceed Pi's limit.");
 
@@ -137,7 +135,10 @@ async function processOne(
 
 	for (let attempt = 0; attempt < 6; attempt += 1) {
 		assertNotAborted(signal);
-		let pipeline = sharp(bytes, { animated: format === "gif", limitInputPixels: limits.maxPixels });
+		let pipeline = sharp(bytes, {
+			animated: format === "gif",
+			limitInputPixels: limits.maxPixels,
+		}).autoOrient();
 		if (targetWidth !== width || targetHeight !== height) {
 			pipeline = pipeline.resize({
 				width: targetWidth,
@@ -157,12 +158,19 @@ async function processOne(
 	throw new Error("Processed image exceeds Pi's inline limit after resizing.");
 }
 
-function validateMetadata(metadata: Metadata, maxPixels: number): void {
-	if (!metadata.width || !metadata.height)
-		throw new Error("Image dimensions could not be decoded.");
+function validatedDimensions(
+	metadata: Metadata,
+	maxPixels: number,
+): { width: number; height: number } {
+	const width = metadata.autoOrient.width ?? metadata.width;
+	const totalHeight = metadata.autoOrient.height ?? metadata.height;
+	if (!width || !totalHeight) throw new Error("Image dimensions could not be decoded.");
 	const pages = metadata.pages ?? 1;
-	if (metadata.width * metadata.height * pages > maxPixels)
+	const height = metadata.pageHeight ?? Math.floor(totalHeight / pages);
+	if (height <= 0 || width * height * pages > maxPixels) {
 		throw new Error("Image pixel count exceeds the limit.");
+	}
+	return { width, height };
 }
 
 function encode(image: Sharp, format: SupportedFormat): Sharp {

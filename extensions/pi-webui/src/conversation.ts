@@ -252,6 +252,7 @@ function messageId(
 	timestamp: number | undefined,
 	content: unknown,
 ): string {
+	if (timestamp !== undefined) return `${message.role}:${timestamp}`;
 	if (typeof message.toolCallId === "string") return `tool-result:${message.toolCallId}`;
 	const toolCall = Array.isArray(message.content)
 		? message.content.find(
@@ -259,9 +260,7 @@ function messageId(
 			)
 		: undefined;
 	if (isRecord(toolCall) && typeof toolCall.id === "string") return `assistant:${toolCall.id}`;
-	return timestamp === undefined
-		? `${message.role}:live:${hash(JSON.stringify(content))}`
-		: `${message.role}:${timestamp}`;
+	return `${message.role}:live:${hash(JSON.stringify(content))}`;
 }
 
 function boundedJson(value: unknown): unknown {

@@ -29,12 +29,17 @@ test("browser logic authenticates a lease, reconnects from sequence, and keeps f
 	assert.match(app, /\/api\/lease/);
 	assert.match(app, /new EventSource\(`\/api\/events\?since=\$\{model\.sequence\}`\)/);
 	assert.match(app, /\/api\/messages/);
-	assert.match(app, /delivery: steer \? "steer" : "next"/);
+	assert.match(app, /prepareSend\(model, crypto\.randomUUID\(\), steer \? "steer" : "next"\)/);
+	assert.match(app, /delivery: attempt\.delivery/);
 	assert.match(app, /deliveryNotice\(model\)/);
 	assert.match(app, /applyConversationEvent/);
 	assert.match(app, /applySnapshot/);
+	assert.match(app, /prepareSend/);
+	assert.match(app, /completeSend/);
+	assert.match(app, /failSend/);
+	assert.match(app, /if \(!model\.leaseClaimed\) await claimLease\(\)/);
+	assert.match(app, /snapshotRefresh/);
 	assert.match(app, /if \(!response\.ok\) throw new Error/);
-	assert.match(app, /model = \{ \.\.\.model, pending: false, error:/);
 	assert.doesNotMatch(app, /localStorage|sessionStorage|indexedDB/i);
 });
 

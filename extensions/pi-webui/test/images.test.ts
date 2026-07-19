@@ -15,6 +15,21 @@ function input(bytes: Buffer, mimeType = "image/png") {
 	return { name: "pasted.png", mimeType, data: bytes.toString("base64") };
 }
 
+async function animatedGif(width: number, pageHeight: number, pages: number): Promise<Buffer> {
+	const framePixels = width * pageHeight;
+	const pixels = Buffer.alloc(framePixels * pages * 4);
+	for (let page = 0; page < pages; page += 1) {
+		for (let index = 0; index < framePixels; index += 1) {
+			pixels.set([page * 20, 255 - page * 20, 0, 255], (page * framePixels + index) * 4);
+		}
+	}
+	return sharp(pixels, {
+		raw: { width, height: pageHeight * pages, channels: 4, pageHeight },
+	})
+		.gif({ delay: Array.from({ length: pages }, () => 20) })
+		.toBuffer();
+}
+
 test("image defaults stay bounded", () => {
 	assert.deepEqual(DEFAULT_IMAGE_LIMITS, {
 		maxImages: 8,
@@ -35,6 +50,36 @@ test("PNG input is signature checked, sanitized, and converted to Pi content", a
 	const metadata = await sharp(Buffer.from(result?.data ?? "", "base64")).metadata();
 	assert.equal(metadata.exif, undefined);
 	assert.equal(metadata.width, 2);
+});
+
+test("JPEG orientation is applied before private metadata is stripped", async () => {
+	const source = await sharp({
+		create: { width: 3, height: 2, channels: 3, background: { r: 10, g: 20, b: 30 } },
+	})
+		.jpeg()
+		.withMetadata({ orientation: 6, exif: { IFD0: { Artist: "secret" } } })
+		.toBuffer();
+	const [result] = await processBrowserImages([input(source, "image/jpeg")]);
+	const metadata = await sharp(Buffer.from(result?.data ?? "", "base64")).metadata();
+	assert.equal(metadata.width, 2);
+	assert.equal(metadata.height, 3);
+	assert.equal(metadata.orientation, undefined);
+	assert.equal(metadata.exif, undefined);
+});
+
+test("animated GIF limits and resizing use per-frame geometry", async () => {
+	const source = await animatedGif(100, 100, 10);
+	const [result] = await processBrowserImages([input(source, "image/gif")], {
+		maxPixels: 150_000,
+		maxDimension: 100,
+	});
+	const metadata = await sharp(Buffer.from(result?.data ?? "", "base64"), {
+		animated: true,
+	}).metadata();
+	assert.equal(metadata.width, 100);
+	assert.equal(metadata.pageHeight, 100);
+	assert.equal(metadata.height, 1_000);
+	assert.equal(metadata.pages, 10);
 });
 
 test("JPEG, WebP, and GIF signatures produce matching provider MIME types", async () => {

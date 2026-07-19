@@ -10,6 +10,18 @@ const state = (await import(
 	applySnapshot(current: WebState, snapshot: Snapshot): WebState;
 	applyConversationEvent(current: WebState, event: ConversationEvent): WebState;
 	applyLease(current: WebState, lease: { activeClientId: string }, clientId: string): WebState;
+	prepareSend(
+		current: WebState,
+		requestId: string,
+		delivery?: "next" | "steer",
+	): { state: WebState; attempt: SendAttempt };
+	completeSend(
+		current: WebState,
+		attempt: SendAttempt,
+		delivery: "immediate" | "followUp" | "steer",
+	): WebState;
+	failSend(current: WebState, attempt: SendAttempt, error: string): WebState;
+	invalidateSendAttempt(current: WebState): WebState;
 	canSend(current: WebState): boolean;
 	busyLabel(current: WebState): string;
 	deliveryNotice(current: WebState): string;
@@ -27,9 +39,19 @@ interface WebState {
 	stale: boolean;
 	needsSnapshot: boolean;
 	pending: boolean;
+	readingImages: number;
+	leaseClaimed: boolean;
 	text: string;
-	images: unknown[];
+	images: Array<{ id: string }>;
+	outbox?: SendAttempt;
 	lastDelivery?: "immediate" | "followUp" | "steer";
+}
+
+interface SendAttempt {
+	requestId: string;
+	text: string;
+	images: Array<{ id: string }>;
+	delivery: "next" | "steer";
 }
 
 interface Snapshot {
@@ -65,6 +87,18 @@ test("snapshots replace authoritative server state without discarding the browse
 	assert.equal(next.text, "draft");
 	assert.deepEqual(next.images, [{ id: "image" }]);
 	assert.equal(next.needsSnapshot, false);
+});
+
+test("older snapshots cannot roll browser state back", () => {
+	const current = state.applySnapshot(state.initialState(), snapshot);
+	const older = state.applySnapshot(current, {
+		...snapshot,
+		sequence: 2,
+		messages: [{ id: "stale" }],
+	});
+	assert.equal(older, current);
+	assert.equal(older.sequence, 3);
+	assert.deepEqual(older.messages, [{ id: "one" }]);
 });
 
 test("ordered conversation events replace messages/tools and sequence gaps request snapshots", () => {
@@ -111,6 +145,7 @@ test("session-ended and lease events disable mutation without relying on color",
 	let current = { ...state.initialState(), connected: true, text: "hello" };
 	current = state.applyLease(current, { activeClientId: "other" }, "this-tab");
 	assert.equal(current.stale, true);
+	assert.equal(current.leaseClaimed, true);
 	assert.equal(state.canSend(current), false);
 	current = state.applyConversationEvent(
 		{ ...current, sequence: 0 },
@@ -127,7 +162,54 @@ test("send availability and labels distinguish immediate, follow-up, and disconn
 	assert.equal(state.busyLabel({ ...base, activity: "running" }), "Send next");
 	assert.equal(state.busyLabel({ ...base, connected: false }), "Reconnect to send");
 	assert.equal(state.canSend({ ...base, pending: true }), false);
-	assert.equal(state.canSend({ ...base, text: "", images: [{}] }), true);
+	assert.equal(state.canSend({ ...base, readingImages: 1 }), false);
+	assert.equal(state.canSend({ ...base, text: "", images: [{ id: "image" }] }), true);
+});
+
+test("failed sends retain one idempotent attempt until the draft changes", () => {
+	const image = { id: "one" };
+	const current = { ...state.initialState(), connected: true, text: "hello", images: [image] };
+	const first = state.prepareSend(current, "request-1", "steer");
+	assert.equal(first.state.pending, true);
+	assert.equal(first.attempt.requestId, "request-1");
+	assert.equal(first.attempt.delivery, "steer");
+
+	const failed = state.failSend(first.state, first.attempt, "Connection lost");
+	assert.equal(failed.pending, false);
+	assert.equal(failed.outbox, first.attempt);
+	const retry = state.prepareSend(failed, "request-2", "next");
+	assert.equal(retry.attempt.requestId, "request-1");
+	assert.equal(retry.attempt.delivery, "steer");
+
+	const definitelyRejected = state.failSend(
+		state.invalidateSendAttempt(first.state),
+		first.attempt,
+		"Invalid request",
+	);
+	assert.equal(state.prepareSend(definitelyRejected, "request-2").attempt.requestId, "request-2");
+
+	const changed = state.invalidateSendAttempt({ ...failed, text: "different" });
+	const replacement = state.prepareSend(changed, "request-2");
+	assert.equal(replacement.attempt.requestId, "request-2");
+});
+
+test("send completion removes only the submitted draft", () => {
+	const submitted = { id: "submitted" };
+	const newer = { id: "newer" };
+	const prepared = state.prepareSend(
+		{ ...state.initialState(), connected: true, text: "old", images: [submitted] },
+		"request-1",
+	);
+	const edited = state.invalidateSendAttempt({
+		...prepared.state,
+		text: "new",
+		images: [submitted, newer],
+	});
+	const completed = state.completeSend(edited, prepared.attempt, "immediate");
+	assert.equal(completed.text, "new");
+	assert.deepEqual(completed.images, [newer]);
+	assert.equal(completed.pending, false);
+	assert.equal(completed.lastDelivery, "immediate");
 });
 
 test("accepted delivery modes provide explicit queue feedback", () => {

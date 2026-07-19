@@ -74,6 +74,23 @@ test("message projection keeps semantic blocks and truncates large tool content"
 	assert.ok(text?.type === "text" && text.text.endsWith("\n… output truncated"));
 });
 
+test("streaming assistant identity remains stable when a tool call appears", () => {
+	const projection = new ConversationProjection(session);
+	projection.recordMessage({ role: "assistant", content: [], timestamp: 10 }, false);
+	projection.recordMessage(
+		{
+			role: "assistant",
+			content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }],
+			timestamp: 10,
+		},
+		false,
+	);
+	const messages = projection.snapshot().messages;
+	assert.equal(messages.length, 1);
+	assert.equal(messages[0]?.id, "assistant:10");
+	assert.equal(messages[0]?.content[0]?.type, "toolCall");
+});
+
 test("projection emits ordered replaceable updates and suppresses exact duplicates", () => {
 	const projection = new ConversationProjection(session, [], 3);
 	const events: unknown[] = [];
