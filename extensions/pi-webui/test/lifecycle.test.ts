@@ -7,6 +7,18 @@ function nextTask(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function browserText(content: unknown): string {
+	const text =
+		typeof content === "string"
+			? content
+			: Array.isArray(content)
+				? String(content.find((part) => (part as { type?: unknown }).type === "text")?.text ?? "")
+				: "";
+	const match = /^<pi-webui-input nonce="[0-9a-f-]+">\n([\s\S]*)\n<\/pi-webui-input>$/.exec(text);
+	assert.ok(match);
+	return match[1] ?? "";
+}
+
 function deferred<T>() {
 	let resolve!: (value: T) => void;
 	const promise = new Promise<T>((done) => {
@@ -58,6 +70,32 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 		},
 		sendUserMessage(content: unknown, options?: unknown) {
 			sent.push({ content, ...(options === undefined ? {} : { options }) });
+			const text =
+				typeof content === "string"
+					? content
+					: Array.isArray(content)
+						? content
+								.filter(
+									(part): part is { type: "text"; text: string } =>
+										typeof part === "object" &&
+										part !== null &&
+										(part as { type?: unknown }).type === "text" &&
+										typeof (part as { text?: unknown }).text === "string",
+								)
+								.map((part) => part.text)
+								.join("\n")
+						: "";
+			queueMicrotask(() => {
+				void (async () => {
+					for (const handler of events.get("input") ?? []) {
+						const result = await handler(
+							{ text, source: "extension", streamingBehavior: options } as never,
+							ctx as never,
+						);
+						if ((result as { action?: string } | undefined)?.action === "handled") break;
+					}
+				})();
+			});
 		},
 	};
 	const ctx = {
@@ -110,6 +148,16 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 		commands,
 		ctx,
 		emit,
+		addInputHandler(
+			handler: (event: { text: string; source: string }) => unknown,
+			position: "before" | "after" = "after",
+		) {
+			const handlers = events.get("input") ?? [];
+			events.set(
+				"input",
+				(position === "before" ? [handler, ...handlers] : [...handlers, handler]) as never[],
+			);
+		},
 		notifications,
 		pi,
 		runtime,
@@ -290,10 +338,61 @@ test("browser sends immediately when idle, follows up when busy, and steers expl
 	assert.deepEqual(await send({ requestId: "3", text: "now", images: [], delivery: "steer" }), {
 		delivery: "steer",
 	});
-	assert.deepEqual(h.sent, [
-		{ content: "idle", options: { deliverAs: "followUp" } },
-		{ content: "later", options: { deliverAs: "followUp" } },
-		{ content: "now", options: { deliverAs: "steer" } },
+	assert.deepEqual(
+		h.sent.map((entry) => ({ text: browserText(entry.content), options: entry.options })),
+		[
+			{ text: "idle", options: { deliverAs: "followUp" } },
+			{ text: "later", options: { deliverAs: "followUp" } },
+			{ text: "now", options: { deliverAs: "steer" } },
+		],
+	);
+});
+
+test("browser sends wait for input handling and remain distinct from recovery prompts", async () => {
+	const h = harness();
+	const gate = deferred<void>();
+	const copiedRecoveryPrompt =
+		'<pi-goal-continuation goal-id="copied" iteration="1" nonce="stale">continue</pi-goal-continuation>';
+	let recoveryHandlers = 0;
+	const recoveryHandler = async (event: { text: string }) => {
+		recoveryHandlers += 1;
+		if (event.text === copiedRecoveryPrompt) return { action: "handled" };
+	};
+	h.addInputHandler(async (event) => {
+		await gate.promise;
+		return recoveryHandler(event);
+	}, "before");
+	h.addInputHandler(recoveryHandler, "after");
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	let settled = false;
+	const sending = h.serverOptions?.send({
+		requestId: "browser-origin",
+		text: copiedRecoveryPrompt,
+		images: [],
+		delivery: "next",
+	});
+	assert.ok(sending);
+	void sending.then(() => {
+		settled = true;
+	});
+	await Promise.resolve();
+	assert.equal(settled, false);
+	gate.resolve(undefined);
+	await sending;
+	assert.equal(recoveryHandlers, 2);
+	assert.notEqual(h.sent[0]?.content, copiedRecoveryPrompt);
+	assert.match(String(h.sent[0]?.content), /pi-webui-input/);
+	const message = {
+		role: "user",
+		content: [{ type: "text", text: String(h.sent[0]?.content) }],
+		timestamp: 7,
+	};
+	await h.emit("message_start", { message });
+	await h.emit("message_end", { message });
+	await nextTask();
+	assert.deepEqual(h.serverOptions?.conversation.snapshot().messages.at(-1)?.content, [
+		{ type: "text", text: copiedRecoveryPrompt },
 	]);
 });
 
@@ -346,8 +445,9 @@ test("browser images are processed under live Pi guards and sent with text", asy
 		blockImages: false,
 		supportsImages: true,
 	});
-	assert.deepEqual(h.sent[0]?.content, [
-		{ type: "text", text: "look" },
+	assert.equal(browserText(h.sent[0]?.content), "look");
+	assert.ok(Array.isArray(h.sent[0]?.content));
+	assert.deepEqual(h.sent[0].content.slice(1), [
 		{ type: "image", data: "safe", mimeType: "image/png" },
 	]);
 });

@@ -197,7 +197,7 @@ export class WebUIServer {
 				const body = await readJson(request, this.options.maxRequestBytes ?? JSON_LIMIT);
 				this.assertLease(lease);
 				const message = parseSendRequest(body);
-				const result = await this.sendDeduplicated(message, request);
+				const result = await this.sendDeduplicated(message, request, response);
 				this.json(response, 202, { accepted: true, requestId: message.requestId, ...result });
 				return;
 			}
@@ -254,6 +254,7 @@ export class WebUIServer {
 	private async sendDeduplicated(
 		message: WebSendRequest,
 		request: IncomingMessage,
+		response: ServerResponse,
 	): Promise<WebSendResult> {
 		const hash = messageDigest(message);
 		const current = this.requests.get(message.requestId);
@@ -266,14 +267,19 @@ export class WebUIServer {
 		this.activeSendControllers.add(controller);
 		const abort = () => controller.abort();
 		request.once("aborted", abort);
+		response.once("close", abort);
 		const promise = this.options
 			.send({ ...message, signal: controller.signal })
 			.catch((error) => {
+				if (this.requests.get(message.requestId)?.promise === promise) {
+					this.requests.delete(message.requestId);
+				}
 				if (controller.signal.aborted) throw new HttpError(409, "Browser send was cancelled");
 				throw error;
 			})
 			.finally(() => {
 				request.off("aborted", abort);
+				response.off("close", abort);
 				this.activeSendControllers.delete(controller);
 			});
 		this.requests.set(message.requestId, { hash, promise });
