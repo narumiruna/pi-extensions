@@ -10,6 +10,7 @@ const LEGACY_SETTINGS_FILE = "pi-statusline-settings.json";
 const DEFAULT_PRESET: StatuslinePresetName = "tokyo-night";
 const DEFAULT_SEGMENTS: SegmentName[] = [
 	"brand",
+	"provider",
 	"model",
 	"thinking",
 	"cwd",

@@ -100,6 +100,8 @@ function buildSegment(
 	switch (name) {
 		case "brand":
 			return segment(name, "π", "accent", "header", true);
+		case "provider":
+			return segment(name, `🔌 ${ctx.model?.provider ?? "no-provider"}`, color, "header");
 		case "model":
 			return segment(name, `🤖 ${shortenModel(ctx.model?.id ?? "no-model")}`, color, "header");
 		case "thinking":
