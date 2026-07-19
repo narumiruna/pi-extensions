@@ -106,16 +106,17 @@ test("image input stages authenticated per-item uploads with visible status and 
 	assert.match(app, /drag-active/);
 	assert.match(app, /moveImageBefore/);
 	assert.match(app, /moveImage/);
-	assert.match(app, /item\.draggable = image\.status === "ready"/);
+	assert.match(
+		app,
+		/item\.draggable =\s*model\.images\.length > 1 && image\.status === "ready" && !orderingLocked/,
+	);
 	assert.match(app, /addEventListener\("dragstart"/);
-	assert.match(app, /model\.images\.length > 1/);
+	assert.match(app, /addEventListener\("keydown"/);
+	assert.match(app, /aria-keyshortcuts/);
 	assert.match(app, /attachment-order-context/);
 	assert.match(app, /Order \$\{index \+ 1\} of \$\{model\.images\.length\}/);
-	assert.match(app, /Move image earlier/);
-	assert.match(app, /Move image later/);
-	assert.match(app, /const label = `\$\{action\}: \$\{image\.name\}`/);
-	assert.match(app, /button\.title = label/);
-	assert.match(app, /focusOrderingControl/);
+	assert.doesNotMatch(app, /Move image earlier|Move image later|data-order-action/);
+	assert.match(app, /focusImageItem/);
 	assert.match(html, /id="clear-attachments"[^>]*hidden/);
 	assert.match(html, /id="clear-attachments-dialog"/);
 	assert.match(html, /id="confirm-clear-attachments"/);
@@ -150,12 +151,29 @@ test("attachment copy keeps summary, item state, and announcements non-duplicati
 });
 
 test("composer actions and attachment cards preserve visual priority and reflow", () => {
-	assert.match(styles, /\.image-previews\s*\{[\s\S]*grid-template-columns:\s*repeat\(auto-fit/);
-	assert.match(styles, /\.remove-image\s*\{[\s\S]*background:\s*transparent/);
-	assert.match(styles, /\.remove-image:hover:not\(:disabled\)[\s\S]*text-decoration:\s*underline/);
-	assert.match(styles, /\.remove-image:disabled\s*\{[\s\S]*background:\s*transparent/);
+	assert.match(styles, /\.image-previews\s*\{[\s\S]*flex-wrap:\s*wrap/);
+	assert.doesNotMatch(styles, /\.image-previews\s*\{[^}]*grid-template-columns/);
+	assert.match(styles, /\.image-preview-item\s*\{[^}]*flex:\s*0 1 22rem/);
+	assert.match(styles, /\.image-preview-item\s*\{[^}]*width:\s*min\(100%, 22rem\)/);
+	assert.match(
+		styles,
+		/\.image-preview-item\s*\{[^}]*grid-template-columns:\s*68px minmax\(0, 1fr\) auto/,
+	);
+	assert.match(styles, /\.remove-image\s*\{[^}]*background:\s*transparent/);
+	assert.match(
+		styles,
+		/\.remove-image:hover:not\(:disabled\)[^}]*background:\s*var\(--danger-soft\)/,
+	);
 	assert.match(styles, /textarea:focus-visible[\s\S]*border-color:\s*transparent/);
-	assert.match(styles, /\.image-order-actions[\s\S]*grid-column:\s*1 \/ -1/);
+	assert.doesNotMatch(styles, /\.image-order-actions|\.move-image/);
+});
+
+test("attachment removal uses an accessible trash icon", () => {
+	assert.match(app, /createElementNS\("http:\/\/www\.w3\.org\/2000\/svg", "svg"\)/);
+	assert.match(app, /remove\.setAttribute\("aria-label", `Remove image/);
+	assert.match(app, /remove\.title = `Remove/);
+	assert.doesNotMatch(app, /remove\.textContent = "Remove"/);
+	assert.match(styles, /\.remove-image svg/);
 });
 
 test("tool, thinking, and Markdown rendering use safe DOM construction", () => {

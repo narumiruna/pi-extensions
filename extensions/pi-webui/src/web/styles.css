@@ -526,8 +526,8 @@ textarea:disabled {
 }
 
 .image-previews {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+	display: flex;
+	flex-wrap: wrap;
 	gap: 0.6rem;
 	margin: 0;
 	padding: 0;
@@ -540,8 +540,10 @@ textarea:disabled {
 
 .image-preview-item {
 	display: grid;
+	width: min(100%, 22rem);
 	min-width: 0;
-	grid-template-columns: 68px minmax(0, 1fr);
+	flex: 0 1 22rem;
+	grid-template-columns: 68px minmax(0, 1fr) auto;
 	align-items: center;
 	gap: 0.5rem;
 	padding: 0.4rem;
@@ -552,6 +554,10 @@ textarea:disabled {
 
 .image-preview-item[draggable="true"] {
 	cursor: grab;
+}
+
+.image-preview-item[draggable="true"]:active {
+	cursor: grabbing;
 }
 
 .image-preview-item.dragging {
@@ -589,20 +595,11 @@ textarea:disabled {
 	font-weight: 650;
 }
 
-.image-order-actions {
+.image-actions {
 	display: flex;
-	grid-column: 1 / -1;
 	align-items: center;
 	justify-content: flex-end;
 	gap: 0.35rem;
-}
-
-.move-image {
-	width: 44px;
-	padding-inline: 0;
-	border-color: var(--border);
-	color: var(--text);
-	background: var(--surface);
 }
 
 .attachment-preview {
@@ -665,7 +662,7 @@ button {
 }
 
 .button.secondary,
-.move-image,
+.remove-image,
 .retry-image {
 	border-color: var(--border);
 	color: var(--text);
@@ -673,22 +670,28 @@ button {
 }
 
 .remove-image {
-	border-color: transparent;
+	display: grid;
+	width: 44px;
+	padding: 0;
+	place-items: center;
 	color: var(--muted);
 	background: transparent;
-	font-weight: 600;
 }
 
 .remove-image:hover:not(:disabled) {
-	border-color: var(--border);
-	color: var(--text);
-	text-decoration: underline;
-	text-underline-offset: 0.18em;
+	border-color: var(--danger);
+	color: var(--danger);
+	background: var(--danger-soft);
 }
 
-.remove-image:focus-visible {
-	border-color: var(--border);
-	color: var(--text);
+.remove-image svg {
+	width: 20px;
+	height: 20px;
+	fill: none;
+	stroke: currentcolor;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 1.8;
 }
 
 button:disabled,
@@ -886,14 +889,6 @@ footer p {
 
 	.send-actions {
 		flex: 0 1 auto;
-	}
-
-	.image-previews {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.image-order-actions {
-		flex-wrap: wrap;
 	}
 }
 
