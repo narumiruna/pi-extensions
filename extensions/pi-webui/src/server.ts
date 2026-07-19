@@ -14,6 +14,7 @@ import {
 import type { ConversationEvent, ConversationProjection } from "./conversation.js";
 import { DraftError, DraftStore, type PublicDraftState } from "./drafts.js";
 import { type BrowserImageInput, DEFAULT_IMAGE_LIMITS } from "./images.js";
+import { SentImageError, type SentImageSettings, SentImageStore } from "./sent-images.js";
 
 const JSON_LIMIT = 64 * 1024 * 1024;
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
@@ -28,6 +29,7 @@ export interface WebSendRequest {
 	attachmentRevision?: number;
 	attachmentIds?: string[];
 	images: BrowserImageInput[];
+	retainedImageIds?: string[];
 	delivery: "next" | "steer";
 	signal?: AbortSignal;
 }
@@ -47,6 +49,7 @@ export interface WebUIServerOptions {
 	send: (request: WebSendRequest) => Promise<WebSendResult>;
 	processAttachment?: (source: Uint8Array, signal?: AbortSignal) => Promise<PreparedAttachment>;
 	attachmentLimits?: AttachmentLimits;
+	sentImageSettings?: SentImageSettings;
 	maxDraftTextBytes?: number;
 	maxRequestBytes?: number;
 }
@@ -84,6 +87,8 @@ export class WebUIServer {
 	private readonly attachments: AttachmentStore;
 	private readonly attachmentLimits: AttachmentLimits;
 	private readonly draft: DraftStore;
+	private readonly sentImages: SentImageStore;
+	private readonly imageResidentBudget: number;
 	private activeClientId?: string;
 	private leaseGeneration = 0;
 	private closed = false;
@@ -104,6 +109,16 @@ export class WebUIServer {
 		this.draft = new DraftStore({
 			maxTextBytes: options.maxDraftTextBytes ?? DEFAULT_MAX_DRAFT_TEXT_BYTES,
 		});
+		const sentImageSettings = options.sentImageSettings ?? {
+			enabled: false,
+			maxImages: 32,
+			maxBytes: 128 * 1024 * 1024,
+		};
+		this.sentImages = new SentImageStore(sentImageSettings);
+		this.imageResidentBudget = Math.max(
+			sentImageSettings.maxBytes,
+			this.attachmentLimits.maxPromptBytes + this.attachmentLimits.maxImageBytes * 2,
+		);
 		this.attachments = new AttachmentStore({
 			limits: this.attachmentLimits,
 			process:
@@ -111,7 +126,10 @@ export class WebUIServer {
 				(async () => {
 					throw new Error("Image processing is unavailable.");
 				}),
-			onChange: (state) => this.broadcastControl("attachments", state),
+			onChange: (state) => {
+				this.reconcileSentImageBytes(state);
+				this.broadcastControl("attachments", state);
+			},
 		});
 		server.on("connection", (socket) => {
 			this.sockets.add(socket);
@@ -169,6 +187,7 @@ export class WebUIServer {
 		this.activeAttachmentControllers.clear();
 		this.attachments.close();
 		this.draft.close();
+		this.sentImages.close();
 		this.requests.clear();
 		const responses = [...this.sseClients].map((client) => client.response);
 		this.broadcastControl("session-ended", { message: "Pi session ended" });
@@ -213,7 +232,18 @@ export class WebUIServer {
 					lease: this.leaseSnapshot(),
 					draft: this.draft.publicState(),
 					attachments: this.attachments.publicState(),
+					sentImages: this.sentImages.publicState(),
 				});
+				return;
+			}
+			const sentPreviewId = sentImagePathId(url.pathname, "preview");
+			if (request.method === "GET" && sentPreviewId) {
+				const preview = this.sentImages.preview(sentPreviewId);
+				response.writeHead(200, {
+					"Content-Type": preview.mimeType,
+					"Content-Length": preview.bytes.byteLength,
+				});
+				response.end(preview.bytes);
 				return;
 			}
 			const previewId = attachmentPathId(url.pathname, "preview");
@@ -270,6 +300,44 @@ export class WebUIServer {
 				);
 				this.assertLease(lease);
 				this.broadcastDraft(state);
+				this.json(response, 200, state);
+				return;
+			}
+			if (request.method === "POST" && url.pathname === "/api/sent-images/reattach") {
+				const body = requireRecord(await readJson(request, 64 * 1024), "sent-image reattach");
+				this.assertLease(lease);
+				const items = parseSentImageReattachments(body.items);
+				const clones = this.sentImages.clone(items.map((item) => item.retainedId));
+				const attachments = this.attachments.attachPrepared(
+					clones.map((clone, index) => ({
+						id: items[index]?.id ?? "",
+						name: clone.name,
+						prepared: { bytes: clone.bytes, mimeType: clone.mimeType, notes: [] },
+					})),
+					numberField(body, "revision"),
+				);
+				this.assertLease(lease);
+				const draft = this.syncDraftAttachments(attachments);
+				this.json(response, 200, {
+					attachments,
+					draft,
+					sentImages: this.sentImages.publicState(),
+				});
+				return;
+			}
+			const sentDeleteId = sentImagePathId(url.pathname);
+			if (request.method === "DELETE" && sentDeleteId) {
+				const state = this.sentImages.remove(sentDeleteId, revisionParameter(url));
+				this.assertLease(lease);
+				this.broadcastSentImages(state);
+				this.json(response, 200, state);
+				return;
+			}
+			if (request.method === "POST" && url.pathname === "/api/sent-images/clear") {
+				const body = requireRecord(await readJson(request, 8 * 1024), "sent-image clear");
+				const state = this.sentImages.clear(numberField(body, "revision"));
+				this.assertLease(lease);
+				this.broadcastSentImages(state);
 				this.json(response, 200, state);
 				return;
 			}
@@ -359,6 +427,7 @@ export class WebUIServer {
 					...result,
 					draft: this.draft.publicState(),
 					attachments: this.attachments.publicState(),
+					sentImages: this.sentImages.publicState(),
 				});
 				return;
 			}
@@ -367,7 +436,8 @@ export class WebUIServer {
 			const status =
 				error instanceof HttpError ||
 				error instanceof AttachmentError ||
-				error instanceof DraftError
+				error instanceof DraftError ||
+				error instanceof SentImageError
 					? error.status
 					: 500;
 			if (error instanceof HttpError && error.closeConnection)
@@ -469,6 +539,10 @@ export class WebUIServer {
 			this.draft.finishSend(draftReservation.token, false);
 			throw error;
 		}
+		const retainedImageIds = this.sentImages.referencesFor(
+			message.requestId,
+			attachmentReservation?.images ?? [],
+		);
 		const controller = new AbortController();
 		this.activeSendControllers.add(controller);
 		const abort = () => controller.abort();
@@ -482,10 +556,28 @@ export class WebUIServer {
 				attachmentRevision: attachmentState.revision,
 				attachmentIds: draftReservation.attachmentIds,
 				images: attachmentReservation?.images ?? [],
+				retainedImageIds,
 				delivery: message.delivery,
 				signal: controller.signal,
 			})
 			.then((result) => {
+				if (retainedImageIds.length > 0) {
+					try {
+						const before = this.sentImages.publicState().revision;
+						this.sentImages.commit(
+							message.requestId,
+							attachmentReservation?.images ?? [],
+							retainedImageIds,
+						);
+						const retained = this.sentImages.reconcile(
+							attachmentState.totalResidentBytes,
+							this.imageResidentBudget,
+						);
+						if (retained.revision !== before) this.broadcastSentImages(retained);
+					} catch {
+						// Retention is optional and must not turn an accepted Pi message into a failure.
+					}
+				}
 				const nextAttachments = attachmentReservation
 					? this.attachments.finishSend(attachmentReservation.token, true)
 					: this.attachments.publicState();
@@ -561,6 +653,7 @@ export class WebUIServer {
 		this.writeSse(client, "lease", this.leaseSnapshot());
 		this.writeSse(client, "draft", this.draft.publicState());
 		this.writeSse(client, "attachments", this.attachments.publicState());
+		this.writeSse(client, "sent-images", this.sentImages.publicState());
 		const replay = this.options.conversation.eventsAfter(since);
 		if (replay === undefined) {
 			this.writeSse(client, "snapshot", this.options.conversation.snapshot());
@@ -589,6 +682,21 @@ export class WebUIServer {
 
 	private broadcastDraft(state: PublicDraftState): void {
 		this.broadcastControl("draft", state);
+	}
+
+	private broadcastSentImages(state: ReturnType<SentImageStore["publicState"]>): void {
+		this.broadcastControl("sent-images", state);
+	}
+
+	private reconcileSentImageBytes(attachments = this.attachments.publicState()): void {
+		const processingReserve =
+			attachments.phase === "processing" ? this.attachmentLimits.maxImageBytes * 2 : 0;
+		const before = this.sentImages.publicState().revision;
+		const retained = this.sentImages.reconcile(
+			attachments.totalResidentBytes + processingReserve,
+			this.imageResidentBudget,
+		);
+		if (retained.revision !== before) this.broadcastSentImages(retained);
 	}
 
 	private broadcastEvent(event: ConversationEvent): void {
@@ -769,6 +877,22 @@ function parseAttachmentReservations(value: unknown): Array<{
 	});
 }
 
+function parseSentImageReattachments(value: unknown): Array<{
+	retainedId: string;
+	id: string;
+}> {
+	if (!Array.isArray(value) || value.length === 0) {
+		throw new HttpError(400, "Invalid sent-image reattach list");
+	}
+	return value.map((entry) => {
+		const item = requireRecord(entry, "sent-image reattach item");
+		return {
+			retainedId: stringField(item, "retainedId"),
+			id: stringField(item, "id"),
+		};
+	});
+}
+
 function revisionParameter(url: URL): number {
 	const value = url.searchParams.get("revision");
 	if (!value || !/^\d+$/.test(value)) throw new HttpError(400, "Invalid attachment revision");
@@ -783,6 +907,12 @@ function attachmentPathId(
 ): string | undefined {
 	const suffix = action ? `/${action}` : "";
 	const match = new RegExp(`^/api/attachments/([A-Za-z0-9_-]{1,128})${suffix}$`).exec(pathname);
+	return match?.[1];
+}
+
+function sentImagePathId(pathname: string, action?: "preview"): string | undefined {
+	const suffix = action ? `/${action}` : "";
+	const match = new RegExp(`^/api/sent-images/([A-Za-z0-9_-]{1,128})${suffix}$`).exec(pathname);
 	return match?.[1];
 }
 

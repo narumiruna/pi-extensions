@@ -73,6 +73,12 @@ export interface SendReservation {
 	images: StagedBrowserImage[];
 }
 
+export interface PreparedAttachmentInput {
+	id: string;
+	name: string;
+	prepared: PreparedAttachment;
+}
+
 interface AttachmentItem extends AttachmentReservationInput {
 	status: AttachmentStatus;
 	reservedRevision: number;
@@ -195,6 +201,64 @@ export class AttachmentStore {
 				...item,
 				status: "uploading" as const,
 				reservedRevision,
+			})),
+		);
+		this.changed();
+		return this.publicState();
+	}
+
+	attachPrepared(
+		inputs: readonly PreparedAttachmentInput[],
+		expectedRevision: number,
+	): PublicAttachmentState {
+		this.assertMutable(expectedRevision);
+		if (!Array.isArray(inputs) || inputs.length === 0) {
+			throw new AttachmentError("At least one prepared attachment is required.", 400);
+		}
+		if (this.items.some((item) => item.status !== "ready")) {
+			throw new AttachmentError(
+				"Current attachments must be ready before attaching retained images.",
+			);
+		}
+		if (this.items.length + inputs.length > this.options.limits.maxImages) {
+			throw new AttachmentError(
+				`Attachment count exceeds the maximum of ${this.options.limits.maxImages}.`,
+				413,
+			);
+		}
+		const ids = new Set(this.items.map((item) => item.id));
+		const existingBytes = this.items.flatMap((item) =>
+			item.prepared ? [item.prepared.bytes] : [],
+		);
+		const additions = inputs.map((input) => {
+			const prepared = validatePrepared(input.prepared, this.options.limits);
+			const reservation = normalizeReservation(
+				{ id: input.id, name: input.name, size: prepared.bytes.byteLength },
+				this.options.limits,
+			);
+			if (ids.has(reservation.id)) throw new AttachmentError("Attachment id is duplicate.", 400);
+			ids.add(reservation.id);
+			if (
+				existingBytes.some((bytes) => bytes.equals(prepared.bytes)) ||
+				additionsContainBytes(inputs, input, prepared.bytes)
+			) {
+				throw new AttachmentError("Prepared attachment is a duplicate of the draft.");
+			}
+			return { reservation, prepared };
+		});
+		const total =
+			this.reservedSourceBytes() +
+			additions.reduce((sum, item) => sum + item.prepared.bytes.byteLength, 0);
+		if (total > this.options.limits.maxPromptBytes) {
+			throw new AttachmentError("Combined prepared attachments are too large.", 413);
+		}
+		const reservedRevision = this.revision + 1;
+		this.items.push(
+			...additions.map(({ reservation, prepared }) => ({
+				...reservation,
+				status: "ready" as const,
+				reservedRevision,
+				prepared,
 			})),
 		);
 		this.changed();
@@ -558,6 +622,34 @@ function normalizeReservation(
 		throw new AttachmentError("Attachment MIME type is invalid.", 400);
 	}
 	return { id: input.id, name: input.name, size: input.size, mimeType: input.mimeType };
+}
+
+function validatePrepared(
+	prepared: PreparedAttachment,
+	limits: AttachmentLimits,
+): PreparedAttachment {
+	if (
+		!prepared ||
+		!Buffer.isBuffer(prepared.bytes) ||
+		prepared.bytes.length === 0 ||
+		prepared.bytes.length > limits.maxImageBytes ||
+		typeof prepared.mimeType !== "string" ||
+		!/^image\/[a-z0-9.+-]{1,64}$/i.test(prepared.mimeType)
+	) {
+		throw new AttachmentError("Prepared attachment is invalid.", 400);
+	}
+	return clonePrepared(prepared);
+}
+
+function additionsContainBytes(
+	inputs: readonly PreparedAttachmentInput[],
+	current: PreparedAttachmentInput,
+	bytes: Buffer,
+): boolean {
+	const currentIndex = inputs.indexOf(current);
+	return inputs
+		.slice(0, currentIndex)
+		.some((input) => Buffer.isBuffer(input.prepared?.bytes) && input.prepared.bytes.equals(bytes));
 }
 
 function validateLimits(limits: AttachmentLimits): void {

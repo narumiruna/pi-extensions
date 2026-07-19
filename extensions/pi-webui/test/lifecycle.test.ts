@@ -231,7 +231,7 @@ test("startOnSessionStart starts automatically for every initialized session and
 		loadSettings: async () => ({
 			kind: "loaded",
 			path: "/agent/pi-webui.json",
-			settings: { startOnSessionStart: true },
+			settings: { ...DEFAULT_SETTINGS, startOnSessionStart: true },
 			source: "settings file",
 			document: { startOnSessionStart: true },
 		}),
@@ -265,7 +265,7 @@ test("invalid settings warn and automatic startup failures remain non-fatal", as
 		loadSettings: async () => ({
 			kind: "loaded",
 			path: "/agent/pi-webui.json",
-			settings: { startOnSessionStart: true },
+			settings: { ...DEFAULT_SETTINGS, startOnSessionStart: true },
 			source: "settings file",
 			document: { startOnSessionStart: true },
 		}),
@@ -540,6 +540,40 @@ test("idle browser sends fail before acknowledgement when model authentication i
 		/authentication/i,
 	);
 	assert.equal(h.sent.length, 0);
+});
+
+test("only accepted browser image messages receive retained-image projection ids", async () => {
+	const h = harness();
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	await h.serverOptions?.send({
+		requestId: "retained-browser-image",
+		text: "again later",
+		images: [{ data: Buffer.from("safe").toString("base64"), mimeType: "image/png" }],
+		retainedImageIds: ["sent_trusted"],
+		delivery: "next",
+	});
+	const browserMessage = { role: "user", content: h.sent[0]?.content, timestamp: 9 };
+	await h.emit("message_start", { message: browserMessage });
+	await h.emit("message_end", { message: browserMessage });
+	await nextTask();
+	assert.deepEqual(h.serverOptions?.conversation.snapshot().messages.at(-1)?.content, [
+		{ type: "text", text: "again later" },
+		{ type: "image", mimeType: "image/png", retainedImageId: "sent_trusted" },
+	]);
+	const terminalMessage = {
+		role: "user",
+		content: [
+			{ type: "image", mimeType: "image/png", data: "safe", retainedImageId: "sent_forged" },
+		],
+		timestamp: 10,
+	};
+	await h.emit("message_start", { message: terminalMessage });
+	await h.emit("message_end", { message: terminalMessage });
+	await nextTask();
+	assert.deepEqual(h.serverOptions?.conversation.snapshot().messages.at(-1)?.content, [
+		{ type: "image", mimeType: "image/png" },
+	]);
 });
 
 test("browser images are staged under live Pi guards and sent without reprocessing source bytes", async () => {

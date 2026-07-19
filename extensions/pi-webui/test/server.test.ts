@@ -392,6 +392,14 @@ test("message requests validate, deduplicate, and reject request-id payload conf
 				totalSourceBytes: 0,
 				totalResidentBytes: 0,
 			},
+			sentImages: {
+				revision: 0,
+				enabled: false,
+				items: [],
+				totalBytes: 0,
+				maxImages: 32,
+				maxBytes: 128 * 1024 * 1024,
+			},
 		});
 		const conflict = await api(server, "/api/messages", {
 			method: "POST",
@@ -767,6 +775,167 @@ test("lease takeover and deletion cancel processing without stale completion res
 		assert.equal(((await response.json()) as { phase: string }).phase, "empty");
 	} finally {
 		for (const release of releases) release();
+		await server.close();
+	}
+});
+
+test("accepted sanitized images can be previewed, reattached atomically, forgotten, and expired", async () => {
+	const conversation = new ConversationProjection({ id: "s", cwd: "/w", projectName: "w" });
+	let attempts = 0;
+	let holdNextSend = false;
+	const nextSend = deferred<WebSendResult>();
+	const seenRetainedIds: string[][] = [];
+	const server = await WebUIServer.start({
+		conversation,
+		sentImageSettings: { enabled: true, maxImages: 2, maxBytes: 16 },
+		attachmentLimits: { maxImages: 3, maxImageBytes: 8, maxPromptBytes: 16 },
+		processAttachment: async (source) => preparedAttachment(Buffer.from(source).toString()),
+		send: async (request) => {
+			attempts += 1;
+			seenRetainedIds.push(request.retainedImageIds ?? []);
+			if (attempts === 1) throw new Error("Pi rejected the send");
+			if (holdNextSend) return nextSend.promise;
+			return { delivery: "immediate" };
+		},
+	});
+	try {
+		const cookie = await authenticate(server);
+		const client = await takeLease(server, cookie);
+		let response = await api(server, "/api/attachments/reserve", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				revision: 0,
+				items: [{ id: "one", name: "one.png", size: 3 }],
+			}),
+		});
+		const attachments = (await response.json()) as { revision: number };
+		await api(server, `/api/attachments/one/upload?revision=${attachments.revision}`, {
+			method: "POST",
+			cookie,
+			client,
+			contentType: "application/octet-stream",
+			body: Buffer.from("one"),
+		});
+		await waitForAttachmentPhase(server, cookie, "ready");
+		const state = (await (await api(server, "/api/state", { cookie })).json()) as {
+			draft: { revision: number };
+		};
+		const body = JSON.stringify({
+			requestId: "retained-send",
+			draftRevision: state.draft.revision,
+			delivery: "next",
+		});
+		assert.equal(
+			(await api(server, "/api/messages", { method: "POST", cookie, client, body })).status,
+			500,
+		);
+		const afterFailure = (await (await api(server, "/api/state", { cookie })).json()) as {
+			sentImages: { items: unknown[] };
+			attachments: { phase: string };
+		};
+		assert.deepEqual(afterFailure.sentImages.items, []);
+		assert.equal(afterFailure.attachments.phase, "ready");
+		response = await api(server, "/api/messages", { method: "POST", cookie, client, body });
+		assert.equal(response.status, 202);
+		const accepted = (await response.json()) as {
+			attachments: { revision: number };
+			sentImages: { revision: number; items: Array<{ id: string }> };
+		};
+		assert.equal(seenRetainedIds[0]?.length, 1);
+		assert.deepEqual(seenRetainedIds[1], seenRetainedIds[0]);
+		const retainedId = accepted.sentImages.items[0]?.id;
+		assert.ok(retainedId);
+		assert.equal((await api(server, `/api/sent-images/${retainedId}/preview`)).status, 401);
+		assert.equal(
+			await (await api(server, `/api/sent-images/${retainedId}/preview`, { cookie })).text(),
+			"one",
+		);
+		const activeClient = await takeLease(server, cookie, "client-two");
+		assert.equal(
+			(
+				await api(server, "/api/sent-images/reattach", {
+					method: "POST",
+					cookie,
+					client,
+					body: JSON.stringify({
+						revision: accepted.attachments.revision,
+						items: [{ retainedId, id: "stale-tab" }],
+					}),
+				})
+			).status,
+			409,
+		);
+		response = await api(server, "/api/sent-images/reattach", {
+			method: "POST",
+			cookie,
+			client: activeClient,
+			body: JSON.stringify({
+				revision: accepted.attachments.revision,
+				items: [{ retainedId, id: "again" }],
+			}),
+		});
+		assert.equal(response.status, 200);
+		const reattached = (await response.json()) as {
+			attachments: { revision: number; items: Array<{ id: string }> };
+			draft: { revision: number };
+		};
+		assert.deepEqual(
+			reattached.attachments.items.map((item) => item.id),
+			["again"],
+		);
+		assert.equal(
+			(
+				await api(server, "/api/sent-images/reattach", {
+					method: "POST",
+					cookie,
+					client: activeClient,
+					body: JSON.stringify({
+						revision: reattached.attachments.revision,
+						items: [{ retainedId, id: "duplicate" }],
+					}),
+				})
+			).status,
+			409,
+		);
+		holdNextSend = true;
+		const pendingSend = api(server, "/api/messages", {
+			method: "POST",
+			cookie,
+			client: activeClient,
+			body: JSON.stringify({
+				requestId: "pending-retained-send",
+				draftRevision: reattached.draft.revision,
+				delivery: "next",
+			}),
+		});
+		await waitFor(() => attempts === 3);
+		response = await api(server, "/api/sent-images/reattach", {
+			method: "POST",
+			cookie,
+			client: activeClient,
+			body: JSON.stringify({
+				revision: reattached.attachments.revision,
+				items: [{ retainedId, id: "during-send" }],
+			}),
+		});
+		assert.equal(response.status, 409);
+		assert.match(await response.text(), /reserved for sending/i);
+		nextSend.resolve({ delivery: "immediate" });
+		assert.equal((await pendingSend).status, 202);
+		response = await api(
+			server,
+			`/api/sent-images/${retainedId}?revision=${accepted.sentImages.revision}`,
+			{ method: "DELETE", cookie, client: activeClient },
+		);
+		assert.equal(response.status, 200);
+		assert.deepEqual(((await response.json()) as { items: unknown[] }).items, []);
+		assert.equal(
+			(await api(server, `/api/sent-images/${retainedId}/preview`, { cookie })).status,
+			404,
+		);
+	} finally {
 		await server.close();
 	}
 });

@@ -16,6 +16,7 @@ const state = (await import(
 		submittedText: string,
 	): WebState;
 	applyAttachments(current: WebState, attachments: Record<string, unknown>): WebState;
+	applySentImages(current: WebState, sentImages: Record<string, unknown>): WebState;
 	applyConversationEvent(current: WebState, event: ConversationEvent): WebState;
 	applyLease(
 		current: WebState,
@@ -73,6 +74,14 @@ interface WebState {
 	textDirty: boolean;
 	attachmentRevision: number;
 	attachmentPhase: string;
+	sentImages: {
+		revision: number;
+		enabled: boolean;
+		items: Array<{ id: string; name?: string }>;
+		totalBytes: number;
+		maxImages: number;
+		maxBytes: number;
+	};
 	following: boolean;
 	unseenUpdateIds: string[];
 	text: string;
@@ -193,6 +202,24 @@ test("server attachment revisions replace browser images and ignore stale update
 	});
 	assert.equal(processing.readingImages, 1);
 	assert.equal(state.canSend({ ...processing, connected: true, text: "send" }), false);
+});
+
+test("sent-image snapshots are immutable and ignore stale eviction state", () => {
+	const source = {
+		revision: 2,
+		enabled: true,
+		items: [{ id: "sent-one", name: "one.png" }],
+		totalBytes: 4,
+		maxImages: 32,
+		maxBytes: 128,
+	};
+	const retained = state.applySentImages(state.initialState(), source);
+	const first = source.items[0];
+	assert.ok(first);
+	first.name = "mutated";
+	assert.deepEqual(retained.sentImages.items, [{ id: "sent-one", name: "one.png" }]);
+	assert.equal(retained.sentImages.enabled, true);
+	assert.equal(state.applySentImages(retained, { ...source, revision: 1, items: [] }), retained);
 });
 
 test("attachment snapshots clone item notes and gate every non-ready batch phase", () => {

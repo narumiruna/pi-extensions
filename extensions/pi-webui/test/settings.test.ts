@@ -7,8 +7,24 @@ import {
 	DEFAULT_SETTINGS,
 	initializeSettings,
 	loadSettings,
+	RETENTION_HARD_LIMITS,
 	saveSettings,
 } from "../src/settings.js";
+
+test("sent-image retention uses conservative opt-in defaults and finite hard ceilings", () => {
+	assert.deepEqual(
+		{
+			retainSentImages: DEFAULT_SETTINGS.retainSentImages,
+			maxRetainedImages: DEFAULT_SETTINGS.maxRetainedImages,
+			maxRetainedBytes: DEFAULT_SETTINGS.maxRetainedBytes,
+		},
+		{ retainSentImages: false, maxRetainedImages: 32, maxRetainedBytes: 128 * 1024 * 1024 },
+	);
+	assert.deepEqual(RETENTION_HARD_LIMITS, {
+		maxRetainedImages: 128,
+		maxRetainedBytes: 512 * 1024 * 1024,
+	});
+});
 
 test("settings loading distinguishes missing, valid, malformed, and invalid files", async () => {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-"));
@@ -22,7 +38,7 @@ test("settings loading distinguishes missing, valid, malformed, and invalid file
 		await writeFile(settingsPath, '{"startOnSessionStart":true,"future":"kept"}\n');
 		const loaded = await loadSettings(settingsPath);
 		assert.equal(loaded.kind, "loaded");
-		assert.deepEqual(loaded.settings, { startOnSessionStart: true });
+		assert.deepEqual(loaded.settings, { ...DEFAULT_SETTINGS, startOnSessionStart: true });
 		assert.deepEqual(loaded.document, { startOnSessionStart: true, future: "kept" });
 		assert.equal(loaded.source, "settings file");
 
@@ -36,7 +52,7 @@ test("settings loading distinguishes missing, valid, malformed, and invalid file
 		const invalid = await loadSettings(settingsPath);
 		assert.equal(invalid.kind, "invalid");
 		assert.deepEqual(invalid.settings, DEFAULT_SETTINGS);
-		assert.match(invalid.warning ?? "", /boolean/i);
+		assert.match(invalid.warning ?? "", /invalid type or limit/i);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -49,10 +65,17 @@ test("saving is atomic and preserves unknown fields", async () => {
 		await writeFile(settingsPath, '{"future":{"enabled":true},"startOnSessionStart":false}\n');
 		const loaded = await loadSettings(settingsPath);
 		assert.equal(loaded.kind, "loaded");
-		await saveSettings({ startOnSessionStart: true }, loaded.document ?? {}, settingsPath);
+		await saveSettings(
+			{ ...DEFAULT_SETTINGS, startOnSessionStart: true },
+			loaded.document ?? {},
+			settingsPath,
+		);
 		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
 			future: { enabled: true },
 			startOnSessionStart: true,
+			retainSentImages: false,
+			maxRetainedImages: 32,
+			maxRetainedBytes: 128 * 1024 * 1024,
 		});
 	} finally {
 		await rm(directory, { recursive: true, force: true });
@@ -67,11 +90,16 @@ test("failed atomic publish keeps the previous settings file", async () => {
 		await writeFile(settingsPath, original);
 		await assert.rejects(
 			() =>
-				saveSettings({ startOnSessionStart: true }, { future: 1 }, settingsPath, {
-					rename: async () => {
-						throw new Error("publish failed");
+				saveSettings(
+					{ ...DEFAULT_SETTINGS, startOnSessionStart: true },
+					{ future: 1 },
+					settingsPath,
+					{
+						rename: async () => {
+							throw new Error("publish failed");
+						},
 					},
-				}),
+				),
 			/publish failed/,
 		);
 		assert.equal(await readFile(settingsPath, "utf8"), original);
@@ -88,7 +116,7 @@ test("failed temporary write leaves the previous settings file untouched", async
 		await writeFile(settingsPath, original);
 		await assert.rejects(
 			() =>
-				saveSettings({ startOnSessionStart: true }, {}, settingsPath, {
+				saveSettings({ ...DEFAULT_SETTINGS, startOnSessionStart: true }, {}, settingsPath, {
 					write: async () => {
 						throw new Error("write failed");
 					},
@@ -109,7 +137,10 @@ test("init creates formatted defaults once and never overwrites existing content
 	const settingsPath = path.join(directory, "pi-webui.json");
 	try {
 		assert.equal(await initializeSettings(settingsPath), "created");
-		assert.equal(await readFile(settingsPath, "utf8"), '{\n  "startOnSessionStart": false\n}\n');
+		assert.equal(
+			await readFile(settingsPath, "utf8"),
+			`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
+		);
 		await writeFile(settingsPath, "{invalid but owned}\n");
 		assert.equal(await initializeSettings(settingsPath), "exists");
 		assert.equal(await readFile(settingsPath, "utf8"), "{invalid but owned}\n");

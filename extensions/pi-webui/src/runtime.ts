@@ -54,6 +54,12 @@ interface PendingBrowserInput {
 	resolve(): void;
 	reject(error: Error): void;
 	text: string;
+	retainedImageIds: string[];
+}
+
+interface AcceptedBrowserInput {
+	text: string;
+	retainedImageIds: string[];
 }
 
 export interface RuntimeDependencies {
@@ -96,7 +102,7 @@ export class WebUIRuntime {
 	private readonly activeMessageIds = new Map<string, string>();
 	private readonly finalMessageTimers = new Set<ReturnType<typeof setTimeout>>();
 	private readonly pendingBrowserInputs = new Map<string, PendingBrowserInput>();
-	private readonly acceptedBrowserInputs = new Map<string, string>();
+	private readonly acceptedBrowserInputs = new Map<string, AcceptedBrowserInput>();
 	private settings: WebUISettings = { ...DEFAULT_SETTINGS };
 	private settingsDocument?: Record<string, unknown> = {};
 	private settingsPath = "pi-webui.json";
@@ -172,7 +178,10 @@ export class WebUIRuntime {
 			if (!wrapped) return;
 			const pending = this.pendingBrowserInputs.get(wrapped.nonce);
 			if (!pending) return;
-			this.acceptedBrowserInputs.set(wrapped.nonce, pending.text);
+			this.acceptedBrowserInputs.set(wrapped.nonce, {
+				text: pending.text,
+				retainedImageIds: [...pending.retainedImageIds],
+			});
 			this.settleBrowserInput(wrapped.nonce);
 		});
 		this.pi.on("message_start", async (event, ctx) => {
@@ -289,8 +298,11 @@ export class WebUIRuntime {
 			id = `web-live:${++this.nextLiveMessageId}`;
 			this.activeMessageIds.set(key, id);
 		}
+		const retainedImageIds = Array.isArray(event.retainedImageIds)
+			? event.retainedImageIds.filter((value): value is string => typeof value === "string")
+			: [];
 		if (phase !== "end") {
-			this.recordProjectedMessage(event.message, false, id);
+			this.recordProjectedMessage(event.message, false, id, retainedImageIds);
 			return;
 		}
 		this.activeMessageIds.delete(key);
@@ -298,14 +310,19 @@ export class WebUIRuntime {
 		const timer = setTimeout(() => {
 			this.finalMessageTimers.delete(timer);
 			if (generation !== this.generation || this.closed) return;
-			this.recordProjectedMessage(event.message, true, id);
+			this.recordProjectedMessage(event.message, true, id, retainedImageIds);
 		}, 0);
 		this.finalMessageTimers.add(timer);
 	}
 
-	private recordProjectedMessage(message: unknown, final: boolean, id: string): void {
+	private recordProjectedMessage(
+		message: unknown,
+		final: boolean,
+		id: string,
+		retainedImageIds: readonly string[] = [],
+	): void {
 		try {
-			this.conversation?.recordMessage(message, final, id);
+			this.conversation?.recordMessage(message, final, id, retainedImageIds);
 		} catch {
 			// Unknown custom message shapes do not block the supported transcript.
 		}
@@ -377,7 +394,7 @@ export class WebUIRuntime {
 							if (!this.settingsDocument) {
 								throw new Error("the invalid settings file must be repaired manually first");
 							}
-							const next = { startOnSessionStart: requested };
+							const next = { ...this.settings, startOnSessionStart: requested };
 							const document = await this.dependencies.saveSettings(
 								next,
 								this.settingsDocument,
@@ -473,6 +490,11 @@ export class WebUIRuntime {
 			const starting = this.dependencies.startServer({
 				conversation,
 				send: (request) => this.sendBrowserMessage(request, generation),
+				sentImageSettings: {
+					enabled: this.settings.retainSentImages,
+					maxImages: this.settings.maxRetainedImages,
+					maxBytes: this.settings.maxRetainedBytes,
+				},
 				processAttachment: (source, signal) =>
 					this.processStagedAttachment(source, generation, signal),
 			});
@@ -558,7 +580,7 @@ export class WebUIRuntime {
 			images.length === 0
 				? text
 				: [...(text.trim() ? ([{ type: "text", text }] satisfies TextContent[]) : []), ...images];
-		const wrapped = this.createBrowserInput(content);
+		const wrapped = this.createBrowserInput(content, request.retainedImageIds ?? []);
 		const delivery =
 			request.delivery === "steer"
 				? "steer"
@@ -613,7 +635,10 @@ export class WebUIRuntime {
 		if (ctx.model !== model) throw new Error("The Pi model changed; retry the browser message.");
 	}
 
-	private createBrowserInput(content: string | Array<TextContent | ImageContent>): {
+	private createBrowserInput(
+		content: string | Array<TextContent | ImageContent>,
+		retainedImageIds: readonly string[],
+	): {
 		nonce: string;
 		content: string | Array<TextContent | ImageContent>;
 		accepted: Promise<void>;
@@ -629,7 +654,12 @@ export class WebUIRuntime {
 						...content.filter((part): part is ImageContent => part.type === "image"),
 					];
 		const accepted = new Promise<void>((resolve, reject) => {
-			this.pendingBrowserInputs.set(nonce, { resolve, reject, text });
+			this.pendingBrowserInputs.set(nonce, {
+				resolve,
+				reject,
+				text,
+				retainedImageIds: [...retainedImageIds],
+			});
 		});
 		return { nonce, content: wrappedContent, accepted };
 	}
@@ -692,35 +722,41 @@ function contentText(content: Array<TextContent | ImageContent>): string {
 
 function sanitizeBrowserMessageEvent(
 	event: unknown,
-	acceptedNonces: Map<string, string>,
+	acceptedNonces: Map<string, AcceptedBrowserInput>,
 	consume: boolean,
 ): unknown {
 	if (!isRecord(event) || !isRecord(event.message) || event.message.role !== "user") return event;
 	const content = event.message.content;
 	if (typeof content === "string") {
 		const wrapped = parseBrowserInput(content);
-		if (!wrapped || !acceptedNonces.has(wrapped.nonce)) return event;
-		const text = acceptedNonces.get(wrapped.nonce) ?? "";
+		const accepted = wrapped ? acceptedNonces.get(wrapped.nonce) : undefined;
+		if (!wrapped || !accepted) return event;
 		if (consume) acceptedNonces.delete(wrapped.nonce);
-		return { ...event, message: { ...event.message, content: text } };
+		return {
+			...event,
+			retainedImageIds: [...accepted.retainedImageIds],
+			message: { ...event.message, content: accepted.text },
+		};
 	}
 	if (!Array.isArray(content)) return event;
-	let changed = false;
-	const consumed = new Set<string>();
-	const sanitized = content.flatMap((part) => {
+	let accepted: AcceptedBrowserInput | undefined;
+	let acceptedNonce: string | undefined;
+	const sanitizedText = content.flatMap((part) => {
 		if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") return [part];
 		const wrapped = parseBrowserInput(part.text);
-		if (!wrapped || !acceptedNonces.has(wrapped.nonce)) return [part];
-		const text = acceptedNonces.get(wrapped.nonce) ?? "";
-		changed = true;
-		consumed.add(wrapped.nonce);
-		return text ? [{ ...part, text }] : [];
+		const candidate = wrapped ? acceptedNonces.get(wrapped.nonce) : undefined;
+		if (!wrapped || !candidate) return [part];
+		accepted = candidate;
+		acceptedNonce = wrapped.nonce;
+		return candidate.text ? [{ ...part, text: candidate.text }] : [];
 	});
-	if (!changed) return event;
-	if (consume) {
-		for (const nonce of consumed) acceptedNonces.delete(nonce);
-	}
-	return { ...event, message: { ...event.message, content: sanitized } };
+	if (!accepted) return event;
+	if (consume && acceptedNonce) acceptedNonces.delete(acceptedNonce);
+	return {
+		...event,
+		retainedImageIds: [...accepted.retainedImageIds],
+		message: { ...event.message, content: sanitizedText },
+	};
 }
 
 function attachmentNotes(image: ProcessedBrowserImage): string[] {
