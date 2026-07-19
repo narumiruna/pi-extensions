@@ -27,6 +27,9 @@ const state = (await import(
 	): WebState;
 	failSend(current: WebState, attempt: SendAttempt, error: string): WebState;
 	invalidateSendAttempt(current: WebState): WebState;
+	setNearBottom(current: WebState, nearBottom: boolean): WebState;
+	noteUnseenUpdate(current: WebState, key: string): WebState;
+	followLatest(current: WebState): WebState;
 	canSend(current: WebState): boolean;
 	busyLabel(current: WebState): string;
 	deliveryNotice(current: WebState): string;
@@ -46,6 +49,8 @@ interface WebState {
 	pending: boolean;
 	readingImages: number;
 	leaseClaimed: boolean;
+	following: boolean;
+	unseenUpdateIds: string[];
 	text: string;
 	images: Array<{ id: string }>;
 	outbox?: SendAttempt;
@@ -169,8 +174,8 @@ test("session-ended and lease events disable mutation without relying on color",
 test("send availability and labels distinguish immediate, follow-up, and disconnected states", () => {
 	const base = { ...state.initialState(), connected: true, text: "hello" };
 	assert.equal(state.canSend(base), true);
-	assert.equal(state.busyLabel(base), "Send now");
-	assert.equal(state.busyLabel({ ...base, activity: "running" }), "Send next");
+	assert.equal(state.busyLabel(base), "Send");
+	assert.equal(state.busyLabel({ ...base, activity: "running" }), "Queue next");
 	assert.equal(state.busyLabel({ ...base, connected: false }), "Reconnect to send");
 	assert.equal(state.canSend({ ...base, pending: true }), false);
 	assert.equal(state.canSend({ ...base, readingImages: 1 }), false);
@@ -221,6 +226,19 @@ test("send completion removes only the submitted draft", () => {
 	assert.deepEqual(completed.images, [newer]);
 	assert.equal(completed.pending, false);
 	assert.equal(completed.lastDelivery, "immediate");
+});
+
+test("live transcript follows only near the bottom and deduplicates unseen updates", () => {
+	let current = state.initialState();
+	current = state.setNearBottom(current, false);
+	assert.equal(current.following, false);
+	current = state.noteUnseenUpdate(current, "message:one");
+	current = state.noteUnseenUpdate(current, "message:one");
+	current = state.noteUnseenUpdate(current, "tool:call");
+	assert.deepEqual(current.unseenUpdateIds, ["message:one", "tool:call"]);
+	current = state.followLatest(current);
+	assert.equal(current.following, true);
+	assert.deepEqual(current.unseenUpdateIds, []);
 });
 
 test("accepted delivery modes provide explicit queue feedback", () => {

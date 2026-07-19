@@ -12,6 +12,8 @@ export function initialState() {
 		pending: false,
 		readingImages: 0,
 		leaseClaimed: false,
+		following: true,
+		unseenUpdateIds: [],
 		text: "",
 		images: [],
 		error: "",
@@ -109,6 +111,21 @@ export function invalidateSendAttempt(current) {
 	return { ...current, outbox: undefined, lastDelivery: undefined };
 }
 
+export function setNearBottom(current, nearBottom) {
+	if (!nearBottom) return current.following ? { ...current, following: false } : current;
+	if (current.following && current.unseenUpdateIds.length === 0) return current;
+	return { ...current, following: true, unseenUpdateIds: [] };
+}
+
+export function noteUnseenUpdate(current, key) {
+	if (current.following || current.unseenUpdateIds.includes(key)) return current;
+	return { ...current, unseenUpdateIds: [...current.unseenUpdateIds, key] };
+}
+
+export function followLatest(current) {
+	return { ...current, following: true, unseenUpdateIds: [] };
+}
+
 export function upsertById(items, value) {
 	const index = items.findIndex((item) => item.id === value.id);
 	if (index < 0) return [...items, value];
@@ -139,5 +156,5 @@ export function busyLabel(current) {
 	if (!current.connected) return "Reconnect to send";
 	if (current.closed) return "Session ended";
 	if (current.stale) return "Tab is read-only";
-	return current.activity === "running" ? "Send next" : "Send now";
+	return current.activity === "running" ? "Queue next" : "Send";
 }

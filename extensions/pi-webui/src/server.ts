@@ -151,7 +151,7 @@ export class WebUIServer {
 			}
 			if (
 				request.method === "GET" &&
-				(url.pathname === "/app.js" || url.pathname === "/state.js")
+				["/app.js", "/state.js", "/markdown.js", "/transcript.js"].includes(url.pathname)
 			) {
 				await this.asset(response, url.pathname.slice(1), "text/javascript; charset=utf-8");
 				return;

@@ -4,10 +4,12 @@ import path from "node:path";
 import test from "node:test";
 
 const root = path.join(process.cwd(), "extensions/pi-webui/src/web");
-const [html, app, styles] = await Promise.all([
+const [html, app, styles, transcript, markdown] = await Promise.all([
 	readFile(path.join(root, "index.html"), "utf8"),
 	readFile(path.join(root, "app.js"), "utf8"),
 	readFile(path.join(root, "styles.css"), "utf8"),
+	readFile(path.join(root, "transcript.js"), "utf8"),
+	readFile(path.join(root, "markdown.js"), "utf8"),
 ]);
 
 test("page hierarchy keeps session context, transcript, and composer in reading order", () => {
@@ -16,10 +18,13 @@ test("page hierarchy keeps session context, transcript, and composer in reading 
 		/<header[^>]*>[\s\S]*id="project-name"[\s\S]*id="connection-status"[\s\S]*<\/header>/,
 	);
 	assert.match(html, /<main[^>]*>[\s\S]*id="transcript"[\s\S]*id="composer"[\s\S]*<\/main>/);
-	assert.match(html, /id="transcript"[^>]*aria-live="polite"/);
+	assert.match(html, /id="transcript"[^>]*>/);
+	assert.doesNotMatch(html, /id="transcript"[^>]*aria-live/);
+	assert.match(html, /id="transcript-status"[^>]*aria-live="polite"/);
+	assert.match(html, /id="jump-latest"[^>]*hidden/);
 	assert.match(html, /id="message-input"[^>]*aria-label="Message Pi"/);
-	assert.match(html, /id="send-next"[^>]*>Send now<\/button>/);
-	assert.match(html, /id="steer"[^>]*hidden[^>]*>Steer now<\/button>/);
+	assert.match(html, /id="send-next"[^>]*>Send<\/button>/);
+	assert.match(html, /id="steer"[^>]*hidden[^>]*>Steer<\/button>/);
 	assert.match(html, /id="composer-status"[^>]*role="status"/);
 	assert.match(html, /id="blocking-state"[^>]*role="alert"[^>]*hidden/);
 });
@@ -41,6 +46,11 @@ test("browser logic authenticates a lease, reconnects from sequence, and keeps f
 	assert.match(app, /applyLease\(model, snapshot\.lease, clientId\)/);
 	assert.match(app, /applyLease\(model, await response\.json\(\), clientId, true\)/);
 	assert.match(app, /snapshotRefresh/);
+	assert.match(app, /createTranscriptRenderer/);
+	assert.match(app, /noteUnseenUpdate/);
+	assert.match(app, /followLatest/);
+	assert.doesNotMatch(app, /ui\.transcript\.replaceChildren/);
+	assert.match(app, /requestAnimationFrame/);
 	assert.match(app, /if \(!response\.ok\) throw new Error/);
 	assert.doesNotMatch(app, /localStorage|sessionStorage|indexedDB/i);
 });
@@ -55,13 +65,23 @@ test("image input supports picker and paste with visible removable previews", ()
 	assert.match(app, /URL\.createObjectURL/);
 	assert.match(app, /URL\.revokeObjectURL/);
 	assert.match(app, /Remove image/);
+	assert.match(html, /Paste, drop, or choose/);
+	assert.match(html, /id="image-preview-dialog"/);
+	assert.match(html, /id="attachment-status"[^>]*aria-live="polite"/);
+	assert.match(app, /showModal/);
+	assert.match(app, /previewReturnFocus.*focus/s);
+	assert.match(app, /drag-active/);
 });
 
-test("tool and thinking details use native disclosure and text-only DOM insertion", () => {
-	assert.match(app, /document\.createElement\("details"\)/);
-	assert.match(app, /summary\.textContent = "Thinking"/);
-	assert.match(app, /renderTool/);
-	assert.doesNotMatch(app, /innerHTML|insertAdjacentHTML|document\.write/);
+test("tool, thinking, and Markdown rendering use safe DOM construction", () => {
+	assert.match(transcript, /createElement\("details"\)/);
+	assert.match(transcript, /summary\.textContent = "Thinking"/);
+	assert.match(app, /createTranscriptRenderer/);
+	assert.match(markdown, /createTextNode|textContent/);
+	assert.doesNotMatch(
+		`${app}\n${transcript}\n${markdown}`,
+		/innerHTML|insertAdjacentHTML|document\.write/,
+	);
 });
 
 test("responsive and accessibility CSS covers focus, targets, reflow, dark mode, and motion", () => {

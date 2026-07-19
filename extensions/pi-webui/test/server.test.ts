@@ -101,6 +101,11 @@ test("assets and APIs require auth and carry restrictive headers", async () => {
 		assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 		assert.equal(page.headers.get("access-control-allow-origin"), null);
 		assert.match(await page.text(), /id="composer"/);
+		for (const module of ["app.js", "state.js", "markdown.js", "transcript.js"]) {
+			const asset = await api(server, `/${module}`, { cookie });
+			assert.equal(asset.status, 200, module);
+			assert.match(asset.headers.get("content-type") ?? "", /javascript/, module);
+		}
 		const state = await (await api(server, "/api/state", { cookie })).json();
 		assert.equal(state.session.projectName, "demo");
 	} finally {

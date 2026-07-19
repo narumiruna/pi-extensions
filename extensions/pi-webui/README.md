@@ -9,9 +9,11 @@ This package is intentionally different from the broader, separately maintained 
 ## Features
 
 - Streams current-branch user and assistant messages, assistant text updates, tool activity/results, errors, and busy/idle state over Server-Sent Events.
-- Sends immediately while Pi is idle and automatically queues **Send next** as a follow-up while Pi is busy.
-- Provides a separate **Steer now** action while Pi is working; steering is never the default submit action.
-- Accepts pasted, dropped, or selected PNG, JPEG, WebP, and GIF images, strips metadata server-side, and applies Pi-compatible size limits.
+- Renders a safe Markdown subset for headings, lists, emphasis, code, blockquotes, and HTTP(S) links without executing model-provided HTML.
+- Preserves open tool/thinking disclosures during keyed streaming updates and offers **Jump to latest** when new activity arrives while you read earlier messages.
+- Sends immediately while Pi is idle and automatically queues **Queue next** as a follow-up while Pi is busy.
+- Provides a separate **Steer** action while Pi is working; steering is never the default submit action.
+- Accepts pasted, dropped, or selected PNG, JPEG, WebP, and GIF images, strips metadata server-side, applies Pi-compatible size limits, and provides contained thumbnails plus an enlarged preview.
 - Reconnects from an ordered event cursor and replaces state from an authoritative snapshot after a gap.
 - Keeps a failed browser draft and prevents rapid duplicate submission with request IDs.
 - Uses no frontend framework, build step, browser storage, remote service, or automatically launched browser.
@@ -37,7 +39,7 @@ The package targets the latest Pi release.
 1. Start Pi in a terminal and run `/webui`.
 2. Open the one-time `http://127.0.0.1:<port>/bootstrap?...` link shown by Pi. The extension does not open a browser itself.
 3. Continue typing in either the terminal or browser. Accepted messages from both surfaces appear in the browser transcript.
-4. While Pi is idle, **Send now** starts a turn immediately. While Pi is working, **Send next** queues a follow-up. Use **Steer now** only when the new instruction should reach Pi after the current tool batch.
+4. While Pi is idle, **Send** starts a turn immediately. While Pi is working, **Queue next** queues a follow-up. Use **Steer** only when the new instruction should reach Pi after the current tool batch.
 5. Refreshing or opening the link in another tab takes the editing lease. Older tabs remain readable and clearly become read-only.
 
 If another installed extension also registers `/webui`, Pi assigns numeric command suffixes according to extension load order. Check Pi's command provenance and invoke the WebUI entry.
@@ -75,7 +77,7 @@ A loopback page is local to the operating-system network namespace. WebUI does n
 
 ## Accessibility and browsers
 
-The page uses semantic headings, native disclosure controls, status/alert live regions, text labels, visible keyboard focus, at least 44 px controls, keyboard image removal, `Ctrl/Command+Enter` submission, reduced-motion handling, dark mode, and responsive reflow. It targets current stable desktop Chrome, Edge, Firefox, and Safari.
+The page uses semantic headings, native disclosure/dialog controls, concise status/alert live regions, text labels, visible keyboard focus, at least 44 px controls, keyboard image preview/removal, `Ctrl/Command+Enter` submission, reduced-motion handling, dark mode, and responsive reflow. It targets current stable desktop Chrome, Edge, Firefox, and Safari.
 
 ## Limitations
 

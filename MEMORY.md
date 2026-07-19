@@ -47,6 +47,7 @@
 - Loopback HTTP cookies are shared by hostname across ports; simultaneous Pi servers on `127.0.0.1` need per-server cookie names, not only per-server cookie values.
 - Symptom: an authenticated browser SSE client remains “reconnecting” when the replay is empty. Cause: `writeHead()` alone may not flush EventSource headers. Fix: call `flushHeaders()` and write an initial SSE comment before waiting for events.
 - Browser request deduplication survives a lost response only when an unchanged retry retains the exact request id and payload, including its delivery mode; definitive HTTP rejections can invalidate that attempt.
+- New framework-free browser modules must be added to the authenticated server asset allowlist as well as the package; cover each runtime module with an HTTP asset test and pack dry run.
 - Symptom: `npm test --workspace @narumitw/<extension>` fails with “Missing script: test”. Cause: extension packages do not define workspace test scripts; root `npm test` compiles and runs all extension tests. Fix: run `npm test` from the repository root.
 - When PR comments expose one class of bug, stop patching comment-by-comment and do a holistic pass over adjacent Modules before pushing again.
 - Goal-owned kickoff, resume, edit, and continuation prompts need bounded markers tied to the originating goal id, plus agent-end ownership, so stale turns cannot mutate replacements. On any failed lazy activation delivery, restore the exact pre-reveal active set only if that failed prompt still owns the current goal.
