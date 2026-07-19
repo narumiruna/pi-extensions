@@ -13,7 +13,7 @@ This package is intentionally different from the broader, separately maintained 
 - Preserves open tool/thinking disclosures during keyed streaming updates and offers **Jump to latest** when new activity arrives while you read earlier messages.
 - Sends immediately while Pi is idle and automatically queues **Queue next** as a follow-up while Pi is busy.
 - Provides a separate **Steer** action while Pi is working; steering is never the default submit action.
-- Accepts pasted, dropped, or selected PNG, JPEG, WebP, and GIF images, strips metadata server-side, applies Pi-compatible size limits, and provides contained thumbnails plus an enlarged preview.
+- Accepts pasted, dropped, or selected PNG, JPEG, WebP, GIF, BMP, TIFF, HEIC/HEIF, and AVIF images, strips metadata server-side, applies Pi-compatible size limits, and provides contained thumbnails plus an enlarged preview.
 - Reconnects from an ordered event cursor and replaces state from an authoritative snapshot after a gap.
 - Keeps a failed browser draft and prevents rapid duplicate submission with request IDs.
 - Uses no frontend framework, build step, browser storage, remote service, or automatically launched browser.
@@ -95,11 +95,15 @@ The initial transcript comes from the active session branch. Browser refresh doe
 | PNG | PNG |
 | JPEG | JPEG |
 | WebP | WebP |
-| GIF | GIF |
+| GIF, including animation | GIF |
+| BMP | PNG |
+| TIFF | PNG |
+| HEIC/HEIF | PNG |
+| AVIF | PNG |
 
-The server checks file signatures instead of trusting browser MIME types. It rejects corrupt/unknown formats, more than 8 images, individual source images over 10 MiB, combined image input over 40 MiB, images over 50 megapixels, and provider-ready Base64 content over Pi's approximately 4.5 MB inline limit. Images over 2,000 pixels on either side are resized when Pi's `images.autoResize` setting is enabled and rejected when it is disabled.
+The server checks file signatures instead of trusting browser MIME types or filename extensions. It rejects corrupt/unknown formats, more than 8 images, individual source images over 10 MiB, combined image input over 40 MiB, images over 50 megapixels, and provider-ready Base64 content over Pi's approximately 4.5 MB inline limit. Images over 2,000 pixels on either side are resized when Pi's `images.autoResize` setting is enabled and rejected when it is disabled.
 
-Processing re-encodes images with `sharp`, strips EXIF and other metadata, and does not retain browser source bytes after the message request is accepted. Pi's effective global and trusted-project `images.autoResize` and `images.blockImages` settings plus the current model's image capability are checked at send time.
+Processing applies image orientation, re-encodes provider-ready output, strips EXIF and other private metadata, preserves ICC color profiles and animated GIF timing where supported, and does not retain browser source bytes after the message request is accepted. Pi's effective global and trusted-project `images.autoResize` and `images.blockImages` settings plus the current model's image capability are checked at send time. BMP and HEIC use bounded portable decoders because the prebuilt `sharp`/libvips distribution does not decode those inputs consistently across supported platforms.
 
 ## Security and privacy
 
@@ -121,7 +125,7 @@ The page uses semantic headings, native disclosure/dialog controls, concise stat
 
 - One active Pi session and one active browser editing tab only.
 - No persistent browser transcript, sent-image history, remote access, PTY/terminal control, model/settings controls, or session switching.
-- No SVG, HEIC/HEIF, TIFF, BMP, AVIF, remote image URL, OCR, annotation, or directory upload support.
+- No SVG, remote image URL, OCR, annotation, or directory upload support.
 - Browser acknowledgment means Pi accepted or queued the message. Provider failures follow Pi's normal session/retry behavior.
 - Built-in TUI commands and dialogs are not reimplemented in the browser.
 

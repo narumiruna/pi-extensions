@@ -28,6 +28,19 @@ let transcriptAnnouncement = "";
 let dragDepth = 0;
 let previewReturnFocus;
 
+const SUPPORTED_IMAGE_TYPES = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/webp",
+	"image/gif",
+	"image/bmp",
+	"image/x-ms-bmp",
+	"image/tiff",
+	"image/heic",
+	"image/heif",
+	"image/avif",
+]);
+
 const ui = {
 	project: document.querySelector("#project-name"),
 	session: document.querySelector("#session-name"),
@@ -95,9 +108,7 @@ window.addEventListener(
 	{ passive: true },
 );
 document.addEventListener("paste", (event) => {
-	const files = [...(event.clipboardData?.files ?? [])].filter((file) =>
-		file.type.startsWith("image/"),
-	);
+	const files = [...(event.clipboardData?.files ?? [])].filter(isSupportedImageFile);
 	if (files.length === 0 || composerLocked()) return;
 	event.preventDefault();
 	void addFiles(files);
@@ -119,9 +130,7 @@ ui.composer.addEventListener("dragleave", () => {
 ui.composer.addEventListener("drop", (event) => {
 	dragDepth = 0;
 	ui.composer.classList.remove("drag-active");
-	const files = [...(event.dataTransfer?.files ?? [])].filter((file) =>
-		file.type.startsWith("image/"),
-	);
+	const files = [...(event.dataTransfer?.files ?? [])].filter(isSupportedImageFile);
 	if (files.length === 0 || composerLocked()) return;
 	event.preventDefault();
 	void addFiles(files);
@@ -284,7 +293,6 @@ async function send(steer) {
 
 async function addFiles(fileList) {
 	if (composerLocked()) return;
-	const supported = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 	const files = [...(fileList ?? [])];
 	if (model.images.length + files.length > 8) {
 		model = { ...model, error: "You can attach at most 8 images." };
@@ -299,7 +307,7 @@ async function addFiles(fileList) {
 				model = { ...model, error: "You can attach at most 8 images." };
 				break;
 			}
-			if (!supported.has(file.type)) {
+			if (!isSupportedImageFile(file)) {
 				model = { ...model, error: `${file.name || "Image"} is not a supported image.` };
 				continue;
 			}
@@ -332,6 +340,13 @@ async function addFiles(fileList) {
 		model = { ...model, readingImages: Math.max(0, model.readingImages - 1) };
 		renderComposer();
 	}
+}
+
+function isSupportedImageFile(file) {
+	return (
+		SUPPORTED_IMAGE_TYPES.has(file.type) ||
+		/\.(?:bmp|tif|tiff|heic|heif|avif)$/i.test(file.name || "")
+	);
 }
 
 function removeImage(id) {

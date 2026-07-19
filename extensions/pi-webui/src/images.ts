@@ -1,5 +1,7 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
-import sharp, { type Metadata, type Sharp } from "sharp";
+import { detectImageFormat, type ProcessImageOptions, processImage } from "./image-pipeline.js";
+
+export { detectImageFormat } from "./image-pipeline.js";
 
 export const DEFAULT_IMAGE_LIMITS = {
 	maxImages: 8,
@@ -29,7 +31,84 @@ export interface ProcessBrowserImageOptions {
 	signal?: AbortSignal;
 }
 
-type SupportedFormat = "png" | "jpeg" | "webp" | "gif";
+interface ImageProcessorOptions {
+	autoResize: boolean;
+	maxPixels: number;
+	maxDimension?: number;
+	maxBase64Bytes?: number;
+	signal?: AbortSignal;
+}
+
+type ImageProcessFunction = (
+	source: Uint8Array,
+	options: ProcessImageOptions,
+) => Promise<ImageContent>;
+
+interface QueuedImageProcess {
+	source: Uint8Array;
+	options: ProcessImageOptions;
+	resolve: (result: ImageContent) => void;
+	reject: (error: unknown) => void;
+	removeAbortListener?: () => void;
+}
+
+export class ImageProcessor {
+	private readonly queue: QueuedImageProcess[] = [];
+	private active = 0;
+
+	constructor(
+		private readonly concurrency = 2,
+		private readonly processor: ImageProcessFunction = processProviderImage,
+	) {
+		if (!Number.isSafeInteger(concurrency) || concurrency <= 0) {
+			throw new Error("Image processing concurrency must be a positive integer");
+		}
+	}
+
+	process(source: Uint8Array, options: ImageProcessorOptions): Promise<ImageContent> {
+		const resolved: ProcessImageOptions = {
+			...options,
+			maxDimension: options.maxDimension ?? DEFAULT_IMAGE_LIMITS.maxDimension,
+			maxBase64Bytes: options.maxBase64Bytes ?? DEFAULT_IMAGE_LIMITS.maxBase64Bytes,
+		};
+		assertNotAborted(resolved.signal);
+		return new Promise((resolve, reject) => {
+			const job: QueuedImageProcess = { source, options: resolved, resolve, reject };
+			if (resolved.signal) {
+				const onAbort = () => {
+					const index = this.queue.indexOf(job);
+					if (index === -1) return;
+					this.queue.splice(index, 1);
+					job.removeAbortListener?.();
+					reject(abortError());
+				};
+				resolved.signal.addEventListener("abort", onAbort, { once: true });
+				job.removeAbortListener = () => resolved.signal?.removeEventListener("abort", onAbort);
+			}
+			this.queue.push(job);
+			this.pump();
+		});
+	}
+
+	private pump(): void {
+		while (this.active < this.concurrency && this.queue.length > 0) {
+			const job = this.queue.shift();
+			if (!job) return;
+			job.removeAbortListener?.();
+			if (job.options.signal?.aborted) {
+				job.reject(abortError());
+				continue;
+			}
+			this.active += 1;
+			void this.processor(job.source, job.options)
+				.then(job.resolve, job.reject)
+				.finally(() => {
+					this.active -= 1;
+					this.pump();
+				});
+		}
+	}
+}
 
 export async function processBrowserImages(
 	inputs: BrowserImageInput[],
@@ -44,29 +123,29 @@ export async function processBrowserImages(
 	assertNotAborted(options.signal);
 
 	const decoded = inputs.map((input, index) => decodeInput(input, index, limits.maxImageBytes));
-	const totalSourceBytes = decoded.reduce((total, item) => total + item.bytes.byteLength, 0);
+	const totalSourceBytes = decoded.reduce((total, item) => total + item.byteLength, 0);
 	if (totalSourceBytes > limits.maxPromptBytes) {
 		throw new Error("Combined image input is too large.");
 	}
 
-	const output: ImageContent[] = [];
-	let totalOutputBytes = 0;
-	for (const item of decoded) {
-		assertNotAborted(options.signal);
-		const processed = await processOne(
-			item.bytes,
-			item.format,
-			limits,
-			options.autoResize !== false,
-			options.signal,
-		);
-		totalOutputBytes += processed.byteLength;
-		if (totalOutputBytes > limits.maxPromptBytes)
-			throw new Error("Combined processed images are too large.");
-		const data = processed.toString("base64");
-		if (data.length > limits.maxBase64Bytes)
-			throw new Error("Processed image exceeds Pi's inline limit.");
-		output.push({ type: "image", data, mimeType: mimeFor(item.format) });
+	const processor = new ImageProcessor(2);
+	const output = await Promise.all(
+		decoded.map((bytes) =>
+			processor.process(bytes, {
+				autoResize: options.autoResize !== false,
+				maxPixels: limits.maxPixels,
+				maxDimension: limits.maxDimension,
+				maxBase64Bytes: limits.maxBase64Bytes,
+				signal: options.signal,
+			}),
+		),
+	);
+	const totalOutputBytes = output.reduce(
+		(total, item) => total + Buffer.byteLength(item.data, "base64"),
+		0,
+	);
+	if (totalOutputBytes > limits.maxPromptBytes) {
+		throw new Error("Combined processed images are too large.");
 	}
 	return output;
 }
@@ -89,11 +168,7 @@ function definedLimits(options: ProcessBrowserImageOptions): Partial<typeof DEFA
 	return result;
 }
 
-function decodeInput(
-	input: BrowserImageInput,
-	index: number,
-	maxImageBytes: number,
-): { bytes: Buffer; format: SupportedFormat } {
+function decodeInput(input: BrowserImageInput, index: number, maxImageBytes: number): Buffer {
 	if (!input || typeof input.data !== "string")
 		throw new Error(`Image ${index + 1} has invalid data.`);
 	if (!input.data) throw new Error(`Image ${index + 1} is empty.`);
@@ -105,117 +180,28 @@ function decodeInput(
 	const bytes = Buffer.from(input.data, "base64");
 	if (bytes.byteLength === 0) throw new Error(`Image ${index + 1} is empty.`);
 	if (bytes.byteLength > maxImageBytes) throw new Error(`Image ${index + 1} is too large.`);
-	const format = detectFormat(bytes);
-	if (!format) throw new Error(`Image ${index + 1} uses an unsupported format.`);
-	return { bytes, format };
+	if (!detectImageFormat(bytes)) throw new Error(`Image ${index + 1} uses an unsupported format.`);
+	return bytes;
 }
 
-async function processOne(
-	bytes: Buffer,
-	format: SupportedFormat,
-	limits: typeof DEFAULT_IMAGE_LIMITS,
-	autoResize: boolean,
-	signal?: AbortSignal,
-): Promise<Buffer> {
-	assertNotAborted(signal);
-	const metadata = await sharp(bytes, {
-		animated: format === "gif",
-		limitInputPixels: limits.maxPixels,
-	}).metadata();
-	assertNotAborted(signal);
-	const { width, height } = validatedDimensions(metadata, limits.maxPixels);
-	const oversized = width > limits.maxDimension || height > limits.maxDimension;
-	if (oversized && !autoResize) throw new Error("Image dimensions exceed Pi's limit.");
-
-	let targetWidth = oversized ? Math.min(width, limits.maxDimension) : width;
-	let targetHeight = oversized ? Math.min(height, limits.maxDimension) : height;
-	const ratio = Math.min(targetWidth / width, targetHeight / height, 1);
-	targetWidth = Math.max(1, Math.round(width * ratio));
-	targetHeight = Math.max(1, Math.round(height * ratio));
-
-	for (let attempt = 0; attempt < 6; attempt += 1) {
-		assertNotAborted(signal);
-		let pipeline = sharp(bytes, {
-			animated: format === "gif",
-			limitInputPixels: limits.maxPixels,
-		}).autoOrient();
-		if (targetWidth !== width || targetHeight !== height) {
-			pipeline = pipeline.resize({
-				width: targetWidth,
-				height: targetHeight,
-				fit: "inside",
-				withoutEnlargement: true,
-			});
-		}
-		pipeline = encode(pipeline, format);
-		const output = await pipeline.toBuffer();
-		assertNotAborted(signal);
-		if (output.toString("base64").length <= limits.maxBase64Bytes) return output;
-		if (!autoResize) throw new Error("Processed image exceeds Pi's inline limit.");
-		targetWidth = Math.max(1, Math.floor(targetWidth * 0.75));
-		targetHeight = Math.max(1, Math.floor(targetHeight * 0.75));
-	}
-	throw new Error("Processed image exceeds Pi's inline limit after resizing.");
-}
-
-function validatedDimensions(
-	metadata: Metadata,
-	maxPixels: number,
-): { width: number; height: number } {
-	const width = metadata.autoOrient.width ?? metadata.width;
-	const totalHeight = metadata.autoOrient.height ?? metadata.height;
-	if (!width || !totalHeight) throw new Error("Image dimensions could not be decoded.");
-	const pages = metadata.pages ?? 1;
-	const height = metadata.pageHeight ?? Math.floor(totalHeight / pages);
-	if (height <= 0 || width * height * pages > maxPixels) {
-		throw new Error("Image pixel count exceeds the limit.");
-	}
-	return { width, height };
-}
-
-function encode(image: Sharp, format: SupportedFormat): Sharp {
-	switch (format) {
-		case "png":
-			return image.png();
-		case "jpeg":
-			return image.jpeg({ quality: 88, mozjpeg: true });
-		case "webp":
-			return image.webp({ quality: 88 });
-		case "gif":
-			return image.gif();
-	}
-}
-
-function detectFormat(bytes: Uint8Array): SupportedFormat | undefined {
-	if (
-		bytes.length >= 8 &&
-		bytes[0] === 0x89 &&
-		bytes[1] === 0x50 &&
-		bytes[2] === 0x4e &&
-		bytes[3] === 0x47 &&
-		bytes[4] === 0x0d &&
-		bytes[5] === 0x0a &&
-		bytes[6] === 0x1a &&
-		bytes[7] === 0x0a
-	)
-		return "png";
-	if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
-		return "jpeg";
-	if (
-		bytes.length >= 12 &&
-		Buffer.from(bytes.subarray(0, 4)).toString("ascii") === "RIFF" &&
-		Buffer.from(bytes.subarray(8, 12)).toString("ascii") === "WEBP"
-	)
-		return "webp";
-	if (bytes.length >= 6 && Buffer.from(bytes.subarray(0, 4)).toString("ascii") === "GIF8")
-		return "gif";
-	return undefined;
-}
-
-function mimeFor(format: SupportedFormat): string {
-	return format === "jpeg" ? "image/jpeg" : `image/${format}`;
+async function processProviderImage(
+	source: Uint8Array,
+	options: ProcessImageOptions,
+): Promise<ImageContent> {
+	const processed = await processImage(source, options);
+	return {
+		type: "image",
+		data: processed.bytes.toString("base64"),
+		mimeType: processed.mimeType,
+	};
 }
 
 function assertNotAborted(signal?: AbortSignal): void {
-	if (signal?.aborted) throw new Error("Image processing aborted.");
+	if (signal?.aborted) throw abortError();
+}
+
+function abortError(): Error {
+	const error = new Error("Image processing aborted.");
+	error.name = "AbortError";
+	return error;
 }

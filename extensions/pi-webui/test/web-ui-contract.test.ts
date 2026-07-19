@@ -58,8 +58,11 @@ test("browser logic authenticates a lease, reconnects from sequence, and keeps f
 test("image input supports picker and paste with visible removable previews", () => {
 	assert.match(
 		html,
-		/id="image-input"[^>]*type="file"[^>]*accept="image\/png,image\/jpeg,image\/webp,image\/gif"[^>]*multiple/,
+		/id="image-input"[^>]*type="file"[^>]*accept="image\/png,image\/jpeg,image\/webp,image\/gif,image\/bmp,image\/tiff,image\/heic,image\/heif,image\/avif,\.bmp,\.tif,\.tiff,\.heic,\.heif,\.avif"[^>]*multiple/,
 	);
+	assert.match(app, /image\/avif/);
+	assert.match(app, /bmp\|tif\|tiff\|heic\|heif\|avif/);
+	assert.match(app, /filter\(isSupportedImageFile\)/);
 	assert.match(html, /id="image-previews"[^>]*aria-label="Attached images"/);
 	assert.match(app, /addEventListener\("paste"/);
 	assert.match(app, /URL\.createObjectURL/);
