@@ -538,6 +538,27 @@ textarea:disabled {
 	box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+.attachment-details {
+	display: grid;
+	gap: 0.2rem;
+	min-width: 0;
+}
+
+.attachment-item-status {
+	color: var(--muted);
+	font-size: 0.78rem;
+}
+
+.attachment-item-status.error {
+	color: var(--danger);
+}
+
+.attachment-conversion-summary {
+	color: var(--muted);
+	font-size: 0.74rem;
+	line-height: 1.35;
+}
+
 .image-order-actions {
 	display: flex;
 	align-items: center;
@@ -563,6 +584,12 @@ textarea:disabled {
 	padding: 0;
 	background: var(--surface);
 	cursor: zoom-in;
+}
+
+.attachment-preview:empty::after {
+	content: "…";
+	color: var(--muted);
+	font-size: 1.4rem;
 }
 
 .image-previews img {
@@ -607,7 +634,8 @@ button {
 
 .button.secondary,
 .move-image,
-.remove-image {
+.remove-image,
+.retry-image {
 	border-color: var(--border);
 	color: var(--text);
 	background: var(--surface);

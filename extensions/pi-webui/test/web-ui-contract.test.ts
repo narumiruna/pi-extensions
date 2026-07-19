@@ -55,7 +55,7 @@ test("browser logic authenticates a lease, reconnects from sequence, and keeps f
 	assert.doesNotMatch(app, /localStorage|sessionStorage|indexedDB/i);
 });
 
-test("image input supports picker and paste with visible removable previews", () => {
+test("image input stages authenticated per-item uploads with visible status and recovery", () => {
 	assert.match(
 		html,
 		/id="image-input"[^>]*type="file"[^>]*accept="image\/png,image\/jpeg,image\/webp,image\/gif,image\/bmp,image\/tiff,image\/heic,image\/heif,image\/avif,\.bmp,\.tif,\.tiff,\.heic,\.heif,\.avif"[^>]*multiple/,
@@ -65,9 +65,17 @@ test("image input supports picker and paste with visible removable previews", ()
 	assert.match(app, /filter\(isSupportedImageFile\)/);
 	assert.match(html, /id="image-previews"[^>]*aria-label="Attached images"/);
 	assert.match(app, /addEventListener\("paste"/);
-	assert.match(app, /URL\.createObjectURL/);
-	assert.match(app, /URL\.revokeObjectURL/);
+	assert.match(app, /\/api\/attachments\/reserve/);
+	assert.match(app, /new XMLHttpRequest\(\)/);
+	assert.match(app, /request\.upload\.addEventListener\("progress"/);
+	assert.match(app, /X-Pi-Web-Client/);
+	assert.match(app, /\/api\/attachments\/\$\{encodeURIComponent\(id\)\}\/upload/);
+	assert.match(app, /\/api\/attachments\/\$\{encodeURIComponent\(id\)\}\/retry/);
+	assert.match(app, /attachment-item-status/);
+	assert.match(app, /attachment-conversion-summary/);
+	assert.match(app, /Retry image/);
 	assert.match(app, /Remove image/);
+	assert.doesNotMatch(app, /URL\.createObjectURL|URL\.revokeObjectURL/);
 	assert.match(html, /Paste, drop, or choose/);
 	assert.match(html, /id="image-preview-dialog"/);
 	assert.match(html, /id="attachment-status"[^>]*aria-live="polite"/);
@@ -76,7 +84,7 @@ test("image input supports picker and paste with visible removable previews", ()
 	assert.match(app, /drag-active/);
 	assert.match(app, /moveImageBefore/);
 	assert.match(app, /moveImage/);
-	assert.match(app, /draggable = !model\.pending/);
+	assert.match(app, /item\.draggable = image\.status === "ready"/);
 	assert.match(app, /addEventListener\("dragstart"/);
 	assert.match(app, /Move image backward/);
 	assert.match(app, /Move image forward/);
@@ -85,10 +93,19 @@ test("image input supports picker and paste with visible removable previews", ()
 	assert.match(html, /id="clear-attachments-dialog"/);
 	assert.match(html, /id="confirm-clear-attachments"/);
 	assert.match(app, /model\.images\.length < 2/);
-	assert.match(app, /clearDraftImages/);
-	assert.match(app, /for \(const image of model\.images\) URL\.revokeObjectURL/);
+	assert.match(app, /\/api\/attachments\/clear/);
+	assert.match(app, /retryFiles\.delete/);
 	assert.match(app, /clearDialog\.showModal/);
 	assert.match(app, /returnValue !== "confirm"/);
+});
+
+test("attachment copy keeps routine status local and states metadata removal once", () => {
+	for (const label of ["Uploading", "Processing", "Ready", "Needs attention", "Retry", "Remove"]) {
+		assert.match(app, new RegExp(label));
+	}
+	assert.equal((app.match(/Sensitive metadata is removed before sending\./g) ?? []).length, 1);
+	assert.match(app, /image\.notes\.join\(" · "\)/);
+	assert.doesNotMatch(app, /alert\(/);
 });
 
 test("tool, thinking, and Markdown rendering use safe DOM construction", () => {

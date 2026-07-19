@@ -145,6 +145,17 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 		},
 		readPiSettings: async () => ({ autoResize: true, blockImages: false, warnings: [] }),
 		processImages: async () => [{ type: "image", data: "processed", mimeType: "image/png" }],
+		processAttachment: async () => ({
+			bytes: Buffer.from("processed"),
+			mimeType: "image/png",
+			width: 1,
+			height: 1,
+			originalWidth: 1,
+			originalHeight: 1,
+			sourceFormat: "png",
+			outputFormat: "png",
+			resized: false,
+		}),
 		...overrides,
 	};
 	const runtime = new WebUIRuntime(pi as never, dependencies);
@@ -531,20 +542,37 @@ test("idle browser sends fail before acknowledgement when model authentication i
 	assert.equal(h.sent.length, 0);
 });
 
-test("browser images are processed under live Pi guards and sent with text", async () => {
+test("browser images are staged under live Pi guards and sent without reprocessing source bytes", async () => {
 	let processOptions: unknown;
+	let legacyBatchCalls = 0;
 	const h = harness({
-		processImages: async (_images, options) => {
+		processImages: async () => {
+			legacyBatchCalls += 1;
+			return [];
+		},
+		processAttachment: async (_source, options) => {
 			processOptions = options;
-			return [{ type: "image", data: "safe", mimeType: "image/png" }];
+			return {
+				bytes: Buffer.from("safe"),
+				mimeType: "image/png",
+				width: 1,
+				height: 1,
+				originalWidth: 2,
+				originalHeight: 2,
+				sourceFormat: "bmp",
+				outputFormat: "png",
+				resized: true,
+			};
 		},
 	});
 	await h.emit("session_start");
 	await h.commands.get("webui")?.handler("", h.ctx as never);
+	const staged = await h.serverOptions?.processAttachment?.(Buffer.from("raw"));
+	assert.ok(staged);
 	await h.serverOptions?.send({
 		requestId: "image",
 		text: "look",
-		images: [{ data: "raw", mimeType: "image/png" }],
+		images: [{ data: staged.bytes.toString("base64"), mimeType: staged.mimeType }],
 		delivery: "next",
 	});
 	assert.ok(processOptions && typeof processOptions === "object");
@@ -560,40 +588,36 @@ test("browser images are processed under live Pi guards and sent with text", asy
 		blockImages: false,
 		supportsImages: true,
 	});
+	assert.equal(legacyBatchCalls, 0);
 	assertBrowserEnvelope(h.sent[0]?.content);
 	assert.doesNotMatch(JSON.stringify(h.sent[0]?.content), /look/);
 	assert.ok(Array.isArray(h.sent[0]?.content));
 	assert.deepEqual(h.sent[0].content.slice(1), [
-		{ type: "image", data: "safe", mimeType: "image/png" },
+		{ type: "image", data: Buffer.from("safe").toString("base64"), mimeType: "image/png" },
 	]);
 });
 
-test("image sends revalidate model capabilities and authentication after processing", async () => {
+test("image sends revalidate model capabilities, authentication, and blockImages after staging", async () => {
 	const runRace = async (
 		mutate: (h: ReturnType<typeof harness>) => void,
 		pattern: RegExp,
 	): Promise<void> => {
-		const started = deferred<void>();
-		const processing = deferred<Array<{ type: "image"; data: string; mimeType: string }>>();
-		const h = harness({
-			processImages: async () => {
-				started.resolve(undefined);
-				return processing.promise;
-			},
-		});
+		const h = harness();
 		await h.emit("session_start");
 		await h.commands.get("webui")?.handler("", h.ctx as never);
-		const sending = h.serverOptions?.send({
-			requestId: "image-race",
-			text: "look",
-			images: [{ data: "raw", mimeType: "image/png" }],
-			delivery: "next",
-		});
-		assert.ok(sending);
-		await started.promise;
+		const staged = await h.serverOptions?.processAttachment?.(Buffer.from("raw"));
+		assert.ok(staged);
 		mutate(h);
-		processing.resolve([{ type: "image", data: "safe", mimeType: "image/png" }]);
-		await assert.rejects(() => sending, pattern);
+		await assert.rejects(
+			() =>
+				h.serverOptions?.send({
+					requestId: "image-race",
+					text: "look",
+					images: [{ data: staged.bytes.toString("base64"), mimeType: staged.mimeType }],
+					delivery: "next",
+				}) ?? Promise.reject(new Error("missing send")),
+			pattern,
+		);
 		assert.equal(h.sent.length, 0);
 	};
 
@@ -602,6 +626,21 @@ test("image sends revalidate model capabilities and authentication after process
 		/image/i,
 	);
 	await runRace((h) => h.setAuth({ ok: false }), /authentication/i);
+	const blocked = harness({
+		readPiSettings: async () => ({ autoResize: true, blockImages: true, warnings: [] }),
+	});
+	await blocked.emit("session_start");
+	await blocked.commands.get("webui")?.handler("", blocked.ctx as never);
+	await assert.rejects(
+		() =>
+			blocked.serverOptions?.send({
+				requestId: "blocked",
+				text: "look",
+				images: [{ data: "safe", mimeType: "image/png" }],
+				delivery: "next",
+			}) ?? Promise.reject(new Error("missing send")),
+		/disabled/i,
+	);
 });
 
 test("send callbacks fail closed after session replacement and Pi send errors propagate", async () => {
@@ -634,21 +673,36 @@ test("send callbacks fail closed after session replacement and Pi send errors pr
 	);
 });
 
-test("image preparation cannot deliver into a replacement session", async () => {
-	const processing = deferred<Array<{ type: "image"; data: string; mimeType: string }>>();
-	const h = harness({ processImages: async () => processing.promise });
+test("image preparation cannot complete into a replacement session", async () => {
+	const processing = deferred<{
+		bytes: Buffer;
+		mimeType: string;
+		width: number;
+		height: number;
+		originalWidth: number;
+		originalHeight: number;
+		sourceFormat: "png";
+		outputFormat: "png";
+		resized: false;
+	}>();
+	const h = harness({ processAttachment: async () => processing.promise });
 	await h.emit("session_start");
 	await h.commands.get("webui")?.handler("", h.ctx as never);
-	const sending = h.serverOptions?.send({
-		requestId: "race",
-		text: "look",
-		images: [{ data: "raw" }],
-		delivery: "next",
-	});
-	assert.ok(sending);
+	const preparing = h.serverOptions?.processAttachment?.(Buffer.from("raw"));
+	assert.ok(preparing);
 	await h.emit("session_start", { reason: "reload" });
-	processing.resolve([{ type: "image", data: "safe", mimeType: "image/png" }]);
-	await assert.rejects(() => sending, /cancelled|changed/i);
+	processing.resolve({
+		bytes: Buffer.from("safe"),
+		mimeType: "image/png",
+		width: 1,
+		height: 1,
+		originalWidth: 1,
+		originalHeight: 1,
+		sourceFormat: "png",
+		outputFormat: "png",
+		resized: false,
+	});
+	await assert.rejects(() => preparing, /cancelled|changed/i);
 	assert.equal(h.sent.length, 0);
 });
 

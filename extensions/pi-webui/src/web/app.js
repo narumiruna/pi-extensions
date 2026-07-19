@@ -1,10 +1,10 @@
 import {
+	applyAttachments,
 	applyConversationEvent,
 	applyLease,
 	applySnapshot,
 	busyLabel,
 	canSend,
-	clearDraftImages,
 	completeSend,
 	deliveryNotice,
 	failSend,
@@ -30,6 +30,9 @@ let transcriptFrame;
 let transcriptAnnouncement = "";
 let dragDepth = 0;
 let previewReturnFocus;
+let mutatingAttachments = false;
+const retryFiles = new Map();
+const uploadProgress = new Map();
 
 const SUPPORTED_IMAGE_TYPES = new Set([
 	"image/png",
@@ -103,7 +106,7 @@ ui.clearDialog.addEventListener("close", () => {
 		requestAnimationFrame(() => ui.clearAttachments.focus());
 		return;
 	}
-	clearAttachments();
+	void clearAttachments();
 });
 ui.input.addEventListener("keydown", (event) => {
 	if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -158,6 +161,7 @@ ui.previewClose.addEventListener("click", () => ui.previewDialog.close());
 ui.previewDismiss.addEventListener("click", () => ui.previewDialog.close());
 ui.previewDialog.addEventListener("close", () => {
 	ui.previewImage.removeAttribute("src");
+	delete ui.previewImage.dataset.imageId;
 	ui.previewImage.alt = "";
 	if (previewReturnFocus?.isConnected) previewReturnFocus.focus();
 	previewReturnFocus = undefined;
@@ -238,6 +242,10 @@ function connectEvents() {
 		model = applyLease(model, JSON.parse(event.data), clientId);
 		render();
 	});
+	events.addEventListener("attachments", (event) => {
+		model = applyAttachments(model, JSON.parse(event.data));
+		render();
+	});
 	events.addEventListener("session-ended", () => {
 		model = { ...model, closed: true, activity: "ended", connected: false };
 		events?.close();
@@ -282,7 +290,8 @@ async function send(steer) {
 	const payload = {
 		requestId: attempt.requestId,
 		text: attempt.text,
-		images: attempt.images.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+		attachmentRevision: attempt.attachmentRevision,
+		attachmentIds: attempt.attachmentIds,
 		delivery: attempt.delivery,
 	};
 	try {
@@ -297,10 +306,11 @@ async function send(steer) {
 			throw new Error(message);
 		}
 		const accepted = await response.json();
-		for (const image of attempt.images) URL.revokeObjectURL(image.previewUrl);
-		if (attempt.images.some((image) => image.previewUrl === ui.previewImage.src)) {
+		if (accepted.attachments) model = applyAttachments(model, accepted.attachments);
+		if (attempt.attachmentIds.includes(ui.previewImage.dataset.imageId)) {
 			ui.previewDialog.close();
 		}
+		for (const id of attempt.attachmentIds) retryFiles.delete(id);
 		model = completeSend(model, attempt, accepted.delivery);
 		render();
 		ui.input.focus();
@@ -311,52 +321,123 @@ async function send(steer) {
 }
 
 async function addFiles(fileList) {
-	if (composerLocked()) return;
+	if (composerLocked() || model.readingImages > 0) return;
 	const files = [...(fileList ?? [])];
+	if (files.length === 0) return;
 	if (model.images.length + files.length > 8) {
 		model = { ...model, error: "You can attach at most 8 images." };
 		render();
 		return;
 	}
-	model = { ...model, readingImages: model.readingImages + 1 };
+	for (const file of files) {
+		if (!isSupportedImageFile(file)) {
+			model = { ...model, error: `${file.name || "Image"} is not a supported image.` };
+			render();
+			return;
+		}
+		if (file.size > 10 * 1024 * 1024) {
+			model = { ...model, error: `${file.name || "Image"} is larger than 10 MB.` };
+			render();
+			return;
+		}
+	}
+	const pending = files.map((file) => ({ id: crypto.randomUUID(), file }));
+	try {
+		mutatingAttachments = true;
+		renderComposer();
+		const response = await attachmentMutation("/api/attachments/reserve", {
+			method: "POST",
+			body: JSON.stringify({
+				revision: model.attachmentRevision,
+				items: pending.map(({ id, file }) => ({
+					id,
+					name: file.name || "Pasted image",
+					size: file.size,
+					mimeType: file.type,
+				})),
+			}),
+		});
+		model = applyAttachments(model, response);
+		for (const { id, file } of pending) retryFiles.set(id, file);
+		render();
+		for (const { id, file } of pending) await uploadFile(id, file);
+	} catch (error) {
+		model = { ...model, error: errorMessage(error) };
+		render();
+	} finally {
+		mutatingAttachments = false;
+		renderComposer();
+	}
+}
+
+async function uploadFile(id, file) {
+	uploadProgress.set(id, { loaded: 0, total: file.size });
 	renderComposer();
 	try {
-		for (const file of files) {
-			if (model.images.length >= 8) {
-				model = { ...model, error: "You can attach at most 8 images." };
-				break;
+		const state = await uploadAttachment(
+			`/api/attachments/${encodeURIComponent(id)}/upload?revision=${model.attachmentRevision}`,
+			file,
+			(progress) => {
+				uploadProgress.set(id, progress);
+				renderComposer();
+			},
+		);
+		retryFiles.delete(id);
+		model = applyAttachments(model, state);
+		render();
+	} finally {
+		uploadProgress.delete(id);
+		renderComposer();
+	}
+}
+
+function uploadAttachment(path, file, onProgress) {
+	return new Promise((resolve, reject) => {
+		const request = new XMLHttpRequest();
+		request.open("POST", path);
+		request.responseType = "json";
+		request.setRequestHeader("Content-Type", "application/octet-stream");
+		request.setRequestHeader("X-Pi-Web-Client", clientId);
+		request.upload.addEventListener("progress", (event) => {
+			if (event.lengthComputable) onProgress({ loaded: event.loaded, total: event.total });
+		});
+		request.addEventListener("load", () => {
+			if (request.status >= 200 && request.status < 300) {
+				resolve(request.response);
+				return;
 			}
-			if (!isSupportedImageFile(file)) {
-				model = { ...model, error: `${file.name || "Image"} is not a supported image.` };
-				continue;
-			}
-			if (file.size > 10 * 1024 * 1024) {
-				model = { ...model, error: `${file.name || "Image"} is larger than 10 MB.` };
-				continue;
-			}
-			try {
-				const data = await readBase64(file);
-				model = invalidateSendAttempt({
-					...model,
-					images: [
-						...model.images,
-						{
-							id: crypto.randomUUID(),
-							name: file.name || "Pasted image",
-							mimeType: file.type,
-							data,
-							previewUrl: URL.createObjectURL(file),
-						},
-					],
-					error: "",
-				});
-			} catch (error) {
-				model = { ...model, error: errorMessage(error) };
-			}
+			reject(new Error(request.response?.error || `Request failed (${request.status}).`));
+		});
+		request.addEventListener("error", () => reject(new Error("Image upload failed.")));
+		request.addEventListener("abort", () => reject(new Error("Image upload was cancelled.")));
+		request.send(file);
+	});
+}
+
+async function retryImage(id) {
+	if (composerLocked()) return;
+	mutatingAttachments = true;
+	renderComposer();
+	try {
+		const file = retryFiles.get(id);
+		if (file) {
+			await uploadFile(id, file);
+		} else {
+			const response = await attachmentMutation(
+				`/api/attachments/${encodeURIComponent(id)}/retry`,
+				{
+					method: "POST",
+					body: JSON.stringify({ revision: model.attachmentRevision }),
+				},
+			);
+			model = applyAttachments(model, response);
 			render();
 		}
+	} catch (error) {
+		model = { ...model, error: errorMessage(error) };
+		render();
 	} finally {
-		model = { ...model, readingImages: Math.max(0, model.readingImages - 1) };
+		mutatingAttachments = false;
 		renderComposer();
 	}
 }
@@ -368,22 +449,29 @@ function isSupportedImageFile(file) {
 	);
 }
 
-function clearAttachments() {
+async function clearAttachments() {
 	if (composerLocked() || model.images.length < 2) return;
-	if (model.images.some((image) => image.previewUrl === ui.previewImage.src)) {
-		ui.previewDialog.close();
-	}
-	for (const image of model.images) URL.revokeObjectURL(image.previewUrl);
-	model = clearDraftImages(model);
-	render();
+	const clearedIds = model.images.map((image) => image.id);
+	if (clearedIds.includes(ui.previewImage.dataset.imageId)) ui.previewDialog.close();
+	const state = await mutateAttachmentState("/api/attachments/clear", {
+		method: "POST",
+		body: JSON.stringify({ revision: model.attachmentRevision }),
+	});
+	if (!state) return;
+	for (const id of clearedIds) retryFiles.delete(id);
 	ui.input.focus();
 }
 
-function reorderImages(images, focusId, focusDirection) {
+async function reorderImages(images, focusId, focusDirection) {
 	if (composerLocked()) return;
-	model = invalidateSendAttempt({ ...model, images, error: "" });
-	render();
-	focusOrderingControl(focusId, focusDirection);
+	const state = await mutateAttachmentState("/api/attachments/reorder", {
+		method: "POST",
+		body: JSON.stringify({
+			revision: model.attachmentRevision,
+			ids: images.map((image) => image.id),
+		}),
+	});
+	if (state) focusOrderingControl(focusId, focusDirection);
 }
 
 function focusOrderingControl(id, direction) {
@@ -399,41 +487,59 @@ function focusOrderingControl(id, direction) {
 	});
 }
 
-function removeImage(id) {
+async function removeImage(id) {
 	if (composerLocked()) return;
-	const removed = model.images.find((image) => image.id === id);
-	if (removed) {
-		if (ui.previewImage.src === removed.previewUrl) ui.previewDialog.close();
-		URL.revokeObjectURL(removed.previewUrl);
+	if (ui.previewImage.dataset.imageId === id) ui.previewDialog.close();
+	const state = await mutateAttachmentState(
+		`/api/attachments/${encodeURIComponent(id)}?revision=${model.attachmentRevision}`,
+		{ method: "DELETE", headers: { "Content-Type": "application/json" } },
+	);
+	if (state) {
+		retryFiles.delete(id);
+		uploadProgress.delete(id);
 	}
-	model = invalidateSendAttempt({
-		...model,
-		images: model.images.filter((image) => image.id !== id),
+}
+
+async function mutateAttachmentState(path, options) {
+	if (composerLocked()) return;
+	mutatingAttachments = true;
+	renderComposer();
+	try {
+		const state = await attachmentMutation(path, options);
+		model = applyAttachments(model, state);
+		model = { ...model, error: "" };
+		render();
+		return state;
+	} catch (error) {
+		model = { ...model, error: errorMessage(error) };
+		render();
+	} finally {
+		mutatingAttachments = false;
+		renderComposer();
+	}
+}
+
+async function attachmentMutation(path, options) {
+	const response = await fetch(path, {
+		...options,
+		headers: {
+			"Content-Type": "application/json",
+			"X-Pi-Web-Client": clientId,
+			...options.headers,
+		},
 	});
-	render();
+	if (!response.ok) throw new Error(await responseError(response));
+	return response.json();
 }
 
 function openImagePreview(image) {
+	if (image.status !== "ready") return;
 	previewReturnFocus = document.activeElement;
 	ui.previewTitle.textContent = image.name;
-	ui.previewImage.src = image.previewUrl;
+	ui.previewImage.src = `/api/attachments/${encodeURIComponent(image.id)}/preview?v=${model.attachmentRevision}`;
+	ui.previewImage.dataset.imageId = image.id;
 	ui.previewImage.alt = image.name;
 	ui.previewDialog.showModal();
-}
-
-function readBase64(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.addEventListener("error", () => reject(new Error(`Could not read ${file.name}.`)));
-		reader.addEventListener("load", () => {
-			if (typeof reader.result !== "string") {
-				reject(new Error(`Could not read ${file.name}.`));
-				return;
-			}
-			resolve(reader.result.slice(reader.result.indexOf(",") + 1));
-		});
-		reader.readAsDataURL(file);
-	});
 }
 
 function render(options = {}) {
@@ -481,9 +587,10 @@ function renderComposer() {
 	ui.steer.hidden = model.activity !== "running";
 	ui.steer.disabled = !canSend(model);
 	ui.input.disabled = locked;
-	ui.imageInput.disabled = locked;
-	ui.addImages.classList.toggle("disabled", locked);
-	ui.addImages.setAttribute("aria-disabled", String(locked));
+	const admissionLocked = locked || model.readingImages > 0;
+	ui.imageInput.disabled = admissionLocked;
+	ui.addImages.classList.toggle("disabled", admissionLocked);
+	ui.addImages.setAttribute("aria-disabled", String(admissionLocked));
 	ui.clearAttachments.hidden = model.images.length < 2;
 	ui.clearAttachments.disabled = locked;
 	ui.status.textContent = composerStatus();
@@ -493,7 +600,7 @@ function renderComposer() {
 	const attachmentStatus =
 		model.images.length === 0
 			? ""
-			: `${model.images.length} of 8 images attached · Sensitive metadata is removed before sending.`;
+			: `${model.images.length} of 8 images staged · ${attachmentPhaseLabel(model.attachmentPhase)} · Sensitive metadata is removed before sending.`;
 	if (ui.attachmentStatus.textContent !== attachmentStatus) {
 		ui.attachmentStatus.textContent = attachmentStatus;
 	}
@@ -502,9 +609,10 @@ function renderComposer() {
 		const item = document.createElement("li");
 		item.className = "image-preview-item";
 		item.dataset.imageId = image.id;
-		item.draggable = !model.pending && !locked;
+		const orderingLocked = locked || model.attachmentPhase !== "ready";
+		item.draggable = image.status === "ready" && !orderingLocked;
 		item.addEventListener("dragstart", (event) => {
-			if (locked || !event.dataTransfer) return;
+			if (orderingLocked || !event.dataTransfer) return;
 			event.dataTransfer.effectAllowed = "move";
 			event.dataTransfer.setData("application/x-pi-webui-image", image.id);
 			item.classList.add("dragging");
@@ -515,7 +623,7 @@ function renderComposer() {
 		});
 		item.addEventListener("dragover", (event) => {
 			const draggedId = event.dataTransfer?.getData("application/x-pi-webui-image");
-			if (locked || !draggedId || draggedId === image.id) return;
+			if (orderingLocked || !draggedId || draggedId === image.id) return;
 			event.preventDefault();
 			item.classList.add("drag-target");
 		});
@@ -523,23 +631,37 @@ function renderComposer() {
 		item.addEventListener("drop", (event) => {
 			const draggedId = event.dataTransfer?.getData("application/x-pi-webui-image");
 			item.classList.remove("drag-target");
-			if (locked || !draggedId || draggedId === image.id) return;
+			if (orderingLocked || !draggedId || draggedId === image.id) return;
 			event.preventDefault();
 			event.stopPropagation();
-			reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId, "forward");
+			void reorderImages(moveImageBefore(model.images, draggedId, image.id), draggedId, "forward");
 		});
 		const previewButton = document.createElement("button");
 		previewButton.type = "button";
 		previewButton.className = "attachment-preview";
 		previewButton.setAttribute("aria-label", `Preview image ${image.name}`);
-		previewButton.disabled = locked;
+		previewButton.disabled = locked || image.status !== "ready";
 		previewButton.addEventListener("click", () => openImagePreview(image));
 		const preview = document.createElement("img");
-		preview.src = image.previewUrl;
+		if (image.status === "ready") {
+			preview.src = `/api/attachments/${encodeURIComponent(image.id)}/preview?v=${model.attachmentRevision}`;
+		}
 		preview.alt = "";
 		previewButton.append(preview);
+		const details = document.createElement("span");
+		details.className = "attachment-details";
 		const name = document.createElement("span");
 		name.textContent = image.name;
+		const itemStatus = document.createElement("span");
+		itemStatus.className = `attachment-item-status ${image.status}`;
+		itemStatus.textContent = attachmentItemLabel(image, uploadProgress.get(image.id));
+		details.append(name, itemStatus);
+		if (Array.isArray(image.notes) && image.notes.length > 0) {
+			const summary = document.createElement("span");
+			summary.className = "attachment-conversion-summary";
+			summary.textContent = image.notes.join(" · ");
+			details.append(summary);
+		}
 		const actions = document.createElement("div");
 		actions.className = "image-order-actions";
 		const backward = document.createElement("button");
@@ -547,20 +669,22 @@ function renderComposer() {
 		backward.className = "move-image";
 		backward.textContent = "←";
 		backward.dataset.orderAction = "backward";
-		backward.disabled = locked || index === 0;
+		backward.disabled = orderingLocked || index === 0;
 		backward.setAttribute("aria-label", `Move image backward: ${image.name}`);
-		backward.addEventListener("click", () =>
-			reorderImages(moveImage(model.images, image.id, -1), image.id, "backward"),
+		backward.addEventListener(
+			"click",
+			() => void reorderImages(moveImage(model.images, image.id, -1), image.id, "backward"),
 		);
 		const forward = document.createElement("button");
 		forward.type = "button";
 		forward.className = "move-image";
 		forward.textContent = "→";
 		forward.dataset.orderAction = "forward";
-		forward.disabled = locked || index === model.images.length - 1;
+		forward.disabled = orderingLocked || index === model.images.length - 1;
 		forward.setAttribute("aria-label", `Move image forward: ${image.name}`);
-		forward.addEventListener("click", () =>
-			reorderImages(moveImage(model.images, image.id, 1), image.id, "forward"),
+		forward.addEventListener(
+			"click",
+			() => void reorderImages(moveImage(model.images, image.id, 1), image.id, "forward"),
 		);
 		const remove = document.createElement("button");
 		remove.type = "button";
@@ -568,9 +692,19 @@ function renderComposer() {
 		remove.textContent = "Remove";
 		remove.disabled = locked;
 		remove.setAttribute("aria-label", `Remove image ${image.name}`);
-		remove.addEventListener("click", () => removeImage(image.id));
+		remove.addEventListener("click", () => void removeImage(image.id));
+		if (image.status === "error" && (image.retryable || retryFiles.has(image.id))) {
+			const retry = document.createElement("button");
+			retry.type = "button";
+			retry.className = "retry-image";
+			retry.textContent = "Retry";
+			retry.disabled = locked;
+			retry.setAttribute("aria-label", `Retry image ${image.name}`);
+			retry.addEventListener("click", () => void retryImage(image.id));
+			actions.append(retry);
+		}
 		actions.append(backward, forward, remove);
-		item.append(previewButton, name, actions);
+		item.append(previewButton, details, actions);
 		ui.previews.append(item);
 	}
 	document.documentElement.style.setProperty("--composer-height", `${ui.composer.offsetHeight}px`);
@@ -599,8 +733,31 @@ function resizeInput() {
 	ui.input.style.height = `${Math.min(ui.input.scrollHeight, window.innerHeight * 0.32)}px`;
 }
 
+function attachmentPhaseLabel(phase) {
+	if (phase === "uploading") return "Uploading";
+	if (phase === "processing") return "Processing";
+	if (phase === "blocked") return "Needs attention";
+	if (phase === "reserved") return "Submitting";
+	return "Ready";
+}
+
+function attachmentItemLabel(image, progress) {
+	if (image.status === "uploading" && progress?.total > 0) {
+		const percent = Math.min(100, Math.round((progress.loaded / progress.total) * 100));
+		return `Uploading · ${percent}%`;
+	}
+	if (image.status === "uploading") return "Uploading…";
+	if (image.status === "processing") return "Processing…";
+	if (image.status === "error") return image.error || "Needs attention";
+	const dimensions =
+		Number.isSafeInteger(image.width) && Number.isSafeInteger(image.height)
+			? ` · ${image.width}×${image.height}`
+			: "";
+	return `Ready${dimensions}`;
+}
+
 function composerStatus() {
-	if (model.readingImages > 0) return "Preparing images…";
+	if (model.readingImages > 0) return "Staging images on this Pi session…";
 	if (model.pending) return "Submitting message…";
 	const notice = deliveryNotice(model);
 	if (notice) return notice;
@@ -629,7 +786,13 @@ function conversationAnnouncement(event) {
 }
 
 function composerLocked() {
-	return model.closed || model.stale || model.pending;
+	return (
+		model.closed ||
+		model.stale ||
+		model.pending ||
+		mutatingAttachments ||
+		model.attachmentPhase === "reserved"
+	);
 }
 
 function hasDraggedFile(event) {
