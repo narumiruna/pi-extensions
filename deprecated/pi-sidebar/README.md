@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sidebar)](https://www.npmjs.com/package/@narumitw/pi-sidebar) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> Deprecated: this package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set.
+> Deprecated: this package is kept for reference under `deprecated/` and is no longer part of the active workspace package set.
 
 `@narumitw/pi-sidebar` is a native [Pi coding agent](https://pi.dev) extension that adds an opencode-inspired right sidebar overlay to Pi's interactive terminal UI.
 
@@ -33,7 +33,7 @@ pi -e npm:@narumitw/pi-sidebar
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-sidebar
+pi -e ./deprecated/pi-sidebar
 ```
 
 ## 🚀 Usage
@@ -74,7 +74,7 @@ This is an overlay-style sidebar, not a true split-pane layout. It does not rese
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-sidebar/
+deprecated/pi-sidebar/
 ├── src/
 │   └── sidebar.ts
 ├── README.md

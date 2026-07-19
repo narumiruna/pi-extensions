@@ -56,7 +56,7 @@ pi -e npm:@narumitw/pi-goal -e npm:@narumitw/pi-statusline -e npm:@narumitw/pi-l
 
 ### 🧠 Shared language-server workflows
 
-Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to let Pi run configurable Language Server Protocol servers through one shared runner. Without custom config, it provides direct-command routes across web, systems, scripting, JVM, .NET, mobile, markup, and infrastructure languages when the corresponding commands are available on `PATH`. Configure servers in `.pi/pi-lsp.json`, `~/.pi/agent/pi-lsp.json`, or `PI_LSP_CONFIG` with simple `{ command, extensions }` entries, then use Pi tools for diagnostics and source code actions. The older split packages [`@narumitw/pi-biome-lsp`](./extensions/deprecated/pi-biome-lsp) and [`@narumitw/pi-python-lsp`](./extensions/deprecated/pi-python-lsp) are deprecated, kept for reference, and excluded from active workspace scripts.
+Use [`@narumitw/pi-lsp`](./extensions/pi-lsp) to let Pi run configurable Language Server Protocol servers through one shared runner. Without custom config, it provides direct-command routes across web, systems, scripting, JVM, .NET, mobile, markup, and infrastructure languages when the corresponding commands are available on `PATH`. Configure servers in `.pi/pi-lsp.json`, `~/.pi/agent/pi-lsp.json`, or `PI_LSP_CONFIG` with simple `{ command, extensions }` entries, then use Pi tools for diagnostics and source code actions. The older split packages [`@narumitw/pi-biome-lsp`](./deprecated/pi-biome-lsp) and [`@narumitw/pi-python-lsp`](./deprecated/pi-python-lsp) are deprecated, kept for reference, and excluded from active workspace scripts.
 
 ### 🧬 JavaScript and TypeScript coding with Biome
 
@@ -112,7 +112,7 @@ Use [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) when you want a Codex-
 
 ### 🗃️ Deprecated extensions
 
-[`@narumitw/pi-telegram-bot`](./extensions/deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./extensions/deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./extensions/deprecated/pi-wait-what) are deprecated and kept under `extensions/deprecated/` for reference.
+[`@narumitw/pi-telegram-bot`](./deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./deprecated/pi-wait-what) are deprecated and kept under `deprecated/` for reference.
 
 ### 🤖 Delegated subagents
 
@@ -191,15 +191,15 @@ npm publish --workspace @narumitw/pi-new-extension --access public
 ## 🗂️ Repository structure
 
 ```txt
+deprecated/
+├── pi-auto-thinking/
+├── pi-biome-lsp/
+├── pi-python-lsp/
+├── pi-sidebar/
+├── pi-telegram-bot/
+├── pi-telegraph/
+└── pi-wait-what/
 extensions/
-├── deprecated/
-│   ├── pi-auto-thinking/
-│   ├── pi-biome-lsp/
-│   ├── pi-python-lsp/
-│   ├── pi-sidebar/
-│   ├── pi-telegram-bot/
-│   ├── pi-telegraph/
-│   └── pi-wait-what/
 ├── pi-btw/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/
@@ -220,7 +220,7 @@ extensions/
 └── pi-webui/
 ```
 
-Each production extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Experimental extensions live under `extensions/experimental/`, remain covered by root checks, and may be published only through an explicit local maintainer recipe—not `publish-all` or GitHub workflows. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
+Each production extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Experimental extensions live under `extensions/experimental/`, remain covered by root checks, and may be published only through an explicit local maintainer recipe—not `publish-all` or GitHub workflows. Deprecated packages live under the root `deprecated/` directory and are excluded from workspace scripts.
 
 ## 📄 License
 

@@ -1,7 +1,7 @@
 {
-	"name": "@narumitw/pi-telegram-bot",
-	"version": "0.1.29",
-	"description": "Deprecated Pi extension that connects the current Pi session to a Telegram bot without custom tools.",
+	"name": "@narumitw/pi-biome-lsp",
+	"version": "0.1.20",
+	"description": "Deprecated Pi extension that exposes Biome language-server tools for diagnostics, formatting, and fixes.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -9,10 +9,10 @@
 		"pi-package",
 		"pi-extension",
 		"pi",
-		"telegram",
-		"bot",
-		"remote-control",
-		"session"
+		"biome",
+		"lsp",
+		"lint",
+		"format"
 	],
 	"files": [
 		"src",
@@ -21,7 +21,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/telegram-bot.ts"
+			"./src/biome-lsp.ts"
 		]
 	},
 	"scripts": {
@@ -29,18 +29,18 @@
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit"
 	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*"
+	"dependencies": {
+		"typebox": "^1.1.37"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.14",
-		"@earendil-works/pi-coding-agent": "0.74.0",
+		"@mariozechner/pi-coding-agent": "0.73.0",
 		"@types/node": "25.6.0",
 		"typescript": "6.0.3"
 	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/deprecated/pi-telegram-bot"
+		"directory": "deprecated/pi-biome-lsp"
 	}
 }
