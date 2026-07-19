@@ -2,9 +2,9 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; public Telegraph page publishing; retry handling; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
 
-**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, browser session chat, image attachments, Telegraph publishing, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
+**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, browser session chat, image attachments, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
 ## 📦 Pi extension packages
 
@@ -29,7 +29,6 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch/status, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
-| [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) | 📝 Publish Markdown files and optionally enable agent tools to create, read, or edit public Telegraph pages. | `pi install npm:@narumitw/pi-telegraph` |
 | [`@narumitw/pi-webui`](./extensions/pi-webui) | 🌐 `/webui` lightweight browser companion for the current terminal Pi session, with semantic live sync and text/image input. | `pi install npm:@narumitw/pi-webui` |
 
 ## 🚀 Quick start
@@ -83,10 +82,6 @@ Use [`@narumitw/pi-image-drop`](./extensions/pi-image-drop) to paste, drop, prev
 
 Use [`@narumitw/pi-webui`](./extensions/pi-webui) to open a private loopback companion for the current terminal Pi session. `/webui` shows a one-time link; the page streams semantic messages and tool activity, sends text immediately or as follow-up/steer, and accepts sanitized image prompts without mirroring terminal ANSI pixels.
 
-### 📝 Public Telegraph publishing
-
-Use [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) to publish local Markdown files with `/telegraph create`, or opt into agent tools that create raw/Markdown pages, retrieve them as Markdown/JSON, and apply confirmed partial edits. Credentials and tool selection stay in a private `pi-telegraph.json` file.
-
 ### 🪢 LLM observability
 
 Use [`@narumitw/pi-langfuse`](./extensions/pi-langfuse) to send Pi agent, generation, token usage, cost, and tool spans to Langfuse with credentials stored in a private `pi-langfuse.json` file.
@@ -115,9 +110,9 @@ Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation,
 
 Use [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) when you want a Codex-like `/plan` mode where the agent explores with read-only tools, asks structured questions, and produces an implementation-ready plan before editing.
 
-### 📨 Remote Telegram session chat
+### 🗃️ Deprecated extensions
 
-[`@narumitw/pi-telegram-bot`](./extensions/deprecated/pi-telegram-bot) and [`@narumitw/pi-wait-what`](./extensions/deprecated/pi-wait-what) are deprecated and kept under `extensions/deprecated/` for reference.
+[`@narumitw/pi-telegram-bot`](./extensions/deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./extensions/deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./extensions/deprecated/pi-wait-what) are deprecated and kept under `extensions/deprecated/` for reference.
 
 ### 🤖 Delegated subagents
 
@@ -161,7 +156,6 @@ pi -e ./extensions/pi-retry
 pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
-pi -e ./extensions/pi-telegraph
 pi -e ./extensions/pi-webui
 ```
 
@@ -185,7 +179,6 @@ npm run pack:retry
 npm run pack:statusline
 npm run pack:sync
 npm run pack:subagents
-npm run pack:telegraph
 npm run pack:webui
 ```
 
@@ -205,6 +198,7 @@ extensions/
 │   ├── pi-python-lsp/
 │   ├── pi-sidebar/
 │   ├── pi-telegram-bot/
+│   ├── pi-telegraph/
 │   └── pi-wait-what/
 ├── pi-btw/
 ├── pi-caffeinate/
@@ -223,7 +217,6 @@ extensions/
 ├── pi-statusline/
 ├── pi-sync/
 ├── pi-subagents/
-├── pi-telegraph/
 └── pi-webui/
 ```
 

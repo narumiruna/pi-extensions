@@ -2,6 +2,8 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-telegraph)](https://www.npmjs.com/package/@narumitw/pi-telegraph) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+> Deprecated: this package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set.
+
 `@narumitw/pi-telegraph` is a native [Pi coding agent](https://pi.dev) extension for creating, reading, and editing public [Telegraph](https://telegra.ph/) pages.
 
 It accepts ergonomic Markdown or advanced Telegraph Node arrays, confirms public mutations, and keeps the Telegraph account token in a private local `pi-telegraph.json` file.
@@ -40,7 +42,7 @@ pi -e npm:@narumitw/pi-telegraph
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-telegraph
+pi -e ./extensions/deprecated/pi-telegraph
 ```
 
 ## 🛠️ Pi tools
@@ -225,7 +227,7 @@ Advanced raw nodes are limited to Telegraph's documented tags and `href`/`src` a
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-telegraph/
+extensions/deprecated/pi-telegraph/
 ├── src/
 │   ├── telegraph.ts  # Pi entrypoint, tool controls, and file command
 │   ├── tools.ts      # Create, get, edit, and shared create execution

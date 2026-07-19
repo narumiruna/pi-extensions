@@ -125,9 +125,6 @@ pack-sync:
 pack-subagents:
     just pack subagents
 
-pack-telegraph:
-    just pack telegraph
-
 pack-webui:
     just pack webui
 
@@ -182,9 +179,6 @@ try-sync:
 
 try-subagents:
     just try subagents
-
-try-telegraph:
-    just try telegraph
 
 try-webui:
     just try webui
@@ -241,9 +235,6 @@ install-sync:
 install-subagents:
     just install subagents
 
-install-telegraph:
-    just install telegraph
-
 install-webui:
     just install webui
 
@@ -298,9 +289,6 @@ publish-sync:
 
 publish-subagents:
     just publish subagents
-
-publish-telegraph:
-    just publish telegraph
 
 publish-webui:
     just publish webui
