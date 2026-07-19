@@ -8,16 +8,14 @@ function nextTask(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function browserText(content: unknown): string {
+function assertBrowserEnvelope(content: unknown): void {
 	const text =
 		typeof content === "string"
 			? content
 			: Array.isArray(content)
 				? String(content.find((part) => (part as { type?: unknown }).type === "text")?.text ?? "")
 				: "";
-	const match = /^<pi-webui-input nonce="[0-9a-f-]+">\n([\s\S]*)\n<\/pi-webui-input>$/.exec(text);
-	assert.ok(match);
-	return match[1] ?? "";
+	assert.match(text, /^<pi-webui-input nonce="[0-9a-f-]+">\n\n<\/pi-webui-input>$/);
 }
 
 function deferred<T>() {
@@ -399,13 +397,10 @@ test("browser sends immediately when idle, follows up when busy, and steers expl
 	assert.deepEqual(await send({ requestId: "3", text: "now", images: [], delivery: "steer" }), {
 		delivery: "steer",
 	});
+	for (const entry of h.sent) assertBrowserEnvelope(entry.content);
 	assert.deepEqual(
-		h.sent.map((entry) => ({ text: browserText(entry.content), options: entry.options })),
-		[
-			{ text: "idle", options: { deliverAs: "followUp" } },
-			{ text: "later", options: { deliverAs: "followUp" } },
-			{ text: "now", options: { deliverAs: "steer" } },
-		],
+		h.sent.map((entry) => entry.options),
+		[{ deliverAs: "followUp" }, { deliverAs: "followUp" }, { deliverAs: "steer" }],
 	);
 });
 
@@ -444,6 +439,7 @@ test("browser sends wait for input handling and remain distinct from recovery pr
 	assert.equal(recoveryHandlers, 2);
 	assert.notEqual(h.sent[0]?.content, copiedRecoveryPrompt);
 	assert.match(String(h.sent[0]?.content), /pi-webui-input/);
+	assert.doesNotMatch(String(h.sent[0]?.content), /pi-goal-continuation/);
 	const message = {
 		role: "user",
 		content: String(h.sent[0]?.content),
@@ -455,6 +451,28 @@ test("browser sends wait for input handling and remain distinct from recovery pr
 	assert.deepEqual(h.serverOptions?.conversation.snapshot().messages.at(-1)?.content, [
 		{ type: "text", text: copiedRecoveryPrompt },
 	]);
+});
+
+test("disconnect after Pi dispatch does not invalidate the queued browser envelope", async () => {
+	const gate = deferred<void>();
+	const h = harness();
+	h.addInputHandler(async () => gate.promise, "before");
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	const controller = new AbortController();
+	const sending = h.serverOptions?.send({
+		requestId: "disconnect-after-dispatch",
+		text: "keep queued",
+		images: [],
+		delivery: "next",
+		signal: controller.signal,
+	});
+	assert.ok(sending);
+	await nextTask();
+	assert.equal(h.sent.length, 1);
+	controller.abort();
+	gate.resolve(undefined);
+	await assert.doesNotReject(() => sending);
 });
 
 test("settlement discards accepted envelopes that produced no user message", async () => {
@@ -542,7 +560,8 @@ test("browser images are processed under live Pi guards and sent with text", asy
 		blockImages: false,
 		supportsImages: true,
 	});
-	assert.equal(browserText(h.sent[0]?.content), "look");
+	assertBrowserEnvelope(h.sent[0]?.content);
+	assert.doesNotMatch(JSON.stringify(h.sent[0]?.content), /look/);
 	assert.ok(Array.isArray(h.sent[0]?.content));
 	assert.deepEqual(h.sent[0].content.slice(1), [
 		{ type: "image", data: "safe", mimeType: "image/png" },

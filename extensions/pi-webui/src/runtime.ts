@@ -50,8 +50,7 @@ type LatestExtensionAPI = ExtensionAPI & {
 interface PendingBrowserInput {
 	resolve(): void;
 	reject(error: Error): void;
-	signal: AbortSignal;
-	onAbort(): void;
+	text: string;
 }
 
 export interface RuntimeDependencies {
@@ -89,7 +88,7 @@ export class WebUIRuntime {
 	private readonly activeMessageIds = new Map<string, string>();
 	private readonly finalMessageTimers = new Set<ReturnType<typeof setTimeout>>();
 	private readonly pendingBrowserInputs = new Map<string, PendingBrowserInput>();
-	private readonly acceptedBrowserInputs = new Set<string>();
+	private readonly acceptedBrowserInputs = new Map<string, string>();
 	private settings: WebUISettings = { ...DEFAULT_SETTINGS };
 	private settingsDocument?: Record<string, unknown> = {};
 	private settingsPath = "pi-webui.json";
@@ -162,8 +161,10 @@ export class WebUIRuntime {
 			if (event.source !== "extension") return;
 			// Keep the envelope through later handlers so copied internal markers remain browser-originated.
 			const wrapped = parseBrowserInput(event.text);
-			if (!wrapped || !this.pendingBrowserInputs.has(wrapped.nonce)) return;
-			this.acceptedBrowserInputs.add(wrapped.nonce);
+			if (!wrapped) return;
+			const pending = this.pendingBrowserInputs.get(wrapped.nonce);
+			if (!pending) return;
+			this.acceptedBrowserInputs.set(wrapped.nonce, pending.text);
 			this.settleBrowserInput(wrapped.nonce);
 		});
 		this.pi.on("message_start", async (event, ctx) => {
@@ -518,7 +519,7 @@ export class WebUIRuntime {
 			images.length === 0
 				? text
 				: [...(text.trim() ? ([{ type: "text", text }] satisfies TextContent[]) : []), ...images];
-		const wrapped = this.createBrowserInput(content, signal);
+		const wrapped = this.createBrowserInput(content);
 		const delivery =
 			request.delivery === "steer"
 				? "steer"
@@ -573,32 +574,23 @@ export class WebUIRuntime {
 		if (ctx.model !== model) throw new Error("The Pi model changed; retry the browser message.");
 	}
 
-	private createBrowserInput(
-		content: string | Array<TextContent | ImageContent>,
-		signal: AbortSignal,
-	): {
+	private createBrowserInput(content: string | Array<TextContent | ImageContent>): {
 		nonce: string;
 		content: string | Array<TextContent | ImageContent>;
 		accepted: Promise<void>;
 	} {
 		const nonce = randomUUID();
-		const wrap = (text: string) => `<pi-webui-input nonce="${nonce}">\n${text}${INPUT_FOOTER}`;
+		const text = typeof content === "string" ? content : contentText(content);
+		const envelope = `<pi-webui-input nonce="${nonce}">\n${INPUT_FOOTER}`;
 		const wrappedContent =
 			typeof content === "string"
-				? wrap(content)
+				? envelope
 				: [
-						{ type: "text" as const, text: wrap(contentText(content)) },
+						{ type: "text" as const, text: envelope },
 						...content.filter((part): part is ImageContent => part.type === "image"),
 					];
 		const accepted = new Promise<void>((resolve, reject) => {
-			const onAbort = () =>
-				this.settleBrowserInput(
-					nonce,
-					new Error("The browser message was cancelled before Pi accepted it."),
-				);
-			this.pendingBrowserInputs.set(nonce, { resolve, reject, signal, onAbort });
-			signal.addEventListener("abort", onAbort, { once: true });
-			if (signal.aborted) onAbort();
+			this.pendingBrowserInputs.set(nonce, { resolve, reject, text });
 		});
 		return { nonce, content: wrappedContent, accepted };
 	}
@@ -607,7 +599,6 @@ export class WebUIRuntime {
 		const pending = this.pendingBrowserInputs.get(nonce);
 		if (!pending) return;
 		this.pendingBrowserInputs.delete(nonce);
-		pending.signal.removeEventListener("abort", pending.onAbort);
 		if (error) pending.reject(error);
 		else pending.resolve();
 	}
@@ -641,13 +632,16 @@ export class WebUIRuntime {
 	}
 }
 
-function parseBrowserInput(text: string): { nonce: string; text: string } | undefined {
+function parseBrowserInput(text: string): { nonce: string } | undefined {
 	const header = INPUT_HEADER.exec(text);
-	if (!header?.[1] || !text.endsWith(INPUT_FOOTER)) return undefined;
-	return {
-		nonce: header[1],
-		text: text.slice(header[0].length, -INPUT_FOOTER.length),
-	};
+	if (
+		!header?.[1] ||
+		!text.endsWith(INPUT_FOOTER) ||
+		text.slice(header[0].length, -INPUT_FOOTER.length) !== ""
+	) {
+		return undefined;
+	}
+	return { nonce: header[1] };
 }
 
 function contentText(content: Array<TextContent | ImageContent>): string {
@@ -659,7 +653,7 @@ function contentText(content: Array<TextContent | ImageContent>): string {
 
 function sanitizeBrowserMessageEvent(
 	event: unknown,
-	acceptedNonces: Set<string>,
+	acceptedNonces: Map<string, string>,
 	consume: boolean,
 ): unknown {
 	if (!isRecord(event) || !isRecord(event.message) || event.message.role !== "user") return event;
@@ -667,8 +661,9 @@ function sanitizeBrowserMessageEvent(
 	if (typeof content === "string") {
 		const wrapped = parseBrowserInput(content);
 		if (!wrapped || !acceptedNonces.has(wrapped.nonce)) return event;
+		const text = acceptedNonces.get(wrapped.nonce) ?? "";
 		if (consume) acceptedNonces.delete(wrapped.nonce);
-		return { ...event, message: { ...event.message, content: wrapped.text } };
+		return { ...event, message: { ...event.message, content: text } };
 	}
 	if (!Array.isArray(content)) return event;
 	let changed = false;
@@ -677,9 +672,10 @@ function sanitizeBrowserMessageEvent(
 		if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") return [part];
 		const wrapped = parseBrowserInput(part.text);
 		if (!wrapped || !acceptedNonces.has(wrapped.nonce)) return [part];
+		const text = acceptedNonces.get(wrapped.nonce) ?? "";
 		changed = true;
 		consumed.add(wrapped.nonce);
-		return wrapped.text ? [{ ...part, text: wrapped.text }] : [];
+		return text ? [{ ...part, text }] : [];
 	});
 	if (!changed) return event;
 	if (consume) {
