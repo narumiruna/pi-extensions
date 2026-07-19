@@ -21,7 +21,7 @@ The current `ExtensionContext` does not expose the active session's `SettingsMan
 - [x] Refresh the cached policy during `session_start` and before each provider request, warn once per loaded extension runtime when disabled, and clear/disarm retry-dependent state when policy becomes disabled; focused tests verify warning deduplication and a disabled-to-enabled change on the next request.
 - [x] Gate retry-only UI and watchdog behavior on the cached policy: keep classification logic side-effect-free when disabled, never show `retrying`, and never abort a stalled stream that Pi cannot retry; focused tests verify disabled suppression while existing hint tests and the enabled watchdog case pass.
 - [x] Update `extensions/pi-retry/README.md` to state that Pi owns retry attempts, budget, and backoff; documented the required `retry.enabled: true` setting, disabled-watchdog behavior, and current SDK in-memory visibility limitation.
-- [x] Run `npm run check` and `just pack-retry`, then inspect the tarball to confirm the changed source and README are included without unrelated files; reverified 808 passing tests and the four expected package files after the malformed-settings policy fix.
+- [x] Run `npm run check` and `just pack-retry`, then inspect the tarball to confirm the changed source and README are included without unrelated files; reverified 810 passing tests and the four expected package files after edge-case hardening.
 - [x] Open an upstream Pi API follow-up requesting an effective `ctx.getRetrySettings()` or `ctx.isAutoRetryEnabled()` accessor so SDK in-memory overrides and live runtime changes can be observed without rereading settings files; created https://github.com/earendil-works/pi/issues/6830 (auto-closed by the new-contributor gate pending maintainer review).
 
 ## Risks
@@ -32,9 +32,9 @@ The current `ExtensionContext` does not expose the active session's `SettingsMan
 
 ## Completion Checklist
 
-- [x] Disabled `retry.enabled` produces exactly one actionable warning, verified by focused lifecycle tests and the full 808-test suite.
+- [x] Disabled `retry.enabled` produces exactly one actionable warning, verified by focused lifecycle tests and the full 810-test suite.
 - [x] Disabled `retry.enabled` produces no `retrying` status and no watchdog abort, verified by matched-error and timer tests.
-- [x] Enabled/default behavior remains compatible, verified by the focused suite and all 808 tests in `npm run check` after the malformed-settings policy fix.
+- [x] Enabled/default behavior remains compatible, verified by the focused suite and all 810 tests in `npm run check` after edge-case hardening.
 - [x] Policy ownership and configuration are documented in `extensions/pi-retry/README.md`, verified by review of the Install and What it does sections.
 - [x] Repository checks and package dry run pass, reverified with `npm run check` and `just pack-retry` after the latest source change.
 - [x] The remaining SDK/in-memory policy visibility gap is tracked by https://github.com/earendil-works/pi/issues/6830.

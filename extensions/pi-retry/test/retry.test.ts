@@ -67,6 +67,9 @@ test("readPiRetryPolicy resolves defaults, global settings, and trusted project 
 	assert.equal(malformedGlobal.enabled, true);
 	assert.equal(malformedGlobal.errors.length, 1);
 	assert.match(malformedGlobal.errors[0] ?? "", /^global settings:/);
+	const projectOverridesMalformedGlobal = readPiRetryPolicy(trustedContext.ctx, agentDir);
+	assert.equal(projectOverridesMalformedGlobal.enabled, true);
+	assert.equal(projectOverridesMalformedGlobal.errors.length, 1);
 
 	writeSettings(agentDir, { retry: { enabled: false } });
 	writeFileSync(join(cwd, CONFIG_DIR_NAME, "settings.json"), "{");
@@ -74,6 +77,14 @@ test("readPiRetryPolicy resolves defaults, global settings, and trusted project 
 	assert.equal(malformedProject.enabled, false);
 	assert.equal(malformedProject.errors.length, 1);
 	assert.match(malformedProject.errors[0] ?? "", /^project settings:/);
+
+	writeFileSync(join(agentDir, "settings.json"), "{");
+	const bothMalformed = readPiRetryPolicy(trustedContext.ctx, agentDir);
+	assert.equal(bothMalformed.enabled, true);
+	assert.equal(bothMalformed.errors.length, 2);
+
+	writeSettings(join(cwd, CONFIG_DIR_NAME), { retry: null });
+	assert.equal(readPiRetryPolicy(trustedContext.ctx, agentDir).enabled, true);
 });
 
 test("session_start warns once when Pi agent-level retry is disabled", async (t) => {
@@ -154,6 +165,74 @@ test("disabled Pi retry policy does not abort a stalled provider request", async
 	assert.equal(context.statuses.get("unknown-error-retry"), undefined);
 });
 
+test("a malformed settings update preserves the last known disabled policy", async (t) => {
+	const mock = createMockPi();
+	let abortCount = 0;
+	retry(mock.pi);
+	const flag = mock.flags.get("retry-stall-timeout-ms");
+	assert.ok(flag);
+	flag.value = "5";
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const beforeProviderRequest = mock.events.get("before_provider_request")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(beforeProviderRequest);
+	assert.ok(sessionShutdown);
+
+	const cwd = createProjectSettingsWorkspace(t, { retry: { enabled: false } });
+	const context = createMockContext({
+		cwd,
+		hasUI: true,
+		isIdle: () => false,
+		isProjectTrusted: () => true,
+		abort: () => abortCount++,
+	});
+	await sessionStart({}, context.ctx);
+	writeFileSync(join(cwd, CONFIG_DIR_NAME, "settings.json"), "{");
+	await beforeProviderRequest({}, context.ctx);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	await sessionShutdown({}, context.ctx);
+
+	assert.equal(abortCount, 0);
+	assert.equal(context.notifications.length, 2);
+	assert.match(context.notifications[1]?.message ?? "", /preserving the last known policy/);
+	assert.equal(context.statuses.get("unknown-error-retry"), undefined);
+});
+
+test("a partial settings failure cannot replace a known enabled policy", async () => {
+	const mock = createMockPi();
+	let readCount = 0;
+	let abortCount = 0;
+	retry(mock.pi, {
+		readRetryPolicy: () =>
+			readCount++ === 0
+				? { enabled: true, errors: [] }
+				: { enabled: false, errors: ["project settings: invalid JSON"] },
+	});
+	const flag = mock.flags.get("retry-stall-timeout-ms");
+	assert.ok(flag);
+	flag.value = "5";
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const beforeProviderRequest = mock.events.get("before_provider_request")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(beforeProviderRequest);
+	assert.ok(sessionShutdown);
+
+	const context = createMockContext({
+		hasUI: true,
+		isIdle: () => false,
+		abort: () => abortCount++,
+	});
+	await sessionStart({}, context.ctx);
+	await beforeProviderRequest({}, context.ctx);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	await sessionShutdown({}, context.ctx);
+
+	assert.equal(abortCount, 1);
+	assert.equal(context.notifications.length, 1);
+});
+
 test("before_provider_request refreshes an injected retry policy", async () => {
 	const mock = createMockPi();
 	let enabled = false;
@@ -210,7 +289,7 @@ test("retry policy read failures warn once and preserve the last known policy", 
 	assert.deepEqual(context.notifications, [
 		{
 			message:
-				"pi-retry could not read Pi retry settings; preserving the last known policy. global settings: invalid JSON",
+				"pi-retry could not read Pi retry settings; using Pi's fallback policy. global settings: invalid JSON",
 			level: "warning",
 		},
 	]);

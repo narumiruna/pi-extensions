@@ -84,6 +84,7 @@ export default function retry(pi: ExtensionAPI, options: RetryOptions = {}) {
 	let providerWatchdogActive = false;
 	let waitingForStallAbortMessage = false;
 	let retryPolicyEnabled = true;
+	let hasResolvedRetryPolicy = false;
 	let warnedRetryPolicyDisabled = false;
 	let warnedRetryPolicyReadFailure = false;
 
@@ -137,14 +138,19 @@ export default function retry(pi: ExtensionAPI, options: RetryOptions = {}) {
 		const policy = (options.readRetryPolicy ?? readPiRetryPolicy)(ctx);
 		if (policy.errors.length > 0 && ctx.hasUI && !warnedRetryPolicyReadFailure) {
 			warnedRetryPolicyReadFailure = true;
+			const fallbackBehavior = hasResolvedRetryPolicy
+				? "preserving the last known policy"
+				: "using Pi's fallback policy";
 			ctx.ui.notify(
-				`pi-retry could not read Pi retry settings; preserving the last known policy. ${policy.errors.join("; ")}`,
+				`pi-retry could not read Pi retry settings; ${fallbackBehavior}. ${policy.errors.join("; ")}`,
 				"warning",
 			);
 		}
 		if (policy.enabled === undefined) return;
+		if (policy.errors.length > 0 && hasResolvedRetryPolicy) return;
 
 		retryPolicyEnabled = policy.enabled;
+		hasResolvedRetryPolicy = true;
 		if (retryPolicyEnabled) return;
 
 		disarmStallWatchdog();
