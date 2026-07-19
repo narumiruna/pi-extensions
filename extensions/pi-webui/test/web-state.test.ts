@@ -16,6 +16,7 @@ const state = (await import(
 		submittedText: string,
 	): WebState;
 	applyAttachments(current: WebState, attachments: Record<string, unknown>): WebState;
+	applyImageLimits(current: WebState, limits: Record<string, unknown>): WebState;
 	applySentImages(current: WebState, sentImages: Record<string, unknown>): WebState;
 	applyConversationEvent(current: WebState, event: ConversationEvent): WebState;
 	applyLease(
@@ -74,6 +75,12 @@ interface WebState {
 	textDirty: boolean;
 	attachmentRevision: number;
 	attachmentPhase: string;
+	imageLimits?: {
+		maxImages: number;
+		maxImageBytes: number;
+		maxBatchBytes: number;
+		maxImagePixels: number;
+	};
 	sentImages: {
 		revision: number;
 		enabled: boolean;
@@ -202,6 +209,21 @@ test("server attachment revisions replace browser images and ignore stale update
 	});
 	assert.equal(processing.readingImages, 1);
 	assert.equal(state.canSend({ ...processing, connected: true, text: "send" }), false);
+});
+
+test("effective image limits hydrate atomically from server state", () => {
+	const initial = state.initialState();
+	const limits = {
+		maxImages: 12,
+		maxImageBytes: 20,
+		maxBatchBytes: 40,
+		maxImagePixels: 60,
+	};
+	const applied = state.applyImageLimits(initial, limits);
+	assert.deepEqual(applied.imageLimits, limits);
+	limits.maxImages = 99;
+	assert.equal(applied.imageLimits?.maxImages, 12);
+	assert.equal(state.applyImageLimits(applied, { ...limits, maxImageBytes: 0 }), applied);
 });
 
 test("sent-image snapshots are immutable and ignore stale eviction state", () => {

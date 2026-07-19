@@ -277,6 +277,65 @@ test("invalid settings warn and automatic startup failures remain non-fatal", as
 	assert.match(failing.notifications.join("\n"), /could not start.*listener unavailable/i);
 });
 
+test("one immutable effective image-limit object reaches server, processing, and send preflight", async () => {
+	let processOptions: Record<string, unknown> | undefined;
+	const effective = {
+		...DEFAULT_SETTINGS,
+		maxImages: 1,
+		maxImageBytes: 12,
+		maxBatchBytes: 20,
+		maxImagePixels: 34,
+	};
+	const h = harness({
+		loadSettings: async () => ({
+			kind: "loaded",
+			path: "/agent/pi-webui.json",
+			settings: effective,
+			source: "settings file",
+			document: effective,
+		}),
+		processAttachment: async (_source, options) => {
+			processOptions = options as Record<string, unknown>;
+			return {
+				bytes: Buffer.from("processed"),
+				mimeType: "image/png",
+				width: 1,
+				height: 1,
+				originalWidth: 1,
+				originalHeight: 1,
+				sourceFormat: "png",
+				outputFormat: "png",
+				resized: false,
+			};
+		},
+	});
+	await h.emit("session_start");
+	await h.commands.get("webui")?.handler("", h.ctx as never);
+	assert.deepEqual(h.serverOptions?.imageLimits, {
+		maxImages: 1,
+		maxImageBytes: 12,
+		maxBatchBytes: 20,
+		maxImagePixels: 34,
+	});
+	assert.equal(Object.isFrozen(h.serverOptions?.imageLimits), true);
+	await h.serverOptions?.processAttachment?.(Buffer.from("x"));
+	assert.equal(processOptions?.maxImageBytes, 12);
+	assert.equal(processOptions?.maxPixels, 34);
+	await assert.rejects(
+		() =>
+			h.serverOptions?.send({
+				requestId: "too-many",
+				text: "",
+				images: [
+					{ data: Buffer.from("a").toString("base64"), mimeType: "image/png" },
+					{ data: Buffer.from("b").toString("base64"), mimeType: "image/png" },
+				],
+				delivery: "next",
+			}) ?? Promise.reject(new Error("server missing")),
+		/maximum is 1/i,
+	);
+});
+
 test("Pi message, tool, and activity events update the browser projection", async () => {
 	const h = harness();
 	await h.emit("session_start");
@@ -618,6 +677,8 @@ test("browser images are staged under live Pi guards and sent without reprocessi
 	};
 	assert.equal(signal.aborted, false);
 	assert.deepEqual(guards, {
+		maxImageBytes: DEFAULT_SETTINGS.maxImageBytes,
+		maxPixels: DEFAULT_SETTINGS.maxImagePixels,
 		autoResize: true,
 		blockImages: false,
 		supportsImages: true,

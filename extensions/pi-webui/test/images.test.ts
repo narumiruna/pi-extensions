@@ -7,6 +7,7 @@ import {
 	DEFAULT_IMAGE_LIMITS,
 	detectImageFormat,
 	ImageProcessor,
+	PROVIDER_IMAGE_LIMITS,
 	processBrowserImages,
 } from "../src/images.js";
 
@@ -73,8 +74,10 @@ test("image defaults stay bounded", () => {
 	assert.deepEqual(DEFAULT_IMAGE_LIMITS, {
 		maxImages: 8,
 		maxImageBytes: 10 * 1024 * 1024,
-		maxPromptBytes: 40 * 1024 * 1024,
-		maxPixels: 50_000_000,
+		maxBatchBytes: 40 * 1024 * 1024,
+		maxImagePixels: 50_000_000,
+	});
+	assert.deepEqual(PROVIDER_IMAGE_LIMITS, {
 		maxDimension: 2_000,
 		maxBase64Bytes: 4_500_000,
 	});

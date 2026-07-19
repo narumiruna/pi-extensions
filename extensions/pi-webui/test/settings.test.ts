@@ -3,10 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { DEFAULT_IMAGE_LIMITS, IMAGE_HARD_LIMITS } from "../src/image-limits.js";
 import {
 	DEFAULT_SETTINGS,
 	initializeSettings,
 	loadSettings,
+	normalizeSettings,
 	RETENTION_HARD_LIMITS,
 	saveSettings,
 } from "../src/settings.js";
@@ -24,6 +26,42 @@ test("sent-image retention uses conservative opt-in defaults and finite hard cei
 		maxRetainedImages: 128,
 		maxRetainedBytes: 512 * 1024 * 1024,
 	});
+});
+
+test("image limit normalization preserves defaults and accepts exact hard boundaries", () => {
+	assert.deepEqual(normalizeSettings({}), DEFAULT_SETTINGS);
+	assert.deepEqual(normalizeSettings(IMAGE_HARD_LIMITS), {
+		...DEFAULT_SETTINGS,
+		...IMAGE_HARD_LIMITS,
+	});
+	for (const key of Object.keys(DEFAULT_IMAGE_LIMITS)) {
+		assert.equal(normalizeSettings({ [key]: 1.5 }), undefined);
+		assert.equal(normalizeSettings({ [key]: 0 }), undefined);
+		assert.equal(
+			normalizeSettings({ [key]: IMAGE_HARD_LIMITS[key as keyof typeof IMAGE_HARD_LIMITS] + 1 }),
+			undefined,
+		);
+	}
+	assert.equal(normalizeSettings({ maxImageBytes: 20, maxBatchBytes: 10 }), undefined);
+});
+
+test("loaded limits above defaults warn while omitted values and unknown fields remain safe", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-"));
+	const settingsPath = path.join(directory, "pi-webui.json");
+	try {
+		await writeFile(
+			settingsPath,
+			JSON.stringify({ maxImages: DEFAULT_IMAGE_LIMITS.maxImages + 1, future: "kept" }),
+		);
+		const loaded = await loadSettings(settingsPath);
+		assert.equal(loaded.kind, "loaded");
+		assert.equal(loaded.settings.maxImages, 9);
+		assert.equal(loaded.settings.maxImageBytes, DEFAULT_IMAGE_LIMITS.maxImageBytes);
+		assert.match(loaded.warning ?? "", /above safe defaults.*maxImages/i);
+		assert.deepEqual(loaded.document, { maxImages: 9, future: "kept" });
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("settings loading distinguishes missing, valid, malformed, and invalid files", async () => {
@@ -76,6 +114,10 @@ test("saving is atomic and preserves unknown fields", async () => {
 			retainSentImages: false,
 			maxRetainedImages: 32,
 			maxRetainedBytes: 128 * 1024 * 1024,
+			maxImages: 8,
+			maxImageBytes: 10 * 1024 * 1024,
+			maxBatchBytes: 40 * 1024 * 1024,
+			maxImagePixels: 50_000_000,
 		});
 	} finally {
 		await rm(directory, { recursive: true, force: true });

@@ -71,7 +71,11 @@ The normal default path is `~/.pi/agent/pi-webui.json`. Pi installations that us
   "startOnSessionStart": false,
   "retainSentImages": false,
   "maxRetainedImages": 32,
-  "maxRetainedBytes": 134217728
+  "maxRetainedBytes": 134217728,
+  "maxImages": 8,
+  "maxImageBytes": 10485760,
+  "maxBatchBytes": 41943040,
+  "maxImagePixels": 50000000
 }
 ```
 
@@ -81,8 +85,16 @@ The normal default path is `~/.pi/agent/pi-webui.json`. Pi installations that us
 | `retainSentImages` | `false` | Opt in to bounded, session-only retention of sanitized images after Pi accepts their browser message. |
 | `maxRetainedImages` | `32` | FIFO retained-image count ceiling. Positive integers up to the hard ceiling of 128 are accepted. |
 | `maxRetainedBytes` | `134217728` (128 MiB) | FIFO retained provider-ready byte ceiling. Positive integers up to the hard ceiling of 536870912 (512 MiB) are accepted. |
+| `maxImages` | `8` | Images in one active draft; hard ceiling 32. |
+| `maxImageBytes` | `10485760` (10 MiB) | Source bytes per image; hard ceiling 52428800 (50 MiB). Must not exceed `maxBatchBytes`. |
+| `maxBatchBytes` | `41943040` (40 MiB) | Combined source/processed draft bytes; hard ceiling 209715200 (200 MiB). |
+| `maxImagePixels` | `50000000` | Decoded pixels per image; hard ceiling 100000000. Animated-image frame area participates in this limit. |
 
-A missing file uses defaults. The file must contain a top-level JSON object; recognized booleans and positive integer limits must have the documented types and remain within their hard ceilings. Malformed JSON or an invalid recognized value causes the file to be ignored with a warning and leaves it untouched. Unknown fields are accepted and preserved by the settings screen for forward compatibility. The settings screen currently exposes the startup toggle; retention fields can be edited in the reported JSON path.
+A missing file uses defaults. The file must contain a top-level JSON object; recognized booleans and positive integer limits must have the documented types and remain within their hard ceilings. Malformed JSON or an invalid recognized value causes the file to be ignored with a warning and leaves it untouched. Unknown fields are accepted and preserved by the settings screen for forward compatibility. The settings screen exposes only the frequent startup toggle; there is not yet user-testing evidence that `maxImages` is adjusted often enough to justify another routine row. Retention and image-limit fields remain in Advanced JSON at the reported path.
+
+### Advanced image limits
+
+Omitting all four image-limit fields exactly reproduces the original 8 image / 10 MiB per image / 40 MiB batch / 50 megapixel behavior. Values are byte counts, not Base64 character counts. Raising any image limit above its safe default emits one concise session-start warning and can materially increase Pi-process memory, decoder work, and denial-of-service exposure; use the smallest value that solves the current workflow. Any non-integer, non-positive, above-ceiling, or cross-field-invalid recognized value rejects the whole file and safely restores all defaults without rewriting it. `/webui status` reports the effective limits and whether they came from defaults or the settings file.
 
 Settings are reloaded on every `session_start`. Changes made in `/webui settings` are saved atomically and update the in-memory preference immediately, but they intentionally do not start or stop the server in the current session; they take effect at the next session initialization or `/reload`. `/webui init` creates formatted defaults once and refuses to overwrite valid or invalid existing content.
 
@@ -107,7 +119,7 @@ The initial transcript comes from the active session branch. Unsent browser mess
 | HEIC/HEIF | PNG |
 | AVIF | PNG |
 
-The server checks file signatures instead of trusting browser MIME types or filename extensions. It rejects corrupt/unknown formats, more than 8 images, individual source images over 10 MiB, combined image input over 40 MiB, images over 50 megapixels, and provider-ready Base64 content over Pi's approximately 4.5 MB inline limit. Images over 2,000 pixels on either side are resized when Pi's `images.autoResize` setting is enabled and rejected when it is disabled.
+The server checks file signatures instead of trusting browser MIME types or filename extensions. It rejects corrupt/unknown formats and applies the effective `maxImages`, `maxImageBytes`, `maxBatchBytes`, and `maxImagePixels` settings at browser admission, streamed upload, processing, draft accounting, send preflight, and Attach again. Pi's approximately 4.5 MB inline Base64 constraint and 2,000-pixel provider-ready dimension constraint remain fixed and cannot be raised in WebUI settings. Images over 2,000 pixels on either side are resized when Pi's `images.autoResize` setting is enabled and rejected when it is disabled.
 
 Choosing, pasting, or dropping images first reserves an ordered server-side batch, uploads each source as a bounded raw request, and processes it before Send becomes available. Each thumbnail reports Uploading, Processing, Ready, or Needs attention; upload progress is shown when the browser reports a byte total. A failed item can be retried without reselecting successful siblings, and every item can be removed independently. Refreshing the active tab restores the authoritative staged batch, while another tab taking the editing lease cancels in-flight work safely.
 
@@ -152,6 +164,7 @@ src/drafts.ts        authoritative in-memory text and attachment-reference revis
 src/attachments.ts   revisioned staged-image state, processing queue, and byte ownership
 src/sent-images.ts   opt-in bounded sanitized sent-image retention
 src/server.ts        authenticated loopback HTTP/SSE server and raw attachment protocol
+src/image-limits.ts  shared configurable defaults, ceilings, and provider constraints
 src/images.ts        bounded provider-ready image processing
 src/pi-settings.ts   effective Pi image settings reader
 src/web/             framework-free browser page

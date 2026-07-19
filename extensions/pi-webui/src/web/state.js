@@ -18,6 +18,7 @@ export function initialState() {
 		textDirty: false,
 		attachmentRevision: 0,
 		attachmentPhase: "empty",
+		imageLimits: undefined,
 		sentImages: {
 			revision: 0,
 			enabled: false,
@@ -49,7 +50,10 @@ export function applySnapshot(current, snapshot) {
 		};
 	}
 	return applySentImages(
-		applyAttachments(applyDraft(next, snapshot?.draft), snapshot?.attachments),
+		applyImageLimits(
+			applyAttachments(applyDraft(next, snapshot?.draft), snapshot?.attachments),
+			snapshot?.imageLimits,
+		),
 		snapshot?.sentImages,
 	);
 }
@@ -86,6 +90,26 @@ export function acknowledgeDraftText(current, draft, submittedText) {
 		return applyDraft({ ...current, textDirty: false }, draft);
 	}
 	return applyDraft(current, draft);
+}
+
+export function applyImageLimits(current, limits) {
+	if (
+		!limits ||
+		!["maxImages", "maxImageBytes", "maxBatchBytes", "maxImagePixels"].every(
+			(key) => Number.isSafeInteger(limits[key]) && limits[key] > 0,
+		)
+	) {
+		return current;
+	}
+	return {
+		...current,
+		imageLimits: {
+			maxImages: limits.maxImages,
+			maxImageBytes: limits.maxImageBytes,
+			maxBatchBytes: limits.maxBatchBytes,
+			maxImagePixels: limits.maxImagePixels,
+		},
+	};
 }
 
 export function applySentImages(current, sentImages) {

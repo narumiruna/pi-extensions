@@ -6,6 +6,7 @@ const limits = {
 	maxImages: 3,
 	maxImageBytes: 8,
 	maxPromptBytes: 16,
+	maxPreparedImageBytes: 16,
 };
 
 function prepared(source: Uint8Array, marker = Buffer.from(source).toString()): PreparedAttachment {
@@ -201,6 +202,27 @@ test("reorder, delete, and clear require exact revisions and release every byte"
 	store.clear(store.publicState().revision);
 	assert.equal(store.publicState().phase, "empty");
 	assert.equal(store.residentBytes(), 0);
+});
+
+test("source-byte and fixed provider-ready per-image limits stay distinct", () => {
+	const store = new AttachmentStore({
+		limits: {
+			maxImages: 2,
+			maxImageBytes: 3,
+			maxPromptBytes: 10,
+			maxPreparedImageBytes: 6,
+		},
+		process: async (source) => prepared(source),
+	});
+	assert.throws(
+		() => store.reserve([{ id: "source", name: "source.png", size: 4 }], 0),
+		/per-image maximum/i,
+	);
+	const state = store.attachPrepared(
+		[{ id: "ready", name: "ready.png", prepared: prepared(Buffer.from("x"), "") }],
+		0,
+	);
+	assert.equal(state.items[0]?.status, "ready");
 });
 
 test("reattaching prepared images is atomic, ordered, bounded, and rejects draft duplicates", async () => {

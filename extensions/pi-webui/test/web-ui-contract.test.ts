@@ -72,6 +72,13 @@ test("image input stages authenticated per-item uploads with visible status and 
 	assert.match(html, /id="image-previews"[^>]*aria-label="Attached images"/);
 	assert.match(app, /addEventListener\("paste"/);
 	assert.match(app, /\/api\/attachments\/reserve/);
+	assert.match(app, /model\.imageLimits/);
+	assert.match(app, /limits\.maxImages/);
+	assert.match(app, /limits\.maxImageBytes/);
+	assert.match(app, /limits\.maxBatchBytes/);
+	assert.match(app, /events\.addEventListener\("image-limits"/);
+	assert.doesNotMatch(app, /images\.length \+ files\.length > 8/);
+	assert.doesNotMatch(app, /file\.size > 10 \* 1024 \* 1024/);
 	assert.match(app, /new XMLHttpRequest\(\)/);
 	assert.match(app, /request\.upload\.addEventListener\("progress"/);
 	assert.match(app, /X-Pi-Web-Client/);

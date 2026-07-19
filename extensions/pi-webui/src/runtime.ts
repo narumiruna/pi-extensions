@@ -10,12 +10,14 @@ import {
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import type { PreparedAttachment } from "./attachments.js";
 import { ConversationProjection, projectBranchMessages } from "./conversation.js";
+import { DEFAULT_IMAGE_LIMITS, type ImageLimits, imageLimits } from "./image-limits.js";
 import {
 	type BrowserImageInput,
 	type ProcessBrowserImageOptions,
 	type ProcessedBrowserImage,
 	processBrowserImages,
 	processStagedImage,
+	validateStagedBrowserImages,
 } from "./images.js";
 import { type EffectivePiImageSettings, readEffectivePiImageSettings } from "./pi-settings.js";
 import {
@@ -104,6 +106,7 @@ export class WebUIRuntime {
 	private readonly pendingBrowserInputs = new Map<string, PendingBrowserInput>();
 	private readonly acceptedBrowserInputs = new Map<string, AcceptedBrowserInput>();
 	private settings: WebUISettings = { ...DEFAULT_SETTINGS };
+	private effectiveImageLimits: Readonly<ImageLimits> = DEFAULT_IMAGE_LIMITS;
 	private settingsDocument?: Record<string, unknown> = {};
 	private settingsPath = "pi-webui.json";
 	private settingsSource: SettingsLoadResult["source"] = "defaults";
@@ -434,6 +437,7 @@ export class WebUIRuntime {
 			[
 				"Pi WebUI status",
 				`startOnSessionStart: ${this.settings.startOnSessionStart} (${source})`,
+				`Image limits (${source}): ${this.effectiveImageLimits.maxImages} images, ${formatMib(this.effectiveImageLimits.maxImageBytes)}/image, ${formatMib(this.effectiveImageLimits.maxBatchBytes)}/batch, ${this.effectiveImageLimits.maxImagePixels.toLocaleString("en-US")} pixels/image`,
 				`Settings: ${this.settingsPath}`,
 				`Server: ${this.server ? "running" : "stopped"}`,
 			].join("\n"),
@@ -450,9 +454,10 @@ export class WebUIRuntime {
 				"settings: edit WebUI settings in TUI mode",
 				"status: show effective settings, source, path, and current server state",
 				"init: create the defaults file without overwriting existing content",
-				'Accepted JSON: { "startOnSessionStart": false }',
+				'Accepted JSON starts with { "startOnSessionStart": false } and may include advanced maxImages, maxImageBytes, maxBatchBytes, and maxImagePixels fields.',
 				`Settings path: ${this.settingsPath}`,
-				"The default is false. Changes apply on the next session initialization or reload.",
+				"Image byte/pixel limits stay in Advanced JSON; Pi provider-ready dimension/Base64 limits are fixed.",
+				"Changes apply on the next session initialization or reload.",
 			].join("\n"),
 			"info",
 		);
@@ -476,6 +481,7 @@ export class WebUIRuntime {
 
 	private applySettingsResult(result: SettingsLoadResult): void {
 		this.settings = { ...result.settings };
+		this.effectiveImageLimits = imageLimits(result.settings);
 		this.settingsDocument = result.kind === "invalid" ? undefined : { ...(result.document ?? {}) };
 		this.settingsPath = result.path;
 		this.settingsSource = result.source;
@@ -490,6 +496,7 @@ export class WebUIRuntime {
 			const starting = this.dependencies.startServer({
 				conversation,
 				send: (request) => this.sendBrowserMessage(request, generation),
+				imageLimits: this.effectiveImageLimits,
 				sentImageSettings: {
 					enabled: this.settings.retainSentImages,
 					maxImages: this.settings.maxRetainedImages,
@@ -530,6 +537,8 @@ export class WebUIRuntime {
 		const settings = await this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted());
 		this.notifySettingsWarnings(ctx, settings.warnings);
 		const image = await this.dependencies.processAttachment(source, {
+			maxImageBytes: this.effectiveImageLimits.maxImageBytes,
+			maxPixels: this.effectiveImageLimits.maxImagePixels,
 			autoResize: settings.autoResize,
 			blockImages: settings.blockImages,
 			supportsImages: ctx.model?.input.includes("image") ?? false,
@@ -560,6 +569,7 @@ export class WebUIRuntime {
 		await this.preflightIdlePrompt(ctx, request, generation, signal);
 		let images: ImageContent[] = [];
 		if (request.images.length > 0) {
+			validateStagedBrowserImages(request.images, this.effectiveImageLimits);
 			const settings = await this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted());
 			this.notifySettingsWarnings(ctx, settings.warnings);
 			if (settings.blockImages) throw new Error("Pi image sending is disabled.");
@@ -780,6 +790,10 @@ function messageLifecycleKey(message: Record<string, unknown>): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatMib(bytes: number): string {
+	return `${bytes / (1024 * 1024)} MiB`;
 }
 
 function formatError(error: unknown): string {

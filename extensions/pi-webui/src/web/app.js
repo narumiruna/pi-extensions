@@ -3,6 +3,7 @@ import {
 	applyAttachments,
 	applyConversationEvent,
 	applyDraft,
+	applyImageLimits,
 	applyLease,
 	applySentImages,
 	applySnapshot,
@@ -264,6 +265,10 @@ function connectEvents() {
 		model = applyAttachments(model, JSON.parse(event.data));
 		render();
 	});
+	events.addEventListener("image-limits", (event) => {
+		model = applyImageLimits(model, JSON.parse(event.data));
+		renderComposer();
+	});
 	events.addEventListener("sent-images", (event) => {
 		model = applySentImages(model, JSON.parse(event.data));
 		render({ updateKey: "sent-images" });
@@ -354,8 +359,14 @@ async function addFiles(fileList) {
 	if (composerLocked() || model.readingImages > 0) return;
 	const files = [...(fileList ?? [])];
 	if (files.length === 0) return;
-	if (model.images.length + files.length > 8) {
-		model = { ...model, error: "You can attach at most 8 images." };
+	const limits = model.imageLimits;
+	if (!limits) {
+		model = { ...model, error: "Effective image limits are still loading." };
+		render();
+		return;
+	}
+	if (model.images.length + files.length > limits.maxImages) {
+		model = { ...model, error: `You can attach at most ${limits.maxImages} images.` };
 		render();
 		return;
 	}
@@ -365,11 +376,25 @@ async function addFiles(fileList) {
 			render();
 			return;
 		}
-		if (file.size > 10 * 1024 * 1024) {
-			model = { ...model, error: `${file.name || "Image"} is larger than 10 MB.` };
+		if (file.size > limits.maxImageBytes) {
+			model = {
+				...model,
+				error: `${file.name || "Image"} is larger than ${formatMib(limits.maxImageBytes)}.`,
+			};
 			render();
 			return;
 		}
+	}
+	const batchBytes =
+		model.images.reduce((total, image) => total + (image.size ?? 0), 0) +
+		files.reduce((total, file) => total + file.size, 0);
+	if (batchBytes > limits.maxBatchBytes) {
+		model = {
+			...model,
+			error: `Combined image input is larger than ${formatMib(limits.maxBatchBytes)}.`,
+		};
+		render();
+		return;
 	}
 	const pending = files.map((file) => ({ id: crypto.randomUUID(), file }));
 	try {
@@ -932,6 +957,10 @@ async function responseError(response) {
 	} catch {
 		return `${response.status} ${response.statusText}`;
 	}
+}
+
+function formatMib(bytes) {
+	return `${bytes / (1024 * 1024)} MiB`;
 }
 
 function errorMessage(error) {
