@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>Pi WebUI</title>
+		<link rel="stylesheet" href="/styles.css" />
+	</head>
+	<body>
+		<a class="skip-link" href="#message-input">Skip to message</a>
+		<header class="session-header">
+			<div class="session-identity">
+				<p class="eyebrow">Pi WebUI</p>
+				<h1 id="project-name">Connecting…</h1>
+				<p id="session-name" class="session-name">Current session</p>
+			</div>
+			<div class="session-controls">
+				<p id="connection-status" class="connection" role="status">Connecting…</p>
+				<details class="session-details">
+					<summary>Session details</summary>
+					<dl>
+						<dt>Working directory</dt>
+						<dd id="cwd">—</dd>
+					</dl>
+				</details>
+			</div>
+		</header>
+
+		<main>
+			<section class="conversation" aria-labelledby="conversation-title">
+				<h2 id="conversation-title" class="visually-hidden">Current Pi conversation</h2>
+				<div id="empty-state" class="empty-state">
+					<strong>No messages yet</strong>
+					<span>Messages from this Pi session will appear here.</span>
+				</div>
+				<ol id="transcript"></ol>
+				<p id="transcript-status" class="visually-hidden" role="status" aria-live="polite"></p>
+			</section>
+
+			<button id="jump-latest" class="jump-latest" type="button" hidden>
+				↓ Jump to latest
+			</button>
+
+			<section id="blocking-state" class="blocking-state" role="alert" hidden>
+				<strong id="blocking-title">This page is read-only</strong>
+				<span id="blocking-message"></span>
+			</section>
+
+			<form id="composer" class="composer">
+				<label for="message-input">Message Pi</label>
+				<textarea
+					id="message-input"
+					aria-label="Message Pi"
+					rows="1"
+					placeholder="Ask Pi to do something…"
+				></textarea>
+				<ul id="image-previews" class="image-previews" aria-label="Attached images"></ul>
+				<p id="attachment-status" class="attachment-status" role="status" aria-live="polite" hidden></p>
+				<p id="composer-error" class="composer-error" role="alert" hidden></p>
+				<div class="composer-bottom">
+					<div class="composer-support">
+						<label class="button secondary" for="image-input">Add images</label>
+						<input
+							id="image-input"
+							type="file"
+							accept="image/png,image/jpeg,image/webp,image/gif"
+							multiple
+							hidden
+						/>
+						<span class="image-hint">Paste, drop, or choose images.</span>
+					</div>
+					<div class="send-actions">
+						<button id="steer" class="button secondary" type="button" hidden>Steer</button>
+						<button id="send-next" class="button primary" type="submit">Send</button>
+					</div>
+				</div>
+				<p id="composer-status" class="composer-status" role="status">
+					Pi is idle · Messages send immediately.
+				</p>
+			</form>
+		</main>
+
+		<footer>
+			<details>
+				<summary>Privacy and limitations</summary>
+				<p>
+					This loopback page reflects semantic Pi messages, not terminal pixels. Data stays in
+					this live Pi process and browser tab. Thinking is collapsed by default.
+				</p>
+			</details>
+		</footer>
+
+		<dialog id="image-preview-dialog" class="image-preview-dialog" aria-labelledby="image-preview-title">
+			<div class="image-preview-content">
+				<header>
+					<h2 id="image-preview-title">Image preview</h2>
+					<button id="image-preview-close" class="button secondary" type="button">Close</button>
+				</header>
+				<button id="image-preview-dismiss" class="image-preview-dismiss" type="button" aria-label="Close enlarged image">
+					<img id="image-preview" alt="" />
+				</button>
+			</div>
+		</dialog>
+
+		<script type="module" src="/app.js"></script>
+	</body>
+</html>

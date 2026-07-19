@@ -2,9 +2,9 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; public Telegraph page publishing; retry handling; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; public Telegraph page publishing; retry handling; side questions; and keep-awake automation.
 
-**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, image attachments, Telegraph publishing, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
+**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, browser session chat, image attachments, Telegraph publishing, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
 ## 📦 Pi extension packages
 
@@ -30,6 +30,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
 | [`@narumitw/pi-telegraph`](./extensions/pi-telegraph) | 📝 Publish Markdown files and optionally enable agent tools to create, read, or edit public Telegraph pages. | `pi install npm:@narumitw/pi-telegraph` |
+| [`@narumitw/pi-webui`](./extensions/pi-webui) | 🌐 `/webui` lightweight browser companion for the current terminal Pi session, with semantic live sync and text/image input. | `pi install npm:@narumitw/pi-webui` |
 
 ## 🚀 Quick start
 
@@ -77,6 +78,10 @@ Use [`@narumitw/pi-google-genai`](./extensions/pi-google-genai) to give Pi Googl
 ### 🖼️ Local image staging
 
 Use [`@narumitw/pi-image-drop`](./extensions/pi-image-drop) to paste, drop, preview, and order images on a private loopback page, then attach the memory-only batch to the next non-empty interactive Pi message. `/image-drop` prints a one-time link and never launches a browser automatically.
+
+### 🌐 Lightweight current-session web chat
+
+Use [`@narumitw/pi-webui`](./extensions/pi-webui) to open a private loopback companion for the current terminal Pi session. `/webui` shows a one-time link; the page streams semantic messages and tool activity, sends text immediately or as follow-up/steer, and accepts sanitized image prompts without mirroring terminal ANSI pixels.
 
 ### 📝 Public Telegraph publishing
 
@@ -157,6 +162,7 @@ pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
 pi -e ./extensions/pi-telegraph
+pi -e ./extensions/pi-webui
 ```
 
 Preview npm package contents before publishing:
@@ -180,6 +186,7 @@ npm run pack:statusline
 npm run pack:sync
 npm run pack:subagents
 npm run pack:telegraph
+npm run pack:webui
 ```
 
 Publishing note for new scoped packages: `just npm-public @narumitw/pi-new-extension` only changes visibility for an already-published package. If npm returns 404 for a brand-new package, create it first with the new package's workspace name, for example:
@@ -216,7 +223,8 @@ extensions/
 ├── pi-statusline/
 ├── pi-sync/
 ├── pi-subagents/
-└── pi-telegraph/
+├── pi-telegraph/
+└── pi-webui/
 ```
 
 Each production extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Experimental extensions live under `extensions/experimental/`, remain covered by root checks, and may be published only through an explicit local maintainer recipe—not `publish-all` or GitHub workflows. Deprecated packages live under `extensions/deprecated/` and are excluded from workspace scripts.
