@@ -57,6 +57,37 @@ test("session start creates the complete default statusline settings", async () 
 	}
 });
 
+test("line breaks become separate footer rows", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-lifecycle-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		writeFileSync(
+			join(root, "pi-statusline.json"),
+			JSON.stringify({ segments: ["model", "line_break", "cwd", "line_break", "branch"] }),
+		);
+		const mock = createMockPi();
+		statusline(mock.pi);
+		const context = createMockContext({
+			mode: "tui",
+			cwd: "/workspace/project",
+			model: { id: "claude-sonnet-4", provider: "anthropic" },
+		});
+		await emit(mock.events, "session_start", {}, context.ctx);
+		const footer = createFooter(context.footer as FooterFactory);
+		const rows = footer.render(200);
+		assert.equal(rows.length, 3);
+		assert.match(rows[0] ?? "", /sonnet-4/u);
+		assert.match(rows[1] ?? "", /project/u);
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("a replacement session reloads JSON settings and uses configured segment text", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-lifecycle-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;

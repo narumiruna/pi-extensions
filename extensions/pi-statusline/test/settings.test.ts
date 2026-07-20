@@ -64,6 +64,27 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.equal(iconOnly.config.extensionStatusIcons.goal, "◎");
 });
 
+test("line breaks may repeat when separated but consecutive line breaks are invalid", () => {
+	const multiline = normalizeStatuslineConfig({
+		segments: ["model", "line_break", "cwd", "line_break", "branch"],
+	});
+	assert.deepEqual(multiline.config.segments, [
+		"model",
+		"line_break",
+		"cwd",
+		"line_break",
+		"branch",
+	]);
+	assert.deepEqual(multiline.diagnostics, []);
+
+	const consecutive = normalizeStatuslineConfig({
+		segments: ["model", "line_break", "line_break", "cwd", "branch"],
+	});
+	assert.deepEqual(consecutive.config.segments, ["model", "line_break", "cwd", "branch"]);
+	assert.match(consecutive.diagnostics[0]?.message ?? "", /consecutive line_break/iu);
+	assert.equal(consecutive.diagnostics[0]?.path, "segments[2]");
+});
+
 test("normalization falls back by field and reports unknown, duplicate, and invalid values", () => {
 	const normalized = normalizeStatuslineConfig({
 		palette: "invalid",
@@ -207,6 +228,14 @@ test("invalid recognized fields are rejected on save while unknown fields remain
 		assert.throws(
 			() => saveStatuslineSettingsDocument(path, JSON.stringify({ palette: "bad" })),
 			/palette/i,
+		);
+		assert.throws(
+			() =>
+				saveStatuslineSettingsDocument(
+					path,
+					JSON.stringify({ segments: ["model", "line_break", "line_break", "cwd"] }),
+				),
+			/consecutive line_break/iu,
 		);
 		const loaded = saveStatuslineSettingsDocument(path, JSON.stringify({ future: true }));
 		assert.equal(loaded.diagnostics[0]?.path, "future");

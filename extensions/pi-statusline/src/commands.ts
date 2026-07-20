@@ -102,6 +102,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 			"/statusline help — show this help",
 			`Settings: ${settingsPath}`,
 			"Fields: palette, density, separator, segments, segmentText, extensionStatusIcons",
+			"Use line_break between segments for another footer row; repeats must not be consecutive.",
 			"The segmentText entries support prefix and suffix strings around Pi-owned dynamic values.",
 		].join("\n"),
 		"info",

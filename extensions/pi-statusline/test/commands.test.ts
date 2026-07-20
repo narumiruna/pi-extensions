@@ -137,6 +137,7 @@ test("settings is TUI-only while status and help are protocol-safe", async () =>
 		assert.match(context.notifications.at(-1)?.message ?? "", /palette: tokyo-night/u);
 		await mock.commands.get("statusline")?.handler("help", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /segmentText/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /line_break/u);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

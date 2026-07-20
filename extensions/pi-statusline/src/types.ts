@@ -16,6 +16,9 @@ export const SEGMENT_NAMES = [
 ] as const;
 export type SegmentName = (typeof SEGMENT_NAMES)[number];
 
+export const LINE_BREAK_SEGMENT_NAME = "line_break" as const;
+export type ConfigSegmentName = SegmentName | typeof LINE_BREAK_SEGMENT_NAME;
+
 export const PALETTE_NAMES = [
 	"tokyo-night",
 	"ocean",
@@ -44,7 +47,7 @@ export interface StatuslineConfig {
 	palette: PaletteName;
 	density: Density;
 	separator: SeparatorName;
-	segments: SegmentName[];
+	segments: ConfigSegmentName[];
 	segmentText: Record<SegmentName, SegmentTextConfig>;
 	extensionStatusIcons: Record<string, string>;
 }
@@ -56,3 +59,9 @@ export interface RenderSegment {
 	block: TokyoNightBlockName;
 	emphasis?: boolean;
 }
+
+export interface RenderLineBreak {
+	name: typeof LINE_BREAK_SEGMENT_NAME;
+}
+
+export type RenderItem = RenderSegment | RenderLineBreak;

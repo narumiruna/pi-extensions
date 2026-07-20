@@ -156,7 +156,7 @@ export default function statusline(pi: ExtensionAPI) {
 					if (!loaded) return [];
 					const config = loaded.config;
 					const mainLine = renderStatusline(width, ctx, footerData, theme, config, runtime);
-					const lines = mainLine ? [mainLine] : [];
+					const lines = mainLine ? mainLine.split("\n") : [];
 					lines.push(
 						...renderExtensionStatusline(width, footerData, theme, config, runtime, mainLine),
 					);

@@ -30,6 +30,23 @@ test("Tokyo Night renderer preserves configured segment order across repeated bl
 	assert.match(plain(rendered), /^░▒▓ model time provider$/u);
 });
 
+test("line breaks render separated repeated markers as independent powerline rows", () => {
+	const config = createDefaultConfig();
+	const lineBreak = { name: "line_break" } as unknown as RenderSegment;
+	const rendered = renderTokyoNightStatusline(
+		300,
+		[
+			segment("model", "model", "header"),
+			lineBreak,
+			segment("cwd", "cwd", "directory"),
+			lineBreak,
+			segment("branch", "branch", "git"),
+		],
+		config,
+	);
+	assert.deepEqual(plain(rendered).split("\n"), ["░▒▓ model", "░▒▓ cwd", "░▒▓ branch"]);
+});
+
 test("density and separator configure text inside a contiguous block", () => {
 	const config = createDefaultConfig();
 	config.separator = "dot";

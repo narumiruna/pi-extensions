@@ -8,7 +8,7 @@
 
 - Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
-- Configures segment order, visibility, surrounding text, palette, density, separators, and extension icons through JSON.
+- Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
 - Creates a complete editable default configuration on first session start.
 - Applies validated `/statusline settings` edits immediately after an atomic save.
 - Caches Git state outside footer rendering and guards stale session results.
@@ -103,21 +103,25 @@ The separator applies only between adjacent segments in the same color block. Co
 
 ### Segments
 
-`segments` is an ordered, duplicate-free subset of:
+`segments` is an ordered list containing:
 
 ```text
-brand provider model thinking cwd branch tools context tokens cost time turn
+brand provider model thinking cwd branch tools context tokens cost time turn line_break
 ```
 
-The array controls visibility and actual rendering order. An empty array hides the main powerline while still allowing extension statuses to render. `turn` is available but omitted by default.
+The array controls visibility and actual rendering order. Data segments must remain unique. The special `line_break` segment starts another footer row and may repeat when another segment separates each occurrence; consecutive `line_break` entries are invalid. Each row receives its own powerline start and end. `line_break` has no `segmentText` entry.
 
-Example compact layout:
+An empty array hides the main powerline while still allowing extension statuses to render. `turn` is available but omitted by default.
+
+Example multiline layout:
 
 ```json
 {
-  "segments": ["model", "cwd", "branch", "context"]
+  "segments": ["model", "line_break", "cwd", "line_break", "branch"]
 }
 ```
+
+This is valid because the `line_break` entries are separated. `["model", "line_break", "line_break", "cwd"]` is invalid.
 
 ### Segment text
 

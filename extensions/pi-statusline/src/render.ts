@@ -13,7 +13,14 @@ import {
 } from "./extension-status.js";
 import { formatGitBranchValue, type GitStatusSummary } from "./git-status.js";
 import { renderTokyoNightStatusline } from "./tokyo-night.js";
-import type { RenderSegment, SegmentName, StatuslineConfig, TokyoNightBlockName } from "./types.js";
+import {
+	LINE_BREAK_SEGMENT_NAME,
+	type RenderItem,
+	type RenderSegment,
+	type SegmentName,
+	type StatuslineConfig,
+	type TokyoNightBlockName,
+} from "./types.js";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 export interface RuntimeState extends ExtensionStatusRuntime {
@@ -44,9 +51,15 @@ export function renderStatusline(
 	if (width <= 0) return "";
 
 	const segments = config.segments
-		.map((name) => buildSegment(name, ctx, footerData, config, runtime))
+		.map((name): RenderItem | undefined =>
+			name === LINE_BREAK_SEGMENT_NAME
+				? { name: LINE_BREAK_SEGMENT_NAME }
+				: buildSegment(name, ctx, footerData, config, runtime),
+		)
 		.filter(
-			(segment): segment is RenderSegment => segment !== undefined && segment.text.length > 0,
+			(segment): segment is RenderItem =>
+				segment !== undefined &&
+				(segment.name === LINE_BREAK_SEGMENT_NAME || segment.text.length > 0),
 		);
 
 	return renderTokyoNightStatusline(width, segments, config);

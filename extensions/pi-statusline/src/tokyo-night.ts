@@ -1,12 +1,14 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { ansiFg, ansiStyle } from "./ansi.js";
-import type {
-	PaletteName,
-	RenderSegment,
-	SeparatorName,
-	StatuslineConfig,
-	TokyoNightBlockName,
+import {
+	LINE_BREAK_SEGMENT_NAME,
+	type PaletteName,
+	type RenderItem,
+	type RenderSegment,
+	type SeparatorName,
+	type StatuslineConfig,
+	type TokyoNightBlockName,
 } from "./types.js";
 
 interface TokyoNightBlock {
@@ -61,11 +63,26 @@ const PALETTE_SEQUENCES: Record<Exclude<PaletteName, "tokyo-night">, SemanticCol
 
 export function renderTokyoNightStatusline(
 	width: number,
-	segments: RenderSegment[],
+	items: RenderItem[],
 	config: Pick<StatuslineConfig, "palette" | "density" | "separator">,
 ): string {
-	if (segments.length === 0 || width <= 0) return "";
-	return truncateToWidth(joinTokyoNightSegments(segments, config), width, "");
+	if (items.length === 0 || width <= 0) return "";
+	return splitLines(items)
+		.map((segments) =>
+			segments.length === 0
+				? ""
+				: truncateToWidth(joinTokyoNightSegments(segments, config), width, ""),
+		)
+		.join("\n");
+}
+
+function splitLines(items: RenderItem[]): RenderSegment[][] {
+	const lines: RenderSegment[][] = [[]];
+	for (const item of items) {
+		if (item.name === LINE_BREAK_SEGMENT_NAME) lines.push([]);
+		else lines.at(-1)?.push(item);
+	}
+	return lines;
 }
 
 export function tokyoNightExtensionSeparator(

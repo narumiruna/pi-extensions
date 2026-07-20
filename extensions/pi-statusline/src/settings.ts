@@ -11,7 +11,9 @@ import {
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+	type ConfigSegmentName,
 	DENSITIES,
+	LINE_BREAK_SEGMENT_NAME,
 	PALETTE_NAMES,
 	SEGMENT_NAMES,
 	SEPARATOR_NAMES,
@@ -146,12 +148,22 @@ export function normalizeStatuslineConfig(value: unknown): {
 		if (!Array.isArray(value.segments)) {
 			diagnostics.push(invalidDiagnostic("segments", "Expected an array of segment names"));
 		} else {
-			const segments: SegmentName[] = [];
+			const segments: ConfigSegmentName[] = [];
 			const seen = new Set<SegmentName>();
 			for (const [index, item] of value.segments.entries()) {
 				const path = `segments[${index}]`;
-				if (typeof item !== "string" || !isSegmentName(item)) {
+				if (typeof item !== "string" || !isConfigSegmentName(item)) {
 					diagnostics.push(invalidDiagnostic(path, "Unknown or non-string segment name"));
+					continue;
+				}
+				if (item === LINE_BREAK_SEGMENT_NAME) {
+					if (segments.at(-1) === LINE_BREAK_SEGMENT_NAME) {
+						diagnostics.push(
+							invalidDiagnostic(path, "Consecutive line_break segments are not allowed"),
+						);
+						continue;
+					}
+					segments.push(item);
 					continue;
 				}
 				if (seen.has(item)) {
@@ -425,6 +437,10 @@ function builtInSettings(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isConfigSegmentName(value: string): value is ConfigSegmentName {
+	return value === LINE_BREAK_SEGMENT_NAME || isSegmentName(value);
 }
 
 function isSegmentName(value: string): value is SegmentName {
