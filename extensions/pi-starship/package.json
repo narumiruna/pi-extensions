@@ -1,0 +1,52 @@
+{
+	"name": "@narumitw/pi-starship",
+	"version": "0.22.0",
+	"description": "Native Starship-style TOML statusline for the Pi coding agent.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"starship",
+		"statusline",
+		"footer",
+		"toml"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE",
+		"NOTICES.md"
+	],
+	"pi": {
+		"extensions": [
+			"./src/pi-starship.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check --vcs-use-ignore-file=false src test package.json tsconfig.json README.md NOTICES.md && npm run typecheck",
+		"format": "biome check --write --vcs-use-ignore-file=false src test package.json tsconfig.json README.md NOTICES.md",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"smol-toml": "^1.7.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.3",
+		"@earendil-works/pi-coding-agent": "0.80.10",
+		"@earendil-works/pi-tui": "0.80.10",
+		"@types/node": "26.1.1",
+		"typescript": "7.0.2"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-starship"
+	}
+}

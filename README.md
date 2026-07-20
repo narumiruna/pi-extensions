@@ -26,6 +26,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-lsp`](./extensions/pi-lsp) | 🧠 Language-agnostic LSP diagnostics and code actions for JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
 | [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) | 🧭 Codex-like read-only `/plan` collaboration mode with safe exploration and implementation-ready plans. | `pi install npm:@narumitw/pi-plan-mode` |
 | [`@narumitw/pi-retry`](./extensions/pi-retry) | 🔁 Retry support for unknown provider errors, retryable Codex backend failures, websocket limits, and stalled streams. | `pi install npm:@narumitw/pi-retry` |
+| [`@narumitw/pi-starship`](./extensions/pi-starship) | 🚀 Native Starship-style TOML footer with Pi-specific modules, palettes, and no Starship binary dependency. | `pi install npm:@narumitw/pi-starship` |
 | [`@narumitw/pi-statusline`](./extensions/pi-statusline) | ✨ A rich Pi terminal statusline with model, tools, git branch/status, context usage, token totals, cost, and time. | `pi install npm:@narumitw/pi-statusline` |
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
@@ -120,7 +121,7 @@ Use [`@narumitw/pi-subagents`](./extensions/pi-subagents) when you want the Pi a
 
 ### ✨ Better agent ergonomics
 
-Use [`@narumitw/pi-btw`](./extensions/pi-btw), [`@narumitw/pi-caffeinate`](./extensions/pi-caffeinate), [`@narumitw/pi-retry`](./extensions/pi-retry), and [`@narumitw/pi-statusline`](./extensions/pi-statusline) to improve day-to-day Pi coding agent sessions with side questions, sleep prevention, automatic retry hints, and a more informative terminal UI.
+Use [`@narumitw/pi-btw`](./extensions/pi-btw), [`@narumitw/pi-caffeinate`](./extensions/pi-caffeinate), and [`@narumitw/pi-retry`](./extensions/pi-retry) for side questions, sleep prevention, and retry hints. Choose either [`@narumitw/pi-starship`](./extensions/pi-starship) for a native Starship-style TOML footer or [`@narumitw/pi-statusline`](./extensions/pi-statusline) for the preset/JSON statusline; do not enable both footer extensions together.
 
 ## 🧑‍💻 Local development
 
@@ -153,6 +154,7 @@ pi -e ./extensions/pi-langfuse
 pi -e ./extensions/pi-lsp
 pi -e ./extensions/pi-plan-mode
 pi -e ./extensions/pi-retry
+pi -e ./extensions/pi-starship
 pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
@@ -176,6 +178,7 @@ npm run pack:langfuse
 npm run pack:lsp
 npm run pack:plan-mode
 npm run pack:retry
+npm run pack:starship
 npm run pack:statusline
 npm run pack:sync
 npm run pack:subagents
@@ -214,6 +217,7 @@ extensions/
 ├── pi-lsp/
 ├── pi-plan-mode/
 ├── pi-retry/
+├── pi-starship/
 ├── pi-statusline/
 ├── pi-sync/
 ├── pi-subagents/
