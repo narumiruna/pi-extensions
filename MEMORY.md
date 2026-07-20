@@ -87,6 +87,8 @@
 - Treat parsed credential maps as own-property dictionaries: names such as `__proto__` and `constructor` must not mutate or resolve through `Object.prototype`.
 - Active-account API-key conversion failures must fail closed, and user-facing errors must redact the exact current access and refresh secrets rather than relying only on token-shape regexes.
 - Symptom: a compiled pi-webui server smoke serves stale browser assets from another checkout. Cause: when cache-local `src/web` is absent, asset loading falls back through `process.cwd()`. Fix: launch the smoke with cwd set to the target worktree.
+- Runtime-auth generation guards prevent stale credential mutation but not stale outer status or connection-invalidation publication; overlapping provider syncs also need latest-task ownership at the lifecycle boundary.
+- Credential-file path and permission checks must run on every locked read, not only startup migration; reject symlinks and repair `0600` through the opened descriptor.
 
 ## TASTE
 

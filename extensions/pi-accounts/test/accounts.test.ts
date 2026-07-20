@@ -243,6 +243,27 @@ test("provider accounts activate independently and default clears only one provi
 	assert.match(notifications.at(-1)?.message ?? "", /default Pi Anthropic login/);
 });
 
+test("default Codex auth does not invalidate connections on first observation", async () => {
+	const invalidations: Array<string | undefined> = [];
+	const codex = fakeProvider("openai-codex");
+	codex.invalidateConnections = (sessionId) => {
+		invalidations.push(sessionId);
+	};
+	const mock = createMockPi();
+	accountsExtension(mock.pi, {
+		store: new AccountStore(new InMemoryAccountStorageBackend()),
+		providers: [codex, fakeProvider("anthropic"), fakeProvider("github-copilot")],
+	});
+	const { registry } = runtimeHarness(mock);
+	const { ctx } = createMockContext({
+		model: { provider: "openai-codex", id: "codex" },
+		modelRegistry: registry,
+	});
+
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	assert.deepEqual(invalidations, []);
+});
+
 test("Codex connections invalidate only when the applied account identity changes", async () => {
 	const store = new AccountStore(new InMemoryAccountStorageBackend());
 	await store.write({
@@ -272,6 +293,112 @@ test("Codex connections invalidate only when the applied account identity change
 	assert.deepEqual(invalidations, ["test-session"]);
 	await mock.commands.get("account")?.handler("switch openai-codex default", ctx);
 	assert.deepEqual(invalidations, ["test-session", "test-session"]);
+});
+
+test("an older overlapping provider sync cannot publish stale inactive state", async () => {
+	const store = new AccountStore(new InMemoryAccountStorageBackend());
+	await store.write({
+		version: 1,
+		providers: {
+			"openai-codex": { active: "work", accounts: { work: credential("codex") } },
+		},
+	});
+	let releaseFirst: (() => void) | undefined;
+	const firstBlocked = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	let signalFirst: (() => void) | undefined;
+	const firstStarted = new Promise<void>((resolve) => {
+		signalFirst = resolve;
+	});
+	let conversions = 0;
+	const invalidations: Array<string | undefined> = [];
+	const codex = fakeProvider("openai-codex");
+	codex.oauth.toAuth = async (current) => {
+		conversions += 1;
+		if (conversions === 1) {
+			signalFirst?.();
+			await firstBlocked;
+			throw new Error("obsolete conversion failed");
+		}
+		return { apiKey: current.access };
+	};
+	codex.invalidateConnections = (sessionId) => {
+		invalidations.push(sessionId);
+	};
+	const mock = createMockPi();
+	accountsExtension(mock.pi, {
+		store,
+		providers: [codex, fakeProvider("anthropic"), fakeProvider("github-copilot")],
+	});
+	const { registry, keys } = runtimeHarness(mock);
+	const { ctx, statuses } = createMockContext({
+		model: { provider: "openai-codex", id: "codex" },
+		modelRegistry: registry,
+	});
+
+	const older = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await firstStarted;
+	await mock.events.get("before_agent_start")?.[0]?.({}, ctx);
+	releaseFirst?.();
+	await older;
+
+	assert.equal(keys.get("openai-codex"), "access-codex");
+	assert.equal(statuses.get(ACCOUNTS_STATUS_KEY), "account:work");
+	assert.deepEqual(invalidations, ["test-session"]);
+});
+
+test("an obsolete invalidation failure cannot fail closed a newer successful sync", async () => {
+	const store = new AccountStore(new InMemoryAccountStorageBackend());
+	await store.write({
+		version: 1,
+		providers: {
+			"openai-codex": { active: "work", accounts: { work: credential("codex") } },
+		},
+	});
+	const originalRead = store.readProviderAsync.bind(store);
+	let reads = 0;
+	let releaseObsoleteRead: (() => void) | undefined;
+	const obsoleteReadBlocked = new Promise<void>((resolve) => {
+		releaseObsoleteRead = resolve;
+	});
+	let signalObsoleteRead: (() => void) | undefined;
+	const obsoleteReadStarted = new Promise<void>((resolve) => {
+		signalObsoleteRead = resolve;
+	});
+	store.readProviderAsync = async (providerId) => {
+		reads += 1;
+		if (reads === 4) {
+			signalObsoleteRead?.();
+			await obsoleteReadBlocked;
+		}
+		return originalRead(providerId);
+	};
+	let invalidations = 0;
+	const codex = fakeProvider("openai-codex");
+	codex.invalidateConnections = () => {
+		invalidations += 1;
+		if (invalidations === 1) throw new Error("obsolete cleanup failed");
+	};
+	const mock = createMockPi();
+	accountsExtension(mock.pi, {
+		store,
+		providers: [codex, fakeProvider("anthropic"), fakeProvider("github-copilot")],
+	});
+	const { registry, keys } = runtimeHarness(mock);
+	const { ctx, statuses } = createMockContext({
+		model: { provider: "openai-codex", id: "codex" },
+		modelRegistry: registry,
+	});
+
+	const older = mock.events.get("session_start")?.[0]?.({}, ctx);
+	await obsoleteReadStarted;
+	await mock.events.get("before_agent_start")?.[0]?.({}, ctx);
+	releaseObsoleteRead?.();
+	await older;
+
+	assert.equal(keys.get("openai-codex"), "access-codex");
+	assert.equal(statuses.get(ACCOUNTS_STATUS_KEY), "account:work");
 });
 
 test("connection invalidation failure replaces active Codex auth with fail-closed state", async () => {
@@ -608,6 +735,53 @@ test("account reset during OAuth conversion cannot restore a stale runtime overr
 	await Promise.all([startup, reset]);
 	assert.equal((await store.readProviderAsync("anthropic")).active, undefined);
 	assert.equal(keys.has("anthropic"), false);
+});
+
+test("an overlapping account switch reports when its requested account was superseded", async () => {
+	const store = new AccountStore(new InMemoryAccountStorageBackend());
+	await store.write({
+		version: 1,
+		providers: {
+			"openai-codex": {
+				accounts: { alpha: credential("alpha"), beta: credential("beta") },
+			},
+		},
+	});
+	let releaseAlpha: (() => void) | undefined;
+	const alphaBlocked = new Promise<void>((resolve) => {
+		releaseAlpha = resolve;
+	});
+	let signalAlpha: (() => void) | undefined;
+	const alphaStarted = new Promise<void>((resolve) => {
+		signalAlpha = resolve;
+	});
+	const codex = fakeProvider("openai-codex");
+	codex.oauth.toAuth = async (current) => {
+		if (current.access === "access-alpha") {
+			signalAlpha?.();
+			await alphaBlocked;
+		}
+		return { apiKey: current.access };
+	};
+	const mock = createMockPi();
+	accountsExtension(mock.pi, {
+		store,
+		providers: [codex, fakeProvider("anthropic"), fakeProvider("github-copilot")],
+	});
+	const { registry } = runtimeHarness(mock);
+	const { ctx, notifications } = createMockContext({
+		model: { provider: "openai-codex", id: "codex" },
+		modelRegistry: registry,
+	});
+
+	const older = mock.commands.get("account")?.handler("switch openai-codex alpha", ctx);
+	await alphaStarted;
+	await mock.commands.get("account")?.handler("switch openai-codex beta", ctx);
+	releaseAlpha?.();
+	await older;
+
+	assert.equal((await store.readProviderAsync("openai-codex")).active, "beta");
+	assert.match(notifications.at(-1)?.message ?? "", /alpha.*superseded/);
 });
 
 test("Codex compatibility aliases write the generic provider state", async () => {

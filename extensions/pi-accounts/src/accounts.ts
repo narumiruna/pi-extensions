@@ -74,33 +74,56 @@ export default function accountsExtension(
 	const results = new Map<AccountProviderId, EnsureActiveProviderAuthResult>();
 	const appliedIdentities = new Map<AccountProviderId, string>();
 	const abortProviders = new Set<AccountProviderId>();
+	const syncTasks = new Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>();
 
-	const syncProvider = async (
+	const syncProvider = (
 		providerId: AccountProviderId,
 		ctx: ExtensionContext,
 		model = ctx.model,
 	): Promise<EnsureActiveProviderAuthResult> => {
-		const adapter = requireAdapter(adapters, providerId);
-		const coordinator = coordinators.get(providerId);
-		if (!coordinator) throw new Error(`Missing runtime coordinator for ${providerId}.`);
-		let result = await coordinator.ensureActive(ctx, store);
-		try {
-			const identity = await authIdentity(store, result);
-			if (appliedIdentities.get(providerId) !== identity) {
-				await adapter.invalidateConnections?.(ctx.sessionManager.getSessionId());
+		let task!: Promise<EnsureActiveProviderAuthResult>;
+		task = (async () => {
+			const adapter = requireAdapter(adapters, providerId);
+			const coordinator = coordinators.get(providerId);
+			if (!coordinator) throw new Error(`Missing runtime coordinator for ${providerId}.`);
+			let result = await coordinator.ensureActive(ctx, store);
+			let latest = syncTasks.get(providerId);
+			if (latest && latest !== task) return latest;
+			try {
+				const identity = await authIdentity(store, result);
+				latest = syncTasks.get(providerId);
+				if (latest && latest !== task) return latest;
+				const previousIdentity = appliedIdentities.get(providerId);
+				const shouldInvalidate =
+					previousIdentity !== identity &&
+					!(previousIdentity === undefined && identity === "default");
+				if (shouldInvalidate) {
+					await adapter.invalidateConnections?.(ctx.sessionManager.getSessionId());
+					latest = syncTasks.get(providerId);
+					if (latest && latest !== task) return latest;
+				}
 				appliedIdentities.set(providerId, identity);
+			} catch (error) {
+				latest = syncTasks.get(providerId);
+				if (latest && latest !== task) return latest;
+				const credential = await selectedCredential(store, providerId, result);
+				latest = syncTasks.get(providerId);
+				if (latest && latest !== task) return latest;
+				result = await coordinator.forceFailClosed(
+					ctx,
+					result.status === "inactive" ? "unknown" : result.accountName,
+					error,
+					credential,
+				);
 			}
-		} catch (error) {
-			result = await coordinator.forceFailClosed(
-				ctx,
-				result.status === "inactive" ? "unknown" : result.accountName,
-				error,
-				await selectedCredential(store, providerId, result),
-			);
-		}
-		results.set(providerId, result);
-		updateStatus(ctx, results, model);
-		return result;
+			latest = syncTasks.get(providerId);
+			if (latest && latest !== task) return latest;
+			results.set(providerId, result);
+			updateStatus(ctx, results, model);
+			return result;
+		})();
+		syncTasks.set(providerId, task);
+		return task;
 	};
 
 	const syncAll = async (ctx: ExtensionContext): Promise<void> => {
@@ -526,6 +549,13 @@ function formatActivationMessage(
 	name: string,
 	result: EnsureActiveProviderAuthResult,
 ): string {
+	if (
+		result.status !== "inactive" &&
+		result.accountName !== "unknown" &&
+		result.accountName !== name
+	) {
+		return `${action} ${adapter.displayName} account "${name}" was superseded by "${result.accountName}" before activation.`;
+	}
 	if (result.status === "error") {
 		return `${action} ${adapter.displayName} account "${name}", but authentication failed; requests will fail closed: ${result.message}`;
 	}

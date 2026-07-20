@@ -149,6 +149,38 @@ test("file storage creates private files and serializes concurrent updates", asy
 	}
 });
 
+test("file storage rejects symlinks without reading or changing their targets", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-accounts-store-symlink-"));
+	const target = join(dir, "target.json");
+	const file = join(dir, ACCOUNTS_FILE);
+	try {
+		await writeFile(target, JSON.stringify({ version: 1, providers: {} }), { mode: 0o644 });
+		await symlink(target, file);
+		const store = new AccountStore(new FileAccountStorageBackend(file));
+
+		await assert.rejects(store.readAsync(), /regular file/);
+		assert.equal((await lstat(target)).mode & 0o777, 0o644);
+		assert.equal(await readFile(target, "utf8"), JSON.stringify({ version: 1, providers: {} }));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("file storage repairs weakened credential permissions on every read", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-accounts-store-permissions-"));
+	const file = join(dir, ACCOUNTS_FILE);
+	try {
+		const store = new AccountStore(new FileAccountStorageBackend(file));
+		await store.write({ version: 1, providers: {} });
+		await chmod(file, 0o644);
+
+		await store.readAsync();
+		assert.equal((await lstat(file)).mode & 0o777, 0o600);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 test("migration copies released Codex schema into provider state and retains rollback source", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-accounts-migrate-"));
 	const legacy = join(dir, "pi-codex-accounts.json");

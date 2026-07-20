@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import {
 	chmodSync,
 	closeSync,
+	constants,
+	fchmodSync,
+	fstatSync,
+	lstatSync,
 	mkdir,
 	mkdirSync,
 	openSync,
@@ -92,7 +96,7 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 		let release: (() => void) | undefined;
 		try {
 			release = this.acquireLockSyncWithRetry();
-			const { result, next } = mutator(readFileSync(this.filePath, "utf8"));
+			const { result, next } = mutator(readPrivateRegularFile(this.filePath));
 			if (next !== undefined) this.writePrivate(next);
 			return result;
 		} finally {
@@ -127,7 +131,7 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 				},
 			});
 			throwIfCompromised();
-			const { result, next } = await mutator(readFileSync(this.filePath, "utf8"));
+			const { result, next } = await mutator(readPrivateRegularFile(this.filePath));
 			throwIfCompromised();
 			if (next !== undefined) this.writePrivate(next);
 			throwIfCompromised();
@@ -189,6 +193,24 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 		} finally {
 			rmSync(tempPath, { force: true });
 		}
+	}
+}
+
+function readPrivateRegularFile(filePath: string): string {
+	const info = lstatSync(filePath);
+	if (!info.isFile() || info.isSymbolicLink()) {
+		throw new Error(`Accounts path must be a regular file: ${filePath}`);
+	}
+	let descriptor: number | undefined;
+	try {
+		descriptor = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+		if (!fstatSync(descriptor).isFile()) {
+			throw new Error(`Accounts path must be a regular file: ${filePath}`);
+		}
+		fchmodSync(descriptor, 0o600);
+		return readFileSync(descriptor, "utf8");
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
 	}
 }
 
