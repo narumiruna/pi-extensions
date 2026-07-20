@@ -1,10 +1,10 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { currentTokenTotal } from "./accounting.js";
-import { completeGoalArguments, parseCommand } from "./command.js";
+import { completeGoalArguments, parseCommand, validateObjective } from "./command.js";
 import { GoalCommandController } from "./commands.js";
 import { type ActiveGoal, loadGoalStateFromSession } from "./persistence.js";
-import { buildGoalPrompt, buildGoalSystemPrompt } from "./prompts.js";
+import { buildGoalPrompt, buildGoalSystemPrompt, type GoalStatus } from "./prompts.js";
 import { activateQueuedGoal } from "./queue.js";
 import {
 	type AssistantMessageLike,
@@ -51,6 +51,101 @@ interface GoalOptions {
 	settingsPath?: string;
 }
 
+// Cross-extension RPC contract over Pi's session-local events bus. pi-subagents
+// (or any sibling extension) starts or pauses a goal through RPC; pi-goal replies
+// to starts and broadcasts `pi-goal:state` on every persist.
+const RPC_START_CHANNEL = "pi-goal:rpc:start";
+const RPC_PAUSE_CHANNEL = "pi-goal:rpc:pause";
+
+interface GoalRpcStartPayload {
+	requestId: string;
+	objective: string;
+	tokenBudget?: number;
+}
+
+type GoalRpcReply =
+	| { success: true; data: { goalId: string; status: GoalStatus } }
+	| { success: false; error: string };
+
+function rpcReplyChannel(requestId: string) {
+	return `pi-goal:rpc:start:reply:${requestId}`;
+}
+
+function parseRpcStartPayload(
+	payload: Partial<GoalRpcStartPayload> | null,
+): string | { objective: string; tokenBudget?: number } {
+	if (!payload || typeof payload !== "object") return "rpc:start payload is missing";
+	if (typeof payload.objective !== "string") return "objective must be a string";
+	const objective = payload.objective.trim();
+	const objectiveError = validateObjective(objective);
+	if (objectiveError) return objectiveError;
+	let tokenBudget: number | undefined;
+	if (payload.tokenBudget !== undefined) {
+		if (
+			typeof payload.tokenBudget !== "number" ||
+			!Number.isFinite(payload.tokenBudget) ||
+			!Number.isSafeInteger(payload.tokenBudget) ||
+			payload.tokenBudget <= 0
+		) {
+			return "tokenBudget must be a positive integer";
+		}
+		tokenBudget = payload.tokenBudget;
+	}
+	return { objective, tokenBudget };
+}
+
+async function handleGoalRpcStart(
+	runtime: GoalRuntime,
+	commands: GoalCommandController,
+	data: unknown,
+	sessionContext: StatusContext | undefined,
+) {
+	const payload = data as Partial<GoalRpcStartPayload> | null;
+	const requestId = typeof payload?.requestId === "string" ? payload.requestId.trim() : "";
+	// Without a usable requestId there is no reply channel to address safely.
+	if (!requestId) return;
+	const reply = (envelope: GoalRpcReply) =>
+		runtime.pi.events.emit(rpcReplyChannel(requestId), envelope);
+
+	if (!sessionContext) {
+		reply({ success: false, error: "no active pi-goal session context" });
+		return;
+	}
+	const parsed = parseRpcStartPayload(payload);
+	if (typeof parsed === "string") {
+		reply({ success: false, error: parsed });
+		return;
+	}
+	// RPC starts run in a fresh child: any pre-existing goal must fail rather
+	// than trigger interactive replacement confirmation or reuse stale state.
+	const existingGoal = runtime.activeGoal;
+	if (existingGoal) {
+		reply({
+			success: false,
+			error: "a goal already exists; clear it before starting another via RPC",
+		});
+		return;
+	}
+	try {
+		await commands.startGoal(parsed.objective, parsed.tokenBudget, sessionContext);
+	} catch (error) {
+		reply({ success: false, error: `goal start failed: ${formatError(error)}` });
+		return;
+	}
+	// Read the authoritative status so an immediate terminal outcome during start
+	// is reflected in the reply instead of assuming "active".
+	const goal = runtime.activeGoal;
+	if (!goal) {
+		reply({
+			success: false,
+			error:
+				"goal start failed; the objective could not be activated (goal tools unavailable or kickoff delivery failed)",
+		});
+		return;
+	}
+	reply({ success: true, data: { goalId: goal.id, status: goal.status } });
+}
+
 const EXPERIMENTAL_GOALS_WARNING =
 	"Experimental ordered goals are enabled for pi-goal. Queue behavior and persisted state may change.";
 const MAX_BLOCKER_REASON_LENGTH = 1_000;
@@ -69,6 +164,21 @@ function onAgentSettled(pi: ExtensionAPI, handler: AgentSettledHandler) {
 function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const runtime = new GoalRuntime(pi);
 	const commands = new GoalCommandController(runtime);
+
+	// Session-local cross-extension RPC context. session_start binds it and
+	// session_shutdown unbinds it; the RPC channel replies failure while unbound.
+	let sessionContext: StatusContext | undefined;
+	pi.events.on(RPC_START_CHANNEL, (data) => {
+		void handleGoalRpcStart(runtime, commands, data, sessionContext);
+	});
+	pi.events.on(RPC_PAUSE_CHANNEL, (data) => {
+		if (!sessionContext || runtime.activeGoal?.status !== "active") return;
+		const payload = data as { goalId?: unknown; reason?: unknown } | null;
+		if (typeof payload?.goalId === "string" && payload.goalId !== runtime.activeGoal.id) return;
+		const reason = typeof payload?.reason === "string" ? payload.reason.trim() : "";
+		runtime.terminalReason = reason || "goal paused by RPC";
+		commands.pauseGoal(sessionContext);
+	});
 
 	// Bind per-factory runtime operations once so event orchestration stays concise
 	// without reintroducing module-global mutable state.
@@ -225,6 +335,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			}
 
 			runtime.activeGoal = transitionGoal(completedGoal, "complete");
+			runtime.completionSummary = summary;
 			updateGoalUsage(runtime.activeGoal, ctx);
 			if (runtime.pendingQueueAction?.kind === "prioritize") {
 				persistGoal(runtime.activeGoal);
@@ -368,6 +479,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			clearGoalRecoveryForGoal(blockedGoal.id);
 			blockStaleGoalToolCalls();
 			runtime.activeGoal = transitionGoal(blockedGoal, "blocked");
+			runtime.terminalReason = reason;
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
 			ctx.ui.notify(`Goal blocked: ${truncateNotification(reason)}`, "warning");
@@ -466,6 +578,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.queuedGoals = [];
 		runtime.pendingQueueAction = undefined;
 		runtime.queueFrozen = false;
+		runtime.completionSummary = undefined;
+		runtime.terminalReason = undefined;
+		sessionContext = ctx;
 		const previousToolVisibility = runtime.settings.toolVisibility;
 		const settingsResult = readGoalSettings(options.settingsPath);
 		runtime.settings =
@@ -580,6 +695,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.queueFrozen = false;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearCompletionStatusTimer();
+		runtime.completionSummary = undefined;
+		runtime.terminalReason = undefined;
+		sessionContext = undefined;
 	});
 
 	pi.on("session_before_compact", (event, ctx) => {
@@ -897,6 +1015,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		blockStaleGoalToolCalls();
 		abortCurrentTurn(ctx);
 		runtime.activeGoal = transitionGoal(goal, status);
+		runtime.terminalReason = assistant.errorMessage ?? `goal ${status} after agent interruption`;
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 

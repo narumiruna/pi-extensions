@@ -26,6 +26,11 @@ type MockPiApi = {
 	registerProvider(name: string, config: unknown): void;
 	unregisterProvider(name: string): void;
 	on(name: string, handler: MockHandler): void;
+	events: {
+		emit: (channel: string, data: unknown) => void;
+		on: (channel: string, handler: (data: unknown) => void) => () => void;
+		clear: () => void;
+	};
 	getFlag(name: string): unknown;
 	getActiveTools(): string[];
 	setActiveTools(names: string[]): void;
@@ -58,6 +63,26 @@ export function createMockPi(
 	const sentMessages: Array<{ message: unknown; options?: unknown }> = [];
 	const setModels: unknown[] = [];
 	const thinkingLevels: string[] = [];
+	const eventBusSubscriptions = new Map<string, Array<(data: unknown) => void>>();
+	const eventBus = {
+		emit(channel: string, data: unknown) {
+			for (const handler of eventBusSubscriptions.get(channel) ?? []) handler(data);
+		},
+		on(channel: string, handler: (data: unknown) => void) {
+			const list = eventBusSubscriptions.get(channel) ?? [];
+			list.push(handler);
+			eventBusSubscriptions.set(channel, list);
+			return () => {
+				const current = eventBusSubscriptions.get(channel);
+				if (!current) return;
+				const index = current.indexOf(handler);
+				if (index >= 0) current.splice(index, 1);
+			};
+		},
+		clear() {
+			eventBusSubscriptions.clear();
+		},
+	};
 	let thinkingLevel = options.thinkingLevel ?? "off";
 	let activeTools = [...(options.activeTools ?? [])];
 	const allTools = options.allTools ?? activeTools.map((name) => builtinTool(name));
@@ -125,6 +150,7 @@ export function createMockPi(
 			setModels.push(model);
 			return true;
 		},
+		events: eventBus,
 	};
 
 	return {
@@ -133,6 +159,7 @@ export function createMockPi(
 		commands,
 		flags,
 		events,
+		eventBus,
 		tools,
 		providers,
 		providerRegistrations,

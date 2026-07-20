@@ -166,6 +166,38 @@ Do not use `goal_blocked` merely because work is difficult, incomplete, uncertai
 
 A user pause or aborted turn produces `paused`; a terminal provider/account quota error produces `usage_limited`; another non-retryable agent error produces `blocked`. Each stopped transition cancels pending continuation intent or delivery, aborts stale work when applicable, and blocks stale tool calls until the next non-goal user prompt, successful reactivation/replacement, or `/goal clear`. On `/goal clear`, the extension clears goal state, continuation markers, and any stale tool-call block without aborting an unrelated in-flight turn. Retryable provider interruptions and overflow compaction retries stay `active` while Pi retries; no extra continuation is queued. User and extension work that starts before settlement supersedes the older continuation intent, and pending messages always take priority.
 
+## 🤝 Cross-extension RPC and events
+
+pi-goal exposes a session-local, dependency-free integration contract over Pi's shared `pi.events` bus so sibling extensions (such as `@tintinweb/pi-subagents`) can start, pause, and observe goals programmatically without driving the `/goal` slash command. The contract is bound only while a Pi session is active: it is established on `session_start` and the captured session context is unbound on `session_shutdown`. All channels are plain JSON-shaped payloads; this extension never adds a runtime dependency for them.
+
+### Starting a goal: `pi-goal:rpc:start`
+
+Emit `pi-goal:rpc:start` with `{ requestId: string, objective: string, tokenBudget?: number }`. `tokenBudget` is an absolute positive integer token count (for example `100000`), not a `k`/`m` string. The request reuses the same `startGoal()` transition as the slash command, so it never implements goal transitions twice.
+
+pi-goal replies on `pi-goal:rpc:start:reply:${requestId}` with one of:
+
+```jsonc
+// success
+{ "success": true, "data": { "goalId": "<uuid>", "status": "active" } }
+// failure (validation, no session, pre-existing goal, or failed activation)
+{ "success": false, "error": "<human-readable reason>" }
+```
+
+Behavior notes:
+
+- Malformed payloads (missing/empty/non-string `objective`, or a non-positive-integer `tokenBudget`) fail fast with a descriptive `error`.
+- If no session context is bound (before `session_start` or after `session_shutdown`), the reply is a failure rather than starting a goal.
+- RPC starts run in a fresh child context, so a **pre-existing goal fails** instead of prompting, replacing, or reusing stale state. Clear the existing goal first.
+- The reply `status` is read from the authoritative goal state, so an immediate terminal outcome during start is represented rather than assumed to be `active`.
+
+### Pausing a goal: `pi-goal:rpc:pause`
+
+Emit `pi-goal:rpc:pause` with `{ goalId?: string, reason?: string }` to stop an active RPC-owned goal safely. When `goalId` is present and does not match the active goal, the request is ignored; omitting it supports cancellation while the start reply is still pending. A successful pause uses the normal Goal pause transition and emits the authoritative `pi-goal:state` event described below.
+
+### Observing goal state: `pi-goal:state`
+
+Whenever pi-goal persists canonical goal state, it emits `pi-goal:state` with `{ goalId, status, summary?, reason? }`. `goalId` and `status` are always authoritative. Terminal statuses are `complete`, `blocked`, `paused`, `usage_limited`, and `budget_limited`. `summary` is populated from the `goal_complete` summary when available, and `reason` is populated from the blocked/usage/budget failure state where available; an `active` or `queued` event carries only `goalId` and `status`. Listeners must treat any non-terminal status as in-progress and should key follow-up behavior on `goalId` plus a terminal `status`.
+
 ## 🧠 Use cases
 
 - Finish implementation tasks without stopping at a plan.

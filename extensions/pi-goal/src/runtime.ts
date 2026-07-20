@@ -80,6 +80,39 @@ export const GOAL_COMPLETE_TOOL = "goal_complete";
 export const GOAL_BLOCKED_TOOL = "goal_blocked";
 export const GOAL_TOOL_NAMES = [GOAL_COMPLETE_TOOL, GOAL_BLOCKED_TOOL] as const;
 
+/** Cross-extension event channel carrying the canonical persisted goal state. */
+export const GOAL_STATE_EVENT_CHANNEL = "pi-goal:state";
+
+/** Payload emitted on {@link GOAL_STATE_EVENT_CHANNEL} whenever goal state persists. */
+export interface GoalStateEventPayload {
+	goalId: string;
+	status: GoalStatus;
+	summary?: string;
+	reason?: string;
+}
+
+/** Terminal statuses broadcast to cross-extension listeners. */
+export function isTerminalGoalStatus(status: GoalStatus): boolean {
+	return status !== "active" && status !== "queued";
+}
+
+/**
+ * Build the cross-extension state payload from the canonical goal plus the most
+ * recent completion summary or blocked/failure reason, without re-deriving state.
+ */
+export function buildGoalStateEvent(
+	goal: ActiveGoal,
+	summary: string | undefined,
+	reason: string | undefined,
+): GoalStateEventPayload {
+	const payload: GoalStateEventPayload = { goalId: goal.id, status: goal.status };
+	if (goal.status === "complete" && summary) payload.summary = summary;
+	else if (goal.status !== "complete" && isTerminalGoalStatus(goal.status) && reason) {
+		payload.reason = reason;
+	}
+	return payload;
+}
+
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const MAX_PENDING_GOAL_PROMPTS = 20;
 const GOAL_PROMPT_MARKER_PREFIX = "pi-goal-prompt:";
@@ -115,6 +148,10 @@ const RETRYABLE_GOAL_ERROR_PATTERNS = [
 export class GoalRuntime {
 	settings: GoalSettings = DEFAULT_GOAL_SETTINGS;
 	activeGoal?: ActiveGoal;
+	/** Completion summary captured for cross-extension `pi-goal:state` events. */
+	completionSummary?: string;
+	/** Blocked/failure reason captured for cross-extension `pi-goal:state` events. */
+	terminalReason?: string;
 	queuedGoals: ActiveGoal[] = [];
 	pendingQueueAction?: PendingQueueAction;
 	queueFrozen = false;
@@ -299,6 +336,7 @@ export class GoalRuntime {
 		this.clearGoalRecoveryForGoal(goal.id);
 		this.clearBudgetWrapUp();
 		this.activeGoal = transitionGoal(goal, "budget_limited");
+		this.terminalReason = `token budget reached (${formatBudget(this.activeGoal)})`;
 		this.persistGoal(this.activeGoal);
 		this.updateStatus(ctx, this.activeGoal);
 		ctx.ui.notify(`Goal token budget reached: ${formatBudget(this.activeGoal)}`, "warning");
@@ -381,9 +419,17 @@ export class GoalRuntime {
 	}
 
 	persistGoal(goal: ActiveGoal) {
+		if (!isTerminalGoalStatus(goal.status)) {
+			this.completionSummary = undefined;
+			this.terminalReason = undefined;
+		}
 		this.pi.appendEntry(
 			GOAL_STATE_ENTRY_TYPE,
 			serializeGoalState(goal, this.queuedGoals, this.pendingQueueAction),
+		);
+		this.pi.events.emit(
+			GOAL_STATE_EVENT_CHANNEL,
+			buildGoalStateEvent(goal, this.completionSummary, this.terminalReason),
 		);
 	}
 
