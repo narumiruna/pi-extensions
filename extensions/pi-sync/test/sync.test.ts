@@ -859,6 +859,60 @@ test("getJson throws after retrying a persistently empty R2 response body", asyn
 	}
 });
 
+test("getBuffer retries on empty R2 response body and eventually succeeds", async () => {
+	const originalFetch = globalThis.fetch;
+	const payload = Buffer.from("snapshot-payload");
+	const responses = [
+		new Response("", { status: 200, headers: { etag: "w/empty1" } }),
+		new Response("", { status: 200, headers: { etag: "w/empty2" } }),
+		new Response(new Uint8Array(payload), { status: 200, headers: { etag: "w/ok" } }),
+	];
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		const response = responses[Math.min(calls, responses.length - 1)];
+		calls += 1;
+		return response;
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		const result = await client.getBuffer("snapshots/snap-1.json.gz");
+		assert.equal(result.missing, false);
+		assert.deepEqual(result.value, payload);
+		assert.equal(result.etag, "w/ok");
+		assert.equal(calls, 3);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("getBuffer throws after retrying a persistently empty R2 response body", async () => {
+	const originalFetch = globalThis.fetch;
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		calls += 1;
+		return new Response("", { status: 200, headers: { etag: "w/empty" } });
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		await assert.rejects(client.getBuffer("snapshots/snap-1.json.gz"), /empty body/);
+		assert.equal(calls, 3);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 function snapshot(files: Array<{ path: string; content: Buffer }>) {
 	return {
 		version: 1,
