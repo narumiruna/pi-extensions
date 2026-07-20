@@ -3,9 +3,9 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { classicExtensionSeparator } from "../presets/classic.js";
-import { tokyoNightExtensionSeparator } from "../presets/tokyo-night.js";
-import type { StatuslineConfig, StatuslinePresetName } from "../presets/types.js";
+import { DEFAULT_EXTENSION_STATUS_ICONS } from "./settings.js";
+import { tokyoNightExtensionSeparator } from "./tokyo-night.js";
+import type { StatuslineConfig } from "./types.js";
 
 export type ExtensionStatusIconAliasMap = ReadonlyMap<string, readonly string[]>;
 export interface ExtensionStatusRuntime {
@@ -15,24 +15,8 @@ export interface ExtensionStatusRuntime {
 
 const STATUSLINE_KEY = "statusline";
 const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
-const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
-	"chrome-devtools": "🌐",
-	"codex-usage": "📊",
-	caffeinate: "💊",
-	firecrawl: "🔥",
-	"github-pr": "🔎",
-	goal: "🎯",
-	lsp: "🧰",
-	"plan-mode": "📝",
-	pisync: "🔄",
-	subagents: "🧑‍🤝‍🧑",
-	"unknown-error-retry": "🔁",
-};
-
-function extensionStatusSeparator(presetName: StatuslinePresetName, theme: Theme): string {
-	return presetName === "classic"
-		? classicExtensionSeparator(theme)
-		: tokyoNightExtensionSeparator(theme);
+function extensionStatusSeparator(config: StatuslineConfig, theme: Theme): string {
+	return tokyoNightExtensionSeparator(theme, config.palette);
 }
 
 export function formatExtensionStatuses(
@@ -42,13 +26,12 @@ export function formatExtensionStatuses(
 	runtime: ExtensionStatusRuntime,
 	hiddenKeys: ReadonlySet<string> = new Set(),
 ): string {
-	const separator = extensionStatusSeparator(config.preset, theme);
+	const separator = extensionStatusSeparator(config, theme);
 	const visibleStatuses = [
 		...formatDuplicateExtensionStatus(runtime, theme),
 		...[...statuses.entries()]
 			.filter(
-				([key, value]) =>
-					key !== STATUSLINE_KEY && !hiddenKeys.has(key) && value.trim().length > 0,
+				([key, value]) => key !== STATUSLINE_KEY && !hiddenKeys.has(key) && value.trim().length > 0,
 			)
 			.map(([key, value]) =>
 				formatExtensionStatus(key, value, theme, config, runtime.extensionStatusIconAliases),
@@ -69,7 +52,12 @@ export function formatExtensionStatus(
 	const text = simplifyExtensionStatusText(status.text);
 	const color = extensionColor(key, value);
 	const textColor = color === "warning" ? "warning" : "muted";
-	const icon = extensionStatusIcon(key, status.icon, config.extensionStatusIcons, extensionStatusIconAliases);
+	const icon = extensionStatusIcon(
+		key,
+		status.icon,
+		config.extensionStatusIcons,
+		extensionStatusIconAliases,
+	);
 	const renderedText = theme.fg(textColor, text);
 	return icon ? `${theme.fg(color, icon)} ${renderedText}` : renderedText;
 }
@@ -186,7 +174,9 @@ function extensionSettingsFiles(cwd: string): string[] {
 	].filter((file) => existsSync(file));
 }
 
-export function findDuplicateExtensions(installedPackages: readonly InstalledExtensionPackage[]): string[] {
+export function findDuplicateExtensions(
+	installedPackages: readonly InstalledExtensionPackage[],
+): string[] {
 	const sourcesByPackage = new Map<string, Set<string>>();
 
 	for (const extensionPackage of installedPackages) {
@@ -206,17 +196,25 @@ export function buildExtensionStatusIconAliases(
 	const packageAliasesByStatusBase = new Map<string, Map<string, string[]>>();
 
 	for (const extensionPackage of installedPackages) {
-		const candidate = extensionStatusIconAliasCandidate(extensionPackage.packageName, extensionPackage.source);
+		const candidate = extensionStatusIconAliasCandidate(
+			extensionPackage.packageName,
+			extensionPackage.source,
+		);
 		if (!candidate) continue;
-		const aliasesByPackage = packageAliasesByStatusBase.get(candidate.statusBase) ?? new Map<string, string[]>();
+		const aliasesByPackage =
+			packageAliasesByStatusBase.get(candidate.statusBase) ?? new Map<string, string[]>();
 		const existingAliases = aliasesByPackage.get(extensionPackage.packageName) ?? [];
-		aliasesByPackage.set(extensionPackage.packageName, uniqueStrings([...existingAliases, ...candidate.aliases]));
+		aliasesByPackage.set(
+			extensionPackage.packageName,
+			uniqueStrings([...existingAliases, ...candidate.aliases]),
+		);
 		packageAliasesByStatusBase.set(candidate.statusBase, aliasesByPackage);
 	}
 
 	const aliases = new Map<string, string[]>();
 	for (const [statusBase, aliasesByPackage] of packageAliasesByStatusBase) {
-		if (aliasesByPackage.size === 1) aliases.set(statusBase, [...aliasesByPackage.values()][0] ?? []);
+		if (aliasesByPackage.size === 1)
+			aliases.set(statusBase, [...aliasesByPackage.values()][0] ?? []);
 	}
 	return aliases;
 }

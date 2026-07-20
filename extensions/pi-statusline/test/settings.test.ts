@@ -1,0 +1,217 @@
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import {
+	DEFAULT_STATUSLINE_CONFIG,
+	DEFAULT_STATUSLINE_DOCUMENT,
+	loadOrCreateStatuslineSettings,
+	normalizeStatuslineConfig,
+	saveStatuslineSettingsDocument,
+	settingsFilePath,
+} from "../src/settings.js";
+
+test("statusline defaults describe the complete Tokyo Night JSON document", () => {
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.palette, "tokyo-night");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.density, "compact");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.separator, "none");
+	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.segments, [
+		"brand",
+		"provider",
+		"model",
+		"thinking",
+		"cwd",
+		"branch",
+		"tools",
+		"context",
+		"tokens",
+		"cost",
+		"time",
+	]);
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.provider.prefix, "🔌 ");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.turn.prefix, "🔁 #");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.goal, "🎯");
+	assert.deepEqual(JSON.parse(DEFAULT_STATUSLINE_DOCUMENT), DEFAULT_STATUSLINE_CONFIG);
+	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.endsWith("\n"), true);
+});
+
+test("normalization supports partial icon-only settings and structured overrides", () => {
+	const normalized = normalizeStatuslineConfig({
+		palette: "ocean",
+		density: "cozy",
+		separator: "dot",
+		segments: ["model", "cwd", "turn"],
+		segmentText: {
+			model: { prefix: "Model: " },
+			turn: { suffix: " turns" },
+		},
+		extensionStatusIcons: { goal: "", custom: "🧪" },
+	});
+	assert.equal(normalized.config.palette, "ocean");
+	assert.equal(normalized.config.density, "cozy");
+	assert.equal(normalized.config.separator, "dot");
+	assert.deepEqual(normalized.config.segments, ["model", "cwd", "turn"]);
+	assert.deepEqual(normalized.config.segmentText.model, { prefix: "Model: ", suffix: "" });
+	assert.deepEqual(normalized.config.segmentText.turn, { prefix: "🔁 #", suffix: " turns" });
+	assert.equal(normalized.config.extensionStatusIcons.goal, "");
+	assert.equal(normalized.config.extensionStatusIcons.custom, "🧪");
+	assert.deepEqual(normalized.diagnostics, []);
+
+	const iconOnly = normalizeStatuslineConfig({ extensionStatusIcons: { goal: "◎" } });
+	assert.equal(iconOnly.config.palette, "tokyo-night");
+	assert.deepEqual(iconOnly.config.segments, DEFAULT_STATUSLINE_CONFIG.segments);
+	assert.equal(iconOnly.config.extensionStatusIcons.goal, "◎");
+});
+
+test("normalization falls back by field and reports unknown, duplicate, and invalid values", () => {
+	const normalized = normalizeStatuslineConfig({
+		palette: "invalid",
+		density: 3,
+		separator: "bar",
+		segments: ["model", "unknown", "model", 3, "time"],
+		segmentText: {
+			model: { prefix: 7, suffix: "!", future: true },
+			unknown: { prefix: "?" },
+		},
+		extensionStatusIcons: { goal: "◎", bad: 3 },
+		preset: "classic",
+		showLabels: true,
+		future: true,
+	});
+	assert.equal(normalized.config.palette, "tokyo-night");
+	assert.equal(normalized.config.density, "compact");
+	assert.equal(normalized.config.separator, "bar");
+	assert.deepEqual(normalized.config.segments, ["model", "time"]);
+	assert.deepEqual(normalized.config.segmentText.model, { prefix: "🤖 ", suffix: "!" });
+	assert.equal(normalized.config.extensionStatusIcons.goal, "◎");
+	assert.equal(Object.hasOwn(normalized.config.extensionStatusIcons, "bad"), false);
+	const paths = normalized.diagnostics.map((item) => item.path);
+	for (const path of [
+		"palette",
+		"density",
+		"segments[1]",
+		"segments[2]",
+		"segments[3]",
+		"segmentText.model.prefix",
+		"segmentText.model.future",
+		"segmentText.unknown",
+		"extensionStatusIcons.bad",
+		"preset",
+		"showLabels",
+		"future",
+	]) {
+		assert.ok(paths.includes(path), path);
+	}
+});
+
+test("all named palettes, separators, empty segments, and environment independence are accepted", () => {
+	const previous = process.env.PI_STATUSLINE_PRESET;
+	process.env.PI_STATUSLINE_PRESET = "classic";
+	try {
+		for (const palette of ["tokyo-night", "ocean", "sunset", "forest", "candy", "neon", "mono"]) {
+			assert.equal(normalizeStatuslineConfig({ palette }).config.palette, palette);
+		}
+		for (const separator of ["none", "dot", "bar", "powerline", "round"]) {
+			assert.equal(normalizeStatuslineConfig({ separator }).config.separator, separator);
+		}
+		assert.deepEqual(normalizeStatuslineConfig({ segments: [] }).config.segments, []);
+		assert.equal(normalizeStatuslineConfig({}).config.palette, "tokyo-night");
+	} finally {
+		if (previous === undefined) delete process.env.PI_STATUSLINE_PRESET;
+		else process.env.PI_STATUSLINE_PRESET = previous;
+	}
+});
+
+test("missing settings are atomically initialized with the complete default document", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
+	try {
+		const loaded = loadOrCreateStatuslineSettings(root);
+		const path = settingsFilePath(root);
+		assert.equal(loaded.source, "user");
+		assert.equal(loaded.rawDocument, DEFAULT_STATUSLINE_DOCUMENT);
+		assert.equal(readFileSync(path, "utf8"), DEFAULT_STATUSLINE_DOCUMENT);
+		assert.deepEqual(loaded.config, DEFAULT_STATUSLINE_CONFIG);
+		assert.deepEqual(loaded.diagnostics, []);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("malformed existing settings are never overwritten", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
+	const path = settingsFilePath(root);
+	try {
+		writeFileSync(path, "{broken\n");
+		const loaded = loadOrCreateStatuslineSettings(root);
+		assert.equal(loaded.source, "built-in");
+		assert.equal(readFileSync(path, "utf8"), "{broken\n");
+		assert.match(loaded.diagnostics[0]?.message ?? "", /parse JSON/i);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a concurrent default creator wins without being overwritten", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
+	const path = settingsFilePath(root);
+	try {
+		const winner = `${JSON.stringify({ segments: ["model"] }, null, "\t")}\n`;
+		const loaded = loadOrCreateStatuslineSettings(root, {
+			linkSync(_temporaryPath, canonicalPath) {
+				writeFileSync(canonicalPath, winner, { flag: "wx" });
+				throw Object.assign(new Error("already exists"), { code: "EEXIST" });
+			},
+		});
+		assert.equal(loaded.source, "user");
+		assert.deepEqual(loaded.config.segments, ["model"]);
+		assert.equal(readFileSync(path, "utf8"), winner);
+		assert.deepEqual(readdirSync(root), ["pi-statusline.json"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("transactional saves preserve unknown fields and roll back publish failures", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
+	const path = settingsFilePath(root);
+	try {
+		writeFileSync(path, `${JSON.stringify({ segments: ["model"], future: true })}\n`);
+		const raw = `${JSON.stringify({ segments: ["cwd"], future: "kept" }, null, "\t")}\n`;
+		const loaded = saveStatuslineSettingsDocument(path, raw);
+		assert.deepEqual(loaded.config.segments, ["cwd"]);
+		assert.equal(JSON.parse(readFileSync(path, "utf8")).future, "kept");
+
+		assert.throws(
+			() =>
+				saveStatuslineSettingsDocument(path, `${JSON.stringify({ segments: ["time"] })}\n`, {
+					renameSync() {
+						throw new Error("publish failed");
+					},
+				}),
+			/publish failed/,
+		);
+		assert.equal(JSON.parse(readFileSync(path, "utf8")).future, "kept");
+		assert.deepEqual(readdirSync(root), ["pi-statusline.json"]);
+		assert.throws(() => saveStatuslineSettingsDocument(path, "{broken"), /parse JSON/i);
+		assert.equal(existsSync(path), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("invalid recognized fields are rejected on save while unknown fields remain allowed", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
+	const path = settingsFilePath(root);
+	try {
+		assert.throws(
+			() => saveStatuslineSettingsDocument(path, JSON.stringify({ palette: "bad" })),
+			/palette/i,
+		);
+		const loaded = saveStatuslineSettingsDocument(path, JSON.stringify({ future: true }));
+		assert.equal(loaded.diagnostics[0]?.path, "future");
+		assert.equal(JSON.parse(readFileSync(path, "utf8")).future, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
