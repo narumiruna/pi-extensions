@@ -437,51 +437,61 @@ async function listAccounts(
 	ctx.ui.notify(lines.join("\n"), "info");
 }
 
-export function completeAccountArguments(
+export async function completeAccountArguments(
 	argumentPrefix: string,
 	store: AccountStore,
-): CommandArgumentCompletion[] {
+): Promise<CommandArgumentCompletion[]> {
 	const hasTrailingSpace = /\s$/.test(argumentPrefix);
 	const tokens = splitArguments(argumentPrefix);
 	if (hasTrailingSpace) tokens.push("");
 	if (tokens.length <= 1) {
-		return filterCompletions(
-			["list", "login", "switch", "remove"].map((value) => ({ value, label: value })),
-			tokens[0] ?? "",
+		return continueCompletionValues(
+			filterCompletions(
+				["list", "login", "switch", "remove"].map((value) => ({ value, label: value })),
+				tokens[0] ?? "",
+			),
 		);
 	}
 	const subcommand = tokens[0];
 	if (!["list", "login", "switch", "remove"].includes(subcommand)) return [];
 	if (tokens.length === 2) {
-		return prefixCompletionValues(
+		const providerCompletions = prefixCompletionValues(
 			subcommand,
 			filterCompletions(
 				SUPPORTED_PROVIDER_IDS.map((id) => ({ value: id, label: id })),
 				tokens[1] ?? "",
 			),
 		);
+		return subcommand === "list"
+			? providerCompletions
+			: continueCompletionValues(providerCompletions);
 	}
 	if ((subcommand === "switch" || subcommand === "remove") && tokens.length === 3) {
 		const providerId = parseProviderId(tokens[1] ?? "");
 		return providerId
 			? prefixCompletionValues(
 					`${subcommand} ${providerId}`,
-					completeProviderAccounts(tokens[2] ?? "", store, providerId, subcommand === "switch"),
+					await completeProviderAccounts(
+						tokens[2] ?? "",
+						store,
+						providerId,
+						subcommand === "switch",
+					),
 				)
 			: [];
 	}
 	return [];
 }
 
-function completeProviderAccounts(
+async function completeProviderAccounts(
 	prefix: string,
 	store: AccountStore,
 	providerId: AccountProviderId,
 	includeDefault: boolean,
-): CommandArgumentCompletion[] {
+): Promise<CommandArgumentCompletion[]> {
 	let names: string[] = [];
 	try {
-		names = Object.keys(store.read().providers[providerId]?.accounts ?? {}).sort();
+		names = Object.keys((await store.readAsync()).providers[providerId]?.accounts ?? {}).sort();
 	} catch {
 		return [];
 	}
@@ -547,6 +557,10 @@ function prefixCompletionValues(
 	items: CommandArgumentCompletion[],
 ): CommandArgumentCompletion[] {
 	return items.map((item) => ({ ...item, value: `${prefix} ${item.value}` }));
+}
+
+function continueCompletionValues(items: CommandArgumentCompletion[]): CommandArgumentCompletion[] {
+	return items.map((item) => ({ ...item, value: `${item.value} ` }));
 }
 
 function isDefaultPiLoginArg(value: string): boolean {
