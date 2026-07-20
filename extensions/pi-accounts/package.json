@@ -1,0 +1,53 @@
+{
+	"name": "@narumitw/pi-accounts",
+	"version": "0.23.0",
+	"description": "Pi extension for switching named subscription OAuth accounts across supported providers.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"accounts",
+		"oauth",
+		"codex",
+		"anthropic",
+		"claude",
+		"github-copilot"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/accounts.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"proper-lockfile": "^4.1.2"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.3",
+		"@earendil-works/pi-ai": "0.80.10",
+		"@earendil-works/pi-coding-agent": "0.80.10",
+		"@types/proper-lockfile": "^4.1.4",
+		"typescript": "7.0.2"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-accounts"
+	}
+}

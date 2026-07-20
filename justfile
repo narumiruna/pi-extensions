@@ -83,6 +83,9 @@ pack-caffeinate:
 pack-chrome-devtools:
     just pack chrome-devtools
 
+pack-accounts:
+    just pack accounts
+
 pack-codex-accounts:
     just pack codex-accounts
 
@@ -140,6 +143,9 @@ try-caffeinate:
 
 try-chrome-devtools:
     just try chrome-devtools
+
+try-accounts:
+    just try accounts
 
 try-codex-accounts:
     just try codex-accounts
@@ -199,6 +205,9 @@ install-caffeinate:
 install-chrome-devtools:
     just install chrome-devtools
 
+install-accounts:
+    just install accounts
+
 install-codex-accounts:
     just install codex-accounts
 
@@ -253,6 +262,9 @@ publish-caffeinate:
 
 publish-chrome-devtools:
     just publish chrome-devtools
+
+publish-accounts:
+    just publish accounts
 
 publish-codex-accounts:
     just publish codex-accounts

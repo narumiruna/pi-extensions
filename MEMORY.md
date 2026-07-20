@@ -77,6 +77,7 @@
 - `fs.watch` on a single file can miss branch HEAD writes on some platforms; watch the parent directory and filter the `HEAD` filename instead.
 - Symptom: Pi 0.79 CI rejects `ProviderHeaders` imports from `@earendil-works/pi-ai`. Cause: that root type export is newer than the supported compatibility floor. Fix: use the compatible local `Record<string, string>` auth-header shape when an extension must typecheck across the 0.79/0.80 matrix.
 - Pi 0.80.8 no longer root-exports `AuthStorage` or its file/in-memory backends, and `@earendil-works/pi-ai/oauth` retains only compatibility types. Keep extension credential storage package-owned; for cross-version OAuth, use the legacy `/oauth` value when present and lazily fall back to `providers/all` only on loaders that support it.
+- Symptom: official Pi resolves a static `@earendil-works/pi-ai/api/*` extension import beneath its `compat.js` alias and fails to load. Fix: prefer an equivalent root export (shared module identity); otherwise use a variable-specifier dynamic import, as with `providers/all`.
 - Symptom: Pi 0.80.8 records an `openai-codex` runtime API key but still reports no provider auth. Cause: the native provider is OAuth-only and cannot resolve an `api_key` credential. Fix: temporarily overlay the native provider with an API-key resolver while self-managed auth is active, verify the resolved key, and remove the overlay on return to default auth.
 - Pi 0.79/0.80.3 applies a dynamic provider request config before merging registrations, and auth status may remain `stored` while a runtime key wins resolution; preserve the full prior provider config, verify the resolved key rather than its reported source, and abort Codex turns when fail-closed auth cannot displace stored auth.
 - Provider-owned OAuth can abort an individual prompt after an out-of-band callback wins; preserve each prompt's signal through compatibility adapters and pass it to Pi's UI dialog options.
@@ -86,10 +87,14 @@
 - Treat parsed credential maps as own-property dictionaries: names such as `__proto__` and `constructor` must not mutate or resolve through `Object.prototype`.
 - Active-account API-key conversion failures must fail closed, and user-facing errors must redact the exact current access and refresh secrets rather than relying only on token-shape regexes.
 - Symptom: a compiled pi-webui server smoke serves stale browser assets from another checkout. Cause: when cache-local `src/web` is absent, asset loading falls back through `process.cwd()`. Fix: launch the smoke with cwd set to the target worktree.
+- Runtime-auth generation guards prevent stale credential mutation but not stale outer status or connection-invalidation publication; overlapping provider syncs also need latest-task ownership at the lifecycle boundary.
+- Credential-file path and permission checks must run on every locked read, not only startup migration; reject symlinks and repair `0600` through the opened descriptor.
 
 ## TASTE
 
 - Prefer validating extensions against the latest Pi release only; do not maintain compatibility matrices for older Pi versions.
+- Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.
+- Keep a predecessor extension active while its successor soaks; move it to `deprecated/` only after an explicit follow-up decision.
 - Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
