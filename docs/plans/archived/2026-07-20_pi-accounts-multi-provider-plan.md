@@ -83,3 +83,8 @@ The existing package already supplies private credential storage, cross-process 
 - [x] The predecessor is preserved under `deprecated/pi-codex-accounts` while package metadata and active release tooling target only `extensions/pi-accounts`, verified by SHA comparison, workspace/recipe discovery, `npm run check`, and `just pack-accounts` inspection.
 - [x] No unresolved implementation-affecting unknown or unaccepted high-severity risk remains, verified by the resolved Copilot/migration decisions, final edge-case review, and explicit Anthropic live-smoke waiver.
 - [x] This completed plan is archived at `docs/plans/archived/2026-07-20_pi-accounts-multi-provider-plan.md`.
+
+## Post-completion follow-up
+
+- [x] On 2026-07-20, the user deferred repository deprecation until `pi-accounts` has completed a soak period. `pi-codex-accounts` was restored byte-for-byte from the `main` baseline to the active `extensions/pi-codex-accounts` workspace, including its tests and package metadata.
+- [x] Root workspace metadata, dry-run recipes, documentation, and lockfile discovery retain both packages during the soak period. `npm run check` passes 874 tests, workspace discovery lists both packages, and `just pack-accounts` / `just pack-codex-accounts` contain the expected 8 / 7 files. Loading both account packages in one Pi installation remains unsupported because they share Codex commands and rotating credentials.

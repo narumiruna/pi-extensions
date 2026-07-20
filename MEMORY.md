@@ -94,6 +94,7 @@
 
 - Prefer validating extensions against the latest Pi release only; do not maintain compatibility matrices for older Pi versions.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.
+- Keep a predecessor extension active while its successor soaks; move it to `deprecated/` only after an explicit follow-up decision.
 - Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.

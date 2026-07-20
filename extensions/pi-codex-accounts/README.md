@@ -2,8 +2,6 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-accounts)](https://www.npmjs.com/package/@narumitw/pi-codex-accounts) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> Deprecated: this package is kept for reference under `deprecated/` and is no longer part of the active workspace package set. Use [`@narumitw/pi-accounts`](../../extensions/pi-accounts) for new installations.
-
 `@narumitw/pi-codex-accounts` is a native [Pi coding agent](https://pi.dev) extension that lets you log in to, switch between, and remove multiple ChatGPT Plus/Pro Codex subscription accounts.
 
 It keeps using Pi's built-in `openai-codex` provider and does **not** add provider aliases or register another OAuth provider. While a named account is active, it temporarily adds API-key resolution to that native provider so Pi can consume the account's runtime access token; returning to the default Pi login removes the overlay.
@@ -37,7 +35,7 @@ pi -e npm:@narumitw/pi-codex-accounts
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./deprecated/pi-codex-accounts
+pi -e ./extensions/pi-codex-accounts
 ```
 
 ## 🚀 Usage
@@ -90,7 +88,7 @@ Account switches and token refreshes also close any cached Codex WebSocket for t
 ## 🗂️ Package layout
 
 ```txt
-deprecated/pi-codex-accounts/
+extensions/pi-codex-accounts/
 ├── src/
 │   ├── codex-accounts.ts
 │   ├── oauth.ts

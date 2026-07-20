@@ -21,6 +21,7 @@
 		"pack:caffeinate": "npm --workspace @narumitw/pi-caffeinate pack --dry-run",
 		"pack:chrome-devtools": "npm --workspace @narumitw/pi-chrome-devtools pack --dry-run",
 		"pack:accounts": "npm --workspace @narumitw/pi-accounts pack --dry-run",
+		"pack:codex-accounts": "npm --workspace @narumitw/pi-codex-accounts pack --dry-run",
 		"pack:codex-usage": "npm --workspace @narumitw/pi-codex-usage pack --dry-run",
 		"pack:firecrawl": "npm --workspace @narumitw/pi-firecrawl pack --dry-run",
 		"pack:github-pr": "npm --workspace @narumitw/pi-github-pr pack --dry-run",

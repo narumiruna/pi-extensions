@@ -86,6 +86,9 @@ pack-chrome-devtools:
 pack-accounts:
     just pack accounts
 
+pack-codex-accounts:
+    just pack codex-accounts
+
 pack-codex-usage:
     just pack codex-usage
 
@@ -140,6 +143,9 @@ try-chrome-devtools:
 
 try-accounts:
     just try accounts
+
+try-codex-accounts:
+    just try codex-accounts
 
 try-codex-usage:
     just try codex-usage
@@ -196,6 +202,9 @@ install-chrome-devtools:
 install-accounts:
     just install accounts
 
+install-codex-accounts:
+    just install codex-accounts
+
 install-codex-usage:
     just install codex-usage
 
@@ -250,6 +259,9 @@ publish-chrome-devtools:
 
 publish-accounts:
     just publish accounts
+
+publish-codex-accounts:
+    just publish codex-accounts
 
 publish-codex-usage:
     just publish codex-usage
