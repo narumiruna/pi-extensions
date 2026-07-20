@@ -152,8 +152,11 @@ export default function statusline(pi: ExtensionAPI) {
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					const lines = [renderStatusline(width, ctx, footerData, theme, config, runtime)];
-					lines.push(...renderExtensionStatusline(width, footerData, theme, config, runtime));
+					const mainLine = renderStatusline(width, ctx, footerData, theme, config, runtime);
+					const lines = [mainLine];
+					lines.push(
+						...renderExtensionStatusline(width, footerData, theme, config, runtime, mainLine),
+					);
 					return lines;
 				},
 			};
@@ -254,6 +257,7 @@ export {
 	contextColor,
 	formatCount,
 	formatToolActivity,
+	prContextFromStatuses,
 	prLinkFromStatuses,
 	shortenModel,
 } from "./render.js";

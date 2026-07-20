@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import githubPr, {
 	formatCompactStatus,
 	formatLinkedStatus,
+	ghPrViewInvocation,
+	isPullRequestVisible,
 	normalizeGhPrView,
 	runGhPrView,
 } from "../src/github-pr.js";
@@ -15,6 +17,12 @@ import githubPr, {
 type ExecOptions = { cwd?: string; signal?: AbortSignal; timeout?: number };
 type ExecCall = { command: string; args: string[]; options?: ExecOptions };
 type ExecFunction = (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult>;
+
+const ambientGhHost = process.env.GH_HOST;
+delete process.env.GH_HOST;
+after(() => {
+	if (ambientGhHost !== undefined) process.env.GH_HOST = ambientGhHost;
+});
 
 const okResult = (stdout: unknown): ExecResult => ({
 	stdout: JSON.stringify(stdout),
@@ -43,6 +51,9 @@ const sampleCounts = {
 
 const samplePr = {
 	number: 123,
+	state: "OPEN",
+	closedAt: null,
+	mergedAt: null,
 	isDraft: false,
 	url: "https://github.com/narumiruna/pi-extensions/pull/123",
 	reviewDecision: "APPROVED",
@@ -153,7 +164,36 @@ test("normalizeGhPrView summarizes pending, changes-requested, draft, and commen
 	);
 	assert.deepEqual(draft.comments, { issue: 0, reviews: 0, total: 0 });
 	assert.equal(formatCompactStatus(draft), "PR #123: no checks, draft, no comments");
-	assert.equal(formatCompactStatus(commented), "PR #123: checks passing, commented, 3 comments");
+	assert.equal(
+		formatCompactStatus(commented),
+		"PR #123: checks passing, review required, 3 comments",
+	);
+});
+
+test("terminal pull requests use their terminal state and expire after 24 hours", () => {
+	const now = Date.parse("2026-06-26T12:00:00.000Z");
+	const merged = normalizeGhPrView({
+		...samplePr,
+		state: "MERGED",
+		mergedAt: "2026-06-25T12:00:00.001Z",
+	});
+	const closed = normalizeGhPrView({
+		...samplePr,
+		state: "CLOSED",
+		closedAt: "2026-06-25T12:00:00.000Z",
+	});
+
+	assert.equal(formatCompactStatus(merged), "PR #123: merged");
+	assert.equal(formatCompactStatus(closed), "PR #123: closed");
+	assert.equal(isPullRequestVisible(merged, now), true);
+	assert.equal(isPullRequestVisible(closed, now), false);
+	assert.equal(isPullRequestVisible({ ...merged, mergedAt: undefined }, now), false);
+	assert.equal(isPullRequestVisible({ ...closed, closedAt: "invalid" }, now), false);
+	assert.equal(isPullRequestVisible(normalizeGhPrView(samplePr), now), true);
+	assert.equal(
+		isPullRequestVisible(normalizeGhPrView({ ...samplePr, closedAt: "invalid" }), now),
+		true,
+	);
 });
 
 test("normalizeGhPrView accepts count-only review and comment payloads", () => {
@@ -166,29 +206,79 @@ test("normalizeGhPrView accepts count-only review and comment payloads", () => {
 	assert.deepEqual(status.comments, { issue: 2, reviews: 3, total: 5 });
 });
 
+test("gh pr view resolves the repository host on POSIX and Windows", () => {
+	const args = [
+		"pr",
+		"view",
+		"--json",
+		"number,isDraft,url,state,closedAt,mergedAt,reviewDecision,latestReviews,statusCheckRollup",
+	];
+
+	assert.deepEqual(ghPrViewInvocation(undefined, "linux"), { command: "gh", args });
+	assert.deepEqual(ghPrViewInvocation("git.example.com", "darwin"), {
+		command: "env",
+		args: ["-u", "GH_HOST", "gh", ...args],
+	});
+	assert.deepEqual(ghPrViewInvocation("git.example.com", "win32", "C:\\Windows\\cmd.exe"), {
+		command: "C:\\Windows\\cmd.exe",
+		args: ["/d", "/s", "/c", `set "GH_HOST=" && gh ${args.join(" ")}`],
+	});
+});
+
 test("runGhPrView calls gh pr view for the current branch and reports actionable failures", async () => {
 	const calls: ExecCall[] = [];
+	const ghHosts: Array<string | undefined> = [];
 	const pi = {
 		exec: async (command, args, options) => {
 			calls.push({ command, args, options });
-			return okResult(args[0] === "pr" ? samplePr : sampleCounts);
+			ghHosts.push(process.env.GH_HOST);
+			if (command === "gh" && args[0] === "pr" && process.env.GH_HOST) {
+				return textResult(
+					"",
+					1,
+					"none of the git remotes configured for this repository correspond to GH_HOST",
+				);
+			}
+			return okResult(calls.length === 1 ? samplePr : sampleCounts);
 		},
 	} satisfies { exec: ExecFunction };
+	const previousGhHost = process.env.GH_HOST;
+	process.env.GH_HOST = "github.netflix.net";
 
-	const status = await runGhPrView(pi, "/repo");
+	let status: Awaited<ReturnType<typeof runGhPrView>>;
+	let restoredGhHost: string | undefined;
+	try {
+		status = await runGhPrView(pi, "/repo");
+		restoredGhHost = process.env.GH_HOST;
+	} finally {
+		if (previousGhHost === undefined) delete process.env.GH_HOST;
+		else process.env.GH_HOST = previousGhHost;
+	}
 
 	assert.equal(status.number, 123);
+	assert.deepEqual(ghHosts, ["github.netflix.net", "github.netflix.net"]);
+	assert.equal(restoredGhHost, "github.netflix.net");
 	assert.equal(calls.length, 2);
-	assert.deepEqual(calls[0], {
-		command: "gh",
-		args: [
-			"pr",
-			"view",
-			"--json",
-			"number,isDraft,url,reviewDecision,latestReviews,statusCheckRollup",
-		],
-		options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
-	});
+	const prArgs = [
+		"pr",
+		"view",
+		"--json",
+		"number,isDraft,url,state,closedAt,mergedAt,reviewDecision,latestReviews,statusCheckRollup",
+	];
+	assert.deepEqual(
+		calls[0],
+		process.platform === "win32"
+			? {
+					command: process.env.ComSpec ?? "cmd.exe",
+					args: ["/d", "/s", "/c", `set "GH_HOST=" && gh ${prArgs.join(" ")}`],
+					options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
+				}
+			: {
+					command: "env",
+					args: ["-u", "GH_HOST", "gh", ...prArgs],
+					options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
+				},
+	);
 	assert.deepEqual(calls[1]?.options, { cwd: "/repo", signal: undefined, timeout: 10_000 });
 	assert.deepEqual(calls[1]?.args.slice(0, 6), [
 		"api",
@@ -364,6 +454,33 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.equal(context.notifications.length, 0);
 });
 
+test("recent terminal pull request status clears when its 24-hour lifetime expires", async () => {
+	const mock = createMockPi();
+	const mergedAt = new Date(Date.now() - 24 * 60 * 60 * 1000 + 1_000).toISOString();
+	const calls = installExec(mock, async (_command, args) =>
+		okResult(args[0] === "pr" ? { ...samplePr, state: "MERGED", mergedAt } : sampleCounts),
+	);
+	githubPr(mock.pi);
+	const context = createMockContext({ cwd: "/repo" });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(sessionShutdown);
+
+	try {
+		await sessionStart({}, context.ctx);
+		assert.match(context.statuses.get("github-pr") ?? "", /: merged$/);
+		await waitFor(
+			() => context.statuses.get("github-pr") === undefined,
+			"terminal pull request status expires",
+			2_000,
+		);
+		assert.equal(calls.length, 3);
+	} finally {
+		await sessionShutdown({}, context.ctx);
+	}
+});
+
 test("branch changes clear stale PR status and stale refreshes cannot restore it", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-github-pr-test-"));
 	const gitDir = join(root, ".git");
@@ -522,6 +639,18 @@ test("ambient failures stay non-intrusive", async () => {
 	const missingGh = await lifecycleStatusFor(async () => {
 		throw new Error("spawn gh ENOENT");
 	});
+	const missingGhViaEnv = await lifecycleStatusFor(async () => ({
+		stdout: "",
+		stderr: "env: ‘gh’: No such file or directory",
+		code: 127,
+		killed: false,
+	}));
+	const missingGhViaCmd = await lifecycleStatusFor(async () => ({
+		stdout: "",
+		stderr: "'gh' is not recognized as an internal or external command",
+		code: 1,
+		killed: false,
+	}));
 	const unauthenticated = await lifecycleStatusFor(async () => ({
 		stdout: "",
 		stderr: "not logged in",
@@ -548,6 +677,8 @@ test("ambient failures stay non-intrusive", async () => {
 	}));
 
 	assert.equal(missingGh.statuses.get("github-pr"), "PR gh missing");
+	assert.equal(missingGhViaEnv.statuses.get("github-pr"), "PR gh missing");
+	assert.equal(missingGhViaCmd.statuses.get("github-pr"), "PR gh missing");
 	assert.equal(unauthenticated.statuses.get("github-pr"), "PR gh auth");
 	assert.equal(execFailure.statuses.get("github-pr"), undefined);
 	assert.equal(spawnPermissionFailure.statuses.get("github-pr"), undefined);
@@ -555,6 +686,8 @@ test("ambient failures stay non-intrusive", async () => {
 	assert.equal(notFound.statuses.get("github-pr"), undefined);
 	for (const context of [
 		missingGh,
+		missingGhViaEnv,
+		missingGhViaCmd,
 		unauthenticated,
 		execFailure,
 		spawnPermissionFailure,

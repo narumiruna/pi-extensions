@@ -27,6 +27,7 @@ import statusline, {
 	formatToolActivity,
 	npmPackageName,
 	parseGitStatusPorcelain,
+	prContextFromStatuses,
 	prLinkFromStatuses,
 	readStatuslineSettings,
 	shortenModel,
@@ -75,6 +76,63 @@ test("statusline registers lifecycle handlers without reading thinking level at 
 	assert.doesNotThrow(() => statusline(mock.pi));
 	assert.ok(mock.events.has("session_start"));
 	assert.ok(mock.events.has("tool_execution_start"));
+});
+
+test("statusline renders PR context inline only when a branch is available", async () => {
+	const previousPreset = process.env.PI_STATUSLINE_PRESET;
+	try {
+		for (const preset of ["classic", "tokyo-night"]) {
+			process.env.PI_STATUSLINE_PRESET = preset;
+			const mock = createMockPi();
+			statusline(mock.pi);
+			const context = createMockContext({ mode: "tui" });
+			await emit(mock.events, "session_start", {}, context.ctx);
+			const footerFactory = context.footer as (
+				tui: { requestRender(): void },
+				theme: { fg(color: string, text: string): string; bold(text: string): string },
+				footerData: {
+					getGitBranch(): string | null;
+					getExtensionStatuses(): ReadonlyMap<string, string>;
+					onBranchChange(callback: () => void): () => void;
+				},
+			) => { render(width: number): string[]; dispose(): void };
+			const link = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
+			const statuses = new Map([
+				["github-pr", `PR ${link}: checks failing (2), approved, 5 comments`],
+			]);
+			let branch: string | null = "feature";
+			const footer = footerFactory(
+				{ requestRender() {} },
+				{ fg: (_color, text) => text, bold: (text) => text },
+				{
+					getGitBranch: () => branch,
+					getExtensionStatuses: () => statuses,
+					onBranchChange: () => () => undefined,
+				},
+			);
+
+			const inlineLines = footer.render(300);
+			assert.ok(inlineLines[0]?.includes(`🌿 feature (${link} · 2 failing)`), preset);
+			assert.equal(inlineLines.length, 1);
+
+			const narrowLines = footer.render(20);
+			assert.match(narrowLines.slice(1).join(" "), /PR/);
+
+			branch = null;
+			const fallbackLines = footer.render(300);
+			assert.equal(fallbackLines.length, 2);
+			assert.match(fallbackLines[1] ?? "", /PR/);
+			assert.match(fallbackLines[1] ?? "", /checks failing/);
+
+			branch = "feature";
+			statuses.set("github-pr", "PR #123: checks failing (2), approved, 5 comments");
+			assert.match(footer.render(300).slice(1).join(" "), /PR/);
+			footer.dispose();
+		}
+	} finally {
+		if (previousPreset === undefined) delete process.env.PI_STATUSLINE_PRESET;
+		else process.env.PI_STATUSLINE_PRESET = previousPreset;
+	}
 });
 
 test("statusline renders max thinking with the latest theme color", async () => {
@@ -449,6 +507,26 @@ test("prLinkFromStatuses keeps the linked PR token and drops the tail and non-PR
 	);
 	assert.equal(prLinkFromStatuses(new Map([["github-pr", "PR gh missing"]])), undefined);
 	assert.equal(prLinkFromStatuses(new Map()), undefined);
+});
+
+test("prContextFromStatuses chooses one actionable state by precedence", () => {
+	const link = "\x1b]8;;https://github.com/o/draft-approved/pull/123\x07#123\x1b]8;;\x07";
+	const context = (details: string) =>
+		prContextFromStatuses(new Map([["github-pr", `PR ${link}: ${details}`]]));
+
+	assert.equal(context("merged"), `${link} · merged`);
+	assert.equal(context("closed"), `${link} · closed`);
+	assert.equal(context("checks failing (2), draft, approved"), `${link} · draft`);
+	assert.equal(context("checks failing (2), changes requested"), `${link} · 2 failing`);
+	assert.equal(context("checks pending (3), changes requested"), `${link} · changes requested`);
+	assert.equal(context("checks pending (3), approved"), `${link} · 3 pending`);
+	assert.equal(context("checks passing, approved"), `${link} · approved`);
+	assert.equal(context("checks passing, review required"), `${link} · review required`);
+	assert.equal(context("checks passing, commented"), `${link} · checks passing`);
+	assert.equal(context("checks passing, review ?"), `${link} · checks passing`);
+	assert.equal(context("checks passing"), `${link} · checks passing`);
+	assert.equal(context("no checks"), `${link} · no checks`);
+	assert.equal(context("unknown"), undefined);
 });
 
 test("git status parser and formatter produce compact dirty tokens", () => {

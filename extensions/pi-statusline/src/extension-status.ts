@@ -14,7 +14,6 @@ export interface ExtensionStatusRuntime {
 }
 
 const STATUSLINE_KEY = "statusline";
-const GITHUB_PR_KEY = "github-pr";
 const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
 const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
 	"chrome-devtools": "🌐",
@@ -41,15 +40,15 @@ export function formatExtensionStatuses(
 	theme: Theme,
 	config: StatuslineConfig,
 	runtime: ExtensionStatusRuntime,
+	hiddenKeys: ReadonlySet<string> = new Set(),
 ): string {
 	const separator = extensionStatusSeparator(config.preset, theme);
 	const visibleStatuses = [
 		...formatDuplicateExtensionStatus(runtime, theme),
 		...[...statuses.entries()]
-			// github-pr is rendered inline in the branch segment, so skip it here to avoid duplication.
 			.filter(
 				([key, value]) =>
-					key !== STATUSLINE_KEY && key !== GITHUB_PR_KEY && value.trim().length > 0,
+					key !== STATUSLINE_KEY && !hiddenKeys.has(key) && value.trim().length > 0,
 			)
 			.map(([key, value]) =>
 				formatExtensionStatus(key, value, theme, config, runtime.extensionStatusIconAliases),
