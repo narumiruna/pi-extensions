@@ -3,6 +3,7 @@
 ## GOTCHA
 
 - `MEMORY.md` is not auto-loaded; check it before non-trivial debugging or design work when prior project context may matter.
+- Pi command argument completion replaces the full argument prefix; nested values must retain prior tokens, intermediate values need a trailing space for repeated-Tab chaining, and storage-backed suggestions should avoid synchronous locks.
 - npm can show a scoped package dist-tag (for example `latest`) while `npm view <package>` still returns 404; fix visibility with `npm access set status=public <package> --otp=<otp>` or publish a bumped version.
 - `npm access set status=public <package>` cannot create brand-new scoped packages; if it returns access 404, first run `npm publish --workspace <package> --access public`.
 - For sleep-inhibitor extensions on WSL, prefer Windows `powershell.exe` with `SetThreadExecutionState`; `systemd-inhibit` may exist but fail without a usable systemd/logind session. Ensure Windows inhibitors exit on stdin EOF, clear `ES_CONTINUOUS`, and pass execution-state flags as `[uint32]'0x...'`; ensure Unix inhibitors are parent-bound and trap cleanup, or Pi shutdown can leave a power request/process active.

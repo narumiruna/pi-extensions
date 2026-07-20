@@ -96,7 +96,7 @@ Remove a named account:
 /account remove github-copilot enterprise
 ```
 
-Provider and stored-account arguments offer completion. Mutating commands always require an explicit provider ID.
+Provider and stored-account arguments offer completion. Press Tab repeatedly to step through the subcommand, provider, and stored account without adding spaces manually. Mutating commands always require an explicit provider ID.
 
 ### Temporary Codex aliases
 

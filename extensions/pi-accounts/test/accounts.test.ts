@@ -15,7 +15,7 @@ import {
 	createOAuthInteraction,
 } from "../src/oauth.js";
 import { RuntimeAuthCoordinator } from "../src/runtime-auth.js";
-import { InMemoryAccountStorageBackend } from "../src/storage.js";
+import { type AccountStorageBackend, InMemoryAccountStorageBackend } from "../src/storage.js";
 
 const credential = (
 	suffix: string,
@@ -199,21 +199,59 @@ test("account names and command completion are provider scoped", async () => {
 	});
 
 	assert.deepEqual(
-		completeAccountArguments("switch anthropic ", store).map((item) => item.value),
+		(await completeAccountArguments("s", store)).map((item) => item.value),
+		["switch "],
+	);
+	assert.deepEqual(
+		(await completeAccountArguments("switch ", store)).map((item) => item.value),
+		["switch anthropic ", "switch github-copilot ", "switch openai-codex "],
+	);
+	assert.deepEqual(
+		(await completeAccountArguments("switch anthropic ", store)).map((item) => item.value),
 		["switch anthropic default", "switch anthropic home", "switch anthropic work"],
 	);
 	assert.deepEqual(
-		completeAccountArguments("remove anthropic h", store).map((item) => item.value),
+		(await completeAccountArguments("remove anthropic h", store)).map((item) => item.value),
 		["remove anthropic home"],
 	);
 	assert.deepEqual(
-		completeAccountArguments("login ", store).map((item) => item.value),
-		["login anthropic", "login github-copilot", "login openai-codex"],
+		(await completeAccountArguments("login ", store)).map((item) => item.value),
+		["login anthropic ", "login github-copilot ", "login openai-codex "],
 	);
 	assert.deepEqual(
-		completeAccountArguments("list open", store).map((item) => item.value),
+		(await completeAccountArguments("list open", store)).map((item) => item.value),
 		["list openai-codex"],
 	);
+});
+
+test("stored-account completion does not block on synchronous storage", async () => {
+	let synchronousReads = 0;
+	let asynchronousReads = 0;
+	const raw = JSON.stringify({
+		version: 1,
+		providers: {
+			anthropic: { accounts: { work: credential("work") } },
+		},
+	});
+	const backend: AccountStorageBackend = {
+		withLock() {
+			synchronousReads += 1;
+			throw new Error("synchronous storage should not be used for completion");
+		},
+		async withLockAsync(mutator) {
+			asynchronousReads += 1;
+			return (await mutator(raw)).result;
+		},
+	};
+
+	assert.deepEqual(
+		(await completeAccountArguments("switch anthropic w", new AccountStore(backend))).map(
+			(item) => item.value,
+		),
+		["switch anthropic work"],
+	);
+	assert.equal(synchronousReads, 0);
+	assert.equal(asynchronousReads, 1);
 });
 
 test("provider accounts activate independently and default clears only one provider", async () => {
