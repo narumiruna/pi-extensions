@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; ChatGPT Codex account switching and usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
+Production-ready, independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; multi-provider subscription account switching and ChatGPT Codex usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
 
 **Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, browser session chat, image attachments, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
@@ -15,7 +15,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-btw`](./extensions/pi-btw) | 💬 `/btw` side-question command for asking quick questions without polluting the main conversation. | `pi install npm:@narumitw/pi-btw` |
 | [`@narumitw/pi-caffeinate`](./extensions/pi-caffeinate) | ☕ Cross-platform sleep prevention while the Pi agent is processing long-running prompts. | `pi install npm:@narumitw/pi-caffeinate` |
 | [`@narumitw/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | 🌐 Native Chrome DevTools Protocol tools for listing tabs, navigating pages, evaluating JavaScript, and taking screenshots. | `pi install npm:@narumitw/pi-chrome-devtools` |
-| [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) | 🔐 `/codex-login`, `/codex-account`, and `/codex-logout` for switching self-managed ChatGPT Codex subscription accounts without changing Pi's `/login` list. | `pi install npm:@narumitw/pi-codex-accounts` |
+| [`@narumitw/pi-accounts`](./extensions/pi-accounts) | 🔐 `/account` for independently switching named OpenAI Codex, Anthropic, and GitHub Copilot subscription OAuth accounts, with temporary Codex command aliases. | `pi install npm:@narumitw/pi-accounts` |
 | [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) | 📊 `/codex-status` command and automatic statusline item for ChatGPT Codex subscription usage, using Pi auth first and Codex CLI only as fallback. | `pi install npm:@narumitw/pi-codex-usage` |
 | [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) | 🔥 Firecrawl-powered web scraping, crawling, URL discovery, and web search tools for documentation and research workflows. | `pi install npm:@narumitw/pi-firecrawl` |
 | [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
@@ -86,9 +86,9 @@ Use [`@narumitw/pi-webui`](./extensions/pi-webui) to open a private loopback com
 
 Use [`@narumitw/pi-langfuse`](./extensions/pi-langfuse) to send Pi agent, generation, token usage, cost, and tool spans to Langfuse with credentials stored in a private `pi-langfuse.json` file.
 
-### 🔐 Codex subscription accounts
+### 🔐 Subscription OAuth accounts
 
-Use [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) to keep multiple ChatGPT Codex subscription accounts in a private `pi-codex-accounts.json` file and switch the active account with `/codex-account`. It does not add provider aliases or change Pi's built-in `/login` provider list.
+Use [`@narumitw/pi-accounts`](./extensions/pi-accounts) to keep independently selected OpenAI Codex, Anthropic, and GitHub Copilot subscription OAuth accounts in a private `pi-accounts.json` file. Use `/account` to login, list, switch, or remove named accounts while retaining Pi's built-in login as each provider's `default` selection.
 
 ### 📊 Codex usage status
 
@@ -112,7 +112,7 @@ Use [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) when you want a Codex-
 
 ### 🗃️ Deprecated extensions
 
-[`@narumitw/pi-telegram-bot`](./deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./deprecated/pi-wait-what) are deprecated and kept under `deprecated/` for reference.
+[`@narumitw/pi-codex-accounts`](./deprecated/pi-codex-accounts), [`@narumitw/pi-telegram-bot`](./deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./deprecated/pi-wait-what) are deprecated and kept under `deprecated/` for reference. New account-switching work lives in [`@narumitw/pi-accounts`](./extensions/pi-accounts).
 
 ### 🤖 Delegated subagents
 
@@ -142,7 +142,7 @@ Try a package locally:
 pi -e ./extensions/pi-btw
 pi -e ./extensions/pi-caffeinate
 pi -e ./extensions/pi-chrome-devtools
-pi -e ./extensions/pi-codex-accounts
+pi -e ./extensions/pi-accounts
 pi -e ./extensions/pi-codex-usage
 pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-github-pr
@@ -165,7 +165,7 @@ Preview npm package contents before publishing:
 npm run pack:btw
 npm run pack:caffeinate
 npm run pack:chrome-devtools
-npm run pack:codex-accounts
+npm run pack:accounts
 npm run pack:codex-usage
 npm run pack:firecrawl
 npm run pack:github-pr
@@ -194,6 +194,7 @@ npm publish --workspace @narumitw/pi-new-extension --access public
 deprecated/
 ├── pi-auto-thinking/
 ├── pi-biome-lsp/
+├── pi-codex-accounts/
 ├── pi-python-lsp/
 ├── pi-sidebar/
 ├── pi-telegram-bot/
@@ -203,7 +204,7 @@ extensions/
 ├── pi-btw/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/
-├── pi-codex-accounts/
+├── pi-accounts/
 ├── pi-codex-usage/
 ├── pi-firecrawl/
 ├── pi-github-pr/
