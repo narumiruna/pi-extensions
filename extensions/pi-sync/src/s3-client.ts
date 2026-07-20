@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { encodeKey, posixJoin } from "./paths.js";
 import type { LatestPointer, RemoteObject, Snapshot, SyncConfig } from "./types.js";
 
@@ -34,10 +35,32 @@ export class S3Client {
 	}
 
 	async getJson<T>(key: string): Promise<RemoteObject<T>> {
-		const object = await this.request("GET", key);
-		if (object.status === 404) return { missing: true };
-		if (!object.ok) throw new Error(`S3 GET failed (${object.status}): ${await object.text()}`);
-		return { value: (await object.json()) as T, etag: normalizeEtag(object.headers.get("etag")), missing: false };
+		const maxAttempts = 3;
+		let lastError: unknown;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			const object = await this.request("GET", key);
+			if (object.status === 404) return { missing: true };
+			if (!object.ok) throw new Error(`S3 GET failed (${object.status}): ${await object.text()}`);
+			const body = await object.text();
+			// R2 can intermittently return an empty 200 body (read-after-write
+			// inconsistency on a long-lived keep-alive connection), which makes
+			// response.json() throw "JSON Parse error: Unexpected EOF" under Bun.
+			// Retry so the transient blip is absorbed instead of surfacing as a
+			// "pi-sync auto sync skipped" warning on every session start.
+			if (body.length > 0) {
+				try {
+					return { value: JSON.parse(body) as T, etag: normalizeEtag(object.headers.get("etag")), missing: false };
+				} catch (error) {
+					lastError = error;
+				}
+			} else {
+				lastError = new Error(`S3 GET returned an empty body for ${key}`);
+			}
+			if (attempt < maxAttempts) {
+				await sleep(250 * attempt);
+			}
+		}
+		throw lastError;
 	}
 
 	async getBuffer(key: string): Promise<RemoteObject<Buffer>> {
