@@ -453,15 +453,21 @@ export function completeAccountArguments(
 	const subcommand = tokens[0];
 	if (!["list", "login", "switch", "remove"].includes(subcommand)) return [];
 	if (tokens.length === 2) {
-		return filterCompletions(
-			SUPPORTED_PROVIDER_IDS.map((id) => ({ value: id, label: id })),
-			tokens[1] ?? "",
+		return prefixCompletionValues(
+			subcommand,
+			filterCompletions(
+				SUPPORTED_PROVIDER_IDS.map((id) => ({ value: id, label: id })),
+				tokens[1] ?? "",
+			),
 		);
 	}
 	if ((subcommand === "switch" || subcommand === "remove") && tokens.length === 3) {
 		const providerId = parseProviderId(tokens[1] ?? "");
 		return providerId
-			? completeProviderAccounts(tokens[2] ?? "", store, providerId, subcommand === "switch")
+			? prefixCompletionValues(
+					`${subcommand} ${providerId}`,
+					completeProviderAccounts(tokens[2] ?? "", store, providerId, subcommand === "switch"),
+				)
 			: [];
 	}
 	return [];
@@ -534,6 +540,13 @@ function filterCompletions(
 	prefix: string,
 ): CommandArgumentCompletion[] {
 	return prefix ? items.filter((item) => item.value.startsWith(prefix)) : items;
+}
+
+function prefixCompletionValues(
+	prefix: string,
+	items: CommandArgumentCompletion[],
+): CommandArgumentCompletion[] {
+	return items.map((item) => ({ ...item, value: `${prefix} ${item.value}` }));
 }
 
 function isDefaultPiLoginArg(value: string): boolean {
