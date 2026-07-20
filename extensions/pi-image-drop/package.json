@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-image-drop",
-	"version": "0.22.0",
+	"version": "0.23.0",
 	"description": "Pi extension for staging browser images and attaching them to the next message.",
 	"type": "module",
 	"license": "MIT",
