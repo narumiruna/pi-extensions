@@ -116,6 +116,9 @@ pack-plan-mode:
 pack-retry:
     just pack retry
 
+pack-starship:
+    just pack starship
+
 pack-statusline:
     just pack statusline
 
@@ -170,6 +173,9 @@ try-plan-mode:
 
 try-retry:
     just try retry
+
+try-starship:
+    just try starship
 
 try-statusline:
     just try statusline
@@ -280,6 +286,9 @@ publish-plan-mode:
 
 publish-retry:
     just publish retry
+
+publish-starship:
+    just publish starship
 
 publish-statusline:
     just publish statusline
