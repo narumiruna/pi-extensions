@@ -85,6 +85,18 @@ test("line breaks may repeat when separated but consecutive line breaks are inva
 	assert.equal(consecutive.diagnostics[0]?.path, "segments[2]");
 });
 
+test("segment text rejects embedded line breaks and terminal control sequences", () => {
+	const normalized = normalizeStatuslineConfig({
+		segments: ["model"],
+		segmentText: { model: { prefix: "before\nafter", suffix: "\u001b[31m" } },
+	});
+	assert.deepEqual(normalized.config.segmentText.model, { prefix: "🤖 ", suffix: "" });
+	assert.equal(normalized.diagnostics[0]?.path, "segmentText.model.prefix");
+	assert.match(normalized.diagnostics[0]?.message ?? "", /use line_break/iu);
+	assert.equal(normalized.diagnostics[1]?.path, "segmentText.model.suffix");
+	assert.match(normalized.diagnostics[1]?.message ?? "", /control characters/iu);
+});
+
 test("normalization falls back by field and reports unknown, duplicate, and invalid values", () => {
 	const normalized = normalizeStatuslineConfig({
 		palette: "invalid",
@@ -124,6 +136,15 @@ test("normalization falls back by field and reports unknown, duplicate, and inva
 	]) {
 		assert.ok(paths.includes(path), path);
 	}
+});
+
+test("extension icon overrides preserve prototype-like exact keys", () => {
+	const parsed = JSON.parse('{"extensionStatusIcons":{"__proto__":"🧪","constructor":"🛠️"}}');
+	const normalized = normalizeStatuslineConfig(parsed);
+	assert.equal(Object.hasOwn(normalized.config.extensionStatusIcons, "__proto__"), true);
+	assert.equal(Reflect.get(normalized.config.extensionStatusIcons, "__proto__"), "🧪");
+	assert.equal(Reflect.get(normalized.config.extensionStatusIcons, "constructor"), "🛠️");
+	assert.deepEqual(normalized.diagnostics, []);
 });
 
 test("all named palettes, separators, empty segments, and environment independence are accepted", () => {
@@ -168,6 +189,25 @@ test("malformed existing settings are never overwritten", () => {
 		assert.equal(loaded.source, "built-in");
 		assert.equal(readFileSync(path, "utf8"), "{broken\n");
 		assert.match(loaded.diagnostics[0]?.message ?? "", /parse JSON/i);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("invalid legacy settings are not migrated to the canonical path", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
+	const legacyPath = join(root, "pi-statusline-settings.json");
+	const canonicalPath = settingsFilePath(root);
+	const raw = `${JSON.stringify({ palette: "invalid", future: true })}\n`;
+	try {
+		writeFileSync(legacyPath, raw);
+		const loaded = loadOrCreateStatuslineSettings(root);
+		assert.equal(
+			loaded.diagnostics.some((item) => item.path === "palette"),
+			true,
+		);
+		assert.equal(readFileSync(legacyPath, "utf8"), raw);
+		assert.equal(existsSync(canonicalPath), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -236,6 +276,14 @@ test("invalid recognized fields are rejected on save while unknown fields remain
 					JSON.stringify({ segments: ["model", "line_break", "line_break", "cwd"] }),
 				),
 			/consecutive line_break/iu,
+		);
+		assert.throws(
+			() =>
+				saveStatuslineSettingsDocument(
+					path,
+					JSON.stringify({ segmentText: { model: { suffix: "\n\n" } } }),
+				),
+			/use line_break/iu,
 		);
 		const loaded = saveStatuslineSettingsDocument(path, JSON.stringify({ future: true }));
 		assert.equal(loaded.diagnostics[0]?.path, "future");

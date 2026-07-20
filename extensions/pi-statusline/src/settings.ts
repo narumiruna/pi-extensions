@@ -203,6 +203,18 @@ export function normalizeStatuslineConfig(value: unknown): {
 						diagnostics.push(invalidDiagnostic(`${path}.${field}`, "Expected a string"));
 						continue;
 					}
+					if (/[\r\n\u2028\u2029]/u.test(fieldValue)) {
+						diagnostics.push(
+							invalidDiagnostic(`${path}.${field}`, "Line breaks are not allowed; use line_break"),
+						);
+						continue;
+					}
+					if (hasControlCharacter(fieldValue)) {
+						diagnostics.push(
+							invalidDiagnostic(`${path}.${field}`, "Control characters are not allowed"),
+						);
+						continue;
+					}
 					config.segmentText[name][field] = fieldValue;
 				}
 			}
@@ -218,7 +230,12 @@ export function normalizeStatuslineConfig(value: unknown): {
 					diagnostics.push(invalidDiagnostic(`extensionStatusIcons.${key}`, "Expected a string"));
 					continue;
 				}
-				config.extensionStatusIcons[key] = icon;
+				Object.defineProperty(config.extensionStatusIcons, key, {
+					value: icon,
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				});
 			}
 		}
 	}
@@ -310,7 +327,11 @@ function migrateLegacySettings(
 	legacyPath: string,
 ): LoadedStatuslineSettings {
 	const legacy = loadStatuslineSettings(legacyPath);
-	if (legacy.source !== "user" || legacy.rawDocument === undefined) {
+	if (
+		legacy.source !== "user" ||
+		legacy.rawDocument === undefined ||
+		blockingDiagnostics(legacy.diagnostics).length > 0
+	) {
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE_NAME} is invalid and was ignored.`;
 		return legacy;
 	}
@@ -352,7 +373,7 @@ export function saveStatuslineSettingsDocument(
 		throw new Error(`Unable to parse JSON: ${formatError(error)}`);
 	}
 	const normalized = normalizeStatuslineConfig(parsed);
-	const blocking = normalized.diagnostics.filter((item) => item.code !== "unknown");
+	const blocking = blockingDiagnostics(normalized.diagnostics);
 	if (blocking.length > 0) {
 		throw new Error(blocking.map((item) => `${item.path || "root"}: ${item.message}`).join("\n"));
 	}
@@ -435,6 +456,14 @@ function builtInSettings(
 	};
 }
 
+function hasControlCharacter(value: string): boolean {
+	for (const character of value) {
+		const codePoint = character.codePointAt(0) ?? 0;
+		if (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)) return true;
+	}
+	return false;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -445,6 +474,12 @@ function isConfigSegmentName(value: string): value is ConfigSegmentName {
 
 function isSegmentName(value: string): value is SegmentName {
 	return (SEGMENT_NAMES as readonly string[]).includes(value);
+}
+
+function blockingDiagnostics(
+	diagnostics: readonly StatuslineConfigDiagnostic[],
+): StatuslineConfigDiagnostic[] {
+	return diagnostics.filter((item) => item.code !== "unknown");
 }
 
 function unknownDiagnostic(path: string): StatuslineConfigDiagnostic {

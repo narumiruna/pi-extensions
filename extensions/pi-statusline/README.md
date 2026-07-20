@@ -143,6 +143,8 @@ Override either string independently:
 }
 ```
 
+Prefix and suffix values must be single-line text without terminal control characters; use the `line_break` segment for additional rows.
+
 This structured model intentionally does not provide variables or a format language. Dynamic Git, PR, activity, usage, token, and cost formatting remains owned by the extension.
 
 ### Extension status icons

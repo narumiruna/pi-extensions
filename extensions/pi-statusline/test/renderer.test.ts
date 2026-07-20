@@ -3,7 +3,7 @@ import test from "node:test";
 import { formatConfiguredSegment } from "../src/render.js";
 import { createDefaultConfig } from "../src/settings.js";
 import { renderTokyoNightStatusline } from "../src/tokyo-night.js";
-import type { RenderSegment, SegmentName } from "../src/types.js";
+import type { RenderItem, RenderSegment, SegmentName } from "../src/types.js";
 
 const ESCAPE = String.fromCharCode(27);
 const ANSI_PATTERN = new RegExp(`${ESCAPE}\\[[0-9;]*m`, "gu");
@@ -30,20 +30,30 @@ test("Tokyo Night renderer preserves configured segment order across repeated bl
 	assert.match(plain(rendered), /^░▒▓ model time provider$/u);
 });
 
-test("line breaks render separated repeated markers as independent powerline rows", () => {
-	const config = createDefaultConfig();
-	const lineBreak = { name: "line_break" } as unknown as RenderSegment;
+test("Tokyo Night default retains the exact powerline colors", () => {
 	const rendered = renderTokyoNightStatusline(
 		300,
-		[
-			segment("model", "model", "header"),
-			lineBreak,
-			segment("cwd", "cwd", "directory"),
-			lineBreak,
-			segment("branch", "branch", "git"),
-		],
-		config,
+		[segment("model", "model", "header")],
+		createDefaultConfig(),
 	);
+	assert.equal(
+		rendered,
+		"\u001b[38;2;163;174;210m░▒▓\u001b[0m" +
+			"\u001b[38;2;9;12;12;48;2;163;174;210m model\u001b[0m" +
+			"\u001b[38;2;163;174;210m\u001b[0m",
+	);
+});
+
+test("line breaks render separated repeated markers as independent powerline rows", () => {
+	const config = createDefaultConfig();
+	const items: RenderItem[] = [
+		segment("model", "model", "header"),
+		{ name: "line_break" },
+		segment("cwd", "cwd", "directory"),
+		{ name: "line_break" },
+		segment("branch", "branch", "git"),
+	];
+	const rendered = renderTokyoNightStatusline(300, items, config);
 	assert.deepEqual(plain(rendered).split("\n"), ["░▒▓ model", "░▒▓ cwd", "░▒▓ branch"]);
 });
 

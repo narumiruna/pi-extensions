@@ -79,6 +79,7 @@ test("line breaks become separate footer rows", async () => {
 		assert.equal(rows.length, 3);
 		assert.match(rows[0] ?? "", /sonnet-4/u);
 		assert.match(rows[1] ?? "", /project/u);
+		assert.match(rows[2] ?? "", /no-git/u);
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	} finally {
