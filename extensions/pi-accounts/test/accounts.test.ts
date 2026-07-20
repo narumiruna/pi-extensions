@@ -200,11 +200,19 @@ test("account names and command completion are provider scoped", async () => {
 
 	assert.deepEqual(
 		completeAccountArguments("switch anthropic ", store).map((item) => item.value),
-		["default", "home", "work"],
+		["switch anthropic default", "switch anthropic home", "switch anthropic work"],
+	);
+	assert.deepEqual(
+		completeAccountArguments("remove anthropic h", store).map((item) => item.value),
+		["remove anthropic home"],
 	);
 	assert.deepEqual(
 		completeAccountArguments("login ", store).map((item) => item.value),
-		["anthropic", "github-copilot", "openai-codex"],
+		["login anthropic", "login github-copilot", "login openai-codex"],
+	);
+	assert.deepEqual(
+		completeAccountArguments("list open", store).map((item) => item.value),
+		["list openai-codex"],
 	);
 });
 
