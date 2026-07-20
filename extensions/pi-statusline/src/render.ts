@@ -6,22 +6,21 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { renderClassicStatusline } from "../presets/classic.js";
-import { renderTokyoNightStatusline } from "../presets/tokyo-night.js";
-import type {
-	PaletteName,
-	RenderSegment,
-	SegmentName,
-	StatuslineConfig,
-	TokyoNightBlockName,
-} from "../presets/types.js";
 import {
 	type ExtensionStatusRuntime,
 	formatExtensionStatuses,
 	wrapExtensionStatusline,
 } from "./extension-status.js";
-import { formatGitBranchText, type GitStatusSummary } from "./git-status.js";
+import { formatGitBranchValue, type GitStatusSummary } from "./git-status.js";
+import { renderTokyoNightStatusline } from "./tokyo-night.js";
+import {
+	LINE_BREAK_SEGMENT_NAME,
+	type RenderItem,
+	type RenderSegment,
+	type SegmentName,
+	type StatuslineConfig,
+	type TokyoNightBlockName,
+} from "./types.js";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 export interface RuntimeState extends ExtensionStatusRuntime {
@@ -41,39 +40,29 @@ interface TokenTotals {
 }
 const GITHUB_PR_KEY = "github-pr";
 const GITHUB_PR_STATUS_KEYS = new Set([GITHUB_PR_KEY]);
-const PALETTES: Record<PaletteName, ThemeColor[]> = {
-	ocean: ["accent", "muted", "success", "warning"],
-	sunset: ["warning", "accent", "success", "muted"],
-	forest: ["success", "accent", "muted", "warning"],
-	candy: ["accent", "warning", "success", "muted"],
-	neon: ["accent", "success", "warning", "error"],
-	mono: ["muted", "dim"],
-};
-
 export function renderStatusline(
 	width: number,
 	ctx: ExtensionContext,
 	footerData: ReadonlyFooterDataProvider,
-	theme: Theme,
+	_theme: Theme,
 	config: StatuslineConfig,
 	runtime: RuntimeState,
 ): string {
 	if (width <= 0) return "";
 
 	const segments = config.segments
-		.map((segment, index) => buildSegment(segment, index, ctx, footerData, config, runtime))
+		.map((name): RenderItem | undefined =>
+			name === LINE_BREAK_SEGMENT_NAME
+				? { name: LINE_BREAK_SEGMENT_NAME }
+				: buildSegment(name, ctx, footerData, config, runtime),
+		)
 		.filter(
-			(segment): segment is RenderSegment => segment !== undefined && segment.text.length > 0,
+			(segment): segment is RenderItem =>
+				segment !== undefined &&
+				(segment.name === LINE_BREAK_SEGMENT_NAME || segment.text.length > 0),
 		);
 
-	if (segments.length === 0) return truncateToWidth(theme.fg("dim", "pi-statusline"), width);
-
-	switch (config.preset) {
-		case "classic":
-			return renderClassicStatusline(width, segments, theme, config);
-		case "tokyo-night":
-			return renderTokyoNightStatusline(width, segments);
-	}
+	return renderTokyoNightStatusline(width, segments, config);
 }
 
 export function renderExtensionStatusline(
@@ -99,80 +88,92 @@ export function renderExtensionStatusline(
 
 function buildSegment(
 	name: SegmentName,
-	index: number,
 	ctx: ExtensionContext,
 	footerData: ReadonlyFooterDataProvider,
 	config: StatuslineConfig,
 	runtime: RuntimeState,
 ): RenderSegment | undefined {
-	const color = pickColor(config, index);
-
 	switch (name) {
 		case "brand":
-			return segment(name, "π", "accent", "header", true);
+			return segment(name, "π", config, "accent", "header", true);
 		case "provider":
-			return segment(name, `🔌 ${ctx.model?.provider ?? "no-provider"}`, color, "header");
+			return segment(name, ctx.model?.provider ?? "no-provider", config, "accent", "header");
 		case "model":
-			return segment(name, `🤖 ${shortenModel(ctx.model?.id ?? "no-model")}`, color, "header");
+			return segment(name, shortenModel(ctx.model?.id ?? "no-model"), config, "accent", "header");
 		case "thinking":
 			return segment(
 				name,
-				`🧠 ${runtime.thinkingLevel}`,
+				runtime.thinkingLevel,
+				config,
 				thinkingColor(runtime.thinkingLevel),
 				"header",
 			);
 		case "branch": {
 			const branch = footerData.getGitBranch();
 			const pr = branch ? prContextFromStatuses(footerData.getExtensionStatuses()) : undefined;
-			return segment(name, formatGitBranchText(branch, runtime.gitStatus, pr), color, "git");
+			return segment(
+				name,
+				formatGitBranchValue(branch, runtime.gitStatus, pr),
+				config,
+				"accent",
+				"git",
+			);
 		}
 		case "cwd":
-			return segment(name, `📁 ${basename(ctx.cwd) || ctx.cwd}`, color, "directory");
+			return segment(name, basename(ctx.cwd) || ctx.cwd, config, "accent", "directory");
 		case "tools":
-			return segment(name, formatToolActivity(runtime), color, "runtime");
+			return segment(name, formatToolActivity(runtime), config, "accent", "runtime");
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const value =
 				usage?.percent === null || usage?.percent === undefined
-					? "🪟 ctx ?"
-					: `🪟 ctx ${usage.percent.toFixed(0)}%`;
-			return segment(name, value, contextColor(usage?.percent), "runtime");
+					? "?"
+					: `${usage.percent.toFixed(0)}%`;
+			return segment(name, value, config, contextColor(usage?.percent), "runtime");
 		}
 		case "tokens": {
 			const totals = getTokenTotals(ctx);
-			if (totals.input === 0 && totals.output === 0)
-				return segment(name, "🔢 tok 0", color, "runtime");
-			return segment(
-				name,
-				`🔢 ↑${formatCount(totals.input)} ↓${formatCount(totals.output)}`,
-				color,
-				"runtime",
-			);
+			const value =
+				totals.input === 0 && totals.output === 0
+					? "tok 0"
+					: `↑${formatCount(totals.input)} ↓${formatCount(totals.output)}`;
+			return segment(name, value, config, "accent", "runtime");
 		}
 		case "cost": {
 			const totals = getTokenTotals(ctx);
-			return segment(name, `💸 $${totals.cost.toFixed(totals.cost >= 1 ? 2 : 3)}`, color, "meter");
+			return segment(
+				name,
+				totals.cost.toFixed(totals.cost >= 1 ? 2 : 3),
+				config,
+				"accent",
+				"meter",
+			);
 		}
 		case "time":
-			return segment(name, `🕒 ${formatTime()}`, color, "meter");
+			return segment(name, formatTime(), config, "accent", "meter");
 		case "turn":
-			return segment(name, `🔁 #${runtime.turnCount}`, color, "meter");
+			return segment(name, `${runtime.turnCount}`, config, "accent", "meter");
 	}
 }
 
 function segment(
 	name: SegmentName,
-	text: string,
-	color: ThemeColor,
+	value: string,
+	config: StatuslineConfig,
+	color: RenderSegment["color"],
 	block: TokyoNightBlockName,
 	emphasis = false,
 ): RenderSegment {
-	return { name, text, color, block, emphasis };
+	return { name, text: formatConfiguredSegment(name, value, config), color, block, emphasis };
 }
 
-function pickColor(config: StatuslineConfig, index: number): ThemeColor {
-	const palette = PALETTES[config.palette];
-	return palette[index % palette.length] ?? "muted";
+export function formatConfiguredSegment(
+	name: SegmentName,
+	value: string,
+	config: Pick<StatuslineConfig, "segmentText">,
+): string {
+	const presentation = config.segmentText[name];
+	return `${presentation.prefix}${value}${presentation.suffix}`;
 }
 
 function thinkingColor(level: ThinkingLevel): ThemeColor {

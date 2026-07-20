@@ -87,14 +87,22 @@ export function formatGitStatusSummary(summary: GitStatusSummary | undefined): s
 		.join(" ");
 }
 
+export function formatGitBranchValue(
+	branch: string | null,
+	status: GitStatusSummary | undefined,
+	pr?: string,
+): string {
+	if (!branch) return "no-git";
+	const suffixes = [formatGitStatusSummary(status), pr ? `(${pr})` : ""].filter(Boolean);
+	return suffixes.length > 0 ? `${branch} ${suffixes.join(" ")}` : branch;
+}
+
 export function formatGitBranchText(
 	branch: string | null,
 	status: GitStatusSummary | undefined,
 	pr?: string,
 ): string {
-	if (!branch) return "🌿 no-git";
-	const suffixes = [formatGitStatusSummary(status), pr ? `(${pr})` : ""].filter(Boolean);
-	return suffixes.length > 0 ? `🌿 ${branch} ${suffixes.join(" ")}` : `🌿 ${branch}`;
+	return `🌿 ${formatGitBranchValue(branch, status, pr)}`;
 }
 
 export function gitStatusSummaryEqual(

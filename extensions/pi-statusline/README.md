@@ -1,160 +1,207 @@
-# ✨ pi-statusline — Rich Statusline for the Pi Coding Agent
+# ✨ pi-statusline — Configurable Tokyo Night Footer for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-statusline)](https://www.npmjs.com/package/@narumitw/pi-statusline) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-statusline` is a native [Pi coding agent](https://pi.dev) extension that replaces Pi's footer with a beautiful, information-rich terminal statusline.
+`@narumitw/pi-statusline` is a native [Pi coding agent](https://pi.dev) extension that replaces Pi's footer with a configurable Tokyo Night powerline statusline.
 
-Use it to monitor provider, model selection, thinking level, git branch, working directory, active tools, context usage, token totals, estimated cost, time, and statuses from other Pi extensions.
+## Features
 
-## ✨ Features
+- Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
+- Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
+- Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
+- Creates a complete editable default configuration on first session start.
+- Applies validated `/statusline settings` edits immediately after an atomic save.
+- Caches Git state outside footer rendering and guards stale session results.
+- Wraps extension statuses safely at narrow terminal widths.
 
-- Replaces the default Pi footer with a compact preset-based statusline.
-- Shows provider, model, thinking level, git branch/status, project directory, active tool, context usage, tokens, cost, and clock.
-- Displays compact statuses published through Pi's generic extension status API.
-- Owns extension status icons through optional JSON config, including per-extension icon suppression with `""`.
-- Warns when the same extension package is installed from multiple sources.
-- Uses emoji-labeled segments for readability in both classic and Tokyo Night presets.
-- Adapts to terminal width and wraps long extension status lines safely.
-- Requires no configuration, with optional preset selection through `PI_STATUSLINE_PRESET`.
-
-## 📦 Install
+## Install
 
 ```bash
 pi install npm:@narumitw/pi-statusline
 ```
 
-Try without installing permanently:
+Try it once or from a checkout:
 
 ```bash
 pi -e npm:@narumitw/pi-statusline
-```
-
-Try this package locally from the repository root:
-
-```bash
 pi -e ./extensions/pi-statusline
 ```
 
-## 🎨 Presets
+Do not enable this together with `@narumitw/pi-starship`: both extensions own Pi's footer. Use `pi-starship` instead when you need full Starship-style format/style grammar.
 
-`pi-statusline` supports presets through the `PI_STATUSLINE_PRESET` environment variable:
+## Configuration
 
-```bash
-PI_STATUSLINE_PRESET=tokyo-night pi
-PI_STATUSLINE_PRESET=classic pi
+The only configuration source is:
+
+```text
+<getAgentDir()>/pi-statusline.json
 ```
 
-Supported presets:
+On first session start, the extension atomically creates the complete default document. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
 
-- `tokyo-night` — the default, inspired by the [Starship Tokyo Night preset](https://starship.rs/presets/tokyo-night), using `░▒▓` / `` powerline blocks and the Tokyo Night color ramp.
-- `classic` — a compact Pi-themed statusline with left-aligned `•` separators.
+There are no project overrides or environment-variable overrides.
 
-Unset or invalid values fall back to `tokyo-night`. Both presets keep the same emoji-labeled information.
-
-## ⚙️ Extension status icons
-
-Extension statuses use built-in icons by status key. Override or suppress them in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-statusline.json`:
+### Default JSON
 
 ```json
 {
+  "palette": "tokyo-night",
+  "density": "compact",
+  "separator": "none",
+  "segments": [
+    "brand",
+    "provider",
+    "model",
+    "thinking",
+    "cwd",
+    "branch",
+    "tools",
+    "context",
+    "tokens",
+    "cost",
+    "time"
+  ],
+  "segmentText": {
+    "brand": { "prefix": "", "suffix": "" },
+    "provider": { "prefix": "🔌 ", "suffix": "" },
+    "model": { "prefix": "🤖 ", "suffix": "" },
+    "thinking": { "prefix": "🧠 ", "suffix": "" },
+    "cwd": { "prefix": "📁 ", "suffix": "" },
+    "branch": { "prefix": "🌿 ", "suffix": "" },
+    "tools": { "prefix": "", "suffix": "" },
+    "context": { "prefix": "🪟 ctx ", "suffix": "" },
+    "tokens": { "prefix": "🔢 ", "suffix": "" },
+    "cost": { "prefix": "💸 $", "suffix": "" },
+    "time": { "prefix": "🕒 ", "suffix": "" },
+    "turn": { "prefix": "🔁 #", "suffix": "" }
+  },
   "extensionStatusIcons": {
-    "caffeinate": "☕",
+    "chrome-devtools": "🌐",
+    "codex-usage": "📊",
+    "caffeinate": "💊",
+    "firecrawl": "🔥",
     "github-pr": "🔎",
     "goal": "🎯",
-    "pisync": "☁️",
-    "unknown-error-retry": "",
+    "lsp": "🧰",
     "plan-mode": "📝",
-    "subagents": "🤖",
-    "@vendor/pi-foo": "🧪"
+    "pisync": "🔄",
+    "subagents": "🧑‍🤝‍🧑",
+    "unknown-error-retry": "🔁"
   }
 }
 ```
 
-Compatibility: a valid legacy `pi-statusline-settings.json` is migrated automatically to `pi-statusline.json`. If both files exist, the new filename takes precedence.
+All fields are optional in an existing document. Missing fields use defaults.
 
-- Exact status key: always wins, e.g. `"goal"` or `"foo:server"`.
-- Installed extension id: for installed packages, use the package name/source such as `"@vendor/pi-foo"`, `"npm:@vendor/pi-foo@1.2.3"`, `"pi-foo"`, or the derived key `"foo"`.
-- Namespaced status keys: package `@vendor/pi-foo` can match `foo`, `foo:server`, and `foo/server`, but not fuzzy matches like `foobar`.
-- Missing key: use the built-in icon, or `🔌` for an unknown status key.
-- String value: use that string as the icon.
-- Empty string: show the status text without an icon.
-- If multiple installed packages derive the same key, use the exact status key to disambiguate.
-- `PI_STATUSLINE_PRESET` remains the only preset setting; this JSON file only controls extension status icons.
+### Appearance
 
-During the `PI_CAFFEINATE_ICON` deprecation window, a leading emoji from `pi-caffeinate` is still used when JSON does not configure `caffeinate`. JSON wins when both are set.
+- `palette`: `tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, or `mono`.
+- `density`: `compact` or `cozy`.
+- `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
 
-## 👀 What it shows
+The separator applies only between adjacent segments in the same color block. Color-block transitions always use ``. Extension statuses remain on separate wrapped lines with their own palette-colored separator.
 
-The default `tokyo-night` statusline uses a Starship-inspired `░▒▓` / `` powerline layout and includes:
+### Segments
 
-- `π` brand marker.
-- 🔌 current provider.
-- 🤖 current model.
-- 🧠 thinking level.
-- 📁 current project directory.
-- 🌿 git branch, with compact git status tokens when dirty or ahead/behind.
-- ⚙ active or last tool.
-- 🪟 context usage percentage.
-- 🔢 token totals.
-- 💸 estimated cost.
-- 🕒 clock.
+`segments` is an ordered list containing:
 
-Git status tokens are hidden for clean repositories. When present, they mean `⇡` ahead, `⇣` behind, `+` staged, `~` modified/deleted in the worktree, `?` untracked, and `!` conflicts. Example: `🌿 main ⇡1 +2 ~1 ?3`.
+```text
+brand provider model thinking cwd branch tools context tokens cost time turn line_break
+```
 
-Statuses from other extensions appear below the main statusline, use each preset's separator, and wrap onto additional footer lines when they exceed the terminal width.
+The array controls visibility and actual rendering order. Data segments must remain unique. The special `line_break` segment starts another footer row and may repeat when another segment separates each occurrence; consecutive `line_break` entries are invalid. Each row receives its own powerline start and end. `line_break` has no `segmentText` entry.
 
-`pi-statusline` is extension-agnostic: it consumes Pi's generic extension status API and does not import or depend on status-producing extensions.
+An empty array hides the main powerline while still allowing extension statuses to render. `turn` is available but omitted by default.
 
-Examples:
+Example multiline layout:
 
-- `🎯 active` for `goal: active` using the built-in `goal` icon.
-- `🔎 PR #123 checks passing` for `github-pr: PR #123 checks passing` using the built-in `github-pr` icon.
-- `☕ display` when JSON config sets `"caffeinate": "☕"`.
-- `🧪 running` for third-party status `foo:server` when an installed package is named `@vendor/pi-foo` and JSON config sets `"@vendor/pi-foo": "🧪"`.
-- `receiving` when JSON config sets `"unknown-error-retry": ""`.
-- `🔌 running` for an unknown extension status key with no configured icon.
-- `⚠️ dup biome-lsp` when local and npm installs register the same extension.
+```json
+{
+  "segments": ["model", "line_break", "cwd", "line_break", "branch"]
+}
+```
 
-## 🧠 Use cases
+This is valid because the `line_break` entries are separated. `["model", "line_break", "line_break", "cwd"]` is invalid.
 
-- Track agent context usage during long coding sessions.
-- See which provider, model, and thinking level are active.
-- Monitor token totals and estimated cost.
-- Keep git branch and project directory visible.
-- Make Pi terminal sessions easier to scan at a glance.
+### Segment text
 
-## 🗂️ Package layout
+Each visible segment renders as:
 
-```txt
+```text
+prefix + Pi-owned dynamic value + suffix
+```
+
+Override either string independently:
+
+```json
+{
+  "segmentText": {
+    "provider": { "prefix": "Provider: " },
+    "context": { "prefix": "[", "suffix": "]" },
+    "cost": { "prefix": "Cost $", "suffix": " USD" }
+  }
+}
+```
+
+Prefix and suffix values must be single-line text without terminal control characters; use the `line_break` segment for additional rows.
+
+This structured model intentionally does not provide variables or a format language. Dynamic Git, PR, activity, usage, token, and cost formatting remains owned by the extension.
+
+### Extension status icons
+
+`extensionStatusIcons` preserves these rules:
+
+- An exact status key wins, such as `goal` or `foo:server`.
+- Installed package aliases such as `@vendor/pi-foo`, `npm:@vendor/pi-foo@1.2.3`, `pi-foo`, or `foo` can configure namespaced statuses.
+- An empty string hides the icon but keeps the status text.
+- A missing key uses the built-in icon or `🔌` for an unknown key.
+- Ambiguous package aliases require an exact status key.
+
+Statuses from other extensions appear below the main powerline. The linked GitHub PR status is hidden from that line when the branch segment already renders it.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `/statusline settings` | Edit raw JSON in TUI, validate, atomically save, and apply immediately |
+| `/statusline status` | Show settings path/source, effective appearance, segments, and diagnostics |
+| `/statusline help` | Show command and schema guidance |
+
+Invalid or cancelled edits leave both the previous file and effective runtime configuration unchanged. The editor is TUI-only; status and help are safe in TUI, print, JSON, and RPC modes.
+
+## Git and activity details
+
+Git status tokens are hidden for clean repositories. When present, they mean `⇡` ahead, `⇣` behind, `+` staged, `~` modified/deleted, `?` untracked, and `!` conflicts.
+
+The tools segment distinguishes active tools, streaming/thinking, the last completed tool, and idle state. Parallel calls are summarized without running subprocesses during footer rendering.
+
+## Package layout
+
+```text
 extensions/pi-statusline/
 ├── src/
-│   ├── statusline.ts  # Pi entrypoint and watcher lifecycle
-│   └── *.ts           # Package-local git, extension status, settings, and render modules
-├── presets/
 │   ├── ansi.ts
-│   ├── classic.ts
+│   ├── commands.ts
+│   ├── extension-status.ts
+│   ├── git-status.ts
+│   ├── render.ts
+│   ├── settings.ts
+│   ├── statusline.ts
 │   ├── tokyo-night.ts
 │   └── types.ts
+├── test/
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-Only `statusline.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
+Only `src/statusline.ts` is a Pi entrypoint. Other modules are package-internal.
 
-```json
-{
-  "pi": {
-    "extensions": ["./src/statusline.ts"]
-  }
-}
-```
+## Keywords
 
-## 🔎 Keywords
+Pi extension, Pi coding agent, configurable statusline, Tokyo Night, terminal footer, token usage, context window, model status, TypeScript Pi package.
 
-Pi extension, Pi coding agent, statusline, terminal UI, AI coding agent status, token usage, context window, model status, TypeScript Pi package.
-
-## 📄 License
+## License
 
 MIT. See [`LICENSE`](./LICENSE).

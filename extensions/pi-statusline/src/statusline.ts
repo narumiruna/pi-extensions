@@ -1,21 +1,24 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionAPI,
+	type ExtensionContext,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
+import { registerStatuslineCommand } from "./commands.js";
 import {
 	buildExtensionStatusIconAliases,
 	type ExtensionStatusIconAliasMap,
 	findDuplicateExtensions,
 	readInstalledExtensionPackages,
 } from "./extension-status.js";
+import { type GitStatusSummary, gitStatusSummaryEqual, readGitStatus } from "./git-status.js";
+import { type RuntimeState, renderExtensionStatusline, renderStatusline } from "./render.js";
 import {
-	gitStatusSummaryEqual,
-	readGitStatus,
-	type GitStatusSummary,
-} from "./git-status.js";
-import {
-	renderExtensionStatusline,
-	renderStatusline,
-	type RuntimeState,
-} from "./render.js";
-import { consumeStatuslineSettingsNotice, createDefaultConfig } from "./settings.js";
+	consumeStatuslineSettingsNotice,
+	type LoadedStatuslineSettings,
+	loadOrCreateStatuslineSettings,
+	loadStatuslineSettings,
+	settingsFilePath,
+} from "./settings.js";
 
 const STATUSLINE_KEY = "statusline";
 const GIT_STATUS_REFRESH_INTERVAL_MS = 30_000;
@@ -23,7 +26,7 @@ const GIT_STATUS_EVENT_DEBOUNCE_MS = 250;
 const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
 
 export default function statusline(pi: ExtensionAPI) {
-	const config = createDefaultConfig();
+	let loaded: LoadedStatuslineSettings | undefined;
 	const runtime: RuntimeState = {
 		turnCount: 0,
 		activeTools: new Map(),
@@ -38,9 +41,7 @@ export default function statusline(pi: ExtensionAPI) {
 	let activeGitStatusTarget: { cwd: string; generation: number } | undefined;
 	let gitStatusRefreshInFlight = false;
 	let gitStatusDebounceTimer: ReturnType<typeof setTimeout> | undefined;
-	let pendingGitStatusRefresh:
-		| { cwd: string; generation: number; requestId: number }
-		| undefined;
+	let pendingGitStatusRefresh: { cwd: string; generation: number; requestId: number } | undefined;
 
 	const refresh = () => runtime.requestRender?.();
 
@@ -116,7 +117,7 @@ export default function statusline(pi: ExtensionAPI) {
 		runtime.duplicateExtensions = [];
 		runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
 		ctx.ui.setStatus(STATUSLINE_KEY, undefined);
-		if (!activeGitStatusTarget) return;
+		if (!activeGitStatusTarget || !loaded) return;
 		const installedPackages = readInstalledExtensionPackages(cwd);
 		runtime.duplicateExtensions = findDuplicateExtensions(installedPackages);
 		runtime.extensionStatusIconAliases = buildExtensionStatusIconAliases(installedPackages);
@@ -152,8 +153,10 @@ export default function statusline(pi: ExtensionAPI) {
 				},
 				invalidate() {},
 				render(width: number): string[] {
+					if (!loaded) return [];
+					const config = loaded.config;
 					const mainLine = renderStatusline(width, ctx, footerData, theme, config, runtime);
-					const lines = [mainLine];
+					const lines = mainLine ? mainLine.split("\n") : [];
 					lines.push(
 						...renderExtensionStatusline(width, footerData, theme, config, runtime, mainLine),
 					);
@@ -164,9 +167,24 @@ export default function statusline(pi: ExtensionAPI) {
 		refreshGitStatus(cwd, generation);
 	};
 
+	const agentDir = getAgentDir();
+	const configPath = settingsFilePath(agentDir);
+	registerStatuslineCommand(pi, {
+		settingsPath: configPath,
+		getLoaded: () => loaded ?? loadStatuslineSettings(configPath),
+		apply(next) {
+			loaded = next;
+			refresh();
+		},
+	});
+
 	pi.on("session_start", (_event, ctx) => {
+		loaded = loadOrCreateStatuslineSettings(agentDir);
 		const settingsNotice = consumeStatuslineSettingsNotice();
 		if (settingsNotice) ctx.ui.notify(settingsNotice, "warning");
+		if (loaded.diagnostics.length > 0) {
+			ctx.ui.notify(formatSettingsDiagnostics(loaded), "warning");
+		}
 		runtime.thinkingLevel = pi.getThinkingLevel();
 		installFooter(ctx);
 	});
@@ -236,6 +254,15 @@ export default function statusline(pi: ExtensionAPI) {
 	});
 }
 
+function formatSettingsDiagnostics(loaded: LoadedStatuslineSettings): string {
+	const details = loaded.diagnostics.slice(0, 5).map((item) => item.message);
+	const remaining = loaded.diagnostics.length - details.length;
+	return [
+		`pi-statusline settings: ${details.join("; ")}`,
+		...(remaining > 0 ? [`+${remaining} more`] : []),
+	].join(" ");
+}
+
 export {
 	buildExtensionStatusIconAliases,
 	type ExtensionStatusIconAliasMap,
@@ -249,9 +276,10 @@ export {
 } from "./extension-status.js";
 export {
 	formatGitBranchText,
+	formatGitBranchValue,
 	formatGitStatusSummary,
-	parseGitStatusPorcelain,
 	type GitStatusSummary,
+	parseGitStatusPorcelain,
 } from "./git-status.js";
 export {
 	contextColor,

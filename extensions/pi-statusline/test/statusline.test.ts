@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { consumeStatuslineSettingsNotice } from "../src/settings.js";
@@ -39,6 +39,15 @@ import statusline, {
 
 const EMPTY_STATUS_ALIASES: ExtensionStatusIconAliasMap = new Map();
 void EMPTY_STATUS_ALIASES;
+
+const suiteAgentDir = mkdtempSync(join(tmpdir(), "pi-statusline-suite-"));
+const previousSuiteAgentDir = process.env.PI_CODING_AGENT_DIR;
+process.env.PI_CODING_AGENT_DIR = suiteAgentDir;
+after(() => {
+	if (previousSuiteAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = previousSuiteAgentDir;
+	rmSync(suiteAgentDir, { recursive: true, force: true });
+});
 
 async function emit(
 	events: ReadonlyMap<string, Array<(...args: unknown[]) => unknown>>,
@@ -79,150 +88,121 @@ test("statusline registers lifecycle handlers without reading thinking level at 
 });
 
 test("statusline renders PR context inline only when a branch is available", async () => {
-	const previousPreset = process.env.PI_STATUSLINE_PRESET;
+	const mock = createMockPi();
+	statusline(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	const footerFactory = context.footer as (
+		tui: { requestRender(): void },
+		theme: { fg(color: string, text: string): string; bold(text: string): string },
+		footerData: {
+			getGitBranch(): string | null;
+			getExtensionStatuses(): ReadonlyMap<string, string>;
+			onBranchChange(callback: () => void): () => void;
+		},
+	) => { render(width: number): string[]; dispose(): void };
+	const link = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
+	const statuses = new Map([["github-pr", `PR ${link}: checks failing (2), approved, 5 comments`]]);
+	let branch: string | null = "feature";
+	const footer = footerFactory(
+		{ requestRender() {} },
+		{ fg: (_color, text) => text, bold: (text) => text },
+		{
+			getGitBranch: () => branch,
+			getExtensionStatuses: () => statuses,
+			onBranchChange: () => () => undefined,
+		},
+	);
 	try {
-		for (const preset of ["classic", "tokyo-night"]) {
-			process.env.PI_STATUSLINE_PRESET = preset;
-			const mock = createMockPi();
-			statusline(mock.pi);
-			const context = createMockContext({ mode: "tui" });
-			await emit(mock.events, "session_start", {}, context.ctx);
-			const footerFactory = context.footer as (
-				tui: { requestRender(): void },
-				theme: { fg(color: string, text: string): string; bold(text: string): string },
-				footerData: {
-					getGitBranch(): string | null;
-					getExtensionStatuses(): ReadonlyMap<string, string>;
-					onBranchChange(callback: () => void): () => void;
-				},
-			) => { render(width: number): string[]; dispose(): void };
-			const link = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
-			const statuses = new Map([
-				["github-pr", `PR ${link}: checks failing (2), approved, 5 comments`],
-			]);
-			let branch: string | null = "feature";
-			const footer = footerFactory(
-				{ requestRender() {} },
-				{ fg: (_color, text) => text, bold: (text) => text },
-				{
-					getGitBranch: () => branch,
-					getExtensionStatuses: () => statuses,
-					onBranchChange: () => () => undefined,
-				},
-			);
+		const inlineLines = footer.render(300);
+		assert.ok(inlineLines[0]?.includes(`🌿 feature (${link} · 2 failing)`));
+		assert.equal(inlineLines.length, 1);
 
-			const inlineLines = footer.render(300);
-			assert.ok(inlineLines[0]?.includes(`🌿 feature (${link} · 2 failing)`), preset);
-			assert.equal(inlineLines.length, 1);
+		const narrowLines = footer.render(20);
+		assert.match(narrowLines.slice(1).join(" "), /PR/);
 
-			const narrowLines = footer.render(20);
-			assert.match(narrowLines.slice(1).join(" "), /PR/);
+		branch = null;
+		const fallbackLines = footer.render(300);
+		assert.equal(fallbackLines.length, 2);
+		assert.match(fallbackLines[1] ?? "", /PR/);
+		assert.match(fallbackLines[1] ?? "", /checks failing/);
 
-			branch = null;
-			const fallbackLines = footer.render(300);
-			assert.equal(fallbackLines.length, 2);
-			assert.match(fallbackLines[1] ?? "", /PR/);
-			assert.match(fallbackLines[1] ?? "", /checks failing/);
-
-			branch = "feature";
-			statuses.set("github-pr", "PR #123: checks failing (2), approved, 5 comments");
-			assert.match(footer.render(300).slice(1).join(" "), /PR/);
-			footer.dispose();
-		}
+		branch = "feature";
+		statuses.set("github-pr", "PR #123: checks failing (2), approved, 5 comments");
+		assert.match(footer.render(300).slice(1).join(" "), /PR/);
 	} finally {
-		if (previousPreset === undefined) delete process.env.PI_STATUSLINE_PRESET;
-		else process.env.PI_STATUSLINE_PRESET = previousPreset;
+		footer.dispose();
 	}
 });
 
-test("statusline renders max thinking with the latest theme color", async () => {
-	const previousPreset = process.env.PI_STATUSLINE_PRESET;
-	process.env.PI_STATUSLINE_PRESET = "classic";
+test("statusline renders max thinking in the Tokyo Night footer", async () => {
+	const mock = createMockPi({ thinkingLevel: "max" });
+	statusline(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+
+	await emit(mock.events, "session_start", {}, context.ctx);
+	const footerFactory = context.footer as (
+		tui: { requestRender(): void },
+		theme: { fg(color: string, text: string): string; bold(text: string): string },
+		footerData: {
+			getGitBranch(): string | null;
+			getExtensionStatuses(): ReadonlyMap<string, string>;
+			onBranchChange(callback: () => void): () => void;
+		},
+	) => { render(width: number): string[]; dispose(): void };
+	const footer = footerFactory(
+		{ requestRender() {} },
+		{ fg: (_color, text) => text, bold: (text) => text },
+		{
+			getGitBranch: () => null,
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
 	try {
-		const mock = createMockPi({ thinkingLevel: "max" });
-		statusline(mock.pi);
-		const context = createMockContext({ mode: "tui" });
-
-		await emit(mock.events, "session_start", {}, context.ctx);
-		const footerFactory = context.footer as (
-			tui: { requestRender(): void },
-			theme: { fg(color: string, text: string): string; bold(text: string): string },
-			footerData: {
-				getGitBranch(): string | null;
-				getExtensionStatuses(): ReadonlyMap<string, string>;
-				onBranchChange(callback: () => void): () => void;
-			},
-		) => { render(width: number): string[]; dispose(): void };
-		const colors: string[] = [];
-		const footer = footerFactory(
-			{ requestRender() {} },
-			{
-				fg(color, text) {
-					colors.push(color);
-					return text;
-				},
-				bold: (text) => text,
-			},
-			{
-				getGitBranch: () => null,
-				getExtensionStatuses: () => new Map(),
-				onBranchChange: () => () => undefined,
-			},
-		);
-
 		assert.match(footer.render(200)[0] ?? "", /🧠 max/);
-		assert.ok(colors.includes("thinkingMax"));
-		footer.dispose();
 	} finally {
-		if (previousPreset === undefined) delete process.env.PI_STATUSLINE_PRESET;
-		else process.env.PI_STATUSLINE_PRESET = previousPreset;
+		footer.dispose();
 	}
 });
 
 test("statusline renders provider next to the model", async () => {
-	const previousPreset = process.env.PI_STATUSLINE_PRESET;
-	process.env.PI_STATUSLINE_PRESET = "classic";
-	try {
-		const mock = createMockPi();
-		statusline(mock.pi);
-		const context = createMockContext({
-			mode: "tui",
-			model: { id: "claude-sonnet-4", provider: "anthropic" },
-		});
+	const mock = createMockPi();
+	statusline(mock.pi);
+	const context = createMockContext({
+		mode: "tui",
+		model: { id: "claude-sonnet-4", provider: "anthropic" },
+	});
 
-		await emit(mock.events, "session_start", {}, context.ctx);
-		const footerFactory = context.footer as (
-			tui: { requestRender(): void },
-			theme: { fg(color: string, text: string): string; bold(text: string): string },
-			footerData: {
-				getGitBranch(): string | null;
-				getExtensionStatuses(): ReadonlyMap<string, string>;
-				onBranchChange(callback: () => void): () => void;
+	await emit(mock.events, "session_start", {}, context.ctx);
+	const footerFactory = context.footer as (
+		tui: { requestRender(): void },
+		theme: { fg(color: string, text: string): string; bold(text: string): string },
+		footerData: {
+			getGitBranch(): string | null;
+			getExtensionStatuses(): ReadonlyMap<string, string>;
+			onBranchChange(callback: () => void): () => void;
+		},
+	) => { render(width: number): string[]; dispose(): void };
+	const footer = footerFactory(
+		{ requestRender() {} },
+		{
+			fg(_color, text) {
+				return text;
 			},
-		) => { render(width: number): string[]; dispose(): void };
-		const footer = footerFactory(
-			{ requestRender() {} },
-			{
-				fg(_color, text) {
-					return text;
-				},
-				bold: (text) => text,
-			},
-			{
-				getGitBranch: () => null,
-				getExtensionStatuses: () => new Map(),
-				onBranchChange: () => () => undefined,
-			},
-		);
+			bold: (text) => text,
+		},
+		{
+			getGitBranch: () => null,
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
 
-		const line = footer.render(200)[0] ?? "";
-		assert.match(line, /🔌 anthropic/);
-		assert.match(line, /🤖 sonnet-4/);
-		footer.dispose();
-	} finally {
-		if (previousPreset === undefined) delete process.env.PI_STATUSLINE_PRESET;
-		else process.env.PI_STATUSLINE_PRESET = previousPreset;
-	}
+	const line = footer.render(200)[0] ?? "";
+	assert.match(line, /🔌 anthropic/);
+	assert.match(line, /🤖 sonnet-4/);
+	footer.dispose();
 });
 
 test("statusline skips git status refreshes outside TUI mode", async () => {
@@ -583,18 +563,19 @@ test("statusline settings load extension icon overrides", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-test-"));
 	const settingsPath = join(root, "pi-statusline.json");
 
-	assert.deepEqual(readStatuslineSettings(settingsPath), { extensionStatusIcons: {} });
+	assert.equal(readStatuslineSettings(settingsPath).palette, "tokyo-night");
 
 	writeFileSync(
 		settingsPath,
 		JSON.stringify({ extensionStatusIcons: { goal: "", caffeinate: "☕", bad: 1 } }),
 	);
-	assert.deepEqual(readStatuslineSettings(settingsPath), {
-		extensionStatusIcons: { goal: "", caffeinate: "☕" },
-	});
+	const configured = readStatuslineSettings(settingsPath);
+	assert.equal(configured.extensionStatusIcons.goal, "");
+	assert.equal(configured.extensionStatusIcons.caffeinate, "☕");
+	assert.equal(Object.hasOwn(configured.extensionStatusIcons, "bad"), false);
 
 	writeFileSync(settingsPath, "not json");
-	assert.deepEqual(readStatuslineSettings(settingsPath), { extensionStatusIcons: {} });
+	assert.equal(readStatuslineSettings(settingsPath).palette, "tokyo-night");
 });
 
 test("statusline settings migrate to the canonical package filename", async () => {
@@ -608,7 +589,7 @@ test("statusline settings migrate to the canonical package filename", async () =
 			legacyPath,
 			JSON.stringify({ extensionStatusIcons: { goal: "🎯" }, futureOption: true }),
 		);
-		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "🎯" } });
+		assert.equal(readStatuslineSettings().extensionStatusIcons.goal, "🎯");
 		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
 			extensionStatusIcons: { goal: "🎯" },
 			futureOption: true,
@@ -617,30 +598,31 @@ test("statusline settings migrate to the canonical package filename", async () =
 
 		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "old" } }));
 		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "new" } }));
-		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "new" } });
+		assert.equal(readStatuslineSettings().extensionStatusIcons.goal, "new");
 		assert.equal(existsSync(legacyPath), true);
 
 		writeFileSync(canonicalPath, "invalid");
-		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: {} });
+		assert.equal(readStatuslineSettings().palette, "tokyo-night");
 		assert.equal(readFileSync(legacyPath, "utf8").includes("old"), true);
 		unlinkSync(legacyPath);
 		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "fixed" } }));
-		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "fixed" } });
+		assert.equal(readStatuslineSettings().extensionStatusIcons.goal, "fixed");
 		assert.equal(consumeStatuslineSettingsNotice(), undefined);
 		unlinkSync(canonicalPath);
 		writeFileSync(legacyPath, "invalid");
-		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: {} });
+		assert.equal(readStatuslineSettings().palette, "tokyo-night");
 		assert.equal(existsSync(canonicalPath), false);
 
 		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "fallback" } }));
 		symlinkSync("missing-target", canonicalPath);
-		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "fallback" } });
+		assert.equal(readStatuslineSettings().palette, "tokyo-night");
 		assert.equal(existsSync(legacyPath), true);
 		const mock = createMockPi();
 		statusline(mock.pi);
 		const context = createMockContext();
 		await emit(mock.events, "session_start", {}, context.ctx);
-		assert.match(context.notifications[0]?.message ?? "", /migration failed/i);
+		assert.match(context.notifications[0]?.message ?? "", /takes precedence/i);
+		assert.match(context.notifications[1]?.message ?? "", /read settings/i);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
