@@ -8,7 +8,7 @@ Pi cannot change its parent process working directory with `cd`. This extension 
 
 ## ✨ Features
 
-- Lists main, linked, current, detached, locked, and prunable worktree state from `git worktree list --porcelain -z`.
+- Shows compact main, linked, current, detached, locked, and prunable state in worktree selectors.
 - Creates a new branch worktree or attaches an existing unoccupied local branch.
 - Suggests a sibling path such as `/workspace/project-feat-login` for `feat/login`.
 - Optionally switches Pi into a newly created worktree while continuing the current conversation.
@@ -47,7 +47,6 @@ Run the command without arguments:
 
 Choose one action:
 
-- **List worktrees** — show compact path, branch/HEAD, and administrative state.
 - **Add worktree** — enter a branch, optional start point, and optional path; confirm creation and optionally switch.
 - **Switch worktree** — select another existing worktree and continue this Pi conversation there.
 - **Remove worktree** — remove a confirmed clean linked worktree without deleting its branch.

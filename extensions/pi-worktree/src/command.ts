@@ -30,16 +30,15 @@ import {
 } from "./git.js";
 import { switchToWorktree } from "./session.js";
 
-const ACTION_LIST = "List worktrees";
 const ACTION_ADD = "Add worktree";
 const ACTION_SWITCH = "Switch worktree";
 const ACTION_REMOVE = "Remove worktree";
 const ACTION_PRUNE = "Prune stale metadata";
-const ACTIONS = [ACTION_LIST, ACTION_ADD, ACTION_SWITCH, ACTION_REMOVE, ACTION_PRUNE];
+const ACTIONS = [ACTION_ADD, ACTION_SWITCH, ACTION_REMOVE, ACTION_PRUNE];
 
 export function registerWorktreeCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("worktree", {
-		description: "Interactively list, add, switch, remove, or prune Git worktrees",
+		description: "Interactively add, switch, remove, or prune Git worktrees",
 		handler: async (args, ctx) => {
 			if (args.trim()) {
 				safeNotify(
@@ -63,9 +62,6 @@ export function registerWorktreeCommand(pi: ExtensionAPI): void {
 					ACTIONS,
 				);
 				switch (action) {
-					case ACTION_LIST:
-						showList(ctx, records, currentPath);
-						return;
 					case ACTION_ADD:
 						await addFlow(pi, ctx, records);
 						return;
@@ -84,14 +80,6 @@ export function registerWorktreeCommand(pi: ExtensionAPI): void {
 			}
 		},
 	});
-}
-
-function showList(
-	ctx: ExtensionCommandContext,
-	records: readonly WorktreeRecord[],
-	currentPath: string,
-): void {
-	ctx.ui.notify(records.map((record) => formatWorktree(record, currentPath)).join("\n"), "info");
 }
 
 async function addFlow(

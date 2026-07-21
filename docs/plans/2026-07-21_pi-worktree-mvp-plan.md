@@ -1,6 +1,6 @@
 ## Goal
 
-Add the independently installable `@narumitw/pi-worktree` production extension with one interactive `/worktree` command for safe `list`, `add`, session-backed `switch`, clean `remove`, and preview-first `prune` operations.
+Add the independently installable `@narumitw/pi-worktree` production extension with one interactive `/worktree` command for safe `add`, session-backed `switch`, clean `remove`, and preview-first `prune` operations.
 
 ## Architecture
 
@@ -16,7 +16,7 @@ Add the independently installable `@narumitw/pi-worktree` production extension w
 ## Plan
 
 - [x] Add red-first domain tests for NUL porcelain parsing, worktree states, path derivation, branch occupancy, and safe argv; implemented the Git service and verified it with `npm test` (981 tests passed), including two disposable-repository Git integration tests.
-- [x] Add red-first command tests and implement the interactive `/worktree` menu plus list/add flows, including cancellation, validation, verification, and optional switch; `npm test` covers new/occupied branches, safe argv, cancellation, listing, and command-driven switching.
+- [x] Add red-first command tests and implement the interactive `/worktree` menu plus add flow, including cancellation, validation, verification, and optional switch; `npm test` covers new/occupied branches, safe argv, cancellation, and command-driven switching.
 - [x] Add red-first session tests and implement persisted-session fork switching, active-branch copying for ephemeral sessions, an official v3 empty-header fallback, and replacement-context-only success handling; verified persisted/ephemeral/empty/cancelled/failed/stale-context cases with public `SessionManager` APIs.
 - [x] Add red-first remove/prune tests and implement main/current/dirty/ignored/initialized-submodule/locked/detached reachability guards plus preview/cancel/confirm behavior; disposable-repository regressions cover ignored/untracked data, detached commits, porcelain-hidden prune metadata, staged-only indexes, and reflog/per-worktree-ref/`FETCH_HEAD`-only commits.
 - [x] Add the production package metadata, README, license, tsconfig, and cohesive source layout under `extensions/pi-worktree/`; the package check and typecheck pass and every source file is below 1,000 lines.
@@ -31,7 +31,7 @@ Add the independently installable `@narumitw/pi-worktree` production extension w
 
 ## Completion Checklist
 
-- [x] `/worktree` exposes only the five agreed interactive actions and every mutation requires the planned validation/confirmation.
+- [x] `/worktree` exposes only the four actionable interactive flows and every mutation requires the planned validation/confirmation.
 - [x] Add and switch preserve safe Git semantics and continue the current Pi conversation in a target-cwd session.
 - [x] Remove and prune cannot discard detected local-only data, staged administrative indexes, or unreachable commits preserved by worktree administrative history.
 - [x] Package metadata, repository integration, user documentation, and npm dry-run contents are complete.

@@ -33,7 +33,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
 | [`@narumitw/pi-webui`](./extensions/pi-webui) | 🌐 `/webui` lightweight browser companion for the current terminal Pi session, with semantic live sync and text/image input. | `pi install npm:@narumitw/pi-webui` |
-| [`@narumitw/pi-worktree`](./extensions/pi-worktree) | 🌳 Interactive `/worktree` management for safe list/add/switch/remove/prune flows and session-backed Pi workspace switching. | `pi install npm:@narumitw/pi-worktree` |
+| [`@narumitw/pi-worktree`](./extensions/pi-worktree) | 🌳 Interactive `/worktree` management for safe add/switch/remove/prune flows and session-backed Pi workspace switching. | `pi install npm:@narumitw/pi-worktree` |
 
 ## 🚀 Quick start
 
@@ -118,7 +118,7 @@ Use [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) when you want a Codex-
 
 ### 🌳 Git worktree workflows
 
-Use [`@narumitw/pi-worktree`](./extensions/pi-worktree) to list and create Git worktrees, continue the current Pi conversation in another worktree through session-backed cwd switching, safely remove clean linked worktrees, and preview stale metadata before pruning.
+Use [`@narumitw/pi-worktree`](./extensions/pi-worktree) to create Git worktrees, continue the current Pi conversation in another worktree through session-backed cwd switching, safely remove clean linked worktrees, and preview stale metadata before pruning.
 
 ### 🗃️ Deprecated extensions
 

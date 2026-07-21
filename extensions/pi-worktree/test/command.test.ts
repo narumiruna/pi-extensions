@@ -82,28 +82,32 @@ test("/worktree waits for full idle before reading Git state or opening dialogs"
 	assert.deepEqual(order, ["idle", "git:worktree:list", "git:rev-parse:--show-toplevel", "select"]);
 });
 
-test("list action displays current and linked worktrees", async () => {
+test("/worktree menu exposes only actionable flows", async () => {
 	const mock = createMockPi();
-	const records = porcelain([
-		{ path: "/repo", branch: "main" },
-		{ path: "/repo-feature", branch: "feature" },
-	]);
 	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
-		if (args[0] === "worktree") return result(records);
-		if (args[0] === "rev-parse") return result("/repo-feature\n");
-		return result();
+		if (args[0] === "worktree") {
+			return result(porcelain([{ path: "/repo", branch: "main" }]));
+		}
+		return result("/repo\n");
 	};
 	worktreeExtension(mock.pi);
+	let actions: string[] = [];
 	const context = createMockContext({
-		cwd: "/repo-feature",
+		cwd: "/repo",
 		hasUI: true,
 		mode: "tui",
-		select: async () => "List worktrees",
+		select: async (_title: string, items: string[]) => {
+			actions = items;
+			return undefined;
+		},
 	});
 	await mock.commands.get("worktree")?.handler("", context.ctx);
-	const notice = context.notifications.at(-1)?.message ?? "";
-	assert.match(notice, /\/repo.*main/);
-	assert.match(notice, /\/repo-feature.*current/);
+	assert.deepEqual(actions, [
+		"Add worktree",
+		"Switch worktree",
+		"Remove worktree",
+		"Prune stale metadata",
+	]);
 });
 
 test("add creates a new branch with safe argv, verifies it, and can leave the session unchanged", async () => {
