@@ -81,6 +81,44 @@ test("Git service creates, inventories, and removes a real linked worktree while
 	}
 });
 
+test("worktree inventory reports clean initialized submodules", async () => {
+	const temporary = realpathSync(mkdtempSync(join(tmpdir(), "pi-worktree-submodule-")));
+	const main = join(temporary, "repo");
+	const linked = join(temporary, "repo-feature");
+	const module = join(temporary, "module");
+	try {
+		git(temporary, ["init", "--initial-branch=main", module]);
+		git(module, ["config", "user.name", "Pi Worktree Test"]);
+		git(module, ["config", "user.email", "pi-worktree@example.invalid"]);
+		writeFileSync(join(module, "module.txt"), "module\n");
+		git(module, ["add", "module.txt"]);
+		git(module, ["commit", "-m", "module"]);
+
+		git(temporary, ["init", "--initial-branch=main", main]);
+		git(main, ["config", "user.name", "Pi Worktree Test"]);
+		git(main, ["config", "user.email", "pi-worktree@example.invalid"]);
+		writeFileSync(join(main, "README.md"), "main\n");
+		git(main, ["add", "README.md"]);
+		git(main, ["commit", "-m", "initial"]);
+		git(main, ["-c", "protocol.file.allow=always", "submodule", "add", module, "deps/module"]);
+		git(main, ["commit", "-am", "add submodule"]);
+		git(main, ["worktree", "add", "-b", "feature", linked, "HEAD"]);
+		git(linked, [
+			"-c",
+			"protocol.file.allow=always",
+			"submodule",
+			"update",
+			"--init",
+			"--recursive",
+		]);
+
+		const inventory = await worktreeInventory(pi, linked);
+		assert.ok(inventory.some((line) => /initialized submodule.*deps\/module/i.test(line)));
+	} finally {
+		rmSync(temporary, { recursive: true, force: true });
+	}
+});
+
 test("administrative history exposes a clean attached worktree's reflog-only commit", async () => {
 	const temporary = realpathSync(mkdtempSync(join(tmpdir(), "pi-worktree-history-")));
 	const main = join(temporary, "repo");
@@ -112,6 +150,38 @@ test("administrative history exposes a clean attached worktree's reflog-only com
 		assert.deepEqual(await durableRefsContaining(pi, main, unique), []);
 		assert.deepEqual(await durableRefsContaining(pi, main, perRefOnly), []);
 		assert.deepEqual(await worktreeInventory(pi, linked), []);
+	} finally {
+		rmSync(temporary, { recursive: true, force: true });
+	}
+});
+
+test("administrative history includes commits referenced only by per-worktree FETCH_HEAD", async () => {
+	const temporary = realpathSync(mkdtempSync(join(tmpdir(), "pi-worktree-fetch-head-")));
+	const main = join(temporary, "repo");
+	const linked = join(temporary, "repo-feature");
+	const remote = join(temporary, "remote");
+	try {
+		git(temporary, ["init", "--initial-branch=main", remote]);
+		git(remote, ["config", "user.name", "Pi Worktree Test"]);
+		git(remote, ["config", "user.email", "pi-worktree@example.invalid"]);
+		writeFileSync(join(remote, "remote.txt"), "fetch only\n");
+		git(remote, ["add", "remote.txt"]);
+		git(remote, ["commit", "-m", "fetch only"]);
+		const fetchedOid = git(remote, ["rev-parse", "HEAD"]).stdout.trim();
+
+		git(temporary, ["init", "--initial-branch=main", main]);
+		git(main, ["config", "user.name", "Pi Worktree Test"]);
+		git(main, ["config", "user.email", "pi-worktree@example.invalid"]);
+		writeFileSync(join(main, "README.md"), "main\n");
+		git(main, ["add", "README.md"]);
+		git(main, ["commit", "-m", "initial"]);
+		git(main, ["worktree", "add", "-b", "feature", linked, "HEAD"]);
+		git(linked, ["fetch", remote, fetchedOid]);
+
+		const administrative = await worktreeAdministrativeDirectory(pi, linked);
+		const history = await administrativeHistoryOids(pi, main, administrative);
+		assert.ok(history.includes(fetchedOid));
+		assert.deepEqual(await durableRefsContaining(pi, main, fetchedOid), []);
 	} finally {
 		rmSync(temporary, { recursive: true, force: true });
 	}

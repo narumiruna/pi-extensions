@@ -43,12 +43,12 @@ interface GitExecOptions {
 }
 
 export class GitWorktreeError extends Error {
-	constructor(
-		message: string,
-		readonly args?: readonly string[],
-	) {
+	readonly args?: readonly string[];
+
+	constructor(message: string, args?: readonly string[]) {
 		super(message);
 		this.name = "GitWorktreeError";
+		this.args = args;
 	}
 }
 
@@ -139,6 +139,16 @@ export function pathIdentity(path: string): string {
 		return realpathSync.native(absolute);
 	} catch {
 		return absolute;
+	}
+}
+
+export function pathEntryExists(path: string): boolean {
+	try {
+		lstatSync(path);
+		return true;
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return false;
+		throw new GitWorktreeError(`Cannot inspect filesystem path ${path}: ${formatError(error)}`);
 	}
 }
 
@@ -273,6 +283,10 @@ export async function worktreeInventory(
 		"--ignore-submodules=none",
 	];
 	const status = await runGit(pi, statusArgs, path, signal);
+	const submoduleStatus = await runGit(pi, ["submodule", "status", "--recursive"], path, signal);
+	const initializedSubmodules = nonEmptyLines(submoduleStatus.stdout)
+		.filter((line) => !line.startsWith("-"))
+		.map((line) => `initialized submodule: ${line.slice(1).trimStart()}`);
 	const submodules = await runGit(
 		pi,
 		[
@@ -285,7 +299,11 @@ export async function worktreeInventory(
 		path,
 		signal,
 	);
-	return [...nonEmptyLines(status.stdout), ...nonEmptyLines(submodules.stdout)];
+	return [
+		...nonEmptyLines(status.stdout),
+		...initializedSubmodules,
+		...nonEmptyLines(submodules.stdout),
+	];
 }
 
 export async function worktreeAdministrativeDirectory(
@@ -329,17 +347,13 @@ export async function administrativeHistoryOids(
 		"REVERT_HEAD",
 		"BISECT_HEAD",
 	]) {
-		const pseudorefPath = resolve(administrativePath, name);
-		if (!existsSync(pseudorefPath)) continue;
-		let contents: string;
-		try {
-			contents = readFileSync(pseudorefPath, "utf8");
-		} catch (error) {
-			throw new GitWorktreeError(
-				`Cannot inspect Git worktree administrative ${name}: ${formatError(error)}`,
-			);
-		}
+		const contents = readAdministrativeFile(administrativePath, name);
+		if (contents === undefined) continue;
 		values.push(...splitAdministrativeOids(contents, name));
+	}
+	const fetchHead = readAdministrativeFile(administrativePath, "FETCH_HEAD");
+	if (fetchHead !== undefined) {
+		values.push(...splitFetchHeadOids(fetchHead));
 	}
 	return [...new Set(values)];
 }
@@ -539,7 +553,7 @@ export function stripTerminalControls(value: string): string {
 	return [...value]
 		.filter((character) => {
 			const code = character.codePointAt(0) ?? 0;
-			return code > 0x1f && code !== 0x7f;
+			return code > 0x1f && (code < 0x7f || code > 0x9f);
 		})
 		.join("");
 }
@@ -619,6 +633,43 @@ function splitAdministrativeOids(value: string, source: string): string[] {
 		throw new GitWorktreeError(`Git returned malformed object IDs for ${source}.`);
 	}
 	return values;
+}
+
+function splitFetchHeadOids(value: string): string[] {
+	const normalized = value.endsWith("\n") ? value.slice(0, -1) : value;
+	if (!normalized) return [];
+	return normalized.split("\n").map((line) => {
+		const match = /^([0-9a-fA-F]{40,64})\t/u.exec(line);
+		if (!match?.[1]) {
+			throw new GitWorktreeError("Git worktree administrative FETCH_HEAD is malformed.");
+		}
+		return match[1];
+	});
+}
+
+function readAdministrativeFile(administrativePath: string, name: string): string | undefined {
+	const path = resolve(administrativePath, name);
+	let stat: ReturnType<typeof lstatSync>;
+	try {
+		stat = lstatSync(path);
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return undefined;
+		throw new GitWorktreeError(
+			`Cannot inspect Git worktree administrative ${name}: ${formatError(error)}`,
+		);
+	}
+	if (stat.isSymbolicLink() || !stat.isFile()) {
+		throw new GitWorktreeError(
+			`Git worktree administrative ${name} must be a regular file: ${path}.`,
+		);
+	}
+	try {
+		return readFileSync(path, "utf8");
+	} catch (error) {
+		throw new GitWorktreeError(
+			`Cannot inspect Git worktree administrative ${name}: ${formatError(error)}`,
+		);
+	}
 }
 
 function readAdministrativeReflogOids(logPath: string): string[] {

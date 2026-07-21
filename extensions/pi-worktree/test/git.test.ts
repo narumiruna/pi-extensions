@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import {
 	buildAddArguments,
 	currentWorktreePath,
@@ -102,8 +104,8 @@ test("formatWorktree strips terminal controls from Git-owned display values", ()
 	const rendered = formatWorktree({
 		path: "/repo\u001b]8;;bad\u0007",
 		head: oid,
-		branch: "feature\nspoof",
-		branchRef: "refs/heads/feature\nspoof",
+		branch: "feature\nspoof\u009b2J",
+		branchRef: "refs/heads/feature\nspoof\u009b2J",
 		isMain: false,
 		bare: false,
 		detached: false,
@@ -112,11 +114,28 @@ test("formatWorktree strips terminal controls from Git-owned display values", ()
 	assert.equal(
 		[...rendered].some((character) => {
 			const code = character.codePointAt(0) ?? 0;
-			return code <= 0x1f || code === 0x7f;
+			return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
 		}),
 		false,
 	);
-	assert.match(rendered, /featurespoof/);
+	assert.match(rendered, /featurespoof2J/);
+});
+
+test("published git source loads with Node strip-only TypeScript", () => {
+	const moduleUrl = pathToFileURL(
+		join(process.cwd(), "extensions", "pi-worktree", "src", "git.ts"),
+	).href;
+	const loaded = spawnSync(
+		process.execPath,
+		[
+			"--experimental-strip-types",
+			"--input-type=module",
+			"--eval",
+			`await import(${JSON.stringify(moduleUrl)})`,
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(loaded.status, 0, loaded.stderr);
 });
 
 test("sameWorktreeIdentity binds path, HEAD, branch ref, detached, main, and bare state", () => {

@@ -12,6 +12,7 @@ import {
 	formatWorktree,
 	listWorktrees,
 	localBranchExists,
+	pathEntryExists,
 	pathIdentity,
 	pathsEqual,
 	prunePreview,
@@ -145,7 +146,9 @@ async function addFlow(
 	const targetPath = pathIdentity(
 		requestedPath.trim() ? resolve(ctx.cwd, requestedPath.trim()) : suggestedPath,
 	);
-	if (existsSync(targetPath)) throw new Error(`The target path already exists: ${targetPath}.`);
+	if (pathEntryExists(targetPath)) {
+		throw new Error(`The target path already exists: ${targetPath}.`);
+	}
 	const pathCollision = records.find((record) => pathsEqual(record.path, targetPath));
 	if (pathCollision) {
 		throw new Error(`The target path is already registered as a worktree: ${pathCollision.path}.`);

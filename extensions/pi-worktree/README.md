@@ -90,7 +90,7 @@ A successfully created Git worktree is never rolled back merely because Pi sessi
 - Locked or stale worktrees cannot be removed through this extension.
 - Dirty, untracked, ignored, and initialized-submodule data causes removal to fail closed.
 - A detached HEAD must be reachable from a local branch, tag, or remote ref before removal or prune.
-- Removal and prune also protect reflog-only and per-worktree administrative history: every discovered commit must remain reachable from a durable branch, tag, or remote ref. This can require creating a branch or tag after a reset or rebase, even when the worktree is otherwise clean.
+- Removal and prune also protect reflog-only and per-worktree administrative history, including `FETCH_HEAD`: every discovered commit must remain reachable from a durable branch, tag, or remote ref. This can require creating a branch or tag after a fetch, reset, or rebase, even when the worktree is otherwise clean.
 - Removal never deletes a branch and never uses `--force`.
 - Prune always runs `git worktree prune --dry-run --verbose` before confirmation, inspects linked-worktree administrative HEAD, index, reflog, pseudoref, and per-worktree ref state (including candidates omitted from porcelain), and uses Git's default expiry.
 - The extension does not commit, push, rebase, repair, move, lock, or unlock worktrees.
