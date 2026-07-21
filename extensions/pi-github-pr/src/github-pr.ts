@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs";
+import { type FSWatcher, watch } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -45,6 +45,7 @@ const STATUS_KEY = "github-pr";
 const GH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
 const BRANCH_REFRESH_DEBOUNCE_MS = 100;
+const PR_REFRESH_INTERVAL_MS = 60_000;
 const TERMINAL_PR_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const GH_PR_FIELDS = [
 	"number",
@@ -72,38 +73,68 @@ const GH_PR_COUNT_QUERY = `
 	}
 `;
 
-export default function githubPr(pi: ExtensionAPI) {
-	const branchWatch: BranchWatchState = { generation: 0, session: 0 };
+interface GithubPrOptions {
+	refreshIntervalMs?: number;
+}
+
+export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}) {
+	const refreshIntervalMs = options.refreshIntervalMs ?? PR_REFRESH_INTERVAL_MS;
+	if (!Number.isFinite(refreshIntervalMs) || refreshIntervalMs <= 0) {
+		throw new RangeError("refreshIntervalMs must be a positive finite number");
+	}
+	const branchWatch: BranchWatchState = { generation: 0, request: 0, session: 0 };
 	const refreshStatus = async (
 		ctx: ExtensionContext,
 		signal?: AbortSignal,
 		generation = branchWatch.generation,
 	) => {
+		branchWatch.request += 1;
+		const request = branchWatch.request;
 		try {
 			const status = await runGhPrView(pi, ctx.cwd, signal);
-			if (generation === branchWatch.generation) renderStatus(ctx, status, branchWatch, generation);
+			if (generation === branchWatch.generation && request === branchWatch.request) {
+				renderStatus(ctx, status, branchWatch, generation);
+			}
 		} catch (error) {
-			if (generation === branchWatch.generation) {
+			if (generation === branchWatch.generation && request === branchWatch.request) {
 				clearExpiryTimer(branchWatch);
 				renderAmbientFailure(ctx, error);
 			}
 		}
+		return request;
 	};
-	const scheduleBranchRefresh = (ctx: ExtensionContext) => {
+	const schedulePeriodicRefresh = (ctx: ExtensionContext, session: number) => {
+		clearPeriodicRefresh(branchWatch);
+		branchWatch.refreshTimer = setTimeout(async () => {
+			branchWatch.refreshTimer = undefined;
+			if (session !== branchWatch.session) return;
+			const request = await refreshStatus(ctx, ctx.signal);
+			if (session === branchWatch.session && request === branchWatch.request) {
+				schedulePeriodicRefresh(ctx, session);
+			}
+		}, refreshIntervalMs);
+		branchWatch.refreshTimer.unref?.();
+	};
+	const scheduleBranchRefresh = (ctx: ExtensionContext, session: number) => {
 		branchWatch.generation += 1;
 		const generation = branchWatch.generation;
+		clearPeriodicRefresh(branchWatch);
 		clearExpiryTimer(branchWatch);
 		clearStatus(ctx);
 		if (branchWatch.timer) clearTimeout(branchWatch.timer);
-		branchWatch.timer = setTimeout(() => {
+		branchWatch.timer = setTimeout(async () => {
 			branchWatch.timer = undefined;
 			if (generation !== branchWatch.generation) return;
-			void refreshStatus(ctx, ctx.signal, generation);
+			const request = await refreshStatus(ctx, ctx.signal, generation);
+			if (session === branchWatch.session && request === branchWatch.request) {
+				schedulePeriodicRefresh(ctx, session);
+			}
 		}, BRANCH_REFRESH_DEBOUNCE_MS);
 	};
 	const closeBranchWatcher = () => {
 		if (branchWatch.timer) clearTimeout(branchWatch.timer);
 		branchWatch.timer = undefined;
+		clearPeriodicRefresh(branchWatch);
 		clearExpiryTimer(branchWatch);
 		branchWatch.watcher?.close();
 		branchWatch.watcher = undefined;
@@ -115,18 +146,26 @@ export default function githubPr(pi: ExtensionAPI) {
 		const session = branchWatch.session;
 		closeBranchWatcher();
 		const watcher = await createBranchWatcher(pi, ctx.cwd, ctx.signal, () => {
-			if (session === branchWatch.session) scheduleBranchRefresh(ctx);
+			if (session === branchWatch.session) scheduleBranchRefresh(ctx, session);
 		});
 		if (session !== branchWatch.session) {
 			watcher?.close();
 			return;
 		}
 		branchWatch.watcher = watcher;
-		await refreshStatus(ctx, ctx.signal);
+		const request = await refreshStatus(ctx, ctx.signal);
+		if (session === branchWatch.session && request === branchWatch.request) {
+			schedulePeriodicRefresh(ctx, session);
+		}
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		await refreshStatus(ctx, ctx.signal);
+		const session = branchWatch.session;
+		clearPeriodicRefresh(branchWatch);
+		const request = await refreshStatus(ctx, ctx.signal);
+		if (session === branchWatch.session && request === branchWatch.request) {
+			schedulePeriodicRefresh(ctx, session);
+		}
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -139,9 +178,11 @@ export default function githubPr(pi: ExtensionAPI) {
 
 interface BranchWatchState {
 	generation: number;
+	request: number;
 	session: number;
 	watcher?: FSWatcher;
 	timer?: ReturnType<typeof setTimeout>;
+	refreshTimer?: ReturnType<typeof setTimeout>;
 	expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -180,14 +221,7 @@ export async function runGhPrView(
 	signal?: AbortSignal,
 ): Promise<PullRequestStatus> {
 	const invocation = ghPrViewInvocation();
-	const result = await execGh(
-		pi,
-		invocation.command,
-		invocation.args,
-		cwd,
-		signal,
-		"gh pr view",
-	);
+	const result = await execGh(pi, invocation.command, invocation.args, cwd, signal, "gh pr view");
 	if (result.killed) throw new Error("gh pr view timed out or was cancelled.");
 	if (result.code !== 0) throw new Error(formatGhFailure("gh pr view", result));
 
@@ -408,6 +442,11 @@ function pullRequestExpiresAt(status: PullRequestStatus): number | undefined {
 	return Number.isFinite(terminalAt) ? terminalAt + TERMINAL_PR_LIFETIME_MS : undefined;
 }
 
+function clearPeriodicRefresh(branchWatch: BranchWatchState) {
+	if (branchWatch.refreshTimer) clearTimeout(branchWatch.refreshTimer);
+	branchWatch.refreshTimer = undefined;
+}
+
 function clearExpiryTimer(branchWatch: BranchWatchState) {
 	if (branchWatch.expiryTimer) clearTimeout(branchWatch.expiryTimer);
 	branchWatch.expiryTimer = undefined;
@@ -421,6 +460,7 @@ export function formatLinkedStatus(status: PullRequestStatus): string {
 }
 
 function stripTerminalControlChars(value: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Strip untrusted terminal controls.
 	return value.replace(/[\x00-\x1f\x7f]/g, "");
 }
 
@@ -557,9 +597,7 @@ function isGhExecutableMissingMessage(lowerMessage: string): boolean {
 		/\b(?:gh|gh\.exe)\b.*\benoent\b|\benoent\b.*\b(?:gh|gh\.exe)\b/.test(lowerMessage) ||
 		/\b(?:gh|gh\.exe): (?:command )?not found\b/.test(lowerMessage) ||
 		/\bcommand not found: (?:gh|gh\.exe)\b/.test(lowerMessage) ||
-		/\benv:\s+['"‘’]?(?:gh|gh\.exe)['"‘’]?: no such file or directory\b/.test(
-			lowerMessage,
-		) ||
+		/\benv:\s+['"‘’]?(?:gh|gh\.exe)['"‘’]?: no such file or directory\b/.test(lowerMessage) ||
 		/['"‘’]?(?:gh|gh\.exe)['"‘’]? is not recognized as an internal or external command\b/.test(
 			lowerMessage,
 		) ||
@@ -571,9 +609,12 @@ function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function parsePrCoordinates(
-	pr: JsonRecord,
-): { host: string; owner: string; name: string; number: number } {
+function parsePrCoordinates(pr: JsonRecord): {
+	host: string;
+	owner: string;
+	name: string;
+	number: number;
+} {
 	const number = requiredNumber(pr.number, "number");
 	const url = optionalString(pr.url);
 	if (!url) throw new Error("Missing PR url");
