@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import type { ExecResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -315,6 +316,7 @@ export async function worktreeInventory(
 	];
 	const status = await runGit(pi, statusArgs, path, signal);
 	const indexFlags = await runGit(pi, ["ls-files", "-v", "-z"], path, signal);
+	const indexInventory = await indexFlagInventory(pi, indexFlags.stdout, path, signal);
 	const submoduleStatus = await runGit(pi, ["submodule", "status", "--recursive"], path, signal);
 	const initializedSubmodules = nonEmptyLines(submoduleStatus.stdout)
 		.filter((line) => !line.startsWith("-"))
@@ -333,7 +335,7 @@ export async function worktreeInventory(
 	);
 	return [
 		...nonEmptyLines(status.stdout),
-		...indexFlagInventory(indexFlags.stdout),
+		...indexInventory,
 		...initializedSubmodules,
 		...nonEmptyLines(submodules.stdout),
 	];
@@ -646,21 +648,155 @@ function nonEmptyLines(value: string): string[] {
 	return value.split(/\r?\n/u).filter((line) => line.length > 0);
 }
 
-function indexFlagInventory(value: string): string[] {
+interface IndexFlagEntry {
+	path: string;
+	skipWorktree: boolean;
+	assumeUnchanged: boolean;
+}
+
+async function indexFlagInventory(
+	pi: Pick<ExtensionAPI, "exec">,
+	value: string,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<string[]> {
+	const entries = parseIndexFlagEntries(value);
+	const sparseManagedPaths = await sparseManagedSkipWorktreePaths(
+		pi,
+		cwd,
+		entries.filter((entry) => entry.skipWorktree).map((entry) => entry.path),
+		signal,
+	);
 	const inventory: string[] = [];
+	for (const entry of entries) {
+		const flags = [
+			entry.skipWorktree && !sparseManagedPaths.has(entry.path) ? "skip-worktree" : undefined,
+			entry.assumeUnchanged ? "assume-unchanged" : undefined,
+		].filter((flag): flag is string => flag !== undefined);
+		if (flags.length > 0) inventory.push(`index flag ${flags.join("+")}: ${entry.path}`);
+	}
+	return inventory;
+}
+
+function parseIndexFlagEntries(value: string): IndexFlagEntry[] {
+	const entries: IndexFlagEntry[] = [];
 	for (const entry of value.split("\0")) {
 		if (!entry) continue;
 		if (entry.length < 3 || entry[1] !== " ") {
 			throw new GitWorktreeError("Git returned malformed ls-files index-flag output.");
 		}
 		const tag = entry[0] ?? "";
-		const flags = [
-			tag.toUpperCase() === "S" ? "skip-worktree" : undefined,
-			/[a-z]/u.test(tag) ? "assume-unchanged" : undefined,
-		].filter((flag): flag is string => flag !== undefined);
-		if (flags.length > 0) inventory.push(`index flag ${flags.join("+")}: ${entry.slice(2)}`);
+		const skipWorktree = tag.toUpperCase() === "S";
+		const assumeUnchanged = /[a-z]/u.test(tag);
+		if (skipWorktree || assumeUnchanged) {
+			entries.push({ path: entry.slice(2), skipWorktree, assumeUnchanged });
+		}
 	}
-	return inventory;
+	return entries;
+}
+
+async function sparseManagedSkipWorktreePaths(
+	pi: Pick<ExtensionAPI, "exec">,
+	cwd: string,
+	paths: readonly string[],
+	signal?: AbortSignal,
+): Promise<ReadonlySet<string>> {
+	if (paths.length === 0) return new Set();
+	const configArgs = ["config", "--bool", "--get", "core.sparseCheckout"];
+	const config = await runGitAllowFailure(pi, configArgs, cwd, signal);
+	if (config.killed) throw killedError(configArgs);
+	if (config.code !== 0 || config.stdout.trim() !== "true") return new Set();
+
+	const candidates = new Set(paths);
+	const checkArgs = ["sparse-checkout", "check-rules", "-z"];
+	const checked = await runGitWithInputAllowFailure(
+		checkArgs,
+		cwd,
+		`${[...candidates].join("\0")}\0`,
+		signal,
+	);
+	if (checked.killed) throw killedError(checkArgs);
+	// Older Git versions lack check-rules; retain every flag rather than guessing.
+	if (checked.code !== 0) return new Set();
+
+	const included = new Set(nulSeparatedPaths(checked.stdout, "sparse-checkout rules"));
+	if ([...included].some((path) => !candidates.has(path))) {
+		throw new GitWorktreeError("Git returned an unexpected sparse-checkout path.");
+	}
+	return new Set([...candidates].filter((path) => !included.has(path)));
+}
+
+function runGitWithInputAllowFailure(
+	args: string[],
+	cwd: string,
+	input: string,
+	signal?: AbortSignal,
+	timeout = GIT_TIMEOUT_MS,
+): Promise<ExecResult> {
+	if (signal?.aborted) {
+		return Promise.resolve({ stdout: "", stderr: "", code: 1, killed: true });
+	}
+	return new Promise((resolveResult, reject) => {
+		// ExtensionAPI.exec has no stdin channel, so this read-only check uses an argv-only child.
+		const child = spawn("git", args, { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+		let stdout = "";
+		let stderr = "";
+		let killed = false;
+		let settled = false;
+		const finish = (result: ExecResult) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeoutHandle);
+			signal?.removeEventListener("abort", stop);
+			resolveResult(result);
+		};
+		const fail = (error: unknown) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeoutHandle);
+			signal?.removeEventListener("abort", stop);
+			child.kill();
+			const message = formatError(error);
+			reject(
+				/\bENOENT\b|not found/i.test(message)
+					? new GitWorktreeError("Git executable was not found. Install Git and retry.", args)
+					: new GitWorktreeError(
+							`Could not start git ${args.slice(0, 2).join(" ")}: ${message}`,
+							args,
+						),
+			);
+		};
+		const stop = () => {
+			killed = true;
+			child.kill();
+		};
+		const timeoutHandle = setTimeout(stop, timeout);
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => {
+			stdout += chunk;
+		});
+		child.stderr.on("data", (chunk: string) => {
+			stderr += chunk;
+		});
+		child.stdin.on("error", (error) => {
+			if (!isNodeError(error) || error.code !== "EPIPE") fail(error);
+		});
+		child.once("error", fail);
+		child.once("close", (code, closeSignal) => {
+			finish({ stdout, stderr, code: code ?? 1, killed: killed || closeSignal !== null });
+		});
+		signal?.addEventListener("abort", stop, { once: true });
+		if (signal?.aborted) stop();
+		child.stdin.end(input);
+	});
+}
+
+function nulSeparatedPaths(value: string, source: string): string[] {
+	if (value && !value.endsWith("\0")) {
+		throw new GitWorktreeError(`Git returned malformed ${source} output.`);
+	}
+	return value.split("\0").filter(Boolean);
 }
 
 function combineOutput(result: ExecResult): string {
