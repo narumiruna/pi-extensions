@@ -4,6 +4,7 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexUsage, {
 	type CodexUsageReport,
 	completeCodexStatusArguments,
+	DEPRECATION_WARNING_MESSAGE,
 	formatCodexUsageReport,
 	formatCodexUsageStatusline,
 	isStaleExtensionContextError,
@@ -24,6 +25,28 @@ test("codex-usage registers command and statusline lifecycle hooks", () => {
 		"session_start",
 		"session_tree",
 	]);
+});
+
+test("session_start warns once that pi-codex-usage is deprecated", async () => {
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const sessionStart = mock.events.get("session_start")?.[0];
+	assert.ok(sessionStart);
+	const { ctx, notifications } = createMockContext();
+
+	await sessionStart({}, ctx);
+	await sessionStart({}, ctx);
+
+	const deprecationWarnings = notifications.filter(
+		(notification) => notification.message === DEPRECATION_WARNING_MESSAGE,
+	);
+	assert.equal(deprecationWarnings.length, 1);
+	assert.equal(deprecationWarnings[0]?.level, "warning");
+	assert.match(deprecationWarnings[0]?.message ?? "", /@narumitw\/pi-codex-usage/);
+	assert.match(deprecationWarnings[0]?.message ?? "", /@narumitw\/pi-usage/);
+	assert.match(deprecationWarnings[0]?.message ?? "", /pi uninstall npm:@narumitw\/pi-codex-usage/);
+	assert.match(deprecationWarnings[0]?.message ?? "", /pi install npm:@narumitw\/pi-usage/);
+	assert.match(deprecationWarnings[0]?.message ?? "", /Do not load both extensions/);
 });
 
 test("completeCodexStatusArguments suggests accepted options", () => {
