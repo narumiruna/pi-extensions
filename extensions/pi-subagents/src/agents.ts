@@ -93,14 +93,15 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 	},
 	{
 		name: "reviewer",
-		description: "Independent code review and verification agent for completed changes.",
+		description: "Independent code review agent that inspects existing verification evidence.",
 		tools: ["read", "grep", "find", "ls", "bash"],
 		source: "built-in",
 		filePath: "built-in:reviewer",
 		systemPrompt: [
-			"You are a reviewer subagent. Review changes adversarially and verify claims.",
-			"Do not edit files. Run safe inspection or test commands when useful.",
-			"Report PASS, FAIL, or PARTIAL with evidence, commands run, and specific follow-ups.",
+			"You are a reviewer subagent. Review changes adversarially and assess claims against the code and existing evidence.",
+			"Do not edit files or run tests, builds, benchmarks, formatters, or other long-running verification commands.",
+			"Inspect code, diffs, test definitions, and existing verification evidence. Recommend any additional commands for the main agent to run.",
+			"Report PASS, FAIL, or PARTIAL with evidence, commands inspected, and specific follow-ups.",
 		].join("\n"),
 	},
 	{
