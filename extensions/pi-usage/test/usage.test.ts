@@ -348,6 +348,61 @@ test("TUI usage queries can be cancelled with Escape", async () => {
 	assert.equal(selected, false);
 });
 
+test("session shutdown aborts usage action and provider selectors", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = usageFetch;
+
+	const dialogSignals: AbortSignal[] = [];
+	let providerSelectorStarted: () => void = () => undefined;
+	const providerSelectorReady = new Promise<void>((resolve) => {
+		providerSelectorStarted = resolve;
+	});
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const command = mock.commands.get("usage");
+	assert.ok(command);
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		model: openRouterModel,
+		select: async (
+			title: string,
+			_options: string[],
+			opts?: { signal?: AbortSignal },
+		): Promise<string | undefined> => {
+			assert.ok(opts?.signal);
+			dialogSignals.push(opts.signal);
+			if (!title.includes("Select a configured provider")) {
+				return "View another configured provider…";
+			}
+			providerSelectorStarted();
+			return new Promise((resolve) => {
+				if (opts.signal?.aborted) resolve(undefined);
+				else opts.signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+			});
+		},
+		modelRegistry: {
+			getProviderAuth: async (provider: string) => ({ auth: { apiKey: `${provider}-key` } }),
+			getAvailable: () => [openRouterModel, codexModel],
+			getAll: () => [openRouterModel, codexModel],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: (provider: string) => provider,
+		},
+	});
+
+	const pending = command.handler("", ctx);
+	await providerSelectorReady;
+	mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+	await pending;
+
+	assert.equal(dialogSignals.length, 2);
+	assert.equal(dialogSignals[0], dialogSignals[1]);
+	assert.equal(dialogSignals[0]?.aborted, true);
+});
+
 test("automatic provider failures back off instead of retrying every turn", async (t) => {
 	const originalFetch = globalThis.fetch;
 	t.after(() => {

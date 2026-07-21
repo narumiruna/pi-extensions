@@ -478,7 +478,9 @@ export default function usageExtension(pi: ExtensionAPI) {
 			let visibleStates: ProviderUsageState[] = [current.state];
 
 			while (!controller.signal.aborted) {
-				const action = await ctx.ui.select(formatProviderStates(visibleStates), [...MENU_ACTIONS]);
+				const action = await ctx.ui.select(formatProviderStates(visibleStates), [...MENU_ACTIONS], {
+					signal: controller.signal,
+				});
 				if (!action || action === CLOSE) return;
 				if (action === REFRESH_CURRENT) {
 					stableCurrent = await queryStableCurrent(
@@ -504,6 +506,7 @@ export default function usageExtension(pi: ExtensionAPI) {
 					const choice = await ctx.ui.select(
 						"Select a configured provider",
 						others.map((adapter) => adapter.displayName),
+						{ signal: controller.signal },
 					);
 					const adapter = others.find((candidate) => candidate.displayName === choice);
 					if (!adapter) continue;
