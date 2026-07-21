@@ -21,7 +21,7 @@ The current extension exposes `/account list/login/switch/remove` plus temporary
 - [x] Implement `/accounts` as the only registered account command and wire the interactive menu to existing OAuth/storage/runtime operations; verified by `npm test` passing 955 tests after implementation.
 - [x] Update README usage and feature text to document the single-command interactive workflow and removed aliases; verified by source inspection showing `pi.registerCommand("accounts", ...)` and no registered `/account` or Codex alias commands in `extensions/pi-accounts/src/accounts.ts`.
 - [x] Run formatting/type/test gates for the affected package and root checks that are practical for the change; verified by `npm --workspace @narumitw/pi-accounts run check`, `npm test`, `npm run check`, and `npm run pack:accounts`.
-- [ ] Commit the intended changes on a feature branch, push it, and create a GitHub PR; verify with `git status --short`, `git log -1`, and `gh pr view`.
+- [x] Commit the intended changes on a feature branch, push it, and create a GitHub PR; verified by commit `04fbbfe`, branch `redesign-pi-accounts-menu`, push to `origin/redesign-pi-accounts-menu`, and PR #306.
 
 ## Risks
 
@@ -31,9 +31,9 @@ The current extension exposes `/account list/login/switch/remove` plus temporary
 
 ## Completion Checklist
 
-- [x] The saved implementation plan exists and reflects completed task evidence in `docs/plans/2026-07-21_pi-accounts-menu-redesign-plan.md`.
+- [x] The saved implementation plan exists and reflects completed task evidence in `docs/plans/archived/2026-07-21_pi-accounts-menu-redesign-plan.md`.
 - [x] `/accounts` is the only registered account-management command, verified by `accounts registers only the interactive /accounts command and lifecycle hooks` and source inspection of `extensions/pi-accounts/src/accounts.ts`.
 - [x] Interactive menu behavior matches the agreed design, verified by tests covering empty, current-provider, other-provider, login, remove, duplicate replacement cancellation/confirmation, active removal fallback, unknown-model onboarding, and non-interactive states.
 - [x] README documents the new `/accounts` workflow and no longer documents removed command entry points, verified by text search for removed command names.
 - [x] Verification commands pass for the changed package/repository scope, with command output recorded in this plan: `npm --workspace @narumitw/pi-accounts run check`, `npm test`, `npm run check`, and `npm run pack:accounts`.
-- [ ] A PR exists for the branch and contains the committed implementation, verified by `gh pr view`.
+- [x] A PR exists for the branch and contains the committed implementation, verified by PR #306 and `gh pr view`.
