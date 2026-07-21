@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	realpathSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -141,6 +149,31 @@ test("worktree inventory reports assume-unchanged and skip-worktree index flags"
 		const inventory = await worktreeInventory(pi, linked);
 		assert.ok(inventory.some((line) => /assume-unchanged.*assume\.txt/i.test(line)));
 		assert.ok(inventory.some((line) => /skip-worktree.*skip\.txt/i.test(line)));
+	} finally {
+		rmSync(temporary, { recursive: true, force: true });
+	}
+});
+
+test("worktree inventory ignores clean sparse-checkout-managed index flags", async () => {
+	const temporary = realpathSync(mkdtempSync(join(tmpdir(), "pi-worktree-sparse-inventory-")));
+	const main = join(temporary, "repo");
+	const linked = join(temporary, "repo-feature");
+	try {
+		git(temporary, ["init", "--initial-branch=main", main]);
+		git(main, ["config", "user.name", "Pi Worktree Test"]);
+		git(main, ["config", "user.email", "pi-worktree@example.invalid"]);
+		mkdirSync(join(main, "keep"));
+		mkdirSync(join(main, "drop"));
+		writeFileSync(join(main, "keep", "a.txt"), "keep\n");
+		writeFileSync(join(main, "drop", "b.txt"), "drop\n");
+		git(main, ["add", "keep/a.txt", "drop/b.txt"]);
+		git(main, ["commit", "-m", "initial"]);
+		git(main, ["worktree", "add", "-b", "feature", linked, "HEAD"]);
+		git(linked, ["sparse-checkout", "set", "keep"]);
+
+		assert.equal(git(linked, ["status", "--porcelain=v1"]).stdout, "");
+		assert.match(git(linked, ["ls-files", "-v"]).stdout, /^S drop\/b\.txt$/m);
+		assert.deepEqual(await worktreeInventory(pi, linked), []);
 	} finally {
 		rmSync(temporary, { recursive: true, force: true });
 	}

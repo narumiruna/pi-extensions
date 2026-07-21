@@ -15,7 +15,7 @@ Pi cannot change its parent process working directory with `cd`. This extension 
 - Optionally switches Pi into a newly created worktree while continuing the current conversation.
 - Switches among existing registered worktrees through Pi's public session replacement API.
 - Removes only clean, unlocked, non-current linked worktrees and preserves their branches.
-- Refuses removal when tracked, untracked, ignored, index-flagged, submodule, or current unreachable detached-commit data may be lost.
+- Refuses removal when tracked, untracked, ignored, manually index-flagged, submodule, or current unreachable detached-commit data may be lost.
 - Names recovery-only administrative commits in the destructive confirmation instead of making ordinary rebase/reset history block cleanup forever.
 - Always previews stale metadata before pruning it and revalidates the preview after confirmation.
 - Runs Git through argv-based subprocess calls, without interpolating user input into shell commands.
@@ -89,7 +89,7 @@ A successfully created Git worktree is never rolled back merely because Pi sessi
 
 - The main worktree and current worktree cannot be removed.
 - Locked or stale worktrees cannot be removed through this extension.
-- Dirty, untracked, ignored, initialized-submodule, and `assume-unchanged`/`skip-worktree` index state causes removal to fail closed. Clear intentional index flags before removing the worktree.
+- Dirty, untracked, ignored, initialized-submodule, and intentional `assume-unchanged`/`skip-worktree` index state causes removal to fail closed. Sparse-checkout-managed `skip-worktree` entries outside the active sparsity rules are allowed when Git's rule checker can confirm them; clear other intentional index flags before removing the worktree.
 - A detached HEAD must be reachable from a local branch, tag, or remote ref before removal or prune.
 - Removal and prune inspect reflogs, pseudorefs, per-worktree refs, and `FETCH_HEAD`. Historical commits reachable only through this administrative recovery state are listed by full OID in the destructive confirmation; approval removes those recovery pointers, so Git may later garbage-collect the commits. Create a branch or tag instead when any listed commit should survive.
 - Staged-only administrative index state, a missing attached branch ref, or an unreachable current detached HEAD still blocks prune without an override.
