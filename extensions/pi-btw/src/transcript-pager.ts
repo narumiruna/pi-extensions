@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
+	CURSOR_MARKER,
 	Editor,
 	type EditorTheme,
 	Key,
@@ -32,8 +33,7 @@ export class BtwTranscriptPager implements Component {
 	private scrollOffset = 0;
 	private lastContentLineCount = 0;
 	private lastViewportHeight = 1;
-	private scrollToBottomOnFirstRender: boolean;
-	private hasRendered = false;
+	private followBottom: boolean;
 	private warning: string | undefined;
 	private finished = false;
 	private isFocused = false;
@@ -46,7 +46,7 @@ export class BtwTranscriptPager implements Component {
 		options: { startAtBottom?: boolean } = {},
 	) {
 		this.transcriptComponents = buildTranscriptComponents(turns, this.theme);
-		this.scrollToBottomOnFirstRender = options.startAtBottom ?? false;
+		this.followBottom = options.startAtBottom ?? false;
 		const editorTheme: EditorTheme = {
 			borderColor: (text) => this.theme.fg("accent", text),
 			selectList: {
@@ -90,23 +90,18 @@ export class BtwTranscriptPager implements Component {
 			availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES,
 		);
 		const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
-		const shouldFollowBottom =
-			this.scrollToBottomOnFirstRender ||
-			(this.hasRendered && this.scrollOffset >= this.getMaxScrollOffset());
 		this.lastContentLineCount = contentLines.length;
 		this.lastViewportHeight = viewportHeight;
-		if (shouldFollowBottom) this.scrollOffset = this.getMaxScrollOffset();
-		this.scrollToBottomOnFirstRender = false;
-		this.hasRendered = true;
+		if (this.followBottom) this.scrollOffset = this.getMaxScrollOffset();
 		this.clampScrollOffset();
 
-		const lines = [
+		return fitComposerLayout(
 			renderSideThreadHeader(safeWidth, this.theme),
-			...contentLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
+			contentLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
 			this.renderFooter(safeWidth),
-			...editorLines,
-		];
-		return fitWithFixedHeader(lines, availableRows);
+			editorLines,
+			availableRows,
+		);
 	}
 
 	handleInput(data: string): void {
@@ -117,12 +112,14 @@ export class BtwTranscriptPager implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.pageUp)) {
+			this.followBottom = false;
 			this.scrollBy(-this.lastViewportHeight);
 			this.tui.requestRender();
 			return;
 		}
 		if (matchesKey(data, Key.pageDown)) {
 			this.scrollBy(this.lastViewportHeight);
+			this.followBottom = this.scrollOffset >= this.getMaxScrollOffset();
 			this.tui.requestRender();
 			return;
 		}
@@ -141,15 +138,19 @@ export class BtwTranscriptPager implements Component {
 			return truncateToWidth(this.theme.fg("warning", warning), width);
 		}
 		const scrollable = this.getMaxScrollOffset() > 0;
-		let hints: string;
-		if (width < 28) {
-			hints = "btw • Enter • Ctrl+C";
-		} else if (width < 52) {
-			hints = `btw • Enter • Ctrl+C${scrollable ? " • PgUp/PgDn" : ""}`;
-		} else {
-			hints = `btw • Enter send • Ctrl+C exit${
-				scrollable ? ` • ${this.scrollOffset > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history` : ""
-			}`;
+		const fullBase = "btw • Enter send • Ctrl+C exit";
+		const compactBase = "btw • Enter • Ctrl+C";
+		let hints = visibleWidth(fullBase) <= width ? fullBase : compactBase;
+		if (scrollable) {
+			const history = ` • ${this.scrollOffset > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history`;
+			const compactHistory = " • PgUp/PgDn";
+			if (visibleWidth(`${hints}${history}`) <= width) {
+				hints += history;
+			} else if (visibleWidth(`${hints}${compactHistory}`) <= width) {
+				hints += compactHistory;
+			} else if (visibleWidth(`${compactBase}${compactHistory}`) <= width) {
+				hints = `${compactBase}${compactHistory}`;
+			}
 		}
 		return truncateToWidth(this.theme.fg("muted", hints), width);
 	}
@@ -175,8 +176,7 @@ export class BtwAnsweringView implements Component {
 	private scrollOffset = 0;
 	private lastContentLineCount = 0;
 	private lastViewportHeight = 1;
-	private scrollToBottomOnFirstRender = true;
-	private hasRendered = false;
+	private followBottom = true;
 	private finished = false;
 
 	constructor(
@@ -204,14 +204,9 @@ export class BtwAnsweringView implements Component {
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
 		const viewportHeight = Math.max(0, availableRows - TRANSCRIPT_CHROME_LINES);
 		const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
-		const shouldFollowBottom =
-			this.scrollToBottomOnFirstRender ||
-			(this.hasRendered && this.scrollOffset >= this.getMaxScrollOffset());
 		this.lastContentLineCount = contentLines.length;
 		this.lastViewportHeight = viewportHeight;
-		if (shouldFollowBottom) this.scrollOffset = this.getMaxScrollOffset();
-		this.scrollToBottomOnFirstRender = false;
-		this.hasRendered = true;
+		if (this.followBottom) this.scrollOffset = this.getMaxScrollOffset();
 		this.clampScrollOffset();
 		const cancelHint = safeWidth < 28 ? "Ctrl+C" : "Ctrl+C cancel";
 		const loaderWidth = Math.max(1, safeWidth - visibleWidth(cancelHint) - 3);
@@ -234,10 +229,12 @@ export class BtwAnsweringView implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.pageUp)) {
+			this.followBottom = false;
 			this.scrollBy(-this.lastViewportHeight);
 			this.tui.requestRender();
 		} else if (matchesKey(data, Key.pageDown)) {
 			this.scrollBy(this.lastViewportHeight);
+			this.followBottom = this.scrollOffset >= this.getMaxScrollOffset();
 			this.tui.requestRender();
 		}
 	}
@@ -329,6 +326,29 @@ function renderSideThreadHeader(width: number, theme: Theme): string {
 	const title = truncateToWidth("─ btw · side thread ", width);
 	const ruleWidth = Math.max(0, width - visibleWidth(title));
 	return theme.fg("muted", `${title}${"─".repeat(ruleWidth)}`);
+}
+
+function fitComposerLayout(
+	header: string,
+	contentLines: string[],
+	footer: string,
+	editorLines: string[],
+	availableRows: number,
+): string[] {
+	const lines = [header, ...contentLines, footer, ...editorLines];
+	if (lines.length <= availableRows) return lines;
+	if (availableRows <= 1) return [header];
+	const editorBudget = Math.max(0, availableRows - 2);
+	return [header, footer, ...fitEditorLines(editorLines, editorBudget)];
+}
+
+function fitEditorLines(editorLines: string[], budget: number): string[] {
+	if (budget <= 0) return [];
+	if (editorLines.length <= budget) return editorLines;
+	const cursorIndex = editorLines.findIndex((line) => line.includes(CURSOR_MARKER));
+	if (cursorIndex < 0) return editorLines.slice(-budget);
+	const start = Math.min(cursorIndex, editorLines.length - budget);
+	return editorLines.slice(start, start + budget);
 }
 
 function fitWithFixedHeader(lines: string[], availableRows: number): string[] {

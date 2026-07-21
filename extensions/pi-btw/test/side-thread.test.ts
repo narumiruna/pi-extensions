@@ -294,12 +294,56 @@ test("empty transcript composer accepts the first side-thread question", () => {
 	const emptyView = emptyLines.join("\n");
 	assert.match(emptyLines[0] ?? "", /─ btw · side thread/);
 	assert.doesNotMatch(emptyView, /turns|Q1|You:|Assistant:|%|history/);
-	assert.match(emptyView, /btw.*Enter.*Ctrl\+C/);
+	assert.match(emptyView, /btw • Enter send • Ctrl\+C exit/);
 	assert.equal(emptyView.includes(CURSOR_MARKER), true);
 	for (const character of "first question") composer.handleInput(character);
 	composer.handleInput("\r");
 
 	assert.deepEqual(actions, [{ kind: "submit", question: "first question" }]);
+});
+
+test("side-thread header and footer remain visible when the editor grows", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const composer = new BtwTranscriptPager(tui as never, theme as never, [], () => undefined);
+	composer.focused = true;
+	for (const character of "long input ".repeat(30)) composer.handleInput(character);
+	const rendered = composer.render(20);
+
+	assert.match(rendered[0] ?? "", /btw/);
+	assert.match(rendered.join("\n"), /Ctrl\+C/);
+	assert.equal(rendered.join("\n").includes(CURSOR_MARKER), true);
+	assert.ok(rendered.length <= tui.terminal.rows - 3);
+});
+
+test("constrained composer keeps an earlier editor cursor visible", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const composer = new BtwTranscriptPager(tui as never, theme as never, [], () => undefined);
+	composer.focused = true;
+	const text = Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n");
+	composer.handleInput(`\u001b[200~${text}\u001b[201~`);
+	for (let index = 0; index < 9; index += 1) composer.handleInput("\u001b[A");
+
+	const rendered = composer.render(20).join("\n");
+	assert.equal(rendered.includes(CURSOR_MARKER), true);
+	assert.match(rendered, /Ctrl\+C/);
 });
 
 test("side-thread header stays fixed across narrow renders and history scrolling", () => {
@@ -441,6 +485,35 @@ test("transcript honors an explicit top start on its first render", () => {
 	assert.doesNotMatch(rendered, /line 20/);
 });
 
+test("transcript preserves an intentional scroll position across fit and reflow", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = `EARLIEST ${"middle content ".repeat(20)}LATEST`;
+	const composer = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "question", answer, kind: "answered", response: response(answer) }],
+		() => undefined,
+		{ startAtBottom: true },
+	);
+	composer.render(20);
+	for (let index = 0; index < 20; index += 1) composer.handleInput("\u001b[5~");
+	tui.terminal.rows = 100;
+	composer.render(80);
+	tui.terminal.rows = 10;
+	const reflowed = composer.render(20).join("\n");
+
+	assert.doesNotMatch(reflowed, /LATEST/);
+});
+
 test("transcript stays anchored to the latest answer when terminal width changes", () => {
 	initTheme("dark");
 	const tui = { terminal: { rows: 10 }, requestRender() {} };
@@ -463,6 +536,38 @@ test("transcript stays anchored to the latest answer when terminal width changes
 
 	assert.match(composer.render(80).join("\n"), /LATEST/);
 	assert.match(composer.render(20).join("\n"), /LATEST/);
+});
+
+test("answering view preserves an intentional scroll position across fit and reflow", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = `EARLIEST ${"middle content ".repeat(20)}LATEST`;
+	const view = new BtwAnsweringView(
+		tui as never,
+		theme as never,
+		[{ question: "Earlier question", answer, kind: "answered", response: response(answer) }],
+		"CURRENT QUESTION",
+		() => undefined,
+	);
+	try {
+		view.render(20);
+		for (let index = 0; index < 20; index += 1) view.handleInput("\u001b[5~");
+		tui.terminal.rows = 100;
+		view.render(80);
+		tui.terminal.rows = 10;
+		const reflowed = view.render(20).join("\n");
+		assert.doesNotMatch(reflowed, /CURRENT QUESTION/);
+	} finally {
+		view.dispose();
+	}
 });
 
 test("answering view preserves the transcript and offers compact cancellation", () => {
