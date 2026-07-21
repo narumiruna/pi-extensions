@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { S3Client } from "../src/s3-client.js";
 import sync, {
 	addTopLevelCaseVariantDeletes,
 	appliedFileHashMap,
@@ -800,6 +801,138 @@ test("security and configuration helpers detect secrets and R2 session-token war
 	assert.equal(isExplicitlyEnabled("true"), true);
 	assert.equal(isExplicitlyEnabled("tru"), false);
 	assert.equal(isExplicitlyEnabled(""), false);
+});
+
+test("getJson retries on empty R2 response body and eventually succeeds", async () => {
+	const originalFetch = globalThis.fetch;
+	const responses = [
+		new Response("", { status: 200, headers: { etag: "w/empty1" } }),
+		new Response("", { status: 200, headers: { etag: "w/empty2" } }),
+		new Response(JSON.stringify({ snapshot: "snap-1", sha256: "abc" }), {
+			status: 200,
+			headers: { etag: "w/ok" },
+		}),
+	];
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		const response = responses[Math.min(calls, responses.length - 1)];
+		calls += 1;
+		return response;
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		const result = await client.getJson<{ snapshot: string; sha256: string }>("latest.json");
+		assert.equal(result.missing, false);
+		assert.equal(result.value?.snapshot, "snap-1");
+		assert.equal(result.etag, "w/ok");
+		assert.equal(calls, 3);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("getJson throws after retrying a persistently empty R2 response body", async () => {
+	const originalFetch = globalThis.fetch;
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		calls += 1;
+		return new Response("", { status: 200, headers: { etag: "w/empty" } });
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		await assert.rejects(client.getJson("latest.json"), /empty body/);
+		assert.equal(calls, 3);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("getJson does not retry a non-empty malformed response body", async () => {
+	const originalFetch = globalThis.fetch;
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		calls += 1;
+		return new Response("{", { status: 200, headers: { etag: "w/malformed" } });
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		await assert.rejects(client.getJson("latest.json"), SyntaxError);
+		assert.equal(calls, 1);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("getBuffer retries on empty R2 response body and eventually succeeds", async () => {
+	const originalFetch = globalThis.fetch;
+	const payload = Buffer.from("snapshot-payload");
+	const responses = [
+		new Response("", { status: 200, headers: { etag: "w/empty1" } }),
+		new Response("", { status: 200, headers: { etag: "w/empty2" } }),
+		new Response(new Uint8Array(payload), { status: 200, headers: { etag: "w/ok" } }),
+	];
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		const response = responses[Math.min(calls, responses.length - 1)];
+		calls += 1;
+		return response;
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		const result = await client.getBuffer("snapshots/snap-1.json.gz");
+		assert.equal(result.missing, false);
+		assert.deepEqual(result.value, payload);
+		assert.equal(result.etag, "w/ok");
+		assert.equal(calls, 3);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("getBuffer throws after retrying a persistently empty R2 response body", async () => {
+	const originalFetch = globalThis.fetch;
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		calls += 1;
+		return new Response("", { status: 200, headers: { etag: "w/empty" } });
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		await assert.rejects(client.getBuffer("snapshots/snap-1.json.gz"), /empty body/);
+		assert.equal(calls, 3);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 function snapshot(files: Array<{ path: string; content: Buffer }>) {
