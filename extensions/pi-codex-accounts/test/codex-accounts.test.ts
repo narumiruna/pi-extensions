@@ -11,6 +11,7 @@ import codexAccounts, {
 	completeStoredAccountArguments,
 	DEFAULT_CODEX_MODEL_ID,
 	DEFAULT_PI_LOGIN_LABEL,
+	DEPRECATION_WARNING_MESSAGE,
 	ensureActiveCodexAuth,
 	FAIL_CLOSED_API_KEY,
 	isOpenAICodexModel,
@@ -41,6 +42,31 @@ test("codex-accounts registers commands and lifecycle hooks", () => {
 		"session_start",
 		"turn_start",
 	]);
+});
+
+test("session_start warns once that pi-codex-accounts is deprecated", async () => {
+	const mock = createMockPi();
+	codexAccounts(mock.pi, { store: new CodexAccountStore(new InMemoryAuthStorageBackend()) });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	assert.ok(sessionStart);
+	const { ctx, notifications } = createMockContext();
+
+	await sessionStart({}, ctx);
+	await sessionStart({}, ctx);
+
+	const deprecationWarnings = notifications.filter(
+		(notification) => notification.message === DEPRECATION_WARNING_MESSAGE,
+	);
+	assert.equal(deprecationWarnings.length, 1);
+	assert.equal(deprecationWarnings[0]?.level, "warning");
+	assert.match(deprecationWarnings[0]?.message ?? "", /@narumitw\/pi-codex-accounts/);
+	assert.match(deprecationWarnings[0]?.message ?? "", /@narumitw\/pi-accounts/);
+	assert.match(
+		deprecationWarnings[0]?.message ?? "",
+		/pi uninstall npm:@narumitw\/pi-codex-accounts/,
+	);
+	assert.match(deprecationWarnings[0]?.message ?? "", /pi install npm:@narumitw\/pi-accounts/);
+	assert.match(deprecationWarnings[0]?.message ?? "", /Do not load both extensions/);
 });
 
 test("parseAccountName accepts small account labels and rejects unsafe names", () => {

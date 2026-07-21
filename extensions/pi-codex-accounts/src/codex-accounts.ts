@@ -37,6 +37,13 @@ const LEGACY_CODEX_ACCOUNTS_FILE = "codex-accounts.json";
 export const CODEX_ACCOUNTS_STATUS_KEY = "codex-accounts";
 export const DEFAULT_PI_LOGIN_LABEL = "(default pi login)";
 export const FAIL_CLOSED_API_KEY = "pi-codex-accounts-refresh-failed";
+export const DEPRECATION_WARNING_MESSAGE = [
+	"@narumitw/pi-codex-accounts is deprecated and will be replaced by @narumitw/pi-accounts.",
+	"Please migrate by running:",
+	"  pi uninstall npm:@narumitw/pi-codex-accounts",
+	"  pi install npm:@narumitw/pi-accounts",
+	"Do not load both extensions at the same time.",
+].join("\n");
 
 const runtimeCodexAuth = new RuntimeApiKeyController(CODEX_PROVIDER_ID);
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -137,6 +144,7 @@ export default function codexAccounts(
 ) {
 	const store = dependencies.store ?? new CodexAccountStore();
 	let migrationNotice = dependencies.store ? undefined : consumeAccountsMigrationNotice();
+	let deprecationWarningShown = false;
 	const oauthProvider =
 		dependencies.oauthProvider ?? getDefaultCodexOAuthProvider(CODEX_PROVIDER_ID);
 	// Keep cleanup injectable until WebSocket controls are available through a loader-safe export.
@@ -256,6 +264,10 @@ export default function codexAccounts(
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		if (!deprecationWarningShown) {
+			ctx.ui.notify(DEPRECATION_WARNING_MESSAGE, "warning");
+			deprecationWarningShown = true;
+		}
 		if (migrationNotice) {
 			ctx.ui.notify(migrationNotice, "warning");
 			migrationNotice = undefined;
