@@ -170,6 +170,53 @@ test("add creates a new branch with safe argv, verifies it, and can leave the se
 	}
 });
 
+test("add strips terminal controls from branch-derived prompts", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-add-controls-"));
+	const main = join(root, "repo");
+	mkdirSync(main);
+	const control = "\u009b2J";
+	const mock = createMockPi();
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
+		if (args[0] === "worktree" && args[1] === "list") {
+			return result(porcelain([{ path: main, branch: "main" }]));
+		}
+		if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return result(`${main}\n`);
+		if (args[0] === "check-ref-format") return result(`feat${control}spoof\n`);
+		if (args[0] === "show-ref") return result("", 1);
+		if (args[0] === "symbolic-ref") return result(`main${control}spoof\n`);
+		if (args[0] === "rev-parse" && args[1] === "--verify") return result(`${oid}\n`);
+		return result();
+	};
+	worktreeExtension(mock.pi);
+	const inputs = ["feature", "", undefined];
+	const dialogs: string[] = [];
+	const context = createMockContext({
+		cwd: main,
+		hasUI: true,
+		mode: "tui",
+		select: async () => "Add worktree",
+		input: async (title: string, placeholder: string) => {
+			dialogs.push(title, placeholder);
+			return inputs.shift();
+		},
+	});
+	try {
+		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(dialogs.length, 6);
+		assert.equal(
+			dialogs.every((value) =>
+				[...value].every((character) => {
+					const code = character.codePointAt(0) ?? 0;
+					return code > 0x1f && (code < 0x7f || code > 0x9f);
+				}),
+			),
+			true,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("add refuses a broken symlink target before creating the branch", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-worktree-symlink-add-"));
 	const main = join(root, "repo");
@@ -204,6 +251,46 @@ test("add refuses a broken symlink target before creating the branch", async () 
 		await mock.commands.get("worktree")?.handler("", context.ctx);
 		assert.equal(mutations, 0);
 		assert.match(context.notifications.at(-1)?.message ?? "", /target path already exists/i);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("add refuses a broken symlink ancestor before creating the branch", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-symlink-parent-add-"));
+	const main = join(root, "repo");
+	const brokenParent = join(root, "broken-parent");
+	const linked = join(brokenParent, "nested", "repo-feature");
+	mkdirSync(main);
+	symlinkSync("missing-parent", brokenParent);
+	const mock = createMockPi();
+	let mutations = 0;
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
+		if (args[0] === "worktree" && args[1] === "add") mutations += 1;
+		if (args[0] === "worktree" && args[1] === "list") {
+			return result(porcelain([{ path: main, branch: "main" }]));
+		}
+		if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return result(`${main}\n`);
+		if (args[0] === "check-ref-format") return result("feature\n");
+		if (args[0] === "show-ref") return result("", 1);
+		if (args[0] === "symbolic-ref") return result("main\n");
+		if (args[0] === "rev-parse" && args[1] === "--verify") return result(`${oid}\n`);
+		return result();
+	};
+	worktreeExtension(mock.pi);
+	const inputs = ["feature", "", linked];
+	const context = createMockContext({
+		cwd: main,
+		hasUI: true,
+		mode: "tui",
+		select: async () => "Add worktree",
+		input: async () => inputs.shift(),
+		confirm: async () => true,
+	});
+	try {
+		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(mutations, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /symbolic-link ancestor/i);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

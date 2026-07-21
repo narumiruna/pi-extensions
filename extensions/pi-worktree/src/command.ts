@@ -22,6 +22,7 @@ import {
 	sameWorktreeIdentity,
 	stripTerminalControls,
 	symbolicBranch,
+	unresolvableSymlinkAncestor,
 	validateBranch,
 	type WorktreeRecord,
 	worktreeAdministrativeDirectory,
@@ -119,10 +120,12 @@ async function addFlow(
 	if (!branchExists) {
 		const defaultStart = await symbolicBranch(pi, ctx.cwd, ctx.signal);
 		const requestedStart = await ctx.ui.input(
-			defaultStart
-				? `Start point for ${branch} (blank uses ${defaultStart})`
-				: `Start point for ${branch} (required because HEAD is detached)`,
-			defaultStart ?? "commit-ish",
+			stripTerminalControls(
+				defaultStart
+					? `Start point for ${branch} (blank uses ${defaultStart})`
+					: `Start point for ${branch} (required because HEAD is detached)`,
+			),
+			stripTerminalControls(defaultStart ?? "commit-ish"),
 		);
 		if (requestedStart === undefined) return;
 		startLabel = requestedStart.trim() || defaultStart;
@@ -139,9 +142,7 @@ async function addFlow(
 	const targetPath = pathIdentity(
 		requestedPath.trim() ? resolve(ctx.cwd, requestedPath.trim()) : suggestedPath,
 	);
-	if (pathEntryExists(targetPath)) {
-		throw new Error(`The target path already exists: ${targetPath}.`);
-	}
+	assertTargetFilesystemAvailable(targetPath);
 	const pathCollision = records.find((record) => pathsEqual(record.path, targetPath));
 	if (pathCollision) {
 		throw new Error(`The target path is already registered as a worktree: ${pathCollision.path}.`);
@@ -152,6 +153,7 @@ async function addFlow(
 		: `Create branch ${branch} from ${startLabel} at ${targetPath}?`;
 	if (!(await ctx.ui.confirm("Create Git worktree", stripTerminalControls(summary)))) return;
 
+	assertTargetFilesystemAvailable(targetPath);
 	await addWorktree(pi, ctx.cwd, { path: targetPath, branch, startOid }, ctx.signal);
 	let created: WorktreeRecord;
 	try {
@@ -179,6 +181,18 @@ async function addFlow(
 			throw new Error("The newly created worktree became unavailable; select it again.");
 		}
 		await switchToWorktree(ctx, latest.path);
+	}
+}
+
+function assertTargetFilesystemAvailable(targetPath: string): void {
+	if (pathEntryExists(targetPath)) {
+		throw new Error(`The target path already exists: ${targetPath}.`);
+	}
+	const unsafeAncestor = unresolvableSymlinkAncestor(targetPath);
+	if (unsafeAncestor) {
+		throw new Error(
+			`The target path has an unresolvable symbolic-link ancestor: ${unsafeAncestor}.`,
+		);
 	}
 }
 

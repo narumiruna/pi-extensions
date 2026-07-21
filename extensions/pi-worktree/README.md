@@ -10,11 +10,12 @@ Pi cannot change its parent process working directory with `cd`. This extension 
 
 - Shows compact main, linked, current, detached, locked, and prunable state in worktree selectors.
 - Creates a new branch worktree or attaches an existing unoccupied local branch.
+- Rejects occupied targets and unresolvable symbolic-link ancestors before Git can create a branch.
 - Suggests a sibling path such as `/workspace/project-feat-login` for `feat/login`.
 - Optionally switches Pi into a newly created worktree while continuing the current conversation.
 - Switches among existing registered worktrees through Pi's public session replacement API.
 - Removes only clean, unlocked, non-current linked worktrees and preserves their branches.
-- Refuses removal when tracked, untracked, ignored, submodule, or current unreachable detached-commit data may be lost.
+- Refuses removal when tracked, untracked, ignored, index-flagged, submodule, or current unreachable detached-commit data may be lost.
 - Names recovery-only administrative commits in the destructive confirmation instead of making ordinary rebase/reset history block cleanup forever.
 - Always previews stale metadata before pruning it and revalidates the preview after confirmation.
 - Runs Git through argv-based subprocess calls, without interpolating user input into shell commands.
@@ -67,7 +68,7 @@ branch:        feat/login
 suggested:     /home/user/workspace/project-feat-login
 ```
 
-Leave the path input blank to accept the suggestion. A custom absolute path is used directly; a custom relative path is resolved from the current Pi cwd.
+Leave the path input blank to accept the suggestion. A custom absolute path is used directly; a custom relative path is resolved from the current Pi cwd. The target itself must not exist, and its nearest existing ancestor must resolve without a broken or looping symbolic link.
 
 The MVP does not expose `--force`, `-B`, `--detach`, `--orphan`, or lock options.
 
@@ -88,7 +89,7 @@ A successfully created Git worktree is never rolled back merely because Pi sessi
 
 - The main worktree and current worktree cannot be removed.
 - Locked or stale worktrees cannot be removed through this extension.
-- Dirty, untracked, ignored, and initialized-submodule data causes removal to fail closed.
+- Dirty, untracked, ignored, initialized-submodule, and `assume-unchanged`/`skip-worktree` index state causes removal to fail closed. Clear intentional index flags before removing the worktree.
 - A detached HEAD must be reachable from a local branch, tag, or remote ref before removal or prune.
 - Removal and prune inspect reflogs, pseudorefs, per-worktree refs, and `FETCH_HEAD`. Historical commits reachable only through this administrative recovery state are listed by full OID in the destructive confirmation; approval removes those recovery pointers, so Git may later garbage-collect the commits. Create a branch or tag instead when any listed commit should survive.
 - Staged-only administrative index state, a missing attached branch ref, or an unreachable current detached HEAD still blocks prune without an override.
