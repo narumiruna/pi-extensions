@@ -22,6 +22,7 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexAccounts, {
 	CODEX_ACCOUNTS_FILE,
 	CodexAccountStore,
+	DEPRECATION_WARNING_MESSAGE,
 	ensureActiveCodexAuth,
 } from "../src/codex-accounts.js";
 import {
@@ -195,7 +196,12 @@ test("default store migrates credentials to the canonical package filename", asy
 			},
 		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		assert.match(context.notifications[0]?.message ?? "", /migrated/i);
+		assert.ok(
+			context.notifications.some(
+				(notification) => notification.message === DEPRECATION_WARNING_MESSAGE,
+			),
+		);
+		assert.ok(context.notifications.some((notification) => /migrated/i.test(notification.message)));
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
