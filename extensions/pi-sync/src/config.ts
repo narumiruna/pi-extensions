@@ -52,20 +52,35 @@ export async function withLock<T>(command: string, fn: () => Promise<T>): Promis
 	};
 	let handle: fs.FileHandle | undefined;
 	try {
-		handle = await fs.open(lockPath(), "wx");
+		// Acquire the lock, reclaiming an unreadable (zero-byte/truncated/corrupt)
+		// lock file once. Such a file can never represent a real holder, so removing
+		// it lets sync/push/pull/rollback self-heal after a crashed or interrupted run.
+		for (let attempt = 0; ; attempt++) {
+			try {
+				handle = await fs.open(lockPath(), "wx");
+				break;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+				const current = await readLock();
+				if (current && isStaleLock(current)) {
+					throw new Error(`pi-sync lock is stale (pid ${current.pid}). Run /pisync unlock --stale, then retry.`);
+				}
+				if (current) {
+					throw new Error(
+						`pi-sync is already running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`,
+					);
+				}
+				if (attempt > 0) {
+					throw new Error("pi-sync is already running.");
+				}
+				// Lock file exists but is unreadable: reclaim and retry.
+				await fs.rm(lockPath(), { force: true });
+			}
+		}
 		await handle.writeFile(JSON.stringify(lock, null, "\t"));
 		await handle.close();
 		handle = undefined;
 		return await fn();
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-			const current = await readLock();
-			if (current && isStaleLock(current)) {
-				throw new Error(`pi-sync lock is stale (pid ${current.pid}). Run /pisync unlock --stale, then retry.`);
-			}
-			throw new Error(`pi-sync is already running${current ? ` (${current.command}, pid ${current.pid}, started ${current.startedAt})` : ""}.`);
-		}
-		throw error;
 	} finally {
 		await handle?.close();
 		const current = await readLock();
@@ -208,6 +223,16 @@ export async function readLock() {
 	return readJsonIfExists<LockFile>(lockPath());
 }
 
+export async function lockFileExists(): Promise<boolean> {
+	try {
+		await fs.stat(lockPath());
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
 export function isStaleLock(lock: LockFile) {
 	if (!Number.isInteger(lock.pid) || lock.pid <= 0) return true;
 	try {
@@ -221,9 +246,15 @@ export function isStaleLock(lock: LockFile) {
 
 async function readJsonIfExists<T>(filePath: string): Promise<T | undefined> {
 	try {
-		return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+		const text = await fs.readFile(filePath, "utf8");
+		// Treat empty/whitespace files (e.g. a truncated or zero-byte lock) as absent.
+		if (text.trim().length === 0) return undefined;
+		return JSON.parse(text) as T;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		// Treat corrupt/unparseable files as absent so callers can self-heal
+		// instead of crashing with a raw SyntaxError.
+		if (error instanceof SyntaxError) return undefined;
 		throw error;
 	}
 }

@@ -38,6 +38,7 @@ import sync, {
 	snapshotWithoutSessions,
 	splitArgs,
 } from "../src/sync.js";
+import { ensureStateDir, lockFileExists, lockPath, readLock, withLock } from "../src/config.js";
 
 test("sync registers pisync command and session lifecycle hooks", () => {
 	const mock = createMockPi();
@@ -933,6 +934,47 @@ test("getBuffer throws after retrying a persistently empty R2 response body", as
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
+});
+
+test("withLock self-heals a zero-byte lock file", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "");
+		const result = await withLock("test", async () => "ok");
+		assert.equal(result, "ok");
+		assert.equal(await lockFileExists(), false);
+	});
+});
+
+test("withLock self-heals a corrupt lock file", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "{not valid json");
+		const result = await withLock("test", async () => "ok");
+		assert.equal(result, "ok");
+		assert.equal(await lockFileExists(), false);
+	});
+});
+
+test("withLock rejects when a valid foreign lock is held", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(
+			lockPath(),
+			JSON.stringify({ id: "other", pid: process.pid, command: "push", startedAt: new Date().toISOString() }),
+		);
+		await assert.rejects(withLock("test", async () => "ok"), /already running/);
+	});
+});
+
+test("readLock treats empty, whitespace, and corrupt lock files as absent", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		for (const contents of ["", "  \n  ", "{broken"]) {
+			writeFileSync(lockPath(), contents);
+			assert.equal(await readLock(), undefined, `expected undefined for ${JSON.stringify(contents)}`);
+		}
+	});
 });
 
 function snapshot(files: Array<{ path: string; content: Buffer }>) {

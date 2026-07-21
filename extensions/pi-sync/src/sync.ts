@@ -15,6 +15,7 @@ import {
 	isStaleLock,
 	loadPartialConfig,
 	localConfigPath,
+	lockFileExists,
 	lockPath,
 	normalizeExtraFiles,
 	readLock,
@@ -622,6 +623,13 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 async function unlock(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const lock = await readLock();
 	if (!lock) {
+		// The lock file may be present but unreadable (zero-byte/truncated/corrupt);
+		// reclaim it so users are never stuck needing a manual `rm`.
+		if (await lockFileExists()) {
+			await fs.rm(lockPath(), { force: true });
+			ctx.ui.notify("Removed unreadable pi-sync lock.", "info");
+			return;
+		}
 		ctx.ui.notify("No pi-sync lock is present.", "info");
 		return;
 	}
