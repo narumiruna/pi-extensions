@@ -2,7 +2,7 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; multi-provider subscription account switching and ChatGPT Codex usage status; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
+Independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; multi-provider subscription account switching and current-account provider usage for Codex and OpenRouter; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
 
 **Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, browser session chat, image attachments, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
@@ -17,7 +17,8 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | 🌐 Native Chrome DevTools Protocol tools for listing tabs, navigating pages, evaluating JavaScript, and taking screenshots. | `pi install npm:@narumitw/pi-chrome-devtools` |
 | [`@narumitw/pi-accounts`](./extensions/pi-accounts) | 🔐 `/account` for independently switching named OpenAI Codex, Anthropic, and GitHub Copilot subscription OAuth accounts, with temporary Codex command aliases. | `pi install npm:@narumitw/pi-accounts` |
 | [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) | 🔐 Existing Codex-only account switcher retained during the `pi-accounts` soak period; do not load both account packages together. | `pi install npm:@narumitw/pi-codex-accounts` |
-| [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) | 📊 `/codex-status` command and automatic statusline item for ChatGPT Codex subscription usage, using Pi auth first and Codex CLI only as fallback. | `pi install npm:@narumitw/pi-codex-usage` |
+| [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) | 📊 Existing Codex-only usage package retained during the `pi-usage` soak period; do not load both usage packages together. | `pi install npm:@narumitw/pi-codex-usage` |
+| [`@narumitw/pi-usage`](./extensions/pi-usage) | 📊 Interactive `/usage` menu and current-account statusline for Codex subscription limits and OpenRouter API-key spend limits. | `pi install npm:@narumitw/pi-usage` |
 | [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) | 🔥 Firecrawl-powered web scraping, crawling, URL discovery, and web search tools for documentation and research workflows. | `pi install npm:@narumitw/pi-firecrawl` |
 | [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
 | [`@narumitw/pi-goal`](./extensions/pi-goal) | 🎯 `/goal` mode that keeps the agent working until verified completion, with an opt-in experimental ordered queue. | `pi install npm:@narumitw/pi-goal` |
@@ -94,9 +95,9 @@ Use [`@narumitw/pi-accounts`](./extensions/pi-accounts) to keep independently se
 
 The existing Codex-only [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) remains active while `pi-accounts` soaks. Choose one account package per Pi installation; loading both together is unsupported.
 
-### 📊 Codex usage status
+### 📊 Current-account provider usage
 
-Use [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) to show ChatGPT Codex subscription usage and reset windows from Pi with `/codex-status`. When the current model uses `openai-codex`, it also shows compact quota status in the statusline. It uses Pi's OpenAI Codex auth first, so Codex CLI is optional.
+Use [`@narumitw/pi-usage`](./extensions/pi-usage) to open one interactive `/usage` menu that follows Pi's selected model and active runtime credential. It reports Codex ChatGPT subscription windows or OpenRouter API-key spend limits, keeps the statusline scoped to the current account, and makes cross-provider queries explicit. The existing [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) package remains available while the successor soaks; choose one usage package per Pi installation.
 
 ### 🔎 GitHub pull request status
 
@@ -149,6 +150,7 @@ pi -e ./extensions/pi-chrome-devtools
 pi -e ./extensions/pi-accounts
 pi -e ./extensions/pi-codex-accounts
 pi -e ./extensions/pi-codex-usage
+pi -e ./extensions/pi-usage
 pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-github-pr
 pi -e ./extensions/pi-goal
@@ -174,6 +176,7 @@ npm run pack:chrome-devtools
 npm run pack:accounts
 npm run pack:codex-accounts
 npm run pack:codex-usage
+npm run pack:usage
 npm run pack:firecrawl
 npm run pack:github-pr
 npm run pack:goal
@@ -214,6 +217,7 @@ extensions/
 ├── pi-accounts/
 ├── pi-codex-accounts/
 ├── pi-codex-usage/
+├── pi-usage/
 ├── pi-firecrawl/
 ├── pi-github-pr/
 ├── pi-goal/

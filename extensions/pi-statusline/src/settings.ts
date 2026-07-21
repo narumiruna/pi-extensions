@@ -27,6 +27,7 @@ const LEGACY_SETTINGS_FILE_NAME = "pi-statusline-settings.json";
 export const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
 	"chrome-devtools": "🌐",
 	"codex-usage": "📊",
+	usage: "📊",
 	caffeinate: "💊",
 	firecrawl: "🔥",
 	"github-pr": "🔎",

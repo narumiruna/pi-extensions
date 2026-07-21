@@ -78,6 +78,7 @@ There are no project overrides or environment-variable overrides.
   "extensionStatusIcons": {
     "chrome-devtools": "🌐",
     "codex-usage": "📊",
+    "usage": "📊",
     "caffeinate": "💊",
     "firecrawl": "🔥",
     "github-pr": "🔎",

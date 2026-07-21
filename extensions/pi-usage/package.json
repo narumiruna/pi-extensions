@@ -1,0 +1,46 @@
+{
+	"name": "@narumitw/pi-usage",
+	"version": "0.24.0",
+	"description": "Pi extension that shows current-account usage across supported model providers.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"usage",
+		"quota",
+		"codex",
+		"openrouter"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/usage.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check --vcs-use-ignore-file=false src test package.json tsconfig.json README.md && npm run typecheck",
+		"format": "biome check --write --vcs-use-ignore-file=false src test package.json tsconfig.json README.md",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": ">=0.81.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.3",
+		"@earendil-works/pi-coding-agent": "0.81.0",
+		"@types/node": "26.1.1",
+		"typescript": "7.0.2"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-usage"
+	}
+}
