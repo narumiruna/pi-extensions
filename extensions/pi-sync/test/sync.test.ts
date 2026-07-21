@@ -1,11 +1,29 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	configuredSessionDir,
+	ensureStateDir,
+	loadPartialConfig,
+	localConfigPath,
+	lockPath,
+	readState,
+} from "../src/config.js";
+import { lockFileExists, readLock, withLock } from "../src/lock.js";
 import { S3Client } from "../src/s3-client.js";
 import sync, {
 	addTopLevelCaseVariantDeletes,
@@ -38,7 +56,6 @@ import sync, {
 	snapshotWithoutSessions,
 	splitArgs,
 } from "../src/sync.js";
-import { ensureStateDir, lockFileExists, lockPath, readLock, withLock } from "../src/config.js";
 
 test("sync registers pisync command and session lifecycle hooks", () => {
 	const mock = createMockPi();
@@ -936,23 +953,153 @@ test("getBuffer throws after retrying a persistently empty R2 response body", as
 	}
 });
 
-test("withLock self-heals a zero-byte lock file", async () => {
+test("withLock self-heals an old zero-byte lock file", async () => {
 	await withTempHome(async () => {
 		await ensureStateDir();
-		writeFileSync(lockPath(), "");
+		writeOldLock("");
 		const result = await withLock("test", async () => "ok");
 		assert.equal(result, "ok");
 		assert.equal(await lockFileExists(), false);
 	});
 });
 
-test("withLock self-heals a corrupt lock file", async () => {
+test("withLock self-heals an old corrupt lock file", async () => {
 	await withTempHome(async () => {
 		await ensureStateDir();
-		writeFileSync(lockPath(), "{not valid json");
+		writeOldLock("{not valid json");
 		const result = await withLock("test", async () => "ok");
 		assert.equal(result, "ok");
 		assert.equal(await lockFileExists(), false);
+	});
+});
+
+test("concurrent corrupt-lock reclaimers never remove a replacement lock", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeOldLock("{broken");
+		const originalRm = fs.rm;
+		let releaseDelayedRemoval: (() => void) | undefined;
+		const delayedRemoval = new Promise<void>((resolve) => {
+			releaseDelayedRemoval = resolve;
+		});
+		let recoveryRemovals = 0;
+		let active = 0;
+		let maxActive = 0;
+		let firstRunStarted: (() => void) | undefined;
+		const runStarted = new Promise<void>((resolve) => {
+			firstRunStarted = resolve;
+		});
+
+		fs.rm = async (...args: Parameters<typeof fs.rm>) => {
+			if (args[0] === lockPath() && args[1] === undefined) {
+				recoveryRemovals += 1;
+				if (recoveryRemovals === 2) await delayedRemoval;
+			}
+			return originalRm(...args);
+		};
+
+		try {
+			const run = () =>
+				withLock("test", async () => {
+					active += 1;
+					maxActive = Math.max(maxActive, active);
+					firstRunStarted?.();
+					await new Promise((resolve) => setTimeout(resolve, 25));
+					active -= 1;
+				});
+			const resultsPromise = Promise.allSettled([run(), run()]);
+			await runStarted;
+			releaseDelayedRemoval?.();
+			const results = await resultsPromise;
+
+			assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+			assert.equal(maxActive, 1);
+		} finally {
+			fs.rm = originalRm;
+			releaseDelayedRemoval?.();
+		}
+	});
+});
+
+test("withLock does not reclaim a lock file that may still be initializing", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "");
+		let ran = false;
+		await assert.rejects(
+			withLock("test", async () => {
+				ran = true;
+			}),
+			/already running/,
+		);
+		assert.equal(ran, false);
+	});
+});
+
+test("unlock keeps a fresh unreadable lock unless stale removal is explicit", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "");
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.commands.get("pisync")?.handler("unlock", ctx);
+		assert.equal(await lockFileExists(), true);
+		assert.match(notifications.at(-1)?.message ?? "", /may still be initializing/);
+
+		await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+		assert.equal(await lockFileExists(), false);
+		assert.match(notifications.at(-1)?.message ?? "", /Removed unreadable/);
+	});
+});
+
+test("unlock cannot remove the lock for an active guarded sync", async () => {
+	await withTempHome(async () => {
+		let releaseRun: (() => void) | undefined;
+		const keepRunning = new Promise<void>((resolve) => {
+			releaseRun = resolve;
+		});
+		let markStarted: (() => void) | undefined;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		const running = withLock("test", async () => {
+			markStarted?.();
+			await keepRunning;
+		});
+		await started;
+
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+		try {
+			await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+			assert.equal(await lockFileExists(), true);
+			assert.match(notifications.at(-1)?.message ?? "", /currently running/);
+		} finally {
+			releaseRun?.();
+			await running;
+		}
+		assert.equal(await lockFileExists(), false);
+	});
+});
+
+test("concurrent withLock calls never execute together", async () => {
+	await withTempHome(async () => {
+		let active = 0;
+		let maxActive = 0;
+		const run = () =>
+			withLock("test", async () => {
+				active += 1;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				active -= 1;
+			});
+
+		const results = await Promise.allSettled([run(), run()]);
+		assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+		assert.equal(maxActive, 1);
 	});
 });
 
@@ -961,21 +1108,68 @@ test("withLock rejects when a valid foreign lock is held", async () => {
 		await ensureStateDir();
 		writeFileSync(
 			lockPath(),
-			JSON.stringify({ id: "other", pid: process.pid, command: "push", startedAt: new Date().toISOString() }),
+			JSON.stringify({
+				id: "other",
+				pid: process.pid,
+				command: "push",
+				startedAt: new Date().toISOString(),
+			}),
 		);
-		await assert.rejects(withLock("test", async () => "ok"), /already running/);
+		await assert.rejects(
+			withLock("test", async () => "ok"),
+			/already running/,
+		);
 	});
 });
 
 test("readLock treats empty, whitespace, and corrupt lock files as absent", async () => {
 	await withTempHome(async () => {
 		await ensureStateDir();
-		for (const contents of ["", "  \n  ", "{broken"]) {
+		for (const contents of [
+			"",
+			"  \n  ",
+			"{broken",
+			"{}",
+			"[]",
+			"null",
+			"1",
+			JSON.stringify({
+				id: "invalid-pid",
+				pid: 2_147_483_648,
+				command: "sync",
+				startedAt: new Date().toISOString(),
+			}),
+		]) {
 			writeFileSync(lockPath(), contents);
-			assert.equal(await readLock(), undefined, `expected undefined for ${JSON.stringify(contents)}`);
+			assert.equal(
+				await readLock(),
+				undefined,
+				`expected undefined for ${JSON.stringify(contents)}`,
+			);
 		}
 	});
 });
+
+test("malformed non-lock JSON remains an explicit error", async () => {
+	await withTempHome(async (agentDir) => {
+		await ensureStateDir();
+
+		writeFileSync(localConfigPath(), "{broken");
+		await assert.rejects(loadPartialConfig(), SyntaxError);
+
+		writeFileSync(path.join(agentDir, ".pisync", "default.state.json"), "{broken");
+		await assert.rejects(readState("default"), SyntaxError);
+
+		writeFileSync(path.join(agentDir, "settings.json"), "{broken");
+		await assert.rejects(configuredSessionDir(), SyntaxError);
+	});
+});
+
+function writeOldLock(contents: string) {
+	writeFileSync(lockPath(), contents);
+	const old = new Date(Date.now() - 60_000);
+	utimesSync(lockPath(), old, old);
+}
 
 function snapshot(files: Array<{ path: string; content: Buffer }>) {
 	return {

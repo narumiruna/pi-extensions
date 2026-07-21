@@ -1,17 +1,15 @@
-import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isDeniedPath, safeName } from "./paths.js";
-import type { LockFile, PartialConfig, Snapshot, SyncConfig, SyncState } from "./types.js";
+import type { PartialConfig, Snapshot, SyncConfig, SyncState } from "./types.js";
 
 const VERSION = 1;
 const DEFAULT_PROFILE = "default";
 const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
-const LOCK_STALE_MS = 30 * 60 * 1000;
 const TOP_LEVEL_FILES = new Set(["settings.json", "keybindings.json", "models.json", "AGENTS.md", "APPEND_SYSTEM.md"]);
 const TOP_LEVEL_FILE_NAMES = new Set([...TOP_LEVEL_FILES].map((name) => name.toLowerCase()));
 const TOP_LEVEL_DIRS = new Set(["skills", "prompts", "themes", "extensions"]);
@@ -40,52 +38,6 @@ function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) 
 	return typeof getSessionDir === "function"
 		? (getSessionDir.call(manager) as string | undefined)
 		: undefined;
-}
-
-export async function withLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
-	await ensureStateDir();
-	const lock: LockFile = {
-		id: randomUUID(),
-		pid: process.pid,
-		command,
-		startedAt: new Date().toISOString(),
-	};
-	let handle: fs.FileHandle | undefined;
-	try {
-		// Acquire the lock, reclaiming an unreadable (zero-byte/truncated/corrupt)
-		// lock file once. Such a file can never represent a real holder, so removing
-		// it lets sync/push/pull/rollback self-heal after a crashed or interrupted run.
-		for (let attempt = 0; ; attempt++) {
-			try {
-				handle = await fs.open(lockPath(), "wx");
-				break;
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-				const current = await readLock();
-				if (current && isStaleLock(current)) {
-					throw new Error(`pi-sync lock is stale (pid ${current.pid}). Run /pisync unlock --stale, then retry.`);
-				}
-				if (current) {
-					throw new Error(
-						`pi-sync is already running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`,
-					);
-				}
-				if (attempt > 0) {
-					throw new Error("pi-sync is already running.");
-				}
-				// Lock file exists but is unreadable: reclaim and retry.
-				await fs.rm(lockPath(), { force: true });
-			}
-		}
-		await handle.writeFile(JSON.stringify(lock, null, "\t"));
-		await handle.close();
-		handle = undefined;
-		return await fn();
-	} finally {
-		await handle?.close();
-		const current = await readLock();
-		if (current?.id === lock.id) await fs.rm(lockPath(), { force: true });
-	}
 }
 
 export async function loadConfigInternal(): Promise<SyncConfig> {
@@ -219,42 +171,11 @@ export async function ensureStateDir() {
 	await fs.mkdir(stateDir(), { recursive: true });
 }
 
-export async function readLock() {
-	return readJsonIfExists<LockFile>(lockPath());
-}
-
-export async function lockFileExists(): Promise<boolean> {
-	try {
-		await fs.stat(lockPath());
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-		throw error;
-	}
-}
-
-export function isStaleLock(lock: LockFile) {
-	if (!Number.isInteger(lock.pid) || lock.pid <= 0) return true;
-	try {
-		process.kill(lock.pid, 0);
-		return false;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
-		return Date.now() - Date.parse(lock.startedAt) > LOCK_STALE_MS;
-	}
-}
-
 async function readJsonIfExists<T>(filePath: string): Promise<T | undefined> {
 	try {
-		const text = await fs.readFile(filePath, "utf8");
-		// Treat empty/whitespace files (e.g. a truncated or zero-byte lock) as absent.
-		if (text.trim().length === 0) return undefined;
-		return JSON.parse(text) as T;
+		return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-		// Treat corrupt/unparseable files as absent so callers can self-heal
-		// instead of crashing with a raw SyntaxError.
-		if (error instanceof SyntaxError) return undefined;
 		throw error;
 	}
 }

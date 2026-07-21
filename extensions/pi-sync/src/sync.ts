@@ -12,13 +12,9 @@ import {
 	ensureStateDir,
 	extraFilePathsByLower,
 	isMissingConfigError,
-	isStaleLock,
 	loadPartialConfig,
 	localConfigPath,
-	lockFileExists,
-	lockPath,
 	normalizeExtraFiles,
-	readLock,
 	stateDir,
 	writeJson,
 	configuredSessionDir,
@@ -30,9 +26,9 @@ import {
 	sessionDirForApply,
 	sessionTokenWarnings,
 	syncSessionsWarnings,
-	withLock,
 	writeState,
 } from "./config.js";
+import { readLock, unlock, withLock } from "./lock.js";
 import { encodeKey, posixJoin, safeJoin, safeName, toPosix } from "./paths.js";
 import {
 	historyKey,
@@ -618,27 +614,6 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	});
 	ctx.ui.notify(`Rolled back to ${target}; latest: ${pointer.snapshot}. Backup: ${backup}`, "info");
 	await maybeReload(ctx);
-}
-
-async function unlock(ctx: ExtensionCommandContext, options: CommandOptions) {
-	const lock = await readLock();
-	if (!lock) {
-		// The lock file may be present but unreadable (zero-byte/truncated/corrupt);
-		// reclaim it so users are never stuck needing a manual `rm`.
-		if (await lockFileExists()) {
-			await fs.rm(lockPath(), { force: true });
-			ctx.ui.notify("Removed unreadable pi-sync lock.", "info");
-			return;
-		}
-		ctx.ui.notify("No pi-sync lock is present.", "info");
-		return;
-	}
-	if (!options.stale && !isStaleLock(lock)) {
-		ctx.ui.notify("Lock is not stale. Use /pisync unlock --stale only after verifying no sync is running.", "warning");
-		return;
-	}
-	await fs.rm(lockPath(), { force: true });
-	ctx.ui.notify("Removed stale pi-sync lock.", "info");
 }
 
 function protectedSessionPaths(ctx: ExtensionCommandContext | ExtensionContext) {
