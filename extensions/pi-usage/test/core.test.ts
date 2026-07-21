@@ -141,6 +141,7 @@ test("runtime auth rejects proxy origins and forwards only adapter-approved head
 	const { ctx: effectiveProxyContext } = createMockContext({
 		model: officialModel,
 		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "current-model-key" }),
 			getProviderAuth: async () => ({
 				auth: { apiKey: "proxy-key", baseUrl: "https://proxy.example.test/v1" },
 			}),
@@ -168,6 +169,39 @@ test("runtime auth rejects proxy origins and forwards only adapter-approved head
 	});
 	const auth = await resolveUsageAuth(officialContext, adapter);
 	assert.deepEqual(auth?.headers, { Authorization: "Bearer official-key" });
+
+	const { ctx: modelScopedContext } = createMockContext({
+		model: officialModel,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({
+				ok: true,
+				apiKey: "provider-default-key",
+				headers: {
+					Authorization: "Bearer current-model-key",
+					"X-Model-Secret": "must-not-leak",
+				},
+			}),
+			getProviderAuth: async () => ({ auth: { apiKey: "provider-default-key" } }),
+			getAvailable: () => [officialModel],
+			getAll: () => [officialModel],
+		},
+	});
+	const modelScopedAuth = await resolveUsageAuth(modelScopedContext, adapter);
+	assert.deepEqual(modelScopedAuth?.headers, { Authorization: "Bearer current-model-key" });
+	assert.ok(modelScopedAuth?.secrets.includes("Bearer current-model-key"));
+	assert.ok(!modelScopedAuth?.secrets.includes("must-not-leak"));
+
+	const { ctx: modelKeyContext } = createMockContext({
+		model: officialModel,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "current-model-key" }),
+			getProviderAuth: async () => ({ auth: { apiKey: "provider-default-key" } }),
+			getAvailable: () => [officialModel],
+			getAll: () => [officialModel],
+		},
+	});
+	const modelKeyAuth = await resolveUsageAuth(modelKeyContext, adapter);
+	assert.deepEqual(modelKeyAuth?.headers, { Authorization: "Bearer current-model-key" });
 });
 
 test("provider cancellation preserves AbortError identity", async () => {

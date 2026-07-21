@@ -83,27 +83,35 @@ export async function resolveUsageAuth(
 		hasOfficialOrigin(candidate, adapter.id),
 	);
 	if (!model) return undefined;
-	const registry = ctx.modelRegistry as unknown as ProviderAuthRegistry;
+	const registry = ctx.modelRegistry as unknown as UsageAuthRegistry;
+	let modelAuth: RequestAuth | undefined;
+	if (ctx.model?.provider === adapter.id && typeof registry.getApiKeyAndHeaders === "function") {
+		const result = await registry.getApiKeyAndHeaders(ctx.model);
+		if (!result.ok) throw new Error(redactUsageError(result.error));
+		if (authorizationFrom(result)) modelAuth = result;
+	}
 	if (typeof registry.getProviderAuth !== "function") {
 		throw new Error("pi-usage requires Pi 0.81.0 or newer to validate resolved provider auth.");
 	}
-	const result = await registry.getProviderAuth(adapter.id);
-	if (!result) return undefined;
-	if (result.auth.baseUrl && !hasOfficialUrlOrigin(result.auth.baseUrl, adapter.id)) {
+	const providerResult = await registry.getProviderAuth(adapter.id);
+	if (
+		providerResult?.auth.baseUrl &&
+		!hasOfficialUrlOrigin(providerResult.auth.baseUrl, adapter.id)
+	) {
 		throw new Error(
 			`${adapter.displayName} usage cannot send a proxy-resolved credential to the official usage endpoint.`,
 		);
 	}
-	const resolvedAuthorization = headerValue(result.auth.headers, "Authorization");
-	const authorization =
-		resolvedAuthorization ?? (result.auth.apiKey ? `Bearer ${result.auth.apiKey}` : undefined);
+	const auth = modelAuth ?? providerResult?.auth;
+	if (!auth) return undefined;
+	const authorization = authorizationFrom(auth);
 	if (!authorization) return undefined;
 	const headers = { Authorization: authorization };
-	const secrets = [result.auth.apiKey, resolvedAuthorization, authorization].filter(
+	const secrets = [auth.apiKey, headerValue(auth.headers, "Authorization"), authorization].filter(
 		(value): value is string => Boolean(value),
 	);
 	return {
-		apiKey: result.auth.apiKey,
+		apiKey: auth.apiKey,
 		headers,
 		fingerprint: fingerprintResolvedAuth({ headers }, salt),
 		secrets,
@@ -249,18 +257,29 @@ async function readBoundedResponse(
 	return truncated ? `${text}…` : text;
 }
 
-type ProviderAuthRegistry = {
+type RequestAuth = {
+	apiKey?: string;
+	headers?: Record<string, string | null>;
+};
+
+type UsageAuthRegistry = {
+	getApiKeyAndHeaders?(
+		model: PiModel,
+	): Promise<({ ok: true } & RequestAuth) | { ok: false; error: string }>;
 	getProviderAuth?(providerId: string): Promise<
 		| {
-				auth: {
-					apiKey?: string;
-					headers?: Record<string, string | null>;
-					baseUrl?: string;
-				};
+				auth: RequestAuth & { baseUrl?: string };
 		  }
 		| undefined
 	>;
 };
+
+function authorizationFrom(auth: RequestAuth): string | undefined {
+	return (
+		headerValue(auth.headers, "Authorization") ??
+		(auth.apiKey ? `Bearer ${auth.apiKey}` : undefined)
+	);
+}
 
 function hasOfficialOrigin(model: PiModel, providerId: string): boolean {
 	return hasOfficialUrlOrigin(model.baseUrl, providerId);
