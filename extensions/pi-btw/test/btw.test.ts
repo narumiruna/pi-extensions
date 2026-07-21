@@ -343,7 +343,7 @@ test("side-question completion maps thinking levels into provider-neutral option
 	}
 });
 
-test("btw command validates usage before reading the runtime thinking level", async () => {
+test("btw command rejects non-TUI mode before reading the runtime thinking level", async () => {
 	const mock = createMockPi();
 	let thinkingLevelReads = 0;
 	mock.rawPi.getThinkingLevel = () => {
@@ -355,20 +355,16 @@ test("btw command validates usage before reading the runtime thinking level", as
 
 	const command = mock.commands.get("btw");
 	assert.ok(command);
-	const emptyQuestion = createMockContext();
-	await command.handler("   ", emptyQuestion.ctx);
-
-	const nonInteractive = createMockContext({ hasUI: false });
-	await command.handler("question?", nonInteractive.ctx);
+	const nonInteractive = createMockContext({ mode: "print", hasUI: false });
+	await command.handler("", nonInteractive.ctx);
 
 	assert.equal(mock.commands.size, 1);
 	assert.equal(
 		command.description,
 		"Ask a quick side question without adding it to the main conversation",
 	);
-	assert.equal(emptyQuestion.notifications[0]?.level, "warning");
-	assert.match(emptyQuestion.notifications[0]?.message ?? "", /Usage: \/btw/);
 	assert.equal(nonInteractive.notifications[0]?.level, "error");
+	assert.doesNotMatch(nonInteractive.notifications[0]?.message ?? "", /Usage/);
 	assert.equal(thinkingLevelReads, 0);
 });
 
