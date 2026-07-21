@@ -39,9 +39,9 @@ export default function (pi: ExtensionAPI) {
 			"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, tasks requiring frequent user back-and-forth, or critical-path work needed for the main agent's next action.",
 			"A single blocking subagent call should be used only when independent context, high-volume output isolation, or an external review is worth waiting for; otherwise do the task in the main agent.",
 			"For one-shot parallel work, use a single subagent call with tasks instead of repeated subagent_spawn calls, even when the user explicitly requests multiple agents.",
-			"When subagent_spawn is available, use it only when detached delegation has a concrete parallel, isolation, or specialization benefit; otherwise keep the work in the main agent.",
-			"After detached spawn, continue useful non-overlapping work when available, or call subagent_wait when coordination is the only useful next action; do not yield permanently while delegated work remains unresolved.",
-			"Consume detached completion messages and synthesize their results before finishing; interrupt or close agents that are no longer needed.",
+			"When subagent_spawn is available, use it only for a concrete bounded subtask that can run independently alongside useful main-agent work and has a parallel, isolation, or specialization benefit; otherwise keep the work in the main agent.",
+			"After subagent_spawn returns, do useful non-overlapping work immediately. Call subagent_wait sparingly, only when the immediate next critical-path step requires the result and is blocked until it arrives; do not wait repeatedly by reflex.",
+			"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
 			"Use subagent parallel mode with 2-4 parallel read-only subagents when work has broad independent branches; prefer scout or reviewer for fan-out and add an aggregator when synthesis helps.",
 			"Use more than 4 subagent tasks only when clearly justified by distinct independent branches, and stay within the existing hard max 8 parallel tasks.",
 			"Do not use subagent parallel mode for write-heavy implementation touching the same files or shared state; serialize those changes in the main agent or one worker.",
@@ -65,7 +65,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_result", (event) => {
 		if (event.toolName !== "subagent") return;
-		if ((event.details as (SubagentDetails & { isError?: boolean }) | undefined)?.isError) return { isError: true };
+		if ((event.details as (SubagentDetails & { isError?: boolean }) | undefined)?.isError)
+			return { isError: true };
 	});
 
 	pi.on("session_start", (_event, ctx) => {

@@ -494,11 +494,7 @@ test("registered detached spawn returns while running and publishes each in-proc
 		});
 		const initialModel = { id: "initial" };
 		const selectedModel = { id: "selected" };
-		let hasPendingMessages = false;
-		const context = createMockContext({
-			model: initialModel,
-			hasPendingMessages: () => hasPendingMessages,
-		});
+		const context = createMockContext({ model: initialModel });
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		mock.events.get("model_select")?.[0]?.({ model: selectedModel }, context.ctx);
 		mock.events.get("thinking_level_select")?.[0]?.({ level: "max" }, context.ctx);
@@ -513,51 +509,31 @@ test("registered detached spawn returns while running and publishes each in-proc
 				undefined,
 				context.ctx,
 			) as Promise<{
+				content: Array<{ text: string }>;
 				details: { agent: { id: string; state: string } };
 			}>;
 		};
-		mock.events.get("before_agent_start")?.[0]?.({}, context.ctx);
 		child.waitForNextAbort();
 		const spawned = await execute("subagent_spawn", { agent: "scout", task: "first" });
 		const agentId = spawned.details.agent.id;
 		assert.match(spawned.details.agent.state, /starting|running/);
+		assert.match(spawned.content[0]?.text ?? "", /useful non-overlapping work immediately/i);
+		assert.match(spawned.content[0]?.text ?? "", /critical-path step is blocked/i);
 		assert.deepEqual(child.prompts, ["first"]);
 		assert.equal(mock.sentMessages.length, 0);
-		hasPendingMessages = true;
 		mock.events.get("agent_end")?.[0]?.({}, context.ctx);
 		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(mock.sentUserMessages.length, 0, "pending root work suppresses recovery");
-		hasPendingMessages = false;
-		const sendUserMessage = mock.rawPi.sendUserMessage.bind(mock.rawPi);
-		mock.rawPi.sendUserMessage = () => {
-			throw new Error("delivery failed");
-		};
-		mock.events.get("agent_end")?.[0]?.({}, context.ctx);
-		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(mock.sentUserMessages.length, 0);
-		mock.rawPi.sendUserMessage = sendUserMessage;
-		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(mock.sentUserMessages.length, 1);
-		assert.match(mock.sentUserMessages[0]?.text ?? "", /subagent_wait/);
-		mock.events.get("agent_end")?.[0]?.({}, context.ctx);
-		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(mock.sentUserMessages.length, 1, "recovery is bounded for an unchanged revision");
-		mock.events.get("before_agent_start")?.[0]?.({}, context.ctx);
-		await execute("subagent_interrupt", { agentId });
-		mock.events.get("agent_end")?.[0]?.({}, context.ctx);
-		const queuedRecovery = mock.sentUserMessages.at(-1) as
-			| { text: string; options?: { deliverAs?: string } }
-			| undefined;
-		assert.equal(queuedRecovery?.options?.deliverAs, "followUp");
-		const input = mock.events.get("input")?.[0];
-		input?.({ source: "user", text: "newer user work" }, context.ctx);
-		const cancelled = input?.(
-			{ source: "extension", text: queuedRecovery?.text ?? "" },
-			context.ctx,
+		assert.equal(
+			mock.sentUserMessages.length,
+			0,
+			"detached work must not autonomously start a root recovery turn",
 		);
-		assert.deepEqual(cancelled, { action: "handled" });
-		mock.sentUserMessages.length = 1;
-		mock.events.get("before_agent_start")?.[0]?.({}, context.ctx);
+		await execute("subagent_interrupt", { agentId });
+		assert.equal(
+			mock.sentUserMessages.length,
+			0,
+			"terminal completion remains asynchronous instead of waking the root",
+		);
 		await execute("subagent_send", { agentId, task: "second" });
 		await Promise.all([
 			execute("subagent_wait", { agentId, timeoutMs: 100 }),
@@ -590,10 +566,10 @@ test("registered detached spawn returns while running and publishes each in-proc
 		assert.match(firstCompletion.message.content, /Message Type: SUBAGENT_COMPLETION/);
 		assert.match(firstCompletion.message.content, /Payload:\ndone:first/);
 		assert.deepEqual(firstCompletion.options, { deliverAs: "steer", triggerTurn: false });
-		assert.equal(mock.sentUserMessages.length, 1);
+		assert.equal(mock.sentUserMessages.length, 0);
 		mock.events.get("agent_end")?.[0]?.({}, context.ctx);
 		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(mock.sentUserMessages.length, 1, "closed work does not recover again");
+		assert.equal(mock.sentUserMessages.length, 0, "closed work does not wake the root");
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	} finally {
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
