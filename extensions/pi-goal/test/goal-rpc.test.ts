@@ -450,3 +450,195 @@ test("pi-goal:state never carries a summary or reason for an active goal", async
 	assert.ok(pausedEvent, "expected a paused state event");
 	assert.equal(pausedEvent?.reason, undefined, "old terminal reasons must not leak");
 });
+
+test("editing a stopped goal does not attach its old reason to the new goal id", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	const context = createMockContext();
+	const stateEvents: StateEvent[] = [];
+	mock.eventBus.on("pi-goal:state", (data) => stateEvents.push(data as StateEvent));
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	const { replies } = rpcStart(mock, { requestId: "req-edit", objective: "old task" });
+	await flush();
+	const oldGoalId = (replies[0] as RpcSuccess).data.goalId;
+
+	await requireGoalTool(mock, "goal_blocked").execute(
+		"blocked-before-edit",
+		{
+			goal_id: oldGoalId,
+			reason: "Old dependency is unavailable.",
+			evidence: "The same external dependency failed on three separate turns.",
+			repeated_turns: 3,
+		},
+		new AbortController().signal,
+		() => undefined,
+		context.ctx,
+	);
+	await mock.commands.get("goal")?.handler("edit revised task", context.ctx);
+
+	const editedEvent = stateEvents.at(-1);
+	assert.equal(editedEvent?.status, "blocked");
+	assert.notEqual(editedEvent?.goalId, oldGoalId);
+	assert.equal(editedEvent?.reason, undefined);
+});
+
+test("unowned pause requests cannot stop a manual goal", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	let aborts = 0;
+	const context = createMockContext({ abort: () => aborts++ });
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	await mock.commands.get("goal")?.handler("manual task", context.ctx);
+	const manualGoalId = lastPersistedGoal(mock)?.id;
+
+	mock.eventBus.emit("pi-goal:rpc:pause", { reason: "uncorrelated cancellation" });
+	mock.eventBus.emit("pi-goal:rpc:pause", {
+		goalId: manualGoalId,
+		reason: "matching id but not RPC-owned",
+	});
+
+	assert.equal(lastPersistedGoal(mock)?.status, "active");
+	assert.equal(aborts, 0);
+});
+
+test("pre-reply cancellation requires and accepts the originating request id", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	const context = createMockContext();
+	const stateEvents: StateEvent[] = [];
+	mock.eventBus.on("pi-goal:state", (data) => stateEvents.push(data as StateEvent));
+	mock.eventBus.on("pi-goal:state", (data) => {
+		if ((data as StateEvent).status !== "active") return;
+		mock.eventBus.emit("pi-goal:rpc:pause", {
+			requestId: "req-other",
+			reason: "unrelated cancellation",
+		});
+		assert.equal(lastPersistedGoal(mock)?.status, "active");
+		mock.eventBus.emit("pi-goal:rpc:pause", {
+			requestId: "req-pre-reply",
+			reason: "parent cancelled before reply",
+		});
+	});
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	const { replies } = rpcStart(mock, { requestId: "req-pre-reply", objective: "pending task" });
+	await flush();
+
+	assert.equal(replies[0]?.success, true);
+	assert.equal((replies[0] as RpcSuccess).data.status, "paused");
+	assert.equal(stateEvents.at(-1)?.status, "paused");
+	assert.equal(stateEvents.at(-1)?.reason, "parent cancelled before reply");
+});
+
+test("a stale start request cannot pause a newer RPC-owned goal", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	const first = rpcStart(mock, { requestId: "req-old", objective: "old task" });
+	await flush();
+	assert.equal(first.replies[0]?.success, true);
+	await mock.commands.get("goal")?.handler("clear", context.ctx);
+
+	const second = rpcStart(mock, { requestId: "req-new", objective: "new task" });
+	mock.eventBus.emit("pi-goal:rpc:pause", {
+		requestId: "req-old",
+		reason: "stale parent cancellation",
+	});
+	await flush();
+
+	assert.equal(second.replies[0]?.success, true);
+	assert.equal(lastPersistedGoal(mock)?.status, "active");
+});
+
+test("a pending start cannot reply with a newer goal after being superseded", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	let releaseKickoff!: () => void;
+	mock.rawPi.sendUserMessage = () =>
+		new Promise<void>((resolve) => {
+			releaseKickoff = resolve;
+		});
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	const first = rpcStart(mock, { requestId: "req-pending", objective: "pending task" });
+
+	await mock.commands.get("goal")?.handler("clear", context.ctx);
+	mock.rawPi.sendUserMessage = () => undefined;
+	const second = rpcStart(mock, { requestId: "req-replacement", objective: "replacement task" });
+	await flush();
+	assert.equal(second.replies[0]?.success, true);
+	releaseKickoff();
+	await flush();
+
+	assert.equal(first.replies[0]?.success, false);
+	assert.match((first.replies[0] as RpcFailure).error, /superseded|could not be activated/i);
+	assert.equal(lastPersistedGoal(mock)?.id, (second.replies[0] as RpcSuccess).data.goalId);
+});
+
+test("clearing an active goal broadcasts a terminal cleared state", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	const context = createMockContext();
+	const stateEvents: StateEvent[] = [];
+	mock.eventBus.on("pi-goal:state", (data) => stateEvents.push(data as StateEvent));
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	const { replies } = rpcStart(mock, { requestId: "req-clear", objective: "clear task" });
+	await flush();
+	const goalId = (replies[0] as RpcSuccess).data.goalId;
+
+	await mock.commands.get("goal")?.handler("clear", context.ctx);
+
+	assert.deepEqual(stateEvents.at(-1), {
+		goalId,
+		status: "cleared",
+		reason: "goal cleared",
+	});
+});
+
+test("failed RPC activation broadcasts cleared state before its failure reply", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	mock.rawPi.sendUserMessage = () => {
+		throw new Error("kickoff delivery failed");
+	};
+	const context = createMockContext();
+	const timeline: Array<{ kind: "state" | "reply"; value: StateEvent | RpcReply }> = [];
+	mock.eventBus.on("pi-goal:state", (data) => {
+		timeline.push({ kind: "state", value: data as StateEvent });
+	});
+	mock.eventBus.on("pi-goal:rpc:start:reply:req-rollback", (data) => {
+		timeline.push({ kind: "reply", value: data as RpcReply });
+	});
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	mock.eventBus.emit("pi-goal:rpc:start", {
+		requestId: "req-rollback",
+		objective: "rollback task",
+	});
+	await flush();
+
+	assert.deepEqual(
+		timeline.map((entry) =>
+			entry.kind === "state"
+				? `${entry.kind}:${(entry.value as StateEvent).status}`
+				: `${entry.kind}:${String((entry.value as RpcReply).success)}`,
+		),
+		["state:active", "state:cleared", "reply:false"],
+	);
+});
+
+test("state listener failures do not interrupt persistence or RPC replies", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash", "goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	const context = createMockContext();
+	mock.eventBus.on("pi-goal:state", () => {
+		throw new Error("observer failed");
+	});
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	const { replies } = rpcStart(mock, { requestId: "req-listener", objective: "safe task" });
+	await flush();
+
+	assert.equal(replies[0]?.success, true);
+	assert.equal(lastPersistedGoal(mock)?.status, "active");
+});
