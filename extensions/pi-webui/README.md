@@ -1,12 +1,12 @@
 # 🌐 pi-webui — Current-session Web Companion for Pi
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-webui)](https://www.npmjs.com/package/@narumitw/pi-webui) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-webui)](https://www.npmjs.com/package/@narumitw/pi-webui) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 `@narumitw/pi-webui` adds a private, lightweight browser companion to the current terminal-owned [Pi Coding Agent](https://pi.dev) session. It displays Pi's semantic conversation and tool activity as they happen and can send text or sanitized images back into that same session.
 
 This package is intentionally different from the broader, separately maintained `@narumitw/pi-web` application. WebUI has one current-session chat page and no session manager, shell, file browser, git UI, control room, or task board.
 
-## Features
+## ✨ Features
 
 - Streams current-branch user and assistant messages, assistant text updates, tool activity/results, errors, and busy/idle state over Server-Sent Events.
 - Renders a safe Markdown subset for headings, lists, emphasis, code, blockquotes, and HTTP(S) links without executing model-provided HTML.
@@ -18,7 +18,7 @@ This package is intentionally different from the broader, separately maintained 
 - Keeps a failed browser draft and prevents rapid duplicate submission with request IDs.
 - Uses no frontend framework, build step, browser storage, remote service, or automatically launched browser.
 
-## Install
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-webui
@@ -34,7 +34,7 @@ just try webui
 
 The package targets the latest Pi release.
 
-## Usage
+## 🚀 Usage
 
 1. Start Pi in a terminal and run `/webui`.
 2. Open the one-time `http://127.0.0.1:<port>/bootstrap?...` link shown by Pi. The extension does not open a browser itself.
@@ -44,7 +44,7 @@ The package targets the latest Pi release.
 
 If another installed extension also registers `/webui`, Pi assigns numeric command suffixes according to extension load order. Check Pi's command provenance and invoke the WebUI entry.
 
-## Commands
+## 💬 Commands
 
 | Command | Behavior |
 | --- | --- |
@@ -56,7 +56,7 @@ If another installed extension also registers `/webui`, Pi assigns numeric comma
 
 Argument completion is available for all subcommands. Bare `/webui` remains the direct browser-link action.
 
-## Settings
+## ⚙️ Settings
 
 WebUI has one optional, **global-only** JSON settings file:
 
@@ -100,13 +100,13 @@ Settings are reloaded on every `session_start`. Changes made in `/webui settings
 
 In print, JSON, and RPC modes, `/webui settings` does not open custom TUI or write protocol-breaking output. Use `/webui status`, `/webui help`, or edit the reported path manually.
 
-## What synchronization means
+## 🔄 What synchronization means
 
 WebUI mirrors Pi's semantic session events, not terminal pixels. It displays conversation content, streaming assistant state, tool calls/results, errors, and activity using browser-native presentation. It does not reproduce ANSI colors, terminal wrapping, footer/widgets, built-in dialogs, arbitrary custom TUI components, or unsent terminal editor text.
 
 The initial transcript comes from the active session branch. Unsent browser message text and ordered attachment references are authoritative in the live Pi process, so refresh, reconnect, and active-tab takeover restore the same draft without creating a second transcript or altering Pi's session tree. Text edits are revisioned and saved with bounded, deduplicated mutations; stale or delayed responses cannot overwrite newer typing.
 
-## Images
+## 🖼️ Images
 
 | Input | Provider-ready output |
 | --- | --- |
@@ -129,7 +129,7 @@ Pi's effective global and trusted-project `images.autoResize` and `images.blockI
 
 When `retainSentImages` is enabled, only provider-ready sanitized bytes transfer into a separate session-memory store after Pi accepts the matching browser message. Content-identical sanitized images share one opaque session reference. Oldest entries are evicted first when either retention ceiling is exceeded. WebUI also reconciles retained, current-draft, and conservative in-flight processing bytes against one aggregate resident-image budget (the larger of the configured retention byte ceiling and the staging store's maximum working set), evicting sent entries before that aggregate can grow. Eligible transcript image chips offer **Attach again** and **Forget**; evicted or forgotten references read **Expired**, and terminal-origin images never gain those actions. Attach again clones the retained bytes into the current authoritative draft, reuses normal count/byte admission, and never mutates the earlier message. Refresh and active-tab takeover recover eligibility from Pi-process state; session replacement, reload, shutdown, or process exit releases all retained bytes.
 
-## Security and privacy
+## 🔐 Security and privacy
 
 - The server binds only to a random `127.0.0.1` port and is owned by one live Pi session.
 - A rotating bootstrap token is exchanged once for a per-server HttpOnly, `SameSite=Strict` cookie and removed from the URL.
@@ -141,11 +141,11 @@ When `retainSentImages` is enabled, only provider-ready sanitized bytes transfer
 
 A loopback page is local to the operating-system network namespace. WebUI does not support LAN/public binding or a cloud relay. For SSH, containers, or devcontainers, forward the exact printed port and preserve the `127.0.0.1:<port>` Host value.
 
-## Accessibility and browsers
+## ♿ Accessibility and browsers
 
 The page uses semantic headings, native disclosure/dialog controls, concise status/alert live regions, accessible labels, visible keyboard focus, at least 44 px controls, keyboard image preview/removal/reordering, `Ctrl/Command+Enter` submission, reduced-motion handling, dark mode, and responsive reflow. It targets current stable desktop Chrome, Edge, Firefox, and Safari.
 
-## Limitations
+## 🚧 Limitations
 
 - One active Pi session and one active browser editing tab only.
 - No persistent browser transcript, permanent sent-image gallery, cross-session image history, remote access, PTY/terminal control, model/settings controls, or session switching.
@@ -153,7 +153,7 @@ The page uses semantic headings, native disclosure/dialog controls, concise stat
 - Browser acknowledgment means Pi accepted or queued the message. Provider failures follow Pi's normal session/retry behavior.
 - Built-in TUI commands and dialogs are not reimplemented in the browser.
 
-## Package layout
+## 🗂️ Package layout
 
 ```text
 src/webui.ts         Pi extension entrypoint
@@ -170,7 +170,7 @@ src/pi-settings.ts   effective Pi image settings reader
 src/web/             framework-free browser page
 ```
 
-## Development
+## 🧪 Development
 
 From the repository root:
 
@@ -183,10 +183,10 @@ just pack webui
 
 The package preview must contain its manifest, license, README, TypeScript source, and static web assets, but no tests, fixtures, cache, or `node_modules`.
 
-## Keywords
+## 🔎 Keywords
 
 Pi extension, Pi Coding Agent, browser companion, local web chat, terminal session sync, Server-Sent Events, image prompt, tool activity, local-first AI coding agent.
 
-## License
+## 📄 License
 
 MIT

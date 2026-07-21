@@ -234,6 +234,10 @@ extensions/pi-lsp/
 └── package.json
 ```
 
+## 🔎 Keywords
+
+Pi extension, Pi Coding Agent, Language Server Protocol, LSP diagnostics, code actions, source fixes, configurable language servers, TypeScript Pi package.
+
 ## 📄 License
 
 MIT. See [`LICENSE`](./LICENSE).
