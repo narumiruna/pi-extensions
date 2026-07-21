@@ -8,8 +8,9 @@ Use it when you want to ask a temporary question, inspect context, or get a shor
 
 ## ✨ Features
 
-- Adds a `/btw <question>` command to Pi.
+- Adds a `/btw` side-thread command to Pi, with an optional initial question.
 - Answers side questions in a temporary, scrollable UI.
+- Supports follow-up questions in the same ephemeral side thread.
 - Uses the current session branch as context.
 - Uses Pi's current model or an independent model selected in `pi-btw.json`.
 - Inherits Pi's current thinking level or uses a fixed level from `pi-btw.json`.
@@ -36,22 +37,34 @@ pi -e ./extensions/pi-btw
 
 ## 🚀 Usage
 
+Start an empty side thread or provide its first question immediately:
+
 ```text
+/btw
 /btw <your side question>
 ```
 
 Examples:
 
 ```text
+/btw
 /btw what does this TypeScript error mean?
 /btw summarize the current implementation before we continue
 /btw is this API name idiomatic?
 ```
 
-Long answers open in a pager-style view. Use `↑`/`↓` or `k`/`j` to scroll by line,
-`PgUp`/`PgDn`, `Shift+Space`/`Space`, or `Ctrl+B`/`Ctrl+F` to scroll by page,
-`Ctrl+U`/`Ctrl+D` to scroll by half page, and `Home`/`End` to jump. Close with
-`q`, `Esc`, `Enter`, or `Ctrl+C`.
+Running `/btw` alone opens an empty ephemeral side thread with its editor ready. When an
+initial question is provided, its answer opens above the same editor. A compact
+`btw · side thread` header stays fixed above the content so the ephemeral workspace remains
+recognizable while scrolling. Messages use Pi's normal user and assistant presentation without
+numbered turns or role labels. Type each question and press `Enter`; no follow-up shortcut is
+required.
+Previous side questions and answers remain available to the model and visible for that
+invocation. While a response is running, the transcript stays visible above a compact
+`Answering…` status. The footer shows `PgUp`/`PgDn` only when history can scroll; press
+`Ctrl+C` to cancel an in-progress answer or leave the side thread. Closing it, reloading Pi,
+or switching sessions discards it without adding any of its questions or answers to the main
+conversation.
 
 ## ⚙️ Model and thinking level
 
