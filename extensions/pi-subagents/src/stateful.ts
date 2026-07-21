@@ -168,12 +168,12 @@ export function registerStatefulSubagents(
 			"Start an addressable background subagent, return immediately with an agentId, and receive its completion asynchronously.",
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
 		promptGuidelines: [
-			"Do not delegate simple or critical-path work that the main agent can perform directly.",
-			"A single detached subagent is appropriate only for a concrete bounded subtask that can run independently alongside useful main-agent work and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
-			"Use one blocking subagent parallel call for multiple independent one-shot tasks; do not use repeated detached spawns when no reuse or overlap is needed.",
-			"After spawning, do useful non-overlapping local work immediately. Call subagent_wait sparingly, only when the immediate next critical-path step requires the result and is blocked until it arrives; do not wait repeatedly by reflex.",
-			"Consume and synthesize available completion messages; interrupt or close agents that are no longer needed.",
-			"Detached completion is delivered automatically. Do not poll, wait forever, or spawn additional agents without a distinct need.",
+			"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly.",
+			"Use a single subagent_spawn only for a concrete bounded subtask that can run independently alongside useful main-agent work and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
+			"Use one blocking subagent parallel call for multiple independent one-shot tasks; do not use repeated subagent_spawn calls when no reuse or overlap is needed.",
+			"After subagent_spawn returns, do useful non-overlapping local work immediately. Call subagent_wait sparingly, only when the immediate next critical-path step requires the result and is blocked until it arrives; do not wait repeatedly by reflex.",
+			"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
+			"subagent_spawn completion is delivered automatically. Do not poll, wait forever, or spawn additional agents without a distinct need.",
 		],
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),

@@ -141,13 +141,20 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.match(spawnTool.promptGuidelines.join("\n"), /simple or critical-path work/);
 		assert.match(
 			spawnTool.promptGuidelines.join("\n"),
-			/single detached subagent.*isolation or specialization/i,
+			/single subagent_spawn.*isolation or specialization/i,
 		);
 		assert.match(spawnTool.promptGuidelines.join("\n"), /useful non-overlapping.*immediately/i);
 		assert.match(spawnTool.promptGuidelines.join("\n"), /subagent_wait.*sparingly/i);
 		assert.match(spawnTool.promptGuidelines.join("\n"), /immediate.*critical-path.*blocked/i);
 		assert.doesNotMatch(spawnTool.promptGuidelines.join("\n"), /rather than yielding/i);
 		assert.match(spawnTool.promptGuidelines.join("\n"), /synthesize available.*completion/i);
+		for (const guideline of spawnTool.promptGuidelines) {
+			assert.match(
+				guideline,
+				/subagent_spawn/,
+				`flattened spawn guideline must identify subagent_spawn: ${guideline}`,
+			);
+		}
 		const waitTool = mock.tools.find((tool) => tool.name === "subagent_wait") as {
 			description: string;
 		};
