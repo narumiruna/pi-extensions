@@ -6,6 +6,8 @@
 
 Use it when you want a quick Codex-style usage summary without leaving Pi or requiring Codex CLI to be installed.
 
+> **Successor:** [`@narumitw/pi-usage`](../pi-usage) adds a current-account-first `/usage` menu for Codex and OpenRouter. This predecessor remains available during the successor's soak period. Do not load both packages together because both register `/codex-status`; see the [migration guide](../pi-usage#-migrating-from-pi-codex-usage).
+
 ## ✨ Features
 
 - Adds a `/codex-status` command to Pi.

@@ -32,6 +32,8 @@ test("statusline defaults describe the complete Tokyo Night JSON document", () =
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.provider.prefix, "🔌 ");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.turn.prefix, "🔁 #");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.goal, "🎯");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.usage, "📊");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons["codex-usage"], "📊");
 	assert.deepEqual(JSON.parse(DEFAULT_STATUSLINE_DOCUMENT), DEFAULT_STATUSLINE_CONFIG);
 	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.endsWith("\n"), true);
 });

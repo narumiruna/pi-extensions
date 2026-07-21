@@ -92,6 +92,9 @@ pack-codex-accounts:
 pack-codex-usage:
     just pack codex-usage
 
+pack-usage:
+    just pack usage
+
 pack-firecrawl:
     just pack firecrawl
 
@@ -152,6 +155,9 @@ try-codex-accounts:
 
 try-codex-usage:
     just try codex-usage
+
+try-usage:
+    just try usage
 
 try-firecrawl:
     just try firecrawl
@@ -214,6 +220,9 @@ install-codex-accounts:
 install-codex-usage:
     just install codex-usage
 
+install-usage:
+    just install usage
+
 install-firecrawl:
     just install firecrawl
 
@@ -271,6 +280,9 @@ publish-codex-accounts:
 
 publish-codex-usage:
     just publish codex-usage
+
+publish-usage:
+    just publish usage
 
 publish-firecrawl:
     just publish firecrawl
