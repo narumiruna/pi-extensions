@@ -294,9 +294,11 @@ Built-in agents are available without setup and can be overridden by user or pro
 | --- | --- | --- |
 | `scout` | Read-only codebase reconnaissance. | `read`, `grep`, `find`, `ls`, `bash` |
 | `planner` | Grounded implementation plans. | `read`, `grep`, `find`, `ls` |
-| `reviewer` | Independent review and verification. | `read`, `grep`, `find`, `ls`, `bash` |
+| `reviewer` | Independent review of code and existing verification evidence. | `read`, `grep`, `find`, `ls`, `bash` |
 | `worker` | General-purpose implementation. | Pi default tools |
 | `general`, `general-purpose` | Aliases for `worker`. | Pi default tools |
+
+The built-in `reviewer` does not run tests, builds, benchmarks, or formatters. It recommends additional verification commands for the main agent to run instead. Custom agents can override this behavior.
 
 Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps subprocesses usable across different Pi setups.
 

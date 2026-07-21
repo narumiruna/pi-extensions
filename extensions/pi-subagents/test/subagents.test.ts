@@ -205,6 +205,26 @@ test("discoverAgents includes built-ins and lets project agents override by name
 	assert.ok(result.agents.some((agent) => agent.name === "worker" && agent.source === "built-in"));
 });
 
+test("built-in reviewer inspects evidence without running verification commands", () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-reviewer-test-"));
+	try {
+		const reviewer = discoverAgents(cwd, "project").agents.find(
+			(agent) => agent.name === "reviewer",
+		);
+
+		assert.ok(reviewer);
+		assert.match(
+			reviewer.systemPrompt,
+			/do not edit files or run tests, builds, benchmarks, formatters/i,
+		);
+		assert.match(reviewer.systemPrompt, /recommend.*commands for the main agent to run/i);
+		assert.doesNotMatch(reviewer.systemPrompt, /run safe inspection or test commands/i);
+		assert.ok(reviewer.tools?.includes("bash"));
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("formatAgentList returns concise text and remaining count", () => {
 	const agents = discoverAgents(process.cwd(), "project").agents;
 	const formatted = formatAgentList(agents, 2);
