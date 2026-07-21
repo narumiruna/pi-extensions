@@ -10,14 +10,16 @@ import {
 	Editor,
 	type EditorTheme,
 	Key,
+	Loader,
 	Markdown,
 	matchesKey,
 	type TUI,
 	truncateToWidth,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { SideThreadTurn } from "./side-thread.js";
 
-const TRANSCRIPT_CHROME_LINES = 1;
+const TRANSCRIPT_CHROME_LINES = 2;
 const OSC133_MARKERS = ["\u001b]133;A\u0007", "\u001b]133;B\u0007", "\u001b]133;C\u0007"];
 // Pi renders a spacer above the custom component and a two-line built-in footer below it.
 const RESERVED_APP_LINES = 3;
@@ -31,6 +33,7 @@ export class BtwTranscriptPager implements Component {
 	private lastContentLineCount = 0;
 	private lastViewportHeight = 1;
 	private scrollToBottomOnFirstRender: boolean;
+	private hasRendered = false;
 	private warning: string | undefined;
 	private finished = false;
 	private isFocused = false;
@@ -83,26 +86,27 @@ export class BtwTranscriptPager implements Component {
 		const editorLines = this.editor.render(safeWidth);
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
 		const viewportHeight = Math.max(
-			1,
+			0,
 			availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES,
 		);
-		const contentLines = this.transcriptComponents
-			.flatMap((component) => component.render(safeWidth))
-			.map(stripShellIntegrationMarkers);
+		const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
+		const shouldFollowBottom =
+			this.scrollToBottomOnFirstRender ||
+			(this.hasRendered && this.scrollOffset >= this.getMaxScrollOffset());
 		this.lastContentLineCount = contentLines.length;
 		this.lastViewportHeight = viewportHeight;
-		if (this.scrollToBottomOnFirstRender) {
-			this.scrollOffset = this.getMaxScrollOffset();
-			this.scrollToBottomOnFirstRender = false;
-		}
+		if (shouldFollowBottom) this.scrollOffset = this.getMaxScrollOffset();
+		this.scrollToBottomOnFirstRender = false;
+		this.hasRendered = true;
 		this.clampScrollOffset();
 
 		const lines = [
+			renderSideThreadHeader(safeWidth, this.theme),
 			...contentLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
 			this.renderFooter(safeWidth),
 			...editorLines,
 		];
-		return lines.length <= availableRows ? lines : lines.slice(lines.length - availableRows);
+		return fitWithFixedHeader(lines, availableRows);
 	}
 
 	handleInput(data: string): void {
@@ -132,12 +136,125 @@ export class BtwTranscriptPager implements Component {
 	}
 
 	private renderFooter(width: number): string {
-		const hints =
-			width < 28 ? "Enter • Ctrl+C exit" : "Enter send • Ctrl+C exit • PgUp/PgDn history";
-		const text = this.warning
-			? this.theme.fg("warning", this.warning)
-			: this.theme.fg("dim", hints);
-		return truncateToWidth(text, width);
+		if (this.warning) {
+			const warning = width < 32 ? "Empty • Ctrl+C" : `${this.warning} • Ctrl+C exit`;
+			return truncateToWidth(this.theme.fg("warning", warning), width);
+		}
+		const scrollable = this.getMaxScrollOffset() > 0;
+		let hints: string;
+		if (width < 28) {
+			hints = "btw • Enter • Ctrl+C";
+		} else if (width < 52) {
+			hints = `btw • Enter • Ctrl+C${scrollable ? " • PgUp/PgDn" : ""}`;
+		} else {
+			hints = `btw • Enter send • Ctrl+C exit${
+				scrollable ? ` • ${this.scrollOffset > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history` : ""
+			}`;
+		}
+		return truncateToWidth(this.theme.fg("muted", hints), width);
+	}
+
+	private scrollBy(delta: number): void {
+		this.scrollOffset += delta;
+		this.clampScrollOffset();
+	}
+
+	private clampScrollOffset(): void {
+		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, this.getMaxScrollOffset()));
+	}
+
+	private getMaxScrollOffset(): number {
+		return Math.max(0, this.lastContentLineCount - this.lastViewportHeight);
+	}
+}
+
+export class BtwAnsweringView implements Component {
+	private readonly transcriptComponents: Component[];
+	private readonly loader: Loader;
+	private readonly controller = new AbortController();
+	private scrollOffset = 0;
+	private lastContentLineCount = 0;
+	private lastViewportHeight = 1;
+	private scrollToBottomOnFirstRender = true;
+	private hasRendered = false;
+	private finished = false;
+
+	constructor(
+		private readonly tui: TUI,
+		private readonly theme: Theme,
+		turns: readonly SideThreadTurn[],
+		pendingQuestion: string,
+		private readonly onCancel: () => void,
+	) {
+		this.transcriptComponents = buildTranscriptComponents(turns, this.theme, pendingQuestion);
+		this.loader = new Loader(
+			this.tui,
+			(text) => this.theme.fg("accent", text),
+			(text) => this.theme.fg("muted", text),
+			"Answering…",
+		);
+	}
+
+	get signal(): AbortSignal {
+		return this.controller.signal;
+	}
+
+	render(width: number): string[] {
+		const safeWidth = Math.max(1, width);
+		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
+		const viewportHeight = Math.max(0, availableRows - TRANSCRIPT_CHROME_LINES);
+		const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
+		const shouldFollowBottom =
+			this.scrollToBottomOnFirstRender ||
+			(this.hasRendered && this.scrollOffset >= this.getMaxScrollOffset());
+		this.lastContentLineCount = contentLines.length;
+		this.lastViewportHeight = viewportHeight;
+		if (shouldFollowBottom) this.scrollOffset = this.getMaxScrollOffset();
+		this.scrollToBottomOnFirstRender = false;
+		this.hasRendered = true;
+		this.clampScrollOffset();
+		const cancelHint = safeWidth < 28 ? "Ctrl+C" : "Ctrl+C cancel";
+		const loaderWidth = Math.max(1, safeWidth - visibleWidth(cancelHint) - 3);
+		const loaderLine = this.loader.render(loaderWidth).at(-1) ?? "Answering…";
+		const lines = [
+			renderSideThreadHeader(safeWidth, this.theme),
+			...contentLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
+			truncateToWidth(`${loaderLine} • ${this.theme.fg("muted", cancelHint)}`, safeWidth),
+		];
+		return fitWithFixedHeader(lines, availableRows);
+	}
+
+	handleInput(data: string): void {
+		if (this.finished) return;
+		if (matchesKey(data, Key.ctrl("c"))) {
+			this.finished = true;
+			this.loader.stop();
+			this.controller.abort();
+			this.onCancel();
+			return;
+		}
+		if (matchesKey(data, Key.pageUp)) {
+			this.scrollBy(-this.lastViewportHeight);
+			this.tui.requestRender();
+		} else if (matchesKey(data, Key.pageDown)) {
+			this.scrollBy(this.lastViewportHeight);
+			this.tui.requestRender();
+		}
+	}
+
+	invalidate(): void {
+		for (const component of this.transcriptComponents) component.invalidate();
+		this.loader.invalidate();
+	}
+
+	finish(): void {
+		this.finished = true;
+		this.loader.stop();
+	}
+
+	dispose(): void {
+		this.finish();
+		this.controller.abort();
 	}
 
 	private scrollBy(delta: number): void {
@@ -165,8 +282,12 @@ export function formatSideTranscript(turns: readonly SideThreadTurn[]): string {
 		.join("\n\n");
 }
 
-function buildTranscriptComponents(turns: readonly SideThreadTurn[], theme: Theme): Component[] {
-	return turns.flatMap((turn): Component[] => {
+function buildTranscriptComponents(
+	turns: readonly SideThreadTurn[],
+	theme: Theme,
+	pendingQuestion?: string,
+): Component[] {
+	const components = turns.flatMap((turn): Component[] => {
 		const question = new UserMessageComponent(
 			escapeTerminalControls(turn.question),
 			getMarkdownTheme(),
@@ -190,6 +311,30 @@ function buildTranscriptComponents(turns: readonly SideThreadTurn[], theme: Them
 		};
 		return [question, new AssistantMessageComponent(response, true, getMarkdownTheme(), "", 1)];
 	});
+	if (pendingQuestion) {
+		components.push(
+			new UserMessageComponent(escapeTerminalControls(pendingQuestion), getMarkdownTheme(), 1),
+		);
+	}
+	return components;
+}
+
+function renderTranscriptLines(components: readonly Component[], width: number): string[] {
+	return components
+		.flatMap((component) => component.render(width))
+		.map(stripShellIntegrationMarkers);
+}
+
+function renderSideThreadHeader(width: number, theme: Theme): string {
+	const title = truncateToWidth("─ btw · side thread ", width);
+	const ruleWidth = Math.max(0, width - visibleWidth(title));
+	return theme.fg("muted", `${title}${"─".repeat(ruleWidth)}`);
+}
+
+function fitWithFixedHeader(lines: string[], availableRows: number): string[] {
+	if (lines.length <= availableRows) return lines;
+	if (availableRows <= 1) return lines.slice(0, 1);
+	return [lines[0] ?? "", ...lines.slice(lines.length - availableRows + 1)];
 }
 
 function stripShellIntegrationMarkers(line: string): string {

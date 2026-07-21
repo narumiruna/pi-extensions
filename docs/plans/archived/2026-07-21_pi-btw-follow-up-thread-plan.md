@@ -10,7 +10,7 @@
 - Model、credentials與thinking level在thread開始時解析一次，避免follow-up中途切換執行環境。
 - 第一個provider request包含主對話context；後續request沿用第一個user message與完整成功side turns，不重複嵌入主context。
 - `extensions/pi-btw/src/side-thread.ts`負責provider messages、completion與turn commit；失敗turn只顯示在transcript，不加入後續provider context。
-- `extensions/pi-btw/src/transcript-pager.ts`以Pi原生user/assistant message components渲染可捲動transcript與editor，不加入Q編號、role labels、turn count、分隔線或進度百分比。`Enter`提交，`PgUp`/`PgDn`捲動歷史，`Ctrl+C`是明確的退出操作；`q`與`Esc`不退出。
+- `extensions/pi-btw/src/transcript-pager.ts`以Pi原生user/assistant message components渲染可捲動transcript與editor，不加入Q編號、role labels、turn count、分隔線或進度百分比。回答期間保留transcript並顯示compact `Answering…`狀態；`PgUp`/`PgDn`只在history可捲動時提示。`Enter`提交，`Ctrl+C`是明確的取消/退出操作；`q`與`Esc`不退出。
 - `extensions/pi-btw/src/btw.ts`負責transcript/editor → loader迴圈；有command參數時可跳過第一次空白composer並直接送出。回答生成期間取消會結束整個side thread，且late provider response不得再寫入thread。
 - Side thread僅存活於command handler；不呼叫`pi.sendMessage()`、`pi.sendUserMessage()`或`pi.appendEntry()`。
 
@@ -33,7 +33,7 @@
 
 - [x] 在`extensions/pi-btw/test/side-thread.test.ts`加入provider sequence、取消競態與command state-machine測試；以首次缺少新模組的`npm test`證明red phase。
 - [x] 將單題completion重構成`extensions/pi-btw/src/side-thread.ts`的累積runner；captured `completeSimple()` calls驗證三題message sequence、單次主context與固定model/auth/thinking level。
-- [x] 將回答UI拆成`extensions/pi-btw/src/transcript-pager.ts`的整合transcript/editor component；component tests驗證Pi原生訊息樣式、無額外role/turn裝飾、窄寬度、長內容、捲底、空白輸入、`Enter`提交及只有`Ctrl+C`退出。
+- [x] 將回答UI拆成`extensions/pi-btw/src/transcript-pager.ts`的整合transcript/editor及inline-answering components；固定的低調`btw · side thread` header提供workspace邊界但不進入對話資料。Component tests驗證Pi原生訊息樣式、無額外role/turn裝飾、回答期間保留context、conditional history hints、窄寬度、resize捲底、空白輸入、`Enter`提交及只有`Ctrl+C`取消/退出。
 - [x] 在command handler實作可從空白composer或command初始問題開始的transcript/editor → loader迴圈；注入式tests驗證第一題輸入、連續追問、生成取消立即退出及late response不復活。
 - [x] 更新`extensions/pi-btw/README.md`，記錄inline follow-up、按鍵與ephemeral/non-polluting語意。
 - [x] 以`npm run check`與`just pack-btw`驗證；互動式Pi TUI smoke依repository execution policy標示不適用。

@@ -15,7 +15,11 @@ import {
 	type SideQuestionAuth,
 	type SideThread,
 } from "./side-thread.js";
-import { BtwTranscriptPager, type TranscriptPagerAction } from "./transcript-pager.js";
+import {
+	BtwAnsweringView,
+	BtwTranscriptPager,
+	type TranscriptPagerAction,
+} from "./transcript-pager.js";
 
 export {
 	BTW_THINKING_LEVELS,
@@ -336,30 +340,26 @@ async function askThreadQuestion(
 ) {
 	return ctx.ui.custom<Awaited<ReturnType<typeof completeSideThreadTurn>>>(
 		(tui, theme, _keybindings, done) => {
-			const loader = new BorderedLoader(
-				tui,
-				theme,
-				`Answering /btw with ${selected.model.provider}/${selected.model.id}...`,
-			);
 			let settled = false;
-			loader.onAbort = () => {
+			const view = new BtwAnsweringView(tui, theme, thread.turns, question, () => {
 				if (settled) return;
 				settled = true;
 				done({ kind: "aborted" });
-			};
+			});
 			completeSideThreadTurn({
 				thread,
 				question,
 				model: selected.model,
 				thinkingLevel,
 				auth: selected.auth,
-				signal: loader.signal,
+				signal: view.signal,
 			}).then((result) => {
 				if (settled) return;
 				settled = true;
+				view.finish();
 				done(result);
 			});
-			return loader;
+			return view;
 		},
 	);
 }

@@ -16,7 +16,11 @@ import {
 	createSideThread,
 	type SideThread,
 } from "../src/side-thread.js";
-import { BtwTranscriptPager, formatSideTranscript } from "../src/transcript-pager.js";
+import {
+	BtwAnsweringView,
+	BtwTranscriptPager,
+	formatSideTranscript,
+} from "../src/transcript-pager.js";
 
 function response(text: string): AssistantMessage {
 	return {
@@ -286,14 +290,75 @@ test("empty transcript composer accepts the first side-thread question", () => {
 	);
 
 	composer.focused = true;
-	const emptyView = composer.render(40).join("\n");
-	assert.doesNotMatch(emptyView, /turns|Q1|You:|Assistant:|%/);
-	assert.match(emptyView, /Enter send.*Ctrl\+C exit/);
+	const emptyLines = composer.render(40);
+	const emptyView = emptyLines.join("\n");
+	assert.match(emptyLines[0] ?? "", /─ btw · side thread/);
+	assert.doesNotMatch(emptyView, /turns|Q1|You:|Assistant:|%|history/);
+	assert.match(emptyView, /btw.*Enter.*Ctrl\+C/);
 	assert.equal(emptyView.includes(CURSOR_MARKER), true);
 	for (const character of "first question") composer.handleInput(character);
 	composer.handleInput("\r");
 
 	assert.deepEqual(actions, [{ kind: "submit", question: "first question" }]);
+});
+
+test("side-thread header stays fixed across narrow renders and history scrolling", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+	const pager = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "question", answer, kind: "answered", response: response(answer) }],
+		() => undefined,
+		{ startAtBottom: true },
+	);
+
+	const initial = pager.render(80);
+	pager.handleInput("\u001b[5~");
+	const scrolled = pager.render(80);
+	const narrow = pager.render(8);
+	assert.match(initial[0] ?? "", /─ btw · side thread/);
+	assert.match(scrolled[0] ?? "", /─ btw · side thread/);
+	assert.match(narrow[0] ?? "", /btw/);
+	assert.ok(narrow.every((line) => visibleWidth(line) <= 8));
+});
+
+test("side-thread header is presentation-only", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 24 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const thread = createSideThread("main context");
+	thread.turns.push({
+		question: "previous question",
+		answer: "previous answer",
+		kind: "answered",
+		response: response("previous answer"),
+	});
+	const snapshot = structuredClone(thread.turns);
+	const pager = new BtwTranscriptPager(tui as never, theme as never, thread.turns, () => undefined);
+
+	assert.match(pager.render(80)[0] ?? "", /btw · side thread/);
+	assert.deepEqual(thread.turns, snapshot);
+	assert.doesNotMatch(
+		JSON.stringify(buildSideThreadMessages(thread, "next question")),
+		/side thread/,
+	);
 });
 
 test("transcript pager starts later turns at the bottom and respects narrow widths", () => {
@@ -323,8 +388,173 @@ test("transcript pager starts later turns at the bottom and respects narrow widt
 
 	assert.ok(lines.every((line) => visibleWidth(line) <= 20));
 	assert.ok(lines.length <= tui.terminal.rows - 3);
-	assert.doesNotMatch(lines.join("\n"), /Q1|You:|Assistant:|turns|%/);
-	assert.match(lines.join("\n"), /Enter.*Ctrl\+C/);
+	assert.doesNotMatch(lines.join("\n"), /Q1|You:|Assistant:|turns|%|history/);
+	assert.match(lines.join("\n"), /btw.*Enter.*Ctrl\+C/);
+});
+
+test("scrollable transcript reveals history controls only when they are useful", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+	const composer = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "question", answer, kind: "answered", response: response(answer) }],
+		() => undefined,
+		{ startAtBottom: true },
+	);
+
+	const rendered = composer.render(80).join("\n");
+	assert.match(rendered, /↑ older.*PgUp\/PgDn history/);
+	assert.match(composer.render(40).join("\n"), /PgUp\/PgDn/);
+});
+
+test("transcript honors an explicit top start on its first render", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+	const composer = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "FIRST QUESTION", answer, kind: "answered", response: response(answer) }],
+		() => undefined,
+	);
+	const rendered = composer.render(80).join("\n");
+
+	assert.match(rendered, /FIRST QUESTION/);
+	assert.doesNotMatch(rendered, /line 20/);
+});
+
+test("transcript stays anchored to the latest answer when terminal width changes", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = `${"reflow content ".repeat(20)}LATEST`;
+	const composer = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "question", answer, kind: "answered", response: response(answer) }],
+		() => undefined,
+		{ startAtBottom: true },
+	);
+
+	assert.match(composer.render(80).join("\n"), /LATEST/);
+	assert.match(composer.render(20).join("\n"), /LATEST/);
+});
+
+test("answering view preserves the transcript and offers compact cancellation", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 24 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	let cancelled = 0;
+	const view = new BtwAnsweringView(
+		tui as never,
+		theme as never,
+		[
+			{
+				question: "Earlier question",
+				answer: "Earlier answer",
+				kind: "answered",
+				response: response("Earlier answer"),
+			},
+		],
+		"Current question",
+		() => {
+			cancelled += 1;
+		},
+	);
+	try {
+		const rendered = view.render(80).join("\n");
+		assert.match(rendered, /─ btw · side thread/);
+		assert.match(rendered, /Earlier question/);
+		assert.match(rendered, /Earlier answer/);
+		assert.match(rendered, /Current question/);
+		assert.match(rendered, /Answering….*Ctrl\+C cancel/);
+		assert.doesNotMatch(rendered, /openai|codex|provider|model/i);
+		view.handleInput("\u0003");
+		assert.equal(cancelled, 1);
+		assert.equal(view.signal.aborted, true);
+	} finally {
+		view.dispose();
+	}
+});
+
+test("answering view never exceeds the available height in a short terminal", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 4 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const view = new BtwAnsweringView(tui as never, theme as never, [], "question", () => undefined);
+
+	try {
+		assert.ok(view.render(40).length <= tui.terminal.rows - 3);
+	} finally {
+		view.dispose();
+	}
+});
+
+test("answering view keeps the pending question visible after terminal reflow", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = "earlier content ".repeat(20);
+	const view = new BtwAnsweringView(
+		tui as never,
+		theme as never,
+		[{ question: "Earlier question", answer, kind: "answered", response: response(answer) }],
+		"CURRENT QUESTION",
+		() => undefined,
+	);
+
+	try {
+		assert.match(view.render(80).join("\n"), /CURRENT QUESTION/);
+		assert.match(view.render(20).join("\n"), /CURRENT QUESTION/);
+	} finally {
+		view.dispose();
+	}
 });
 
 test("transcript renders like a plain conversation without role labels", () => {
@@ -408,7 +638,10 @@ test("transcript composer submits typed questions by default and only Ctrl+C clo
 		actions.push(action),
 	);
 	blank.handleInput("\r");
-	assert.match(blank.render(40).join("\n"), /cannot be empty/i);
+	const blankWarning = blank.render(60).join("\n");
+	assert.match(blankWarning, /cannot be empty/i);
+	assert.match(blankWarning, /Ctrl\+C exit/);
+	assert.match(blank.render(20).join("\n"), /Empty.*Ctrl\+C/);
 
 	assert.deepEqual(actions, [{ kind: "submit", question: "qf" }, { kind: "close" }]);
 });

@@ -54,13 +54,17 @@ Examples:
 ```
 
 Running `/btw` alone opens an empty ephemeral side thread with its editor ready. When an
-initial question is provided, its answer opens above the same editor. Messages use Pi's normal
-user and assistant presentation without numbered turns or role labels. Type each question and
-press `Enter`; no follow-up shortcut is required.
+initial question is provided, its answer opens above the same editor. A compact
+`btw · side thread` header stays fixed above the content so the ephemeral workspace remains
+recognizable while scrolling. Messages use Pi's normal user and assistant presentation without
+numbered turns or role labels. Type each question and press `Enter`; no follow-up shortcut is
+required.
 Previous side questions and answers remain available to the model and visible for that
-invocation. Press `PgUp`/`PgDn` to scroll the transcript and `Ctrl+C` to cancel an in-progress
-answer or leave the side thread. Closing it, reloading Pi, or switching sessions discards it
-without adding any of its questions or answers to the main conversation.
+invocation. While a response is running, the transcript stays visible above a compact
+`Answering…` status. The footer shows `PgUp`/`PgDn` only when history can scroll; press
+`Ctrl+C` to cancel an in-progress answer or leave the side thread. Closing it, reloading Pi,
+or switching sessions discards it without adding any of its questions or answers to the main
+conversation.
 
 ## ⚙️ Model and thinking level
 
