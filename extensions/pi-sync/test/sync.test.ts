@@ -1,11 +1,29 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	configuredSessionDir,
+	ensureStateDir,
+	loadPartialConfig,
+	localConfigPath,
+	lockPath,
+	readState,
+} from "../src/config.js";
+import { lockFileExists, readLock, withLock } from "../src/lock.js";
 import { S3Client } from "../src/s3-client.js";
 import sync, {
 	addTopLevelCaseVariantDeletes,
@@ -934,6 +952,355 @@ test("getBuffer throws after retrying a persistently empty R2 response body", as
 		globalThis.fetch = originalFetch;
 	}
 });
+
+test("old unreadable locks require explicit stale unlock before recovery", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx } = createMockContext();
+
+		for (const contents of ["", "{not valid json"]) {
+			writeOldLock(contents);
+			let ran = false;
+			await assert.rejects(
+				withLock("test", async () => {
+					ran = true;
+				}),
+				/unreadable/,
+			);
+			assert.equal(ran, false);
+			assert.equal(await lockFileExists(), true);
+
+			await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+			assert.equal(await lockFileExists(), false);
+			assert.equal(await withLock("test", async () => "ok"), "ok");
+		}
+	});
+});
+
+test("withLock never reclaims an aged lock that a legacy writer still owns", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		const legacyHandle = await fs.open(lockPath(), "wx");
+		const old = new Date(Date.now() - 60_000);
+		await fs.utimes(lockPath(), old, old);
+		let ran = false;
+		try {
+			await assert.rejects(
+				withLock("test", async () => {
+					ran = true;
+				}),
+				/unreadable/,
+			);
+			assert.equal(ran, false);
+
+			await legacyHandle.writeFile(
+				JSON.stringify({
+					id: "legacy",
+					pid: process.pid,
+					command: "sync",
+					startedAt: new Date().toISOString(),
+				}),
+			);
+			await assert.rejects(
+				withLock("test", async () => undefined),
+				/already running/,
+			);
+		} finally {
+			await legacyHandle.close();
+			await fs.rm(lockPath(), { force: true });
+		}
+	});
+});
+
+test("withLock does not reclaim a lock file that may still be initializing", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "");
+		let ran = false;
+		await assert.rejects(
+			withLock("test", async () => {
+				ran = true;
+			}),
+			/unreadable/,
+		);
+		assert.equal(ran, false);
+	});
+});
+
+test("unlock keeps a fresh unreadable lock unless stale removal is explicit", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "");
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.commands.get("pisync")?.handler("unlock", ctx);
+		assert.equal(await lockFileExists(), true);
+		assert.match(notifications.at(-1)?.message ?? "", /unreadable/);
+
+		await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+		assert.equal(await lockFileExists(), false);
+		assert.match(notifications.at(-1)?.message ?? "", /Removed unreadable/);
+	});
+});
+
+test("stale unlock rechecks unreadable metadata before removing it", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "");
+		const originalReadFile = fs.readFile;
+		let lockReads = 0;
+		fs.readFile = (async (...args: Parameters<typeof fs.readFile>) => {
+			const result = await originalReadFile(...args);
+			if (args[0] === lockPath() && lockReads++ === 0) {
+				await fs.writeFile(
+					lockPath(),
+					JSON.stringify({
+						id: "legacy",
+						pid: process.pid,
+						command: "sync",
+						startedAt: new Date().toISOString(),
+					}),
+				);
+			}
+			return result;
+		}) as typeof fs.readFile;
+
+		try {
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext();
+			await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+
+			assert.equal(await lockFileExists(), true);
+			assert.match(notifications.at(-1)?.message ?? "", /not stale|still live/);
+		} finally {
+			fs.readFile = originalReadFile;
+			await fs.rm(lockPath(), { force: true });
+		}
+	});
+});
+
+test("unlock cannot remove the lock for an active guarded sync", async () => {
+	await withTempHome(async () => {
+		let releaseRun: (() => void) | undefined;
+		const keepRunning = new Promise<void>((resolve) => {
+			releaseRun = resolve;
+		});
+		let markStarted: (() => void) | undefined;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		const running = withLock("test", async () => {
+			markStarted?.();
+			await keepRunning;
+		});
+		await started;
+
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+		try {
+			await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+			assert.equal(await lockFileExists(), true);
+			assert.match(notifications.at(-1)?.message ?? "", /currently running/);
+		} finally {
+			releaseRun?.();
+			await running;
+		}
+		assert.equal(await lockFileExists(), false);
+	});
+});
+
+test("unlock reports when a dead owner's guard is still expiring", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(
+			lockPath(),
+			JSON.stringify({
+				id: "dead-owner",
+				pid: 2_147_483_647,
+				command: "sync",
+				startedAt: new Date().toISOString(),
+			}),
+		);
+		mkdirSync(`${lockPath()}.guard`);
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+		assert.equal(await lockFileExists(), true);
+		assert.match(notifications.at(-1)?.message ?? "", /owner exited.*guard expires/);
+	});
+});
+
+test("concurrent withLock calls never execute together", async () => {
+	await withTempHome(async () => {
+		let active = 0;
+		let maxActive = 0;
+		const run = () =>
+			withLock("test", async () => {
+				active += 1;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				active -= 1;
+			});
+
+		const results = await Promise.allSettled([run(), run()]);
+		assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+		assert.equal(maxActive, 1);
+	});
+});
+
+test("withLock rejects when a valid foreign lock is held", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(
+			lockPath(),
+			JSON.stringify({
+				id: "other",
+				pid: process.pid,
+				command: "push",
+				startedAt: new Date().toISOString(),
+			}),
+		);
+		await assert.rejects(
+			withLock("test", async () => "ok"),
+			/already running/,
+		);
+	});
+});
+
+test("readLock treats empty, whitespace, and corrupt lock files as absent", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		for (const contents of [
+			"",
+			"  \n  ",
+			"{broken",
+			"{}",
+			"[]",
+			"null",
+			"1",
+			JSON.stringify({
+				id: "invalid-pid",
+				pid: 2_147_483_648,
+				command: "sync",
+				startedAt: new Date().toISOString(),
+			}),
+		]) {
+			writeFileSync(lockPath(), contents);
+			assert.equal(
+				await readLock(),
+				undefined,
+				`expected undefined for ${JSON.stringify(contents)}`,
+			);
+		}
+	});
+});
+
+test("doctor warns when lock metadata is unreadable", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(lockPath(), "{broken");
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /lock: unreadable/);
+		assert.equal(notifications.at(-1)?.level, "warning");
+	});
+});
+
+test("doctor warns when a lock guard is active without metadata", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		mkdirSync(`${lockPath()}.guard`);
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /lock: guard active.*metadata/);
+		assert.equal(notifications.at(-1)?.level, "warning");
+	});
+});
+
+test("doctor warns when a valid lock owner has exited", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(
+			lockPath(),
+			JSON.stringify({
+				id: "dead-owner",
+				pid: 2_147_483_647,
+				command: "sync",
+				startedAt: new Date().toISOString(),
+			}),
+		);
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /lock: stale.*unlock/);
+		assert.equal(notifications.at(-1)?.level, "warning");
+	});
+});
+
+test("doctor reports live and free lock states", async () => {
+	await withTempHome(async () => {
+		await ensureStateDir();
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
+		writeFileSync(
+			lockPath(),
+			JSON.stringify({
+				id: "live-owner",
+				pid: process.pid,
+				command: "sync",
+				startedAt: new Date().toISOString(),
+			}),
+		);
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /lock: held by pid/);
+		assert.equal(notifications.at(-1)?.level, "info");
+
+		await fs.rm(lockPath());
+		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /lock: free/);
+		assert.equal(notifications.at(-1)?.level, "info");
+	});
+});
+
+test("malformed non-lock JSON remains an explicit error", async () => {
+	await withTempHome(async (agentDir) => {
+		await ensureStateDir();
+
+		writeFileSync(localConfigPath(), "{broken");
+		await assert.rejects(loadPartialConfig(), SyntaxError);
+
+		writeFileSync(path.join(agentDir, ".pisync", "default.state.json"), "{broken");
+		await assert.rejects(readState("default"), SyntaxError);
+
+		writeFileSync(path.join(agentDir, "settings.json"), "{broken");
+		await assert.rejects(configuredSessionDir(), SyntaxError);
+	});
+});
+
+function writeOldLock(contents: string) {
+	writeFileSync(lockPath(), contents);
+	const old = new Date(Date.now() - 60_000);
+	utimesSync(lockPath(), old, old);
+}
 
 function snapshot(files: Array<{ path: string; content: Buffer }>) {
 	return {

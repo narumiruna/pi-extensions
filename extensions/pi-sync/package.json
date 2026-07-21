@@ -28,9 +28,13 @@
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit"
 	},
+	"dependencies": {
+		"proper-lockfile": "^4.1.2"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.3",
 		"@earendil-works/pi-coding-agent": "0.80.10",
+		"@types/proper-lockfile": "^4.1.4",
 		"typescript": "7.0.2"
 	},
 	"repository": {

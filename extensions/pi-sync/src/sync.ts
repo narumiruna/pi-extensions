@@ -12,12 +12,9 @@ import {
 	ensureStateDir,
 	extraFilePathsByLower,
 	isMissingConfigError,
-	isStaleLock,
 	loadPartialConfig,
 	localConfigPath,
-	lockPath,
 	normalizeExtraFiles,
-	readLock,
 	stateDir,
 	writeJson,
 	configuredSessionDir,
@@ -29,9 +26,9 @@ import {
 	sessionDirForApply,
 	sessionTokenWarnings,
 	syncSessionsWarnings,
-	withLock,
 	writeState,
 } from "./config.js";
+import { inspectLock, isLockGuardHeld, isStaleLock, unlock, withLock } from "./lock.js";
 import { encodeKey, posixJoin, safeJoin, safeName, toPosix } from "./paths.js";
 import {
 	historyKey,
@@ -346,8 +343,25 @@ async function doctor(ctx: ExtensionCommandContext) {
 		messages.push(`secret scan: ok (${local.files.length} files checked)`);
 	}
 
-	const lock = await readLock();
-	messages.push(lock ? `lock: held by pid ${lock.pid} since ${lock.startedAt}` : "lock: free");
+	const lock = await inspectLock();
+	if (lock.status === "valid" && isStaleLock(lock.lock)) {
+		level = "warning";
+		messages.push(
+			`lock: stale (pid ${lock.lock.pid}); run /pisync unlock after verifying no sync is running`,
+		);
+	} else if (lock.status === "valid") {
+		messages.push(`lock: held by pid ${lock.lock.pid} since ${lock.lock.startedAt}`);
+	} else if (lock.status === "unreadable") {
+		level = "warning";
+		messages.push(
+			"lock: unreadable; use /pisync unlock --stale only after verifying no sync is running",
+		);
+	} else if (await isLockGuardHeld()) {
+		level = "warning";
+		messages.push("lock: guard active while metadata is missing or still being initialized");
+	} else {
+		messages.push("lock: free");
+	}
 	ctx.ui.notify(messages.join("\n"), level);
 }
 
@@ -617,20 +631,6 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	});
 	ctx.ui.notify(`Rolled back to ${target}; latest: ${pointer.snapshot}. Backup: ${backup}`, "info");
 	await maybeReload(ctx);
-}
-
-async function unlock(ctx: ExtensionCommandContext, options: CommandOptions) {
-	const lock = await readLock();
-	if (!lock) {
-		ctx.ui.notify("No pi-sync lock is present.", "info");
-		return;
-	}
-	if (!options.stale && !isStaleLock(lock)) {
-		ctx.ui.notify("Lock is not stale. Use /pisync unlock --stale only after verifying no sync is running.", "warning");
-		return;
-	}
-	await fs.rm(lockPath(), { force: true });
-	ctx.ui.notify("Removed stale pi-sync lock.", "info");
 }
 
 function protectedSessionPaths(ctx: ExtensionCommandContext | ExtensionContext) {
