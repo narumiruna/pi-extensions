@@ -222,6 +222,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 		hasPendingMessages: overrides.hasPendingMessages ?? (() => false),
 		isProjectTrusted: overrides.isProjectTrusted ?? (() => false),
 		abort: overrides.abort ?? (() => undefined),
+		waitForIdle: overrides.waitForIdle ?? (async () => undefined),
 		reload: overrides.reload ?? (async () => undefined),
 		getContextUsage: overrides.getContextUsage ?? (() => undefined),
 		sessionManager: overrides.sessionManager ?? {

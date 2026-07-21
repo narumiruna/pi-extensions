@@ -37,7 +37,8 @@
 		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run",
 		"pack:sync": "npm --workspace @narumitw/pi-sync pack --dry-run",
 		"pack:subagents": "npm --workspace @narumitw/pi-subagents pack --dry-run",
-		"pack:webui": "npm --workspace @narumitw/pi-webui pack --dry-run"
+		"pack:webui": "npm --workspace @narumitw/pi-webui pack --dry-run",
+		"pack:worktree": "npm --workspace @narumitw/pi-worktree pack --dry-run"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.3",

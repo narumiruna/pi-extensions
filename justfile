@@ -137,6 +137,9 @@ pack-subagents:
 pack-webui:
     just pack webui
 
+pack-worktree:
+    just pack worktree
+
 # Try individual packages from this working tree as temporary pi packages
 try-btw:
     just try btw
@@ -201,6 +204,9 @@ try-subagents:
 try-webui:
     just try webui
 
+try-worktree:
+    just try worktree
+
 # Install individual packages through pi
 install-btw:
     just install btw
@@ -261,6 +267,9 @@ install-subagents:
 
 install-webui:
     just install webui
+
+install-worktree:
+    just install worktree
 
 # Publish individual packages to npm
 publish-btw:
@@ -325,6 +334,9 @@ publish-subagents:
 
 publish-webui:
     just publish webui
+
+publish-worktree:
+    just publish worktree
 
 # Bump one workspace package without creating a git tag
 # Usage: just bump @narumitw/pi-goal patch
