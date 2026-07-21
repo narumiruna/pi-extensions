@@ -119,6 +119,33 @@ test("worktree inventory reports clean initialized submodules", async () => {
 	}
 });
 
+test("worktree inventory reports assume-unchanged and skip-worktree index flags", async () => {
+	const temporary = realpathSync(mkdtempSync(join(tmpdir(), "pi-worktree-index-flags-")));
+	const main = join(temporary, "repo");
+	const linked = join(temporary, "repo-feature");
+	try {
+		git(temporary, ["init", "--initial-branch=main", main]);
+		git(main, ["config", "user.name", "Pi Worktree Test"]);
+		git(main, ["config", "user.email", "pi-worktree@example.invalid"]);
+		writeFileSync(join(main, "assume.txt"), "base\n");
+		writeFileSync(join(main, "skip.txt"), "base\n");
+		git(main, ["add", "assume.txt", "skip.txt"]);
+		git(main, ["commit", "-m", "initial"]);
+		git(main, ["worktree", "add", "-b", "feature", linked, "HEAD"]);
+		git(linked, ["update-index", "--assume-unchanged", "assume.txt"]);
+		git(linked, ["update-index", "--skip-worktree", "skip.txt"]);
+		writeFileSync(join(linked, "assume.txt"), "hidden change\n");
+		writeFileSync(join(linked, "skip.txt"), "hidden change\n");
+
+		assert.equal(git(linked, ["status", "--porcelain=v1"]).stdout, "");
+		const inventory = await worktreeInventory(pi, linked);
+		assert.ok(inventory.some((line) => /assume-unchanged.*assume\.txt/i.test(line)));
+		assert.ok(inventory.some((line) => /skip-worktree.*skip\.txt/i.test(line)));
+	} finally {
+		rmSync(temporary, { recursive: true, force: true });
+	}
+});
+
 test("administrative history exposes a clean attached worktree's reflog-only commit", async () => {
 	const temporary = realpathSync(mkdtempSync(join(tmpdir(), "pi-worktree-history-")));
 	const main = join(temporary, "repo");

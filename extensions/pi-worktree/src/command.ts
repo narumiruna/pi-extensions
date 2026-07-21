@@ -22,6 +22,7 @@ import {
 	sameWorktreeIdentity,
 	stripTerminalControls,
 	symbolicBranch,
+	unresolvableSymlinkAncestor,
 	validateBranch,
 	type WorktreeRecord,
 	worktreeAdministrativeDirectory,
@@ -35,6 +36,11 @@ const ACTION_SWITCH = "Switch worktree";
 const ACTION_REMOVE = "Remove worktree";
 const ACTION_PRUNE = "Prune stale metadata";
 const ACTIONS = [ACTION_ADD, ACTION_SWITCH, ACTION_REMOVE, ACTION_PRUNE];
+
+interface AdministrativeHistoryRisk {
+	label: string;
+	oids: string[];
+}
 
 export function registerWorktreeCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("worktree", {
@@ -114,10 +120,12 @@ async function addFlow(
 	if (!branchExists) {
 		const defaultStart = await symbolicBranch(pi, ctx.cwd, ctx.signal);
 		const requestedStart = await ctx.ui.input(
-			defaultStart
-				? `Start point for ${branch} (blank uses ${defaultStart})`
-				: `Start point for ${branch} (required because HEAD is detached)`,
-			defaultStart ?? "commit-ish",
+			stripTerminalControls(
+				defaultStart
+					? `Start point for ${branch} (blank uses ${defaultStart})`
+					: `Start point for ${branch} (required because HEAD is detached)`,
+			),
+			stripTerminalControls(defaultStart ?? "commit-ish"),
 		);
 		if (requestedStart === undefined) return;
 		startLabel = requestedStart.trim() || defaultStart;
@@ -134,9 +142,7 @@ async function addFlow(
 	const targetPath = pathIdentity(
 		requestedPath.trim() ? resolve(ctx.cwd, requestedPath.trim()) : suggestedPath,
 	);
-	if (pathEntryExists(targetPath)) {
-		throw new Error(`The target path already exists: ${targetPath}.`);
-	}
+	assertTargetFilesystemAvailable(targetPath);
 	const pathCollision = records.find((record) => pathsEqual(record.path, targetPath));
 	if (pathCollision) {
 		throw new Error(`The target path is already registered as a worktree: ${pathCollision.path}.`);
@@ -147,6 +153,7 @@ async function addFlow(
 		: `Create branch ${branch} from ${startLabel} at ${targetPath}?`;
 	if (!(await ctx.ui.confirm("Create Git worktree", stripTerminalControls(summary)))) return;
 
+	assertTargetFilesystemAvailable(targetPath);
 	await addWorktree(pi, ctx.cwd, { path: targetPath, branch, startOid }, ctx.signal);
 	let created: WorktreeRecord;
 	try {
@@ -174,6 +181,18 @@ async function addFlow(
 			throw new Error("The newly created worktree became unavailable; select it again.");
 		}
 		await switchToWorktree(ctx, latest.path);
+	}
+}
+
+function assertTargetFilesystemAvailable(targetPath: string): void {
+	if (pathEntryExists(targetPath)) {
+		throw new Error(`The target path already exists: ${targetPath}.`);
+	}
+	const unsafeAncestor = unresolvableSymlinkAncestor(targetPath);
+	if (unsafeAncestor) {
+		throw new Error(
+			`The target path has an unresolvable symbolic-link ancestor: ${unsafeAncestor}.`,
+		);
 	}
 }
 
@@ -236,16 +255,17 @@ async function removeFlow(
 		);
 	}
 	await assertDetachedHeadIsDurable(pi, ctx, selected);
-	await assertAdministrativeHistoryIsDurable(
-		pi,
-		ctx,
-		await worktreeAdministrativeDirectory(pi, selected.path, ctx.signal),
+	const administrativePath = await worktreeAdministrativeDirectory(pi, selected.path, ctx.signal);
+	const approvedHistoryRisks = historyRisks(
+		selected.path,
+		await unreachableAdministrativeHistoryOids(pi, ctx, administrativePath),
 	);
+	const recoveryWarning = formatAdministrativeRecoveryWarning(approvedHistoryRisks);
 	if (
 		!(await ctx.ui.confirm(
-			"Remove Git worktree",
+			recoveryWarning ? "Remove worktree and discard recovery history" : "Remove Git worktree",
 			stripTerminalControls(
-				`Delete the clean worktree directory ${selected.path}? The branch will be preserved.`,
+				`Delete the clean worktree directory ${selected.path}? The branch will be preserved.${recoveryWarning}`,
 			),
 		))
 	) {
@@ -270,11 +290,23 @@ async function removeFlow(
 		);
 	}
 	await assertDetachedHeadIsDurable(pi, ctx, latest);
-	await assertAdministrativeHistoryIsDurable(
+	const latestAdministrativePath = await worktreeAdministrativeDirectory(
 		pi,
-		ctx,
-		await worktreeAdministrativeDirectory(pi, latest.path, ctx.signal),
+		latest.path,
+		ctx.signal,
 	);
+	const latestHistoryRisks = historyRisks(
+		latest.path,
+		await unreachableAdministrativeHistoryOids(pi, ctx, latestAdministrativePath),
+	);
+	if (
+		!pathsEqual(administrativePath, latestAdministrativePath) ||
+		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)
+	) {
+		throw new Error(
+			`Worktree ${selected.path} administrative recovery history changed after confirmation; select it again.`,
+		);
+	}
 	await removeWorktree(pi, ctx.cwd, latest.path, ctx.signal);
 	const updated = await listWorktrees(pi, ctx.cwd, ctx.signal);
 	if (updated.some((record) => pathsEqual(record.path, selected.path))) {
@@ -298,17 +330,34 @@ async function pruneFlow(
 		ctx.ui.notify("Git found no stale worktree metadata to prune.", "info");
 		return;
 	}
-	await assertAdministrativePruneCandidatesAreDurable(pi, ctx);
+	const approvedHistoryRisks = await inspectAdministrativePruneCandidates(pi, ctx);
 	const safePreview = stripTerminalControls(preview);
+	const recoveryWarning = formatAdministrativeRecoveryWarning(approvedHistoryRisks);
 	ctx.ui.notify(`git worktree prune --dry-run --verbose\n${safePreview}`, "warning");
-	if (!(await ctx.ui.confirm("Prune stale worktree metadata", safePreview))) return;
+	if (
+		!(await ctx.ui.confirm(
+			recoveryWarning
+				? "Prune metadata and discard recovery history"
+				: "Prune stale worktree metadata",
+			stripTerminalControls(`${safePreview}${recoveryWarning}`),
+		))
+	) {
+		return;
+	}
 	const latest = await listWorktrees(pi, ctx.cwd, ctx.signal);
 	for (const record of latest.filter(
 		(candidate) => candidate.prunableReason !== undefined && candidate.detached,
 	)) {
 		await assertDetachedHeadIsDurable(pi, ctx, record);
 	}
-	await assertAdministrativePruneCandidatesAreDurable(pi, ctx);
+	const latestPreview = await prunePreview(pi, ctx.cwd, ctx.signal);
+	const latestHistoryRisks = await inspectAdministrativePruneCandidates(pi, ctx);
+	if (
+		latestPreview !== preview ||
+		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)
+	) {
+		throw new Error("Stale worktree metadata changed after confirmation; run prune again.");
+	}
 	const output = await pruneWorktrees(pi, ctx.cwd, ctx.signal);
 	safeNotify(
 		ctx,
@@ -317,17 +366,17 @@ async function pruneFlow(
 	);
 }
 
-async function assertAdministrativePruneCandidatesAreDurable(
+async function inspectAdministrativePruneCandidates(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
-): Promise<void> {
+): Promise<AdministrativeHistoryRisk[]> {
+	const risks: AdministrativeHistoryRisk[] = [];
 	for (const candidate of await administrativePruneCandidates(pi, ctx.cwd, ctx.signal)) {
 		if (candidate.indexDirty) {
 			throw new Error(
 				`Prune refused because administrative worktree ${candidate.id} contains staged-only index changes.`,
 			);
 		}
-		await assertAdministrativeHistoryIsDurable(pi, ctx, candidate.administrativePath);
 		if (candidate.head) {
 			const refs = await durableRefsContaining(pi, ctx.cwd, candidate.head, ctx.signal);
 			if (refs.length === 0) {
@@ -335,9 +384,7 @@ async function assertAdministrativePruneCandidatesAreDurable(
 					`Prune refused because administrative worktree ${candidate.id} has detached HEAD ${candidate.head}, which is not reachable from a durable ref.`,
 				);
 			}
-			continue;
-		}
-		if (
+		} else if (
 			!candidate.branchRef ||
 			!(await durableRefExists(pi, ctx.cwd, candidate.branchRef, ctx.signal))
 		) {
@@ -345,22 +392,56 @@ async function assertAdministrativePruneCandidatesAreDurable(
 				`Prune refused because administrative worktree ${candidate.id} does not resolve to a durable ref.`,
 			);
 		}
+		risks.push(
+			...historyRisks(
+				candidate.id,
+				await unreachableAdministrativeHistoryOids(pi, ctx, candidate.administrativePath),
+			),
+		);
 	}
+	return normalizeAdministrativeHistoryRisks(risks);
 }
 
-async function assertAdministrativeHistoryIsDurable(
+async function unreachableAdministrativeHistoryOids(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
 	administrativePath: string,
-): Promise<void> {
+): Promise<string[]> {
+	const unreachable: string[] = [];
 	for (const oid of await administrativeHistoryOids(pi, ctx.cwd, administrativePath, ctx.signal)) {
 		const refs = await durableRefsContaining(pi, ctx.cwd, oid, ctx.signal);
-		if (refs.length === 0) {
-			throw new Error(
-				`Operation refused because worktree administrative history contains ${oid}, which is not reachable from a durable ref. Create a branch or tag for it first.`,
-			);
-		}
+		if (refs.length === 0) unreachable.push(oid);
 	}
+	return [...new Set(unreachable)].sort();
+}
+
+function historyRisks(label: string, oids: string[]): AdministrativeHistoryRisk[] {
+	return oids.length > 0 ? [{ label, oids }] : [];
+}
+
+function normalizeAdministrativeHistoryRisks(
+	risks: readonly AdministrativeHistoryRisk[],
+): AdministrativeHistoryRisk[] {
+	return risks
+		.map((risk) => ({ label: risk.label, oids: [...new Set(risk.oids)].sort() }))
+		.filter((risk) => risk.oids.length > 0)
+		.sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function sameAdministrativeHistoryRisks(
+	left: readonly AdministrativeHistoryRisk[],
+	right: readonly AdministrativeHistoryRisk[],
+): boolean {
+	return (
+		JSON.stringify(normalizeAdministrativeHistoryRisks(left)) ===
+		JSON.stringify(normalizeAdministrativeHistoryRisks(right))
+	);
+}
+
+function formatAdministrativeRecoveryWarning(risks: readonly AdministrativeHistoryRisk[]): string {
+	if (risks.length === 0) return "";
+	const entries = risks.map((risk) => `${risk.label}: ${risk.oids.join(", ")}`).join("; ");
+	return ` Administrative recovery warning: these commits are not reachable from a branch, tag, or remote ref: ${entries}. Discarding their recovery pointers means they may later be garbage-collected.`;
 }
 
 async function assertDetachedHeadIsDurable(

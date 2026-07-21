@@ -152,6 +152,37 @@ export function pathEntryExists(path: string): boolean {
 	}
 }
 
+export function unresolvableSymlinkAncestor(path: string): string | undefined {
+	let current = dirname(resolve(path));
+	while (true) {
+		try {
+			const stat = lstatSync(current);
+			if (!stat.isSymbolicLink()) return undefined;
+			try {
+				realpathSync.native(current);
+				return undefined;
+			} catch (error) {
+				if (isNodeError(error) && (error.code === "ENOENT" || error.code === "ELOOP")) {
+					return current;
+				}
+				throw new GitWorktreeError(
+					`Cannot resolve filesystem ancestor ${current}: ${formatError(error)}`,
+				);
+			}
+		} catch (error) {
+			if (!isNodeError(error) || error.code !== "ENOENT") {
+				if (error instanceof GitWorktreeError) throw error;
+				throw new GitWorktreeError(
+					`Cannot inspect filesystem ancestor ${current}: ${formatError(error)}`,
+				);
+			}
+			const parent = dirname(current);
+			if (parent === current) return undefined;
+			current = parent;
+		}
+	}
+}
+
 export function pathsEqual(left: string, right: string): boolean {
 	return pathIdentity(left) === pathIdentity(right);
 }
@@ -283,6 +314,7 @@ export async function worktreeInventory(
 		"--ignore-submodules=none",
 	];
 	const status = await runGit(pi, statusArgs, path, signal);
+	const indexFlags = await runGit(pi, ["ls-files", "-v", "-z"], path, signal);
 	const submoduleStatus = await runGit(pi, ["submodule", "status", "--recursive"], path, signal);
 	const initializedSubmodules = nonEmptyLines(submoduleStatus.stdout)
 		.filter((line) => !line.startsWith("-"))
@@ -301,6 +333,7 @@ export async function worktreeInventory(
 	);
 	return [
 		...nonEmptyLines(status.stdout),
+		...indexFlagInventory(indexFlags.stdout),
 		...initializedSubmodules,
 		...nonEmptyLines(submodules.stdout),
 	];
@@ -611,6 +644,23 @@ function killedError(args: string[]): GitWorktreeError {
 
 function nonEmptyLines(value: string): string[] {
 	return value.split(/\r?\n/u).filter((line) => line.length > 0);
+}
+
+function indexFlagInventory(value: string): string[] {
+	const inventory: string[] = [];
+	for (const entry of value.split("\0")) {
+		if (!entry) continue;
+		if (entry.length < 3 || entry[1] !== " ") {
+			throw new GitWorktreeError("Git returned malformed ls-files index-flag output.");
+		}
+		const tag = entry[0] ?? "";
+		const flags = [
+			tag.toUpperCase() === "S" ? "skip-worktree" : undefined,
+			/[a-z]/u.test(tag) ? "assume-unchanged" : undefined,
+		].filter((flag): flag is string => flag !== undefined);
+		if (flags.length > 0) inventory.push(`index flag ${flags.join("+")}: ${entry.slice(2)}`);
+	}
+	return inventory;
 }
 
 function combineOutput(result: ExecResult): string {
