@@ -10,6 +10,7 @@ import {
 	latestAssistantText,
 	messageContainsInactivePlanModeArtifact,
 	messageContainsLegacyPlanModeContextArtifact,
+	messageContainsPlanModeImplementationHandoff,
 	parseProposedPlan,
 	stripPlanModeCompletionCallsFromMessage,
 	stripProposedPlanBlocksFromMessage,
@@ -292,7 +293,13 @@ export default function planMode(pi: ExtensionAPI) {
 		const messagesWithoutLegacyPlanContext = event.messages.filter(
 			(message: unknown) => !messageContainsLegacyPlanModeContextArtifact(message),
 		);
-		if (state.enabled) return { messages: messagesWithoutLegacyPlanContext };
+		if (state.enabled) {
+			return {
+				messages: messagesWithoutLegacyPlanContext.filter(
+					(message: unknown) => !messageContainsPlanModeImplementationHandoff(message),
+				),
+			};
+		}
 		return {
 			messages: messagesWithoutLegacyPlanContext
 				.filter((message: unknown) => !messageContainsInactivePlanModeArtifact(message))
