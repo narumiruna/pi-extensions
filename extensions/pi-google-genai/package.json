@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-google-genai",
-	"version": "0.25.0",
+	"version": "0.25.1",
 	"description": "Pi extension that exposes Google GenAI search, maps, and URL context grounding tools.",
 	"type": "module",
 	"license": "MIT",
