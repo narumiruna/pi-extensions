@@ -16,8 +16,6 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-caffeinate`](./extensions/pi-caffeinate) | ☕ Cross-platform sleep prevention while the Pi agent is processing long-running prompts. | `pi install npm:@narumitw/pi-caffeinate` |
 | [`@narumitw/pi-chrome-devtools`](./extensions/pi-chrome-devtools) | 🌐 Native Chrome DevTools Protocol tools for listing tabs, navigating pages, evaluating JavaScript, and taking screenshots. | `pi install npm:@narumitw/pi-chrome-devtools` |
 | [`@narumitw/pi-accounts`](./extensions/pi-accounts) | 🔐 `/account` for independently switching named OpenAI Codex, Anthropic, and GitHub Copilot subscription OAuth accounts, with temporary Codex command aliases. | `pi install npm:@narumitw/pi-accounts` |
-| [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) | 🔐 Existing Codex-only account switcher retained during the `pi-accounts` soak period; do not load both account packages together. | `pi install npm:@narumitw/pi-codex-accounts` |
-| [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) | 📊 Existing Codex-only usage package retained during the `pi-usage` soak period; do not load both usage packages together. | `pi install npm:@narumitw/pi-codex-usage` |
 | [`@narumitw/pi-usage`](./extensions/pi-usage) | 📊 Interactive `/usage` menu and current-account statusline for Codex subscription limits and OpenRouter API-key spend limits. | `pi install npm:@narumitw/pi-usage` |
 | [`@narumitw/pi-firecrawl`](./extensions/pi-firecrawl) | 🔥 Firecrawl-powered web scraping, crawling, URL discovery, and web search tools for documentation and research workflows. | `pi install npm:@narumitw/pi-firecrawl` |
 | [`@narumitw/pi-github-pr`](./extensions/pi-github-pr) | 🔎 Passive current-branch GitHub PR checks, review, and comment counts in the statusline. | `pi install npm:@narumitw/pi-github-pr` |
@@ -94,11 +92,9 @@ Use [`@narumitw/pi-langfuse`](./extensions/pi-langfuse) to send Pi agent, genera
 
 Use [`@narumitw/pi-accounts`](./extensions/pi-accounts) to keep independently selected OpenAI Codex, Anthropic, and GitHub Copilot subscription OAuth accounts in a private `pi-accounts.json` file. Use `/account` to login, list, switch, or remove named accounts while retaining Pi's built-in login as each provider's `default` selection.
 
-The existing Codex-only [`@narumitw/pi-codex-accounts`](./extensions/pi-codex-accounts) remains active while `pi-accounts` soaks. Choose one account package per Pi installation; loading both together is unsupported.
-
 ### 📊 Current-account provider usage
 
-Use [`@narumitw/pi-usage`](./extensions/pi-usage) to open one interactive `/usage` menu that follows Pi's selected model and active runtime credential. It reports Codex ChatGPT subscription windows or OpenRouter API-key spend limits, keeps the statusline scoped to the current account, and makes cross-provider queries explicit. The existing [`@narumitw/pi-codex-usage`](./extensions/pi-codex-usage) package remains available while the successor soaks; choose one usage package per Pi installation.
+Use [`@narumitw/pi-usage`](./extensions/pi-usage) to open one interactive `/usage` menu that follows Pi's selected model and active runtime credential. It reports Codex ChatGPT subscription windows or OpenRouter API-key spend limits, keeps the statusline scoped to the current account, and makes cross-provider queries explicit.
 
 ### 🔎 GitHub pull request status
 
@@ -122,7 +118,7 @@ Use [`@narumitw/pi-worktree`](./extensions/pi-worktree) to create Git worktrees,
 
 ### 🗃️ Deprecated extensions
 
-[`@narumitw/pi-telegram-bot`](./deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./deprecated/pi-wait-what) are deprecated and kept under `deprecated/` for reference.
+The Codex-only [`@narumitw/pi-codex-accounts`](./deprecated/pi-codex-accounts) and [`@narumitw/pi-codex-usage`](./deprecated/pi-codex-usage) packages are deprecated in favor of [`@narumitw/pi-accounts`](./extensions/pi-accounts) and [`@narumitw/pi-usage`](./extensions/pi-usage). [`@narumitw/pi-telegram-bot`](./deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./deprecated/pi-wait-what) are also deprecated and kept under `deprecated/` for reference.
 
 ### 🤖 Delegated subagents
 
@@ -153,8 +149,6 @@ pi -e ./extensions/pi-btw
 pi -e ./extensions/pi-caffeinate
 pi -e ./extensions/pi-chrome-devtools
 pi -e ./extensions/pi-accounts
-pi -e ./extensions/pi-codex-accounts
-pi -e ./extensions/pi-codex-usage
 pi -e ./extensions/pi-usage
 pi -e ./extensions/pi-firecrawl
 pi -e ./extensions/pi-github-pr
@@ -180,8 +174,6 @@ npm run pack:btw
 npm run pack:caffeinate
 npm run pack:chrome-devtools
 npm run pack:accounts
-npm run pack:codex-accounts
-npm run pack:codex-usage
 npm run pack:usage
 npm run pack:firecrawl
 npm run pack:github-pr
@@ -212,6 +204,8 @@ npm publish --workspace @narumitw/pi-new-extension --access public
 deprecated/
 ├── pi-auto-thinking/
 ├── pi-biome-lsp/
+├── pi-codex-accounts/
+├── pi-codex-usage/
 ├── pi-python-lsp/
 ├── pi-sidebar/
 ├── pi-telegram-bot/
@@ -222,8 +216,6 @@ extensions/
 ├── pi-caffeinate/
 ├── pi-chrome-devtools/
 ├── pi-accounts/
-├── pi-codex-accounts/
-├── pi-codex-usage/
 ├── pi-usage/
 ├── pi-firecrawl/
 ├── pi-github-pr/

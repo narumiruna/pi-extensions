@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-codex-usage",
 	"version": "0.25.1",
-	"description": "Pi extension that shows Codex ChatGPT subscription usage without requiring Codex CLI.",
+	"description": "Deprecated Pi extension that shows Codex ChatGPT subscription usage without requiring Codex CLI.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -37,6 +37,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-codex-usage"
+		"directory": "deprecated/pi-codex-usage"
 	}
 }
