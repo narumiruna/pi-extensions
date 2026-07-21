@@ -33,7 +33,7 @@ It uses Pi's built-in providers and provider-owned OAuth implementations. A name
 
 ## 📦 Install
 
-`pi-codex-accounts` remains available during the `pi-accounts` soak period, but do not load both packages together; they can manage and refresh the same rotating Codex credential independently. To move one Pi installation to the new package:
+`pi-codex-accounts` is deprecated and its source is archived under `deprecated/`. Do not load both packages together; they can manage and refresh the same rotating Codex credential independently. To migrate one Pi installation:
 
 ```bash
 pi uninstall npm:@narumitw/pi-codex-accounts
@@ -135,10 +135,10 @@ If both files exist, `pi-accounts.json` is canonical and the legacy file is not 
 
 1. Switch managed providers to `default` and stop Pi sessions using `pi-accounts`.
 2. Remove `pi-accounts` from the Pi package configuration.
-3. Install the retained `@narumitw/pi-codex-accounts` package if needed.
+3. Reinstall the deprecated `@narumitw/pi-codex-accounts` package only if necessary.
 4. Reauthenticate Codex if the retained legacy refresh token was rotated.
 
-The repository retains the predecessor implementation as the active `extensions/pi-codex-accounts` workspace during the soak period. This implementation does not run `npm deprecate` or change npm registry visibility.
+The repository preserves the predecessor implementation under `deprecated/pi-codex-accounts` for reference. It is excluded from active workspace checks, version bumps, and publishing.
 
 ## 🚧 Limitations and non-goals
 

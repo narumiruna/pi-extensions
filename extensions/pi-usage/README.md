@@ -95,7 +95,7 @@ Manual another-provider and all-provider queries never publish to the statusline
 
 ## 🔄 Migrating from pi-codex-usage
 
-`pi-codex-usage` remains available while this successor soaks. To migrate one installation:
+`pi-codex-usage` is deprecated and its source is archived under `deprecated/`. To migrate one installation:
 
 ```bash
 pi remove npm:@narumitw/pi-codex-usage

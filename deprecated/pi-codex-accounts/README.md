@@ -1,9 +1,10 @@
-# 🔐 pi-codex-accounts — Codex Account Switcher for Pi
+# 🔐 pi-codex-accounts — Deprecated Codex Account Switcher for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-accounts)](https://www.npmjs.com/package/@narumitw/pi-codex-accounts) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 > [!WARNING]
-> `@narumitw/pi-codex-accounts` is deprecated and will be replaced by `@narumitw/pi-accounts`.
+> `@narumitw/pi-codex-accounts` is deprecated, kept under `deprecated/` for reference,
+> and no longer part of the active workspace package set. Use `@narumitw/pi-accounts` instead.
 > Do not load both extensions at the same time. To migrate one Pi installation, run:
 >
 > ```bash
@@ -44,7 +45,7 @@ pi -e npm:@narumitw/pi-codex-accounts
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-codex-accounts
+pi -e ./deprecated/pi-codex-accounts
 ```
 
 ## 🚀 Usage
@@ -97,7 +98,7 @@ Account switches and token refreshes also close any cached Codex WebSocket for t
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-codex-accounts/
+deprecated/pi-codex-accounts/
 ├── src/
 │   ├── codex-accounts.ts
 │   ├── oauth.ts

@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-codex-accounts",
 	"version": "0.25.1",
-	"description": "Pi extension for switching self-managed ChatGPT Codex subscription accounts without touching /login.",
+	"description": "Deprecated Pi extension for switching self-managed ChatGPT Codex subscription accounts without touching /login.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -46,6 +46,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-codex-accounts"
+		"directory": "deprecated/pi-codex-accounts"
 	}
 }
