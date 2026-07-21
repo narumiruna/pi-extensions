@@ -192,11 +192,11 @@ Behavior notes:
 
 ### Pausing a goal: `pi-goal:rpc:pause`
 
-Emit `pi-goal:rpc:pause` with `{ goalId?: string, reason?: string }` to stop an active RPC-owned goal safely. When `goalId` is present and does not match the active goal, the request is ignored; omitting it supports cancellation while the start reply is still pending. A successful pause uses the normal Goal pause transition and emits the authoritative `pi-goal:state` event described below.
+Emit `pi-goal:rpc:pause` with `{ goalId?: string, requestId?: string, reason?: string }` to stop an active RPC-owned goal safely. After a successful start reply, pass its `goalId`. To cancel while the start reply is still pending, omit `goalId` and pass the originating start `requestId`. Uncorrelated requests, stale request IDs, mismatched goal IDs, and goals not created through RPC are ignored. A successful pause uses the normal Goal pause transition and emits the authoritative `pi-goal:state` event described below.
 
 ### Observing goal state: `pi-goal:state`
 
-Whenever pi-goal persists canonical goal state, it emits `pi-goal:state` with `{ goalId, status, summary?, reason? }`. `goalId` and `status` are always authoritative. Terminal statuses are `complete`, `blocked`, `paused`, `usage_limited`, and `budget_limited`. `summary` is populated from the `goal_complete` summary when available, and `reason` is populated from the blocked/usage/budget failure state where available; an `active` or `queued` event carries only `goalId` and `status`. Listeners must treat any non-terminal status as in-progress and should key follow-up behavior on `goalId` plus a terminal `status`.
+Whenever pi-goal persists canonical goal state, it emits `pi-goal:state` with `{ goalId, status, summary?, reason? }`. `goalId` and `status` are always authoritative. Terminal statuses are `complete`, `blocked`, `paused`, `usage_limited`, `budget_limited`, and `cleared`. Explicit clears and failed activation rollbacks emit `cleared` for the removed goal so observers cannot retain stale active state. `summary` is populated from the matching `goal_complete` summary when available, and `reason` is populated from the same goal instance's blocked/usage/budget/clear state where available; an `active` or `queued` event carries only `goalId` and `status`. Listeners must treat any non-terminal status as in-progress and should key follow-up behavior on `goalId` plus a terminal `status`.
 
 ## 🧠 Use cases
 
@@ -214,6 +214,7 @@ extensions/pi-goal/
 │   ├── goal.ts       # Pi entrypoint, tool contracts, and lifecycle orchestration
 │   ├── commands.ts   # Per-factory user-command and queue mutation controller
 │   ├── runtime.ts    # Per-factory state, prompt ownership, budgets, and tool policy
+│   ├── rpc.ts        # Session-local cross-extension request ownership and replies
 │   ├── queue.ts      # Pure ordered-goal transitions
 │   └── *.ts          # Package-local parsing, settings, prompts, accounting, and persistence
 ├── README.md

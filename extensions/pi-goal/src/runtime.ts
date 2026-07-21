@@ -83,16 +83,19 @@ export const GOAL_TOOL_NAMES = [GOAL_COMPLETE_TOOL, GOAL_BLOCKED_TOOL] as const;
 /** Cross-extension event channel carrying the canonical persisted goal state. */
 export const GOAL_STATE_EVENT_CHANNEL = "pi-goal:state";
 
+/** State values broadcast to cross-extension listeners. */
+export type GoalStateEventStatus = GoalStatus | "cleared";
+
 /** Payload emitted on {@link GOAL_STATE_EVENT_CHANNEL} whenever goal state persists. */
 export interface GoalStateEventPayload {
 	goalId: string;
-	status: GoalStatus;
+	status: GoalStateEventStatus;
 	summary?: string;
 	reason?: string;
 }
 
 /** Terminal statuses broadcast to cross-extension listeners. */
-export function isTerminalGoalStatus(status: GoalStatus): boolean {
+export function isTerminalGoalStatus(status: GoalStateEventStatus): boolean {
 	return status !== "active" && status !== "queued";
 }
 
@@ -111,6 +114,12 @@ export function buildGoalStateEvent(
 		payload.reason = reason;
 	}
 	return payload;
+}
+
+interface GoalTerminalDetails {
+	goalId: string;
+	summary?: string;
+	reason?: string;
 }
 
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
@@ -148,10 +157,8 @@ const RETRYABLE_GOAL_ERROR_PATTERNS = [
 export class GoalRuntime {
 	settings: GoalSettings = DEFAULT_GOAL_SETTINGS;
 	activeGoal?: ActiveGoal;
-	/** Completion summary captured for cross-extension `pi-goal:state` events. */
-	completionSummary?: string;
-	/** Blocked/failure reason captured for cross-extension `pi-goal:state` events. */
-	terminalReason?: string;
+	/** Terminal details captured for the matching cross-extension state event. */
+	private terminalDetails?: GoalTerminalDetails;
 	queuedGoals: ActiveGoal[] = [];
 	pendingQueueAction?: PendingQueueAction;
 	queueFrozen = false;
@@ -281,6 +288,18 @@ export class GoalRuntime {
 		this.budgetWrapUp = undefined;
 	}
 
+	setCompletionSummary(goalId: string, summary: string) {
+		this.terminalDetails = { goalId, summary };
+	}
+
+	setTerminalReason(goalId: string, reason: string) {
+		this.terminalDetails = { goalId, reason };
+	}
+
+	clearTerminalDetails() {
+		this.terminalDetails = undefined;
+	}
+
 	keepBudgetWrapUpMessage(message: unknown) {
 		if (!message || typeof message !== "object") return true;
 		const candidate = message as {
@@ -336,7 +355,10 @@ export class GoalRuntime {
 		this.clearGoalRecoveryForGoal(goal.id);
 		this.clearBudgetWrapUp();
 		this.activeGoal = transitionGoal(goal, "budget_limited");
-		this.terminalReason = `token budget reached (${formatBudget(this.activeGoal)})`;
+		this.setTerminalReason(
+			this.activeGoal.id,
+			`token budget reached (${formatBudget(this.activeGoal)})`,
+		);
 		this.persistGoal(this.activeGoal);
 		this.updateStatus(ctx, this.activeGoal);
 		ctx.ui.notify(`Goal token budget reached: ${formatBudget(this.activeGoal)}`, "warning");
@@ -419,9 +441,8 @@ export class GoalRuntime {
 	}
 
 	persistGoal(goal: ActiveGoal) {
-		if (!isTerminalGoalStatus(goal.status)) {
-			this.completionSummary = undefined;
-			this.terminalReason = undefined;
+		if (!isTerminalGoalStatus(goal.status) || this.terminalDetails?.goalId !== goal.id) {
+			this.clearTerminalDetails();
 		}
 		this.pi.appendEntry(
 			GOAL_STATE_ENTRY_TYPE,
@@ -429,16 +450,25 @@ export class GoalRuntime {
 		);
 		this.pi.events.emit(
 			GOAL_STATE_EVENT_CHANNEL,
-			buildGoalStateEvent(goal, this.completionSummary, this.terminalReason),
+			buildGoalStateEvent(goal, this.terminalDetails?.summary, this.terminalDetails?.reason),
 		);
 	}
 
-	clearPersistedGoal(cwd: string) {
+	clearPersistedGoal(cwd: string, clearedGoal?: ActiveGoal, reason = "goal cleared") {
 		this.pi.appendEntry(GOAL_STATE_ENTRY_TYPE, serializeGoalState(undefined, [], undefined));
+		if (clearedGoal) {
+			this.pi.events.emit(GOAL_STATE_EVENT_CHANNEL, {
+				goalId: clearedGoal.id,
+				status: "cleared",
+				reason,
+			} satisfies GoalStateEventPayload);
+		}
+		this.clearTerminalDetails();
 		clearLegacyPersistedGoal(cwd);
 	}
 
-	clearActiveGoal(ctx: StatusContext) {
+	clearActiveGoal(ctx: StatusContext, reason = "goal cleared") {
+		const clearedGoal = this.activeGoal;
 		this.cancelContinuationWork();
 		this.clearGoalRecovery();
 		this.clearBudgetWrapUp();
@@ -447,7 +477,7 @@ export class GoalRuntime {
 		this.queuedGoals = [];
 		this.pendingQueueAction = undefined;
 		this.queueFrozen = false;
-		this.clearPersistedGoal(ctx.cwd);
+		this.clearPersistedGoal(ctx.cwd, clearedGoal, reason);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		// Do not clear goalToolsUnlocked: after first activation, keep tools visible
 		// for the rest of this extension runtime to avoid repeated goal-tool schema

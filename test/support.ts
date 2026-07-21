@@ -66,7 +66,14 @@ export function createMockPi(
 	const eventBusSubscriptions = new Map<string, Array<(data: unknown) => void>>();
 	const eventBus = {
 		emit(channel: string, data: unknown) {
-			for (const handler of eventBusSubscriptions.get(channel) ?? []) handler(data);
+			for (const handler of eventBusSubscriptions.get(channel) ?? []) {
+				try {
+					const result = handler(data);
+					void Promise.resolve(result).catch(() => undefined);
+				} catch {
+					// Match Pi's event bus: one observer cannot interrupt sibling handlers.
+				}
+			}
 		},
 		on(channel: string, handler: (data: unknown) => void) {
 			const list = eventBusSubscriptions.get(channel) ?? [];

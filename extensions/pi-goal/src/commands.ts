@@ -1,5 +1,6 @@
 import { currentTokenTotal } from "./accounting.js";
 import { validateObjective } from "./command.js";
+import type { ActiveGoal } from "./persistence.js";
 import { buildGoalPrompt, buildObjectiveUpdatedPrompt, buildResumePrompt } from "./prompts.js";
 import {
 	activateQueuedGoal,
@@ -36,7 +37,12 @@ export class GoalCommandController {
 		this.runtime = runtime;
 	}
 
-	async startGoal(objective: string, tokenBudget: number | undefined, ctx: StatusContext) {
+	async startGoal(
+		objective: string,
+		tokenBudget: number | undefined,
+		ctx: StatusContext,
+		onActivated?: (goal: ActiveGoal) => void,
+	) {
 		const validationError = validateObjective(objective);
 		if (validationError) {
 			ctx.ui.notify(validationError, "warning");
@@ -75,9 +81,10 @@ export class GoalCommandController {
 		this.runtime.queuedGoals = [];
 		this.runtime.pendingQueueAction = undefined;
 		this.runtime.activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
-		this.runtime.persistGoal(this.runtime.activeGoal);
-		this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 		const startedGoal = this.runtime.activeGoal;
+		onActivated?.(startedGoal);
+		this.runtime.persistGoal(startedGoal);
+		this.runtime.updateStatus(ctx, startedGoal);
 		const sent = await this.runtime.sendOwnedGoalPrompt(
 			ctx,
 			startedGoal.id,
