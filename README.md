@@ -2,9 +2,9 @@
 
 [![npm scope](https://img.shields.io/badge/npm-@narumitw-blue)](https://www.npmjs.com/org/narumitw) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; multi-provider subscription account switching and current-account provider usage for Codex and OpenRouter; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
+Independently installable [Pi](https://pi.dev) Coding Agent extension packages for AI coding workflows. This TypeScript monorepo publishes npm packages under `@narumitw` and gives Pi native tools, slash commands, and statusline integrations for LSP diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more; Chrome DevTools Protocol browser automation; Firecrawl web scraping, crawling, and web search; Google GenAI grounding for Google Search, Maps, and URL context; Langfuse LLM observability; multi-provider subscription account switching and current-account provider usage for Codex and OpenRouter; GitHub pull request checks; autonomous goal mode with opt-in ordered queues; Codex-like plan mode; local browser image staging and lightweight current-session web chat; safe Git worktree management and Pi workspace switching; subagents; rich terminal statuslines; Cloudflare R2/S3 settings sync; retry handling; side questions; and keep-awake automation.
 
-**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, browser session chat, image attachments, Langfuse, LLM observability, ChatGPT Codex tools, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
+**Search keywords:** Pi Coding Agent extensions, AI coding agent tools, npm Pi packages, LSP diagnostics, Language Server Protocol, Chrome DevTools Protocol, browser automation, web scraping, Firecrawl, Google GenAI grounding, browser image staging, browser session chat, image attachments, Langfuse, LLM observability, ChatGPT Codex tools, Git worktree management, workspace switching, subagents, terminal statusline, Cloudflare R2 sync, S3 sync.
 
 ## 📦 Pi extension packages
 
@@ -33,6 +33,7 @@ Install only the Pi extensions you need. Each package is published under the `@n
 | [`@narumitw/pi-sync`](./extensions/pi-sync) | ☁️ Sync allowlisted Pi settings, skills, prompts, themes, extensions, and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
 | [`@narumitw/pi-subagents`](./extensions/pi-subagents) | 🤖 Delegate work to specialized isolated subagents with single, parallel, and chained execution modes. | `pi install npm:@narumitw/pi-subagents` |
 | [`@narumitw/pi-webui`](./extensions/pi-webui) | 🌐 `/webui` lightweight browser companion for the current terminal Pi session, with semantic live sync and text/image input. | `pi install npm:@narumitw/pi-webui` |
+| [`@narumitw/pi-worktree`](./extensions/pi-worktree) | 🌳 Interactive `/worktree` management for safe add/switch/remove/prune flows and session-backed Pi workspace switching. | `pi install npm:@narumitw/pi-worktree` |
 
 ## 🚀 Quick start
 
@@ -115,6 +116,10 @@ Use [`@narumitw/pi-goal`](./extensions/pi-goal) for long-running implementation,
 
 Use [`@narumitw/pi-plan-mode`](./extensions/pi-plan-mode) when you want a Codex-like `/plan` mode where the agent explores with read-only tools, asks structured questions, and produces an implementation-ready plan before editing.
 
+### 🌳 Git worktree workflows
+
+Use [`@narumitw/pi-worktree`](./extensions/pi-worktree) to create Git worktrees, continue the current Pi conversation in another worktree through session-backed cwd switching, safely remove clean linked worktrees, and preview stale metadata before pruning.
+
 ### 🗃️ Deprecated extensions
 
 [`@narumitw/pi-telegram-bot`](./deprecated/pi-telegram-bot), [`@narumitw/pi-telegraph`](./deprecated/pi-telegraph), and [`@narumitw/pi-wait-what`](./deprecated/pi-wait-what) are deprecated and kept under `deprecated/` for reference.
@@ -165,6 +170,7 @@ pi -e ./extensions/pi-statusline
 pi -e ./extensions/pi-sync
 pi -e ./extensions/pi-subagents
 pi -e ./extensions/pi-webui
+pi -e ./extensions/pi-worktree
 ```
 
 Preview npm package contents before publishing:
@@ -191,6 +197,7 @@ npm run pack:statusline
 npm run pack:sync
 npm run pack:subagents
 npm run pack:webui
+npm run pack:worktree
 ```
 
 Publishing note for new scoped packages: `just npm-public @narumitw/pi-new-extension` only changes visibility for an already-published package. If npm returns 404 for a brand-new package, create it first with the new package's workspace name, for example:
@@ -231,7 +238,8 @@ extensions/
 ├── pi-statusline/
 ├── pi-sync/
 ├── pi-subagents/
-└── pi-webui/
+├── pi-webui/
+└── pi-worktree/
 ```
 
 Each production extension package contains its own `package.json`, `README.md`, `LICENSE`, `tsconfig.json`, and TypeScript source under `src/`. Experimental extensions live under `extensions/experimental/`, remain covered by root checks, and may be published only through an explicit local maintainer recipe—not `publish-all` or GitHub workflows. Deprecated packages live under the root `deprecated/` directory and are excluded from workspace scripts.
