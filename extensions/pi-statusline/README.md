@@ -4,7 +4,7 @@
 
 `@narumitw/pi-statusline` is a native [Pi coding agent](https://pi.dev) extension that replaces Pi's footer with a configurable Tokyo Night powerline statusline.
 
-## Features
+## ✨ Features
 
 - Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
@@ -14,7 +14,7 @@
 - Caches Git state outside footer rendering and guards stale session results.
 - Wraps extension statuses safely at narrow terminal widths.
 
-## Install
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-statusline
@@ -29,7 +29,7 @@ pi -e ./extensions/pi-statusline
 
 Do not enable this together with `@narumitw/pi-starship`: both extensions own Pi's footer. Use `pi-starship` instead when you need full Starship-style format/style grammar.
 
-## Configuration
+## ⚙️ Configuration
 
 The only configuration source is:
 
@@ -160,7 +160,7 @@ This structured model intentionally does not provide variables or a format langu
 
 Statuses from other extensions appear below the main powerline. The linked GitHub PR status is hidden from that line when the branch segment already renders it.
 
-## Commands
+## 💬 Commands
 
 | Command | Purpose |
 | --- | --- |
@@ -170,13 +170,13 @@ Statuses from other extensions appear below the main powerline. The linked GitHu
 
 Invalid or cancelled edits leave both the previous file and effective runtime configuration unchanged. The editor is TUI-only; status and help are safe in TUI, print, JSON, and RPC modes.
 
-## Git and activity details
+## 🌿 Git and activity details
 
 Git status tokens are hidden for clean repositories. When present, they mean `⇡` ahead, `⇣` behind, `+` staged, `~` modified/deleted, `?` untracked, and `!` conflicts.
 
 The tools segment distinguishes active tools, streaming/thinking, the last completed tool, and idle state. Parallel calls are summarized without running subprocesses during footer rendering.
 
-## Package layout
+## 🗂️ Package layout
 
 ```text
 extensions/pi-statusline/
@@ -199,10 +199,10 @@ extensions/pi-statusline/
 
 Only `src/statusline.ts` is a Pi entrypoint. Other modules are package-internal.
 
-## Keywords
+## 🔎 Keywords
 
 Pi extension, Pi coding agent, configurable statusline, Tokyo Night, terminal footer, token usage, context window, model status, TypeScript Pi package.
 
-## License
+## 📄 License
 
 MIT. See [`LICENSE`](./LICENSE).

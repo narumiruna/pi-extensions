@@ -1,12 +1,22 @@
 # 🖼️ pi-image-drop — Browser Image Staging for Pi
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-image-drop)](https://www.npmjs.com/package/@narumitw/pi-image-drop) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-image-drop)](https://www.npmjs.com/package/@narumitw/pi-image-drop) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 `@narumitw/pi-image-drop` adds one `/image-drop` command to the latest [Pi Coding Agent](https://pi.dev). It serves a private loopback page where you can paste, drop, choose, preview, reorder, retry, and remove local images. The ordered batch is attached to your next non-empty interactive Pi message.
 
 The page never contains a prompt or Attach button: Pi remains the only place where messages are written and sent.
 
-## Install
+## ✨ Features
+
+- Stages pasted, dropped, or selected images on a private loopback page.
+- Preserves an ordered batch for the next non-empty interactive Pi message.
+- Previews, reorders, retries, and removes images before submission.
+- Supports PNG, JPEG, WebP, GIF, BMP, TIFF, HEIC/HEIF, and AVIF input.
+- Applies orientation, strips private metadata, and enforces Pi-compatible image limits.
+- Keeps bounded sent-image history for explicit re-attachment during the live session.
+- Reports batch state above Pi's editor and can start automatically with each session.
+
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-image-drop
@@ -22,7 +32,7 @@ just try image-drop
 
 This package targets the latest Pi release and uses its `agent_settled` lifecycle event. Older Pi releases are not supported.
 
-## Workflow
+## 🚀 Workflow
 
 1. Run `/image-drop` in an interactive Pi session. You can instead set `startOnSessionStart: true` to start the service with every Pi session.
 2. Pi prints and displays a clickable one-time `http://127.0.0.1:<port>/...` link. The extension does **not** open a browser, including when session startup is enabled.
@@ -35,7 +45,7 @@ The `🖼️` widget above Pi's editor reports ready, uploading, error, and queu
 
 By default, the loopback service starts lazily when you run `/image-drop`. With `startOnSessionStart: true`, it starts after each Pi session initializes and displays the link in Pi automatically. Each later `/image-drop` invocation reuses the service and rotates the unused one-time link. A browser refresh keeps the current in-memory batch and sent-image history. Opening the authenticated page in another tab gives the new tab the editing lease and makes the old tab stale. Reloading, replacing, forking, or shutting down the Pi session releases both the draft and all retained history.
 
-## Supported images
+## 🖼️ Supported images
 
 | Input | Provider-ready output |
 | --- | --- |
@@ -52,7 +62,7 @@ Detection uses file signatures, not filenames or browser MIME types. SVG, HTML, 
 
 The processor applies orientation and removes EXIF (including GPS), XMP, IPTC, comments, and other sensitive metadata. It retains an ICC color profile and animated GIF timing where the output format supports them. With Pi's `images.autoResize` enabled (the default), output is reduced to fit Pi's 2,000-pixel and approximately 4.5 MiB Base64 inline limits. With it disabled, output that exceeds either limit fails visibly instead of being resized.
 
-## Configuration
+## ⚙️ Configuration
 
 Image Drop has one optional **global-only** JSON file:
 
@@ -93,7 +103,7 @@ Limit values are positive integer counts/bytes/pixels, and `startOnSessionStart`
 
 At upload and submission time, the extension also re-reads Pi's documented global and trusted-project `images.autoResize` and `images.blockImages` settings. `blockImages: true` or a text-only current model blocks processing/submission without discarding the draft.
 
-## Security and privacy
+## 🔐 Security and privacy
 
 - The HTTP listener binds only to a random `127.0.0.1` port.
 - A rotating bootstrap token is exchanged once for an HttpOnly, `SameSite=Strict` session cookie, then removed from the URL.
@@ -105,7 +115,7 @@ At upload and submission time, the extension also re-reads Pi's documented globa
 
 A loopback page is local to your operating-system network namespace. Do not expose the port to a LAN or public interface.
 
-## Platforms, browsers, and remote environments
+## 🖥️ Platforms, browsers, and remote environments
 
 The supported local targets are current macOS, Windows, desktop Linux, and WSL with current stable Chrome, Edge, Firefox, or Safari where those browsers are available. Native `sharp` packages are installed for the current platform; HEVC-backed HEIC and BMP use bounded portable decoders because the patent-safe prebuilt `sharp`/libvips bundle omits them.
 
@@ -117,7 +127,7 @@ ssh -L 45678:127.0.0.1:45678 user@remote-host
 
 Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop does not provide a cloud relay or remote upload endpoint.
 
-## Limitations
+## 🚧 Limitations
 
 - Only `/image-drop` is registered; there is no `/image-drop clear` command.
 - A non-empty interactive Pi message is required. RPC, extension-generated, slash-command, and image-only inputs do not consume the batch.
@@ -126,7 +136,7 @@ Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop do
 - Sent history exists only for the current live Pi session. It is not reconstructed from the transcript, persisted across sessions, or shared with another Pi process.
 - FIFO retention can remove the oldest sent images automatically at the configured count or memory limit; the browser displays the current usage and limit.
 
-## Package layout
+## 🗂️ Package layout
 
 ```text
 src/image-drop.ts       Pi extension entrypoint
@@ -139,7 +149,7 @@ src/pi-settings.ts      effective Pi image settings adapter
 src/web/                framework-free browser page
 ```
 
-## Development
+## 🧪 Development
 
 From the repository root:
 
@@ -152,7 +162,7 @@ just pack image-drop
 
 The dry-run package must contain the manifest, license, README, TypeScript sources, and static web assets, but no tests, fixtures, image bytes, or `node_modules`.
 
-## Publishing
+## 🚀 Publishing
 
 The first publication is intentionally a maintainer action:
 
@@ -161,3 +171,11 @@ npm publish --workspace @narumitw/pi-image-drop --access public
 ```
 
 `just npm-public` only changes visibility after a scoped package already exists. Do not publish from an implementation or verification run.
+
+## 🔎 Keywords
+
+Pi extension, Pi Coding Agent, browser image staging, image prompt, local image upload, metadata removal, local-first AI coding agent.
+
+## 📄 License
+
+MIT. See [`LICENSE`](./LICENSE).
