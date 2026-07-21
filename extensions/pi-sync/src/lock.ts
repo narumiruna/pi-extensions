@@ -18,7 +18,6 @@ import { ensureStateDir, lockPath } from "./config.js";
 import type { CommandOptions, LockFile } from "./types.js";
 
 const LOCK_STALE_MS = 30 * 60 * 1000;
-const LOCK_WRITE_GRACE_MS = 5_000;
 const GUARD_STALE_MS = 30_000;
 const GUARD_UPDATE_MS = 10_000;
 const MAX_PROCESS_ID = 2_147_483_647;
@@ -55,6 +54,11 @@ interface Guard {
 	isCompromised: () => boolean;
 }
 
+export type LockInspection =
+	| { status: "missing" }
+	| { status: "unreadable" }
+	| { status: "valid"; lock: LockFile };
+
 export async function withLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
 	await ensureStateDir();
 	const lock: LockFile = {
@@ -75,24 +79,21 @@ export async function withLock<T>(command: string, fn: () => Promise<T>): Promis
 			throw await describeHeldLock();
 		}
 
-		const current = await readLock();
-		if (current && isStaleLock(current)) {
+		const inspection = await inspectLock();
+		if (inspection.status === "valid" && isStaleLock(inspection.lock)) {
 			throw new Error(
-				`pi-sync lock is stale (pid ${current.pid}). Run /pisync unlock --stale, then retry.`,
+				`pi-sync lock is stale (pid ${inspection.lock.pid}). Run /pisync unlock --stale, then retry.`,
 			);
 		}
-		if (current) {
+		if (inspection.status === "valid") {
 			throw new Error(
-				`pi-sync is already running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`,
+				`pi-sync is already running (${inspection.lock.command}, pid ${inspection.lock.pid}, started ${inspection.lock.startedAt}).`,
 			);
 		}
-
-		const recovery = await reclaimUnreadableLock();
-		if (recovery === "fresh") {
-			throw new Error("pi-sync is already running (lock metadata is still being written).");
-		}
-		if (recovery === "changed") {
-			throw new Error("pi-sync is already running (lock changed while being inspected).");
+		if (inspection.status === "unreadable") {
+			throw new Error(
+				"pi-sync lock metadata is unreadable. Run /pisync unlock --stale after verifying no sync is running.",
+			);
 		}
 
 		await fs.writeFile(lockPath(), JSON.stringify(lock, null, "\t"), { flag: "wx" });
@@ -124,17 +125,22 @@ export async function withLock<T>(command: string, fn: () => Promise<T>): Promis
 	return result as T;
 }
 
-export async function readLock(): Promise<LockFile | undefined> {
+export async function inspectLock(): Promise<LockInspection> {
 	try {
 		const text = await fs.readFile(lockPath(), "utf8");
-		if (text.trim().length === 0) return undefined;
+		if (text.trim().length === 0) return { status: "unreadable" };
 		const parsed = JSON.parse(text) as unknown;
-		return isLockFile(parsed) ? parsed : undefined;
+		return isLockFile(parsed) ? { status: "valid", lock: parsed } : { status: "unreadable" };
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-		if (error instanceof SyntaxError) return undefined;
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
+		if (error instanceof SyntaxError) return { status: "unreadable" };
 		throw error;
 	}
+}
+
+export async function readLock(): Promise<LockFile | undefined> {
+	const inspection = await inspectLock();
+	return inspection.status === "valid" ? inspection.lock : undefined;
 }
 
 export async function lockFileExists(): Promise<boolean> {
@@ -147,19 +153,13 @@ export async function lockFileExists(): Promise<boolean> {
 	}
 }
 
-export async function reclaimUnreadableLock(force = false) {
-	if (await readLock()) return "changed" as const;
-	try {
-		const unreadable = await fs.stat(lockPath());
-		if (!force && Date.now() - unreadable.mtimeMs < LOCK_WRITE_GRACE_MS) {
-			return "fresh" as const;
-		}
-		await fs.rm(lockPath());
-		return "removed" as const;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing" as const;
-		throw error;
-	}
+export function isLockGuardHeld() {
+	return lockfile.check(lockPath(), {
+		fs: LOCKFILE_FS_ADAPTER,
+		lockfilePath: `${lockPath()}.guard`,
+		realpath: false,
+		stale: GUARD_STALE_MS,
+	});
 }
 
 export function isStaleLock(lock: LockFile) {
@@ -179,7 +179,7 @@ export async function unlock(ctx: ExtensionCommandContext, options: CommandOptio
 		guard = await acquireGuard();
 	} catch (error) {
 		if (!isLockHeldError(error)) throw error;
-		ctx.ui.notify("Pi-sync is currently running; retry unlock after it finishes.", "warning");
+		ctx.ui.notify((await describeHeldLock()).message, "warning");
 		return;
 	}
 
@@ -200,32 +200,35 @@ export async function unlock(ctx: ExtensionCommandContext, options: CommandOptio
 }
 
 async function unlockGuarded(ctx: ExtensionCommandContext, options: CommandOptions) {
-	const lock = await readLock();
-	if (!lock) {
-		const recovery = await reclaimUnreadableLock(options.stale);
-		if (recovery === "removed") {
-			ctx.ui.notify("Removed unreadable pi-sync lock.", "info");
-			return;
-		}
-		if (recovery === "fresh") {
+	let inspection = await inspectLock();
+	if (inspection.status === "missing") {
+		ctx.ui.notify("No pi-sync lock is present.", "info");
+		return;
+	}
+	if (inspection.status === "unreadable") {
+		if (!options.stale) {
 			ctx.ui.notify(
-				"Lock metadata may still be initializing. Retry shortly, or use /pisync unlock --stale after verifying no sync is running.",
+				"Pi-sync lock metadata is unreadable. Use /pisync unlock --stale only after verifying no sync is running.",
 				"warning",
 			);
 			return;
 		}
-		if (recovery === "changed") {
-			ctx.ui.notify("Pi-sync lock changed while being inspected; retry the command.", "warning");
+		inspection = await inspectLock();
+		if (inspection.status === "unreadable") {
+			// Legacy writers expose an empty file before writing owner metadata, so no
+			// automatic test can prove this file is abandoned. The explicit --stale
+			// flag is the user's confirmation that no legacy sync is still running.
+			await fs.rm(lockPath(), { force: true });
+			ctx.ui.notify("Removed unreadable pi-sync lock.", "info");
 			return;
 		}
-		ctx.ui.notify("No pi-sync lock is present.", "info");
-		return;
+		if (inspection.status === "missing") {
+			ctx.ui.notify("No pi-sync lock is present.", "info");
+			return;
+		}
 	}
-	if (!options.stale && !isStaleLock(lock)) {
-		ctx.ui.notify(
-			"Lock is not stale. Use /pisync unlock --stale only after verifying no sync is running.",
-			"warning",
-		);
+	if (!isStaleLock(inspection.lock)) {
+		ctx.ui.notify("Lock owner is still live; refusing to remove it.", "warning");
 		return;
 	}
 	await fs.rm(lockPath(), { force: true });
@@ -269,10 +272,12 @@ async function describeHeldLock() {
 	}
 	if (current) {
 		return new Error(
-			`pi-sync is already running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`,
+			`Pi-sync is currently running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`,
 		);
 	}
-	return new Error("pi-sync is already running (lock metadata is still being written).");
+	return new Error(
+		"Pi-sync is currently running (lock metadata is unreadable or still being written).",
+	);
 }
 
 function isLockHeldError(error: unknown) {
