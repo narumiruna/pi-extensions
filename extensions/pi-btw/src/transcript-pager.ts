@@ -112,8 +112,9 @@ export class BtwTranscriptPager implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.pageUp)) {
-			this.followBottom = false;
+			const previousOffset = this.scrollOffset;
 			this.scrollBy(-this.lastViewportHeight);
+			if (this.scrollOffset < previousOffset) this.followBottom = false;
 			this.tui.requestRender();
 			return;
 		}
@@ -229,8 +230,9 @@ export class BtwAnsweringView implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.pageUp)) {
-			this.followBottom = false;
+			const previousOffset = this.scrollOffset;
 			this.scrollBy(-this.lastViewportHeight);
+			if (this.scrollOffset < previousOffset) this.followBottom = false;
 			this.tui.requestRender();
 		} else if (matchesKey(data, Key.pageDown)) {
 			this.scrollBy(this.lastViewportHeight);

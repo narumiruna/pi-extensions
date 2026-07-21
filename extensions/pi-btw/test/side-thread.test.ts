@@ -485,6 +485,32 @@ test("transcript honors an explicit top start on its first render", () => {
 	assert.doesNotMatch(rendered, /line 20/);
 });
 
+test("transcript keeps following the bottom when PageUp has no scrollback", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 100 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = `EARLIEST ${"middle content ".repeat(20)}LATEST`;
+	const composer = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "question", answer, kind: "answered", response: response(answer) }],
+		() => undefined,
+		{ startAtBottom: true },
+	);
+	composer.render(80);
+	composer.handleInput("\u001b[5~");
+	tui.terminal.rows = 10;
+
+	assert.match(composer.render(20).join("\n"), /LATEST/);
+});
+
 test("transcript preserves an intentional scroll position across fit and reflow", () => {
 	initTheme("dark");
 	const tui = { terminal: { rows: 10 }, requestRender() {} };
@@ -536,6 +562,35 @@ test("transcript stays anchored to the latest answer when terminal width changes
 
 	assert.match(composer.render(80).join("\n"), /LATEST/);
 	assert.match(composer.render(20).join("\n"), /LATEST/);
+});
+
+test("answering view keeps following the bottom when PageUp has no scrollback", () => {
+	initTheme("dark");
+	const tui = { terminal: { rows: 100 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = `EARLIEST ${"middle content ".repeat(20)}LATEST`;
+	const view = new BtwAnsweringView(
+		tui as never,
+		theme as never,
+		[{ question: "Earlier question", answer, kind: "answered", response: response(answer) }],
+		"CURRENT QUESTION",
+		() => undefined,
+	);
+	try {
+		view.render(80);
+		view.handleInput("\u001b[5~");
+		tui.terminal.rows = 10;
+		assert.match(view.render(20).join("\n"), /CURRENT QUESTION/);
+	} finally {
+		view.dispose();
+	}
 });
 
 test("answering view preserves an intentional scroll position across fit and reflow", () => {
