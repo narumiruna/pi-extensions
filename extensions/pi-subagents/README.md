@@ -81,9 +81,11 @@ Count-selection guidance:
 - A single `subagent` call is blocking. Use one only when context isolation, high-volume output
   isolation, or independent review is worth waiting for; otherwise the main agent should do the work.
 - Do not delegate ordinary critical-path work merely to wait for it. Use detached `subagent_spawn`
-  only when parallel work, bounded context/output, independent review, a distinct model/tool profile,
-  or workspace isolation provides concrete value. Continue useful non-overlapping work when available;
-  otherwise call `subagent_wait` and synthesize the result before finishing.
+  only for a concrete bounded subtask that can run independently alongside useful main-agent work
+  and when parallel work, bounded context/output, independent review, a distinct model/tool profile,
+  or workspace isolation provides concrete value. After spawning, do useful non-overlapping work
+  immediately. Call `subagent_wait` sparingly, only when the immediate next critical-path step needs
+  the result and is blocked until it arrives; do not wait repeatedly by reflex.
 - Prefer **2–4 parallel read-only subagents** when a broad task naturally splits into independent
   branches that can each return a concise summary.
 - Exceed 4 tasks only when the branches are clearly distinct and worth the extra cost, while staying
@@ -202,9 +204,9 @@ Run a chain where each step receives the previous output:
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects one bounded `pi-subagent-completion` message per settled turn. The message uses `deliverAs: "steer"` with `triggerTurn: false`, so an active root turn can consume it naturally.
 
-Detached work has a root-coordination invariant: the main agent should continue useful non-overlapping work when available, or call `subagent_wait` when coordination is the only useful next action. If it yields while current delegated work is still live or awaiting synthesis, the extension schedules one idle-gated recovery continuation for that orchestration revision. A completion, close, interruption, new root turn, session replacement, or shutdown revises or clears that ephemeral state. Recovery is bounded and does not internally wait forever or persist across sessions.
+Detached work follows a critical-path policy: spawn only a concrete bounded subtask that can run independently alongside useful main-agent work, then do that non-overlapping work immediately. Use `subagent_wait` sparingly and only when the immediate next critical-path step requires the result and is blocked until it arrives. The extension does not start an autonomous recovery turn merely because delegated work remains live or completes. If the root turn has already ended, completion stays queued for the next turn instead of waking the root.
 
-A single detached agent is justified only by a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
+A single detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
 When `subagent_wait` starts while a turn is running, that wait consumes the turn's completion: the terminal output is returned by the tool and is not also injected as a duplicate asynchronous completion. Multiple active waiters may all receive the terminal result. A timed-out or aborted wait does not consume it, so later settlement still delivers the normal asynchronous completion. If a turn has already settled and queued its completion before a wait starts, the queued message cannot be retracted safely.
 
@@ -237,7 +239,7 @@ Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the ex
 | `subagent_send` | Send follow-up work to a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
 | `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
-| `subagent_wait` | Wait when coordination is the useful next action; timeout does not terminate the agent, and parent abort/user steering cancels only the wait. Already-terminal agents return immediately. |
+| `subagent_wait` | Wait sparingly when the immediate next critical-path step is blocked on a result; timeout does not terminate the agent, and parent abort/user steering cancels only the wait. Already-terminal agents return immediately. |
 | `subagent_list` | List retained agents and lifecycle states. |
 | `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
 | `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |

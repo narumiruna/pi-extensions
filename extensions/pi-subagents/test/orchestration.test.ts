@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { RootOrchestrationState } from "../src/orchestration.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import { normalizeSubagentSettings } from "../src/settings.js";
 import {
@@ -90,78 +89,6 @@ test("shared-workspace write classification and follow-up guards are conservativ
 	await registry.interrupt(active.id);
 });
 
-test("root orchestration recovery is revision-bounded and clears synthesized results", () => {
-	const state = new RootOrchestrationState();
-	state.reset();
-	state.beginTurn();
-	state.spawn("sa_one");
-	const first = state.endTurn();
-	assert.ok(first);
-	assert.match(first.prompt, /subagent_wait/);
-	state.markDelivered(first);
-
-	state.beginTurn();
-	assert.equal(state.endTurn(), undefined, "unchanged live work does not loop autonomously");
-	state.complete("sa_one");
-	const synthesis = state.endTurn();
-	assert.ok(synthesis, "completion after the turn schedules a synthesis recovery");
-	state.markDelivered(synthesis);
-	state.beginTurn();
-	assert.equal(state.endTurn(), undefined);
-	assert.equal(state.hasUnresolved(), false);
-});
-
-test("root orchestration treats newer root work as a bounded coordination attempt", () => {
-	const state = new RootOrchestrationState();
-	state.reset();
-	state.spawn("sa_one");
-	assert.ok(state.endTurn());
-	state.beginTurn();
-	assert.equal(state.endTurn(), undefined);
-	assert.deepEqual(state.liveAgentIds(), ["sa_one"]);
-});
-
-test("root orchestration lets newer user work supersede a queued recovery", () => {
-	const state = new RootOrchestrationState();
-	state.reset();
-	state.spawn("sa_one");
-	const queued = state.endTurn();
-	assert.ok(queued);
-	assert.match(queued.prompt, new RegExp(queued.nonce));
-	assert.deepEqual(state.supersedePending(), queued);
-	assert.equal(state.isCurrent(queued), false);
-	state.beginTurn();
-	assert.equal(state.endTurn(), undefined);
-});
-
-test("root orchestration accepts completion synthesized during useful root work", () => {
-	const state = new RootOrchestrationState();
-	state.reset();
-	state.beginTurn();
-	state.spawn("sa_one");
-	state.complete("sa_one");
-	state.observeAvailable();
-	assert.equal(state.endTurn(), undefined);
-	assert.equal(state.hasUnresolved(), false);
-});
-
-test("root orchestration cancels stale tickets and explicit resolution", () => {
-	const state = new RootOrchestrationState();
-	state.reset();
-	state.spawn("sa_one");
-	const stale = state.endTurn();
-	assert.ok(stale);
-	state.complete("sa_one");
-	assert.equal(state.isCurrent(stale), false);
-	const current = state.endTurn();
-	assert.ok(current);
-	state.resolve("sa_one");
-	assert.equal(state.isCurrent(current), false);
-	assert.equal(state.hasUnresolved(), false);
-	state.reset();
-	assert.equal(state.pendingTicket(), undefined);
-});
-
 test("selected context entries imply all mode only when context mode is omitted", () => {
 	assert.equal(resolveSpawnContextMode(undefined, ["entry"]), "all");
 	assert.equal(resolveSpawnContextMode(undefined, []), "all");
@@ -216,8 +143,16 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			spawnTool.promptGuidelines.join("\n"),
 			/single detached subagent.*isolation or specialization/i,
 		);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /call subagent_wait rather than yielding/i);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /synthesize their results/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /useful non-overlapping.*immediately/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /subagent_wait.*sparingly/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /immediate.*critical-path.*blocked/i);
+		assert.doesNotMatch(spawnTool.promptGuidelines.join("\n"), /rather than yielding/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /synthesize available.*completion/i);
+		const waitTool = mock.tools.find((tool) => tool.name === "subagent_wait") as {
+			description: string;
+		};
+		assert.match(waitTool.description, /use sparingly/i);
+		assert.match(waitTool.description, /immediate next critical-path step is blocked/i);
 		const originalDepth = process.env.PI_SUBAGENT_DEPTH;
 		process.env.PI_SUBAGENT_DEPTH = "1";
 		try {

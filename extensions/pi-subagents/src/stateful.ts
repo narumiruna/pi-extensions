@@ -7,17 +7,8 @@ import { discoverAgents, type AgentScope, isThinkingLevel } from "./agents.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
-import {
-	ORCHESTRATION_MARKER_PREFIX,
-	RootOrchestrationState,
-	type OrchestrationRecoveryTicket,
-} from "./orchestration.js";
 import { AgentPersistence } from "./persistence.js";
-import {
-	AgentRegistry,
-	type AgentTurnCompletion,
-	type ManagedAgent,
-} from "./registry.js";
+import { AgentRegistry, type AgentTurnCompletion, type ManagedAgent } from "./registry.js";
 import { readSubagentSettings } from "./settings.js";
 import { SubprocessTransport } from "./subprocess-transport.js";
 import {
@@ -58,8 +49,6 @@ export function registerStatefulSubagents(
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
 	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
-	const orchestration = new RootOrchestrationState();
-	const cancelledRecoveryNonces = new Set<string>();
 	const completionWaiters = new Map<string, number>();
 
 	const requireRegistry = () => {
@@ -69,11 +58,12 @@ export function registerStatefulSubagents(
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++runtimeGeneration;
-		rememberCancelledRecovery(orchestration.supersedePending(), cancelledRecoveryNonces);
-		orchestration.reset();
 		parentRuntime.model = ctx.model;
 		parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(pi.getThinkingLevel());
-		const owner = ctx.sessionManager.getSessionId?.() ?? ctx.sessionManager.getSessionFile?.() ?? `ephemeral:${ctx.cwd}`;
+		const owner =
+			ctx.sessionManager.getSessionId?.() ??
+			ctx.sessionManager.getSessionFile?.() ??
+			`ephemeral:${ctx.cwd}`;
 		const sessionPersistence = new AgentPersistence(owner, {
 			retentionDays: settings.retentionDays,
 			maxStoredAgents: settings.maxStoredAgents,
@@ -112,7 +102,6 @@ export function registerStatefulSubagents(
 			},
 			onTurnComplete: (completion) => {
 				if (generation !== runtimeGeneration) return;
-				orchestration.complete(completion.agent.id);
 				if (!completionWaiters.has(completion.agent.id)) {
 					sendDetachedCompletion(pi, completion);
 				}
@@ -122,8 +111,7 @@ export function registerStatefulSubagents(
 			.load()
 			.filter(
 				(agent) =>
-					(agent.agentScope !== "project" && agent.agentScope !== "both") ||
-					ctx.isProjectTrusted(),
+					(agent.agentScope !== "project" && agent.agentScope !== "both") || ctx.isProjectTrusted(),
 			);
 		for (const agent of restored) {
 			for (const message of agent.mailbox) seenMessageIds.add(message.id);
@@ -140,38 +128,6 @@ export function registerStatefulSubagents(
 		sweepTimer.unref();
 	});
 
-	pi.on("input", (event) => {
-		if (event.source === "extension") {
-			const nonce = extractOrchestrationNonce(event.text);
-			if (nonce && cancelledRecoveryNonces.delete(nonce)) return { action: "handled" as const };
-			return;
-		}
-		rememberCancelledRecovery(orchestration.supersedePending(), cancelledRecoveryNonces);
-	});
-
-	pi.on("before_agent_start", () => {
-		orchestration.beginTurn();
-	});
-
-	pi.on("before_provider_request", () => {
-		orchestration.observeAvailable();
-	});
-
-	pi.on("agent_end", (_event, ctx) => {
-		const ticket = orchestration.endTurn();
-		if (ticket && !hasPendingRootMessages(ctx)) queueOrchestrationFollowUp(pi, ctx, ticket);
-	});
-
-	const settledEvents = pi as unknown as {
-		on(
-			event: "agent_settled",
-			handler: (event: unknown, ctx: ExtensionContext) => void,
-		): void;
-	};
-	settledEvents.on("agent_settled", (_event, ctx) => {
-		dispatchOrchestrationRecovery(pi, ctx, orchestration);
-	});
-
 	pi.on("model_select", (event) => {
 		parentRuntime.model = event.model;
 	});
@@ -182,8 +138,6 @@ export function registerStatefulSubagents(
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		runtimeGeneration++;
-		rememberCancelledRecovery(orchestration.supersedePending(), cancelledRecoveryNonces);
-		orchestration.reset();
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		for (const agentId of isolatedAgents.keys()) {
@@ -203,24 +157,22 @@ export function registerStatefulSubagents(
 		persistence = undefined;
 		if (cleanupError && ctx.hasUI) {
 			const reason = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-			ctx.ui.notify(
-				`Some isolated subagent workspaces could not be removed: ${reason}`,
-				"warning",
-			);
+			ctx.ui.notify(`Some isolated subagent workspaces could not be removed: ${reason}`, "warning");
 		}
 	});
 
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
-		description: "Start an addressable background subagent, return immediately with an agentId, and receive its completion asynchronously.",
+		description:
+			"Start an addressable background subagent, return immediately with an agentId, and receive its completion asynchronously.",
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
 		promptGuidelines: [
 			"Do not delegate simple or critical-path work that the main agent can perform directly.",
-			"A single detached subagent is appropriate only for a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
+			"A single detached subagent is appropriate only for a concrete bounded subtask that can run independently alongside useful main-agent work and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
 			"Use one blocking subagent parallel call for multiple independent one-shot tasks; do not use repeated detached spawns when no reuse or overlap is needed.",
-			"After spawning, continue useful non-overlapping local work when available; otherwise call subagent_wait rather than yielding while delegated work remains unresolved.",
-			"Consume available completion messages and synthesize their results before finishing; interrupt or close agents that are no longer needed.",
+			"After spawning, do useful non-overlapping local work immediately. Call subagent_wait sparingly, only when the immediate next critical-path step requires the result and is blocked until it arrives; do not wait repeatedly by reflex.",
+			"Consume and synthesize available completion messages; interrupt or close agents that are no longer needed.",
 			"Detached completion is delivered automatically. Do not poll, wait forever, or spawn additional agents without a distinct need.",
 		],
 		parameters: Type.Object({
@@ -247,13 +199,7 @@ export function registerStatefulSubagents(
 			const scope = (params.agentScope ?? "user") as AgentScope;
 			assertSubagentDepthAllowed();
 			const cwd = params.cwd ?? ctx.cwd;
-			await confirmProjectAgent(
-				params.agent,
-				scope,
-				params.confirmProjectAgents ?? true,
-				ctx,
-				cwd,
-			);
+			await confirmProjectAgent(params.agent, scope, params.confirmProjectAgents ?? true, ctx, cwd);
 			const resolvedAgent = discoverAgents(cwd, scope, readSubagentSettings()).agents.find(
 				(agent) => agent.name === params.agent,
 			);
@@ -269,12 +215,7 @@ export function registerStatefulSubagents(
 			);
 			const requestedCwd = cwd;
 			if ((params.workspaceMode ?? "shared") === "shared" && !params.allowConcurrentWrites) {
-				assertNoSharedWriteConflict(
-					requireRegistry(),
-					params.agent,
-					requestedCwd,
-					scope,
-				);
+				assertNoSharedWriteConflict(requireRegistry(), params.agent, requestedCwd, scope);
 			}
 			const workspaceOwner = `pending-${randomUUID()}`;
 			const workspace =
@@ -298,10 +239,9 @@ export function registerStatefulSubagents(
 				throw error;
 			}
 			if (workspace) isolatedAgents.set(agent.id, workspaceOwner);
-			trackSpawnedAgent(orchestration, agent);
 			return result(
 				agent,
-				`Spawned ${agent.agent} as ${agent.id}. Continue coordinating this agent; do useful non-overlapping work or call subagent_wait, then synthesize its result before finishing.`,
+				`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately. Completion will arrive asynchronously; call subagent_wait only if the immediate next critical-path step is blocked on this result.`,
 			);
 		},
 	});
@@ -334,7 +274,6 @@ export function registerStatefulSubagents(
 				isolatedAgents.has(existing.id),
 			);
 			const agent = await requireRegistry().followUp(params.agentId, params.task);
-			trackSpawnedAgent(orchestration, agent);
 			return result(agent, `Started follow-up for ${agent.id}.`);
 		},
 	});
@@ -384,9 +323,7 @@ export function registerStatefulSubagents(
 			}));
 			const text = summaries.length
 				? summaries
-						.map(
-							(message) => `${message.id} from ${message.senderId}: ${message.content}`,
-						)
+						.map((message) => `${message.id} from ${message.senderId}: ${message.content}`)
 						.join("\n")
 				: "No unread messages.";
 			return {
@@ -399,7 +336,8 @@ export function registerStatefulSubagents(
 	pi.registerTool({
 		name: "subagent_wait",
 		label: "Wait for Subagent",
-		description: "Wait for a stateful subagent turn without terminating it when the wait times out.",
+		description:
+			"Wait for a stateful subagent turn without terminating it when the wait times out. Use sparingly, only when the immediate next critical-path step is blocked on this result.",
 		parameters: Type.Object({
 			agentId: Type.String(),
 			timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: 3_600_000, default: 30_000 })),
@@ -412,7 +350,6 @@ export function registerStatefulSubagents(
 			}
 			try {
 				const waited = await requireRegistry().wait(params.agentId, params.timeoutMs, signal);
-				if (!waited.timedOut) orchestration.observe(waited.agent.id);
 				return result(
 					waited.agent,
 					waited.timedOut
@@ -436,9 +373,7 @@ export function registerStatefulSubagents(
 				content: [
 					{
 						type: "text",
-						text: agents.length
-							? agents.map(formatLine).join("\n")
-							: "No stateful subagents.",
+						text: agents.length ? agents.map(formatLine).join("\n") : "No stateful subagents.",
 					},
 				],
 				details: { agents: agents.map(summarizeAgent) },
@@ -481,7 +416,6 @@ export function registerStatefulSubagents(
 		async execute(_id, params) {
 			const existing = requireRegistry().get(params.agentId);
 			if (existing?.state === "closed" && !params.subtree) {
-				orchestration.resolve(existing.id);
 				const pendingOwner = isolatedAgents.get(existing.id);
 				if (pendingOwner) await workspaceManager.cleanup(pendingOwner);
 				isolatedAgents.delete(existing.id);
@@ -494,7 +428,6 @@ export function registerStatefulSubagents(
 				} finally {
 					await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
 				}
-				for (const closed of agents) orchestration.resolve(closed.id);
 				return {
 					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
 					details: {
@@ -509,7 +442,6 @@ export function registerStatefulSubagents(
 			} finally {
 				await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
 			}
-			orchestration.resolve(agent.id);
 			return result(agent, `Closed ${agent.id}.`);
 		},
 	});
@@ -530,7 +462,6 @@ export function registerStatefulSubagents(
 					isolatedAgents.clear();
 				}
 				seenMessageIds.clear();
-				orchestration.reset();
 				await persistence?.delete();
 				ctx.ui.notify("Cleared stateful subagents.", "info");
 				return;
@@ -577,12 +508,7 @@ export function assertFollowUpWriteAllowed(
 	isolatedWorkspace: boolean,
 ): void {
 	if (allowConcurrentWrites || isolatedWorkspace) return;
-	assertNoSharedWriteConflict(
-		registry,
-		agent.agent,
-		agent.cwd,
-		agent.agentScope ?? "user",
-	);
+	assertNoSharedWriteConflict(registry, agent.agent, agent.cwd, agent.agentScope ?? "user");
 }
 
 export function isWriteCapable(tools: string[] | undefined): boolean {
@@ -614,7 +540,10 @@ async function confirmProjectAgent(
 		throw new Error("Project-local subagent definitions require a trusted project");
 	}
 	if (confirm && ctx.hasUI) {
-		const approved = await ctx.ui.confirm("Run project-local agent?", `Agent: ${name}\nSource: ${agent.filePath}`);
+		const approved = await ctx.ui.confirm(
+			"Run project-local agent?",
+			`Agent: ${name}\nSource: ${agent.filePath}`,
+		);
 		if (!approved) throw new Error("Project-local subagent was not approved");
 	}
 }
@@ -623,9 +552,7 @@ function isSameCwd(left: string, right: string): boolean {
 	return path.resolve(left) === path.resolve(right);
 }
 
-function normalizeContextMode(
-	value: "none" | "all" | "summary" | number | undefined,
-): ContextMode {
+function normalizeContextMode(value: "none" | "all" | "summary" | number | undefined): ContextMode {
 	if (value === undefined) return "none";
 	if (value === "none" || value === "all" || value === "summary") return value;
 	return Math.max(1, Math.floor(value));
@@ -680,85 +607,7 @@ function summarizeAgent(agent: ManagedAgent) {
 	};
 }
 
-function trackSpawnedAgent(
-	orchestration: RootOrchestrationState,
-	agent: ManagedAgent,
-): void {
-	orchestration.spawn(agent.id);
-	if (agent.state === "closed") orchestration.resolve(agent.id);
-	else if (agent.state !== "starting" && agent.state !== "running") {
-		orchestration.complete(agent.id);
-	}
-}
-
-function rememberCancelledRecovery(
-	ticket: OrchestrationRecoveryTicket | undefined,
-	cancelledNonces: Set<string>,
-): void {
-	if (!ticket) return;
-	cancelledNonces.add(ticket.nonce);
-	if (cancelledNonces.size <= 64) return;
-	const oldest = cancelledNonces.values().next().value;
-	if (oldest) cancelledNonces.delete(oldest);
-}
-
-function extractOrchestrationNonce(text: string): string | undefined {
-	const marker = `<!-- ${ORCHESTRATION_MARKER_PREFIX}`;
-	const start = text.lastIndexOf(marker);
-	if (start < 0) return undefined;
-	const valueStart = start + marker.length;
-	const end = text.indexOf(" -->", valueStart);
-	return end < 0 ? undefined : text.slice(valueStart, end);
-}
-
-function queueOrchestrationFollowUp(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	ticket: OrchestrationRecoveryTicket,
-): void {
-	try {
-		pi.sendUserMessage(ticket.prompt, { deliverAs: "followUp" });
-	} catch (error) {
-		if (ctx.hasUI) {
-			const reason = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Subagent coordination follow-up failed: ${reason}`, "warning");
-		}
-	}
-}
-
-function dispatchOrchestrationRecovery(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	orchestration: RootOrchestrationState,
-): boolean {
-	const ticket = orchestration.pendingTicket();
-	if (!ticket || !orchestration.isCurrent(ticket)) return false;
-	if (hasPendingRootMessages(ctx)) return false;
-	try {
-		pi.sendUserMessage(ticket.prompt);
-		orchestration.markDelivered(ticket);
-		return true;
-	} catch (error) {
-		if (ctx.hasUI) {
-			const reason = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Subagent coordination prompt failed: ${reason}`, "warning");
-		}
-		return false;
-	}
-}
-
-function hasPendingRootMessages(ctx: ExtensionContext): boolean {
-	try {
-		return ctx.hasPendingMessages();
-	} catch {
-		return true;
-	}
-}
-
-function sendDetachedCompletion(
-	pi: ExtensionAPI,
-	completion: AgentTurnCompletion,
-): void {
+function sendDetachedCompletion(pi: ExtensionAPI, completion: AgentTurnCompletion): void {
 	const content = buildDetachedCompletionMessage(completion);
 	pi.sendMessage(
 		{
@@ -798,8 +647,8 @@ export function buildDetachedCompletionMessage(completion: AgentTurnCompletion):
 }
 
 function sanitizeCompletionLine(value: string, maxBytes: number): string {
-	return truncateUtf8(redactPrivateText(value), maxBytes).text
-		.replace(/[\u0000-\u001f\u007f]+/g, " ")
+	return truncateUtf8(redactPrivateText(value), maxBytes)
+		.text.replace(/[\u0000-\u001f\u007f]+/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
 }
