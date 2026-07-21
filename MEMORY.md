@@ -102,4 +102,5 @@
 - Keep `just` install recipes resilient by verifying registry visibility and falling back only when it solves the current install path.
 - New extension README files should mirror the existing style: emoji title, npm/Pi/license badges, Features, Install, Usage/What it does, Package layout, Keywords, and License.
 - New slash-command extensions should include argument autocomplete when the command has known subcommands, modes, or flags.
+- Prefer Pi extension manager commands to use one interactive slash command that shows current state plus next actions; prioritize the current session context, make cross-context changes explicit, and avoid hidden argument-based fallbacks unless non-interactive support is a real product requirement.
 - Earendil Works acquired the Pi tooling from mariozechner; prefer `@earendil-works/*` Pi packages because `@mariozechner/pi-*` packages are deprecated and should not be used for new extension work.
