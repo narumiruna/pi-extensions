@@ -2,8 +2,12 @@ import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
 
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
-const PROPOSED_PLAN_PATTERN = /^<proposed_plan>[\t ]*\r?\n([\s\S]*?)\r?\n<\/proposed_plan>[\t ]*$/gm;
-const PROPOSED_PLAN_BLOCK_PATTERN = /^<proposed_plan>[\t ]*\r?\n[\s\S]*?\r?\n<\/proposed_plan>[\t ]*$/gm;
+const PLAN_IMPLEMENTATION_HANDOFF_PREFIX =
+	"Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:";
+const PROPOSED_PLAN_PATTERN =
+	/^<proposed_plan>[\t ]*\r?\n([\s\S]*?)\r?\n<\/proposed_plan>[\t ]*$/gm;
+const PROPOSED_PLAN_BLOCK_PATTERN =
+	/^<proposed_plan>[\t ]*\r?\n[\s\S]*?\r?\n<\/proposed_plan>[\t ]*$/gm;
 
 export type ProposedPlanParseResult =
 	| { kind: "absent" }
@@ -65,6 +69,14 @@ export function messageContainsInactivePlanModeArtifact(message: unknown) {
 	);
 }
 
+export function messageContainsPlanModeImplementationHandoff(message: unknown) {
+	const candidate = unwrapSessionMessage(message);
+	return (
+		candidate.role === "user" &&
+		contentText(candidate.content).trimStart().startsWith(PLAN_IMPLEMENTATION_HANDOFF_PREFIX)
+	);
+}
+
 export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
 	return replaceAssistantContent(message, stripProposedPlanBlocksFromContent);
 }
@@ -74,9 +86,7 @@ export function stripPlanModeCompletionCallsFromMessage<T>(message: T): T {
 		if (!Array.isArray(content)) return content;
 		const nextContent = content.filter((block) => {
 			const candidate = block as { type?: string; name?: string };
-			return !(
-				candidate.type === "toolCall" && candidate.name === PLAN_MODE_COMPLETE_TOOL_NAME
-			);
+			return !(candidate.type === "toolCall" && candidate.name === PLAN_MODE_COMPLETE_TOOL_NAME);
 		});
 		return nextContent.length === content.length ? content : nextContent;
 	});
@@ -91,10 +101,7 @@ export function isEmptyAssistantMessage(message: unknown) {
 	);
 }
 
-function replaceAssistantContent<T>(
-	message: T,
-	transform: (content: unknown) => unknown,
-): T {
+function replaceAssistantContent<T>(message: T, transform: (content: unknown) => unknown): T {
 	const candidate = unwrapSessionMessage(message);
 	if (candidate.role !== "assistant") return message;
 
