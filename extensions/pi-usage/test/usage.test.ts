@@ -248,6 +248,45 @@ test("unsupported providers remain visible without publishing an error status", 
 	assert.equal(statuses.get("usage"), undefined);
 });
 
+test("current auth appearance during a command is revalidated before display", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = usageFetch;
+	let authCalls = 0;
+	let title = "";
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const command = mock.commands.get("usage");
+	assert.ok(command);
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		model: openRouterModel,
+		select: async (value: string) => {
+			title = value;
+			return "Close";
+		},
+		modelRegistry: {
+			getProviderAuth: async () => {
+				authCalls += 1;
+				return authCalls === 1 ? undefined : { auth: { apiKey: "openrouter-key" } };
+			},
+			getAvailable: () => [openRouterModel],
+			getAll: () => [openRouterModel],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: (provider: string) => provider,
+		},
+	});
+
+	await command.handler("", ctx);
+
+	assert.match(title, /OpenRouter Usage · Current/);
+	assert.match(title, /test-key/);
+	assert.ok(authCalls >= 3);
+});
+
 test("automatic lifecycle refresh starts asynchronously", () => {
 	const mock = createMockPi();
 	usageExtension(mock.pi);
@@ -544,7 +583,16 @@ test("statusline follows runtime auth changes and clears for unsupported selecte
 	globalThis.fetch = async () => {
 		fetches += 1;
 		if (activeKey === "account-a") accountAQueries += 1;
-		const remaining = activeKey === "account-a" ? (accountAQueries === 1 ? 75 : 20) : 40;
+		const remaining =
+			activeKey === "account-a"
+				? accountAQueries === 1
+					? 75
+					: accountAQueries === 2
+						? 20
+						: accountAQueries === 3
+							? 10
+							: 5
+				: 40;
 		return new Response(
 			JSON.stringify({
 				data: {
@@ -602,4 +650,21 @@ test("statusline follows runtime auth changes and clears for unsupported selecte
 		ctx,
 	);
 	assert.equal(statuses.get("usage"), undefined);
+
+	mock.events.get("model_select")?.[0]?.({ model: openRouterModel }, ctx);
+	await settle();
+	assert.equal(statuses.get("usage"), "openrouter $10.00 left");
+	assert.equal(fetches, 4);
+
+	const proxyModel = { ...openRouterModel, baseUrl: "https://proxy.example.test/v1" };
+	Object.assign(ctx, { model: proxyModel });
+	mock.events.get("model_select")?.[0]?.({ model: proxyModel }, ctx);
+	await settle();
+	assert.equal(statuses.get("usage"), "auth unavailable");
+
+	Object.assign(ctx, { model: openRouterModel });
+	mock.events.get("model_select")?.[0]?.({ model: openRouterModel }, ctx);
+	await settle();
+	assert.equal(statuses.get("usage"), "openrouter $5.00 left");
+	assert.equal(fetches, 5);
 });

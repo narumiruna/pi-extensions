@@ -24,9 +24,9 @@ OpenRouter is the validated second provider. Its official `GET https://openroute
 
 - [x] Add failing executable specifications for provider normalization, auth/cache isolation, menu/query-all behavior, lifecycle/statusline behavior, and Codex regressions; `npm test` reached the expected red state on missing `pi-usage` source modules.
 - [x] Implement the provider-neutral core plus Codex and OpenRouter adapters to satisfy normalization, formatting, timeout, cancellation, redaction, response-bound, and proxy-origin tests; 16 focused adapter/core tests pass.
-- [x] Implement `/usage`, `/codex-status`, interactive current/configured/all-provider flows, bounded concurrency, cache identity, and current-only lifecycle statusline; 14 focused command/lifecycle race and cancellation tests pass.
+- [x] Implement `/usage`, `/codex-status`, interactive current/configured/all-provider flows, bounded concurrency, cache identity, and current-only lifecycle statusline; 15 focused command/lifecycle race, account-transition, and cancellation tests pass.
 - [x] Add package metadata, migration/provider-semantics documentation, root scripts/recipes/catalog entries, and the `usage` statusline icon; package/statusline typechecks and metadata tests pass.
-- [x] Run formatting, the full repository check, package dry run, and a local Pi runtime smoke; `npm run check` passed 992 tests, `just pack usage` contained 11 expected publish files, and `pi -p -e ./extensions/pi-usage '/usage'` exited 0 without network/model work.
+- [x] Run formatting, the full repository check, package dry run, and a local Pi runtime smoke; `npm run check` passed 993 tests, `just pack usage` contained 11 expected publish files, and `pi -p -e ./extensions/pi-usage '/usage'` exited 0 without network/model work.
 - [x] Audit issue #268 acceptance criteria, commit the focused diff, push `feat/pi-usage`, and create pull request #314 with issue linkage and verification evidence.
 
 ## Risks

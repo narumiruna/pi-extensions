@@ -44,6 +44,7 @@ const MENU_ACTIONS = [REFRESH_CURRENT, VIEW_ANOTHER, VIEW_ALL, CLOSE];
 type QueryOutcome = {
 	state: ProviderUsageState;
 	fingerprint?: string;
+	authState?: "unavailable";
 };
 
 type StableCurrent = {
@@ -163,6 +164,9 @@ export default function usageExtension(pi: ExtensionAPI) {
 			);
 		} catch (error) {
 			if (isStaleExtensionContextError(error) || isAbortError(error)) throw error;
+			if (displayState === "current") {
+				transitionCurrentIdentity(`${adapter.id}:auth-error`, adapter.id);
+			}
 			return {
 				state: {
 					providerId: adapter.id,
@@ -185,6 +189,7 @@ export default function usageExtension(pi: ExtensionAPI) {
 					status: "auth-unavailable",
 					message: `No runtime credential is configured for ${adapter.displayName}.`,
 				},
+				authState: "unavailable",
 			};
 		}
 		if (displayState === "current") {
@@ -301,6 +306,8 @@ export default function usageExtension(pi: ExtensionAPI) {
 	) => {
 		const adapter = adapterForProvider(model?.provider);
 		if (!adapter || !model) {
+			const providerId = model?.provider ?? "none";
+			transitionCurrentIdentity(`unsupported:${providerId}`, providerId);
 			clearStatus(ctx);
 			return;
 		}
@@ -378,8 +385,27 @@ export default function usageExtension(pi: ExtensionAPI) {
 		if (generation !== statusGeneration || modelIdentity(ctx.model) !== modelIdentity(model)) {
 			return false;
 		}
-		if (!outcome.fingerprint) return true;
 		const adapter = adapterForProvider(model?.provider);
+		if (outcome.authState === "unavailable") {
+			if (!adapter) return false;
+			try {
+				const auth = await awaitWithDeadline(
+					resolveUsageAuth(ctx, adapter),
+					signal,
+					DEFAULT_TIMEOUT_MS,
+					`revalidating ${adapter.displayName} runtime auth`,
+				);
+				return (
+					generation === statusGeneration &&
+					modelIdentity(ctx.model) === modelIdentity(model) &&
+					auth === undefined
+				);
+			} catch (error) {
+				if (isAbortError(error) || isStaleExtensionContextError(error)) throw error;
+				return false;
+			}
+		}
+		if (!outcome.fingerprint) return true;
 		if (!adapter) return false;
 		try {
 			const auth = await awaitWithDeadline(
@@ -593,10 +619,6 @@ export default function usageExtension(pi: ExtensionAPI) {
 		startStatusRefresh(ctx, event.model, false);
 	});
 	pi.on("turn_start", (_event, ctx) => {
-		if (!ctx.model || !adapterForProvider(ctx.model.provider)) {
-			clearStatus(ctx);
-			return;
-		}
 		startStatusRefresh(ctx, ctx.model, false);
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
