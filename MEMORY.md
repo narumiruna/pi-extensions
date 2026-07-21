@@ -96,6 +96,19 @@
 
 ## TASTE
 
+### README
+
+- New extension README files should mirror the existing style: emoji title, npm/Pi/license badges, Features, Install, Usage/What it does, Package layout, Keywords, and License.
+
+1. Write extension READMEs in English.
+2. Prefer practical documentation over marketing copy: explain capabilities, then installation, then commands, tools, configuration, or workflow.
+3. Document the applicable install paths: `pi install npm:@narumitw/...`, temporary `pi -e npm:@narumitw/...`, and local checkout `pi -e ./extensions/...`.
+4. Keep content easy to scan with short paragraphs, feature bullets, tables when useful, inline code, and language-tagged fenced blocks.
+5. State operational behavior clearly, including relevant defaults, precedence, persistence, lifecycle, failures, security, privacy, and limitations.
+6. End with a package layout that identifies `src/*.ts` modules and briefly explains their responsibilities.
+
+### General
+
 - Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.
 - Prefer validating extensions against the latest Pi release only; do not maintain compatibility matrices for older Pi versions.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.
@@ -104,7 +117,6 @@
 - Keep entries short and reusable.
 - Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
 - Keep `just` install recipes resilient by verifying registry visibility and falling back only when it solves the current install path.
-- New extension README files should mirror the existing style: emoji title, npm/Pi/license badges, Features, Install, Usage/What it does, Package layout, Keywords, and License.
 - New slash-command extensions should include argument autocomplete when the command has known subcommands, modes, or flags.
 - Prefer Pi extension manager commands to use one interactive slash command that shows current state plus next actions; prioritize the current session context, make cross-context changes explicit, and avoid hidden argument-based fallbacks unless non-interactive support is a real product requirement.
 - Earendil Works acquired the Pi tooling from mariozechner; prefer `@earendil-works/*` Pi packages because `@mariozechner/pi-*` packages are deprecated and should not be used for new extension work.
