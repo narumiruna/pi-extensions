@@ -12,6 +12,13 @@ const COMMAND_NAME = "codex-status";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const STATUS_KEY = "codex-usage";
+export const DEPRECATION_WARNING_MESSAGE = [
+	"@narumitw/pi-codex-usage is deprecated and will be replaced by @narumitw/pi-usage.",
+	"Please migrate by running:",
+	"  pi uninstall npm:@narumitw/pi-codex-usage",
+	"  pi install npm:@narumitw/pi-usage",
+	"Do not load both extensions at the same time.",
+].join("\n");
 
 interface CommandArgumentCompletion {
 	value: string;
@@ -41,6 +48,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 	let statuslineRequestId = 0;
 	let sessionActive = false;
 	let activeStatuslineContext: ExtensionContext | undefined;
+	let deprecationWarningShown = false;
 
 	const clearStatuslineTimers = () => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
@@ -211,6 +219,10 @@ export default function codexUsage(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		if (!deprecationWarningShown) {
+			ctx.ui.notify(DEPRECATION_WARNING_MESSAGE, "warning");
+			deprecationWarningShown = true;
+		}
 		sessionActive = true;
 		if (isOpenAICodexModel(ctx.model)) {
 			void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model).catch(

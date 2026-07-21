@@ -2,11 +2,20 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-usage)](https://www.npmjs.com/package/@narumitw/pi-codex-usage) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+> [!WARNING]
+> `@narumitw/pi-codex-usage` is deprecated and will be replaced by [`@narumitw/pi-usage`](../pi-usage).
+> Do not load both extensions at the same time. To migrate one Pi installation, run:
+>
+> ```bash
+> pi uninstall npm:@narumitw/pi-codex-usage
+> pi install npm:@narumitw/pi-usage
+> ```
+>
+> See the [`pi-usage` migration guide](../pi-usage#-migrating-from-pi-codex-usage) for behavior changes.
+
 `@narumitw/pi-codex-usage` is a native [Pi coding agent](https://pi.dev) extension that adds `/codex-status`, a command for showing ChatGPT Codex subscription usage from inside Pi.
 
 Use it when you want a quick Codex-style usage summary without leaving Pi or requiring Codex CLI to be installed.
-
-> **Successor:** [`@narumitw/pi-usage`](../pi-usage) adds a current-account-first `/usage` menu for Codex and OpenRouter. This predecessor remains available during the successor's soak period. Do not load both packages together because both register `/codex-status`; see the [migration guide](../pi-usage#-migrating-from-pi-codex-usage).
 
 ## ✨ Features
 
