@@ -859,6 +859,28 @@ test("getJson throws after retrying a persistently empty R2 response body", asyn
 	}
 });
 
+test("getJson does not retry a non-empty malformed response body", async () => {
+	const originalFetch = globalThis.fetch;
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		calls += 1;
+		return new Response("{", { status: 200, headers: { etag: "w/malformed" } });
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new S3Client({
+			...requiredConfig(),
+			region: "auto",
+			profile: "default",
+			prefix: "pi-sync",
+			syncSessions: false,
+		});
+		await assert.rejects(client.getJson("latest.json"), SyntaxError);
+		assert.equal(calls, 1);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("getBuffer retries on empty R2 response body and eventually succeeds", async () => {
 	const originalFetch = globalThis.fetch;
 	const payload = Buffer.from("snapshot-payload");

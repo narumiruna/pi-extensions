@@ -48,14 +48,9 @@ export class S3Client {
 			// Retry so the transient blip is absorbed instead of surfacing as a
 			// "pi-sync auto sync skipped" warning on every session start.
 			if (body.length > 0) {
-				try {
-					return { value: JSON.parse(body) as T, etag: normalizeEtag(object.headers.get("etag")), missing: false };
-				} catch (error) {
-					lastError = error;
-				}
-			} else {
-				lastError = new Error(`S3 GET returned an empty body for ${key}`);
+				return { value: JSON.parse(body) as T, etag: normalizeEtag(object.headers.get("etag")), missing: false };
 			}
+			lastError = new Error(`S3 GET returned an empty body for ${key}`);
 			if (attempt < maxAttempts) {
 				await sleep(250 * attempt);
 			}
