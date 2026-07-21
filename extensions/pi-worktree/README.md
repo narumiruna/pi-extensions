@@ -80,7 +80,7 @@ Switching uses Pi's public `SessionManager` and `ctx.switchSession()` APIs:
 3. Pi tears down the old cwd-bound runtime and creates the target runtime.
 4. The extension reports success only through the fresh replacement-session context.
 
-If the current session is completely empty, the extension creates a valid empty Pi session for the target. If an in-memory session contains conversation entries but has no persisted session file, switching is refused to avoid losing context.
+If the current session is completely empty, the extension creates a valid empty Pi session for the target. If the current session is ephemeral (`--no-session`), the extension copies its active conversation branch into a persisted target session so the workspace switch does not lose context.
 
 A successfully created Git worktree is never rolled back merely because Pi session switching fails. Re-run `/worktree` and choose **Switch worktree** after resolving the reported Pi/session issue.
 

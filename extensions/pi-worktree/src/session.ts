@@ -64,8 +64,11 @@ export function createTargetSession(ctx: ExtensionCommandContext, targetPath: st
 	}
 
 	if (ctx.sessionManager.getEntries().length > 0) {
-		throw new Error(
-			"The current Pi session is not persisted but contains conversation entries; switching was refused to prevent context loss.",
+		return writeTargetSession(
+			targetPath,
+			ctx.sessionManager.getBranch(),
+			undefined,
+			ctx.sessionManager.getLeafId(),
 		);
 	}
 

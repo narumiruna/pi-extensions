@@ -149,22 +149,49 @@ test("switchToWorktree creates a readable empty v3 session when no entries exist
 	}
 });
 
-test("switchToWorktree rejects non-persisted conversation content", async () => {
-	let switchCalls = 0;
+test("switchToWorktree preserves a non-persisted conversation in the target session", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-ephemeral-session-"));
+	const sourceCwd = join(root, "source");
+	const targetCwd = join(root, "target");
+	const source = SessionManager.inMemory(sourceCwd);
+	const activeUser = source.appendMessage({
+		role: "user",
+		content: "continue ephemeral work",
+		timestamp: Date.now(),
+	});
+	source.appendMessage(assistant("ephemeral answer"));
+	source.appendMessage({ role: "user", content: "abandoned branch", timestamp: Date.now() });
+	source.branch(activeUser);
+
+	let switchedPath = "";
 	const context = createMockContext({
-		sessionManager: {
-			getSessionFile: () => undefined,
-			getEntries: () => [{ type: "message" }],
-		},
-		switchSession: async () => {
-			switchCalls += 1;
+		cwd: sourceCwd,
+		hasUI: true,
+		sessionManager: source,
+		switchSession: async (
+			path: string,
+			options: { withSession?: (ctx: unknown) => Promise<void> },
+		) => {
+			switchedPath = path;
+			await options.withSession?.({ cwd: targetCwd, ui: { notify() {} } });
 			return { cancelled: false };
 		},
 	});
 
-	assert.equal(await switchToWorktree(context.ctx, "/target"), "failed");
-	assert.equal(switchCalls, 0);
-	assert.match(context.notifications.at(-1)?.message ?? "", /not persisted.*conversation/i);
+	try {
+		assert.equal(await switchToWorktree(context.ctx, targetCwd), "switched");
+		const switched = SessionManager.open(switchedPath);
+		assert.equal(switched.getCwd(), targetCwd);
+		assert.equal(switched.getLeafId(), activeUser);
+		assert.deepEqual(
+			switched.buildSessionContext().messages.map((message) => message.role),
+			["user"],
+		);
+		const message = switched.buildSessionContext().messages[0];
+		assert.equal(message?.role === "user" ? message.content : undefined, "continue ephemeral work");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("successful switching never uses the stale source UI after replacement", async () => {
