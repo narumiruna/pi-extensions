@@ -44,12 +44,6 @@ export const ACCOUNTS_STATUS_KEY = "accounts";
 export const FAIL_CLOSED_API_KEY = RUNTIME_FAIL_CLOSED_API_KEY;
 export const DEFAULT_PI_LOGIN_LABEL = "(default pi login)";
 
-export type CommandArgumentCompletion = {
-	value: string;
-	label: string;
-	description?: string;
-};
-
 export type AccountsDependencies = {
 	store?: AccountStore;
 	providers?: readonly AccountProviderAdapter[];
@@ -140,8 +134,7 @@ export default function accountsExtension(
 	};
 
 	const accountCommand = createAccountCommand(pi, store, adapters, syncProvider);
-	pi.registerCommand("account", accountCommand);
-	registerCodexCompatibilityCommands(pi, store, adapters, syncProvider);
+	pi.registerCommand("accounts", accountCommand);
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (migrationNotice) {
@@ -212,66 +205,311 @@ function createAccountCommand(
 	) => Promise<EnsureActiveProviderAuthResult>,
 ) {
 	return {
-		description: "Manage named subscription OAuth accounts",
-		getArgumentCompletions: (prefix: string) => completeAccountArguments(prefix, store),
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			const [subcommand, providerArg, ...rest] = splitArguments(args);
-			if (subcommand === "list") {
-				const providerId = providerArg ? parseProviderId(providerArg) : undefined;
-				if (providerArg && !providerId) return notifyUnsupportedProvider(ctx, providerArg);
-				await listAccounts(ctx, store, adapters, providerId);
-				return;
-			}
-			if (!subcommand || !["login", "switch", "remove"].includes(subcommand)) {
-				ctx.ui.notify(
-					"Usage: /account list [provider] | login <provider> <name> | switch <provider> [name] | remove <provider> <name>",
-					"warning",
-				);
-				return;
-			}
-			const providerId = providerArg ? parseProviderId(providerArg) : undefined;
-			if (!providerId) return notifyUnsupportedProvider(ctx, providerArg ?? "");
-			const adapter = requireAdapter(adapters, providerId);
-			const nameArg = rest.join(" ").trim();
-			if (subcommand === "login") {
-				await loginAccount(pi, ctx, store, adapter, nameArg, syncProvider);
-				return;
-			}
-			if (subcommand === "switch") {
-				await switchAccount(ctx, store, adapter, nameArg, syncProvider);
-				return;
-			}
-			await removeAccount(ctx, store, adapter, nameArg, syncProvider);
+		description: "Open the interactive subscription account manager",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			await showAccountsMenu(pi, ctx, store, adapters, syncProvider);
 		},
 	};
 }
 
-function registerCodexCompatibilityCommands(
+const LOGIN_ACTION = "Login new account";
+const REMOVE_ACTION = "Remove account";
+const SWITCH_PROVIDER_ACTION = "Switch provider account";
+const SWITCH_ANOTHER_PROVIDER_ACTION = "Switch another provider’s account";
+
+type ProviderMenuState = {
+	id: AccountProviderId;
+	adapter: AccountProviderAdapter;
+	active: string | undefined;
+	accounts: Record<string, StoredOAuthCredential>;
+};
+
+async function showAccountsMenu(
 	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
 	store: AccountStore,
 	adapters: Map<AccountProviderId, AccountProviderAdapter>,
 	syncProvider: (
 		providerId: AccountProviderId,
 		ctx: ExtensionContext,
 	) => Promise<EnsureActiveProviderAuthResult>,
-): void {
-	const adapter = requireAdapter(adapters, "openai-codex");
-	pi.registerCommand("codex-login", {
-		description: "Compatibility alias for /account login openai-codex",
-		handler: async (args, ctx) => loginAccount(pi, ctx, store, adapter, args, syncProvider),
-	});
-	pi.registerCommand("codex-account", {
-		description: "Compatibility alias for /account switch openai-codex",
-		getArgumentCompletions: (prefix) =>
-			completeProviderAccounts(prefix, store, "openai-codex", true),
-		handler: async (args, ctx) => switchAccount(ctx, store, adapter, args, syncProvider),
-	});
-	pi.registerCommand("codex-logout", {
-		description: "Compatibility alias for /account remove openai-codex",
-		getArgumentCompletions: (prefix) =>
-			completeProviderAccounts(prefix, store, "openai-codex", false),
-		handler: async (args, ctx) => removeAccount(ctx, store, adapter, args, syncProvider),
-	});
+): Promise<void> {
+	if (!ctx.hasUI) {
+		ctx.ui.notify("/accounts requires interactive UI.", "error");
+		return;
+	}
+	const states = await readProviderMenuStates(store, adapters);
+	const currentProviderId = toProviderId(ctx.model?.provider);
+	const currentState = currentProviderId ? states.get(currentProviderId) : undefined;
+	const hasAnyStoredAccount = [...states.values()].some((state) => accountNames(state).length > 0);
+	const action = await ctx.ui.select(
+		formatAccountsMenuTitle(ctx, states, hasAnyStoredAccount),
+		buildAccountsMenuActions(states, currentState, hasAnyStoredAccount),
+	);
+	if (!action) return;
+	if (action === LOGIN_ACTION) {
+		await showLoginAccount(pi, ctx, store, adapters, syncProvider);
+		return;
+	}
+	if (action === REMOVE_ACTION) {
+		await showRemoveAccount(ctx, store, adapters, syncProvider);
+		return;
+	}
+	if (currentState && action === switchCurrentProviderAction(currentState.adapter)) {
+		await showSwitchProviderAccount(ctx, store, currentState.adapter, syncProvider);
+		return;
+	}
+	if (action === SWITCH_ANOTHER_PROVIDER_ACTION || action === SWITCH_PROVIDER_ACTION) {
+		const excludeProviderId =
+			action === SWITCH_ANOTHER_PROVIDER_ACTION ? currentProviderId : undefined;
+		const provider = await selectProviderWithAccounts(ctx, states, excludeProviderId);
+		if (provider) await showSwitchProviderAccount(ctx, store, provider.adapter, syncProvider);
+	}
+}
+
+async function readProviderMenuStates(
+	store: AccountStore,
+	adapters: Map<AccountProviderId, AccountProviderAdapter>,
+): Promise<Map<AccountProviderId, ProviderMenuState>> {
+	const states = new Map<AccountProviderId, ProviderMenuState>();
+	for (const id of SUPPORTED_PROVIDER_IDS) {
+		const state = await store.readProviderAsync(id);
+		states.set(id, {
+			id,
+			adapter: requireAdapter(adapters, id),
+			active: state.active,
+			accounts: state.accounts,
+		});
+	}
+	return states;
+}
+
+function formatAccountsMenuTitle(
+	ctx: ExtensionCommandContext,
+	states: Map<AccountProviderId, ProviderMenuState>,
+	hasAnyStoredAccount: boolean,
+): string {
+	if (!hasAnyStoredAccount) return "Accounts\n\nNo saved accounts yet.\n\nWhat do you want to do?";
+	const activeLines = sortedProviderStates(states).map(
+		(state) => `  ${state.adapter.displayName}: ${state.active ?? "default"}`,
+	);
+	return [
+		"Accounts",
+		"",
+		"Current model:",
+		`  ${formatCurrentModel(ctx)}`,
+		"",
+		"Active accounts:",
+		...activeLines,
+		"",
+		"What do you want to do?",
+	].join("\n");
+}
+
+function formatCurrentModel(ctx: ExtensionCommandContext): string {
+	if (!ctx.model) return "(none)";
+	const providerId = toProviderId(ctx.model.provider);
+	const providerName = providerId ? providerDisplayName(providerId) : ctx.model.provider;
+	return `${providerName} / ${ctx.model.id}`;
+}
+
+function buildAccountsMenuActions(
+	states: Map<AccountProviderId, ProviderMenuState>,
+	currentState: ProviderMenuState | undefined,
+	hasAnyStoredAccount: boolean,
+): string[] {
+	if (!hasAnyStoredAccount) return [LOGIN_ACTION];
+	const currentHasAccounts = currentState ? accountNames(currentState).length > 0 : false;
+	if (currentState && currentHasAccounts) {
+		const actions = [
+			switchCurrentProviderAction(currentState.adapter),
+			LOGIN_ACTION,
+			REMOVE_ACTION,
+		];
+		if (providerStatesWithAccounts(states, currentState.id).length > 0) {
+			actions.push(SWITCH_ANOTHER_PROVIDER_ACTION);
+		}
+		return actions;
+	}
+	return [
+		LOGIN_ACTION,
+		currentState ? SWITCH_ANOTHER_PROVIDER_ACTION : SWITCH_PROVIDER_ACTION,
+		REMOVE_ACTION,
+	];
+}
+
+function switchCurrentProviderAction(adapter: AccountProviderAdapter): string {
+	return `Switch ${adapter.displayName} account`;
+}
+
+async function showLoginAccount(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	store: AccountStore,
+	adapters: Map<AccountProviderId, AccountProviderAdapter>,
+	syncProvider: (
+		providerId: AccountProviderId,
+		ctx: ExtensionContext,
+	) => Promise<EnsureActiveProviderAuthResult>,
+): Promise<void> {
+	const adapter = await selectProvider(
+		ctx,
+		sortedProviderStates(await readProviderMenuStates(store, adapters)),
+	);
+	if (!adapter) return;
+	const name = await ctx.ui.input(`Name this ${adapter.displayName} account:`, "work");
+	if (name === undefined) return;
+	await loginAccount(pi, ctx, store, adapter, name, syncProvider);
+}
+
+async function showSwitchProviderAccount(
+	ctx: ExtensionCommandContext,
+	store: AccountStore,
+	adapter: AccountProviderAdapter,
+	syncProvider: (
+		providerId: AccountProviderId,
+		ctx: ExtensionContext,
+	) => Promise<EnsureActiveProviderAuthResult>,
+): Promise<void> {
+	const state = await store.readProviderAsync(adapter.id);
+	const options = switchAccountOptions(state.active, Object.keys(state.accounts));
+	if (options.length <= 1) {
+		ctx.ui.notify(`${adapter.displayName} has no saved accounts to switch.`, "info");
+		return;
+	}
+	const selected = await ctx.ui.select(`Switch ${adapter.displayName} account:`, options);
+	if (!selected) return;
+	const accountName = stripActiveMarker(selected);
+	if (accountName === (state.active ?? "default")) {
+		ctx.ui.notify(`${adapter.displayName} account "${accountName}" is already active.`, "info");
+		return;
+	}
+	await switchAccount(ctx, store, adapter, accountName, syncProvider);
+}
+
+async function selectProviderWithAccounts(
+	ctx: ExtensionCommandContext,
+	states: Map<AccountProviderId, ProviderMenuState>,
+	excludeProviderId?: AccountProviderId,
+): Promise<ProviderMenuState | undefined> {
+	const candidates = providerStatesWithAccounts(states, excludeProviderId);
+	const adapter = await selectProvider(ctx, candidates);
+	return adapter ? candidates.find((state) => state.id === adapter.id) : undefined;
+}
+
+async function selectProvider(
+	ctx: ExtensionCommandContext,
+	states: readonly ProviderMenuState[],
+): Promise<AccountProviderAdapter | undefined> {
+	const labels = states.map((state) => state.adapter.displayName);
+	const selected = await ctx.ui.select("Select provider:", labels);
+	return states.find((state) => state.adapter.displayName === selected)?.adapter;
+}
+
+async function showRemoveAccount(
+	ctx: ExtensionCommandContext,
+	store: AccountStore,
+	adapters: Map<AccountProviderId, AccountProviderAdapter>,
+	syncProvider: (
+		providerId: AccountProviderId,
+		ctx: ExtensionContext,
+	) => Promise<EnsureActiveProviderAuthResult>,
+): Promise<void> {
+	const states = await readProviderMenuStates(store, adapters);
+	const options = removeAccountOptions(states, toProviderId(ctx.model?.provider));
+	if (options.length === 0) {
+		ctx.ui.notify("No saved accounts to remove.", "info");
+		return;
+	}
+	const selected = await ctx.ui.select(
+		"Remove account:",
+		options.map((option) => option.label),
+	);
+	const option = options.find((item) => item.label === selected);
+	if (!option) return;
+	const confirmed = await ctx.ui.confirm(
+		"Remove account",
+		`Remove ${option.adapter.displayName} account "${option.accountName}"?`,
+	);
+	if (!confirmed) return;
+	await removeAccount(ctx, store, option.adapter, option.accountName, syncProvider);
+}
+
+function sortedProviderStates(
+	states: Map<AccountProviderId, ProviderMenuState>,
+): ProviderMenuState[];
+function sortedProviderStates(states: readonly ProviderMenuState[]): ProviderMenuState[];
+function sortedProviderStates(
+	states: Map<AccountProviderId, ProviderMenuState> | readonly ProviderMenuState[],
+): ProviderMenuState[] {
+	const values = Array.isArray(states) ? [...states] : [...states.values()];
+	return values.sort((left, right) =>
+		left.adapter.displayName.localeCompare(right.adapter.displayName),
+	);
+}
+
+function providerStatesWithAccounts(
+	states: Map<AccountProviderId, ProviderMenuState>,
+	excludeProviderId?: AccountProviderId,
+): ProviderMenuState[] {
+	return sortedProviderStates(states).filter(
+		(state) => state.id !== excludeProviderId && accountNames(state).length > 0,
+	);
+}
+
+function accountNames(state: ProviderMenuState): string[] {
+	return Object.keys(state.accounts).sort();
+}
+
+function switchAccountOptions(activeName: string | undefined, names: string[]): string[] {
+	const active = activeName ?? "default";
+	const sortedNames = [...names].sort();
+	const options = [formatSwitchAccountOption(active, true)];
+	for (const name of sortedNames) {
+		if (name !== active) options.push(formatSwitchAccountOption(name, false));
+	}
+	if (active !== "default") options.push(formatSwitchAccountOption("default", false));
+	return options;
+}
+
+function formatSwitchAccountOption(name: string, active: boolean): string {
+	return active ? `✓ ${name}` : name;
+}
+
+function stripActiveMarker(value: string): string {
+	return value.replace(/^✓\s+/, "");
+}
+
+function removeAccountOptions(
+	states: Map<AccountProviderId, ProviderMenuState>,
+	currentProviderId?: AccountProviderId,
+): Array<{ label: string; adapter: AccountProviderAdapter; accountName: string }> {
+	const providerStates = providerStatesWithAccounts(states);
+	if (currentProviderId) {
+		const currentIndex = providerStates.findIndex((state) => state.id === currentProviderId);
+		if (currentIndex > 0) {
+			const [current] = providerStates.splice(currentIndex, 1);
+			if (current) providerStates.unshift(current);
+		}
+	}
+	return providerStates.flatMap((state) =>
+		accountNames(state).map((accountName) => ({
+			label: `${state.adapter.displayName} · ${accountName}`,
+			adapter: state.adapter,
+			accountName,
+		})),
+	);
+}
+
+function providerDisplayName(providerId: AccountProviderId): string {
+	switch (providerId) {
+		case "anthropic":
+			return "Anthropic";
+		case "github-copilot":
+			return "GitHub Copilot";
+		case "openai-codex":
+			return "OpenAI Codex";
+	}
 }
 
 async function loginAccount(
@@ -294,6 +532,14 @@ async function loginAccount(
 	if (!ctx.hasUI) {
 		ctx.ui.notify("Account login requires interactive UI.", "error");
 		return;
+	}
+	const state = await store.readProviderAsync(adapter.id);
+	if (getOwnCredential(state.accounts, parsed.name)) {
+		const confirmed = await ctx.ui.confirm(
+			"Replace account",
+			`${adapter.displayName} account "${parsed.name}" already exists. Replace it?`,
+		);
+		if (!confirmed) return;
 	}
 	ctx.ui.notify(`Starting ${adapter.displayName} login for "${parsed.name}".`, "info");
 	try {
@@ -335,7 +581,7 @@ async function switchAccount(
 		const names = Object.keys(state.accounts).sort();
 		if (!ctx.hasUI) {
 			ctx.ui.notify(
-				`${adapter.displayName} accounts: ${[DEFAULT_PI_LOGIN_LABEL, ...names].join(", ")}. Use /account switch ${adapter.id} <name>.`,
+				`${adapter.displayName} accounts: ${[DEFAULT_PI_LOGIN_LABEL, ...names].join(", ")}. Use /accounts in interactive mode to switch accounts.`,
 				"info",
 			);
 			return;
@@ -418,90 +664,6 @@ async function removeAccount(
 	ctx.ui.notify(`Removed ${adapter.displayName} account "${parsed.name}".`, "info");
 }
 
-async function listAccounts(
-	ctx: ExtensionCommandContext,
-	store: AccountStore,
-	adapters: Map<AccountProviderId, AccountProviderAdapter>,
-	providerId?: AccountProviderId,
-): Promise<void> {
-	const ids = providerId ? [providerId] : SUPPORTED_PROVIDER_IDS;
-	const lines: string[] = [];
-	for (const id of ids) {
-		const state = await store.readProviderAsync(id);
-		const names = Object.keys(state.accounts).sort();
-		const rendered = names.length
-			? names.map((name) => (name === state.active ? `${name} (active)` : name)).join(", ")
-			: "(none)";
-		lines.push(`${requireAdapter(adapters, id).displayName}: ${rendered}`);
-	}
-	ctx.ui.notify(lines.join("\n"), "info");
-}
-
-export async function completeAccountArguments(
-	argumentPrefix: string,
-	store: AccountStore,
-): Promise<CommandArgumentCompletion[]> {
-	const hasTrailingSpace = /\s$/.test(argumentPrefix);
-	const tokens = splitArguments(argumentPrefix);
-	if (hasTrailingSpace) tokens.push("");
-	if (tokens.length <= 1) {
-		return continueCompletionValues(
-			filterCompletions(
-				["list", "login", "switch", "remove"].map((value) => ({ value, label: value })),
-				tokens[0] ?? "",
-			),
-		);
-	}
-	const subcommand = tokens[0];
-	if (!["list", "login", "switch", "remove"].includes(subcommand)) return [];
-	if (tokens.length === 2) {
-		const providerCompletions = prefixCompletionValues(
-			subcommand,
-			filterCompletions(
-				SUPPORTED_PROVIDER_IDS.map((id) => ({ value: id, label: id })),
-				tokens[1] ?? "",
-			),
-		);
-		return subcommand === "list"
-			? providerCompletions
-			: continueCompletionValues(providerCompletions);
-	}
-	if ((subcommand === "switch" || subcommand === "remove") && tokens.length === 3) {
-		const providerId = parseProviderId(tokens[1] ?? "");
-		return providerId
-			? prefixCompletionValues(
-					`${subcommand} ${providerId}`,
-					await completeProviderAccounts(
-						tokens[2] ?? "",
-						store,
-						providerId,
-						subcommand === "switch",
-					),
-				)
-			: [];
-	}
-	return [];
-}
-
-async function completeProviderAccounts(
-	prefix: string,
-	store: AccountStore,
-	providerId: AccountProviderId,
-	includeDefault: boolean,
-): Promise<CommandArgumentCompletion[]> {
-	let names: string[] = [];
-	try {
-		names = Object.keys((await store.readAsync()).providers[providerId]?.accounts ?? {}).sort();
-	} catch {
-		return [];
-	}
-	const items: CommandArgumentCompletion[] = includeDefault
-		? [{ value: "default", label: DEFAULT_PI_LOGIN_LABEL, description: "Use Pi's built-in login" }]
-		: [];
-	for (const name of names) items.push({ value: name, label: name });
-	return filterCompletions(items, prefix.trim());
-}
-
 function validateProviderSet(providers: readonly AccountProviderAdapter[]): void {
 	const ids = new Set<AccountProviderId>();
 	for (const provider of providers) {
@@ -522,45 +684,12 @@ function requireAdapter(
 	return adapter;
 }
 
-function parseProviderId(value: string): AccountProviderId | undefined {
-	return isAccountProviderId(value) ? value : undefined;
-}
-
 function toProviderId(value: string | undefined): AccountProviderId | undefined {
 	return value && isAccountProviderId(value) ? value : undefined;
 }
 
 function isAccountProviderId(value: string): value is AccountProviderId {
 	return (SUPPORTED_PROVIDER_IDS as readonly string[]).includes(value);
-}
-
-function notifyUnsupportedProvider(ctx: ExtensionCommandContext, provider: string): void {
-	ctx.ui.notify(
-		`Unsupported account provider "${provider || "(missing)"}". Supported providers: ${SUPPORTED_PROVIDER_IDS.join(", ")}.`,
-		"warning",
-	);
-}
-
-function splitArguments(value: string): string[] {
-	return value.trim() ? value.trim().split(/\s+/) : [];
-}
-
-function filterCompletions(
-	items: CommandArgumentCompletion[],
-	prefix: string,
-): CommandArgumentCompletion[] {
-	return prefix ? items.filter((item) => item.value.startsWith(prefix)) : items;
-}
-
-function prefixCompletionValues(
-	prefix: string,
-	items: CommandArgumentCompletion[],
-): CommandArgumentCompletion[] {
-	return items.map((item) => ({ ...item, value: `${prefix} ${item.value}` }));
-}
-
-function continueCompletionValues(items: CommandArgumentCompletion[]): CommandArgumentCompletion[] {
-	return items.map((item) => ({ ...item, value: `${item.value} ` }));
 }
 
 function isDefaultPiLoginArg(value: string): boolean {
