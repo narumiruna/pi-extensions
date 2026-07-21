@@ -8,7 +8,7 @@ It uses Pi's built-in providers and provider-owned OAuth implementations. A name
 
 ## ✨ Features
 
-- Manages OpenAI Codex, Anthropic Claude Pro/Max, and GitHub Copilot OAuth accounts through one `/account` command.
+- Manages OpenAI Codex, Anthropic Claude Pro/Max, and GitHub Copilot OAuth accounts through one interactive `/accounts` command.
 - Keeps an independent active named account—or Pi's built-in login—for every provider.
 - Stores complete provider-owned OAuth credentials, including GitHub Enterprise and available-model metadata.
 - Refreshes rotating OAuth credentials under a cross-process file lock.
@@ -19,7 +19,6 @@ It uses Pi's built-in providers and provider-owned OAuth implementations. A name
 - Restores the exact provider registration that existed before the account overlay.
 - Invalidates cached Codex WebSockets only when the applied Codex identity changes.
 - Migrates released `pi-codex-accounts.json` state without deleting the rollback source.
-- Retains `/codex-login`, `/codex-account`, and `/codex-logout` as temporary compatibility aliases.
 
 ## 🔌 Supported providers
 
@@ -34,7 +33,7 @@ It uses Pi's built-in providers and provider-owned OAuth implementations. A name
 
 ## 📦 Install
 
-`pi-codex-accounts` remains available during the `pi-accounts` soak period, but do not load both packages together; they register the same Codex compatibility commands and can refresh the same rotating credential independently. To move one Pi installation to the new package:
+`pi-codex-accounts` remains available during the `pi-accounts` soak period, but do not load both packages together; they can manage and refresh the same rotating Codex credential independently. To move one Pi installation to the new package:
 
 ```bash
 pi uninstall npm:@narumitw/pi-codex-accounts
@@ -55,59 +54,50 @@ pi -e ./extensions/pi-accounts
 
 ## 🚀 Usage
 
-List every provider or one provider:
+Open the interactive account manager:
 
 ```text
-/account list
-/account list anthropic
+/accounts
 ```
 
-Login and store a named subscription account (`default` is reserved):
+The command requires interactive UI. Any extra text after `/accounts` is ignored so the entry point stays singular.
+
+When no accounts are saved yet, the menu starts with login:
 
 ```text
-/account login openai-codex work
-/account login anthropic personal
-/account login github-copilot enterprise
+Accounts
+
+No saved accounts yet.
+
+What do you want to do?
+› Login new account
 ```
 
-Switch one provider without changing another provider's active account:
+After accounts exist, `/accounts` shows the current model and every supported provider's active account before offering actions:
 
 ```text
-/account switch openai-codex work
-/account switch anthropic personal
-/account switch github-copilot enterprise
+Accounts
+
+Current model:
+  Anthropic / claude-sonnet-4
+
+Active accounts:
+  Anthropic: work
+  GitHub Copilot: enterprise
+  OpenAI Codex: default
+
+What do you want to do?
+› Switch Anthropic account
+  Login new account
+  Remove account
+  Switch another provider’s account
 ```
 
-Omit the account name in interactive mode to open a selector:
+Login follows Pi's built-in `/login` style: choose a provider, enter a named account, then complete that provider's OAuth flow. `default` is reserved for Pi's built-in login. Reusing an existing provider/account name asks before replacing the stored credential.
 
-```text
-/account switch anthropic
-```
+Switching the current model provider is the primary flow. Switching a different provider is explicit: choose **Switch another provider’s account**, choose the provider, then choose the account. Choosing `default` restores Pi's built-in login for that provider. `/accounts` manages account identity only; it does not switch models except when login succeeds while the current model is still `unknown`, where it selects that provider's default model as onboarding help.
 
-Return only one provider to Pi's built-in login:
-
-```text
-/account switch anthropic default
-```
-
-Remove a named account:
-
-```text
-/account remove github-copilot enterprise
-```
-
-Provider and stored-account arguments offer completion. Press Tab repeatedly to step through the subcommand, provider, and stored account without adding spaces manually. Mutating commands always require an explicit provider ID.
-
-### Temporary Codex aliases
-
-These commands use exactly the same `openai-codex` state and runtime path as `/account`:
-
-```text
-/codex-login work
-/codex-account work
-/codex-account default
-/codex-logout work
-```
+Removing an account lists named accounts as `Provider · account`, asks for confirmation, then removes the credential. Removing an active account automatically restores that provider to Pi's built-in login.
 
 ## 🔐 Auth and fail-closed behavior
 
