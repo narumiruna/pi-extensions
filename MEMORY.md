@@ -91,6 +91,7 @@
 
 ## TASTE
 
+- Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.
 - Prefer validating extensions against the latest Pi release only; do not maintain compatibility matrices for older Pi versions.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.
 - Keep a predecessor extension active while its successor soaks; move it to `deprecated/` only after an explicit follow-up decision.
