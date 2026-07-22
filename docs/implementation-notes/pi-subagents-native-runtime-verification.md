@@ -2,6 +2,8 @@
 
 Date: 2026-07-11
 
+> Historical verification record. On 2026-07-23, the detached `subagent_wait` tool was removed and completion delivery gained opt-in batched `auto-resume`; the original wait/`triggerTurn: false` assertions below describe the earlier runtime.
+
 ## Automated evidence
 
 - `npm run check`: passed with Biome, extension boundaries, every workspace typecheck, and 293 tests.

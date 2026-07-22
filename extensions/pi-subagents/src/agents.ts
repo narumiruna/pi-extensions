@@ -47,9 +47,12 @@ export interface SubagentAgentConfig {
 
 export type SubagentTransportKind = "subprocess" | "in-process";
 
+export type CompletionDelivery = "next-turn" | "auto-resume";
+
 export interface SubagentRuntimeSettings {
 	enabled?: boolean;
 	transport?: SubagentTransportKind;
+	completionDelivery?: CompletionDelivery;
 	maxAgents?: number;
 	maxActiveTurns?: number;
 	maxDepth?: number;

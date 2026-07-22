@@ -3,7 +3,12 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { discoverAgents, type AgentScope, isThinkingLevel } from "./agents.js";
+import {
+	type CompletionDelivery,
+	discoverAgents,
+	type AgentScope,
+	isThinkingLevel,
+} from "./agents.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
@@ -29,27 +34,45 @@ const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
 });
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 const MAX_COMPLETION_ERROR_BYTES = 512;
+const MAX_COMPLETIONS_PER_MESSAGE = 16;
+const COMPLETION_BATCH_DELAY_MS = 10;
 
 export interface StatefulSubagentDependencies {
 	createInProcessSession?: ChildSessionFactory;
+	workspaceManager?: WorkspaceManager;
+}
+
+export interface StatefulSubagentController {
+	getCompletionDelivery(): CompletionDelivery;
+	setCompletionDelivery(value: CompletionDelivery): void;
 }
 
 export function registerStatefulSubagents(
 	pi: ExtensionAPI,
 	dependencies: StatefulSubagentDependencies = {},
-): void {
+): StatefulSubagentController {
 	const settings = readSubagentSettings()?.stateful ?? {};
-	if (settings.enabled === false) return;
+	let completionDelivery = resolveCompletionDelivery(settings.completionDelivery);
+	let completionBroker: CompletionDeliveryBroker | undefined;
+	const controller: StatefulSubagentController = {
+		getCompletionDelivery() {
+			return completionDelivery;
+		},
+		setCompletionDelivery(value) {
+			completionDelivery = value;
+			completionBroker?.setDelivery(value);
+		},
+	};
+	if (settings.enabled === false) return controller;
 
 	let registry: AgentRegistry | undefined;
 	let persistence: AgentPersistence | undefined;
 	let sweepTimer: NodeJS.Timeout | undefined;
 	let runtimeGeneration = 0;
-	const workspaceManager = new WorkspaceManager();
+	const workspaceManager = dependencies.workspaceManager ?? new WorkspaceManager();
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
 	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
-	const completionWaiters = new Map<string, number>();
 
 	const requireRegistry = () => {
 		if (!registry) throw new Error("Stateful subagents are not initialized for this session");
@@ -58,6 +81,8 @@ export function registerStatefulSubagents(
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++runtimeGeneration;
+		completionBroker?.close();
+		completionBroker = undefined;
 		parentRuntime.model = ctx.model;
 		parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(pi.getThinkingLevel());
 		const owner =
@@ -69,6 +94,18 @@ export function registerStatefulSubagents(
 			maxStoredAgents: settings.maxStoredAgents,
 		});
 		persistence = sessionPersistence;
+		completionBroker = new CompletionDeliveryBroker(
+			pi,
+			ctx,
+			completionDelivery,
+			{
+				onDeliveryError: (error) => {
+					if (!ctx.hasUI) return;
+					const reason = error instanceof Error ? error.message : String(error);
+					ctx.ui.notify(`Subagent completion delivery failed: ${reason}`, "warning");
+				},
+			},
+		);
 		const transport =
 			resolveStatefulTransportKind(settings.transport) === "in-process"
 				? new InProcessTransport({
@@ -102,9 +139,7 @@ export function registerStatefulSubagents(
 			},
 			onTurnComplete: (completion) => {
 				if (generation !== runtimeGeneration) return;
-				if (!completionWaiters.has(completion.agent.id)) {
-					sendDetachedCompletion(pi, completion);
-				}
+				completionBroker?.enqueue(completion);
 			},
 		});
 		const restored = sessionPersistence
@@ -128,6 +163,14 @@ export function registerStatefulSubagents(
 		sweepTimer.unref();
 	});
 
+	pi.on("agent_start", () => {
+		completionBroker?.onParentTurnStart();
+	});
+
+	pi.on("agent_settled", () => {
+		completionBroker?.onParentSettled();
+	});
+
 	pi.on("model_select", (event) => {
 		parentRuntime.model = event.model;
 	});
@@ -138,6 +181,8 @@ export function registerStatefulSubagents(
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		runtimeGeneration++;
+		completionBroker?.close();
+		completionBroker = undefined;
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		for (const agentId of isolatedAgents.keys()) {
@@ -145,7 +190,6 @@ export function registerStatefulSubagents(
 		}
 		isolatedAgents.clear();
 		seenMessageIds.clear();
-		completionWaiters.clear();
 		let cleanupError: unknown;
 		try {
 			await workspaceManager.cleanupAll();
@@ -171,9 +215,9 @@ export function registerStatefulSubagents(
 			"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly.",
 			"Use a single subagent_spawn only for a concrete bounded subtask that can run independently alongside useful main-agent work and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
 			"Use one blocking subagent parallel call for multiple independent one-shot tasks; do not use repeated subagent_spawn calls when no reuse or overlap is needed.",
-			"After subagent_spawn returns, do useful non-overlapping local work immediately. Call subagent_wait sparingly, only when the immediate next critical-path step requires the result and is blocked until it arrives; do not wait repeatedly by reflex.",
+			"After subagent_spawn returns, do useful non-overlapping local work immediately. If no such work remains, briefly tell the user what subagent_spawn launched and end the response; completion delivery follows the configured policy.",
 			"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
-			"subagent_spawn completion is delivered automatically. Do not poll, wait forever, or spawn additional agents without a distinct need.",
+			"subagent_spawn completion is delivered automatically. Do not poll with subagent_list or subagent_messages, repeatedly check progress, or duplicate the delegated work.",
 		],
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),
@@ -241,7 +285,7 @@ export function registerStatefulSubagents(
 			if (workspace) isolatedAgents.set(agent.id, workspaceOwner);
 			return result(
 				agent,
-				`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately. Completion will arrive asynchronously; call subagent_wait only if the immediate next critical-path step is blocked on this result.`,
+				`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately, or briefly tell the user what was launched and end the response. Completion will arrive asynchronously according to the configured delivery policy; do not poll for progress.`,
 			);
 		},
 	});
@@ -330,35 +374,6 @@ export function registerStatefulSubagents(
 				content: [{ type: "text", text: truncateUtf8(text, DEFAULT_MAX_CONTEXT_BYTES).text }],
 				details: { messages: summaries },
 			};
-		},
-	});
-
-	pi.registerTool({
-		name: "subagent_wait",
-		label: "Wait for Subagent",
-		description:
-			"Wait for a stateful subagent turn without terminating it when the wait times out. Use sparingly, only when the immediate next critical-path step is blocked on this result.",
-		parameters: Type.Object({
-			agentId: Type.String(),
-			timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: 3_600_000, default: 30_000 })),
-		}),
-		async execute(_id, params, signal) {
-			const existing = requireRegistry().get(params.agentId);
-			const registered = existing?.state === "starting" || existing?.state === "running";
-			if (registered) {
-				completionWaiters.set(params.agentId, (completionWaiters.get(params.agentId) ?? 0) + 1);
-			}
-			try {
-				const waited = await requireRegistry().wait(params.agentId, params.timeoutMs, signal);
-				return result(
-					waited.agent,
-					waited.timedOut
-						? `Wait timed out; ${waited.agent.id} is ${waited.agent.state}.`
-						: formatFinal(waited.agent),
-				);
-			} finally {
-				if (registered) decrementWaiter(completionWaiters, params.agentId);
-			}
 		},
 	});
 
@@ -473,6 +488,8 @@ export function registerStatefulSubagents(
 			);
 		},
 	});
+
+	return controller;
 }
 
 export function assertNoSharedWriteConflict(
@@ -495,7 +512,7 @@ export function assertNoSharedWriteConflict(
 		if (isWriteCapable(activeConfig?.tools)) {
 			throw new Error(
 				`Write-capable subagent ${active.id} is already active in shared workspace ${cwd}. ` +
-					"For independent one-shot work, use subagent parallel mode. Otherwise wait or close the active agent; set allowConcurrentWrites only when overlapping writes are knowingly safe, or use workspaceMode worktree when repository isolation is needed.",
+					"For independent one-shot work, use subagent parallel mode. Otherwise let the active agent finish or close it; set allowConcurrentWrites only when overlapping writes are knowingly safe, or use workspaceMode worktree when repository isolation is needed.",
 			);
 		}
 	}
@@ -514,12 +531,6 @@ export function assertFollowUpWriteAllowed(
 export function isWriteCapable(tools: string[] | undefined): boolean {
 	if (!tools) return true;
 	return tools.some((tool) => ["bash", "write", "edit"].includes(tool));
-}
-
-function decrementWaiter(waiters: Map<string, number>, agentId: string): void {
-	const count = waiters.get(agentId);
-	if (count === undefined || count <= 1) waiters.delete(agentId);
-	else waiters.set(agentId, count - 1);
 }
 
 async function confirmProjectAgent(
@@ -570,7 +581,7 @@ function formatLine(agent: ManagedAgent): string {
 	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - agent.updatedAt) / 1000));
 	const actions =
 		agent.state === "running" || agent.state === "starting"
-			? "wait, interrupt, close"
+			? "interrupt, close"
 			: agent.state === "closed"
 				? "inspect"
 				: "send, close";
@@ -578,11 +589,6 @@ function formatLine(agent: ManagedAgent): string {
 	const unread = agent.mailbox.filter((message) => !message.readAt).length;
 	const indent = "  ".repeat(agent.depth);
 	return `${indent}${agent.id} ${agent.agent} ${agent.state} ${elapsedSeconds}s unread:${unread} [${actions}]${task}`;
-}
-
-function formatFinal(agent: ManagedAgent): string {
-	const last = agent.history.at(-1);
-	return last?.output || agent.error || `${agent.id} is ${agent.state}.`;
 }
 
 function summarizeAgent(agent: ManagedAgent) {
@@ -607,21 +613,188 @@ function summarizeAgent(agent: ManagedAgent) {
 	};
 }
 
-function sendDetachedCompletion(pi: ExtensionAPI, completion: AgentTurnCompletion): void {
-	const content = buildDetachedCompletionMessage(completion);
-	pi.sendMessage(
-		{
+interface CompletionMetadata {
+	agentId: string;
+	agent: string;
+	state: string;
+}
+
+interface CompletionMessage {
+	customType: "pi-subagent-completion";
+	content: string;
+	display: true;
+	details:
+		| CompletionMetadata
+		| {
+				completionCount: number;
+				completions: CompletionMetadata[];
+		  };
+}
+
+type CompletionContext = Pick<ExtensionContext, "hasPendingMessages" | "isIdle">;
+type CompletionPi = Pick<ExtensionAPI, "sendMessage">;
+
+export interface CompletionDeliveryBrokerOptions {
+	onDeliveryError?: (error: unknown) => void;
+}
+
+/**
+ * Coalesces detached completions so one bounded notification batch starts at
+ * most one root synthesis turn. The broker belongs to one parent session and
+ * must be closed when that session is replaced or shut down.
+ */
+export class CompletionDeliveryBroker {
+	private pending: AgentTurnCompletion[] = [];
+	private flushTimer?: NodeJS.Timeout;
+	private wakeInFlight = false;
+	private closed = false;
+
+	constructor(
+		private readonly pi: CompletionPi,
+		private readonly ctx: CompletionContext,
+		private delivery: CompletionDelivery,
+		private readonly options: CompletionDeliveryBrokerOptions = {},
+	) {}
+
+	enqueue(completion: AgentTurnCompletion): void {
+		if (this.closed) return;
+		this.pending.push(completion);
+		this.scheduleFlush();
+	}
+
+	setDelivery(value: CompletionDelivery): void {
+		this.delivery = value;
+		this.scheduleFlush();
+	}
+
+	onParentTurnStart(): void {
+		this.wakeInFlight = false;
+		this.scheduleFlush();
+	}
+
+	onParentSettled(): void {
+		this.wakeInFlight = false;
+		this.scheduleFlush();
+	}
+
+	flush(): void {
+		if (this.closed || this.pending.length === 0) return;
+		if (this.flushTimer) clearTimeout(this.flushTimer);
+		this.flushTimer = undefined;
+		if (this.delivery === "auto-resume" && !this.isRootIdle()) return;
+
+		const completions = this.pending.splice(0);
+		const batches = chunkCompletions(completions);
+		let canWake = this.shouldWakeRoot();
+		for (let index = 0; index < batches.length; index++) {
+			const triggerTurn = canWake && index === batches.length - 1;
+			const message = buildCompletionMessage(batches[index]);
+			if (triggerTurn) this.wakeInFlight = true;
+			try {
+				this.pi.sendMessage(message, { deliverAs: "steer", triggerTurn });
+			} catch (primaryError) {
+				if (triggerTurn) this.wakeInFlight = false;
+				canWake = false;
+				try {
+					this.pi.sendMessage(message, { deliverAs: "nextTurn", triggerTurn: false });
+				} catch (fallbackError) {
+					this.pending = [...batches.slice(index).flat(), ...this.pending];
+					try {
+						this.options.onDeliveryError?.(
+							new AggregateError(
+								[primaryError, fallbackError],
+								"Detached subagent completion delivery failed",
+							),
+						);
+					} catch {
+						// Delivery retention must survive a failing observer.
+					}
+					return;
+				}
+			}
+		}
+	}
+
+	close(): void {
+		this.closed = true;
+		if (this.flushTimer) clearTimeout(this.flushTimer);
+		this.flushTimer = undefined;
+		this.pending = [];
+	}
+
+	private scheduleFlush(): void {
+		if (this.closed || this.pending.length === 0 || this.flushTimer) return;
+		this.flushTimer = setTimeout(() => {
+			this.flushTimer = undefined;
+			this.flush();
+		}, COMPLETION_BATCH_DELAY_MS);
+	}
+
+	private isRootIdle(): boolean {
+		try {
+			return this.ctx.isIdle();
+		} catch {
+			return false;
+		}
+	}
+
+	private shouldWakeRoot(): boolean {
+		if (this.delivery !== "auto-resume" || this.wakeInFlight) return false;
+		try {
+			return !this.ctx.hasPendingMessages();
+		} catch {
+			return false;
+		}
+	}
+}
+
+function chunkCompletions(completions: AgentTurnCompletion[]): AgentTurnCompletion[][] {
+	const batches: AgentTurnCompletion[][] = [];
+	for (let index = 0; index < completions.length; index += MAX_COMPLETIONS_PER_MESSAGE) {
+		batches.push(completions.slice(index, index + MAX_COMPLETIONS_PER_MESSAGE));
+	}
+	return batches;
+}
+
+function buildCompletionMessage(completions: AgentTurnCompletion[]): CompletionMessage {
+	if (completions.length === 1) {
+		const completion = completions[0];
+		return {
 			customType: "pi-subagent-completion",
-			content,
+			content: buildDetachedCompletionMessage(completion),
 			display: true,
-			details: {
-				agentId: completion.agent.id,
-				agent: completion.agent.agent,
-				state: completion.agent.state,
-			},
+			details: completionMetadata(completion),
+		};
+	}
+	const content = truncateUtf8(
+		[
+			"Message Type: SUBAGENT_COMPLETION_BATCH",
+			`Completion Count: ${completions.length}`,
+			...completions.flatMap((completion, index) => [
+				"",
+				`--- Completion ${index + 1} of ${completions.length} ---`,
+				buildDetachedCompletionMessage(completion),
+			]),
+		].join("\n"),
+		DEFAULT_MAX_CONTEXT_BYTES,
+	).text;
+	return {
+		customType: "pi-subagent-completion",
+		content,
+		display: true,
+		details: {
+			completionCount: completions.length,
+			completions: completions.map(completionMetadata),
 		},
-		{ deliverAs: "steer", triggerTurn: false },
-	);
+	};
+}
+
+function completionMetadata(completion: AgentTurnCompletion): CompletionMetadata {
+	return {
+		agentId: completion.agent.id,
+		agent: completion.agent.agent,
+		state: completion.agent.state,
+	};
 }
 
 export function buildDetachedCompletionMessage(completion: AgentTurnCompletion): string {
@@ -676,6 +849,12 @@ export function resolveStatefulTransportKind(
 	value: "subprocess" | "in-process" | undefined,
 ): "subprocess" | "in-process" {
 	return value ?? "subprocess";
+}
+
+export function resolveCompletionDelivery(
+	value: CompletionDelivery | undefined,
+): CompletionDelivery {
+	return value ?? "next-turn";
 }
 
 function normalizeRuntimeThinkingLevel(value: string): ParentRuntimeSnapshot["thinkingLevel"] {

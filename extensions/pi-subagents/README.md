@@ -10,16 +10,16 @@ Use it to split independent research, planning, implementation, and review work 
 
 - Registers a `subagent` tool for single-agent, parallel, fan-in, and chained delegation.
 - Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
-- Registers detached stateful lifecycle tools by default; spawn returns immediately and completion is delivered asynchronously without starting a new root turn.
+- Registers detached stateful lifecycle tools by default; completion can stay queued for the next turn or opt into an idle root synthesis turn.
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
 - Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
-- Provides `/subagents:config` to persist per-agent tool allow-lists.
+- Provides `/subagents settings|status|help` for completion delivery plus `/subagents:config` for per-agent tool allow-lists.
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, `thinkingLevel`, abort propagation, and streaming progress.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
-- Provides addressable stateful agents with follow-up, wait, list, interrupt, close, context selection, and persistence.
+- Provides addressable stateful agents with follow-up, mailbox, list, interrupt, close, context selection, and persistence.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete bounded worker output in tool details and a concise result for the main agent.
 
@@ -84,8 +84,8 @@ Count-selection guidance:
   only for a concrete bounded subtask that can run independently alongside useful main-agent work
   and when parallel work, bounded context/output, independent review, a distinct model/tool profile,
   or workspace isolation provides concrete value. After spawning, do useful non-overlapping work
-  immediately. Call `subagent_wait` sparingly, only when the immediate next critical-path step needs
-  the result and is blocked until it arrives; do not wait repeatedly by reflex.
+  immediately. If none remains, briefly tell the user what was launched and end the response. Do not
+  poll lifecycle tools for progress or duplicate the delegated work.
 - Prefer **2–4 parallel read-only subagents** when a broad task naturally splits into independent
   branches that can each return a concise summary.
 - Exceed 4 tasks only when the branches are clearly distinct and worth the extra cost, while staying
@@ -202,22 +202,28 @@ Run a chain where each step receives the previous output:
 
 ## 🔁 Stateful agents
 
-Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects one bounded `pi-subagent-completion` message per settled turn. The message uses `deliverAs: "steer"` with `triggerTurn: false`, so an active root turn can consume it naturally.
+Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a critical-path policy: spawn only a concrete bounded subtask that can run independently alongside useful main-agent work, then do that non-overlapping work immediately. Use `subagent_wait` sparingly and only when the immediate next critical-path step requires the result and is blocked until it arrives. The extension does not start an autonomous recovery turn merely because delegated work remains live or completes. If the root turn has already ended, completion stays queued for the next turn instead of waking the root.
+Detached work follows a non-polling policy: spawn only a concrete bounded subtask that can run independently alongside useful main-agent work, then do that non-overlapping work immediately. If no useful non-overlapping work remains, briefly tell the user what was launched and end the response. Do not poll `subagent_list` or `subagent_messages` for progress, and do not duplicate the delegated work. The blocking `subagent` batch tool remains available when results are genuinely needed before the root can continue; detached lifecycle work intentionally has no `subagent_wait` tool.
 
 A single detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
-When `subagent_wait` starts while a turn is running, that wait consumes the turn's completion: the terminal output is returned by the tool and is not also injected as a duplicate asynchronous completion. Multiple active waiters may all receive the terminal result. A timed-out or aborted wait does not consume it, so later settlement still delivers the normal asynchronous completion. If a turn has already settled and queued its completion before a wait starts, the queued message cannot be retracted safely.
+`stateful.completionDelivery` controls settled completion delivery:
+
+- `"next-turn"` (default) preserves the previous behavior: use `deliverAs: "steer"` with `triggerTurn: false`. An active root can consume completion naturally; an idle root is not awakened.
+- `"auto-resume"` holds completion while the root is active, then requests one synthesis turn after the parent settles when no user or extension messages are already pending. Simultaneous completions share that turn, active work is not interrupted, and pending input suppresses the autonomous wake.
+
+Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. Session-generation checks, shutdown cleanup, batching, and the in-flight wake guard prevent stale or duplicate scheduling pressure, but they do not make completion delivery durable across process exit.
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
-Configure the runtime in `~/.pi/agent/pi-subagents.json`, then reload Pi:
+Use `/subagents settings` to change completion delivery interactively and apply it immediately. `/subagents status` shows configured versus runtime values, source, and path; `/subagents help` summarizes the commands. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
   "stateful": {
     "transport": "in-process",
+    "completionDelivery": "auto-resume",
     "maxAgents": 16,
     "maxActiveTurns": 4,
     "maxDepth": 3,
@@ -231,7 +237,7 @@ Configure the runtime in `~/.pi/agent/pi-subagents.json`, then reload Pi:
 }
 ```
 
-Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the extension registers:
+The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the extension registers:
 
 | Tool | Purpose |
 | --- | --- |
@@ -239,7 +245,6 @@ Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the ex
 | `subagent_send` | Send follow-up work to a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
 | `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
-| `subagent_wait` | Wait sparingly when the immediate next critical-path step is blocked on a result; timeout does not terminate the agent, and parent abort/user steering cancels only the wait. Already-terminal agents return immediately. |
 | `subagent_list` | List retained agents and lifecycle states. |
 | `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
 | `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |
@@ -269,7 +274,7 @@ Stateful execution uses a transport boundary:
 
 No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used. Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by the in-process transport.
 
-Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. For independent one-shot work, use batch parallel mode. Otherwise wait for or close the active agent, explicitly accept safe overlap with `allowConcurrentWrites`, or use an isolated worktree when repository isolation is actually needed.
+Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. For independent one-shot work, use batch parallel mode. Otherwise let the active agent finish or close it, explicitly accept safe overlap with `allowConcurrentWrites`, or use an isolated worktree when repository isolation is actually needed.
 
 Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. Isolated worktree agents are intentionally not restored after shutdown.
 

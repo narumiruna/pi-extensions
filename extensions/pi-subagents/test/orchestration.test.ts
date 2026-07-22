@@ -11,6 +11,7 @@ import {
 	assertFollowUpWriteAllowed,
 	isWriteCapable,
 	registerStatefulSubagents,
+	resolveCompletionDelivery,
 	resolveSpawnContextMode,
 	resolveStatefulTransportKind,
 } from "../src/stateful.js";
@@ -78,7 +79,7 @@ test("shared-workspace write classification and follow-up guards are conservativ
 		(error: unknown) => {
 			assert.match(String(error), /already active in shared workspace/);
 			assert.match(String(error), /subagent parallel mode/);
-			assert.match(String(error), /wait or close/);
+			assert.match(String(error), /let the active agent finish or close/);
 			assert.match(String(error), /allowConcurrentWrites/);
 			assert.match(String(error), /worktree/);
 			return true;
@@ -111,7 +112,6 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 				"subagent_send",
 				"subagent_message",
 				"subagent_messages",
-				"subagent_wait",
 				"subagent_list",
 				"subagent_interrupt",
 				"subagent_close",
@@ -144,9 +144,8 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			/single subagent_spawn.*isolation or specialization/i,
 		);
 		assert.match(spawnTool.promptGuidelines.join("\n"), /useful non-overlapping.*immediately/i);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /subagent_wait.*sparingly/i);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /immediate.*critical-path.*blocked/i);
-		assert.doesNotMatch(spawnTool.promptGuidelines.join("\n"), /rather than yielding/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /tell the user.*end the response/i);
+		assert.match(spawnTool.promptGuidelines.join("\n"), /do not poll.*subagent_list/i);
 		assert.match(spawnTool.promptGuidelines.join("\n"), /synthesize available.*completion/i);
 		for (const guideline of spawnTool.promptGuidelines) {
 			assert.match(
@@ -155,11 +154,6 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 				`flattened spawn guideline must identify subagent_spawn: ${guideline}`,
 			);
 		}
-		const waitTool = mock.tools.find((tool) => tool.name === "subagent_wait") as {
-			description: string;
-		};
-		assert.match(waitTool.description, /use sparingly/i);
-		assert.match(waitTool.description, /immediate next critical-path step is blocked/i);
 		const originalDepth = process.env.PI_SUBAGENT_DEPTH;
 		process.env.PI_SUBAGENT_DEPTH = "1";
 		try {
@@ -227,14 +221,17 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 	}
 });
 
-test("stateful settings validate transport and bounded runtime options", () => {
+test("stateful settings validate transport, completion delivery, and bounded runtime options", () => {
 	assert.equal(resolveStatefulTransportKind(undefined), "subprocess");
 	assert.equal(resolveStatefulTransportKind("in-process"), "in-process");
+	assert.equal(resolveCompletionDelivery(undefined), "next-turn");
+	assert.equal(resolveCompletionDelivery("auto-resume"), "auto-resume");
 	assert.deepEqual(
 		normalizeSubagentSettings({
 			stateful: {
 				enabled: true,
 				transport: "in-process",
+				completionDelivery: "auto-resume",
 				maxAgents: 8,
 				maxDepth: 2,
 				maxChildrenPerAgent: 3,
@@ -247,6 +244,7 @@ test("stateful settings validate transport and bounded runtime options", () => {
 			stateful: {
 				enabled: true,
 				transport: "in-process",
+				completionDelivery: "auto-resume",
 				maxAgents: 8,
 				maxDepth: 2,
 				maxChildrenPerAgent: 3,
@@ -259,6 +257,10 @@ test("stateful settings validate transport and bounded runtime options", () => {
 		stateful: { transport: "subprocess" },
 	});
 	assert.equal(normalizeSubagentSettings({ stateful: { transport: "native" } }), undefined);
+	assert.equal(
+		normalizeSubagentSettings({ stateful: { completionDelivery: "always" } }),
+		undefined,
+	);
 	assert.equal(normalizeSubagentSettings({ stateful: { maxAgents: 0 } }), undefined);
 	assert.equal(normalizeSubagentSettings({ stateful: { maxAgents: 1.5 } }), undefined);
 	assert.deepEqual(normalizeSubagentSettings({ stateful: { maxDepth: 0 } }), {

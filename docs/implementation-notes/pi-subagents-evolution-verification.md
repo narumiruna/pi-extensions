@@ -2,6 +2,8 @@
 
 Date: 2026-07-11
 
+> Historical verification record. On 2026-07-23, detached waiting was removed and completion delivery gained opt-in batched `auto-resume`; wait-based smoke details below describe the earlier tool surface.
+
 ## Release gates
 
 The implementation is organized as independently reversible modules:
