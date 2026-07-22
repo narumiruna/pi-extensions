@@ -1,7 +1,4 @@
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_BASE_URL,
 	type LangfuseConfig,
@@ -18,12 +15,10 @@ interface ExtensionDependencies {
 	createBackend(config: LangfuseConfig): Promise<TraceBackend>;
 }
 
-const COMMAND_COMPLETIONS = [
-	{ value: "status", label: "status", description: "Show Langfuse tracing status" },
-	{ value: "flush", label: "flush", description: "Export all completed traces now" },
-	{ value: "help", label: "help", description: "Show Langfuse command help" },
-	{ value: "init", label: "init", description: "Interactively create or update config" },
-];
+const FLUSH_ACTION = "Flush completed traces for this session";
+const SET_UP_ACTION = "Set up Langfuse for this Pi agent directory (restart required)";
+const UPDATE_ACTION = "Update Langfuse for this Pi agent directory (restart required)";
+const HELP_ACTION = "Show setup and privacy help";
 
 export function createLangfuseExtension(
 	dependencies: Partial<ExtensionDependencies> = {},
@@ -42,93 +37,87 @@ export function createLangfuseExtension(
 		let activeConfig: LangfuseConfig | undefined;
 		let configPath: string | undefined;
 		let initializationError: string | undefined;
+		let hasStoredConfig = false;
+		let configurationNotice: string | undefined;
+		let sessionGeneration = 0;
 
 		pi.registerCommand("langfuse", {
-			description: "Manage Langfuse tracing and configuration",
-			getArgumentCompletions: (prefix) => {
-				const normalized = prefix.trimStart().toLowerCase();
-				if (/\s/.test(normalized)) return null;
-				const matches = COMMAND_COMPLETIONS.filter((item) => item.value.startsWith(normalized));
-				return matches.length > 0 ? matches : null;
-			},
-			handler: async (args, ctx) => {
-				const action = args.trim().toLowerCase() || "status";
-				if (action === "status") {
-					if (activeConfig) {
-						ctx.ui.notify(
-							[
-								"Langfuse tracing is enabled.",
-								`Endpoint: ${activeConfig.baseUrl}`,
-								`Content capture: ${activeConfig.captureContent ? "enabled" : "disabled"}`,
-								`Configuration: ${configPath ?? "unknown"}`,
-							].join("\n"),
-							"info",
-						);
-						return;
-					}
+			description: "Open interactive Langfuse tracing controls",
+			handler: async (_args, ctx) => {
+				if (!ctx.hasUI) {
 					ctx.ui.notify(
-						initializationError ??
-							"Langfuse tracing is disabled because its credentials are not configured.",
+						formatNonInteractiveStatus(activeConfig, configPath, initializationError),
 						"warning",
 					);
 					return;
 				}
-				if (action === "flush") {
-					if (!recorder) {
-						ctx.ui.notify("Langfuse tracing is not enabled.", "warning");
+
+				const menuGeneration = sessionGeneration;
+				const menuRecorder = recorder;
+				const menuConfig = activeConfig;
+				const choice = await ctx.ui.select(
+					formatMenuTitle(activeConfig, configPath, initializationError, configurationNotice),
+					[
+						...(menuRecorder ? [FLUSH_ACTION] : []),
+						hasStoredConfig ? UPDATE_ACTION : SET_UP_ACTION,
+						HELP_ACTION,
+					],
+				);
+				if (!choice || menuGeneration !== sessionGeneration) return;
+
+				if (choice === FLUSH_ACTION) {
+					if (!menuRecorder) {
+						ctx.ui.notify("Langfuse tracing is not enabled for this session.", "warning");
 						return;
 					}
 					try {
-						await recorder.flush();
-						ctx.ui.notify("Langfuse traces flushed.", "info");
+						await menuRecorder.flush();
+						if (menuGeneration !== sessionGeneration) return;
+						ctx.ui.notify("Langfuse traces flushed for this session.", "info");
 					} catch (error) {
-						ctx.ui.notify(`Langfuse flush failed: ${formatError(error)}`, "error");
+						if (menuGeneration !== sessionGeneration) return;
+						ctx.ui.notify(`Langfuse flush failed: ${formatError(error, menuConfig)}`, "error");
 					}
 					return;
 				}
-				if (action === "init") {
-					if (!ctx.hasUI) {
-						ctx.ui.notify(
-							"/langfuse init requires interactive UI. Edit pi-langfuse.json manually.",
-							"warning",
-						);
-						return;
-					}
+
+				if (choice === SET_UP_ACTION || choice === UPDATE_ACTION) {
 					const loaded = await loadConfig(configPath);
+					if (menuGeneration !== sessionGeneration) return;
 					configPath = loaded.path;
 					const next = await promptForConfig(ctx, loaded.ok ? loaded.config : undefined);
-					if (!next) return;
+					if (!next || menuGeneration !== sessionGeneration) return;
 					try {
 						await writeConfig(next, loaded.path);
-						initializationError =
-							"Langfuse config was saved. Restart Pi to apply the new configuration.";
-						ctx.ui.notify(`Saved Langfuse config to ${loaded.path}. Restart Pi to apply it.`, "info");
+						if (menuGeneration !== sessionGeneration) return;
+						hasStoredConfig = true;
+						configurationNotice =
+							"Saved; restart each Pi process to use it in subsequent sessions.";
+						ctx.ui.notify(
+							`Saved Langfuse config to ${loaded.path} for this Pi agent directory. Restart each Pi process to apply it to subsequent sessions.`,
+							"info",
+						);
 					} catch (error) {
-						ctx.ui.notify(`Failed to save Langfuse config: ${formatError(error)}`, "error");
+						if (menuGeneration !== sessionGeneration) return;
+						ctx.ui.notify(`Failed to save Langfuse config: ${formatError(error, next)}`, "error");
 					}
 					return;
 				}
-				if (action === "help") {
-					ctx.ui.notify(
-						[
-							"Usage: /langfuse [status|flush|help|init]",
-							"status: show tracing state without credentials",
-							"flush: wait for completed traces to export",
-							"init: interactively create or update the private config",
-						].join("\n"),
-						"info",
-					);
-					return;
+
+				if (choice === HELP_ACTION) {
+					ctx.ui.notify(formatHelp(configPath), "info");
 				}
-				ctx.ui.notify("Usage: /langfuse [status|flush|help|init]", "warning");
 			},
 		});
 
 		pi.on("session_start", async (_event, ctx) => {
+			sessionGeneration += 1;
 			recorder = undefined;
 			activeConfig = undefined;
 			configPath = undefined;
 			initializationError = undefined;
+			hasStoredConfig = false;
+			configurationNotice = undefined;
 
 			const result = await loadConfig();
 			configPath = result.path;
@@ -139,6 +128,7 @@ export function createLangfuseExtension(
 				return;
 			}
 
+			hasStoredConfig = true;
 			try {
 				const backend = await createBackend(result.config);
 				activeConfig = result.config;
@@ -149,7 +139,7 @@ export function createLangfuseExtension(
 					captureContent: result.config.captureContent,
 				});
 			} catch (error) {
-				initializationError = `Langfuse tracing could not start: ${formatError(error)}`;
+				initializationError = `Langfuse tracing could not start: ${formatError(error, result.config)}`;
 				ctx.ui.notify(initializationError, "warning");
 			}
 		});
@@ -227,7 +217,9 @@ export function createLangfuseExtension(
 		});
 
 		pi.on("session_shutdown", async (event, ctx) => {
+			sessionGeneration += 1;
 			const activeRecorder = recorder;
+			const shutdownConfig = activeConfig;
 			recorder = undefined;
 			activeConfig = undefined;
 			if (!activeRecorder) return;
@@ -238,7 +230,10 @@ export function createLangfuseExtension(
 					await activeRecorder.flush();
 				}
 			} catch (error) {
-				ctx.ui.notify(`Langfuse shutdown export failed: ${formatError(error)}`, "error");
+				ctx.ui.notify(
+					`Langfuse shutdown export failed: ${formatError(error, shutdownConfig)}`,
+					"error",
+				);
 			}
 		});
 	};
@@ -281,15 +276,87 @@ async function promptForConfig(
 	return normalized.config;
 }
 
+function formatMenuTitle(
+	activeConfig: LangfuseConfig | undefined,
+	configPath: string | undefined,
+	initializationError: string | undefined,
+	configurationNotice: string | undefined,
+): string {
+	const lines = [
+		"Langfuse",
+		"",
+		"Current session:",
+		`  Tracing: ${activeConfig ? "enabled" : "disabled"}`,
+	];
+	if (activeConfig) {
+		lines.push(
+			`  Endpoint: ${activeConfig.baseUrl}`,
+			`  Content capture: ${activeConfig.captureContent ? "enabled" : "disabled"}`,
+		);
+	} else if (configurationNotice) {
+		lines.push("  State: tracing remains disabled until Pi restarts.");
+	} else if (initializationError) {
+		lines.push(`  Reason: ${initializationError}`);
+	}
+	lines.push(
+		"",
+		"Agent-directory configuration:",
+		`  Configuration: ${configPath ?? "unknown"}`,
+		"  Scope: this Pi agent directory; restart each Pi process to apply changes.",
+	);
+	if (configurationNotice) lines.push(`  Pending: ${configurationNotice}`);
+	lines.push("", "What do you want to do?");
+	return lines.join("\n");
+}
+
+function formatNonInteractiveStatus(
+	activeConfig: LangfuseConfig | undefined,
+	configPath: string | undefined,
+	initializationError: string | undefined,
+): string {
+	return [
+		"/langfuse requires interactive UI.",
+		`Current session tracing: ${activeConfig ? "enabled" : "disabled"}`,
+		...(activeConfig
+			? [
+					`Endpoint: ${activeConfig.baseUrl}`,
+					`Content capture: ${activeConfig.captureContent ? "enabled" : "disabled"}`,
+				]
+			: initializationError
+				? [`Reason: ${initializationError}`]
+				: []),
+		`Configuration: ${configPath ?? "unknown"}`,
+		"Edit the private config manually, then restart each Pi process to apply it to subsequent sessions.",
+	].join("\n");
+}
+
+function formatHelp(configPath: string | undefined): string {
+	return [
+		"Langfuse setup and privacy:",
+		"Run /langfuse in interactive Pi to manage tracing for the current session.",
+		`Configuration: ${configPath ?? "pi-langfuse.json"}`,
+		"The file belongs to this Pi agent directory; restart each Pi process after changing it.",
+		"Trace content may contain prompts, responses, tool arguments, tool results, and source code.",
+		'Use "captureContent": false in the private config to export metadata only.',
+	].join("\n");
+}
+
 function formatConfigError(result: Extract<LangfuseConfigResult, { ok: false }>): string {
 	const setupHint = result.reason.startsWith("Configuration file not found:")
-		? " Run /langfuse init to create it."
+		? " Run /langfuse and choose Set up Langfuse."
 		: "";
 	return `Langfuse tracing is disabled: ${result.reason}${setupHint}`;
 }
 
-function formatError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+function formatError(error: unknown, config?: LangfuseConfig): string {
+	let message = error instanceof Error ? error.message : String(error);
+	const secrets = [config?.publicKey, config?.secretKey]
+		.filter((secret): secret is string => Boolean(secret))
+		.sort((left, right) => right.length - left.length);
+	for (const secret of secrets) {
+		message = message.split(secret).join("[LANGFUSE_KEY_REDACTED]");
+	}
+	return message;
 }
 
 export default createLangfuseExtension();
