@@ -39,7 +39,6 @@ Run commands from the repository root unless noted otherwise.
 
 ## Publishing and release safety
 
-- Publish recipes accept an optional OTP, e.g. `just publish-goal 123456`; never commit OTPs, tokens, or npm credentials.
 - Experimental packages may be published only by an explicit maintainer using `just publish <name>`; never add them to `publish-all` or GitHub publish workflows.
 - If npm shows a scoped package dist-tag but `npm view <package>` returns 404, use `just npm-public <package> <otp>` to set public visibility before bumping or republishing.
 - Use `just bump <package> patch|minor|major` for a no-tag workspace bump. The GitHub `bump-version` workflow bumps all package versions together and tags `v*.*.*`.
