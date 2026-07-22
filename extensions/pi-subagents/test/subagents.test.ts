@@ -60,15 +60,23 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 
 	const tool = mock.tools[0];
 	assert.equal(tool?.name, "subagent");
-	assert.match(String(tool?.promptSnippet), /decide whether to spawn 0, 1, or multiple subagents/i);
+	assert.equal(tool?.label, "Blocking Subagent");
+	assert.match(String(tool?.description), /blocks the main agent/i);
+	assert.match(String(tool?.description), /queued steering/i);
+	assert.match(String(tool?.promptSnippet), /blocking isolated subagents/i);
 
 	const promptGuidelines = tool?.promptGuidelines;
 	assert.ok(Array.isArray(promptGuidelines));
 	const guidanceText = promptGuidelines.join("\n");
 	assert.match(guidanceText, /decide how many subagents to spawn/i);
 	assert.match(guidanceText, /no subagent/i);
-	assert.match(guidanceText, /blocking subagent/i);
-	assert.match(guidanceText, /one-shot.*parallel.*single.*subagent.*call/i);
+	assert.match(guidanceText, /blocking subagent.*outputs.*required.*before/i);
+	assert.match(
+		guidanceText,
+		/prefer one subagent_spawn.*broad.*research|broad.*research.*prefer one subagent_spawn/i,
+	);
+	assert.match(guidanceText, /even when.*final answer.*depends/i);
+	assert.match(guidanceText, /do not.*blocking parallel.*same turn/i);
 	assert.match(guidanceText, /critical-path/i);
 	assert.match(guidanceText, /subagent_spawn.*parallel, isolation, or specialization benefit/i);
 	assert.match(guidanceText, /useful non-overlapping.*immediately/i);
@@ -77,7 +85,7 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	assert.match(guidanceText, /synthesize available.*completion/i);
 	assert.match(guidanceText, /after subagent_spawn.*non-overlapping work immediately/i);
 	assert.match(guidanceText, /subagent_spawn completion messages/i);
-	assert.match(guidanceText, /2-4 parallel read-only subagents/i);
+	assert.doesNotMatch(guidanceText, /use subagent parallel mode with 2-4/i);
 	assert.match(guidanceText, /hard max 8/i);
 
 	const parameters = tool?.parameters as SchemaObject | undefined;

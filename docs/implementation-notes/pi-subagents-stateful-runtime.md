@@ -43,7 +43,8 @@ restored persisted state -> idle -> explicit follow-up -> starting
 
 - `starting` means queued for an active-turn slot.
 - `running` owns one `AbortController` and one transport turn.
-- `subagent_spawn` returns immediately; prompt guidance requires useful non-overlapping main-agent work or ending the response instead of polling.
+- `subagent_spawn` returns immediately; prompt guidance prefers one detached agent covering related asynchronous research/review even when the final answer depends on it, followed by useful non-overlapping main-agent work or ending the response instead of polling.
+- Blocking `subagent` batches are reserved for outputs required before the root's next action because queued steering cannot be processed until the call returns.
 - Settled turns emit bounded `pi-subagent-completion` custom messages. The default does not wake an idle root; opt-in auto-resume batches a dispatch window and requests one synthesis turn.
 - Active parent work is not interrupted; `agent_settled` schedules the held batch. User or extension input already pending at flush time suppresses auto-resume, and a parent `agent_start` acknowledgement clears the pre-set one-wake guard.
 - Registry state-change callbacks are serialized in invocation order, preventing a slow `starting` persistence write from overwriting a later terminal snapshot.
@@ -58,7 +59,7 @@ Subprocess cleanup retains process-group SIGTERM/SIGKILL escalation. In-process 
 
 ## Public surface
 
-Separate lifecycle tools preserve the existing batch `subagent` schema and give each operation a precise contract. `subagent` remains the blocking API for single, parallel, chain, and fan-in work. `subagent_spawn` is the detached sidecar API: scheduling and execution continue independently, settled turns notify the root session according to `completionDelivery`, and no wait operation is exposed. It must not be used to delegate one immediate critical-path blocker while the main agent idles.
+Separate lifecycle tools preserve the existing batch `subagent` schema and give each operation a precise contract. `subagent` remains the blocking API for single, parallel, chain, and fan-in work, but model-facing guidance reserves it for outputs required before the root can continue and explicitly warns that user steering waits. `subagent_spawn` is the preferred detached sidecar API for related asynchronous research/review, even when the final answer depends on its result: scheduling and execution continue independently, settled turns notify the root session according to `completionDelivery`, and no wait operation is exposed. It must not be used to delegate one immediate critical-path blocker while the main agent idles.
 
 `/subagents settings` edits `completionDelivery` through `SettingsList`, patches the canonical raw JSON atomically without dropping unknown fields, and applies the runtime policy immediately. `/subagents status` reports configured versus runtime values; manual file edits remain reload-based. `/subagents:config` remains the compatibility UI for per-agent tool allow-lists and now also patches only the selected agent field.
 

@@ -12,10 +12,10 @@ The policy remains static tool prompt metadata and documentation, not autonomous
 ## Static guidance evidence
 
 - `subagent` says not to delegate critical-path work needed for the main agent's next action.
-- A single blocking call is reserved for context/output isolation or independent review that is worth waiting for.
-- `subagent_spawn` is reserved for a concrete detached sidecar task that overlaps meaningful non-overlapping main-agent work.
+- A blocking call is reserved for outputs required before the root's next action and warns that queued steering waits until the call returns.
+- One `subagent_spawn` is preferred for related broad research/review even when the final answer depends on it; blocking parallel fan-out is not used merely to keep delegation in one turn.
 - One bounded completion message is delivered automatically per settled turn without waking an idle root turn.
-- Spawn guidance explicitly forbids polling or immediately calling `subagent_wait` unless useful local work is exhausted and progress is genuinely blocked.
+- Spawn guidance explicitly forbids polling; detached lifecycle work exposes no `subagent_wait` tool.
 - Parallel fan-out remains limited to independent branches; write-heavy shared-file work is serialized.
 - Project agents still require explicit scope selection and project trust.
 
@@ -23,15 +23,15 @@ The policy remains static tool prompt metadata and documentation, not autonomous
 
 | # | Prompt/shape | Expected | Result |
 | --- | --- | --- | --- |
-| 1 | Audit a completed branch for release blockers. | One blocking independent reviewer can be justified by context isolation. | PASS |
-| 2 | Research auth, database, and API modules. | Use 2–4 parallel read-only agents when branches are independent. | PASS |
+| 1 | Audit a completed branch for release blockers. | Prefer one detached reviewer when the audit can complete asynchronously; block only when its output is required before the next root action. | PASS |
+| 2 | Research auth, database, and API modules. | Prefer one detached scout covering related branches; add concurrency only when work and workspace policy are truly independent. | PASS |
 | 3 | Implement, then independently verify. | Implement locally/serially, then request independent review. | PASS |
 | 4 | Explain one README sentence. | No subagent. | PASS |
 | 5 | Rename one symbol in one file. | No subagent. | PASS |
 | 6 | Use project agents. | Require explicit project scope and trust. | PASS |
 | 7 | Spawn one agent for information required before any next step. | Do the critical-path work in the main agent instead of spawning and idling. | PASS |
-| 8 | Spawn research while the main agent can implement unrelated scaffolding. | Use background `subagent_spawn`, perform that scaffolding immediately, then inspect/wait only when needed. | PASS |
-| 9 | Spawn a background agent, then immediately wait despite known local work. | Explicitly prohibited by `subagent_spawn.promptGuidelines`. | PASS |
+| 8 | Spawn research while the main agent can implement unrelated scaffolding. | Use one background `subagent_spawn`, perform that scaffolding immediately, and consume automatic completion without polling. | PASS |
+| 9 | Spawn a background agent, then poll despite known local work. | Explicitly prohibited by `subagent_spawn.promptGuidelines`. | PASS |
 
 Summary: 9 PASS, 0 FAIL.
 

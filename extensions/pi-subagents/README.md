@@ -45,15 +45,16 @@ pi -e ./extensions/pi-subagents
 
 `pi-subagents` registers a primary batch tool plus the stateful lifecycle tools documented below:
 
-- `subagent` — delegate blocking single, parallel, fan-in, or chained batch work.
+- `subagent` — delegate blocking single, parallel, fan-in, or chained batch work. The main agent cannot process queued steering until the call returns.
 - `subagent_spawn` and related lifecycle tools — start reusable detached work, return immediately, and receive bounded completion messages automatically.
 
 Choose the API by lifecycle:
 
 | Need | Use |
 | --- | --- |
-| One or more independent, one-shot results needed before the root responds | One blocking `subagent` call (`tasks` for parallel work) |
-| Reusable history, follow-ups, mailboxes, or work that overlaps useful root work | `subagent_spawn` and lifecycle tools |
+| A result is required before the root's next action, and blocking user steering is intentional | One blocking `subagent` call (`tasks` for synchronous parallel work) |
+| Broad asynchronous research/review that can overlap root work | Prefer one `subagent_spawn` covering related branches |
+| Reusable history, follow-ups, or mailboxes | `subagent_spawn` and lifecycle tools |
 | One simple or critical-path action the root can perform directly | No subagent |
 
 Execution modes:
@@ -78,20 +79,20 @@ Count-selection guidance:
 
 - Use **no subagent** for simple answers, quick targeted edits, latency-sensitive one-step work, or
   tasks that need frequent user back-and-forth.
-- A single `subagent` call is blocking. Use one only when context isolation, high-volume output
-  isolation, or independent review is worth waiting for; otherwise the main agent should do the work.
-- Do not delegate ordinary critical-path work merely to wait for it. Use detached `subagent_spawn`
-  only for a concrete bounded subtask that can run independently alongside useful main-agent work
-  and when parallel work, bounded context/output, independent review, a distinct model/tool profile,
-  or workspace isolation provides concrete value. After spawning, do useful non-overlapping work
-  immediately. If none remains, briefly tell the user what was launched and end the response. Do not
-  poll lifecycle tools for progress or duplicate the delegated work.
-- Prefer **2–4 parallel read-only subagents** when a broad task naturally splits into independent
-  branches that can each return a concise summary.
-- Exceed 4 tasks only when the branches are clearly distinct and worth the extra cost, while staying
-  within the existing hard max of 8 parallel tasks.
-- Do not parallelize implementation that may edit the same files or shared state; serialize
-  write-heavy work instead.
+- `subagent` is deliberately blocking: while it runs, the main agent cannot answer queued steering.
+  Use it only when the outputs are required before the next root action and waiting is intentional.
+- For broad research or review, prefer **one detached `subagent_spawn`** whose task covers related
+  branches even when the final answer depends on its result. Do not choose blocking parallel fan-out
+  merely to keep delegation in one turn. Add another detached agent only when the work is truly
+  independent and shared-workspace concurrency is safe.
+- Use detached `subagent_spawn` only for a concrete bounded subtask that can run independently
+  alongside useful main-agent work and when bounded context/output, independent review, a distinct
+  model/tool profile, or workspace isolation provides concrete value. After spawning, do useful
+  non-overlapping work immediately. If none remains, briefly tell the user what was launched and end
+  the response. Do not poll lifecycle tools for progress or duplicate the delegated work.
+- If synchronous parallel or fan-in output is genuinely required, keep blocking `subagent` tasks
+  independent, stay within the hard max of 8, and do not parallelize implementation that may edit
+  the same files or shared state.
 - Do not use project-local agents unless the user explicitly opts into them with
   `agentScope: "project"` or `"both"`; keep confirmation enabled for untrusted repositories.
 
@@ -103,16 +104,17 @@ No subagent for a known-file edit:
 Rename one symbol in src/foo.ts.
 ```
 
-One subagent for an independent review:
+One detached agent for a broad asynchronous review (call `subagent_spawn`):
 
 ```json
 {
   "agent": "reviewer",
-  "task": "Review the current changes for release blockers. Do not edit files. Report PASS/FAIL/PARTIAL with evidence."
+  "task": "Review source, tests, and integration risks for the current changes. Do not edit files. Report PASS/FAIL/PARTIAL with evidence."
 }
 ```
 
-Two to four parallel subagents for broad independent reconnaissance:
+A blocking fan-out is reserved for output that must be synthesized before the root continues (call
+`subagent`):
 
 ```json
 {
@@ -124,10 +126,6 @@ Two to four parallel subagents for broad independent reconnaissance:
     {
       "agent": "scout",
       "task": "Research auth-related tests. Report coverage gaps. Do not edit files."
-    },
-    {
-      "agent": "scout",
-      "task": "Research API entry points that depend on auth. Report integration risks. Do not edit files."
     }
   ],
   "aggregator": {
@@ -137,7 +135,10 @@ Two to four parallel subagents for broad independent reconnaissance:
 }
 ```
 
-## 🚀 Examples
+## 🚀 Blocking batch examples
+
+Every example in this section calls `subagent` and keeps the main agent unavailable until the batch
+finishes. Use `subagent_spawn` instead when the work can complete asynchronously.
 
 Run one read-only reconnaissance agent:
 
@@ -204,9 +205,9 @@ Run a chain where each step receives the previous output:
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a non-polling policy: spawn only a concrete bounded subtask that can run independently alongside useful main-agent work, then do that non-overlapping work immediately. If no useful non-overlapping work remains, briefly tell the user what was launched and end the response. Do not poll `subagent_list` or `subagent_messages` for progress, and do not duplicate the delegated work. The blocking `subagent` batch tool remains available when results are genuinely needed before the root can continue; detached lifecycle work intentionally has no `subagent_wait` tool.
+Detached work follows a non-polling policy: prefer one bounded `subagent_spawn` that covers related asynchronous research or review even when the final answer depends on its result, then do useful non-overlapping main-agent work immediately. If none remains, briefly tell the user what was launched and end the response. Do not poll `subagent_list` or `subagent_messages` for progress, and do not duplicate the delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. The blocking `subagent` batch tool remains available when results are genuinely needed before the root can continue and delaying queued steering is intentional; detached lifecycle work intentionally has no `subagent_wait` tool.
 
-A single detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
+A detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
 `stateful.completionDelivery` controls settled completion delivery:
 
@@ -274,7 +275,7 @@ Stateful execution uses a transport boundary:
 
 No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used. Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by the in-process transport.
 
-Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. For independent one-shot work, use batch parallel mode. Otherwise let the active agent finish or close it, explicitly accept safe overlap with `allowConcurrentWrites`, or use an isolated worktree when repository isolation is actually needed.
+Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. Prefer one detached agent when asynchronous work can be combined. If concurrent work is genuinely required, use the blocking batch only when synchronous outputs justify making the root unavailable, explicitly accept safe detached overlap with `allowConcurrentWrites`, or use isolated worktrees when repository isolation is needed.
 
 Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. Isolated worktree agents are intentionally not restored after shutdown.
 
