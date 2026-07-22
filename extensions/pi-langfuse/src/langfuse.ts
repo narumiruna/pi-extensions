@@ -226,8 +226,16 @@ export function createLangfuseExtension(
 			recorder?.beginTool(event.toolCallId, event.toolName, event.args);
 		});
 
+		pi.on("tool_call", (event) => {
+			recorder?.recordToolInput(event.toolCallId, event.input);
+		});
+
 		pi.on("tool_execution_update", (event) => {
 			recorder?.recordToolProgress(event.toolCallId);
+		});
+
+		pi.on("tool_result", (event) => {
+			recorder?.recordToolInput(event.toolCallId, event.input);
 		});
 
 		pi.on("tool_execution_end", (event) => {

@@ -118,9 +118,11 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		"session_compact",
 		"session_shutdown",
 		"session_start",
+		"tool_call",
 		"tool_execution_end",
 		"tool_execution_start",
 		"tool_execution_update",
+		"tool_result",
 		"turn_end",
 		"turn_start",
 	]);
@@ -359,12 +361,32 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 		},
 		ctx,
 	);
+	const preparedInput = {
+		path: "file.ts",
+		edits: [{ oldText: "old", newText: "new" }],
+	};
+	await mock.events.get("tool_call")?.[0]?.(
+		{ toolCallId: "call-1", toolName: "edit", input: preparedInput },
+		ctx,
+	);
+	preparedInput.path = "mutated-file.ts";
 	await mock.events.get("tool_execution_update")?.[0]?.(
 		{
 			toolCallId: "call-1",
 			toolName: "edit",
 			args: { path: "file.ts", oldText: "old", newText: "new" },
 			partialResult: { content: [{ type: "text", text: "private partial output" }] },
+		},
+		ctx,
+	);
+	await mock.events.get("tool_result")?.[0]?.(
+		{
+			toolCallId: "call-1",
+			toolName: "edit",
+			input: preparedInput,
+			content: [{ type: "text", text: "final" }],
+			details: { stage: "final" },
+			isError: false,
 		},
 		ctx,
 	);
@@ -406,6 +428,13 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 		oldText: "old",
 		newText: "new",
 	});
+	assert.deepEqual(
+		tool?.updates.filter((update) => update.input !== undefined).map((update) => update.input),
+		[
+			{ path: "file.ts", edits: [{ oldText: "old", newText: "new" }] },
+			{ path: "mutated-file.ts", edits: [{ oldText: "old", newText: "new" }] },
+		],
+	);
 	assert.equal(JSON.stringify(tool).includes("private partial output"), false);
 	assert.equal(tool?.updates.at(-1)?.metadata?.["pi.tool.progress_update_count"], 1);
 	assert.deepEqual(tool?.updates.at(-1)?.output, {

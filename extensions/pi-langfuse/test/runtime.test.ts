@@ -98,7 +98,8 @@ test("isolated runtime preserves the global provider and exports native observat
 		},
 		stopReason: "toolUse",
 	});
-	recorder.beginTool("call", "read", { path: "file" });
+	recorder.beginTool("call", "read", { path: "raw-file" });
+	recorder.recordToolInput("call", { path: "executed-file" });
 	recorder.finishTool("call", { content: "content" });
 	recorder.beginCompaction({
 		reason: "threshold",
@@ -169,6 +170,10 @@ test("isolated runtime preserves the global provider and exports native observat
 		"post_compaction",
 	);
 	assert.equal(attempt?.attributes["langfuse.observation.metadata.pi.attempt.outcome"], "success");
+	assert.equal(
+		tool?.attributes["langfuse.observation.input"],
+		JSON.stringify({ path: "executed-file" }),
+	);
 	assert.equal(tool?.attributes["langfuse.observation.metadata.pi.tool.call_id"], "call");
 	assert.equal(tool?.attributes["langfuse.observation.metadata.pi.tool.name"], "read");
 	assert.equal(
