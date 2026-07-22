@@ -54,7 +54,7 @@ type SubagentTool = {
 	}>;
 };
 
-test("subagents registers self-directed fan-out guidance and configuration command", () => {
+test("subagents registers consistent blocking guidance and configuration command", () => {
 	const mock = createMockPi();
 	subagents(mock.pi);
 
@@ -63,6 +63,7 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	assert.equal(tool?.label, "Blocking Subagent");
 	assert.match(String(tool?.description), /blocks the main agent/i);
 	assert.match(String(tool?.description), /queued steering/i);
+	assert.doesNotMatch(String(tool?.description), /subagent_spawn/i);
 	assert.match(String(tool?.promptSnippet), /blocking isolated subagents/i);
 
 	const promptGuidelines = tool?.promptGuidelines;
@@ -71,20 +72,9 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	assert.match(guidanceText, /decide how many subagents to spawn/i);
 	assert.match(guidanceText, /no subagent/i);
 	assert.match(guidanceText, /blocking subagent.*outputs.*required.*before/i);
-	assert.match(
-		guidanceText,
-		/prefer one subagent_spawn.*broad.*research|broad.*research.*prefer one subagent_spawn/i,
-	);
-	assert.match(guidanceText, /even when.*final answer.*depends/i);
-	assert.match(guidanceText, /do not.*blocking parallel.*same turn/i);
-	assert.match(guidanceText, /critical-path/i);
-	assert.match(guidanceText, /subagent_spawn.*parallel, isolation, or specialization benefit/i);
-	assert.match(guidanceText, /useful non-overlapping.*immediately/i);
-	assert.match(guidanceText, /tell the user.*end the response/i);
-	assert.match(guidanceText, /do not poll.*subagent_list/i);
-	assert.match(guidanceText, /synthesize available.*completion/i);
-	assert.match(guidanceText, /after subagent_spawn.*non-overlapping work immediately/i);
-	assert.match(guidanceText, /subagent_spawn completion messages/i);
+	assert.match(guidanceText, /critical-path work.*main agent can perform directly/i);
+	assert.doesNotMatch(guidanceText, /critical-path work needed for.*next action/i);
+	assert.doesNotMatch(guidanceText, /subagent_spawn/i);
 	assert.doesNotMatch(guidanceText, /use subagent parallel mode with 2-4/i);
 	assert.match(guidanceText, /hard max 8/i);
 
@@ -124,6 +114,34 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	);
 });
 
+test("disabled stateful settings do not advertise unavailable lifecycle tools", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-disabled-guidance-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		writeFileSync(
+			path.join(directory, "pi-subagents.json"),
+			JSON.stringify({ stateful: { enabled: false } }),
+		);
+		const mock = createMockPi();
+		subagents(mock.pi);
+		assert.deepEqual(
+			mock.tools.map((tool) => tool.name),
+			["subagent"],
+		);
+		const blockingTool = mock.tools[0];
+		assert.doesNotMatch(String(blockingTool?.description), /subagent_spawn/i);
+		assert.doesNotMatch(
+			Array.isArray(blockingTool?.promptGuidelines) ? blockingTool.promptGuidelines.join("\n") : "",
+			/subagent_spawn/i,
+		);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 test("subagent settings UI preserves unknown JSON and applies completion delivery immediately", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-settings-ui-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -138,6 +156,12 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		subagents(mock.pi);
 		const command = mock.commands.get("subagents");
 		assert.ok(command);
+		const initialSpawnGuidance = mock.tools.find(
+			(tool) => tool.name === "subagent_spawn",
+		)?.promptGuidelines;
+		assert.ok(Array.isArray(initialSpawnGuidance));
+		assert.match(initialSpawnGuidance.join("\n"), /next-turn.*default/i);
+		assert.doesNotMatch(initialSpawnGuidance.join("\n"), /even when.*final answer.*depends/i);
 		let customCalls = 0;
 		const context = createMockContext({
 			mode: "tui",
@@ -149,6 +173,13 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		});
 		await command.handler("settings", context.ctx);
 		assert.equal(customCalls, 1);
+		const updatedSpawnGuidance = mock.tools
+			.filter((tool) => tool.name === "subagent_spawn")
+			.at(-1)?.promptGuidelines;
+		assert.ok(Array.isArray(updatedSpawnGuidance));
+		assert.match(updatedSpawnGuidance.join("\n"), /auto-resume/i);
+		assert.match(updatedSpawnGuidance.join("\n"), /even when.*final answer.*depends/i);
+		assert.doesNotMatch(updatedSpawnGuidance.join("\n"), /next-turn.*default/i);
 		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 			futureOption: true,
 			stateful: {
