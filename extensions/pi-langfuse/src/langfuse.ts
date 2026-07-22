@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_BASE_URL,
 	type LangfuseConfig,
@@ -7,7 +11,12 @@ import {
 	normalizeLangfuseConfig,
 	writeLangfuseConfig,
 } from "./config.js";
-import { type GitMetadata, type TraceBackend, TraceRecorder } from "./tracing.js";
+import {
+	type ContextSnapshot,
+	type GitMetadata,
+	type TraceBackend,
+	TraceRecorder,
+} from "./tracing.js";
 
 interface ExtensionDependencies {
 	loadConfig(path?: string): Promise<LangfuseConfigResult>;
@@ -45,6 +54,7 @@ export function createLangfuseExtension(
 		let hasStoredConfig = false;
 		let configurationNotice: string | undefined;
 		let sessionGeneration = 0;
+		let nextAttemptReason: string | undefined;
 
 		pi.registerCommand("langfuse", {
 			description: "Open interactive Langfuse tracing controls",
@@ -123,6 +133,7 @@ export function createLangfuseExtension(
 			initializationError = undefined;
 			hasStoredConfig = false;
 			configurationNotice = undefined;
+			nextAttemptReason = undefined;
 
 			const result = await loadConfig();
 			configPath = result.path;
@@ -150,6 +161,7 @@ export function createLangfuseExtension(
 		});
 
 		pi.on("before_agent_start", async (event, ctx) => {
+			nextAttemptReason = undefined;
 			const activeRecorder = recorder;
 			if (!activeRecorder) return;
 			const git = await resolveGit(ctx.cwd).catch(() => undefined);
@@ -157,35 +169,45 @@ export function createLangfuseExtension(
 			activeRecorder.beginAgent({
 				prompt: event.prompt,
 				images: event.images,
-				model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+				model: ctx.model
+					? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api }
+					: undefined,
 				git,
+				snapshot: contextSnapshot(ctx),
 			});
+		});
+
+		pi.on("agent_start", () => {
+			if (!recorder) return;
+			recorder.beginAttempt(nextAttemptReason ? { reason: nextAttemptReason } : undefined);
+			nextAttemptReason = undefined;
 		});
 
 		pi.on("turn_start", (event, ctx) => {
 			if (!recorder) return;
-			if (!recorder.hasActiveTrace()) {
-				recorder.beginAgent({
-					prompt: "[automatic continuation]",
-					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-				});
-			}
+			ensureActiveRun(recorder, ctx);
 			recorder.beginTurn(event.turnIndex);
 		});
 
-		pi.on("before_provider_request", (_event, ctx) => {
+		pi.on("before_provider_request", (event, ctx) => {
 			if (!recorder) return;
-			if (!recorder.hasActiveTrace()) {
-				recorder.beginAgent({
-					prompt: "[automatic continuation]",
-					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-				});
-			}
-			recorder.beginGeneration();
+			ensureActiveRun(recorder, ctx);
+			recorder.beginGeneration({
+				payload: event.payload,
+				payloadStage: "before_provider_request",
+				model: ctx.model
+					? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api }
+					: undefined,
+				thinkingLevel: pi.getThinkingLevel(),
+			});
 		});
 
 		pi.on("after_provider_response", (event) => {
-			recorder?.recordProviderResponse(event.status);
+			recorder?.recordProviderResponse(event.status, event.headers);
+		});
+
+		pi.on("message_update", (event) => {
+			if (isRealOutputDelta(event.assistantMessageEvent)) recorder?.markGenerationFirstOutput();
 		});
 
 		pi.on("message_end", (event) => {
@@ -201,11 +223,11 @@ export function createLangfuseExtension(
 		});
 
 		pi.on("tool_execution_start", (event) => {
-			recorder?.beginTool(event.toolCallId, event.toolName);
+			recorder?.beginTool(event.toolCallId, event.toolName, event.args);
 		});
 
-		pi.on("tool_result", (event) => {
-			recorder?.updateToolInput(event.toolCallId, event.input);
+		pi.on("tool_execution_update", (event) => {
+			recorder?.recordToolProgress(event.toolCallId);
 		});
 
 		pi.on("tool_execution_end", (event) => {
@@ -217,16 +239,40 @@ export function createLangfuseExtension(
 		});
 
 		pi.on("agent_end", (event) => {
-			for (let index = event.messages.length - 1; index >= 0; index -= 1) {
-				const message = event.messages[index];
-				if (message?.role !== "assistant") continue;
-				recorder?.finishAssistant(message);
-				break;
-			}
+			const message = findLastAssistant(event.messages);
+			recorder?.finishAttempt(message);
 		});
 
-		pi.on("agent_settled", () => {
-			recorder?.settle();
+		pi.on("session_before_compact", (event) => {
+			recorder?.beginCompaction({
+				reason: event.reason,
+				willRetry: event.willRetry,
+				tokensBefore: event.preparation.tokensBefore,
+				messagesToSummarize: event.preparation.messagesToSummarize.length,
+				turnPrefixMessages: event.preparation.turnPrefixMessages.length,
+				branchEntries: event.branchEntries.length,
+				isSplitTurn: event.preparation.isSplitTurn,
+			});
+		});
+
+		pi.on("session_compact", (event) => {
+			const entry = event.compactionEntry as typeof event.compactionEntry & {
+				usage?: Parameters<TraceRecorder["finishCompaction"]>[0]["usage"];
+			};
+			recorder?.finishCompaction({
+				reason: event.reason,
+				willRetry: event.willRetry,
+				fromExtension: event.fromExtension,
+				tokensBefore: entry.tokensBefore,
+				details: entry.details,
+				usage: entry.usage,
+			});
+			if (event.willRetry && recorder?.hasActiveTrace()) nextAttemptReason = "post_compaction";
+		});
+
+		pi.on("agent_settled", (_event, ctx) => {
+			recorder?.settle(contextSnapshot(ctx));
+			nextAttemptReason = undefined;
 		});
 
 		pi.on("session_shutdown", async (event, ctx) => {
@@ -237,9 +283,13 @@ export function createLangfuseExtension(
 			activeConfig = undefined;
 			if (!activeRecorder) return;
 			try {
-				if (event.reason === "quit") await activeRecorder.shutdown();
+				const snapshot = contextSnapshot(ctx);
+				if (event.reason === "quit") await activeRecorder.shutdown(snapshot);
 				else {
-					activeRecorder.settle();
+					activeRecorder.interrupt(
+						`Pi session ended before settlement (${event.reason}).`,
+						snapshot,
+					);
 					await activeRecorder.flush();
 				}
 			} catch (error) {
@@ -250,6 +300,47 @@ export function createLangfuseExtension(
 			}
 		});
 	};
+}
+
+function ensureActiveRun(recorder: TraceRecorder, ctx: ExtensionContext): void {
+	if (!recorder.hasActiveTrace()) {
+		recorder.beginAgent({
+			prompt: "[automatic continuation]",
+			model: ctx.model
+				? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api }
+				: undefined,
+			snapshot: contextSnapshot(ctx),
+		});
+	}
+	if (!recorder.hasActiveAttempt()) recorder.beginAttempt();
+}
+
+function contextSnapshot(ctx: ExtensionContext): ContextSnapshot {
+	return {
+		leafId:
+			typeof ctx.sessionManager.getLeafId === "function"
+				? ctx.sessionManager.getLeafId()
+				: undefined,
+		contextUsage: ctx.getContextUsage(),
+	};
+}
+
+function findLastAssistant<T extends { role?: string }>(messages: readonly T[]): T | undefined {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message?.role === "assistant") return message;
+	}
+	return undefined;
+}
+
+function isRealOutputDelta(event: { type: string; delta?: unknown }): boolean {
+	return (
+		(event.type === "text_delta" ||
+			event.type === "thinking_delta" ||
+			event.type === "toolcall_delta") &&
+		typeof event.delta === "string" &&
+		event.delta.length > 0
+	);
 }
 
 const GIT_LOOKUP_TIMEOUT_MS = 1_000;
