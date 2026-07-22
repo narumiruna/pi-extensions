@@ -84,8 +84,8 @@ test("experimental publishing is manual-only", () => {
 	assert.match(selector, /new Set\(\["experimental"\]\)/);
 	assert.match(justfile, /package_json="\.\/extensions\/experimental\/pi-\$name\/package\.json"/);
 	assert.match(justfile, /WARNING: manually publishing experimental Pi extension/);
-	assert.match(justfile, /publish name otp=""/);
-	assert.match(justfile, /otp_flag=\(\).*--otp "\$otp"/);
+	assert.match(justfile, /^publish name:/m);
+	assert.doesNotMatch(justfile, /\botp\b|--otp/);
 });
 
 function writeJson(filePath: string, value: unknown) {
