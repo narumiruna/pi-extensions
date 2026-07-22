@@ -25,7 +25,13 @@
 pi install npm:@narumitw/pi-langfuse
 ```
 
-Try the local workspace package:
+Try the published package without installing it:
+
+```bash
+pi -e npm:@narumitw/pi-langfuse
+```
+
+Try a local checkout:
 
 ```bash
 pi -e ./extensions/pi-langfuse
@@ -35,13 +41,15 @@ The Langfuse v4 SDK requires Node.js 20 or newer.
 
 ## ⚙️ Configuration
 
-Create or update the private config interactively from Pi:
+Run the interactive manager, then choose **Set up Langfuse for this Pi agent directory** or **Update Langfuse for this Pi agent directory**:
 
 ```text
-/langfuse init
+/langfuse
 ```
 
-The command prompts for the secret key, public key, and base URL in the same order Langfuse presents them. Leave either key blank to preserve its existing value when updating a valid config. Leave the base URL blank to use `https://us.cloud.langfuse.com`. The file is saved atomically with mode `0600`; restart Pi after saving. In print or JSON mode, edit the file manually because interactive input is unavailable.
+The setup flow prompts for the secret key, public key, and base URL in the same order Langfuse presents them. Leave either key blank to preserve its existing value when updating a valid config. Leave the base URL blank to use `https://us.cloud.langfuse.com`. The file is saved atomically with mode `0600`.
+
+Configuration belongs to the displayed Pi agent directory, not just the current conversation. Restart each running Pi process after saving; the new connection applies to subsequent sessions in that process. `/reload` is not sufficient because the isolated Langfuse runtime is initialized once per process. In print or JSON mode, edit the file manually because the interactive manager is unavailable.
 
 You can also create the file manually:
 
@@ -66,7 +74,7 @@ The extension automatically restricts an existing config file to mode `0600` and
 chmod 600 ~/.pi/agent/pi-langfuse.json
 ```
 
-Restart Pi after changing credentials, endpoint, environment, or release. The isolated OpenTelemetry tracer provider is initialized once per Pi process and selected only for Langfuse; it does not replace Pi's process-global provider or send Langfuse observations to another extension's exporter.
+Restart Pi after changing credentials, endpoint, environment, release, or `captureContent`. The isolated OpenTelemetry tracer provider is initialized once per Pi process and selected only for Langfuse; it does not replace Pi's process-global provider or send Langfuse observations to another extension's exporter.
 
 ## 🔭 What is traced
 
@@ -84,23 +92,26 @@ Pi does not expose a post-transform provider payload event, so generation reques
 
 Images and embedded base64 data URIs are represented without their payloads, including provider data URLs. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
 
-Completed observations are exported in batches while Pi remains live. Normal `agent_end` handling never waits for Langfuse network I/O. Use `/langfuse flush` when you need to wait for completed exports; quit shutdown also drains the provider.
+Completed observations are exported in batches while Pi remains live. Normal `agent_end` handling never waits for Langfuse network I/O. When you need to wait for completed exports, run `/langfuse` and choose **Flush completed traces for this session**; quit shutdown also drains the provider.
 
 Automatic retries or continuations that begin without a new user prompt are recorded as a new trace labeled `[automatic continuation]`, so provider activity is not lost on Pi versions without a final `agent_settled` extension event.
 
 ## 💬 Command
 
 ```text
-/langfuse status
-/langfuse flush
-/langfuse help
-/langfuse init
+/langfuse
 ```
 
-- `status` reports whether tracing is enabled, the endpoint, configuration source, and content-capture mode. It never displays credentials.
-- `flush` waits for all completed observations to export.
-- `help` displays command guidance.
-- `init` interactively creates or updates the private config without displaying existing credentials. Blank keys preserve valid existing values; a blank base URL uses the US cloud endpoint.
+The command opens one context-aware menu. Its title shows the current session's tracing state, endpoint, content-capture mode, initialization failure when applicable, and private configuration path. It never displays credentials.
+
+Available actions depend on that state:
+
+- **Flush completed traces for this session** appears first when tracing is active and waits for completed observations to export.
+- **Set up Langfuse for this Pi agent directory** appears when no valid config was loaded.
+- **Update Langfuse for this Pi agent directory** appears when a valid config exists.
+- **Show setup and privacy help** explains the agent-directory scope, manual configuration path, and content-capture risk.
+
+Connection actions state their agent-directory scope and per-process restart requirement before selection. Command arguments are intentionally ignored so remembered subcommands cannot silently bypass the menu. In non-interactive modes, the command reports that the menu is unavailable and points to the manual config path.
 
 ## 🔐 Privacy
 
