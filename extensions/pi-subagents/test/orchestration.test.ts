@@ -78,7 +78,12 @@ test("shared-workspace write classification and follow-up guards are conservativ
 		() => assertFollowUpWriteAllowed(registry, followUp, false, false),
 		(error: unknown) => {
 			assert.match(String(error), /already active in shared workspace/);
-			assert.match(String(error), /subagent parallel mode/);
+			assert.match(String(error), /prefer one subagent_spawn.*asynchronous work/i);
+			assert.match(String(error), /blocking subagent parallel mode.*synchronous outputs/i);
+			assert.doesNotMatch(
+				String(error),
+				/For independent one-shot work, use subagent parallel mode/,
+			);
 			assert.match(String(error), /let the active agent finish or close/);
 			assert.match(String(error), /allowConcurrentWrites/);
 			assert.match(String(error), /worktree/);
@@ -138,15 +143,24 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			execute: (...args: unknown[]) => Promise<unknown>;
 			promptGuidelines: string[];
 		};
-		assert.match(spawnTool.promptGuidelines.join("\n"), /simple or critical-path work/);
+		const spawnGuidance = spawnTool.promptGuidelines.join("\n");
+		assert.match(spawnGuidance, /simple or critical-path work/);
+		assert.match(spawnGuidance, /prefer one subagent_spawn.*broad.*research/i);
+		assert.match(spawnGuidance, /even when.*final answer.*depends/i);
+		assert.match(spawnGuidance, /do not.*blocking parallel.*same turn/i);
+		assert.match(spawnGuidance, /single subagent_spawn.*isolation or specialization/i);
 		assert.match(
-			spawnTool.promptGuidelines.join("\n"),
-			/single subagent_spawn.*isolation or specialization/i,
+			spawnGuidance,
+			/blocking subagent.*only when.*outputs.*required.*before.*continue/i,
 		);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /useful non-overlapping.*immediately/i);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /tell the user.*end the response/i);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /do not poll.*subagent_list/i);
-		assert.match(spawnTool.promptGuidelines.join("\n"), /synthesize available.*completion/i);
+		assert.doesNotMatch(
+			spawnGuidance,
+			/use one blocking subagent parallel call for multiple independent one-shot tasks/i,
+		);
+		assert.match(spawnGuidance, /useful non-overlapping.*immediately/i);
+		assert.match(spawnGuidance, /tell the user.*end the response/i);
+		assert.match(spawnGuidance, /do not poll.*subagent_list/i);
+		assert.match(spawnGuidance, /synthesize available.*completion/i);
 		for (const guideline of spawnTool.promptGuidelines) {
 			assert.match(
 				guideline,

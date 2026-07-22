@@ -94,18 +94,13 @@ export function registerStatefulSubagents(
 			maxStoredAgents: settings.maxStoredAgents,
 		});
 		persistence = sessionPersistence;
-		completionBroker = new CompletionDeliveryBroker(
-			pi,
-			ctx,
-			completionDelivery,
-			{
-				onDeliveryError: (error) => {
-					if (!ctx.hasUI) return;
-					const reason = error instanceof Error ? error.message : String(error);
-					ctx.ui.notify(`Subagent completion delivery failed: ${reason}`, "warning");
-				},
+		completionBroker = new CompletionDeliveryBroker(pi, ctx, completionDelivery, {
+			onDeliveryError: (error) => {
+				if (!ctx.hasUI) return;
+				const reason = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Subagent completion delivery failed: ${reason}`, "warning");
 			},
-		);
+		});
 		const transport =
 			resolveStatefulTransportKind(settings.transport) === "in-process"
 				? new InProcessTransport({
@@ -213,8 +208,9 @@ export function registerStatefulSubagents(
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
 		promptGuidelines: [
 			"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly.",
+			"Prefer one subagent_spawn for broad asynchronous research or review that covers related branches even when the final answer depends on its result; do not choose a blocking parallel subagent merely to keep delegation in the same turn. Add another only for truly independent work with safe workspace concurrency.",
 			"Use a single subagent_spawn only for a concrete bounded subtask that can run independently alongside useful main-agent work and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
-			"Use one blocking subagent parallel call for multiple independent one-shot tasks; do not use repeated subagent_spawn calls when no reuse or overlap is needed.",
+			"Use the blocking subagent tool instead of subagent_spawn only when its outputs are required before the main agent can continue and waiting is intentional; queued steering cannot be processed until that call returns.",
 			"After subagent_spawn returns, do useful non-overlapping local work immediately. If no such work remains, briefly tell the user what subagent_spawn launched and end the response; completion delivery follows the configured policy.",
 			"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
 			"subagent_spawn completion is delivered automatically. Do not poll with subagent_list or subagent_messages, repeatedly check progress, or duplicate the delegated work.",
@@ -512,7 +508,7 @@ export function assertNoSharedWriteConflict(
 		if (isWriteCapable(activeConfig?.tools)) {
 			throw new Error(
 				`Write-capable subagent ${active.id} is already active in shared workspace ${cwd}. ` +
-					"For independent one-shot work, use subagent parallel mode. Otherwise let the active agent finish or close it; set allowConcurrentWrites only when overlapping writes are knowingly safe, or use workspaceMode worktree when repository isolation is needed.",
+					"Prefer one subagent_spawn covering combined asynchronous work. Use the blocking subagent parallel mode only when concurrent synchronous outputs justify making the main agent unavailable. Otherwise let the active agent finish or close it; set allowConcurrentWrites only when overlapping writes are knowingly safe, or use workspaceMode worktree when repository isolation is needed.",
 			);
 		}
 	}
