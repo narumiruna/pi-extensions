@@ -51,10 +51,17 @@ interface ModelDescriptor {
 	id?: string;
 }
 
+export interface GitMetadata {
+	branch?: string;
+	commit?: string;
+	detached: boolean;
+}
+
 interface BeginAgentInput {
 	prompt: unknown;
 	images?: unknown;
 	model?: ModelDescriptor;
+	git?: GitMetadata;
 }
 
 interface AssistantMessage {
@@ -115,12 +122,20 @@ export class TraceRecorder {
 		});
 		const metadata: Record<string, unknown> = {
 			"pi.cwd": this.context.cwd,
+			...(input.git?.branch ? { "pi.git.branch": input.git.branch } : {}),
+			...(input.git?.commit ? { "pi.git.commit": input.git.commit } : {}),
+			...(input.git ? { "pi.git.detached": input.git.detached } : {}),
 			"pi.mode": this.context.mode,
 			...(input.model?.id ? { "pi.model": input.model.id } : {}),
 			...(input.model?.provider ? { "pi.provider": input.model.provider } : {}),
 			"pi.session.id": this.context.sessionId,
 		};
 		const attributes = { input: traceInput, metadata };
+		const gitTag = input.git?.branch
+			? `branch:${input.git.branch}`
+			: input.git?.detached
+				? "git:detached"
+				: undefined;
 
 		this.root = this.backend.start("pi.conversation", attributes, { asType: "span" });
 		this.root.updateTrace?.({
@@ -128,7 +143,7 @@ export class TraceRecorder {
 			sessionId: this.context.sessionId,
 			input: traceInput,
 			metadata,
-			tags: ["pi"],
+			tags: ["pi", ...(gitTag ? [gitTag] : [])],
 		});
 		this.agent = this.backend.start("pi.agent", attributes, {
 			asType: "agent",

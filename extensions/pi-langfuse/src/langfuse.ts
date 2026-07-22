@@ -7,12 +7,13 @@ import {
 	normalizeLangfuseConfig,
 	writeLangfuseConfig,
 } from "./config.js";
-import { type TraceBackend, TraceRecorder } from "./tracing.js";
+import { type GitMetadata, type TraceBackend, TraceRecorder } from "./tracing.js";
 
 interface ExtensionDependencies {
 	loadConfig(path?: string): Promise<LangfuseConfigResult>;
 	writeConfig(config: LangfuseConfig, path?: string): Promise<LangfuseConfig>;
 	createBackend(config: LangfuseConfig): Promise<TraceBackend>;
+	resolveGitMetadata(cwd: string): Promise<GitMetadata | undefined>;
 }
 
 const FLUSH_ACTION = "Flush completed traces for this session";
@@ -33,6 +34,10 @@ export function createLangfuseExtension(
 		});
 
 	return function langfuse(pi: ExtensionAPI) {
+		const resolveGit =
+			dependencies.resolveGitMetadata ??
+			((cwd: string) =>
+				resolveGitMetadata((command, args, options) => pi.exec(command, args, options), cwd));
 		let recorder: TraceRecorder | undefined;
 		let activeConfig: LangfuseConfig | undefined;
 		let configPath: string | undefined;
@@ -144,11 +149,16 @@ export function createLangfuseExtension(
 			}
 		});
 
-		pi.on("before_agent_start", (event, ctx) => {
-			recorder?.beginAgent({
+		pi.on("before_agent_start", async (event, ctx) => {
+			const activeRecorder = recorder;
+			if (!activeRecorder) return;
+			const git = await resolveGit(ctx.cwd).catch(() => undefined);
+			if (recorder !== activeRecorder) return;
+			activeRecorder.beginAgent({
 				prompt: event.prompt,
 				images: event.images,
 				model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+				git,
 			});
 		});
 
@@ -240,6 +250,73 @@ export function createLangfuseExtension(
 			}
 		});
 	};
+}
+
+const GIT_LOOKUP_TIMEOUT_MS = 1_000;
+const MAX_GIT_BRANCH_LENGTH = 256;
+
+type GitExecutor = ExtensionAPI["exec"];
+
+export async function resolveGitMetadata(
+	exec: GitExecutor,
+	cwd: string,
+): Promise<GitMetadata | undefined> {
+	const [branchResult, commit] = await Promise.all([
+		resolveGitBranch(exec, cwd),
+		resolveGitCommit(exec, cwd),
+	]);
+	if (!branchResult.resolved) return undefined;
+	if (branchResult.branch) {
+		return {
+			branch: branchResult.branch,
+			...(commit ? { commit } : {}),
+			detached: false,
+		};
+	}
+	return commit ? { commit, detached: true } : undefined;
+}
+
+async function resolveGitBranch(
+	exec: GitExecutor,
+	cwd: string,
+): Promise<{ resolved: boolean; branch?: string }> {
+	try {
+		const result = await exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+			cwd,
+			timeout: GIT_LOOKUP_TIMEOUT_MS,
+		});
+		if (result.killed) return { resolved: false };
+		if (result.code === 1) return { resolved: true };
+		if (result.code !== 0) return { resolved: false };
+		const branch = normalizeGitBranch(result.stdout);
+		return branch ? { resolved: true, branch } : { resolved: false };
+	} catch {
+		return { resolved: false };
+	}
+}
+
+async function resolveGitCommit(exec: GitExecutor, cwd: string): Promise<string | undefined> {
+	try {
+		const result = await exec("git", ["rev-parse", "--verify", "--short=12", "HEAD"], {
+			cwd,
+			timeout: GIT_LOOKUP_TIMEOUT_MS,
+		});
+		if (result.code !== 0 || result.killed) return undefined;
+		const commit = result.stdout.trim();
+		return /^[0-9a-f]{4,64}$/iu.test(commit) ? commit.toLowerCase() : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function normalizeGitBranch(value: string): string | undefined {
+	const branch = value.trim();
+	if (!branch || branch.length > MAX_GIT_BRANCH_LENGTH) return undefined;
+	for (const character of branch) {
+		const code = character.codePointAt(0) ?? 0;
+		if (code <= 31 || code === 127) return undefined;
+	}
+	return branch;
 }
 
 async function promptForConfig(
@@ -340,6 +417,7 @@ function formatHelp(configPath: string | undefined): string {
 		`Configuration: ${configPath ?? "pi-langfuse.json"}`,
 		"The file belongs to this Pi agent directory; restart each Pi process after changing it.",
 		"Trace content may contain prompts, responses, tool arguments, tool results, and source code.",
+		"Git branch, commit, cwd, model, and usage remain in metadata when content capture is disabled.",
 		'Use "captureContent": false in the private config to export metadata only.',
 	].join("\n");
 }

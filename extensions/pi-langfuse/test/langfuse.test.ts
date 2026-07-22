@@ -8,7 +8,7 @@ import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-tr
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadLangfuseConfig, normalizeLangfuseConfig } from "../src/config.js";
-import { createLangfuseExtension } from "../src/langfuse.js";
+import { createLangfuseExtension, resolveGitMetadata } from "../src/langfuse.js";
 import { createProductionBackend, maskSecrets } from "../src/runtime.js";
 import {
 	MAX_CAPTURE_BYTES,
@@ -127,6 +127,62 @@ test("loadLangfuseConfig reports missing and unsafe settings without environment
 	if (!invalid.ok) assert.match(invalid.reason, /publicKey must be literal/i);
 });
 
+test("resolveGitMetadata captures branch and commit with bounded non-shell commands", async () => {
+	const calls: Array<{ command: string; args: string[]; cwd?: string; timeout?: number }> = [];
+	const metadata = await resolveGitMetadata(async (command, args, options) => {
+		calls.push({ command, args, cwd: options?.cwd, timeout: options?.timeout });
+		if (args[0] === "symbolic-ref") {
+			return {
+				stdout: "feature/langfuse-context\n",
+				stderr: "",
+				code: 0,
+				killed: false,
+			};
+		}
+		return { stdout: "0123456789ab\n", stderr: "", code: 0, killed: false };
+	}, "/workspace");
+
+	assert.deepEqual(metadata, {
+		branch: "feature/langfuse-context",
+		commit: "0123456789ab",
+		detached: false,
+	});
+	assert.deepEqual(calls, [
+		{
+			command: "git",
+			args: ["symbolic-ref", "--quiet", "--short", "HEAD"],
+			cwd: "/workspace",
+			timeout: 1_000,
+		},
+		{
+			command: "git",
+			args: ["rev-parse", "--verify", "--short=12", "HEAD"],
+			cwd: "/workspace",
+			timeout: 1_000,
+		},
+	]);
+});
+
+test("resolveGitMetadata handles detached HEADs and omits unavailable repositories", async () => {
+	const detached = await resolveGitMetadata(async (_command, args) => {
+		if (args[0] === "symbolic-ref") {
+			return { stdout: "", stderr: "", code: 1, killed: false };
+		}
+		return { stdout: "abcdef012345\n", stderr: "", code: 0, killed: false };
+	}, "/detached");
+	assert.deepEqual(detached, { commit: "abcdef012345", detached: true });
+
+	const unavailable = await resolveGitMetadata(async () => {
+		return { stdout: "", stderr: "not a repository", code: 128, killed: false };
+	}, "/outside");
+	assert.equal(unavailable, undefined);
+
+	const failed = await resolveGitMetadata(async () => {
+		throw new Error("git is unavailable");
+	}, "/missing-git");
+	assert.equal(failed, undefined);
+});
+
 test("session start suggests the /langfuse setup action when the config file is missing", async () => {
 	const mock = createMockPi();
 	createLangfuseExtension({
@@ -156,6 +212,11 @@ test("TraceRecorder wraps one agent hierarchy in a conversation span", async () 
 	recorder.beginAgent({
 		prompt: "Fix the test",
 		model: { provider: "anthropic", id: "claude" },
+		git: {
+			branch: "feature/langfuse-context",
+			commit: "0123456789ab",
+			detached: false,
+		},
 	});
 	recorder.beginGeneration();
 	recorder.finishAssistant({
@@ -191,11 +252,14 @@ test("TraceRecorder wraps one agent hierarchy in a conversation span", async () 
 		sessionId: "session-1",
 		input: { prompt: "Fix the test" },
 		metadata: conversation?.attributes.metadata,
-		tags: ["pi"],
+		tags: ["pi", "branch:feature/langfuse-context"],
 	});
 	assert.deepEqual(conversation?.attributes.input, { prompt: "Fix the test" });
 	assert.deepEqual(conversation?.attributes.metadata, {
 		"pi.cwd": "/workspace",
+		"pi.git.branch": "feature/langfuse-context",
+		"pi.git.commit": "0123456789ab",
+		"pi.git.detached": false,
 		"pi.mode": "tui",
 		"pi.model": "claude",
 		"pi.provider": "anthropic",
@@ -288,7 +352,10 @@ test("TraceRecorder replaces all captured values when content capture is disable
 		mode: "tui",
 		captureContent: false,
 	});
-	recorder.beginAgent({ prompt: "private prompt" });
+	recorder.beginAgent({
+		prompt: "private prompt",
+		git: { commit: "abcdef012345", detached: true },
+	});
 	recorder.beginGeneration();
 	recorder.finishAssistant({ role: "assistant", content: "private response" });
 	recorder.beginTool("call", "read", { path: "private path" });
@@ -298,12 +365,17 @@ test("TraceRecorder replaces all captured values when content capture is disable
 	for (const observation of backend.observations) {
 		if (observation.name === "pi.llm") assert.equal(observation.attributes.input, undefined);
 		else assert.equal(observation.attributes.input, "[content capture disabled]");
+		if (observation.name === "pi.conversation" || observation.name === "pi.agent") {
+			assert.equal(observation.attributes.metadata?.["pi.git.commit"], "abcdef012345");
+			assert.equal(observation.attributes.metadata?.["pi.git.detached"], true);
+		}
 		for (const update of observation.updates) {
 			if (update.output !== undefined) {
 				assert.equal(update.output, "[content capture disabled]");
 			}
 		}
 	}
+	assert.deepEqual(backend.observations[0]?.traceUpdates[0]?.tags, ["pi", "git:detached"]);
 });
 
 test("TraceRecorder closes interrupted observations and redacts image payloads", () => {
@@ -375,6 +447,14 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 			warnings: [],
 		}),
 		createBackend: async () => backend,
+		resolveGitMetadata: async (cwd) => {
+			assert.equal(cwd, "/workspace");
+			return {
+				branch: "feature/lifecycle",
+				commit: "fedcba987654",
+				detached: false,
+			};
+		},
 	});
 	extension(mock.pi);
 
@@ -437,6 +517,10 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	assert.equal(conversation?.name, "pi.conversation");
 	assert.equal(conversation?.type, "span");
 	assert.equal(conversation?.ended, false);
+	assert.equal(conversation?.attributes.metadata?.["pi.git.branch"], "feature/lifecycle");
+	assert.equal(conversation?.attributes.metadata?.["pi.git.commit"], "fedcba987654");
+	assert.equal(conversation?.attributes.metadata?.["pi.git.detached"], false);
+	assert.deepEqual(conversation?.traceUpdates[0]?.tags, ["pi", "branch:feature/lifecycle"]);
 	assert.equal(agent?.name, "pi.agent");
 	assert.equal(agent?.parent, conversation);
 	assert.equal(agent?.ended, false);
@@ -1063,6 +1147,7 @@ test("/langfuse disabled state prioritizes agent-directory setup and routes priv
 		"Show setup and privacy help",
 	]);
 	assert.match(notifications.at(-1)?.message ?? "", /trace content may contain/i);
+	assert.match(notifications.at(-1)?.message ?? "", /git branch.*remain in metadata/i);
 	assert.match(notifications.at(-1)?.message ?? "", /\/config\/pi-langfuse\.json/);
 });
 

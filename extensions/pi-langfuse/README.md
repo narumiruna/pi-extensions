@@ -12,6 +12,7 @@
 - Records provider, model, stop reason, token usage, and known non-zero reported cost.
 - Records normalized tool inputs, finalized outputs, duration, and failures as child spans.
 - Groups traces with Pi's session id.
+- Adds the conversation-start Git branch and commit as metadata plus a filterable branch tag.
 - Records provider HTTP status codes when Pi exposes them.
 - Reads Langfuse credentials and options only from a private `pi-langfuse.json` file.
 - Batches routine exports without delaying normal Pi agent completion.
@@ -97,6 +98,8 @@ The hierarchy records:
 - a `pi.llm` native `generation` under the active turn for every provider request;
 - a `pi.tool.<tool-name>` native `tool` observation under the active turn for every tool execution;
 - the Pi session id, working directory, mode, provider, and model;
+- `pi.git.branch`, `pi.git.commit`, and `pi.git.detached` at conversation start when the working directory is in a Git repository;
+- a `branch:<branch-name>` trace tag, or `git:detached` for a detached HEAD, for Langfuse filtering;
 - generation token usage and positive total cost when Pi reports a known price;
 - the concrete response model when Pi reports one, with a differing requested alias retained in metadata;
 - error levels and status messages for failed provider responses, model calls, and tools.
@@ -106,6 +109,8 @@ Pi does not expose a post-transform provider payload event, so generation reques
 Images and embedded base64 data URIs are represented without their payloads, including provider data URLs. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
 
 A conversation span starts from the submitted prompt and remains open across all of its model/tool turns, automatic retries, overflow-compaction recovery, and queued continuations. Pi's `agent_end` only reconciles the latest finalized assistant output; `agent_settled` closes the conversation after no automatic work remains. Activity that unexpectedly arrives without a submitted prompt still gets a fallback conversation labeled `[automatic continuation]` so it is not lost.
+
+At conversation start, the extension runs bounded, non-shell Git lookups in `ctx.cwd`. A branch switch therefore applies to the next conversation. Detached HEADs retain only commit/detached metadata and the `git:detached` tag. Missing Git, non-repositories, timeouts, and lookup failures silently omit Git context without affecting tracing.
 
 Completed observations are exported in batches while Pi remains live. Neither `agent_end` nor `agent_settled` waits for Langfuse network I/O. When you need to wait for completed exports, run `/langfuse` and choose **Flush completed traces for this session**; quit shutdown also drains the provider.
 
@@ -130,7 +135,9 @@ Connection actions state their agent-directory scope and per-process restart req
 
 With content capture enabled, traces can contain user prompts, model responses, tool arguments, and tool results. These may include source code, file contents, shell output, or other sensitive project data. Review your Langfuse retention and access controls before enabling this extension.
 
-The built-in mask specifically protects Langfuse credentials; it is not a general secret scanner. Set `"captureContent": false` in `pi-langfuse.json` when content must remain local.
+Git branch names, commit ids, working directory, model, usage, and other operational fields are metadata. They remain exported when `captureContent` is `false`; branch names can themselves contain issue or project details.
+
+The built-in mask specifically protects Langfuse credentials; it is not a general secret scanner. Set `"captureContent": false` in `pi-langfuse.json` when prompts, responses, and tool content must remain local.
 
 ## 🗂️ Package layout
 
