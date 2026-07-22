@@ -214,7 +214,6 @@ interface Counters {
 
 export class TraceRecorder {
 	private root: Observation | undefined;
-	private agent: Observation | undefined;
 	private attempt: Observation | undefined;
 	private attemptIndex: number | undefined;
 	private turn: Observation | undefined;
@@ -245,7 +244,7 @@ export class TraceRecorder {
 
 	beginAgent(input: BeginAgentInput): void {
 		if (this.root)
-			this.closeActiveTrace("Interrupted by a new Pi conversation.", undefined, "interrupted");
+			this.closeActiveTrace("Interrupted by a new Pi run.", undefined, "interrupted");
 
 		this.lastOutput = undefined;
 		this.lastAssistant = undefined;
@@ -277,7 +276,7 @@ export class TraceRecorder {
 				? "git:detached"
 				: undefined;
 
-		this.root = this.backend.start("pi.conversation", attributes, { asType: "span" });
+		this.root = this.backend.start("pi.agent", attributes, { asType: "agent" });
 		this.root.updateTrace?.({
 			name: "pi.trace",
 			sessionId: this.context.sessionId,
@@ -285,10 +284,6 @@ export class TraceRecorder {
 			input: traceInput,
 			metadata,
 			tags: ["pi", ...(gitTag ? [gitTag] : [])],
-		});
-		this.agent = this.backend.start("pi.agent", attributes, {
-			asType: "agent",
-			parent: this.root,
 		});
 	}
 
@@ -311,7 +306,7 @@ export class TraceRecorder {
 				},
 				version: TRACE_SCHEMA_VERSION,
 			},
-			{ asType: "span", parent: this.agent ?? this.root },
+			{ asType: "span", parent: this.root },
 		);
 	}
 
@@ -334,7 +329,7 @@ export class TraceRecorder {
 		this.turn = this.backend.start(
 			"pi.turn",
 			{ metadata: { "pi.turn.index": turnIndex }, version: TRACE_SCHEMA_VERSION },
-			{ asType: "span", parent: this.attempt ?? this.agent ?? this.root },
+			{ asType: "span", parent: this.attempt ?? this.root },
 		);
 	}
 
@@ -389,7 +384,7 @@ export class TraceRecorder {
 				...(Object.keys(requestMetadata).length > 0 ? { metadata: requestMetadata } : {}),
 				version: TRACE_SCHEMA_VERSION,
 			},
-			{ asType: "generation", parent: this.turn ?? this.attempt ?? this.agent ?? this.root },
+			{ asType: "generation", parent: this.turn ?? this.attempt ?? this.root },
 		);
 		this.generation = {
 			observation,
@@ -576,7 +571,7 @@ export class TraceRecorder {
 					},
 					version: TRACE_SCHEMA_VERSION,
 				},
-				{ asType: "span", parent: this.agent ?? this.root },
+				{ asType: "span", parent: this.root },
 			),
 		};
 	}
@@ -637,9 +632,9 @@ export class TraceRecorder {
 		snapshot?: ContextSnapshot,
 		forcedOutcome?: Outcome,
 	): void {
-		this.closeTurn(statusMessage ?? "Pi turn ended when the conversation settled.");
+		this.closeTurn(statusMessage ?? "Pi turn ended when the agent run settled.");
 		this.closeAttempt(undefined, statusMessage, forcedOutcome ?? "interrupted");
-		this.closeCompaction(statusMessage ?? "Pi compaction ended when the conversation settled.");
+		this.closeCompaction(statusMessage ?? "Pi compaction ended when the agent run settled.");
 
 		if (!this.root) return;
 		const baseOutcome =
@@ -670,11 +665,6 @@ export class TraceRecorder {
 			metadata: finalMetadata,
 			...severityForOutcome(baseOutcome, statusMessage ?? this.lastAssistant?.errorMessage),
 		};
-		if (this.agent) {
-			this.agent.update(finalAttributes);
-			this.agent.end();
-			this.agent = undefined;
-		}
 		this.root.update(finalAttributes);
 		this.root.updateTrace?.({
 			...(this.lastOutput !== undefined ? { output: this.lastOutput } : {}),
@@ -724,7 +714,7 @@ export class TraceRecorder {
 				metadata: { "pi.tool.call_id": toolCallId, "pi.tool.name": toolName },
 				version: TRACE_SCHEMA_VERSION,
 			},
-			{ asType: "tool", parent: this.turn ?? this.attempt ?? this.agent ?? this.root },
+			{ asType: "tool", parent: this.turn ?? this.attempt ?? this.root },
 		);
 	}
 

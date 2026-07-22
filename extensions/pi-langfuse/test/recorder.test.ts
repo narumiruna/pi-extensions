@@ -3,7 +3,7 @@ import test from "node:test";
 import { MAX_CAPTURE_BYTES, TraceRecorder } from "../src/tracing.js";
 import { FakeBackend, serializedBytes } from "./support.js";
 
-test("TraceRecorder wraps one agent hierarchy in a conversation span", async () => {
+test("TraceRecorder uses the agent as the root trace observation", async () => {
 	const backend = new FakeBackend();
 	const recorder = new TraceRecorder(backend, {
 		sessionId: "session-1",
@@ -45,21 +45,21 @@ test("TraceRecorder wraps one agent hierarchy in a conversation span", async () 
 	recorder.settle();
 	await recorder.flush();
 
-	assert.equal(backend.observations.length, 4);
-	const [conversation, agent, generation, tool] = backend.observations;
-	assert.equal(conversation?.name, "pi.conversation");
-	assert.equal(conversation?.type, "span");
-	assert.equal(conversation?.parent, undefined);
-	assert.deepEqual(conversation?.traceUpdates[0], {
+	assert.equal(backend.observations.length, 3);
+	const [agent, generation, tool] = backend.observations;
+	assert.equal(agent?.name, "pi.agent");
+	assert.equal(agent?.type, "agent");
+	assert.equal(agent?.parent, undefined);
+	assert.deepEqual(agent?.traceUpdates[0], {
 		name: "pi.trace",
 		sessionId: "session-1",
 		version: "2",
 		input: { prompt: "Fix the test" },
-		metadata: conversation?.attributes.metadata,
+		metadata: agent?.attributes.metadata,
 		tags: ["pi", "branch:feature/langfuse-context"],
 	});
-	assert.deepEqual(conversation?.attributes.input, { prompt: "Fix the test" });
-	assert.deepEqual(conversation?.attributes.metadata, {
+	assert.deepEqual(agent?.attributes.input, { prompt: "Fix the test" });
+	assert.deepEqual(agent?.attributes.metadata, {
 		"pi.cwd": "/workspace",
 		"pi.git.branch": "feature/langfuse-context",
 		"pi.git.commit": "0123456789ab",
@@ -70,10 +70,6 @@ test("TraceRecorder wraps one agent hierarchy in a conversation span", async () 
 		"pi.session.id": "session-1",
 		"pi.trace.schema_version": 2,
 	});
-	assert.equal(agent?.name, "pi.agent");
-	assert.equal(agent?.type, "agent");
-	assert.equal(agent?.parent, conversation);
-	assert.deepEqual(agent?.attributes, conversation?.attributes);
 	assert.equal(generation?.name, "pi.llm");
 	assert.equal(generation?.type, "generation");
 	assert.equal(generation?.parent, agent);
@@ -91,7 +87,6 @@ test("TraceRecorder wraps one agent hierarchy in a conversation span", async () 
 	assert.equal(tool?.parent, agent);
 	assert.equal(tool?.ended, true);
 	assert.equal(agent?.ended, true);
-	assert.equal(conversation?.ended, true);
 	assert.equal(backend.flushes, 1);
 });
 
@@ -118,8 +113,8 @@ test("TraceRecorder only exports known non-zero costs with the Langfuse total bu
 		usage: { cost: { total: 0.01 } },
 	});
 
-	assert.equal(backend.observations[2]?.updates.at(-1)?.costDetails, undefined);
-	assert.deepEqual(backend.observations[3]?.updates.at(-1)?.costDetails, { total: 0.01 });
+	assert.equal(backend.observations[1]?.updates.at(-1)?.costDetails, undefined);
+	assert.deepEqual(backend.observations[2]?.updates.at(-1)?.costDetails, { total: 0.01 });
 });
 
 test("TraceRecorder prefers the concrete response model and retains the requested alias", () => {
@@ -141,8 +136,8 @@ test("TraceRecorder prefers the concrete response model and retains the requeste
 		stopReason: "stop",
 	});
 
-	assert.equal(backend.observations[2]?.updates.at(-1)?.model, "concrete-model");
-	assert.deepEqual(backend.observations[2]?.updates.at(-1)?.metadata, {
+	assert.equal(backend.observations[1]?.updates.at(-1)?.model, "concrete-model");
+	assert.deepEqual(backend.observations[1]?.updates.at(-1)?.metadata, {
 		"pi.provider": "openai",
 		"pi.requested_model": "requested-alias",
 		"pi.response.model": "concrete-model",
@@ -172,7 +167,7 @@ test("TraceRecorder replaces all captured values when content capture is disable
 	for (const observation of backend.observations) {
 		if (observation.name === "pi.llm") assert.equal(observation.attributes.input, undefined);
 		else assert.equal(observation.attributes.input, "[content capture disabled]");
-		if (observation.name === "pi.conversation" || observation.name === "pi.agent") {
+		if (observation.name === "pi.agent") {
 			assert.equal(observation.attributes.metadata?.["pi.git.commit"], "abcdef012345");
 			assert.equal(observation.attributes.metadata?.["pi.git.detached"], true);
 		}
@@ -205,12 +200,11 @@ test("TraceRecorder closes interrupted observations and redacts image payloads",
 	recorder.finishTool("call-1", { content: "failed", isError: true });
 	recorder.settle();
 
-	const [conversation, agent, firstGeneration, secondGeneration, tool] = backend.observations;
-	assert.deepEqual(conversation?.attributes.input, {
+	const [agent, firstGeneration, secondGeneration, tool] = backend.observations;
+	assert.deepEqual(agent?.attributes.input, {
 		images: [{ type: "image", mimeType: "image/png", data: "[base64 omitted]" }],
 		prompt: "Describe this",
 	});
-	assert.deepEqual(agent?.attributes.input, conversation?.attributes.input);
 	assert.equal(firstGeneration?.updates.at(-1)?.level, "ERROR");
 	assert.match(String(firstGeneration?.updates.at(-1)?.statusMessage), /interrupted/i);
 	assert.equal(firstGeneration?.ended, true);
@@ -237,7 +231,7 @@ test("TraceRecorder bounds oversized tool details as one captured output", () =>
 		),
 	});
 
-	const tool = backend.observations[2];
+	const tool = backend.observations[1];
 	assert.ok(serializedBytes(tool?.attributes.input) <= MAX_CAPTURE_BYTES);
 	assert.ok(serializedBytes(tool?.updates.at(-1)?.output) <= MAX_CAPTURE_BYTES);
 });
@@ -291,7 +285,6 @@ test("TraceRecorder keeps retries in one trace with indexed attempt spans and ro
 		contextUsage: { tokens: 250, contextWindow: 1_000, percent: 25 },
 	});
 
-	const conversation = backend.observations.find(({ name }) => name === "pi.conversation");
 	const agent = backend.observations.find(({ name }) => name === "pi.agent");
 	const attempts = backend.observations.filter(({ name }) => name === "pi.attempt");
 	assert.equal(attempts.length, 2);
@@ -306,8 +299,8 @@ test("TraceRecorder keeps retries in one trace with indexed attempt spans and ro
 	assert.equal(attempts[1]?.updates.at(-1)?.level, undefined);
 	assert.equal(attempts[1]?.updates.at(-1)?.metadata?.["pi.attempt.outcome"], "success");
 	assert.equal(attempts[1]?.updates.at(-1)?.metadata?.["pi.attempt.stop_reason"], "stop");
-	assert.equal(conversation?.attributes.version, "2");
-	const finalMetadata = conversation?.updates.at(-1)?.metadata;
+	assert.equal(agent?.attributes.version, "2");
+	const finalMetadata = agent?.updates.at(-1)?.metadata;
 	assert.equal(finalMetadata?.["pi.trace.outcome"], "recovered_success");
 	assert.equal(finalMetadata?.["pi.trace.attempt_count"], 2);
 	assert.equal(finalMetadata?.["pi.trace.turn_count"], 2);
@@ -325,9 +318,7 @@ test("TraceRecorder keeps retries in one trace with indexed attempt spans and ro
 	assert.equal(finalMetadata?.["pi.trace.end_context_window"], 1_000);
 	assert.equal(finalMetadata?.["pi.trace.start_context_percent"], 10);
 	assert.equal(finalMetadata?.["pi.trace.end_context_percent"], 25);
-	assert.deepEqual(agent?.updates.at(-1)?.metadata, finalMetadata);
-	assert.deepEqual(conversation?.traceUpdates.at(-1)?.metadata, finalMetadata);
-	assert.equal(conversation?.endCalls, 1);
+	assert.deepEqual(agent?.traceUpdates.at(-1)?.metadata, finalMetadata);
 	assert.equal(agent?.endCalls, 1);
 	assert.equal(
 		backend.observations.every(({ endCalls }) => endCalls === 1),

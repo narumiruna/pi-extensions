@@ -174,19 +174,17 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	);
 	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
-	assert.equal(backend.observations.length, 5);
+	assert.equal(backend.observations.length, 4);
 	assert.equal(backend.flushes, 0);
-	const [conversation, agent, attempt, turn, generation] = backend.observations;
-	assert.equal(conversation?.name, "pi.conversation");
-	assert.equal(conversation?.type, "span");
-	assert.equal(conversation?.ended, false);
-	assert.equal(conversation?.attributes.metadata?.["pi.git.branch"], "feature/lifecycle");
-	assert.equal(conversation?.attributes.metadata?.["pi.git.commit"], "fedcba987654");
-	assert.equal(conversation?.attributes.metadata?.["pi.git.detached"], false);
-	assert.deepEqual(conversation?.traceUpdates[0]?.tags, ["pi", "branch:feature/lifecycle"]);
+	const [agent, attempt, turn, generation] = backend.observations;
 	assert.equal(agent?.name, "pi.agent");
-	assert.equal(agent?.parent, conversation);
+	assert.equal(agent?.type, "agent");
+	assert.equal(agent?.parent, undefined);
 	assert.equal(agent?.ended, false);
+	assert.equal(agent?.attributes.metadata?.["pi.git.branch"], "feature/lifecycle");
+	assert.equal(agent?.attributes.metadata?.["pi.git.commit"], "fedcba987654");
+	assert.equal(agent?.attributes.metadata?.["pi.git.detached"], false);
+	assert.deepEqual(agent?.traceUpdates[0]?.tags, ["pi", "branch:feature/lifecycle"]);
 	assert.equal(attempt?.name, "pi.attempt");
 	assert.equal(attempt?.parent, agent);
 	assert.equal(attempt?.ended, true);
@@ -242,10 +240,10 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	);
 	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
-	assert.equal(backend.observations.length, 8);
-	const continuationAttempt = backend.observations[5];
-	const continuationTurn = backend.observations[6];
-	const continuationGeneration = backend.observations[7];
+	assert.equal(backend.observations.length, 7);
+	const continuationAttempt = backend.observations[4];
+	const continuationTurn = backend.observations[5];
+	const continuationGeneration = backend.observations[6];
 	assert.equal(continuationAttempt?.name, "pi.attempt");
 	assert.equal(continuationAttempt?.parent, agent);
 	assert.equal(continuationAttempt?.ended, true);
@@ -254,7 +252,6 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	assert.equal(continuationTurn?.ended, true);
 	assert.equal(continuationGeneration?.parent, continuationTurn);
 	assert.equal(continuationGeneration?.ended, true);
-	assert.equal(conversation?.ended, false);
 	assert.equal(agent?.ended, false);
 
 	await mock.events.get("agent_settled")?.[0]?.({}, ctx);
@@ -263,7 +260,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		backend.observations.every((observation) => observation.ended),
 		true,
 	);
-	assert.deepEqual(conversation?.updates.at(-1)?.output, [{ type: "text", text: "Recovered" }]);
+	assert.deepEqual(agent?.updates.at(-1)?.output, [{ type: "text", text: "Recovered" }]);
 	assert.equal(backend.flushes, 0);
 });
 
@@ -302,15 +299,13 @@ test("pi-langfuse reconciles the finalized assistant message from agent_end", as
 	};
 	await mock.events.get("agent_end")?.[0]?.({ messages: [finalized] }, ctx);
 
-	const [conversation, agent, generation] = backend.observations;
+	const [agent, generation] = backend.observations;
 	assert.deepEqual(generation?.updates.at(-1)?.output, finalized.content);
 	assert.equal(generation?.updates.at(-1)?.statusMessage, finalized.errorMessage);
 	assert.equal(generation?.ended, true);
-	assert.equal(conversation?.ended, false);
 	assert.equal(agent?.ended, false);
 
 	await mock.events.get("agent_settled")?.[0]?.({}, ctx);
-	assert.equal(conversation?.ended, true);
 	assert.equal(agent?.ended, true);
 });
 
@@ -404,8 +399,8 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 	assert.equal(generation?.ended, true);
 	assert.equal(typeof generation?.endTime, "number");
 	const tool = backend.observations.at(-1);
-	assert.equal(backend.observations[3]?.name, "pi.turn");
-	assert.equal(tool?.parent, backend.observations[3]);
+	assert.equal(backend.observations[2]?.name, "pi.turn");
+	assert.equal(tool?.parent, backend.observations[2]);
 	assert.deepEqual(tool?.attributes.input, {
 		path: "file.ts",
 		oldText: "old",
@@ -419,7 +414,7 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 	});
 });
 
-test("agent_end leaves the conversation open and settled never starts a routine flush", async () => {
+test("agent_end leaves the root agent open and settled never starts a routine flush", async () => {
 	const backend = new FakeBackend();
 	backend.forceFlush = () => new Promise<void>(() => undefined);
 	const mock = createMockPi();

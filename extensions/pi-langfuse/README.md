@@ -6,14 +6,14 @@
 
 ## ✨ Features
 
-- Names each Langfuse trace `pi.trace` and wraps one complete prompt-processing cycle in a root `pi.conversation` span.
-- Keeps one native `pi.agent` observation open until settlement, with indexed `pi.attempt` spans for retries and queued continuations.
+- Names each Langfuse trace `pi.trace` and uses a native `pi.agent` as its root observation.
+- Keeps the root agent open until settlement, with indexed `pi.attempt` spans for retries and queued continuations.
 - Records bounded provider-request snapshots, finalized assistant outputs, requested/response identity, TTFT, usage, and known cost buckets.
 - Retains ordered HTTP response history and safe diagnostic headers without marking recovered requests as errors.
 - Records final tool inputs and outputs, progress timing, duration, and failures without exporting partial-result content.
 - Records active compactions structurally without exporting generated summary text.
 - Groups traces with Pi's session id and adds bounded session/context snapshots and aggregate counters.
-- Adds the conversation-start Git branch and commit as metadata plus a filterable branch tag.
+- Adds the run-start Git branch and commit as metadata plus a filterable branch tag.
 - Reads Langfuse credentials and options only from a private `pi-langfuse.json` file.
 - Batches routine exports without delaying normal Pi agent completion.
 - Keeps its OpenTelemetry provider isolated so it coexists with other tracing extensions.
@@ -79,25 +79,24 @@ Restart Pi after changing credentials, endpoint, environment, release, or `captu
 
 ## 🔭 What is traced
 
-Each trace has this observation hierarchy. The `pi.conversation` wrapper is retained for compatibility with existing saved filters:
+Each trace has this observation hierarchy:
 
 ```text
 pi.trace
-└── pi.conversation (span: submitted prompt until Pi fully settles)
-    └── pi.agent (agent)
-        ├── pi.attempt (span: one agent_start/agent_end pair)
-        │   └── pi.turn (span)
-        │       ├── pi.llm (generation)
-        │       └── pi.tool.<tool-name> (tool)
-        ├── pi.compaction (span, only while the trace is active)
-        └── pi.attempt ...
+└── pi.agent (agent: submitted prompt until Pi fully settles)
+    ├── pi.attempt (span: one agent_start/agent_end pair)
+    │   └── pi.turn (span)
+    │       ├── pi.llm (generation)
+    │       └── pi.tool.<tool-name> (tool)
+    ├── pi.compaction (span, only while the trace is active)
+    └── pi.attempt ...
 ```
 
-All observations and the trace use schema version `2`. Existing observation names remain unchanged; schema version 2 adds `pi.attempt` and `pi.compaction` depth beneath the compatibility wrapper.
+All observations and the trace use schema version `2`. Schema version 2 adds indexed `pi.attempt` observations and active `pi.compaction` spans beneath the root agent.
 
 ### Trace and attempt fields
 
-The trace, `pi.conversation`, and `pi.agent` retain the submitted prompt, final assistant output, Pi session id, working directory, mode, initial provider/model, and optional Git context. Root metadata includes:
+The trace and root `pi.agent` retain the submitted prompt, final assistant output, Pi session id, working directory, mode, initial provider/model, and optional Git context. Root metadata includes:
 
 - `pi.trace.schema_version`, `pi.trace.outcome`, and `pi.trace.stop_reason`;
 - `pi.trace.attempt_count`, `pi.trace.turn_count`, `pi.trace.generation_count`, `pi.trace.tool_count`, `pi.trace.tool_error_count`, `pi.trace.compaction_count`, and `pi.trace.recovered_error_count`;
@@ -133,9 +132,9 @@ An active `pi.compaction` records `pi.compaction.reason`, `pi.compaction.will_re
 
 Images and embedded base64 data URIs are represented without their payloads, including provider data URLs. Opaque `thinkingSignature`, `textSignature`, and `thoughtSignature` continuity values are always removed. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
 
-A conversation begins before the first agent loop and remains open across retries, overflow-compaction recovery, and queued continuations. `agent_end` closes only the current attempt; `agent_settled` closes the root after no automatic work remains. Activity that unexpectedly arrives without a submitted prompt gets a fallback conversation labeled `[automatic continuation]`. Session replacement, reload, quit, and a new unexpected prompt close all descendants defensively and idempotently.
+The root agent begins before the first agent loop and remains open across retries, overflow-compaction recovery, and queued continuations. `agent_end` closes only the current attempt; `agent_settled` closes the root after no automatic work remains. Activity that unexpectedly arrives without a submitted prompt gets a fallback root input labeled `[automatic continuation]`. Session replacement, reload, quit, and a new unexpected prompt close all descendants defensively and idempotently.
 
-At conversation start, the extension runs bounded, non-shell Git lookups in `ctx.cwd`. A branch switch therefore applies to the next conversation. Detached HEADs retain only commit/detached metadata and the `git:detached` tag. Missing Git, non-repositories, timeouts, and lookup failures silently omit Git context without affecting tracing.
+At run start, the extension performs bounded, non-shell Git lookups in `ctx.cwd`. A branch switch therefore applies to the next run. Detached HEADs retain only commit/detached metadata and the `git:detached` tag. Missing Git, non-repositories, timeouts, and lookup failures silently omit Git context without affecting tracing.
 
 Completed observations are exported in batches while Pi remains live. Neither `agent_end` nor `agent_settled` waits for Langfuse network I/O. To wait for completed exports, run `/langfuse` and choose **Flush completed traces for this session**; quit shutdown also drains the provider.
 
