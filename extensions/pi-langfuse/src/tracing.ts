@@ -51,10 +51,17 @@ interface ModelDescriptor {
 	id?: string;
 }
 
+export interface GitMetadata {
+	branch?: string;
+	commit?: string;
+	detached: boolean;
+}
+
 interface BeginAgentInput {
 	prompt: unknown;
 	images?: unknown;
 	model?: ModelDescriptor;
+	git?: GitMetadata;
 }
 
 interface AssistantMessage {
@@ -88,6 +95,7 @@ interface TurnResult {
 
 export class TraceRecorder {
 	private root: Observation | undefined;
+	private agent: Observation | undefined;
 	private turn: Observation | undefined;
 	private turnIndex: number | undefined;
 	private generation: Observation | undefined;
@@ -105,7 +113,7 @@ export class TraceRecorder {
 	}
 
 	beginAgent(input: BeginAgentInput): void {
-		if (this.root) this.closeActiveTrace("Interrupted by a new Pi agent run.");
+		if (this.root) this.closeActiveTrace("Interrupted by a new Pi conversation.");
 
 		this.lastOutput = undefined;
 		const traceInput = this.capture({
@@ -114,19 +122,32 @@ export class TraceRecorder {
 		});
 		const metadata: Record<string, unknown> = {
 			"pi.cwd": this.context.cwd,
+			...(input.git?.branch ? { "pi.git.branch": input.git.branch } : {}),
+			...(input.git?.commit ? { "pi.git.commit": input.git.commit } : {}),
+			...(input.git ? { "pi.git.detached": input.git.detached } : {}),
 			"pi.mode": this.context.mode,
 			...(input.model?.id ? { "pi.model": input.model.id } : {}),
 			...(input.model?.provider ? { "pi.provider": input.model.provider } : {}),
 			"pi.session.id": this.context.sessionId,
 		};
+		const attributes = { input: traceInput, metadata };
+		const gitTag = input.git?.branch
+			? `branch:${input.git.branch}`
+			: input.git?.detached
+				? "git:detached"
+				: undefined;
 
-		this.root = this.backend.start("pi.agent", { input: traceInput, metadata }, { asType: "agent" });
+		this.root = this.backend.start("pi.conversation", attributes, { asType: "span" });
 		this.root.updateTrace?.({
 			name: "pi.trace",
 			sessionId: this.context.sessionId,
 			input: traceInput,
 			metadata,
-			tags: ["pi"],
+			tags: ["pi", ...(gitTag ? [gitTag] : [])],
+		});
+		this.agent = this.backend.start("pi.agent", attributes, {
+			asType: "agent",
+			parent: this.root,
 		});
 	}
 
@@ -137,7 +158,7 @@ export class TraceRecorder {
 		this.turn = this.backend.start(
 			"pi.turn",
 			{ metadata: { "pi.turn.index": turnIndex } },
-			{ asType: "span", parent: this.root },
+			{ asType: "span", parent: this.agent ?? this.root },
 		);
 	}
 
@@ -154,9 +175,7 @@ export class TraceRecorder {
 			metadata: {
 				"pi.turn.index": this.turnIndex ?? turnIndex,
 				"pi.turn.tool_result_count": result.toolResultCount,
-				...(result.message.stopReason
-					? { "pi.turn.stop_reason": result.message.stopReason }
-					: {}),
+				...(result.message.stopReason ? { "pi.turn.stop_reason": result.message.stopReason } : {}),
 			},
 			...(failed
 				? {
@@ -182,7 +201,7 @@ export class TraceRecorder {
 		this.generation = this.backend.start(
 			"pi.llm",
 			{},
-			{ asType: "generation", parent: this.turn ?? this.root },
+			{ asType: "generation", parent: this.turn ?? this.agent ?? this.root },
 		);
 	}
 
@@ -258,7 +277,7 @@ export class TraceRecorder {
 					...(args !== undefined ? { input: this.capture(args) } : {}),
 					metadata: { "pi.tool.call_id": toolCallId, "pi.tool.name": toolName },
 				},
-				{ asType: "tool", parent: this.turn ?? this.root },
+				{ asType: "tool", parent: this.turn ?? this.agent ?? this.root },
 			),
 		);
 	}
@@ -294,13 +313,19 @@ export class TraceRecorder {
 	}
 
 	private closeActiveTrace(statusMessage?: string): void {
-		this.closeTurn(statusMessage ?? "Pi turn ended when the agent settled.");
+		this.closeTurn(statusMessage ?? "Pi turn ended when the conversation settled.");
 
-		if (!this.root) return;
-		this.root.update({
+		const finalAttributes: ObservationAttributes = {
 			...(this.lastOutput !== undefined ? { output: this.lastOutput } : {}),
 			...(statusMessage ? { level: "WARNING" as const, statusMessage } : {}),
-		});
+		};
+		if (this.agent) {
+			this.agent.update(finalAttributes);
+			this.agent.end();
+			this.agent = undefined;
+		}
+		if (!this.root) return;
+		this.root.update(finalAttributes);
 		this.root.updateTrace?.({
 			...(this.lastOutput !== undefined ? { output: this.lastOutput } : {}),
 			...(statusMessage ? { metadata: { "pi.status": statusMessage } } : {}),

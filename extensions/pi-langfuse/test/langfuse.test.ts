@@ -8,7 +8,7 @@ import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-tr
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadLangfuseConfig, normalizeLangfuseConfig } from "../src/config.js";
-import { createLangfuseExtension } from "../src/langfuse.js";
+import { createLangfuseExtension, resolveGitMetadata } from "../src/langfuse.js";
 import { createProductionBackend, maskSecrets } from "../src/runtime.js";
 import {
 	MAX_CAPTURE_BYTES,
@@ -127,6 +127,62 @@ test("loadLangfuseConfig reports missing and unsafe settings without environment
 	if (!invalid.ok) assert.match(invalid.reason, /publicKey must be literal/i);
 });
 
+test("resolveGitMetadata captures branch and commit with bounded non-shell commands", async () => {
+	const calls: Array<{ command: string; args: string[]; cwd?: string; timeout?: number }> = [];
+	const metadata = await resolveGitMetadata(async (command, args, options) => {
+		calls.push({ command, args, cwd: options?.cwd, timeout: options?.timeout });
+		if (args[0] === "symbolic-ref") {
+			return {
+				stdout: "feature/langfuse-context\n",
+				stderr: "",
+				code: 0,
+				killed: false,
+			};
+		}
+		return { stdout: "0123456789ab\n", stderr: "", code: 0, killed: false };
+	}, "/workspace");
+
+	assert.deepEqual(metadata, {
+		branch: "feature/langfuse-context",
+		commit: "0123456789ab",
+		detached: false,
+	});
+	assert.deepEqual(calls, [
+		{
+			command: "git",
+			args: ["symbolic-ref", "--quiet", "--short", "HEAD"],
+			cwd: "/workspace",
+			timeout: 1_000,
+		},
+		{
+			command: "git",
+			args: ["rev-parse", "--verify", "--short=12", "HEAD"],
+			cwd: "/workspace",
+			timeout: 1_000,
+		},
+	]);
+});
+
+test("resolveGitMetadata handles detached HEADs and omits unavailable repositories", async () => {
+	const detached = await resolveGitMetadata(async (_command, args) => {
+		if (args[0] === "symbolic-ref") {
+			return { stdout: "", stderr: "", code: 1, killed: false };
+		}
+		return { stdout: "abcdef012345\n", stderr: "", code: 0, killed: false };
+	}, "/detached");
+	assert.deepEqual(detached, { commit: "abcdef012345", detached: true });
+
+	const unavailable = await resolveGitMetadata(async () => {
+		return { stdout: "", stderr: "not a repository", code: 128, killed: false };
+	}, "/outside");
+	assert.equal(unavailable, undefined);
+
+	const failed = await resolveGitMetadata(async () => {
+		throw new Error("git is unavailable");
+	}, "/missing-git");
+	assert.equal(failed, undefined);
+});
+
 test("session start suggests the /langfuse setup action when the config file is missing", async () => {
 	const mock = createMockPi();
 	createLangfuseExtension({
@@ -144,7 +200,7 @@ test("session start suggests the /langfuse setup action when the config file is 
 	assert.match(notifications.at(-1)?.message ?? "", /run \/langfuse and choose set up langfuse/i);
 });
 
-test("TraceRecorder builds one agent trace with child generations and tool spans", async () => {
+test("TraceRecorder wraps one agent hierarchy in a conversation span", async () => {
 	const backend = new FakeBackend();
 	const recorder = new TraceRecorder(backend, {
 		sessionId: "session-1",
@@ -156,6 +212,11 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 	recorder.beginAgent({
 		prompt: "Fix the test",
 		model: { provider: "anthropic", id: "claude" },
+		git: {
+			branch: "feature/langfuse-context",
+			commit: "0123456789ab",
+			detached: false,
+		},
 	});
 	recorder.beginGeneration();
 	recorder.finishAssistant({
@@ -181,28 +242,36 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 	recorder.settle();
 	await recorder.flush();
 
-	assert.equal(backend.observations.length, 3);
-	const [root, generation, tool] = backend.observations;
-	assert.equal(root?.name, "pi.agent");
-	assert.equal(root?.type, "agent");
-	assert.deepEqual(root?.traceUpdates[0], {
+	assert.equal(backend.observations.length, 4);
+	const [conversation, agent, generation, tool] = backend.observations;
+	assert.equal(conversation?.name, "pi.conversation");
+	assert.equal(conversation?.type, "span");
+	assert.equal(conversation?.parent, undefined);
+	assert.deepEqual(conversation?.traceUpdates[0], {
 		name: "pi.trace",
 		sessionId: "session-1",
 		input: { prompt: "Fix the test" },
-		metadata: root?.attributes.metadata,
-		tags: ["pi"],
+		metadata: conversation?.attributes.metadata,
+		tags: ["pi", "branch:feature/langfuse-context"],
 	});
-	assert.deepEqual(root?.attributes.input, { prompt: "Fix the test" });
-	assert.deepEqual(root?.attributes.metadata, {
+	assert.deepEqual(conversation?.attributes.input, { prompt: "Fix the test" });
+	assert.deepEqual(conversation?.attributes.metadata, {
 		"pi.cwd": "/workspace",
+		"pi.git.branch": "feature/langfuse-context",
+		"pi.git.commit": "0123456789ab",
+		"pi.git.detached": false,
 		"pi.mode": "tui",
 		"pi.model": "claude",
 		"pi.provider": "anthropic",
 		"pi.session.id": "session-1",
 	});
+	assert.equal(agent?.name, "pi.agent");
+	assert.equal(agent?.type, "agent");
+	assert.equal(agent?.parent, conversation);
+	assert.deepEqual(agent?.attributes, conversation?.attributes);
 	assert.equal(generation?.name, "pi.llm");
 	assert.equal(generation?.type, "generation");
-	assert.equal(generation?.parent, root);
+	assert.equal(generation?.parent, agent);
 	assert.equal(generation?.attributes.input, undefined);
 	assert.deepEqual(generation?.updates.at(-1)?.usageDetails, {
 		cache_creation_input_tokens: 1,
@@ -214,9 +283,10 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 	assert.equal(generation?.ended, true);
 	assert.equal(tool?.name, "pi.tool.read");
 	assert.equal(tool?.type, "tool");
-	assert.equal(tool?.parent, root);
+	assert.equal(tool?.parent, agent);
 	assert.equal(tool?.ended, true);
-	assert.equal(root?.ended, true);
+	assert.equal(agent?.ended, true);
+	assert.equal(conversation?.ended, true);
 	assert.equal(backend.flushes, 1);
 });
 
@@ -243,8 +313,8 @@ test("TraceRecorder only exports known non-zero costs with the Langfuse total bu
 		usage: { cost: { total: 0.01 } },
 	});
 
-	assert.equal(backend.observations[1]?.updates.at(-1)?.costDetails, undefined);
-	assert.deepEqual(backend.observations[2]?.updates.at(-1)?.costDetails, { total: 0.01 });
+	assert.equal(backend.observations[2]?.updates.at(-1)?.costDetails, undefined);
+	assert.deepEqual(backend.observations[3]?.updates.at(-1)?.costDetails, { total: 0.01 });
 });
 
 test("TraceRecorder prefers the concrete response model and retains the requested alias", () => {
@@ -266,8 +336,8 @@ test("TraceRecorder prefers the concrete response model and retains the requeste
 		stopReason: "stop",
 	});
 
-	assert.equal(backend.observations[1]?.updates.at(-1)?.model, "concrete-model");
-	assert.deepEqual(backend.observations[1]?.updates.at(-1)?.metadata, {
+	assert.equal(backend.observations[2]?.updates.at(-1)?.model, "concrete-model");
+	assert.deepEqual(backend.observations[2]?.updates.at(-1)?.metadata, {
 		"pi.provider": "openai",
 		"pi.requested_model": "requested-alias",
 		"pi.stop_reason": "stop",
@@ -282,7 +352,10 @@ test("TraceRecorder replaces all captured values when content capture is disable
 		mode: "tui",
 		captureContent: false,
 	});
-	recorder.beginAgent({ prompt: "private prompt" });
+	recorder.beginAgent({
+		prompt: "private prompt",
+		git: { commit: "abcdef012345", detached: true },
+	});
 	recorder.beginGeneration();
 	recorder.finishAssistant({ role: "assistant", content: "private response" });
 	recorder.beginTool("call", "read", { path: "private path" });
@@ -292,12 +365,17 @@ test("TraceRecorder replaces all captured values when content capture is disable
 	for (const observation of backend.observations) {
 		if (observation.name === "pi.llm") assert.equal(observation.attributes.input, undefined);
 		else assert.equal(observation.attributes.input, "[content capture disabled]");
+		if (observation.name === "pi.conversation" || observation.name === "pi.agent") {
+			assert.equal(observation.attributes.metadata?.["pi.git.commit"], "abcdef012345");
+			assert.equal(observation.attributes.metadata?.["pi.git.detached"], true);
+		}
 		for (const update of observation.updates) {
 			if (update.output !== undefined) {
 				assert.equal(update.output, "[content capture disabled]");
 			}
 		}
 	}
+	assert.deepEqual(backend.observations[0]?.traceUpdates[0]?.tags, ["pi", "git:detached"]);
 });
 
 test("TraceRecorder closes interrupted observations and redacts image payloads", () => {
@@ -320,11 +398,12 @@ test("TraceRecorder closes interrupted observations and redacts image payloads",
 	recorder.finishTool("call-1", { content: "failed", isError: true });
 	recorder.settle();
 
-	const [root, firstGeneration, secondGeneration, tool] = backend.observations;
-	assert.deepEqual(root?.attributes.input, {
+	const [conversation, agent, firstGeneration, secondGeneration, tool] = backend.observations;
+	assert.deepEqual(conversation?.attributes.input, {
 		images: [{ type: "image", mimeType: "image/png", data: "[base64 omitted]" }],
 		prompt: "Describe this",
 	});
+	assert.deepEqual(agent?.attributes.input, conversation?.attributes.input);
 	assert.equal(firstGeneration?.updates.at(-1)?.level, "ERROR");
 	assert.match(String(firstGeneration?.updates.at(-1)?.statusMessage), /interrupted/i);
 	assert.equal(firstGeneration?.ended, true);
@@ -368,6 +447,14 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 			warnings: [],
 		}),
 		createBackend: async () => backend,
+		resolveGitMetadata: async (cwd) => {
+			assert.equal(cwd, "/workspace");
+			return {
+				branch: "feature/lifecycle",
+				commit: "fedcba987654",
+				detached: false,
+			};
+		},
 	});
 	extension(mock.pi);
 
@@ -375,6 +462,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"after_provider_response",
 		"agent_end",
+		"agent_settled",
 		"before_agent_start",
 		"before_provider_request",
 		"message_end",
@@ -423,16 +511,24 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	);
 	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
-	assert.equal(backend.observations.length, 3);
-	assert.equal(
-		backend.observations.every((observation) => observation.ended),
-		true,
-	);
+	assert.equal(backend.observations.length, 4);
 	assert.equal(backend.flushes, 0);
-	const [root, turn, generation] = backend.observations;
+	const [conversation, agent, turn, generation] = backend.observations;
+	assert.equal(conversation?.name, "pi.conversation");
+	assert.equal(conversation?.type, "span");
+	assert.equal(conversation?.ended, false);
+	assert.equal(conversation?.attributes.metadata?.["pi.git.branch"], "feature/lifecycle");
+	assert.equal(conversation?.attributes.metadata?.["pi.git.commit"], "fedcba987654");
+	assert.equal(conversation?.attributes.metadata?.["pi.git.detached"], false);
+	assert.deepEqual(conversation?.traceUpdates[0]?.tags, ["pi", "branch:feature/lifecycle"]);
+	assert.equal(agent?.name, "pi.agent");
+	assert.equal(agent?.parent, conversation);
+	assert.equal(agent?.ended, false);
 	assert.equal(turn?.name, "pi.turn");
-	assert.equal(turn?.parent, root);
+	assert.equal(turn?.parent, agent);
+	assert.equal(turn?.ended, true);
 	assert.equal(generation?.parent, turn);
+	assert.equal(generation?.ended, true);
 	assert.deepEqual(turn?.attributes.metadata, { "pi.turn.index": 0 });
 	assert.deepEqual(turn?.updates.at(-1)?.metadata, {
 		"pi.turn.index": 0,
@@ -467,15 +563,23 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	await mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
 	assert.equal(backend.observations.length, 6);
-	assert.deepEqual(backend.observations[3]?.attributes.input, {
-		prompt: "[automatic continuation]",
-	});
-	assert.equal(backend.observations[4]?.name, "pi.turn");
-	assert.equal(backend.observations[5]?.parent, backend.observations[4]);
+	const continuationTurn = backend.observations[4];
+	const continuationGeneration = backend.observations[5];
+	assert.equal(continuationTurn?.name, "pi.turn");
+	assert.equal(continuationTurn?.parent, agent);
+	assert.equal(continuationTurn?.ended, true);
+	assert.equal(continuationGeneration?.parent, continuationTurn);
+	assert.equal(continuationGeneration?.ended, true);
+	assert.equal(conversation?.ended, false);
+	assert.equal(agent?.ended, false);
+
+	await mock.events.get("agent_settled")?.[0]?.({}, ctx);
+
 	assert.equal(
-		backend.observations.slice(3).every((observation) => observation.ended),
+		backend.observations.every((observation) => observation.ended),
 		true,
 	);
+	assert.deepEqual(conversation?.updates.at(-1)?.output, [{ type: "text", text: "Recovered" }]);
 	assert.equal(backend.flushes, 0);
 });
 
@@ -514,10 +618,16 @@ test("pi-langfuse reconciles the finalized assistant message from agent_end", as
 	};
 	await mock.events.get("agent_end")?.[0]?.({ messages: [finalized] }, ctx);
 
-	const generation = backend.observations[1];
+	const [conversation, agent, generation] = backend.observations;
 	assert.deepEqual(generation?.updates.at(-1)?.output, finalized.content);
 	assert.equal(generation?.updates.at(-1)?.statusMessage, finalized.errorMessage);
 	assert.equal(generation?.ended, true);
+	assert.equal(conversation?.ended, false);
+	assert.equal(agent?.ended, false);
+
+	await mock.events.get("agent_settled")?.[0]?.({}, ctx);
+	assert.equal(conversation?.ended, true);
+	assert.equal(agent?.ended, true);
 });
 
 test("pi-langfuse traces normalized tool inputs and finalized tool outputs", async () => {
@@ -611,8 +721,8 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 	assert.equal(generation?.ended, true);
 	assert.equal(typeof generation?.endTime, "number");
 	const tool = backend.observations.at(-1);
-	assert.equal(backend.observations[1]?.name, "pi.turn");
-	assert.equal(tool?.parent, backend.observations[1]);
+	assert.equal(backend.observations[2]?.name, "pi.turn");
+	assert.equal(tool?.parent, backend.observations[2]);
 	assert.equal(tool?.attributes.input, undefined);
 	assert.deepEqual(tool?.updates.find((update) => update.input !== undefined)?.input, {
 		path: "file.ts",
@@ -792,7 +902,7 @@ test("TraceRecorder bounds oversized tool details as one captured output", () =>
 		),
 	});
 
-	const tool = backend.observations[1];
+	const tool = backend.observations[2];
 	assert.ok(serializedBytes(tool?.attributes.input) <= MAX_CAPTURE_BYTES);
 	assert.ok(serializedBytes(tool?.updates.at(-1)?.output) <= MAX_CAPTURE_BYTES);
 });
@@ -1037,6 +1147,7 @@ test("/langfuse disabled state prioritizes agent-directory setup and routes priv
 		"Show setup and privacy help",
 	]);
 	assert.match(notifications.at(-1)?.message ?? "", /trace content may contain/i);
+	assert.match(notifications.at(-1)?.message ?? "", /git branch.*remain in metadata/i);
 	assert.match(notifications.at(-1)?.message ?? "", /\/config\/pi-langfuse\.json/);
 });
 
@@ -1228,7 +1339,7 @@ test("/langfuse ignores arguments but requires interactive UI", async () => {
 	assert.equal(notifications.at(-1)?.level, "warning");
 });
 
-test("agent_end never waits for or starts a routine flush", async () => {
+test("agent_end leaves the conversation open and settled never starts a routine flush", async () => {
 	const backend = new FakeBackend();
 	backend.forceFlush = () => new Promise<void>(() => undefined);
 	const mock = createMockPi();
@@ -1256,6 +1367,19 @@ test("agent_end never waits for or starts a routine flush", async () => {
 		mock.events.get("agent_end")?.[0]?.({ messages: [] }, ctx),
 		new Promise((_, reject) => setTimeout(() => reject(new Error("agent_end blocked")), 50)),
 	]);
+	assert.equal(
+		backend.observations.every((observation) => observation.ended),
+		false,
+	);
+
+	await Promise.race([
+		mock.events.get("agent_settled")?.[0]?.({}, ctx),
+		new Promise((_, reject) => setTimeout(() => reject(new Error("agent_settled blocked")), 50)),
+	]);
+	assert.equal(
+		backend.observations.every((observation) => observation.ended),
+		true,
+	);
 	assert.equal(backend.flushes, 0);
 });
 
@@ -1372,12 +1496,15 @@ test("isolated runtime preserves the global provider and exports native observat
 		"agent",
 		"generation",
 		"span",
+		"span",
 		"tool",
 	]);
-	const root = spans.find((span) => span.name === "pi.agent");
+	const conversation = spans.find((span) => span.name === "pi.conversation");
+	const agent = spans.find((span) => span.name === "pi.agent");
 	const turn = spans.find((span) => span.name === "pi.turn");
-	assert.equal(root?.parentSpanContext, undefined);
-	assert.equal(turn?.parentSpanContext?.spanId, root?.spanContext().spanId);
+	assert.equal(conversation?.parentSpanContext, undefined);
+	assert.equal(agent?.parentSpanContext?.spanId, conversation?.spanContext().spanId);
+	assert.equal(turn?.parentSpanContext?.spanId, agent?.spanContext().spanId);
 	for (const child of spans.filter((span) => ["pi.llm", "pi.tool.read"].includes(span.name))) {
 		assert.equal(child.parentSpanContext?.spanId, turn?.spanContext().spanId);
 	}
