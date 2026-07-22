@@ -213,6 +213,9 @@ export function createLangfuseExtension(
 				recorder?.finishAssistant(message);
 				break;
 			}
+		});
+
+		pi.on("agent_settled", () => {
 			recorder?.settle();
 		});
 
