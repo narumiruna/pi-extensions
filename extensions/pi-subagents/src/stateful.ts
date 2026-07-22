@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
+import {
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
 	type CompletionDelivery,
@@ -11,16 +15,16 @@ import {
 } from "./agents.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
-import { AgentPersistence } from "./persistence.js";
-import { AgentRegistry, type AgentTurnCompletion, type ManagedAgent } from "./registry.js";
-import { readSubagentSettings } from "./settings.js";
-import { SubprocessTransport } from "./subprocess-transport.js";
 import {
 	type ChildSessionFactory,
 	InProcessTransport,
 	type ParentRuntimeSnapshot,
 } from "./in-process-transport.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import { AgentPersistence } from "./persistence.js";
+import { AgentRegistry, type AgentTurnCompletion, type ManagedAgent } from "./registry.js";
+import { readSubagentSettings } from "./settings.js";
+import { SubprocessTransport } from "./subprocess-transport.js";
 import { WorkspaceManager } from "./workspace.js";
 
 const ContextModeSchema = Type.Union([
@@ -36,6 +40,28 @@ const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 const MAX_COMPLETION_ERROR_BYTES = 512;
 const MAX_COMPLETIONS_PER_MESSAGE = 16;
 const COMPLETION_BATCH_DELAY_MS = 10;
+
+function createSpawnPromptGuidelines(completionDelivery: CompletionDelivery): string[] {
+	const deliveryGuidance =
+		completionDelivery === "auto-resume"
+			? "With subagent_spawn completion delivery set to auto-resume, prefer one subagent_spawn for broad asynchronous research or review that covers related branches even when the final answer depends on its result; do not choose blocking parallel fan-out merely to keep delegation in the same turn."
+			: "With subagent_spawn completion delivery set to next-turn (the default), prefer one subagent_spawn for broad asynchronous research or review only when the current response does not depend on its result; use the blocking subagent when the final answer depends on the detached result.";
+	const noLocalWorkGuidance =
+		completionDelivery === "auto-resume"
+			? "After subagent_spawn returns, do useful non-overlapping local work immediately. If none remains, briefly tell the user what subagent_spawn launched and end the response; auto-resume will request a synthesis turn after completion."
+			: "After subagent_spawn returns, do useful non-overlapping local work immediately. If none remains, briefly tell the user what subagent_spawn launched and end the response only when the current response does not depend on its result; next-turn delivery will not wake an idle root.";
+	return [
+		"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly.",
+		deliveryGuidance,
+		"Use a single subagent_spawn only for a concrete bounded subtask that can run independently and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
+		"Use the blocking subagent instead of subagent_spawn when synchronous output is required before the main agent can continue and waiting is intentional; queued steering cannot be processed until that blocking call returns.",
+		"When subagent_spawn fits the completion-delivery policy, do not choose a blocking parallel subagent merely to keep delegation in the same turn.",
+		"Add another subagent_spawn only for truly independent work with safe workspace concurrency.",
+		noLocalWorkGuidance,
+		"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
+		"subagent_spawn completion is delivered automatically. Do not poll with subagent_list or subagent_messages, repeatedly check progress, or duplicate the delegated work.",
+	];
+}
 
 export interface StatefulSubagentDependencies {
 	createInProcessSession?: ChildSessionFactory;
@@ -54,6 +80,7 @@ export function registerStatefulSubagents(
 	const settings = readSubagentSettings()?.stateful ?? {};
 	let completionDelivery = resolveCompletionDelivery(settings.completionDelivery);
 	let completionBroker: CompletionDeliveryBroker | undefined;
+	let refreshSpawnToolRegistration: (() => void) | undefined;
 	const controller: StatefulSubagentController = {
 		getCompletionDelivery() {
 			return completionDelivery;
@@ -61,6 +88,7 @@ export function registerStatefulSubagents(
 		setCompletionDelivery(value) {
 			completionDelivery = value;
 			completionBroker?.setDelivery(value);
+			refreshSpawnToolRegistration?.();
 		},
 	};
 	if (settings.enabled === false) return controller;
@@ -200,21 +228,13 @@ export function registerStatefulSubagents(
 		}
 	});
 
-	pi.registerTool({
+	const spawnTool = defineTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
 		description:
 			"Start an addressable background subagent, return immediately with an agentId, and receive its completion asynchronously.",
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
-		promptGuidelines: [
-			"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly.",
-			"Prefer one subagent_spawn for broad asynchronous research or review that covers related branches even when the final answer depends on its result; do not choose a blocking parallel subagent merely to keep delegation in the same turn. Add another only for truly independent work with safe workspace concurrency.",
-			"Use a single subagent_spawn only for a concrete bounded subtask that can run independently alongside useful main-agent work and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
-			"Use the blocking subagent tool instead of subagent_spawn only when its outputs are required before the main agent can continue and waiting is intentional; queued steering cannot be processed until that call returns.",
-			"After subagent_spawn returns, do useful non-overlapping local work immediately. If no such work remains, briefly tell the user what subagent_spawn launched and end the response; completion delivery follows the configured policy.",
-			"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
-			"subagent_spawn completion is delivered automatically. Do not poll with subagent_list or subagent_messages, repeatedly check progress, or duplicate the delegated work.",
-		],
+		promptGuidelines: createSpawnPromptGuidelines(completionDelivery),
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
@@ -279,12 +299,21 @@ export function registerStatefulSubagents(
 				throw error;
 			}
 			if (workspace) isolatedAgents.set(agent.id, workspaceOwner);
+			const deliveryNote =
+				completionDelivery === "auto-resume"
+					? "If no useful local work remains, briefly tell the user what was launched and end the response; auto-resume will request synthesis after completion."
+					: "End the response without the result only when the current response does not depend on it; next-turn delivery will not wake an idle root.";
 			return result(
 				agent,
-				`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately, or briefly tell the user what was launched and end the response. Completion will arrive asynchronously according to the configured delivery policy; do not poll for progress.`,
+				`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately. ${deliveryNote} Do not poll for progress.`,
 			);
 		},
 	});
+	refreshSpawnToolRegistration = () => {
+		spawnTool.promptGuidelines = createSpawnPromptGuidelines(completionDelivery);
+		pi.registerTool(spawnTool);
+	};
+	refreshSpawnToolRegistration();
 
 	pi.registerTool({
 		name: "subagent_send",

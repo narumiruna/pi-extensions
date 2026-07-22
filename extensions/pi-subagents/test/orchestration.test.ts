@@ -146,13 +146,12 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		const spawnGuidance = spawnTool.promptGuidelines.join("\n");
 		assert.match(spawnGuidance, /simple or critical-path work/);
 		assert.match(spawnGuidance, /prefer one subagent_spawn.*broad.*research/i);
-		assert.match(spawnGuidance, /even when.*final answer.*depends/i);
+		assert.match(spawnGuidance, /next-turn.*default/i);
+		assert.match(spawnGuidance, /current response.*does not depend/i);
+		assert.match(spawnGuidance, /blocking subagent.*final answer.*depends/i);
+		assert.doesNotMatch(spawnGuidance, /even when.*final answer.*depends/i);
 		assert.match(spawnGuidance, /do not.*blocking parallel.*same turn/i);
 		assert.match(spawnGuidance, /single subagent_spawn.*isolation or specialization/i);
-		assert.match(
-			spawnGuidance,
-			/blocking subagent.*only when.*outputs.*required.*before.*continue/i,
-		);
 		assert.doesNotMatch(
 			spawnGuidance,
 			/use one blocking subagent parallel call for multiple independent one-shot tasks/i,
@@ -220,6 +219,19 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			/trusted project/,
 		);
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+
+		writeFileSync(
+			path.join(dir, "pi-subagents.json"),
+			JSON.stringify({ stateful: { completionDelivery: "auto-resume" } }),
+		);
+		const autoResume = createMockPi();
+		registerStatefulSubagents(autoResume.pi);
+		const autoResumeSpawn = autoResume.tools.find((tool) => tool.name === "subagent_spawn");
+		assert.ok(Array.isArray(autoResumeSpawn?.promptGuidelines));
+		const autoResumeGuidance = autoResumeSpawn.promptGuidelines.join("\n");
+		assert.match(autoResumeGuidance, /auto-resume/i);
+		assert.match(autoResumeGuidance, /even when.*final answer.*depends/i);
+		assert.doesNotMatch(autoResumeGuidance, /next-turn.*default/i);
 
 		writeFileSync(
 			path.join(dir, "pi-subagents.json"),

@@ -4,7 +4,7 @@
 
 `@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. The batch `subagent` tool keeps isolated Pi subprocesses, while addressable lifecycle tools can run reusable agents either as subprocess-backed logical sessions or as public-SDK in-process child sessions.
 
-Use it to split independent research, planning, implementation, and review work across focused workers. Background delegation is intended for sidecar work the main agent can overlap with useful local work—not for handing off one critical-path task and waiting.
+Use it to split independent research, planning, implementation, and review work across focused workers. Under the default next-turn delivery policy, background delegation is for work the current response does not depend on. Opt-in auto-resume also supports final-answer-dependent background work by requesting a synthesis turn after completion.
 
 ## ✨ Features
 
@@ -43,18 +43,19 @@ pi -e ./extensions/pi-subagents
 
 ## 🛠️ Pi tool
 
-`pi-subagents` registers a primary batch tool plus the stateful lifecycle tools documented below:
+`pi-subagents` always registers the primary batch tool and registers the stateful lifecycle tools unless `stateful.enabled` is `false`:
 
 - `subagent` — delegate blocking single, parallel, fan-in, or chained batch work. The main agent cannot process queued steering until the call returns.
-- `subagent_spawn` and related lifecycle tools — start reusable detached work, return immediately, and receive bounded completion messages automatically.
+- `subagent_spawn` and related lifecycle tools — when enabled, start reusable detached work, return immediately, and receive bounded completion messages automatically.
 
 Choose the API by lifecycle:
 
 | Need | Use |
 | --- | --- |
-| A result is required before the root's next action, and blocking user steering is intentional | One blocking `subagent` call (`tasks` for synchronous parallel work) |
-| Broad asynchronous research/review that can overlap root work | Prefer one `subagent_spawn` covering related branches |
-| Reusable history, follow-ups, or mailboxes | `subagent_spawn` and lifecycle tools |
+| A delegated result is required before the root's next action under default next-turn delivery | One blocking `subagent` call (`tasks` for synchronous parallel work) |
+| Broad research/review the current response does not depend on | Prefer one `subagent_spawn` covering related branches, when lifecycle tools are enabled |
+| Final-answer-dependent broad work with `completionDelivery: "auto-resume"` | Prefer one `subagent_spawn`; completion requests a synthesis turn |
+| Reusable history, follow-ups, or mailboxes | `subagent_spawn` and lifecycle tools, when enabled |
 | One simple or critical-path action the root can perform directly | No subagent |
 
 Execution modes:
@@ -72,25 +73,27 @@ Common controls:
 
 ## 🧭 Proactive use
 
-The `subagent` tool advertises concise prompt guidance so the main Pi agent can decide
-whether to spawn 0, 1, or multiple subagents without an explicit user-specified count.
+The always-available `subagent` tool advertises only blocking guidance. When stateful lifecycle tools
+are registered, `subagent_spawn` adds detached guidance for the active completion-delivery policy.
+Changing the policy through `/subagents settings` refreshes that guidance immediately.
 
 Count-selection guidance:
 
 - Use **no subagent** for simple answers, quick targeted edits, latency-sensitive one-step work, or
-  tasks that need frequent user back-and-forth.
+  critical-path work the main agent can perform directly.
 - `subagent` is deliberately blocking: while it runs, the main agent cannot answer queued steering.
-  Use it only when the outputs are required before the next root action and waiting is intentional.
-- For broad research or review, prefer **one detached `subagent_spawn`** whose task covers related
-  branches even when the final answer depends on its result. Do not choose blocking parallel fan-out
-  merely to keep delegation in one turn. Add another detached agent only when the work is truly
-  independent and shared-workspace concurrency is safe.
-- Use detached `subagent_spawn` only for a concrete bounded subtask that can run independently
-  alongside useful main-agent work and when bounded context/output, independent review, a distinct
-  model/tool profile, or workspace isolation provides concrete value. After spawning, do useful
-  non-overlapping work immediately. If none remains, briefly tell the user what was launched and end
-  the response. Do not poll lifecycle tools for progress or duplicate the delegated work.
-- If synchronous parallel or fan-in output is genuinely required, keep blocking `subagent` tasks
+  Use it when delegated outputs are required before the next root action and waiting is intentional.
+- With default `completionDelivery: "next-turn"`, prefer **one detached `subagent_spawn`** for broad
+  research or review only when the current response does not depend on its result. Keep
+  final-answer-dependent delegated work on the blocking path because an idle root is not awakened.
+- With `completionDelivery: "auto-resume"`, prefer one detached `subagent_spawn` for broad related
+  research or review even when the final answer depends on it; completion requests a later synthesis
+  turn. Do not choose blocking parallel fan-out merely to keep delegation in one turn.
+- Use detached `subagent_spawn` only when lifecycle tools are enabled and a bounded independent task
+  has a concrete isolation or specialization benefit. After spawning, do useful non-overlapping work
+  immediately. Do not poll lifecycle tools for progress or duplicate the delegated work.
+- Add another detached agent only for truly independent work with safe workspace concurrency. If
+  synchronous parallel or fan-in output is genuinely required, keep blocking `subagent` tasks
   independent, stay within the hard max of 8, and do not parallelize implementation that may edit
   the same files or shared state.
 - Do not use project-local agents unless the user explicitly opts into them with
@@ -104,7 +107,7 @@ No subagent for a known-file edit:
 Rename one symbol in src/foo.ts.
 ```
 
-One detached agent for a broad asynchronous review (call `subagent_spawn`):
+One detached agent for a broad asynchronous review that the current response does not require, or when auto-resume is enabled (call `subagent_spawn`):
 
 ```json
 {
@@ -138,7 +141,8 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 ## 🚀 Blocking batch examples
 
 Every example in this section calls `subagent` and keeps the main agent unavailable until the batch
-finishes. Use `subagent_spawn` instead when the work can complete asynchronously.
+finishes. Use `subagent_spawn` instead when the work can complete asynchronously and its configured
+completion policy supports when synthesis is needed.
 
 Run one read-only reconnaissance agent:
 
@@ -205,7 +209,7 @@ Run a chain where each step receives the previous output:
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a non-polling policy: prefer one bounded `subagent_spawn` that covers related asynchronous research or review even when the final answer depends on its result, then do useful non-overlapping main-agent work immediately. If none remains, briefly tell the user what was launched and end the response. Do not poll `subagent_list` or `subagent_messages` for progress, and do not duplicate the delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. The blocking `subagent` batch tool remains available when results are genuinely needed before the root can continue and delaying queued steering is intentional; detached lifecycle work intentionally has no `subagent_wait` tool.
+Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result; if it does, use blocking `subagent`. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_list` or `subagent_messages`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
 
 A detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
@@ -218,7 +222,7 @@ Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. S
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
-Use `/subagents settings` to change completion delivery interactively and apply it immediately. `/subagents status` shows configured versus runtime values, source, and path; `/subagents help` summarizes the commands. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
+Use `/subagents settings` to change completion delivery interactively and apply it immediately, including refreshing the model-facing spawn guidance. `/subagents status` shows configured versus runtime values, source, and path; `/subagents help` summarizes the commands. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
