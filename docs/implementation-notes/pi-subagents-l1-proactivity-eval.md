@@ -3,6 +3,8 @@
 Original date: 2026-05-17
 Updated: 2026-07-11
 
+> Historical evaluation. On 2026-07-23, the detached wait tool was removed and opt-in `stateful.completionDelivery: "auto-resume"` added the bounded autonomous scheduler that this note previously rejected by default.
+
 ## Method
 
 The policy remains static tool prompt metadata and documentation, not autonomous runtime orchestration. Tests inspect both blocking `subagent` guidance and default-on background `subagent_spawn` guidance. Live model tool choice is not a deterministic pass/fail oracle.

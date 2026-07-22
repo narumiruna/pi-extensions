@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentConfig,
+	type CompletionDelivery,
 	isThinkingLevel,
 	type SubagentAgentConfig,
 	type SubagentSettings,
@@ -88,6 +89,15 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 			}
 			runtime.transport = value.stateful.transport;
 		}
+		if (hasOwn(value.stateful, "completionDelivery")) {
+			if (
+				value.stateful.completionDelivery !== "next-turn" &&
+				value.stateful.completionDelivery !== "auto-resume"
+			) {
+				return undefined;
+			}
+			runtime.completionDelivery = value.stateful.completionDelivery;
+		}
 		for (const key of [
 			"maxAgents",
 			"maxActiveTurns",
@@ -121,6 +131,7 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 
 const SETTINGS_FILE = "pi-subagents.json";
 const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
+const DEFAULT_COMPLETION_DELIVERY: CompletionDelivery = "next-turn";
 let pendingSettingsNotice: string | undefined;
 
 export function readSubagentSettings(): SubagentSettings | undefined {
@@ -227,6 +238,108 @@ export function consumeSubagentSettingsNotice() {
 }
 
 export function saveSubagentConfig(settings: SubagentSettings): void {
+	writeSettingsObject(settings);
+}
+
+export interface CompletionDeliverySettingsSnapshot {
+	path: string;
+	value: CompletionDelivery;
+	source: "default" | "user settings";
+	error?: string;
+}
+
+export function subagentSettingsFilePath(): string {
+	return path.join(getAgentDir(), SETTINGS_FILE);
+}
+
+export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsSnapshot {
+	const configPath = subagentSettingsFilePath();
+	if (!fs.existsSync(configPath)) {
+		return { path: configPath, value: DEFAULT_COMPLETION_DELIVERY, source: "default" };
+	}
+	try {
+		const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		const settings = normalizeSubagentSettings(raw);
+		if (!settings) throw new Error(`${SETTINGS_FILE} is not a valid settings object`);
+		const explicit =
+			isPlainObject(raw.stateful) && hasOwn(raw.stateful, "completionDelivery");
+		return {
+			path: configPath,
+			value: settings.stateful?.completionDelivery ?? DEFAULT_COMPLETION_DELIVERY,
+			source: explicit ? "user settings" : "default",
+		};
+	} catch (error) {
+		return {
+			path: configPath,
+			value: DEFAULT_COMPLETION_DELIVERY,
+			source: "default",
+			error: formatError(error),
+		};
+	}
+}
+
+export function updateCompletionDeliverySetting(value: CompletionDelivery): void {
+	const raw = readSettingsObjectForUpdate();
+	const stateful = raw.stateful;
+	if (stateful !== undefined && !isPlainObject(stateful)) {
+		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+	}
+	writeSettingsObject({
+		...raw,
+		stateful: {
+			...(stateful ?? {}),
+			completionDelivery: value,
+		},
+	});
+}
+
+export function updateAgentToolsSetting(name: string, tools: string[] | undefined): void {
+	const raw = readSettingsObjectForUpdate();
+	const rawAgents = raw.agents;
+	if (rawAgents !== undefined && !isPlainObject(rawAgents)) {
+		throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
+	}
+	const agents = { ...(rawAgents ?? {}) };
+	const rawAgent = hasOwn(agents, name) ? agents[name] : undefined;
+	if (rawAgent !== undefined && !isPlainObject(rawAgent)) {
+		throw new Error(`Cannot update invalid ${SETTINGS_FILE} settings for ${name}`);
+	}
+	const agent = { ...(rawAgent ?? {}) };
+	if (tools === undefined) delete agent.tools;
+	else agent.tools = tools;
+	if (Object.keys(agent).length > 0) {
+		Object.defineProperty(agents, name, {
+			value: agent,
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		});
+	} else {
+		delete agents[name];
+	}
+
+	const updated = { ...raw };
+	if (Object.keys(agents).length > 0) updated.agents = agents;
+	else delete updated.agents;
+	writeSettingsObject(updated);
+}
+
+function readSettingsObjectForUpdate(): Record<string, unknown> {
+	const configPath = subagentSettingsFilePath();
+	if (!fs.existsSync(configPath)) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	} catch (error) {
+		throw new Error(`Cannot update malformed ${SETTINGS_FILE}: ${formatError(error)}`);
+	}
+	if (!isPlainObject(parsed) || !normalizeSubagentSettings(parsed)) {
+		throw new Error(`Cannot update invalid ${SETTINGS_FILE}`);
+	}
+	return parsed;
+}
+
+function writeSettingsObject(settings: object): void {
 	const agentDir = getAgentDir();
 	fs.mkdirSync(agentDir, { recursive: true });
 	const configPath = path.join(agentDir, SETTINGS_FILE);

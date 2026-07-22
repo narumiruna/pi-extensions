@@ -20,6 +20,7 @@ import {
 } from "../src/in-process-transport.js";
 import type { ManagedAgent } from "../src/registry.js";
 import { registerStatefulSubagents } from "../src/stateful.js";
+import { type IsolatedWorkspace, WorkspaceManager } from "../src/workspace.js";
 
 function managedAgent(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	return {
@@ -99,6 +100,21 @@ async function createTestModelRegistry(): Promise<{
 	}
 }
 
+class FakeWorkspaceManager extends WorkspaceManager {
+	override async create(_ownerId: string, cwd: string): Promise<IsolatedWorkspace> {
+		return {
+			mode: "worktree",
+			path: cwd,
+			rootPath: cwd,
+			repositoryRoot: cwd,
+		};
+	}
+
+	override async cleanup(_ownerId: string): Promise<void> {}
+
+	override async cleanupAll(): Promise<void> {}
+}
+
 class FakeChildSession implements ChildSession {
 	readonly sessionId = "child-session";
 	readonly prompts: string[] = [];
@@ -156,6 +172,13 @@ class FakeChildSession implements ChildSession {
 
 	getActiveToolNames(): string[] {
 		return ["read"];
+	}
+}
+
+class DelayedAbortChildSession extends FakeChildSession {
+	override async abort(): Promise<void> {
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		await super.abort();
 	}
 }
 
@@ -474,13 +497,19 @@ test("child resource loader excludes extensions while retaining the agent prompt
 	assert.equal(loader.getAgentsFiles().agentsFiles.at(-1)?.content, "Trusted child context.");
 });
 
-test("registered detached spawn returns while running and publishes each in-process completion", async () => {
+test("registered detached spawn auto-resumes without exposing a wait tool", async () => {
 	const originalDir = process.env.PI_CODING_AGENT_DIR;
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-tools-"));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	writeFileSync(
 		path.join(agentDir, "pi-subagents.json"),
-		JSON.stringify({ stateful: { transport: "in-process", persistence: false } }),
+		JSON.stringify({
+			stateful: {
+				transport: "in-process",
+				completionDelivery: "auto-resume",
+				persistence: false,
+			},
+		}),
 	);
 	try {
 		const child = new FakeChildSession();
@@ -492,9 +521,14 @@ test("registered detached spawn returns while running and publishes each in-proc
 				return child;
 			},
 		});
+		assert.equal(
+			mock.tools.some((tool) => tool.name === "subagent_wait"),
+			false,
+		);
 		const initialModel = { id: "initial" };
 		const selectedModel = { id: "selected" };
-		const context = createMockContext({ model: initialModel });
+		let rootIdle = false;
+		const context = createMockContext({ model: initialModel, isIdle: () => rootIdle });
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		mock.events.get("model_select")?.[0]?.({ model: selectedModel }, context.ctx);
 		mock.events.get("thinking_level_select")?.[0]?.({ level: "max" }, context.ctx);
@@ -513,64 +547,146 @@ test("registered detached spawn returns while running and publishes each in-proc
 				details: { agent: { id: string; state: string } };
 			}>;
 		};
+		const waitForCompletionCount = async (expected: number) => {
+			for (let attempt = 0; attempt < 50 && mock.sentMessages.length < expected; attempt++) {
+				await new Promise((resolve) => setTimeout(resolve, 2));
+			}
+			assert.equal(mock.sentMessages.length, expected);
+		};
+
 		child.waitForNextAbort();
 		const spawned = await execute("subagent_spawn", { agent: "scout", task: "first" });
 		const agentId = spawned.details.agent.id;
 		assert.match(spawned.details.agent.state, /starting|running/);
 		assert.match(spawned.content[0]?.text ?? "", /useful non-overlapping work immediately/i);
-		assert.match(spawned.content[0]?.text ?? "", /critical-path step is blocked/i);
+		assert.match(spawned.content[0]?.text ?? "", /end the response/i);
+		assert.match(spawned.content[0]?.text ?? "", /do not poll/i);
 		assert.deepEqual(child.prompts, ["first"]);
-		assert.equal(mock.sentMessages.length, 0);
-		mock.events.get("agent_end")?.[0]?.({}, context.ctx);
-		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(
-			mock.sentUserMessages.length,
-			0,
-			"detached work must not autonomously start a root recovery turn",
-		);
 		await execute("subagent_interrupt", { agentId });
-		assert.equal(
-			mock.sentUserMessages.length,
-			0,
-			"terminal completion remains asynchronous instead of waking the root",
-		);
+		await new Promise((resolve) => setTimeout(resolve, 15));
+		assert.equal(mock.sentMessages.length, 0, "active root completion waits for settlement");
+		rootIdle = true;
+		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+		await waitForCompletionCount(1);
+		mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+
 		await execute("subagent_send", { agentId, task: "second" });
-		await Promise.all([
-			execute("subagent_wait", { agentId, timeoutMs: 100 }),
-			execute("subagent_wait", { agentId, timeoutMs: 100 }),
-		]);
+		await waitForCompletionCount(2);
+		mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+
 		child.waitForNextAbort();
 		await execute("subagent_send", { agentId, task: "interrupt me" });
 		await execute("subagent_interrupt", { agentId });
+		await waitForCompletionCount(3);
+		mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+
 		await execute("subagent_send", { agentId, task: "recovered" });
-		await execute("subagent_wait", { agentId, timeoutMs: 100 });
+		await waitForCompletionCount(4);
 		await execute("subagent_close", { agentId });
+
 		assert.deepEqual(child.prompts, ["first", "second", "interrupt me", "recovered"]);
 		assert.equal(created.length, 1);
 		assert.equal(created[0].parentRuntime.model, selectedModel);
 		assert.equal(created[0].parentRuntime.thinkingLevel, "max");
 		assert.equal(child.disposals, 1);
-		await new Promise((resolve) => setImmediate(resolve));
-		assert.equal(
-			mock.sentMessages.length,
-			2,
-			"active waits consume completion without suppressing unwaited turns",
+		for (const entry of mock.sentMessages) {
+			const delivered = entry as {
+				message: { customType: string; content: string };
+				options: { deliverAs: string; triggerTurn: boolean };
+			};
+			assert.equal(delivered.message.customType, "pi-subagent-completion");
+			assert.match(delivered.message.content, /Message Type: SUBAGENT_COMPLETION/);
+			assert.deepEqual(delivered.options, { deliverAs: "steer", triggerTurn: true });
+		}
+		assert.match(
+			String((mock.sentMessages[0] as { message: { content: string } }).message.content),
+			/Payload:\ndone:first/,
 		);
-		const firstCompletion = mock.sentMessages[0] as {
-			message: { customType: string; content: string; details: { agentId: string; state: string } };
-			options: { deliverAs: string; triggerTurn: boolean };
-		};
-		assert.equal(firstCompletion.message.customType, "pi-subagent-completion");
-		assert.equal(firstCompletion.message.details.agentId, agentId);
-		assert.equal(firstCompletion.message.details.state, "interrupted");
-		assert.match(firstCompletion.message.content, /Message Type: SUBAGENT_COMPLETION/);
-		assert.match(firstCompletion.message.content, /Payload:\ndone:first/);
-		assert.deepEqual(firstCompletion.options, { deliverAs: "steer", triggerTurn: false });
-		assert.equal(mock.sentUserMessages.length, 0);
-		mock.events.get("agent_end")?.[0]?.({}, context.ctx);
-		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(mock.sentUserMessages.length, 0, "closed work does not wake the root");
+		assert.equal(mock.sentUserMessages.length, 0, "completion uses a custom message wake");
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	} finally {
+		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalDir;
+	}
+});
+
+test("session shutdown closes completion delivery before delayed isolated-agent cleanup", async () => {
+	const originalDir = process.env.PI_CODING_AGENT_DIR;
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-shutdown-delivery-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	writeFileSync(
+		path.join(agentDir, "pi-subagents.json"),
+		JSON.stringify({
+			stateful: {
+				transport: "in-process",
+				completionDelivery: "auto-resume",
+			},
+		}),
+	);
+	try {
+		const completedChild = new FakeChildSession();
+		const activeChild = new DelayedAbortChildSession();
+		activeChild.waitForNextAbort();
+		let childIndex = 0;
+		const mock = createMockPi();
+		registerStatefulSubagents(mock.pi, {
+			createInProcessSession: async () => (childIndex++ === 0 ? completedChild : activeChild),
+			workspaceManager: new FakeWorkspaceManager(),
+		});
+		const context = createMockContext({ isIdle: () => true });
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const execute = async (name: string, params: Record<string, unknown>) => {
+			const tool = mock.tools.find((candidate) => candidate.name === name) as {
+				execute: (...args: unknown[]) => Promise<unknown>;
+			};
+			return tool.execute(
+				"call",
+				params,
+				new AbortController().signal,
+				undefined,
+				context.ctx,
+			) as Promise<{
+				details: {
+					agent?: { id: string };
+					agents?: Array<{ id: string; state: string }>;
+				};
+			}>;
+		};
+		const first = await execute("subagent_spawn", {
+			agent: "scout",
+			task: "complete before shutdown",
+			workspaceMode: "worktree",
+		});
+		const second = await execute("subagent_spawn", {
+			agent: "scout",
+			task: "delay shutdown cleanup",
+			workspaceMode: "worktree",
+		});
+		for (let attempt = 0; attempt < 50; attempt++) {
+			await Promise.resolve();
+			const listed = await execute("subagent_list", {});
+			const firstState = listed.details.agents?.find(
+				(agent) => agent.id === first.details.agent?.id,
+			)?.state;
+			const secondState = listed.details.agents?.find(
+				(agent) => agent.id === second.details.agent?.id,
+			)?.state;
+			if (firstState === "completed" && secondState === "running") break;
+		}
+		const listed = await execute("subagent_list", {});
+		assert.equal(
+			listed.details.agents?.find((agent) => agent.id === first.details.agent?.id)?.state,
+			"completed",
+		);
+		assert.equal(
+			listed.details.agents?.find((agent) => agent.id === second.details.agent?.id)?.state,
+			"running",
+		);
+		assert.equal(mock.sentMessages.length, 0, "completion timer has not fired yet");
+
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(mock.sentMessages.length, 0, "shutdown must suppress the queued root wake");
 	} finally {
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalDir;

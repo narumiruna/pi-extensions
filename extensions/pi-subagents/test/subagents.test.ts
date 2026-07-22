@@ -13,7 +13,8 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
 import { ToolToggleList } from "../src/config-ui.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
@@ -21,6 +22,7 @@ import subagents, {
 	buildPiArgs,
 	formatTokens,
 	formatUsageStats,
+	inspectCompletionDeliverySettings,
 	normalizeSubagentSettings,
 	parsePositiveInteger,
 	readSubagentSettings,
@@ -28,7 +30,11 @@ import subagents, {
 	sameToolSet,
 	saveSubagentConfig,
 	uniqueToolNames,
+	updateAgentToolsSetting,
+	updateCompletionDeliverySetting,
 } from "../src/subagents.js";
+
+initTheme("dark", false);
 
 type SchemaObject = {
 	properties?: Record<string, SchemaObject>;
@@ -66,9 +72,8 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	assert.match(guidanceText, /critical-path/i);
 	assert.match(guidanceText, /subagent_spawn.*parallel, isolation, or specialization benefit/i);
 	assert.match(guidanceText, /useful non-overlapping.*immediately/i);
-	assert.match(guidanceText, /subagent_wait.*sparingly/i);
-	assert.match(guidanceText, /immediate.*critical-path.*blocked/i);
-	assert.doesNotMatch(guidanceText, /do not yield permanently/i);
+	assert.match(guidanceText, /tell the user.*end the response/i);
+	assert.match(guidanceText, /do not poll.*subagent_list/i);
 	assert.match(guidanceText, /synthesize available.*completion/i);
 	assert.match(guidanceText, /after subagent_spawn.*non-overlapping work immediately/i);
 	assert.match(guidanceText, /subagent_spawn completion messages/i);
@@ -95,7 +100,12 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 		parameters?.properties?.aggregator?.properties?.thinkingLevel?.enum,
 		thinkingLevels,
 	);
+	assert.ok(mock.commands.has("subagents"));
 	assert.ok(mock.commands.has("subagents:config"));
+	assert.deepEqual(mock.commands.get("subagents")?.getArgumentCompletions?.("s"), [
+		{ value: "settings", label: "settings", description: "Configure completion delivery" },
+		{ value: "status", label: "status", description: "Show effective subagent settings" },
+	]);
 	const toolResultHandler = mock.events.get("tool_result")?.[0];
 	assert.deepEqual(
 		toolResultHandler?.(
@@ -104,6 +114,109 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 		),
 		{ isError: true },
 	);
+});
+
+test("subagent settings UI preserves unknown JSON and applies completion delivery immediately", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-settings-ui-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ futureOption: true, stateful: { futureStatefulOption: "keep" } }),
+		);
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let customCalls = 0;
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				customCalls++;
+				return driveCustomSelector(factory, ["\r", "\u001b"]).result;
+			},
+		});
+		await command.handler("settings", context.ctx);
+		assert.equal(customCalls, 1);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			futureOption: true,
+			stateful: {
+				futureStatefulOption: "keep",
+				completionDelivery: "auto-resume",
+			},
+		});
+		updateAgentToolsSetting("scout", ["read"]);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			futureOption: true,
+			stateful: {
+				futureStatefulOption: "keep",
+				completionDelivery: "auto-resume",
+			},
+			agents: { scout: { tools: ["read"] } },
+		});
+		await command.handler("status", context.ctx);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/runtime completionDelivery: auto-resume/,
+		);
+
+		const nonTui = createMockContext({
+			mode: "json",
+			hasUI: true,
+			custom: async () => {
+				throw new Error("custom UI must not open");
+			},
+		});
+		await command.handler("settings", nonTui.ctx);
+		assert.match(nonTui.notifications[0]?.message ?? "", /Edit settings manually/);
+		await mock.commands.get("subagents:config")?.handler("", nonTui.ctx);
+		assert.match(nonTui.notifications.at(-1)?.message ?? "", /requires TUI mode/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("subagent settings UI rolls back after an atomic save failure", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-settings-rollback-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let renders: string[][] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				rmSync(settingsPath);
+				mkdirSync(settingsPath);
+				const driven = driveCustomSelector(factory, ["\r", "\u001b"]);
+				renders = driven.renders;
+				return driven.result;
+			},
+		});
+		await command.handler("settings", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /were not saved/i);
+		assert.ok(renders[0]?.some((line) => line.includes("next-turn")));
+		await command.handler("status", context.ctx);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/runtime completionDelivery: next-turn/,
+		);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("subagent tool selection keeps the cursor on the toggled row", () => {
@@ -308,6 +421,46 @@ test("subagent settings migrate and save to the canonical package filename", () 
 		const ignoredContext = createMockContext();
 		ignoredMock.events.get("session_start")?.[0]?.({}, ignoredContext.ctx);
 		assert.match(ignoredContext.notifications[0]?.message ?? "", /ignored/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("completion delivery inspection rejects malformed settings without overwriting them", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-completion-settings-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		assert.deepEqual(inspectCompletionDeliverySettings(), {
+			path: path.join(directory, "pi-subagents.json"),
+			value: "next-turn",
+			source: "default",
+		});
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{ malformed");
+		assert.match(inspectCompletionDeliverySettings().error ?? "", /JSON|position|property/i);
+		assert.throws(() => updateCompletionDeliverySetting("auto-resume"), /Cannot update malformed/);
+		assert.equal(readFileSync(settingsPath, "utf8"), "{ malformed");
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("agent tool patches preserve prototype-like names as data", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-tools-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		updateAgentToolsSetting("__proto__", ["read"]);
+		const raw = JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8"));
+		assert.equal(Object.hasOwn(raw.agents, "__proto__"), true);
+		assert.deepEqual(Object.getOwnPropertyDescriptor(raw.agents, "__proto__")?.value, {
+			tools: ["read"],
+		});
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

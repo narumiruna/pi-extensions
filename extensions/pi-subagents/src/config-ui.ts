@@ -1,24 +1,42 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
+	type AutocompleteItem,
 	Container,
 	Key,
 	matchesKey,
 	type SelectItem,
 	SelectList,
+	type SettingItem,
+	SettingsList,
 	Spacer,
 	Text,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { discoverAgents, type SubagentSettings } from "./agents.js";
+import { type CompletionDelivery, discoverAgents } from "./agents.js";
 import {
-	hasAnyAgentOverride,
 	hasOwn,
+	inspectCompletionDeliverySettings,
 	readSubagentSettings,
 	sameToolSet,
-	saveSubagentConfig,
+	updateAgentToolsSetting,
+	updateCompletionDeliverySetting,
 	uniqueToolNames,
 } from "./settings.js";
+
+const SUBCOMMANDS: AutocompleteItem[] = [
+	{ value: "settings", label: "settings", description: "Configure completion delivery" },
+	{ value: "status", label: "status", description: "Show effective subagent settings" },
+	{ value: "help", label: "help", description: "Show subagent settings help" },
+];
+
+export interface SubagentSettingsRuntime {
+	getCompletionDelivery(): CompletionDelivery;
+	setCompletionDelivery(value: CompletionDelivery): void;
+}
 
 export class ToolToggleList {
 	private items: { name: string; selected: boolean }[];
@@ -76,11 +94,16 @@ export class ToolToggleList {
 	}
 }
 
-export function registerSubagentConfigCommand(pi: ExtensionAPI) {
+export function registerSubagentConfigCommand(
+	pi: ExtensionAPI,
+	runtime: SubagentSettingsRuntime,
+) {
+	registerSubagentPrimaryCommand(pi, runtime);
 	pi.registerCommand("subagents:config", {
 		description: "Configure which tools each subagent can use",
 		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) {
+			if (ctx.mode !== "tui") {
+				if (ctx.hasUI) ctx.ui.notify("/subagents:config requires TUI mode", "info");
 				return;
 			}
 
@@ -248,39 +271,12 @@ export function registerSubagentConfigCommand(pi: ExtensionAPI) {
 				// null means user cancelled — loop back to agent selection
 				if (selectedTools === null) continue;
 
-				// Save to global settings
-				const updatedAgents = { ...currentAgents };
-				let restoredDefaults = false;
-
-				const isSameAsDefault =
+				// Patch only this agent's tool field so forward-compatible settings survive.
+				const restoredDefaults =
 					defaultTools === undefined
 						? sameToolSet(selectedTools, allTools)
 						: sameToolSet(selectedTools, defaultTools);
-
-				if (isSameAsDefault) {
-					// Tools match defaults — remove only the tools override.
-					// Keep other settings (model, timeoutMs) if present.
-					const existing = updatedAgents[agentName];
-					if (existing) {
-						const nextConfig = { ...existing };
-						delete nextConfig.tools;
-						if (hasAnyAgentOverride(nextConfig)) updatedAgents[agentName] = nextConfig;
-						else delete updatedAgents[agentName];
-					}
-					restoredDefaults = true;
-				} else {
-					updatedAgents[agentName] = {
-						...updatedAgents[agentName],
-						tools: selectedTools,
-					};
-				}
-
-				const newSettings: SubagentSettings = {
-					...currentSettings,
-					agents: Object.keys(updatedAgents).length > 0 ? updatedAgents : undefined,
-				};
-
-				saveSubagentConfig(newSettings);
+				updateAgentToolsSetting(agentName, restoredDefaults ? undefined : selectedTools);
 				const message = restoredDefaults
 					? `${agentName}: defaults restored`
 					: `${agentName}: ${selectedTools.length} tool${selectedTools.length !== 1 ? "s" : ""} configured`;
@@ -290,4 +286,132 @@ export function registerSubagentConfigCommand(pi: ExtensionAPI) {
 			}
 		},
 	});
+}
+
+function registerSubagentPrimaryCommand(pi: ExtensionAPI, runtime: SubagentSettingsRuntime) {
+	pi.registerCommand("subagents", {
+		description: "Configure or inspect subagent settings",
+		getArgumentCompletions(prefix: string): AutocompleteItem[] | null {
+			const normalized = prefix.trim().toLowerCase();
+			const matches = SUBCOMMANDS.filter((item) => item.value.startsWith(normalized));
+			return matches.length > 0 ? matches : null;
+		},
+		async handler(args, ctx) {
+			const subcommand = args.trim().split(/\s+/u)[0]?.toLowerCase() || "help";
+			switch (subcommand) {
+				case "settings":
+					await showSubagentSettings(ctx, runtime);
+					return;
+				case "status":
+					showSubagentStatus(ctx, runtime);
+					return;
+				case "help":
+					showSubagentHelp(ctx);
+					return;
+				default:
+					if (ctx.mode === "tui" || ctx.hasUI) {
+						ctx.ui.notify(`Unknown /subagents subcommand: ${subcommand}`, "warning");
+					}
+			}
+		},
+	});
+}
+
+async function showSubagentSettings(
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+) {
+	const snapshot = inspectCompletionDeliverySettings();
+	if (ctx.mode !== "tui") {
+		if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${snapshot.path}`, "info");
+		return;
+	}
+	if (snapshot.error) {
+		ctx.ui.notify(`Subagent settings cannot be edited: ${snapshot.error}`, "error");
+		return;
+	}
+	let currentValue = snapshot.value;
+	await ctx.ui.custom((tui, theme, _keybindings, done) => {
+		const items: SettingItem[] = [
+			{
+				id: "completionDelivery",
+				label: "Completion delivery",
+				description:
+					"next-turn queues completion without waking an idle root; auto-resume starts one synthesis turn after the root settles.",
+				currentValue,
+				values: ["next-turn", "auto-resume"],
+			},
+		];
+		const container = new Container();
+		container.addChild(
+			new Text(theme.fg("accent", theme.bold("Subagent Settings")), 1, 1),
+		);
+		let settingsList: SettingsList;
+		settingsList = new SettingsList(
+			items,
+			Math.min(items.length + 2, 15),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				if (id !== "completionDelivery") return;
+				const previous = currentValue;
+				const next = newValue as CompletionDelivery;
+				try {
+					updateCompletionDeliverySetting(next);
+					runtime.setCompletionDelivery(next);
+					currentValue = next;
+					ctx.ui.notify(`Completion delivery set to ${next}.`, "info");
+				} catch (error) {
+					settingsList.updateValue(id, previous);
+					ctx.ui.notify(`Subagent settings were not saved: ${formatError(error)}`, "error");
+				}
+				tui.requestRender();
+			},
+			() => done(undefined),
+		);
+		container.addChild(settingsList);
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput(data: string) {
+				settingsList.handleInput?.(data);
+				tui.requestRender();
+			},
+		};
+	});
+}
+
+function showSubagentStatus(ctx: ExtensionCommandContext, runtime: SubagentSettingsRuntime) {
+	if (ctx.mode !== "tui" && !ctx.hasUI) return;
+	const snapshot = inspectCompletionDeliverySettings();
+	ctx.ui.notify(
+		[
+			`pi-subagents source: ${snapshot.source}`,
+			`path: ${snapshot.path}`,
+			`configured completionDelivery: ${snapshot.value}`,
+			`runtime completionDelivery: ${runtime.getCompletionDelivery()}`,
+			snapshot.error ? `warning: ${snapshot.error}` : "warning: none",
+			"Manual file changes require /reload; /subagents settings applies immediately.",
+		].join("\n"),
+		snapshot.error ? "warning" : "info",
+	);
+}
+
+function showSubagentHelp(ctx: ExtensionCommandContext) {
+	if (ctx.mode !== "tui" && !ctx.hasUI) return;
+	const snapshot = inspectCompletionDeliverySettings();
+	ctx.ui.notify(
+		[
+			"/subagents settings — configure completion delivery",
+			"/subagents status — show configured and runtime values",
+			"/subagents help — show this help",
+			"/subagents:config — configure per-agent tool allow-lists",
+			"/subagents:agents list|clear — inspect or clear retained agents",
+			`Settings: ${snapshot.path}`,
+		].join("\n"),
+		"info",
+	);
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

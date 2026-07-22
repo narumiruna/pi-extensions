@@ -40,7 +40,8 @@ export default function (pi: ExtensionAPI) {
 			"A single blocking subagent call should be used only when independent context, high-volume output isolation, or an external review is worth waiting for; otherwise do the task in the main agent.",
 			"For one-shot parallel work, use a single subagent call with tasks instead of repeated subagent_spawn calls, even when the user explicitly requests multiple agents.",
 			"When subagent_spawn is available, use it only for a concrete bounded subtask that can run independently alongside useful main-agent work and has a parallel, isolation, or specialization benefit; otherwise keep the work in the main agent.",
-			"After subagent_spawn returns, do useful non-overlapping work immediately. Call subagent_wait sparingly, only when the immediate next critical-path step requires the result and is blocked until it arrives; do not wait repeatedly by reflex.",
+			"After subagent_spawn returns, do useful non-overlapping work immediately. If none remains, briefly tell the user what was launched and end the response; completion delivery follows the configured policy.",
+			"Do not poll subagent_spawn work with subagent_list or subagent_messages, repeatedly check progress, or duplicate the delegated work.",
 			"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
 			"Use subagent parallel mode with 2-4 parallel read-only subagents when work has broad independent branches; prefer scout or reviewer for fan-out and add an aggregator when synthesis helps.",
 			"Use more than 4 subagent tasks only when clearly justified by distinct independent branches, and stay within the existing hard max 8 parallel tasks.",
@@ -78,18 +79,22 @@ export default function (pi: ExtensionAPI) {
 		if (notice) ctx.ui.notify(notice, "warning");
 	});
 
-	registerSubagentConfigCommand(pi);
-	registerStatefulSubagents(pi);
+	const statefulRuntime = registerStatefulSubagents(pi);
+	registerSubagentConfigCommand(pi, statefulRuntime);
 }
 export { formatTokens, formatUsageStats } from "./render.js";
 export { buildPiArgs } from "./runner.js";
 export {
+	inspectCompletionDeliverySettings,
 	normalizeAgentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
 	resolveSubagentThinkingLevel,
 	saveSubagentConfig,
 	sameToolSet,
+	subagentSettingsFilePath,
+	updateAgentToolsSetting,
+	updateCompletionDeliverySetting,
 	uniqueToolNames,
 } from "./settings.js";
 export { parsePositiveInteger } from "./execution.js";

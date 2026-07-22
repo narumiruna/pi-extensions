@@ -1,7 +1,7 @@
 # pi-subagents stateful runtime decision
 
 Date: 2026-07-11
-Updated: 2026-07-11
+Updated: 2026-07-23
 
 ## Decision
 
@@ -12,7 +12,7 @@ Keep the existing logical stateful registry and support two transports:
 
 Stateful lifecycle tools are registered by default and can be removed with `stateful.enabled: false`. The default transport remains subprocess for compatibility and rollback safety.
 
-Detached completion follows Codex's completion-watcher pattern: spawn returns after scheduling, a background lifecycle observer publishes final status/output to the parent session, and the notification does not trigger a turn by itself. Pi implements this with `AgentRegistry.onTurnComplete` plus `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: false })`. Completion metadata/output/error fields are independently sanitized and bounded so a large error cannot hide partial output, and runtime-generation guards prevent stale reload callbacks from writing into a replacement session.
+Detached completion is configurable. `stateful.completionDelivery: "next-turn"` is the default Codex-style behavior: the lifecycle observer publishes final status/output with `deliverAs: "steer"` and `triggerTurn: false`. Opt-in `"auto-resume"` holds completion while the root is active, coalesces simultaneous completions, and requests at most one synthesis turn after the parent settles when no input is pending. Completion metadata/output/error fields are independently sanitized and bounded, and session-generation, shutdown, batching, and in-flight wake guards prevent stale or duplicate scheduling pressure. Delivery remains best-effort because Pi's custom-message API is fire-and-forget.
 
 ## In-process ownership
 
@@ -43,10 +43,11 @@ restored persisted state -> idle -> explicit follow-up -> starting
 
 - `starting` means queued for an active-turn slot.
 - `running` owns one `AbortController` and one transport turn.
-- `subagent_spawn` returns immediately; prompt guidance requires useful non-overlapping main-agent work instead of polling or waiting.
-- Every settled turn emits one bounded `pi-subagent-completion` custom message through `deliverAs: "steer"` and `triggerTurn: false`. Active root turns can consume it; idle roots are not awakened autonomously.
+- `subagent_spawn` returns immediately; prompt guidance requires useful non-overlapping main-agent work or ending the response instead of polling.
+- Settled turns emit bounded `pi-subagent-completion` custom messages. The default does not wake an idle root; opt-in auto-resume batches a dispatch window and requests one synthesis turn.
+- Active parent work is not interrupted; `agent_settled` schedules the held batch. User or extension input already pending at flush time suppresses auto-resume, and a parent `agent_start` acknowledgement clears the pre-set one-wake guard.
 - Registry state-change callbacks are serialized in invocation order, preventing a slow `starting` persistence write from overwriting a later terminal snapshot.
-- `subagent_wait` is an explicit blocking fallback and times out only the caller's wait.
+- No detached wait tool is exposed; genuinely blocking one-shot work uses the batch `subagent` API.
 - `subagent_interrupt` aborts a queued/running turn but preserves identity and settled history.
 - `subagent_close` aborts current work, releases transport ownership exactly once, and excludes the record from persistence.
 - Session shutdown aborts active work, drains queued work, persists non-closed records as inert `idle`, and shuts down every owned child session.
@@ -57,7 +58,9 @@ Subprocess cleanup retains process-group SIGTERM/SIGKILL escalation. In-process 
 
 ## Public surface
 
-Separate lifecycle tools preserve the existing batch `subagent` schema and give each operation a precise contract. `subagent` remains the blocking API for single, parallel, chain, and fan-in work. `subagent_spawn` is the detached sidecar API: scheduling and execution continue independently, settled turns notify the root session without triggering a new turn, and explicit wait remains optional. It must not be used to delegate one immediate critical-path blocker while the main agent idles.
+Separate lifecycle tools preserve the existing batch `subagent` schema and give each operation a precise contract. `subagent` remains the blocking API for single, parallel, chain, and fan-in work. `subagent_spawn` is the detached sidecar API: scheduling and execution continue independently, settled turns notify the root session according to `completionDelivery`, and no wait operation is exposed. It must not be used to delegate one immediate critical-path blocker while the main agent idles.
+
+`/subagents settings` edits `completionDelivery` through `SettingsList`, patches the canonical raw JSON atomically without dropping unknown fields, and applies the runtime policy immediately. `/subagents status` reports configured versus runtime values; manual file edits remain reload-based. `/subagents:config` remains the compatibility UI for per-agent tool allow-lists and now also patches only the selected agent field.
 
 ## Context and policy boundary
 
