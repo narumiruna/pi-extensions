@@ -166,6 +166,7 @@ test("TraceRecorder replaces all captured values when content capture is disable
 	recorder.beginGeneration();
 	recorder.finishAssistant({ role: "assistant", content: "private response" });
 	recorder.beginTool("call", "read", { path: "private path" });
+	recorder.recordToolInput("call", { path: "final private path" });
 	recorder.finishTool("call", { content: "private content", details: "private details" });
 	recorder.settle();
 
@@ -183,6 +184,11 @@ test("TraceRecorder replaces all captured values when content capture is disable
 		}
 	}
 	assert.deepEqual(backend.observations[0]?.traceUpdates[0]?.tags, ["pi", "git:detached"]);
+	const tool = backend.observations.find(({ name }) => name === "pi.tool.read");
+	assert.deepEqual(
+		tool?.updates.filter((update) => update.input !== undefined).map((update) => update.input),
+		["[content capture disabled]"],
+	);
 });
 
 test("TraceRecorder closes interrupted observations and redacts image payloads", () => {
@@ -465,7 +471,8 @@ test("TraceRecorder records final tool args, progress timing, and bounded compac
 	});
 	recorder.beginAgent({ prompt: "test" });
 	recorder.beginAttempt();
-	recorder.beginTool("call", "read", { path: "final.ts" }, 1_000);
+	recorder.beginTool("call", "read", { path: "raw.ts" }, 1_000);
+	recorder.recordToolInput("call", { path: "final.ts" });
 	recorder.recordToolProgress("call", 1_025);
 	recorder.recordToolProgress("call", 1_050);
 	recorder.finishTool("call", { content: "done", isError: true });
@@ -492,7 +499,8 @@ test("TraceRecorder records final tool args, progress timing, and bounded compac
 	});
 
 	const tool = backend.observations.find(({ name }) => name === "pi.tool.read");
-	assert.deepEqual(tool?.attributes.input, { path: "final.ts" });
+	assert.deepEqual(tool?.attributes.input, { path: "raw.ts" });
+	assert.deepEqual(tool?.updates[0]?.input, { path: "final.ts" });
 	assert.equal(tool?.attributes.metadata?.["pi.tool.call_id"], "call");
 	assert.equal(tool?.attributes.metadata?.["pi.tool.name"], "read");
 	assert.equal(tool?.updates.at(-1)?.metadata?.["pi.tool.progress_update_count"], 2);
@@ -643,7 +651,10 @@ test("TraceRecorder closes duplicate, parallel, no-progress, and abrupt tools on
 	recorder.beginAgent({ prompt: "tools" });
 	recorder.beginTool("duplicate", "read", { path: "first" }, 10);
 	recorder.beginTool("duplicate", "write", { path: "second" }, 20);
+	recorder.recordToolInput("duplicate", { path: "quarantined" });
+	recorder.recordToolInput("missing", { path: "orphan" });
 	recorder.beginTool("parallel", "bash", { command: "true" }, 20);
+	recorder.recordToolInput("parallel", { command: "echo final" });
 	recorder.finishTool("duplicate", { content: "second completed first" });
 	recorder.finishTool("duplicate", { content: "first completed second" });
 	recorder.finishTool("parallel", { content: "done" });
@@ -659,6 +670,9 @@ test("TraceRecorder closes duplicate, parallel, no-progress, and abrupt tools on
 	assert.equal(tools[0]?.updates.at(-1)?.level, "ERROR");
 	assert.equal(tools[1]?.updates.at(-1)?.level, "ERROR");
 	assert.equal(JSON.stringify(tools.slice(0, 2)).includes("completed"), false);
+	assert.equal(JSON.stringify(tools).includes("quarantined"), false);
+	assert.equal(JSON.stringify(tools).includes("orphan"), false);
+	assert.deepEqual(tools[2]?.updates[0]?.input, { command: "echo final" });
 	assert.equal(tools[2]?.updates.at(-1)?.metadata?.["pi.tool.progress_update_count"], 0);
 	assert.equal(
 		tools[2]?.updates.at(-1)?.metadata?.["pi.tool.time_to_first_progress_ms"],

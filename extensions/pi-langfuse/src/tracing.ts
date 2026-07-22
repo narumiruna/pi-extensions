@@ -519,6 +519,11 @@ export class TraceRecorder {
 		});
 	}
 
+	recordToolInput(toolCallId: string, input: unknown): void {
+		if (input === undefined || this.duplicateToolIds.has(toolCallId)) return;
+		this.tools.get(toolCallId)?.observation.update({ input: this.capture(input) });
+	}
+
 	recordToolProgress(toolCallId: string, timestamp = Date.now()): void {
 		const tool = this.tools.get(toolCallId);
 		if (!tool) return;
