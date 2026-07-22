@@ -130,6 +130,16 @@ export function normalizeLangfuseConfig(
 	}
 	const environment = optionalString(input.environment, "environment");
 	if (!environment.ok) return environment;
+	if (
+		environment.value &&
+		(environment.value.length > 40 || !/^(?!langfuse)[a-z0-9_-]+$/u.test(environment.value))
+	) {
+		return {
+			ok: false,
+			reason:
+				"pi-langfuse.json environment must be at most 40 lowercase letters, numbers, hyphens, or underscores and must not start with langfuse.",
+		};
+	}
 	const release = optionalString(input.release, "release");
 	if (!release.ok) return release;
 

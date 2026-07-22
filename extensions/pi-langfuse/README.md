@@ -7,13 +7,13 @@
 ## ✨ Features
 
 - Names each Langfuse trace `pi.trace` and wraps one complete prompt-processing cycle in a root `pi.conversation` span.
-- Keeps the native `pi.agent` observation inside that span, with every `pi.turn`, generation, and tool nested beneath it.
-- Records finalized assistant outputs without retaining intermediate provider request payloads.
-- Records provider, model, stop reason, token usage, and known non-zero reported cost.
-- Records normalized tool inputs, finalized outputs, duration, and failures as child spans.
-- Groups traces with Pi's session id.
+- Keeps one native `pi.agent` observation open until settlement, with indexed `pi.attempt` spans for retries and queued continuations.
+- Records bounded provider-request snapshots, finalized assistant outputs, requested/response identity, TTFT, usage, and known cost buckets.
+- Retains ordered HTTP response history and safe diagnostic headers without marking recovered requests as errors.
+- Records final tool inputs and outputs, progress timing, duration, and failures without exporting partial-result content.
+- Records active compactions structurally without exporting generated summary text.
+- Groups traces with Pi's session id and adds bounded session/context snapshots and aggregate counters.
 - Adds the conversation-start Git branch and commit as metadata plus a filterable branch tag.
-- Records provider HTTP status codes when Pi exposes them.
 - Reads Langfuse credentials and options only from a private `pi-langfuse.json` file.
 - Batches routine exports without delaying normal Pi agent completion.
 - Keeps its OpenTelemetry provider isolated so it coexists with other tracing extensions.
@@ -67,7 +67,7 @@ You can also create the file manually:
 
 `publicKey` and `secretKey` are required literal strings. Environment-variable and command interpolation are intentionally unsupported. `baseUrl` defaults to `https://us.cloud.langfuse.com`; regional and self-hosted HTTP or HTTPS endpoints are supported. Prefer HTTPS because HTTP sends Langfuse credentials and trace content without transport encryption.
 
-`environment` and `release` are optional Langfuse trace attributes. Set `captureContent` to `false` to trace timing, model, usage, cost, and status metadata without sending prompts, responses, or tool content.
+`environment` and `release` are optional Langfuse trace attributes. An environment must match Langfuse's contract: at most 40 lowercase letters, numbers, hyphens, or underscores, and it cannot start with `langfuse`. Set `captureContent` to `false` to trace timing, model, usage, cost, status, and bounded diagnostic metadata without sending prompts, provider-request snapshots, responses, or tool content.
 
 The extension automatically restricts an existing config file to mode `0600` and refuses to load credentials if that protection cannot be enforced. You can also set it explicitly:
 
@@ -79,40 +79,65 @@ Restart Pi after changing credentials, endpoint, environment, release, or `captu
 
 ## 🔭 What is traced
 
-Each trace has this observation hierarchy:
+Each trace has this observation hierarchy. The `pi.conversation` wrapper is retained for compatibility with existing saved filters:
 
 ```text
-pi.conversation (span: submitted prompt until Pi fully settles)
-└── pi.agent (agent)
-    ├── pi.turn (span)
-    │   ├── pi.llm (generation)
-    │   └── pi.tool.<tool-name> (tool)
-    └── pi.turn ...
+pi.trace
+└── pi.conversation (span: submitted prompt until Pi fully settles)
+    └── pi.agent (agent)
+        ├── pi.attempt (span: one agent_start/agent_end pair)
+        │   └── pi.turn (span)
+        │       ├── pi.llm (generation)
+        │       └── pi.tool.<tool-name> (tool)
+        ├── pi.compaction (span, only while the trace is active)
+        └── pi.attempt ...
 ```
 
-The hierarchy records:
+All observations and the trace use schema version `2`. Existing observation names remain unchanged; schema version 2 adds `pi.attempt` and `pi.compaction` depth beneath the compatibility wrapper.
 
-- one root `pi.conversation` native `span` for the complete prompt-processing cycle;
-- one `pi.agent` native `agent` child that retains the submitted prompt and final assistant output;
-- a `pi.turn` native `span` for every Pi turn, including its index, stop reason, tool-result count, duration, and failure status;
-- a `pi.llm` native `generation` under the active turn for every provider request;
-- a `pi.tool.<tool-name>` native `tool` observation under the active turn for every tool execution;
-- the Pi session id, working directory, mode, provider, and model;
-- `pi.git.branch`, `pi.git.commit`, and `pi.git.detached` at conversation start when the working directory is in a Git repository;
-- a `branch:<branch-name>` trace tag, or `git:detached` for a detached HEAD, for Langfuse filtering;
-- generation token usage and positive total cost when Pi reports a known price;
-- the concrete response model when Pi reports one, with a differing requested alias retained in metadata;
-- error levels and status messages for failed provider responses, model calls, and tools.
+### Trace and attempt fields
 
-Pi does not expose a post-transform provider payload event, so generation request bodies are intentionally omitted rather than risking capture of a payload that a later extension rewrites or redacts. The agent observation still records the user prompt, and assistant output is reconciled after message transformers. Tool input is captured after argument preparation and `tool_call` mutations, while tool output is captured after `tool_result` transformers.
+The trace, `pi.conversation`, and `pi.agent` retain the submitted prompt, final assistant output, Pi session id, working directory, mode, initial provider/model, and optional Git context. Root metadata includes:
 
-Images and embedded base64 data URIs are represented without their payloads, including provider data URLs. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
+- `pi.trace.schema_version`, `pi.trace.outcome`, and `pi.trace.stop_reason`;
+- `pi.trace.attempt_count`, `pi.trace.turn_count`, `pi.trace.generation_count`, `pi.trace.tool_count`, `pi.trace.tool_error_count`, `pi.trace.compaction_count`, and `pi.trace.recovered_error_count`;
+- `pi.trace.start_leaf_id`, `pi.trace.end_leaf_id`, `pi.trace.start_context_tokens`, `pi.trace.end_context_tokens`, `pi.trace.start_context_window`, `pi.trace.end_context_window`, `pi.trace.start_context_percent`, and `pi.trace.end_context_percent` when Pi knows them;
+- `pi.git.branch`, `pi.git.commit`, and `pi.git.detached`, plus a `branch:<branch-name>` tag or `git:detached` tag.
 
-A conversation span starts from the submitted prompt and remains open across all of its model/tool turns, automatic retries, overflow-compaction recovery, and queued continuations. Pi's `agent_end` only reconciles the latest finalized assistant output; `agent_settled` closes the conversation after no automatic work remains. Activity that unexpectedly arrives without a submitted prompt still gets a fallback conversation labeled `[automatic continuation]` so it is not lost.
+Outcomes are `success`, `recovered_success`, `error`, `aborted`, `length`, or `interrupted`. `pi.trace.recovered_error_count` includes recovered provider responses, tool failures handled by a later generation, and failed attempts followed by final success. Errors use Langfuse `ERROR`; aborts, output limits, shutdown, replacement, and other interruption closures use `WARNING`. High-cardinality correlation values stay in metadata rather than tags.
+
+Each `pi.attempt` records `pi.attempt.index`, final `pi.attempt.outcome`, and `pi.attempt.stop_reason`. An attempt immediately following overflow compaction also sets `pi.attempt.reason` to `post_compaction`. Failed attempts remain errors even when a later attempt makes the root a recovered success.
+
+### Generation fields
+
+Each `pi.llm` generation records:
+
+- a bounded input snapshot from this extension's `before_provider_request` handler and `pi.request.payload_stage` set to `before_provider_request`;
+- `pi.request.provider`, `pi.request.model`, `pi.request.api`, and `pi.request.thinking_level`, with thinking level also exported through Langfuse-native model parameters;
+- the Langfuse-native response model plus `pi.response.provider`, `pi.response.api`, `pi.response.model`, and `pi.response.id` when Pi reports them;
+- Langfuse-native `completionStartTime` from the first non-empty text, thinking, or tool-call delta;
+- ordered `http.response.status_codes`, final `http.response.status_code`, `http.response.attempt_count`, and `http.response.retry_count`;
+- allowlisted `http.response.headers`: request ids, `cf-ray`, `retry-after`, and the supported OpenAI/Anthropic rate-limit headers. Authorization, cookies, and unrecognized headers are never exported;
+- additive input, output, cache-read, cache-write, and total token usage plus known positive input, output, cache-read, cache-write, and total cost buckets;
+- non-additive `pi.usage.reasoning_tokens` and `pi.usage.cache_write_1h_tokens` in metadata so subsets are not double-counted.
+
+The request snapshot is the payload visible at this handler, not a guaranteed final wire payload: later extensions can still replace it. Final assistant content is reconciled from `turn_end` and `agent_end` after message transformation. A recovered sequence such as `429 -> 200` remains queryable in HTTP metadata but is not an error; the final assistant outcome decides generation severity.
+
+### Tool and compaction fields
+
+A `pi.tool.<tool-name>` observation captures the execution arguments from `tool_execution_start`, final transformed output from `tool_execution_end`, final error state, `pi.tool.progress_update_count`, and `pi.tool.time_to_first_progress_ms` when progress occurs. An unrecovered tool failure also makes the attempt and root errors. Existing `pi.tool.call_id` and `pi.tool.name` correlation fields remain. `tool_execution_update` partial-result bodies are never captured. Duplicate, parallel, failed, no-progress, and interrupted tools are closed independently.
+
+An active `pi.compaction` records `pi.compaction.reason`, `pi.compaction.will_retry`, `pi.compaction.from_extension`, `pi.compaction.tokens_before`, `pi.compaction.messages_to_summarize`, `pi.compaction.turn_prefix_messages`, `pi.compaction.branch_entries`, and `pi.compaction.is_split_turn`. It adds `pi.compaction.read_file_count`, `pi.compaction.modified_file_count`, and `pi.compaction.usage.*` / `pi.compaction.cost.*` when Pi reports them. It never records the summary, custom instructions, or message bodies. Manual compaction outside an active agent trace is ignored; incomplete compaction closes as a warning at settlement or shutdown.
+
+### Boundaries and export
+
+Images and embedded base64 data URIs are represented without their payloads, including provider data URLs. Opaque `thinkingSignature`, `textSignature`, and `thoughtSignature` continuity values are always removed. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
+
+A conversation begins before the first agent loop and remains open across retries, overflow-compaction recovery, and queued continuations. `agent_end` closes only the current attempt; `agent_settled` closes the root after no automatic work remains. Activity that unexpectedly arrives without a submitted prompt gets a fallback conversation labeled `[automatic continuation]`. Session replacement, reload, quit, and a new unexpected prompt close all descendants defensively and idempotently.
 
 At conversation start, the extension runs bounded, non-shell Git lookups in `ctx.cwd`. A branch switch therefore applies to the next conversation. Detached HEADs retain only commit/detached metadata and the `git:detached` tag. Missing Git, non-repositories, timeouts, and lookup failures silently omit Git context without affecting tracing.
 
-Completed observations are exported in batches while Pi remains live. Neither `agent_end` nor `agent_settled` waits for Langfuse network I/O. When you need to wait for completed exports, run `/langfuse` and choose **Flush completed traces for this session**; quit shutdown also drains the provider.
+Completed observations are exported in batches while Pi remains live. Neither `agent_end` nor `agent_settled` waits for Langfuse network I/O. To wait for completed exports, run `/langfuse` and choose **Flush completed traces for this session**; quit shutdown also drains the provider.
 
 ## 💬 Command
 
@@ -135,9 +160,9 @@ Connection actions state their agent-directory scope and per-process restart req
 
 With content capture enabled, traces can contain user prompts, model responses, tool arguments, and tool results. These may include source code, file contents, shell output, or other sensitive project data. Review your Langfuse retention and access controls before enabling this extension.
 
-Git branch names, commit ids, working directory, model, usage, and other operational fields are metadata. They remain exported when `captureContent` is `false`; branch names can themselves contain issue or project details.
+Git branch names, commit ids, working directory, session/leaf ids, model identity, usage/cost, aggregate counts, and allowlisted response-header values are metadata. They remain exported when `captureContent` is `false`; branch names and diagnostic header values can themselves contain operational details.
 
-The built-in mask specifically protects Langfuse credentials; it is not a general secret scanner. Set `"captureContent": false` in `pi-langfuse.json` when prompts, responses, and tool content must remain local.
+The built-in mask specifically protects Langfuse credentials; it is not a general secret scanner. Set `"captureContent": false` in `pi-langfuse.json` when prompts, provider-request snapshots, responses, and tool content must remain local. Compaction summaries, tool partial results, opaque continuation signatures, authorization headers, cookies, and unapproved response headers are never exported in either mode.
 
 ## 🗂️ Package layout
 
@@ -145,7 +170,8 @@ The built-in mask specifically protects Langfuse credentials; it is not a genera
 extensions/pi-langfuse/
 ├── src/
 │   ├── langfuse.ts  # Pi lifecycle integration and slash command
-│   ├── tracing.ts   # Trace lifecycle and content bounding
+│   ├── tracing.ts   # Observation lifecycle, outcomes, and bounded metadata
+│   ├── sanitizer.ts # Content bounding and opaque-signature removal
 │   ├── runtime.ts   # Langfuse/OpenTelemetry runtime
 │   └── config.ts    # Private pi-langfuse.json loading and validation
 ├── test/
