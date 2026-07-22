@@ -130,19 +130,16 @@ test("isolated runtime preserves the global provider and exports native observat
 		"span",
 		"span",
 		"span",
-		"span",
 		"tool",
 	]);
 	for (const span of spans) assert.equal(span.attributes["langfuse.version"], "2");
-	const conversation = spans.find((span) => span.name === "pi.conversation");
 	const agent = spans.find((span) => span.name === "pi.agent");
 	const attempt = spans.find((span) => span.name === "pi.attempt");
 	const turn = spans.find((span) => span.name === "pi.turn");
 	const generation = spans.find((span) => span.name === "pi.llm");
 	const tool = spans.find((span) => span.name === "pi.tool.read");
 	const compaction = spans.find((span) => span.name === "pi.compaction");
-	assert.equal(conversation?.parentSpanContext, undefined);
-	assert.equal(agent?.parentSpanContext?.spanId, conversation?.spanContext().spanId);
+	assert.equal(agent?.parentSpanContext, undefined);
 	assert.equal(attempt?.parentSpanContext?.spanId, agent?.spanContext().spanId);
 	assert.equal(turn?.parentSpanContext?.spanId, attempt?.spanContext().spanId);
 	assert.equal(compaction?.parentSpanContext?.spanId, agent?.spanContext().spanId);
@@ -163,13 +160,10 @@ test("isolated runtime preserves the global provider and exports native observat
 		generation?.attributes["langfuse.observation.cost_details"],
 		JSON.stringify({ input: 0.01, output: 0.02, total: 0.03 }),
 	);
-	assert.equal(conversation?.attributes["langfuse.observation.metadata.pi.cwd"], "/workspace");
-	assert.equal(conversation?.attributes["langfuse.trace.metadata.pi.cwd"], "/workspace");
-	assert.equal(
-		conversation?.attributes["langfuse.observation.metadata.pi.trace.outcome"],
-		"success",
-	);
-	assert.equal(conversation?.attributes["langfuse.trace.metadata.pi.trace.outcome"], "success");
+	assert.equal(agent?.attributes["langfuse.observation.metadata.pi.cwd"], "/workspace");
+	assert.equal(agent?.attributes["langfuse.trace.metadata.pi.cwd"], "/workspace");
+	assert.equal(agent?.attributes["langfuse.observation.metadata.pi.trace.outcome"], "success");
+	assert.equal(agent?.attributes["langfuse.trace.metadata.pi.trace.outcome"], "success");
 	assert.equal(
 		attempt?.attributes["langfuse.observation.metadata.pi.attempt.reason"],
 		"post_compaction",
