@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-goal",
-	"version": "0.25.1",
+	"version": "0.26.0",
 	"description": "Pi extension for autonomous /goal completion with opt-in experimental ordered queues.",
 	"type": "module",
 	"license": "MIT",
