@@ -664,6 +664,13 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		}
 		if (runtime.queueFrozen) return;
 		if (/^\/goal(?:\s|$)/u.test(event.text.trimStart())) return;
+		if (event.streamingBehavior === "followUp") {
+			runtime.noteQueuedNonGoalInput(event.text, "followUp", true);
+			return;
+		}
+		if (event.streamingBehavior === "steer") {
+			runtime.noteQueuedNonGoalInput(event.text, "steer");
+		}
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
@@ -672,6 +679,21 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 	pi.on("message_start", (event, ctx) => {
 		const message = event.message as { role?: unknown; content?: unknown };
+		if (
+			message.role === "assistant" &&
+			runtime.activeGoal?.status === "paused" &&
+			runtime.guardAbortGoalId === runtime.activeGoal.id
+		) {
+			abortCurrentTurn(ctx);
+			return;
+		}
+		if (message.role === "custom") {
+			if (runtime.guardAbortGoalId === runtime.activeGoal?.id) {
+				runtime.guardAbortGoalId = undefined;
+			}
+			beginNonGoalFollowUp(ctx, false);
+			return;
+		}
 		if (message.role !== "user") return;
 		const prompt = Array.isArray(message.content)
 			? message.content
@@ -685,13 +707,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(prompt);
 		const ownedPrompt = consumePendingGoalPrompt(prompt);
 		if (!ownedPrompt) {
-			if (queuedNonGoalInput === "followUp") {
-				clearGoalRecovery();
-				clearStaleGoalToolCallBlock();
-				runtime.beginAgentRun(
-					runtime.activeGoal?.status === "active" ? runtime.activeGoal.id : null,
-					runtime.activeGoal?.status === "active" ? "manual" : undefined,
-				);
+			if (queuedNonGoalInput?.behavior === "followUp") {
+				beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
 			}
 			return;
 		}
@@ -712,8 +729,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		updateStatus(ctx, runtime.activeGoal);
 	});
 
-	pi.on("context", (event) => {
+	pi.on("context", (event, ctx) => {
 		const messages = event.messages.filter((message) => keepBudgetWrapUpMessage(message));
+		if (
+			runtime.activeGoal?.status === "paused" &&
+			runtime.guardAbortGoalId === runtime.activeGoal.id
+		) {
+			// A current custom follow-up clears the guard at message_start. Otherwise,
+			// context transformation aborts before the provider adapter receives the signal.
+			abortCurrentTurn(ctx);
+		}
 		if (messages.length !== event.messages.length) return { messages };
 	});
 
@@ -784,9 +809,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
-		if (runtime.consumeQueuedNonGoalInput(event.prompt) === "followUp") {
-			clearGoalRecovery();
-			clearStaleGoalToolCallBlock();
+		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(event.prompt);
+		if (queuedNonGoalInput?.behavior === "followUp") {
+			beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
 		}
 		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
 		const runOrigin = continuationGoalId
@@ -865,9 +890,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				runtime.guardAbortGoalId = undefined;
 				clearStaleGoalToolCallBlock();
 				runtime.beginAgentRun(null, undefined);
-				return;
 			}
-			abortCurrentTurn(ctx);
+			// Unknown runs defer cleanup until their message/context boundary: custom
+			// follow-ups have no input event, while bare recovery is aborted pre-provider.
 			return;
 		}
 		runtime.beginRecoveryRunIfNeeded();
@@ -988,6 +1013,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (!dispatchedQueueAction) dispatchContinuationIfSettled(ctx);
 		runtime.clearSettledSafetyTracking();
 	});
+
+	function beginNonGoalFollowUp(ctx: StatusContext, resetSafetyEpoch: boolean) {
+		clearGoalRecovery();
+		clearStaleGoalToolCallBlock();
+		if (resetSafetyEpoch) clearBudgetWrapUp();
+		const activeGoalId =
+			runtime.activeGoal?.status === "active" ? runtime.activeGoal.id : undefined;
+		runtime.beginAgentRun(activeGoalId ?? null, activeGoalId ? "manual" : undefined);
+		if (resetSafetyEpoch && activeGoalId) runtime.resetActiveSafetyEpoch(ctx);
+	}
 
 	function hasPendingSkipForGoal(goalId: string) {
 		return (

@@ -2592,6 +2592,8 @@ test("hard cap aborts Pi recovery started after a retryable boundary error", asy
 	assert.equal(aborts, 1);
 
 	capped.mock.events.get("agent_start")?.[0]?.({}, capped.ctx);
+	assert.equal(aborts, 1);
+	capped.mock.events.get("context")?.[0]?.({ messages: [] }, capped.ctx);
 	assert.equal(aborts, 2);
 	capped.mock.events.get("turn_end")?.[0]?.(
 		{ message: { role: "assistant", stopReason: "aborted", content: [] }, toolResults: [] },
@@ -2604,6 +2606,30 @@ test("hard cap aborts Pi recovery started after a retryable boundary error", asy
 	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
 	assert.equal(requireLastGoal(capped.mock).automaticModelTurns, 1);
 	assert.equal(capped.mock.sentUserMessages.length, 2);
+});
+
+test("an aborted automatic response does not consume the final hard-cap turn", async () => {
+	const interrupted = await startGoalForTest({}, "finish", ONE_TURN_LIMIT_SETTINGS_PATH);
+	await interrupted.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		interrupted.ctx,
+	);
+	await interrupted.mock.events.get("agent_settled")?.[0]?.({}, interrupted.ctx);
+	const continuation = interrupted.mock.sentUserMessages.at(-1)?.text ?? "";
+	interrupted.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		interrupted.ctx,
+	);
+	const aborted = { role: "assistant", stopReason: "aborted", content: [] };
+	interrupted.mock.events.get("turn_end")?.[0]?.(
+		{ message: aborted, toolResults: [] },
+		interrupted.ctx,
+	);
+	assert.equal(lastGoalStatus(interrupted.mock), "active");
+	assert.equal(requireLastGoal(interrupted.mock).automaticModelTurns, 0);
+	await interrupted.mock.events.get("agent_end")?.[0]?.({ messages: [aborted] }, interrupted.ctx);
+	assert.equal(lastGoalStatus(interrupted.mock), "paused");
+	assert.equal(requireLastGoal(interrupted.mock).safetyPauseCause, undefined);
 });
 
 test("terminal errors take precedence when an automatic response reaches the hard cap", async () => {
@@ -2668,6 +2694,49 @@ test("hard-cap cleanup guard does not abort an unrelated queued follow-up", asyn
 	assert.equal(
 		capped.mock.events.get("tool_call")?.[0]?.(
 			{ toolName: "read", toolCallId: "unrelated-follow-up-read", input: {} },
+			capped.ctx,
+		),
+		undefined,
+	);
+});
+
+test("queued custom follow-up starts without cleanup abort or stale tool blocking", async () => {
+	let aborts = 0;
+	const capped = await startGoalForTest(
+		{ abort: () => aborts++ },
+		"finish",
+		ONE_TURN_LIMIT_SETTINGS_PATH,
+	);
+	await capped.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+	const continuation = capped.mock.sentUserMessages.at(-1)?.text ?? "";
+	capped.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		capped.ctx,
+	);
+	capped.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		capped.ctx,
+	);
+	assert.equal(lastGoalStatus(capped.mock), "paused");
+	assert.equal(aborts, 1);
+
+	capped.mock.events.get("agent_start")?.[0]?.({}, capped.ctx);
+	assert.equal(aborts, 1);
+	const customFollowUp = {
+		role: "custom",
+		customType: "other-extension-follow-up",
+		content: "unrelated custom work",
+	};
+	capped.mock.events.get("message_start")?.[0]?.({ message: customFollowUp }, capped.ctx);
+	capped.mock.events.get("context")?.[0]?.({ messages: [customFollowUp] }, capped.ctx);
+	assert.equal(aborts, 1);
+	assert.equal(
+		capped.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "custom-follow-up-read", input: {} },
 			capped.ctx,
 		),
 		undefined,
@@ -2749,7 +2818,46 @@ test("mid-stream steer does not suppress hard-cap cleanup abort", async () => {
 	);
 	assert.equal(aborts, 1);
 	capped.mock.events.get("agent_start")?.[0]?.({}, capped.ctx);
+	assert.equal(aborts, 1);
+	capped.mock.events.get("context")?.[0]?.({ messages: [] }, capped.ctx);
 	assert.equal(aborts, 2);
+});
+
+test("queued user follow-up resets safety only when its message starts", async () => {
+	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		active.ctx,
+	);
+	const safety = requireLastGoal(active.mock);
+	safety.automaticModelTurns = 2;
+	safety.toolFreeRepeatCount = 2;
+	safety.lastToolFreeOutputFingerprint = "f".repeat(64);
+	active.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "user follow-up", streamingBehavior: "followUp" },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 2);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
+
+	active.mock.events.get("message_start")?.[0]?.(
+		{ message: { role: "user", content: [{ type: "text", text: "user follow-up" }] } },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
+	active.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+	assert.match(continuation, /pi-goal-continuation:/);
 });
 
 test("queued non-goal follow-up does not inherit automatic recovery ownership", async () => {

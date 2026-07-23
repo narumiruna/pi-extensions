@@ -127,6 +127,7 @@ interface PendingGoalPrompt {
 interface PendingNonGoalInput {
 	behavior: "steer" | "followUp";
 	fingerprint: string;
+	resetSafetyEpoch: boolean;
 }
 
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
@@ -409,13 +410,7 @@ export class GoalRuntime {
 		const goal = this.activeGoal;
 		if (goal?.status !== "active" || !this.isAutomaticRunForGoal(goal.id)) return false;
 		const candidate = message as { role?: unknown; stopReason?: unknown } | undefined;
-		if (
-			this.guardAbortGoalId === goal.id &&
-			candidate?.role === "assistant" &&
-			candidate.stopReason === "aborted"
-		) {
-			return false;
-		}
+		if (candidate?.role === "assistant" && candidate.stopReason === "aborted") return false;
 		goal.automaticModelTurns = Math.min(Number.MAX_SAFE_INTEGER, goal.automaticModelTurns + 1);
 		this.recordGoalUsage(goal, ctx);
 		this.persistGoal(goal);
@@ -600,8 +595,16 @@ export class GoalRuntime {
 		return true;
 	}
 
-	noteQueuedNonGoalInput(prompt: string, behavior: "steer" | "followUp") {
-		this.pendingNonGoalInputs.push({ behavior, fingerprint: inputFingerprint(prompt) });
+	noteQueuedNonGoalInput(
+		prompt: string,
+		behavior: "steer" | "followUp",
+		resetSafetyEpoch = false,
+	) {
+		this.pendingNonGoalInputs.push({
+			behavior,
+			fingerprint: inputFingerprint(prompt),
+			resetSafetyEpoch,
+		});
 		if (this.pendingNonGoalInputs.length > MAX_PENDING_NON_GOAL_INPUTS) {
 			this.pendingNonGoalInputs.shift();
 		}
@@ -623,7 +626,7 @@ export class GoalRuntime {
 							pending.behavior === "followUp" && pending.fingerprint === fingerprint,
 					);
 		if (index < 0) return undefined;
-		return this.pendingNonGoalInputs.splice(index, 1)[0]?.behavior;
+		return this.pendingNonGoalInputs.splice(index, 1)[0];
 	}
 
 	consumeQueuedNonGoalFollowUpForAgentStart() {
