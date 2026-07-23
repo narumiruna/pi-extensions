@@ -15,6 +15,8 @@ const STATE_FILE = join(
 	"pi-goal-state.json",
 );
 
+export type SafetyPauseCause = "continuation_limit" | "no_progress";
+
 export interface ActiveGoal {
 	id: string;
 	text: string;
@@ -27,6 +29,10 @@ export interface ActiveGoal {
 	timeUsedSeconds: number;
 	baselineTokens: number;
 	activeStartedAt?: number;
+	automaticModelTurns: number;
+	toolFreeRepeatCount: number;
+	lastToolFreeOutputFingerprint?: string;
+	safetyPauseCause?: SafetyPauseCause;
 }
 
 export type PendingQueueAction =
@@ -225,7 +231,23 @@ export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 		timeUsedSeconds: nonNegativeFiniteNumber(goal.timeUsedSeconds),
 		baselineTokens: nonNegativeFiniteNumber(goal.baselineTokens),
 		activeStartedAt: goal.status === "active" ? now : undefined,
+		automaticModelTurns: normalizeSafetyCounter(goal.automaticModelTurns),
+		toolFreeRepeatCount: normalizeSafetyCounter(goal.toolFreeRepeatCount),
+		lastToolFreeOutputFingerprint: normalizeOutputFingerprint(goal.lastToolFreeOutputFingerprint),
+		safetyPauseCause: normalizeSafetyPauseCause(goal.safetyPauseCause),
 	};
+}
+
+function normalizeSafetyCounter(value: unknown) {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function normalizeOutputFingerprint(value: unknown) {
+	return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value) ? value : undefined;
+}
+
+function normalizeSafetyPauseCause(value: unknown): SafetyPauseCause | undefined {
+	return value === "continuation_limit" || value === "no_progress" ? value : undefined;
 }
 
 export function clearLegacyPersistedGoal(cwd: string) {

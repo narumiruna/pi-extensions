@@ -27,6 +27,8 @@ export function createQueuedGoal(
 		tokensUsed: 0,
 		timeUsedSeconds: 0,
 		baselineTokens: 0,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
 	};
 }
 

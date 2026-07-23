@@ -287,6 +287,7 @@ export class GoalCommandController {
 			ctx,
 			activatedGoal.id,
 			buildGoalPrompt(activatedGoal),
+			false, // Queue reactivation preserves its persisted safety epoch.
 		);
 		if (!sent && this.runtime.activeGoal?.id === activatedGoal.id) {
 			this.runtime.activeGoal = transitionGoal(activatedGoal, "paused");
@@ -442,9 +443,10 @@ export class GoalCommandController {
 		this.runtime.clearGoalRecovery();
 		this.runtime.clearBudgetWrapUp();
 		const previousStatus = this.runtime.activeGoal.status;
+		const rotatedGoal = nextGoalInstance(this.runtime.activeGoal);
 		const nextGoal = transitionGoal(
 			{
-				...nextGoalInstance(this.runtime.activeGoal),
+				...rotatedGoal,
 				text: objective,
 				tokenBudget: tokenBudget ?? this.runtime.activeGoal.tokenBudget,
 			},

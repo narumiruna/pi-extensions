@@ -116,15 +116,105 @@ test("legacy plural state migrates only without canonical history", () => {
 });
 
 test("a legacy single goal becomes ordinary singular state", () => {
+	const legacyGoal = {
+		...active,
+		automaticModelTurns: undefined,
+		toolFreeRepeatCount: undefined,
+		lastToolFreeOutputFingerprint: undefined,
+		safetyPauseCause: undefined,
+	};
 	const loaded = loadGoalStateFromSession(
-		branch({ customType: "goals-state", data: { goals: [active] } }),
+		branch({ customType: "goals-state", data: { goals: [legacyGoal] } }),
 	);
 
 	assert.equal(loaded.source, "legacy-goals");
 	assert.equal(loaded.goal?.text, "active");
+	assert.equal(loaded.goal?.automaticModelTurns, 0);
+	assert.equal(loaded.goal?.toolFreeRepeatCount, 0);
+	assert.equal(loaded.goal?.lastToolFreeOutputFingerprint, undefined);
+	assert.equal(loaded.goal?.safetyPauseCause, undefined);
 	assert.deepEqual(loaded.queue, []);
 	assert.equal(loaded.pendingAction, undefined);
 	assert.equal(loaded.hasExperimentalQueueState, false);
+});
+
+test("canonical persistence normalizes bounded safety state independently per queued goal", () => {
+	const fingerprint = "a".repeat(64);
+	const loaded = loadGoalStateFromSession(
+		branch({
+			customType: "goal-state",
+			data: {
+				goal: {
+					...active,
+					status: "paused",
+					automaticModelTurns: 12,
+					toolFreeRepeatCount: 2,
+					lastToolFreeOutputFingerprint: fingerprint,
+					safetyPauseCause: "no_progress",
+				},
+				queue: [
+					{
+						...queued,
+						automaticModelTurns: 7,
+						toolFreeRepeatCount: 1,
+						lastToolFreeOutputFingerprint: "b".repeat(64),
+					},
+				],
+			},
+		}),
+	);
+
+	assert.equal(loaded.goal?.automaticModelTurns, 12);
+	assert.equal(loaded.goal?.toolFreeRepeatCount, 2);
+	assert.equal(loaded.goal?.lastToolFreeOutputFingerprint, fingerprint);
+	assert.equal(loaded.goal?.safetyPauseCause, "no_progress");
+	assert.equal(loaded.queue[0]?.automaticModelTurns, 7);
+	assert.equal(loaded.queue[0]?.toolFreeRepeatCount, 1);
+	assert.equal(loaded.queue[0]?.lastToolFreeOutputFingerprint, "b".repeat(64));
+	assert.equal(loaded.queue[0]?.safetyPauseCause, undefined);
+});
+
+test("a pending active reactivation retains its safety cause until prompt start", () => {
+	const loaded = loadGoalStateFromSession(
+		branch({
+			customType: "goal-state",
+			data: {
+				goal: {
+					...active,
+					automaticModelTurns: 2,
+					toolFreeRepeatCount: 3,
+					lastToolFreeOutputFingerprint: "c".repeat(64),
+					safetyPauseCause: "no_progress",
+				},
+			},
+		}),
+	);
+
+	assert.equal(loaded.goal?.status, "active");
+	assert.equal(loaded.goal?.safetyPauseCause, "no_progress");
+	assert.equal(loaded.goal?.toolFreeRepeatCount, 3);
+});
+
+test("malformed persisted safety fields reset without discarding the goal", () => {
+	const loaded = loadGoalStateFromSession(
+		branch({
+			customType: "goal-state",
+			data: {
+				goal: {
+					...active,
+					automaticModelTurns: -2,
+					toolFreeRepeatCount: Number.MAX_SAFE_INTEGER + 1,
+					lastToolFreeOutputFingerprint: "not-a-fingerprint",
+					safetyPauseCause: "other",
+				},
+			},
+		}),
+	);
+
+	assert.equal(loaded.goal?.automaticModelTurns, 0);
+	assert.equal(loaded.goal?.toolFreeRepeatCount, 0);
+	assert.equal(loaded.goal?.lastToolFreeOutputFingerprint, undefined);
+	assert.equal(loaded.goal?.safetyPauseCause, undefined);
 });
 
 test("malformed canonical or plural queue state fails closed", () => {
@@ -178,6 +268,8 @@ function storedGoal(text: string, status: ActiveGoal["status"]): ActiveGoal {
 		tokensUsed: 0,
 		timeUsedSeconds: 0,
 		baselineTokens: 0,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
 		...(status === "active" ? { activeStartedAt: 1 } : {}),
 	};
 }

@@ -6,17 +6,23 @@ export const GOAL_SETTINGS_FILE = "pi-goal.json";
 export const GOAL_TOOL_VISIBILITIES = ["always", "after-first-goal"] as const;
 
 export type GoalToolVisibility = (typeof GOAL_TOOL_VISIBILITIES)[number];
+export type ContinuationLimit = number | null;
 
 export interface GoalSettings {
 	toolVisibility: GoalToolVisibility;
 	experimental: {
 		goals: boolean;
 	};
+	continuationLimits: {
+		automaticTurns: ContinuationLimit;
+		noProgressTurns: ContinuationLimit;
+	};
 }
 
 export const DEFAULT_GOAL_SETTINGS: GoalSettings = {
 	toolVisibility: "always",
 	experimental: { goals: false },
+	continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
 };
 
 export type GoalSettingsLoadResult =
@@ -48,10 +54,45 @@ export function normalizeGoalSettings(value: unknown): GoalSettings | undefined 
 			: DEFAULT_GOAL_SETTINGS.experimental.goals;
 	if (typeof goals !== "boolean") return undefined;
 
+	const continuationLimitsValue = Object.hasOwn(value, "continuationLimits")
+		? Reflect.get(value, "continuationLimits")
+		: undefined;
+	if (
+		continuationLimitsValue !== undefined &&
+		(typeof continuationLimitsValue !== "object" ||
+			continuationLimitsValue === null ||
+			Array.isArray(continuationLimitsValue))
+	) {
+		return undefined;
+	}
+	const automaticTurns = continuationLimitsValue
+		? normalizeContinuationLimit(
+				Reflect.get(continuationLimitsValue, "automaticTurns"),
+				DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns,
+			)
+		: DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns;
+	const noProgressTurns = continuationLimitsValue
+		? normalizeContinuationLimit(
+				Reflect.get(continuationLimitsValue, "noProgressTurns"),
+				DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns,
+			)
+		: DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns;
+	if (automaticTurns === undefined || noProgressTurns === undefined) return undefined;
+
 	return {
 		toolVisibility: toolVisibility as GoalToolVisibility,
 		experimental: { goals },
+		continuationLimits: { automaticTurns, noProgressTurns },
 	};
+}
+
+function normalizeContinuationLimit(
+	value: unknown,
+	fallback: ContinuationLimit,
+): ContinuationLimit | undefined {
+	if (value === undefined) return fallback;
+	if (value === null) return null;
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 export function readGoalSettings(
