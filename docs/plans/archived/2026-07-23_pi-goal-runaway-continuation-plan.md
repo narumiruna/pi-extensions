@@ -112,7 +112,7 @@ Use the relevant final command after each compile for focused RED/GREEN evidence
 - [x] Extend `extensions/pi-goal/test/goal-runtime-smoke.mjs` with an automatic tool-loop scenario using `automaticTurns: 3`; Pi 0.81.1 runtime smoke proves three counted automatic responses, one safety pause/abort, bounded pre-aborted cleanup, and no further call after settlement.
 - [x] Add Pi 0.81.1 runtime retry scenarios proving automatic ownership survives a real HTTP 524 retry and a retry that starts after the hard-limit response receives only an already-aborted signal; runtime smoke passes.
 - [x] Update `extensions/pi-goal/README.md` with both defaults, normal-response counting and bounded pre-aborted cleanup semantics, `null` opt-in, repeat heuristic, safety-epoch transitions, pause notification/status behavior, the distinction between call count and cost, and `/goal --tokens` guidance; documented fields and transitions match passing tests.
-- [ ] Run `npm run check`, `npm run test:runtime --workspace @narumitw/pi-goal`, and `just pack-goal` with pi-goal resolving Pi `0.81.1`; require all commands to pass, inspect the tarball file list against `extensions/pi-goal/package.json`, and record dependency/runtime versions plus passing evidence before marking implementation complete.
+- [x] Run `npm run check`, `npm run test:runtime --workspace @narumitw/pi-goal`, and `just pack-goal` with pi-goal resolving Pi `0.81.1`; the package tests pass 201/201, runtime smoke passes, the dry-run tarball contains the expected 16 files, dependency resolution reports Pi `0.81.1`, and PR CI run `29998469346` passed the repository check against the latest Pi packages.
 
 ## Completion Checklist
 
@@ -121,4 +121,4 @@ Use the relevant final command after each compile for focused RED/GREEN evidence
 - [x] Safety epochs reset only on documented successful user-control boundaries and remain exact across stopped states, failed delivery, reload, compaction, shelving, automatic queue activation, and independent queued goals.
 - [x] Retryable provider/overflow recovery remains Pi-owned while a retry starts, but matching exhausted recovery stops as `blocked` at `agent_settled`; pending queue actions still dispatch in that callback, stale recovery cannot affect a replacement goal, and usage errors remain distinct.
 - [x] Users receive exactly one clear pause reason, measured response/repeat count, cumulative tokens, and resume guidance in notification, summary, and state-event assertions.
-- [ ] Existing sessions and queues load with safe defaults without losing state, both real-runtime circuit-breaker scenarios pass on Pi `0.81.1`, and documentation, `npm run check`, runtime smoke, and package dry run all pass.
+- [x] Existing sessions and queues load with safe defaults without losing state, both real-runtime circuit-breaker scenarios pass on Pi `0.81.1`, and documentation, repository CI checks, runtime smoke, and package dry run all pass.
