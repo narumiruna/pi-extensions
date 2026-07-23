@@ -712,8 +712,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			: typeof message.content === "string"
 				? message.content
 				: "";
-		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(prompt);
 		const ownedPrompt = consumePendingGoalPrompt(prompt);
+		const ownedPromptBoundary = runtime.hasOwnedPromptBoundary(prompt);
+		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(prompt, !ownedPromptBoundary);
 		if (!ownedPrompt) {
 			if (queuedNonGoalInput?.behavior === "followUp") {
 				beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
@@ -816,13 +817,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const goalPromptGoalId = goalPrompt?.goalId;
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
+		const ownedPromptBoundary = runtime.hasOwnedPromptBoundary(event.prompt);
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
 		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
 		const queuedNonGoalInput = activeBudgetWrapUp
 			? undefined
 			: runtime.consumeQueuedNonGoalInput(
 					event.prompt,
-					!activeGoalRecovery && ownedPromptGoalId === undefined,
+					!activeGoalRecovery && ownedPromptGoalId === undefined && !ownedPromptBoundary,
 				);
 		if (queuedNonGoalInput?.behavior === "followUp") {
 			beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
