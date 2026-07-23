@@ -652,11 +652,13 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				return { action: "handled" as const };
 			}
 			if (runtime.queueFrozen) return;
-			// A follow-up input is queued before its model work starts. Keep an owned
-			// marker pending for message_start; remember unrelated queued work so a
-			// later hard-cap cleanup guard cannot abort it.
+			// Streaming input is queued before its model work starts. Keep owned
+			// markers pending for message_start, and track non-goal delivery mode so a
+			// steer cannot consume a later follow-up's cleanup protection.
 			if (runtime.hasPendingOwnedGoalPrompt(event.text)) return;
-			if (event.streamingBehavior === "followUp") runtime.noteQueuedNonGoalInput();
+			if (event.streamingBehavior === "steer" || event.streamingBehavior === "followUp") {
+				runtime.noteQueuedNonGoalInput(event.text, event.streamingBehavior);
+			}
 			clearGoalRecovery();
 			return;
 		}
@@ -671,7 +673,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	pi.on("message_start", (event, ctx) => {
 		const message = event.message as { role?: unknown; content?: unknown };
 		if (message.role !== "user") return;
-		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput();
 		const prompt = Array.isArray(message.content)
 			? message.content
 					.filter((part) => part && typeof part === "object" && Reflect.get(part, "type") === "text")
@@ -681,11 +682,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			: typeof message.content === "string"
 				? message.content
 				: "";
+		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(prompt);
 		const ownedPrompt = consumePendingGoalPrompt(prompt);
 		if (!ownedPrompt) {
-			if (queuedNonGoalInput && runtime.activeGoal?.status === "active") {
+			if (queuedNonGoalInput === "followUp") {
 				clearGoalRecovery();
-				runtime.beginAgentRun(runtime.activeGoal.id, "manual");
+				clearStaleGoalToolCallBlock();
+				runtime.beginAgentRun(
+					runtime.activeGoal?.status === "active" ? runtime.activeGoal.id : null,
+					runtime.activeGoal?.status === "active" ? "manual" : undefined,
+				);
 			}
 			return;
 		}
@@ -778,7 +784,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
-		if (runtime.consumeQueuedNonGoalInput()) clearGoalRecovery();
+		if (runtime.consumeQueuedNonGoalInput(event.prompt) === "followUp") {
+			clearGoalRecovery();
+			clearStaleGoalToolCallBlock();
+		}
 		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
 		const runOrigin = continuationGoalId
 			? "automatic"
@@ -852,8 +861,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.guardAbortGoalId === activeGoal.id &&
 			activeGoal.status === "paused"
 		) {
-			if (runtime.consumeQueuedNonGoalInput()) {
+			if (runtime.consumeQueuedNonGoalFollowUpForAgentStart()) {
 				runtime.guardAbortGoalId = undefined;
+				clearStaleGoalToolCallBlock();
+				runtime.beginAgentRun(null, undefined);
 				return;
 			}
 			abortCurrentTurn(ctx);

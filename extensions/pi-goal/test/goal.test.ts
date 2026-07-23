@@ -2665,6 +2665,61 @@ test("hard-cap cleanup guard does not abort an unrelated queued follow-up", asyn
 
 	capped.mock.events.get("agent_start")?.[0]?.({}, capped.ctx);
 	assert.equal(aborts, 1);
+	assert.equal(
+		capped.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "unrelated-follow-up-read", input: {} },
+			capped.ctx,
+		),
+		undefined,
+	);
+});
+
+test("a queued follow-up marker is not consumed by an earlier matching steer", async () => {
+	let aborts = 0;
+	const capped = await startGoalForTest(
+		{ abort: () => aborts++ },
+		"finish",
+		ONE_TURN_LIMIT_SETTINGS_PATH,
+	);
+	await capped.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+	const continuation = capped.mock.sentUserMessages.at(-1)?.text ?? "";
+	capped.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		capped.ctx,
+	);
+	capped.mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: "same prompt", streamingBehavior: "followUp" },
+		capped.ctx,
+	);
+	capped.mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: "same prompt", streamingBehavior: "steer" },
+		capped.ctx,
+	);
+	capped.mock.events.get("message_start")?.[0]?.(
+		{ message: { role: "user", content: [{ type: "text", text: "same prompt" }] } },
+		capped.ctx,
+	);
+	capped.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		capped.ctx,
+	);
+	assert.equal(lastGoalStatus(capped.mock), "paused");
+	assert.equal(requireLastGoal(capped.mock).automaticModelTurns, 1);
+	assert.equal(aborts, 1);
+
+	capped.mock.events.get("agent_start")?.[0]?.({}, capped.ctx);
+	assert.equal(aborts, 1);
+	assert.equal(
+		capped.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "matching-follow-up-read", input: {} },
+			capped.ctx,
+		),
+		undefined,
+	);
 });
 
 test("mid-stream steer does not suppress hard-cap cleanup abort", async () => {

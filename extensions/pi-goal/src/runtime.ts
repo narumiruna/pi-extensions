@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	checkpointGoalActiveTime,
@@ -124,8 +124,14 @@ interface PendingGoalPrompt {
 	resetSafetyEpoch: boolean;
 }
 
+interface PendingNonGoalInput {
+	behavior: "steer" | "followUp";
+	fingerprint: string;
+}
+
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const MAX_PENDING_GOAL_PROMPTS = 20;
+const MAX_PENDING_NON_GOAL_INPUTS = 20;
 const BUDGET_WRAP_UP_MESSAGE_TYPE = "goal-budget-wrap-up";
 const BUDGET_WRAP_UP_PROMPT =
 	"The active /goal token budget is exhausted. Stop substantive work and do not call substantive tools. Summarize progress, verified results, remaining work, and blockers concisely. Treat completion as unproven. Do not call goal_complete unless authoritative, requirement-by-requirement evidence already proves every requirement is complete. Weak, indirect, or missing evidence is not enough. Budget exhaustion is not completion.";
@@ -161,7 +167,7 @@ export class GoalRuntime {
 	goalToolsHiddenByPolicy = new Set<string>();
 	pendingGoalPromptMarkers = new Map<string, PendingGoalPrompt>();
 	cancelledContinuationMarkers = new Set<string>();
-	queuedNonGoalInputPending = false;
+	pendingNonGoalInputs: PendingNonGoalInput[] = [];
 
 	readonly pi: ExtensionAPI;
 
@@ -518,7 +524,7 @@ export class GoalRuntime {
 
 	clearSettledSafetyTracking() {
 		this.guardAbortGoalId = undefined;
-		this.queuedNonGoalInputPending = false;
+		this.pendingNonGoalInputs = [];
 		this.clearAgentRun();
 	}
 
@@ -544,7 +550,7 @@ export class GoalRuntime {
 
 	clearPendingGoalPrompts() {
 		this.pendingGoalPromptMarkers.clear();
-		this.queuedNonGoalInputPending = false;
+		this.pendingNonGoalInputs = [];
 	}
 
 	async sendOwnedGoalPrompt(
@@ -594,14 +600,42 @@ export class GoalRuntime {
 		return true;
 	}
 
-	noteQueuedNonGoalInput() {
-		this.queuedNonGoalInputPending = true;
+	noteQueuedNonGoalInput(prompt: string, behavior: "steer" | "followUp") {
+		this.pendingNonGoalInputs.push({ behavior, fingerprint: inputFingerprint(prompt) });
+		if (this.pendingNonGoalInputs.length > MAX_PENDING_NON_GOAL_INPUTS) {
+			this.pendingNonGoalInputs.shift();
+		}
 	}
 
-	consumeQueuedNonGoalInput() {
-		const pending = this.queuedNonGoalInputPending;
-		this.queuedNonGoalInputPending = false;
-		return pending;
+	consumeQueuedNonGoalInput(prompt: string) {
+		if (typeof prompt !== "string") return undefined;
+		const fingerprint = inputFingerprint(prompt);
+		// Pi delivers steers before follow-ups. Prefer a matching steer even when an
+		// identical follow-up was queued first so it cannot steal follow-up ownership.
+		const steerIndex = this.pendingNonGoalInputs.findIndex(
+			(pending) => pending.behavior === "steer" && pending.fingerprint === fingerprint,
+		);
+		const index =
+			steerIndex >= 0
+				? steerIndex
+				: this.pendingNonGoalInputs.findIndex(
+						(pending) =>
+							pending.behavior === "followUp" && pending.fingerprint === fingerprint,
+					);
+		if (index < 0) return undefined;
+		return this.pendingNonGoalInputs.splice(index, 1)[0]?.behavior;
+	}
+
+	consumeQueuedNonGoalFollowUpForAgentStart() {
+		// A pending steer owns the next intra-run boundary. Do not let a later
+		// follow-up suppress cleanup until all earlier-priority steers have started.
+		if (this.pendingNonGoalInputs.some((pending) => pending.behavior === "steer")) return false;
+		const index = this.pendingNonGoalInputs.findIndex(
+			(pending) => pending.behavior === "followUp",
+		);
+		if (index < 0) return false;
+		this.pendingNonGoalInputs.splice(index, 1);
+		return true;
 	}
 
 	markContinuationStarted(prompt: string) {
@@ -984,6 +1018,10 @@ export function goalIdRejectionReason(goal: ActiveGoal, requestedGoalId: string)
 	if (!requestedGoalId) return "missing goal_id";
 	if (requestedGoalId !== goal.id) return "goal_id does not match the active goal";
 	return undefined;
+}
+
+function inputFingerprint(prompt: string) {
+	return createHash("sha256").update(prompt, "utf8").digest("hex");
 }
 
 async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
