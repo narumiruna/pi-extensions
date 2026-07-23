@@ -24,7 +24,7 @@ function porcelain(
 		.flatMap((record) => [
 			`worktree ${record.path}`,
 			`HEAD ${record.head ?? oid}`,
-			`branch refs/heads/${record.branch}`,
+			record.branch ? `branch refs/heads/${record.branch}` : "detached",
 			"",
 		])
 		.join("\0");
@@ -237,6 +237,117 @@ test("remove catches ignored data added during recovery-history revalidation", a
 		assert.equal(historyScans, 2);
 		assert.equal(removeCalls, 0);
 		assert.match(context.notifications.at(-1)?.message ?? "", /ignored data changed/i);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("remove rechecks detached HEAD durability after inventory", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-remove-detached-race-"));
+	const main = join(root, "repo");
+	const linked = join(root, "repo-detached");
+	mkdirSync(main);
+	mkdirSync(linked);
+	const mock = createMockPi();
+	let statusCalls = 0;
+	let durable = true;
+	let removeCalls = 0;
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
+		if (args[0] === "worktree" && args[1] === "list") {
+			return result(
+				porcelain([
+					{ path: main, branch: "main" },
+					{ path: linked, head: oid },
+				]),
+			);
+		}
+		if (args[0] === "rev-parse") return result(`${main}\n`);
+		if (args[0] === "status") {
+			statusCalls += 1;
+			if (statusCalls === 2) durable = false;
+			return result();
+		}
+		if (args[0] === "submodule") return result();
+		if (args.includes("for-each-ref")) {
+			return args.some((arg) => arg.startsWith("--contains=")) && durable
+				? result("refs/heads/safety\n")
+				: result();
+		}
+		if (args[0] === "worktree" && args[1] === "remove") removeCalls += 1;
+		return result();
+	};
+	worktreeExtension(mock.pi);
+	let selectCount = 0;
+	const context = createMockContext({
+		cwd: main,
+		hasUI: true,
+		mode: "tui",
+		select: async (_title: string, items: string[]) =>
+			selectCount++ === 0 ? "Remove worktree" : items[0],
+		confirm: async () => true,
+	});
+	try {
+		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(removeCalls, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /not reachable/i);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("prune rechecks recovery history after its final preview", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-prune-history-preview-race-"));
+	const main = join(root, "repo");
+	const administrative = join(main, ".git", "worktrees", "hidden");
+	const logPath = join(administrative, "logs", "HEAD");
+	mkdirSync(join(administrative, "logs"), { recursive: true });
+	writeFileSync(join(administrative, "HEAD"), "ref: refs/heads/feature\n");
+	const firstOrphan = oid.replace(/^0/, "1");
+	const laterOrphan = oid.replace(/^0/, "2");
+	writeFileSync(
+		logPath,
+		`${"0".repeat(40)} ${firstOrphan} Test <test@example.invalid> 0 +0000\tcommit\n`,
+	);
+	const mock = createMockPi();
+	let dryRuns = 0;
+	let actualPruneCalls = 0;
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
+		if (args[0] === "worktree" && args[1] === "list") {
+			return result(porcelain([{ path: main, branch: "main" }]));
+		}
+		if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+			return result(`${main}\n`);
+		}
+		if (args[0] === "rev-parse" && args.includes("--git-common-dir")) {
+			return result(".git\n");
+		}
+		if (args[0]?.startsWith("--git-dir=") && args[1] === "diff") return result();
+		if (args.includes("for-each-ref")) return result();
+		if (args.includes("--dry-run")) {
+			dryRuns += 1;
+			if (dryRuns === 2) {
+				writeFileSync(
+					logPath,
+					`${"0".repeat(40)} ${firstOrphan} Test <test@example.invalid> 0 +0000\tcommit\n${firstOrphan} ${laterOrphan} Test <test@example.invalid> 1 +0000\tcommit\n`,
+				);
+			}
+			return result("Removing worktrees/hidden: missing gitdir\n");
+		}
+		if (args[0] === "worktree" && args[1] === "prune") actualPruneCalls += 1;
+		return result();
+	};
+	worktreeExtension(mock.pi);
+	const context = createMockContext({
+		cwd: main,
+		hasUI: true,
+		mode: "tui",
+		select: async () => "Prune stale metadata",
+		confirm: async () => true,
+	});
+	try {
+		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(actualPruneCalls, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /metadata changed/i);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

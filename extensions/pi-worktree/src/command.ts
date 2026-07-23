@@ -280,23 +280,13 @@ async function removeFlow(
 		return;
 	}
 
-	const latestAdministrativePath = await worktreeAdministrativeDirectory(
+	await assertAdministrativeHistoryUnchanged(
 		pi,
+		ctx,
 		selected.path,
-		ctx.signal,
+		administrativePath,
+		approvedHistoryRisks,
 	);
-	const latestHistoryRisks = historyRisks(
-		selected.path,
-		await unreachableAdministrativeHistoryOids(pi, ctx, latestAdministrativePath),
-	);
-	if (
-		!pathsEqual(administrativePath, latestAdministrativePath) ||
-		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)
-	) {
-		throw new Error(
-			`Worktree ${selected.path} administrative recovery history changed after confirmation; select it again.`,
-		);
-	}
 
 	const beforeRemoval = await listWorktrees(pi, ctx.cwd, ctx.signal);
 	const latest = beforeRemoval.find((record) => pathsEqual(record.path, selected.path));
@@ -309,7 +299,6 @@ async function removeFlow(
 			`Worktree ${selected.path} changed state after confirmation; removal was refused.`,
 		);
 	}
-	await assertDetachedHeadIsDurable(pi, ctx, latest);
 	const latestInventory = classifyRemovalInventory(
 		await worktreeInventory(pi, latest.path, ctx.signal),
 	);
@@ -323,6 +312,14 @@ async function removeFlow(
 			`Removal refused because ignored data changed after confirmation:\n${latestInventory.ignored.join("\n") || "(none)"}`,
 		);
 	}
+	await assertDetachedHeadIsDurable(pi, ctx, latest);
+	await assertAdministrativeHistoryUnchanged(
+		pi,
+		ctx,
+		latest.path,
+		administrativePath,
+		approvedHistoryRisks,
+	);
 	await removeWorktree(pi, ctx.cwd, latest.path, ctx.signal);
 	const updated = await listWorktrees(pi, ctx.cwd, ctx.signal);
 	if (updated.some((record) => pathsEqual(record.path, selected.path))) {
@@ -366,11 +363,15 @@ async function pruneFlow(
 	)) {
 		await assertDetachedHeadIsDurable(pi, ctx, record);
 	}
-	const latestHistoryRisks = await inspectAdministrativePruneCandidates(pi, ctx);
+	const beforePreviewHistoryRisks = await inspectAdministrativePruneCandidates(pi, ctx);
+	if (!sameAdministrativeHistoryRisks(approvedHistoryRisks, beforePreviewHistoryRisks)) {
+		throw new Error("Stale worktree metadata changed after confirmation; run prune again.");
+	}
 	const latestPreview = await prunePreview(pi, ctx.cwd, ctx.signal);
+	const finalHistoryRisks = await inspectAdministrativePruneCandidates(pi, ctx);
 	if (
 		latestPreview !== preview ||
-		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)
+		!sameAdministrativeHistoryRisks(approvedHistoryRisks, finalHistoryRisks)
 	) {
 		throw new Error("Stale worktree metadata changed after confirmation; run prune again.");
 	}
@@ -380,6 +381,32 @@ async function pruneFlow(
 		output ? `Pruned stale worktree metadata:\n${output}` : "Pruned stale worktree metadata.",
 		"info",
 	);
+}
+
+async function assertAdministrativeHistoryUnchanged(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	selectedPath: string,
+	approvedAdministrativePath: string,
+	approvedHistoryRisks: readonly AdministrativeHistoryRisk[],
+): Promise<void> {
+	const latestAdministrativePath = await worktreeAdministrativeDirectory(
+		pi,
+		selectedPath,
+		ctx.signal,
+	);
+	const latestHistoryRisks = historyRisks(
+		selectedPath,
+		await unreachableAdministrativeHistoryOids(pi, ctx, latestAdministrativePath),
+	);
+	if (
+		!pathsEqual(approvedAdministrativePath, latestAdministrativePath) ||
+		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)
+	) {
+		throw new Error(
+			`Worktree ${selectedPath} administrative recovery history changed after confirmation; select it again.`,
+		);
+	}
 }
 
 async function inspectAdministrativePruneCandidates(

@@ -502,7 +502,7 @@ test("remove explicitly confirms and discards reflog-only recovery history", asy
 	}
 });
 
-test("remove refuses administrative recovery history that changes after confirmation", async () => {
+test("remove refuses administrative recovery history added during final validation", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-worktree-remove-history-race-"));
 	const main = join(root, "repo");
 	const linked = join(root, "repo-feature");
@@ -517,6 +517,7 @@ test("remove refuses administrative recovery history that changes after confirma
 		`${"0".repeat(40)} ${firstOrphan} Test <test@example.invalid> 0 +0000\tcommit\n`,
 	);
 	const mock = createMockPi();
+	let statusCalls = 0;
 	let removeCalls = 0;
 	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
 		if (args[0] === "worktree" && args[1] === "list") {
@@ -527,14 +528,19 @@ test("remove refuses administrative recovery history that changes after confirma
 				]),
 			);
 		}
-		if (args[0] === "rev-parse" && args.includes("--show-toplevel")) {
-			return result(`${main}\n`);
+		if (args[0] === "rev-parse" && args.includes("--show-toplevel")) return result(`${main}\n`);
+		if (args[0] === "rev-parse" && args.includes("--git-dir")) return result(`${administrative}\n`);
+		if (args[0] === "status") {
+			statusCalls += 1;
+			if (statusCalls === 2) {
+				writeFileSync(
+					logPath,
+					`${"0".repeat(40)} ${firstOrphan} Test <test@example.invalid> 0 +0000\tcommit\n${firstOrphan} ${laterOrphan} Test <test@example.invalid> 1 +0000\tcommit\n`,
+				);
+			}
+			return result();
 		}
-		if (args[0] === "rev-parse" && args.includes("--git-dir")) {
-			return result(`${administrative}\n`);
-		}
-		if (args[0] === "status" || args[0] === "submodule") return result();
-		if (args.includes("for-each-ref")) return result();
+		if (args[0] === "submodule" || args.includes("for-each-ref")) return result();
 		if (args[0] === "worktree" && args[1] === "remove") removeCalls += 1;
 		return result();
 	};
@@ -546,13 +552,7 @@ test("remove refuses administrative recovery history that changes after confirma
 		mode: "tui",
 		select: async (_title: string, items: string[]) =>
 			selects++ === 0 ? "Remove worktree" : items[0],
-		confirm: async () => {
-			writeFileSync(
-				logPath,
-				`${"0".repeat(40)} ${firstOrphan} Test <test@example.invalid> 0 +0000\tcommit\n${firstOrphan} ${laterOrphan} Test <test@example.invalid> 1 +0000\tcommit\n`,
-			);
-			return true;
-		},
+		confirm: async () => true,
 	});
 	try {
 		await mock.commands.get("worktree")?.handler("", context.ctx);
