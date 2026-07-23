@@ -280,6 +280,24 @@ async function removeFlow(
 		return;
 	}
 
+	const latestAdministrativePath = await worktreeAdministrativeDirectory(
+		pi,
+		selected.path,
+		ctx.signal,
+	);
+	const latestHistoryRisks = historyRisks(
+		selected.path,
+		await unreachableAdministrativeHistoryOids(pi, ctx, latestAdministrativePath),
+	);
+	if (
+		!pathsEqual(administrativePath, latestAdministrativePath) ||
+		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)
+	) {
+		throw new Error(
+			`Worktree ${selected.path} administrative recovery history changed after confirmation; select it again.`,
+		);
+	}
+
 	const beforeRemoval = await listWorktrees(pi, ctx.cwd, ctx.signal);
 	const latest = beforeRemoval.find((record) => pathsEqual(record.path, selected.path));
 	if (!latest) throw new Error(`Worktree ${selected.path} is no longer registered.`);
@@ -291,6 +309,7 @@ async function removeFlow(
 			`Worktree ${selected.path} changed state after confirmation; removal was refused.`,
 		);
 	}
+	await assertDetachedHeadIsDurable(pi, ctx, latest);
 	const latestInventory = classifyRemovalInventory(
 		await worktreeInventory(pi, latest.path, ctx.signal),
 	);
@@ -302,24 +321,6 @@ async function removeFlow(
 	if (!sameInventory(inventory.ignored, latestInventory.ignored)) {
 		throw new Error(
 			`Removal refused because ignored data changed after confirmation:\n${latestInventory.ignored.join("\n") || "(none)"}`,
-		);
-	}
-	await assertDetachedHeadIsDurable(pi, ctx, latest);
-	const latestAdministrativePath = await worktreeAdministrativeDirectory(
-		pi,
-		latest.path,
-		ctx.signal,
-	);
-	const latestHistoryRisks = historyRisks(
-		latest.path,
-		await unreachableAdministrativeHistoryOids(pi, ctx, latestAdministrativePath),
-	);
-	if (
-		!pathsEqual(administrativePath, latestAdministrativePath) ||
-		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)
-	) {
-		throw new Error(
-			`Worktree ${selected.path} administrative recovery history changed after confirmation; select it again.`,
 		);
 	}
 	await removeWorktree(pi, ctx.cwd, latest.path, ctx.signal);
@@ -365,8 +366,8 @@ async function pruneFlow(
 	)) {
 		await assertDetachedHeadIsDurable(pi, ctx, record);
 	}
-	const latestPreview = await prunePreview(pi, ctx.cwd, ctx.signal);
 	const latestHistoryRisks = await inspectAdministrativePruneCandidates(pi, ctx);
+	const latestPreview = await prunePreview(pi, ctx.cwd, ctx.signal);
 	if (
 		latestPreview !== preview ||
 		!sameAdministrativeHistoryRisks(approvedHistoryRisks, latestHistoryRisks)

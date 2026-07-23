@@ -914,19 +914,24 @@ test("prune explicitly confirms and discards reflog-only recovery history", asyn
 	}
 });
 
-test("prune refuses metadata whose dry-run preview changes after confirmation", async () => {
+test("prune refuses metadata that changes during recovery-history revalidation", async () => {
 	const mock = createMockPi();
 	let dryRuns = 0;
+	let historyScans = 0;
 	let actualPruneCalls = 0;
 	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
 		if (args[0] === "worktree" && args[1] === "list") {
 			return result(porcelain([{ path: "/repo", branch: "main" }]));
 		}
+		if (args[0] === "rev-parse" && args.includes("--git-common-dir")) {
+			historyScans += 1;
+			return result("/repo/.git\n");
+		}
 		if (args[0] === "rev-parse") return result("/repo\n");
 		if (args.includes("--dry-run")) {
 			dryRuns += 1;
 			return result(
-				dryRuns === 1
+				historyScans < 2
 					? "Removing worktrees/first: missing gitdir\n"
 					: "Removing worktrees/second: missing gitdir\n",
 			);

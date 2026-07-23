@@ -192,6 +192,56 @@ test("remove refuses ignored data that changes after confirmation", async () => 
 	}
 });
 
+test("remove catches ignored data added during recovery-history revalidation", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-remove-late-ignored-race-"));
+	const main = join(root, "repo");
+	const linked = join(root, "repo-feature");
+	mkdirSync(main);
+	mkdirSync(linked);
+	const mock = createMockPi();
+	let historyScans = 0;
+	let removeCalls = 0;
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
+		if (args[0] === "worktree" && args[1] === "list") {
+			return result(
+				porcelain([
+					{ path: main, branch: "main" },
+					{ path: linked, branch: "feature" },
+				]),
+			);
+		}
+		if (args[0] === "rev-parse") return result(`${main}\n`);
+		if (args[0] === "status") {
+			return result(historyScans < 2 ? "!! node_modules/\n" : "!! node_modules/\n!! cache/\n");
+		}
+		if (args[0] === "submodule") return result();
+		if (args.includes("for-each-ref")) {
+			historyScans += 1;
+			return result();
+		}
+		if (args[0] === "worktree" && args[1] === "remove") removeCalls += 1;
+		return result();
+	};
+	worktreeExtension(mock.pi);
+	let selectCount = 0;
+	const context = createMockContext({
+		cwd: main,
+		hasUI: true,
+		mode: "tui",
+		select: async (_title: string, items: string[]) =>
+			selectCount++ === 0 ? "Remove worktree" : items[0],
+		confirm: async () => true,
+	});
+	try {
+		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(historyScans, 2);
+		assert.equal(removeCalls, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /ignored data changed/i);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 type ExecFunction = (
 	command: string,
 	args: string[],
