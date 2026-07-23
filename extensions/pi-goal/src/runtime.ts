@@ -20,7 +20,10 @@ import {
 	serializeGoalState,
 } from "./persistence.js";
 import { buildContinuePrompt, type GoalStatus } from "./prompts.js";
-import { nextToolFreeRepeatState } from "./safety.js";
+import { nextToolFreeRepeatState, resetGoalSafetyEpoch } from "./safety.js";
+
+export { queueGoalSafetyReset, resetGoalSafetyEpoch } from "./safety.js";
+
 import { DEFAULT_GOAL_SETTINGS, type GoalSettings } from "./settings.js";
 
 export interface ContinuationTicket {
@@ -603,11 +606,7 @@ export class GoalRuntime {
 		return true;
 	}
 
-	noteQueuedNonGoalInput(
-		prompt: string,
-		behavior: "steer" | "followUp",
-		resetSafetyEpoch = false,
-	) {
+	noteQueuedNonGoalInput(prompt: string, behavior: "steer" | "followUp", resetSafetyEpoch = false) {
 		this.pendingNonGoalInputs.push({
 			behavior,
 			fingerprint: inputFingerprint(prompt),
@@ -618,7 +617,7 @@ export class GoalRuntime {
 		}
 	}
 
-	consumeQueuedNonGoalInput(prompt: string) {
+	consumeQueuedNonGoalInput(prompt: string, allowDeliveryFallback = true) {
 		if (typeof prompt !== "string") return undefined;
 		const fingerprint = inputFingerprint(prompt);
 		// Pi delivers steers before follow-ups. Prefer a matching steer even when an
@@ -630,10 +629,10 @@ export class GoalRuntime {
 			steerIndex >= 0
 				? steerIndex
 				: this.pendingNonGoalInputs.findIndex(
-						(pending) =>
-							pending.behavior === "followUp" && pending.fingerprint === fingerprint,
+						(pending) => pending.behavior === "followUp" && pending.fingerprint === fingerprint,
 					);
 		if (exactIndex >= 0) return this.pendingNonGoalInputs.splice(exactIndex, 1)[0];
+		if (!allowDeliveryFallback) return undefined;
 
 		// Skills, templates, and later input handlers can transform the raw text after
 		// pi-goal records it. Fall back to Pi's delivery priority as a bounded marker:
@@ -653,9 +652,7 @@ export class GoalRuntime {
 		// A pending steer owns the next intra-run boundary. Do not let a later
 		// follow-up suppress cleanup until all earlier-priority steers have started.
 		if (this.pendingNonGoalInputs.some((pending) => pending.behavior === "steer")) return false;
-		const index = this.pendingNonGoalInputs.findIndex(
-			(pending) => pending.behavior === "followUp",
-		);
+		const index = this.pendingNonGoalInputs.findIndex((pending) => pending.behavior === "followUp");
 		if (index < 0) return false;
 		this.pendingNonGoalInputs.splice(index, 1);
 		return true;
@@ -860,11 +857,7 @@ export class GoalRuntime {
 		this.completionStatusTimer = undefined;
 	}
 
-	private rememberPendingGoalPrompt(
-		goalId: string,
-		prompt: string,
-		resetSafetyEpoch: boolean,
-	) {
+	private rememberPendingGoalPrompt(goalId: string, prompt: string, resetSafetyEpoch: boolean) {
 		const marker = randomUUID();
 		this.pendingGoalPromptMarkers.set(marker, { goalId, resetSafetyEpoch });
 		if (this.pendingGoalPromptMarkers.size > MAX_PENDING_GOAL_PROMPTS) {
@@ -932,21 +925,6 @@ export function transitionGoal(goal: ActiveGoal, requestedStatus: GoalStatus): A
 
 export function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, id: randomUUID(), updatedAt: Date.now() };
-}
-
-export function queueGoalSafetyReset(goal: ActiveGoal): ActiveGoal {
-	return { ...goal, safetyResetPending: true };
-}
-
-export function resetGoalSafetyEpoch(goal: ActiveGoal): ActiveGoal {
-	return {
-		...goal,
-		automaticModelTurns: 0,
-		toolFreeRepeatCount: 0,
-		lastToolFreeOutputFingerprint: undefined,
-		safetyPauseCause: undefined,
-		safetyResetPending: undefined,
-	};
 }
 
 export function editedGoalStatus(status: GoalStatus): GoalStatus {

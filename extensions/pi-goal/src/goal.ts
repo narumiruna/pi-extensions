@@ -703,7 +703,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (message.role !== "user") return;
 		const prompt = Array.isArray(message.content)
 			? message.content
-					.filter((part) => part && typeof part === "object" && Reflect.get(part, "type") === "text")
+					.filter(
+						(part) => part && typeof part === "object" && Reflect.get(part, "type") === "text",
+					)
 					.map((part) => Reflect.get(part as object, "text"))
 					.filter((text): text is string => typeof text === "string")
 					.join("\n")
@@ -815,11 +817,13 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
-		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(event.prompt);
+		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
+		const queuedNonGoalInput = activeBudgetWrapUp
+			? undefined
+			: runtime.consumeQueuedNonGoalInput(event.prompt, !activeGoalRecovery);
 		if (queuedNonGoalInput?.behavior === "followUp") {
 			beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
 		}
-		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
 		const runOrigin = continuationGoalId
 			? "automatic"
 			: activeGoalRecovery && runtime.goalRecovery?.automaticOwner
@@ -884,7 +888,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		};
 	});
 
-	pi.on("agent_start", (_event, ctx) => {
+	pi.on("agent_start", (_event, _ctx) => {
 		if (runtime.queueFrozen) return;
 		const activeGoal = runtime.activeGoal;
 		if (
