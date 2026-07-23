@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-webui",
-	"version": "0.26.0",
+	"version": "0.27.0",
 	"description": "Lightweight local web companion for the current Pi terminal session.",
 	"type": "module",
 	"license": "MIT",

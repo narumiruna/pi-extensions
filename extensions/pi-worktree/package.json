@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-worktree",
-	"version": "0.26.0",
+	"version": "0.27.0",
 	"description": "Pi extension for safe interactive Git worktree management and workspace switching.",
 	"type": "module",
 	"license": "MIT",
