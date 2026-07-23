@@ -12,6 +12,7 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Adds `--plan` to start a session in Plan mode.
 - Enables built-in read-only tools by default while Plan mode is active.
 - Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
+- Optionally limits `subagent` and `subagent_spawn` launches to named planning roles while Plan mode is active.
 - Blocks `update_plan`, mutating built-in tools, and unsafe `bash` forms such as writes, substitutions, background jobs, dependency installs, and mutating Git commands.
 - Injects Codex-like Plan mode instructions: explore first, ask decision questions for high-impact ambiguity, do not mutate files, and finalize only when decision-complete.
 - Adds required `plan_mode_question` and `plan_mode_complete` tools for structured questions and completion.
@@ -90,7 +91,8 @@ Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-m
 ```json
 {
   "thinkingLevel": "inherit",
-  "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
+  "defaultPlanTools": ["read", "bash", "grep", "find", "ls", "subagent"],
+  "allowedPlanSubagents": ["plan-scout", "plan-researcher", "plan-reviewer"],
   "safeSubcommands": {
     "git": ["status", "log", "rev-parse", "blame"],
     "gh": ["pr view", "pr list", "issue view", "issue list"]
@@ -105,6 +107,16 @@ Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-m
 Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. A tool registered after Plan mode is already active is not added automatically; re-enter Plan mode or reopen `/plan tools` to reapply the selection. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them with `/plan tools`. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead. An effective tool named `bash` remains subject to the limited-shell policy regardless of its source metadata.
 
 A selection made with `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes. The global setting remains the baseline for fresh sessions and sessions without an explicit selection.
+
+### Allowed Plan subagents
+
+`allowedPlanSubagents` is an optional, exact, case-sensitive allowlist of role names for subagent launches while Plan mode is active. It does not activate delegation tools by itself: add `subagent` or `subagent_spawn` to `defaultPlanTools`, or select the tool through `/plan tools`. The same role policy applies whichever activation path is used.
+
+When configured, Plan mode checks every role in blocking `subagent` single, parallel, chain, and fan-in calls (`agent`, `tasks[].agent`, `chain[].agent`, and `aggregator.agent`) and the top-level `agent` in `subagent_spawn`. A call containing any disallowed role is rejected as a whole before the launch tool executes. Covered calls whose role fields cannot be verified are also rejected so a malformed launch cannot bypass the policy.
+
+Omit `allowedPlanSubagents` to preserve the unrestricted role behavior for explicitly enabled delegation tools. Set it to `[]` to reject every covered launch in Plan mode. Names must be non-empty strings; duplicates are removed in first-seen order. A wrong type or an empty, whitespace-only, or non-string entry invalidates the settings file and triggers the normal warning/default fallback. Settings reload on `session_start`; removing the property removes the role restriction. Non-Plan sessions are never restricted. If no extension has registered the covered tool names, the setting is inert, so `pi-plan-mode` and `pi-subagents` remain independently installable.
+
+This is a name check, not capability enforcement or a sandbox. `pi-plan-mode` does not inspect an allowed role's effective tools, permissions, or source. User or project definitions can change or override the meaning of an allowed name, so keep every allowed role independently read-only and retain normal project-agent trust and confirmation controls. The policy does not resolve retained agent IDs used by `subagent_send`; enabling follow-up lifecycle tools remains a separate user-risk decision.
 
 ### Safe shell subcommands
 

@@ -63,6 +63,26 @@ test("Plan-mode settings normalize default tool names strictly", async () => {
 	}
 });
 
+test("Plan-mode settings normalize allowed subagent names strictly", () => {
+	assert.deepEqual(normalizePlanModeSettings({}), { thinkingLevel: "inherit" });
+	assert.deepEqual(
+		normalizePlanModeSettings({
+			allowedPlanSubagents: ["plan-scout", "plan-reviewer", "plan-scout"],
+		}),
+		{
+			thinkingLevel: "inherit",
+			allowedPlanSubagents: ["plan-scout", "plan-reviewer"],
+		},
+	);
+	assert.deepEqual(normalizePlanModeSettings({ allowedPlanSubagents: [] }), {
+		thinkingLevel: "inherit",
+		allowedPlanSubagents: [],
+	});
+	for (const allowedPlanSubagents of ["plan-scout", [""], ["   "], ["plan-scout", 42]]) {
+		assert.equal(normalizePlanModeSettings({ allowedPlanSubagents }), undefined);
+	}
+});
+
 test("Plan-mode settings validate safe subcommands strictly", async () => {
 	assert.deepEqual(
 		normalizePlanModeSettings({
