@@ -45,10 +45,12 @@ it is not an API reference.
   `ExtensionAPI` and registers the extension's hooks, commands, tools, or providers.
   **Verification:** `Smoke` by loading the declared entrypoint with Pi; `Test` when the package has a
   loader smoke test.
-- **MUST:** Put runtime libraries in `dependencies`; list Pi packages imported at runtime in
-  `peerDependencies` with version `"*"`; do not rely on `devDependencies` being installed with a
-  production package. **Verification:** `Review` of imports and package metadata, plus an npm pack
-  dry run for dependency or publishing changes.
+- **MUST:** Put third-party runtime libraries in `dependencies`. List Pi-bundled core packages
+  imported at runtime—`@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`,
+  `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox`—in `peerDependencies`
+  with version `"*"`; do not rely on `devDependencies` being installed with a production package.
+  **Verification:** `Review` of imports and package metadata, plus an npm pack dry run for dependency
+  or publishing changes.
 - **MUST:** Treat installed extension code as fully privileged and load only trusted sources.
   **Verification:** `Review` of installation documentation and any code-loading path.
 
@@ -116,7 +118,7 @@ and long-running interactive work should expose cancellation.
 
 - **MUST:** Keep active production packages under `extensions/<package>/`, experiments under
   `extensions/experimental/<package>/`, and deprecated references under `deprecated/<package>/`.
-  **Verification:** `Validator` via `npm run check:boundaries` and `Review` for lifecycle moves.
+  **Verification:** `Review` of package locations and lifecycle moves.
 - **MUST:** Give every active package a thin `src/index.ts` default-export forwarder and declare
   exactly `"pi": { "extensions": ["./src/index.ts"] }`; keep implementation in descriptive modules.
   **Verification:** `Validator` via `npm run check:boundaries`.
