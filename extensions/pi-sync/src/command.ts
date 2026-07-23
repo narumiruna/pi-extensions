@@ -1,23 +1,30 @@
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { CommandArgumentCompletion, CommandOptions } from "./types.js";
 
 const YES_FLAG_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 	{ value: "--yes", label: "--yes", description: "Skip confirmation prompts" },
 	{ value: "-y", label: "-y", description: "Skip confirmation prompts" },
 ];
-const SYNC_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
-	{ value: "help", label: "help", description: "Show command usage" },
-	{ value: "init", label: "init", description: "Create local config template" },
-	{ value: "config", label: "config", description: "Show resolved configuration" },
-	{ value: "status", label: "status", description: "Show sync status" },
-	{ value: "diff", label: "diff", description: "Show local/remote diff" },
-	{ value: "doctor", label: "doctor", description: "Check config, secrets, and lock state" },
-	{ value: "push", label: "push", description: "Upload local settings" },
-	{ value: "pull", label: "pull", description: "Apply remote settings" },
-	{ value: "sync", label: "sync", description: "Push or pull as needed" },
-	{ value: "history", label: "history", description: "Show recent remote snapshots" },
-	{ value: "rollback", label: "rollback", description: "Apply a previous snapshot" },
-	{ value: "unlock", label: "unlock", description: "Remove a stale local lock" },
-];
+export const SYNC_COMMANDS = [
+	{ name: "help", description: "Show command usage" },
+	{ name: "init", description: "Create local config template" },
+	{ name: "config", description: "Show resolved configuration" },
+	{ name: "status", description: "Show sync status" },
+	{ name: "diff", description: "Show local/remote diff" },
+	{ name: "doctor", description: "Check config, secrets, and lock state" },
+	{ name: "push", description: "Upload local settings" },
+	{ name: "pull", description: "Apply remote settings" },
+	{ name: "sync", description: "Push or pull as needed" },
+	{ name: "history", description: "Show recent remote snapshots" },
+	{ name: "rollback", description: "Apply a previous snapshot", usageSuffix: " <snapshot>" },
+	{ name: "unlock", description: "Remove a stale local lock", usageSuffix: " --stale" },
+] as const;
+
+export type SyncCommandName = (typeof SYNC_COMMANDS)[number]["name"];
+
+const SYNC_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = SYNC_COMMANDS.map(
+	({ name, description }) => ({ value: name, label: name, description }),
+);
 const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]> = {
 	push: [
 		...YES_FLAG_COMPLETIONS,
@@ -88,10 +95,42 @@ export function completeSyncArguments(argumentPrefix: string): CommandArgumentCo
 		: null;
 }
 
+export function syncMenuOptions() {
+	return SYNC_COMMANDS.map(({ name, description }) => `${name} — ${description}`);
+}
+
+export function syncCommandFromMenuOption(option: string): SyncCommandName | undefined {
+	return SYNC_COMMANDS.find(({ name, description }) => option === `${name} — ${description}`)?.name;
+}
+
+export async function resolveSyncCommand(input: string, ctx: ExtensionCommandContext) {
+	const [subcommand, ...rest] = splitArgs(input);
+	if (subcommand) return { subcommand, rest };
+	if (!ctx.hasUI) {
+		ctx.ui.notify(usage(), "info");
+		return undefined;
+	}
+
+	const selectedOption = await ctx.ui.select("pi-sync", syncMenuOptions());
+	const selected = selectedOption ? syncCommandFromMenuOption(selectedOption) : undefined;
+	if (!selected) return undefined;
+	if (selected !== "rollback") return { subcommand: selected, rest: [] };
+
+	const target = (await ctx.ui.input("Rollback snapshot", "snapshot id"))?.trim();
+	if (!target) {
+		ctx.ui.notify("Rollback cancelled.", "info");
+		return undefined;
+	}
+	return { subcommand: selected, rest: [target] };
+}
+
 export function usage() {
+	const commands = SYNC_COMMANDS.map(
+		(command) => `${command.name}${"usageSuffix" in command ? command.usageSuffix : ""}`,
+	).join(", ");
 	return [
 		"Usage: /sync <command>",
-		"Commands: init, config, status, diff, doctor, push, pull, sync, history, rollback <snapshot>, unlock --stale",
+		`Commands: ${commands}`,
 		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN, PI_SYNC_SESSIONS/syncSessions, region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json (or $PI_CODING_AGENT_DIR/pi-sync.local.json when PI_CODING_AGENT_DIR is set).",
 	].join("\n");
 }
