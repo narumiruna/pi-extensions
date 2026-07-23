@@ -414,6 +414,9 @@ export class GoalRuntime {
 		this.recordGoalUsage(goal, ctx);
 		this.persistGoal(goal);
 		this.updateStatus(ctx, goal);
+		// Terminal errors need agent_end classification before a safety pause can
+		// choose between usage_limited, blocked, or retryable cleanup.
+		if (candidate?.role === "assistant" && candidate.stopReason === "error") return false;
 		return this.enforceAutomaticTurnLimit(ctx, true);
 	}
 

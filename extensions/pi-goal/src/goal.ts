@@ -656,7 +656,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			// marker pending for message_start; remember unrelated queued work so a
 			// later hard-cap cleanup guard cannot abort it.
 			if (runtime.hasPendingOwnedGoalPrompt(event.text)) return;
-			if (event.streamingBehavior) runtime.noteQueuedNonGoalInput();
+			if (event.streamingBehavior === "followUp") runtime.noteQueuedNonGoalInput();
 			clearGoalRecovery();
 			return;
 		}
@@ -671,7 +671,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	pi.on("message_start", (event, ctx) => {
 		const message = event.message as { role?: unknown; content?: unknown };
 		if (message.role !== "user") return;
-		runtime.consumeQueuedNonGoalInput();
+		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput();
 		const prompt = Array.isArray(message.content)
 			? message.content
 					.filter((part) => part && typeof part === "object" && Reflect.get(part, "type") === "text")
@@ -682,8 +682,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				? message.content
 				: "";
 		const ownedPrompt = consumePendingGoalPrompt(prompt);
-		if (!ownedPrompt || runtime.activeGoal?.id !== ownedPrompt.goalId) return;
-		if (runtime.activeGoal.status !== "active") return;
+		if (!ownedPrompt) {
+			if (queuedNonGoalInput && runtime.activeGoal?.status === "active") {
+				clearGoalRecovery();
+				runtime.beginAgentRun(runtime.activeGoal.id, "manual");
+			}
+			return;
+		}
+		if (runtime.activeGoal?.id !== ownedPrompt.goalId || runtime.activeGoal.status !== "active") {
+			return;
+		}
 		if (runtime.agentRunGoalId !== undefined && runtime.agentRunGoalId !== ownedPrompt.goalId) {
 			runtime.activeGoal.baselineTokens = Math.max(
 				0,
@@ -770,6 +778,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
+		if (runtime.consumeQueuedNonGoalInput()) clearGoalRecovery();
 		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
 		const runOrigin = continuationGoalId
 			? "automatic"
@@ -900,6 +909,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 		if (finalAssistant?.stopReason === "error") {
 			if (isRetryableGoalInterruption(finalAssistant)) {
+				if (run.origin === "automatic" && enforceAutomaticTurnLimit(ctx, true)) return;
 				if (limitActiveGoalForBudget(ctx, false)) return;
 				if (!goalToolsAvailable()) {
 					pauseGoalForUnavailableTools(ctx);
