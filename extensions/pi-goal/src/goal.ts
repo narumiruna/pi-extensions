@@ -712,8 +712,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			: typeof message.content === "string"
 				? message.content
 				: "";
-		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(prompt);
 		const ownedPrompt = consumePendingGoalPrompt(prompt);
+		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(prompt, ownedPrompt === undefined);
 		if (!ownedPrompt) {
 			if (queuedNonGoalInput?.behavior === "followUp") {
 				beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
