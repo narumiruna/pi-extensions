@@ -119,6 +119,11 @@ interface GoalTerminalDetails {
 	reason?: string;
 }
 
+interface PendingGoalPrompt {
+	goalId: string;
+	resetSafetyEpoch: boolean;
+}
+
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const MAX_PENDING_GOAL_PROMPTS = 20;
 const BUDGET_WRAP_UP_MESSAGE_TYPE = "goal-budget-wrap-up";
@@ -154,8 +159,9 @@ export class GoalRuntime {
 	goalToolsUnlocked = false;
 	/** Exact lazy goal tools this runtime removed and may restore on a mode change. */
 	goalToolsHiddenByPolicy = new Set<string>();
-	pendingGoalPromptMarkers = new Map<string, string>();
+	pendingGoalPromptMarkers = new Map<string, PendingGoalPrompt>();
 	cancelledContinuationMarkers = new Set<string>();
+	queuedNonGoalInputPending = false;
 
 	readonly pi: ExtensionAPI;
 
@@ -163,9 +169,12 @@ export class GoalRuntime {
 		this.pi = pi;
 	}
 
-	canRecordGoalUsage() {
+	canRecordGoalUsage(goalId?: string) {
 		return (
 			this.agentRunGoalId !== null &&
+			(goalId === undefined ||
+				this.agentRunGoalId === undefined ||
+				this.agentRunGoalId === goalId) &&
 			!(
 				this.pendingQueueAction?.kind === "prioritize" &&
 				this.pendingQueueAction.displacedUsageFinalized === true
@@ -231,7 +240,7 @@ export class GoalRuntime {
 		ctx: StatusContext,
 		checkpointActiveTime = goal.status === "active",
 	) {
-		if (!this.canRecordGoalUsage()) return false;
+		if (!this.canRecordGoalUsage(goal.id)) return false;
 		updateGoalUsage(goal, ctx, checkpointActiveTime);
 		return true;
 	}
@@ -506,6 +515,7 @@ export class GoalRuntime {
 
 	clearSettledSafetyTracking() {
 		this.guardAbortGoalId = undefined;
+		this.queuedNonGoalInputPending = false;
 		this.clearAgentRun();
 	}
 
@@ -531,10 +541,16 @@ export class GoalRuntime {
 
 	clearPendingGoalPrompts() {
 		this.pendingGoalPromptMarkers.clear();
+		this.queuedNonGoalInputPending = false;
 	}
 
-	async sendOwnedGoalPrompt(ctx: StatusContext, goalId: string, prompt: string) {
-		const pending = this.rememberPendingGoalPrompt(goalId, prompt);
+	async sendOwnedGoalPrompt(
+		ctx: StatusContext,
+		goalId: string,
+		prompt: string,
+		resetSafetyEpoch = true,
+	) {
+		const pending = this.rememberPendingGoalPrompt(goalId, prompt, resetSafetyEpoch);
 		const sent = await sendPrompt(this.pi, ctx, pending.prompt);
 		if (!sent) this.pendingGoalPromptMarkers.delete(pending.marker);
 		return sent;
@@ -553,15 +569,20 @@ export class GoalRuntime {
 		return marker ? this.cancelledContinuationMarkers.delete(marker) : false;
 	}
 
+	hasPendingOwnedGoalPrompt(prompt: string) {
+		const marker = extractGoalPromptMarker(prompt);
+		return marker ? this.pendingGoalPromptMarkers.has(marker) : false;
+	}
+
 	consumeStaleOwnedGoalPrompt(prompt: string) {
 		const marker = extractGoalPromptMarker(prompt);
 		if (!marker) return false;
-		const goalId = this.pendingGoalPromptMarkers.get(marker);
-		if (!goalId) return false;
+		const pending = this.pendingGoalPromptMarkers.get(marker);
+		if (!pending) return false;
 		if (
 			!this.queueFrozen &&
 			!this.pendingQueueAction &&
-			this.activeGoal?.id === goalId &&
+			this.activeGoal?.id === pending.goalId &&
 			this.activeGoal.status === "active"
 		) {
 			return false;
@@ -570,14 +591,14 @@ export class GoalRuntime {
 		return true;
 	}
 
-	claimCurrentOwnedGoalPrompt(prompt: string) {
-		const marker = extractGoalPromptMarker(prompt);
-		if (!marker) return undefined;
-		const goalId = this.pendingGoalPromptMarkers.get(marker);
-		const activeGoal = this.activeGoal;
-		if (!activeGoal || goalId !== activeGoal.id || activeGoal.status !== "active") return undefined;
-		this.pendingGoalPromptMarkers.delete(marker);
-		return goalId;
+	noteQueuedNonGoalInput() {
+		this.queuedNonGoalInputPending = true;
+	}
+
+	consumeQueuedNonGoalInput() {
+		const pending = this.queuedNonGoalInputPending;
+		this.queuedNonGoalInputPending = false;
+		return pending;
 	}
 
 	markContinuationStarted(prompt: string) {
@@ -779,9 +800,13 @@ export class GoalRuntime {
 		this.completionStatusTimer = undefined;
 	}
 
-	private rememberPendingGoalPrompt(goalId: string, prompt: string) {
+	private rememberPendingGoalPrompt(
+		goalId: string,
+		prompt: string,
+		resetSafetyEpoch: boolean,
+	) {
 		const marker = randomUUID();
-		this.pendingGoalPromptMarkers.set(marker, goalId);
+		this.pendingGoalPromptMarkers.set(marker, { goalId, resetSafetyEpoch });
 		if (this.pendingGoalPromptMarkers.size > MAX_PENDING_GOAL_PROMPTS) {
 			const oldest = this.pendingGoalPromptMarkers.keys().next().value;
 			if (oldest) this.pendingGoalPromptMarkers.delete(oldest);
@@ -792,9 +817,9 @@ export class GoalRuntime {
 	private consumePendingGoalPrompt(prompt: string) {
 		const marker = extractGoalPromptMarker(prompt);
 		if (!marker) return undefined;
-		const goalId = this.pendingGoalPromptMarkers.get(marker);
+		const pending = this.pendingGoalPromptMarkers.get(marker);
 		this.pendingGoalPromptMarkers.delete(marker);
-		return goalId;
+		return pending;
 	}
 
 	consumeOwnedGoalPrompt(prompt: string) {

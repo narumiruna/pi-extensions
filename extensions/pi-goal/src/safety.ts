@@ -50,9 +50,9 @@ export function normalizeVisibleAssistantOutput(messages: readonly unknown[]) {
 	const normalized = text
 		.join("\n")
 		.normalize("NFKC")
-		.replace(/[\p{Cc}\p{Cf}]/gu, "")
 		.toLowerCase()
 		.replace(/\s+/gu, " ")
+		.replace(/[\p{Cc}\p{Cf}]/gu, "")
 		.trim();
 	return normalized === "" || /^[\p{P}\s]+$/u.test(normalized) ? "" : normalized;
 }

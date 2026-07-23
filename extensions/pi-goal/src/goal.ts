@@ -92,7 +92,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const consumeCancelledContinuationPrompt =
 		runtime.consumeCancelledContinuationPrompt.bind(runtime);
 	const consumeStaleOwnedGoalPrompt = runtime.consumeStaleOwnedGoalPrompt.bind(runtime);
-	const claimCurrentOwnedGoalPrompt = runtime.claimCurrentOwnedGoalPrompt.bind(runtime);
 	const consumePendingGoalPrompt = runtime.consumeOwnedGoalPrompt.bind(runtime);
 	const markContinuationStarted = runtime.markContinuationStarted.bind(runtime);
 	const hasContinuationWorkForGoal = runtime.hasContinuationWorkForGoal.bind(runtime);
@@ -108,7 +107,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		ctx: StatusContext,
 		goalId: string,
 		prompt: string,
-	) => runtime.sendOwnedGoalPrompt(ctx, goalId, prompt);
+		resetSafetyEpoch = true,
+	) => runtime.sendOwnedGoalPrompt(ctx, goalId, prompt, resetSafetyEpoch);
 	const dispatchPendingQueueActionIfSettled =
 		commands.dispatchPendingQueueActionIfSettled.bind(commands);
 
@@ -551,6 +551,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					ctx,
 					restoredGoal.id,
 					buildGoalPrompt(restoredGoal),
+					false, // Reloaded queue activation preserves its persisted safety epoch.
 				);
 				if (!sent && runtime.activeGoal?.id === restoredGoal.id) {
 					runtime.activeGoal = transitionGoal(restoredGoal, "paused");
@@ -651,14 +652,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				return { action: "handled" as const };
 			}
 			if (runtime.queueFrozen) return;
-			const ownedGoalId = claimCurrentOwnedGoalPrompt(event.text);
-			if (ownedGoalId && runtime.activeGoal?.id === ownedGoalId) {
-				runtime.beginAgentRun(ownedGoalId, "manual");
-				runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
-				persistGoal(runtime.activeGoal);
-				updateStatus(ctx, runtime.activeGoal);
-				return;
-			}
+			// A follow-up input is queued before its model work starts. Keep an owned
+			// marker pending for message_start; remember unrelated queued work so a
+			// later hard-cap cleanup guard cannot abort it.
+			if (runtime.hasPendingOwnedGoalPrompt(event.text)) return;
+			if (event.streamingBehavior) runtime.noteQueuedNonGoalInput();
 			clearGoalRecovery();
 			return;
 		}
@@ -668,6 +666,36 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
 		runtime.resetActiveSafetyEpoch(ctx);
+	});
+
+	pi.on("message_start", (event, ctx) => {
+		const message = event.message as { role?: unknown; content?: unknown };
+		if (message.role !== "user") return;
+		runtime.consumeQueuedNonGoalInput();
+		const prompt = Array.isArray(message.content)
+			? message.content
+					.filter((part) => part && typeof part === "object" && Reflect.get(part, "type") === "text")
+					.map((part) => Reflect.get(part as object, "text"))
+					.filter((text): text is string => typeof text === "string")
+					.join("\n")
+			: typeof message.content === "string"
+				? message.content
+				: "";
+		const ownedPrompt = consumePendingGoalPrompt(prompt);
+		if (!ownedPrompt || runtime.activeGoal?.id !== ownedPrompt.goalId) return;
+		if (runtime.activeGoal.status !== "active") return;
+		if (runtime.agentRunGoalId !== undefined && runtime.agentRunGoalId !== ownedPrompt.goalId) {
+			runtime.activeGoal.baselineTokens = Math.max(
+				0,
+				currentTokenTotal(ctx) - runtime.activeGoal.tokensUsed,
+			);
+		}
+		runtime.beginAgentRun(ownedPrompt.goalId, "manual");
+		if (ownedPrompt.resetSafetyEpoch) {
+			runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
+		}
+		persistGoal(runtime.activeGoal);
+		updateStatus(ctx, runtime.activeGoal);
 	});
 
 	pi.on("context", (event) => {
@@ -733,7 +761,12 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	pi.on("before_agent_start", (event, ctx) => {
 		runtime.clearAgentRun();
 		if (runtime.queueFrozen) return;
-		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
+		// Pi-owned retries emit agent_start directly. Reaching a normal prompt
+		// boundary means cleanup no longer owns the next run, so the hard-cap guard
+		// must not abort it.
+		if (runtime.guardAbortGoalId) runtime.guardAbortGoalId = undefined;
+		const goalPrompt = consumePendingGoalPrompt(event.prompt);
+		const goalPromptGoalId = goalPrompt?.goalId;
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
@@ -791,7 +824,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			pauseGoalForUnavailableTools(ctx, ownedPromptGoalId !== undefined);
 			return;
 		}
-		if (goalPromptGoalId === runtime.activeGoal.id) {
+		if (goalPrompt?.resetSafetyEpoch && goalPromptGoalId === runtime.activeGoal.id) {
 			runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
@@ -810,6 +843,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			runtime.guardAbortGoalId === activeGoal.id &&
 			activeGoal.status === "paused"
 		) {
+			if (runtime.consumeQueuedNonGoalInput()) {
+				runtime.guardAbortGoalId = undefined;
+				return;
+			}
 			abortCurrentTurn(ctx);
 			return;
 		}

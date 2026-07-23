@@ -155,6 +155,46 @@ test("goal_complete advances only after the finishing run settles", async () => 
 	);
 });
 
+test("automatic queue advance preserves a shelved goal safety epoch", async () => {
+	const urgent = storedGoal("urgent goal", "active");
+	const shelved = {
+		...storedGoal("shelved goal", "queued"),
+		automaticModelTurns: 7,
+		toolFreeRepeatCount: 2,
+		lastToolFreeOutputFingerprint: "a".repeat(64),
+	};
+	const state: GoalStateEntryData = { goal: urgent, queue: [shelved] };
+	const branch = [{ type: "custom", customType: "goal-state", data: state }];
+	const harness = await createHarness({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+
+	await completionTool(harness.mock).execute(
+		"complete-urgent-for-safety",
+		{ goal_id: urgent.id, summary: "Urgent goal completed and verified." },
+		new AbortController().signal,
+		() => undefined,
+		harness.ctx,
+	);
+	await settled(harness);
+	const activated = stateGoals(harness.mock)[0];
+	assert.equal(activated?.text, "shelved goal");
+	assert.equal(activated?.automaticModelTurns, 7);
+	assert.equal(activated?.toolFreeRepeatCount, 2);
+	assert.equal(activated?.lastToolFreeOutputFingerprint, "a".repeat(64));
+
+	const prompt = harness.mock.sentUserMessages.at(-1)?.text ?? "";
+	harness.mock.events.get("input")?.[0]?.({ source: "extension", text: prompt }, harness.ctx);
+	harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt, systemPrompt: "base" },
+		harness.ctx,
+	);
+	const started = stateGoals(harness.mock)[0];
+	assert.equal(started?.automaticModelTurns, 7);
+	assert.equal(started?.toolFreeRepeatCount, 2);
+	assert.equal(started?.lastToolFreeOutputFingerprint, "a".repeat(64));
+});
+
 test("pending completion advance survives reload before settlement", async () => {
 	const interrupted = await createHarness({ isIdle: () => false });
 	await interrupted.command("first goal");

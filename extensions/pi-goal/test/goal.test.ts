@@ -123,6 +123,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 		"before_agent_start",
 		"context",
 		"input",
+		"message_start",
 		"session_before_compact",
 		"session_compact",
 		"session_shutdown",
@@ -2138,8 +2139,13 @@ test("direct active input resets safety and reclassifies an in-flight automatic 
 	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
 });
 
-test("busy active edit claims same-run ownership and resets safety at input", async () => {
-	const edited = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+test("busy active edit claims ownership and resets safety only when its queued run starts", async () => {
+	const branch = [assistantUsageEntry({ totalTokens: 100 })];
+	const edited = await startGoalForTest(
+		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
+		"finish",
+		LOW_LIMITS_SETTINGS_PATH,
+	);
 	const kickoff = edited.mock.sentUserMessages.at(-1)?.text ?? "";
 	edited.mock.events.get("before_agent_start")?.[0]?.(
 		{ prompt: kickoff, systemPrompt: "base" },
@@ -2156,8 +2162,19 @@ test("busy active edit claims same-run ownership and resets safety at input", as
 	assert.equal(candidate.automaticModelTurns, 2);
 	const editPrompt = edited.mock.sentUserMessages.at(-1)?.text ?? "";
 	edited.mock.events.get("input")?.[0]?.({ source: "extension", text: editPrompt }, edited.ctx);
+	assert.equal(requireLastGoal(edited.mock).automaticModelTurns, 2);
+	assert.equal(requireLastGoal(edited.mock).toolFreeRepeatCount, 2);
+	branch.push(assistantUsageEntry({ totalTokens: 20 }));
+	await edited.mock.events.get("tool_execution_end")?.[0]?.({}, edited.ctx);
+	assert.equal(requireLastGoal(edited.mock).tokensUsed, 0);
+
+	edited.mock.events.get("message_start")?.[0]?.(
+		{ message: { role: "user", content: [{ type: "text", text: editPrompt }] } },
+		edited.ctx,
+	);
 	assert.equal(requireLastGoal(edited.mock).automaticModelTurns, 0);
 	assert.equal(requireLastGoal(edited.mock).toolFreeRepeatCount, 0);
+	assert.equal(requireLastGoal(edited.mock).baselineTokens, 120);
 
 	await edited.mock.events.get("agent_end")?.[0]?.(
 		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
@@ -2377,6 +2394,20 @@ test("no-progress classifier normalizes visible output conservatively", () => {
 	assert.equal(normalizeVisibleAssistantOutput(blank), "");
 	assert.equal(normalizeVisibleAssistantOutput(thinkingOnly), "");
 	assert.equal(
+		normalizeVisibleAssistantOutput([
+			{ role: "assistant", content: [{ type: "text", text: "foo\n\tbar" }] },
+		]),
+		"foo bar",
+	);
+	assert.equal(
+		fingerprintVisibleAssistantOutput([
+			{ role: "assistant", content: [{ type: "text", text: "foo\nbar" }] },
+		]),
+		fingerprintVisibleAssistantOutput([
+			{ role: "assistant", content: [{ type: "text", text: "foo bar" }] },
+		]),
+	);
+	assert.equal(
 		fingerprintVisibleAssistantOutput(blank),
 		fingerprintVisibleAssistantOutput(thinkingOnly),
 	);
@@ -2573,6 +2604,42 @@ test("hard cap aborts Pi recovery started after a retryable boundary error", asy
 	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
 	assert.equal(requireLastGoal(capped.mock).automaticModelTurns, 1);
 	assert.equal(capped.mock.sentUserMessages.length, 2);
+});
+
+test("hard-cap cleanup guard does not abort an unrelated queued follow-up", async () => {
+	let aborts = 0;
+	const capped = await startGoalForTest(
+		{ abort: () => aborts++ },
+		"finish",
+		ONE_TURN_LIMIT_SETTINGS_PATH,
+	);
+	await capped.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+	const continuation = capped.mock.sentUserMessages.at(-1)?.text ?? "";
+	capped.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		capped.ctx,
+	);
+	capped.mock.events.get("input")?.[0]?.(
+		{
+			source: "extension",
+			text: "unrelated extension follow-up",
+			streamingBehavior: "followUp",
+		},
+		capped.ctx,
+	);
+	capped.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		capped.ctx,
+	);
+	assert.equal(lastGoalStatus(capped.mock), "paused");
+	assert.equal(aborts, 1);
+
+	capped.mock.events.get("agent_start")?.[0]?.({}, capped.ctx);
+	assert.equal(aborts, 1);
 });
 
 test("three blank automatic runs pause for no progress without a fourth continuation", async () => {

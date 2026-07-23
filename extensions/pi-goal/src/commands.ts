@@ -287,6 +287,7 @@ export class GoalCommandController {
 			ctx,
 			activatedGoal.id,
 			buildGoalPrompt(activatedGoal),
+			false, // Queue reactivation preserves its persisted safety epoch.
 		);
 		if (!sent && this.runtime.activeGoal?.id === activatedGoal.id) {
 			this.runtime.activeGoal = transitionGoal(activatedGoal, "paused");
