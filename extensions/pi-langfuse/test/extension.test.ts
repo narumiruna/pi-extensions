@@ -118,7 +118,6 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		"session_compact",
 		"session_shutdown",
 		"session_start",
-		"tool_call",
 		"tool_execution_end",
 		"tool_execution_start",
 		"tool_execution_update",
@@ -311,7 +310,7 @@ test("pi-langfuse reconciles the finalized assistant message from agent_end", as
 	assert.equal(agent?.ended, true);
 });
 
-test("pi-langfuse traces normalized tool inputs and finalized tool outputs", async () => {
+test("pi-langfuse traces executed tool inputs while preserving blocked raw inputs", async () => {
 	const backend = new FakeBackend();
 	const mock = createMockPi();
 	createLangfuseExtension({
@@ -402,6 +401,34 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 		},
 		ctx,
 	);
+	await mock.events.get("tool_execution_start")?.[0]?.(
+		{
+			toolCallId: "blocked-call",
+			toolName: "read",
+			args: { path: "raw-blocked.ts" },
+		},
+		ctx,
+	);
+	await mock.events.get("tool_call")?.[0]?.(
+		{
+			toolCallId: "blocked-call",
+			toolName: "read",
+			input: { path: "prepared-but-blocked.ts" },
+		},
+		ctx,
+	);
+	await mock.events.get("tool_execution_end")?.[0]?.(
+		{
+			toolCallId: "blocked-call",
+			toolName: "read",
+			result: {
+				content: [{ type: "text", text: "Blocked by policy" }],
+				details: {},
+			},
+			isError: true,
+		},
+		ctx,
+	);
 	await mock.events.get("turn_end")?.[0]?.(
 		{
 			turnIndex: 0,
@@ -420,7 +447,9 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 
 	assert.equal(generation?.ended, true);
 	assert.equal(typeof generation?.endTime, "number");
-	const tool = backend.observations.at(-1);
+	const tool = backend.observations.find(
+		({ attributes }) => attributes.metadata?.["pi.tool.call_id"] === "call-1",
+	);
 	assert.equal(backend.observations[2]?.name, "pi.turn");
 	assert.equal(tool?.parent, backend.observations[2]);
 	assert.deepEqual(tool?.attributes.input, {
@@ -430,16 +459,27 @@ test("pi-langfuse traces normalized tool inputs and finalized tool outputs", asy
 	});
 	assert.deepEqual(
 		tool?.updates.filter((update) => update.input !== undefined).map((update) => update.input),
-		[
-			{ path: "file.ts", edits: [{ oldText: "old", newText: "new" }] },
-			{ path: "mutated-file.ts", edits: [{ oldText: "old", newText: "new" }] },
-		],
+		[{ path: "mutated-file.ts", edits: [{ oldText: "old", newText: "new" }] }],
 	);
 	assert.equal(JSON.stringify(tool).includes("private partial output"), false);
 	assert.equal(tool?.updates.at(-1)?.metadata?.["pi.tool.progress_update_count"], 1);
 	assert.deepEqual(tool?.updates.at(-1)?.output, {
 		content: [{ type: "text", text: "final" }],
 		details: { stage: "final" },
+	});
+
+	const blockedTool = backend.observations.find(
+		({ attributes }) => attributes.metadata?.["pi.tool.call_id"] === "blocked-call",
+	);
+	assert.deepEqual(blockedTool?.attributes.input, { path: "raw-blocked.ts" });
+	assert.deepEqual(
+		blockedTool?.updates.filter((update) => update.input !== undefined),
+		[],
+	);
+	assert.equal(blockedTool?.updates.at(-1)?.level, "ERROR");
+	assert.deepEqual(blockedTool?.updates.at(-1)?.output, {
+		content: [{ type: "text", text: "Blocked by policy" }],
+		details: {},
 	});
 });
 
