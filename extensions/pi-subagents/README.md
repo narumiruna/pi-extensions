@@ -491,7 +491,8 @@ Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-su
 ```txt
 extensions/pi-subagents/
 ├── src/
-│   ├── subagents.ts              # Pi entrypoint and blocking tool schema
+│   ├── index.ts                  # Pi package entrypoint
+│   ├── subagents.ts              # Extension registration and blocking tool schema
 │   ├── stateful.ts               # Detached lifecycle registration and dispatch
 │   ├── stateful-tool-params.ts   # Consolidated action schemas and validation
 │   └── *.ts                      # Package-local discovery, execution, rendering, and config modules
@@ -501,12 +502,12 @@ extensions/pi-subagents/
 └── package.json
 ```
 
-Only `subagents.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {
   "pi": {
-    "extensions": ["./src/subagents.ts"]
+    "extensions": ["./src/index.ts"]
   }
 }
 ```

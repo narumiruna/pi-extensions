@@ -140,6 +140,7 @@ Use Git directly when you intentionally need force removal, branch deletion, cus
 ```text
 extensions/pi-worktree/
 ├── src/
+│   ├── index.ts
 │   ├── command.ts
 │   ├── git.ts
 │   ├── session.ts

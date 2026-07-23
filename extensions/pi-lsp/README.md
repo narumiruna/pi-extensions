@@ -219,6 +219,7 @@ Shows configured LSP commands and whether each command is available on `PATH`.
 ```txt
 extensions/pi-lsp/
 ├── src/
+│   ├── index.ts
 │   ├── adapters.ts
 │   ├── command.ts
 │   ├── files.ts

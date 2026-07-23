@@ -20,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/goal.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

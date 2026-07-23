@@ -189,7 +189,8 @@ filename is deprecated and will be removed in a future major release.
 ```txt
 extensions/pi-chrome-devtools/
 ├── src/
-│   ├── chrome-devtools.ts  # Pi entrypoint and command orchestration
+│   ├── index.ts            # Pi package entrypoint
+│   ├── chrome-devtools.ts  # Extension registration and command orchestration
 │   └── *.ts                # Package-local browser, CDP, tool, and storage modules
 ├── README.md
 ├── LICENSE
@@ -197,12 +198,12 @@ extensions/pi-chrome-devtools/
 └── package.json
 ```
 
-Only `chrome-devtools.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `chrome-devtools.ts`; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {
   "pi": {
-    "extensions": ["./src/chrome-devtools.ts"]
+    "extensions": ["./src/index.ts"]
   }
 }
 ```

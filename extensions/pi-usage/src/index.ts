@@ -11,6 +11,7 @@ export {
 export { formatProviderStates, formatUsageReport, formatUsageStatusline } from "./format.js";
 export { normalizeCodexBackendPayload } from "./providers/codex.js";
 export { normalizeOpenRouterKeyPayload } from "./providers/openrouter.js";
+export { default } from "./usage.js";
 export {
 	adapterForProvider,
 	isStaleExtensionContextError,

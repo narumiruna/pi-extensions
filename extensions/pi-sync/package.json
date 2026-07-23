@@ -20,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/sync.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

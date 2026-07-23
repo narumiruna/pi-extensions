@@ -20,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/chrome-devtools.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

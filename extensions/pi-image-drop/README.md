@@ -139,7 +139,8 @@ Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop do
 ## 🗂️ Package layout
 
 ```text
-src/image-drop.ts       Pi extension entrypoint
+src/index.ts            Pi package entrypoint
+src/image-drop.ts       extension registration and command orchestration
 src/runtime.ts          Pi lifecycle and message orchestration
 src/batch.ts            in-memory draft and sent-history state machine
 src/images.ts           bounded image processing

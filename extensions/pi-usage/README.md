@@ -126,7 +126,8 @@ Behavior changes:
 ```txt
 extensions/pi-usage/
 ├── src/
-│   ├── usage.ts       # Pi entrypoint, menu, cache, and lifecycle orchestration
+│   ├── index.ts       # Pi package entrypoint and helper export barrel
+│   ├── usage.ts       # Menu, cache, and lifecycle orchestration
 │   ├── query.ts       # Runtime auth resolution and provider queries
 │   ├── format.ts      # Provider-aware notifications and statusline text
 │   ├── core.ts        # Cache, concurrency, fingerprint, and redaction helpers
@@ -139,7 +140,7 @@ extensions/pi-usage/
 └── package.json
 ```
 
-Only `usage.ts` is a Pi entrypoint; other source modules are internal.
+`index.ts` is the Pi entrypoint and forwards the default factory from `usage.ts` while retaining the package's named helper exports; other source modules are internal.
 
 ## 🔎 Keywords
 

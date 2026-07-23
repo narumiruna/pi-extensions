@@ -156,7 +156,8 @@ The page uses semantic headings, native disclosure/dialog controls, concise stat
 ## 🗂️ Package layout
 
 ```text
-src/webui.ts         Pi extension entrypoint
+src/index.ts         Pi package entrypoint
+src/webui.ts         extension registration and command orchestration
 src/runtime.ts       Pi lifecycle, commands, event projection, and browser message routing
 src/settings.ts      global WebUI settings validation and atomic persistence
 src/conversation.ts  bounded transcript snapshot and ordered event replay

@@ -82,6 +82,7 @@ Use `0`, `off`, or `false` to disable the watchdog. Retry attempts, budget, and 
 ```txt
 extensions/pi-retry/
 ├── src/
+│   ├── index.ts
 │   └── retry.ts
 ├── README.md
 ├── LICENSE
@@ -94,7 +95,7 @@ The package exposes its Pi extension through `package.json`:
 ```json
 {
   "pi": {
-    "extensions": ["./src/retry.ts"]
+    "extensions": ["./src/index.ts"]
   }
 }
 ```
