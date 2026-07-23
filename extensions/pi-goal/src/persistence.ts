@@ -33,6 +33,7 @@ export interface ActiveGoal {
 	toolFreeRepeatCount: number;
 	lastToolFreeOutputFingerprint?: string;
 	safetyPauseCause?: SafetyPauseCause;
+	safetyResetPending?: boolean;
 }
 
 export type PendingQueueAction =
@@ -235,6 +236,7 @@ export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 		toolFreeRepeatCount: normalizeSafetyCounter(goal.toolFreeRepeatCount),
 		lastToolFreeOutputFingerprint: normalizeOutputFingerprint(goal.lastToolFreeOutputFingerprint),
 		safetyPauseCause: normalizeSafetyPauseCause(goal.safetyPauseCause),
+		safetyResetPending: goal.safetyResetPending === true ? true : undefined,
 	};
 }
 
@@ -292,7 +294,8 @@ function isGoal(value: unknown): value is ActiveGoal {
 		typeof value.tokensUsed === "number" &&
 		typeof value.timeUsedSeconds === "number" &&
 		typeof value.baselineTokens === "number" &&
-		(value.activeStartedAt === undefined || typeof value.activeStartedAt === "number")
+		(value.activeStartedAt === undefined || typeof value.activeStartedAt === "number") &&
+		(value.safetyResetPending === undefined || typeof value.safetyResetPending === "boolean")
 	);
 }
 

@@ -526,6 +526,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		}
 		if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 		if (runtime.activeGoal) {
+			if (runtime.activeGoal.status === "active" && runtime.activeGoal.safetyResetPending) {
+				// Resume/edit activation is persisted before its queued prompt starts. A
+				// reload must commit that promised reset before enforcing the old limits.
+				runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
+			}
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
 				if (limitActiveGoalForBudget(ctx, false)) return;
@@ -688,6 +693,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		if (message.role === "custom") {
+			if (runtime.isActiveBudgetWrapUpMessage(message)) return;
 			if (runtime.guardAbortGoalId === runtime.activeGoal?.id) {
 				runtime.guardAbortGoalId = undefined;
 			}

@@ -22,6 +22,7 @@ import {
 	hasPendingMessages,
 	isResumableGoalStatus,
 	nextGoalInstance,
+	queueGoalSafetyReset,
 	STATUS_KEY,
 	type StatusContext,
 	stoppedStatusLabel,
@@ -372,7 +373,9 @@ export class GoalCommandController {
 		this.runtime.clearGoalRecovery();
 		this.runtime.clearBudgetWrapUp();
 		this.runtime.clearStaleGoalToolCallBlock();
-		this.runtime.activeGoal = transitionGoal(nextGoalInstance(this.runtime.activeGoal), "active");
+		this.runtime.activeGoal = queueGoalSafetyReset(
+			transitionGoal(nextGoalInstance(this.runtime.activeGoal), "active"),
+		);
 		this.runtime.persistGoal(this.runtime.activeGoal);
 		this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 		if (this.runtime.activeGoal.status !== "active") {
@@ -444,7 +447,7 @@ export class GoalCommandController {
 		this.runtime.clearBudgetWrapUp();
 		const previousStatus = this.runtime.activeGoal.status;
 		const rotatedGoal = nextGoalInstance(this.runtime.activeGoal);
-		const nextGoal = transitionGoal(
+		const transitionedGoal = transitionGoal(
 			{
 				...rotatedGoal,
 				text: objective,
@@ -452,6 +455,10 @@ export class GoalCommandController {
 			},
 			editedGoalStatus(previousStatus),
 		);
+		const nextGoal =
+			transitionedGoal.status === "active"
+				? queueGoalSafetyReset(transitionedGoal)
+				: transitionedGoal;
 		const goalToolVisibilityBeforeActivation =
 			nextGoal.status === "active" ? this.runtime.snapshotGoalToolVisibility() : undefined;
 		if (nextGoal.status === "active") {

@@ -340,21 +340,29 @@ export class GoalRuntime {
 		this.terminalDetails = undefined;
 	}
 
-	keepBudgetWrapUpMessage(message: unknown) {
-		if (!message || typeof message !== "object") return true;
+	isActiveBudgetWrapUpMessage(message: unknown) {
+		if (!message || typeof message !== "object") return false;
 		const candidate = message as {
 			role?: unknown;
 			customType?: unknown;
 			details?: { goalId?: unknown };
 		};
-		if (candidate.role !== "custom" || candidate.customType !== BUDGET_WRAP_UP_MESSAGE_TYPE) {
-			return true;
-		}
 		return (
+			candidate.role === "custom" &&
+			candidate.customType === BUDGET_WRAP_UP_MESSAGE_TYPE &&
 			typeof candidate.details?.goalId === "string" &&
 			candidate.details.goalId === this.budgetWrapUp?.goalId &&
 			candidate.details.goalId === this.activeGoal?.id
 		);
+	}
+
+	keepBudgetWrapUpMessage(message: unknown) {
+		if (!message || typeof message !== "object") return true;
+		const candidate = message as { role?: unknown; customType?: unknown };
+		if (candidate.role !== "custom" || candidate.customType !== BUDGET_WRAP_UP_MESSAGE_TYPE) {
+			return true;
+		}
+		return this.isActiveBudgetWrapUpMessage(message);
 	}
 
 	queueBudgetWrapUp(ctx: StatusContext, goal: ActiveGoal) {
@@ -618,15 +626,27 @@ export class GoalRuntime {
 		const steerIndex = this.pendingNonGoalInputs.findIndex(
 			(pending) => pending.behavior === "steer" && pending.fingerprint === fingerprint,
 		);
-		const index =
+		const exactIndex =
 			steerIndex >= 0
 				? steerIndex
 				: this.pendingNonGoalInputs.findIndex(
 						(pending) =>
 							pending.behavior === "followUp" && pending.fingerprint === fingerprint,
 					);
-		if (index < 0) return undefined;
-		return this.pendingNonGoalInputs.splice(index, 1)[0];
+		if (exactIndex >= 0) return this.pendingNonGoalInputs.splice(exactIndex, 1)[0];
+
+		// Skills, templates, and later input handlers can transform the raw text after
+		// pi-goal records it. Fall back to Pi's delivery priority as a bounded marker:
+		// steers drain before follow-ups, and settlement clears stale entries.
+		const fallbackSteerIndex = this.pendingNonGoalInputs.findIndex(
+			(pending) => pending.behavior === "steer",
+		);
+		const fallbackIndex =
+			fallbackSteerIndex >= 0
+				? fallbackSteerIndex
+				: this.pendingNonGoalInputs.findIndex((pending) => pending.behavior === "followUp");
+		if (fallbackIndex < 0) return undefined;
+		return this.pendingNonGoalInputs.splice(fallbackIndex, 1)[0];
 	}
 
 	consumeQueuedNonGoalFollowUpForAgentStart() {
@@ -914,6 +934,10 @@ export function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, id: randomUUID(), updatedAt: Date.now() };
 }
 
+export function queueGoalSafetyReset(goal: ActiveGoal): ActiveGoal {
+	return { ...goal, safetyResetPending: true };
+}
+
 export function resetGoalSafetyEpoch(goal: ActiveGoal): ActiveGoal {
 	return {
 		...goal,
@@ -921,6 +945,7 @@ export function resetGoalSafetyEpoch(goal: ActiveGoal): ActiveGoal {
 		toolFreeRepeatCount: 0,
 		lastToolFreeOutputFingerprint: undefined,
 		safetyPauseCause: undefined,
+		safetyResetPending: undefined,
 	};
 }
 
