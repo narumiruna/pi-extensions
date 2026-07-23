@@ -123,7 +123,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-config-"));
 	process.env.PI_CODING_AGENT_DIR = dir;
 	try {
-		const mock = createMockPi();
+		const mock = createMockPi({ activeTools: ["read"] });
 		const controller = registerStatefulSubagents(mock.pi);
 		assert.deepEqual(controller.getRuntimeStatus(), {
 			enabled: true,
@@ -137,15 +137,19 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.equal(await controller.clearAgents(), 0);
 		assert.deepEqual(
 			mock.tools.map((tool) => tool.name),
-			[
-				"subagent_spawn",
-				"subagent_send",
-				"subagent_message",
-				"subagent_messages",
-				"subagent_list",
-				"subagent_interrupt",
-				"subagent_close",
-			],
+			["subagent_spawn", "subagent_send", "subagent_manage", "subagent_mailbox"],
+		);
+		assert.equal(
+			mock.tools.some((tool) =>
+				[
+					"subagent_message",
+					"subagent_messages",
+					"subagent_list",
+					"subagent_interrupt",
+					"subagent_close",
+				].includes(String(tool.name)),
+			),
+			false,
 		);
 		assert.ok(mock.commands.has("subagents:agents"));
 		const context = createMockContext();
@@ -158,11 +162,187 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			activeAgents: 0,
 			retainedAgents: 0,
 		});
-		const list = mock.tools.find((tool) => tool.name === "subagent_list") as {
-			execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }> }>;
+		const send = mock.tools.find((tool) => tool.name === "subagent_send") as {
+			description: string;
+			promptSnippet?: string;
 		};
-		const listed = await list.execute("id", {}, undefined, undefined, context.ctx);
+		const manage = mock.tools.find((tool) => tool.name === "subagent_manage") as {
+			description: string;
+			parameters: { properties?: Record<string, { description?: string; enum?: string[] }> };
+			execute: (...args: unknown[]) => Promise<{
+				content: Array<{ text: string }>;
+				details: Record<string, unknown>;
+			}>;
+		};
+		const mailbox = mock.tools.find((tool) => tool.name === "subagent_mailbox") as {
+			description: string;
+			parameters: {
+				required?: string[];
+				properties?: Record<
+					string,
+					{
+						description?: string;
+						enum?: string[];
+						maximum?: number;
+						maxLength?: number;
+						minimum?: number;
+					}
+				>;
+			};
+			execute: (...args: unknown[]) => Promise<unknown>;
+		};
+		assert.match(send.description, /follow-up.*start.*turn/i);
+		assert.match(send.description, /subagent_mailbox.*queue-only/i);
+		assert.match(manage.description, /list.*interrupt.*close/i);
+		assert.deepEqual(manage.parameters.properties?.action?.enum, ["list", "interrupt", "close"]);
+		assert.match(
+			manage.parameters.properties?.action?.description ?? "",
+			/list.*interrupt.*close/i,
+		);
+		assert.match(mailbox.description, /without starting a turn.*read/i);
+		assert.deepEqual(mailbox.parameters.properties?.action?.enum, ["send", "read"]);
+		assert.match(mailbox.parameters.properties?.action?.description ?? "", /send.*read/i);
+		assert.deepEqual(mailbox.parameters.required?.sort(), ["action", "agentId"]);
+		assert.equal(mailbox.parameters.properties?.message?.maxLength, 16 * 1024);
+		assert.equal(mailbox.parameters.properties?.limit?.minimum, 1);
+		assert.equal(mailbox.parameters.properties?.limit?.maximum, 20);
+		const listed = await manage.execute(
+			"id",
+			{ action: "list" },
+			undefined,
+			undefined,
+			context.ctx,
+		);
 		assert.equal(listed.content[0].text, "No stateful subagents.");
+		assert.deepEqual(listed.details, { agents: [] });
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+		await assert.rejects(
+			() => manage.execute("id", { action: "interrupt" }, undefined, undefined, context.ctx),
+			/subagent_manage action "interrupt" requires agentId/,
+		);
+		await assert.rejects(
+			() =>
+				manage.execute(
+					"id",
+					{ action: "list", agentId: "sa_unused" },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_manage action "list" does not accept agentId/,
+		);
+		await assert.rejects(
+			() => manage.execute("id", { action: 1 }, undefined, undefined, context.ctx),
+			/subagent_manage action must be one of/,
+		);
+		await assert.rejects(
+			() =>
+				manage.execute(
+					"id",
+					{ action: "list", includeClosed: "yes" },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_manage action "list" requires includeClosed to be a boolean/,
+		);
+		await assert.rejects(
+			() =>
+				manage.execute(
+					"id",
+					{ action: "interrupt", agentId: "sa_unknown", includeClosed: false },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_manage action "interrupt" does not accept includeClosed/,
+		);
+		await assert.rejects(
+			() =>
+				manage.execute("id", { action: "close", agentId: 1 }, undefined, undefined, context.ctx),
+			/subagent_manage action "close" requires agentId to be a non-empty string/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{ action: "send", agentId: "sa_unknown" },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_mailbox action "send" requires message/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{ action: "read", agentId: "sa_unknown", message: "wrong action" },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_mailbox action "read" does not accept message/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{ action: "send", agentId: "sa_unknown", message: "ok", acknowledge: true },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_mailbox action "send" does not accept acknowledge/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{ action: "send", agentId: "sa_unknown", message: "x".repeat(16 * 1024 + 1) },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_mailbox action "send" requires message at most 16384 characters/,
+		);
+		await assert.rejects(
+			() => mailbox.execute("id", { action: "archive" }, undefined, undefined, context.ctx),
+			/subagent_mailbox action must be one of/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{ action: "read", agentId: "sa_unknown", acknowledge: "yes" },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_mailbox action "read" requires acknowledge to be a boolean/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{ action: "read", agentId: "sa_unknown", limit: 21 },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/subagent_mailbox action "read" requires limit between 1 and 20/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{ action: "read", agentId: "sa_unknown" },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/Unknown subagent/,
+		);
 
 		const project = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-project-"));
 		const projectAgents = path.join(project, ".pi", "agents");
@@ -202,7 +382,9 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		);
 		assert.match(spawnGuidance, /useful non-overlapping.*immediately/i);
 		assert.match(spawnGuidance, /tell the user.*end the response/i);
-		assert.match(spawnGuidance, /do not poll.*subagent_list/i);
+		assert.match(spawnGuidance, /do not poll.*subagent_manage.*action.*list/i);
+		assert.match(spawnGuidance, /subagent_mailbox.*action.*read/i);
+		assert.doesNotMatch(spawnGuidance, /subagent_(?:list|messages)/i);
 		assert.match(spawnGuidance, /synthesize available.*completion/i);
 		assert.match(spawnGuidance, /subagent_spawn.*lowest sufficient.*thinking level/i);
 		assert.match(spawnGuidance, /off.*minimal.*extraction.*mechanical/i);
