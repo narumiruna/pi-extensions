@@ -114,6 +114,27 @@ test("AgentRegistry supports follow-up, wait timeout, interrupt/reuse, limits, a
 	await assert.rejects(() => registry.close(first.id), /already closed/);
 });
 
+test("AgentRegistry retains an explicit spawn thinking level across follow-ups and copies", async () => {
+	const observed: Array<string | undefined> = [];
+	const registry = new AgentRegistry(async (agent) => {
+		observed.push(agent.thinkingLevel);
+		return { output: "done", exitCode: 0 };
+	});
+	const spawned = await registry.spawn({
+		agent: "scout",
+		task: "first",
+		cwd: process.cwd(),
+		thinkingLevel: "high",
+	});
+	assert.equal(spawned.thinkingLevel, "high");
+	await registry.wait(spawned.id, 100);
+	const followUp = await registry.followUp(spawned.id, "second");
+	assert.equal(followUp.thinkingLevel, "high");
+	await registry.wait(spawned.id, 100);
+	assert.deepEqual(observed, ["high", "high"]);
+	assert.equal(registry.get(spawned.id)?.thinkingLevel, "high");
+});
+
 test("AgentRegistry runs lifecycle operations through a transport contract", async () => {
 	const calls: string[] = [];
 	const registry = new AgentRegistry({
@@ -603,6 +624,7 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	const persistence = new AgentPersistence("session", { stateDir: dir, maxStoredAgents: 2 });
 	await persistence.save([
 		record({
+			thinkingLevel: "high",
 			context: "<private>secret</private>",
 			mailbox: [
 				{
@@ -629,6 +651,7 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	assert.match(raw, /visible/);
 	const restoredState = persistence.load()[0];
 	assert.equal(restoredState?.state, "idle");
+	assert.equal(restoredState?.thinkingLevel, "high");
 	assert.equal(restoredState?.mailbox[0]?.content, "[private content omitted]visible");
 	const competing = new AgentPersistence("session", { stateDir: dir, maxStoredAgents: 2 });
 	await Promise.all([
@@ -681,6 +704,27 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 		}),
 	);
 	assert.equal(persistence.load()[0]?.rootId, "legacy");
+	assert.equal(persistence.load()[0]?.thinkingLevel, undefined);
+	writeFileSync(
+		persistence.filePath,
+		JSON.stringify({
+			version: 2,
+			updatedAt: Date.now(),
+			agents: [
+				{
+					id: "invalid-thinking",
+					agent: "scout",
+					thinkingLevel: "huge",
+					state: "idle",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					cwd: process.cwd(),
+					history: [],
+				},
+			],
+		}),
+	);
+	assert.deepEqual(persistence.load(), []);
 	writeFileSync(
 		persistence.filePath,
 		JSON.stringify({

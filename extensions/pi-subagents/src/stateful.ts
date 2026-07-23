@@ -8,10 +8,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+	type AgentScope,
 	type CompletionDelivery,
 	discoverAgents,
-	type AgentScope,
 	isThinkingLevel,
+	THINKING_LEVELS,
 } from "./agents.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
@@ -36,6 +37,10 @@ const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
 		'Per-invocation custom agent scope for this spawn. Default: "user". Use "project" for project-local agents or "both" for user and project agents; the selected scope is retained for follow-ups.',
 	default: "user",
 });
+const StatefulThinkingLevelSchema = StringEnum(THINKING_LEVELS, {
+	description:
+		"Optional requested Pi thinking level selected for this task difficulty; retained for every turn of the spawned agent.",
+});
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 const MAX_COMPLETION_ERROR_BYTES = 512;
 const MAX_COMPLETIONS_PER_MESSAGE = 16;
@@ -52,6 +57,7 @@ function createSpawnPromptGuidelines(completionDelivery: CompletionDelivery): st
 			: "After subagent_spawn returns, do useful non-overlapping local work immediately. If none remains, briefly tell the user what subagent_spawn launched and end the response only when the current response does not depend on its result; next-turn delivery will not wake an idle root.";
 	return [
 		"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly.",
+		"Set subagent_spawn thinkingLevel to the lowest sufficient thinking level for the delegated task: use off or minimal for extraction, formatting, or mechanical work; low for straightforward bounded work; medium for ordinary multi-step research or implementation; high for complex debugging, design, review, or cross-file analysis; xhigh for highly ambiguous, cross-system, or high-risk analysis; and max only for the hardest tasks when quality clearly outweighs latency and cost. Omit subagent_spawn thinkingLevel only to preserve the agent or child default.",
 		deliveryGuidance,
 		"Use a single subagent_spawn only for a concrete bounded subtask that can run independently and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
 		"Use the blocking subagent instead of subagent_spawn when synchronous output is required before the main agent can continue and waiting is intentional; queued steering cannot be processed until that blocking call returns.",
@@ -136,7 +142,7 @@ export function registerStatefulSubagents(
 						getParentRuntime: () => ({ ...parentRuntime }),
 						createSession: dependencies.createInProcessSession,
 					})
-				: new SubprocessTransport(ctx);
+				: new SubprocessTransport();
 		registry = new AgentRegistry(transport, {
 			maxAgents: settings.maxAgents,
 			maxActiveTurns: settings.maxActiveTurns,
@@ -232,12 +238,13 @@ export function registerStatefulSubagents(
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
 		description:
-			"Start an addressable background subagent, return immediately with an agentId, and receive its completion asynchronously.",
+			"Start an addressable background subagent with an optional thinking level chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously.",
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
 		promptGuidelines: createSpawnPromptGuidelines(completionDelivery),
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
+			thinkingLevel: Type.Optional(StatefulThinkingLevelSchema),
 			cwd: Type.Optional(Type.String()),
 			agentScope: Type.Optional(ScopeSchema),
 			confirmProjectAgents: Type.Optional(Type.Boolean({ default: true })),
@@ -289,6 +296,7 @@ export function registerStatefulSubagents(
 					task: params.task,
 					cwd: workspace?.path ?? requestedCwd,
 					agentScope: scope,
+					thinkingLevel: params.thinkingLevel,
 					parentId: params.parentId,
 					context: snapshot.text || undefined,
 					contextSourceIds: snapshot.sourceIds,
@@ -613,7 +621,8 @@ function formatLine(agent: ManagedAgent): string {
 	const task = agent.currentTask ? ` — ${agent.currentTask.slice(0, 80)}` : "";
 	const unread = agent.mailbox.filter((message) => !message.readAt).length;
 	const indent = "  ".repeat(agent.depth);
-	return `${indent}${agent.id} ${agent.agent} ${agent.state} ${elapsedSeconds}s unread:${unread} [${actions}]${task}`;
+	const thinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
+	return `${indent}${agent.id} ${agent.agent} ${agent.state} ${elapsedSeconds}s${thinking} unread:${unread} [${actions}]${task}`;
 }
 
 function summarizeAgent(agent: ManagedAgent) {
@@ -628,6 +637,7 @@ function summarizeAgent(agent: ManagedAgent) {
 		createdAt: agent.createdAt,
 		updatedAt: agent.updatedAt,
 		cwd: agent.cwd,
+		thinkingLevel: agent.thinkingLevel,
 		currentTask: agent.currentTask
 			? truncateUtf8(agent.currentTask, MAX_TOOL_MESSAGE_BYTES).text
 			: undefined,
@@ -845,10 +855,13 @@ export function buildDetachedCompletionMessage(completion: AgentTurnCompletion):
 }
 
 function sanitizeCompletionLine(value: string, maxBytes: number): string {
-	return truncateUtf8(redactPrivateText(value), maxBytes)
-		.text.replace(/[\u0000-\u001f\u007f]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	return (
+		truncateUtf8(redactPrivateText(value), maxBytes)
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Strip untrusted terminal controls.
+			.text.replace(/[\u0000-\u001f\u007f]+/g, " ")
+			.replace(/\s+/g, " ")
+			.trim()
+	);
 }
 
 async function cleanupClosedWorkspaces(

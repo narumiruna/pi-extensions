@@ -15,6 +15,7 @@ import {
 	resolveSpawnContextMode,
 	resolveStatefulTransportKind,
 } from "../src/stateful.js";
+import { resolveStatefulSubprocessThinkingLevel } from "../src/subprocess-transport.js";
 import { WorkspaceManager } from "../src/workspace.js";
 
 function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
@@ -140,9 +141,20 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		);
 		const untrusted = createMockContext({ cwd: project, isProjectTrusted: () => false });
 		const spawnTool = mock.tools.find((tool) => tool.name === "subagent_spawn") as {
+			description: string;
 			execute: (...args: unknown[]) => Promise<unknown>;
+			parameters: {
+				properties?: Record<string, { description?: string; enum?: string[] }>;
+			};
 			promptGuidelines: string[];
 		};
+		const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+		assert.deepEqual(spawnTool.parameters.properties?.thinkingLevel?.enum, thinkingLevels);
+		assert.match(
+			spawnTool.parameters.properties?.thinkingLevel?.description ?? "",
+			/task difficulty/i,
+		);
+		assert.match(spawnTool.description, /thinking level.*task difficulty/i);
 		const spawnGuidance = spawnTool.promptGuidelines.join("\n");
 		assert.match(spawnGuidance, /simple or critical-path work/);
 		assert.match(spawnGuidance, /prefer one subagent_spawn.*broad.*research/i);
@@ -160,6 +172,13 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.match(spawnGuidance, /tell the user.*end the response/i);
 		assert.match(spawnGuidance, /do not poll.*subagent_list/i);
 		assert.match(spawnGuidance, /synthesize available.*completion/i);
+		assert.match(spawnGuidance, /subagent_spawn.*lowest sufficient.*thinking level/i);
+		assert.match(spawnGuidance, /off.*minimal.*extraction.*mechanical/i);
+		assert.match(spawnGuidance, /low.*straightforward.*bounded/i);
+		assert.match(spawnGuidance, /medium.*multi-step/i);
+		assert.match(spawnGuidance, /high.*debugging.*design.*review/i);
+		assert.match(spawnGuidance, /xhigh.*ambiguous.*cross-system.*high-risk/i);
+		assert.match(spawnGuidance, /max.*hardest.*quality.*latency.*cost/i);
 		for (const guideline of spawnTool.promptGuidelines) {
 			assert.match(
 				guideline,
@@ -245,6 +264,19 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalDir;
 	}
+});
+
+test("stateful subprocess thinking uses spawn override before the agent default", () => {
+	const agents = [{ name: "scout", thinkingLevel: "low" as const }, { name: "reviewer" }];
+	assert.equal(
+		resolveStatefulSubprocessThinkingLevel(agents, record({ thinkingLevel: "high" })),
+		"high",
+	);
+	assert.equal(resolveStatefulSubprocessThinkingLevel(agents, record()), "low");
+	assert.equal(
+		resolveStatefulSubprocessThinkingLevel(agents, record({ agent: "reviewer" })),
+		undefined,
+	);
 });
 
 test("stateful settings validate transport, completion delivery, and bounded runtime options", () => {

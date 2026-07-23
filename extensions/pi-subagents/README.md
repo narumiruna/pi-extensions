@@ -16,7 +16,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides `/subagents settings|status|help` for completion delivery plus `/subagents:config` for per-agent tool allow-lists.
-- Supports per-task `cwd`, hard subprocess `timeoutMs`, `thinkingLevel`, abort propagation, and streaming progress.
+- Supports per-task `cwd`, hard subprocess `timeoutMs`, task-selected `thinkingLevel`, abort propagation, and streaming progress.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
 - Provides addressable stateful agents with follow-up, mailbox, list, interrupt, close, context selection, and persistence.
@@ -69,7 +69,9 @@ Common controls:
 
 - `cwd` — run a job from a different working directory.
 - `timeoutMs` — set a hard subprocess timeout.
-- `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process.
+- `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process or in-process child.
+
+For `subagent_spawn`, the root agent selects the lowest thinking level sufficient for the delegated task. This is a tool-argument decision made from the task already in context; `pi-subagents` does not run a string heuristic or an extra classifier model call.
 
 ## 🧭 Proactive use
 
@@ -246,7 +248,7 @@ The settings UI patches the raw JSON atomically and preserves unknown fields; it
 
 | Tool | Purpose |
 | --- | --- |
-| `subagent_spawn` | Start detached work, return an opaque `agentId` immediately, and deliver completion asynchronously. |
+| `subagent_spawn` | Start detached work with an optional task-selected thinking level, return an opaque `agentId` immediately, and deliver completion asynchronously. |
 | `subagent_send` | Send follow-up work to a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
 | `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
@@ -255,6 +257,18 @@ The settings UI patches the raw JSON atomically and preserves unknown fields; it
 | `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |
 
 Use `/subagents:agents list` to inspect the indented agent tree, lifecycle state, unread count, and available actions. Use `/subagents:agents clear` to close and delete all retained agents for the session. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
+
+A spawn can request a thinking level explicitly:
+
+```json
+{
+  "agent": "reviewer",
+  "task": "Analyze the cross-package concurrency failure and identify the safest fix",
+  "thinkingLevel": "high"
+}
+```
+
+The requested level is stored with the stateful agent and remains in effect for all follow-ups and after persisted restore. `subagent_send` does not provide a per-turn thinking override; create a new agent when a later task needs a different level.
 
 `subagent_spawn.context` accepts:
 
@@ -294,7 +308,7 @@ Existing `subagent` requests remain unchanged:
 | Parallel | Input order, with at most four active children. | Collects all task results; partial worker failure is reported in summaries but does not discard successful results. |
 | Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with both successful outputs and failure descriptions; aggregator failure marks the tool result as an error. |
 
-Timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Thinking precedence remains: task/step/aggregator → call → agent setting → child default. Project-agent resolution and confirmation behavior is unchanged.
+Timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Blocking thinking precedence remains: task/step/aggregator → call → agent setting → child default. Stateful spawn thinking precedence is: `subagent_spawn.thinkingLevel` → agent setting → transport fallback. Project-agent resolution and confirmation behavior is unchanged.
 
 ## 🤖 Built-in agents
 
@@ -395,9 +409,24 @@ Each subprocess has a hard timeout to avoid runaway workers.
 - Set `timeoutMs` on a task, chain step, or aggregator to override it locally.
 - If omitted, the default is `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset.
 
-Set `thinkingLevel` to pass Pi's `--thinking <level>` to a subprocess. Supported values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+Set `thinkingLevel` to request one of Pi's supported levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Blocking subprocess calls pass the resolved value through `--thinking <level>`.
 
-Thinking-level precedence is: task/chain step/aggregator `thinkingLevel` → top-level `thinkingLevel` → agent default from config or frontmatter → Pi subprocess default. Omit `thinkingLevel` to preserve existing behavior. Pi still owns model capability clamping, so unsupported thinking levels are handled by the spawned Pi process.
+For `subagent_spawn`, the root agent should choose the lowest sufficient level:
+
+| Level | Appropriate delegated work |
+| --- | --- |
+| `off` / `minimal` | Extraction, formatting, or mechanical work requiring almost no reasoning. |
+| `low` | Straightforward, bounded tasks with direct steps. |
+| `medium` | Ordinary multi-step research or implementation. |
+| `high` | Complex debugging, design, review, or cross-file analysis. |
+| `xhigh` | Highly ambiguous, cross-system, or high-risk analysis. |
+| `max` | Exceptional hardest tasks where quality clearly outweighs latency and cost. |
+
+Blocking thinking precedence is: task/chain step/aggregator `thinkingLevel` → top-level `thinkingLevel` → agent default from config or frontmatter → Pi subprocess default.
+
+Stateful spawn precedence is: `subagent_spawn.thinkingLevel` → agent default from config or frontmatter → transport fallback. The subprocess transport then uses spawned Pi model/default resolution. The in-process transport uses a configured model thinking suffix and then the parent thinking snapshot captured when the child is created. An explicit spawn value is retained for the agent lifecycle and wins over all of those fallbacks.
+
+Omit `thinkingLevel` to preserve existing behavior. Reported stateful details show the requested level, not a guarantee of the provider's effective value. Pi still owns model capability clamping; `pi-subagents` does not duplicate capability detection.
 
 On timeout, the extension sends process-group `SIGTERM`, escalates to `SIGKILL` after a five-second grace period if the process has not actually closed, and returns partial bounded messages or stderr collected so far. Parent abort uses the same cleanup path and preserves a structured result.
 
