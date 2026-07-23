@@ -618,6 +618,8 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		assert.equal(controller.getRuntimeStatus().retainedAgents, 1);
 		assert.equal(await controller.clearAgents(), 1);
 		assert.deepEqual(controller.listAgents(), []);
+		assert.equal(controller.listAgents(true).length, 1, "closed history remains inspectable");
+		assert.equal(await controller.clearAgents(), 0, "closed history is not clearable again");
 		assert.equal(controller.getRuntimeStatus().retainedAgents, 0);
 
 		assert.deepEqual(child.prompts, ["first", "second", "interrupt me", "recovered"]);

@@ -17,7 +17,12 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
-import { ToolToggleList } from "../src/config-ui.js";
+import {
+	registerSubagentConfigCommand,
+	type SubagentSettingsRuntime,
+	ToolToggleList,
+} from "../src/config-ui.js";
+import type { ManagedAgent } from "../src/registry.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
 import subagents, {
 	buildPiArgs,
@@ -260,6 +265,71 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		for (const handler of mock.events.get("session_shutdown") ?? []) {
 			await handler({}, managerContext.ctx);
 		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("current-session manager excludes already closed agent records", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-closed-manager-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const mock = createMockPi();
+		const closedAgent: ManagedAgent = {
+			id: "sa_closed",
+			agent: "scout",
+			rootId: "sa_closed",
+			depth: 0,
+			children: [],
+			state: "closed",
+			createdAt: 1,
+			updatedAt: 1,
+			cwd: process.cwd(),
+			history: [],
+			mailbox: [],
+		};
+		const includeClosedArguments: boolean[] = [];
+		const runtime: SubagentSettingsRuntime = {
+			getCompletionDelivery: () => "next-turn",
+			setCompletionDelivery: () => undefined,
+			getRuntimeStatus: () => ({
+				enabled: true,
+				initialized: true,
+				transport: "subprocess",
+				completionDelivery: "next-turn",
+				activeAgents: 0,
+				retainedAgents: 0,
+			}),
+			listAgents(includeClosed = false) {
+				includeClosedArguments.push(includeClosed);
+				return includeClosed ? [closedAgent] : [];
+			},
+			clearAgents: async () => 0,
+		};
+		registerSubagentConfigCommand(mock.pi, runtime);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		const renders: string[][] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const inputs =
+					call === 0 ? ["\u001b[B", "\u001b[B", "\r"] : call === 1 ? ["\r"] : ["\u001b"];
+				const driven = driveCustomSelector(factory, inputs, 60);
+				renders[call++] = driven.renders.flat();
+				return driven.result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 3);
+		assert.deepEqual(includeClosedArguments, [false]);
+		assert.match(renders[1]?.join("\n") ?? "", /No current-session subagents/);
+		assert.doesNotMatch(renders[1]?.join("\n") ?? "", /sa_closed/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

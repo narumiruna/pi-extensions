@@ -113,7 +113,7 @@ export function registerStatefulSubagents(
 	const clearAgents = async (): Promise<number> => {
 		const currentRegistry = registry;
 		if (!currentRegistry) return 0;
-		const count = currentRegistry.list(true).length;
+		const count = currentRegistry.list().length;
 		try {
 			await currentRegistry.closeAll();
 		} finally {

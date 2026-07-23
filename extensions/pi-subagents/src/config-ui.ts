@@ -420,7 +420,7 @@ async function showCurrentSessionAgents(
 	runtime: SubagentSettingsRuntime,
 ) {
 	while (true) {
-		const agents = runtime.listAgents(true);
+		const agents = runtime.listAgents();
 		const status = runtime.getRuntimeStatus();
 		const action = await ctx.ui.custom<AgentManagerAction | null>(
 			(tui, theme, _keybindings, done) => {
