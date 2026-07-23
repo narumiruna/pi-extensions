@@ -232,12 +232,7 @@ async function removeFlow(
 	const candidates = records.filter(
 		(record) => !record.isMain && !record.bare && !pathsEqual(record.path, currentPath),
 	);
-	const selected = await selectWorktree(
-		ctx,
-		"Remove clean linked worktree",
-		candidates,
-		currentPath,
-	);
+	const selected = await selectWorktree(ctx, "Remove linked worktree", candidates, currentPath);
 	if (!selected) return;
 	if (selected.lockedReason !== undefined) {
 		throw new Error(
@@ -248,10 +243,12 @@ async function removeFlow(
 		throw new Error("The selected worktree path is stale. Use prune instead of remove.");
 	}
 
-	const inventory = await worktreeInventory(pi, selected.path, ctx.signal);
-	if (inventory.length > 0) {
+	const inventory = classifyRemovalInventory(
+		await worktreeInventory(pi, selected.path, ctx.signal),
+	);
+	if (inventory.protected.length > 0) {
 		throw new Error(
-			`Removal refused because ${selected.path} contains tracked, untracked, ignored, or submodule data:\n${inventory.join("\n")}`,
+			`Removal refused because ${selected.path} contains tracked, untracked, index-flagged, or submodule data:\n${inventory.protected.join("\n")}`,
 		);
 	}
 	await assertDetachedHeadIsDurable(pi, ctx, selected);
@@ -261,12 +258,23 @@ async function removeFlow(
 		await unreachableAdministrativeHistoryOids(pi, ctx, administrativePath),
 	);
 	const recoveryWarning = formatAdministrativeRecoveryWarning(approvedHistoryRisks);
+	const ignoredWarning = formatIgnoredDataWarning(inventory.ignored);
+	const removalWarning =
+		ignoredWarning && recoveryWarning
+			? `${ignoredWarning}\n${recoveryWarning.trimStart()}`
+			: `${ignoredWarning}${recoveryWarning}`;
+	const confirmationTitle =
+		inventory.ignored.length > 0
+			? recoveryWarning
+				? "Remove worktree and discard local/recovery data"
+				: "Remove worktree and delete ignored files"
+			: recoveryWarning
+				? "Remove worktree and discard recovery history"
+				: "Remove Git worktree";
 	if (
 		!(await ctx.ui.confirm(
-			recoveryWarning ? "Remove worktree and discard recovery history" : "Remove Git worktree",
-			stripTerminalControls(
-				`Delete the clean worktree directory ${selected.path}? The branch will be preserved.${recoveryWarning}`,
-			),
+			confirmationTitle,
+			`Delete the worktree directory ${stripTerminalControls(selected.path)}? The branch will be preserved.${removalWarning}`,
 		))
 	) {
 		return;
@@ -283,10 +291,17 @@ async function removeFlow(
 			`Worktree ${selected.path} changed state after confirmation; removal was refused.`,
 		);
 	}
-	const latestInventory = await worktreeInventory(pi, latest.path, ctx.signal);
-	if (latestInventory.length > 0) {
+	const latestInventory = classifyRemovalInventory(
+		await worktreeInventory(pi, latest.path, ctx.signal),
+	);
+	if (latestInventory.protected.length > 0) {
 		throw new Error(
-			`Removal refused because new local data appeared after confirmation:\n${latestInventory.join("\n")}`,
+			`Removal refused because new protected local data appeared after confirmation:\n${latestInventory.protected.join("\n")}`,
+		);
+	}
+	if (!sameInventory(inventory.ignored, latestInventory.ignored)) {
+		throw new Error(
+			`Removal refused because ignored data changed after confirmation:\n${latestInventory.ignored.join("\n") || "(none)"}`,
 		);
 	}
 	await assertDetachedHeadIsDurable(pi, ctx, latest);
@@ -440,8 +455,43 @@ function sameAdministrativeHistoryRisks(
 
 function formatAdministrativeRecoveryWarning(risks: readonly AdministrativeHistoryRisk[]): string {
 	if (risks.length === 0) return "";
-	const entries = risks.map((risk) => `${risk.label}: ${risk.oids.join(", ")}`).join("; ");
+	const entries = risks
+		.map(
+			(risk) =>
+				`${stripTerminalControls(risk.label)}: ${risk.oids.map(stripTerminalControls).join(", ")}`,
+		)
+		.join("; ");
 	return ` Administrative recovery warning: these commits are not reachable from a branch, tag, or remote ref: ${entries}. Discarding their recovery pointers means they may later be garbage-collected.`;
+}
+
+interface RemovalInventory {
+	ignored: string[];
+	protected: string[];
+}
+
+function classifyRemovalInventory(lines: readonly string[]): RemovalInventory {
+	const ignored: string[] = [];
+	const protectedData: string[] = [];
+	for (const line of lines) {
+		(line.startsWith("!! ") ? ignored : protectedData).push(line);
+	}
+	return {
+		ignored: normalizeInventory(ignored),
+		protected: normalizeInventory(protectedData),
+	};
+}
+
+function normalizeInventory(lines: readonly string[]): string[] {
+	return [...new Set(lines)].sort();
+}
+
+function sameInventory(left: readonly string[], right: readonly string[]): boolean {
+	return JSON.stringify(normalizeInventory(left)) === JSON.stringify(normalizeInventory(right));
+}
+
+function formatIgnoredDataWarning(ignored: readonly string[]): string {
+	if (ignored.length === 0) return "";
+	return ` Ignored files and directories that will be deleted:\n${ignored.map(stripTerminalControls).join("\n")}`;
 }
 
 async function assertDetachedHeadIsDurable(

@@ -14,8 +14,9 @@ Pi cannot change its parent process working directory with `cd`. This extension 
 - Suggests a sibling path such as `/workspace/project-feat-login` for `feat/login`.
 - Optionally switches Pi into a newly created worktree while continuing the current conversation.
 - Switches among existing registered worktrees through Pi's public session replacement API.
-- Removes only clean, unlocked, non-current linked worktrees and preserves their branches.
-- Refuses removal when tracked, untracked, ignored, manually index-flagged, submodule, or current unreachable detached-commit data may be lost.
+- Removes unlocked, non-current linked worktrees and preserves their branches.
+- Refuses removal when tracked, untracked, manually index-flagged, submodule, or current unreachable detached-commit data may be lost.
+- Allows ignored-only data such as `node_modules/` after listing it in the destructive confirmation.
 - Names recovery-only administrative commits in the destructive confirmation instead of making ordinary rebase/reset history block cleanup forever.
 - Always previews stale metadata before pruning it and revalidates the preview after confirmation.
 - Runs Git through argv-based subprocess calls, without interpolating user input into shell commands.
@@ -51,7 +52,7 @@ Choose one action:
 
 - **Add worktree** — enter a branch, optional start point, and optional path; confirm creation and optionally switch.
 - **Switch worktree** — select another existing worktree and continue this Pi conversation there.
-- **Remove worktree** — remove a confirmed clean linked worktree without deleting its branch.
+- **Remove worktree** — remove a linked worktree without deleting its branch; ignored-only data is listed for explicit confirmation.
 - **Prune stale metadata** — inspect Git's dry-run output, then optionally run the matching prune.
 
 `/worktree` intentionally does not accept text subcommands in this version. Every mutation is initiated and confirmed through the interactive UI.
@@ -89,7 +90,8 @@ A successfully created Git worktree is never rolled back merely because Pi sessi
 
 - The main worktree and current worktree cannot be removed.
 - Locked or stale worktrees cannot be removed through this extension.
-- Dirty, untracked, ignored, initialized-submodule, and intentional `assume-unchanged`/`skip-worktree` index state causes removal to fail closed. Sparse-checkout-managed `skip-worktree` entries outside the active sparsity rules are allowed when Git's rule checker can confirm them; clear other intentional index flags before removing the worktree.
+- Dirty, untracked, initialized-submodule, and intentional `assume-unchanged`/`skip-worktree` index state causes removal to fail closed. Sparse-checkout-managed `skip-worktree` entries outside the active sparsity rules are allowed when Git's rule checker can confirm them; clear other intentional index flags before removing the worktree.
+- Ignored-only files and directories do not block removal. The confirmation lists them, and the extension rechecks the exact ignored inventory before Git deletes the worktree.
 - A detached HEAD must be reachable from a local branch, tag, or remote ref before removal or prune.
 - Removal and prune inspect reflogs, pseudorefs, per-worktree refs, and `FETCH_HEAD`. Historical commits reachable only through this administrative recovery state are listed by full OID in the destructive confirmation; approval removes those recovery pointers, so Git may later garbage-collect the commits. Create a branch or tag instead when any listed commit should survive.
 - Staged-only administrative index state, a missing attached branch ref, or an unreachable current detached HEAD still blocks prune without an override.
@@ -119,6 +121,7 @@ extensions/pi-worktree/
 │   ├── command.test.ts
 │   ├── git.integration.test.ts
 │   ├── git.test.ts
+│   ├── remove-ignored-command.test.ts
 │   └── session.test.ts
 ├── package.json
 ├── README.md
