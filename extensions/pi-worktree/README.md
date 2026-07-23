@@ -11,7 +11,7 @@ Pi cannot change its parent process working directory with `cd`. This extension 
 - Shows compact main, linked, current, detached, locked, and prunable state in worktree selectors.
 - Creates a new branch worktree or attaches an existing unoccupied local branch.
 - Rejects occupied targets and unresolvable symbolic-link ancestors before Git can create a branch.
-- Suggests a sibling path such as `/workspace/project-feat-login` for `feat/login`.
+- Suggests `~/.worktrees/<main-worktree-name>/<branch>` by default and lets the user configure the root interactively.
 - Optionally switches Pi into a newly created worktree while continuing the current conversation.
 - Switches among existing registered worktrees through Pi's public session replacement API.
 - Removes unlocked, non-current linked worktrees and preserves their branches.
@@ -54,24 +54,50 @@ Choose one action:
 - **Switch worktree** — select another existing worktree and continue this Pi conversation there.
 - **Remove worktree** — remove a linked worktree without deleting its branch; ignored-only data is listed for explicit confirmation.
 - **Prune stale metadata** — inspect Git's dry-run output, then optionally run the matching prune.
+- **Configure worktree root** — set a machine-local default root or submit a blank value to restore `~/.worktrees`.
 
-`/worktree` intentionally does not accept text subcommands in this version. Every mutation is initiated and confirmed through the interactive UI.
+The menu title shows the effective worktree root and whether it comes from the built-in default or the user settings file. `/worktree` intentionally does not accept text subcommands or expose argument autocomplete. Every change is initiated and confirmed through the interactive UI.
 
 ## 🌿 Add defaults
 
 For a new branch, the current symbolic branch is the default start point. If Pi is running from detached HEAD, the command requires an explicit commit-ish. Git must resolve the start point to exactly one commit.
 
-The suggested path is a sibling of the main worktree:
+The default root is `~/.worktrees`, where `~` is Node's platform home directory. Suggestions use the registered main worktree's directory name, not the current linked-worktree cwd:
 
 ```text
 main worktree: /home/user/workspace/project
 branch:        feat/login
-suggested:     /home/user/workspace/project-feat-login
+root:          /home/user/.worktrees
+suggested:     /home/user/.worktrees/project/feat-login
 ```
 
-Leave the path input blank to accept the suggestion. A custom absolute path is used directly; a custom relative path is resolved from the current Pi cwd. The target itself must not exist, and its nearest existing ancestor must resolve without a broken or looping symbolic link.
+On Windows, the equivalent default is such as `C:\Users\Alice\.worktrees`. Branch `/` characters become `-`. The extension does not add hashes or collision suffixes: if two normalized paths collide or the target already exists, Add stops before Git mutation.
+
+Leave the path input blank to accept the suggestion. A custom absolute path is used directly; a custom relative path is resolved from the current Pi cwd. The target itself must not exist, and its nearest existing ancestor must resolve without a broken or looping symbolic link. Existing registered worktrees are never moved when this default changes.
 
 The MVP does not expose `--force`, `-B`, `--detach`, `--orphan`, or lock options.
+
+## ⚙️ Worktree root settings
+
+The machine-local user settings file is:
+
+```text
+<getAgentDir()>/pi-worktree.json
+```
+
+For a default Pi installation this is typically `~/.pi/agent/pi-worktree.json`. Configure it through **Configure worktree root** or edit it manually:
+
+```json
+{
+  "worktreeRoot": "~/worktrees"
+}
+```
+
+`worktreeRoot` accepts `~`, a home-prefixed path such as `~/worktrees`, or a native-platform absolute path. It does not expand `$VAR`, `%VAR%`, or other shell syntax. Empty, relative, NUL-containing, non-string, and invalid paths are rejected. There is no project override or extension-specific environment variable.
+
+A missing `worktreeRoot` uses `~/.worktrees`. Submitting a blank value in the interactive action removes the override. Unknown JSON fields survive interactive saves and resets. Settings reload on every `session_start`, including `/reload` and workspace replacement; a successful interactive save applies immediately to the next Add flow.
+
+Malformed or invalid settings are warned about but never overwritten. An initial failure uses `~/.worktrees`; a later failure retains the last valid effective root. Interactive configuration remains blocked until the invalid file is fixed manually.
 
 ## 🔀 Pi workspace switching
 
@@ -96,6 +122,7 @@ A successfully created Git worktree is never rolled back merely because Pi sessi
 - Removal and prune inspect reflogs, pseudorefs, per-worktree refs, and `FETCH_HEAD`. Historical commits reachable only through this administrative recovery state are listed by full OID in the destructive confirmation; approval removes those recovery pointers, so Git may later garbage-collect the commits. Create a branch or tag instead when any listed commit should survive.
 - Staged-only administrative index state, a missing attached branch ref, or an unreachable current detached HEAD still blocks prune without an override.
 - Removal never deletes a branch and never uses `--force`.
+- Remove invokes only argv-based `git worktree remove <path>`; production runtime never invokes a shell, `rm`, `rm -rf`, or a Node filesystem directory-deletion API for worktrees.
 - Prune always runs `git worktree prune --dry-run --verbose` before confirmation, inspects candidates omitted from porcelain, rechecks the exact preview and recovery-risk set after confirmation, and uses Git's default expiry. Remove likewise rechecks worktree identity, inventory, administrative path, and the approved recovery-risk set before mutation.
 - The extension does not commit, push, rebase, repair, move, lock, or unlock worktrees.
 
@@ -106,7 +133,7 @@ Use Git directly when you intentionally need force removal, branch deletion, cus
 - Git must be installed and the current Pi cwd must be inside a non-bare Git worktree.
 - The command requires a UI-capable Pi mode; print and JSON modes cannot drive its dialogs.
 - Project trust and cwd-bound extension/resource loading during a switch remain owned by Pi.
-- The extension registers no LLM tool, background watcher, settings file, or statusline item.
+- The extension registers no LLM tool, background watcher, project settings, or statusline item.
 
 ## 📁 Package layout
 
@@ -116,13 +143,15 @@ extensions/pi-worktree/
 │   ├── command.ts
 │   ├── git.ts
 │   ├── session.ts
+│   ├── settings.ts
 │   └── worktree.ts
 ├── test/
 │   ├── command.test.ts
 │   ├── git.integration.test.ts
 │   ├── git.test.ts
 │   ├── remove-ignored-command.test.ts
-│   └── session.test.ts
+│   ├── session.test.ts
+│   └── settings.test.ts
 ├── package.json
 ├── README.md
 ├── LICENSE

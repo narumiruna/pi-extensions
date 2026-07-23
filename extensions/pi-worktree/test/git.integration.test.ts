@@ -44,10 +44,10 @@ const pi = {
 	},
 };
 
-test("Git service creates, inventories, and removes a real linked worktree while preserving branch", async () => {
+test("Git service creates a nested-root worktree, inventories it, and removes it while preserving branch", async () => {
 	const temporary = realpathSync(mkdtempSync(join(tmpdir(), "pi-worktree-git-")));
 	const main = join(temporary, "repo");
-	const linked = join(temporary, "repo-feature");
+	const linked = join(temporary, ".worktrees", "repo", "feature-test");
 	try {
 		git(temporary, ["init", "--initial-branch=main", main]);
 		git(main, ["config", "user.name", "Pi Worktree Test"]);

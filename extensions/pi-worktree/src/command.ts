@@ -30,21 +30,23 @@ import {
 	worktreeInventory,
 } from "./git.js";
 import { switchToWorktree } from "./session.js";
+import type { WorktreeSettingsRuntime } from "./settings.js";
 
 const ACTION_ADD = "Add worktree";
 const ACTION_SWITCH = "Switch worktree";
 const ACTION_REMOVE = "Remove worktree";
 const ACTION_PRUNE = "Prune stale metadata";
-const ACTIONS = [ACTION_ADD, ACTION_SWITCH, ACTION_REMOVE, ACTION_PRUNE];
+const ACTION_CONFIGURE_ROOT = "Configure worktree root";
+const ACTIONS = [ACTION_ADD, ACTION_SWITCH, ACTION_REMOVE, ACTION_PRUNE, ACTION_CONFIGURE_ROOT];
 
 interface AdministrativeHistoryRisk {
 	label: string;
 	oids: string[];
 }
 
-export function registerWorktreeCommand(pi: ExtensionAPI): void {
+export function registerWorktreeCommand(pi: ExtensionAPI, settings: WorktreeSettingsRuntime): void {
 	pi.registerCommand("worktree", {
-		description: "Interactively add, switch, remove, or prune Git worktrees",
+		description: "Interactively manage Git worktrees and their default root",
 		handler: async (args, ctx) => {
 			if (args.trim()) {
 				safeNotify(
@@ -63,13 +65,17 @@ export function registerWorktreeCommand(pi: ExtensionAPI): void {
 				await ctx.waitForIdle();
 				const records = await listWorktrees(pi, ctx.cwd, ctx.signal);
 				const currentPath = await currentWorktreePath(pi, ctx.cwd, ctx.signal);
+				const root = settings.get();
+				const warning = root.warning ? " — settings warning" : "";
 				const action = await ctx.ui.select(
-					stripTerminalControls(`Git worktrees (${records.length}) — current: ${currentPath}`),
+					stripTerminalControls(
+						`Git worktrees (${records.length}) — current: ${currentPath}\nWorktree root: ${root.effectiveRoot} (${root.source})${warning}`,
+					),
 					ACTIONS,
 				);
 				switch (action) {
 					case ACTION_ADD:
-						await addFlow(pi, ctx, records);
+						await addFlow(pi, ctx, records, root.effectiveRoot);
 						return;
 					case ACTION_SWITCH:
 						await switchFlow(pi, ctx, records, currentPath);
@@ -80,6 +86,9 @@ export function registerWorktreeCommand(pi: ExtensionAPI): void {
 					case ACTION_PRUNE:
 						await pruneFlow(pi, ctx, records);
 						return;
+					case ACTION_CONFIGURE_ROOT:
+						await configureRootFlow(ctx, settings);
+						return;
 				}
 			} catch (error) {
 				safeNotify(ctx, formatError(error), "error");
@@ -88,10 +97,37 @@ export function registerWorktreeCommand(pi: ExtensionAPI): void {
 	});
 }
 
+async function configureRootFlow(
+	ctx: ExtensionCommandContext,
+	settings: WorktreeSettingsRuntime,
+): Promise<void> {
+	const current = await settings.reload();
+	if (!current.canSave) {
+		throw new Error(
+			current.warning ?? `Fix ${settings.getPath()} before changing pi-worktree settings.`,
+		);
+	}
+	const requested = await ctx.ui.input(
+		"Worktree root (blank restores ~/.worktrees)",
+		stripTerminalControls(current.configuredRoot ?? current.effectiveRoot),
+	);
+	if (requested === undefined) return;
+	const configuredRoot = requested.trim() || undefined;
+	const updated = await settings.save(configuredRoot);
+	safeNotify(
+		ctx,
+		configuredRoot === undefined
+			? `Worktree root reset to ${updated.effectiveRoot}.`
+			: `Worktree root saved as ${updated.effectiveRoot}.`,
+		"info",
+	);
+}
+
 async function addFlow(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
 	records: readonly WorktreeRecord[],
+	worktreeRoot: string,
 ): Promise<void> {
 	const main = records[0];
 	if (!main) throw new Error("Git returned no registered worktrees.");
@@ -133,7 +169,7 @@ async function addFlow(
 		startOid = await resolveCommit(pi, ctx.cwd, startLabel, ctx.signal);
 	}
 
-	const suggestedPath = defaultWorktreePath(main.path, branch);
+	const suggestedPath = defaultWorktreePath(main.path, branch, worktreeRoot);
 	const requestedPath = await ctx.ui.input(
 		stripTerminalControls(`Worktree path (blank uses ${suggestedPath})`),
 		stripTerminalControls(suggestedPath),
