@@ -57,13 +57,30 @@ import sync, {
 	splitArgs,
 } from "../src/sync.js";
 
-test("sync registers pisync command and session lifecycle hooks", () => {
+test("sync registers the sync command and session lifecycle hooks", () => {
 	const mock = createMockPi();
 	sync(mock.pi);
 
-	assert.ok(mock.commands.has("pisync"));
-	assert.equal(typeof mock.commands.get("pisync")?.getArgumentCompletions, "function");
+	assert.ok(mock.commands.has("sync"));
+	assert.equal(mock.commands.has("pisync"), false);
+	assert.equal(typeof mock.commands.get("sync")?.getArgumentCompletions, "function");
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
+});
+
+test("sync command help and errors use the public command name", async () => {
+	await withTempHome(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+		const command = mock.commands.get("sync");
+
+		await command?.handler("help", ctx);
+		await command?.handler("unknown", ctx);
+
+		assert.match(notifications[0]?.message ?? "", /Usage: \/sync <command>/);
+		assert.match(notifications[1]?.message ?? "", /Unknown \/sync command: unknown/);
+		assert.doesNotMatch(notifications.map(({ message }) => message).join("\n"), /\/pisync/);
+	});
 });
 
 test("completeSyncArguments suggests commands and useful flags", () => {
@@ -211,7 +228,7 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 	});
 });
 
-test("pisync config output reports session sync and privacy warning", async () => {
+test("sync config output reports session sync and privacy warning", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(
@@ -223,7 +240,7 @@ test("pisync config output reports session sync and privacy warning", async () =
 		const { ctx, notifications } = createMockContext();
 
 		await withEnv({}, async () => {
-			await mock.commands.get("pisync")?.handler("config", ctx);
+			await mock.commands.get("sync")?.handler("config", ctx);
 		});
 
 		assert.match(notifications[0]?.message ?? "", /syncSessions: enabled/);
@@ -972,7 +989,7 @@ test("old unreadable locks require explicit stale unlock before recovery", async
 			assert.equal(ran, false);
 			assert.equal(await lockFileExists(), true);
 
-			await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+			await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 			assert.equal(await lockFileExists(), false);
 			assert.equal(await withLock("test", async () => "ok"), "ok");
 		}
@@ -1037,11 +1054,11 @@ test("unlock keeps a fresh unreadable lock unless stale removal is explicit", as
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext();
 
-		await mock.commands.get("pisync")?.handler("unlock", ctx);
+		await mock.commands.get("sync")?.handler("unlock", ctx);
 		assert.equal(await lockFileExists(), true);
 		assert.match(notifications.at(-1)?.message ?? "", /unreadable/);
 
-		await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+		await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 		assert.equal(await lockFileExists(), false);
 		assert.match(notifications.at(-1)?.message ?? "", /Removed unreadable/);
 	});
@@ -1073,7 +1090,7 @@ test("stale unlock rechecks unreadable metadata before removing it", async () =>
 			const mock = createMockPi();
 			sync(mock.pi);
 			const { ctx, notifications } = createMockContext();
-			await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+			await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 
 			assert.equal(await lockFileExists(), true);
 			assert.match(notifications.at(-1)?.message ?? "", /not stale|still live/);
@@ -1104,7 +1121,7 @@ test("unlock cannot remove the lock for an active guarded sync", async () => {
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext();
 		try {
-			await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+			await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 			assert.equal(await lockFileExists(), true);
 			assert.match(notifications.at(-1)?.message ?? "", /currently running/);
 		} finally {
@@ -1132,7 +1149,7 @@ test("unlock reports when a dead owner's guard is still expiring", async () => {
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext();
 
-		await mock.commands.get("pisync")?.handler("unlock --stale", ctx);
+		await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 		assert.equal(await lockFileExists(), true);
 		assert.match(notifications.at(-1)?.message ?? "", /owner exited.*guard expires/);
 	});
@@ -1211,7 +1228,7 @@ test("doctor warns when lock metadata is unreadable", async () => {
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext();
 
-		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: unreadable/);
 		assert.equal(notifications.at(-1)?.level, "warning");
 	});
@@ -1225,7 +1242,7 @@ test("doctor warns when a lock guard is active without metadata", async () => {
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext();
 
-		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: guard active.*metadata/);
 		assert.equal(notifications.at(-1)?.level, "warning");
 	});
@@ -1247,7 +1264,7 @@ test("doctor warns when a valid lock owner has exited", async () => {
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext();
 
-		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: stale.*unlock/);
 		assert.equal(notifications.at(-1)?.level, "warning");
 	});
@@ -1270,12 +1287,12 @@ test("doctor reports live and free lock states", async () => {
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext();
 
-		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: held by pid/);
 		assert.equal(notifications.at(-1)?.level, "info");
 
 		await fs.rm(lockPath());
-		await mock.commands.get("pisync")?.handler("doctor", ctx);
+		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: free/);
 		assert.equal(notifications.at(-1)?.level, "info");
 	});

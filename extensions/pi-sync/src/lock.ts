@@ -82,7 +82,7 @@ export async function withLock<T>(command: string, fn: () => Promise<T>): Promis
 		const inspection = await inspectLock();
 		if (inspection.status === "valid" && isStaleLock(inspection.lock)) {
 			throw new Error(
-				`pi-sync lock is stale (pid ${inspection.lock.pid}). Run /pisync unlock --stale, then retry.`,
+				`pi-sync lock is stale (pid ${inspection.lock.pid}). Run /sync unlock --stale, then retry.`,
 			);
 		}
 		if (inspection.status === "valid") {
@@ -92,7 +92,7 @@ export async function withLock<T>(command: string, fn: () => Promise<T>): Promis
 		}
 		if (inspection.status === "unreadable") {
 			throw new Error(
-				"pi-sync lock metadata is unreadable. Run /pisync unlock --stale after verifying no sync is running.",
+				"pi-sync lock metadata is unreadable. Run /sync unlock --stale after verifying no sync is running.",
 			);
 		}
 
@@ -208,7 +208,7 @@ async function unlockGuarded(ctx: ExtensionCommandContext, options: CommandOptio
 	if (inspection.status === "unreadable") {
 		if (!options.stale) {
 			ctx.ui.notify(
-				"Pi-sync lock metadata is unreadable. Use /pisync unlock --stale only after verifying no sync is running.",
+				"Pi-sync lock metadata is unreadable. Use /sync unlock --stale only after verifying no sync is running.",
 				"warning",
 			);
 			return;
