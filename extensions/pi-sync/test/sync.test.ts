@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -15,6 +16,12 @@ import path from "node:path";
 import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	SYNC_COMMANDS,
+	syncCommandFromMenuOption,
+	syncMenuOptions,
+	usage,
+} from "../src/command.js";
 import {
 	configuredSessionDir,
 	ensureStateDir,
@@ -80,6 +87,132 @@ test("sync command help and errors use the public command name", async () => {
 		assert.match(notifications[0]?.message ?? "", /Usage: \/sync <command>/);
 		assert.match(notifications[1]?.message ?? "", /Unknown \/sync command: unknown/);
 		assert.doesNotMatch(notifications.map(({ message }) => message).join("\n"), /\/pisync/);
+	});
+});
+
+const expectedSyncMenuOptions = [
+	"help — Show command usage",
+	"init — Create local config template",
+	"config — Show resolved configuration",
+	"status — Show sync status",
+	"diff — Show local/remote diff",
+	"doctor — Check config, secrets, and lock state",
+	"push — Upload local settings",
+	"pull — Apply remote settings",
+	"sync — Push or pull as needed",
+	"history — Show recent remote snapshots",
+	"rollback — Apply a previous snapshot",
+	"unlock — Remove a stale local lock",
+];
+
+test("bare sync command opens an all-subcommand menu and cancellation is a no-op", async () => {
+	await withTempHome(async (agentDir) => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		let selectedTitle: string | undefined;
+		let selectedOptions: string[] | undefined;
+		const { ctx, notifications, statuses } = createMockContext({
+			hasUI: true,
+			select: async (title: string, options: string[]) => {
+				selectedTitle = title;
+				selectedOptions = options;
+				return undefined;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.equal(selectedTitle, "pi-sync");
+		assert.deepEqual(selectedOptions, expectedSyncMenuOptions);
+		assert.deepEqual(notifications, []);
+		assert.equal(statuses.size, 0);
+		assert.equal(existsSync(path.join(agentDir, ".pisync")), false);
+	});
+});
+
+test("sync menu options map one-to-one to the canonical command catalog", () => {
+	const commandNames = SYNC_COMMANDS.map(({ name }) => name);
+	const options = syncMenuOptions();
+
+	assert.deepEqual(options, expectedSyncMenuOptions);
+	assert.deepEqual(options.map(syncCommandFromMenuOption), commandNames);
+	assert.equal(new Set(commandNames).size, commandNames.length);
+	for (const commandName of commandNames) {
+		assert.match(usage(), new RegExp(`\\b${commandName}\\b`));
+	}
+});
+
+test("sync menu dispatches its selected subcommand through the public command path", async () => {
+	await withTempHome(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			select: async () => expectedSyncMenuOptions[0],
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.match(notifications[0]?.message ?? "", /Usage: \/sync <command>/);
+	});
+});
+
+test("bare sync command reports usage without an interactive UI", async () => {
+	await withTempHome(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		let selected = false;
+		const { ctx, notifications } = createMockContext({
+			hasUI: false,
+			select: async () => {
+				selected = true;
+				return undefined;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.equal(selected, false);
+		assert.match(notifications[0]?.message ?? "", /Usage: \/sync <command>/);
+	});
+});
+
+test("sync rollback menu requests a snapshot id and cancels empty input", async () => {
+	await withTempHome(async (agentDir) => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		let inputCalls = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			select: async () => expectedSyncMenuOptions[10],
+			input: async () => {
+				inputCalls += 1;
+				return "  ";
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.equal(inputCalls, 1);
+		assert.match(notifications[0]?.message ?? "", /Rollback cancelled/);
+		assert.equal(existsSync(path.join(agentDir, ".pisync")), false);
+	});
+});
+
+test("sync rollback menu passes a provided snapshot id to rollback", async () => {
+	await withTempHome(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			select: async () => expectedSyncMenuOptions[10],
+			input: async () => "snapshot-id",
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.match(notifications[0]?.message ?? "", /Missing pi-sync config/);
+		assert.doesNotMatch(notifications[0]?.message ?? "", /Usage: \/sync rollback/);
 	});
 });
 

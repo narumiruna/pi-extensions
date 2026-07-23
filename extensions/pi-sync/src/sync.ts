@@ -6,7 +6,7 @@ import path from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { completeSyncArguments, parseOptions, splitArgs, usage } from "./command.js";
+import { completeSyncArguments, parseOptions, resolveSyncCommand, usage } from "./command.js";
 import {
 	agentDir,
 	ensureStateDir,
@@ -118,10 +118,11 @@ export default function sync(pi: ExtensionAPI) {
 }
 
 async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
-	const [subcommand = "status", ...rest] = splitArgs(rawArgs);
-	const options = parseOptions(rest);
-
 	try {
+		const command = await resolveSyncCommand(rawArgs, ctx);
+		if (!command) return;
+		const { subcommand, rest } = command;
+		const options = parseOptions(rest);
 		await ensureStateDir();
 
 		switch (subcommand) {

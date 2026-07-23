@@ -8,7 +8,7 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
 
 ## ✨ Features
 
-- Adds a `/sync` command with `status`, `diff`, `push`, `pull`, `sync`, `history`, `rollback`, `doctor`, and `unlock` subcommands.
+- Opens every pi-sync action from the bare `/sync` menu and keeps direct `help`, `init`, `config`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` subcommands for automation and advanced flags.
 - Syncs allowlisted Pi configuration from `~/.pi/agent`:
   - `settings.json`
   - `keybindings.json`
@@ -111,11 +111,21 @@ Session files can contain prompts, model output, tool results, file paths, image
 
 ## 🚀 Usage
 
+Run `/sync` without arguments to open the interactive menu containing every pi-sync action. Choosing rollback asks for the snapshot id before showing the existing confirmation. Cancelling either selection leaves sync state unchanged.
+
 ```text
+/sync
+```
+
+The same actions remain available as direct routes for automation, non-interactive use, and advanced flags:
+
+```text
+/sync help
+/sync init
 /sync config
-/sync doctor
 /sync status
 /sync diff
+/sync doctor
 /sync push
 /sync pull
 /sync sync
@@ -123,6 +133,8 @@ Session files can contain prompts, model output, tool results, file paths, image
 /sync rollback <snapshot-id>
 /sync unlock --stale
 ```
+
+Bare `/sync` reports command usage when an interactive UI is unavailable; use a direct route for the desired operation.
 
 Useful flags:
 
