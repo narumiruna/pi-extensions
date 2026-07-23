@@ -517,7 +517,7 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		const child = new FakeChildSession();
 		const created: ChildSessionCreateOptions[] = [];
 		const mock = createMockPi();
-		registerStatefulSubagents(mock.pi, {
+		const controller = registerStatefulSubagents(mock.pi, {
 			createInProcessSession: async (options) => {
 				created.push(options);
 				return child;
@@ -568,6 +568,14 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		const agentId = spawned.details.agent.id;
 		assert.match(spawned.details.agent.state, /starting|running/);
 		assert.equal(spawned.details.agent.thinkingLevel, "high");
+		assert.deepEqual(controller.getRuntimeStatus(), {
+			enabled: true,
+			initialized: true,
+			transport: "in-process",
+			completionDelivery: "auto-resume",
+			activeAgents: 1,
+			retainedAgents: 1,
+		});
 		assert.match(spawned.content[0]?.text ?? "", /useful non-overlapping work immediately/i);
 		assert.match(spawned.content[0]?.text ?? "", /end the response/i);
 		assert.match(spawned.content[0]?.text ?? "", /do not poll/i);
@@ -579,6 +587,14 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 			"high",
 		);
 		await execute("subagent_interrupt", { agentId });
+		assert.deepEqual(controller.getRuntimeStatus(), {
+			enabled: true,
+			initialized: true,
+			transport: "in-process",
+			completionDelivery: "auto-resume",
+			activeAgents: 0,
+			retainedAgents: 1,
+		});
 		await new Promise((resolve) => setTimeout(resolve, 15));
 		assert.equal(mock.sentMessages.length, 0, "active root completion waits for settlement");
 		rootIdle = true;
@@ -598,7 +614,11 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 
 		await execute("subagent_send", { agentId, task: "recovered" });
 		await waitForCompletionCount(4);
-		await execute("subagent_close", { agentId });
+		assert.equal(controller.getRuntimeStatus().activeAgents, 0);
+		assert.equal(controller.getRuntimeStatus().retainedAgents, 1);
+		assert.equal(await controller.clearAgents(), 1);
+		assert.deepEqual(controller.listAgents(), []);
+		assert.equal(controller.getRuntimeStatus().retainedAgents, 0);
 
 		assert.deepEqual(child.prompts, ["first", "second", "interrupt me", "recovered"]);
 		assert.equal(created.length, 1);
@@ -649,7 +669,8 @@ test("session shutdown closes completion delivery before delayed isolated-agent 
 			createInProcessSession: async () => (childIndex++ === 0 ? completedChild : activeChild),
 			workspaceManager: new FakeWorkspaceManager(),
 		});
-		const context = createMockContext({ isIdle: () => true });
+		// Keep the root active so auto-resume must retain completion until shutdown closes the broker.
+		const context = createMockContext({ isIdle: () => false });
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		const execute = async (name: string, params: Record<string, unknown>) => {
 			const tool = mock.tools.find((candidate) => candidate.name === name) as {

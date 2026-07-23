@@ -18,7 +18,7 @@ Updated: 2026-07-23
 | Shared-write guard and disposable worktrees | Implemented, opt-in | `stateful.ts`, `workspace.ts`; clean-repository and cleanup tests |
 | Follow-up, mailbox, list, interrupt, close | Implemented, default-on | seven non-waiting lifecycle tools in `stateful.ts`; registry and completion-delivery tests |
 | Separate active and retained capacity | Implemented | FIFO queue and limits in `registry.ts`; capacity/fairness test |
-| Interactive settings and inspection | Implemented | `/subagents settings|status|help`, compatibility `/subagents:config`, and `/subagents:agents list|clear` |
+| Interactive settings and inspection | Implemented | Bare `/subagents` is the current-session-first manager; `settings|status|help` remain direct routes, with compatibility `/subagents:config` and `/subagents:agents list|clear` |
 | Native transcript switching | Core-blocked | Extension APIs expose custom entries/UI but no supported child transcript/session switch handle |
 | Parent context selection | Implemented | `context.ts`: none/all/summary/recent N/entry IDs, text-only sanitation and byte bound |
 | Approval/sandbox/header inheritance | Unsupported guarantee | `SingleResult.policy`; only environment and explicit CLI overrides are reported |

@@ -74,9 +74,21 @@ export interface StatefulSubagentDependencies {
 	workspaceManager?: WorkspaceManager;
 }
 
+export interface StatefulSubagentRuntimeStatus {
+	enabled: boolean;
+	initialized: boolean;
+	transport: "subprocess" | "in-process";
+	completionDelivery: CompletionDelivery;
+	activeAgents: number;
+	retainedAgents: number;
+}
+
 export interface StatefulSubagentController {
 	getCompletionDelivery(): CompletionDelivery;
 	setCompletionDelivery(value: CompletionDelivery): void;
+	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
+	listAgents(includeClosed?: boolean): ManagedAgent[];
+	clearAgents(): Promise<number>;
 }
 
 export function registerStatefulSubagents(
@@ -84,9 +96,34 @@ export function registerStatefulSubagents(
 	dependencies: StatefulSubagentDependencies = {},
 ): StatefulSubagentController {
 	const settings = readSubagentSettings()?.stateful ?? {};
+	const enabled = settings.enabled !== false;
+	const transportKind = resolveStatefulTransportKind(settings.transport);
 	let completionDelivery = resolveCompletionDelivery(settings.completionDelivery);
 	let completionBroker: CompletionDeliveryBroker | undefined;
 	let refreshSpawnToolRegistration: (() => void) | undefined;
+	let registry: AgentRegistry | undefined;
+	let persistence: AgentPersistence | undefined;
+	let sweepTimer: NodeJS.Timeout | undefined;
+	let runtimeGeneration = 0;
+	const workspaceManager = dependencies.workspaceManager ?? new WorkspaceManager();
+	const isolatedAgents = new Map<string, string>();
+	const seenMessageIds = new Set<string>();
+	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
+
+	const clearAgents = async (): Promise<number> => {
+		const currentRegistry = registry;
+		if (!currentRegistry) return 0;
+		const count = currentRegistry.list(true).length;
+		try {
+			await currentRegistry.closeAll();
+		} finally {
+			await workspaceManager.cleanupAll();
+			isolatedAgents.clear();
+		}
+		seenMessageIds.clear();
+		await persistence?.delete();
+		return count;
+	};
 	const controller: StatefulSubagentController = {
 		getCompletionDelivery() {
 			return completionDelivery;
@@ -96,17 +133,25 @@ export function registerStatefulSubagents(
 			completionBroker?.setDelivery(value);
 			refreshSpawnToolRegistration?.();
 		},
+		getRuntimeStatus() {
+			const agents = registry?.list(true) ?? [];
+			return {
+				enabled,
+				initialized: registry !== undefined,
+				transport: transportKind,
+				completionDelivery,
+				activeAgents: agents.filter(
+					(agent) => agent.state === "starting" || agent.state === "running",
+				).length,
+				retainedAgents: agents.filter((agent) => agent.state !== "closed").length,
+			};
+		},
+		listAgents(includeClosed = false) {
+			return registry?.list(includeClosed) ?? [];
+		},
+		clearAgents,
 	};
-	if (settings.enabled === false) return controller;
-
-	let registry: AgentRegistry | undefined;
-	let persistence: AgentPersistence | undefined;
-	let sweepTimer: NodeJS.Timeout | undefined;
-	let runtimeGeneration = 0;
-	const workspaceManager = dependencies.workspaceManager ?? new WorkspaceManager();
-	const isolatedAgents = new Map<string, string>();
-	const seenMessageIds = new Set<string>();
-	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
+	if (!enabled) return controller;
 
 	const requireRegistry = () => {
 		if (!registry) throw new Error("Stateful subagents are not initialized for this session");
@@ -136,7 +181,7 @@ export function registerStatefulSubagents(
 			},
 		});
 		const transport =
-			resolveStatefulTransportKind(settings.transport) === "in-process"
+			transportKind === "in-process"
 				? new InProcessTransport({
 						modelRegistry: ctx.modelRegistry,
 						getParentRuntime: () => ({ ...parentRuntime }),
@@ -225,9 +270,12 @@ export function registerStatefulSubagents(
 		} catch (error) {
 			cleanupError = error;
 		}
-		await registry?.shutdown();
-		registry = undefined;
-		persistence = undefined;
+		try {
+			await registry?.shutdown();
+		} finally {
+			registry = undefined;
+			persistence = undefined;
+		}
 		if (cleanupError && ctx.hasUI) {
 			const reason = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
 			ctx.ui.notify(`Some isolated subagent workspaces could not be removed: ${reason}`, "warning");
@@ -440,10 +488,12 @@ export function registerStatefulSubagents(
 		async execute(_id, params) {
 			if (params.subtree) {
 				const agents = await requireRegistry().interruptTree(params.agentId);
+				const root = requireRegistry().get(params.agentId);
+				if (!root) throw new Error(`Unknown subagent: ${params.agentId}`);
 				return {
 					content: [{ type: "text", text: `Interrupted ${agents.length} active agent(s).` }],
 					details: {
-						agent: summarizeAgent(requireRegistry().get(params.agentId)!),
+						agent: summarizeAgent(root),
 						agents: agents.map(summarizeAgent),
 					},
 				};
@@ -476,10 +526,12 @@ export function registerStatefulSubagents(
 				} finally {
 					await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
 				}
+				const root = requireRegistry().get(params.agentId);
+				if (!root) throw new Error(`Unknown subagent: ${params.agentId}`);
 				return {
 					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
 					details: {
-						agent: summarizeAgent(requireRegistry().get(params.agentId)!),
+						agent: summarizeAgent(root),
 						agents: agents.map(summarizeAgent),
 					},
 				};
@@ -495,28 +547,33 @@ export function registerStatefulSubagents(
 	});
 
 	pi.registerCommand("subagents:agents", {
-		description: "Inspect or clear stateful subagents",
+		description: "Inspect or clear current-session subagents",
 		getArgumentCompletions(prefix: string) {
 			return ["list", "clear"]
 				.filter((value) => value.startsWith(prefix))
 				.map((value) => ({ value, label: value }));
 		},
 		async handler(args, ctx) {
-			if (args.trim() === "clear") {
-				try {
-					await requireRegistry().closeAll();
-				} finally {
-					await workspaceManager.cleanupAll();
-					isolatedAgents.clear();
-				}
-				seenMessageIds.clear();
-				await persistence?.delete();
-				ctx.ui.notify("Cleared stateful subagents.", "info");
+			const subcommand = args.trim().toLowerCase() || "list";
+			if (subcommand === "clear") {
+				const count = await controller.clearAgents();
+				ctx.ui.notify(
+					count > 0
+						? `Cleared ${count} current-session subagent${count === 1 ? "" : "s"}.`
+						: statefulEmptyMessage(controller.getRuntimeStatus()),
+					"info",
+				);
 				return;
 			}
-			const agents = requireRegistry().list(true);
+			if (subcommand !== "list") {
+				ctx.ui.notify(`Unknown /subagents:agents subcommand: ${subcommand}`, "warning");
+				return;
+			}
+			const agents = controller.listAgents(true);
 			ctx.ui.notify(
-				agents.length ? agents.map(formatLine).join("\n") : "No stateful subagents.",
+				agents.length
+					? agents.map(formatLine).join("\n")
+					: statefulEmptyMessage(controller.getRuntimeStatus()),
 				"info",
 			);
 		},
@@ -610,7 +667,13 @@ export function resolveSpawnContextMode(
 	return normalizeContextMode(value);
 }
 
-function formatLine(agent: ManagedAgent): string {
+function statefulEmptyMessage(status: StatefulSubagentRuntimeStatus): string {
+	if (!status.enabled) return "Stateful subagents are disabled in user settings.";
+	if (!status.initialized) return "Stateful subagents are not initialized for this session.";
+	return "No current-session subagents.";
+}
+
+export function formatStatefulAgentLine(agent: ManagedAgent): string {
 	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - agent.updatedAt) / 1000));
 	const actions =
 		agent.state === "running" || agent.state === "starting"
@@ -618,11 +681,26 @@ function formatLine(agent: ManagedAgent): string {
 			: agent.state === "closed"
 				? "inspect"
 				: "send, close";
-	const task = agent.currentTask ? ` — ${agent.currentTask.slice(0, 80)}` : "";
+	const task = agent.currentTask ? ` — ${sanitizeStatusLine(agent.currentTask, 80)}` : "";
 	const unread = agent.mailbox.filter((message) => !message.readAt).length;
 	const indent = "  ".repeat(agent.depth);
 	const thinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
-	return `${indent}${agent.id} ${agent.agent} ${agent.state} ${elapsedSeconds}s${thinking} unread:${unread} [${actions}]${task}`;
+	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking} unread:${unread} [${actions}]${task}`;
+}
+
+function sanitizeStatusLine(value: string, maxLength: number): string {
+	return (
+		value
+			.slice(0, maxLength)
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Escape untrusted terminal controls.
+			.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+			.replace(/\s+/gu, " ")
+			.trim()
+	);
+}
+
+function formatLine(agent: ManagedAgent): string {
+	return formatStatefulAgentLine(agent);
 }
 
 function summarizeAgent(agent: ManagedAgent) {

@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
 import { ToolToggleList } from "../src/config-ui.js";
@@ -114,7 +115,159 @@ test("subagents registers consistent blocking guidance and configuration command
 	);
 });
 
-test("disabled stateful settings do not advertise unavailable lifecycle tools", () => {
+test("bare subagents opens a current-session manager and keeps direct routes predictable", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-manager-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+
+		const managerRenders: string[][] = [];
+		const managerContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const driven = driveCustomSelector(factory, ["\u001b"], 52);
+				managerRenders.push(...driven.renders);
+				return driven.result;
+			},
+		});
+		for (const handler of mock.events.get("session_start") ?? []) {
+			await handler({}, managerContext.ctx);
+		}
+		await command.handler("", managerContext.ctx);
+		assert.equal(managerRenders.length, 1);
+		assert.ok(managerRenders.flat().every((line) => visibleWidth(line) <= 52));
+		const managerText = managerRenders.flat().join("\n");
+		assert.match(managerText, /Subagents/);
+		assert.match(managerText, /Current session/);
+		assert.match(managerText, /Lifecycle: enabled/);
+		assert.match(managerText, /Transport: subprocess/);
+		assert.match(managerText, /Completion delivery: next-turn/);
+		assert.match(managerText, /Agents: 0 active.*0 retained/);
+		assert.match(managerText, /User settings/);
+		assert.match(managerText.replace(/\s+/gu, ""), /pi-subagents\.json/);
+		assert.match(managerText, /Completion settings/);
+		assert.match(managerText, /Agent tool settings/);
+		assert.match(managerText, /Current-session agents/);
+		assert.equal(managerContext.notifications.length, 0);
+
+		let nestedCall = 0;
+		const nestedRenders: string[][] = [];
+		const nestedContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const inputs = nestedCall === 0 ? ["\r"] : ["\u001b"];
+				const driven = driveCustomSelector(factory, inputs, 60);
+				nestedRenders[nestedCall++] = driven.renders.flat();
+				return driven.result;
+			},
+		});
+		await command.handler("", nestedContext.ctx);
+		assert.equal(nestedCall, 3, "settings closes back to a fresh manager before final Escape");
+		assert.match(nestedRenders[0]?.join("\n") ?? "", /Current session/);
+		assert.match(nestedRenders[1]?.join("\n") ?? "", /Subagent User Settings/);
+		assert.match(nestedRenders[2]?.join("\n") ?? "", /Current session/);
+
+		let agentRouteCall = 0;
+		const agentRouteRenders: string[][] = [];
+		const agentRouteContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const inputs = agentRouteCall === 0 ? ["\u001b[B", "\u001b[B", "\r"] : ["\u001b"];
+				const driven = driveCustomSelector(factory, inputs, 60);
+				agentRouteRenders[agentRouteCall++] = driven.renders.flat();
+				return driven.result;
+			},
+		});
+		await command.handler("", agentRouteContext.ctx);
+		assert.equal(agentRouteCall, 3);
+		assert.match(agentRouteRenders[1]?.join("\n") ?? "", /Current-session Subagents/);
+		assert.match(agentRouteRenders[1]?.join("\n") ?? "", /No current-session subagents/);
+
+		let directCalls = 0;
+		const directRenders: string[][] = [];
+		const directContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				directCalls++;
+				const driven = driveCustomSelector(factory, ["\u001b"], 60);
+				directRenders.push(...driven.renders);
+				return driven.result;
+			},
+		});
+		await command.handler("settings", directContext.ctx);
+		assert.equal(directCalls, 1);
+		assert.match(directRenders.flat().join("\n"), /Subagent User Settings/);
+		assert.doesNotMatch(directRenders.flat().join("\n"), /Current session/);
+
+		const rpcContext = createMockContext({
+			mode: "rpc",
+			hasUI: true,
+			custom: async () => {
+				throw new Error("RPC must not open custom TUI");
+			},
+		});
+		await command.handler("", rpcContext.ctx);
+		assert.match(rpcContext.notifications[0]?.message ?? "", /Current session/);
+		assert.match(rpcContext.notifications[0]?.message ?? "", /User settings/);
+
+		for (const mode of ["json", "print"]) {
+			const headlessContext = createMockContext({
+				mode,
+				hasUI: false,
+				custom: async () => {
+					throw new Error(`${mode} mode must not open custom TUI`);
+				},
+			});
+			await command.handler("", headlessContext.ctx);
+			assert.deepEqual(headlessContext.notifications, []);
+		}
+
+		await command.handler("status", managerContext.ctx);
+		assert.match(managerContext.notifications.at(-1)?.message ?? "", /Current session/);
+		assert.match(managerContext.notifications.at(-1)?.message ?? "", /User settings/);
+		await command.handler("help", managerContext.ctx);
+		assert.match(managerContext.notifications.at(-1)?.message ?? "", /compatibility route/);
+		await command.handler("unknown", managerContext.ctx);
+		assert.match(
+			managerContext.notifications.at(-1)?.message ?? "",
+			/Unknown \/subagents subcommand: unknown/,
+		);
+		await command.handler("settings extra", managerContext.ctx);
+		assert.match(
+			managerContext.notifications.at(-1)?.message ?? "",
+			/Unknown \/subagents subcommand: settings extra/,
+		);
+		const agentsCommand = mock.commands.get("subagents:agents");
+		assert.ok(agentsCommand);
+		await agentsCommand.handler("list", managerContext.ctx);
+		assert.match(
+			managerContext.notifications.at(-1)?.message ?? "",
+			/No current-session subagents/,
+		);
+		await agentsCommand.handler("unknown", managerContext.ctx);
+		assert.match(
+			managerContext.notifications.at(-1)?.message ?? "",
+			/Unknown \/subagents:agents subcommand: unknown/,
+		);
+		for (const handler of mock.events.get("session_shutdown") ?? []) {
+			await handler({}, managerContext.ctx);
+		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("disabled stateful settings do not advertise unavailable lifecycle tools", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-disabled-guidance-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -135,6 +288,23 @@ test("disabled stateful settings do not advertise unavailable lifecycle tools", 
 			Array.isArray(blockingTool?.promptGuidelines) ? blockingTool.promptGuidelines.join("\n") : "",
 			/subagent_spawn/i,
 		);
+		assert.equal(mock.commands.has("subagents:agents"), false);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		const renders: string[][] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const driven = driveCustomSelector(factory, ["\u001b"], 60);
+				renders.push(...driven.renders);
+				return driven.result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.match(renders.flat().join("\n"), /Lifecycle: disabled/);
+		await command.handler("help", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /unavailable.*disabled/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -197,10 +367,8 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 			agents: { scout: { tools: ["read"] } },
 		});
 		await command.handler("status", context.ctx);
-		assert.match(
-			context.notifications.at(-1)?.message ?? "",
-			/runtime completionDelivery: auto-resume/,
-		);
+		assert.match(context.notifications.at(-1)?.message ?? "", /Completion delivery: auto-resume/);
+		assert.match(context.notifications.at(-1)?.message ?? "", /User settings/);
 
 		const nonTui = createMockContext({
 			mode: "json",
@@ -247,10 +415,7 @@ test("subagent settings UI rolls back after an atomic save failure", async () =>
 		assert.match(context.notifications.at(-1)?.message ?? "", /were not saved/i);
 		assert.ok(renders[0]?.some((line) => line.includes("next-turn")));
 		await command.handler("status", context.ctx);
-		assert.match(
-			context.notifications.at(-1)?.message ?? "",
-			/runtime completionDelivery: next-turn/,
-		);
+		assert.match(context.notifications.at(-1)?.message ?? "", /Completion delivery: next-turn/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -263,6 +428,21 @@ test("subagent tool selection keeps the cursor on the toggled row", () => {
 	list.handleInput("\u001b[B");
 	list.handleInput("\r");
 	assert.ok(list.render(100).some((line) => line.includes("> ✓ second")));
+});
+
+test("subagent tool selection escapes display controls without changing saved names", () => {
+	const names = ["read\u001b]8;;https://example.com\u0007linked", "line\nbreak"];
+	const list = new ToolToggleList(names, new Set(names));
+	for (const renderedLine of list.render(100)) {
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: Verify terminal-control escaping.
+		assert.doesNotMatch(renderedLine, /[\u0000-\u001f\u007f-\u009f]/u);
+	}
+	let saved: string[] | undefined;
+	list.onDone = (tools) => {
+		saved = tools;
+	};
+	list.handleInput("s");
+	assert.deepEqual(saved, names);
 });
 
 test("subagent recursion guard rejects nested delegation before spawning", async () => {
