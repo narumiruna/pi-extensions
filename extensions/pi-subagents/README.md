@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents)](https://www.npmjs.com/package/@narumitw/pi-subagents) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. The batch `subagent` tool keeps isolated Pi subprocesses, while addressable lifecycle tools can run reusable agents either as subprocess-backed logical sessions or as public-SDK in-process child sessions.
+`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. The blocking batch `subagent` tool keeps isolated Pi subprocesses, while four detached tools run reusable agents either as subprocess-backed logical sessions or as public-SDK in-process child sessions. Together they form a fixed five-tool surface.
 
 Use it to split independent research, planning, implementation, and review work across focused workers. Under the default next-turn delivery policy, background delegation is for work the current response does not depend on. Opt-in auto-resume also supports final-answer-dependent background work by requesting a synthesis turn after completion.
 
@@ -19,7 +19,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, task-selected `thinkingLevel`, abort propagation, and streaming progress.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
-- Provides addressable stateful agents with follow-up, mailbox, list, interrupt, close, context selection, and persistence.
+- Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, context selection, and persistence.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete bounded worker output in tool details and a concise result for the main agent.
 
@@ -211,7 +211,7 @@ Run a chain where each step receives the previous output:
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result; if it does, use blocking `subagent`. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_list` or `subagent_messages`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
+Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result; if it does, use blocking `subagent`. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_manage` with `action: "list"` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
 
 A detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
@@ -246,19 +246,48 @@ The direct routes remain predictable: `/subagents settings` changes user complet
 }
 ```
 
-The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the extension registers:
+The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Set `"enabled": false` to remove all four stateful tools. Otherwise, the extension keeps the following tool membership fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
 
 | Tool | Purpose |
 | --- | --- |
 | `subagent_spawn` | Start detached work with an optional task-selected thinking level, return an opaque `agentId` immediately, and deliver completion asynchronously. |
-| `subagent_send` | Send follow-up work to a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
-| `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
-| `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
-| `subagent_list` | List retained agents and lifecycle states. |
-| `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
-| `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |
+| `subagent_send` | Send follow-up work and trigger a new turn on a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
+| `subagent_manage` | Use `action: "list"` to inspect agents, `"interrupt"` to retain an agent after aborting active work, or `"close"` to release it; interrupt/close accept optional `subtree`. |
+| `subagent_mailbox` | Use `action: "send"` for queue-only messages that do not start a turn, or `"read"` to read and optionally acknowledge unread messages. |
+
+The action schemas are flat for provider compatibility and reject parameters that belong to another action. For example:
+
+```json
+{
+  "action": "interrupt",
+  "agentId": "sa_example",
+  "subtree": true
+}
+```
+
+```json
+{
+  "action": "send",
+  "agentId": "sa_example",
+  "message": "Check the API compatibility note before finishing."
+}
+```
 
 Use the **Current-session agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. `/subagents:agents list|clear` remains the compatibility command for the same current-session operations. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
+
+### Migrating from the seven-tool lifecycle surface
+
+The five replaced names are intentionally not registered as aliases. Update explicit prompts and integrations as follows:
+
+| Previous call | Fixed-surface call |
+| --- | --- |
+| `subagent_list({ includeClosed })` | `subagent_manage({ action: "list", includeClosed })` |
+| `subagent_interrupt({ agentId, subtree })` | `subagent_manage({ action: "interrupt", agentId, subtree })` |
+| `subagent_close({ agentId, subtree })` | `subagent_manage({ action: "close", agentId, subtree })` |
+| `subagent_message({ agentId, message, ... })` | `subagent_mailbox({ action: "send", agentId, message, ... })` |
+| `subagent_messages({ agentId, acknowledge, limit })` | `subagent_mailbox({ action: "read", agentId, acknowledge, limit })` |
+
+Persisted agent and mailbox records require no migration. If an explicit prompt in a resumed conversation keeps requesting an old name, update it with the mapping above or start a fresh conversation. To roll back after an upgrade, pin the package version used before the upgrade; for this migration, use `pi install npm:@narumitw/pi-subagents@0.26.0`. The previous release can read the same state directory.
 
 A spawn can request a thinking level explicitly:
 
@@ -462,8 +491,10 @@ Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-su
 ```txt
 extensions/pi-subagents/
 ├── src/
-│   ├── subagents.ts  # Pi entrypoint and tool schema
-│   └── *.ts          # Package-local discovery, execution, rendering, and config modules
+│   ├── subagents.ts              # Pi entrypoint and blocking tool schema
+│   ├── stateful.ts               # Detached lifecycle registration and dispatch
+│   ├── stateful-tool-params.ts   # Consolidated action schemas and validation
+│   └── *.ts                      # Package-local discovery, execution, rendering, and config modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json

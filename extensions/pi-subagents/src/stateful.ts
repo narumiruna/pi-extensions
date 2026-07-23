@@ -25,6 +25,12 @@ import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
 import { AgentRegistry, type AgentTurnCompletion, type ManagedAgent } from "./registry.js";
 import { readSubagentSettings } from "./settings.js";
+import {
+	MailboxParamsSchema,
+	ManageParamsSchema,
+	validateMailboxParams,
+	validateManageParams,
+} from "./stateful-tool-params.js";
 import { SubprocessTransport } from "./subprocess-transport.js";
 import { WorkspaceManager } from "./workspace.js";
 
@@ -64,8 +70,8 @@ function createSpawnPromptGuidelines(completionDelivery: CompletionDelivery): st
 		"When subagent_spawn fits the completion-delivery policy, do not choose a blocking parallel subagent merely to keep delegation in the same turn.",
 		"Add another subagent_spawn only for truly independent work with safe workspace concurrency.",
 		noLocalWorkGuidance,
-		"Consume and synthesize available subagent_spawn completion messages; interrupt or close agents that are no longer needed.",
-		"subagent_spawn completion is delivered automatically. Do not poll with subagent_list or subagent_messages, repeatedly check progress, or duplicate the delegated work.",
+		'Consume and synthesize available subagent_spawn completion messages; use subagent_manage with action "interrupt" or "close" for agents that are no longer needed.',
+		'Completion from subagent_spawn is delivered automatically. Do not poll with subagent_manage action "list" or subagent_mailbox action "read", repeatedly check progress, or duplicate the delegated work.',
 	];
 }
 
@@ -89,6 +95,11 @@ export interface StatefulSubagentController {
 	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
 	listAgents(includeClosed?: boolean): ManagedAgent[];
 	clearAgents(): Promise<number>;
+}
+
+interface StatefulActionToolResult {
+	content: Array<{ type: "text"; text: string }>;
+	details: Record<string, unknown>;
 }
 
 export function registerStatefulSubagents(
@@ -156,6 +167,11 @@ export function registerStatefulSubagents(
 	const requireRegistry = () => {
 		if (!registry) throw new Error("Stateful subagents are not initialized for this session");
 		return registry;
+	};
+	const requireAgent = (agentId: string) => {
+		const agent = requireRegistry().get(agentId);
+		if (!agent) throw new Error(`Unknown subagent: ${agentId}`);
+		return agent;
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -374,7 +390,9 @@ export function registerStatefulSubagents(
 	pi.registerTool({
 		name: "subagent_send",
 		label: "Send Subagent Follow-up",
-		description: "Send a follow-up task to an idle, completed, interrupted, or failed subagent.",
+		description:
+			"Send follow-up work to an idle, completed, interrupted, or failed subagent and start a new turn. Use subagent_mailbox for queue-only messages.",
+		promptSnippet: "Start a new detached follow-up turn on a retained subagent",
 		parameters: Type.Object({
 			agentId: Type.String(),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
@@ -404,43 +422,98 @@ export function registerStatefulSubagents(
 	});
 
 	pi.registerTool({
-		name: "subagent_message",
-		label: "Message Subagent",
-		description: "Queue a bounded mailbox message without starting a turn.",
-		parameters: Type.Object({
-			agentId: Type.String(),
-			message: Type.String({ minLength: 1, maxLength: 16 * 1024 }),
-			senderId: Type.Optional(Type.String()),
-			deduplicationKey: Type.Optional(Type.String({ maxLength: 256 })),
-		}),
-		async execute(_id, params) {
-			const message = await requireRegistry().sendMessage(
-				params.agentId,
-				params.message,
-				params.senderId,
-				params.deduplicationKey,
-			);
-			return {
-				content: [{ type: "text", text: `Queued ${message.id} for ${message.recipientId}.` }],
-				details: { message },
-			};
+		name: "subagent_manage",
+		label: "Manage Subagents",
+		description:
+			"List retained subagents, interrupt active work while keeping an agent reusable, or close agents and release their resources.",
+		promptSnippet: "List or control retained detached subagents",
+		parameters: ManageParamsSchema,
+		async execute(_id, params): Promise<StatefulActionToolResult> {
+			const operation = validateManageParams(params);
+			if (operation.action === "list") {
+				const agents = requireRegistry().list(operation.includeClosed);
+				return {
+					content: [
+						{
+							type: "text",
+							text: agents.length ? agents.map(formatLine).join("\n") : "No stateful subagents.",
+						},
+					],
+					details: { agents: agents.map(summarizeAgent) },
+				};
+			}
+			const agentId = operation.agentId;
+			if (operation.action === "interrupt") {
+				if (operation.subtree) {
+					const agents = await requireRegistry().interruptTree(agentId);
+					return {
+						content: [{ type: "text", text: `Interrupted ${agents.length} active agent(s).` }],
+						details: {
+							agent: summarizeAgent(requireAgent(agentId)),
+							agents: agents.map(summarizeAgent),
+						},
+					};
+				}
+				const agent = await requireRegistry().interrupt(agentId);
+				return result(agent, `Interrupted ${agent.id}; it remains reusable.`);
+			}
+			const existing = requireRegistry().get(agentId);
+			if (existing?.state === "closed" && !operation.subtree) {
+				const pendingOwner = isolatedAgents.get(existing.id);
+				if (pendingOwner) await workspaceManager.cleanup(pendingOwner);
+				isolatedAgents.delete(existing.id);
+				return result(existing, `Closed ${existing.id}.`);
+			}
+			if (operation.subtree) {
+				let agents: ManagedAgent[];
+				try {
+					agents = await requireRegistry().closeTree(agentId);
+				} finally {
+					await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
+				}
+				return {
+					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
+					details: {
+						agent: summarizeAgent(requireAgent(agentId)),
+						agents: agents.map(summarizeAgent),
+					},
+				};
+			}
+			let agent: ManagedAgent;
+			try {
+				agent = await requireRegistry().close(agentId);
+			} finally {
+				await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
+			}
+			return result(agent, `Closed ${agent.id}.`);
 		},
 	});
 
 	pi.registerTool({
-		name: "subagent_messages",
-		label: "Read Subagent Messages",
-		description: "Read unread mailbox messages and optionally acknowledge them.",
-		parameters: Type.Object({
-			agentId: Type.String(),
-			acknowledge: Type.Optional(Type.Boolean({ default: true })),
-			limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20, default: 20 })),
-		}),
-		async execute(_id, params) {
+		name: "subagent_mailbox",
+		label: "Subagent Mailbox",
+		description:
+			"Queue a bounded message without starting a turn, or read unread mailbox messages and optionally acknowledge them.",
+		promptSnippet: "Send or read queue-only detached-subagent mailbox messages",
+		parameters: MailboxParamsSchema,
+		async execute(_id, params): Promise<StatefulActionToolResult> {
+			const operation = validateMailboxParams(params);
+			if (operation.action === "send") {
+				const message = await requireRegistry().sendMessage(
+					operation.agentId,
+					operation.message,
+					operation.senderId,
+					operation.deduplicationKey,
+				);
+				return {
+					content: [{ type: "text", text: `Queued ${message.id} for ${message.recipientId}.` }],
+					details: { message },
+				};
+			}
 			const messages = await requireRegistry().readMessages(
-				params.agentId,
-				params.acknowledge,
-				params.limit,
+				operation.agentId,
+				operation.acknowledge,
+				operation.limit,
 			);
 			const summaries = messages.map((message) => ({
 				...message,
@@ -455,94 +528,6 @@ export function registerStatefulSubagents(
 				content: [{ type: "text", text: truncateUtf8(text, DEFAULT_MAX_CONTEXT_BYTES).text }],
 				details: { messages: summaries },
 			};
-		},
-	});
-
-	pi.registerTool({
-		name: "subagent_list",
-		label: "List Subagents",
-		description: "List stateful subagents and lifecycle states.",
-		parameters: Type.Object({ includeClosed: Type.Optional(Type.Boolean({ default: false })) }),
-		async execute(_id, params) {
-			const agents = requireRegistry().list(params.includeClosed);
-			return {
-				content: [
-					{
-						type: "text",
-						text: agents.length ? agents.map(formatLine).join("\n") : "No stateful subagents.",
-					},
-				],
-				details: { agents: agents.map(summarizeAgent) },
-			};
-		},
-	});
-
-	pi.registerTool({
-		name: "subagent_interrupt",
-		label: "Interrupt Subagent",
-		description: "Interrupt the current turn while retaining the subagent for follow-up work.",
-		parameters: Type.Object({
-			agentId: Type.String(),
-			subtree: Type.Optional(Type.Boolean({ default: false })),
-		}),
-		async execute(_id, params) {
-			if (params.subtree) {
-				const agents = await requireRegistry().interruptTree(params.agentId);
-				const root = requireRegistry().get(params.agentId);
-				if (!root) throw new Error(`Unknown subagent: ${params.agentId}`);
-				return {
-					content: [{ type: "text", text: `Interrupted ${agents.length} active agent(s).` }],
-					details: {
-						agent: summarizeAgent(root),
-						agents: agents.map(summarizeAgent),
-					},
-				};
-			}
-			const agent = await requireRegistry().interrupt(params.agentId);
-			return result(agent, `Interrupted ${agent.id}; it remains reusable.`);
-		},
-	});
-
-	pi.registerTool({
-		name: "subagent_close",
-		label: "Close Subagent",
-		description: "Close a stateful subagent and remove it from retained persistence.",
-		parameters: Type.Object({
-			agentId: Type.String(),
-			subtree: Type.Optional(Type.Boolean({ default: false })),
-		}),
-		async execute(_id, params) {
-			const existing = requireRegistry().get(params.agentId);
-			if (existing?.state === "closed" && !params.subtree) {
-				const pendingOwner = isolatedAgents.get(existing.id);
-				if (pendingOwner) await workspaceManager.cleanup(pendingOwner);
-				isolatedAgents.delete(existing.id);
-				return result(existing, `Closed ${existing.id}.`);
-			}
-			if (params.subtree) {
-				let agents: ManagedAgent[];
-				try {
-					agents = await requireRegistry().closeTree(params.agentId);
-				} finally {
-					await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
-				}
-				const root = requireRegistry().get(params.agentId);
-				if (!root) throw new Error(`Unknown subagent: ${params.agentId}`);
-				return {
-					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
-					details: {
-						agent: summarizeAgent(root),
-						agents: agents.map(summarizeAgent),
-					},
-				};
-			}
-			let agent: ManagedAgent;
-			try {
-				agent = await requireRegistry().close(params.agentId);
-			} finally {
-				await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
-			}
-			return result(agent, `Closed ${agent.id}.`);
 		},
 	});
 

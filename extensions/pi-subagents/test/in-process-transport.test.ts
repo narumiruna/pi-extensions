@@ -115,6 +115,15 @@ class FakeWorkspaceManager extends WorkspaceManager {
 	override async cleanupAll(): Promise<void> {}
 }
 
+class FailOnceWorkspaceManager extends FakeWorkspaceManager {
+	cleanupAttempts = 0;
+
+	override async cleanup(_ownerId: string): Promise<void> {
+		this.cleanupAttempts++;
+		if (this.cleanupAttempts === 1) throw new Error("workspace cleanup failed");
+	}
+}
+
 class FakeChildSession implements ChildSession {
 	readonly sessionId = "child-session";
 	readonly prompts: string[] = [];
@@ -548,7 +557,9 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 				content: Array<{ text: string }>;
 				details: {
 					agent: { id: string; state: string; thinkingLevel?: string };
-					agents?: Array<{ id: string; thinkingLevel?: string }>;
+					agents?: Array<{ id: string; state?: string; thinkingLevel?: string }>;
+					message?: { id: string };
+					messages?: unknown[];
 				};
 			}>;
 		};
@@ -581,12 +592,12 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		assert.match(spawned.content[0]?.text ?? "", /do not poll/i);
 		assert.deepEqual(child.prompts, ["first"]);
 		assert.equal(created[0].agent.thinkingLevel, "high");
-		const listedAfterSpawn = await execute("subagent_list", {});
+		const listedAfterSpawn = await execute("subagent_manage", { action: "list" });
 		assert.equal(
 			listedAfterSpawn.details.agents?.find((agent) => agent.id === agentId)?.thinkingLevel,
 			"high",
 		);
-		await execute("subagent_interrupt", { agentId });
+		await execute("subagent_manage", { action: "interrupt", agentId });
 		assert.deepEqual(controller.getRuntimeStatus(), {
 			enabled: true,
 			initialized: true,
@@ -602,13 +613,46 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		await waitForCompletionCount(1);
 		mock.events.get("agent_start")?.[0]?.({}, context.ctx);
 
+		const queued = await execute("subagent_mailbox", {
+			action: "send",
+			agentId,
+			message: "queued guidance",
+			deduplicationKey: "guidance",
+		});
+		const duplicate = await execute("subagent_mailbox", {
+			action: "send",
+			agentId,
+			message: "queued guidance",
+			deduplicationKey: "guidance",
+		});
+		assert.equal(duplicate.details.message?.id, queued.details.message?.id);
+		const unread = await execute("subagent_mailbox", {
+			action: "read",
+			agentId,
+			acknowledge: false,
+			limit: 1,
+		});
+		assert.match(unread.content[0]?.text ?? "", /queued guidance/);
+		assert.equal(unread.details.messages?.length, 1);
+		const acknowledged = await execute("subagent_mailbox", {
+			action: "read",
+			agentId,
+			acknowledge: true,
+		});
+		assert.equal(acknowledged.details.messages?.length, 1);
+		const emptyMailbox = await execute("subagent_mailbox", {
+			action: "read",
+			agentId,
+		});
+		assert.equal(emptyMailbox.content[0]?.text, "No unread messages.");
+
 		await execute("subagent_send", { agentId, task: "second" });
 		await waitForCompletionCount(2);
 		mock.events.get("agent_start")?.[0]?.({}, context.ctx);
 
 		child.waitForNextAbort();
 		await execute("subagent_send", { agentId, task: "interrupt me" });
-		await execute("subagent_interrupt", { agentId });
+		await execute("subagent_manage", { action: "interrupt", agentId });
 		await waitForCompletionCount(3);
 		mock.events.get("agent_start")?.[0]?.({}, context.ctx);
 
@@ -641,6 +685,63 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 			/Payload:\ndone:first/,
 		);
 		assert.equal(mock.sentUserMessages.length, 0, "completion uses a custom message wake");
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	} finally {
+		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalDir;
+	}
+});
+
+test("consolidated close reports cleanup failure and remains safely repeatable", async () => {
+	const originalDir = process.env.PI_CODING_AGENT_DIR;
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-cleanup-tool-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	writeFileSync(
+		path.join(agentDir, "pi-subagents.json"),
+		JSON.stringify({ stateful: { transport: "in-process", persistence: false } }),
+	);
+	try {
+		const manager = new FailOnceWorkspaceManager();
+		const mock = createMockPi();
+		registerStatefulSubagents(mock.pi, {
+			createInProcessSession: async () => new FakeChildSession(),
+			workspaceManager: manager,
+		});
+		const context = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const execute = async (name: string, params: Record<string, unknown>) => {
+			const tool = mock.tools.find((candidate) => candidate.name === name) as {
+				execute: (...args: unknown[]) => Promise<unknown>;
+			};
+			return tool.execute(
+				"call",
+				params,
+				new AbortController().signal,
+				undefined,
+				context.ctx,
+			) as Promise<{
+				details: {
+					agent?: { id: string; state: string };
+					agents?: Array<{ id: string; state: string }>;
+				};
+			}>;
+		};
+		const spawned = await execute("subagent_spawn", {
+			agent: "scout",
+			task: "complete before close",
+			workspaceMode: "worktree",
+		});
+		const agentId = spawned.details.agent?.id;
+		assert.ok(agentId);
+		await assert.rejects(
+			() => execute("subagent_manage", { action: "close", agentId, subtree: true }),
+			/workspace cleanup failed/,
+		);
+		const listed = await execute("subagent_manage", { action: "list", includeClosed: true });
+		assert.equal(listed.details.agents?.find((agent) => agent.id === agentId)?.state, "closed");
+		const closedAgain = await execute("subagent_manage", { action: "close", agentId });
+		assert.equal(closedAgain.details.agent?.state, "closed");
+		assert.equal(manager.cleanupAttempts, 2);
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	} finally {
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -703,7 +804,7 @@ test("session shutdown closes completion delivery before delayed isolated-agent 
 		});
 		for (let attempt = 0; attempt < 50; attempt++) {
 			await Promise.resolve();
-			const listed = await execute("subagent_list", {});
+			const listed = await execute("subagent_manage", { action: "list" });
 			const firstState = listed.details.agents?.find(
 				(agent) => agent.id === first.details.agent?.id,
 			)?.state;
@@ -712,7 +813,7 @@ test("session shutdown closes completion delivery before delayed isolated-agent 
 			)?.state;
 			if (firstState === "completed" && secondState === "running") break;
 		}
-		const listed = await execute("subagent_list", {});
+		const listed = await execute("subagent_manage", { action: "list" });
 		assert.equal(
 			listed.details.agents?.find((agent) => agent.id === first.details.agent?.id)?.state,
 			"completed",

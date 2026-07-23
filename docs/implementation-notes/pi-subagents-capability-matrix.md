@@ -14,9 +14,10 @@ Updated: 2026-07-23
 | Detached addressable agents | Implemented, default-on | `subagent_spawn` returns immediately; bounded completions use default non-triggering delivery or opt-in batched `auto-resume`; disable with `stateful.enabled: false` |
 | Transport abstraction and fallback | Implemented | `transport.ts`, default `subprocess-transport.ts`, opt-in public-SDK `in-process-transport.ts` |
 | Hierarchical ownership and subtree lifecycle | Implemented | parent/root/depth/children metadata and child-first interrupt/close in `registry.ts` |
-| Bounded asynchronous mailbox | Implemented | message/read/ack tools, deduplication, completion delivery, and persistence tests |
+| Bounded asynchronous mailbox | Implemented | `subagent_mailbox` send/read actions, acknowledgement, deduplication, completion delivery, and persistence tests |
 | Shared-write guard and disposable worktrees | Implemented, opt-in | `stateful.ts`, `workspace.ts`; clean-repository and cleanup tests |
-| Follow-up, mailbox, list, interrupt, close | Implemented, default-on | seven non-waiting lifecycle tools in `stateful.ts`; registry and completion-delivery tests |
+| Fixed five-tool delegation surface | Implemented, default-on | blocking `subagent` plus four non-waiting stateful tools; `stateful-tool-params.ts`, orchestration/in-process contract tests |
+| Follow-up, mailbox, list, interrupt, close | Implemented, default-on | `subagent_send`, `subagent_manage`, and `subagent_mailbox` action dispatch in `stateful.ts`; registry and completion-delivery tests |
 | Separate active and retained capacity | Implemented | FIFO queue and limits in `registry.ts`; capacity/fairness test |
 | Interactive settings and inspection | Implemented | Bare `/subagents` is the current-session-first manager; `settings|status|help` remain direct routes, with compatibility `/subagents:config` and `/subagents:agents list|clear` |
 | Native transcript switching | Core-blocked | Extension APIs expose custom entries/UI but no supported child transcript/session switch handle |

@@ -64,6 +64,10 @@ test("subagents registers consistent blocking guidance and configuration command
 	const mock = createMockPi();
 	subagents(mock.pi);
 
+	assert.deepEqual(
+		mock.tools.map((candidate) => candidate.name),
+		["subagent", "subagent_spawn", "subagent_send", "subagent_manage", "subagent_mailbox"],
+	);
 	const tool = mock.tools[0];
 	assert.equal(tool?.name, "subagent");
 	assert.equal(tool?.label, "Blocking Subagent");
