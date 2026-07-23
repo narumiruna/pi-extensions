@@ -12,7 +12,9 @@ The Pi guidance was last reviewed against the latest published
 - [TUI components](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/tui.md)
 
 Review this section when the repository updates its Pi dependencies or latest-release CI target.
-The official Pi documentation wins if this summary becomes stale.
+The official documentation is authoritative for the latest Pi behavior, while the repository's
+installed typings and tested runtime determine which APIs implementation code may rely on until its
+Pi dependencies are updated.
 
 ## Authority and adoption
 
@@ -135,15 +137,19 @@ lines for responsibility-based decomposition rather than mechanical splitting.
 
 A command's default shape depends on its product role:
 
-- A multi-action extension **SHOULD** expose one primary slash command. Invoking it without arguments
-  should open a current-state menu, while direct subcommands remain available for predictable and
-  non-interactive use.
-- A text-first command such as `/btw <question>`, a single-purpose action, or a passive extension MAY
-  use a different shape or expose no command.
+- A multi-action manager extension **SHOULD** expose one primary slash command whose no-argument form
+  opens a current-state menu. Do not mirror menu actions into textual subcommands by default.
+- Add command arguments or subcommands only for a concrete need: the text is the primary payload,
+  such as `/btw <question>` or `/goal <goal>`; a supported non-TUI, RPC, or automation workflow needs
+  a deterministic route; an existing public interface requires compatibility; or the command is a
+  frequent, single, unambiguous primary action.
+- A passive extension MAY expose no command. A menu-only manager MAY reject all arguments explicitly.
 - The primary command **SHOULD** usually derive from the unscoped package name by removing `pi-`.
   Preserve an established or clearer product name when compatibility or meaning outweighs symmetry.
-- Known subcommands, modes, and flags **SHOULD** provide `getArgumentCompletions`. Unknown arguments
-  should produce a clear warning and usage guidance rather than silently selecting another action.
+- **MUST:** Treat every accepted argument or subcommand as a public interface: document it, provide
+  `getArgumentCompletions` for known values, reject unknown input clearly, preserve applicable safety
+  checks, and test its supported TUI and non-TUI behavior. **Verification:** `Test` of direct command
+  routes plus `Review` of documentation, completion, compatibility, and safety behavior.
 - A main menu **SHOULD** show current state and the most relevant next actions. Prioritize current
   session context and label cross-provider, cross-workspace, destructive, or externally visible
   effects explicitly.
@@ -169,9 +175,10 @@ trust, validation, persistence, migration, secrets, interactive UI, and settings
 - **MUST:** Do not register a generic `/settings` command that competes with Pi's built-in command.
   **Verification:** `Review` of registered command names.
 
-A configurable extension **SHOULD** provide `/<command> settings`, `/<command> status`, and
-`/<command> help`. A small no-argument main menu may link to those direct entrypoints. Keep `config`
-only as a compatibility alias or when it describes a distinct setup workflow.
+A configurable manager extension **SHOULD** expose Settings, Status, and Help as actions in its
+no-argument menu. It MAY add documented direct routes for those actions only when one of the concrete
+needs in the command section applies. Keep `config` only as a compatibility alias or when it describes
+a distinct setup workflow.
 
 ### Status and persistent UI
 
@@ -211,7 +218,8 @@ fragile regular expressions. Until then, label the real verification method hone
 - [ ] Add the thin `src/index.ts` forwarder and canonical `pi.extensions` manifest entry.
 - [ ] Separate factory registration from session-owned startup and idempotent shutdown cleanup.
 - [ ] Choose the primary command and no-argument behavior from the extension's product role; add
-      completions for known arguments and a safe non-TUI path.
+      direct routes only for a concrete need, then document, complete, reject, and test them as public
+      interfaces.
 - [ ] Follow `docs/extension-settings.md` for every user or project setting.
 - [ ] Bound tool output, cancellation, state persistence, and file mutation where applicable.
 - [ ] Document installation, behavior, settings, security, limitations, and source responsibilities.

@@ -26,7 +26,6 @@
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.
 - Symptom: extension actions from `agent_end` may not trigger a new turn. Cause: follow-ups can miss the late drain point. Fix: on Pi 0.80.6+, record intent in `agent_end` and dispatch from `agent_settled`; standalone manual compaction does not emit `agent_settled`, so use a narrowly idle-gated `session_compact` fallback when needed.
 - Detached orchestration recovery is more reliable when `agent_end` queues a `deliverAs: "followUp"` prompt and `agent_settled` retries retained intent if no pending message remains; settled-only `sendUserMessage` can be accepted yet lose the print-mode start race.
-- Extension statusline entries should be activity-based: only show an extension in status when it is actively running, retrying, or needs attention; avoid permanent “configured/ready/on” statuses.
 - Symptom: concurrent tools sharing one extension status key can clear or mislabel a still-running sibling. Cause: each call unconditionally owns set/clear. Fix: track active statuses per UI/session, restore the latest remaining status, and invalidate the tracker on session teardown.
 - Run Biome `--write` only on intended files during bounded work; formatting whole extension trees can rewrite unrelated source that is currently outside the root's normal ignore-aware formatting path.
 - Root Biome checks reject nested Git worktrees that contain another root `biome.json`; create worktrees outside the repository or locally ignore their parent directory during verification.
@@ -103,25 +102,14 @@
 
 ### README
 
-- New extension README files should mirror the existing style: emoji title, npm/Pi/license badges, Features, Install, Usage/What it does, Package layout, Keywords, and License.
-
-1. Write extension READMEs in English.
-2. Prefer practical documentation over marketing copy: explain capabilities, then installation, then commands, tools, configuration, or workflow.
-3. Document the applicable install paths: `pi install npm:@narumitw/...`, temporary `pi -e npm:@narumitw/...`, and local checkout `pi -e ./extensions/...`.
-4. Keep content easy to scan with short paragraphs, feature bullets, tables when useful, inline code, and language-tagged fenced blocks.
-5. State operational behavior clearly, including relevant defaults, precedence, persistence, lifecycle, failures, security, privacy, and limitations.
-6. End with a package layout that identifies `src/*.ts` modules and briefly explains their responsibilities.
+- Write extension READMEs in English and mirror the existing visual style, including the emoji title and npm/Pi/license badges.
 
 ### General
 
 - Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.
-- Prefer validating extensions against the latest Pi release only; do not maintain compatibility matrices for older Pi versions.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.
 - Keep a predecessor extension active while its successor soaks; move it to `deprecated/` only after an explicit follow-up decision.
 - Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
-- Prefer status-producing extensions to publish text-only status values; keep extension icons in pi-statusline defaults/settings so styling and suppression stay centralized.
 - Keep `just` install recipes resilient by verifying registry visibility and falling back only when it solves the current install path.
-- New slash-command extensions should include argument autocomplete when the command has known subcommands, modes, or flags.
-- Prefer Pi extension manager commands to use one interactive slash command that shows current state plus next actions; prioritize the current session context, make cross-context changes explicit, and avoid hidden argument-based fallbacks unless non-interactive support is a real product requirement.
 - Earendil Works acquired the Pi tooling from mariozechner; prefer `@earendil-works/*` Pi packages because `@mariozechner/pi-*` packages are deprecated and should not be used for new extension work.

@@ -36,13 +36,10 @@ Call user-editable preferences **settings** in new code and UI. Use names such a
 renaming would break compatibility or when configuration describes a distinct connection or setup
 workflow.
 
-An extension with user-facing settings should expose these subcommands from its primary command:
-
-```text
-/<command> settings    Open the interactive settings screen
-/<command> status      Show effective values, sources, and settings paths
-/<command> help        Show commands and manual configuration instructions
-```
+An extension with user-facing settings should expose Settings, Status, and Help as actions in its
+primary command's no-argument menu. Add documented direct subcommands only for a concrete payload,
+supported non-TUI workflow, compatibility requirement, or frequent unambiguous primary action, as
+defined in [`docs/extension-conventions.md`](extension-conventions.md).
 
 `config` may remain as a documented compatibility alias. Do not register a generic `/settings`
 command that competes with Pi's built-in command.
@@ -52,7 +49,7 @@ command that competes with Pi's built-in command.
 Extensions with multiple directly editable settings should provide a screen matching Pi's built-in
 `/settings` interaction pattern. In TUI mode:
 
-- Open `/<command> settings` with `ctx.ui.custom()`.
+- Open the Settings menu action with `ctx.ui.custom()`.
 - Use `SettingsList` from `@earendil-works/pi-tui` with `getSettingsListTheme()` from
   `@earendil-works/pi-coding-agent`; do not rebuild an equivalent selector or reopen
   `ctx.ui.select()` after every toggle, because doing so resets the cursor.
@@ -70,8 +67,9 @@ Extensions with multiple directly editable settings should provide a screen matc
   forcing them into a value cycle.
 - Use the callback-provided theme and keybindings, and request a render after state changes.
 
-A primary extension command invoked without arguments may open a small main menu containing
-Settings, Status, and Help. `/<command> settings` must remain the direct, predictable entrypoint.
+A primary extension command invoked without arguments should open a small main menu containing
+Settings, Status, and Help. If the extension has a justified direct settings route, it should open the
+same settings screen rather than a second implementation.
 
 Minimal structure:
 
@@ -185,10 +183,11 @@ created canonical file, and remove the legacy file only after confirming it did 
 
 ## Non-TUI behavior
 
-`ctx.ui.custom()` is TUI-only. In print, JSON, and RPC modes, `/<command> settings` must not attempt
-to open the interactive screen. RPC mode may use `ctx.ui.notify()` to provide the active settings
-path. Do not write ad hoc output that would corrupt JSON protocol output. Keep settings paths and
-manual instructions available through `status`, `help`, and the package README.
+`ctx.ui.custom()` is TUI-only. In print, JSON, and RPC modes, the Settings action and any justified
+direct settings route must not attempt to open the interactive screen. RPC mode may use
+`ctx.ui.notify()` to provide the active settings path. Do not write ad hoc output that would corrupt
+JSON protocol output. Keep settings paths and manual instructions available through the package
+README and any supported Status or Help route.
 
 ## Verification
 
