@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
+import type { SubagentThinkingLevel } from "./agents.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
-import {
-	type AgentTurnRunner,
-	normalizeTransport,
-	type SubagentTransport,
-} from "./transport.js";
+import { type AgentTurnRunner, normalizeTransport, type SubagentTransport } from "./transport.js";
 
 export type AgentLifecycleState =
 	| "starting"
@@ -46,6 +43,7 @@ export interface ManagedAgent {
 	updatedAt: number;
 	cwd: string;
 	agentScope?: "user" | "project" | "both";
+	thinkingLevel?: SubagentThinkingLevel;
 	currentTask?: string;
 	history: AgentTurn[];
 	error?: string;
@@ -113,7 +111,11 @@ export class AgentRegistry {
 	private readonly agents = new Map<string, ManagedAgent>();
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly running = new Map<string, Promise<ManagedAgent>>();
-	private readonly queue: Array<{ agent: ManagedAgent; task: string; resolve: (agent: ManagedAgent) => void }> = [];
+	private readonly queue: Array<{
+		agent: ManagedAgent;
+		task: string;
+		resolve: (agent: ManagedAgent) => void;
+	}> = [];
 	private changeQueue: Promise<void> = Promise.resolve();
 	private readonly maxAgents: number;
 	private readonly maxActiveTurns: number;
@@ -128,7 +130,10 @@ export class AgentRegistry {
 	private readonly transport: SubagentTransport;
 	private readonly now: () => number;
 
-	constructor(transport: SubagentTransport | AgentTurnRunner, private readonly options: AgentRegistryOptions = {}) {
+	constructor(
+		transport: SubagentTransport | AgentTurnRunner,
+		private readonly options: AgentRegistryOptions = {},
+	) {
 		this.transport = normalizeTransport(transport);
 		this.maxAgents = positiveInteger(options.maxAgents ?? 16, "maxAgents");
 		this.maxActiveTurns = positiveInteger(options.maxActiveTurns ?? 4, "maxActiveTurns");
@@ -210,6 +215,7 @@ export class AgentRegistry {
 		task: string;
 		cwd: string;
 		agentScope?: "user" | "project" | "both";
+		thinkingLevel?: SubagentThinkingLevel;
 		parentId?: string;
 		context?: string;
 		contextSourceIds?: string[];
@@ -250,6 +256,7 @@ export class AgentRegistry {
 			updatedAt: now,
 			cwd: input.cwd,
 			agentScope: input.agentScope,
+			thinkingLevel: input.thinkingLevel,
 			currentTask: task,
 			history: [],
 			mailbox: [],
@@ -293,10 +300,12 @@ export class AgentRegistry {
 			throw new Error("Subagent mailbox deduplication keys cannot exceed 256 characters");
 		}
 		const recipient = this.require(recipientId);
-		if (recipient.state === "closed") throw new Error(`Cannot message closed agent ${recipient.id}`);
+		if (recipient.state === "closed")
+			throw new Error(`Cannot message closed agent ${recipient.id}`);
 		if (senderId !== "root") {
 			const sender = this.require(senderId);
-			if (sender.state === "closed") throw new Error(`Closed agent ${sender.id} cannot send messages`);
+			if (sender.state === "closed")
+				throw new Error(`Closed agent ${sender.id} cannot send messages`);
 			if (sender.rootId !== recipient.rootId) {
 				throw new Error("Subagent mailbox messages cannot cross agent trees");
 			}
@@ -367,7 +376,8 @@ export class AgentRegistry {
 
 	async interrupt(id: string): Promise<ManagedAgent> {
 		const agent = this.require(id);
-		if (agent.state !== "running" && agent.state !== "starting") throw new Error(`Agent ${id} is not running`);
+		if (agent.state !== "running" && agent.state !== "starting")
+			throw new Error(`Agent ${id} is not running`);
 		if (agent.state === "starting") {
 			const index = this.queue.findIndex((entry) => entry.agent.id === id);
 			if (index >= 0) {
@@ -539,7 +549,11 @@ export class AgentRegistry {
 		}
 	}
 
-	private runQueuedTurn(agent: ManagedAgent, task: string, resolveQueued: (agent: ManagedAgent) => void): void {
+	private runQueuedTurn(
+		agent: ManagedAgent,
+		task: string,
+		resolveQueued: (agent: ManagedAgent) => void,
+	): void {
 		const controller = new AbortController();
 		this.controllers.set(agent.id, controller);
 		agent.state = "running";
@@ -549,7 +563,8 @@ export class AgentRegistry {
 		let completionContent = "";
 		let completionOutput = "";
 		let completionError: string | undefined;
-		void this.transport.runTurn(this.copy(agent), task, controller.signal)
+		void this.transport
+			.runTurn(this.copy(agent), task, controller.signal)
 			.then(async (outcome) => {
 				const output = truncateUtf8(outcome.output, this.maxTurnOutputBytes).text;
 				const error = outcome.error
@@ -564,7 +579,11 @@ export class AgentRegistry {
 					truncated: outcome.truncated,
 				});
 				agent.history = agent.history.slice(-this.maxHistoryTurns);
-				agent.state = outcome.aborted ? "interrupted" : outcome.exitCode === 0 ? "completed" : "failed";
+				agent.state = outcome.aborted
+					? "interrupted"
+					: outcome.exitCode === 0
+						? "completed"
+						: "failed";
 				agent.error = error;
 				agent.policy = outcome.policy;
 				completionOutput = output;
@@ -623,8 +642,7 @@ export class AgentRegistry {
 	): AgentMailboxMessage {
 		if (deduplicationKey) {
 			const existing = recipient.mailbox.find(
-				(message) =>
-					message.deduplicationKey === deduplicationKey && message.senderId === senderId,
+				(message) => message.deduplicationKey === deduplicationKey && message.senderId === senderId,
 			);
 			if (existing) return existing;
 		}

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { isThinkingLevel } from "./agents.js";
 import { redactPrivateText } from "./context.js";
 import type { ManagedAgent } from "./registry.js";
 
@@ -165,8 +166,10 @@ function isStoredState(value: unknown): value is StoredState {
 			typeof record.updatedAt === "number" &&
 			Number.isFinite(record.updatedAt) &&
 			(record.parentId === undefined || typeof record.parentId === "string") &&
+			(record.thinkingLevel === undefined || isThinkingLevel(record.thinkingLevel)) &&
 			(record.children === undefined ||
-				(Array.isArray(record.children) && record.children.every((id) => typeof id === "string"))) &&
+				(Array.isArray(record.children) &&
+					record.children.every((id) => typeof id === "string"))) &&
 			Array.isArray(record.history) &&
 			record.history.every(isAgentTurn) &&
 			(record.mailbox === undefined ||

@@ -204,6 +204,7 @@ test("InProcessTransport reuses one child session and sends only each current ta
 		return child;
 	});
 	const agent = managedAgent({
+		thinkingLevel: "high",
 		context: "parent context",
 		history: [
 			{ task: "old task", output: "old output", startedAt: 1, completedAt: 2, exitCode: 0 },
@@ -221,6 +222,7 @@ test("InProcessTransport reuses one child session and sends only each current ta
 	);
 	assert.deepEqual(child.prompts, ["first", "second"]);
 	assert.equal(first.output, "done:first");
+	assert.deepEqual(first.policy?.overridden, ["thinkingLevel", "tools"]);
 	assert.equal(second.output, "done:second");
 	await transport.shutdown();
 	assert.equal(child.disposals, 1);
@@ -544,7 +546,10 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 				context.ctx,
 			) as Promise<{
 				content: Array<{ text: string }>;
-				details: { agent: { id: string; state: string } };
+				details: {
+					agent: { id: string; state: string; thinkingLevel?: string };
+					agents?: Array<{ id: string; thinkingLevel?: string }>;
+				};
 			}>;
 		};
 		const waitForCompletionCount = async (expected: number) => {
@@ -555,13 +560,24 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		};
 
 		child.waitForNextAbort();
-		const spawned = await execute("subagent_spawn", { agent: "scout", task: "first" });
+		const spawned = await execute("subagent_spawn", {
+			agent: "scout",
+			task: "first",
+			thinkingLevel: "high",
+		});
 		const agentId = spawned.details.agent.id;
 		assert.match(spawned.details.agent.state, /starting|running/);
+		assert.equal(spawned.details.agent.thinkingLevel, "high");
 		assert.match(spawned.content[0]?.text ?? "", /useful non-overlapping work immediately/i);
 		assert.match(spawned.content[0]?.text ?? "", /end the response/i);
 		assert.match(spawned.content[0]?.text ?? "", /do not poll/i);
 		assert.deepEqual(child.prompts, ["first"]);
+		assert.equal(created[0].agent.thinkingLevel, "high");
+		const listedAfterSpawn = await execute("subagent_list", {});
+		assert.equal(
+			listedAfterSpawn.details.agents?.find((agent) => agent.id === agentId)?.thinkingLevel,
+			"high",
+		);
 		await execute("subagent_interrupt", { agentId });
 		await new Promise((resolve) => setTimeout(resolve, 15));
 		assert.equal(mock.sentMessages.length, 0, "active root completion waits for settlement");
@@ -756,6 +772,28 @@ test("public SDK child-session adapter completes a deterministic in-memory turn 
 	assert.equal(explicit.model.provider, model.provider);
 	assert.equal(explicit.model.id, model.id);
 	assert.equal(explicit.thinkingLevel, "max");
+	const agentDefault = await resolveChildModel({
+		agent: managedAgent(),
+		agentConfig: agentConfig({
+			model: "child-smoke/child-model:max",
+			thinkingLevel: "high",
+		}),
+		history: [],
+		modelRegistry,
+		parentRuntime: { model: undefined, thinkingLevel: "medium" },
+	});
+	assert.equal(agentDefault.thinkingLevel, "high");
+	const spawnOverride = await resolveChildModel({
+		agent: managedAgent({ thinkingLevel: "low" }),
+		agentConfig: agentConfig({
+			model: "child-smoke/child-model:max",
+			thinkingLevel: "high",
+		}),
+		history: [],
+		modelRegistry,
+		parentRuntime: { model: undefined, thinkingLevel: "medium" },
+	});
+	assert.equal(spawnOverride.thinkingLevel, "low");
 	const childCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-turn-"));
 	const child = await createSdkChildSession({
 		agent: managedAgent({ cwd: childCwd }),

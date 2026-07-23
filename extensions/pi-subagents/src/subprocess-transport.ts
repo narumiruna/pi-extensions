@@ -1,18 +1,19 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { discoverAgents } from "./agents.js";
+import { type AgentConfig, discoverAgents, type SubagentThinkingLevel } from "./agents.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 import { getResultFinalOutput, runSingleAgent, type SubagentDetails } from "./runner.js";
 import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
-import {
-	buildStatefulTurnPrompt,
-	resolveStatefulTurnTimeout,
-} from "./stateful-prompt.js";
+import { buildStatefulTurnPrompt, resolveStatefulTurnTimeout } from "./stateful-prompt.js";
 import type { SubagentTransport } from "./transport.js";
+
+export function resolveStatefulSubprocessThinkingLevel(
+	agents: readonly Pick<AgentConfig, "name" | "thinkingLevel">[],
+	record: Pick<ManagedAgent, "agent" | "thinkingLevel">,
+): SubagentThinkingLevel | undefined {
+	return resolveSubagentThinkingLevel(agents, record.agent, record.thinkingLevel);
+}
 
 export class SubprocessTransport implements SubagentTransport {
 	readonly kind = "subprocess" as const;
-
-	constructor(private readonly ctx: ExtensionContext) {}
 
 	async runTurn(record: ManagedAgent, task: string, signal: AbortSignal): Promise<TurnOutcome> {
 		const settings = readSubagentSettings();
@@ -33,7 +34,7 @@ export class SubprocessTransport implements SubagentTransport {
 			undefined,
 			undefined,
 			signal,
-			resolveSubagentThinkingLevel(discovery.agents, record.agent),
+			resolveStatefulSubprocessThinkingLevel(discovery.agents, record),
 			resolveStatefulTurnTimeout(agent),
 			undefined,
 			makeDetails,

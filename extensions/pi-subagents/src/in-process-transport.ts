@@ -139,6 +139,7 @@ export class InProcessTransport implements SubagentTransport {
 		const final = latestAssistant(record.session.messages.slice(startingMessageCount));
 		const output = truncateUtf8(final.output || record.lastOutput, DEFAULT_MAX_OUTPUT_BYTES);
 		const truncated = output.truncated || agent.contextTruncated;
+		const policy = inProcessPolicy(agentConfig, agent);
 
 		switch (settlement.kind) {
 			case "completed":
@@ -148,21 +149,21 @@ export class InProcessTransport implements SubagentTransport {
 						exitCode: 1,
 						truncated,
 						error: final.error || "In-process subagent returned an error",
-						policy: inProcessPolicy(agentConfig),
+						policy,
 					};
 				}
 				if (final.stopReason === "aborted") {
 					return {
 						...interruptedOutcome(output.text),
 						truncated,
-						policy: inProcessPolicy(agentConfig),
+						policy,
 					};
 				}
 				return {
 					output: output.text,
 					exitCode: 0,
 					truncated,
-					policy: inProcessPolicy(agentConfig),
+					policy,
 				};
 			case "failed":
 				return {
@@ -170,7 +171,7 @@ export class InProcessTransport implements SubagentTransport {
 					exitCode: 1,
 					truncated,
 					error: errorMessage(settlement.error),
-					policy: inProcessPolicy(agentConfig),
+					policy,
 				};
 			case "timeout":
 				return {
@@ -178,13 +179,13 @@ export class InProcessTransport implements SubagentTransport {
 					exitCode: 124,
 					truncated,
 					error: `In-process subagent timed out after ${timeoutMs}ms`,
-					policy: inProcessPolicy(agentConfig),
+					policy,
 				};
 			case "aborted":
 				return {
 					...interruptedOutcome(output.text),
 					truncated,
-					policy: inProcessPolicy(agentConfig),
+					policy,
 				};
 		}
 	}
@@ -448,6 +449,7 @@ export async function resolveChildModel(options: ChildSessionCreateOptions): Pro
 	return {
 		model,
 		thinkingLevel:
+			options.agent.thinkingLevel ??
 			options.agentConfig.thinkingLevel ??
 			modelThinkingLevel ??
 			options.parentRuntime.thinkingLevel,
@@ -622,13 +624,16 @@ function interruptedOutcome(output: string): TurnOutcome {
 	return { output, exitCode: 130, aborted: true, error: "In-process subagent was aborted" };
 }
 
-function inProcessPolicy(agent: AgentConfig): NonNullable<TurnOutcome["policy"]> {
+function inProcessPolicy(
+	agentConfig: AgentConfig,
+	managedAgent: ManagedAgent,
+): NonNullable<TurnOutcome["policy"]> {
 	return {
 		inherited: ["modelRegistry", "authentication", "cwdResources"],
 		overridden: [
-			...(agent.model ? ["model"] : []),
-			...(agent.thinkingLevel ? ["thinkingLevel"] : []),
-			...(agent.tools ? ["tools"] : []),
+			...(agentConfig.model ? ["model"] : []),
+			...(managedAgent.thinkingLevel || agentConfig.thinkingLevel ? ["thinkingLevel"] : []),
+			...(agentConfig.tools ? ["tools"] : []),
 		],
 		unsupported: ["approvalPolicy", "sandboxProfile", "providerHeaders", "extensionState"],
 	};
