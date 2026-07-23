@@ -120,11 +120,12 @@ export function worktreeForBranch(
 	return records.find((record) => record.branchRef === branchRef);
 }
 
-export function defaultWorktreePath(mainWorktreePath: string, branch: string): string {
-	return resolve(
-		dirname(mainWorktreePath),
-		`${basename(mainWorktreePath)}-${branch.replaceAll("/", "-")}`,
-	);
+export function defaultWorktreePath(
+	mainWorktreePath: string,
+	branch: string,
+	worktreeRoot: string,
+): string {
+	return resolve(worktreeRoot, basename(mainWorktreePath), branch.replaceAll("/", "-"));
 }
 
 export function buildAddArguments(input: AddArguments): string[] {

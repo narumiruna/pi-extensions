@@ -76,10 +76,14 @@ test("parseWorktreePorcelain rejects malformed fields before a worktree record",
 	assert.throws(() => parseWorktreePorcelain("worktree\0"), /missing path/i);
 });
 
-test("defaultWorktreePath derives a sibling path and normalizes branch slashes", () => {
+test("defaultWorktreePath derives a root/project/branch path and normalizes branch slashes", () => {
 	assert.equal(
-		defaultWorktreePath("/home/me/project", "feat/login"),
-		join("/home/me", "project-feat-login"),
+		defaultWorktreePath("/home/me/project", "feat/login", "/home/me/.worktrees"),
+		join("/home/me", ".worktrees", "project", "feat-login"),
+	);
+	assert.equal(
+		defaultWorktreePath("/home/me/project", "feat-login", "/home/me/.worktrees"),
+		join("/home/me", ".worktrees", "project", "feat-login"),
 	);
 });
 
