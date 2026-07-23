@@ -77,6 +77,10 @@ test("Git service creates, inventories, and removes a real linked worktree while
 			assert.ok((await durableRefsContaining(pi, main, historyOid)).length > 0);
 		}
 
+		writeFileSync(join(linked, "cache.ignored"), "disposable cache\n");
+		const ignoredInventory = await worktreeInventory(pi, linked);
+		assert.ok(ignoredInventory.some((line) => line.includes("cache.ignored")));
+		assert.ok(ignoredInventory.every((line) => line.startsWith("!! ")));
 		await removeWorktree(pi, main, linked);
 		assert.equal((await listWorktrees(pi, main)).length, 1);
 		assert.equal(await localBranchExists(pi, main, "feature/test"), true);
