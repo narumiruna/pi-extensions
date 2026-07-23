@@ -9,6 +9,7 @@ export const SYNC_COMMANDS = [
 	{ name: "help", description: "Show command usage" },
 	{ name: "init", description: "Create local config template" },
 	{ name: "config", description: "Show resolved configuration" },
+	{ name: "files", description: "Choose synced files" },
 	{ name: "status", description: "Show sync status" },
 	{ name: "diff", description: "Show local/remote diff" },
 	{ name: "doctor", description: "Check config, secrets, and lock state" },
@@ -43,7 +44,10 @@ const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]
 };
 
 export function splitArgs(input: string) {
-	return input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((arg) => arg.replace(/^['"]|['"]$/g, "")) ?? [];
+	return (
+		input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((arg) => arg.replace(/^['"]|['"]$/g, "")) ??
+		[]
+	);
 }
 
 export function parseOptions(args: string[]): CommandOptions {
@@ -131,6 +135,6 @@ export function usage() {
 	return [
 		"Usage: /sync <command>",
 		`Commands: ${commands}`,
-		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN, PI_SYNC_SESSIONS/syncSessions, region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json (or $PI_CODING_AGENT_DIR/pi-sync.local.json when PI_CODING_AGENT_DIR is set).",
+		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN, PI_SYNC_SESSIONS/syncSessions, region/profile/prefix, or edit syncFiles/extraFiles in ~/.pi/agent/pi-sync.local.json (or $PI_CODING_AGENT_DIR/pi-sync.local.json when PI_CODING_AGENT_DIR is set).",
 	].join("\n");
 }

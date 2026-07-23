@@ -1,35 +1,37 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { gunzip, gzip } from "node:zlib";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { completeSyncArguments, parseOptions, resolveSyncCommand, usage } from "./command.js";
 import {
 	agentDir,
 	ensureStateDir,
-	extraFilePathsByLower,
-	isMissingConfigError,
-	loadPartialConfig,
-	localConfigPath,
-	normalizeExtraFiles,
-	stateDir,
-	writeJson,
-	configuredSessionDir,
-	isCloudflareR2Endpoint,
 	isEnabled,
 	isExplicitlyEnabled,
+	isMissingConfigError,
 	loadConfig,
+	loadPartialConfig,
+	localConfigPath,
+	localConfigTemplate,
+	normalizeExtraFiles,
+	normalizeSyncFiles,
 	readState,
 	sessionDirForApply,
 	sessionTokenWarnings,
+	stateDir,
 	syncSessionsWarnings,
+	writeLocalConfigObject,
 	writeState,
 } from "./config.js";
+import { showFileSelection } from "./file-selection.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, unlock, withLock } from "./lock.js";
-import { encodeKey, posixJoin, safeJoin, safeName, toPosix } from "./paths.js";
 import {
 	historyKey,
 	latestKey,
@@ -39,27 +41,28 @@ import {
 	snapshotKey,
 } from "./s3-client.js";
 import {
-	addTopLevelCaseVariantDeletes,
-	appliedFileHashMap,
-	applySnapshot,
-	preflightSnapshotApply,
-	protectSnapshotApplyPlan,
-} from "./snapshot-apply.js";
-import {
-	collectFiles,
 	createSnapshot,
-	canonicalSnapshotPathForConfig,
 	filterSnapshotForConfigPolicy,
-	isConfiguredSnapshotPath,
-	isDeniedPath,
-	isSessionPath,
-	sessionSnapshotPathFromAbsolute,
 	mergeRemotePreservedFiles,
-	mergeRemoteSessionFiles,
 	scanSnapshot,
+	sessionSnapshotPathFromAbsolute,
 	snapshotIncludesSessions,
 	snapshotWithoutSessions,
 } from "./snapshot.js";
+import { applySnapshot } from "./snapshot-apply.js";
+import {
+	canPullRemoteSessionsOnFirstSync,
+	canPullRemoteSettingsOnFirstSync,
+	fileHashMap,
+	hasLocalChanges,
+	hasRemoteChanges,
+	remoteChangedSinceState,
+	sameHashes,
+	shouldRefreshSyncedState,
+	snapshotHashesMatchState,
+	snapshotsMatch,
+	syncPolicyChanged,
+} from "./sync-state.js";
 import type {
 	CommandOptions,
 	LatestPointer,
@@ -78,7 +81,6 @@ const VERSION = 1;
 const DEFAULT_PROFILE = "default";
 const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
-const LOCK_STALE_MS = 30 * 60 * 1000;
 
 interface PushInput {
 	config: SyncConfig;
@@ -111,7 +113,8 @@ export default function sync(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		const reason = typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
+		const reason =
+			typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
 		if (reason !== "reload") await autoPushSessions(ctx);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
@@ -134,6 +137,9 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
 				return;
 			case "config":
 				await showConfig(ctx);
+				return;
+			case "files":
+				await showFileSelection(ctx);
 				return;
 			case "status":
 				await status(ctx);
@@ -216,19 +222,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 		// Create below.
 	}
 
-	const sample = {
-		endpoint: "https://<account-id>.r2.cloudflarestorage.com",
-		bucket: "pi-sync",
-		region: DEFAULT_REGION,
-		accessKeyId: "<access-key-id>",
-		secretAccessKey: "<secret-access-key>",
-		profile: DEFAULT_PROFILE,
-		prefix: DEFAULT_PREFIX,
-		autoSync: true,
-		syncSessions: false,
-		extraFiles: [],
-	};
-	await writeJson(configPath, sample);
+	await writeLocalConfigObject(localConfigTemplate());
 	ctx.ui.notify(`Created ${configPath}. Fill in R2 credentials, then run /sync doctor.`, "info");
 }
 
@@ -248,6 +242,7 @@ async function showConfig(ctx: ExtensionCommandContext) {
 			`profile: ${partial.profile ?? DEFAULT_PROFILE}`,
 			`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
 			`autoSync: ${isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true) ? "enabled" : "disabled"}`,
+			`syncFiles: ${normalizeSyncFiles(partial.syncFiles).join(", ") || "none"}`,
 			`syncSessions: ${syncSessions ? "enabled" : "disabled"}`,
 			`extraFiles: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
 			`local config: ${localConfigPath()}`,
@@ -267,7 +262,7 @@ async function status(ctx: ExtensionCommandContext) {
 	const localChanged = hasLocalChanges(local, state, config);
 
 	let remoteText = "remote: empty";
-	let remoteChanged = remoteChangedSinceState(latest, state, config);
+	const remoteChanged = remoteChangedSinceState(latest, state, config);
 	if (!latest.missing && latest.value) {
 		remoteText = `remote: ${latest.value.snapshot} from ${latest.value.machine} at ${latest.value.createdAt}`;
 	}
@@ -277,6 +272,8 @@ async function status(ctx: ExtensionCommandContext) {
 	ctx.ui.notify(
 		[
 			`profile: ${config.profile}`,
+			`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
+			`extra files: ${config.extraFiles.join(", ") || "none"}`,
 			`sessions: ${config.syncSessions ? "included" : "excluded"}`,
 			remoteText,
 			`local files: ${local.files.length}`,
@@ -297,9 +294,12 @@ async function diff(ctx: ExtensionCommandContext) {
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 
 	const warnings = syncSessionsWarnings(config);
-	const header = [`sessions: ${config.syncSessions ? "included" : "excluded"}`, ...warnings].join(
-		"\n",
-	);
+	const header = [
+		`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
+		`extra files: ${config.extraFiles.join(", ") || "none"}`,
+		`sessions: ${config.syncSessions ? "included" : "excluded"}`,
+		...warnings,
+	].join("\n");
 	const level = warnings.length > 0 ? "warning" : "info";
 	if (!remote) {
 		ctx.ui.notify(
@@ -323,6 +323,8 @@ async function doctor(ctx: ExtensionCommandContext) {
 		profile = config.profile;
 		snapshotOptions = snapshotOptionsForContext(ctx, config);
 		messages.push(`config: ok (${config.bucket}/${profilePrefix(config)})`);
+		messages.push(`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`);
+		messages.push(`extra files: ${config.extraFiles.join(", ") || "none"}`);
 		messages.push(`sessions: ${config.syncSessions ? "included" : "excluded"}`);
 		const warnings = [...sessionTokenWarnings(config), ...syncSessionsWarnings(config)];
 		if (warnings.length > 0) {
@@ -375,7 +377,8 @@ async function push(
 	const config = input?.config ?? (await loadConfig());
 	const client = input?.client ?? new S3Client(config);
 	const state = input?.state ?? (await readState(config.profile));
-	const local = input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
+	const local =
+		input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
 
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const remoteForUpload = options.force
@@ -397,7 +400,9 @@ async function push(
 	});
 	const secrets = scanSnapshot(local);
 	if (secrets.length > 0) {
-		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
+		throw new Error(
+			`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`,
+		);
 	}
 
 	const preservedRemoteFileCount = countPreservedRemoteFiles(local, upload);
@@ -421,6 +426,7 @@ async function push(
 		lastAppliedSnapshot: pointer.snapshot,
 		lastRemoteEtag: undefined,
 		lastFileHashes: fileHashMap(local),
+		syncFiles: config.syncFiles,
 		syncSessions: config.syncSessions,
 		extraFiles: config.extraFiles,
 	});
@@ -442,7 +448,9 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	const localChanged = hasLocalChanges(local, state, config);
 	const remoteChanged = hasRemoteChanges(remote, state, config, protectedSessionPaths(ctx));
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot && !options.force) {
-		throw new Error("Both local and remote changed since last sync. Run /sync diff, then choose /sync pull --force or /sync push --force.");
+		throw new Error(
+			"Both local and remote changed since last sync. Run /sync diff, then choose /sync pull --force or /sync push --force.",
+		);
 	}
 
 	if (
@@ -460,6 +468,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
 	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), {
+		syncFiles: config.syncFiles,
 		sessionDir: applySessionDir,
 		extraFiles: config.extraFiles,
 	});
@@ -469,12 +478,16 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 		lastAppliedSnapshot: remote.id,
 		lastRemoteEtag: undefined,
 		lastFileHashes,
+		syncFiles: config.syncFiles,
 		syncSessions: config.syncSessions,
 		extraFiles: config.extraFiles,
 	});
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	if (!options.silent) {
-		ctx.ui.notify(`Pulled ${remote.files.length} files from ${remote.id}. Backup: ${backup}`, "info");
+		ctx.ui.notify(
+			`Pulled ${remote.files.length} files from ${remote.id}. Backup: ${backup}`,
+			"info",
+		);
 	} else if (options.auto && config.syncSessions && snapshotIncludesSessions(remote)) {
 		ctx.ui.notify(
 			"Pulled Pi sessions after startup selected the current session. Restart Pi or resume a pulled session to use newly synced conversations.",
@@ -498,11 +511,15 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 
 	if (firstSync && remote && remote.files.length > 0 && local.files.length > 0) {
 		if (!canPullRemoteSettingsOnFirstSync(local, remote)) {
-			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /sync diff, then manually choose /sync pull or /sync push.");
+			throw new Error(
+				"Remote settings exist and this machine has different local Pi settings. Run /sync diff, then manually choose /sync pull or /sync push.",
+			);
 		}
 		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
 			if (!canPullRemoteSessionsOnFirstSync(local, remote)) {
-				throw new Error("Remote settings match, but local and remote Pi sessions differ. Run /sync diff, then manually choose /sync pull or /sync push.");
+				throw new Error(
+					"Remote settings match, but local and remote Pi sessions differ. Run /sync diff, then manually choose /sync pull or /sync push.",
+				);
 			}
 			await pull(ctx, options);
 			return;
@@ -513,10 +530,12 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 			lastAppliedSnapshot: remote.id,
 			lastRemoteEtag: undefined,
 			lastFileHashes: fileHashMap(remote),
+			syncFiles: config.syncFiles,
 			syncSessions: config.syncSessions,
 			extraFiles: config.extraFiles,
 		});
-		if (!options.silent) ctx.ui.notify("pi-sync state initialized; local settings already match remote.", "info");
+		if (!options.silent)
+			ctx.ui.notify("pi-sync state initialized; local settings already match remote.", "info");
 		return;
 	}
 	if (localChanged && remoteChanged && remote && snapshotsMatch(local, remote)) {
@@ -526,6 +545,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 			lastAppliedSnapshot: remote.id,
 			lastRemoteEtag: undefined,
 			lastFileHashes: fileHashMap(remote),
+			syncFiles: config.syncFiles,
 			syncSessions: config.syncSessions,
 			extraFiles: config.extraFiles,
 		});
@@ -533,7 +553,9 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 		return;
 	}
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
-		throw new Error("Both local and remote changed. Run /sync diff and resolve with push --force or pull --force.");
+		throw new Error(
+			"Both local and remote changed. Run /sync diff and resolve with push --force or pull --force.",
+		);
 	}
 	if (remoteChanged) {
 		await pull(ctx, options);
@@ -550,6 +572,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 			lastAppliedSnapshot: remote.id,
 			lastRemoteEtag: undefined,
 			lastFileHashes: fileHashMap(remote),
+			syncFiles: config.syncFiles,
 			syncSessions: config.syncSessions,
 			extraFiles: config.extraFiles,
 		});
@@ -607,6 +630,7 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
 	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), {
+		syncFiles: config.syncFiles,
 		sessionDir: applySessionDir,
 		extraFiles: config.extraFiles,
 	});
@@ -627,6 +651,7 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 		lastAppliedSnapshot: pointer.snapshot,
 		lastRemoteEtag: undefined,
 		lastFileHashes,
+		syncFiles: config.syncFiles,
 		syncSessions: config.syncSessions,
 		extraFiles: config.extraFiles,
 	});
@@ -649,6 +674,7 @@ function snapshotOptionsForContext(
 	config: SyncConfig,
 ): SnapshotOptions {
 	return {
+		syncFiles: config.syncFiles,
 		syncSessions: config.syncSessions,
 		sessionDir: sessionDirFromContext(ctx),
 		extraFiles: config.extraFiles,
@@ -671,7 +697,13 @@ function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) 
 
 async function maybeReload(ctx: ExtensionCommandContext | ExtensionContext) {
 	if (!("reload" in ctx)) return;
-	if (ctx.hasUI && (await ctx.ui.confirm("Reload Pi resources now?", "This reloads extensions, skills, prompts, themes, and context files."))) {
+	if (
+		ctx.hasUI &&
+		(await ctx.ui.confirm(
+			"Reload Pi resources now?",
+			"This reloads extensions, skills, prompts, themes, and context files.",
+		))
+	) {
 		await ctx.reload();
 	}
 }
@@ -730,7 +762,9 @@ async function uploadSnapshot(
 	await client.putJson(latestKey(config), pointer);
 	const verified = await client.getJson<LatestPointer>(latestKey(config));
 	if (verified.value?.snapshot !== pointer.snapshot) {
-		throw new Error("Remote latest changed immediately after push. Run /sync status before continuing.");
+		throw new Error(
+			"Remote latest changed immediately after push. Run /sync status before continuing.",
+		);
 	}
 	return pointer;
 }
@@ -744,8 +778,10 @@ async function readRemoteSnapshotRaw(client: S3Client, config: SyncConfig) {
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	if (latest.missing || !latest.value) return undefined;
 	const object = await client.getBuffer(snapshotKey(config, latest.value.snapshot));
-	if (!object.value) throw new Error(`Remote latest points to missing snapshot: ${latest.value.snapshot}`);
-	if (sha256(object.value) !== latest.value.sha256) throw new Error("Remote snapshot checksum mismatch.");
+	if (!object.value)
+		throw new Error(`Remote latest points to missing snapshot: ${latest.value.snapshot}`);
+	if (sha256(object.value) !== latest.value.sha256)
+		throw new Error("Remote snapshot checksum mismatch.");
 	return decodeSnapshot(object.value);
 }
 
@@ -756,7 +792,8 @@ async function encodeSnapshot(snapshot: Snapshot) {
 async function decodeSnapshot(buffer: Buffer): Promise<Snapshot> {
 	const decoded = await gunzipAsync(buffer);
 	const parsed = JSON.parse(decoded.toString("utf8")) as Snapshot;
-	if (parsed.version !== VERSION || !Array.isArray(parsed.files)) throw new Error("Unsupported snapshot format.");
+	if (parsed.version !== VERSION || !Array.isArray(parsed.files))
+		throw new Error("Unsupported snapshot format.");
 	return parsed;
 }
 
@@ -770,7 +807,9 @@ export async function backupLocal(profile: string, options: SnapshotOptions = {}
 }
 
 async function updateHistory(client: S3Client, config: SyncConfig, pointer: LatestPointer) {
-	const object = await client.getJson<{ version: number; snapshots: LatestPointer[] }>(historyKey(config));
+	const object = await client.getJson<{ version: number; snapshots: LatestPointer[] }>(
+		historyKey(config),
+	);
 	const snapshots = object.value?.snapshots ?? [];
 	const next = [
 		...snapshots.filter((snapshot) => snapshot.snapshot !== pointer.snapshot),
@@ -783,7 +822,11 @@ function formatDiff(local: Snapshot, remote: Snapshot) {
 	const localMap = fileHashMap(local);
 	const remoteMap = fileHashMap(remote);
 	const allPaths = [...new Set([...Object.keys(localMap), ...Object.keys(remoteMap)])].sort();
-	const lines = [`local: ${local.files.length} files`, `remote: ${remote.id} (${remote.files.length} files)`, ""];
+	const lines = [
+		`local: ${local.files.length} files`,
+		`remote: ${remote.id} (${remote.files.length} files)`,
+		"",
+	];
 	let changed = 0;
 	for (const filePath of allPaths) {
 		if (!localMap[filePath]) {
@@ -819,143 +862,13 @@ function formatPushSummary(
 	].join("\n");
 }
 
-function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncConfig) {
-	return !sameHashes(fileHashMap(local), stateHashMapForConfig(state, config));
-}
-
-function remoteChangedSinceState(
-	latest: RemoteObject<LatestPointer>,
-	state: SyncState,
-	config: SyncConfig,
-) {
-	if (latest.missing) return Boolean(state.lastAppliedSnapshot);
-	if (latest.value?.snapshot !== state.lastAppliedSnapshot) return true;
-	if (extraFilesChanged(state, config)) return true;
-	return config.syncSessions && state.syncSessions !== true && latest.value?.syncSessions === true;
-}
-
-export function hasRemoteChanges(
-	remote: Snapshot,
-	state: SyncState,
-	config: SyncConfig,
-	ignoredPaths = new Set<string>(),
-) {
-	if (remote.id === state.lastAppliedSnapshot && !syncPolicyChanged(state, config)) return false;
-	return !snapshotHashesMatchState(filterSnapshotForConfigPolicy(remote, config), state, config, ignoredPaths);
-}
-
 function remoteIdentity(remote: RemoteObject<LatestPointer>) {
 	return remote.missing ? "missing" : (remote.value?.snapshot ?? "unknown");
-}
-
-function sameHashes(left: Record<string, string>, right: Record<string, string>) {
-	const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-	for (const key of keys) {
-		if (left[key] !== right[key]) return false;
-	}
-	return true;
-}
-
-function fileHashMap(snapshot: Snapshot) {
-	return Object.fromEntries(snapshot.files.map((file) => [file.path, file.sha256]));
-}
-
-function stateHashMapForConfig(state: SyncState, config: Pick<SyncConfig, "syncSessions" | "extraFiles">) {
-	const extraFilePaths = extraFilePathsByLower(config.extraFiles);
-	const extraFiles = new Set(extraFilePaths.keys());
-	return Object.fromEntries(
-		Object.entries(state.lastFileHashes)
-			.filter(([filePath]) => isConfiguredSnapshotPath(filePath, config, extraFiles))
-			.map(([filePath, hash]) => [canonicalSnapshotPathForConfig(filePath, extraFilePaths), hash]),
-	);
-}
-
-function snapshotHashesMatchState(
-	snapshot: Snapshot,
-	state: SyncState,
-	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
-	ignoredPaths = new Set<string>(),
-) {
-	return sameHashes(
-		withoutHashPaths(fileHashMap(snapshot), ignoredPaths),
-		withoutHashPaths(stateHashMapForConfig(state, config), ignoredPaths),
-	);
-}
-
-function snapshotsMatch(left: Snapshot, right: Snapshot) {
-	return left.syncSessions === right.syncSessions && sameHashes(fileHashMap(left), fileHashMap(right));
-}
-
-function withoutHashPaths(hashes: Record<string, string>, ignoredPaths: Set<string>) {
-	if (ignoredPaths.size === 0) return hashes;
-	return Object.fromEntries(
-		Object.entries(hashes).filter(([filePath]) => !ignoredPaths.has(toPosix(filePath))),
-	);
-}
-
-function syncPolicyChanged(state: SyncState, config: Pick<SyncConfig, "syncSessions" | "extraFiles">) {
-	return (state.syncSessions ?? false) !== config.syncSessions || extraFilesChanged(state, config);
-}
-
-function shouldRefreshSyncedState(
-	remote: Snapshot,
-	state: SyncState,
-	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
-) {
-	return remote.id !== state.lastAppliedSnapshot || syncPolicyChanged(state, config);
-}
-
-function extraFilesChanged(state: SyncState, config: Pick<SyncConfig, "extraFiles">) {
-	return !sameStringSet(normalizeExtraFiles(state.extraFiles), normalizeExtraFiles(config.extraFiles));
-}
-
-function sameStringSet(left: string[], right: string[]) {
-	const leftSet = new Set(left);
-	const rightSet = new Set(right);
-	if (leftSet.size !== rightSet.size) return false;
-	return [...leftSet].every((item) => rightSet.has(item));
 }
 
 function countPreservedRemoteFiles(local: Snapshot, upload: Snapshot) {
 	const localPaths = new Set(local.files.map((file) => file.path));
 	return upload.files.filter((file) => !localPaths.has(file.path)).length;
-}
-
-export function settingsHashMap(snapshot: Snapshot) {
-	return Object.fromEntries(
-		snapshot.files
-			.filter((file) => !isSessionPath(file.path))
-			.map((file) => [file.path, file.sha256]),
-	);
-}
-
-export function sessionHashMap(snapshot: Snapshot) {
-	return Object.fromEntries(
-		snapshot.files.filter((file) => isSessionPath(file.path)).map((file) => [file.path, file.sha256]),
-	);
-}
-
-export function settingsHashMapFromState(state: SyncState) {
-	return Object.fromEntries(
-		Object.entries(state.lastFileHashes).filter(([filePath]) => !isSessionPath(filePath)),
-	);
-}
-
-export function settingsHashesMatchState(remote: Snapshot, state: SyncState) {
-	return sameHashes(settingsHashMap(remote), settingsHashMapFromState(state));
-}
-
-export function canPullRemoteSettingsOnFirstSync(local: Snapshot, remote: Snapshot) {
-	const remoteSettings = settingsHashMap(remote);
-	return Object.entries(settingsHashMap(local)).every(
-		([filePath, hash]) => remoteSettings[filePath] === hash,
-	);
-}
-
-export function canPullRemoteSessionsOnFirstSync(local: Snapshot, remote: Snapshot) {
-	const localSessions = sessionHashMap(local);
-	const remoteSessions = sessionHashMap(remote);
-	return Object.entries(localSessions).every(([filePath, hash]) => remoteSessions[filePath] === hash);
 }
 
 function sha256(value: Buffer) {
@@ -971,8 +884,27 @@ function errorMessage(error: unknown) {
 }
 
 export { completeSyncArguments, parseOptions, splitArgs } from "./command.js";
-export { isCloudflareR2Endpoint, isEnabled, isExplicitlyEnabled, loadConfig, sessionTokenWarnings } from "./config.js";
+export {
+	isCloudflareR2Endpoint,
+	isEnabled,
+	isExplicitlyEnabled,
+	loadConfig,
+	sessionTokenWarnings,
+} from "./config.js";
 export { encodeKey, posixJoin, safeJoin, safeName } from "./paths.js";
+export {
+	canonicalSnapshotPathForConfig,
+	collectFiles,
+	filterSnapshotForConfigPolicy,
+	isConfiguredSnapshotPath,
+	isDeniedPath,
+	isSessionPath,
+	mergeRemotePreservedFiles,
+	mergeRemoteSessionFiles,
+	scanSnapshot,
+	sessionSnapshotPathFromAbsolute,
+	snapshotWithoutSessions,
+} from "./snapshot.js";
 export {
 	addTopLevelCaseVariantDeletes,
 	appliedFileHashMap,
@@ -980,15 +912,11 @@ export {
 	protectSnapshotApplyPlan,
 } from "./snapshot-apply.js";
 export {
-	collectFiles,
-	canonicalSnapshotPathForConfig,
-	filterSnapshotForConfigPolicy,
-	isConfiguredSnapshotPath,
-	isDeniedPath,
-	isSessionPath,
-	sessionSnapshotPathFromAbsolute,
-	mergeRemotePreservedFiles,
-	mergeRemoteSessionFiles,
-	scanSnapshot,
-	snapshotWithoutSessions,
-} from "./snapshot.js";
+	canPullRemoteSessionsOnFirstSync,
+	canPullRemoteSettingsOnFirstSync,
+	hasRemoteChanges,
+	sessionHashMap,
+	settingsHashesMatchState,
+	settingsHashMap,
+	settingsHashMapFromState,
+} from "./sync-state.js";

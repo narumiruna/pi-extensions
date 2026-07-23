@@ -7,6 +7,7 @@ export interface SyncConfig {
 	sessionToken?: string;
 	profile: string;
 	prefix: string;
+	syncFiles?: string[];
 	syncSessions: boolean;
 	extraFiles: string[];
 }
@@ -21,6 +22,7 @@ export interface PartialConfig {
 	profile?: string;
 	prefix?: string;
 	autoSync?: boolean | string;
+	syncFiles?: unknown;
 	syncSessions?: boolean | string;
 	extraFiles?: unknown;
 }
@@ -63,6 +65,7 @@ export interface SyncState {
 	lastAppliedSnapshot?: string;
 	lastRemoteEtag?: string;
 	lastFileHashes: Record<string, string>;
+	syncFiles?: string[];
 	syncSessions?: boolean;
 	extraFiles?: string[];
 }
@@ -91,6 +94,7 @@ export interface CommandArgumentCompletion {
 }
 
 export interface SnapshotOptions {
+	syncFiles?: string[];
 	syncSessions?: boolean;
 	sessionDir?: string;
 	extraFiles?: string[];
