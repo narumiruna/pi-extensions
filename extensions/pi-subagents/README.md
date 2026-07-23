@@ -15,7 +15,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
-- Provides `/subagents settings|status|help` for completion delivery plus `/subagents:config` for per-agent tool allow-lists.
+- Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, task-selected `thinkingLevel`, abort propagation, and streaming progress.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
@@ -224,7 +224,9 @@ Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. S
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
-Use `/subagents settings` to change completion delivery interactively and apply it immediately, including refreshing the model-facing spawn guidance. `/subagents status` shows configured versus runtime values, source, and path; `/subagents help` summarizes the commands. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
+Run `/subagents` in TUI mode to open the primary manager. It separates current-session lifecycle state, transport, completion delivery, and active/retained counts from user settings that persist across sessions. Its actions open completion settings, per-agent tool settings, current-session agent inspection/clear, status, and help. Escape returns from a nested screen to a newly refreshed manager and then closes it.
+
+The direct routes remain predictable: `/subagents settings` changes user completion delivery and applies it immediately, including refreshing the model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from the configured value, source, and path; `/subagents help` summarizes commands and compatibility routes. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
@@ -256,7 +258,7 @@ The settings UI patches the raw JSON atomically and preserves unknown fields; it
 | `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
 | `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |
 
-Use `/subagents:agents list` to inspect the indented agent tree, lifecycle state, unread count, and available actions. Use `/subagents:agents clear` to close and delete all retained agents for the session. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
+Use the **Current-session agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. `/subagents:agents list|clear` remains the compatibility command for the same current-session operations. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
 
 A spawn can request a thinking level explicitly:
 
@@ -328,8 +330,7 @@ Built-in agents inherit the active/default Pi model instead of forcing a provide
 
 ## ⚙️ Configure agent tools
 
-Run `/subagents:config` in an interactive Pi session to edit the tools each subagent may use.
-The command stores settings in `~/.pi/agent/pi-subagents.json`.
+Open `/subagents` and choose **Agent tool settings** in an interactive Pi session to edit the tools each subagent may use. `/subagents:config` remains a documented compatibility route to the same screen. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
 Compatibility: a valid legacy `pi-subagents-config.json` is migrated automatically to `pi-subagents.json`. If both files exist, the new filename takes precedence.
 

@@ -9,6 +9,7 @@ import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import { normalizeSubagentSettings } from "../src/settings.js";
 import {
 	assertFollowUpWriteAllowed,
+	formatStatefulAgentLine,
 	isWriteCapable,
 	registerStatefulSubagents,
 	resolveCompletionDelivery,
@@ -96,6 +97,19 @@ test("shared-workspace write classification and follow-up guards are conservativ
 	await registry.interrupt(active.id);
 });
 
+test("stateful agent lines escape terminal controls from retained agent data", () => {
+	const line = formatStatefulAgentLine(
+		record({
+			agent: "scout\u001b]8;;https://example.com\u0007linked",
+			currentTask: "first line\nsecond line\u009b31m",
+		}),
+	);
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Verify terminal-control escaping.
+	assert.doesNotMatch(line, /[\u0000-\u001f\u007f-\u009f]/u);
+	assert.match(line, /scout.*linked/);
+	assert.match(line, /first line second line/);
+});
+
 test("selected context entries imply all mode only when context mode is omitted", () => {
 	assert.equal(resolveSpawnContextMode(undefined, ["entry"]), "all");
 	assert.equal(resolveSpawnContextMode(undefined, []), "all");
@@ -110,7 +124,17 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 	process.env.PI_CODING_AGENT_DIR = dir;
 	try {
 		const mock = createMockPi();
-		registerStatefulSubagents(mock.pi);
+		const controller = registerStatefulSubagents(mock.pi);
+		assert.deepEqual(controller.getRuntimeStatus(), {
+			enabled: true,
+			initialized: false,
+			transport: "subprocess",
+			completionDelivery: "next-turn",
+			activeAgents: 0,
+			retainedAgents: 0,
+		});
+		assert.deepEqual(controller.listAgents(), []);
+		assert.equal(await controller.clearAgents(), 0);
 		assert.deepEqual(
 			mock.tools.map((tool) => tool.name),
 			[
@@ -126,6 +150,14 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.ok(mock.commands.has("subagents:agents"));
 		const context = createMockContext();
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		assert.deepEqual(controller.getRuntimeStatus(), {
+			enabled: true,
+			initialized: true,
+			transport: "subprocess",
+			completionDelivery: "next-turn",
+			activeAgents: 0,
+			retainedAgents: 0,
+		});
 		const list = mock.tools.find((tool) => tool.name === "subagent_list") as {
 			execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }> }>;
 		};
@@ -238,6 +270,14 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			/trusted project/,
 		);
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+		assert.deepEqual(controller.getRuntimeStatus(), {
+			enabled: true,
+			initialized: false,
+			transport: "subprocess",
+			completionDelivery: "next-turn",
+			activeAgents: 0,
+			retainedAgents: 0,
+		});
 
 		writeFileSync(
 			path.join(dir, "pi-subagents.json"),
@@ -257,9 +297,19 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			JSON.stringify({ stateful: { enabled: false } }),
 		);
 		const disabled = createMockPi();
-		registerStatefulSubagents(disabled.pi);
+		const disabledController = registerStatefulSubagents(disabled.pi);
 		assert.equal(disabled.tools.length, 0);
 		assert.equal(disabled.events.size, 0);
+		assert.deepEqual(disabledController.getRuntimeStatus(), {
+			enabled: false,
+			initialized: false,
+			transport: "subprocess",
+			completionDelivery: "next-turn",
+			activeAgents: 0,
+			retainedAgents: 0,
+		});
+		assert.deepEqual(disabledController.listAgents(), []);
+		assert.equal(await disabledController.clearAgents(), 0);
 	} finally {
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalDir;
