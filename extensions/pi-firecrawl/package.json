@@ -20,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/firecrawl.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

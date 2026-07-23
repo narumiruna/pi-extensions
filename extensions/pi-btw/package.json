@@ -19,7 +19,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/btw.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

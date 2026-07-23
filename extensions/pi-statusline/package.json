@@ -19,7 +19,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/statusline.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

@@ -84,6 +84,7 @@ The extension runs passively:
 
 ```text
 extensions/pi-github-pr/
+├── src/index.ts
 ├── src/github-pr.ts
 ├── test/github-pr.test.ts
 ├── package.json

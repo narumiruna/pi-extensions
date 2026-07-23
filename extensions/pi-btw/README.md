@@ -113,6 +113,7 @@ Normal assistant messages become part of the main Pi conversation and can distra
 ```txt
 extensions/pi-btw/
 ├── src/
+│   ├── index.ts
 │   └── btw.ts
 ├── README.md
 ├── LICENSE
@@ -125,7 +126,7 @@ The package exposes its Pi extension through `package.json`:
 ```json
 {
   "pi": {
-    "extensions": ["./src/btw.ts"]
+    "extensions": ["./src/index.ts"]
   }
 }
 ```

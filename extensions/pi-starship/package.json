@@ -22,7 +22,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/pi-starship.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

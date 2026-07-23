@@ -237,7 +237,8 @@ Whenever pi-goal persists canonical goal state, it emits `pi-goal:state` with `{
 ```txt
 extensions/pi-goal/
 ├── src/
-│   ├── goal.ts       # Pi entrypoint, tool contracts, and lifecycle orchestration
+│   ├── index.ts      # Pi package entrypoint
+│   ├── goal.ts       # Tool contracts and lifecycle orchestration
 │   ├── commands.ts   # Per-factory user-command and queue mutation controller
 │   ├── runtime.ts    # Per-factory state, prompt ownership, budgets, and tool policy
 │   ├── safety.ts     # Output normalization and no-progress fingerprint state
@@ -252,12 +253,12 @@ extensions/pi-goal/
 └── package.json
 ```
 
-Only `goal.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `goal.ts`; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {
   "pi": {
-    "extensions": ["./src/goal.ts"]
+    "extensions": ["./src/index.ts"]
   }
 }
 ```

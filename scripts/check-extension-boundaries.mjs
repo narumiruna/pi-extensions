@@ -56,6 +56,7 @@ const compilerSnapshot = compilerApi.updateSnapshot({
 
 try {
 	for (const extensionPackage of activePackages) {
+		checkPiEntrypoint(extensionPackage);
 		checkPackageDependencies(extensionPackage);
 		checkSourceImports(extensionPackage);
 	}
@@ -103,6 +104,20 @@ function findActiveExtensionPackages(directory) {
 	}
 
 	return packages.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function checkPiEntrypoint(extensionPackage) {
+	const entrypoint = path.join(extensionPackage.directory, "src", "index.ts");
+	if (!fs.existsSync(entrypoint)) {
+		failures.push(`${relative(entrypoint)} must exist as the Pi extension entrypoint.`);
+	}
+
+	const entries = extensionPackage.packageJson.pi?.extensions;
+	if (!Array.isArray(entries) || entries.length !== 1 || entries[0] !== "./src/index.ts") {
+		failures.push(
+			`${relative(extensionPackage.packagePath)} pi.extensions must be ["./src/index.ts"].`,
+		);
+	}
 }
 
 function checkPackageDependencies(extensionPackage) {

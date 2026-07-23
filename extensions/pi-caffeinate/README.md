@@ -165,7 +165,8 @@ The default display-awake mode prioritizes uninterrupted long-running Pi work ac
 ```txt
 extensions/pi-caffeinate/
 ├── src/
-│   ├── caffeinate.ts  # Pi entrypoint and lifecycle orchestration
+│   ├── index.ts       # Pi package entrypoint
+│   ├── caffeinate.ts  # Extension registration and lifecycle orchestration
 │   └── *.ts           # Package-local inhibitor and settings modules
 ├── README.md
 ├── LICENSE
@@ -173,7 +174,7 @@ extensions/pi-caffeinate/
 └── package.json
 ```
 
-Only `caffeinate.ts` is a Pi entrypoint; the other source modules are internal.
+`index.ts` is the Pi entrypoint and forwards to `caffeinate.ts`; the other source modules are internal.
 
 ## 🔎 Keywords
 

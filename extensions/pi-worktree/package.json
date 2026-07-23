@@ -20,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/worktree.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

@@ -181,6 +181,7 @@ The tools segment distinguishes active tools, streaming/thinking, the last compl
 ```text
 extensions/pi-statusline/
 ├── src/
+│   ├── index.ts
 │   ├── ansi.ts
 │   ├── commands.ts
 │   ├── extension-status.ts
@@ -197,7 +198,7 @@ extensions/pi-statusline/
 └── package.json
 ```
 
-Only `src/statusline.ts` is a Pi entrypoint. Other modules are package-internal.
+`src/index.ts` is the Pi entrypoint and forwards to `src/statusline.ts`. Other modules are package-internal.
 
 ## 🔎 Keywords
 

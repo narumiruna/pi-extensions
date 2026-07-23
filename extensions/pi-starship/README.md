@@ -151,6 +151,7 @@ Keep `extension_status` last in the catalog so earlier modules can consume exten
 
 ## 🗂️ Package layout
 
+- `src/index.ts` — Pi package entrypoint.
 - `src/pi-starship.ts` — extension lifecycle and footer.
 - `src/config.ts` — TOML loading, validation, defaults, and persistence.
 - `src/format/` — native format/style parser and renderer.

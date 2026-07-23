@@ -22,7 +22,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/google-genai.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

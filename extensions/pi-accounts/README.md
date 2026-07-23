@@ -153,6 +153,7 @@ The repository preserves the predecessor implementation under `deprecated/pi-cod
 ```text
 extensions/pi-accounts/
 ├── src/
+│   ├── index.ts
 │   ├── account-store.ts
 │   ├── accounts.ts
 │   ├── oauth.ts
@@ -172,7 +173,7 @@ The package exposes its Pi extension through `package.json`:
 ```json
 {
   "pi": {
-    "extensions": ["./src/accounts.ts"]
+    "extensions": ["./src/index.ts"]
   }
 }
 ```

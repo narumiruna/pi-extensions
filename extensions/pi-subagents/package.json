@@ -20,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/subagents.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

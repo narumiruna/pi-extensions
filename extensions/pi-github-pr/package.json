@@ -20,7 +20,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/github-pr.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

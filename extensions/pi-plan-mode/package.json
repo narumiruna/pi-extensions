@@ -19,7 +19,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/plan-mode.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

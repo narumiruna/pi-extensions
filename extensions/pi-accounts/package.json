@@ -23,7 +23,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/accounts.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

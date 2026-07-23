@@ -180,7 +180,8 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 ```txt
 extensions/pi-plan-mode/
 ├── src/
-│   ├── plan-mode.ts  # Pi entrypoint and mode state
+│   ├── index.ts      # Pi package entrypoint
+│   ├── plan-mode.ts  # Extension registration and mode state
 │   └── *.ts          # Package-local prompt, policy, question, and message modules
 ├── README.md
 ├── LICENSE
@@ -188,12 +189,12 @@ extensions/pi-plan-mode/
 └── package.json
 ```
 
-Only `plan-mode.ts` is a Pi entrypoint; the other source modules are internal. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `plan-mode.ts`; the other source modules are internal. The package exposes its Pi extension through `package.json`:
 
 ```json
 {
   "pi": {
-    "extensions": ["./src/plan-mode.ts"]
+    "extensions": ["./src/index.ts"]
   }
 }
 ```

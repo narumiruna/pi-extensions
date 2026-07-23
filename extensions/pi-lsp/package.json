@@ -23,7 +23,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/pi-lsp.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {

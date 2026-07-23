@@ -54,6 +54,29 @@ Use multiple Pi extensions together:
 pi -e npm:@narumitw/pi-goal -e npm:@narumitw/pi-statusline -e npm:@narumitw/pi-lsp
 ```
 
+### Install from Git
+
+Install this repository directly from GitHub:
+
+```bash
+pi install git:github.com/narumiruna/pi-extensions
+```
+
+The repository root auto-discovers every active extension, so the unfiltered command enables all of them. To keep the Git checkout but load only one extension, replace the installed package entry in `~/.pi/agent/settings.json` with an object filter:
+
+```json
+{
+  "packages": [
+    {
+      "source": "git:github.com/narumiruna/pi-extensions",
+      "extensions": ["extensions/pi-accounts/src/index.ts"]
+    }
+  ]
+}
+```
+
+Package filters match resource files relative to the repository root. A directory such as `extensions/pi-accounts` does not select the extension; use its `src/index.ts` entrypoint. Restart Pi or run `/reload` after changing the filter. Update the Git checkout later with `pi update --extensions`.
+
 ## 🛠️ Extension use cases
 
 ### 🧠 Shared language-server workflows

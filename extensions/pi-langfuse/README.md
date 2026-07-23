@@ -168,6 +168,7 @@ The built-in mask specifically protects Langfuse credentials; it is not a genera
 ```txt
 extensions/pi-langfuse/
 ├── src/
+│   ├── index.ts     # Pi package entrypoint
 │   ├── langfuse.ts  # Pi lifecycle integration and slash command
 │   ├── tracing.ts   # Observation lifecycle, outcomes, and bounded metadata
 │   ├── sanitizer.ts # Content bounding and opaque-signature removal
@@ -180,7 +181,7 @@ extensions/pi-langfuse/
 └── package.json
 ```
 
-Only `langfuse.ts` is a Pi entrypoint; the other source modules are internal.
+`index.ts` is the Pi entrypoint and forwards to `langfuse.ts`; the other source modules are internal.
 
 ## 🔎 Keywords
 
