@@ -50,7 +50,7 @@ test("remove confirms and deletes ignored-only data without forcing Git", async 
 			);
 		}
 		if (args[0] === "rev-parse") return result(`${main}\n`);
-		if (args[0] === "status") return result("!! node_modules/\n");
+		if (args[0] === "status") return result("!! node_modules/\n!! cache/\n");
 		if (args[0] === "submodule") return result();
 		if (args[0] === "worktree" && args[1] === "remove") {
 			removed = true;
@@ -77,7 +77,7 @@ test("remove confirms and deletes ignored-only data without forcing Git", async 
 	try {
 		await mock.commands.get("worktree")?.handler("", context.ctx);
 		assert.match(confirmationTitle, /delete ignored files/i);
-		assert.match(confirmationMessage, /!! node_modules\//);
+		assert.match(confirmationMessage, /!! cache\/\n!! node_modules\//);
 		assert.deepEqual(
 			calls.find((args) => args[0] === "worktree" && args[1] === "remove"),
 			["worktree", "remove", linked],

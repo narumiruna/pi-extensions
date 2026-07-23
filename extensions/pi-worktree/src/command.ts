@@ -270,9 +270,7 @@ async function removeFlow(
 	if (
 		!(await ctx.ui.confirm(
 			confirmationTitle,
-			stripTerminalControls(
-				`Delete the worktree directory ${selected.path}? The branch will be preserved.${ignoredWarning}${recoveryWarning}`,
-			),
+			`Delete the worktree directory ${stripTerminalControls(selected.path)}? The branch will be preserved.${ignoredWarning}${recoveryWarning}`,
 		))
 	) {
 		return;
@@ -453,7 +451,12 @@ function sameAdministrativeHistoryRisks(
 
 function formatAdministrativeRecoveryWarning(risks: readonly AdministrativeHistoryRisk[]): string {
 	if (risks.length === 0) return "";
-	const entries = risks.map((risk) => `${risk.label}: ${risk.oids.join(", ")}`).join("; ");
+	const entries = risks
+		.map(
+			(risk) =>
+				`${stripTerminalControls(risk.label)}: ${risk.oids.map(stripTerminalControls).join(", ")}`,
+		)
+		.join("; ");
 	return ` Administrative recovery warning: these commits are not reachable from a branch, tag, or remote ref: ${entries}. Discarding their recovery pointers means they may later be garbage-collected.`;
 }
 
@@ -484,7 +487,7 @@ function sameInventory(left: readonly string[], right: readonly string[]): boole
 
 function formatIgnoredDataWarning(ignored: readonly string[]): string {
 	if (ignored.length === 0) return "";
-	return ` Ignored files and directories that will be deleted:\n${ignored.join("\n")}`;
+	return ` Ignored files and directories that will be deleted:\n${ignored.map(stripTerminalControls).join("\n")}`;
 }
 
 async function assertDetachedHeadIsDurable(
