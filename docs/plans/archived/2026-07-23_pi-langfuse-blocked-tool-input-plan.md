@@ -20,11 +20,11 @@ PR #332 review `pullrequestreview-4758241509` identifies that pi-langfuse record
 - [x] Defer tool-input replacement until `tool_result`; all 46 pi-langfuse tests pass, including blocked raw input and final executed input assertions.
 - [x] Update `extensions/pi-langfuse/README.md` to describe the corrected lifecycle semantics; the text now distinguishes blocked raw fallbacks from executed final input.
 - [x] Run focused pi-langfuse tests, `npm run check`, `npm run pack:langfuse`, and `git diff --check`; all 46 focused tests and all 1,054 repository tests pass, and the dry-run package contains the documented five source modules.
-- [ ] Commit and push the focused branch, then prepare the exact pull-request title and body for approval before creating the PR.
+- [x] Commit and push the focused branch, then prepare the exact pull-request title and body for approval before creating the PR; commit `1fe0d8f` is pushed and PR #334 is open against `main` with the approved content.
 
 ## Completion Checklist
 
 - [x] Blocked and otherwise non-executed calls retain raw model arguments.
 - [x] Successful and failed executed tools report the exact arguments they ran.
 - [x] Existing trace output, timing, errors, duplicate handling, and privacy behavior remain unchanged.
-- [ ] The branch is verified, pushed, and represented by a pull request to `main`.
+- [x] The branch is verified, pushed, and represented by PR #334 to `main`.
