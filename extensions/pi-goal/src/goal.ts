@@ -820,7 +820,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
 		const queuedNonGoalInput = activeBudgetWrapUp
 			? undefined
-			: runtime.consumeQueuedNonGoalInput(event.prompt, !activeGoalRecovery);
+			: runtime.consumeQueuedNonGoalInput(
+					event.prompt,
+					!activeGoalRecovery && ownedPromptGoalId === undefined,
+				);
 		if (queuedNonGoalInput?.behavior === "followUp") {
 			beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
 		}
