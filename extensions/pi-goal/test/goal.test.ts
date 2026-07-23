@@ -2077,6 +2077,63 @@ test("safety epochs reset on successful resume and active edit", async () => {
 	});
 });
 
+test("queued resume and active edit persist a reset that survives reload", async () => {
+	const safety = {
+		automaticModelTurns: 3,
+		toolFreeRepeatCount: 3,
+		lastToolFreeOutputFingerprint: "d".repeat(64),
+		safetyPauseCause: "continuation_limit" as const,
+	};
+	const resumed = restoreGoalForTest("paused", safety);
+	await resumed.mock.commands.get("goal")?.handler("resume", resumed.ctx);
+	const queuedResume = requireLastGoal(resumed.mock);
+	assert.deepEqual(pickSafetyState(queuedResume), safety);
+
+	const reloadedResume = restoreStoredGoalForTest(
+		queuedResume,
+		[],
+		"always",
+		{},
+		LOW_LIMITS_SETTINGS_PATH,
+	);
+	assert.equal(lastGoalStatus(reloadedResume.mock), "active");
+	assert.deepEqual(pickSafetyState(requireLastGoal(reloadedResume.mock)), {
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
+		lastToolFreeOutputFingerprint: undefined,
+		safetyPauseCause: undefined,
+	});
+
+	const editSafety = { ...safety, toolFreeRepeatCount: 2 };
+	const activeGoal: StoredGoal = {
+		...queuedResume,
+		...editSafety,
+		id: "active-before-edit",
+		status: "active",
+		activeStartedAt: Date.now(),
+		safetyResetPending: undefined,
+	};
+	const edited = restoreStoredGoalForTest(activeGoal);
+	await edited.mock.commands.get("goal")?.handler("edit revised after reload", edited.ctx);
+	const queuedEdit = requireLastGoal(edited.mock);
+	assert.deepEqual(pickSafetyState(queuedEdit), editSafety);
+
+	const reloadedEdit = restoreStoredGoalForTest(
+		queuedEdit,
+		[],
+		"always",
+		{},
+		LOW_LIMITS_SETTINGS_PATH,
+	);
+	assert.equal(lastGoalStatus(reloadedEdit.mock), "active");
+	assert.deepEqual(pickSafetyState(requireLastGoal(reloadedEdit.mock)), {
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
+		lastToolFreeOutputFingerprint: undefined,
+		safetyPauseCause: undefined,
+	});
+});
+
 test("stopped input and failed resume preserve the exact safety epoch", async () => {
 	const safety = {
 		automaticModelTurns: 25,
@@ -2860,6 +2917,128 @@ test("queued user follow-up resets safety only when its message starts", async (
 	assert.match(continuation, /pi-goal-continuation:/);
 });
 
+test("expanded queued follow-up claims manual ownership at its delivery boundary", async () => {
+	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		active.ctx,
+	);
+	const safety = requireLastGoal(active.mock);
+	safety.automaticModelTurns = 2;
+	safety.toolFreeRepeatCount = 2;
+	safety.lastToolFreeOutputFingerprint = "9".repeat(64);
+	active.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
+		active.ctx,
+	);
+
+	active.mock.events.get("message_start")?.[0]?.(
+		{
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "Expanded review skill instructions" }],
+			},
+		},
+		active.ctx,
+	);
+	active.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		active.ctx,
+	);
+
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
+});
+
+test("owned continuation does not consume a pending transformed follow-up", async () => {
+	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	const safety = requireLastGoal(active.mock);
+	safety.automaticModelTurns = 2;
+	safety.toolFreeRepeatCount = 2;
+	safety.lastToolFreeOutputFingerprint = "8".repeat(64);
+	active.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
+		active.ctx,
+	);
+
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 2);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
+
+	active.mock.events.get("message_start")?.[0]?.(
+		{
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "Expanded review skill instructions" }],
+			},
+		},
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
+});
+
+test("provider retry does not consume a pending transformed follow-up", async () => {
+	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		active.ctx,
+	);
+	active.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
+		active.ctx,
+	);
+	const retryableError = {
+		role: "assistant",
+		stopReason: "error",
+		errorMessage: "HTTP 524: upstream timeout",
+		content: [],
+	};
+	await active.mock.events.get("agent_end")?.[0]?.({ messages: [retryableError] }, active.ctx);
+
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "provider retry", systemPrompt: "base" },
+		active.ctx,
+	);
+	active.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 1);
+
+	active.mock.events.get("message_start")?.[0]?.(
+		{
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "Expanded review skill instructions" }],
+			},
+		},
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+});
+
 test("queued non-goal follow-up does not inherit automatic recovery ownership", async () => {
 	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
 	await active.mock.events.get("agent_end")?.[0]?.(
@@ -3467,6 +3646,91 @@ test("budget wrap-up permission closes at agent_end and stale context is filtere
 		budgeted.ctx,
 	) as { messages?: unknown[] } | undefined;
 	assert.deepEqual(contextResult?.messages, [{ role: "user", content: "keep" }]);
+});
+
+test("budget wrap-up does not consume a pending transformed follow-up", async () => {
+	const branch: Array<Record<string, unknown>> = [];
+	const budgeted = await startGoalForTest(
+		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
+		"--tokens 10 finish",
+	);
+	const goalId = requireLastGoal(budgeted.mock).id;
+	budgeted.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
+		budgeted.ctx,
+	);
+	branch.push(assistantUsageEntry({ totalTokens: 12 }));
+	await budgeted.mock.events.get("tool_execution_end")?.[0]?.(
+		{ toolCallId: "tool-1", toolName: "bash", result: {}, isError: false },
+		budgeted.ctx,
+	);
+
+	budgeted.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "budget wrap-up", systemPrompt: "base" },
+		budgeted.ctx,
+	);
+
+	assert.deepEqual(
+		budgeted.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "wrap-up-read", input: {} },
+			budgeted.ctx,
+		),
+		{
+			block: true,
+			reason: "Goal token budget is exhausted; only goal_complete is allowed during wrap-up.",
+		},
+	);
+	assert.equal(
+		budgeted.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "goal_complete", toolCallId: "wrap-up-complete", input: {} },
+			budgeted.ctx,
+		),
+		undefined,
+	);
+	const completion = await requireGoalTool(budgeted.mock, "goal_complete").execute(
+		"wrap-up-complete",
+		{ goal_id: goalId, summary: "All requirements were implemented and verified." },
+		new AbortController().signal,
+		() => undefined,
+		budgeted.ctx,
+	);
+	assert.equal(completion.terminate, true);
+});
+
+test("budget wrap-up custom message retains goal ownership through agent_end", async () => {
+	const branch: Array<Record<string, unknown>> = [];
+	const budgeted = await startGoalForTest(
+		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
+		"--tokens 10 finish",
+	);
+	branch.push(assistantUsageEntry({ totalTokens: 12 }));
+	await budgeted.mock.events.get("tool_execution_end")?.[0]?.(
+		{ toolCallId: "tool-1", toolName: "bash", result: {}, isError: false },
+		budgeted.ctx,
+	);
+	const queuedWrapUp = budgeted.mock.sentMessages[0]?.message as
+		| Record<string, unknown>
+		| undefined;
+	assert.ok(queuedWrapUp);
+	const wrapUpMessage = { role: "custom", ...queuedWrapUp };
+
+	budgeted.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "budget wrap-up", systemPrompt: "base" },
+		budgeted.ctx,
+	);
+	budgeted.mock.events.get("message_start")?.[0]?.({ message: wrapUpMessage }, budgeted.ctx);
+	await budgeted.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [wrapUpMessage, { role: "assistant", stopReason: "stop", content: [] }] },
+		budgeted.ctx,
+	);
+
+	assert.equal(
+		budgeted.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: "after-wrap-up", input: {} },
+			budgeted.ctx,
+		),
+		undefined,
+	);
 });
 
 test("compaction cancels before retry when persisted usage has exhausted the budget", async () => {
@@ -4197,6 +4461,7 @@ type StoredGoal = {
 	toolFreeRepeatCount?: number;
 	lastToolFreeOutputFingerprint?: string;
 	safetyPauseCause?: string;
+	safetyResetPending?: boolean;
 };
 
 function assertHardenedGoalPrompt(prompt: string) {

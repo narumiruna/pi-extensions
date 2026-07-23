@@ -526,6 +526,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		}
 		if (runtime.pendingQueueAction) await dispatchPendingQueueActionIfSettled(ctx);
 		if (runtime.activeGoal) {
+			if (runtime.activeGoal.status === "active" && runtime.activeGoal.safetyResetPending) {
+				// Resume/edit activation is persisted before its queued prompt starts. A
+				// reload must commit that promised reset before enforcing the old limits.
+				runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
+			}
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
 				if (limitActiveGoalForBudget(ctx, false)) return;
@@ -688,6 +693,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		if (message.role === "custom") {
+			if (runtime.isActiveBudgetWrapUpMessage(message)) return;
 			if (runtime.guardAbortGoalId === runtime.activeGoal?.id) {
 				runtime.guardAbortGoalId = undefined;
 			}
@@ -697,7 +703,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (message.role !== "user") return;
 		const prompt = Array.isArray(message.content)
 			? message.content
-					.filter((part) => part && typeof part === "object" && Reflect.get(part, "type") === "text")
+					.filter(
+						(part) => part && typeof part === "object" && Reflect.get(part, "type") === "text",
+					)
 					.map((part) => Reflect.get(part as object, "text"))
 					.filter((text): text is string => typeof text === "string")
 					.join("\n")
@@ -809,11 +817,16 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
-		const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(event.prompt);
+		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
+		const queuedNonGoalInput = activeBudgetWrapUp
+			? undefined
+			: runtime.consumeQueuedNonGoalInput(
+					event.prompt,
+					!activeGoalRecovery && ownedPromptGoalId === undefined,
+				);
 		if (queuedNonGoalInput?.behavior === "followUp") {
 			beginNonGoalFollowUp(ctx, queuedNonGoalInput.resetSafetyEpoch);
 		}
-		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
 		const runOrigin = continuationGoalId
 			? "automatic"
 			: activeGoalRecovery && runtime.goalRecovery?.automaticOwner
@@ -878,7 +891,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		};
 	});
 
-	pi.on("agent_start", (_event, ctx) => {
+	pi.on("agent_start", (_event, _ctx) => {
 		if (runtime.queueFrozen) return;
 		const activeGoal = runtime.activeGoal;
 		if (

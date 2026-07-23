@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { checkpointGoalActiveTime } from "./accounting.js";
 import type { ActiveGoal } from "./persistence.js";
+import { resetGoalSafetyEpoch } from "./safety.js";
 
 export interface GoalQueueResult {
 	goal: ActiveGoal | undefined;
@@ -94,5 +95,5 @@ export function activateQueuedGoal(
 	if (activated.tokenBudget !== undefined && activated.tokensUsed >= activated.tokenBudget) {
 		return { ...activated, status: "budget_limited", activeStartedAt: undefined };
 	}
-	return activated;
+	return activated.safetyResetPending ? resetGoalSafetyEpoch(activated) : activated;
 }

@@ -1,8 +1,24 @@
 import { createHash } from "node:crypto";
+import type { ActiveGoal } from "./persistence.js";
 
 export interface ToolFreeRepeatState {
 	toolFreeRepeatCount: number;
 	lastToolFreeOutputFingerprint?: string;
+}
+
+export function queueGoalSafetyReset(goal: ActiveGoal): ActiveGoal {
+	return { ...goal, safetyResetPending: true };
+}
+
+export function resetGoalSafetyEpoch(goal: ActiveGoal): ActiveGoal {
+	return {
+		...goal,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
+		lastToolFreeOutputFingerprint: undefined,
+		safetyPauseCause: undefined,
+		safetyResetPending: undefined,
+	};
 }
 
 export function nextToolFreeRepeatState(

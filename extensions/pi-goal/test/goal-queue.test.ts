@@ -195,6 +195,45 @@ test("automatic queue advance preserves a shelved goal safety epoch", async () =
 	assert.equal(started?.lastToolFreeOutputFingerprint, "a".repeat(64));
 });
 
+test("queued activation consumes promised resume and edit safety resets", async (t) => {
+	const safety = {
+		automaticModelTurns: 7,
+		toolFreeRepeatCount: 2,
+		lastToolFreeOutputFingerprint: "b".repeat(64),
+		safetyPauseCause: "continuation_limit" as const,
+	};
+	for (const scenario of ["resume", "edit"] as const) {
+		await t.test(scenario, async () => {
+			const original = {
+				...storedGoal("original goal", scenario === "resume" ? "paused" : "active"),
+				...safety,
+			};
+			const branch = [
+				{ type: "custom", customType: "goal-state", data: { goal: original, queue: [] } },
+			];
+			const harness = await createHarness({
+				sessionManager: { getBranch: () => branch, getEntries: () => branch },
+			});
+
+			await harness.command(scenario === "resume" ? "resume" : "edit revised original goal");
+			await harness.command("prioritize urgent goal");
+			await harness.command("skip");
+
+			const activated = stateGoals(harness.mock)[0];
+			assert.equal(
+				activated?.text,
+				scenario === "resume" ? "original goal" : "revised original goal",
+			);
+			assert.equal(activated?.status, "active");
+			assert.equal(activated?.automaticModelTurns, 0);
+			assert.equal(activated?.toolFreeRepeatCount, 0);
+			assert.equal(activated?.lastToolFreeOutputFingerprint, undefined);
+			assert.equal(activated?.safetyPauseCause, undefined);
+			assert.equal(activated?.safetyResetPending, undefined);
+		});
+	}
+});
+
 test("pending completion advance survives reload before settlement", async () => {
 	const interrupted = await createHarness({ isIdle: () => false });
 	await interrupted.command("first goal");
