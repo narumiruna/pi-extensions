@@ -47,7 +47,6 @@ Run commands from the repository root unless noted otherwise.
 
 - Recent history uses Conventional Commits such as `feat: ...`, `fix: ...`, and `chore(release): ...`; keep commit messages grounded in the actual diff.
 - Stage only intended paths. Do not use blanket staging for unrelated local changes.
-- Do not create or modify issues, pull requests, comments, reviews, discussions, or other public artifacts in third-party repositories without the user's explicit approval for that exact action and content; approval to execute a plan does not count.
 - For PRs or handoff notes, include the commands run and any publish/visibility checks performed.
 
 ## MEMORY.md
