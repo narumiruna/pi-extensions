@@ -1,28 +1,27 @@
 import { randomUUID } from "node:crypto";
-import {
-	isContextOverflow,
-	type AssistantMessage as PiAssistantMessage,
-	type Usage,
-} from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-	assistantUsageTokens,
 	checkpointGoalActiveTime,
 	formatDuration,
 	formatTokenCount,
-	nonNegativeFiniteNumber,
 	updateGoalUsage,
 } from "./accounting.js";
+import { formatError, truncateNotification } from "./errors.js";
+import {
+	appendGoalPromptMarker,
+	extractContinuationMarker,
+	extractGoalPromptMarker,
+} from "./markers.js";
 import {
 	type ActiveGoal,
 	clearLegacyPersistedGoal,
 	type PendingQueueAction,
+	type SafetyPauseCause,
 	serializeGoalState,
 } from "./persistence.js";
 import { buildContinuePrompt, type GoalStatus } from "./prompts.js";
+import { nextToolFreeRepeatState } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, type GoalSettings } from "./settings.js";
-
-export type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 export interface ContinuationTicket {
 	goalId: string;
@@ -38,21 +37,19 @@ export interface BudgetWrapUp {
 
 export type GoalRecoveryKind = "provider_retry" | "compaction_retry";
 
+export type GoalRunOrigin = "manual" | "automatic";
+
 export interface GoalRecovery {
 	goalId: string;
 	kind: GoalRecoveryKind;
+	automaticOwner: boolean;
+	errorMessage?: string;
 }
 
-export interface AssistantMessageLike {
-	role: "assistant";
-	stopReason?: AgentStopReason;
-	errorMessage?: string;
-	content?: PiAssistantMessage["content"];
-	api?: PiAssistantMessage["api"];
-	provider?: PiAssistantMessage["provider"];
-	model?: string;
-	usage?: Usage;
-	timestamp?: number;
+export interface CompletedGoalRun {
+	goalId?: string | null;
+	origin?: GoalRunOrigin;
+	toolAttempted: boolean;
 }
 
 export interface StatusContext {
@@ -124,8 +121,6 @@ interface GoalTerminalDetails {
 
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const MAX_PENDING_GOAL_PROMPTS = 20;
-const GOAL_PROMPT_MARKER_PREFIX = "pi-goal-prompt:";
-const CONTINUATION_MARKER_PREFIX = "pi-goal-continuation:";
 const BUDGET_WRAP_UP_MESSAGE_TYPE = "goal-budget-wrap-up";
 const BUDGET_WRAP_UP_PROMPT =
 	"The active /goal token budget is exhausted. Stop substantive work and do not call substantive tools. Summarize progress, verified results, remaining work, and blockers concisely. Treat completion as unproven. Do not call goal_complete unless authoritative, requirement-by-requirement evidence already proves every requirement is complete. Weak, indirect, or missing evidence is not enough. Budget exhaustion is not completion.";
@@ -134,24 +129,6 @@ const CONTRADICTORY_COMPLETION_PATTERNS = [
 	/\bstill\s+(?:incomplete|failing|failing\s+tests?|fails?)\b/i,
 	/\btests?\s+(?:still\s+)?fail(?:ing)?\b/i,
 ] as const;
-const USAGE_LIMIT_GOAL_ERROR_PATTERNS = [
-	/usage[_\s-]*(?:limit|cap)|chatgpt.{0,32}usage/i,
-	/quota.{0,32}(?:reached|exceeded|exhausted|depleted)|(?:reached|exceeded|exhausted|depleted).{0,32}quota/i,
-	/insufficient[_\s-]*(?:quota|credits?)|out of credits|out of budget|available balance|payment required/i,
-	/(?:credit|balance).{0,32}(?:low|exhausted|depleted)|billing/i,
-] as const;
-const NON_RETRYABLE_GOAL_ERROR_RE =
-	/multi-auth rotation failed|credentials tried|unauthori[sz]ed|invalid api key/i;
-// Pi 0.79 does not export its assistant-error retry classifier. Keep this
-// compatibility mirror aligned with Pi's public retry utility in newer versions.
-const RETRYABLE_GOAL_ERROR_PATTERNS = [
-	/overloaded|rate.?limit|too many requests|\b(?:429|500|502|503|504)\b|service.?unavailable|server.?error|internal.?error/i,
-	/provider.?returned.?error|you can retry your request|try your request again|please retry your request/i,
-	/network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up/i,
-	/timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before message_stop|http2 request did not get a response|retry delay/i,
-	/context[_\s-]*length[_\s-]*exceeded|input exceeds the context window/i,
-] as const;
-
 // One instance belongs to one extension factory. It owns all mutable session state
 // and the cross-cutting invariants used by command and lifecycle orchestration.
 export class GoalRuntime {
@@ -169,6 +146,9 @@ export class GoalRuntime {
 	budgetWrapUp?: BudgetWrapUp;
 	/** `null` marks a run that must not be charged to the active goal. */
 	agentRunGoalId?: string | null;
+	agentRunOrigin?: GoalRunOrigin;
+	agentRunToolAttempted = false;
+	guardAbortGoalId?: string;
 	staleGoalToolCallsBlocked = false;
 	/** Once true, goal tools stay in the active set for this runtime (prompt-cache stable). */
 	goalToolsUnlocked = false;
@@ -203,6 +183,47 @@ export class GoalRuntime {
 
 	hasActiveGoalRecovery() {
 		return Boolean(this.activeGoal && this.goalRecovery?.goalId === this.activeGoal.id);
+	}
+
+	beginAgentRun(goalId: string | null | undefined, origin: GoalRunOrigin | undefined) {
+		this.agentRunGoalId = goalId;
+		this.agentRunOrigin = origin;
+		this.agentRunToolAttempted = false;
+	}
+
+	beginRecoveryRunIfNeeded() {
+		if (this.agentRunGoalId !== undefined || !this.activeGoal) return;
+		const recovery = this.goalRecovery;
+		if (!recovery || recovery.goalId !== this.activeGoal.id) return;
+		this.beginAgentRun(recovery.goalId, recovery.automaticOwner ? "automatic" : "manual");
+	}
+
+	markAgentToolAttempted() {
+		if (this.agentRunGoalId !== undefined) this.agentRunToolAttempted = true;
+	}
+
+	finishAgentRun(): CompletedGoalRun {
+		const run = {
+			goalId: this.agentRunGoalId,
+			origin: this.agentRunOrigin,
+			toolAttempted: this.agentRunToolAttempted,
+		};
+		this.clearAgentRun();
+		return run;
+	}
+
+	clearAgentRun() {
+		this.agentRunGoalId = undefined;
+		this.agentRunOrigin = undefined;
+		this.agentRunToolAttempted = false;
+	}
+
+	reclassifyAgentRunAsManual() {
+		if (this.agentRunGoalId !== undefined) this.agentRunOrigin = "manual";
+	}
+
+	isAutomaticRunForGoal(goalId: string) {
+		return this.agentRunGoalId === goalId && this.agentRunOrigin === "automatic";
 	}
 
 	recordGoalUsage(
@@ -240,6 +261,9 @@ export class GoalRuntime {
 			this.activeGoal.status !== "active"
 		) {
 			this.continuationIntent = undefined;
+			return false;
+		}
+		if (this.enforceAutomaticTurnLimit(ctx, false) || this.enforceNoProgressLimit(ctx)) {
 			return false;
 		}
 		if (ctx.isIdle?.() !== true || hasPendingMessages(ctx)) return false;
@@ -366,6 +390,125 @@ export class GoalRuntime {
 		return true;
 	}
 
+	recordAutomaticTurn(ctx: StatusContext, message: unknown) {
+		const goal = this.activeGoal;
+		if (goal?.status !== "active" || !this.isAutomaticRunForGoal(goal.id)) return false;
+		const candidate = message as { role?: unknown; stopReason?: unknown } | undefined;
+		if (
+			this.guardAbortGoalId === goal.id &&
+			candidate?.role === "assistant" &&
+			candidate.stopReason === "aborted"
+		) {
+			return false;
+		}
+		goal.automaticModelTurns = Math.min(Number.MAX_SAFE_INTEGER, goal.automaticModelTurns + 1);
+		this.recordGoalUsage(goal, ctx);
+		this.persistGoal(goal);
+		this.updateStatus(ctx, goal);
+		return this.enforceAutomaticTurnLimit(ctx, true);
+	}
+
+	recordAutomaticRunProgress(
+		ctx: StatusContext,
+		goalId: string,
+		messages: readonly unknown[],
+		toolAttempted: boolean,
+	) {
+		const goal = this.activeGoal;
+		if (goal?.id !== goalId || goal.status !== "active") return false;
+		const next = nextToolFreeRepeatState(goal, messages, toolAttempted);
+		goal.toolFreeRepeatCount = next.toolFreeRepeatCount;
+		goal.lastToolFreeOutputFingerprint = next.lastToolFreeOutputFingerprint;
+		this.persistGoal(goal);
+		this.updateStatus(ctx, goal);
+		const limit = this.settings.continuationLimits.noProgressTurns;
+		if (limit === null || goal.toolFreeRepeatCount < limit) return false;
+		return this.pauseGoalForSafety(ctx, "no_progress", false);
+	}
+
+	enforceAutomaticTurnLimit(ctx: StatusContext, abortTurn: boolean) {
+		const goal = this.activeGoal;
+		const limit = this.settings.continuationLimits.automaticTurns;
+		if (goal?.status !== "active" || limit === null || goal.automaticModelTurns < limit) {
+			return false;
+		}
+		return this.pauseGoalForSafety(ctx, "continuation_limit", abortTurn);
+	}
+
+	enforceNoProgressLimit(ctx: StatusContext) {
+		const goal = this.activeGoal;
+		const limit = this.settings.continuationLimits.noProgressTurns;
+		if (goal?.status !== "active" || limit === null || goal.toolFreeRepeatCount < limit) {
+			return false;
+		}
+		return this.pauseGoalForSafety(ctx, "no_progress", false);
+	}
+
+	pauseGoalForSafety(ctx: StatusContext, cause: SafetyPauseCause, abortTurn: boolean) {
+		const goal = this.activeGoal;
+		if (goal?.status !== "active") return false;
+		this.cancelContinuationWork();
+		this.clearGoalRecoveryForGoal(goal.id);
+		this.clearBudgetWrapUp();
+		this.blockStaleGoalToolCalls();
+		if (abortTurn) {
+			this.guardAbortGoalId = goal.id;
+			abortCurrentTurn(ctx);
+		}
+		this.activeGoal = transitionGoal({ ...goal, safetyPauseCause: cause }, "paused");
+		const count =
+			cause === "continuation_limit"
+				? `${this.activeGoal.automaticModelTurns} automatic model responses`
+				: `no progress across ${this.activeGoal.toolFreeRepeatCount} automatic runs`;
+		this.setTerminalReason(
+			this.activeGoal.id,
+			`${cause} (${count}; ${formatTokenCount(this.activeGoal.tokensUsed)} tokens)`,
+		);
+		this.persistGoal(this.activeGoal);
+		this.updateStatus(ctx, this.activeGoal);
+		ctx.ui.notify(
+			`Goal paused: ${count}; ${formatTokenCount(this.activeGoal.tokensUsed)} cumulative tokens. Run /goal resume to continue.`,
+			"warning",
+		);
+		return true;
+	}
+
+	resetActiveSafetyEpoch(ctx: StatusContext) {
+		const goal = this.activeGoal;
+		if (goal?.status !== "active") return false;
+		this.activeGoal = resetGoalSafetyEpoch(goal);
+		this.reclassifyAgentRunAsManual();
+		this.persistGoal(this.activeGoal);
+		this.updateStatus(ctx, this.activeGoal);
+		return true;
+	}
+
+	finalizeSettledRecovery(ctx: StatusContext) {
+		const recovery = this.goalRecovery;
+		if (!recovery) return false;
+		this.goalRecovery = undefined;
+		const goal = this.activeGoal;
+		if (goal?.id !== recovery.goalId || goal.status !== "active") return false;
+		this.cancelContinuationWork();
+		this.clearBudgetWrapUp();
+		this.blockStaleGoalToolCalls();
+		this.activeGoal = transitionGoal(goal, "blocked");
+		const details = recovery.errorMessage ? `: ${truncateNotification(recovery.errorMessage)}` : "";
+		this.setTerminalReason(this.activeGoal.id, `agent error after retries${details}`);
+		this.persistGoal(this.activeGoal);
+		this.updateStatus(ctx, this.activeGoal);
+		ctx.ui.notify(
+			`Goal blocked after agent error retries were exhausted${details}. Resolve the blocker or run /goal resume to retry.`,
+			"warning",
+		);
+		return true;
+	}
+
+	clearSettledSafetyTracking() {
+		this.guardAbortGoalId = undefined;
+		this.clearAgentRun();
+	}
+
 	clearGoalRecoveryForGoal(goalId: string) {
 		if (this.goalRecovery?.goalId === goalId) this.goalRecovery = undefined;
 	}
@@ -425,6 +568,16 @@ export class GoalRuntime {
 		}
 		this.pendingGoalPromptMarkers.delete(marker);
 		return true;
+	}
+
+	claimCurrentOwnedGoalPrompt(prompt: string) {
+		const marker = extractGoalPromptMarker(prompt);
+		if (!marker) return undefined;
+		const goalId = this.pendingGoalPromptMarkers.get(marker);
+		const activeGoal = this.activeGoal;
+		if (!activeGoal || goalId !== activeGoal.id || activeGoal.status !== "active") return undefined;
+		this.pendingGoalPromptMarkers.delete(marker);
+		return goalId;
 	}
 
 	markContinuationStarted(prompt: string) {
@@ -633,7 +786,7 @@ export class GoalRuntime {
 			const oldest = this.pendingGoalPromptMarkers.keys().next().value;
 			if (oldest) this.pendingGoalPromptMarkers.delete(oldest);
 		}
-		return { marker, prompt: `${prompt}\n\n<!-- ${GOAL_PROMPT_MARKER_PREFIX}${marker} -->` };
+		return { marker, prompt: appendGoalPromptMarker(prompt, marker) };
 	}
 
 	private consumePendingGoalPrompt(prompt: string) {
@@ -674,6 +827,8 @@ export function createGoal(
 		timeUsedSeconds: 0,
 		baselineTokens,
 		activeStartedAt: now,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
 	};
 }
 
@@ -692,6 +847,16 @@ export function transitionGoal(goal: ActiveGoal, requestedStatus: GoalStatus): A
 
 export function nextGoalInstance(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, id: randomUUID(), updatedAt: Date.now() };
+}
+
+export function resetGoalSafetyEpoch(goal: ActiveGoal): ActiveGoal {
+	return {
+		...goal,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
+		lastToolFreeOutputFingerprint: undefined,
+		safetyPauseCause: undefined,
+	};
 }
 
 export function editedGoalStatus(status: GoalStatus): GoalStatus {
@@ -729,9 +894,15 @@ export function goalSummary(
 		`Goal: ${goal.text}`,
 		`Status: ${queueFrozen ? "queue off" : goal.status}`,
 		`Iteration: ${goal.iteration}`,
+		`Automatic model responses: ${goal.automaticModelTurns}`,
 		`Active elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
 		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
 	];
+	if (goal.safetyPauseCause) {
+		summary.push(
+			`Safety pause: ${goal.safetyPauseCause === "continuation_limit" ? "automatic response limit" : "no progress"}`,
+		);
+	}
 	if (experimentalGoals || queuedGoals.length > 0 || queueFrozen) {
 		summary.push(
 			`Goals (${queuedGoals.length + 1}):`,
@@ -787,67 +958,6 @@ export function goalIdRejectionReason(goal: ActiveGoal, requestedGoalId: string)
 	return undefined;
 }
 
-export function isUsageLimitedGoalInterruption(assistant: AssistantMessageLike) {
-	const errorMessage = assistant.errorMessage;
-	return (
-		assistant.stopReason === "error" &&
-		typeof errorMessage === "string" &&
-		USAGE_LIMIT_GOAL_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage))
-	);
-}
-
-export function isRetryableGoalInterruption(assistant: AssistantMessageLike) {
-	if (assistant.stopReason !== "error") return false;
-	if (!assistant.errorMessage) return false;
-	if (
-		isUsageLimitedGoalInterruption(assistant) ||
-		NON_RETRYABLE_GOAL_ERROR_RE.test(assistant.errorMessage)
-	) {
-		return false;
-	}
-	return (
-		isGoalContextOverflow(assistant) ||
-		RETRYABLE_GOAL_ERROR_PATTERNS.some((pattern) => pattern.test(assistant.errorMessage ?? ""))
-	);
-}
-
-export function isGoalContextOverflow(assistant: AssistantMessageLike) {
-	return isContextOverflow(toPiAssistantMessage(assistant));
-}
-
-export function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (!message || typeof message !== "object") continue;
-		const candidate = message as Record<string, unknown>;
-		if (candidate.role !== "assistant") continue;
-		const assistant: AssistantMessageLike = {
-			role: "assistant",
-			stopReason: isAgentStopReason(candidate.stopReason) ? candidate.stopReason : undefined,
-			errorMessage: typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
-		};
-		if (Array.isArray(candidate.content)) {
-			assistant.content = candidate.content as PiAssistantMessage["content"];
-		}
-		if (typeof candidate.api === "string") assistant.api = candidate.api;
-		if (typeof candidate.provider === "string") assistant.provider = candidate.provider;
-		if (typeof candidate.model === "string") assistant.model = candidate.model;
-		if (typeof candidate.timestamp === "number") assistant.timestamp = candidate.timestamp;
-		const usage = normalizeUsage(candidate.usage);
-		if (usage) assistant.usage = usage;
-		return assistant;
-	}
-	return undefined;
-}
-
-export function formatError(error: unknown) {
-	return truncateNotification(error instanceof Error ? error.message : String(error));
-}
-
-export function truncateNotification(value: string) {
-	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
-}
-
 async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
 	try {
 		await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
@@ -871,80 +981,16 @@ function goalCommandHint(status: GoalStatus, experimentalGoals = false) {
 	return `/goal edit <objective>, /goal clear${queueCommands}`;
 }
 
-function toPiAssistantMessage(assistant: AssistantMessageLike): PiAssistantMessage {
-	return {
-		role: "assistant",
-		content: assistant.content ?? [],
-		api: assistant.api ?? "openai-responses",
-		provider: assistant.provider ?? "unknown",
-		model: assistant.model ?? "unknown",
-		usage: assistant.usage ?? zeroUsage(),
-		stopReason: assistant.stopReason ?? "error",
-		errorMessage: assistant.errorMessage,
-		timestamp: assistant.timestamp ?? Date.now(),
-	};
-}
-
-function zeroUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			total: 0,
-		},
-	};
-}
-
 function continuationMarker(goal: ActiveGoal) {
 	return `${goal.id}:${goal.iteration}:${randomUUID()}`;
 }
 
-function escapeRegExpText(value: string) {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-const GOAL_PROMPT_MARKER_PATTERN = new RegExp(
-	`<!--\\s*${escapeRegExpText(GOAL_PROMPT_MARKER_PREFIX)}([^\\s>]+)\\s*-->`,
-);
-const CONTINUATION_MARKER_PATTERN = new RegExp(
-	`<!--\\s*${escapeRegExpText(CONTINUATION_MARKER_PREFIX)}([^\\s>]+)\\s*-->`,
-);
-
-function extractGoalPromptMarker(prompt: string) {
-	return GOAL_PROMPT_MARKER_PATTERN.exec(prompt)?.[1];
-}
-
-function extractContinuationMarker(prompt: string) {
-	return CONTINUATION_MARKER_PATTERN.exec(prompt)?.[1];
-}
-
-function isAgentStopReason(value: unknown): value is AgentStopReason {
-	return ["stop", "length", "toolUse", "error", "aborted"].includes(String(value));
-}
-
-function normalizeUsage(value: unknown): Usage | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const usage = value as Partial<Usage>;
-	if (typeof usage.input !== "number" || typeof usage.output !== "number") return undefined;
-	return {
-		input: nonNegativeFiniteNumber(usage.input),
-		output: nonNegativeFiniteNumber(usage.output),
-		cacheRead: nonNegativeFiniteNumber(usage.cacheRead),
-		cacheWrite: nonNegativeFiniteNumber(usage.cacheWrite),
-		totalTokens: assistantUsageTokens(usage),
-		cost: {
-			input: usage.cost?.input ?? 0,
-			output: usage.cost?.output ?? 0,
-			cacheRead: usage.cost?.cacheRead ?? 0,
-			cacheWrite: usage.cost?.cacheWrite ?? 0,
-			total: usage.cost?.total ?? 0,
-		},
-	};
-}
+export type { AssistantMessageLike } from "./errors.js";
+export {
+	findFinalAssistantMessage,
+	formatError,
+	isGoalContextOverflow,
+	isRetryableGoalInterruption,
+	isUsageLimitedGoalInterruption,
+	truncateNotification,
+} from "./errors.js";

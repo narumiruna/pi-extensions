@@ -23,11 +23,13 @@ import {
 	isGoalContextOverflow,
 	isRetryableGoalInterruption,
 	isUsageLimitedGoalInterruption,
+	resetGoalSafetyEpoch,
 	STATUS_KEY,
 	type StatusContext,
 	transitionGoal,
 	truncateNotification,
 } from "./runtime.js";
+import { hasAssistantToolCall } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, readGoalSettings } from "./settings.js";
 
 // goal.ts is the Pi-facing composition root: it keeps tool contracts and event
@@ -56,16 +58,6 @@ const EXPERIMENTAL_GOALS_WARNING =
 	"Experimental ordered goals are enabled for pi-goal. Queue behavior and persisted state may change.";
 const MAX_BLOCKER_REASON_LENGTH = 1_000;
 const MAX_BLOCKER_EVIDENCE_LENGTH = 4_000;
-
-type AgentSettledHandler = (event: unknown, ctx: StatusContext) => unknown;
-
-function onAgentSettled(pi: ExtensionAPI, handler: AgentSettledHandler) {
-	(
-		pi as unknown as {
-			on(event: "agent_settled", callback: AgentSettledHandler): void;
-		}
-	).on("agent_settled", handler);
-}
 
 function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const runtime = new GoalRuntime(pi);
@@ -100,9 +92,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const consumeCancelledContinuationPrompt =
 		runtime.consumeCancelledContinuationPrompt.bind(runtime);
 	const consumeStaleOwnedGoalPrompt = runtime.consumeStaleOwnedGoalPrompt.bind(runtime);
+	const claimCurrentOwnedGoalPrompt = runtime.claimCurrentOwnedGoalPrompt.bind(runtime);
 	const consumePendingGoalPrompt = runtime.consumeOwnedGoalPrompt.bind(runtime);
 	const markContinuationStarted = runtime.markContinuationStarted.bind(runtime);
 	const hasContinuationWorkForGoal = runtime.hasContinuationWorkForGoal.bind(runtime);
+	const recordAutomaticTurn = runtime.recordAutomaticTurn.bind(runtime);
+	const recordAutomaticRunProgress = runtime.recordAutomaticRunProgress.bind(runtime);
+	const enforceAutomaticTurnLimit = runtime.enforceAutomaticTurnLimit.bind(runtime);
+	const enforceNoProgressLimit = runtime.enforceNoProgressLimit.bind(runtime);
 	const clearActiveGoal = runtime.clearActiveGoal.bind(runtime);
 	const showCompletionStatus = runtime.showCompletionStatus.bind(runtime);
 	const restoreGoalToolsHiddenByPolicy = runtime.restoreGoalToolsHiddenByPolicy.bind(runtime);
@@ -464,7 +461,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearCompletionStatusTimer();
 		clearContinuationTracking();
 		clearPendingGoalPrompts();
-		runtime.agentRunGoalId = undefined;
+		runtime.clearAgentRun();
+		runtime.guardAbortGoalId = undefined;
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
@@ -531,6 +529,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			if (runtime.activeGoal.status === "active") {
 				updateGoalUsage(runtime.activeGoal, ctx);
 				if (limitActiveGoalForBudget(ctx, false)) return;
+				if (enforceAutomaticTurnLimit(ctx, false) || enforceNoProgressLimit(ctx)) return;
 			}
 			if (runtime.settings.toolVisibility === "after-first-goal") {
 				// Registered tools are already active on an unrestricted fresh runtime.
@@ -577,7 +576,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		}
 		clearContinuationTracking();
 		clearPendingGoalPrompts();
-		runtime.agentRunGoalId = undefined;
+		runtime.clearAgentRun();
+		runtime.guardAbortGoalId = undefined;
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
@@ -633,8 +633,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		if (limitActiveGoalForBudget(ctx, false)) return;
 
 		const wasPiRetry = isPiOwnedCompactionRetry(event, runtime.activeGoal.id);
-		clearGoalRecoveryForGoal(runtime.activeGoal.id);
 		if (wasPiRetry) return;
+		clearGoalRecoveryForGoal(runtime.activeGoal.id);
 		requestContinuation(runtime.activeGoal);
 		// Manual compaction does not emit agent_settled. This common dispatcher is
 		// therefore the narrow fallback; threshold compaction leaves the intent for
@@ -642,7 +642,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		dispatchContinuationIfSettled(ctx);
 	});
 
-	pi.on("input", (event) => {
+	pi.on("input", (event, ctx) => {
 		if (event.source === "extension") {
 			if (
 				consumeCancelledContinuationPrompt(event.text) ||
@@ -651,6 +651,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				return { action: "handled" as const };
 			}
 			if (runtime.queueFrozen) return;
+			const ownedGoalId = claimCurrentOwnedGoalPrompt(event.text);
+			if (ownedGoalId && runtime.activeGoal?.id === ownedGoalId) {
+				runtime.beginAgentRun(ownedGoalId, "manual");
+				runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
+				persistGoal(runtime.activeGoal);
+				updateStatus(ctx, runtime.activeGoal);
+				return;
+			}
 			clearGoalRecovery();
 			return;
 		}
@@ -659,6 +667,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
+		runtime.resetActiveSafetyEpoch(ctx);
 	});
 
 	pi.on("context", (event) => {
@@ -667,6 +676,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("tool_call", (event, ctx) => {
+		runtime.markAgentToolAttempted();
 		if (runtime.queueFrozen) {
 			if (!isGoalToolName(event.toolName)) return;
 			return {
@@ -721,15 +731,18 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
-		if (runtime.queueFrozen) {
-			runtime.agentRunGoalId = undefined;
-			return;
-		}
+		runtime.clearAgentRun();
+		if (runtime.queueFrozen) return;
 		const goalPromptGoalId = consumePendingGoalPrompt(event.prompt);
 		const continuationGoalId = goalPromptGoalId ? undefined : markContinuationStarted(event.prompt);
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
 		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
+		const runOrigin = continuationGoalId
+			? "automatic"
+			: activeGoalRecovery && runtime.goalRecovery?.automaticOwner
+				? "automatic"
+				: "manual";
 		if (
 			runtime.pendingQueueAction?.kind === "prioritize" &&
 			!activeBudgetWrapUp &&
@@ -748,38 +761,40 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					updateStatus(ctx, runtime.activeGoal);
 				}
 			}
-			runtime.agentRunGoalId = null;
+			runtime.beginAgentRun(null, undefined);
 			if (ownedPromptGoalId) abortCurrentTurn(ctx);
 			return;
 		}
 		if (activeBudgetWrapUp && runtime.activeGoal) {
-			runtime.agentRunGoalId = runtime.activeGoal.id;
+			runtime.beginAgentRun(runtime.activeGoal.id, "manual");
 			return;
 		}
 		if (
 			runtime.pendingQueueAction?.kind === "advance" &&
 			runtime.pendingQueueAction.goalId === runtime.activeGoal?.id
 		) {
-			runtime.agentRunGoalId = ownedPromptGoalId ?? runtime.activeGoal.id;
+			runtime.beginAgentRun(ownedPromptGoalId ?? runtime.activeGoal.id, runOrigin);
 			if (ownedPromptGoalId) abortCurrentTurn(ctx);
 			return;
 		}
 		if (ownedPromptGoalId && ownedPromptGoalId !== runtime.activeGoal?.id) {
-			runtime.agentRunGoalId = ownedPromptGoalId;
+			runtime.beginAgentRun(ownedPromptGoalId, runOrigin);
 			if (runtime.activeGoal?.status === "active" && !goalToolsAvailable()) {
 				pauseGoalForUnavailableTools(ctx, false);
 			}
 			abortCurrentTurn(ctx);
 			return;
 		}
-		if (runtime.activeGoal?.status !== "active") {
-			runtime.agentRunGoalId = undefined;
-			return;
-		}
-		runtime.agentRunGoalId = runtime.activeGoal.id;
+		if (runtime.activeGoal?.status !== "active") return;
+		runtime.beginAgentRun(runtime.activeGoal.id, runOrigin);
 		if (!goalToolsAvailable()) {
 			pauseGoalForUnavailableTools(ctx, ownedPromptGoalId !== undefined);
 			return;
+		}
+		if (goalPromptGoalId === runtime.activeGoal.id) {
+			runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
+			persistGoal(runtime.activeGoal);
+			updateStatus(ctx, runtime.activeGoal);
 		}
 
 		return {
@@ -787,17 +802,30 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		};
 	});
 
-	pi.on("agent_end", (event, ctx) => {
+	pi.on("agent_start", (_event, ctx) => {
 		if (runtime.queueFrozen) return;
-		const agentRunGoalId = runtime.agentRunGoalId;
-		runtime.agentRunGoalId = undefined;
+		const activeGoal = runtime.activeGoal;
 		if (
-			agentRunGoalId === null ||
-			(!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp())
+			activeGoal &&
+			runtime.guardAbortGoalId === activeGoal.id &&
+			activeGoal.status === "paused"
 		) {
+			abortCurrentTurn(ctx);
 			return;
 		}
-		if (agentRunGoalId && agentRunGoalId !== runtime.activeGoal?.id) return;
+		runtime.beginRecoveryRunIfNeeded();
+	});
+
+	pi.on("turn_end", (event, ctx) => {
+		if (runtime.queueFrozen) return;
+		recordAutomaticTurn(ctx, event.message);
+	});
+
+	pi.on("agent_end", (event, ctx) => {
+		const run = runtime.finishAgentRun();
+		if (runtime.queueFrozen || run.goalId === null) return;
+		if (!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp()) return;
+		if (run.goalId && run.goalId !== runtime.activeGoal?.id) return;
 		if (!runtime.activeGoal) return;
 		if (
 			runtime.activeGoal.status === "budget_limited" &&
@@ -843,6 +871,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				runtime.goalRecovery = {
 					goalId,
 					kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
+					automaticOwner: run.origin === "automatic",
+					errorMessage: finalAssistant.errorMessage,
 				};
 				cancelContinuationWork();
 				persistGoal(runtime.activeGoal);
@@ -866,6 +896,17 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			pauseGoalForUnavailableTools(ctx);
 			return;
 		}
+		if (
+			run.origin === "automatic" &&
+			recordAutomaticRunProgress(
+				ctx,
+				goalId,
+				event.messages,
+				run.toolAttempted || hasAssistantToolCall(event.messages),
+			)
+		) {
+			return;
+		}
 
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
@@ -876,15 +917,18 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		requestContinuation(currentGoal);
 	});
 
-	onAgentSettled(pi, (_event, ctx) => {
-		if (runtime.queueFrozen) return;
-		if (!runtime.pendingQueueAction) {
-			dispatchContinuationIfSettled(ctx);
+	pi.on("agent_settled", async (_event, ctx) => {
+		if (runtime.queueFrozen) {
+			runtime.clearSettledSafetyTracking();
 			return;
 		}
-		return dispatchPendingQueueActionIfSettled(ctx).then((dispatched) => {
-			if (!dispatched) dispatchContinuationIfSettled(ctx);
-		});
+		runtime.finalizeSettledRecovery(ctx);
+		let dispatchedQueueAction = false;
+		if (runtime.pendingQueueAction) {
+			dispatchedQueueAction = await dispatchPendingQueueActionIfSettled(ctx);
+		}
+		if (!dispatchedQueueAction) dispatchContinuationIfSettled(ctx);
+		runtime.clearSettledSafetyTracking();
 	});
 
 	function hasPendingSkipForGoal(goalId: string) {

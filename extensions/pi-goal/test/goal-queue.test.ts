@@ -436,6 +436,37 @@ test("pending prioritize preserves Pi-owned retry turns", async () => {
 	assert.equal(stateGoals(harness.mock)[0]?.text, "urgent goal");
 });
 
+test("exhausted retry finalizes before pending priority dispatches at settlement", async () => {
+	let idle = false;
+	const harness = await createHarness({ isIdle: () => idle });
+	await harness.command("recovering goal");
+	const ownedPrompt = harness.mock.sentUserMessages.at(-1)?.text;
+	assert.ok(ownedPrompt);
+	await harness.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: ownedPrompt, systemPrompt: "base" },
+		harness.ctx,
+	);
+	await harness.command("prioritize urgent goal");
+	await harness.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{ role: "assistant", stopReason: "error", errorMessage: "HTTP 524 upstream timeout" },
+			],
+		},
+		harness.ctx,
+	);
+
+	idle = true;
+	await settled(harness);
+	assert.deepEqual(
+		stateGoals(harness.mock).map(({ text, status }) => ({ text, status })),
+		[
+			{ text: "urgent goal", status: "active" },
+			{ text: "recovering goal", status: "blocked" },
+		],
+	);
+});
+
 test("extension input cannot claim a pending Pi retry under priority", async () => {
 	let idle = false;
 	const harness = await createHarness({ isIdle: () => idle });
@@ -1361,6 +1392,8 @@ function storedGoal(text: string, status: ActiveGoal["status"]): ActiveGoal {
 		tokensUsed: 0,
 		timeUsedSeconds: 0,
 		baselineTokens: 0,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
 		...(status === "active" ? { activeStartedAt: 1 } : {}),
 	};
 }

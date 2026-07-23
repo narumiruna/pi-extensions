@@ -11,7 +11,12 @@ import {
 } from "../src/queue.js";
 
 test("queue structural operations preserve array order", () => {
-	const head = goal("head", "active");
+	const head = {
+		...goal("head", "active"),
+		automaticModelTurns: 9,
+		toolFreeRepeatCount: 2,
+		lastToolFreeOutputFingerprint: "a".repeat(64),
+	};
 	const second = goal("second", "queued");
 	const third = goal("third", "queued");
 
@@ -27,6 +32,9 @@ test("queue structural operations preserve array order", () => {
 		["head", "second"],
 	);
 	assert.equal(prioritized.queue[0]?.status, "queued");
+	assert.equal(prioritized.queue[0]?.automaticModelTurns, 9);
+	assert.equal(prioritized.queue[0]?.toolFreeRepeatCount, 2);
+	assert.equal(prioritized.queue[0]?.lastToolFreeOutputFingerprint, "a".repeat(64));
 
 	const dropped = dropLastGoal(head, [second, third]);
 	assert.equal(dropped.removed?.text, "third");
@@ -52,13 +60,23 @@ test("dropping the only goal clears the head", () => {
 });
 
 test("queued goals activate with fresh ids and rebased independent accounting", () => {
-	const queued = { ...createQueuedGoal("later", 2_000, 1_000), id: "old-id", tokensUsed: 75 };
+	const queued = {
+		...createQueuedGoal("later", 2_000, 1_000),
+		id: "old-id",
+		tokensUsed: 75,
+		automaticModelTurns: 4,
+		toolFreeRepeatCount: 2,
+		lastToolFreeOutputFingerprint: "b".repeat(64),
+	};
 	const activated = activateQueuedGoal(queued, 1_500, 2_000);
 	assert.notEqual(activated.id, "old-id");
 	assert.equal(activated.status, "active");
 	assert.equal(activated.baselineTokens, 1_425);
 	assert.equal(activated.tokensUsed, 75);
 	assert.equal(activated.activeStartedAt, 2_000);
+	assert.equal(activated.automaticModelTurns, 4);
+	assert.equal(activated.toolFreeRepeatCount, 2);
+	assert.equal(activated.lastToolFreeOutputFingerprint, "b".repeat(64));
 });
 
 test("stopped queued heads keep their status until explicit resume", () => {
@@ -82,6 +100,8 @@ function goal(text: string, status: ActiveGoal["status"]): ActiveGoal {
 		tokensUsed: 0,
 		timeUsedSeconds: 0,
 		baselineTokens: 0,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
 		...(status === "active" ? { activeStartedAt: 1_000 } : {}),
 	};
 }

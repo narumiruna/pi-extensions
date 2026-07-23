@@ -442,9 +442,10 @@ export class GoalCommandController {
 		this.runtime.clearGoalRecovery();
 		this.runtime.clearBudgetWrapUp();
 		const previousStatus = this.runtime.activeGoal.status;
+		const rotatedGoal = nextGoalInstance(this.runtime.activeGoal);
 		const nextGoal = transitionGoal(
 			{
-				...nextGoalInstance(this.runtime.activeGoal),
+				...rotatedGoal,
 				text: objective,
 				tokenBudget: tokenBudget ?? this.runtime.activeGoal.tokenBudget,
 			},

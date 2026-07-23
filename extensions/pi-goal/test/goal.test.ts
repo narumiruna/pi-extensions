@@ -20,6 +20,12 @@ import goal, {
 	parseTokenBudget,
 	validateObjective,
 } from "../src/goal.js";
+import {
+	fingerprintVisibleAssistantOutput,
+	hasAssistantToolCall,
+	nextToolFreeRepeatState,
+	normalizeVisibleAssistantOutput,
+} from "../src/safety.js";
 
 // This suite stays in one file because it exercises one module-scoped extension
 // state machine across commands, lifecycle hooks, tools, persistence, prompts,
@@ -33,9 +39,19 @@ const ALWAYS_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "always.json");
 const LAZY_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "after-first-goal.json");
 const INVALID_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "invalid.json");
 const MISSING_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "missing.json");
+const LOW_LIMITS_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "low-limits.json");
+const ONE_TURN_LIMIT_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "one-turn-limit.json");
 writeFileSync(ALWAYS_SETTINGS_PATH, '{"toolVisibility":"always"}\n');
 writeFileSync(LAZY_SETTINGS_PATH, '{"toolVisibility":"after-first-goal"}\n');
 writeFileSync(INVALID_SETTINGS_PATH, '{"toolVisibility":"sometimes"}\n');
+writeFileSync(
+	LOW_LIMITS_SETTINGS_PATH,
+	'{"continuationLimits":{"automaticTurns":3,"noProgressTurns":3}}\n',
+);
+writeFileSync(
+	ONE_TURN_LIMIT_SETTINGS_PATH,
+	'{"continuationLimits":{"automaticTurns":1,"noProgressTurns":null}}\n',
+);
 after(() => rmSync(GOAL_SETTINGS_DIRECTORY, { recursive: true, force: true }));
 
 function registerGoal(
@@ -103,6 +119,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"agent_end",
 		"agent_settled",
+		"agent_start",
 		"before_agent_start",
 		"context",
 		"input",
@@ -112,6 +129,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 		"session_start",
 		"tool_call",
 		"tool_execution_end",
+		"turn_end",
 	]);
 });
 
@@ -1072,7 +1090,7 @@ test("pending compaction recovery survives later child startup", async () => {
 	const rootContext = createMockContext();
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
-	const rootGoal = requireLastGoal(root);
+	requireLastGoal(root);
 	const rootUserMessagesBefore = root.sentUserMessages.length;
 
 	await root.events.get("agent_end")?.[0]?.(
@@ -1092,16 +1110,15 @@ test("pending compaction recovery survives later child startup", async () => {
 	registerGoal(child.pi);
 	const childContext = createMockContext();
 	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
-	const retryPrompt = root.events.get("before_agent_start")?.[0]?.(
-		{ prompt: "retry", systemPrompt: "base" },
-		rootContext.ctx,
-	) as { systemPrompt?: string } | undefined;
-	assert.match(retryPrompt?.systemPrompt ?? "", new RegExp(rootGoal.id));
-
 	root.events.get("session_before_compact")?.[0]?.({}, rootContext.ctx);
 	await root.events.get("session_compact")?.[0]?.({}, rootContext.ctx);
+	root.events.get("agent_start")?.[0]?.({}, rootContext.ctx);
+	await root.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		rootContext.ctx,
+	);
 	await root.events.get("agent_settled")?.[0]?.({}, rootContext.ctx);
-	assert.equal(root.sentUserMessages.length, rootUserMessagesBefore);
+	assert.equal(root.sentUserMessages.length, rootUserMessagesBefore + 1);
 	assert.equal(child.sentUserMessages.length, 0);
 	assert.equal(lastGoalStatus(root), "active");
 	assert.equal(lastGoalStatus(child), null);
@@ -1391,6 +1408,59 @@ test("session reload immediately limits an active goal whose persisted usage is 
 	assert.equal(restored.mock.sentMessages.length, 0);
 });
 
+test("session reload pauses an active goal already at the automatic response limit", () => {
+	const sessionGoal: StoredGoal = {
+		id: "restored-at-automatic-limit",
+		text: "restore bounded active goal",
+		status: "active",
+		startedAt: 1,
+		updatedAt: 2,
+		iteration: 3,
+		tokensUsed: 5,
+		timeUsedSeconds: 4,
+		baselineTokens: 0,
+		automaticModelTurns: 3,
+		toolFreeRepeatCount: 0,
+	};
+	const restored = restoreStoredGoalForTest(
+		sessionGoal,
+		[],
+		"always",
+		{},
+		LOW_LIMITS_SETTINGS_PATH,
+	);
+	assert.equal(lastGoalStatus(restored.mock), "paused");
+	assert.equal(requireLastGoal(restored.mock).safetyPauseCause, "continuation_limit");
+	assert.equal(restored.mock.sentUserMessages.length, 0);
+});
+
+test("session reload pauses an active goal already at the no-progress limit", () => {
+	const sessionGoal: StoredGoal = {
+		id: "restored-at-no-progress-limit",
+		text: "restore stalled active goal",
+		status: "active",
+		startedAt: 1,
+		updatedAt: 2,
+		iteration: 3,
+		tokensUsed: 5,
+		timeUsedSeconds: 4,
+		baselineTokens: 0,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 3,
+		lastToolFreeOutputFingerprint: "d".repeat(64),
+	};
+	const restored = restoreStoredGoalForTest(
+		sessionGoal,
+		[],
+		"always",
+		{},
+		LOW_LIMITS_SETTINGS_PATH,
+	);
+	assert.equal(lastGoalStatus(restored.mock), "paused");
+	assert.equal(requireLastGoal(restored.mock).safetyPauseCause, "no_progress");
+	assert.equal(restored.mock.sentUserMessages.length, 0);
+});
+
 test("session reload drops malformed persisted budgets instead of limiting the goal", () => {
 	const restored = restoreStoredGoalForTest({
 		id: "restored-malformed-budget",
@@ -1457,6 +1527,8 @@ test("formatStatus reports active, stopped, budget-limited, complete, and empty 
 		tokensUsed: 500,
 		timeUsedSeconds: 90,
 		baselineTokens: 0,
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
 	} as const;
 
 	assert.equal(formatStatus(undefined), undefined);
@@ -1958,6 +2030,144 @@ test("resume safely reactivates every resumable stopped status and rotates goal_
 	}
 });
 
+test("safety epochs reset on successful resume and active edit", async () => {
+	const safety = {
+		automaticModelTurns: 25,
+		toolFreeRepeatCount: 3,
+		lastToolFreeOutputFingerprint: "a".repeat(64),
+		safetyPauseCause: "no_progress" as const,
+	};
+	const resumed = restoreGoalForTest("paused", safety);
+	await resumed.mock.commands.get("goal")?.handler("resume", resumed.ctx);
+	assert.deepEqual(pickSafetyState(requireLastGoal(resumed.mock)), safety);
+	resumed.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: resumed.mock.sentUserMessages.at(-1)?.text ?? "", systemPrompt: "base" },
+		resumed.ctx,
+	);
+	assert.deepEqual(pickSafetyState(requireLastGoal(resumed.mock)), {
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
+		lastToolFreeOutputFingerprint: undefined,
+		safetyPauseCause: undefined,
+	});
+
+	const edited = await startGoalForTest();
+	const activeGoal = requireLastGoal(edited.mock);
+	activeGoal.automaticModelTurns = 8;
+	activeGoal.toolFreeRepeatCount = 2;
+	activeGoal.lastToolFreeOutputFingerprint = "b".repeat(64);
+	edited.mock.entries.push({ customType: "goal-state", data: { goal: activeGoal } });
+	await edited.mock.commands.get("goal")?.handler("edit revised objective", edited.ctx);
+	assert.deepEqual(pickSafetyState(requireLastGoal(edited.mock)), {
+		automaticModelTurns: 8,
+		toolFreeRepeatCount: 2,
+		lastToolFreeOutputFingerprint: "b".repeat(64),
+		safetyPauseCause: undefined,
+	});
+	edited.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: edited.mock.sentUserMessages.at(-1)?.text ?? "", systemPrompt: "base" },
+		edited.ctx,
+	);
+	assert.deepEqual(pickSafetyState(requireLastGoal(edited.mock)), {
+		automaticModelTurns: 0,
+		toolFreeRepeatCount: 0,
+		lastToolFreeOutputFingerprint: undefined,
+		safetyPauseCause: undefined,
+	});
+});
+
+test("stopped input and failed resume preserve the exact safety epoch", async () => {
+	const safety = {
+		automaticModelTurns: 25,
+		toolFreeRepeatCount: 3,
+		lastToolFreeOutputFingerprint: "c".repeat(64),
+		safetyPauseCause: "continuation_limit" as const,
+	};
+	const restored = restoreGoalForTest("paused", safety);
+	restored.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "what happened?" },
+		restored.ctx,
+	);
+	assert.deepEqual(pickSafetyState(requireLastGoal(restored.mock)), safety);
+
+	restored.mock.rawPi.sendUserMessage = () => {
+		throw new Error("resume delivery failed");
+	};
+	await restored.mock.commands.get("goal")?.handler("resume", restored.ctx);
+	assert.equal(requireLastGoal(restored.mock).id, restored.sessionGoal.id);
+	assert.deepEqual(pickSafetyState(requireLastGoal(restored.mock)), safety);
+});
+
+test("direct active input resets safety and reclassifies an in-flight automatic run", async () => {
+	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	active.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		active.ctx,
+	);
+	active.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 1);
+	active.mock.events.get("input")?.[0]?.(
+		{ source: "extension", text: "unrelated extension input" },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 1);
+
+	active.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "new evidence" },
+		active.ctx,
+	);
+	active.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		active.ctx,
+	);
+
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
+});
+
+test("busy active edit claims same-run ownership and resets safety at input", async () => {
+	const edited = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	const kickoff = edited.mock.sentUserMessages.at(-1)?.text ?? "";
+	edited.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: kickoff, systemPrompt: "base" },
+		edited.ctx,
+	);
+	const previous = requireLastGoal(edited.mock);
+	previous.automaticModelTurns = 2;
+	previous.toolFreeRepeatCount = 2;
+	previous.lastToolFreeOutputFingerprint = "e".repeat(64);
+
+	await edited.mock.commands.get("goal")?.handler("edit busy replacement", edited.ctx);
+	const candidate = requireLastGoal(edited.mock);
+	assert.notEqual(candidate.id, previous.id);
+	assert.equal(candidate.automaticModelTurns, 2);
+	const editPrompt = edited.mock.sentUserMessages.at(-1)?.text ?? "";
+	edited.mock.events.get("input")?.[0]?.({ source: "extension", text: editPrompt }, edited.ctx);
+	assert.equal(requireLastGoal(edited.mock).automaticModelTurns, 0);
+	assert.equal(requireLastGoal(edited.mock).toolFreeRepeatCount, 0);
+
+	await edited.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		edited.ctx,
+	);
+	await edited.mock.events.get("agent_settled")?.[0]?.({}, edited.ctx);
+	assert.equal(lastGoalStatus(edited.mock), "active");
+	assert.equal(edited.mock.sentUserMessages.length, 3);
+});
+
 test("resume rejects active goals and exhausted budgets without rotating goal_id", async () => {
 	const active = await startGoalForTest();
 	const activeGoal = requireLastGoal(active.mock);
@@ -2156,6 +2366,250 @@ test("pause remains active-only for new stopped statuses", async () => {
 			status === "usage_limited" ? "usage" : status === "budget_limited" ? "budget 5/10" : status,
 		);
 	}
+});
+
+test("no-progress classifier normalizes visible output conservatively", () => {
+	const blank = [{ role: "assistant", content: [{ type: "text", text: "  ...\u0000 " }] }];
+	const thinkingOnly = [
+		{ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, null] },
+		{ malformed: true },
+	];
+	assert.equal(normalizeVisibleAssistantOutput(blank), "");
+	assert.equal(normalizeVisibleAssistantOutput(thinkingOnly), "");
+	assert.equal(
+		fingerprintVisibleAssistantOutput(blank),
+		fingerprintVisibleAssistantOutput(thinkingOnly),
+	);
+	assert.equal(
+		hasAssistantToolCall([
+			{ role: "assistant", content: [{ type: "toolCall", name: "unknown", arguments: {} }] },
+		]),
+		true,
+	);
+
+	let state = { toolFreeRepeatCount: 0 };
+	state = nextToolFreeRepeatState(
+		state,
+		[{ role: "assistant", content: [{ type: "text", text: "  STILL   Working " }] }],
+		false,
+	);
+	assert.equal(state.toolFreeRepeatCount, 1);
+	state = nextToolFreeRepeatState(
+		state,
+		[{ role: "assistant", content: [{ type: "text", text: "still working" }] }],
+		false,
+	);
+	assert.equal(state.toolFreeRepeatCount, 2);
+	state = nextToolFreeRepeatState(
+		state,
+		[{ role: "assistant", content: [{ type: "text", text: "different short output" }] }],
+		false,
+	);
+	assert.equal(state.toolFreeRepeatCount, 1);
+	state = nextToolFreeRepeatState(state, blank, true);
+	assert.deepEqual(state, { toolFreeRepeatCount: 0 });
+});
+
+test("assistant toolCall blocks reset no-progress even when tool_call hook never fires", async () => {
+	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		active.ctx,
+	);
+	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	for (let run = 1; run <= 2; run++) {
+		const prompt = active.mock.sentUserMessages.at(-1)?.text ?? "";
+		active.mock.events.get("before_agent_start")?.[0]?.(
+			{ prompt, systemPrompt: "base" },
+			active.ctx,
+		);
+		await active.mock.events.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+			active.ctx,
+		);
+		await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+	}
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
+
+	const prompt = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	active.mock.events.get("before_agent_start")?.[0]?.({ prompt, systemPrompt: "base" }, active.ctx);
+	await active.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{
+					role: "assistant",
+					stopReason: "toolUse",
+					content: [{ type: "toolCall", name: "unknown", arguments: {} }],
+				},
+			],
+		},
+		active.ctx,
+	);
+	assert.equal(lastGoalStatus(active.mock), "active");
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
+});
+
+test("automatic turn_end hard cap pauses a tool loop before another normal response", async () => {
+	let aborts = 0;
+	const capped = await startGoalForTest(
+		{ abort: () => aborts++ },
+		"finish",
+		LOW_LIMITS_SETTINGS_PATH,
+	);
+	const stateEvents: Array<{ status?: string; reason?: string }> = [];
+	capped.mock.eventBus.on("pi-goal:state", (data) =>
+		stateEvents.push(data as { status?: string; reason?: string }),
+	);
+	const kickoffPrompt = capped.mock.sentUserMessages.at(-1)?.text ?? "";
+	capped.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: kickoffPrompt, systemPrompt: "base" },
+		capped.ctx,
+	);
+	capped.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		capped.ctx,
+	);
+	assert.equal(requireLastGoal(capped.mock).automaticModelTurns, 0);
+	await capped.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+	const continuationPrompt = capped.mock.sentUserMessages.at(-1)?.text ?? "";
+	capped.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuationPrompt, systemPrompt: "base" },
+		capped.ctx,
+	);
+
+	for (let turn = 1; turn <= 3; turn++) {
+		capped.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "read", toolCallId: `tool-${turn}`, input: {} },
+			capped.ctx,
+		);
+		capped.mock.events.get("turn_end")?.[0]?.(
+			{
+				message: { role: "assistant", stopReason: "toolUse", content: [] },
+				toolResults: [],
+			},
+			capped.ctx,
+		);
+	}
+
+	const stopped = requireLastGoal(capped.mock);
+	assert.equal(stopped.status, "paused");
+	assert.equal(stopped.automaticModelTurns, 3);
+	assert.equal(stopped.safetyPauseCause, "continuation_limit");
+	assert.equal(aborts, 1);
+	assert.equal(
+		capped.notifications.filter((notice) =>
+			/Goal paused: 3 automatic model responses/i.test(notice.message),
+		).length,
+		1,
+	);
+	assert.match(
+		stateEvents.find((event) => event.status === "paused")?.reason ?? "",
+		/continuation_limit.*3 automatic model responses.*tokens/i,
+	);
+	await capped.mock.commands.get("goal")?.handler("", capped.ctx);
+	assert.match(capped.notifications.at(-1)?.message ?? "", /Automatic model responses: 3/i);
+	assert.match(
+		capped.notifications.at(-1)?.message ?? "",
+		/Safety pause: automatic response limit/i,
+	);
+	capped.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "aborted", content: [] }, toolResults: [] },
+		capped.ctx,
+	);
+	assert.equal(requireLastGoal(capped.mock).automaticModelTurns, 3);
+	await capped.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "aborted", content: [] }] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+	assert.equal(capped.mock.sentUserMessages.length, 2);
+});
+
+test("hard cap aborts Pi recovery started after a retryable boundary error", async () => {
+	let aborts = 0;
+	const capped = await startGoalForTest(
+		{ abort: () => aborts++ },
+		"finish",
+		ONE_TURN_LIMIT_SETTINGS_PATH,
+	);
+	await capped.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+	const continuation = capped.mock.sentUserMessages.at(-1)?.text ?? "";
+	capped.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		capped.ctx,
+	);
+	const retryableError = {
+		role: "assistant",
+		stopReason: "error",
+		errorMessage: "HTTP 524: upstream timeout",
+		content: [],
+	};
+	capped.mock.events.get("turn_end")?.[0]?.(
+		{ message: retryableError, toolResults: [] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_end")?.[0]?.({ messages: [retryableError] }, capped.ctx);
+	assert.equal(lastGoalStatus(capped.mock), "paused");
+	assert.equal(aborts, 1);
+
+	capped.mock.events.get("agent_start")?.[0]?.({}, capped.ctx);
+	assert.equal(aborts, 2);
+	capped.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "aborted", content: [] }, toolResults: [] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "aborted", content: [] }] },
+		capped.ctx,
+	);
+	await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+	assert.equal(requireLastGoal(capped.mock).automaticModelTurns, 1);
+	assert.equal(capped.mock.sentUserMessages.length, 2);
+});
+
+test("three blank automatic runs pause for no progress without a fourth continuation", async () => {
+	const stalled = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await stalled.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
+			],
+		},
+		stalled.ctx,
+	);
+	await stalled.mock.events.get("agent_settled")?.[0]?.({}, stalled.ctx);
+
+	for (let run = 1; run <= 3; run++) {
+		const prompt = stalled.mock.sentUserMessages.at(-1)?.text ?? "";
+		stalled.mock.events.get("before_agent_start")?.[0]?.(
+			{ prompt, systemPrompt: "base" },
+			stalled.ctx,
+		);
+		await stalled.mock.events.get("agent_end")?.[0]?.(
+			{
+				messages: [
+					{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "   ...  " }] },
+				],
+			},
+			stalled.ctx,
+		);
+		await stalled.mock.events.get("agent_settled")?.[0]?.({}, stalled.ctx);
+	}
+
+	const stopped = requireLastGoal(stalled.mock);
+	assert.equal(stopped.status, "paused");
+	assert.equal(stopped.toolFreeRepeatCount, 3);
+	assert.equal(stopped.safetyPauseCause, "no_progress");
+	assert.equal(stalled.mock.sentUserMessages.length, 4);
+	assert.match(stalled.notifications.at(-1)?.message ?? "", /no progress.*3 automatic runs/i);
 });
 
 test("agent_settled dispatches one idle continuation after agent_end records intent", async () => {
@@ -2974,6 +3428,22 @@ test("agent_end keeps retryable interruptions active but stops on non-retryable 
 		isRetryableGoalInterruption({
 			role: "assistant",
 			stopReason: "error",
+			errorMessage: "HTTP 524: upstream timeout",
+		}),
+		true,
+	);
+	assert.equal(
+		isRetryableGoalInterruption({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "ResourceExhausted: transient backend capacity",
+		}),
+		true,
+	);
+	assert.equal(
+		isRetryableGoalInterruption({
+			role: "assistant",
+			stopReason: "error",
 			errorMessage: "You have hit your ChatGPT usage limit.",
 		}),
 		false,
@@ -2988,14 +3458,22 @@ test("agent_end keeps retryable interruptions active but stops on non-retryable 
 	);
 
 	assert.equal(lastGoalStatus(retryable.mock), "active");
-	await retryable.mock.events.get("agent_settled")?.[0]?.({}, retryable.ctx);
-	assert.equal(retryable.mock.sentUserMessages.length, 1);
 	assert.equal(
 		retryable.mock.events.get("tool_call")?.[0]?.(
 			{ toolName: "bash", toolCallId: "retry-tool", input: {} },
 			retryable.ctx,
 		),
 		undefined,
+	);
+	await retryable.mock.events.get("agent_settled")?.[0]?.({}, retryable.ctx);
+	assert.equal(retryable.mock.sentUserMessages.length, 1);
+	assert.equal(lastGoalStatus(retryable.mock), "blocked");
+	assert.deepEqual(
+		retryable.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "retry-exhausted-tool", input: {} },
+			retryable.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
 	);
 
 	let aborts = 0;
@@ -3024,6 +3502,84 @@ test("agent_end keeps retryable interruptions active but stops on non-retryable 
 		),
 		{ block: true, reason: STALE_GOAL_TOOL_REASON },
 	);
+});
+
+test("automatic ownership survives agent_start retry without before_agent_start", async () => {
+	const retried = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	await retried.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		retried.ctx,
+	);
+	await retried.mock.events.get("agent_settled")?.[0]?.({}, retried.ctx);
+	const continuation = retried.mock.sentUserMessages.at(-1)?.text ?? "";
+	retried.mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: continuation, systemPrompt: "base" },
+		retried.ctx,
+	);
+	retried.mock.events.get("turn_end")?.[0]?.(
+		{
+			message: {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "HTTP 524: upstream timeout",
+				content: [],
+			},
+			toolResults: [],
+		},
+		retried.ctx,
+	);
+	await retried.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "HTTP 524: upstream timeout",
+					content: [],
+				},
+			],
+		},
+		retried.ctx,
+	);
+	assert.equal(requireLastGoal(retried.mock).automaticModelTurns, 1);
+
+	retried.mock.events.get("agent_start")?.[0]?.({}, retried.ctx);
+	retried.mock.events.get("turn_end")?.[0]?.(
+		{ message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+		retried.ctx,
+	);
+	await retried.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+		retried.ctx,
+	);
+	await retried.mock.events.get("agent_settled")?.[0]?.({}, retried.ctx);
+
+	assert.equal(lastGoalStatus(retried.mock), "active");
+	assert.equal(requireLastGoal(retried.mock).automaticModelTurns, 2);
+});
+
+test("stale exhausted recovery cannot block a replacement goal", async () => {
+	const replaced = await startGoalForTest();
+	await replaced.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "HTTP 524 upstream timeout",
+				},
+			],
+		},
+		replaced.ctx,
+	);
+	const oldGoal = requireLastGoal(replaced.mock);
+	await replaced.mock.commands.get("goal")?.handler("replacement objective", replaced.ctx);
+	const replacement = requireLastGoal(replaced.mock);
+	assert.notEqual(replacement.id, oldGoal.id);
+
+	await replaced.mock.events.get("agent_settled")?.[0]?.({}, replaced.ctx);
+	assert.equal(requireLastGoal(replaced.mock).id, replacement.id);
+	assert.equal(lastGoalStatus(replaced.mock), "active");
 });
 
 test("an exhausted goal does not remain active for a retryable provider error", async () => {
@@ -3109,10 +3665,22 @@ test("overflow compaction retry keeps the goal active and does not block retry t
 
 	overflow.mock.events.get("session_before_compact")?.[0]?.({}, overflow.ctx);
 	await overflow.mock.events.get("session_compact")?.[0]?.({}, overflow.ctx);
+	assert.equal(lastGoalStatus(overflow.mock), "active");
+
+	// Pi retries through agent.continue(), which emits agent_start but not before_agent_start.
+	overflow.mock.events.get("agent_start")?.[0]?.({}, overflow.ctx);
+	await overflow.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "recovered" }] },
+			],
+		},
+		overflow.ctx,
+	);
 	await overflow.mock.events.get("agent_settled")?.[0]?.({}, overflow.ctx);
 
 	assert.equal(lastGoalStatus(overflow.mock), "active");
-	assert.equal(overflow.mock.sentUserMessages.length, 1);
+	assert.equal(overflow.mock.sentUserMessages.length, 2);
 	assert.equal(
 		overflow.mock.events.get("tool_call")?.[0]?.(
 			{ toolName: "bash", toolCallId: "post-compact-retry-tool", input: {} },
@@ -3294,6 +3862,10 @@ type StoredGoal = {
 	timeUsedSeconds?: number;
 	baselineTokens?: number;
 	activeStartedAt?: number;
+	automaticModelTurns?: number;
+	toolFreeRepeatCount?: number;
+	lastToolFreeOutputFingerprint?: string;
+	safetyPauseCause?: string;
 };
 
 function assertHardenedGoalPrompt(prompt: string) {
@@ -3348,7 +3920,15 @@ function requireGoalTool(mock: ReturnType<typeof createMockPi>, name: string) {
 
 function restoreGoalForTest(
 	status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited",
-	overrides: { tokenBudget?: number; tokensUsed?: number; timeUsedSeconds?: number } = {},
+	overrides: {
+		tokenBudget?: number;
+		tokensUsed?: number;
+		timeUsedSeconds?: number;
+		automaticModelTurns?: number;
+		toolFreeRepeatCount?: number;
+		lastToolFreeOutputFingerprint?: string;
+		safetyPauseCause?: "continuation_limit" | "no_progress";
+	} = {},
 	toolVisibility: "always" | "after-first-goal" = "always",
 	contextOverrides: Record<string, unknown> = {},
 ) {
@@ -3363,6 +3943,10 @@ function restoreGoalForTest(
 		tokensUsed: overrides.tokensUsed ?? 5,
 		timeUsedSeconds: overrides.timeUsedSeconds ?? 4,
 		baselineTokens: 0,
+		automaticModelTurns: overrides.automaticModelTurns ?? 0,
+		toolFreeRepeatCount: overrides.toolFreeRepeatCount ?? 0,
+		lastToolFreeOutputFingerprint: overrides.lastToolFreeOutputFingerprint,
+		safetyPauseCause: overrides.safetyPauseCause,
 	};
 	return restoreStoredGoalForTest(sessionGoal, [], toolVisibility, contextOverrides);
 }
@@ -3372,6 +3956,7 @@ function restoreStoredGoalForTest(
 	extraEntries: Array<Record<string, unknown>> = [],
 	toolVisibility: "always" | "after-first-goal" = "always",
 	contextOverrides: Record<string, unknown> = {},
+	settingsPath?: string,
 ) {
 	const branch = [
 		{
@@ -3382,7 +3967,8 @@ function restoreStoredGoalForTest(
 		...extraEntries,
 	];
 	const mock = createMockPi();
-	registerGoal(mock.pi, toolVisibility);
+	if (settingsPath) registerGoalWithSettingsPath(mock.pi, settingsPath);
+	else registerGoal(mock.pi, toolVisibility);
 	const context = createMockContext({
 		...contextOverrides,
 		sessionManager: { getBranch: () => branch, getEntries: () => branch },
@@ -3391,9 +3977,13 @@ function restoreStoredGoalForTest(
 	return { mock, ...context, sessionGoal };
 }
 
-async function startGoalForTest(overrides: Record<string, unknown> = {}, command = "finish") {
+async function startGoalForTest(
+	overrides: Record<string, unknown> = {},
+	command = "finish",
+	settingsPath = ALWAYS_SETTINGS_PATH,
+) {
 	const mock = createMockPi();
-	registerGoal(mock.pi);
+	registerGoalWithSettingsPath(mock.pi, settingsPath);
 	const context = createMockContext(overrides);
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	await mock.commands.get("goal")?.handler(command, context.ctx);
@@ -3420,6 +4010,15 @@ function findPersistedGoal(mock: ReturnType<typeof createMockPi>, status: string
 		if (stored?.status === status) return stored;
 	}
 	return undefined;
+}
+
+function pickSafetyState(goal: StoredGoal) {
+	return {
+		automaticModelTurns: goal.automaticModelTurns,
+		toolFreeRepeatCount: goal.toolFreeRepeatCount,
+		lastToolFreeOutputFingerprint: goal.lastToolFreeOutputFingerprint,
+		safetyPauseCause: goal.safetyPauseCause,
+	};
 }
 
 function lastGoalStatus(mock: ReturnType<typeof createMockPi>) {
