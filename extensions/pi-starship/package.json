@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-starship",
-	"version": "0.27.0",
+	"version": "0.27.1",
 	"description": "Native Starship-style TOML statusline for the Pi coding agent.",
 	"type": "module",
 	"license": "MIT",
