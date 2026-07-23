@@ -54,7 +54,8 @@ pi -e ./extensions/pi-goal
 
 ## ⚙️ Configuration
 
-Configuration is optional. Create `~/.pi/agent/pi-goal.json` only when overriding the defaults:
+On the first session start, pi-goal automatically creates `~/.pi/agent/pi-goal.json`
+with the complete current defaults:
 
 ```json
 {
@@ -69,6 +70,8 @@ Configuration is optional. Create `~/.pi/agent/pi-goal.json` only when overridin
 }
 ```
 
+Edit this generated file only when overriding the defaults.
+
 `toolVisibility` accepts:
 
 - `"always"` (default) — pi-goal does not proactively hide `goal_complete` or `goal_blocked`, keeping the tool schema stable from session startup.
@@ -82,8 +85,16 @@ Configuration is optional. Create `~/.pi/agent/pi-goal.json` only when overridin
 - `noProgressTurns` is a positive safe integer and defaults to `3`. At the end of an automatic run, pi-goal compares visible assistant text after Unicode normalization, lowercasing, control-character removal, and whitespace collapse. Thinking and tool blocks are excluded; empty and punctuation-only output are equivalent. Consecutive empty or identical tool-free outputs increment the repeat count. Different non-empty output starts a new run at one, and any attempted tool call resets it. Set this field to `null` to disable only this heuristic.
 
 Settings are reread at Pi startup, session replacement, and `/reload`; the file is not watched live.
+A missing file is created during any of those session starts, while an existing file is read without
+being rewritten. Initialization publishes the generated file atomically and never overwrites a file
+created concurrently by another process.
 
-Missing settings and omitted fields use the defaults above. Invalid settings produce a warning and fall back to all defaults; pi-goal never creates the file automatically. Reload Pi after changing the file. If a live runtime reloads settings, switching `toolVisibility` to `"always"` restores only the exact tools that pi-goal previously hid, while switching to `"after-first-goal"` locks a runtime that has no unfinished goal.
+Omitted fields use the defaults above. Invalid or malformed existing settings are never overwritten;
+they produce a warning and fall back to all defaults. If the default file cannot be created, pi-goal
+warns, continues with the built-in defaults, and retries on the next session start. Reload Pi after
+changing the file. If a live runtime reloads settings, switching `toolVisibility` to `"always"`
+restores only the exact tools that pi-goal previously hid, while switching to
+`"after-first-goal"` locks a runtime that has no unfinished goal.
 
 Tool visibility is a baseline, not ownership of Pi's global active-tool list. Plan mode or another restrictive policy may temporarily hide the tools. pi-goal does not fight that policy on restore or on every turn: activation is rejected if both tools cannot be made available, and an already-active goal is paused without automatic continuation if they disappear. The pause aborts a Goal-owned kickoff, resume, active-edit, or automatic-continuation prompt, but it does not cancel or stale-block an unrelated user or extension turn, including startup follow-ups after a restrictive restore.
 

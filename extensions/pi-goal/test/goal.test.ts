@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -26,6 +26,7 @@ import {
 	nextToolFreeRepeatState,
 	normalizeVisibleAssistantOutput,
 } from "../src/safety.js";
+import { DEFAULT_GOAL_SETTINGS_DOCUMENT } from "../src/settings.js";
 
 // This suite stays in one file because it exercises one module-scoped extension
 // state machine across commands, lifecycle hooks, tools, persistence, prompts,
@@ -132,6 +133,50 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 		"tool_execution_end",
 		"turn_end",
 	]);
+});
+
+test("session start creates complete default settings when the file is missing", () => {
+	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "session-created.json");
+	const mock = createMockPi({
+		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
+	});
+	registerGoalWithSettingsPath(mock.pi, settingsPath);
+	const context = createMockContext();
+
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	assert.equal(readFileSync(settingsPath, "utf8"), DEFAULT_GOAL_SETTINGS_DOCUMENT);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
+	assert.equal(context.notifications.length, 0);
+});
+
+test("session start warns and keeps defaults when settings creation fails", () => {
+	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "create-failed.json");
+	const mock = createMockPi({
+		activeTools: ["read", "bash", "goal_complete", "goal_blocked"],
+	});
+	mock.rawPi.setActiveTools([
+		...new Set([...mock.rawPi.getActiveTools(), "goal_complete", "goal_blocked"]),
+	]);
+	goal(mock.pi, {
+		settingsPath,
+		settingsFileSystem: {
+			linkSync() {
+				throw new Error("publish failed");
+			},
+		},
+	});
+	const context = createMockContext();
+
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	assert.equal(existsSync(settingsPath), false);
+	assert.equal(
+		readdirSync(GOAL_SETTINGS_DIRECTORY).some((name) => name.includes("create-failed.json")),
+		false,
+	);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked"]);
+	assert.match(context.notifications[0]?.message ?? "", /could not create.*publish failed/i);
 });
 
 test("missing and invalid settings fall back to always-visible tools", () => {
