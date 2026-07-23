@@ -97,7 +97,7 @@ const AUTO_SYNC_OPTIONS: CommandOptions = {
 	args: [],
 };
 export default function sync(pi: ExtensionAPI) {
-	pi.registerCommand("pisync", {
+	pi.registerCommand("sync", {
 		description: "Sync Pi settings through Cloudflare R2 or S3-compatible storage",
 		getArgumentCompletions: completeSyncArguments,
 		handler: async (args, ctx) => {
@@ -162,7 +162,7 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
 				await unlock(ctx, options);
 				return;
 			default:
-				ctx.ui.notify(`Unknown /pisync command: ${subcommand}\n\n${usage()}`, "warning");
+				ctx.ui.notify(`Unknown /sync command: ${subcommand}\n\n${usage()}`, "warning");
 		}
 	} catch (error) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -228,7 +228,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 		extraFiles: [],
 	};
 	await writeJson(configPath, sample);
-	ctx.ui.notify(`Created ${configPath}. Fill in R2 credentials, then run /pisync doctor.`, "info");
+	ctx.ui.notify(`Created ${configPath}. Fill in R2 credentials, then run /sync doctor.`, "info");
 }
 
 async function showConfig(ctx: ExtensionCommandContext) {
@@ -347,14 +347,14 @@ async function doctor(ctx: ExtensionCommandContext) {
 	if (lock.status === "valid" && isStaleLock(lock.lock)) {
 		level = "warning";
 		messages.push(
-			`lock: stale (pid ${lock.lock.pid}); run /pisync unlock after verifying no sync is running`,
+			`lock: stale (pid ${lock.lock.pid}); run /sync unlock after verifying no sync is running`,
 		);
 	} else if (lock.status === "valid") {
 		messages.push(`lock: held by pid ${lock.lock.pid} since ${lock.lock.startedAt}`);
 	} else if (lock.status === "unreadable") {
 		level = "warning";
 		messages.push(
-			"lock: unreadable; use /pisync unlock --stale only after verifying no sync is running",
+			"lock: unreadable; use /sync unlock --stale only after verifying no sync is running",
 		);
 	} else if (await isLockGuardHeld()) {
 		level = "warning";
@@ -386,7 +386,7 @@ async function push(
 			: undefined;
 		if (!remoteForConflict || !snapshotHashesMatchState(remoteForConflict, state, config)) {
 			throw new Error(
-				"Remote or sync policy changed since last sync. Run /pisync pull first or /pisync push --force.",
+				"Remote or sync policy changed since last sync. Run /sync pull first or /sync push --force.",
 			);
 		}
 	}
@@ -436,12 +436,12 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	const state = await readState(config.profile);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const remote = await readRemoteSnapshot(client, config);
-	if (!remote) throw new Error("Remote is empty. Run /pisync push from a configured machine first.");
+	if (!remote) throw new Error("Remote is empty. Run /sync push from a configured machine first.");
 
 	const localChanged = hasLocalChanges(local, state, config);
 	const remoteChanged = hasRemoteChanges(remote, state, config, protectedSessionPaths(ctx));
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot && !options.force) {
-		throw new Error("Both local and remote changed since last sync. Run /pisync diff, then choose /pisync pull --force or /pisync push --force.");
+		throw new Error("Both local and remote changed since last sync. Run /sync diff, then choose /sync pull --force or /sync push --force.");
 	}
 
 	if (
@@ -497,11 +497,11 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 
 	if (firstSync && remote && remote.files.length > 0 && local.files.length > 0) {
 		if (!canPullRemoteSettingsOnFirstSync(local, remote)) {
-			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
+			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /sync diff, then manually choose /sync pull or /sync push.");
 		}
 		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
 			if (!canPullRemoteSessionsOnFirstSync(local, remote)) {
-				throw new Error("Remote settings match, but local and remote Pi sessions differ. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
+				throw new Error("Remote settings match, but local and remote Pi sessions differ. Run /sync diff, then manually choose /sync pull or /sync push.");
 			}
 			await pull(ctx, options);
 			return;
@@ -532,7 +532,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 		return;
 	}
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
-		throw new Error("Both local and remote changed. Run /pisync diff and resolve with push --force or pull --force.");
+		throw new Error("Both local and remote changed. Run /sync diff and resolve with push --force or pull --force.");
 	}
 	if (remoteChanged) {
 		await pull(ctx, options);
@@ -577,7 +577,7 @@ async function history(ctx: ExtensionCommandContext) {
 
 async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const target = options.args[0];
-	if (!target) throw new Error("Usage: /pisync rollback <snapshot-id> [--yes]");
+	if (!target) throw new Error("Usage: /sync rollback <snapshot-id> [--yes]");
 
 	const config = await loadConfig();
 	const client = new S3Client(config);
@@ -724,12 +724,12 @@ async function uploadSnapshot(
 	await client.putBuffer(snapshotKey(config, snapshot.id), encoded, "application/gzip");
 	const current = await client.getJson<LatestPointer>(latestKey(config));
 	if (!force && remoteIdentity(current) !== remoteIdentity(latest)) {
-		throw new Error("Remote changed while pushing. Run /pisync pull first, then retry.");
+		throw new Error("Remote changed while pushing. Run /sync pull first, then retry.");
 	}
 	await client.putJson(latestKey(config), pointer);
 	const verified = await client.getJson<LatestPointer>(latestKey(config));
 	if (verified.value?.snapshot !== pointer.snapshot) {
-		throw new Error("Remote latest changed immediately after push. Run /pisync status before continuing.");
+		throw new Error("Remote latest changed immediately after push. Run /sync status before continuing.");
 	}
 	return pointer;
 }

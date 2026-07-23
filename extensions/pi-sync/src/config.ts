@@ -55,7 +55,7 @@ export async function loadConfigInternal(): Promise<SyncConfig> {
 		.filter(([, value]) => !value)
 		.map(([name]) => name);
 	if (missing.length > 0) {
-		throw new Error(`Missing pi-sync config: ${missing.join(", ")}. Run /pisync init or set PI_SYNC_* environment variables.`);
+		throw new Error(`Missing pi-sync config: ${missing.join(", ")}. Run /sync init or set PI_SYNC_* environment variables.`);
 	}
 
 	return {
