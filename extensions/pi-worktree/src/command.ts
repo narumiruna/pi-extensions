@@ -259,6 +259,10 @@ async function removeFlow(
 	);
 	const recoveryWarning = formatAdministrativeRecoveryWarning(approvedHistoryRisks);
 	const ignoredWarning = formatIgnoredDataWarning(inventory.ignored);
+	const removalWarning =
+		ignoredWarning && recoveryWarning
+			? `${ignoredWarning}\n${recoveryWarning.trimStart()}`
+			: `${ignoredWarning}${recoveryWarning}`;
 	const confirmationTitle =
 		inventory.ignored.length > 0
 			? recoveryWarning
@@ -270,7 +274,7 @@ async function removeFlow(
 	if (
 		!(await ctx.ui.confirm(
 			confirmationTitle,
-			`Delete the worktree directory ${stripTerminalControls(selected.path)}? The branch will be preserved.${ignoredWarning}${recoveryWarning}`,
+			`Delete the worktree directory ${stripTerminalControls(selected.path)}? The branch will be preserved.${removalWarning}`,
 		))
 	) {
 		return;

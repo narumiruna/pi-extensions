@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -83,6 +83,64 @@ test("remove confirms and deletes ignored-only data without forcing Git", async 
 			["worktree", "remove", linked],
 		);
 		assert.match(context.notifications.at(-1)?.message ?? "", /branch was preserved/i);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("remove separates ignored inventory from recovery warnings", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-remove-combined-warning-"));
+	const main = join(root, "repo");
+	const linked = join(root, "repo-feature");
+	const administrative = join(main, ".git", "worktrees", "repo-feature");
+	mkdirSync(main);
+	mkdirSync(linked);
+	mkdirSync(join(administrative, "logs"), { recursive: true });
+	const orphan = oid.replace(/^0/, "1");
+	writeFileSync(
+		join(administrative, "logs", "HEAD"),
+		`${"0".repeat(40)} ${orphan} Test <test@example.invalid> 0 +0000\tcommit\n`,
+	);
+	const mock = createMockPi();
+	let removed = false;
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
+		if (args[0] === "worktree" && args[1] === "list") {
+			return result(
+				porcelain([
+					{ path: main, branch: "main" },
+					...(!removed ? [{ path: linked, branch: "feature" }] : []),
+				]),
+			);
+		}
+		if (args[0] === "rev-parse" && args.includes("--show-toplevel")) {
+			return result(`${main}\n`);
+		}
+		if (args[0] === "rev-parse" && args.includes("--git-dir")) {
+			return result(`${administrative}\n`);
+		}
+		if (args[0] === "status") return result("!! cache/\n");
+		if (args[0] === "submodule" || args.includes("for-each-ref")) return result();
+		if (args[0] === "worktree" && args[1] === "remove") removed = true;
+		return result();
+	};
+	worktreeExtension(mock.pi);
+	let selectCount = 0;
+	let confirmationMessage = "";
+	const context = createMockContext({
+		cwd: main,
+		hasUI: true,
+		mode: "tui",
+		select: async (_title: string, items: string[]) =>
+			selectCount++ === 0 ? "Remove worktree" : items[0],
+		confirm: async (_title: string, message: string) => {
+			confirmationMessage = message;
+			return true;
+		},
+	});
+	try {
+		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(removed, true);
+		assert.match(confirmationMessage, /!! cache\/\nAdministrative recovery warning:/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
