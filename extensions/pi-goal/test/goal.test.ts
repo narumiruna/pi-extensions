@@ -2956,6 +2956,42 @@ test("expanded queued follow-up claims manual ownership at its delivery boundary
 	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
 });
 
+test("owned goal message start does not consume a pending transformed follow-up", async () => {
+	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+	const ownedPrompt = active.mock.sentUserMessages.at(-1)?.text ?? "";
+	const safety = requireLastGoal(active.mock);
+	safety.automaticModelTurns = 2;
+	safety.toolFreeRepeatCount = 2;
+	safety.lastToolFreeOutputFingerprint = "7".repeat(64);
+	active.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
+		active.ctx,
+	);
+
+	active.mock.events.get("message_start")?.[0]?.(
+		{ message: { role: "user", content: [{ type: "text", text: ownedPrompt }] } },
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
+	const afterOwnedPrompt = requireLastGoal(active.mock);
+	afterOwnedPrompt.automaticModelTurns = 2;
+	afterOwnedPrompt.toolFreeRepeatCount = 2;
+	afterOwnedPrompt.lastToolFreeOutputFingerprint = "6".repeat(64);
+
+	active.mock.events.get("message_start")?.[0]?.(
+		{
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "Expanded review skill instructions" }],
+			},
+		},
+		active.ctx,
+	);
+	assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+	assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
+});
+
 test("owned continuation does not consume a pending transformed follow-up", async () => {
 	const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
 	await active.mock.events.get("agent_end")?.[0]?.(
