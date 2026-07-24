@@ -14,7 +14,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
 	createCustomSelectorHarness,
@@ -550,6 +550,79 @@ test("upload merge preserves remote built-ins and directories that this machine 
 		merged.files.map((file) => file.path),
 		["keybindings.json", "settings.json", "skills/demo.md"],
 	);
+});
+
+test("forced pushes preserve remote files outside this machine's selection", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
+		);
+
+		const remote = {
+			...snapshot([
+				{ path: "settings.json", content: Buffer.from("remote settings\n") },
+				{ path: "keybindings.json", content: Buffer.from("remote keys\n") },
+			]),
+			id: "remote-snapshot",
+		};
+		const remoteBody = gzipSync(Buffer.from(JSON.stringify(remote), "utf8"));
+		let latest = {
+			version: 1,
+			profile: "default",
+			snapshot: remote.id,
+			sha256: createHash("sha256").update(remoteBody).digest("hex"),
+			createdAt: remote.createdAt,
+			machine: remote.machine,
+			syncSessions: false,
+		};
+		let uploadedBody: Buffer | undefined;
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input, init) => {
+			const url = new URL(String(input));
+			const method = init?.method ?? "GET";
+			if (method === "GET" && url.pathname.endsWith("/latest.json")) {
+				return Response.json(latest);
+			}
+			if (method === "GET" && url.pathname.endsWith(`/snapshots/${remote.id}.json.gz`)) {
+				return new Response(new Uint8Array(remoteBody));
+			}
+			if (method === "PUT" && url.pathname.includes("/snapshots/")) {
+				uploadedBody = Buffer.from(init?.body as Uint8Array);
+				return new Response(null, { status: 200 });
+			}
+			if (method === "PUT" && url.pathname.endsWith("/latest.json")) {
+				latest = JSON.parse(Buffer.from(init?.body as Uint8Array).toString("utf8"));
+				return new Response(null, { status: 200 });
+			}
+			if (method === "GET" && url.pathname.endsWith("/history.json")) {
+				return new Response(null, { status: 404 });
+			}
+			if (method === "PUT" && url.pathname.endsWith("/history.json")) {
+				return new Response(null, { status: 200 });
+			}
+			throw new Error(`Unexpected S3 request: ${method} ${url.pathname}`);
+		}) as typeof globalThis.fetch;
+
+		try {
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext();
+			await mock.commands.get("sync")?.handler("push --yes --force", ctx);
+
+			assert.ok(uploadedBody, JSON.stringify(notifications));
+			const uploaded = JSON.parse(gunzipSync(uploadedBody).toString("utf8"));
+			assert.deepEqual(
+				uploaded.files.map((file: { path: string }) => file.path),
+				["keybindings.json", "settings.json"],
+			);
+			assert.equal(notifications.at(-1)?.level, "info");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
 });
 
 test("syncSessions config defaults off and supports file plus env overrides", async () => {

@@ -381,9 +381,7 @@ async function push(
 		input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
 
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
-	const remoteForUpload = options.force
-		? undefined
-		: await readRemoteSnapshotForUpload(client, config, latest, state);
+	const remoteForUpload = await readRemoteSnapshotForUpload(client, config, latest, state);
 	if (remoteChangedSinceState(latest, state, config) && !options.force) {
 		const remoteForConflict = remoteForUpload
 			? filterSnapshotForConfigPolicy(remoteForUpload, config)
@@ -395,9 +393,7 @@ async function push(
 		}
 	}
 
-	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload, {
-		preserveRemote: !options.force,
-	});
+	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload);
 	const secrets = scanSnapshot(local);
 	if (secrets.length > 0) {
 		throw new Error(
@@ -730,9 +726,9 @@ async function snapshotForUpload(
 	local: Snapshot,
 	latest: RemoteObject<LatestPointer>,
 	remote?: Snapshot,
-	options: { preserveRemote?: boolean; ignoreUnreadableRemote?: boolean } = {},
+	options: { ignoreUnreadableRemote?: boolean } = {},
 ) {
-	if (options.preserveRemote === false || latest.missing || !latest.value) return local;
+	if (latest.missing || !latest.value) return local;
 	let snapshot = remote;
 	if (!snapshot) {
 		try {
