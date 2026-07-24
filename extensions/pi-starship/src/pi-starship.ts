@@ -1,3 +1,4 @@
+import { homedir, hostname, userInfo } from "node:os";
 import {
 	type ExtensionAPI,
 	type ExtensionContext,
@@ -10,20 +11,28 @@ import {
 	type LoadedStarshipConfig,
 	loadOrCreateStarshipConfig,
 	loadStarshipConfig,
+	type StarshipConfig,
 	settingsFilePath,
 } from "./config.js";
-import { formatVariables } from "./format/formatter.js";
 import { readInstalledPackageInfo } from "./installed-packages.js";
 import { gitSnapshotEqual, readGitSnapshot } from "./modules/git/runtime.js";
 import {
 	type ExtensionStatusIconAliasMap,
 	type GitSnapshot,
+	reachableModuleRequirements,
 	renderStatusline,
 	type StarshipRuntimeSnapshot,
+	type WorkspaceSnapshot,
 } from "./modules/index.js";
+import { AsyncRefreshController } from "./runtime/refresh-controller.js";
+import {
+	collectWorkspaceSnapshot,
+	type WorkspaceRefreshInput,
+	workspaceSnapshotEqual,
+} from "./runtime/workspace.js";
 
-const GIT_REFRESH_INTERVAL_MS = 30_000;
-const GIT_EVENT_DEBOUNCE_MS = 250;
+const REFRESH_INTERVAL_MS = 30_000;
+const EVENT_DEBOUNCE_MS = 250;
 const EMPTY_ALIASES: ExtensionStatusIconAliasMap = new Map();
 
 interface RuntimeState {
@@ -32,9 +41,20 @@ interface RuntimeState {
 	thinkingLevel: string;
 	lastCompletedTool?: string;
 	git?: GitSnapshot;
+	workspace?: WorkspaceSnapshot;
 	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	requestRender?: () => void;
 	renderPreview?: (loaded: LoadedStarshipConfig, width: number) => string[];
+}
+
+interface RefreshTarget {
+	cwd: string;
+	generation: number;
+}
+
+interface GitRefreshInput {
+	cwd: string;
+	config: StarshipConfig;
 }
 
 export default function piStarship(pi: ExtensionAPI) {
@@ -47,88 +67,92 @@ export default function piStarship(pi: ExtensionAPI) {
 	};
 	let conflictWarningShown = false;
 	let sessionGeneration = 0;
-	let gitRequestId = 0;
-	let activeGitTarget: { cwd: string; generation: number } | undefined;
-	let gitRefreshInFlight = false;
-	let gitDebounceTimer: ReturnType<typeof setTimeout> | undefined;
-	let pendingGitRefresh: { cwd: string; generation: number; requestId: number } | undefined;
+	let activeTarget: RefreshTarget | undefined;
+	let eventDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const refresh = () => runtime.requestRender?.();
-	const clearDebounce = () => {
-		if (!gitDebounceTimer) return;
-		clearTimeout(gitDebounceTimer);
-		gitDebounceTimer = undefined;
-	};
-	const isActiveTarget = (cwd: string, generation: number) =>
-		activeGitTarget?.cwd === cwd &&
-		activeGitTarget.generation === generation &&
-		generation === sessionGeneration;
-	const isCurrentRequest = (cwd: string, generation: number, requestId: number) =>
-		isActiveTarget(cwd, generation) && requestId === gitRequestId;
-
-	const setGitSnapshot = (snapshot: GitSnapshot | undefined) => {
-		if (gitSnapshotEqual(runtime.git, snapshot)) return;
-		runtime.git = snapshot;
-		refresh();
-	};
-
-	const runGitRefresh = (cwd: string, generation: number, requestId: number) => {
-		if (!isCurrentRequest(cwd, generation, requestId)) return;
-		if (gitRefreshInFlight) {
-			pendingGitRefresh = { cwd, generation, requestId };
-			return;
-		}
-		gitRefreshInFlight = true;
-		void (async () => {
+	const gitController = new AsyncRefreshController<GitRefreshInput, GitSnapshot | undefined>({
+		async read(input) {
+			const requirements = reachableModuleRequirements(input.config);
+			const gitReachable = [...requirements.keys()].some((name) => name.startsWith("git_"));
+			if (!gitReachable) return undefined;
 			try {
-				const config = loaded?.config;
-				const snapshot = await readGitSnapshot(pi, cwd, {
-					includeMetrics: config ? !config.modules.git_metrics.disabled : false,
-					includeTag: config
-						? !config.modules.git_commit.disabled &&
-							formatVariables(config.modules.git_commit.formatAst).has("tag")
-						: false,
+				return await readGitSnapshot(pi, input.cwd, {
+					includeMetrics: requirements.has("git_metrics"),
+					includeTag: requirements.get("git_commit")?.has("tag") ?? false,
 				});
-				if (isCurrentRequest(cwd, generation, requestId)) setGitSnapshot(snapshot);
 			} catch {
-				if (isCurrentRequest(cwd, generation, requestId)) setGitSnapshot(undefined);
-			} finally {
-				gitRefreshInFlight = false;
-				const pending = pendingGitRefresh;
-				pendingGitRefresh = undefined;
-				if (pending) runGitRefresh(pending.cwd, pending.generation, pending.requestId);
+				return undefined;
 			}
-		})();
-	};
+		},
+		equal: gitSnapshotEqual,
+		publish(snapshot) {
+			runtime.git = snapshot;
+			refresh();
+		},
+	});
+	const workspaceController = new AsyncRefreshController<WorkspaceRefreshInput, WorkspaceSnapshot>({
+		async read(input) {
+			try {
+				return await collectWorkspaceSnapshot(input);
+			} catch {
+				return { modules: {} };
+			}
+		},
+		equal: workspaceSnapshotEqual,
+		publish(snapshot) {
+			runtime.workspace = snapshot;
+			refresh();
+		},
+	});
 
-	const refreshGit = (cwd: string, generation = sessionGeneration) => {
-		if (!isActiveTarget(cwd, generation)) return;
-		runGitRefresh(cwd, generation, ++gitRequestId);
+	const clearDebounce = () => {
+		if (!eventDebounceTimer) return;
+		clearTimeout(eventDebounceTimer);
+		eventDebounceTimer = undefined;
 	};
-	const scheduleGit = (ctx: ExtensionContext) => {
-		if (!activeGitTarget || activeGitTarget.cwd !== ctx.cwd) return;
-		const { cwd, generation } = activeGitTarget;
-		const requestId = ++gitRequestId;
+	const isActiveTarget = (target: RefreshTarget) =>
+		activeTarget?.cwd === target.cwd &&
+		activeTarget.generation === target.generation &&
+		target.generation === sessionGeneration;
+
+	const requestRefresh = (
+		target: RefreshTarget,
+		reason: WorkspaceRefreshInput["reason"] = "event",
+	) => {
+		if (!loaded || !isActiveTarget(target)) return;
+		gitController.request({ cwd: target.cwd, config: loaded.config });
+		workspaceController.request(
+			workspaceInput(pi, target.cwd, loaded.config, reason, runtime.workspace),
+		);
+	};
+	const scheduleRefresh = (ctx: ExtensionContext) => {
+		const target = activeTarget;
+		if (!target || target.cwd !== ctx.cwd) return;
 		clearDebounce();
-		gitDebounceTimer = setTimeout(() => {
-			gitDebounceTimer = undefined;
-			runGitRefresh(cwd, generation, requestId);
-		}, GIT_EVENT_DEBOUNCE_MS);
+		eventDebounceTimer = setTimeout(() => {
+			eventDebounceTimer = undefined;
+			requestRefresh(target);
+		}, EVENT_DEBOUNCE_MS);
 	};
 
 	const installFooter = (ctx: ExtensionContext) => {
 		const generation = ++sessionGeneration;
-		const cwd = ctx.cwd;
+		const target = { cwd: ctx.cwd, generation };
 		clearDebounce();
-		pendingGitRefresh = undefined;
+		gitController.stop();
+		workspaceController.stop();
 		runtime.git = undefined;
+		runtime.workspace = undefined;
 		runtime.requestRender = undefined;
 		runtime.renderPreview = undefined;
-		activeGitTarget = ctx.mode === "tui" ? { cwd, generation } : undefined;
+		activeTarget = ctx.mode === "tui" ? target : undefined;
 		ctx.ui.setStatus("starship", undefined);
-		if (!activeGitTarget || !loaded) return;
+		if (!activeTarget || !loaded) return;
+		gitController.start(generation);
+		workspaceController.start(generation);
 
-		const installed = readInstalledPackageInfo(getAgentDir(), cwd, ctx.isProjectTrusted());
+		const installed = readInstalledPackageInfo(getAgentDir(), target.cwd, ctx.isProjectTrusted());
 		runtime.extensionStatusIconAliases = installed.aliases;
 		if (installed.hasStatuslineConflict && !conflictWarningShown) {
 			conflictWarningShown = true;
@@ -142,19 +166,23 @@ export default function piStarship(pi: ExtensionAPI) {
 			runtime.requestRender = () => tui.requestRender();
 			runtime.renderPreview = (preview, width) => {
 				const snapshot = runtimeSnapshot(ctx, footerData, runtime);
-				return wrapFormattedStatusline(renderStatusline(preview.config, snapshot).ansi, width);
+				return wrapFormattedStatusline(
+					renderStatusline(preview.config, snapshot, width).ansi,
+					width,
+				);
 			};
 			const unsubscribe = footerData.onBranchChange(() => {
 				runtime.git = undefined;
+				gitController.clear();
 				clearDebounce();
-				refreshGit(cwd, generation);
+				requestRefresh(target);
 				tui.requestRender();
 			});
 			const timer = setInterval(() => {
 				clearDebounce();
-				refreshGit(cwd, generation);
+				requestRefresh(target, "periodic");
 				tui.requestRender();
-			}, GIT_REFRESH_INTERVAL_MS);
+			}, REFRESH_INTERVAL_MS);
 			let disposed = false;
 
 			return {
@@ -163,11 +191,13 @@ export default function piStarship(pi: ExtensionAPI) {
 					disposed = true;
 					unsubscribe();
 					clearInterval(timer);
-					if (isActiveTarget(cwd, generation)) {
-						activeGitTarget = undefined;
+					if (isActiveTarget(target)) {
+						activeTarget = undefined;
 						clearDebounce();
-						pendingGitRefresh = undefined;
+						gitController.stop();
+						workspaceController.stop();
 						runtime.git = undefined;
+						runtime.workspace = undefined;
 						runtime.requestRender = undefined;
 						runtime.renderPreview = undefined;
 					}
@@ -176,11 +206,14 @@ export default function piStarship(pi: ExtensionAPI) {
 				render(width: number): string[] {
 					if (!loaded) return [];
 					const snapshot = runtimeSnapshot(ctx, footerData, runtime);
-					return wrapFormattedStatusline(renderStatusline(loaded.config, snapshot).ansi, width);
+					return wrapFormattedStatusline(
+						renderStatusline(loaded.config, snapshot, width).ansi,
+						width,
+					);
 				},
 			};
 		});
-		refreshGit(cwd, generation);
+		requestRefresh(target, "initial");
 	};
 
 	const configPath = settingsFilePath(getAgentDir());
@@ -189,6 +222,8 @@ export default function piStarship(pi: ExtensionAPI) {
 		getLoaded: () => loaded ?? loadStarshipConfig(configPath),
 		apply(next) {
 			loaded = next;
+			const target = activeTarget;
+			if (target) requestRefresh(target);
 			refresh();
 		},
 		renderPreview(preview, width) {
@@ -216,10 +251,12 @@ export default function piStarship(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		sessionGeneration += 1;
-		activeGitTarget = undefined;
+		activeTarget = undefined;
 		clearDebounce();
-		pendingGitRefresh = undefined;
+		gitController.stop();
+		workspaceController.stop();
 		runtime.git = undefined;
+		runtime.workspace = undefined;
 		runtime.extensionStatusIconAliases = EMPTY_ALIASES;
 		runtime.requestRender = undefined;
 		runtime.renderPreview = undefined;
@@ -238,7 +275,7 @@ export default function piStarship(pi: ExtensionAPI) {
 	});
 	pi.on("agent_end", (_event, ctx) => {
 		runtime.isStreaming = false;
-		scheduleGit(ctx);
+		scheduleRefresh(ctx);
 		refresh();
 	});
 	pi.on("turn_start", () => {
@@ -246,7 +283,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		refresh();
 	});
 	pi.on("turn_end", (_event, ctx) => {
-		scheduleGit(ctx);
+		scheduleRefresh(ctx);
 		refresh();
 	});
 	pi.on("tool_execution_start", (event) => {
@@ -258,9 +295,90 @@ export default function piStarship(pi: ExtensionAPI) {
 		if (count <= 1) runtime.activeTools.delete(event.toolName);
 		else runtime.activeTools.set(event.toolName, count - 1);
 		runtime.lastCompletedTool = event.toolName;
-		scheduleGit(ctx);
+		scheduleRefresh(ctx);
 		refresh();
 	});
+}
+
+function workspaceInput(
+	pi: ExtensionAPI,
+	cwd: string,
+	config: StarshipConfig,
+	reason: WorkspaceRefreshInput["reason"],
+	previous: WorkspaceSnapshot | undefined,
+): WorkspaceRefreshInput {
+	return {
+		cwd,
+		config,
+		environment: allowlistedEnvironment(config),
+		homeDir: homedir(),
+		platform: process.platform,
+		hostname: hostname(),
+		username: safeUsername(),
+		exec: (command, args, options) => pi.exec(command, args, options),
+		reason,
+		previous,
+	};
+}
+
+const ENVIRONMENT_ALLOWLIST = [
+	"AWS_CONFIG_FILE",
+	"AWS_DEFAULT_PROFILE",
+	"AWS_DEFAULT_REGION",
+	"AWS_PROFILE",
+	"AWS_REGION",
+	"AZURE_CONFIG_DIR",
+	"CLOUDSDK_ACTIVE_CONFIG_NAME",
+	"CLOUDSDK_CONFIG",
+	"CODESPACES",
+	"CONDA_DEFAULT_ENV",
+	"DOCKER_CONFIG",
+	"DOCKER_CONTEXT",
+	"GUIX_ENVIRONMENT",
+	"IN_NIX_SHELL",
+	"KUBECONFIG",
+	"LOGNAME",
+	"NIX_SHELL_LEVEL",
+	"NIX_SHELL_NAME",
+	"OS_CLIENT_CONFIG_FILE",
+	"OS_CLOUD",
+	"OS_PROJECT_NAME",
+	"PATH",
+	"PIXI_ENVIRONMENT_NAME",
+	"PIXI_PROJECT_NAME",
+	"PYENV_VERSION",
+	"REMOTE_CONTAINERS",
+	"RUSTC",
+	"RUSTUP_TOOLCHAIN",
+	"SSH_CONNECTION",
+	"SSH_TTY",
+	"TF_DATA_DIR",
+	"TF_WORKSPACE",
+	"USER",
+	"USERNAME",
+	"VIRTUAL_ENV",
+	"WSL_DISTRO_NAME",
+] as const;
+
+function allowlistedEnvironment(config: StarshipConfig): Record<string, string | undefined> {
+	const result: Record<string, string | undefined> = {};
+	const configured = config.modules.username.options.detect_env_vars;
+	const names = new Set([
+		...ENVIRONMENT_ALLOWLIST,
+		...(Array.isArray(configured)
+			? configured.filter((name): name is string => typeof name === "string")
+			: []),
+	]);
+	for (const name of names) result[name] = process.env[name];
+	return result;
+}
+
+function safeUsername(): string {
+	try {
+		return userInfo().username;
+	} catch {
+		return process.env.USER ?? process.env.USERNAME ?? "";
+	}
 }
 
 function runtimeSnapshot(
@@ -285,6 +403,7 @@ function runtimeSnapshot(
 		gitMetrics: runtime.git?.metrics,
 		gitStatus: runtime.git?.status,
 		gitWorktree: runtime.git?.worktree,
+		workspace: runtime.workspace,
 		extensionStatuses: footerData.getExtensionStatuses(),
 		extensionStatusIconAliases: runtime.extensionStatusIconAliases,
 		now: new Date(),

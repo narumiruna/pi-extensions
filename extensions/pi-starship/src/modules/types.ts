@@ -61,6 +61,10 @@ export interface GitSnapshot {
 
 export type ExtensionStatusIconAliasMap = ReadonlyMap<string, readonly string[]>;
 
+export interface WorkspaceSnapshot {
+	modules: Readonly<Record<string, Readonly<Record<string, string>>>>;
+}
+
 export interface StarshipRuntimeSnapshot {
 	cwd: string;
 	model?: { provider: string; id: string };
@@ -85,6 +89,7 @@ export interface StarshipRuntimeSnapshot {
 	extensionStatuses: ReadonlyMap<string, string>;
 	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	now: Date;
+	workspace?: WorkspaceSnapshot;
 }
 
 export interface ExtensionStatusPresentation {
@@ -100,6 +105,13 @@ export interface ModuleValueContext {
 	hiddenExtensionStatusKeys: ReadonlySet<string>;
 }
 
+export type ModuleOptionSchema =
+	| { kind: "string"; default: string; allowEmpty?: boolean }
+	| { kind: "boolean"; default: boolean }
+	| { kind: "integer"; default: number; minimum: number; maximum: number }
+	| { kind: "string-array"; default: readonly string[]; allowNegative?: boolean }
+	| { kind: "string-map"; default: Readonly<Record<string, string>> };
+
 export interface ModuleDefaults {
 	format: string;
 	symbol: string;
@@ -111,6 +123,8 @@ export interface ModuleDefinition<Name extends string> {
 	name: Name;
 	variables: readonly string[];
 	defaults: ModuleDefaults;
+	options?: Readonly<Record<string, ModuleOptionSchema>>;
+	layout?: "fill";
 	values(context: ModuleValueContext): Record<string, string> | undefined;
 }
 
