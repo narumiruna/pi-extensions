@@ -132,6 +132,7 @@ export function normalizeStatuslineConfig(value: unknown): {
 			diagnostics: [invalidDiagnostic("", "Settings must contain a JSON object", "error")],
 		};
 	}
+	config.palette = {};
 
 	const knownRoot = new Set([
 		"palettePreset",
@@ -443,7 +444,7 @@ function normalizePalette(
 		return;
 	}
 
-	const palette = cloneSegmentPalette(TOKYO_NIGHT_SEGMENT_PALETTE);
+	const palette: SegmentPalette = {};
 	for (const [name, colors] of Object.entries(value)) {
 		const path = `palette.${name}`;
 		if (!isSegmentName(name)) {
@@ -454,6 +455,8 @@ function normalizePalette(
 			diagnostics.push(invalidDiagnostic(path, "Expected an object"));
 			continue;
 		}
+		const normalizedColors: NonNullable<SegmentPalette[SegmentName]> = {};
+		palette[name] = normalizedColors;
 		for (const [field, color] of Object.entries(colors)) {
 			const colorPath = `${path}.${field}`;
 			if (field !== "fg" && field !== "bg") {
@@ -464,7 +467,7 @@ function normalizePalette(
 				diagnostics.push(invalidDiagnostic(colorPath, "Expected a full #RRGGBB hexadecimal color"));
 				continue;
 			}
-			palette[name][field] = color.toLowerCase();
+			normalizedColors[field] = color.toLowerCase();
 		}
 	}
 	config.palette = palette;
@@ -494,7 +497,7 @@ function normalizeEnum<
 
 function cloneSegmentPalette(palette: SegmentPalette): SegmentPalette {
 	return Object.fromEntries(
-		SEGMENT_NAMES.map((name) => [name, { ...palette[name] }]),
+		Object.entries(palette).map(([name, colors]) => [name, { ...colors }]),
 	) as SegmentPalette;
 }
 

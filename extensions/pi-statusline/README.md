@@ -37,7 +37,7 @@ The only configuration source is:
 <getAgentDir()>/pi-statusline.json
 ```
 
-On first session start, the extension atomically creates the complete default document. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
+On first session start, the extension atomically creates the complete default document with `palettePreset` set to `tokyo-night`. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
 
 There are no project overrides or environment-variable overrides.
 
@@ -115,9 +115,9 @@ All fields are optional in an existing document. Missing fields use defaults.
 - `density`: `compact` or `cozy`.
 - `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
 
-Named presets use their built-in colors while preserving the complete custom `palette` object. Selecting `custom` activates that object. If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
+Named presets use their built-in colors while preserving the custom `palette` object. Selecting `custom` activates that object. If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
 
-Each custom palette color must be a complete `#RRGGBB` truecolor value. Missing segment entries or color fields inherit Tokyo Night defaults. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` uses the Tokyo Night separator.
+Each custom palette color must be a complete `#RRGGBB` truecolor value. Missing segment entries or `fg`/`bg` fields remain unstyled and do not inherit colors from Tokyo Night. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` leaves that separator unstyled.
 
 For example, after moving `time` before the header segments, select `custom` and give it the same colors as the Tokyo Night header to keep one continuous block:
 
@@ -134,7 +134,7 @@ For example, after moving `time` before the header segments, select `custom` and
 }
 ```
 
-Adjacent custom segments with the same configured foreground and background render as one block. Invalid presets or colors prevent `/statusline settings` from saving. Unknown segment names or palette fields are reported as warnings and ignored.
+Adjacent custom segments with the same configured foreground and background render as one block. Segments with no configured colors also join into one unstyled block. Invalid presets or colors prevent `/statusline settings` from saving. Unknown segment names or palette fields are reported as warnings and ignored.
 
 ### Segments
 

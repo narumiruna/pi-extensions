@@ -157,8 +157,8 @@ test("palette picker migrates a legacy string without losing unknown fields", as
 		const saved = JSON.parse(readFileSync(path, "utf8"));
 		assert.equal(saved.palettePreset, "custom");
 		assert.equal(saved.future, true);
-		assert.equal(typeof saved.palette, "object");
-		assert.deepEqual(saved.palette.time, { fg: "#a0a9cb", bg: "#1d2230" });
+		assert.deepEqual(saved.palette, {});
+		assert.deepEqual(loaded.config.palette, {});
 		assert.equal(loaded.config.palettePreset, "custom");
 	} finally {
 		rmSync(root, { recursive: true, force: true });

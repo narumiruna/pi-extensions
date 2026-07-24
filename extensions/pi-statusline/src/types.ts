@@ -47,11 +47,11 @@ export interface SegmentTextConfig {
 }
 
 export interface SegmentPaletteColor {
-	fg: string;
-	bg: string;
+	fg?: string;
+	bg?: string;
 }
 
-export type SegmentPalette = Record<SegmentName, SegmentPaletteColor>;
+export type SegmentPalette = Partial<Record<SegmentName, SegmentPaletteColor>>;
 
 export const TOKYO_NIGHT_SEGMENT_PALETTE: SegmentPalette = {
 	brand: { fg: "#090c0c", bg: "#a3aed2" },

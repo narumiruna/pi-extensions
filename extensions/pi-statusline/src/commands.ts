@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import {
-	createDefaultConfig,
 	DEFAULT_STATUSLINE_DOCUMENT,
 	type LoadedStatuslineSettings,
 	saveStatuslineSettingsDocument,
@@ -150,7 +149,7 @@ function palettePresetDocument(
 	}
 	const parsed = JSON.parse(current.rawDocument) as unknown;
 	if (!isRecord(parsed)) throw new Error("Settings must contain a JSON object");
-	if (!isRecord(parsed.palette)) parsed.palette = createDefaultConfig().palette;
+	if (!isRecord(parsed.palette)) parsed.palette = {};
 	parsed.palettePreset = palettePreset;
 	return `${JSON.stringify(parsed, null, "\t")}\n`;
 }

@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { ansiFg, ansiStyle } from "./ansi.js";
+import { ansiStyle } from "./ansi.js";
 import {
 	LINE_BREAK_SEGMENT_NAME,
 	type PaletteName,
@@ -20,14 +20,14 @@ interface TokyoNightBlock {
 }
 
 interface BlockColors {
-	fg: string;
-	bg: string;
+	fg?: string;
+	bg?: string;
 }
 
 interface PowerlinePalette {
-	lead: string;
+	lead?: string;
 	blocks: Record<TokyoNightBlockName, BlockColors>;
-	extensionSeparator: string;
+	extensionSeparator?: string;
 }
 
 const BLOCK_NAMES: TokyoNightBlockName[] = ["header", "directory", "git", "runtime", "meter"];
@@ -42,6 +42,16 @@ const TOKYO_NIGHT_PALETTE: PowerlinePalette = {
 		meter: { fg: "#a0a9cb", bg: "#1d2230" },
 	},
 	extensionSeparator: "#394260",
+};
+
+const UNSTYLED_PALETTE: PowerlinePalette = {
+	blocks: {
+		header: {},
+		directory: {},
+		git: {},
+		runtime: {},
+		meter: {},
+	},
 };
 
 const SEMANTIC_COLORS = {
@@ -92,7 +102,7 @@ export function tokyoNightExtensionSeparator(
 	_theme: Theme,
 	palettePreset: PalettePreset = "tokyo-night",
 ): string {
-	return ansiFg(resolvePalette(palettePreset).extensionSeparator, " • ");
+	return ansiStyle(" • ", { fg: resolvePalette(palettePreset).extensionSeparator });
 }
 
 function joinTokyoNightSegments(
@@ -101,7 +111,7 @@ function joinTokyoNightSegments(
 ): string {
 	const palette = resolvePalette(config.palettePreset);
 	const blocks = contiguousBlocks(segments, palette, config.palettePreset, config.palette);
-	let line = ansiFg(palette.lead, "░▒▓");
+	let line = ansiStyle("░▒▓", { fg: palette.lead });
 
 	for (const [index, block] of blocks.entries()) {
 		const previous = index === 0 ? undefined : blocks[index - 1]?.colors;
@@ -110,7 +120,7 @@ function joinTokyoNightSegments(
 	}
 
 	const lastBlock = blocks.at(-1);
-	if (lastBlock) line += ansiFg(lastBlock.colors.bg, "");
+	if (lastBlock) line += ansiStyle("", { fg: lastBlock.colors.bg });
 	return line;
 }
 
@@ -124,7 +134,7 @@ function contiguousBlocks(
 	const usesConfiguredColors = palettePreset === "custom";
 	for (const segment of segments) {
 		const colors = usesConfiguredColors
-			? configuredPalette[segment.name]
+			? (configuredPalette[segment.name] ?? {})
 			: palette.blocks[segment.block];
 		const previous = blocks.at(-1);
 		const matchesPrevious =
@@ -174,7 +184,8 @@ function separatorText(separator: SeparatorName, cozy: boolean): string {
 }
 
 function resolvePalette(palettePreset: PalettePreset): PowerlinePalette {
-	if (palettePreset === "custom" || palettePreset === "tokyo-night") return TOKYO_NIGHT_PALETTE;
+	if (palettePreset === "custom") return UNSTYLED_PALETTE;
+	if (palettePreset === "tokyo-night") return TOKYO_NIGHT_PALETTE;
 	const sequence = PALETTE_SEQUENCES[palettePreset];
 	const backgrounds = BLOCK_NAMES.map(
 		(_block, index) => SEMANTIC_COLORS[sequence[index % sequence.length] ?? "muted"],

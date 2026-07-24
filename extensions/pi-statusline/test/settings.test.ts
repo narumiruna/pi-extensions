@@ -70,7 +70,7 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.equal(iconOnly.config.extensionStatusIcons.goal, "◎");
 });
 
-test("palette object normalizes segment colors and inherits omitted Tokyo Night details", () => {
+test("palette object normalizes colors without filling omitted custom colors", () => {
 	const normalized = normalizeStatuslineConfig({
 		palette: {
 			time: { fg: "#090c0c", bg: "#A3AED2" },
@@ -80,9 +80,9 @@ test("palette object normalizes segment colors and inherits omitted Tokyo Night 
 	});
 	assert.equal(normalized.config.palettePreset, "custom");
 	assert.deepEqual(normalized.config.palette.time, { fg: "#090c0c", bg: "#a3aed2" });
-	assert.deepEqual(normalized.config.palette.model, { fg: "#ffffff", bg: "#a3aed2" });
-	assert.deepEqual(normalized.config.palette.cwd, { fg: "#e3e5e5", bg: "#123abc" });
-	assert.deepEqual(normalized.config.palette.brand, { fg: "#090c0c", bg: "#a3aed2" });
+	assert.deepEqual(normalized.config.palette.model, { fg: "#ffffff" });
+	assert.deepEqual(normalized.config.palette.cwd, { bg: "#123abc" });
+	assert.equal(normalized.config.palette.brand, undefined);
 	assert.deepEqual(normalized.diagnostics, []);
 });
 
@@ -94,6 +94,10 @@ test("explicit palette preset takes precedence while preserving custom colors", 
 	assert.equal(normalized.config.palettePreset, "forest");
 	assert.deepEqual(normalized.config.palette.time, { fg: "#112233", bg: "#445566" });
 	assert.deepEqual(normalized.diagnostics, []);
+
+	const emptyCustom = normalizeStatuslineConfig({ palettePreset: "custom" });
+	assert.equal(emptyCustom.config.palettePreset, "custom");
+	assert.deepEqual(emptyCustom.config.palette, {});
 });
 
 test("palette object reports invalid colors and forward-compatible unknown fields", () => {
@@ -105,7 +109,7 @@ test("palette object reports invalid colors and forward-compatible unknown field
 		},
 	});
 	assert.equal(normalized.config.palettePreset, "custom");
-	assert.deepEqual(normalized.config.palette.time, { fg: "#a0a9cb", bg: "#1d2230" });
+	assert.deepEqual(normalized.config.palette.time, {});
 	assert.deepEqual(
 		normalized.diagnostics.map(({ code, path }) => ({ code, path })),
 		[

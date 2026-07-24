@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { formatConfiguredSegment } from "../src/render.js";
 import { createDefaultConfig, normalizeStatuslineConfig } from "../src/settings.js";
-import { renderTokyoNightStatusline } from "../src/tokyo-night.js";
+import { renderTokyoNightStatusline, tokyoNightExtensionSeparator } from "../src/tokyo-night.js";
 import type { RenderItem, RenderSegment, SegmentName } from "../src/types.js";
 
 const ESCAPE = String.fromCharCode(27);
@@ -57,10 +58,21 @@ test("configured palette joins reordered time to an adjacent header block", () =
 	assert.equal((plain(rendered).match(//gu) ?? []).length, 1);
 });
 
-test("partial configured palette inherits omitted Tokyo Night colors", () => {
+test("partial custom palette leaves omitted colors unstyled", () => {
 	const config = normalizeStatuslineConfig({ palette: { time: { fg: "#ffffff" } } }).config;
 	const rendered = renderTokyoNightStatusline(300, [segment("time", "time", "meter")], config);
-	assert.ok(rendered.includes(`${ESCAPE}[38;2;255;255;255;48;2;29;34;48m time${ESCAPE}[0m`));
+	assert.equal(rendered, `░▒▓${ESCAPE}[38;2;255;255;255m time${ESCAPE}[0m`);
+});
+
+test("empty custom palette renders without ANSI color fallback", () => {
+	const config = normalizeStatuslineConfig({ palette: {} }).config;
+	const rendered = renderTokyoNightStatusline(
+		300,
+		[segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
+		config,
+	);
+	assert.equal(rendered, "░▒▓ model cwd");
+	assert.equal(tokyoNightExtensionSeparator({} as Theme, "custom"), " • ");
 });
 
 test("different final segment colors retain the powerline transition", () => {
