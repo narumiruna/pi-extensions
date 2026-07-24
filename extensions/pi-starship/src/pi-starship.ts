@@ -35,6 +35,7 @@ interface RuntimeState {
 	gitWorktree?: GitWorktreeSnapshot;
 	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	requestRender?: () => void;
+	renderPreview?: (loaded: LoadedStarshipConfig, width: number) => string[];
 }
 
 export default function piStarship(pi: ExtensionAPI) {
@@ -137,6 +138,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		runtime.gitStatus = undefined;
 		runtime.gitWorktree = undefined;
 		runtime.requestRender = undefined;
+		runtime.renderPreview = undefined;
 		activeGitTarget = ctx.mode === "tui" ? { cwd, generation } : undefined;
 		ctx.ui.setStatus("starship", undefined);
 		if (!activeGitTarget || !loaded) return;
@@ -153,6 +155,10 @@ export default function piStarship(pi: ExtensionAPI) {
 
 		ctx.ui.setFooter((tui, _theme, footerData) => {
 			runtime.requestRender = () => tui.requestRender();
+			runtime.renderPreview = (preview, width) => {
+				const snapshot = runtimeSnapshot(ctx, footerData, runtime);
+				return wrapFormattedStatusline(renderStatusline(preview.config, snapshot).ansi, width);
+			};
 			const unsubscribe = footerData.onBranchChange(() => {
 				runtime.gitStatus = undefined;
 				clearDebounce();
@@ -179,6 +185,7 @@ export default function piStarship(pi: ExtensionAPI) {
 						runtime.gitStatus = undefined;
 						runtime.gitWorktree = undefined;
 						runtime.requestRender = undefined;
+						runtime.renderPreview = undefined;
 					}
 				},
 				invalidate() {},
@@ -200,6 +207,13 @@ export default function piStarship(pi: ExtensionAPI) {
 		apply(next) {
 			loaded = next;
 			refresh();
+		},
+		renderPreview(preview, width) {
+			return (
+				runtime.renderPreview?.(preview, width) ?? [
+					"Live preview is unavailable until the footer is ready.",
+				]
+			);
 		},
 	});
 
@@ -226,6 +240,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		runtime.gitWorktree = undefined;
 		runtime.extensionStatusIconAliases = EMPTY_ALIASES;
 		runtime.requestRender = undefined;
+		runtime.renderPreview = undefined;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setStatus("starship", undefined);
 	});

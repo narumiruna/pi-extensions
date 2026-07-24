@@ -421,10 +421,9 @@ interface AtomicFileSystem {
 	rmSync: typeof rmSync;
 }
 
-export function atomicSaveConfigDocument(
+export function validateConfigDocument(
 	settingsPath: string,
 	rawDocument: string,
-	overrides: Partial<AtomicFileSystem> = {},
 ): LoadedStarshipConfig {
 	let parsed: TomlTable;
 	try {
@@ -436,7 +435,37 @@ export function atomicSaveConfigDocument(
 	if (normalized.diagnostics.some((item) => item.severity === "error")) {
 		throw new Error(normalized.diagnostics.map((item) => item.message).join("\n"));
 	}
+	return {
+		...normalized,
+		source: "user",
+		settingsPath,
+		rawDocument,
+	};
+}
 
+export function atomicSaveConfigDocument(
+	settingsPath: string,
+	rawDocument: string,
+	overrides: Partial<AtomicFileSystem> = {},
+): LoadedStarshipConfig {
+	const validated = validateConfigDocument(settingsPath, rawDocument);
+	atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
+	return validated;
+}
+
+export function atomicRestoreConfigDocument(
+	settingsPath: string,
+	rawDocument: string,
+	overrides: Partial<AtomicFileSystem> = {},
+) {
+	atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
+}
+
+function atomicWriteConfigDocument(
+	settingsPath: string,
+	rawDocument: string,
+	overrides: Partial<AtomicFileSystem>,
+) {
 	const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
 	fs.mkdirSync(dirname(settingsPath), { recursive: true });
 	const tempPath = join(dirname(settingsPath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
@@ -447,15 +476,9 @@ export function atomicSaveConfigDocument(
 		try {
 			fs.rmSync(tempPath, { force: true });
 		} catch {
-			// Best-effort cleanup must not replace the original save error.
+			// Best-effort cleanup must not replace the publication result.
 		}
 	}
-	return {
-		...normalized,
-		source: "user",
-		settingsPath,
-		rawDocument,
-	};
 }
 
 function cloneBuiltInConfig(): StarshipConfig {
