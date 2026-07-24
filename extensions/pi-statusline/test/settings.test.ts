@@ -12,7 +12,7 @@ import {
 	settingsFilePath,
 } from "../src/settings.js";
 
-test("runtime defaults remain complete while the initial JSON document stays concise", () => {
+test("initial JSON exposes active defaults without materializing an inactive palette", () => {
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.palettePreset, "tokyo-night");
 	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.palette.time, {
 		fg: "#a0a9cb",
@@ -55,10 +55,12 @@ test("runtime defaults remain complete while the initial JSON document stays con
 			"cost",
 			"time",
 		],
+		segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
+		extensionStatusIcons: DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons,
 	});
 	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"palette"'), false);
-	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"segmentText"'), false);
-	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"extensionStatusIcons"'), false);
+	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"segmentText"'), true);
+	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"extensionStatusIcons"'), true);
 	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.endsWith("\n"), true);
 });
 
@@ -271,7 +273,7 @@ test("all named palettes, separators, empty segments, and environment independen
 	}
 });
 
-test("missing settings are atomically initialized with the concise default document", () => {
+test("missing settings are atomically initialized with the editable default document", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
 	try {
 		const loaded = loadOrCreateStatuslineSettings(root);

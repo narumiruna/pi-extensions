@@ -9,7 +9,7 @@
 - Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
 - Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
-- Creates a concise editable default configuration on first session start.
+- Creates an editable default configuration without an inactive custom palette on first session start.
 - Previews palette presets as the picker cursor moves, then applies the selection only on Enter.
 - Applies validated JSON settings edits from the `/statusline` menu immediately after an atomic save.
 - Caches Git state outside footer rendering and guards stale session results.
@@ -38,7 +38,7 @@ The only configuration source is:
 <getAgentDir()>/pi-statusline.json
 ```
 
-On first session start, the extension atomically creates a concise default document containing the common appearance and layout settings. Advanced fields continue to use built-in defaults until explicitly added. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
+On first session start, the extension atomically creates an editable default document containing every active appearance and status-icon setting. The inactive custom `palette` is added only when needed. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
 
 There are no project overrides or environment-variable overrides.
 
@@ -61,7 +61,35 @@ There are no project overrides or environment-variable overrides.
     "tokens",
     "cost",
     "time"
-  ]
+  ],
+  "segmentText": {
+    "brand": { "prefix": "", "suffix": "" },
+    "provider": { "prefix": "🔌 ", "suffix": "" },
+    "model": { "prefix": "🤖 ", "suffix": "" },
+    "thinking": { "prefix": "🧠 ", "suffix": "" },
+    "cwd": { "prefix": "📁 ", "suffix": "" },
+    "branch": { "prefix": "🌿 ", "suffix": "" },
+    "tools": { "prefix": "", "suffix": "" },
+    "context": { "prefix": "🪟 ctx ", "suffix": "" },
+    "tokens": { "prefix": "🔢 ", "suffix": "" },
+    "cost": { "prefix": "💸 $", "suffix": "" },
+    "time": { "prefix": "🕒 ", "suffix": "" },
+    "turn": { "prefix": "🔁 #", "suffix": "" }
+  },
+  "extensionStatusIcons": {
+    "chrome-devtools": "🌐",
+    "codex-usage": "📊",
+    "usage": "📊",
+    "caffeinate": "💊",
+    "firecrawl": "🔥",
+    "github-pr": "🔎",
+    "goal": "🎯",
+    "lsp": "🧰",
+    "plan-mode": "📝",
+    "pisync": "🔄",
+    "subagents": "🧑‍🤝‍🧑",
+    "unknown-error-retry": "🔁"
+  }
 }
 ```
 

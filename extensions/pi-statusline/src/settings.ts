@@ -85,7 +85,9 @@ const DEFAULT_STATUSLINE_DOCUMENT_CONFIG = {
 	density: DEFAULT_STATUSLINE_CONFIG.density,
 	separator: DEFAULT_STATUSLINE_CONFIG.separator,
 	segments: DEFAULT_SEGMENTS,
-} satisfies Pick<StatuslineConfig, "palettePreset" | "density" | "separator" | "segments">;
+	segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
+	extensionStatusIcons: DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons,
+} satisfies Omit<StatuslineConfig, "palette">;
 
 export const DEFAULT_STATUSLINE_DOCUMENT = `${JSON.stringify(
 	DEFAULT_STATUSLINE_DOCUMENT_CONFIG,
