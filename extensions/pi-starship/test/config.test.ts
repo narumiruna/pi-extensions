@@ -12,6 +12,7 @@ import {
 	loadStarshipConfig,
 	MODULE_NAMES,
 	settingsFilePath,
+	validateConfigDocument,
 } from "../src/config.js";
 
 test("config path uses the agent directory and missing settings use built-in defaults", () => {
@@ -249,6 +250,24 @@ test("invalid root and module formats fall back at the documented scope", () => 
 		assert.equal(loaded.config.modules.model.format, BUILT_IN_CONFIG.modules.model.format);
 		assert.equal(loaded.config.modules.model.symbol, "custom");
 		assert.equal(loaded.diagnostics.length, 2);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("draft validation never writes and retains unknown TOML fields", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-config-"));
+	const path = join(root, CONFIG_FILE_NAME);
+	try {
+		writeFileSync(path, "format = '$model'\nfuture = 'old'\n");
+		const draft = "format = '$provider'\nfuture = 'preserved'\n";
+		const validated = validateConfigDocument(path, draft);
+		assert.equal(validated.config.format, "$provider");
+		assert.equal(validated.rawDocument, draft);
+		assert.equal(readFileSync(path, "utf8"), "format = '$model'\nfuture = 'old'\n");
+		assert.match(validated.diagnostics.map((item) => item.message).join(" "), /future/u);
+		assert.throws(() => validateConfigDocument(path, "format = ["), /parse TOML/iu);
+		assert.equal(readFileSync(path, "utf8"), "format = '$model'\nfuture = 'old'\n");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

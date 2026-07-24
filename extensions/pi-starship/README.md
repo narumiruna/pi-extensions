@@ -13,7 +13,7 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 - Pi modules for model, thinking, activity, context, tokens, cost, turn, and extension statuses.
 - Cached Git branch, commit, operation state, line metrics, detailed status, and linked-worktree identity; no subprocess runs during footer rendering.
 - Multiline output wraps to the terminal width instead of truncating.
-- Transactional TOML editing through `/starship settings`.
+- Goal-oriented `/starship` menu with configuration health, preview, confirmation, and recovery.
 
 ## 📦 Install
 
@@ -41,13 +41,15 @@ On the first session start, the extension atomically creates this file from its 
 
 The extension does **not** read project overrides, `pi-statusline.json`, `PI_STATUSLINE_PRESET`, or `~/.config/starship.toml`, and does not migrate statusline settings.
 
-Open the file transactionally in TUI mode:
+Open the interactive menu in TUI mode:
 
 ```text
-/starship settings
+/starship
 ```
 
-A successful edit is validated, atomically saved, and applied immediately. Invalid or cancelled edits leave the previous file and effective config unchanged.
+Choose **Customize footer** to edit the TOML. Closing the editor validates the draft and opens a width-aware preview; saving happens only after a separate confirmation. Confirmed changes are atomically saved and applied immediately. Editor cancellation, preview cancellation, invalid drafts, write failures, and runtime application failures preserve the previous file and effective footer.
+
+The **Advanced** menu is one level deep and contains configuration details plus **Restore built-in**. Restore shows the concrete built-in preview and requires explicit overwrite confirmation.
 
 ### 📝 Example
 
@@ -149,11 +151,14 @@ If `$git_branch.$pr` is present in the module format, its selected PR token is r
 
 | Command | Purpose |
 | --- | --- |
-| `/starship settings` | Edit, validate, save, and immediately apply TOML (TUI only) |
+| `/starship` | Open the current-state menu in TUI mode; retain help behavior outside TUI |
+| `/starship settings` | Open the compatible direct edit → preview → confirm flow (TUI only) |
 | `/starship status` | Show config source/path and diagnostics |
 | `/starship help` | Show command and configuration help |
 
-Status and help are safe in TUI, RPC, JSON, and print modes. Footer/timer/Git lifecycle work starts only in TUI mode.
+The main menu keeps frequent goals visible: **Customize footer**, **Check configuration**, and **Help**. It shows whether the footer uses the built-in or custom document and displays the current warning count. **Advanced** contains uncommon details and the confirmed restore action, with an explicit **Back** path.
+
+Status and help remain safe in TUI, RPC, JSON, and print modes. RPC receives notifications but never opens custom terminal UI; print and JSON modes produce no ad hoc output. Footer/timer/Git lifecycle work starts only in TUI mode.
 
 ## 📐 Scope
 
@@ -168,8 +173,9 @@ Keep `extension_status` last in the catalog so earlier modules can consume exten
 ## 🗂️ Package layout
 
 - `src/index.ts` — Pi package entrypoint.
-- `src/pi-starship.ts` — extension lifecycle and footer.
-- `src/config.ts` — TOML loading, validation, defaults, and persistence.
+- `src/pi-starship.ts` — extension lifecycle, live preview binding, and footer.
+- `src/commands.ts` — goal-oriented menu, preview/confirmation, diagnostics, and compatibility routes.
+- `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
 - `src/format/` — native format/style parser and renderer.
 - `src/modules/` — module-per-file definitions, ordered registry, and statusline renderer.
 - `src/modules/git/` — shared Git runtime plus branch, status, and worktree modules.
