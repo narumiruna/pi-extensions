@@ -8,11 +8,13 @@ import {
 	type RenderSegment,
 	type SeparatorName,
 	type StatuslineConfig,
+	type StatuslinePalette,
 	type TokyoNightBlockName,
 } from "./types.js";
 
 interface TokyoNightBlock {
-	name: TokyoNightBlockName;
+	baseBlock: TokyoNightBlockName;
+	colors: BlockColors;
 	segments: RenderSegment[];
 }
 
@@ -87,9 +89,9 @@ function splitLines(items: RenderItem[]): RenderSegment[][] {
 
 export function tokyoNightExtensionSeparator(
 	_theme: Theme,
-	paletteName: PaletteName = "tokyo-night",
+	palette: StatuslinePalette = "tokyo-night",
 ): string {
-	return ansiFg(resolvePalette(paletteName).extensionSeparator, " • ");
+	return ansiFg(resolvePalette(palette).extensionSeparator, " • ");
 }
 
 function joinTokyoNightSegments(
@@ -97,29 +99,45 @@ function joinTokyoNightSegments(
 	config: Pick<StatuslineConfig, "palette" | "density" | "separator">,
 ): string {
 	const palette = resolvePalette(config.palette);
-	const blocks = contiguousBlocks(segments);
+	const blocks = contiguousBlocks(segments, palette, config.palette);
 	let line = ansiFg(palette.lead, "░▒▓");
 
 	for (const [index, block] of blocks.entries()) {
-		const colors = palette.blocks[block.name];
-		const previous = index === 0 ? undefined : palette.blocks[blocks[index - 1]?.name ?? "header"];
-		if (previous) line += ansiStyle("", { fg: previous.bg, bg: colors.bg });
-		line += ansiStyle(formatBlockText(block, config), colors);
+		const previous = index === 0 ? undefined : blocks[index - 1]?.colors;
+		if (previous) line += ansiStyle("", { fg: previous.bg, bg: block.colors.bg });
+		line += ansiStyle(formatBlockText(block, config), block.colors);
 	}
 
 	const lastBlock = blocks.at(-1);
-	if (lastBlock) line += ansiFg(palette.blocks[lastBlock.name].bg, "");
+	if (lastBlock) line += ansiFg(lastBlock.colors.bg, "");
 	return line;
 }
 
-function contiguousBlocks(segments: RenderSegment[]): TokyoNightBlock[] {
+function contiguousBlocks(
+	segments: RenderSegment[],
+	palette: PowerlinePalette,
+	configuredPalette: StatuslinePalette,
+): TokyoNightBlock[] {
 	const blocks: TokyoNightBlock[] = [];
+	const usesConfiguredColors = typeof configuredPalette !== "string";
 	for (const segment of segments) {
+		const colors = usesConfiguredColors
+			? configuredPalette[segment.name]
+			: palette.blocks[segment.block];
 		const previous = blocks.at(-1);
-		if (previous?.name === segment.block) previous.segments.push(segment);
-		else blocks.push({ name: segment.block, segments: [segment] });
+		const matchesPrevious =
+			previous !== undefined &&
+			(usesConfiguredColors
+				? colorsEqual(previous.colors, colors)
+				: previous.baseBlock === segment.block);
+		if (matchesPrevious) previous.segments.push(segment);
+		else blocks.push({ baseBlock: segment.block, colors, segments: [segment] });
 	}
 	return blocks;
+}
+
+function colorsEqual(left: BlockColors, right: BlockColors): boolean {
+	return left.fg === right.fg && left.bg === right.bg;
 }
 
 function formatBlockText(
@@ -153,9 +171,9 @@ function separatorText(separator: SeparatorName, cozy: boolean): string {
 	}
 }
 
-function resolvePalette(name: PaletteName): PowerlinePalette {
-	if (name === "tokyo-night") return TOKYO_NIGHT_PALETTE;
-	const sequence = PALETTE_SEQUENCES[name];
+function resolvePalette(palette: StatuslinePalette): PowerlinePalette {
+	if (typeof palette !== "string" || palette === "tokyo-night") return TOKYO_NIGHT_PALETTE;
+	const sequence = PALETTE_SEQUENCES[palette];
 	const backgrounds = BLOCK_NAMES.map(
 		(_block, index) => SEMANTIC_COLORS[sequence[index % sequence.length] ?? "muted"],
 	);

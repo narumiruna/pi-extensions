@@ -45,7 +45,20 @@ There are no project overrides or environment-variable overrides.
 
 ```json
 {
-  "palette": "tokyo-night",
+  "palette": {
+    "brand": { "fg": "#090c0c", "bg": "#a3aed2" },
+    "provider": { "fg": "#090c0c", "bg": "#a3aed2" },
+    "model": { "fg": "#090c0c", "bg": "#a3aed2" },
+    "thinking": { "fg": "#090c0c", "bg": "#a3aed2" },
+    "cwd": { "fg": "#e3e5e5", "bg": "#769ff0" },
+    "branch": { "fg": "#769ff0", "bg": "#394260" },
+    "tools": { "fg": "#769ff0", "bg": "#212736" },
+    "context": { "fg": "#769ff0", "bg": "#212736" },
+    "tokens": { "fg": "#769ff0", "bg": "#212736" },
+    "cost": { "fg": "#a0a9cb", "bg": "#1d2230" },
+    "time": { "fg": "#a0a9cb", "bg": "#1d2230" },
+    "turn": { "fg": "#a0a9cb", "bg": "#1d2230" }
+  },
   "density": "compact",
   "separator": "none",
   "segments": [
@@ -96,11 +109,29 @@ All fields are optional in an existing document. Missing fields use defaults.
 
 ### Appearance
 
-- `palette`: `tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, or `mono`.
+- `palette`: maps each segment to foreground (`fg`) and background (`bg`) colors.
 - `density`: `compact` or `cozy`.
 - `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
 
+Each palette color must be a complete `#RRGGBB` truecolor value. The generated default document contains the complete Tokyo Night palette. Missing segment entries or color fields inherit Tokyo Night defaults, so existing partial documents remain valid. Legacy string palettes—`tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, and `mono`—remain accepted for compatibility.
+
 The separator applies only between adjacent segments in the same color block. Color-block transitions always use ``. Extension statuses remain on separate wrapped lines with their own palette-colored separator.
+
+For example, after moving `time` before the header segments, give it the same colors as the Tokyo Night header to keep one continuous block:
+
+```json
+{
+  "segments": ["time", "brand", "provider", "model"],
+  "palette": {
+    "time": {
+      "fg": "#090c0c",
+      "bg": "#a3aed2"
+    }
+  }
+}
+```
+
+Adjacent segments with the same configured foreground and background render as one block. Invalid colors prevent `/statusline settings` from saving. Unknown segment names or palette fields are reported as warnings and ignored.
 
 ### Segments
 

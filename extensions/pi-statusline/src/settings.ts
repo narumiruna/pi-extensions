@@ -18,7 +18,9 @@ import {
 	SEGMENT_NAMES,
 	SEPARATOR_NAMES,
 	type SegmentName,
+	type SegmentPalette,
 	type StatuslineConfig,
+	TOKYO_NIGHT_SEGMENT_PALETTE,
 } from "./types.js";
 
 export const SETTINGS_FILE_NAME = "pi-statusline.json";
@@ -54,7 +56,7 @@ const DEFAULT_SEGMENTS: SegmentName[] = [
 ];
 
 export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
-	palette: "tokyo-night",
+	palette: cloneSegmentPalette(TOKYO_NIGHT_SEGMENT_PALETTE),
 	density: "compact",
 	separator: "none",
 	segments: DEFAULT_SEGMENTS,
@@ -141,7 +143,7 @@ export function normalizeStatuslineConfig(value: unknown): {
 		if (!knownRoot.has(key)) diagnostics.push(unknownDiagnostic(key));
 	}
 
-	normalizeEnum(value, "palette", PALETTE_NAMES, config, diagnostics);
+	normalizePalette(value.palette, config, diagnostics);
 	normalizeEnum(value, "density", DENSITIES, config, diagnostics);
 	normalizeEnum(value, "separator", SEPARATOR_NAMES, config, diagnostics);
 
@@ -413,10 +415,58 @@ export function normalizeStatuslineSettings(value: unknown): StatuslineConfig {
 	return normalizeStatuslineConfig(value).config;
 }
 
-function normalizeEnum<
-	K extends "palette" | "density" | "separator",
-	T extends StatuslineConfig[K],
->(
+function normalizePalette(
+	value: unknown,
+	config: StatuslineConfig,
+	diagnostics: StatuslineConfigDiagnostic[],
+) {
+	if (value === undefined) return;
+	if (typeof value === "string") {
+		if (!(PALETTE_NAMES as readonly string[]).includes(value)) {
+			diagnostics.push(
+				invalidDiagnostic(
+					"palette",
+					`Expected a palette object or one of: ${PALETTE_NAMES.join(", ")}`,
+				),
+			);
+			return;
+		}
+		config.palette = value as StatuslineConfig["palette"];
+		return;
+	}
+	if (!isRecord(value)) {
+		diagnostics.push(invalidDiagnostic("palette", "Expected a palette object"));
+		return;
+	}
+
+	const palette = cloneSegmentPalette(TOKYO_NIGHT_SEGMENT_PALETTE);
+	for (const [name, colors] of Object.entries(value)) {
+		const path = `palette.${name}`;
+		if (!isSegmentName(name)) {
+			diagnostics.push(unknownDiagnostic(path));
+			continue;
+		}
+		if (!isRecord(colors)) {
+			diagnostics.push(invalidDiagnostic(path, "Expected an object"));
+			continue;
+		}
+		for (const [field, color] of Object.entries(colors)) {
+			const colorPath = `${path}.${field}`;
+			if (field !== "fg" && field !== "bg") {
+				diagnostics.push(unknownDiagnostic(colorPath));
+				continue;
+			}
+			if (typeof color !== "string" || !/^#[0-9a-f]{6}$/iu.test(color)) {
+				diagnostics.push(invalidDiagnostic(colorPath, "Expected a full #RRGGBB hexadecimal color"));
+				continue;
+			}
+			palette[name][field] = color.toLowerCase();
+		}
+	}
+	config.palette = palette;
+}
+
+function normalizeEnum<K extends "density" | "separator", T extends StatuslineConfig[K]>(
 	value: Record<string, unknown>,
 	field: K,
 	accepted: readonly T[],
@@ -434,9 +484,17 @@ function normalizeEnum<
 	config[field] = candidate as StatuslineConfig[K];
 }
 
+function cloneSegmentPalette(palette: SegmentPalette): SegmentPalette {
+	return Object.fromEntries(
+		SEGMENT_NAMES.map((name) => [name, { ...palette[name] }]),
+	) as SegmentPalette;
+}
+
 function cloneConfig(config: StatuslineConfig): StatuslineConfig {
 	return {
 		...config,
+		palette:
+			typeof config.palette === "string" ? config.palette : cloneSegmentPalette(config.palette),
 		segments: [...config.segments],
 		segmentText: Object.fromEntries(
 			SEGMENT_NAMES.map((name) => [name, { ...config.segmentText[name] }]),

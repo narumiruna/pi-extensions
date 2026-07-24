@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatConfiguredSegment } from "../src/render.js";
-import { createDefaultConfig } from "../src/settings.js";
+import { createDefaultConfig, normalizeStatuslineConfig } from "../src/settings.js";
 import { renderTokyoNightStatusline } from "../src/tokyo-night.js";
 import type { RenderItem, RenderSegment, SegmentName } from "../src/types.js";
 
@@ -42,6 +42,37 @@ test("Tokyo Night default retains the exact powerline colors", () => {
 			"\u001b[38;2;9;12;12;48;2;163;174;210m model\u001b[0m" +
 			"\u001b[38;2;163;174;210m\u001b[0m",
 	);
+});
+
+test("configured palette joins reordered time to an adjacent header block", () => {
+	const config = createDefaultConfig();
+	if (typeof config.palette === "string") assert.fail("expected palette object");
+	config.palette.time = { fg: "#090c0c", bg: "#a3aed2" };
+	const rendered = renderTokyoNightStatusline(
+		300,
+		[segment("time", "time", "meter"), segment("brand", "brand", "header")],
+		config,
+	);
+	assert.equal(plain(rendered), "░▒▓ time brand");
+	assert.equal((plain(rendered).match(//gu) ?? []).length, 1);
+});
+
+test("partial configured palette inherits omitted Tokyo Night colors", () => {
+	const config = normalizeStatuslineConfig({ palette: { time: { fg: "#ffffff" } } }).config;
+	const rendered = renderTokyoNightStatusline(300, [segment("time", "time", "meter")], config);
+	assert.ok(rendered.includes(`${ESCAPE}[38;2;255;255;255;48;2;29;34;48m time${ESCAPE}[0m`));
+});
+
+test("different final segment colors retain the powerline transition", () => {
+	const config = createDefaultConfig();
+	if (typeof config.palette === "string") assert.fail("expected palette object");
+	config.palette.time = { ...config.palette.time, bg: "#123456" };
+	const rendered = renderTokyoNightStatusline(
+		300,
+		[segment("time", "time", "meter"), segment("brand", "brand", "header")],
+		config,
+	);
+	assert.equal(plain(rendered), "░▒▓ time brand");
 });
 
 test("line breaks render separated repeated markers as independent powerline rows", () => {

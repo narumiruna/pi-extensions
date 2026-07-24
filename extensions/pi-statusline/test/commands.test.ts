@@ -97,6 +97,9 @@ test("cancelled, invalid, and failed settings edits preserve file and runtime st
 		nextEdit = JSON.stringify({ palette: "invalid" });
 		await mock.commands.get("statusline")?.handler("settings", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*palette/i);
+		nextEdit = JSON.stringify({ palette: { time: { fg: "red" } } });
+		await mock.commands.get("statusline")?.handler("settings", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*palette\.time\.fg/i);
 		nextEdit = JSON.stringify({ future: "publish" });
 		await mock.commands.get("statusline")?.handler("settings", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /publish failed/i);
@@ -134,9 +137,10 @@ test("settings is TUI-only while status and help are protocol-safe", async () =>
 		assert.match(context.notifications.at(-1)?.message ?? "", /Edit settings manually/u);
 		await mock.commands.get("statusline")?.handler("status", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /source: user/u);
-		assert.match(context.notifications.at(-1)?.message ?? "", /palette: tokyo-night/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /palette: configured/u);
 		await mock.commands.get("statusline")?.handler("help", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /segmentText/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /palette maps/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /line_break/u);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

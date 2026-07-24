@@ -75,6 +75,7 @@ async function editSettings(ctx: ExtensionCommandContext, options: StatuslineCom
 function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
 	if (!canNotify(ctx)) return;
 	const loaded = options.getLoaded();
+	const palette = typeof loaded.config.palette === "string" ? loaded.config.palette : "configured";
 	const diagnostics = loaded.diagnostics
 		.slice(0, 5)
 		.map((item) => `${item.path || "root"}: ${item.message}`)
@@ -83,7 +84,7 @@ function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOpti
 		[
 			`pi-statusline source: ${loaded.source}`,
 			`path: ${options.settingsPath}`,
-			`palette: ${loaded.config.palette}`,
+			`palette: ${palette}`,
 			`density: ${loaded.config.density}`,
 			`separator: ${loaded.config.separator}`,
 			`segments: ${loaded.config.segments.join(", ") || "none"}`,
@@ -102,6 +103,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 			"/statusline help — show this help",
 			`Settings: ${settingsPath}`,
 			"Fields: palette, density, separator, segments, segmentText, extensionStatusIcons",
+			"palette maps segment names to fg/bg full #RRGGBB colors.",
 			"Use line_break between segments for another footer row; repeats must not be consecutive.",
 			"The segmentText entries support prefix and suffix strings around Pi-owned dynamic values.",
 		].join("\n"),

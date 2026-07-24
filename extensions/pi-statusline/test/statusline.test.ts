@@ -563,7 +563,7 @@ test("statusline settings load extension icon overrides", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-test-"));
 	const settingsPath = join(root, "pi-statusline.json");
 
-	assert.equal(readStatuslineSettings(settingsPath).palette, "tokyo-night");
+	assert.equal(typeof readStatuslineSettings(settingsPath).palette, "object");
 
 	writeFileSync(
 		settingsPath,
@@ -575,7 +575,7 @@ test("statusline settings load extension icon overrides", () => {
 	assert.equal(Object.hasOwn(configured.extensionStatusIcons, "bad"), false);
 
 	writeFileSync(settingsPath, "not json");
-	assert.equal(readStatuslineSettings(settingsPath).palette, "tokyo-night");
+	assert.equal(typeof readStatuslineSettings(settingsPath).palette, "object");
 });
 
 test("statusline settings migrate to the canonical package filename", async () => {
@@ -602,7 +602,7 @@ test("statusline settings migrate to the canonical package filename", async () =
 		assert.equal(existsSync(legacyPath), true);
 
 		writeFileSync(canonicalPath, "invalid");
-		assert.equal(readStatuslineSettings().palette, "tokyo-night");
+		assert.equal(typeof readStatuslineSettings().palette, "object");
 		assert.equal(readFileSync(legacyPath, "utf8").includes("old"), true);
 		unlinkSync(legacyPath);
 		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "fixed" } }));
@@ -610,12 +610,12 @@ test("statusline settings migrate to the canonical package filename", async () =
 		assert.equal(consumeStatuslineSettingsNotice(), undefined);
 		unlinkSync(canonicalPath);
 		writeFileSync(legacyPath, "invalid");
-		assert.equal(readStatuslineSettings().palette, "tokyo-night");
+		assert.equal(typeof readStatuslineSettings().palette, "object");
 		assert.equal(existsSync(canonicalPath), false);
 
 		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "fallback" } }));
 		symlinkSync("missing-target", canonicalPath);
-		assert.equal(readStatuslineSettings().palette, "tokyo-night");
+		assert.equal(typeof readStatuslineSettings().palette, "object");
 		assert.equal(existsSync(legacyPath), true);
 		const mock = createMockPi();
 		statusline(mock.pi);
