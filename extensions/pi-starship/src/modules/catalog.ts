@@ -5,6 +5,9 @@ import { costModule } from "./cost.js";
 import { directoryModule } from "./directory.js";
 import { extensionStatusModule } from "./extension-status.js";
 import { gitBranchModule } from "./git/branch.js";
+import { gitCommitModule } from "./git/commit.js";
+import { gitMetricsModule } from "./git/metrics.js";
+import { gitStateModule } from "./git/state.js";
 import { gitStatusModule } from "./git/status.js";
 import { gitWorktreeModule } from "./git/worktree.js";
 import { modelModule } from "./model.js";
@@ -23,6 +26,9 @@ export const MODULE_DEFINITIONS = [
 	directoryModule,
 	gitWorktreeModule,
 	gitBranchModule,
+	gitCommitModule,
+	gitStateModule,
+	gitMetricsModule,
 	gitStatusModule,
 	activityModule,
 	contextModule,

@@ -9,6 +9,11 @@ export { shortenModel } from "./model.js";
 export { renderStatusline } from "./render.js";
 export type {
 	ExtensionStatusIconAliasMap,
+	GitBranchSnapshot,
+	GitCommitSnapshot,
+	GitMetricsSnapshot,
+	GitSnapshot,
+	GitStateSnapshot,
 	GitStatusSnapshot,
 	GitWorktreeSnapshot,
 	RenderedStatusline,

@@ -139,7 +139,9 @@ test("TUI footer renders cached state and parallel tool activity without executi
 			worktreeCalls += 1;
 			return gitResult("/work/pi-feature\n/work/pi/.git\n/work/pi/.git/worktrees/pi-feature\n");
 		}
-		return gitResult("## main\n M changed.ts\n");
+		return gitResult(
+			"# branch.oid abcdef1234567890\n# branch.head main\n1 .M N... 100644 100644 100644 a b changed.ts\n",
+		);
 	};
 	piStarship(mock.pi);
 	const context = createMockContext({
@@ -167,13 +169,13 @@ test("TUI footer renders cached state and parallel tool activity without executi
 	await emit(mock.events, "tool_execution_start", { toolName: "bash" }, context.ctx);
 	branchChange?.();
 	await flushAsync();
-	assert.equal(worktreeCalls, 1);
+	assert.equal(worktreeCalls, 2);
 	const beforeRender = calls;
 	const lines = footer.render(300);
 	assert.equal(calls, beforeRender);
 	assert.match(stripAnsi(lines.join("\n")), /pi-feature/);
 	assert.match(stripAnsi(lines.join("\n")), /read×2\+1/);
-	assert.match(stripAnsi(lines.join("\n")), /~1/);
+	assert.match(stripAnsi(lines.join("\n")), /!1/);
 	footer.dispose();
 	await emit(mock.events, "session_shutdown", {}, context.ctx);
 });
@@ -203,9 +205,13 @@ test("stale Git results from a replaced session cannot overwrite the new footer"
 	await emit(mock.events, "session_start", {}, oldContext.ctx);
 	await emit(mock.events, "session_shutdown", {}, oldContext.ctx);
 	await emit(mock.events, "session_start", {}, newContext.ctx);
-	first.resolve(gitResult("## old\n M stale.ts\n"));
+	first.resolve(
+		gitResult(
+			"# branch.oid abcdef1234567890\n# branch.head old\n1 .M N... 100644 100644 100644 a b stale.ts\n",
+		),
+	);
 	await flushAsync();
-	second.resolve(gitResult("## new\n?? fresh.ts\n"));
+	second.resolve(gitResult("# branch.oid abcdef1234567890\n# branch.head new\n? fresh.ts\n"));
 	await flushAsync();
 	const footer = (newContext.footer as FooterFactory)(
 		{ requestRender() {} },
@@ -217,7 +223,7 @@ test("stale Git results from a replaced session cannot overwrite the new footer"
 		},
 	);
 	const output = stripAnsi(footer.render(300).join("\n"));
-	assert.doesNotMatch(output, /~1/);
+	assert.doesNotMatch(output, /!1/);
 	assert.match(output, /\?1/);
 	footer.dispose();
 	await emit(mock.events, "session_shutdown", {}, newContext.ctx);
@@ -331,7 +337,26 @@ test("Git porcelain parser returns all compact counters", () => {
 		parseGitStatusPorcelain(
 			`## main...origin/main [ahead 2, behind 1]\nM  staged\n M modified\n?? new\nUU conflict\n`,
 		),
-		{ ahead: 2, behind: 1, staged: 1, modified: 1, untracked: 1, conflicted: 1 },
+		{
+			ahead: 2,
+			behind: 1,
+			stashed: 0,
+			conflicted: 1,
+			deleted: 0,
+			renamed: 0,
+			modified: 1,
+			staged: 1,
+			typechanged: 0,
+			untracked: 1,
+			worktreeAdded: 0,
+			worktreeDeleted: 0,
+			worktreeModified: 1,
+			worktreeTypechanged: 0,
+			indexAdded: 0,
+			indexDeleted: 0,
+			indexModified: 1,
+			indexTypechanged: 0,
+		},
 	);
 });
 

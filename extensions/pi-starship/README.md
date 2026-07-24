@@ -11,7 +11,7 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 - Automatically creates a readable Tokyo Night configuration on first session start.
 - Starship-style root/module formats, conditional groups, `$all`, styles, and palettes.
 - Pi modules for model, thinking, activity, context, tokens, cost, turn, and extension statuses.
-- Cached Git branch/status rendering and linked-worktree identity; no subprocess runs during footer rendering.
+- Cached Git branch, commit, operation state, line metrics, detailed status, and linked-worktree identity; no subprocess runs during footer rendering.
 - Multiline output wraps to the terminal width instead of truncating.
 - Transactional TOML editing through `/starship settings`.
 
@@ -126,8 +126,11 @@ An invalid root format falls back to the built-in root format. An invalid module
 | `thinking` | `$symbol`, `$level` | Thinking level |
 | `directory` | `$symbol`, `$path`, `$full_path` | Current working directory |
 | `git_worktree` | `$symbol`, `$name`, `$path` | Linked worktree name and top-level path |
-| `git_branch` | `$symbol`, `$branch`, `$pr` | Cached branch and actionable PR state |
-| `git_status` | `$symbol`, `$all_status`, `$ahead`, `$behind`, `$staged`, `$modified`, `$untracked`, `$conflicted` | Cached porcelain counters |
+| `git_branch` | `$symbol`, `$branch`, `$remote_name`, `$remote_branch`, `$pr` | Branch, upstream, and actionable PR state |
+| `git_commit` | `$symbol`, `$hash`, `$tag` | Seven-character HEAD hash and optional exact tag |
+| `git_state` | `$symbol`, `$state`, `$progress_current`, `$progress_total` | Rebase, merge, revert, cherry-pick, bisect, or mail-apply state |
+| `git_metrics` | `$symbol`, `$added`, `$deleted` | Added/deleted line totals from the working tree diff |
+| `git_status` | `$symbol`, `$all_status`, `$ahead_behind`, `$ahead`, `$behind`, `$diverged`, `$up_to_date`, `$conflicted`, `$stashed`, `$deleted`, `$renamed`, `$modified`, `$typechanged`, `$staged`, `$untracked`, and detailed index/worktree counters | Cached porcelain-v2 counters |
 | `activity` | `$symbol`, `$state`, `$tool`, `$count`, `$text` | Active tools, streaming, completion, or idle |
 | `context` | `$symbol`, `$percentage`, `$tokens`, `$window` | Context-window use |
 | `tokens` | `$symbol`, `$input`, `$output`, `$total` | Token totals |
@@ -137,6 +140,8 @@ An invalid root format falls back to the built-in root format. An invalid module
 | `extension_status` | `$symbol`, `$statuses`, `$count` | Pi extension statuses |
 
 `git_worktree` is empty in the primary worktree. In a linked worktree it defaults to the top-level directory name; use `$path` when the full absolute path is needed.
+
+`git_commit`, `git_state`, and `git_metrics` are intentionally not present in the built-in root format. Add their variables to `format` to opt in; also set `[git_metrics].disabled = false`, matching Starship's opt-in metrics default. `$tag` resolves only an exact tag on HEAD and is queried only when the configured `git_commit` format references it.
 
 If `$git_branch.$pr` is present in the module format, its selected PR token is removed from `extension_status` to avoid duplication.
 

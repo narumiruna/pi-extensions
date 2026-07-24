@@ -12,12 +12,12 @@ import {
 	loadStarshipConfig,
 	settingsFilePath,
 } from "./config.js";
+import { formatVariables } from "./format/formatter.js";
 import { readInstalledPackageInfo } from "./installed-packages.js";
-import { gitStatusEqual, readGitStatus, readGitWorktree } from "./modules/git/runtime.js";
+import { gitSnapshotEqual, readGitSnapshot } from "./modules/git/runtime.js";
 import {
 	type ExtensionStatusIconAliasMap,
-	type GitStatusSnapshot,
-	type GitWorktreeSnapshot,
+	type GitSnapshot,
 	renderStatusline,
 	type StarshipRuntimeSnapshot,
 } from "./modules/index.js";
@@ -31,8 +31,7 @@ interface RuntimeState {
 	isStreaming: boolean;
 	thinkingLevel: string;
 	lastCompletedTool?: string;
-	gitStatus?: GitStatusSnapshot;
-	gitWorktree?: GitWorktreeSnapshot;
+	git?: GitSnapshot;
 	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	requestRender?: () => void;
 }
@@ -66,30 +65,10 @@ export default function piStarship(pi: ExtensionAPI) {
 	const isCurrentRequest = (cwd: string, generation: number, requestId: number) =>
 		isActiveTarget(cwd, generation) && requestId === gitRequestId;
 
-	const setGitStatus = (status: GitStatusSnapshot | undefined) => {
-		if (gitStatusEqual(runtime.gitStatus, status)) return;
-		runtime.gitStatus = status;
+	const setGitSnapshot = (snapshot: GitSnapshot | undefined) => {
+		if (gitSnapshotEqual(runtime.git, snapshot)) return;
+		runtime.git = snapshot;
 		refresh();
-	};
-
-	const refreshGitWorktree = (cwd: string, generation: number) => {
-		void (async () => {
-			let worktree: GitWorktreeSnapshot | undefined;
-			try {
-				worktree = await readGitWorktree(pi, cwd);
-			} catch {
-				worktree = undefined;
-			}
-			if (!isActiveTarget(cwd, generation)) return;
-			if (
-				runtime.gitWorktree?.name === worktree?.name &&
-				runtime.gitWorktree?.path === worktree?.path
-			) {
-				return;
-			}
-			runtime.gitWorktree = worktree;
-			refresh();
-		})();
 	};
 
 	const runGitRefresh = (cwd: string, generation: number, requestId: number) => {
@@ -101,10 +80,17 @@ export default function piStarship(pi: ExtensionAPI) {
 		gitRefreshInFlight = true;
 		void (async () => {
 			try {
-				const status = await readGitStatus(pi, cwd);
-				if (isCurrentRequest(cwd, generation, requestId)) setGitStatus(status);
+				const config = loaded?.config;
+				const snapshot = await readGitSnapshot(pi, cwd, {
+					includeMetrics: config ? !config.modules.git_metrics.disabled : false,
+					includeTag: config
+						? !config.modules.git_commit.disabled &&
+							formatVariables(config.modules.git_commit.formatAst).has("tag")
+						: false,
+				});
+				if (isCurrentRequest(cwd, generation, requestId)) setGitSnapshot(snapshot);
 			} catch {
-				if (isCurrentRequest(cwd, generation, requestId)) setGitStatus(undefined);
+				if (isCurrentRequest(cwd, generation, requestId)) setGitSnapshot(undefined);
 			} finally {
 				gitRefreshInFlight = false;
 				const pending = pendingGitRefresh;
@@ -134,8 +120,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		const cwd = ctx.cwd;
 		clearDebounce();
 		pendingGitRefresh = undefined;
-		runtime.gitStatus = undefined;
-		runtime.gitWorktree = undefined;
+		runtime.git = undefined;
 		runtime.requestRender = undefined;
 		activeGitTarget = ctx.mode === "tui" ? { cwd, generation } : undefined;
 		ctx.ui.setStatus("starship", undefined);
@@ -154,7 +139,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		ctx.ui.setFooter((tui, _theme, footerData) => {
 			runtime.requestRender = () => tui.requestRender();
 			const unsubscribe = footerData.onBranchChange(() => {
-				runtime.gitStatus = undefined;
+				runtime.git = undefined;
 				clearDebounce();
 				refreshGit(cwd, generation);
 				tui.requestRender();
@@ -176,8 +161,7 @@ export default function piStarship(pi: ExtensionAPI) {
 						activeGitTarget = undefined;
 						clearDebounce();
 						pendingGitRefresh = undefined;
-						runtime.gitStatus = undefined;
-						runtime.gitWorktree = undefined;
+						runtime.git = undefined;
 						runtime.requestRender = undefined;
 					}
 				},
@@ -190,7 +174,6 @@ export default function piStarship(pi: ExtensionAPI) {
 			};
 		});
 		refreshGit(cwd, generation);
-		refreshGitWorktree(cwd, generation);
 	};
 
 	const configPath = settingsFilePath(getAgentDir());
@@ -222,8 +205,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		activeGitTarget = undefined;
 		clearDebounce();
 		pendingGitRefresh = undefined;
-		runtime.gitStatus = undefined;
-		runtime.gitWorktree = undefined;
+		runtime.git = undefined;
 		runtime.extensionStatusIconAliases = EMPTY_ALIASES;
 		runtime.requestRender = undefined;
 		ctx.ui.setFooter(undefined);
@@ -281,9 +263,13 @@ function runtimeSnapshot(
 		lastCompletedTool: runtime.lastCompletedTool,
 		contextUsage: ctx.getContextUsage() ?? undefined,
 		tokenTotals: tokenTotals(ctx),
-		gitBranch: footerData.getGitBranch(),
-		gitStatus: runtime.gitStatus,
-		gitWorktree: runtime.gitWorktree,
+		gitBranch: runtime.git?.branch?.name ?? footerData.getGitBranch(),
+		gitBranchDetails: runtime.git?.branch,
+		gitCommit: runtime.git?.commit,
+		gitState: runtime.git?.state,
+		gitMetrics: runtime.git?.metrics,
+		gitStatus: runtime.git?.status,
+		gitWorktree: runtime.git?.worktree,
 		extensionStatuses: footerData.getExtensionStatuses(),
 		extensionStatusIconAliases: runtime.extensionStatusIconAliases,
 		now: new Date(),
@@ -322,4 +308,10 @@ export function wrapFormattedStatusline(format: string, width: number): string[]
 	return wrapTextWithAnsi(format, width);
 }
 
-export { parseGitStatusPorcelain, parseGitWorktree } from "./modules/git/runtime.js";
+export {
+	parseGitDiffShortstat,
+	parseGitState,
+	parseGitStatusPorcelain,
+	parseGitStatusPorcelainV2,
+	parseGitWorktree,
+} from "./modules/git/runtime.js";
