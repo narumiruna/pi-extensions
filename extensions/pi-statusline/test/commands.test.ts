@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerStatuslineCommand } from "../src/commands.js";
 import {
@@ -12,6 +13,8 @@ import {
 	settingsFilePath,
 } from "../src/settings.js";
 import statusline from "../src/statusline.js";
+
+initTheme("dark", false);
 
 interface PickerComponent {
 	render?(width: number): string[];
@@ -66,6 +69,205 @@ test("/statusline keeps compatibility subcommands and an argument-free interacti
 	await command.handler("palette", context.ctx);
 	assert.equal(selectCalls, 1);
 	assert.match(context.notifications.at(-1)?.message ?? "", /unknown.*palette/iu);
+});
+
+test("segment menu toggles displayed segments and preserves JSON fields and layout order", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	writeFileSync(
+		path,
+		JSON.stringify({
+			segments: ["model", "line_break", "cwd"],
+			future: { retained: true },
+		}),
+	);
+	try {
+		const mock = createMockPi();
+		let loaded = loadStatuslineSettings(path);
+		const appliedSegments: string[][] = [];
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply(next) {
+				loaded = next;
+				appliedSegments.push([...next.config.segments]);
+			},
+		});
+		let menuChoices: string[] = [];
+		let initialScreen = "";
+		let changedScreen = "";
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) => {
+				menuChoices = choices;
+				return choices.find((choice) => choice.startsWith("Segments ("));
+			},
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				let result: unknown;
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					{},
+					(value: unknown) => {
+						result = value;
+					},
+				) as PickerComponent;
+				initialScreen = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\r");
+				changedScreen = component.render?.(100).join("\n") ?? "";
+				for (let index = 0; index < 4; index += 1) component.handleInput?.("\u001b[B");
+				component.handleInput?.("\r");
+				for (let index = 0; index < 8; index += 1) component.handleInput?.("\u001b[B");
+				component.handleInput?.("\r");
+				component.handleInput?.("\u001b");
+				return result;
+			},
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.deepEqual(menuChoices, [
+			"Palette preset (tokyo-night)",
+			"Segments (2/12 shown)",
+			"Edit settings JSON (custom colors, layout, icons)",
+			"Status",
+			"Help",
+		]);
+		assert.match(initialScreen, /Statusline segments/u);
+		assert.match(initialScreen.split("\n").find((line) => line.includes("brand")) ?? "", /hidden/u);
+		assert.match(
+			initialScreen.split("\n").find((line) => line.includes("model")) ?? "",
+			/visible/u,
+		);
+		assert.doesNotMatch(initialScreen, /line_break/u);
+		assert.match(
+			changedScreen.split("\n").find((line) => line.includes("brand")) ?? "",
+			/visible/u,
+		);
+		assert.deepEqual(appliedSegments, [
+			["model", "line_break", "cwd", "brand"],
+			["model", "line_break", "brand"],
+			["model"],
+		]);
+		assert.deepEqual(loaded.config.segments, ["model"]);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+			segments: ["model"],
+			future: { retained: true },
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("segment menu rolls back its displayed value when saving fails", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	const original = `${JSON.stringify({ segments: ["model"] })}\n`;
+	writeFileSync(path, original);
+	try {
+		const mock = createMockPi();
+		const loaded = loadStatuslineSettings(path);
+		let applied = 0;
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply() {
+				applied += 1;
+			},
+			save() {
+				throw new Error("disk full");
+			},
+		});
+		let screenAfterFailure = "";
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) =>
+				choices.find((choice) => choice.startsWith("Segments (")),
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					{},
+					() => undefined,
+				) as PickerComponent;
+				component.handleInput?.("\r");
+				screenAfterFailure = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b");
+			},
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.match(
+			screenAfterFailure.split("\n").find((line) => line.includes("brand")) ?? "",
+			/hidden/u,
+		);
+		assert.equal(readFileSync(path, "utf8"), original);
+		assert.equal(applied, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*disk full/iu);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("segment menu restores persisted and runtime settings when application fails", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	const original = `${JSON.stringify({ segments: ["model"], future: true })}\n`;
+	writeFileSync(path, original);
+	try {
+		const mock = createMockPi();
+		let runtime = loadStatuslineSettings(path);
+		let applyCalls = 0;
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => runtime,
+			apply(next) {
+				runtime = next;
+				applyCalls += 1;
+				if (applyCalls === 1) throw new Error("render failed");
+			},
+		});
+		let screenAfterFailure = "";
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) =>
+				choices.find((choice) => choice.startsWith("Segments (")),
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					{},
+					() => undefined,
+				) as PickerComponent;
+				component.handleInput?.("\r");
+				screenAfterFailure = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b");
+			},
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.match(
+			screenAfterFailure.split("\n").find((line) => line.includes("brand")) ?? "",
+			/hidden/u,
+		);
+		assert.equal(readFileSync(path, "utf8"), original);
+		assert.deepEqual(runtime.config.segments, ["model"]);
+		assert.equal(applyCalls, 2);
+		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*render failed/iu);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("palette picker previews cursor movement and restores the saved preset on cancel", async () => {
@@ -188,6 +390,7 @@ test("palette picker preserves custom colors and unknown fields while applying a
 
 		assert.deepEqual(selections[0]?.choices, [
 			"Palette preset (custom)",
+			"Segments (11/12 shown)",
 			"Edit settings JSON (custom colors, layout, icons)",
 			"Status",
 			"Help",
