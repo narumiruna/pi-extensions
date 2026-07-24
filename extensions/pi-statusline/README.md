@@ -20,9 +20,13 @@ A representative uncolored layout:
 - **Still flexible:** custom layouts, multiline rows, colors, labels, separators, and status icons stay
   available under **Advanced**.
 
-> Want complete format and style control? Use
-> [`@narumitw/pi-starship`](https://www.npmjs.com/package/@narumitw/pi-starship) instead. Do not
-> enable both packages: each owns Pi's footer.
+> **Need more customization?** See
+> [`pi-starship`](https://github.com/narumiruna/pi-extensions/tree/main/extensions/pi-starship)
+> ([npm](https://www.npmjs.com/package/@narumitw/pi-starship)). It uses a
+> [Starship-inspired](https://starship.rs/) TOML format and style syntax for deeper control over
+> layout, modules, and colors. Choose `pi-statusline` for practical defaults and quick setup.
+>
+> Do not enable both extensions at the same time because both own Pi's footer.
 
 ## Install
 
