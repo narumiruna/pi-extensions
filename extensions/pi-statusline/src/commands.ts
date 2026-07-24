@@ -271,6 +271,26 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
 			commit(name, segmentsDocument(current, name, !current.config.segments.includes(name)));
 		};
 
+		const toggleLineBreakAfterSelected = () => {
+			const name = names[selectedIndex];
+			if (!name) return;
+			moveMode = false;
+			const segmentIndex = current.config.segments.indexOf(name);
+			if (segmentIndex < 0) {
+				feedback = `Show ${name} before adding a line break.`;
+				return;
+			}
+			const hasLineBreak = current.config.segments[segmentIndex + 1] === LINE_BREAK_SEGMENT_NAME;
+			const hasFollowingSegment = current.config.segments
+				.slice(segmentIndex + 1)
+				.some((segment) => segment !== LINE_BREAK_SEGMENT_NAME);
+			if (!hasLineBreak && !hasFollowingSegment) {
+				feedback = `Add another visible segment after ${name} before adding a line break.`;
+				return;
+			}
+			commit(name, lineBreakAfterDocument(current, name));
+		};
+
 		const reorderSelected = (direction: -1 | 1) => {
 			const name = names[selectedIndex];
 			if (!name) return;
@@ -334,8 +354,11 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
 				const isSelected = index === selectedIndex;
 				const prefix = isSelected ? "→ " : "  ";
 				const placement = placements.get(name);
+				const lineBreakLabel = hasLineBreakAfter(current.config.segments, name)
+					? " · break after"
+					: "";
 				const row = placement
-					? `${prefix}${`${placement.order}.`.padStart(3)} row ${placement.row} · ${name.padEnd(8)} · visible`
+					? `${prefix}${`${placement.order}.`.padStart(3)} row ${placement.row} · ${name.padEnd(8)} · visible${lineBreakLabel}`
 					: `${prefix}  · ${name.padEnd(8)} · hidden`;
 				const truncated = truncateToWidth(row, safeWidth);
 				if (isSelected) lines.push(theme.fg("accent", truncated));
@@ -387,6 +410,7 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
 			},
 			handleInput(data: string) {
 				const moveModeKey = matchesKey(data, "m") || matchesKey(data, Key.shift("m"));
+				const lineBreakKey = matchesKey(data, "b") || matchesKey(data, Key.shift("b"));
 				if (matchesKey(data, Key.alt("up"))) {
 					reorderSelected(-1);
 				} else if (matchesKey(data, Key.alt("down"))) {
@@ -417,6 +441,8 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
 					moveSelection(SEGMENT_VIEWPORT_SIZE);
 				} else if (moveModeKey) {
 					enterMoveMode();
+				} else if (lineBreakKey) {
+					toggleLineBreakAfterSelected();
 				} else if (keybindings.matches(data, "tui.select.confirm") || data === " ") {
 					toggleSelected();
 				} else if (keybindings.matches(data, "tui.select.cancel")) {
@@ -481,6 +507,11 @@ function segmentMenuOrder(current: LoadedStatuslineSettings): SegmentName[] {
 	return [...visible, ...SEGMENT_NAMES.filter((name) => !visibleSet.has(name))];
 }
 
+function hasLineBreakAfter(segments: readonly ConfigSegmentName[], name: SegmentName): boolean {
+	const index = segments.indexOf(name);
+	return index >= 0 && segments[index + 1] === LINE_BREAK_SEGMENT_NAME;
+}
+
 function segmentPlacements(
 	segments: readonly ConfigSegmentName[],
 ): Map<SegmentName, { order: number; row: number }> {
@@ -516,8 +547,17 @@ function segmentControlHints(
 				];
 	}
 	return width < 30
-		? ["↑↓ navigate", "Enter/Space toggle", "M move mode", "Alt+↑/↓ quick move", "Esc close"]
-		: ["↑↓ navigate · Enter/Space show/hide · M move mode", "Alt+↑/↓ quick move · Esc close"];
+		? [
+				"↑↓ navigate",
+				"Enter/Space toggle",
+				"M move · B line break",
+				"Alt+↑/↓ quick move",
+				"Esc close",
+			]
+		: [
+				"↑↓ navigate · Enter/Space show/hide · M move mode",
+				"B add/remove line break after · Alt+↑/↓ quick move · Esc close",
+			];
 }
 
 function segmentsDocument(
@@ -530,6 +570,28 @@ function segmentsDocument(
 		? [...current.config.segments, ...(current.config.segments.includes(name) ? [] : [name])]
 		: current.config.segments.filter((segment) => segment !== name);
 	parsed.segments = normalizeLineBreaks(segments);
+	return {
+		nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
+		previousDocument,
+	};
+}
+
+function lineBreakAfterDocument(
+	current: LoadedStatuslineSettings,
+	name: SegmentName,
+): { nextDocument: string; previousDocument: string } {
+	const { parsed, rawDocument: previousDocument } = editableSettings(
+		current,
+		"changing line breaks",
+	);
+	const segments = [...current.config.segments];
+	const segmentIndex = segments.indexOf(name);
+	if (segments[segmentIndex + 1] === LINE_BREAK_SEGMENT_NAME) {
+		segments.splice(segmentIndex + 1, 1);
+	} else {
+		segments.splice(segmentIndex + 1, 0, LINE_BREAK_SEGMENT_NAME);
+	}
+	parsed.segments = segments;
 	return {
 		nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
 		previousDocument,
@@ -655,10 +717,11 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 			`Settings: ${settingsPath}`,
 			"Fields: palettePreset, palette, density, separator, segments, segmentText, extensionStatusIcons",
 			"Named presets ignore but preserve palette; custom uses its per-segment fg/bg colors.",
-			"Use the Segments menu to show, hide, or reorder data segments; changes save and apply immediately.",
-			"Rows and visible/hidden sections reflect the effective layout; unavailable moves explain why.",
+			"Use the Segments menu to show, hide, reorder, or split data segments across rows.",
+			"Rows and visible/hidden sections reflect the layout; unavailable changes explain why.",
 			"Press M for move mode with ordinary arrows, or Alt+Up/Alt+Down for a quick move.",
-			"Use line_break between segments for another footer row; repeats must not be consecutive.",
+			"Press B to add or remove a line break after the selected visible segment.",
+			"Line breaks (line_break) may repeat when separated by data segments, but cannot be consecutive.",
 			"The segmentText entries support prefix and suffix strings around Pi-owned dynamic values.",
 		].join("\n"),
 		"info",

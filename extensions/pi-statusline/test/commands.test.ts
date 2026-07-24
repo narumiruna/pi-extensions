@@ -223,7 +223,7 @@ test("segment menu reorders visible segments immediately while preserving multil
 		assert.match(finalScreen.split("\n").find((line) => line.includes("cwd")) ?? "", /row 1/u);
 		assert.match(finalScreen.split("\n").find((line) => line.includes("model")) ?? "", /row 2/u);
 		assert.match(narrowScreen, /Enter\/Space toggle/u);
-		assert.match(narrowScreen, /M move mode/u);
+		assert.match(narrowScreen, /M move/u);
 		assert.match(narrowScreen, /Alt\+↑\/↓ quick move/u);
 		assert.match(narrowScreen, /Esc close/u);
 		assert.deepEqual(appliedSegments, [
@@ -233,6 +233,91 @@ test("segment menu reorders visible segments immediately while preserving multil
 		]);
 		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
 			segments: ["cwd", "line_break", "model", "branch"],
+			future: true,
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("segment menu adds and removes line breaks after the selected visible segment", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	writeFileSync(
+		path,
+		`${JSON.stringify({ segments: ["model", "cwd", "branch"], future: true })}\n`,
+	);
+	try {
+		const mock = createMockPi();
+		let loaded = loadStatuslineSettings(path);
+		const appliedSegments: string[][] = [];
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply(next) {
+				loaded = next;
+				appliedSegments.push([...next.config.segments]);
+			},
+		});
+		let screenWithBreak = "";
+		let screenWithTwoBreaks = "";
+		let screenAfterRemoval = "";
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) =>
+				choices.find((choice) => choice.startsWith("Segments (")),
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				let result: unknown;
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					getKeybindings(),
+					(value: unknown) => {
+						result = value;
+					},
+				) as PickerComponent;
+				component.handleInput?.("b");
+				screenWithBreak = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b[B");
+				component.handleInput?.("B");
+				screenWithTwoBreaks = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("B");
+				screenAfterRemoval = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b");
+				return result;
+			},
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.match(
+			screenWithBreak.split("\n").find((line) => line.includes("model")) ?? "",
+			/break after/iu,
+		);
+		assert.match(screenWithBreak.split("\n").find((line) => line.includes("cwd")) ?? "", /row 2/u);
+		assert.match(screenWithBreak, /B add\/remove line break after/iu);
+		assert.match(
+			screenWithTwoBreaks.split("\n").find((line) => line.includes("cwd")) ?? "",
+			/break after/iu,
+		);
+		assert.match(
+			screenWithTwoBreaks.split("\n").find((line) => line.includes("branch")) ?? "",
+			/row 3/u,
+		);
+		assert.doesNotMatch(
+			screenAfterRemoval.split("\n").find((line) => line.includes("cwd")) ?? "",
+			/break after/iu,
+		);
+		assert.deepEqual(appliedSegments, [
+			["model", "line_break", "cwd", "branch"],
+			["model", "line_break", "cwd", "line_break", "branch"],
+			["model", "line_break", "cwd", "branch"],
+		]);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+			segments: ["model", "line_break", "cwd", "branch"],
 			future: true,
 		});
 	} finally {
