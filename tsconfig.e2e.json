@@ -1,0 +1,9 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"outDir": "node_modules/.cache/pi-extensions-e2e",
+		"rootDir": "."
+	},
+	"include": ["e2e/**/*.ts"]
+}

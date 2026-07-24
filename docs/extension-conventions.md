@@ -229,11 +229,18 @@ the extension safely.
 
 - **MUST:** Add or update deterministic tests for changed behavior when practical; when a behavior
   requires a real Pi runtime or external service, record and run the smallest representative smoke
-  instead. **Verification:** `Test` through root `npm test`, `Smoke` for the stated runtime path, and
-  `Review` of any intentionally untested behavior.
+  instead. **Verification:** unit/integration coverage through root `npm test`, runtime coverage through
+  `npm run test:e2e` when applicable, and `Review` of any intentionally untested behavior.
+- **MUST:** Keep every active package in the explicit E2E inventory. The shared E2E load smoke starts
+  each declared package entrypoint in an isolated, offline Pi CLI/RPC process and proves graceful
+  shutdown. Add a credential-free representative E2E flow when correctness depends on Pi orchestration
+  that package-local mocks do not exercise, such as continuation, queue, replacement-session, or
+  cross-turn tool behavior. **Verification:** `Smoke` through `npm run test:e2e`; this gate does not
+  claim TUI, browser, real-provider, or external-service coverage.
 - **MUST:** Run the repository CI-equivalent gate before completing a change, and add an npm pack dry
-  run or local Pi load when package metadata or runtime loading changed. **Verification:** `Validator`
-  via `npm run check`; applicable `Smoke` evidence in the change handoff.
+  run when package metadata or published contents changed. **Verification:** `Validator` via
+  `npm run check`, which includes unit/integration and CLI/RPC E2E tests; applicable pack evidence in
+  the change handoff.
 
 Do not create a validator merely because a convention is written down. Add one when a new or touched
 area has a stable, low-false-positive rule that can be checked without encoding product semantics in
@@ -253,8 +260,9 @@ fragile regular expressions. Until then, label the real verification method hone
 - [ ] Follow `docs/extension-settings.md` for every user or project setting.
 - [ ] Bound tool output, cancellation, state persistence, and file mutation where applicable.
 - [ ] Document installation, behavior, settings, security, limitations, and source responsibilities.
-- [ ] Add deterministic tests and run `npm run check`.
-- [ ] Inspect `npm pack --workspace <name> --dry-run --json` and load the declared entrypoint with Pi.
+- [ ] Add deterministic tests, add the package to the explicit E2E inventory, and run `npm run check`.
+- [ ] Inspect `npm pack --workspace <name> --dry-run --json`; the shared E2E gate loads the declared
+      entrypoint with Pi.
 
 ## Touched-area checklist
 
@@ -264,6 +272,7 @@ fragile regular expressions. Until then, label the real verification method hone
 - [ ] For command-surface changes, preserve established routes or explicitly own an approved breaking
       migration, and test every claimed execution mode.
 - [ ] Update focused tests and run the verification method named by each relevant MUST.
-- [ ] Run `npm run check`; add pack or Pi runtime smokes when metadata or loading changed.
+- [ ] Run `npm run check`; add pack evidence for publication changes and a representative E2E flow
+      when Pi orchestration changed beyond the shared entrypoint load smoke.
 - [ ] Report any skipped check, accepted exception, or follow-up validator opportunity in the change
       handoff.

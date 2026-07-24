@@ -38,7 +38,12 @@ jobs:
       - name: Install latest Pi packages
         run: |
           node scripts/set-pi-version.mjs latest
-          npm install --no-save
+          npm install --no-save --package-lock=false
+          expected_version="$(npm view @earendil-works/pi-coding-agent version)"
+          installed_version="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")"
+          cli_version="$(node_modules/.bin/pi --version)"
+          test "$installed_version" = "$expected_version"
+          test "$cli_version" = "$expected_version"
 
       - name: Run checks and tests
         run: npm run check

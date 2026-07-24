@@ -4,9 +4,13 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# Run formatter, linter, and typechecks for all packages
+# Run formatter, linter, typechecks, unit tests, and E2E tests
 check:
     npm run check
+
+# Run isolated Pi CLI/RPC extension E2E tests
+e2e:
+    npm run test:e2e
 
 # Format all files with Biome
 format:
