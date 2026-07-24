@@ -38,11 +38,19 @@ function customPalettePicker(inputs: string[], inspect?: (lines: string[]) => vo
 	};
 }
 
-test("/statusline registers an argument-free interactive menu", async () => {
+test("/statusline keeps compatibility subcommands and an argument-free interactive menu", async () => {
 	const mock = createMockPi();
 	statusline(mock.pi);
 	const command = mock.commands.get("statusline");
-	assert.equal(command?.getArgumentCompletions, undefined);
+	assert.ok(command?.getArgumentCompletions);
+	assert.deepEqual(
+		(command.getArgumentCompletions("") as Array<{ value: string }>).map((item) => item.value),
+		["settings", "status", "help"],
+	);
+	assert.deepEqual(
+		(command.getArgumentCompletions("st") as Array<{ value: string }>).map((item) => item.value),
+		["status"],
+	);
 	let selectCalls = 0;
 	const context = createMockContext({
 		mode: "tui",
@@ -52,10 +60,12 @@ test("/statusline registers an argument-free interactive menu", async () => {
 		},
 	});
 
-	await command?.handler("palette", context.ctx);
+	await command.handler("", context.ctx);
+	assert.equal(selectCalls, 1);
 
-	assert.equal(selectCalls, 0);
-	assert.match(context.notifications.at(-1)?.message ?? "", /does not accept arguments/u);
+	await command.handler("palette", context.ctx);
+	assert.equal(selectCalls, 1);
+	assert.match(context.notifications.at(-1)?.message ?? "", /unknown.*palette/iu);
 });
 
 test("palette picker previews cursor movement and restores the saved preset on cancel", async () => {
@@ -121,13 +131,12 @@ test("settings edits raw JSON transactionally and applies it immediately", async
 		)}\n`;
 		const context = createMockContext({
 			mode: "tui",
-			select: async () => "Edit settings JSON (custom colors, layout, icons)",
 			editor: async (_title: string, value: string) => {
 				initial = value;
 				return edited;
 			},
 		});
-		await mock.commands.get("statusline")?.handler("", context.ctx);
+		await mock.commands.get("statusline")?.handler("settings", context.ctx);
 		assert.equal(initial, DEFAULT_STATUSLINE_DOCUMENT);
 		assert.equal(readFileSync(path, "utf8"), edited);
 		assert.deepEqual(loaded.config.segments, ["model"]);
@@ -393,7 +402,7 @@ test("status and help remain available from the main menu", async () => {
 	}
 });
 
-test("/statusline safely rejects non-TUI mode and textual arguments", async () => {
+test("/statusline compatibility routes work in RPC and reject unknown or trailing input", async () => {
 	const mock = createMockPi();
 	registerStatuslineCommand(mock.pi, {
 		settingsPath: "/tmp/pi-statusline.json",
@@ -401,10 +410,23 @@ test("/statusline safely rejects non-TUI mode and textual arguments", async () =
 		apply() {},
 	});
 	const context = createMockContext({ mode: "rpc", hasUI: true });
+	const command = mock.commands.get("statusline");
 
-	await mock.commands.get("statusline")?.handler("", context.ctx);
+	await command?.handler("", context.ctx);
 	assert.match(context.notifications.at(-1)?.message ?? "", /requires an interactive Pi UI/u);
 
-	await mock.commands.get("statusline")?.handler("status", context.ctx);
-	assert.match(context.notifications.at(-1)?.message ?? "", /does not accept arguments/u);
+	await command?.handler("settings", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Edit settings manually/u);
+
+	await command?.handler("status", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /source: built-in/u);
+
+	await command?.handler("help", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Menu actions/u);
+
+	await command?.handler("status extra", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /does not accept trailing arguments/u);
+
+	await command?.handler("palette", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /unknown.*palette/iu);
 });

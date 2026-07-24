@@ -190,8 +190,11 @@ Statuses from other extensions appear below the main powerline. The linked GitHu
 | Command | Purpose |
 | --- | --- |
 | `/statusline` | Open the interactive menu for palette presets, settings JSON, status, and help |
+| `/statusline settings` | Open the JSON settings editor in TUI mode |
+| `/statusline status` | Show the settings source, path, appearance, segments, and diagnostics |
+| `/statusline help` | Show command and schema guidance |
 
-`/statusline` does not accept arguments and requires TUI mode. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged.
+Argument-free `/statusline` requires TUI mode. The established `settings`, `status`, and `help` routes remain available for compatibility; RPC receives notifications instead of opening TUI-only controls. Unknown subcommands and trailing arguments are rejected. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged.
 
 ## 🌿 Git and activity details
 

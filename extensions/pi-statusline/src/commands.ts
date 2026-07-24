@@ -3,7 +3,13 @@ import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import {
+	type AutocompleteItem,
+	Container,
+	type SelectItem,
+	SelectList,
+	Text,
+} from "@earendil-works/pi-tui";
 import { segmentPaletteForPreset } from "./presets/index.js";
 import {
 	DEFAULT_STATUSLINE_DOCUMENT,
@@ -18,6 +24,11 @@ import {
 } from "./types.js";
 
 const EDIT_SETTINGS_LABEL = "Edit settings JSON (custom colors, layout, icons)";
+const SUBCOMMANDS: AutocompleteItem[] = [
+	{ value: "settings", label: "settings", description: "Edit pi-statusline.json" },
+	{ value: "status", label: "status", description: "Show effective statusline settings" },
+	{ value: "help", label: "help", description: "Show configuration help" },
+];
 
 export interface StatuslineCommandOptions {
 	settingsPath: string;
@@ -29,18 +40,43 @@ export interface StatuslineCommandOptions {
 
 export function registerStatuslineCommand(pi: ExtensionAPI, options: StatuslineCommandOptions) {
 	pi.registerCommand("statusline", {
-		description: "Open the statusline settings and status menu",
+		description: "Open or inspect the statusline settings",
+		getArgumentCompletions(prefix: string): AutocompleteItem[] | null {
+			const normalized = prefix.trim().toLowerCase();
+			const matches = SUBCOMMANDS.filter((item) => item.value.startsWith(normalized));
+			return matches.length > 0 ? matches : null;
+		},
 		handler: async (args, ctx) => {
-			if (args.trim()) {
+			const normalized = args.trim();
+			if (!normalized) {
+				await showMainMenu(ctx, options);
+				return;
+			}
+
+			const tokens = normalized.split(/\s+/u);
+			const subcommand = tokens[0]?.toLowerCase() ?? "";
+			if (tokens.length > 1) {
 				if (canNotify(ctx)) {
-					ctx.ui.notify(
-						"/statusline does not accept arguments; run it without arguments to open the menu.",
-						"warning",
-					);
+					ctx.ui.notify(`/statusline ${subcommand} does not accept trailing arguments.`, "warning");
 				}
 				return;
 			}
-			await showMainMenu(ctx, options);
+
+			switch (subcommand) {
+				case "settings":
+					await editSettings(ctx, options);
+					return;
+				case "status":
+					showStatus(ctx, options);
+					return;
+				case "help":
+					showHelp(ctx, options.settingsPath);
+					return;
+				default:
+					if (canNotify(ctx)) {
+						ctx.ui.notify(`Unknown /statusline subcommand: ${subcommand}`, "warning");
+					}
+			}
 		},
 	});
 }
@@ -242,6 +278,9 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 	ctx.ui.notify(
 		[
 			"/statusline — open the interactive statusline menu",
+			"/statusline settings — edit and apply JSON",
+			"/statusline status — show source, path, and warnings",
+			"/statusline help — show this help",
 			"Menu actions: Palette preset, Edit settings JSON, Status, Help",
 			`Settings: ${settingsPath}`,
 			"Fields: palettePreset, palette, density, separator, segments, segmentText, extensionStatusIcons",
