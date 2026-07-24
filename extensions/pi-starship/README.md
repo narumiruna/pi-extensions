@@ -75,10 +75,21 @@ format = "[ $symbol$branch$pr ]($style)"
 
 [extension_status]
 format = "([$statuses ]($style))"
-icons = { "github-pr" = "PR", "@narumitw/pi-goal" = "◎", fallback = "•" }
+icons = { "github-pr" = "PR", "foo:*" = "🧪", "@narumitw/pi-goal" = "◎", fallback = "•" }
 ```
 
-All module tables support `format`, `symbol`, `style`, and `disabled`. `[extension_status].icons` additionally maps exact status keys or installed package IDs; `fallback` controls unmatched statuses.
+All module tables support `format`, `symbol`, `style`, and `disabled`.
+`[extension_status].icons` accepts arbitrary exact Pi status keys, explicit colon namespace
+wildcards such as `foo:*`, and installed package IDs; `fallback` controls unmatched statuses. Icon
+matching uses exact key, longest `:*` wildcard, unambiguous package alias, leading status emoji,
+built-in icon, then `fallback`/`🔌`. An empty icon suppresses only the icon. `foo:*` matches
+`foo:server` but not `foo`, `foobar`, or `foo/server`.
+
+Pi does not expose which package owns a status, so package aliases are best-effort conveniences and
+exact raw keys are the reliable third-party contract. Extension authors may adopt
+`<extension-id>` or `<extension-id>:<stable-slot>` for interoperability, but pi-starship cannot
+require that convention. Canonical built-ins use `sync` and `retry`; compatibility mappings keep
+`pisync` and `unknown-error-retry` settings and older producer versions working.
 
 ## 🧩 Format grammar
 

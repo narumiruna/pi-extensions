@@ -610,8 +610,21 @@ test("forced pushes preserve remote files outside this machine's selection", asy
 			const mock = createMockPi();
 			sync(mock.pi);
 			const { ctx, notifications } = createMockContext();
+			const statusUpdates: Array<[string, string | undefined]> = [];
+			const mutableContext = ctx as unknown as {
+				ui: { setStatus(key: string, value: string | undefined): void };
+			};
+			const setStatus = mutableContext.ui.setStatus.bind(mutableContext.ui);
+			mutableContext.ui.setStatus = (key, value) => {
+				statusUpdates.push([key, value]);
+				setStatus(key, value);
+			};
 			await mock.commands.get("sync")?.handler("push --yes --force", ctx);
 
+			assert.deepEqual(statusUpdates, [
+				["sync", "pushing"],
+				["sync", undefined],
+			]);
 			assert.ok(uploadedBody, JSON.stringify(notifications));
 			const uploaded = JSON.parse(gunzipSync(uploadedBody).toString("utf8"));
 			assert.deepEqual(

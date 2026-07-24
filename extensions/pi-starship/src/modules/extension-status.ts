@@ -1,17 +1,29 @@
 import { defineModule, type ExtensionStatusIconAliasMap } from "./types.js";
 
 const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
+	accounts: "👤",
+	caffeinate: "💊",
 	"chrome-devtools": "🌐",
 	"codex-usage": "📊",
-	caffeinate: "💊",
 	firecrawl: "🔥",
 	"github-pr": "🔎",
 	goal: "🎯",
+	"google-genai": "✨",
 	lsp: "🧰",
 	"plan-mode": "📝",
+	retry: "🔁",
 	pisync: "🔄",
 	subagents: "🧑‍🤝‍🧑",
+	sync: "🔄",
+	usage: "📊",
 	"unknown-error-retry": "🔁",
+};
+
+const COMPATIBLE_STATUS_ICON_KEYS: Readonly<Record<string, string>> = {
+	retry: "unknown-error-retry",
+	sync: "pisync",
+	"unknown-error-retry": "retry",
+	pisync: "sync",
 };
 
 export const extensionStatusModule = defineModule({
@@ -64,6 +76,12 @@ function extensionStatusIcon(
 	aliases: ExtensionStatusIconAliasMap,
 ): string {
 	if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key] ?? "";
+	const namespaceIcon = configuredNamespaceIcon(key, configuredIcons);
+	if (namespaceIcon !== undefined) return namespaceIcon;
+	const compatibleKey = COMPATIBLE_STATUS_ICON_KEYS[key];
+	if (compatibleKey && Object.hasOwn(configuredIcons, compatibleKey)) {
+		return configuredIcons[compatibleKey] ?? "";
+	}
 	for (const alias of extensionStatusAliasesForKey(key, aliases)) {
 		if (Object.hasOwn(configuredIcons, alias)) return configuredIcons[alias] ?? "";
 	}
@@ -74,6 +92,20 @@ function extensionStatusIcon(
 		? configuredIcons.fallback
 		: undefined;
 	return leadingIcon ?? defaultIcon ?? fallbackIcon ?? "🔌";
+}
+
+function configuredNamespaceIcon(
+	key: string,
+	configuredIcons: Readonly<Record<string, string>>,
+): string | undefined {
+	let match: { baseLength: number; icon: string } | undefined;
+	for (const [selector, icon] of Object.entries(configuredIcons)) {
+		if (!selector.endsWith(":*")) continue;
+		const base = selector.slice(0, -2);
+		if (!base || !key.startsWith(`${base}:`)) continue;
+		if (!match || base.length > match.baseLength) match = { baseLength: base.length, icon };
+	}
+	return match?.icon;
 }
 
 function extensionStatusAliasesForKey(

@@ -77,18 +77,19 @@ There are no project overrides or environment-variable overrides.
     "turn": { "prefix": "🔁 #", "suffix": "" }
   },
   "extensionStatusIcons": {
-    "chrome-devtools": "🌐",
-    "codex-usage": "📊",
-    "usage": "📊",
+    "accounts": "👤",
     "caffeinate": "💊",
+    "chrome-devtools": "🌐",
     "firecrawl": "🔥",
     "github-pr": "🔎",
     "goal": "🎯",
+    "google-genai": "✨",
     "lsp": "🧰",
     "plan-mode": "📝",
-    "pisync": "🔄",
+    "retry": "🔁",
     "subagents": "🧑‍🤝‍🧑",
-    "unknown-error-retry": "🔁"
+    "sync": "🔄",
+    "usage": "📊"
   }
 }
 ```
@@ -173,17 +174,63 @@ This structured model intentionally does not provide variables or a format langu
 
 ### Extension status icons
 
-`extensionStatusIcons` preserves these rules:
+`extensionStatusIcons` accepts any raw key emitted through Pi's `ctx.ui.setStatus()`; it is not
+restricted to extensions in this repository. Icons resolve in this order:
 
-- An exact status key wins, such as `goal` or `foo:server`.
-- Installed package aliases such as `@vendor/pi-foo`, `npm:@vendor/pi-foo@1.2.3`, `pi-foo`, or `foo` can configure namespaced statuses.
-- An empty string hides the icon but keeps the status text.
-- A missing key uses the built-in icon or `🔌` for an unknown key.
-- Ambiguous package aliases require an exact status key.
+1. An exact configured raw key, such as `goal` or `foo:server`.
+2. The longest explicit colon namespace wildcard, such as `foo:*` or `foo:server:*`.
+3. An unambiguous installed package alias such as `@vendor/pi-foo`,
+   `npm:@vendor/pi-foo@1.2.3`, `pi-foo`, or `foo`.
+4. A leading emoji supplied by the status text.
+5. A built-in icon.
+6. The generic `🔌` fallback.
 
-Built-in icon mappings are `chrome-devtools` → `🌐`, `codex-usage` and `usage` → `📊`, `caffeinate` → `💊`, `firecrawl` → `🔥`, `github-pr` → `🔎`, `goal` → `🎯`, `lsp` → `🧰`, `plan-mode` → `📝`, `pisync` → `🔄`, `subagents` → `🧑‍🤝‍🧑`, and `unknown-error-retry` → `🔁`.
+An empty icon at any configured match hides the icon while retaining status text. `foo:*` matches
+`foo:server` and `foo:server:worker`, but not `foo`, `foobar`, or `foo/server`; use an exact key for a
+slash-delimited third-party status. Installed-package aliases retain delimiter-bound colon and slash
+matching for compatibility, but ambiguous package aliases are ignored.
 
-Statuses from other extensions appear below the main powerline. The linked GitHub PR status is hidden from that line when the branch segment already renders it.
+```json
+{
+  "extensionStatusIcons": {
+    "third_party/key": "🧩",
+    "foo:*": "🧪",
+    "foo:server": "🖥️",
+    "@vendor/pi-other": "📦",
+    "quiet-extension": ""
+  }
+}
+```
+
+Built-in icon mappings for current repository statuses are `accounts` → `👤`, `caffeinate` → `💊`,
+`chrome-devtools` → `🌐`, `firecrawl` → `🔥`, `github-pr` → `🔎`, `goal` → `🎯`, `google-genai` →
+`✨`, `lsp` → `🧰`, `plan-mode` → `📝`, `retry` → `🔁`, `subagents` → `🧑‍🤝‍🧑`, `sync` → `🔄`,
+and `usage` → `📊`. Compatibility fallbacks retain `codex-usage`, `pisync`, and
+`unknown-error-retry`. Existing `pisync` or `unknown-error-retry` settings continue to configure the
+new `sync` or `retry` statuses when the canonical key is absent; files are not rewritten, and an
+explicit canonical key wins.
+
+#### For extension authors
+
+Pi accepts any string as a status key. pi-statusline cannot force another extension to follow a key
+format, and Pi does not expose which package owns a status. Exact raw-key matching is therefore the
+only universally reliable icon contract. Namespace wildcards and package aliases are conveniences,
+not authoritative ownership.
+
+For interoperable new extensions, prefer a stable lowercase kebab-case key:
+
+```text
+<extension-id>
+<extension-id>:<stable-slot>
+```
+
+Use the first form for one aggregated status. Use a stable slot only when statuses must coexist, for
+example `lsp:typescript`; put transient activity in the value (`setStatus("sync", "pushing")`) rather
+than creating keys such as `sync:pushing`. Always clear the same complete key. This is a convention
+other authors may adopt, not a requirement for appearing in pi-statusline.
+
+Statuses from other extensions appear below the main powerline. The linked GitHub PR status is hidden
+from that line when the branch segment already renders it.
 
 ## 💬 Commands
 

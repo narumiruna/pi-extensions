@@ -197,9 +197,22 @@ a distinct setup workflow.
 
 ### Status and persistent UI
 
-- **MUST:** Use a stable package-specific key for statuses or widgets and clear session-owned UI on
-  shutdown, replacement, and failed initialization. **Verification:** `Test` of lifecycle cleanup and
-  `Review` of key ownership.
+- **MUST:** Use a stable package-specific key for statuses or widgets, clear the exact key that was
+  set, and clear session-owned UI on shutdown, replacement, and failed initialization.
+  **Verification:** `Test` of lifecycle cleanup and `Review` of key ownership.
+
+A repository-owned status key **SHOULD** use `<extension-id>` for one aggregated status or
+`<extension-id>:<stable-slot>` when independently owned statuses must coexist. Derive the lowercase
+kebab-case extension id from the unscoped package basename by removing `pi-`; for example,
+`@narumitw/pi-sync` uses `sync`. Keep transient state, tool-call ids, and other changing values in the
+status text rather than the key. A stable slot identifies a long-lived channel such as
+`lsp:typescript`, not an activity such as `sync:pushing`.
+
+This grammar is an author convention, not Pi enforcement: `ctx.ui.setStatus()` accepts any string,
+Pi exposes no package owner for a status, and two extensions using the same key overwrite each other
+before a custom footer receives the status map. `pi-statusline` must therefore continue accepting
+arbitrary third-party raw keys; exact raw-key matching is its reliable interoperability contract,
+while namespace wildcards and installed-package aliases are convenience fallbacks only.
 
 Status values **SHOULD** be text-only and activity-based: show active work, retry, or a condition that
 needs attention, not a permanent `ready`, `configured`, or `on`. Keep icon mapping and suppression in

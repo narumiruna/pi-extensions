@@ -28,20 +28,33 @@ import {
 export const SETTINGS_FILE_NAME = "pi-statusline.json";
 const LEGACY_SETTINGS_FILE_NAME = "pi-statusline-settings.json";
 
-export const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
-	"chrome-devtools": "🌐",
-	"codex-usage": "📊",
-	usage: "📊",
+const DEFAULT_DOCUMENT_EXTENSION_STATUS_ICONS: Record<string, string> = {
+	accounts: "👤",
 	caffeinate: "💊",
+	"chrome-devtools": "🌐",
 	firecrawl: "🔥",
 	"github-pr": "🔎",
 	goal: "🎯",
+	"google-genai": "✨",
 	lsp: "🧰",
 	"plan-mode": "📝",
-	pisync: "🔄",
+	retry: "🔁",
 	subagents: "🧑‍🤝‍🧑",
+	sync: "🔄",
+	usage: "📊",
+};
+
+export const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
+	...DEFAULT_DOCUMENT_EXTENSION_STATUS_ICONS,
+	"codex-usage": "📊",
+	pisync: "🔄",
 	"unknown-error-retry": "🔁",
 };
+
+const LEGACY_STATUS_ICON_KEYS = {
+	pisync: "sync",
+	"unknown-error-retry": "retry",
+} as const;
 
 const DEFAULT_SEGMENTS: SegmentName[] = [
 	"brand",
@@ -86,7 +99,7 @@ const DEFAULT_STATUSLINE_DOCUMENT_CONFIG = {
 	separator: DEFAULT_STATUSLINE_CONFIG.separator,
 	segments: DEFAULT_SEGMENTS,
 	segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
-	extensionStatusIcons: DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons,
+	extensionStatusIcons: DEFAULT_DOCUMENT_EXTENSION_STATUS_ICONS,
 } satisfies Omit<StatuslineConfig, "palette">;
 
 export const DEFAULT_STATUSLINE_DOCUMENT = `${JSON.stringify(
@@ -255,6 +268,28 @@ export function normalizeStatuslineConfig(value: unknown): {
 				}
 				Object.defineProperty(config.extensionStatusIcons, key, {
 					value: icon,
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				});
+			}
+			for (const [legacyKey, canonicalKey] of Object.entries(LEGACY_STATUS_ICON_KEYS)) {
+				const legacyIcon = Object.hasOwn(value.extensionStatusIcons, legacyKey)
+					? value.extensionStatusIcons[legacyKey]
+					: undefined;
+				const canonicalIcon = Object.hasOwn(value.extensionStatusIcons, canonicalKey)
+					? value.extensionStatusIcons[canonicalKey]
+					: undefined;
+				const targetKey = typeof canonicalIcon === "string" ? legacyKey : canonicalKey;
+				const inheritedIcon =
+					typeof canonicalIcon === "string"
+						? canonicalIcon
+						: typeof legacyIcon === "string"
+							? legacyIcon
+							: undefined;
+				if (inheritedIcon === undefined) continue;
+				Object.defineProperty(config.extensionStatusIcons, targetKey, {
+					value: inheritedIcon,
 					enumerable: true,
 					configurable: true,
 					writable: true,

@@ -719,6 +719,86 @@ test("statusline render uses installed package id icon aliases from settings", a
 	}
 });
 
+test("extension status icons match arbitrary exact keys and explicit namespace wildcards", () => {
+	const theme = { fg: (_color: string, text: string) => text } as never;
+	const config = (extensionStatusIcons: Record<string, string>) => ({ extensionStatusIcons });
+
+	assert.equal(
+		formatExtensionStatus("third_party/key", "running", theme, config({ "third_party/key": "🧩" })),
+		"🧩 running",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:server",
+			"running",
+			theme,
+			config({ "foo:*": "🧪", "foo:server": "🖥️" }),
+		),
+		"🖥️ running",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:server:worker",
+			"running",
+			theme,
+			config({ "foo:*": "🧪", "foo:server:*": "⚙️" }),
+		),
+		"⚙️ running",
+	);
+	assert.equal(
+		formatExtensionStatus("foo:worker", "running", theme, config({ "foo:*": "🧪" })),
+		"🧪 running",
+	);
+	const packageAliases = buildExtensionStatusIconAliases([{ packageName: "@vendor/pi-foo" }]);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:worker",
+			"running",
+			theme,
+			config({ "foo:*": "WILDCARD", "@vendor/pi-foo": "PACKAGE" }),
+			packageAliases,
+		),
+		"WILDCARD running",
+	);
+	assert.equal(
+		formatExtensionStatus("foo:worker", "running", theme, config({ "foo:*": "" })),
+		"running",
+	);
+	for (const key of ["foo", "foobar", "foo/server"]) {
+		assert.equal(
+			formatExtensionStatus(key, "running", theme, config({ "foo:*": "🧪" })),
+			"🔌 running",
+		);
+	}
+});
+
+test("extension status icons bridge canonical and legacy sync and retry keys", () => {
+	const theme = { fg: (_color: string, text: string) => text } as never;
+	const config = (extensionStatusIcons: Record<string, string>) => ({ extensionStatusIcons });
+
+	assert.equal(
+		formatExtensionStatus("sync", "pushing", theme, config({ pisync: "CUSTOM-SYNC" })),
+		"CUSTOM-SYNC pushing",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"retry",
+			"retrying",
+			theme,
+			config({ "unknown-error-retry": "CUSTOM-RETRY" }),
+		),
+		"CUSTOM-RETRY retrying",
+	);
+	assert.equal(
+		formatExtensionStatus("pisync", "pushing", theme, config({ sync: "NEW-SYNC" })),
+		"NEW-SYNC pushing",
+	);
+	assert.equal(
+		formatExtensionStatus("unknown-error-retry", "retrying", theme, config({ retry: "NEW-RETRY" })),
+		"NEW-RETRY retrying",
+	);
+});
+
 test("extension status icons use installed package id aliases without fuzzy matching", () => {
 	const theme = { fg: (_color: string, text: string) => text } as never;
 	const config = (extensionStatusIcons: Record<string, string>) => ({ extensionStatusIcons });

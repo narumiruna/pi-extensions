@@ -76,7 +76,7 @@ import type {
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
-const STATUS_KEY = "pisync";
+const STATUS_KEY = "sync";
 const VERSION = 1;
 const DEFAULT_PROFILE = "default";
 const DEFAULT_PREFIX = "pi-sync";
