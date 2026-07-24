@@ -39,7 +39,7 @@ export type Density = (typeof DENSITIES)[number];
 export const SEPARATOR_NAMES = ["none", "dot", "bar", "powerline", "round"] as const;
 export type SeparatorName = (typeof SEPARATOR_NAMES)[number];
 
-export type TokyoNightBlockName = "header" | "directory" | "git" | "runtime" | "meter";
+export type PowerlineBlockName = "header" | "directory" | "git" | "runtime" | "meter";
 
 export interface SegmentTextConfig {
 	prefix: string;
@@ -52,21 +52,6 @@ export interface SegmentPaletteColor {
 }
 
 export type SegmentPalette = Partial<Record<SegmentName, SegmentPaletteColor>>;
-
-export const TOKYO_NIGHT_SEGMENT_PALETTE: SegmentPalette = {
-	brand: { fg: "#090c0c", bg: "#a3aed2" },
-	provider: { fg: "#090c0c", bg: "#a3aed2" },
-	model: { fg: "#090c0c", bg: "#a3aed2" },
-	thinking: { fg: "#090c0c", bg: "#a3aed2" },
-	cwd: { fg: "#e3e5e5", bg: "#769ff0" },
-	branch: { fg: "#769ff0", bg: "#394260" },
-	tools: { fg: "#769ff0", bg: "#212736" },
-	context: { fg: "#769ff0", bg: "#212736" },
-	tokens: { fg: "#769ff0", bg: "#212736" },
-	cost: { fg: "#a0a9cb", bg: "#1d2230" },
-	time: { fg: "#a0a9cb", bg: "#1d2230" },
-	turn: { fg: "#a0a9cb", bg: "#1d2230" },
-};
 
 export interface StatuslineConfig {
 	palettePreset: PalettePreset;
@@ -82,7 +67,7 @@ export interface RenderSegment {
 	name: SegmentName;
 	text: string;
 	color: ThemeColor;
-	block: TokyoNightBlockName;
+	block: PowerlineBlockName;
 	emphasis?: boolean;
 }
 

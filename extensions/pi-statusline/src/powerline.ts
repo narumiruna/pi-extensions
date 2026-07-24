@@ -1,80 +1,26 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { ansiStyle } from "./ansi.js";
+import { resolvePreset } from "./presets/index.js";
+import type { BlockColors, PowerlinePreset } from "./presets/types.js";
 import {
 	LINE_BREAK_SEGMENT_NAME,
-	type PaletteName,
 	type PalettePreset,
+	type PowerlineBlockName,
 	type RenderItem,
 	type RenderSegment,
 	type SegmentPalette,
 	type SeparatorName,
 	type StatuslineConfig,
-	type TokyoNightBlockName,
 } from "./types.js";
 
-interface TokyoNightBlock {
-	baseBlock: TokyoNightBlockName;
+interface PowerlineBlock {
+	baseBlock: PowerlineBlockName;
 	colors: BlockColors;
 	segments: RenderSegment[];
 }
 
-interface BlockColors {
-	fg?: string;
-	bg?: string;
-}
-
-interface PowerlinePalette {
-	lead?: string;
-	blocks: Record<TokyoNightBlockName, BlockColors>;
-	extensionSeparator?: string;
-}
-
-const BLOCK_NAMES: TokyoNightBlockName[] = ["header", "directory", "git", "runtime", "meter"];
-
-const TOKYO_NIGHT_PALETTE: PowerlinePalette = {
-	lead: "#a3aed2",
-	blocks: {
-		header: { fg: "#090c0c", bg: "#a3aed2" },
-		directory: { fg: "#e3e5e5", bg: "#769ff0" },
-		git: { fg: "#769ff0", bg: "#394260" },
-		runtime: { fg: "#769ff0", bg: "#212736" },
-		meter: { fg: "#a0a9cb", bg: "#1d2230" },
-	},
-	extensionSeparator: "#394260",
-};
-
-const UNSTYLED_PALETTE: PowerlinePalette = {
-	blocks: {
-		header: {},
-		directory: {},
-		git: {},
-		runtime: {},
-		meter: {},
-	},
-};
-
-const SEMANTIC_COLORS = {
-	accent: "#7aa2f7",
-	muted: "#565f89",
-	success: "#9ece6a",
-	warning: "#e0af68",
-	error: "#f7768e",
-	dim: "#414868",
-} as const;
-
-type SemanticColor = keyof typeof SEMANTIC_COLORS;
-
-const PALETTE_SEQUENCES: Record<Exclude<PaletteName, "tokyo-night">, SemanticColor[]> = {
-	ocean: ["accent", "muted", "success", "warning"],
-	sunset: ["warning", "accent", "success", "muted"],
-	forest: ["success", "accent", "muted", "warning"],
-	candy: ["accent", "warning", "success", "muted"],
-	neon: ["accent", "success", "warning", "error"],
-	mono: ["muted", "dim"],
-};
-
-export function renderTokyoNightStatusline(
+export function renderPowerlineStatusline(
 	width: number,
 	items: RenderItem[],
 	config: Pick<StatuslineConfig, "palettePreset" | "palette" | "density" | "separator">,
@@ -84,7 +30,7 @@ export function renderTokyoNightStatusline(
 		.map((segments) =>
 			segments.length === 0
 				? ""
-				: truncateToWidth(joinTokyoNightSegments(segments, config), width, ""),
+				: truncateToWidth(joinPowerlineSegments(segments, config), width, ""),
 		)
 		.join("\n");
 }
@@ -98,20 +44,20 @@ function splitLines(items: RenderItem[]): RenderSegment[][] {
 	return lines;
 }
 
-export function tokyoNightExtensionSeparator(
+export function powerlineExtensionSeparator(
 	_theme: Theme,
 	palettePreset: PalettePreset = "tokyo-night",
 ): string {
-	return ansiStyle(" • ", { fg: resolvePalette(palettePreset).extensionSeparator });
+	return ansiStyle(" • ", { fg: resolvePreset(palettePreset).extensionSeparator });
 }
 
-function joinTokyoNightSegments(
+function joinPowerlineSegments(
 	segments: RenderSegment[],
 	config: Pick<StatuslineConfig, "palettePreset" | "palette" | "density" | "separator">,
 ): string {
-	const palette = resolvePalette(config.palettePreset);
-	const blocks = contiguousBlocks(segments, palette, config.palettePreset, config.palette);
-	let line = ansiStyle("░▒▓", { fg: palette.lead });
+	const preset = resolvePreset(config.palettePreset);
+	const blocks = contiguousBlocks(segments, preset, config.palettePreset, config.palette);
+	let line = ansiStyle("░▒▓", { fg: preset.lead });
 
 	for (const [index, block] of blocks.entries()) {
 		const previous = index === 0 ? undefined : blocks[index - 1]?.colors;
@@ -126,16 +72,16 @@ function joinTokyoNightSegments(
 
 function contiguousBlocks(
 	segments: RenderSegment[],
-	palette: PowerlinePalette,
+	preset: PowerlinePreset,
 	palettePreset: PalettePreset,
 	configuredPalette: SegmentPalette,
-): TokyoNightBlock[] {
-	const blocks: TokyoNightBlock[] = [];
+): PowerlineBlock[] {
+	const blocks: PowerlineBlock[] = [];
 	const usesConfiguredColors = palettePreset === "custom";
 	for (const segment of segments) {
 		const colors = usesConfiguredColors
 			? (configuredPalette[segment.name] ?? {})
-			: palette.blocks[segment.block];
+			: preset.blocks[segment.block];
 		const previous = blocks.at(-1);
 		const matchesPrevious =
 			previous !== undefined &&
@@ -153,7 +99,7 @@ function colorsEqual(left: BlockColors, right: BlockColors): boolean {
 }
 
 function formatBlockText(
-	block: TokyoNightBlock,
+	block: PowerlineBlock,
 	config: Pick<StatuslineConfig, "density" | "separator">,
 ): string {
 	const texts = block.segments.map(formatSegmentText);
@@ -181,31 +127,4 @@ function separatorText(separator: SeparatorName, cozy: boolean): string {
 		case "none":
 			return padding;
 	}
-}
-
-function resolvePalette(palettePreset: PalettePreset): PowerlinePalette {
-	if (palettePreset === "custom") return UNSTYLED_PALETTE;
-	if (palettePreset === "tokyo-night") return TOKYO_NIGHT_PALETTE;
-	const sequence = PALETTE_SEQUENCES[palettePreset];
-	const backgrounds = BLOCK_NAMES.map(
-		(_block, index) => SEMANTIC_COLORS[sequence[index % sequence.length] ?? "muted"],
-	);
-	return {
-		lead: backgrounds[0] ?? SEMANTIC_COLORS.accent,
-		blocks: Object.fromEntries(
-			BLOCK_NAMES.map((block, index) => {
-				const background = backgrounds[index] ?? SEMANTIC_COLORS.muted;
-				return [block, { fg: contrastColor(background), bg: background }];
-			}),
-		) as Record<TokyoNightBlockName, BlockColors>,
-		extensionSeparator: backgrounds[2] ?? SEMANTIC_COLORS.muted,
-	};
-}
-
-function contrastColor(hex: string): string {
-	const normalized = hex.slice(1);
-	const red = Number.parseInt(normalized.slice(0, 2), 16);
-	const green = Number.parseInt(normalized.slice(2, 4), 16);
-	const blue = Number.parseInt(normalized.slice(4, 6), 16);
-	return red * 0.299 + green * 0.587 + blue * 0.114 > 150 ? "#090c0c" : "#f0f0f0";
 }

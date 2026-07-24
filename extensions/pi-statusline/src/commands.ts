@@ -1,5 +1,9 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import {
+	DynamicBorder,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import {
 	DEFAULT_STATUSLINE_DOCUMENT,
 	type LoadedStatuslineSettings,
@@ -7,58 +11,35 @@ import {
 } from "./settings.js";
 import { PALETTE_PRESET_NAMES, type PalettePreset } from "./types.js";
 
-const SUBCOMMANDS: AutocompleteItem[] = [
-	{ value: "palette", label: "palette", description: "Choose a palette preset" },
-	{ value: "settings", label: "settings", description: "Edit pi-statusline.json" },
-	{ value: "status", label: "status", description: "Show effective statusline settings" },
-	{ value: "help", label: "help", description: "Show configuration help" },
-];
-
 export interface StatuslineCommandOptions {
 	settingsPath: string;
 	getLoaded(): LoadedStatuslineSettings;
 	apply(loaded: LoadedStatuslineSettings, ctx: ExtensionCommandContext): void;
+	preview?(palettePreset: PalettePreset | undefined, ctx: ExtensionCommandContext): void;
 	save?: (settingsPath: string, rawDocument: string) => LoadedStatuslineSettings;
 }
 
 export function registerStatuslineCommand(pi: ExtensionAPI, options: StatuslineCommandOptions) {
 	pi.registerCommand("statusline", {
-		description: "Configure or inspect the statusline footer",
-		getArgumentCompletions(prefix: string): AutocompleteItem[] | null {
-			const normalized = prefix.trim().toLowerCase();
-			const matches = SUBCOMMANDS.filter((item) => item.value.startsWith(normalized));
-			return matches.length > 0 ? matches : null;
-		},
+		description: "Open the statusline settings and status menu",
 		handler: async (args, ctx) => {
-			const subcommand = args.trim().split(/\s+/u)[0]?.toLowerCase() ?? "";
-			switch (subcommand) {
-				case "":
-					await showMainMenu(ctx, options);
-					return;
-				case "palette":
-					await choosePalettePreset(ctx, options);
-					return;
-				case "settings":
-					await editSettings(ctx, options);
-					return;
-				case "status":
-					showStatus(ctx, options);
-					return;
-				case "help":
-					showHelp(ctx, options.settingsPath);
-					return;
-				default:
-					if (canNotify(ctx)) {
-						ctx.ui.notify(`Unknown /statusline subcommand: ${subcommand}`, "warning");
-					}
+			if (args.trim()) {
+				if (canNotify(ctx)) {
+					ctx.ui.notify(
+						"/statusline does not accept arguments; run it without arguments to open the menu.",
+						"warning",
+					);
+				}
+				return;
 			}
+			await showMainMenu(ctx, options);
 		},
 	});
 }
 
 async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
 	if (ctx.mode !== "tui") {
-		showHelp(ctx, options.settingsPath);
+		if (ctx.hasUI) ctx.ui.notify("/statusline requires an interactive Pi UI.", "error");
 		return;
 	}
 	const paletteItem = `Palette preset (${options.getLoaded().config.palettePreset})`;
@@ -93,14 +74,16 @@ async function choosePalettePreset(
 		return;
 	}
 	const current = options.getLoaded();
-	const selection = await ctx.ui.select(
-		`Palette preset (current: ${current.config.palettePreset})`,
-		[...PALETTE_PRESET_NAMES],
-	);
+	let selection: PalettePreset | undefined;
+	try {
+		selection = await showPalettePresetPicker(ctx, current.config.palettePreset, options);
+	} finally {
+		options.preview?.(undefined, ctx);
+	}
 	if (selection === undefined) return;
 
 	try {
-		const rawDocument = palettePresetDocument(current, selection as PalettePreset);
+		const rawDocument = palettePresetDocument(current, selection);
 		const loaded = (options.save ?? saveStatuslineSettingsDocument)(
 			options.settingsPath,
 			rawDocument,
@@ -110,6 +93,60 @@ async function choosePalettePreset(
 	} catch (error) {
 		ctx.ui.notify(`Palette preset was not saved: ${formatError(error)}`, "error");
 	}
+}
+
+async function showPalettePresetPicker(
+	ctx: ExtensionCommandContext,
+	current: PalettePreset,
+	options: StatuslineCommandOptions,
+): Promise<PalettePreset | undefined> {
+	const items: SelectItem[] = PALETTE_PRESET_NAMES.map((palettePreset) => ({
+		value: palettePreset,
+		label: palettePreset,
+		description: palettePreset === current ? "current" : undefined,
+	}));
+	const selectedIndex = PALETTE_PRESET_NAMES.indexOf(current);
+	const result = await ctx.ui.custom<PalettePreset | null>((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		const title = new Text("", 1, 0);
+		container.addChild(title);
+		const list = new SelectList(items, Math.min(items.length, 10), {
+			selectedPrefix: (text) => theme.fg("accent", text),
+			selectedText: (text) => theme.fg("accent", text),
+			description: (text) => theme.fg("muted", text),
+			scrollInfo: (text) => theme.fg("dim", text),
+			noMatch: (text) => theme.fg("warning", text),
+		});
+		list.setSelectedIndex(selectedIndex);
+		list.onSelectionChange = (item) => {
+			options.preview?.(item.value as PalettePreset, ctx);
+		};
+		list.onSelect = (item) => done(item.value as PalettePreset);
+		list.onCancel = () => done(null);
+		container.addChild(list);
+		const hint = new Text("", 1, 0);
+		container.addChild(hint);
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		const updateThemedText = () => {
+			title.setText(theme.fg("accent", theme.bold(`Palette preset (current: ${current})`)));
+			hint.setText(theme.fg("dim", "↑↓ preview • enter apply • esc cancel"));
+		};
+		updateThemedText();
+
+		return {
+			render: (width: number) => container.render(width),
+			invalidate() {
+				container.invalidate();
+				updateThemedText();
+			},
+			handleInput(data: string) {
+				list.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+	return result ?? undefined;
 }
 
 async function editSettings(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
@@ -179,11 +216,8 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 	if (!canNotify(ctx)) return;
 	ctx.ui.notify(
 		[
-			"/statusline — open the statusline menu",
-			"/statusline palette — choose a named or custom palette preset",
-			"/statusline settings — edit and apply JSON",
-			"/statusline status — show source, path, and warnings",
-			"/statusline help — show this help",
+			"/statusline — open the interactive statusline menu",
+			"Menu actions: Palette preset, Edit JSON settings, Status, Help",
 			`Settings: ${settingsPath}`,
 			"Fields: palettePreset, palette, density, separator, segments, segmentText, extensionStatusIcons",
 			"Named presets ignore but preserve palette; custom uses its per-segment fg/bg colors.",

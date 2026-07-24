@@ -12,14 +12,14 @@ import {
 	wrapExtensionStatusline,
 } from "./extension-status.js";
 import { formatGitBranchValue, type GitStatusSummary } from "./git-status.js";
-import { renderTokyoNightStatusline } from "./tokyo-night.js";
+import { renderPowerlineStatusline } from "./powerline.js";
 import {
 	LINE_BREAK_SEGMENT_NAME,
+	type PowerlineBlockName,
 	type RenderItem,
 	type RenderSegment,
 	type SegmentName,
 	type StatuslineConfig,
-	type TokyoNightBlockName,
 } from "./types.js";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -62,7 +62,7 @@ export function renderStatusline(
 				(segment.name === LINE_BREAK_SEGMENT_NAME || segment.text.length > 0),
 		);
 
-	return renderTokyoNightStatusline(width, segments, config);
+	return renderPowerlineStatusline(width, segments, config);
 }
 
 export function renderExtensionStatusline(
@@ -161,7 +161,7 @@ function segment(
 	value: string,
 	config: StatuslineConfig,
 	color: RenderSegment["color"],
-	block: TokyoNightBlockName,
+	block: PowerlineBlockName,
 	emphasis = false,
 ): RenderSegment {
 	return { name, text: formatConfiguredSegment(name, value, config), color, block, emphasis };

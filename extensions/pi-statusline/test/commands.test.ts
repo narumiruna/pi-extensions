@@ -13,19 +13,88 @@ import {
 } from "../src/settings.js";
 import statusline from "../src/statusline.js";
 
-test("/statusline registers palette, settings, status, and help autocomplete", () => {
+interface PickerComponent {
+	render?(width: number): string[];
+	handleInput?(data: string): void;
+}
+
+function customPalettePicker(inputs: string[], inspect?: (lines: string[]) => void) {
+	return async (factory: (...args: unknown[]) => unknown) => {
+		let result: unknown;
+		const component = factory(
+			{ requestRender() {} },
+			{
+				fg: (_color: string, text: string) => text,
+				bold: (text: string) => text,
+			},
+			{},
+			(value: unknown) => {
+				result = value;
+			},
+		) as PickerComponent;
+		if (inspect && component.render) inspect(component.render(100));
+		for (const input of inputs) component.handleInput?.(input);
+		return result;
+	};
+}
+
+test("/statusline registers an argument-free interactive menu", async () => {
 	const mock = createMockPi();
 	statusline(mock.pi);
 	const command = mock.commands.get("statusline");
-	assert.ok(command?.getArgumentCompletions);
-	assert.deepEqual(
-		(command.getArgumentCompletions("") as Array<{ value: string }>).map((item) => item.value),
-		["palette", "settings", "status", "help"],
-	);
-	assert.deepEqual(
-		(command.getArgumentCompletions("st") as Array<{ value: string }>).map((item) => item.value),
-		["status"],
-	);
+	assert.equal(command?.getArgumentCompletions, undefined);
+	let selectCalls = 0;
+	const context = createMockContext({
+		mode: "tui",
+		select: async () => {
+			selectCalls += 1;
+			return undefined;
+		},
+	});
+
+	await command?.handler("palette", context.ctx);
+
+	assert.equal(selectCalls, 0);
+	assert.match(context.notifications.at(-1)?.message ?? "", /does not accept arguments/u);
+});
+
+test("palette picker previews cursor movement and restores the saved preset on cancel", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	writeFileSync(path, JSON.stringify({ palettePreset: "sunset" }));
+	try {
+		const mock = createMockPi();
+		const loaded = loadStatuslineSettings(path);
+		const previews: Array<string | undefined> = [];
+		let applied = 0;
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply() {
+				applied += 1;
+			},
+			preview(palettePreset) {
+				previews.push(palettePreset);
+			},
+		});
+		let customCalls = 0;
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) => choices[0],
+			custom: customPalettePicker(["\u001b[B", "\u001b"], () => {
+				customCalls += 1;
+			}),
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.equal(customCalls, 1);
+		assert.deepEqual(previews, ["forest", undefined]);
+		assert.equal(applied, 0);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { palettePreset: "sunset" });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("settings edits raw JSON transactionally and applies it immediately", async () => {
@@ -52,12 +121,13 @@ test("settings edits raw JSON transactionally and applies it immediately", async
 		)}\n`;
 		const context = createMockContext({
 			mode: "tui",
+			select: async () => "Edit JSON settings",
 			editor: async (_title: string, value: string) => {
 				initial = value;
 				return edited;
 			},
 		});
-		await mock.commands.get("statusline")?.handler("settings", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.equal(initial, DEFAULT_STATUSLINE_DOCUMENT);
 		assert.equal(readFileSync(path, "utf8"), edited);
 		assert.deepEqual(loaded.config.segments, ["model"]);
@@ -92,13 +162,17 @@ test("palette picker preserves custom colors and unknown fields while applying a
 			},
 		});
 		const selections: Array<{ title: string; choices: string[] }> = [];
+		let pickerText = "";
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
 			select: async (title: string, choices: string[]) => {
 				selections.push({ title, choices });
-				return title === "pi-statusline" ? choices[0] : "ocean";
+				return choices[0];
 			},
+			custom: customPalettePicker(["\u001b[B", "\u001b[B", "\r"], (lines) => {
+				pickerText = lines.join("\n");
+			}),
 		});
 
 		await mock.commands.get("statusline")?.handler("", context.ctx);
@@ -109,8 +183,8 @@ test("palette picker preserves custom colors and unknown fields while applying a
 			"Status",
 			"Help",
 		]);
-		assert.match(selections[1]?.title ?? "", /current: custom/u);
-		assert.deepEqual(selections[1]?.choices, [
+		assert.match(pickerText, /current: custom/u);
+		for (const palettePreset of [
 			"tokyo-night",
 			"ocean",
 			"sunset",
@@ -119,7 +193,9 @@ test("palette picker preserves custom colors and unknown fields while applying a
 			"neon",
 			"mono",
 			"custom",
-		]);
+		]) {
+			assert.match(pickerText, new RegExp(palettePreset, "u"));
+		}
 		assert.equal(loaded.config.palettePreset, "ocean");
 		assert.deepEqual(loaded.config.palette.time, { fg: "#112233", bg: "#445566" });
 		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
@@ -149,10 +225,11 @@ test("palette picker migrates a legacy string without losing unknown fields", as
 		});
 		const context = createMockContext({
 			mode: "tui",
-			select: async () => "custom",
+			select: async (_title: string, choices: string[]) => choices[0],
+			custom: customPalettePicker(["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"]),
 		});
 
-		await mock.commands.get("statusline")?.handler("palette", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 
 		const saved = JSON.parse(readFileSync(path, "utf8"));
 		assert.equal(saved.palettePreset, "custom");
@@ -181,11 +258,16 @@ test("palette picker cancellation and malformed settings leave the file unchange
 			},
 		});
 		let selection: string | undefined;
-		const context = createMockContext({ mode: "tui", select: async () => selection });
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) => choices[0],
+			custom: (factory: (...args: unknown[]) => unknown) =>
+				customPalettePicker(selection ? ["\u001b[B", "\r"] : ["\u001b"])(factory),
+		});
 
-		await mock.commands.get("statusline")?.handler("palette", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 		selection = "ocean";
-		await mock.commands.get("statusline")?.handler("palette", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 
 		assert.equal(readFileSync(path, "utf8"), "{broken");
 		assert.equal(applied, 0);
@@ -217,17 +299,21 @@ test("cancelled, invalid, and failed settings edits preserve file and runtime st
 				return saveStatuslineSettingsDocument(settingsPath, rawDocument);
 			},
 		});
-		const context = createMockContext({ mode: "tui", editor: async () => nextEdit });
+		const context = createMockContext({
+			mode: "tui",
+			select: async () => "Edit JSON settings",
+			editor: async () => nextEdit,
+		});
 
-		await mock.commands.get("statusline")?.handler("settings", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 		nextEdit = JSON.stringify({ palette: "invalid" });
-		await mock.commands.get("statusline")?.handler("settings", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*palette/i);
 		nextEdit = JSON.stringify({ palette: { time: { fg: "red" } } });
-		await mock.commands.get("statusline")?.handler("settings", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*palette\.time\.fg/i);
 		nextEdit = JSON.stringify({ future: "publish" });
-		await mock.commands.get("statusline")?.handler("settings", context.ctx);
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /publish failed/i);
 		assert.equal(readFileSync(path, "utf8"), original);
 		assert.deepEqual(loaded.config.segments, ["model"]);
@@ -237,7 +323,7 @@ test("cancelled, invalid, and failed settings edits preserve file and runtime st
 	}
 });
 
-test("settings is TUI-only while status and help are protocol-safe", async () => {
+test("status and help remain available from the main menu", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
 	const path = settingsFilePath(root);
 	writeFileSync(path, DEFAULT_STATUSLINE_DOCUMENT);
@@ -249,30 +335,35 @@ test("settings is TUI-only while status and help are protocol-safe", async () =>
 			getLoaded: () => loaded,
 			apply() {},
 		});
-		let editorCalls = 0;
-		const context = createMockContext({
-			mode: "rpc",
-			hasUI: true,
-			editor: async () => {
-				editorCalls += 1;
-				return undefined;
-			},
-		});
-		await mock.commands.get("statusline")?.handler("settings", context.ctx);
-		assert.equal(editorCalls, 0);
-		assert.match(context.notifications.at(-1)?.message ?? "", /Edit settings manually/u);
-		await mock.commands.get("statusline")?.handler("palette", context.ctx);
-		assert.match(context.notifications.at(-1)?.message ?? "", /Edit palettePreset manually/u);
+		let selection = "Status";
+		const context = createMockContext({ mode: "tui", select: async () => selection });
+
 		await mock.commands.get("statusline")?.handler("", context.ctx);
-		assert.match(context.notifications.at(-1)?.message ?? "", /open the statusline menu/u);
-		await mock.commands.get("statusline")?.handler("status", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /source: user/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /palette preset: tokyo-night/u);
-		await mock.commands.get("statusline")?.handler("help", context.ctx);
+
+		selection = "Help";
+		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /segmentText/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /palettePreset/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /line_break/u);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("/statusline safely rejects non-TUI mode and textual arguments", async () => {
+	const mock = createMockPi();
+	registerStatuslineCommand(mock.pi, {
+		settingsPath: "/tmp/pi-statusline.json",
+		getLoaded: () => loadStatuslineSettings("/tmp/missing-pi-statusline.json"),
+		apply() {},
+	});
+	const context = createMockContext({ mode: "rpc", hasUI: true });
+
+	await mock.commands.get("statusline")?.handler("", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /requires an interactive Pi UI/u);
+
+	await mock.commands.get("statusline")?.handler("status", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /does not accept arguments/u);
 });

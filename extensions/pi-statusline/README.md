@@ -10,7 +10,8 @@
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
 - Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
 - Creates a complete editable default configuration on first session start.
-- Applies validated `/statusline settings` edits immediately after an atomic save.
+- Previews palette presets as the picker cursor moves, then applies the selection only on Enter.
+- Applies validated JSON settings edits from the `/statusline` menu immediately after an atomic save.
 - Caches Git state outside footer rendering and guards stale session results.
 - Wraps extension statuses safely at narrow terminal widths.
 
@@ -115,7 +116,7 @@ All fields are optional in an existing document. Missing fields use defaults.
 - `density`: `compact` or `cozy`.
 - `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
 
-Named presets use their built-in colors while preserving the custom `palette` object. Selecting `custom` activates that object. If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
+Named presets use cohesive namesake color ramps while preserving the custom `palette` object. Selecting `custom` activates that object. If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
 
 Each custom palette color must be a complete `#RRGGBB` truecolor value. Missing segment entries or `fg`/`bg` fields remain unstyled and do not inherit colors from Tokyo Night. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` leaves that separator unstyled.
 
@@ -134,7 +135,7 @@ For example, after moving `time` before the header segments, select `custom` and
 }
 ```
 
-Adjacent custom segments with the same configured foreground and background render as one block. Segments with no configured colors also join into one unstyled block. Invalid presets or colors prevent `/statusline settings` from saving. Unknown segment names or palette fields are reported as warnings and ignored.
+Adjacent custom segments with the same configured foreground and background render as one block. Segments with no configured colors also join into one unstyled block. Invalid presets or colors prevent the menu's JSON settings action from saving. Unknown segment names or palette fields are reported as warnings and ignored.
 
 ### Segments
 
@@ -198,13 +199,9 @@ Statuses from other extensions appear below the main powerline. The linked GitHu
 
 | Command | Purpose |
 | --- | --- |
-| `/statusline` | Open the TUI menu for palette presets, JSON settings, status, and help |
-| `/statusline palette` | Choose a named preset or the preserved custom palette |
-| `/statusline settings` | Edit raw JSON in TUI, validate, atomically save, and apply immediately |
-| `/statusline status` | Show settings path/source, effective appearance, segments, and diagnostics |
-| `/statusline help` | Show command and schema guidance |
+| `/statusline` | Open the interactive menu for palette presets, JSON settings, status, and help |
 
-Preset selection and raw editing are TUI-only. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged. Status and help are safe in TUI, print, JSON, and RPC modes.
+`/statusline` does not accept arguments and requires TUI mode. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged.
 
 ## 🌿 Git and activity details
 
@@ -222,10 +219,22 @@ extensions/pi-statusline/
 │   ├── commands.ts
 │   ├── extension-status.ts
 │   ├── git-status.ts
+│   ├── powerline.ts
+│   ├── presets/
+│   │   ├── candy.ts
+│   │   ├── create-ramp.ts
+│   │   ├── custom.ts
+│   │   ├── forest.ts
+│   │   ├── index.ts
+│   │   ├── mono.ts
+│   │   ├── neon.ts
+│   │   ├── ocean.ts
+│   │   ├── sunset.ts
+│   │   ├── tokyo-night.ts
+│   │   └── types.ts
 │   ├── render.ts
 │   ├── settings.ts
 │   ├── statusline.ts
-│   ├── tokyo-night.ts
 │   └── types.ts
 ├── test/
 ├── README.md

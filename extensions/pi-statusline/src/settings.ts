@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { TOKYO_NIGHT_SEGMENT_PALETTE } from "./presets/tokyo-night.js";
 import {
 	type ConfigSegmentName,
 	DENSITIES,
@@ -21,7 +22,6 @@ import {
 	type SegmentName,
 	type SegmentPalette,
 	type StatuslineConfig,
-	TOKYO_NIGHT_SEGMENT_PALETTE,
 } from "./types.js";
 
 export const SETTINGS_FILE_NAME = "pi-statusline.json";
