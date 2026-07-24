@@ -48,17 +48,30 @@ export function renderStatusline(
 ): string {
 	if (width <= 0) return "";
 
-	const segments = config.segments
-		.map((name): RenderItem | undefined =>
-			name === LINE_BREAK_SEGMENT_NAME
-				? { name: LINE_BREAK_SEGMENT_NAME }
-				: buildSegment(name, ctx, footerData, config, runtime),
-		)
-		.filter(
-			(segment): segment is RenderItem =>
-				segment !== undefined &&
-				(segment.name === LINE_BREAK_SEGMENT_NAME || segment.text.length > 0),
-		);
+	const rows: Array<{ configuredSegments: number; segments: RenderSegment[] }> = [
+		{ configuredSegments: 0, segments: [] },
+	];
+	for (const name of config.segments) {
+		if (name === LINE_BREAK_SEGMENT_NAME) {
+			rows.push({ configuredSegments: 0, segments: [] });
+			continue;
+		}
+
+		const row = rows.at(-1);
+		if (!row) continue;
+		row.configuredSegments += 1;
+		const rendered = buildSegment(name, ctx, footerData, config, runtime);
+		if (rendered && rendered.text.length > 0) row.segments.push(rendered);
+	}
+
+	const segments: RenderItem[] = [];
+	const renderedRows = rows.filter(
+		(row) => row.configuredSegments === 0 || row.segments.length > 0,
+	);
+	for (const [index, row] of renderedRows.entries()) {
+		if (index > 0) segments.push({ name: LINE_BREAK_SEGMENT_NAME });
+		segments.push(...row.segments);
+	}
 
 	return renderPowerlineStatusline(width, segments, config);
 }

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { createMockContext } from "../../../test/support.js";
 import { powerlineExtensionSeparator, renderPowerlineStatusline } from "../src/powerline.js";
-import { formatConfiguredSegment } from "../src/render.js";
+import { formatConfiguredSegment, type RuntimeState, renderStatusline } from "../src/render.js";
 import { createDefaultConfig, normalizeStatuslineConfig } from "../src/settings.js";
 import type { RenderItem, RenderSegment, SegmentName } from "../src/types.js";
 
@@ -99,6 +100,47 @@ test("line breaks render separated repeated markers as independent powerline row
 	];
 	const rendered = renderPowerlineStatusline(300, items, config);
 	assert.deepEqual(plain(rendered).split("\n"), ["░▒▓ model", "░▒▓ cwd", "░▒▓ branch"]);
+});
+
+test("idle contextual activity rows collapse while explicit empty rows remain", () => {
+	const config = createDefaultConfig();
+	config.segments = ["model", "line_break", "tools", "line_break", "context"];
+	const context = createMockContext({
+		model: { id: "claude-sonnet-4", provider: "anthropic" },
+		getContextUsage: () => ({ percent: 42 }),
+	});
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => "main",
+		getExtensionStatuses: () => new Map<string, string>(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+	const idle = plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
+	assert.deepEqual(idle.split("\n"), ["░▒▓ 🤖 sonnet-4", "░▒▓ 🪟 ctx 42%"]);
+
+	runtime.isStreaming = true;
+	const streaming = plain(
+		renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime),
+	);
+	assert.deepEqual(streaming.split("\n"), [
+		"░▒▓ 🤖 sonnet-4",
+		"░▒▓ 💭 thinking",
+		"░▒▓ 🪟 ctx 42%",
+	]);
+
+	config.segments = ["line_break", "model", "line_break"];
+	const explicitEmptyRows = plain(
+		renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime),
+	);
+	assert.deepEqual(explicitEmptyRows.split("\n"), ["", "░▒▓ 🤖 sonnet-4", ""]);
 });
 
 test("responsive fitting keeps primary and active information ahead of decorative segments", () => {
