@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { INFORMATION_PROFILES } from "./information-profiles.js";
 import { segmentPaletteForPreset } from "./presets/index.js";
 import {
 	type ConfigSegmentName,
@@ -56,19 +57,7 @@ const LEGACY_STATUS_ICON_KEYS = {
 	"unknown-error-retry": "retry",
 } as const;
 
-const DEFAULT_SEGMENTS: SegmentName[] = [
-	"brand",
-	"provider",
-	"model",
-	"thinking",
-	"cwd",
-	"branch",
-	"tools",
-	"context",
-	"tokens",
-	"cost",
-	"time",
-];
+const DEFAULT_SEGMENTS: SegmentName[] = [...INFORMATION_PROFILES.balanced];
 
 export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
 	palettePreset: "tokyo-night",

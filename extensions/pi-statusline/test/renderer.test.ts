@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { powerlineExtensionSeparator, renderPowerlineStatusline } from "../src/powerline.js";
 import { formatConfiguredSegment } from "../src/render.js";
 import { createDefaultConfig, normalizeStatuslineConfig } from "../src/settings.js";
@@ -98,6 +99,81 @@ test("line breaks render separated repeated markers as independent powerline row
 	];
 	const rendered = renderPowerlineStatusline(300, items, config);
 	assert.deepEqual(plain(rendered).split("\n"), ["░▒▓ model", "░▒▓ cwd", "░▒▓ branch"]);
+});
+
+test("responsive fitting keeps primary and active information ahead of decorative segments", () => {
+	const config = createDefaultConfig();
+	const items = [
+		segment("brand", "BRAND", "header"),
+		segment("provider", "PROVIDER", "header"),
+		segment("model", "MODEL", "header"),
+		segment("thinking", "THINKING", "header"),
+		segment("cwd", "WORKSPACE", "directory"),
+		segment("branch", "BRANCH", "git"),
+		segment("tools", "ACTIVE", "runtime"),
+		segment("context", "CONTEXT", "runtime"),
+		segment("tokens", "TOKENS", "runtime"),
+		segment("cost", "COST", "meter"),
+		segment("time", "TIME", "meter"),
+		segment("turn", "TURN", "meter"),
+	];
+
+	const normal = plain(renderPowerlineStatusline(60, items, config));
+	assert.ok(visibleWidth(normal) <= 60);
+	for (const value of ["MODEL", "WORKSPACE", "BRANCH", "ACTIVE", "CONTEXT"]) {
+		assert.match(normal, new RegExp(value, "u"));
+	}
+	assert.doesNotMatch(normal, /BRAND|PROVIDER|TOKENS|TIME|TURN/u);
+
+	const narrow = plain(renderPowerlineStatusline(40, items, config));
+	assert.ok(visibleWidth(narrow) <= 40);
+	for (const value of ["MODEL", "BRANCH", "ACTIVE", "CONTEXT"]) {
+		assert.match(narrow, new RegExp(value, "u"));
+	}
+	assert.doesNotMatch(narrow, /BRAND|PROVIDER|THINKING|WORKSPACE|TOKENS|COST|TIME|TURN/u);
+});
+
+test("responsive fitting preserves explicit row boundaries and fits every rendered line", () => {
+	const config = createDefaultConfig();
+	const rendered = renderPowerlineStatusline(
+		15,
+		[
+			segment("brand", "DECORATION", "header"),
+			segment("context", "CONTEXT", "runtime"),
+			{ name: "line_break" },
+			segment("model", "MODEL", "header"),
+			segment("time", "CLOCK", "meter"),
+		],
+		config,
+	);
+	const lines = plain(rendered).split("\n");
+	assert.equal(lines.length, 2);
+	assert.match(lines[0] ?? "", /CONTEXT/u);
+	assert.doesNotMatch(lines[0] ?? "", /DECORATION/u);
+	assert.match(lines[1] ?? "", /MODEL/u);
+	assert.doesNotMatch(lines[1] ?? "", /CLOCK/u);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 15));
+});
+
+test("responsive fitting truncates one oversized segment and preserves empty explicit rows", () => {
+	const config = createDefaultConfig();
+	const oversized = renderPowerlineStatusline(
+		8,
+		[segment("model", "A VERY LONG MODEL", "header")],
+		config,
+	);
+	assert.ok(visibleWidth(oversized) <= 8);
+
+	const multiline = renderPowerlineStatusline(
+		20,
+		[{ name: "line_break" }, segment("model", "MODEL", "header"), { name: "line_break" }],
+		config,
+	);
+	const lines = multiline.split("\n");
+	assert.equal(lines.length, 3);
+	assert.equal(lines[0], "");
+	assert.equal(lines[2], "");
+	assert.ok(lines.every((line) => visibleWidth(line) <= 20));
 });
 
 test("density and separator configure text inside a contiguous block", () => {

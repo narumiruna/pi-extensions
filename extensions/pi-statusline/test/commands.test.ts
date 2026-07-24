@@ -13,7 +13,6 @@ import {
 	saveStatuslineSettingsDocument,
 	settingsFilePath,
 } from "../src/settings.js";
-import statusline from "../src/statusline.js";
 
 initTheme("dark", false);
 
@@ -22,7 +21,19 @@ interface PickerComponent {
 	handleInput?(data: string): void;
 }
 
-function customPalettePicker(inputs: string[], inspect?: (lines: string[]) => void) {
+function selectCustomLayout(title: string, choices: string[]): string | undefined {
+	if (title === "pi-statusline") return "Advanced";
+	if (title === "pi-statusline — Advanced") {
+		return choices.find((choice) => choice.startsWith("Custom layout ("));
+	}
+	return undefined;
+}
+
+function customPalettePicker(
+	inputs: string[],
+	inspect?: (lines: string[]) => void,
+	inspectNarrow?: (lines: string[]) => void,
+) {
 	return async (factory: (...args: unknown[]) => unknown) => {
 		let result: unknown;
 		const component = factory(
@@ -37,6 +48,7 @@ function customPalettePicker(inputs: string[], inspect?: (lines: string[]) => vo
 			},
 		) as PickerComponent;
 		if (inspect && component.render) inspect(component.render(100));
+		if (inspectNarrow && component.render) inspectNarrow(component.render(20));
 		for (const input of inputs) component.handleInput?.(input);
 		return result;
 	};
@@ -44,7 +56,11 @@ function customPalettePicker(inputs: string[], inspect?: (lines: string[]) => vo
 
 test("/statusline keeps compatibility subcommands and an argument-free interactive menu", async () => {
 	const mock = createMockPi();
-	statusline(mock.pi);
+	registerStatuslineCommand(mock.pi, {
+		settingsPath: "/tmp/missing-pi-statusline-menu.json",
+		getLoaded: () => loadStatuslineSettings("/tmp/missing-pi-statusline-menu.json"),
+		apply() {},
+	});
 	const command = mock.commands.get("statusline");
 	assert.ok(command?.getArgumentCompletions);
 	assert.deepEqual(
@@ -56,16 +72,25 @@ test("/statusline keeps compatibility subcommands and an argument-free interacti
 		["status"],
 	);
 	let selectCalls = 0;
+	let mainChoices: string[] = [];
 	const context = createMockContext({
 		mode: "tui",
-		select: async () => {
+		select: async (_title: string, choices: string[]) => {
 			selectCalls += 1;
+			mainChoices = choices;
 			return undefined;
 		},
 	});
 
 	await command.handler("", context.ctx);
 	assert.equal(selectCalls, 1);
+	assert.deepEqual(mainChoices, [
+		"Appearance (tokyo-night)",
+		"Information (balanced)",
+		"Advanced",
+		"Status",
+		"Help",
+	]);
 
 	await command.handler("palette", context.ctx);
 	assert.equal(selectCalls, 1);
@@ -94,14 +119,14 @@ test("segment menu toggles displayed segments and preserves JSON fields and layo
 				appliedSegments.push([...next.config.segments]);
 			},
 		});
-		let menuChoices: string[] = [];
+		const selections: Array<{ title: string; choices: string[] }> = [];
 		let initialScreen = "";
 		let changedScreen = "";
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) => {
-				menuChoices = choices;
-				return choices.find((choice) => choice.startsWith("Segments ("));
+			select: async (title: string, choices: string[]) => {
+				selections.push({ title, choices });
+				return selectCustomLayout(title, choices);
 			},
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				let result: unknown;
@@ -131,12 +156,17 @@ test("segment menu toggles displayed segments and preserves JSON fields and layo
 
 		await mock.commands.get("statusline")?.handler("", context.ctx);
 
-		assert.deepEqual(menuChoices, [
-			"Palette preset (tokyo-night)",
-			"Segments (2/12 shown)",
-			"Edit settings JSON (custom colors, layout, icons)",
+		assert.deepEqual(selections[0]?.choices, [
+			"Appearance (tokyo-night)",
+			"Information (custom)",
+			"Advanced",
 			"Status",
 			"Help",
+		]);
+		assert.deepEqual(selections[1]?.choices, [
+			"Custom layout (2/12 shown)",
+			"Edit settings JSON",
+			"Back",
 		]);
 		assert.match(initialScreen, /Statusline segments/u);
 		assert.match(initialScreen.split("\n").find((line) => line.includes("brand")) ?? "", /hidden/u);
@@ -181,8 +211,7 @@ test("segment menu reorders visible segments immediately while preserving multil
 		let finalScreen = "";
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) =>
-				choices.find((choice) => choice.startsWith("Segments (")),
+			select: selectCustomLayout,
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				let result: unknown;
 				const component = factory(
@@ -264,8 +293,7 @@ test("segment menu adds and removes line breaks after the selected visible segme
 		let screenAfterRemoval = "";
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) =>
-				choices.find((choice) => choice.startsWith("Segments (")),
+			select: selectCustomLayout,
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				let result: unknown;
 				const component = factory(
@@ -346,8 +374,7 @@ test("segment menu offers Move mode and explains unavailable moves", async () =>
 		let hiddenScreen = "";
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) =>
-				choices.find((choice) => choice.startsWith("Segments (")),
+			select: selectCustomLayout,
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				let result: unknown;
 				const component = factory(
@@ -409,8 +436,7 @@ test("segment menu keeps displayed order when reordering cannot be saved", async
 		let screenAfterFailure = "";
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) =>
-				choices.find((choice) => choice.startsWith("Segments (")),
+			select: selectCustomLayout,
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				const component = factory(
 					{ requestRender() {} },
@@ -460,8 +486,7 @@ test("segment menu rolls back its displayed value when saving fails", async () =
 		let screenAfterFailure = "";
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) =>
-				choices.find((choice) => choice.startsWith("Segments (")),
+			select: selectCustomLayout,
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				const component = factory(
 					{ requestRender() {} },
@@ -513,8 +538,7 @@ test("segment menu restores persisted and runtime settings when application fail
 		let screenAfterFailure = "";
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) =>
-				choices.find((choice) => choice.startsWith("Segments (")),
+			select: selectCustomLayout,
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				const component = factory(
 					{ requestRender() {} },
@@ -662,9 +686,9 @@ test("palette picker preserves custom colors and unknown fields while applying a
 		await mock.commands.get("statusline")?.handler("", context.ctx);
 
 		assert.deepEqual(selections[0]?.choices, [
-			"Palette preset (custom)",
-			"Segments (11/12 shown)",
-			"Edit settings JSON (custom colors, layout, icons)",
+			"Appearance (custom)",
+			"Information (balanced)",
+			"Advanced",
 			"Status",
 			"Help",
 		]);
@@ -827,7 +851,8 @@ test("cancelled, invalid, and failed settings edits preserve file and runtime st
 		});
 		const context = createMockContext({
 			mode: "tui",
-			select: async () => "Edit settings JSON (custom colors, layout, icons)",
+			select: async (title: string) =>
+				title === "pi-statusline" ? "Advanced" : "Edit settings JSON",
 			editor: async () => nextEdit,
 		});
 

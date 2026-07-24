@@ -21,17 +21,13 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.density, "compact");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.separator, "none");
 	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.segments, [
-		"brand",
-		"provider",
 		"model",
 		"thinking",
 		"cwd",
 		"branch",
 		"tools",
 		"context",
-		"tokens",
 		"cost",
-		"time",
 	]);
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.provider.prefix, "🔌 ");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.turn.prefix, "🔁 #");
@@ -47,19 +43,7 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 		palettePreset: "tokyo-night",
 		density: "compact",
 		separator: "none",
-		segments: [
-			"brand",
-			"provider",
-			"model",
-			"thinking",
-			"cwd",
-			"branch",
-			"tools",
-			"context",
-			"tokens",
-			"cost",
-			"time",
-		],
+		segments: ["model", "thinking", "cwd", "branch", "tools", "context", "cost"],
 		segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
 		extensionStatusIcons: {
 			accounts: "👤",

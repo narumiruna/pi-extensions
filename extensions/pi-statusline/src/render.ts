@@ -26,8 +26,6 @@ type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 export interface RuntimeState extends ExtensionStatusRuntime {
 	turnCount: number;
 	activeTools: Map<string, number>;
-	lastTool?: string;
-	lastCompletedTool?: string;
 	isStreaming: boolean;
 	thinkingLevel: ThinkingLevel;
 	gitStatus?: GitStatusSummary;
@@ -121,8 +119,10 @@ function buildSegment(
 		}
 		case "cwd":
 			return segment(name, basename(ctx.cwd) || ctx.cwd, config, "accent", "directory");
-		case "tools":
-			return segment(name, formatToolActivity(runtime), config, "accent", "runtime");
+		case "tools": {
+			const activity = formatToolActivity(runtime);
+			return activity ? segment(name, activity, config, "accent", "runtime") : undefined;
+		}
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const value =
@@ -204,7 +204,7 @@ export function contextColor(percent: number | null | undefined): ThemeColor {
 	return "success";
 }
 
-export function formatToolActivity(runtime: RuntimeState): string {
+export function formatToolActivity(runtime: RuntimeState): string | undefined {
 	const active = [...runtime.activeTools.entries()];
 	if (active.length > 0) {
 		const [name, count] = active[0] ?? ["tool", 1];
@@ -212,9 +212,7 @@ export function formatToolActivity(runtime: RuntimeState): string {
 		return `⚙ ${name}${suffix}`;
 	}
 
-	if (runtime.isStreaming) return "💭 thinking";
-	if (runtime.lastCompletedTool) return `✅ ${runtime.lastCompletedTool}`;
-	return "💤 idle";
+	return runtime.isStreaming ? "💭 thinking" : undefined;
 }
 
 export function prLinkFromStatuses(statuses: ReadonlyMap<string, string>): string | undefined {

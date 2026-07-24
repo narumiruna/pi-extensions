@@ -14,6 +14,12 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import {
+	INFORMATION_PROFILE_NAMES,
+	INFORMATION_PROFILES,
+	type InformationProfileName,
+	inferInformationProfile,
+} from "./information-profiles.js";
 import { segmentPaletteForPreset } from "./presets/index.js";
 import {
 	DEFAULT_STATUSLINE_DOCUMENT,
@@ -31,7 +37,7 @@ import {
 	type SegmentName,
 } from "./types.js";
 
-const EDIT_SETTINGS_LABEL = "Edit settings JSON (custom colors, layout, icons)";
+const EDIT_SETTINGS_LABEL = "Edit settings JSON";
 const SEGMENT_VIEWPORT_SIZE = 6;
 const NARROW_SEGMENT_VIEWPORT_SIZE = 3;
 const SEGMENT_DESCRIPTIONS: Record<SegmentName, string> = {
@@ -110,36 +116,64 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 		if (ctx.hasUI) ctx.ui.notify("/statusline requires an interactive Pi UI.", "error");
 		return;
 	}
+	while (true) {
+		const config = options.getLoaded().config;
+		const appearanceItem = `Appearance (${config.palettePreset})`;
+		const informationItem = `Information (${inferInformationProfile(config.segments)})`;
+		const selection = await ctx.ui.select("pi-statusline", [
+			appearanceItem,
+			informationItem,
+			"Advanced",
+			"Status",
+			"Help",
+		]);
+		if (selection === appearanceItem) {
+			await choosePalettePreset(ctx, options);
+			return;
+		}
+		if (selection === informationItem) {
+			await chooseInformationProfile(ctx, options);
+			return;
+		}
+		switch (selection) {
+			case "Advanced":
+				if (await showAdvancedMenu(ctx, options)) continue;
+				return;
+			case "Status":
+				showStatus(ctx, options);
+				return;
+			case "Help":
+				showHelp(ctx, options.settingsPath);
+				return;
+			default:
+				return;
+		}
+	}
+}
+
+async function showAdvancedMenu(
+	ctx: ExtensionCommandContext,
+	options: StatuslineCommandOptions,
+): Promise<boolean> {
 	const config = options.getLoaded().config;
-	const paletteItem = `Palette preset (${config.palettePreset})`;
 	const visibleSegmentCount = config.segments.filter(
 		(segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME,
 	).length;
-	const segmentsItem = `Segments (${visibleSegmentCount}/${SEGMENT_NAMES.length} shown)`;
-	const selection = await ctx.ui.select("pi-statusline", [
-		paletteItem,
-		segmentsItem,
+	const layoutItem = `Custom layout (${visibleSegmentCount}/${SEGMENT_NAMES.length} shown)`;
+	const selection = await ctx.ui.select("pi-statusline — Advanced", [
+		layoutItem,
 		EDIT_SETTINGS_LABEL,
-		"Status",
-		"Help",
+		"Back",
 	]);
-	if (selection === paletteItem) {
-		await choosePalettePreset(ctx, options);
-		return;
+	if (selection === layoutItem) {
+		await chooseSegments(ctx, options);
+		return false;
 	}
-	switch (selection) {
-		case segmentsItem:
-			await chooseSegments(ctx, options);
-			return;
-		case EDIT_SETTINGS_LABEL:
-			await editSettings(ctx, options);
-			return;
-		case "Status":
-			showStatus(ctx, options);
-			return;
-		case "Help":
-			showHelp(ctx, options.settingsPath);
+	if (selection === EDIT_SETTINGS_LABEL) {
+		await editSettings(ctx, options);
+		return false;
 	}
+	return selection === "Back";
 }
 
 async function choosePalettePreset(
@@ -168,7 +202,7 @@ async function choosePalettePreset(
 		options.apply(loaded, ctx);
 		const message =
 			loaded.config.palettePreset === "custom"
-				? "Custom palette applied. Edit palette colors via /statusline → Edit settings JSON."
+				? "Custom palette applied. Edit colors via /statusline → Advanced → Edit settings JSON."
 				: `Palette preset applied: ${loaded.config.palettePreset}.`;
 		ctx.ui.notify(message, "info");
 	} catch (error) {
@@ -233,6 +267,94 @@ async function showPalettePresetPicker(
 			},
 		};
 	});
+	return result ?? undefined;
+}
+
+async function chooseInformationProfile(
+	ctx: ExtensionCommandContext,
+	options: StatuslineCommandOptions,
+) {
+	if (ctx.mode !== "tui") {
+		if (ctx.hasUI) ctx.ui.notify(`Edit segments manually: ${options.settingsPath}`, "info");
+		return;
+	}
+	const current = options.getLoaded();
+	const currentProfile = inferInformationProfile(current.config.segments);
+	const selection = await showInformationProfilePicker(ctx, currentProfile);
+	if (selection === undefined) return;
+
+	try {
+		const change = informationProfileDocument(current, selection);
+		const loaded = applySegmentsDocumentChange(change, ctx, options);
+		ctx.ui.notify(
+			`Information level applied: ${inferInformationProfile(loaded.config.segments)}.`,
+			"info",
+		);
+	} catch (error) {
+		ctx.ui.notify(`Information level was not saved: ${formatError(error)}`, "error");
+	}
+}
+
+async function showInformationProfilePicker(
+	ctx: ExtensionCommandContext,
+	current: ReturnType<typeof inferInformationProfile>,
+): Promise<InformationProfileName | undefined> {
+	const items: SelectItem[] = INFORMATION_PROFILE_NAMES.map((profile) => ({
+		value: profile,
+		label: `${profile[0]?.toUpperCase() ?? ""}${profile.slice(1)}`,
+		description: `${INFORMATION_PROFILES[profile].length} segments${profile === current ? " • current" : ""}`,
+	}));
+	const initialProfile = current === "custom" ? "balanced" : current;
+	const selectedIndex = INFORMATION_PROFILE_NAMES.indexOf(initialProfile);
+	const result = await ctx.ui.custom<InformationProfileName | null>(
+		(tui, theme, _keybindings, done) => {
+			const container = new Container();
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			const title = new Text("", 1, 0);
+			container.addChild(title);
+			const list = new SelectList(items, items.length, {
+				selectedPrefix: (text) => theme.fg("accent", text),
+				selectedText: (text) => theme.fg("accent", text),
+				description: (text) => theme.fg("muted", text),
+				scrollInfo: (text) => theme.fg("dim", text),
+				noMatch: (text) => theme.fg("warning", text),
+			});
+			list.setSelectedIndex(selectedIndex);
+			let selectedProfile = initialProfile;
+			const details = new Text("", 1, 0);
+			const hint = new Text("", 1, 0);
+			const updateThemedText = () => {
+				title.setText(theme.fg("accent", theme.bold(`Information level (current: ${current})`)));
+				details.setText(
+					theme.fg("muted", `Segments: ${INFORMATION_PROFILES[selectedProfile].join(" · ")}`),
+				);
+				hint.setText(theme.fg("dim", "↑↓ preview contents • enter apply • esc cancel"));
+			};
+			list.onSelectionChange = (item) => {
+				selectedProfile = item.value as InformationProfileName;
+				updateThemedText();
+			};
+			list.onSelect = (item) => done(item.value as InformationProfileName);
+			list.onCancel = () => done(null);
+			container.addChild(list);
+			container.addChild(details);
+			container.addChild(hint);
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			updateThemedText();
+
+			return {
+				render: (width: number) => container.render(width),
+				invalidate() {
+					container.invalidate();
+					updateThemedText();
+				},
+				handleInput(data: string) {
+					list.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		},
+	);
 	return result ?? undefined;
 }
 
@@ -495,6 +617,21 @@ function palettePresetDocument(
 	return `${JSON.stringify(parsed, null, "\t")}\n`;
 }
 
+function informationProfileDocument(
+	current: LoadedStatuslineSettings,
+	profile: InformationProfileName,
+): { nextDocument: string; previousDocument: string } {
+	const { parsed, rawDocument: previousDocument } = editableSettings(
+		current,
+		"changing information level",
+	);
+	parsed.segments = [...INFORMATION_PROFILES[profile]];
+	return {
+		nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
+		previousDocument,
+	};
+}
+
 function visibleSegmentNames(current: LoadedStatuslineSettings): SegmentName[] {
 	return current.config.segments.filter(
 		(segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME,
@@ -698,6 +835,7 @@ function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOpti
 			`palette preset: ${loaded.config.palettePreset}`,
 			`density: ${loaded.config.density}`,
 			`separator: ${loaded.config.separator}`,
+			`information: ${inferInformationProfile(loaded.config.segments)}`,
 			`segments: ${loaded.config.segments.join(", ") || "none"}`,
 			diagnostics ? `warnings: ${diagnostics}` : "warnings: none",
 		].join("\n"),
@@ -709,20 +847,21 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 	if (!canNotify(ctx)) return;
 	ctx.ui.notify(
 		[
-			"/statusline — open the interactive statusline menu",
+			"/statusline — open Appearance, Information, Advanced, Status, and Help",
 			"/statusline settings — edit and apply JSON",
-			"/statusline status — show source, path, and warnings",
+			"/statusline status — show source, path, information level, and warnings",
 			"/statusline help — show this help",
-			"Menu actions: Palette preset, Segments, Edit settings JSON, Status, Help",
+			"Menu actions: Appearance, Information, Advanced, Status, Help.",
+			"Information levels: minimal, balanced, detailed; any other segment array is custom.",
+			"Advanced actions: Custom layout, Edit settings JSON, Back.",
 			`Settings: ${settingsPath}`,
 			"Fields: palettePreset, palette, density, separator, segments, segmentText, extensionStatusIcons",
 			"Named presets ignore but preserve palette; custom uses its per-segment fg/bg colors.",
-			"Use the Segments menu to show, hide, reorder, or split data segments across rows.",
-			"Rows and visible/hidden sections reflect the layout; unavailable changes explain why.",
-			"Press M for move mode with ordinary arrows, or Alt+Up/Alt+Down for a quick move.",
-			"Press B to add or remove a line break after the selected visible segment.",
+			"Responsive rows retain context, model, location, and active work before decorative data.",
+			"Custom layout can show, hide, reorder, or split data segments across rows.",
+			"Press M for move mode, Alt+Up/Alt+Down for quick move, and B for a line break.",
 			"Line breaks (line_break) may repeat when separated by data segments, but cannot be consecutive.",
-			"The segmentText entries support prefix and suffix strings around Pi-owned dynamic values.",
+			"segmentText supports prefix and suffix strings around Pi-owned dynamic values.",
 		].join("\n"),
 		"info",
 	);

@@ -193,6 +193,9 @@ export default function statusline(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		runtime.turnCount = 0;
+		runtime.activeTools.clear();
+		runtime.isStreaming = false;
 		loaded = loadOrCreateStatuslineSettings(agentDir);
 		const settingsNotice = consumeStatuslineSettingsNotice();
 		if (settingsNotice) ctx.ui.notify(settingsNotice, "warning");
@@ -216,6 +219,8 @@ export default function statusline(pi: ExtensionAPI) {
 		clearGitStatusDebounce();
 		pendingGitStatusRefresh = undefined;
 		runtime.gitStatus = undefined;
+		runtime.activeTools.clear();
+		runtime.isStreaming = false;
 		runtime.duplicateExtensions = [];
 		runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
 		ctx.ui.setFooter(undefined);
@@ -237,6 +242,7 @@ export default function statusline(pi: ExtensionAPI) {
 
 	pi.on("agent_end", (_event, ctx) => {
 		runtime.isStreaming = false;
+		runtime.activeTools.clear();
 		scheduleGitStatusRefreshForContext(ctx);
 		refresh();
 	});
@@ -255,7 +261,6 @@ export default function statusline(pi: ExtensionAPI) {
 	pi.on("tool_execution_start", (event) => {
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		runtime.activeTools.set(event.toolName, currentCount + 1);
-		runtime.lastTool = event.toolName;
 		refresh();
 	});
 
@@ -264,7 +269,6 @@ export default function statusline(pi: ExtensionAPI) {
 		if (currentCount <= 1) runtime.activeTools.delete(event.toolName);
 		else runtime.activeTools.set(event.toolName, currentCount - 1);
 
-		runtime.lastCompletedTool = event.toolName;
 		scheduleGitStatusRefreshForContext(ctx);
 		refresh();
 	});
