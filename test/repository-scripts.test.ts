@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +7,8 @@ import test from "node:test";
 
 const repositoryRoot = process.cwd();
 const bumpScript = path.join(repositoryRoot, "scripts", "bump-shared-version.mjs");
+const checkScript = path.join(repositoryRoot, "scripts", "run-checks.mjs");
+const expectedChecks = ["biome:check", "check:boundaries", "test", "typecheck"];
 
 test("shared-version discovery skips publishable experimental workspaces", () => {
 	const fixture = mkdtempSync(path.join(tmpdir(), "pi-workspaces-"));
@@ -87,6 +89,69 @@ test("experimental publishing is manual-only", () => {
 	assert.match(justfile, /^publish name:/m);
 	assert.doesNotMatch(justfile, /\botp\b|--otp/);
 });
+
+test("repository checks start in parallel", () => {
+	const result = runFakeChecks();
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(traceEntries(result.trace, "start"), expectedChecks);
+	assert.deepEqual(traceEntries(result.trace, "finish"), expectedChecks);
+});
+
+test("repository checks report a failing gate after all gates run", () => {
+	const result = runFakeChecks("typecheck");
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /typecheck failed/);
+	assert.deepEqual(traceEntries(result.trace, "start"), expectedChecks);
+	assert.deepEqual(traceEntries(result.trace, "finish"), expectedChecks);
+});
+
+function runFakeChecks(failingCheck = "") {
+	const fixture = mkdtempSync(path.join(tmpdir(), "pi-checks-"));
+	try {
+		const tracePath = path.join(fixture, "trace.log");
+		const fakeNpmPath = path.join(fixture, "fake-npm.mjs");
+		writeFileSync(
+			fakeNpmPath,
+			`import fs from "node:fs";
+const check = process.argv.at(-1);
+const tracePath = process.env.FAKE_CHECK_TRACE;
+fs.appendFileSync(tracePath, \`start:\${check}\\n\`);
+const deadline = Date.now() + 2_000;
+while (fs.readFileSync(tracePath, "utf8").match(/^start:/gm)?.length !== 4) {
+	if (Date.now() > deadline) process.exit(70);
+	await new Promise((resolve) => setTimeout(resolve, 10));
+}
+fs.appendFileSync(tracePath, \`finish:\${check}\\n\`);
+if (check === process.env.FAKE_CHECK_FAILURE) process.exit(23);
+`,
+		);
+
+		const result = spawnSync(process.execPath, [checkScript], {
+			cwd: repositoryRoot,
+			encoding: "utf8",
+			env: {
+				...process.env,
+				FAKE_CHECK_FAILURE: failingCheck,
+				FAKE_CHECK_TRACE: tracePath,
+				npm_execpath: fakeNpmPath,
+			},
+		});
+		return {
+			...result,
+			trace: readFileSync(tracePath, "utf8"),
+		};
+	} finally {
+		rmSync(fixture, { recursive: true, force: true });
+	}
+}
+
+function traceEntries(trace: string, event: string) {
+	return trace
+		.split("\n")
+		.filter((line) => line.startsWith(`${event}:`))
+		.map((line) => line.slice(event.length + 1))
+		.sort();
+}
 
 function writeJson(filePath: string, value: unknown) {
 	mkdirSync(path.dirname(filePath), { recursive: true });
