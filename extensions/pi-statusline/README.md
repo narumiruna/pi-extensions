@@ -9,7 +9,7 @@
 - Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
 - Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
-- Chooses displayed data segments from the `/statusline` menu and applies each toggle immediately.
+- Shows, hides, and reorders data segments from a grouped, row-aware `/statusline` menu, applying each change immediately.
 - Creates an editable default configuration without an inactive custom palette on first session start.
 - Previews palette presets as the picker cursor moves, then applies the selection only on Enter.
 - Applies validated JSON settings edits from the `/statusline` menu immediately after an atomic save.
@@ -137,7 +137,9 @@ brand provider model thinking cwd branch tools context tokens cost time turn lin
 
 The array controls visibility and actual rendering order. Data segments must remain unique. The special `line_break` segment starts another footer row and may repeat when another segment separates each occurrence; consecutive `line_break` entries are invalid. Each row receives its own powerline start and end. `line_break` has no `segmentText` entry.
 
-Use `/statusline` → `Segments` to show or hide any data segment without editing JSON. The screen supports arrow-key navigation, Enter or Space to toggle, and Escape to close. Every successful toggle is atomically saved and applied immediately; Escape does not undo earlier toggles. Remaining segments keep their relative order, newly shown segments are appended to the final row, and leading, trailing, or newly consecutive `line_break` entries are removed. Continue using the JSON editor when you need to place segments or line breaks at exact positions.
+Use `/statusline` → `Segments` to show, hide, or reorder data segments without editing JSON. The bounded screen groups visible segments in their effective render order and hidden segments separately, labels every visible segment with the footer row derived from `line_break`, and keeps the selected segment in view. Use Up and Down to navigate, Page Up and Page Down for larger jumps, and Enter or Space to show or hide. Press `M` to enter Move mode, where ordinary Up and Down move the selected visible segment; Enter, Space, or Escape leaves Move mode. `Alt+Up` and `Alt+Down` remain quick-move accelerators, and Escape closes the normal screen. Hidden segments and first/last boundaries explain in place why a move is unavailable.
+
+Every successful toggle or move is atomically saved and applied immediately; leaving Move mode or closing the screen does not undo earlier changes. Remaining segments keep their relative order, newly shown segments are appended to the final row, and leading, trailing, or newly consecutive `line_break` entries are removed after a toggle. Reordering swaps data segments around existing `line_break` positions, so displayed row boundaries stay in place while a segment can move between rows. Continue using the JSON editor when you need to place line breaks at exact positions.
 
 An empty array hides the main powerline while still allowing extension statuses to render. `turn` is available but omitted by default.
 
@@ -244,7 +246,7 @@ from that line when the branch segment already renders it.
 | `/statusline status` | Show the settings source, path, appearance, segments, and diagnostics |
 | `/statusline help` | Show command and schema guidance |
 
-Argument-free `/statusline` requires TUI mode. The established `settings`, `status`, and `help` routes remain available for compatibility; RPC receives notifications instead of opening TUI-only controls. Unknown subcommands and trailing arguments are rejected. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. In the Segments screen, each Enter or Space toggle saves immediately, while Escape only closes the screen. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled unsaved changes leave both the previous file and effective runtime configuration unchanged.
+Argument-free `/statusline` requires TUI mode. The established `settings`, `status`, and `help` routes remain available for compatibility; RPC receives notifications instead of opening TUI-only controls. Unknown subcommands and trailing arguments are rejected. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. In the Segments screen, each Enter or Space toggle and each Move-mode or `Alt+Up`/`Alt+Down` move saves immediately. Escape leaves Move mode first and closes the normal screen; neither action rolls back saved changes. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled unsaved changes leave both the previous file and effective runtime configuration unchanged.
 
 ## 🌿 Git and activity details
 
