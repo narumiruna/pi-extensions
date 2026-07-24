@@ -5,6 +5,7 @@ import { BUILT_IN_CONFIG } from "../src/config.js";
 import {
 	buildExtensionStatusIconAliases,
 	formatCount,
+	formatExtensionStatus,
 	prContextFromStatuses,
 	renderStatusline,
 	type StarshipRuntimeSnapshot,
@@ -201,6 +202,71 @@ test("activity handles parallel active tools, thinking, completed, and idle", ()
 	assert.match(text({ isStreaming: true, lastCompletedTool: undefined }), /thinking/);
 	assert.match(text({ lastCompletedTool: "bash" }), /completed bash/);
 	assert.match(text({ lastCompletedTool: undefined }), /idle/);
+});
+
+test("extension status icons match arbitrary exact keys and explicit namespace wildcards", () => {
+	const aliases = new Map<string, string[]>();
+
+	assert.equal(
+		formatExtensionStatus("third_party/key", "running", { "third_party/key": "🧩" }, aliases),
+		"🧩 running",
+	);
+	assert.equal(
+		formatExtensionStatus("foo:server", "running", { "foo:*": "🧪", "foo:server": "🖥️" }, aliases),
+		"🖥️ running",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:server:worker",
+			"running",
+			{ "foo:*": "🧪", "foo:server:*": "⚙️" },
+			aliases,
+		),
+		"⚙️ running",
+	);
+	assert.equal(formatExtensionStatus("foo:worker", "running", { "foo:*": "" }, aliases), "running");
+	const packageAliases = buildExtensionStatusIconAliases([{ packageName: "@vendor/pi-foo" }]);
+	assert.equal(
+		formatExtensionStatus(
+			"foo:worker",
+			"running",
+			{ "foo:*": "WILDCARD", "@vendor/pi-foo": "PACKAGE" },
+			packageAliases,
+		),
+		"WILDCARD running",
+	);
+	for (const key of ["foo", "foobar", "foo/server"]) {
+		assert.equal(formatExtensionStatus(key, "running", { "foo:*": "🧪" }, aliases), "🔌 running");
+	}
+});
+
+test("extension status icons bridge canonical and legacy sync and retry keys", () => {
+	const aliases = new Map<string, string[]>();
+
+	assert.equal(formatExtensionStatus("sync", "pushing", {}, aliases), "🔄 pushing");
+	assert.equal(formatExtensionStatus("retry", "retrying", {}, aliases), "🔁 retrying");
+	assert.equal(formatExtensionStatus("pisync", "pushing", {}, aliases), "🔄 pushing");
+	assert.equal(
+		formatExtensionStatus("unknown-error-retry", "retrying", {}, aliases),
+		"🔁 retrying",
+	);
+	assert.equal(
+		formatExtensionStatus("sync", "pushing", { pisync: "CUSTOM-SYNC" }, aliases),
+		"CUSTOM-SYNC pushing",
+	);
+	assert.equal(
+		formatExtensionStatus("pisync", "pushing", { sync: "NEW-SYNC" }, aliases),
+		"NEW-SYNC pushing",
+	);
+	assert.equal(
+		formatExtensionStatus(
+			"retry",
+			"retrying",
+			{ "unknown-error-retry": "CUSTOM-RETRY", retry: "NEW-RETRY" },
+			aliases,
+		),
+		"NEW-RETRY retrying",
+	);
 });
 
 test("extension status icons honor exact keys, aliases, suppression, defaults, and fallback", () => {

@@ -38,7 +38,12 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.goal, "🎯");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.usage, "📊");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons["codex-usage"], "📊");
-	assert.deepEqual(JSON.parse(DEFAULT_STATUSLINE_DOCUMENT), {
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.accounts, "👤");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons["google-genai"], "✨");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.retry, "🔁");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.sync, "🔄");
+	const defaultDocument = JSON.parse(DEFAULT_STATUSLINE_DOCUMENT);
+	assert.deepEqual(defaultDocument, {
 		palettePreset: "tokyo-night",
 		density: "compact",
 		separator: "none",
@@ -56,8 +61,25 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 			"time",
 		],
 		segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
-		extensionStatusIcons: DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons,
+		extensionStatusIcons: {
+			accounts: "👤",
+			caffeinate: "💊",
+			"chrome-devtools": "🌐",
+			firecrawl: "🔥",
+			"github-pr": "🔎",
+			goal: "🎯",
+			"google-genai": "✨",
+			lsp: "🧰",
+			"plan-mode": "📝",
+			retry: "🔁",
+			subagents: "🧑‍🤝‍🧑",
+			sync: "🔄",
+			usage: "📊",
+		},
 	});
+	assert.equal(Object.hasOwn(defaultDocument.extensionStatusIcons, "pisync"), false);
+	assert.equal(Object.hasOwn(defaultDocument.extensionStatusIcons, "unknown-error-retry"), false);
+	assert.equal(Object.hasOwn(defaultDocument.extensionStatusIcons, "codex-usage"), false);
 	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"palette"'), false);
 	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"segmentText"'), true);
 	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"extensionStatusIcons"'), true);
@@ -90,6 +112,44 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.equal(iconOnly.config.palettePreset, "tokyo-night");
 	assert.deepEqual(iconOnly.config.segments, DEFAULT_STATUSLINE_CONFIG.segments);
 	assert.equal(iconOnly.config.extensionStatusIcons.goal, "◎");
+});
+
+test("legacy status icon keys inherit into canonical keys without rewriting settings", () => {
+	const legacyOnly = normalizeStatuslineConfig({
+		extensionStatusIcons: { pisync: "OLD-SYNC", "unknown-error-retry": "OLD-RETRY" },
+	});
+	assert.equal(legacyOnly.config.extensionStatusIcons.sync, "OLD-SYNC");
+	assert.equal(legacyOnly.config.extensionStatusIcons.retry, "OLD-RETRY");
+
+	const suppressed = normalizeStatuslineConfig({
+		extensionStatusIcons: { pisync: "", "unknown-error-retry": "" },
+	});
+	assert.equal(suppressed.config.extensionStatusIcons.sync, "");
+	assert.equal(suppressed.config.extensionStatusIcons.retry, "");
+
+	const canonicalWins = normalizeStatuslineConfig({
+		extensionStatusIcons: {
+			pisync: "OLD-SYNC",
+			sync: "NEW-SYNC",
+			"unknown-error-retry": "OLD-RETRY",
+			retry: "NEW-RETRY",
+		},
+	});
+	assert.equal(canonicalWins.config.extensionStatusIcons.sync, "NEW-SYNC");
+	assert.equal(canonicalWins.config.extensionStatusIcons.pisync, "NEW-SYNC");
+	assert.equal(canonicalWins.config.extensionStatusIcons.retry, "NEW-RETRY");
+	assert.equal(canonicalWins.config.extensionStatusIcons["unknown-error-retry"], "NEW-RETRY");
+
+	const directory = mkdtempSync(join(tmpdir(), "pi-statusline-status-icon-migration-"));
+	const settingsPath = join(directory, "pi-statusline.json");
+	const document = '{"extensionStatusIcons":{"pisync":"CUSTOM","future":"🧪"}}\n';
+	try {
+		const saved = saveStatuslineSettingsDocument(settingsPath, document);
+		assert.equal(saved.config.extensionStatusIcons.sync, "CUSTOM");
+		assert.equal(readFileSync(settingsPath, "utf8"), document);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("a named preset without custom colors prepares that preset as the custom starting point", () => {

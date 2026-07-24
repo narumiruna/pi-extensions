@@ -14,6 +14,12 @@ export interface ExtensionStatusRuntime {
 }
 
 const STATUSLINE_KEY = "statusline";
+const COMPATIBLE_STATUS_ICON_KEYS: Readonly<Record<string, string>> = {
+	retry: "unknown-error-retry",
+	sync: "pisync",
+	"unknown-error-retry": "retry",
+	pisync: "sync",
+};
 const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
 function extensionStatusSeparator(config: StatuslineConfig, theme: Theme): string {
 	return powerlineExtensionSeparator(theme, config.palettePreset);
@@ -69,10 +75,30 @@ function extensionStatusIcon(
 	extensionStatusIconAliases: ExtensionStatusIconAliasMap,
 ) {
 	if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key];
+	const namespaceIcon = configuredNamespaceIcon(key, configuredIcons);
+	if (namespaceIcon !== undefined) return namespaceIcon;
+	const compatibleKey = COMPATIBLE_STATUS_ICON_KEYS[key];
+	if (compatibleKey && Object.hasOwn(configuredIcons, compatibleKey)) {
+		return configuredIcons[compatibleKey];
+	}
 	for (const alias of extensionStatusAliasesForKey(key, extensionStatusIconAliases)) {
 		if (Object.hasOwn(configuredIcons, alias)) return configuredIcons[alias];
 	}
 	return leadingIcon ?? DEFAULT_EXTENSION_STATUS_ICONS[key] ?? "🔌";
+}
+
+function configuredNamespaceIcon(
+	key: string,
+	configuredIcons: Readonly<Record<string, string>>,
+): string | undefined {
+	let match: { baseLength: number; icon: string } | undefined;
+	for (const [selector, icon] of Object.entries(configuredIcons)) {
+		if (!selector.endsWith(":*")) continue;
+		const base = selector.slice(0, -2);
+		if (!base || !key.startsWith(`${base}:`)) continue;
+		if (!match || base.length > match.baseLength) match = { baseLength: base.length, icon };
+	}
+	return match?.icon;
 }
 
 function extensionStatusAliasesForKey(

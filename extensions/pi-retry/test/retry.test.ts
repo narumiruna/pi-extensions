@@ -130,7 +130,8 @@ test("disabled Pi retry policy suppresses retry UI for matched errors", async (t
 	);
 
 	assert.ok(result && typeof result === "object" && "message" in result);
-	assert.equal(context.statuses.get("unknown-error-retry"), undefined);
+	assert.equal(context.statuses.get("retry"), undefined);
+	assert.equal(context.statuses.has("unknown-error-retry"), false);
 	assert.equal(context.notifications.length, 1);
 });
 
@@ -162,7 +163,8 @@ test("disabled Pi retry policy does not abort a stalled provider request", async
 	await sessionShutdown({}, context.ctx);
 
 	assert.equal(abortCount, 0);
-	assert.equal(context.statuses.get("unknown-error-retry"), undefined);
+	assert.equal(context.statuses.get("retry"), undefined);
+	assert.equal(context.statuses.has("unknown-error-retry"), false);
 });
 
 test("a malformed settings update preserves the last known disabled policy", async (t) => {
@@ -196,7 +198,8 @@ test("a malformed settings update preserves the last known disabled policy", asy
 	assert.equal(abortCount, 0);
 	assert.equal(context.notifications.length, 2);
 	assert.match(context.notifications[1]?.message ?? "", /preserving the last known policy/);
-	assert.equal(context.statuses.get("unknown-error-retry"), undefined);
+	assert.equal(context.statuses.get("retry"), undefined);
+	assert.equal(context.statuses.has("unknown-error-retry"), false);
 });
 
 test("a partial settings failure cannot replace a known enabled policy", async () => {
@@ -264,8 +267,55 @@ test("before_provider_request refreshes an injected retry policy", async () => {
 	await beforeProviderRequest({}, context.ctx);
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	assert.equal(abortCount, 1);
-	assert.equal(context.statuses.get("unknown-error-retry"), "retrying");
+	assert.equal(context.statuses.get("retry"), "retrying");
+	assert.equal(context.statuses.has("unknown-error-retry"), false);
 	await sessionShutdown({}, context.ctx);
+	assert.equal(context.statuses.get("retry"), undefined);
+});
+
+test("retry transient, watchdog, and shutdown status updates use only the canonical key", async () => {
+	const mock = createMockPi();
+	retry(mock.pi, { readRetryPolicy: () => ({ enabled: true, errors: [] }) });
+	const flag = mock.flags.get("retry-stall-timeout-ms");
+	assert.ok(flag);
+	flag.value = "5";
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const beforeProviderRequest = mock.events.get("before_provider_request")?.[0];
+	const afterProviderResponse = mock.events.get("after_provider_response")?.[0];
+	const agentEnd = mock.events.get("agent_end")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(beforeProviderRequest);
+	assert.ok(afterProviderResponse);
+	assert.ok(agentEnd);
+	assert.ok(sessionShutdown);
+
+	const context = createMockContext({ hasUI: true, isIdle: () => false });
+	const updates: Array<[string, string | undefined]> = [];
+	const mutableContext = context.ctx as unknown as {
+		ui: { setStatus(key: string, value: string | undefined): void };
+	};
+	const setStatus = mutableContext.ui.setStatus.bind(mutableContext.ui);
+	mutableContext.ui.setStatus = (key, value) => {
+		updates.push([key, value]);
+		setStatus(key, value);
+	};
+
+	await sessionStart({}, context.ctx);
+	await beforeProviderRequest({}, context.ctx);
+	await afterProviderResponse({}, context.ctx);
+	await agentEnd({}, context.ctx);
+	await beforeProviderRequest({}, context.ctx);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	await sessionShutdown({}, context.ctx);
+
+	assert.deepEqual(updates, [
+		["retry", undefined],
+		["retry", "receiving"],
+		["retry", undefined],
+		["retry", "retrying"],
+		["retry", undefined],
+	]);
 });
 
 test("retry policy read failures warn once and preserve the last known policy", async () => {
