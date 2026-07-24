@@ -9,6 +9,7 @@ The Pi guidance was last reviewed against the latest published
 
 - [Extension API](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md)
 - [Package format](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
+- [RPC mode](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md)
 - [TUI components](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/tui.md)
 
 Review this section when the repository updates its Pi dependencies or latest-release CI target.
@@ -137,7 +138,8 @@ lines for responsibility-based decomposition rather than mechanical splitting.
 
 ### Slash commands and menus
 
-A command's default shape depends on its product role:
+A command's default shape depends on its product role. A manager can be menu-first without being
+menu-only:
 
 - A multi-action manager extension **SHOULD** expose one primary slash command whose no-argument form
   opens a current-state menu. Do not mirror menu actions into textual subcommands by default.
@@ -145,22 +147,33 @@ A command's default shape depends on its product role:
   such as `/btw <question>` or `/goal <goal>`; a supported non-TUI, RPC, or automation workflow needs
   a deterministic route; an existing public interface requires compatibility; or the command is a
   frequent, single, unambiguous primary action.
-- A passive extension MAY expose no command. A menu-only manager MAY reject all arguments explicitly.
+- A passive extension MAY expose no command. A manager with none of those direct-route needs MAY be
+  menu-only and reject all arguments explicitly.
 - The primary command **SHOULD** usually derive from the unscoped package name by removing `pi-`.
   Preserve an established or clearer product name when compatibility or meaning outweighs symmetry.
-- **MUST:** Treat every accepted argument or subcommand as a public interface: document it, provide
-  `getArgumentCompletions` for known values, reject unknown input clearly, preserve applicable safety
-  checks, and test its supported TUI and non-TUI behavior. **Verification:** `Test` of direct command
-  routes plus `Review` of documentation, completion, compatibility, and safety behavior.
+- **MUST:** Treat every accepted argument or subcommand as a public interface: document its supported
+  modes, provide `getArgumentCompletions` for known routes and values, reject unknown or trailing input
+  instead of silently ignoring it, preserve applicable safety checks, and test every claimed TUI and
+  non-TUI behavior. **Verification:** `Test` of exact direct-command routes and claimed modes plus
+  `Review` of documentation, completion, compatibility, and safety behavior.
+- **MUST:** Do not remove an established or documented route merely to make a manager menu-first.
+  Preserve it as a compatibility route unless an explicitly approved breaking change includes its
+  migration path, release documentation, and updated compatibility tests. **Verification:** `Test` of
+  retained routes or intentionally changed behavior plus `Review` of breaking-change approval,
+  migration, and release documentation.
 - A main menu **SHOULD** show current state and the most relevant next actions. Prioritize current
   session context and label cross-provider, cross-workspace, destructive, or externally visible
   effects explicitly.
 - Destructive actions **SHOULD** show an exact summary and ask for confirmation. Cancellation should
   leave state unchanged.
 
-- **MUST:** Provide a safe non-TUI result for every command that can run outside the TUI: execute a
-  direct operation, return status/help through a supported UI channel, or clearly reject the mode.
-  **Verification:** `Test` for supported command modes plus `Review` of the fallback.
+- **MUST:** Provide safe behavior in every non-TUI mode a command can receive: execute a direct
+  operation, expose status/help through a channel supported by that mode, or reject before entering
+  TUI-only work. Claim a mode as supported only when its result or rejection is observable there.
+  `ctx.hasUI` is true in TUI and RPC modes, where `ctx.ui.notify()` is observable, and false in print
+  and JSON modes, where UI methods are no-ops; a notify-only path therefore does not provide a print
+  or JSON result. **Verification:** `Test` for each claimed command mode plus `Review` of every
+  unsupported-mode fallback.
 
 Use `ctx.ui.select()` for a small action menu. Use `SelectList` for richer selection and
 `SettingsList` for editable settings; do not repeatedly reopen `ctx.ui.select()` after each toggle,
@@ -219,9 +232,11 @@ fragile regular expressions. Until then, label the real verification method hone
       installable.
 - [ ] Add the thin `src/index.ts` forwarder and canonical `pi.extensions` manifest entry.
 - [ ] Separate factory registration from session-owned startup and idempotent shutdown cleanup.
-- [ ] Choose the primary command and no-argument behavior from the extension's product role; add
-      direct routes only for a concrete need, then document, complete, reject, and test them as public
-      interfaces.
+- [ ] Choose the primary command and no-argument behavior from the extension's product role; use a
+      menu-first manager unless a concrete reason supports another shape, and add direct routes only
+      for concrete payload, automation, compatibility, or frequent-action needs.
+- [ ] Document accepted command routes and modes, complete known values, reject unknown or trailing
+      input, preserve safety checks, and test each claimed execution mode.
 - [ ] Follow `docs/extension-settings.md` for every user or project setting.
 - [ ] Bound tool output, cancellation, state persistence, and file mutation where applicable.
 - [ ] Document installation, behavior, settings, security, limitations, and source responsibilities.
@@ -233,6 +248,8 @@ fragile regular expressions. Until then, label the real verification method hone
 - [ ] Identify which sections the change touches; do not expand an unrelated change into a full
       package migration.
 - [ ] Apply every relevant MUST and review SHOULD deviations near their owning package.
+- [ ] For command-surface changes, preserve established routes or explicitly own an approved breaking
+      migration, and test every claimed execution mode.
 - [ ] Update focused tests and run the verification method named by each relevant MUST.
 - [ ] Run `npm run check`; add pack or Pi runtime smokes when metadata or loading changed.
 - [ ] Report any skipped check, accepted exception, or follow-up validator opportunity in the change
