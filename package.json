@@ -16,7 +16,7 @@
 		"check:boundaries": "node ./scripts/check-extension-boundaries.mjs",
 		"typecheck": "npm --workspaces run typecheck",
 		"test": "node ./scripts/run-tests.mjs",
-		"check": "npm run biome:check && npm run check:boundaries && npm run typecheck && npm test",
+		"check": "node ./scripts/run-checks.mjs",
 		"pack:btw": "npm --workspace @narumitw/pi-btw pack --dry-run",
 		"pack:caffeinate": "npm --workspace @narumitw/pi-caffeinate pack --dry-run",
 		"pack:chrome-devtools": "npm --workspace @narumitw/pi-chrome-devtools pack --dry-run",
