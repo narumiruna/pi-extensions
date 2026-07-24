@@ -31,7 +31,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"smol-toml": "^1.7.0"
+		"smol-toml": "^1.7.0",
+		"yaml": "^2.9.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

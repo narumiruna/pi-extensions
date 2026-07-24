@@ -40,6 +40,17 @@ export interface StyledChunk {
 	style?: TextStyle;
 }
 
+export interface FillChunk {
+	type: "fill";
+	pattern: readonly StyledChunk[];
+}
+
+export type LayoutChunk = StyledChunk | FillChunk;
+
+export function isFillChunk(chunk: LayoutChunk): chunk is FillChunk {
+	return "type" in chunk && chunk.type === "fill";
+}
+
 export type ColorPalette = Readonly<Record<string, string>>;
 
 const NAMED_COLORS = new Set<NamedColor>([
@@ -176,10 +187,11 @@ interface ResolvedStyle extends Omit<TextStyle, "foreground" | "background"> {
 	background?: Exclude<ColorSpec, { kind: "previous" }>;
 }
 
-export function renderChunksToAnsi(chunks: readonly StyledChunk[]): string {
+export function renderChunksToAnsi(chunks: readonly LayoutChunk[]): string {
 	const runs: Array<{ text: string; style: ResolvedStyle }> = [];
 	let previous: ResolvedStyle | undefined;
 	for (const chunk of chunks) {
+		if (isFillChunk(chunk)) continue;
 		const style = resolveStyle(chunk.style, previous);
 		const last = runs.at(-1);
 		if (chunk.text && last && stylesEqual(last.style, style)) last.text += chunk.text;

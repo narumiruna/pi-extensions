@@ -1,4 +1,10 @@
-import { type ColorPalette, parseStyle, type StyledChunk, type TextStyle } from "./style.js";
+import {
+	type ColorPalette,
+	isFillChunk,
+	type LayoutChunk,
+	parseStyle,
+	type TextStyle,
+} from "./style.js";
 
 export type FormatNode =
 	| { type: "text"; value: string }
@@ -7,7 +13,7 @@ export type FormatNode =
 	| { type: "conditional"; children: FormatNode[] };
 
 export type StyleNode = { type: "text"; value: string } | { type: "variable"; name: string };
-export type FormatValue = string | readonly StyledChunk[] | undefined;
+export type FormatValue = string | readonly LayoutChunk[] | undefined;
 
 export interface RenderFormatOptions {
 	variables: Readonly<Record<string, FormatValue>>;
@@ -191,7 +197,7 @@ export function styleVariables(nodes: readonly FormatNode[]): Set<string> {
 export function renderFormat(
 	nodes: readonly FormatNode[],
 	options: RenderFormatOptions,
-): StyledChunk[] {
+): LayoutChunk[] {
 	return renderNodes(nodes, options, undefined);
 }
 
@@ -199,8 +205,8 @@ function renderNodes(
 	nodes: readonly FormatNode[],
 	options: RenderFormatOptions,
 	inheritedStyle: TextStyle | undefined,
-): StyledChunk[] {
-	const chunks: StyledChunk[] = [];
+): LayoutChunk[] {
+	const chunks: LayoutChunk[] = [];
 	for (const node of nodes) {
 		switch (node.type) {
 			case "text":
@@ -235,13 +241,20 @@ function ownValue<T>(record: Readonly<Record<string, T>> | undefined, key: strin
 	return record && Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function chunksForValue(value: FormatValue, inheritedStyle: TextStyle | undefined): StyledChunk[] {
+function chunksForValue(value: FormatValue, inheritedStyle: TextStyle | undefined): LayoutChunk[] {
 	if (value === undefined) return [];
 	if (typeof value === "string") return [{ text: value, style: inheritedStyle }];
-	return value.map((chunk) => ({
-		...chunk,
-		style: chunk.style ?? inheritedStyle,
-	}));
+	return value.map((chunk) =>
+		isFillChunk(chunk)
+			? {
+					type: "fill" as const,
+					pattern: chunk.pattern.map((part) => ({
+						...part,
+						style: part.style ?? inheritedStyle,
+					})),
+				}
+			: { ...chunk, style: chunk.style ?? inheritedStyle },
+	);
 }
 
 function conditionalVisible(
@@ -251,7 +264,9 @@ function conditionalVisible(
 	for (const variable of formatVariables(nodes)) {
 		const value = ownValue(variables, variable);
 		if (
-			typeof value === "string" ? value.length > 0 : value?.some((chunk) => chunk.text.length > 0)
+			typeof value === "string"
+				? value.length > 0
+				: value?.some((chunk) => isFillChunk(chunk) || chunk.text.length > 0)
 		) {
 			return true;
 		}

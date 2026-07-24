@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { BUILT_IN_CONFIG } from "../src/config.js";
+import { parseFormat } from "../src/format/formatter.js";
 import {
 	buildExtensionStatusIconAliases,
 	formatCount,
@@ -268,6 +269,55 @@ test("git worktree renders linked worktree values and stays empty for the primar
 		"pi-extensions-feature:/work/pi-extensions-feature",
 	);
 	assert.equal(renderStatusline(config, fixture({ gitWorktree: undefined })).ansi, "");
+});
+
+test("first-wave workspace modules render documented snapshot variables", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	const names = [
+		"package",
+		"nodejs",
+		"python",
+		"rust",
+		"golang",
+		"bun",
+		"deno",
+		"mise",
+		"direnv",
+		"conda",
+		"pixi",
+		"nix_shell",
+		"guix_shell",
+		"docker_context",
+		"kubernetes",
+		"terraform",
+		"aws",
+		"gcloud",
+		"azure",
+		"openstack",
+		"os",
+		"container",
+		"hostname",
+		"username",
+	] as const;
+	config.format = names.map((name) => `$${name}`).join("|");
+	config.formatAst = parseFormat(config.format);
+	config.modules.os.disabled = false;
+	for (const name of names) {
+		config.modules[name].format = name === "package" || name === "nodejs" ? "$version" : "$symbol";
+		config.modules[name].formatAst = parseFormat(config.modules[name].format);
+	}
+	const workspace: Record<string, Record<string, string>> = {};
+	for (const [index, name] of names.entries()) {
+		workspace[name] =
+			name === "package" || name === "nodejs" ? { version: `v${index + 1}.0.0` } : {};
+	}
+	const rendered = stripAnsi(
+		renderStatusline(config, fixture({ workspace: { modules: workspace } }), 400).ansi,
+	);
+	assert.match(rendered, /v1\.0\.0/);
+	assert.match(rendered, /v2\.0\.0/);
+	assert.match(rendered, /📦|||||🍞|🦕|mise|direnv|🅒|🧚||🐃||☸|💠|☁|󰠅|⬢|🌐/u);
+	assert.equal(rendered.split("|").length, names.length);
 });
 
 test("activity handles parallel active tools, thinking, completed, and idle", () => {

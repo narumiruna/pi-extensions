@@ -82,6 +82,60 @@ test("Git modules use Starship display order", () => {
 	]);
 });
 
+test("first-wave modules are registered in deterministic domain order", () => {
+	for (const name of [
+		"package",
+		"nodejs",
+		"python",
+		"rust",
+		"golang",
+		"bun",
+		"deno",
+		"mise",
+		"direnv",
+		"conda",
+		"pixi",
+		"nix_shell",
+		"guix_shell",
+		"docker_context",
+		"kubernetes",
+		"terraform",
+		"aws",
+		"gcloud",
+		"azure",
+		"openstack",
+		"os",
+		"container",
+		"hostname",
+		"username",
+		"fill",
+	] as const) {
+		assert.ok(MODULE_NAMES.includes(name), name);
+	}
+	assert.ok(MODULE_NAMES.indexOf("package") < MODULE_NAMES.indexOf("nodejs"));
+	assert.ok(MODULE_NAMES.indexOf("openstack") < MODULE_NAMES.indexOf("os"));
+	assert.ok(MODULE_NAMES.indexOf("fill") < MODULE_NAMES.indexOf("extension_status"));
+});
+
+test("catalog-owned module options normalize values and diagnose invalid input", () => {
+	const valid = loadFromText(
+		`format = '$package$hostname'\n\n[package]\nversion_format = 'v$raw'\n\n[nodejs]\ndetect_files = ['package.json']\ndetect_extensions = ['js', 'ts']\n\n[hostname]\nssh_only = false\ntrim_at = '.'\naliases = { workstation = 'dev' }\n`,
+	);
+	assert.equal(valid.config.modules.package.options.version_format, "v$raw");
+	assert.deepEqual(valid.config.modules.nodejs.options.detect_files, ["package.json"]);
+	assert.equal(valid.config.modules.hostname.options.ssh_only, false);
+	assert.deepEqual(valid.config.modules.hostname.options.aliases, { workstation: "dev" });
+	assert.deepEqual(valid.diagnostics, []);
+
+	const invalid = loadFromText(
+		`format = '$package'\n\n[package]\nversion_format = 7\nfuture = true\n\n[nodejs]\ndetect_files = ['ok', 3]\n`,
+	);
+	assert.match(
+		invalid.diagnostics.map((item) => `${item.path}: ${item.message}`).join("\n"),
+		/package\.version_format.*string|package\.future|nodejs\.detect_files/iu,
+	);
+});
+
 test("missing settings are atomically initialized from the readable built-in example", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-config-"));
 	const path = join(root, CONFIG_FILE_NAME);
@@ -326,6 +380,17 @@ test("legacy pi-statusline files and preset environment never affect config", ()
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+function loadFromText(raw: string) {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-config-text-"));
+	const path = join(root, CONFIG_FILE_NAME);
+	try {
+		writeFileSync(path, raw);
+		return loadStarshipConfig(path);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
 
 function requireDirectory(path: string): string[] {
 	return readdirSync(path);

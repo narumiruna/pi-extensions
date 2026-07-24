@@ -18,6 +18,7 @@ import {
 } from "./format/formatter.js";
 import { type ColorPalette, isValidStyle, parseColor } from "./format/style.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
+import type { ModuleOptionSchema } from "./modules/types.js";
 
 export const CONFIG_FILE_NAME = "pi-starship.toml";
 export { MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
@@ -26,12 +27,20 @@ const MODULE_CONTENT_VARIABLES = Object.fromEntries(
 	MODULE_DEFINITIONS.map((definition) => [definition.name, definition.variables]),
 ) as Record<ModuleName, readonly string[]>;
 
+export type ModuleOptionValue =
+	| string
+	| boolean
+	| number
+	| readonly string[]
+	| Readonly<Record<string, string>>;
+
 export interface ModuleConfig {
 	format: string;
 	formatAst: FormatNode[];
 	symbol: string;
 	style: string;
 	disabled: boolean;
+	options: Record<string, ModuleOptionValue>;
 }
 
 export interface ExtensionStatusConfig {
@@ -103,11 +112,17 @@ const BUILT_IN_PALETTE = {
 };
 
 const BUILT_IN_MODULES = Object.fromEntries(
-	MODULE_DEFINITIONS.map(({ name, defaults }) => [
+	MODULE_DEFINITIONS.map(({ name, defaults, options }) => [
 		name,
 		{
 			...defaults,
 			formatAst: parseFormat(defaults.format),
+			options: Object.fromEntries(
+				Object.entries(options ?? {}).map(([key, schema]) => [
+					key,
+					cloneOptionValue(schema.default),
+				]),
+			),
 		},
 	]),
 ) as Record<ModuleName, ModuleConfig>;
@@ -339,7 +354,9 @@ function normalizeModule(
 	config: StarshipConfig,
 	diagnostics: ConfigDiagnostic[],
 ) {
-	const known = new Set(["format", "symbol", "style", "disabled"]);
+	const definition = MODULE_DEFINITIONS.find((candidate) => candidate.name === name);
+	const optionSchemas: Readonly<Record<string, ModuleOptionSchema>> = definition?.options ?? {};
+	const known = new Set(["format", "symbol", "style", "disabled", ...Object.keys(optionSchemas)]);
 	if (name === "extension_status") {
 		known.add("separator");
 		known.add("max_statuses");
@@ -377,6 +394,12 @@ function normalizeModule(
 		if (typeof value.disabled !== "boolean") {
 			diagnostics.push(typeDiagnostic(`${name}.disabled`, "boolean"));
 		} else module.disabled = value.disabled;
+	}
+	for (const [key, schema] of Object.entries(optionSchemas)) {
+		if (value[key] === undefined) continue;
+		const normalized = normalizeModuleOption(value[key], schema);
+		if (normalized.ok) module.options[key] = normalized.value;
+		else diagnostics.push(diagnostic("warning", `${name}.${key}`, normalized.message));
 	}
 	if (name !== "extension_status") return;
 	if (value.separator !== undefined) {
@@ -494,6 +517,7 @@ function cloneBuiltInConfig(): StarshipConfig {
 				{
 					...BUILT_IN_CONFIG.modules[name],
 					formatAst: structuredClone(BUILT_IN_CONFIG.modules[name].formatAst),
+					options: structuredClone(BUILT_IN_CONFIG.modules[name].options),
 				},
 			]),
 		) as Record<ModuleName, ModuleConfig>,
@@ -538,6 +562,61 @@ function validateStyleVariables(
 			),
 		);
 	}
+}
+
+function normalizeModuleOption(
+	value: unknown,
+	schema: ModuleOptionSchema,
+): { ok: true; value: ModuleOptionValue } | { ok: false; message: string } {
+	switch (schema.kind) {
+		case "string":
+			return typeof value === "string" && (schema.allowEmpty !== false || value.length > 0)
+				? { ok: true, value }
+				: { ok: false, message: "Expected a non-empty string; using the default value" };
+		case "boolean":
+			return typeof value === "boolean"
+				? { ok: true, value }
+				: { ok: false, message: "Expected boolean; using the default value" };
+		case "integer":
+			return typeof value === "number" &&
+				Number.isInteger(value) &&
+				value >= schema.minimum &&
+				value <= schema.maximum
+				? { ok: true, value }
+				: {
+						ok: false,
+						message: `Expected an integer from ${schema.minimum} through ${schema.maximum}; using the default value`,
+					};
+		case "string-array": {
+			if (
+				!Array.isArray(value) ||
+				value.some(
+					(item) =>
+						typeof item !== "string" ||
+						item.length === 0 ||
+						(!schema.allowNegative && item.startsWith("!")),
+				)
+			) {
+				return {
+					ok: false,
+					message: "Expected an array of valid strings; using the default value",
+				};
+			}
+			return { ok: true, value: [...value] as string[] };
+		}
+		case "string-map": {
+			if (!isRecord(value) || Object.values(value).some((item) => typeof item !== "string")) {
+				return { ok: false, message: "Expected a table of strings; using the default value" };
+			}
+			const result: Record<string, string> = {};
+			for (const [key, item] of Object.entries(value)) setOwn(result, key, item as string);
+			return { ok: true, value: result };
+		}
+	}
+}
+
+function cloneOptionValue(value: ModuleOptionValue): ModuleOptionValue {
+	return typeof value === "object" ? structuredClone(value) : value;
 }
 
 function setOwn<T>(record: Record<string, T>, key: string, value: T) {

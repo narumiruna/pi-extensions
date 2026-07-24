@@ -6,7 +6,7 @@ export {
 export { prContextFromStatuses } from "./git/branch.js";
 export { formatCount } from "./helpers.js";
 export { shortenModel } from "./model.js";
-export { renderStatusline } from "./render.js";
+export { reachableModuleRequirements, renderStatusline } from "./render.js";
 export type {
 	ExtensionStatusIconAliasMap,
 	GitBranchSnapshot,
@@ -18,4 +18,5 @@ export type {
 	GitWorktreeSnapshot,
 	RenderedStatusline,
 	StarshipRuntimeSnapshot,
+	WorkspaceSnapshot,
 } from "./types.js";
