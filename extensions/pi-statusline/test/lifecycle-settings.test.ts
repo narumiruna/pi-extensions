@@ -37,7 +37,7 @@ function createFooter(factory: FooterFactory) {
 	);
 }
 
-test("session start creates the complete default statusline settings", async () => {
+test("session start creates the concise default statusline settings", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-lifecycle-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;

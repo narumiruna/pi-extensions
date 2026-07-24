@@ -10,13 +10,14 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { TOKYO_NIGHT_SEGMENT_PALETTE } from "./presets/tokyo-night.js";
+import { segmentPaletteForPreset } from "./presets/index.js";
 import {
 	type ConfigSegmentName,
 	DENSITIES,
 	LINE_BREAK_SEGMENT_NAME,
 	PALETTE_NAMES,
 	PALETTE_PRESET_NAMES,
+	type PaletteName,
 	SEGMENT_NAMES,
 	SEPARATOR_NAMES,
 	type SegmentName,
@@ -58,7 +59,7 @@ const DEFAULT_SEGMENTS: SegmentName[] = [
 
 export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
 	palettePreset: "tokyo-night",
-	palette: cloneSegmentPalette(TOKYO_NIGHT_SEGMENT_PALETTE),
+	palette: segmentPaletteForPreset("tokyo-night"),
 	density: "compact",
 	separator: "none",
 	segments: DEFAULT_SEGMENTS,
@@ -79,7 +80,18 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
 	extensionStatusIcons: DEFAULT_EXTENSION_STATUS_ICONS,
 };
 
-export const DEFAULT_STATUSLINE_DOCUMENT = `${JSON.stringify(DEFAULT_STATUSLINE_CONFIG, null, "\t")}\n`;
+const DEFAULT_STATUSLINE_DOCUMENT_CONFIG = {
+	palettePreset: DEFAULT_STATUSLINE_CONFIG.palettePreset,
+	density: DEFAULT_STATUSLINE_CONFIG.density,
+	separator: DEFAULT_STATUSLINE_CONFIG.separator,
+	segments: DEFAULT_SEGMENTS,
+} satisfies Pick<StatuslineConfig, "palettePreset" | "density" | "separator" | "segments">;
+
+export const DEFAULT_STATUSLINE_DOCUMENT = `${JSON.stringify(
+	DEFAULT_STATUSLINE_DOCUMENT_CONFIG,
+	null,
+	"\t",
+)}\n`;
 
 export interface StatuslineConfigDiagnostic {
 	severity: "warning" | "error";
@@ -132,8 +144,6 @@ export function normalizeStatuslineConfig(value: unknown): {
 			diagnostics: [invalidDiagnostic("", "Settings must contain a JSON object", "error")],
 		};
 	}
-	config.palette = {};
-
 	const knownRoot = new Set([
 		"palettePreset",
 		"palette",
@@ -149,6 +159,9 @@ export function normalizeStatuslineConfig(value: unknown): {
 
 	normalizePalette(value.palette, config, diagnostics);
 	normalizeEnum(value, "palettePreset", PALETTE_PRESET_NAMES, config, diagnostics);
+	if (!isRecord(value.palette) && isPaletteName(config.palettePreset)) {
+		config.palette = segmentPaletteForPreset(config.palettePreset);
+	}
 	normalizeEnum(value, "density", DENSITIES, config, diagnostics);
 	normalizeEnum(value, "separator", SEPARATOR_NAMES, config, diagnostics);
 
@@ -445,6 +458,7 @@ function normalizePalette(
 	}
 
 	const palette: SegmentPalette = {};
+	config.palette = palette;
 	for (const [name, colors] of Object.entries(value)) {
 		const path = `palette.${name}`;
 		if (!isSegmentName(name)) {
@@ -539,6 +553,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isConfigSegmentName(value: string): value is ConfigSegmentName {
 	return value === LINE_BREAK_SEGMENT_NAME || isSegmentName(value);
+}
+
+function isPaletteName(value: StatuslineConfig["palettePreset"]): value is PaletteName {
+	return (PALETTE_NAMES as readonly StatuslineConfig["palettePreset"][]).includes(value);
 }
 
 function isSegmentName(value: string): value is SegmentName {

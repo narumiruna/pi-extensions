@@ -121,7 +121,7 @@ test("settings edits raw JSON transactionally and applies it immediately", async
 		)}\n`;
 		const context = createMockContext({
 			mode: "tui",
-			select: async () => "Edit JSON settings",
+			select: async () => "Edit settings JSON (custom colors, layout, icons)",
 			editor: async (_title: string, value: string) => {
 				initial = value;
 				return edited;
@@ -179,7 +179,7 @@ test("palette picker preserves custom colors and unknown fields while applying a
 
 		assert.deepEqual(selections[0]?.choices, [
 			"Palette preset (custom)",
-			"Edit JSON settings",
+			"Edit settings JSON (custom colors, layout, icons)",
 			"Status",
 			"Help",
 		]);
@@ -196,6 +196,7 @@ test("palette picker preserves custom colors and unknown fields while applying a
 		]) {
 			assert.match(pickerText, new RegExp(palettePreset, "u"));
 		}
+		assert.match(pickerText, /per-segment colors from settings JSON/u);
 		assert.equal(loaded.config.palettePreset, "ocean");
 		assert.deepEqual(loaded.config.palette.time, { fg: "#112233", bg: "#445566" });
 		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
@@ -209,7 +210,41 @@ test("palette picker preserves custom colors and unknown fields while applying a
 	}
 });
 
-test("palette picker migrates a legacy string without losing unknown fields", async () => {
+test("custom selection preserves an existing custom palette", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	const palette = { time: { fg: "#112233", bg: "#445566" } };
+	writeFileSync(path, JSON.stringify({ palettePreset: "custom", palette, future: true }));
+	try {
+		const mock = createMockPi();
+		let loaded = loadStatuslineSettings(path);
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply(next) {
+				loaded = next;
+			},
+		});
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) => choices[0],
+			custom: customPalettePicker(["\r"]),
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+			palettePreset: "custom",
+			palette,
+			future: true,
+		});
+		assert.deepEqual(loaded.config.palette, palette);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("custom selection materializes the active legacy preset without losing unknown fields", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
 	const path = settingsFilePath(root);
 	writeFileSync(path, JSON.stringify({ palette: "forest", future: true }));
@@ -234,9 +269,15 @@ test("palette picker migrates a legacy string without losing unknown fields", as
 		const saved = JSON.parse(readFileSync(path, "utf8"));
 		assert.equal(saved.palettePreset, "custom");
 		assert.equal(saved.future, true);
-		assert.deepEqual(saved.palette, {});
-		assert.deepEqual(loaded.config.palette, {});
+		assert.equal(Object.keys(saved.palette).length, 12);
+		assert.equal(saved.palette.model.bg, "#a7c080");
+		assert.equal(saved.palette.cwd.bg, "#83c092");
+		assert.equal(saved.palette.branch.bg, "#5f9f75");
+		assert.equal(saved.palette.tools.bg, "#3f6f55");
+		assert.equal(saved.palette.time.bg, "#293f35");
+		assert.deepEqual(loaded.config.palette, saved.palette);
 		assert.equal(loaded.config.palettePreset, "custom");
+		assert.match(context.notifications.at(-1)?.message ?? "", /Edit settings JSON/u);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -301,7 +342,7 @@ test("cancelled, invalid, and failed settings edits preserve file and runtime st
 		});
 		const context = createMockContext({
 			mode: "tui",
-			select: async () => "Edit JSON settings",
+			select: async () => "Edit settings JSON (custom colors, layout, icons)",
 			editor: async () => nextEdit,
 		});
 

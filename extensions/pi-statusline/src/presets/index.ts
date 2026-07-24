@@ -1,4 +1,11 @@
-import type { PalettePreset } from "../types.js";
+import {
+	type PaletteName,
+	type PalettePreset,
+	type PowerlineBlockName,
+	SEGMENT_NAMES,
+	type SegmentName,
+	type SegmentPalette,
+} from "../types.js";
 import { CANDY_PRESET } from "./candy.js";
 import { CUSTOM_PRESET } from "./custom.js";
 import { FOREST_PRESET } from "./forest.js";
@@ -20,6 +27,28 @@ const PRESETS = {
 	custom: CUSTOM_PRESET,
 } satisfies Record<PalettePreset, PowerlinePreset>;
 
+const SEGMENT_BLOCKS: Record<SegmentName, PowerlineBlockName> = {
+	brand: "header",
+	provider: "header",
+	model: "header",
+	thinking: "header",
+	cwd: "directory",
+	branch: "git",
+	tools: "runtime",
+	context: "runtime",
+	tokens: "runtime",
+	cost: "meter",
+	time: "meter",
+	turn: "meter",
+};
+
 export function resolvePreset(preset: PalettePreset): PowerlinePreset {
 	return PRESETS[preset];
+}
+
+export function segmentPaletteForPreset(preset: PaletteName): SegmentPalette {
+	const blocks = PRESETS[preset].blocks;
+	return Object.fromEntries(
+		SEGMENT_NAMES.map((name) => [name, { ...blocks[SEGMENT_BLOCKS[name]] }]),
+	) as SegmentPalette;
 }

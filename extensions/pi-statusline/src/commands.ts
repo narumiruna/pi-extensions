@@ -4,12 +4,20 @@ import {
 	type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { segmentPaletteForPreset } from "./presets/index.js";
 import {
 	DEFAULT_STATUSLINE_DOCUMENT,
 	type LoadedStatuslineSettings,
 	saveStatuslineSettingsDocument,
 } from "./settings.js";
-import { PALETTE_PRESET_NAMES, type PalettePreset } from "./types.js";
+import {
+	PALETTE_NAMES,
+	PALETTE_PRESET_NAMES,
+	type PaletteName,
+	type PalettePreset,
+} from "./types.js";
+
+const EDIT_SETTINGS_LABEL = "Edit settings JSON (custom colors, layout, icons)";
 
 export interface StatuslineCommandOptions {
 	settingsPath: string;
@@ -45,7 +53,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 	const paletteItem = `Palette preset (${options.getLoaded().config.palettePreset})`;
 	const selection = await ctx.ui.select("pi-statusline", [
 		paletteItem,
-		"Edit JSON settings",
+		EDIT_SETTINGS_LABEL,
 		"Status",
 		"Help",
 	]);
@@ -54,7 +62,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 		return;
 	}
 	switch (selection) {
-		case "Edit JSON settings":
+		case EDIT_SETTINGS_LABEL:
 			await editSettings(ctx, options);
 			return;
 		case "Status":
@@ -89,7 +97,11 @@ async function choosePalettePreset(
 			rawDocument,
 		);
 		options.apply(loaded, ctx);
-		ctx.ui.notify(`Palette preset applied: ${loaded.config.palettePreset}.`, "info");
+		const message =
+			loaded.config.palettePreset === "custom"
+				? "Custom palette applied. Edit palette colors via /statusline → Edit settings JSON."
+				: `Palette preset applied: ${loaded.config.palettePreset}.`;
+		ctx.ui.notify(message, "info");
 	} catch (error) {
 		ctx.ui.notify(`Palette preset was not saved: ${formatError(error)}`, "error");
 	}
@@ -103,7 +115,13 @@ async function showPalettePresetPicker(
 	const items: SelectItem[] = PALETTE_PRESET_NAMES.map((palettePreset) => ({
 		value: palettePreset,
 		label: palettePreset,
-		description: palettePreset === current ? "current" : undefined,
+		description:
+			[
+				palettePreset === current ? "current" : undefined,
+				palettePreset === "custom" ? "per-segment colors from settings JSON" : undefined,
+			]
+				.filter((part): part is string => part !== undefined)
+				.join(" • ") || undefined,
 	}));
 	const selectedIndex = PALETTE_PRESET_NAMES.indexOf(current);
 	const result = await ctx.ui.custom<PalettePreset | null>((tui, theme, _keybindings, done) => {
@@ -186,7 +204,14 @@ function palettePresetDocument(
 	}
 	const parsed = JSON.parse(current.rawDocument) as unknown;
 	if (!isRecord(parsed)) throw new Error("Settings must contain a JSON object");
-	if (!isRecord(parsed.palette)) parsed.palette = {};
+	if (palettePreset === "custom" && !isRecord(parsed.palette)) {
+		const seedPreset = isPaletteName(current.config.palettePreset)
+			? current.config.palettePreset
+			: "tokyo-night";
+		parsed.palette = segmentPaletteForPreset(seedPreset);
+	} else if (palettePreset !== "custom" && typeof parsed.palette === "string") {
+		delete parsed.palette;
+	}
 	parsed.palettePreset = palettePreset;
 	return `${JSON.stringify(parsed, null, "\t")}\n`;
 }
@@ -217,7 +242,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 	ctx.ui.notify(
 		[
 			"/statusline — open the interactive statusline menu",
-			"Menu actions: Palette preset, Edit JSON settings, Status, Help",
+			"Menu actions: Palette preset, Edit settings JSON, Status, Help",
 			`Settings: ${settingsPath}`,
 			"Fields: palettePreset, palette, density, separator, segments, segmentText, extensionStatusIcons",
 			"Named presets ignore but preserve palette; custom uses its per-segment fg/bg colors.",
@@ -230,6 +255,10 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPaletteName(value: PalettePreset): value is PaletteName {
+	return (PALETTE_NAMES as readonly PalettePreset[]).includes(value);
 }
 
 function canNotify(ctx: ExtensionCommandContext): boolean {

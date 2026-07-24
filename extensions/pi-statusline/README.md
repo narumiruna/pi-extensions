@@ -9,7 +9,7 @@
 - Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
 - Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
-- Creates a complete editable default configuration on first session start.
+- Creates a concise editable default configuration on first session start.
 - Previews palette presets as the picker cursor moves, then applies the selection only on Enter.
 - Applies validated JSON settings edits from the `/statusline` menu immediately after an atomic save.
 - Caches Git state outside footer rendering and guards stale session results.
@@ -38,7 +38,7 @@ The only configuration source is:
 <getAgentDir()>/pi-statusline.json
 ```
 
-On first session start, the extension atomically creates the complete default document with `palettePreset` set to `tokyo-night`. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
+On first session start, the extension atomically creates a concise default document containing the common appearance and layout settings. Advanced fields continue to use built-in defaults until explicitly added. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
 
 There are no project overrides or environment-variable overrides.
 
@@ -47,20 +47,6 @@ There are no project overrides or environment-variable overrides.
 ```json
 {
   "palettePreset": "tokyo-night",
-  "palette": {
-    "brand": { "fg": "#090c0c", "bg": "#a3aed2" },
-    "provider": { "fg": "#090c0c", "bg": "#a3aed2" },
-    "model": { "fg": "#090c0c", "bg": "#a3aed2" },
-    "thinking": { "fg": "#090c0c", "bg": "#a3aed2" },
-    "cwd": { "fg": "#e3e5e5", "bg": "#769ff0" },
-    "branch": { "fg": "#769ff0", "bg": "#394260" },
-    "tools": { "fg": "#769ff0", "bg": "#212736" },
-    "context": { "fg": "#769ff0", "bg": "#212736" },
-    "tokens": { "fg": "#769ff0", "bg": "#212736" },
-    "cost": { "fg": "#a0a9cb", "bg": "#1d2230" },
-    "time": { "fg": "#a0a9cb", "bg": "#1d2230" },
-    "turn": { "fg": "#a0a9cb", "bg": "#1d2230" }
-  },
   "density": "compact",
   "separator": "none",
   "segments": [
@@ -75,35 +61,7 @@ There are no project overrides or environment-variable overrides.
     "tokens",
     "cost",
     "time"
-  ],
-  "segmentText": {
-    "brand": { "prefix": "", "suffix": "" },
-    "provider": { "prefix": "🔌 ", "suffix": "" },
-    "model": { "prefix": "🤖 ", "suffix": "" },
-    "thinking": { "prefix": "🧠 ", "suffix": "" },
-    "cwd": { "prefix": "📁 ", "suffix": "" },
-    "branch": { "prefix": "🌿 ", "suffix": "" },
-    "tools": { "prefix": "", "suffix": "" },
-    "context": { "prefix": "🪟 ctx ", "suffix": "" },
-    "tokens": { "prefix": "🔢 ", "suffix": "" },
-    "cost": { "prefix": "💸 $", "suffix": "" },
-    "time": { "prefix": "🕒 ", "suffix": "" },
-    "turn": { "prefix": "🔁 #", "suffix": "" }
-  },
-  "extensionStatusIcons": {
-    "chrome-devtools": "🌐",
-    "codex-usage": "📊",
-    "usage": "📊",
-    "caffeinate": "💊",
-    "firecrawl": "🔥",
-    "github-pr": "🔎",
-    "goal": "🎯",
-    "lsp": "🧰",
-    "plan-mode": "📝",
-    "pisync": "🔄",
-    "subagents": "🧑‍🤝‍🧑",
-    "unknown-error-retry": "🔁"
-  }
+  ]
 }
 ```
 
@@ -116,9 +74,11 @@ All fields are optional in an existing document. Missing fields use defaults.
 - `density`: `compact` or `cozy`.
 - `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
 
-Named presets use cohesive namesake color ramps while preserving the custom `palette` object. Selecting `custom` activates that object. If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
+Named presets use cohesive namesake color ramps while preserving an existing custom `palette` object. Selecting `custom` activates that object. When no palette object exists, choosing `custom` from `/statusline` writes a complete per-segment copy of the active named preset before activating it, so customization starts from the current appearance. The picker labels this editing relationship, and the main menu's `Edit settings JSON (custom colors, layout, icons)` action opens the existing JSON editor. It does not force an editor or present a separate per-color menu.
 
-Each custom palette color must be a complete `#RRGGBB` truecolor value. Missing segment entries or `fg`/`bg` fields remain unstyled and do not inherit colors from Tokyo Night. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` leaves that separator unstyled.
+If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. A manually authored `"palettePreset": "custom"` without a palette uses the built-in Tokyo Night colors. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
+
+Each custom palette color must be a complete `#RRGGBB` truecolor value. Within an explicit `palette` object, missing segment entries or `fg`/`bg` fields remain unstyled and do not inherit colors from Tokyo Night. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` leaves that separator unstyled.
 
 For example, after moving `time` before the header segments, select `custom` and give it the same colors as the Tokyo Night header to keep one continuous block:
 
@@ -179,7 +139,7 @@ Override either string independently:
 }
 ```
 
-Prefix and suffix values must be single-line text without terminal control characters; use the `line_break` segment for additional rows.
+Prefix and suffix values must be single-line text without terminal control characters; use the `line_break` segment for additional rows. The built-in prefixes are `🔌 ` for provider, `🤖 ` for model, `🧠 ` for thinking, `📁 ` for cwd, `🌿 ` for branch, `🪟 ctx ` for context, `🔢 ` for tokens, `💸 $` for cost, `🕒 ` for time, and `🔁 #` for turn; brand and tools have no built-in prefix, and all built-in suffixes are empty.
 
 This structured model intentionally does not provide variables or a format language. Dynamic Git, PR, activity, usage, token, and cost formatting remains owned by the extension.
 
@@ -193,15 +153,17 @@ This structured model intentionally does not provide variables or a format langu
 - A missing key uses the built-in icon or `🔌` for an unknown key.
 - Ambiguous package aliases require an exact status key.
 
+Built-in icon mappings are `chrome-devtools` → `🌐`, `codex-usage` and `usage` → `📊`, `caffeinate` → `💊`, `firecrawl` → `🔥`, `github-pr` → `🔎`, `goal` → `🎯`, `lsp` → `🧰`, `plan-mode` → `📝`, `pisync` → `🔄`, `subagents` → `🧑‍🤝‍🧑`, and `unknown-error-retry` → `🔁`.
+
 Statuses from other extensions appear below the main powerline. The linked GitHub PR status is hidden from that line when the branch segment already renders it.
 
 ## 💬 Commands
 
 | Command | Purpose |
 | --- | --- |
-| `/statusline` | Open the interactive menu for palette presets, JSON settings, status, and help |
+| `/statusline` | Open the interactive menu for palette presets, settings JSON, status, and help |
 
-`/statusline` does not accept arguments and requires TUI mode. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged.
+`/statusline` does not accept arguments and requires TUI mode. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged.
 
 ## 🌿 Git and activity details
 
