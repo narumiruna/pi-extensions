@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerStatuslineCommand } from "../src/commands.js";
 import {
@@ -30,7 +31,7 @@ function customPalettePicker(inputs: string[], inspect?: (lines: string[]) => vo
 				fg: (_color: string, text: string) => text,
 				bold: (text: string) => text,
 			},
-			{},
+			getKeybindings(),
 			(value: unknown) => {
 				result = value;
 			},
@@ -110,7 +111,7 @@ test("segment menu toggles displayed segments and preserves JSON fields and layo
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					},
-					{},
+					getKeybindings(),
 					(value: unknown) => {
 						result = value;
 					},
@@ -118,9 +119,10 @@ test("segment menu toggles displayed segments and preserves JSON fields and layo
 				initialScreen = component.render?.(100).join("\n") ?? "";
 				component.handleInput?.("\r");
 				changedScreen = component.render?.(100).join("\n") ?? "";
-				for (let index = 0; index < 4; index += 1) component.handleInput?.("\u001b[B");
+				component.handleInput?.("\u001b[A");
+				component.handleInput?.("\u001b[A");
 				component.handleInput?.("\r");
-				for (let index = 0; index < 8; index += 1) component.handleInput?.("\u001b[B");
+				component.handleInput?.("\u001b[A");
 				component.handleInput?.("\r");
 				component.handleInput?.("\u001b");
 				return result;
@@ -143,20 +145,209 @@ test("segment menu toggles displayed segments and preserves JSON fields and layo
 			/visible/u,
 		);
 		assert.doesNotMatch(initialScreen, /line_break/u);
-		assert.match(
-			changedScreen.split("\n").find((line) => line.includes("brand")) ?? "",
-			/visible/u,
-		);
-		assert.deepEqual(appliedSegments, [
-			["model", "line_break", "cwd", "brand"],
-			["model", "line_break", "brand"],
-			["model"],
-		]);
-		assert.deepEqual(loaded.config.segments, ["model"]);
+		assert.match(changedScreen.split("\n").find((line) => line.includes("model")) ?? "", /hidden/u);
+		assert.deepEqual(appliedSegments, [["cwd"], ["cwd", "brand"], ["brand"]]);
+		assert.deepEqual(loaded.config.segments, ["brand"]);
 		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
-			segments: ["model"],
+			segments: ["brand"],
 			future: { retained: true },
 		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("segment menu reorders visible segments immediately while preserving multiline layout", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	writeFileSync(
+		path,
+		`${JSON.stringify({ segments: ["model", "line_break", "cwd", "branch"], future: true })}\n`,
+	);
+	try {
+		const mock = createMockPi();
+		let loaded = loadStatuslineSettings(path);
+		const appliedSegments: string[][] = [];
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply(next) {
+				loaded = next;
+				appliedSegments.push([...next.config.segments]);
+			},
+		});
+		let initialScreen = "";
+		let narrowScreen = "";
+		let finalScreen = "";
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) =>
+				choices.find((choice) => choice.startsWith("Segments (")),
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				let result: unknown;
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					getKeybindings(),
+					(value: unknown) => {
+						result = value;
+					},
+				) as PickerComponent;
+				const initialLines = component.render?.(100) ?? [];
+				initialScreen = initialLines.join("\n");
+				assert.ok(initialLines.length <= 17);
+				const narrowLines = component.render?.(20) ?? [];
+				narrowScreen = narrowLines.join("\n");
+				assert.ok(narrowLines.length <= 17);
+				for (const line of narrowLines) assert.ok(visibleWidth(line) <= 20);
+				component.handleInput?.("\u001b[1;3B");
+				component.handleInput?.("\u001b[1;3A");
+				component.handleInput?.("\u001b[1;3B");
+				finalScreen = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b");
+				return result;
+			},
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.ok(initialScreen.indexOf("model") < initialScreen.indexOf("cwd"));
+		assert.ok(finalScreen.indexOf("cwd") < finalScreen.indexOf("model"));
+		assert.match(initialScreen, /Visible.*render order/u);
+		assert.match(initialScreen, /Hidden.*not rendered/u);
+		assert.match(initialScreen.split("\n").find((line) => line.includes("model")) ?? "", /row 1/u);
+		assert.match(initialScreen.split("\n").find((line) => line.includes("cwd")) ?? "", /row 2/u);
+		assert.match(finalScreen.split("\n").find((line) => line.includes("cwd")) ?? "", /row 1/u);
+		assert.match(finalScreen.split("\n").find((line) => line.includes("model")) ?? "", /row 2/u);
+		assert.match(narrowScreen, /Enter\/Space toggle/u);
+		assert.match(narrowScreen, /M move mode/u);
+		assert.match(narrowScreen, /Alt\+↑\/↓ quick move/u);
+		assert.match(narrowScreen, /Esc close/u);
+		assert.deepEqual(appliedSegments, [
+			["cwd", "line_break", "model", "branch"],
+			["model", "line_break", "cwd", "branch"],
+			["cwd", "line_break", "model", "branch"],
+		]);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+			segments: ["cwd", "line_break", "model", "branch"],
+			future: true,
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("segment menu offers Move mode and explains unavailable moves", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	writeFileSync(path, `${JSON.stringify({ segments: ["model", "cwd"] })}\n`);
+	try {
+		const mock = createMockPi();
+		let loaded = loadStatuslineSettings(path);
+		const appliedSegments: string[][] = [];
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply(next) {
+				loaded = next;
+				appliedSegments.push([...next.config.segments]);
+			},
+		});
+		let boundaryScreen = "";
+		let moveModeScreen = "";
+		let hiddenScreen = "";
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) =>
+				choices.find((choice) => choice.startsWith("Segments (")),
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				let result: unknown;
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					getKeybindings(),
+					(value: unknown) => {
+						result = value;
+					},
+				) as PickerComponent;
+				component.handleInput?.("\u001b[1;3A");
+				boundaryScreen = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("m");
+				moveModeScreen = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b[B");
+				component.handleInput?.("\r");
+				component.handleInput?.("\r");
+				component.handleInput?.("m");
+				hiddenScreen = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b");
+				return result;
+			},
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.match(boundaryScreen, /already the first visible segment/iu);
+		assert.match(moveModeScreen, /Move mode.*model/iu);
+		assert.match(hiddenScreen, /show.*before moving/iu);
+		assert.deepEqual(appliedSegments, [["cwd", "model"], ["cwd"]]);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { segments: ["cwd"] });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("segment menu keeps displayed order when reordering cannot be saved", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+	const path = settingsFilePath(root);
+	const original = `${JSON.stringify({ segments: ["model", "cwd"] })}\n`;
+	writeFileSync(path, original);
+	try {
+		const mock = createMockPi();
+		const loaded = loadStatuslineSettings(path);
+		let applied = 0;
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply() {
+				applied += 1;
+			},
+			save() {
+				throw new Error("disk full");
+			},
+		});
+		let screenAfterFailure = "";
+		const context = createMockContext({
+			mode: "tui",
+			select: async (_title: string, choices: string[]) =>
+				choices.find((choice) => choice.startsWith("Segments (")),
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					getKeybindings(),
+					() => undefined,
+				) as PickerComponent;
+				component.handleInput?.("\u001b[1;3B");
+				screenAfterFailure = component.render?.(100).join("\n") ?? "";
+				component.handleInput?.("\u001b");
+			},
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.ok(screenAfterFailure.indexOf("model") < screenAfterFailure.indexOf("cwd"));
+		assert.equal(readFileSync(path, "utf8"), original);
+		assert.equal(applied, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*disk full/iu);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -193,7 +384,7 @@ test("segment menu rolls back its displayed value when saving fails", async () =
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					},
-					{},
+					getKeybindings(),
 					() => undefined,
 				) as PickerComponent;
 				component.handleInput?.("\r");
@@ -219,7 +410,7 @@ test("segment menu rolls back its displayed value when saving fails", async () =
 test("segment menu restores persisted and runtime settings when application fails", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
 	const path = settingsFilePath(root);
-	const original = `${JSON.stringify({ segments: ["model"], future: true })}\n`;
+	const original = `${JSON.stringify({ segments: ["model", "cwd"], future: true })}\n`;
 	writeFileSync(path, original);
 	try {
 		const mock = createMockPi();
@@ -246,10 +437,10 @@ test("segment menu restores persisted and runtime settings when application fail
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					},
-					{},
+					getKeybindings(),
 					() => undefined,
 				) as PickerComponent;
-				component.handleInput?.("\r");
+				component.handleInput?.("\u001b[1;3B");
 				screenAfterFailure = component.render?.(100).join("\n") ?? "";
 				component.handleInput?.("\u001b");
 			},
@@ -257,12 +448,9 @@ test("segment menu restores persisted and runtime settings when application fail
 
 		await mock.commands.get("statusline")?.handler("", context.ctx);
 
-		assert.match(
-			screenAfterFailure.split("\n").find((line) => line.includes("brand")) ?? "",
-			/hidden/u,
-		);
+		assert.ok(screenAfterFailure.indexOf("model") < screenAfterFailure.indexOf("cwd"));
 		assert.equal(readFileSync(path, "utf8"), original);
-		assert.deepEqual(runtime.config.segments, ["model"]);
+		assert.deepEqual(runtime.config.segments, ["model", "cwd"]);
 		assert.equal(applyCalls, 2);
 		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*render failed/iu);
 	} finally {
@@ -600,6 +788,8 @@ test("status and help remain available from the main menu", async () => {
 		assert.match(context.notifications.at(-1)?.message ?? "", /segmentText/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /palettePreset/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /line_break/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /M.*move mode/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /Alt\+Up.*Alt\+Down/u);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
