@@ -39,11 +39,11 @@ export class LspClient {
 			timeout: NodeJS.Timeout;
 		}
 	>();
-	#publishedDiagnostics = new Map<string, LspDiagnostic[]>();
+	#publishedDiagnostics = new Map<string, { version: number; diagnostics: LspDiagnostic[] }>();
 	#diagnosticWaiters = new Map<
 		string,
 		Set<{
-			onPublish: () => void;
+			onPublish: (publication: { version: number; diagnostics: LspDiagnostic[] }) => void;
 			reject: (reason: unknown) => void;
 			dispose: () => void;
 		}>
@@ -174,13 +174,24 @@ export class LspClient {
 		if (!this.#serverCapabilities.diagnosticProvider) {
 			return this.#waitForPublishedDiagnostics(uri);
 		}
+		const published = this.#publishedDiagnostics.get(uri);
+		// Ignore a provisional empty publish, but preserve diagnostics that arrived before the pull.
+		const afterVersion = published?.diagnostics.length
+			? published.version - 1
+			: (published?.version ?? 0);
 		const response = await this.request("textDocument/diagnostic", {
 			textDocument: { uri },
 			identifier: null,
 			previousResultId: null,
 		});
 		const result = response.result as { items?: LspDiagnostic[] } | undefined;
-		return result?.items ?? [];
+		const diagnostics = result?.items ?? [];
+		if (diagnostics.length > 0 || !this.#adapter.pullDiagnosticsGraceMs) return diagnostics;
+		return this.#waitForPublishedDiagnostics(uri, {
+			afterVersion,
+			diagnostics,
+			waitMs: this.#adapter.pullDiagnosticsGraceMs,
+		});
 	}
 
 	async codeActions(uri: string, text: string, diagnostics: LspDiagnostic[], kind: string) {
@@ -339,11 +350,15 @@ export class LspClient {
 		if (message.method === "textDocument/publishDiagnostics") {
 			const params = message.params as { uri?: string; diagnostics?: LspDiagnostic[] } | undefined;
 			if (params?.uri) {
-				const diagnostics = params.diagnostics ?? [];
-				this.#publishedDiagnostics.set(params.uri, diagnostics);
+				const previousVersion = this.#publishedDiagnostics.get(params.uri)?.version ?? 0;
+				const publication = {
+					version: previousVersion + 1,
+					diagnostics: params.diagnostics ?? [],
+				};
+				this.#publishedDiagnostics.set(params.uri, publication);
 				const waiters = this.#diagnosticWaiters.get(params.uri);
 				if (waiters) {
-					for (const waiter of [...waiters]) waiter.onPublish();
+					for (const waiter of [...waiters]) waiter.onPublish(publication);
 				}
 			}
 			return;
@@ -354,14 +369,21 @@ export class LspClient {
 		}
 	}
 
-	#waitForPublishedDiagnostics(uri: string) {
+	#waitForPublishedDiagnostics(
+		uri: string,
+		fallback?: { afterVersion: number; diagnostics: LspDiagnostic[]; waitMs: number },
+	) {
 		// See PUBLISHED_DIAGNOSTICS_SETTLE_MS. Bounded by #timeoutMs.
 		return new Promise<LspDiagnostic[]>((resolve, reject) => {
 			let settleTimer: NodeJS.Timeout | undefined;
+			let fallbackTimer: NodeJS.Timeout | undefined;
 			let overallTimer: NodeJS.Timeout | undefined;
+			let sawNonEmptyPublication = false;
+			const afterVersion = fallback?.afterVersion ?? 0;
 
 			const dispose = () => {
 				if (settleTimer) clearTimeout(settleTimer);
+				if (fallbackTimer) clearTimeout(fallbackTimer);
 				if (overallTimer) clearTimeout(overallTimer);
 				const set = this.#diagnosticWaiters.get(uri);
 				set?.delete(waiter);
@@ -375,10 +397,14 @@ export class LspClient {
 				dispose();
 				reject(reason);
 			};
-			const onPublish = () => {
+			const onPublish = (publication: { version: number; diagnostics: LspDiagnostic[] }) => {
+				if (publication.version <= afterVersion) return;
+				if (fallback && publication.diagnostics.length === 0 && !sawNonEmptyPublication) return;
+				sawNonEmptyPublication ||= publication.diagnostics.length > 0;
+				if (fallbackTimer) clearTimeout(fallbackTimer);
 				if (settleTimer) clearTimeout(settleTimer);
 				settleTimer = setTimeout(
-					() => settleWith(this.#publishedDiagnostics.get(uri) ?? []),
+					() => settleWith(this.#publishedDiagnostics.get(uri)?.diagnostics ?? []),
 					this.#adapter.diagnosticsSettleMs ?? PUBLISHED_DIAGNOSTICS_SETTLE_MS,
 				);
 			};
@@ -388,10 +414,23 @@ export class LspClient {
 			set.add(waiter);
 			this.#diagnosticWaiters.set(uri, set);
 
+			if (fallback) {
+				fallbackTimer = setTimeout(
+					() => {
+						const latest = this.#publishedDiagnostics.get(uri);
+						settleWith(
+							latest && latest.version > afterVersion ? latest.diagnostics : fallback.diagnostics,
+						);
+					},
+					Math.min(fallback.waitMs, this.#timeoutMs),
+				);
+			}
 			overallTimer = setTimeout(() => {
 				const latest = this.#publishedDiagnostics.get(uri);
-				if (latest !== undefined) {
-					settleWith(latest);
+				if (latest && latest.version > afterVersion) {
+					settleWith(latest.diagnostics);
+				} else if (fallback) {
+					settleWith(fallback.diagnostics);
 				} else {
 					fail(
 						new Error(
@@ -401,7 +440,8 @@ export class LspClient {
 				}
 			}, this.#timeoutMs);
 
-			if (this.#publishedDiagnostics.has(uri)) onPublish();
+			const existing = this.#publishedDiagnostics.get(uri);
+			if (existing) onPublish(existing);
 		});
 	}
 

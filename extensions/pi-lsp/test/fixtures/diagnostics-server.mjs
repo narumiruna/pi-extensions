@@ -35,7 +35,10 @@ function handle(message) {
 			id: message.id,
 			result: {
 				capabilities:
-					scenario === "pull-error"
+					scenario === "pull-error" ||
+					scenario === "pull-empty-then-push" ||
+					scenario === "pull-empty-after-push" ||
+					scenario === "pull-empty-only"
 						? {
 								diagnosticProvider: {
 									interFileDependencies: false,
@@ -59,6 +62,10 @@ function handle(message) {
 		if (scenario === "push-sequence") {
 			setTimeout(() => publish(uri, [diagnostic("first")]), 20);
 			setTimeout(() => publish(uri, [diagnostic("first"), diagnostic("second", 1)]), 40);
+		} else if (scenario === "pull-empty-then-push") {
+			setTimeout(() => publish(uri, [diagnostic("late pull-capable diagnostic")]), 40);
+		} else if (scenario === "pull-empty-after-push") {
+			publish(uri, [diagnostic("already published diagnostic")]);
 		} else if (scenario === "batch-push" && openedUris.length === expectedFiles) {
 			setTimeout(() => {
 				for (const openedUri of openedUris) {
@@ -70,11 +77,17 @@ function handle(message) {
 	}
 
 	if (message.method === "textDocument/diagnostic") {
-		send({
-			jsonrpc: "2.0",
-			id: message.id,
-			error: { code: -32603, message: "intentional pull failure" },
-		});
+		send(
+			scenario === "pull-empty-then-push" ||
+				scenario === "pull-empty-after-push" ||
+				scenario === "pull-empty-only"
+				? { jsonrpc: "2.0", id: message.id, result: { kind: "full", items: [] } }
+				: {
+						jsonrpc: "2.0",
+						id: message.id,
+						error: { code: -32603, message: "intentional pull failure" },
+					},
+		);
 		return;
 	}
 

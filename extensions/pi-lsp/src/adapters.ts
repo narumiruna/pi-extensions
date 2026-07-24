@@ -76,6 +76,9 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		name: "rust-analyzer",
 		command: ["rust-analyzer"],
 		extensions: [".rs"],
+		// rust-analyzer can return an empty pull result before its initial analysis
+		// publishes the real diagnostics.
+		pullDiagnosticsGraceMs: 5_000,
 	},
 	{
 		name: "gopls",
@@ -422,6 +425,7 @@ function normalizeServer(name: string, value: unknown, label: string): InternalL
 		initialization: optionalRecordField(value, "initialization", label),
 		skipDirectories: optionalDirectoryNamesField(value, "skipDirectories", label),
 		diagnosticsSettleMs: optionalPositiveNumberField(value, "diagnosticsSettleMs", label),
+		pullDiagnosticsGraceMs: optionalPositiveNumberField(value, "pullDiagnosticsGraceMs", label),
 	};
 }
 
@@ -448,6 +452,7 @@ function configToAdapter(config: InternalLspServer): LspServerAdapter {
 		initialization: config.initialization,
 		skipDirectories: new Set([...COMMON_SKIP_DIRECTORIES, ...(config.skipDirectories ?? [])]),
 		diagnosticsSettleMs: config.diagnosticsSettleMs,
+		pullDiagnosticsGraceMs: config.pullDiagnosticsGraceMs,
 		isSupportedFile: (filePath) => extensionSet.has(path.extname(filePath)),
 		languageIdFor: (filePath) => languageIdFor(config, filePath),
 	};
