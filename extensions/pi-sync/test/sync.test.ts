@@ -14,8 +14,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { gunzipSync } from "node:zlib";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import {
 	SYNC_COMMANDS,
 	syncCommandFromMenuOption,
@@ -28,10 +33,13 @@ import {
 	loadPartialConfig,
 	localConfigPath,
 	lockPath,
+	readLocalConfigObject,
 	readState,
+	updateLocalConfig,
 } from "../src/config.js";
 import { lockFileExists, readLock, withLock } from "../src/lock.js";
 import { S3Client } from "../src/s3-client.js";
+import { applySnapshot } from "../src/snapshot-apply.js";
 import sync, {
 	addTopLevelCaseVariantDeletes,
 	appliedFileHashMap,
@@ -63,6 +71,9 @@ import sync, {
 	snapshotWithoutSessions,
 	splitArgs,
 } from "../src/sync.js";
+import { DEFAULT_SYNC_FILES, normalizeSyncFiles } from "../src/sync-policy.js";
+
+initTheme("dark", false);
 
 test("sync registers the sync command and session lifecycle hooks", () => {
 	const mock = createMockPi();
@@ -94,6 +105,7 @@ const expectedSyncMenuOptions = [
 	"help — Show command usage",
 	"init — Create local config template",
 	"config — Show resolved configuration",
+	"files — Choose synced files",
 	"status — Show sync status",
 	"diff — Show local/remote diff",
 	"doctor — Check config, secrets, and lock state",
@@ -177,6 +189,212 @@ test("bare sync command reports usage without an interactive UI", async () => {
 	});
 });
 
+test("sync files persists SettingsList choices and safe extra-file candidates", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(path.join(agentDir, "custom-dir"), { recursive: true });
+		writeFileSync(path.join(agentDir, "LOCAL.md"), "local\n");
+		writeFileSync(path.join(agentDir, "secret-notes.md"), "secret\n");
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({ ...requiredConfig(), future: true, extraFiles: ["REMOTE.md"] }),
+		);
+		const mock = createMockPi();
+		sync(mock.pi);
+		let initialRender = "";
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const selector = createCustomSelectorHarness(factory);
+				initialRender = selector.render().join("\n");
+				selector.handleInput("\r");
+				selector.handleInput("\u001b");
+				return selector.result;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("files", ctx);
+
+		assert.match(initialRender, /settings\.json/);
+		assert.match(initialRender, /sessions/);
+		assert.match(initialRender, /LOCAL\.md/);
+		assert.match(initialRender, /REMOTE\.md/);
+		assert.doesNotMatch(initialRender, /secret-notes|custom-dir/);
+		const saved = await readLocalConfigObject();
+		assert.equal(saved?.future, true);
+		assert.deepEqual(
+			saved?.syncFiles,
+			DEFAULT_SYNC_FILES.filter((item) => item !== "settings.json"),
+		);
+		if (process.platform !== "win32") {
+			assert.equal((await fs.stat(localConfigPath())).mode & 0o777, 0o600);
+		}
+	});
+});
+
+test("the first file-selection change creates the complete config template", async () => {
+	await withTempHome(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const selector = createCustomSelectorHarness(factory);
+				selector.handleInput("\r");
+				selector.handleInput("\u001b");
+				return selector.result;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("files", ctx);
+		const saved = await readLocalConfigObject();
+		assert.equal(saved?.endpoint, "https://<account-id>.r2.cloudflarestorage.com");
+		assert.equal(saved?.autoSync, true);
+		assert.deepEqual(
+			saved?.syncFiles,
+			DEFAULT_SYNC_FILES.filter((item) => item !== "settings.json"),
+		);
+		assert.deepEqual(saved?.extraFiles, []);
+	});
+});
+
+test("sync files serializes rapid changes in user action order", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const selector = createCustomSelectorHarness(factory);
+				selector.handleInput("\r");
+				selector.handleInput("\r");
+				selector.handleInput("\u001b");
+				return selector.result;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("files", ctx);
+		assert.deepEqual((await readLocalConfigObject())?.syncFiles, [...DEFAULT_SYNC_FILES]);
+	});
+});
+
+test("sync files keeps environment-overridden sessions read-only", async () => {
+	await withTempHome(async () => {
+		mkdirSync(path.dirname(localConfigPath()), { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify({ ...requiredConfig(), syncSessions: false }));
+		await withEnv({ PI_SYNC_SESSIONS: "true" }, async () => {
+			const mock = createMockPi();
+			sync(mock.pi);
+			let sessionRender = "";
+			const { ctx } = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				custom: async (factory: unknown) => {
+					const selector = createCustomSelectorHarness(factory);
+					for (const character of "sessions") selector.handleInput(character);
+					sessionRender = selector.render().join("\n");
+					selector.handleInput("\r");
+					selector.handleInput("\u001b");
+					return selector.result;
+				},
+			});
+
+			await mock.commands.get("sync")?.handler("files", ctx);
+			assert.match(sessionRender, /included \(environment\)/);
+			assert.equal((await readLocalConfigObject())?.syncSessions, false);
+		});
+	});
+});
+
+test("sync files has a protocol-safe non-TUI summary", async () => {
+	await withTempHome(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		let customCalls = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			custom: async () => {
+				customCalls += 1;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("files", ctx);
+		assert.equal(customCalls, 0);
+		assert.match(
+			notifications.at(-1)?.message ?? "",
+			/selected files.*syncFiles.*pi-sync\.local\.json/is,
+		);
+	});
+});
+
+test("local config updates preserve unknown fields and reject malformed or symlinked files", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify({ future: { enabled: true } }));
+		await updateLocalConfig((current) => ({ ...current, syncFiles: [] }));
+		assert.deepEqual((await readLocalConfigObject())?.future, { enabled: true });
+
+		writeFileSync(localConfigPath(), "{broken");
+		await assert.rejects(
+			updateLocalConfig((current) => current),
+			SyntaxError,
+		);
+		assert.equal(readFileSync(localConfigPath(), "utf8"), "{broken");
+
+		rmSync(localConfigPath());
+		const target = path.join(agentDir, "target.json");
+		writeFileSync(target, "keep\n");
+		await fs.symlink(target, localConfigPath());
+		await assert.rejects(
+			updateLocalConfig((current) => current),
+			/symlinked pi-sync config/,
+		);
+		assert.equal(readFileSync(target, "utf8"), "keep\n");
+	});
+});
+
+test("sync files rolls back the active row when atomic publication fails", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
+		const originalRename = fs.rename;
+		fs.rename = (async () => {
+			throw new Error("rename failed");
+		}) as typeof fs.rename;
+		try {
+			const mock = createMockPi();
+			sync(mock.pi);
+			const context = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				custom: async (factory: unknown) => {
+					const selector = createCustomSelectorHarness(factory);
+					selector.handleInput("\r");
+					await waitFor(() => context.notifications.length > 0);
+					assert.ok(
+						selector
+							.render()
+							.some((line) => line.includes("settings.json") && line.includes("included")),
+					);
+					selector.handleInput("\u001b");
+					return selector.result;
+				},
+			});
+
+			await mock.commands.get("sync")?.handler("files", context.ctx);
+			assert.match(context.notifications.at(-1)?.message ?? "", /rename failed/);
+			assert.equal((await readLocalConfigObject())?.syncFiles, undefined);
+		} finally {
+			fs.rename = originalRename;
+		}
+	});
+});
+
 test("sync rollback menu requests a snapshot id and cancels empty input", async () => {
 	await withTempHome(async (agentDir) => {
 		const mock = createMockPi();
@@ -184,7 +402,7 @@ test("sync rollback menu requests a snapshot id and cancels empty input", async 
 		let inputCalls = 0;
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
-			select: async () => expectedSyncMenuOptions[10],
+			select: async () => expectedSyncMenuOptions[11],
 			input: async () => {
 				inputCalls += 1;
 				return "  ";
@@ -205,7 +423,7 @@ test("sync rollback menu passes a provided snapshot id to rollback", async () =>
 		sync(mock.pi);
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
-			select: async () => expectedSyncMenuOptions[10],
+			select: async () => expectedSyncMenuOptions[11],
 			input: async () => "snapshot-id",
 		});
 
@@ -223,6 +441,7 @@ test("completeSyncArguments suggests commands and useful flags", () => {
 			"help",
 			"init",
 			"config",
+			"files",
 			"status",
 			"diff",
 			"doctor",
@@ -265,6 +484,145 @@ test("completeSyncArguments suggests commands and useful flags", () => {
 	assert.equal(completeSyncArguments("status "), null);
 	assert.equal(completeSyncArguments("push snapshot"), null);
 	assert.equal(completeSyncArguments("wat"), null);
+});
+
+test("syncFiles keeps the legacy allowlist by default and validates explicit selections safely", async () => {
+	assert.deepEqual(normalizeSyncFiles(undefined), [...DEFAULT_SYNC_FILES]);
+	assert.deepEqual(normalizeSyncFiles([]), []);
+	assert.deepEqual(normalizeSyncFiles(["SETTINGS.JSON", "settings.json", "skills"]), [
+		"settings.json",
+		"skills",
+	]);
+	assert.throws(() => normalizeSyncFiles("settings.json"), /syncFiles must be an array/);
+	assert.throws(
+		() => normalizeSyncFiles(["settings.json", "unknown.json"]),
+		/Unknown syncFiles item/,
+	);
+	assert.throws(() => normalizeSyncFiles(["settings.json", 1]), /syncFiles items must be strings/);
+
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
+		assert.deepEqual((await loadConfig()).syncFiles, [...DEFAULT_SYNC_FILES]);
+
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), syncFiles: [] }),
+		);
+		assert.deepEqual((await loadConfig()).syncFiles, []);
+	});
+});
+
+test("snapshot collection includes only selected built-in files and directory groups", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-selected-"));
+	mkdirSync(path.join(root, "skills"));
+	mkdirSync(path.join(root, "prompts"));
+	writeFileSync(path.join(root, "settings.json"), "{}\n");
+	writeFileSync(path.join(root, "keybindings.json"), "{}\n");
+	writeFileSync(path.join(root, "skills", "demo.md"), "skill\n");
+	writeFileSync(path.join(root, "prompts", "demo.md"), "prompt\n");
+
+	assert.deepEqual(
+		(await collectFiles(root, { syncFiles: ["settings.json", "skills"] })).map((file) => file.path),
+		["settings.json", "skills/demo.md"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { syncFiles: [] })).map((file) => file.path),
+		[],
+	);
+});
+
+test("upload merge preserves remote built-ins and directories that this machine does not manage", () => {
+	const local = snapshot([{ path: "settings.json", content: Buffer.from("local") }]);
+	const remote = snapshot([
+		{ path: "settings.json", content: Buffer.from("remote") },
+		{ path: "keybindings.json", content: Buffer.from("remote keys") },
+		{ path: "skills/demo.md", content: Buffer.from("remote skill") },
+		{ path: "prompts/demo.md", content: Buffer.from("old prompt") },
+	]);
+	const merged = mergeRemotePreservedFiles(local, remote, {
+		syncFiles: ["settings.json", "prompts"],
+		syncSessions: false,
+		extraFiles: [],
+	});
+
+	assert.deepEqual(
+		merged.files.map((file) => file.path),
+		["keybindings.json", "settings.json", "skills/demo.md"],
+	);
+});
+
+test("forced pushes preserve remote files outside this machine's selection", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
+		);
+
+		const remote = {
+			...snapshot([
+				{ path: "settings.json", content: Buffer.from("remote settings\n") },
+				{ path: "keybindings.json", content: Buffer.from("remote keys\n") },
+			]),
+			id: "remote-snapshot",
+		};
+		const remoteBody = gzipSync(Buffer.from(JSON.stringify(remote), "utf8"));
+		let latest = {
+			version: 1,
+			profile: "default",
+			snapshot: remote.id,
+			sha256: createHash("sha256").update(remoteBody).digest("hex"),
+			createdAt: remote.createdAt,
+			machine: remote.machine,
+			syncSessions: false,
+		};
+		let uploadedBody: Buffer | undefined;
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input, init) => {
+			const url = new URL(String(input));
+			const method = init?.method ?? "GET";
+			if (method === "GET" && url.pathname.endsWith("/latest.json")) {
+				return Response.json(latest);
+			}
+			if (method === "GET" && url.pathname.endsWith(`/snapshots/${remote.id}.json.gz`)) {
+				return new Response(new Uint8Array(remoteBody));
+			}
+			if (method === "PUT" && url.pathname.includes("/snapshots/")) {
+				uploadedBody = Buffer.from(init?.body as Uint8Array);
+				return new Response(null, { status: 200 });
+			}
+			if (method === "PUT" && url.pathname.endsWith("/latest.json")) {
+				latest = JSON.parse(Buffer.from(init?.body as Uint8Array).toString("utf8"));
+				return new Response(null, { status: 200 });
+			}
+			if (method === "GET" && url.pathname.endsWith("/history.json")) {
+				return new Response(null, { status: 404 });
+			}
+			if (method === "PUT" && url.pathname.endsWith("/history.json")) {
+				return new Response(null, { status: 200 });
+			}
+			throw new Error(`Unexpected S3 request: ${method} ${url.pathname}`);
+		}) as typeof globalThis.fetch;
+
+		try {
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext();
+			await mock.commands.get("sync")?.handler("push --yes --force", ctx);
+
+			assert.ok(uploadedBody, JSON.stringify(notifications));
+			const uploaded = JSON.parse(gunzipSync(uploadedBody).toString("utf8"));
+			assert.deepEqual(
+				uploaded.files.map((file: { path: string }) => file.path),
+				["keybindings.json", "settings.json"],
+			);
+			assert.equal(notifications.at(-1)?.level, "info");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
 });
 
 test("syncSessions config defaults off and supports file plus env overrides", async () => {
@@ -573,6 +931,24 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 	);
 });
 
+test("snapshot apply leaves unselected local files and directories untouched", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(path.join(agentDir, "skills"), { recursive: true });
+		writeFileSync(path.join(agentDir, "keybindings.json"), "local keys\n");
+		writeFileSync(path.join(agentDir, "skills", "local.md"), "local skill\n");
+		const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote settings\n") }]);
+
+		await applySnapshot(remote, new Set(), {
+			syncFiles: ["settings.json"],
+			extraFiles: [],
+		});
+
+		assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), "remote settings\n");
+		assert.equal(readFileSync(path.join(agentDir, "keybindings.json"), "utf8"), "local keys\n");
+		assert.equal(readFileSync(path.join(agentDir, "skills", "local.md"), "utf8"), "local skill\n");
+	});
+});
+
 test("snapshot apply deletes stale top-level case variants", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-apply-case-"));
 	writeFileSync(path.join(root, "append_system.md"), "old\n");
@@ -748,6 +1124,36 @@ test("settings-only uploads preserve remote session files", () => {
 		["settings.json"],
 	);
 	assert.equal(emptySessionSet.syncSessions, true);
+});
+
+test("sync state tracks selection-policy changes without treating deselection as remote deletion", () => {
+	const remote = snapshot([
+		{ path: "settings.json", content: Buffer.from("settings") },
+		{ path: "keybindings.json", content: Buffer.from("keys") },
+	]);
+	const selectedSettings = {
+		...requiredConfig(),
+		region: "auto",
+		profile: "default",
+		prefix: "pi-sync",
+		syncFiles: ["settings.json"],
+		syncSessions: false,
+		extraFiles: [],
+	};
+	const legacyState = {
+		version: 1,
+		profile: "default",
+		lastAppliedSnapshot: remote.id,
+		lastFileHashes: Object.fromEntries(remote.files.map((file) => [file.path, file.sha256])),
+	};
+	assert.equal(hasRemoteChanges(remote, legacyState, selectedSettings), false);
+
+	const previouslyEmptyState = {
+		...legacyState,
+		lastFileHashes: {},
+		syncFiles: [],
+	};
+	assert.equal(hasRemoteChanges(remote, previouslyEmptyState, selectedSettings), true);
 });
 
 test("settings hash maps ignore session differences for first sync checks", () => {
@@ -1497,6 +1903,14 @@ async function withTempHome<T>(fn: (agentDir: string) => Promise<T>) {
 		else process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDir;
 		rmSync(home, { recursive: true, force: true });
 	}
+}
+
+async function waitFor(predicate: () => boolean) {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error("Timed out waiting for test condition");
 }
 
 async function withEnv<T>(env: Record<string, string>, fn: () => Promise<T>) {

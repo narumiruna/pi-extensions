@@ -8,14 +8,12 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
 
 ## ✨ Features
 
-- Opens every pi-sync action from the bare `/sync` menu and keeps direct `help`, `init`, `config`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` subcommands for automation and advanced flags.
-- Syncs allowlisted Pi configuration from `~/.pi/agent`:
-  - `settings.json`
-  - `keybindings.json`
-  - `models.json`
-  - `AGENTS.md`
-  - `APPEND_SYSTEM.md`
-  - `skills/`, `prompts/`, `themes/`, and `extensions/`
+- Opens every pi-sync action from the bare `/sync` menu and keeps direct `help`, `init`, `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` subcommands for automation and advanced flags.
+- Uses `/sync files` to choose which top-level Pi files and recursive directory groups are managed by this machine.
+- Syncs selected, allowlisted Pi configuration from `~/.pi/agent`:
+  - `settings.json`, `keybindings.json`, `models.json`, `AGENTS.md`, and `APPEND_SYSTEM.md`
+  - recursive `skills/`, `prompts/`, `themes/`, and `extensions/` groups
+  - safe top-level files selected through `extraFiles`
   - optionally denylist-filtered `sessions/**/*.jsonl` when `syncSessions` is enabled
 - Stores each remote version as an immutable gzip-compressed JSON snapshot bundle.
 - Updates remote state through `latest.json` after re-reading remote state to reject already-visible remote changes.
@@ -71,6 +69,17 @@ Example:
   "profile": "default",
   "prefix": "pi-sync",
   "autoSync": true,
+  "syncFiles": [
+    "settings.json",
+    "keybindings.json",
+    "models.json",
+    "AGENTS.md",
+    "APPEND_SYSTEM.md",
+    "skills",
+    "prompts",
+    "themes",
+    "extensions"
+  ],
   "syncSessions": false,
   "extraFiles": []
 }
@@ -91,7 +100,13 @@ export PI_SYNC_AUTO_SYNC="true"
 export PI_SYNC_SESSIONS="false" # opt in with true to sync Pi conversation JSONL files
 ```
 
-Set `extraFiles` to additional top-level file names to include beyond the default allowlist. Machines without a matching `extraFiles` entry preserve those remote files but do not apply or delete them locally.
+Run `/sync files` in TUI mode to edit `syncFiles`, `syncSessions`, and `extraFiles` with a searchable selector. Enter or Space toggles an item and Escape closes the screen. Each successful change is saved immediately to `pi-sync.local.json`, preserving unknown fields through an atomic replacement with `0600` permissions on POSIX. No network sync starts until the next manual `push`, `pull`, or `sync`, or the existing automatic sync lifecycle.
+
+`syncFiles` accepts the built-in names shown above and has no environment-variable override. Directory names select the complete recursive group. Omitting `syncFiles` preserves the legacy default of selecting every built-in item; an empty array is valid and means this machine manages none of them. Unknown values make configuration validation fail instead of silently narrowing the selection.
+
+The selector always shows built-in items, even when they are absent locally, so another machine can provide them on pull. It also shows safe top-level regular files found locally and configured `extraFiles` that may only exist remotely. It excludes directories, symlinks, reserved names, and denylisted names. You can still edit `extraFiles` manually to select additional safe top-level file names.
+
+An unselected item is unmanaged by this machine: pi-sync does not collect, compare, pull, overwrite, or delete its local content, and pushes preserve its existing remote snapshot content for other machines. This applies to built-ins, directory groups, sessions, and extra files. Selecting nothing therefore does not delete unmanaged local or remote files.
 
 `PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary credentials such as AWS STS, AWS SSO, assumed roles, or S3-compatible providers that issue short-lived credentials.
 
@@ -111,7 +126,7 @@ Session files can contain prompts, model output, tool results, file paths, image
 
 ## 🚀 Usage
 
-Run `/sync` without arguments to open the interactive menu containing every pi-sync action. Choosing rollback asks for the snapshot id before showing the existing confirmation. Cancelling either selection leaves sync state unchanged.
+Run `/sync` without arguments to open the interactive menu containing every pi-sync action. The **files — Choose synced files** action opens the persistent selector. Choosing rollback asks for the snapshot id before showing the existing confirmation. Cancelling either action leaves unmodified state unchanged; file-selection changes that were already saved are not rolled back when the screen closes.
 
 ```text
 /sync
@@ -123,6 +138,7 @@ The same actions remain available as direct routes for automation, non-interacti
 /sync help
 /sync init
 /sync config
+/sync files
 /sync status
 /sync diff
 /sync doctor
@@ -134,7 +150,7 @@ The same actions remain available as direct routes for automation, non-interacti
 /sync unlock --stale
 ```
 
-Bare `/sync` reports command usage when an interactive UI is unavailable; use a direct route for the desired operation.
+Bare `/sync` reports command usage when an interactive UI is unavailable; use a direct route for the desired operation. Outside TUI mode, `/sync files` does not open a custom component and instead reports the effective selection, config path, and manual editing fields. When `PI_SYNC_SESSIONS` is set, the sessions row is read-only and identifies the environment override.
 
 Useful flags:
 
@@ -188,6 +204,7 @@ Before updating `latest.json`, pi-sync re-reads the current pointer and rejects 
 ## 🛡️ Safety notes
 
 - pi-sync auto-syncs on startup by default, but skips instead of overwriting when first-run local settings and a remote snapshot both exist, or when both local and remote changed after a previous sync.
+- Unselected built-in files, directory groups, sessions, and extra files are unmanaged locally and preserved remotely; selecting nothing does not delete them.
 - With `syncSessions`/`PI_SYNC_SESSIONS` disabled, pi-sync does not collect or apply local Pi sessions, though settings-only pushes may preserve session files already present in remote snapshots. It never syncs OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
 - If another Pi process is already syncing on the same machine, destructive commands stop at the local lock. `/sync unlock --stale` is intended for locks whose process is gone or invalid.
 - If another machine's update is visible before this machine updates `latest.json`, push is rejected unless you explicitly use `--force`.
@@ -201,6 +218,8 @@ extensions/pi-sync/
 ├── src/
 │   ├── index.ts       # Pi package entrypoint
 │   ├── sync.ts        # Extension registration and command orchestration
+│   ├── file-selection.ts # Persistent SettingsList selector
+│   ├── sync-policy.ts # Shared built-in catalog and path policy
 │   └── *.ts           # Package-local config, snapshot, path, and S3 modules
 ├── README.md
 ├── LICENSE
