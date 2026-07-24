@@ -13,13 +13,11 @@ import {
 } from "../src/settings.js";
 
 test("statusline defaults describe the complete Tokyo Night JSON document", () => {
-	assert.equal(typeof DEFAULT_STATUSLINE_CONFIG.palette, "object");
-	assert.deepEqual(
-		typeof DEFAULT_STATUSLINE_CONFIG.palette === "string"
-			? undefined
-			: DEFAULT_STATUSLINE_CONFIG.palette.time,
-		{ fg: "#a0a9cb", bg: "#1d2230" },
-	);
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.palettePreset, "tokyo-night");
+	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.palette.time, {
+		fg: "#a0a9cb",
+		bg: "#1d2230",
+	});
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.density, "compact");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.separator, "none");
 	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.segments, [
@@ -56,7 +54,7 @@ test("normalization supports partial icon-only settings and structured overrides
 		},
 		extensionStatusIcons: { goal: "", custom: "🧪" },
 	});
-	assert.equal(normalized.config.palette, "ocean");
+	assert.equal(normalized.config.palettePreset, "ocean");
 	assert.equal(normalized.config.density, "cozy");
 	assert.equal(normalized.config.separator, "dot");
 	assert.deepEqual(normalized.config.segments, ["model", "cwd", "turn"]);
@@ -67,7 +65,7 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.deepEqual(normalized.diagnostics, []);
 
 	const iconOnly = normalizeStatuslineConfig({ extensionStatusIcons: { goal: "◎" } });
-	assert.equal(typeof iconOnly.config.palette, "object");
+	assert.equal(iconOnly.config.palettePreset, "tokyo-night");
 	assert.deepEqual(iconOnly.config.segments, DEFAULT_STATUSLINE_CONFIG.segments);
 	assert.equal(iconOnly.config.extensionStatusIcons.goal, "◎");
 });
@@ -80,12 +78,21 @@ test("palette object normalizes segment colors and inherits omitted Tokyo Night 
 			cwd: { bg: "#123ABC" },
 		},
 	});
-	assert.equal(typeof normalized.config.palette, "object");
-	if (typeof normalized.config.palette === "string") assert.fail("expected palette object");
+	assert.equal(normalized.config.palettePreset, "custom");
 	assert.deepEqual(normalized.config.palette.time, { fg: "#090c0c", bg: "#a3aed2" });
 	assert.deepEqual(normalized.config.palette.model, { fg: "#ffffff", bg: "#a3aed2" });
 	assert.deepEqual(normalized.config.palette.cwd, { fg: "#e3e5e5", bg: "#123abc" });
 	assert.deepEqual(normalized.config.palette.brand, { fg: "#090c0c", bg: "#a3aed2" });
+	assert.deepEqual(normalized.diagnostics, []);
+});
+
+test("explicit palette preset takes precedence while preserving custom colors", () => {
+	const normalized = normalizeStatuslineConfig({
+		palettePreset: "forest",
+		palette: { time: { fg: "#112233", bg: "#445566" } },
+	});
+	assert.equal(normalized.config.palettePreset, "forest");
+	assert.deepEqual(normalized.config.palette.time, { fg: "#112233", bg: "#445566" });
 	assert.deepEqual(normalized.diagnostics, []);
 });
 
@@ -97,8 +104,7 @@ test("palette object reports invalid colors and forward-compatible unknown field
 			unknown: { fg: "#123456" },
 		},
 	});
-	assert.equal(typeof normalized.config.palette, "object");
-	if (typeof normalized.config.palette === "string") assert.fail("expected palette object");
+	assert.equal(normalized.config.palettePreset, "custom");
 	assert.deepEqual(normalized.config.palette.time, { fg: "#a0a9cb", bg: "#1d2230" });
 	assert.deepEqual(
 		normalized.diagnostics.map(({ code, path }) => ({ code, path })),
@@ -148,6 +154,7 @@ test("segment text rejects embedded line breaks and terminal control sequences",
 test("normalization falls back by field and reports unknown, duplicate, and invalid values", () => {
 	const normalized = normalizeStatuslineConfig({
 		palette: "invalid",
+		palettePreset: "invalid",
 		density: 3,
 		separator: "bar",
 		segments: ["model", "unknown", "model", 3, "time"],
@@ -160,7 +167,7 @@ test("normalization falls back by field and reports unknown, duplicate, and inva
 		showLabels: true,
 		future: true,
 	});
-	assert.equal(typeof normalized.config.palette, "object");
+	assert.equal(normalized.config.palettePreset, "tokyo-night");
 	assert.equal(normalized.config.density, "compact");
 	assert.equal(normalized.config.separator, "bar");
 	assert.deepEqual(normalized.config.segments, ["model", "time"]);
@@ -170,6 +177,7 @@ test("normalization falls back by field and reports unknown, duplicate, and inva
 	const paths = normalized.diagnostics.map((item) => item.path);
 	for (const path of [
 		"palette",
+		"palettePreset",
 		"density",
 		"segments[1]",
 		"segments[2]",
@@ -199,14 +207,29 @@ test("all named palettes, separators, empty segments, and environment independen
 	const previous = process.env.PI_STATUSLINE_PRESET;
 	process.env.PI_STATUSLINE_PRESET = "classic";
 	try {
-		for (const palette of ["tokyo-night", "ocean", "sunset", "forest", "candy", "neon", "mono"]) {
-			assert.equal(normalizeStatuslineConfig({ palette }).config.palette, palette);
+		for (const palettePreset of [
+			"tokyo-night",
+			"ocean",
+			"sunset",
+			"forest",
+			"candy",
+			"neon",
+			"mono",
+		]) {
+			assert.equal(
+				normalizeStatuslineConfig({ palettePreset }).config.palettePreset,
+				palettePreset,
+			);
+			assert.equal(
+				normalizeStatuslineConfig({ palette: palettePreset }).config.palettePreset,
+				palettePreset,
+			);
 		}
 		for (const separator of ["none", "dot", "bar", "powerline", "round"]) {
 			assert.equal(normalizeStatuslineConfig({ separator }).config.separator, separator);
 		}
 		assert.deepEqual(normalizeStatuslineConfig({ segments: [] }).config.segments, []);
-		assert.equal(typeof normalizeStatuslineConfig({}).config.palette, "object");
+		assert.equal(normalizeStatuslineConfig({}).config.palettePreset, "tokyo-night");
 	} finally {
 		if (previous === undefined) delete process.env.PI_STATUSLINE_PRESET;
 		else process.env.PI_STATUSLINE_PRESET = previous;
@@ -316,6 +339,10 @@ test("invalid recognized fields are rejected on save while unknown fields remain
 		assert.throws(
 			() => saveStatuslineSettingsDocument(path, JSON.stringify({ palette: "bad" })),
 			/palette/i,
+		);
+		assert.throws(
+			() => saveStatuslineSettingsDocument(path, JSON.stringify({ palettePreset: "bad" })),
+			/palettePreset/i,
 		);
 		assert.throws(
 			() =>

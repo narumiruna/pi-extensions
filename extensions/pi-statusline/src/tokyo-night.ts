@@ -4,11 +4,12 @@ import { ansiFg, ansiStyle } from "./ansi.js";
 import {
 	LINE_BREAK_SEGMENT_NAME,
 	type PaletteName,
+	type PalettePreset,
 	type RenderItem,
 	type RenderSegment,
+	type SegmentPalette,
 	type SeparatorName,
 	type StatuslineConfig,
-	type StatuslinePalette,
 	type TokyoNightBlockName,
 } from "./types.js";
 
@@ -66,7 +67,7 @@ const PALETTE_SEQUENCES: Record<Exclude<PaletteName, "tokyo-night">, SemanticCol
 export function renderTokyoNightStatusline(
 	width: number,
 	items: RenderItem[],
-	config: Pick<StatuslineConfig, "palette" | "density" | "separator">,
+	config: Pick<StatuslineConfig, "palettePreset" | "palette" | "density" | "separator">,
 ): string {
 	if (items.length === 0 || width <= 0) return "";
 	return splitLines(items)
@@ -89,17 +90,17 @@ function splitLines(items: RenderItem[]): RenderSegment[][] {
 
 export function tokyoNightExtensionSeparator(
 	_theme: Theme,
-	palette: StatuslinePalette = "tokyo-night",
+	palettePreset: PalettePreset = "tokyo-night",
 ): string {
-	return ansiFg(resolvePalette(palette).extensionSeparator, " • ");
+	return ansiFg(resolvePalette(palettePreset).extensionSeparator, " • ");
 }
 
 function joinTokyoNightSegments(
 	segments: RenderSegment[],
-	config: Pick<StatuslineConfig, "palette" | "density" | "separator">,
+	config: Pick<StatuslineConfig, "palettePreset" | "palette" | "density" | "separator">,
 ): string {
-	const palette = resolvePalette(config.palette);
-	const blocks = contiguousBlocks(segments, palette, config.palette);
+	const palette = resolvePalette(config.palettePreset);
+	const blocks = contiguousBlocks(segments, palette, config.palettePreset, config.palette);
 	let line = ansiFg(palette.lead, "░▒▓");
 
 	for (const [index, block] of blocks.entries()) {
@@ -116,10 +117,11 @@ function joinTokyoNightSegments(
 function contiguousBlocks(
 	segments: RenderSegment[],
 	palette: PowerlinePalette,
-	configuredPalette: StatuslinePalette,
+	palettePreset: PalettePreset,
+	configuredPalette: SegmentPalette,
 ): TokyoNightBlock[] {
 	const blocks: TokyoNightBlock[] = [];
-	const usesConfiguredColors = typeof configuredPalette !== "string";
+	const usesConfiguredColors = palettePreset === "custom";
 	for (const segment of segments) {
 		const colors = usesConfiguredColors
 			? configuredPalette[segment.name]
@@ -171,9 +173,9 @@ function separatorText(separator: SeparatorName, cozy: boolean): string {
 	}
 }
 
-function resolvePalette(palette: StatuslinePalette): PowerlinePalette {
-	if (typeof palette !== "string" || palette === "tokyo-night") return TOKYO_NIGHT_PALETTE;
-	const sequence = PALETTE_SEQUENCES[palette];
+function resolvePalette(palettePreset: PalettePreset): PowerlinePalette {
+	if (palettePreset === "custom" || palettePreset === "tokyo-night") return TOKYO_NIGHT_PALETTE;
+	const sequence = PALETTE_SEQUENCES[palettePreset];
 	const backgrounds = BLOCK_NAMES.map(
 		(_block, index) => SEMANTIC_COLORS[sequence[index % sequence.length] ?? "muted"],
 	);

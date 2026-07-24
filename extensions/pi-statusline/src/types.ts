@@ -30,6 +30,9 @@ export const PALETTE_NAMES = [
 ] as const;
 export type PaletteName = (typeof PALETTE_NAMES)[number];
 
+export const PALETTE_PRESET_NAMES = [...PALETTE_NAMES, "custom"] as const;
+export type PalettePreset = (typeof PALETTE_PRESET_NAMES)[number];
+
 export const DENSITIES = ["compact", "cozy"] as const;
 export type Density = (typeof DENSITIES)[number];
 
@@ -49,7 +52,6 @@ export interface SegmentPaletteColor {
 }
 
 export type SegmentPalette = Record<SegmentName, SegmentPaletteColor>;
-export type StatuslinePalette = PaletteName | SegmentPalette;
 
 export const TOKYO_NIGHT_SEGMENT_PALETTE: SegmentPalette = {
 	brand: { fg: "#090c0c", bg: "#a3aed2" },
@@ -67,7 +69,8 @@ export const TOKYO_NIGHT_SEGMENT_PALETTE: SegmentPalette = {
 };
 
 export interface StatuslineConfig {
-	palette: StatuslinePalette;
+	palettePreset: PalettePreset;
+	palette: SegmentPalette;
 	density: Density;
 	separator: SeparatorName;
 	segments: ConfigSegmentName[];

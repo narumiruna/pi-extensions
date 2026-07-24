@@ -15,6 +15,7 @@ import {
 	DENSITIES,
 	LINE_BREAK_SEGMENT_NAME,
 	PALETTE_NAMES,
+	PALETTE_PRESET_NAMES,
 	SEGMENT_NAMES,
 	SEPARATOR_NAMES,
 	type SegmentName,
@@ -56,6 +57,7 @@ const DEFAULT_SEGMENTS: SegmentName[] = [
 ];
 
 export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
+	palettePreset: "tokyo-night",
 	palette: cloneSegmentPalette(TOKYO_NIGHT_SEGMENT_PALETTE),
 	density: "compact",
 	separator: "none",
@@ -132,6 +134,7 @@ export function normalizeStatuslineConfig(value: unknown): {
 	}
 
 	const knownRoot = new Set([
+		"palettePreset",
 		"palette",
 		"density",
 		"separator",
@@ -144,6 +147,7 @@ export function normalizeStatuslineConfig(value: unknown): {
 	}
 
 	normalizePalette(value.palette, config, diagnostics);
+	normalizeEnum(value, "palettePreset", PALETTE_PRESET_NAMES, config, diagnostics);
 	normalizeEnum(value, "density", DENSITIES, config, diagnostics);
 	normalizeEnum(value, "separator", SEPARATOR_NAMES, config, diagnostics);
 
@@ -431,7 +435,7 @@ function normalizePalette(
 			);
 			return;
 		}
-		config.palette = value as StatuslineConfig["palette"];
+		config.palettePreset = value as (typeof PALETTE_NAMES)[number];
 		return;
 	}
 	if (!isRecord(value)) {
@@ -464,9 +468,13 @@ function normalizePalette(
 		}
 	}
 	config.palette = palette;
+	config.palettePreset = "custom";
 }
 
-function normalizeEnum<K extends "density" | "separator", T extends StatuslineConfig[K]>(
+function normalizeEnum<
+	K extends "palettePreset" | "density" | "separator",
+	T extends StatuslineConfig[K],
+>(
 	value: Record<string, unknown>,
 	field: K,
 	accepted: readonly T[],
@@ -493,8 +501,7 @@ function cloneSegmentPalette(palette: SegmentPalette): SegmentPalette {
 function cloneConfig(config: StatuslineConfig): StatuslineConfig {
 	return {
 		...config,
-		palette:
-			typeof config.palette === "string" ? config.palette : cloneSegmentPalette(config.palette),
+		palette: cloneSegmentPalette(config.palette),
 		segments: [...config.segments],
 		segmentText: Object.fromEntries(
 			SEGMENT_NAMES.map((name) => [name, { ...config.segmentText[name] }]),

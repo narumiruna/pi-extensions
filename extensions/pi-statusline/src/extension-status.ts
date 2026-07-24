@@ -16,7 +16,7 @@ export interface ExtensionStatusRuntime {
 const STATUSLINE_KEY = "statusline";
 const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
 function extensionStatusSeparator(config: StatuslineConfig, theme: Theme): string {
-	return tokyoNightExtensionSeparator(theme, config.palette);
+	return tokyoNightExtensionSeparator(theme, config.palettePreset);
 }
 
 export function formatExtensionStatuses(

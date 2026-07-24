@@ -45,6 +45,7 @@ There are no project overrides or environment-variable overrides.
 
 ```json
 {
+  "palettePreset": "tokyo-night",
   "palette": {
     "brand": { "fg": "#090c0c", "bg": "#a3aed2" },
     "provider": { "fg": "#090c0c", "bg": "#a3aed2" },
@@ -109,18 +110,20 @@ All fields are optional in an existing document. Missing fields use defaults.
 
 ### Appearance
 
-- `palette`: maps each segment to foreground (`fg`) and background (`bg`) colors.
+- `palettePreset`: `tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, `mono`, or `custom`.
+- `palette`: maps each segment to foreground (`fg`) and background (`bg`) colors used by `custom`.
 - `density`: `compact` or `cozy`.
 - `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
 
-Each palette color must be a complete `#RRGGBB` truecolor value. The generated default document contains the complete Tokyo Night palette. Missing segment entries or color fields inherit Tokyo Night defaults, so existing partial documents remain valid. Legacy string palettes—`tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, and `mono`—remain accepted for compatibility.
+Named presets use their built-in colors while preserving the complete custom `palette` object. Selecting `custom` activates that object. If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
 
-The separator applies only between adjacent segments in the same color block. Color-block transitions always use ``. Extension statuses remain on separate wrapped lines with their own palette-colored separator.
+Each custom palette color must be a complete `#RRGGBB` truecolor value. Missing segment entries or color fields inherit Tokyo Night defaults. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` uses the Tokyo Night separator.
 
-For example, after moving `time` before the header segments, give it the same colors as the Tokyo Night header to keep one continuous block:
+For example, after moving `time` before the header segments, select `custom` and give it the same colors as the Tokyo Night header to keep one continuous block:
 
 ```json
 {
+  "palettePreset": "custom",
   "segments": ["time", "brand", "provider", "model"],
   "palette": {
     "time": {
@@ -131,7 +134,7 @@ For example, after moving `time` before the header segments, give it the same co
 }
 ```
 
-Adjacent segments with the same configured foreground and background render as one block. Invalid colors prevent `/statusline settings` from saving. Unknown segment names or palette fields are reported as warnings and ignored.
+Adjacent custom segments with the same configured foreground and background render as one block. Invalid presets or colors prevent `/statusline settings` from saving. Unknown segment names or palette fields are reported as warnings and ignored.
 
 ### Segments
 
@@ -195,11 +198,13 @@ Statuses from other extensions appear below the main powerline. The linked GitHu
 
 | Command | Purpose |
 | --- | --- |
+| `/statusline` | Open the TUI menu for palette presets, JSON settings, status, and help |
+| `/statusline palette` | Choose a named preset or the preserved custom palette |
 | `/statusline settings` | Edit raw JSON in TUI, validate, atomically save, and apply immediately |
 | `/statusline status` | Show settings path/source, effective appearance, segments, and diagnostics |
 | `/statusline help` | Show command and schema guidance |
 
-Invalid or cancelled edits leave both the previous file and effective runtime configuration unchanged. The editor is TUI-only; status and help are safe in TUI, print, JSON, and RPC modes.
+Preset selection and raw editing are TUI-only. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged. Status and help are safe in TUI, print, JSON, and RPC modes.
 
 ## 🌿 Git and activity details
 

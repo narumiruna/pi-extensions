@@ -46,7 +46,7 @@ test("Tokyo Night default retains the exact powerline colors", () => {
 
 test("configured palette joins reordered time to an adjacent header block", () => {
 	const config = createDefaultConfig();
-	if (typeof config.palette === "string") assert.fail("expected palette object");
+	config.palettePreset = "custom";
 	config.palette.time = { fg: "#090c0c", bg: "#a3aed2" };
 	const rendered = renderTokyoNightStatusline(
 		300,
@@ -65,7 +65,7 @@ test("partial configured palette inherits omitted Tokyo Night colors", () => {
 
 test("different final segment colors retain the powerline transition", () => {
 	const config = createDefaultConfig();
-	if (typeof config.palette === "string") assert.fail("expected palette object");
+	config.palettePreset = "custom";
 	config.palette.time = { ...config.palette.time, bg: "#123456" };
 	const rendered = renderTokyoNightStatusline(
 		300,
@@ -127,7 +127,8 @@ test("all named palettes render deterministic distinct ANSI output", () => {
 		"mono",
 	] as const) {
 		const config = createDefaultConfig();
-		config.palette = palette;
+		config.palettePreset = palette;
+		config.palette.model = { fg: "#ffffff", bg: "#ffffff" };
 		const output = renderTokyoNightStatusline(
 			300,
 			[segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
