@@ -119,7 +119,8 @@ Providing custom config replaces the default server map. The following `pi-lsp.j
   },
   "rust-analyzer": {
     "command": ["rust-analyzer"],
-    "extensions": [".rs"]
+    "extensions": [".rs"],
+    "pullDiagnosticsGraceMs": 5000
   },
   "gopls": {
     "command": ["gopls"],
@@ -157,6 +158,7 @@ Each server entry supports:
 - `initialization`: LSP initialization options and workspace configuration values.
 - `skipDirectories`: additional directory names to exclude from recursive discovery. Explicitly requested paths remain available.
 - `diagnosticsSettleMs`: positive number of milliseconds without another push-diagnostics publication before using the latest result. Defaults to `800`; the built-in intelephense route uses `4000`. The global timeout remains the upper bound.
+- `pullDiagnosticsGraceMs`: positive number of milliseconds to wait for a newer push publication after a server returns an empty pull-diagnostics result. It is unset by default; the built-in rust-analyzer route uses `5000` because initial workspace analysis can finish after an early empty pull response.
 
 Global options:
 

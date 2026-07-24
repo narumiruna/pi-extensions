@@ -72,6 +72,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 		assert.ok(gopls);
 		assert.deepEqual(rustAnalyzer.defaultCommand, { command: "rust-analyzer", args: [] });
 		assert.deepEqual(rustAnalyzer.extensions, [".rs"]);
+		assert.equal(rustAnalyzer.pullDiagnosticsGraceMs, 5_000);
 		assert.equal(rustAnalyzer.languageIdFor("src/main.rs"), "rust");
 		assert.deepEqual(collectSupportedFiles(rustAnalyzer, project, undefined, 50), [
 			path.join(project, "src", "main.rs"),
@@ -98,6 +99,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			skipDirectories?: string[];
 			initialization?: Record<string, unknown>;
 			diagnosticsSettleMs?: number;
+			pullDiagnosticsGraceMs?: number;
 		}> = [
 			{
 				name: "rubocop",
@@ -298,6 +300,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			assert.equal(adapter.languageIdFor(expected.sample), expected.languageId);
 			assert.deepEqual(adapter.initialization, expected.initialization);
 			assert.equal(adapter.diagnosticsSettleMs, expected.diagnosticsSettleMs);
+			assert.equal(adapter.pullDiagnosticsGraceMs, expected.pullDiagnosticsGraceMs);
 			for (const directory of expected.skipDirectories ?? []) {
 				assert.equal(
 					adapter.skipDirectories.has(directory),
@@ -453,6 +456,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 					extensions: [".foo"],
 					skipDirectories: ["generated"],
 					diagnosticsSettleMs: 250,
+					pullDiagnosticsGraceMs: 500,
 				},
 			},
 		});
@@ -460,6 +464,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 		assert.ok(adapter);
 		assert.equal(adapter.isDefault, false);
 		assert.equal(adapter.diagnosticsSettleMs, 250);
+		assert.equal(adapter.pullDiagnosticsGraceMs, 500);
 		assert.deepEqual(collectSupportedFiles(adapter, project, undefined, 50), [
 			path.join(project, "src", "main.foo"),
 		]);
@@ -488,6 +493,17 @@ test("LSP config applies safe server-specific skip directories", () => {
 			},
 		});
 		assert.throws(() => loadConfig(project), /diagnosticsSettleMs.*positive number/);
+
+		process.env.PI_LSP_CONFIG = JSON.stringify({
+			servers: {
+				custom: {
+					command: ["custom-lsp"],
+					extensions: [".foo"],
+					pullDiagnosticsGraceMs: 0,
+				},
+			},
+		});
+		assert.throws(() => loadConfig(project), /pullDiagnosticsGraceMs.*positive number/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
