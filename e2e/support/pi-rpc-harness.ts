@@ -57,6 +57,24 @@ const DEFAULT_DIAGNOSTIC_BYTES = 16 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAX_RETAINED_RECORDS = 100;
+const CHILD_ENV_ALLOWLIST = new Set([
+	"CI",
+	"COLORTERM",
+	"COMSPEC",
+	"FORCE_COLOR",
+	"LANG",
+	"NO_COLOR",
+	"PATH",
+	"PATHEXT",
+	"SHELL",
+	"SYSTEMROOT",
+	"TEMP",
+	"TERM",
+	"TMP",
+	"TMPDIR",
+	"TZ",
+	"WINDIR",
+]);
 
 export class JsonlDecoder {
 	private readonly decoder = new StringDecoder("utf8");
@@ -438,12 +456,20 @@ export function spawnPiRpc(options: SpawnPiRpcOptions): RpcProcess {
 		"--extension",
 		extensionPath,
 	]);
-	const env = sanitizedChildEnvironment({ ...process.env, ...options.env });
+	const env = isolatedChildEnvironment(process.env, options.env);
 	Object.assign(env, {
+		APPDATA: options.agentDir,
+		HOME: options.agentDir,
+		LOCALAPPDATA: options.agentDir,
 		PI_CODING_AGENT_DIR: options.agentDir,
 		PI_CODING_AGENT_SESSION_DIR: options.sessionDir,
 		PI_OFFLINE: "1",
 		PI_TELEMETRY: "0",
+		PWD: options.cwd,
+		USERPROFILE: options.agentDir,
+		XDG_CACHE_HOME: path.join(options.agentDir, "cache"),
+		XDG_CONFIG_HOME: path.join(options.agentDir, "config"),
+		XDG_DATA_HOME: path.join(options.agentDir, "data"),
 	});
 	return spawnRpcProcess({
 		command: invocation.command,
@@ -472,14 +498,17 @@ export function spawnPiRpc(options: SpawnPiRpcOptions): RpcProcess {
 	});
 }
 
-function sanitizedChildEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function isolatedChildEnvironment(
+	source: NodeJS.ProcessEnv,
+	overrides: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {};
-	for (const [name, value] of Object.entries(source)) {
+	for (const [name, value] of Object.entries({ ...source, ...overrides })) {
+		const normalizedName = name.toUpperCase();
 		if (
-			/(?:^|_)(?:API_KEY|OAUTH_TOKEN|ACCESS_TOKEN|AUTH_TOKEN|SECRET_ACCESS_KEY|SESSION_TOKEN)$/i.test(
-				name,
-			) ||
-			/^(?:AWS_PROFILE|GOOGLE_APPLICATION_CREDENTIALS)$/i.test(name)
+			!CHILD_ENV_ALLOWLIST.has(normalizedName) &&
+			!normalizedName.startsWith("LC_") &&
+			!normalizedName.startsWith("PI_E2E_")
 		) {
 			continue;
 		}

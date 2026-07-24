@@ -3,6 +3,16 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const COMMAND_NAME = "e2e-control";
 const SENTINEL_PATH_ENV = "PI_E2E_SHUTDOWN_SENTINEL";
+const CREDENTIAL_ENV_NAMES = [
+	"ANTHROPIC_API_KEY",
+	"AWS_ACCESS_KEY_ID",
+	"AWS_SECRET_ACCESS_KEY",
+	"AWS_SESSION_TOKEN",
+	"E2E_SECRET_API_KEY",
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"NPM_TOKEN",
+] as const;
 
 export default function controlExtension(pi: ExtensionAPI): void {
 	pi.registerCommand(COMMAND_NAME, {
@@ -14,7 +24,9 @@ export default function controlExtension(pi: ExtensionAPI): void {
 					`PI_E2E_CONTROL ${JSON.stringify({
 						agentDir: process.env.PI_CODING_AGENT_DIR,
 						commands: pi.getCommands().map((command) => command.name),
-						credentialLeak: process.env.E2E_SECRET_API_KEY !== undefined,
+						credentialLeaks: CREDENTIAL_ENV_NAMES.filter((name) => process.env[name] !== undefined),
+						home: process.env.HOME ?? process.env.USERPROFILE,
+						safeMarker: process.env.PI_E2E_SAFE_MARKER,
 					})}`,
 					"info",
 				);

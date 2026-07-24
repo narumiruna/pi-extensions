@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -10,7 +11,7 @@ import {
 
 const fakeRpcChild = path.join(process.cwd(), "e2e", "fixtures", "fake-rpc-child.mjs");
 
-async function waitUntilDead(pid: number, timeoutMs = 2_000): Promise<void> {
+async function waitUntilNotRunning(pid: number, timeoutMs = 2_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		try {
@@ -19,9 +20,16 @@ async function waitUntilDead(pid: number, timeoutMs = 2_000): Promise<void> {
 			if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
 			throw error;
 		}
+
+		// PID 0 probes also succeed for zombies. A zombie cannot execute or retain inherited
+		// resources, so treat it as stopped while its new parent finishes reaping it.
+		const status = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
+			encoding: "utf8",
+		});
+		if (status.status !== 0 || /^Z/.test(status.stdout.trim())) return;
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
-	assert.fail(`process ${pid} remained alive`);
+	assert.fail(`process ${pid} remained running`);
 }
 
 test("repository Pi invocation resolves the installed package binary through Node", () => {
@@ -129,5 +137,5 @@ test("forced close terminates descendants that retain inherited resources", {
 	const response = await rpc.request({ type: "child" });
 	const childPid = (response.data as { pid: number }).pid;
 	await rpc.close();
-	await waitUntilDead(childPid);
+	await waitUntilNotRunning(childPid);
 });

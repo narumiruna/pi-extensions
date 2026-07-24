@@ -30,8 +30,16 @@ test("control fixture inspects an isolated RPC session and shuts it down gracefu
 		sessionDir,
 		extensionPaths: [controlExtension],
 		env: {
-			PI_E2E_SHUTDOWN_SENTINEL: sentinel,
+			ANTHROPIC_API_KEY: "must-not-reach-the-child",
+			AWS_ACCESS_KEY_ID: "must-not-reach-the-child",
+			AWS_SECRET_ACCESS_KEY: "must-not-reach-the-child",
+			AWS_SESSION_TOKEN: "must-not-reach-the-child",
 			E2E_SECRET_API_KEY: "must-not-reach-the-child",
+			GH_TOKEN: "must-not-reach-the-child",
+			GITHUB_TOKEN: "must-not-reach-the-child",
+			NPM_TOKEN: "must-not-reach-the-child",
+			PI_E2E_SAFE_MARKER: "expected-safe-marker",
+			PI_E2E_SHUTDOWN_SENTINEL: sentinel,
 		},
 		requestTimeoutMs: 5_000,
 		shutdownTimeoutMs: 1_000,
@@ -61,10 +69,14 @@ test("control fixture inspects an isolated RPC session and shuts it down gracefu
 	const details = JSON.parse((inspection.message as string).slice("PI_E2E_CONTROL ".length)) as {
 		agentDir: string;
 		commands: string[];
-		credentialLeak: boolean;
+		credentialLeaks: string[];
+		home: string;
+		safeMarker: string;
 	};
 	assert.equal(details.agentDir, agentDir);
-	assert.equal(details.credentialLeak, false);
+	assert.deepEqual(details.credentialLeaks, []);
+	assert.equal(details.home, agentDir);
+	assert.equal(details.safeMarker, "expected-safe-marker");
 	assert.ok(details.commands.includes("e2e-control"));
 
 	const shutdownRecord = rpc.waitForRecord(
