@@ -37,7 +37,7 @@ function createFooter(factory: FooterFactory) {
 	);
 }
 
-test("session start creates the complete default statusline settings", async () => {
+test("session start creates the editable default statusline settings", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-lifecycle-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;
@@ -50,6 +50,61 @@ test("session start creates the complete default statusline settings", async () 
 		assert.equal(existsSync(path), true);
 		assert.equal(readFileSync(path, "utf8"), DEFAULT_STATUSLINE_DOCUMENT);
 		assert.equal(context.footer, undefined);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("palette picker previews the highlighted preset and restores on cancel", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-lifecycle-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		writeFileSync(
+			join(root, "pi-statusline.json"),
+			JSON.stringify({ palettePreset: "sunset", segments: ["model"] }),
+		);
+		const mock = createMockPi();
+		statusline(mock.pi);
+		let footer: ReturnType<typeof createFooter> | undefined;
+		let preview = "";
+		const context = createMockContext({
+			mode: "tui",
+			model: { id: "claude-sonnet-4", provider: "anthropic" },
+			select: async (_title: string, choices: string[]) => choices[0],
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				let result: unknown;
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					{},
+					(value: unknown) => {
+						result = value;
+					},
+				) as { handleInput?(data: string): void };
+				component.handleInput?.("\u001b[B");
+				preview = footer?.render(200)[0] ?? "";
+				component.handleInput?.("\u001b");
+				return result;
+			},
+		});
+		await emit(mock.events, "session_start", {}, context.ctx);
+		footer = createFooter(context.footer as FooterFactory);
+		const before = footer.render(200)[0] ?? "";
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		const after = footer.render(200)[0] ?? "";
+		assert.match(before, /48;2;255;207;112/u);
+		assert.match(preview, /48;2;167;192;128/u);
+		assert.equal(after, before);
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

@@ -9,8 +9,9 @@
 - Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
 - Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
-- Creates a complete editable default configuration on first session start.
-- Applies validated `/statusline settings` edits immediately after an atomic save.
+- Creates an editable default configuration without an inactive custom palette on first session start.
+- Previews palette presets as the picker cursor moves, then applies the selection only on Enter.
+- Applies validated JSON settings edits from the `/statusline` menu immediately after an atomic save.
 - Caches Git state outside footer rendering and guards stale session results.
 - Wraps extension statuses safely at narrow terminal widths.
 
@@ -37,7 +38,7 @@ The only configuration source is:
 <getAgentDir()>/pi-statusline.json
 ```
 
-On first session start, the extension atomically creates the complete default document. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
+On first session start, the extension atomically creates an editable default document containing every active appearance and status-icon setting. The inactive custom `palette` is added only when needed. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
 
 There are no project overrides or environment-variable overrides.
 
@@ -45,7 +46,7 @@ There are no project overrides or environment-variable overrides.
 
 ```json
 {
-  "palette": "tokyo-night",
+  "palettePreset": "tokyo-night",
   "density": "compact",
   "separator": "none",
   "segments": [
@@ -96,11 +97,33 @@ All fields are optional in an existing document. Missing fields use defaults.
 
 ### Appearance
 
-- `palette`: `tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, or `mono`.
+- `palettePreset`: `tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, `mono`, or `custom`.
+- `palette`: maps each segment to foreground (`fg`) and background (`bg`) colors used by `custom`.
 - `density`: `compact` or `cozy`.
 - `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
 
-The separator applies only between adjacent segments in the same color block. Color-block transitions always use ``. Extension statuses remain on separate wrapped lines with their own palette-colored separator.
+Named presets use cohesive namesake color ramps while preserving an existing custom `palette` object. Selecting `custom` activates that object. When no palette object exists, choosing `custom` from `/statusline` writes a complete per-segment copy of the active named preset before activating it, so customization starts from the current appearance. The picker labels this editing relationship, and the main menu's `Edit settings JSON (custom colors, layout, icons)` action opens the existing JSON editor. It does not force an editor or present a separate per-color menu.
+
+If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. A manually authored `"palettePreset": "custom"` without a palette uses the built-in Tokyo Night colors. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
+
+Each custom palette color must be a complete `#RRGGBB` truecolor value. Within an explicit `palette` object, missing segment entries or `fg`/`bg` fields remain unstyled and do not inherit colors from Tokyo Night. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` leaves that separator unstyled.
+
+For example, after moving `time` before the header segments, select `custom` and give it the same colors as the Tokyo Night header to keep one continuous block:
+
+```json
+{
+  "palettePreset": "custom",
+  "segments": ["time", "brand", "provider", "model"],
+  "palette": {
+    "time": {
+      "fg": "#090c0c",
+      "bg": "#a3aed2"
+    }
+  }
+}
+```
+
+Adjacent custom segments with the same configured foreground and background render as one block. Segments with no configured colors also join into one unstyled block. Invalid presets or colors prevent the menu's JSON settings action from saving. Unknown segment names or palette fields are reported as warnings and ignored.
 
 ### Segments
 
@@ -144,7 +167,7 @@ Override either string independently:
 }
 ```
 
-Prefix and suffix values must be single-line text without terminal control characters; use the `line_break` segment for additional rows.
+Prefix and suffix values must be single-line text without terminal control characters; use the `line_break` segment for additional rows. The built-in prefixes are `🔌 ` for provider, `🤖 ` for model, `🧠 ` for thinking, `📁 ` for cwd, `🌿 ` for branch, `🪟 ctx ` for context, `🔢 ` for tokens, `💸 $` for cost, `🕒 ` for time, and `🔁 #` for turn; brand and tools have no built-in prefix, and all built-in suffixes are empty.
 
 This structured model intentionally does not provide variables or a format language. Dynamic Git, PR, activity, usage, token, and cost formatting remains owned by the extension.
 
@@ -158,17 +181,20 @@ This structured model intentionally does not provide variables or a format langu
 - A missing key uses the built-in icon or `🔌` for an unknown key.
 - Ambiguous package aliases require an exact status key.
 
+Built-in icon mappings are `chrome-devtools` → `🌐`, `codex-usage` and `usage` → `📊`, `caffeinate` → `💊`, `firecrawl` → `🔥`, `github-pr` → `🔎`, `goal` → `🎯`, `lsp` → `🧰`, `plan-mode` → `📝`, `pisync` → `🔄`, `subagents` → `🧑‍🤝‍🧑`, and `unknown-error-retry` → `🔁`.
+
 Statuses from other extensions appear below the main powerline. The linked GitHub PR status is hidden from that line when the branch segment already renders it.
 
 ## 💬 Commands
 
 | Command | Purpose |
 | --- | --- |
-| `/statusline settings` | Edit raw JSON in TUI, validate, atomically save, and apply immediately |
-| `/statusline status` | Show settings path/source, effective appearance, segments, and diagnostics |
+| `/statusline` | Open the interactive menu for palette presets, settings JSON, status, and help |
+| `/statusline settings` | Open the JSON settings editor in TUI mode |
+| `/statusline status` | Show the settings source, path, appearance, segments, and diagnostics |
 | `/statusline help` | Show command and schema guidance |
 
-Invalid or cancelled edits leave both the previous file and effective runtime configuration unchanged. The editor is TUI-only; status and help are safe in TUI, print, JSON, and RPC modes.
+Argument-free `/statusline` requires TUI mode. The established `settings`, `status`, and `help` routes remain available for compatibility; RPC receives notifications instead of opening TUI-only controls. Unknown subcommands and trailing arguments are rejected. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged.
 
 ## 🌿 Git and activity details
 
@@ -186,10 +212,22 @@ extensions/pi-statusline/
 │   ├── commands.ts
 │   ├── extension-status.ts
 │   ├── git-status.ts
+│   ├── powerline.ts
+│   ├── presets/
+│   │   ├── candy.ts
+│   │   ├── create-ramp.ts
+│   │   ├── custom.ts
+│   │   ├── forest.ts
+│   │   ├── index.ts
+│   │   ├── mono.ts
+│   │   ├── neon.ts
+│   │   ├── ocean.ts
+│   │   ├── sunset.ts
+│   │   ├── tokyo-night.ts
+│   │   └── types.ts
 │   ├── render.ts
 │   ├── settings.ts
 │   ├── statusline.ts
-│   ├── tokyo-night.ts
 │   └── types.ts
 ├── test/
 ├── README.md

@@ -3,8 +3,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { powerlineExtensionSeparator } from "./powerline.js";
 import { DEFAULT_EXTENSION_STATUS_ICONS } from "./settings.js";
-import { tokyoNightExtensionSeparator } from "./tokyo-night.js";
 import type { StatuslineConfig } from "./types.js";
 
 export type ExtensionStatusIconAliasMap = ReadonlyMap<string, readonly string[]>;
@@ -16,7 +16,7 @@ export interface ExtensionStatusRuntime {
 const STATUSLINE_KEY = "statusline";
 const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
 function extensionStatusSeparator(config: StatuslineConfig, theme: Theme): string {
-	return tokyoNightExtensionSeparator(theme, config.palette);
+	return powerlineExtensionSeparator(theme, config.palettePreset);
 }
 
 export function formatExtensionStatuses(

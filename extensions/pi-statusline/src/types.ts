@@ -30,21 +30,32 @@ export const PALETTE_NAMES = [
 ] as const;
 export type PaletteName = (typeof PALETTE_NAMES)[number];
 
+export const PALETTE_PRESET_NAMES = [...PALETTE_NAMES, "custom"] as const;
+export type PalettePreset = (typeof PALETTE_PRESET_NAMES)[number];
+
 export const DENSITIES = ["compact", "cozy"] as const;
 export type Density = (typeof DENSITIES)[number];
 
 export const SEPARATOR_NAMES = ["none", "dot", "bar", "powerline", "round"] as const;
 export type SeparatorName = (typeof SEPARATOR_NAMES)[number];
 
-export type TokyoNightBlockName = "header" | "directory" | "git" | "runtime" | "meter";
+export type PowerlineBlockName = "header" | "directory" | "git" | "runtime" | "meter";
 
 export interface SegmentTextConfig {
 	prefix: string;
 	suffix: string;
 }
 
+export interface SegmentPaletteColor {
+	fg?: string;
+	bg?: string;
+}
+
+export type SegmentPalette = Partial<Record<SegmentName, SegmentPaletteColor>>;
+
 export interface StatuslineConfig {
-	palette: PaletteName;
+	palettePreset: PalettePreset;
+	palette: SegmentPalette;
 	density: Density;
 	separator: SeparatorName;
 	segments: ConfigSegmentName[];
@@ -56,7 +67,7 @@ export interface RenderSegment {
 	name: SegmentName;
 	text: string;
 	color: ThemeColor;
-	block: TokyoNightBlockName;
+	block: PowerlineBlockName;
 	emphasis?: boolean;
 }
 

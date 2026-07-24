@@ -10,14 +10,18 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { segmentPaletteForPreset } from "./presets/index.js";
 import {
 	type ConfigSegmentName,
 	DENSITIES,
 	LINE_BREAK_SEGMENT_NAME,
 	PALETTE_NAMES,
+	PALETTE_PRESET_NAMES,
+	type PaletteName,
 	SEGMENT_NAMES,
 	SEPARATOR_NAMES,
 	type SegmentName,
+	type SegmentPalette,
 	type StatuslineConfig,
 } from "./types.js";
 
@@ -54,7 +58,8 @@ const DEFAULT_SEGMENTS: SegmentName[] = [
 ];
 
 export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
-	palette: "tokyo-night",
+	palettePreset: "tokyo-night",
+	palette: segmentPaletteForPreset("tokyo-night"),
 	density: "compact",
 	separator: "none",
 	segments: DEFAULT_SEGMENTS,
@@ -75,7 +80,20 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
 	extensionStatusIcons: DEFAULT_EXTENSION_STATUS_ICONS,
 };
 
-export const DEFAULT_STATUSLINE_DOCUMENT = `${JSON.stringify(DEFAULT_STATUSLINE_CONFIG, null, "\t")}\n`;
+const DEFAULT_STATUSLINE_DOCUMENT_CONFIG = {
+	palettePreset: DEFAULT_STATUSLINE_CONFIG.palettePreset,
+	density: DEFAULT_STATUSLINE_CONFIG.density,
+	separator: DEFAULT_STATUSLINE_CONFIG.separator,
+	segments: DEFAULT_SEGMENTS,
+	segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
+	extensionStatusIcons: DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons,
+} satisfies Omit<StatuslineConfig, "palette">;
+
+export const DEFAULT_STATUSLINE_DOCUMENT = `${JSON.stringify(
+	DEFAULT_STATUSLINE_DOCUMENT_CONFIG,
+	null,
+	"\t",
+)}\n`;
 
 export interface StatuslineConfigDiagnostic {
 	severity: "warning" | "error";
@@ -128,8 +146,8 @@ export function normalizeStatuslineConfig(value: unknown): {
 			diagnostics: [invalidDiagnostic("", "Settings must contain a JSON object", "error")],
 		};
 	}
-
 	const knownRoot = new Set([
+		"palettePreset",
 		"palette",
 		"density",
 		"separator",
@@ -141,7 +159,11 @@ export function normalizeStatuslineConfig(value: unknown): {
 		if (!knownRoot.has(key)) diagnostics.push(unknownDiagnostic(key));
 	}
 
-	normalizeEnum(value, "palette", PALETTE_NAMES, config, diagnostics);
+	normalizePalette(value.palette, config, diagnostics);
+	normalizeEnum(value, "palettePreset", PALETTE_PRESET_NAMES, config, diagnostics);
+	if (!isRecord(value.palette) && isPaletteName(config.palettePreset)) {
+		config.palette = segmentPaletteForPreset(config.palettePreset);
+	}
 	normalizeEnum(value, "density", DENSITIES, config, diagnostics);
 	normalizeEnum(value, "separator", SEPARATOR_NAMES, config, diagnostics);
 
@@ -413,8 +435,63 @@ export function normalizeStatuslineSettings(value: unknown): StatuslineConfig {
 	return normalizeStatuslineConfig(value).config;
 }
 
+function normalizePalette(
+	value: unknown,
+	config: StatuslineConfig,
+	diagnostics: StatuslineConfigDiagnostic[],
+) {
+	if (value === undefined) return;
+	if (typeof value === "string") {
+		if (!(PALETTE_NAMES as readonly string[]).includes(value)) {
+			diagnostics.push(
+				invalidDiagnostic(
+					"palette",
+					`Expected a palette object or one of: ${PALETTE_NAMES.join(", ")}`,
+				),
+			);
+			return;
+		}
+		config.palettePreset = value as (typeof PALETTE_NAMES)[number];
+		return;
+	}
+	if (!isRecord(value)) {
+		diagnostics.push(invalidDiagnostic("palette", "Expected a palette object"));
+		return;
+	}
+
+	const palette: SegmentPalette = {};
+	config.palette = palette;
+	for (const [name, colors] of Object.entries(value)) {
+		const path = `palette.${name}`;
+		if (!isSegmentName(name)) {
+			diagnostics.push(unknownDiagnostic(path));
+			continue;
+		}
+		if (!isRecord(colors)) {
+			diagnostics.push(invalidDiagnostic(path, "Expected an object"));
+			continue;
+		}
+		const normalizedColors: NonNullable<SegmentPalette[SegmentName]> = {};
+		palette[name] = normalizedColors;
+		for (const [field, color] of Object.entries(colors)) {
+			const colorPath = `${path}.${field}`;
+			if (field !== "fg" && field !== "bg") {
+				diagnostics.push(unknownDiagnostic(colorPath));
+				continue;
+			}
+			if (typeof color !== "string" || !/^#[0-9a-f]{6}$/iu.test(color)) {
+				diagnostics.push(invalidDiagnostic(colorPath, "Expected a full #RRGGBB hexadecimal color"));
+				continue;
+			}
+			normalizedColors[field] = color.toLowerCase();
+		}
+	}
+	config.palette = palette;
+	config.palettePreset = "custom";
+}
+
 function normalizeEnum<
-	K extends "palette" | "density" | "separator",
+	K extends "palettePreset" | "density" | "separator",
 	T extends StatuslineConfig[K],
 >(
 	value: Record<string, unknown>,
@@ -434,9 +511,16 @@ function normalizeEnum<
 	config[field] = candidate as StatuslineConfig[K];
 }
 
+function cloneSegmentPalette(palette: SegmentPalette): SegmentPalette {
+	return Object.fromEntries(
+		Object.entries(palette).map(([name, colors]) => [name, { ...colors }]),
+	) as SegmentPalette;
+}
+
 function cloneConfig(config: StatuslineConfig): StatuslineConfig {
 	return {
 		...config,
+		palette: cloneSegmentPalette(config.palette),
 		segments: [...config.segments],
 		segmentText: Object.fromEntries(
 			SEGMENT_NAMES.map((name) => [name, { ...config.segmentText[name] }]),
@@ -471,6 +555,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isConfigSegmentName(value: string): value is ConfigSegmentName {
 	return value === LINE_BREAK_SEGMENT_NAME || isSegmentName(value);
+}
+
+function isPaletteName(value: StatuslineConfig["palettePreset"]): value is PaletteName {
+	return (PALETTE_NAMES as readonly StatuslineConfig["palettePreset"][]).includes(value);
 }
 
 function isSegmentName(value: string): value is SegmentName {

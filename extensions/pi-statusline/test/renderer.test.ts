@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { powerlineExtensionSeparator, renderPowerlineStatusline } from "../src/powerline.js";
 import { formatConfiguredSegment } from "../src/render.js";
-import { createDefaultConfig } from "../src/settings.js";
-import { renderTokyoNightStatusline } from "../src/tokyo-night.js";
+import { createDefaultConfig, normalizeStatuslineConfig } from "../src/settings.js";
 import type { RenderItem, RenderSegment, SegmentName } from "../src/types.js";
 
 const ESCAPE = String.fromCharCode(27);
@@ -16,9 +17,9 @@ function segment(name: SegmentName, text: string, block: RenderSegment["block"])
 	return { name, text, block, color: "accent" };
 }
 
-test("Tokyo Night renderer preserves configured segment order across repeated blocks", () => {
+test("powerline renderer preserves configured segment order across repeated blocks", () => {
 	const config = createDefaultConfig();
-	const rendered = renderTokyoNightStatusline(
+	const rendered = renderPowerlineStatusline(
 		300,
 		[
 			segment("model", "model", "header"),
@@ -31,7 +32,7 @@ test("Tokyo Night renderer preserves configured segment order across repeated bl
 });
 
 test("Tokyo Night default retains the exact powerline colors", () => {
-	const rendered = renderTokyoNightStatusline(
+	const rendered = renderPowerlineStatusline(
 		300,
 		[segment("model", "model", "header")],
 		createDefaultConfig(),
@@ -44,6 +45,48 @@ test("Tokyo Night default retains the exact powerline colors", () => {
 	);
 });
 
+test("configured palette joins reordered time to an adjacent header block", () => {
+	const config = createDefaultConfig();
+	config.palettePreset = "custom";
+	config.palette.time = { fg: "#090c0c", bg: "#a3aed2" };
+	const rendered = renderPowerlineStatusline(
+		300,
+		[segment("time", "time", "meter"), segment("brand", "brand", "header")],
+		config,
+	);
+	assert.equal(plain(rendered), "░▒▓ time brand");
+	assert.equal((plain(rendered).match(//gu) ?? []).length, 1);
+});
+
+test("partial custom palette leaves omitted colors unstyled", () => {
+	const config = normalizeStatuslineConfig({ palette: { time: { fg: "#ffffff" } } }).config;
+	const rendered = renderPowerlineStatusline(300, [segment("time", "time", "meter")], config);
+	assert.equal(rendered, `░▒▓${ESCAPE}[38;2;255;255;255m time${ESCAPE}[0m`);
+});
+
+test("empty custom palette renders without ANSI color fallback", () => {
+	const config = normalizeStatuslineConfig({ palette: {} }).config;
+	const rendered = renderPowerlineStatusline(
+		300,
+		[segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
+		config,
+	);
+	assert.equal(rendered, "░▒▓ model cwd");
+	assert.equal(powerlineExtensionSeparator({} as Theme, "custom"), " • ");
+});
+
+test("different final segment colors retain the powerline transition", () => {
+	const config = createDefaultConfig();
+	config.palettePreset = "custom";
+	config.palette.time = { ...config.palette.time, bg: "#123456" };
+	const rendered = renderPowerlineStatusline(
+		300,
+		[segment("time", "time", "meter"), segment("brand", "brand", "header")],
+		config,
+	);
+	assert.equal(plain(rendered), "░▒▓ time brand");
+});
+
 test("line breaks render separated repeated markers as independent powerline rows", () => {
 	const config = createDefaultConfig();
 	const items: RenderItem[] = [
@@ -53,7 +96,7 @@ test("line breaks render separated repeated markers as independent powerline row
 		{ name: "line_break" },
 		segment("branch", "branch", "git"),
 	];
-	const rendered = renderTokyoNightStatusline(300, items, config);
+	const rendered = renderPowerlineStatusline(300, items, config);
 	assert.deepEqual(plain(rendered).split("\n"), ["░▒▓ model", "░▒▓ cwd", "░▒▓ branch"]);
 });
 
@@ -63,7 +106,7 @@ test("density and separator configure text inside a contiguous block", () => {
 	config.density = "compact";
 	assert.equal(
 		plain(
-			renderTokyoNightStatusline(
+			renderPowerlineStatusline(
 				300,
 				[segment("provider", "one", "header"), segment("model", "two", "header")],
 				config,
@@ -74,7 +117,7 @@ test("density and separator configure text inside a contiguous block", () => {
 	config.density = "cozy";
 	assert.equal(
 		plain(
-			renderTokyoNightStatusline(
+			renderPowerlineStatusline(
 				300,
 				[segment("provider", "one", "header"), segment("model", "two", "header")],
 				config,
@@ -96,8 +139,9 @@ test("all named palettes render deterministic distinct ANSI output", () => {
 		"mono",
 	] as const) {
 		const config = createDefaultConfig();
-		config.palette = palette;
-		const output = renderTokyoNightStatusline(
+		config.palettePreset = palette;
+		config.palette.model = { fg: "#ffffff", bg: "#ffffff" };
+		const output = renderPowerlineStatusline(
 			300,
 			[segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
 			config,
@@ -107,6 +151,93 @@ test("all named palettes render deterministic distinct ANSI output", () => {
 	}
 	assert.equal(outputs.size, 7);
 });
+
+test("named palettes use cohesive preset-specific background ramps", () => {
+	const expected = {
+		ocean: ["#7dcfff", "#4f9fba", "#2d6f88", "#23475b", "#182b3a"],
+		sunset: ["#ffcf70", "#f59e6f", "#dc718a", "#8f5b78", "#493447"],
+		forest: ["#a7c080", "#83c092", "#5f9f75", "#3f6f55", "#293f35"],
+		candy: ["#f5c2e7", "#cba6f7", "#89b4fa", "#745f9a", "#403a5c"],
+		neon: ["#39ff14", "#00f5ff", "#ff4fd8", "#7a2cf3", "#29134f"],
+		mono: ["#d4d4d4", "#a3a3a3", "#686868", "#404040", "#262626"],
+	} as const;
+	const samples = [
+		segment("model", "model", "header"),
+		segment("cwd", "cwd", "directory"),
+		segment("branch", "branch", "git"),
+		segment("tools", "tools", "runtime"),
+		segment("time", "time", "meter"),
+	];
+
+	for (const [palettePreset, colors] of Object.entries(expected)) {
+		const config = createDefaultConfig();
+		config.palettePreset = palettePreset as keyof typeof expected;
+		const actual = samples.map((item) =>
+			backgroundColor(renderPowerlineStatusline(80, [item], config)),
+		);
+		assert.deepEqual(actual, colors, palettePreset);
+	}
+});
+
+test("named palette block text meets WCAG AA contrast", () => {
+	const samples = [
+		segment("model", "model", "header"),
+		segment("cwd", "cwd", "directory"),
+		segment("branch", "branch", "git"),
+		segment("tools", "tools", "runtime"),
+		segment("time", "time", "meter"),
+	];
+
+	for (const palettePreset of ["ocean", "sunset", "forest", "candy", "neon", "mono"] as const) {
+		const config = createDefaultConfig();
+		config.palettePreset = palettePreset;
+		for (const item of samples) {
+			const rendered = renderPowerlineStatusline(80, [item], config);
+			const colors = blockColors(rendered);
+			assert.ok(colors, `${palettePreset} ${item.block} colors`);
+			assert.ok(
+				contrastRatio(colors.fg, colors.bg) >= 4.5,
+				`${palettePreset} ${item.block} contrast`,
+			);
+		}
+	}
+});
+
+function backgroundColor(rendered: string): string | undefined {
+	const match = /48;2;(\d+);(\d+);(\d+)/u.exec(rendered);
+	return match ? rgbMatchToHex(match.slice(1)) : undefined;
+}
+
+function blockColors(rendered: string): { fg: string; bg: string } | undefined {
+	const match = /38;2;(\d+);(\d+);(\d+);48;2;(\d+);(\d+);(\d+)/u.exec(rendered);
+	return match
+		? { fg: rgbMatchToHex(match.slice(1, 4)), bg: rgbMatchToHex(match.slice(4, 7)) }
+		: undefined;
+}
+
+function rgbMatchToHex(components: string[]): string {
+	return `#${components
+		.map((component) => Number(component).toString(16).padStart(2, "0"))
+		.join("")}`;
+}
+
+function contrastRatio(left: string, right: string): number {
+	const luminances = [left, right].map(relativeLuminance);
+	const lighter = Math.max(...luminances);
+	const darker = Math.min(...luminances);
+	return (lighter + 0.05) / (darker + 0.05);
+}
+
+function relativeLuminance(hex: string): number {
+	const channels = hex
+		.slice(1)
+		.match(/../gu)
+		?.map((component) => Number.parseInt(component, 16) / 255)
+		.map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)) ?? [
+		0, 0, 0,
+	];
+	return 0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0);
+}
 
 test("segment presentation wraps canonical dynamic values with configured text", () => {
 	const config = createDefaultConfig();
@@ -118,5 +249,5 @@ test("segment presentation wraps canonical dynamic values with configured text",
 });
 
 test("empty segment arrays render no powerline content", () => {
-	assert.equal(renderTokyoNightStatusline(80, [], createDefaultConfig()), "");
+	assert.equal(renderPowerlineStatusline(80, [], createDefaultConfig()), "");
 });

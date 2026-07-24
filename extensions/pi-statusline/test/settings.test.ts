@@ -12,8 +12,12 @@ import {
 	settingsFilePath,
 } from "../src/settings.js";
 
-test("statusline defaults describe the complete Tokyo Night JSON document", () => {
-	assert.equal(DEFAULT_STATUSLINE_CONFIG.palette, "tokyo-night");
+test("initial JSON exposes active defaults without materializing an inactive palette", () => {
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.palettePreset, "tokyo-night");
+	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.palette.time, {
+		fg: "#a0a9cb",
+		bg: "#1d2230",
+	});
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.density, "compact");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.separator, "none");
 	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.segments, [
@@ -34,7 +38,29 @@ test("statusline defaults describe the complete Tokyo Night JSON document", () =
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.goal, "🎯");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.usage, "📊");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons["codex-usage"], "📊");
-	assert.deepEqual(JSON.parse(DEFAULT_STATUSLINE_DOCUMENT), DEFAULT_STATUSLINE_CONFIG);
+	assert.deepEqual(JSON.parse(DEFAULT_STATUSLINE_DOCUMENT), {
+		palettePreset: "tokyo-night",
+		density: "compact",
+		separator: "none",
+		segments: [
+			"brand",
+			"provider",
+			"model",
+			"thinking",
+			"cwd",
+			"branch",
+			"tools",
+			"context",
+			"tokens",
+			"cost",
+			"time",
+		],
+		segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
+		extensionStatusIcons: DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons,
+	});
+	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"palette"'), false);
+	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"segmentText"'), true);
+	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.includes('"extensionStatusIcons"'), true);
 	assert.equal(DEFAULT_STATUSLINE_DOCUMENT.endsWith("\n"), true);
 });
 
@@ -50,7 +76,7 @@ test("normalization supports partial icon-only settings and structured overrides
 		},
 		extensionStatusIcons: { goal: "", custom: "🧪" },
 	});
-	assert.equal(normalized.config.palette, "ocean");
+	assert.equal(normalized.config.palettePreset, "ocean");
 	assert.equal(normalized.config.density, "cozy");
 	assert.equal(normalized.config.separator, "dot");
 	assert.deepEqual(normalized.config.segments, ["model", "cwd", "turn"]);
@@ -61,9 +87,72 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.deepEqual(normalized.diagnostics, []);
 
 	const iconOnly = normalizeStatuslineConfig({ extensionStatusIcons: { goal: "◎" } });
-	assert.equal(iconOnly.config.palette, "tokyo-night");
+	assert.equal(iconOnly.config.palettePreset, "tokyo-night");
 	assert.deepEqual(iconOnly.config.segments, DEFAULT_STATUSLINE_CONFIG.segments);
 	assert.equal(iconOnly.config.extensionStatusIcons.goal, "◎");
+});
+
+test("a named preset without custom colors prepares that preset as the custom starting point", () => {
+	const normalized = normalizeStatuslineConfig({ palettePreset: "forest" });
+	assert.equal(normalized.config.palettePreset, "forest");
+	assert.equal(normalized.config.palette.model?.bg, "#a7c080");
+	assert.equal(normalized.config.palette.cwd?.bg, "#83c092");
+	assert.equal(normalized.config.palette.branch?.bg, "#5f9f75");
+	assert.equal(normalized.config.palette.tools?.bg, "#3f6f55");
+	assert.equal(normalized.config.palette.time?.bg, "#293f35");
+	assert.deepEqual(normalized.diagnostics, []);
+});
+
+test("palette object normalizes colors without filling omitted custom colors", () => {
+	const normalized = normalizeStatuslineConfig({
+		palette: {
+			time: { fg: "#090c0c", bg: "#A3AED2" },
+			model: { fg: "#ffffff" },
+			cwd: { bg: "#123ABC" },
+		},
+	});
+	assert.equal(normalized.config.palettePreset, "custom");
+	assert.deepEqual(normalized.config.palette.time, { fg: "#090c0c", bg: "#a3aed2" });
+	assert.deepEqual(normalized.config.palette.model, { fg: "#ffffff" });
+	assert.deepEqual(normalized.config.palette.cwd, { bg: "#123abc" });
+	assert.equal(normalized.config.palette.brand, undefined);
+	assert.deepEqual(normalized.diagnostics, []);
+});
+
+test("explicit palette preset takes precedence while preserving custom colors", () => {
+	const normalized = normalizeStatuslineConfig({
+		palettePreset: "forest",
+		palette: { time: { fg: "#112233", bg: "#445566" } },
+	});
+	assert.equal(normalized.config.palettePreset, "forest");
+	assert.deepEqual(normalized.config.palette.time, { fg: "#112233", bg: "#445566" });
+	assert.deepEqual(normalized.diagnostics, []);
+
+	const defaultedCustom = normalizeStatuslineConfig({ palettePreset: "custom" });
+	assert.equal(defaultedCustom.config.palettePreset, "custom");
+	assert.deepEqual(defaultedCustom.config.palette, DEFAULT_STATUSLINE_CONFIG.palette);
+});
+
+test("palette object reports invalid colors and forward-compatible unknown fields", () => {
+	const normalized = normalizeStatuslineConfig({
+		palette: {
+			time: { fg: "#fff", bg: 7, future: "#ffffff" },
+			model: "#ffffff",
+			unknown: { fg: "#123456" },
+		},
+	});
+	assert.equal(normalized.config.palettePreset, "custom");
+	assert.deepEqual(normalized.config.palette.time, {});
+	assert.deepEqual(
+		normalized.diagnostics.map(({ code, path }) => ({ code, path })),
+		[
+			{ code: "invalid", path: "palette.time.fg" },
+			{ code: "invalid", path: "palette.time.bg" },
+			{ code: "unknown", path: "palette.time.future" },
+			{ code: "invalid", path: "palette.model" },
+			{ code: "unknown", path: "palette.unknown" },
+		],
+	);
 });
 
 test("line breaks may repeat when separated but consecutive line breaks are invalid", () => {
@@ -102,6 +191,7 @@ test("segment text rejects embedded line breaks and terminal control sequences",
 test("normalization falls back by field and reports unknown, duplicate, and invalid values", () => {
 	const normalized = normalizeStatuslineConfig({
 		palette: "invalid",
+		palettePreset: "invalid",
 		density: 3,
 		separator: "bar",
 		segments: ["model", "unknown", "model", 3, "time"],
@@ -114,7 +204,7 @@ test("normalization falls back by field and reports unknown, duplicate, and inva
 		showLabels: true,
 		future: true,
 	});
-	assert.equal(normalized.config.palette, "tokyo-night");
+	assert.equal(normalized.config.palettePreset, "tokyo-night");
 	assert.equal(normalized.config.density, "compact");
 	assert.equal(normalized.config.separator, "bar");
 	assert.deepEqual(normalized.config.segments, ["model", "time"]);
@@ -124,6 +214,7 @@ test("normalization falls back by field and reports unknown, duplicate, and inva
 	const paths = normalized.diagnostics.map((item) => item.path);
 	for (const path of [
 		"palette",
+		"palettePreset",
 		"density",
 		"segments[1]",
 		"segments[2]",
@@ -153,21 +244,36 @@ test("all named palettes, separators, empty segments, and environment independen
 	const previous = process.env.PI_STATUSLINE_PRESET;
 	process.env.PI_STATUSLINE_PRESET = "classic";
 	try {
-		for (const palette of ["tokyo-night", "ocean", "sunset", "forest", "candy", "neon", "mono"]) {
-			assert.equal(normalizeStatuslineConfig({ palette }).config.palette, palette);
+		for (const palettePreset of [
+			"tokyo-night",
+			"ocean",
+			"sunset",
+			"forest",
+			"candy",
+			"neon",
+			"mono",
+		]) {
+			assert.equal(
+				normalizeStatuslineConfig({ palettePreset }).config.palettePreset,
+				palettePreset,
+			);
+			assert.equal(
+				normalizeStatuslineConfig({ palette: palettePreset }).config.palettePreset,
+				palettePreset,
+			);
 		}
 		for (const separator of ["none", "dot", "bar", "powerline", "round"]) {
 			assert.equal(normalizeStatuslineConfig({ separator }).config.separator, separator);
 		}
 		assert.deepEqual(normalizeStatuslineConfig({ segments: [] }).config.segments, []);
-		assert.equal(normalizeStatuslineConfig({}).config.palette, "tokyo-night");
+		assert.equal(normalizeStatuslineConfig({}).config.palettePreset, "tokyo-night");
 	} finally {
 		if (previous === undefined) delete process.env.PI_STATUSLINE_PRESET;
 		else process.env.PI_STATUSLINE_PRESET = previous;
 	}
 });
 
-test("missing settings are atomically initialized with the complete default document", () => {
+test("missing settings are atomically initialized with the editable default document", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
 	try {
 		const loaded = loadOrCreateStatuslineSettings(root);
@@ -270,6 +376,18 @@ test("invalid recognized fields are rejected on save while unknown fields remain
 		assert.throws(
 			() => saveStatuslineSettingsDocument(path, JSON.stringify({ palette: "bad" })),
 			/palette/i,
+		);
+		assert.throws(
+			() => saveStatuslineSettingsDocument(path, JSON.stringify({ palettePreset: "bad" })),
+			/palettePreset/i,
+		);
+		assert.throws(
+			() =>
+				saveStatuslineSettingsDocument(
+					path,
+					JSON.stringify({ palette: { time: { bg: "#abcd" } } }),
+				),
+			/palette\.time\.bg/i,
 		);
 		assert.throws(
 			() =>
