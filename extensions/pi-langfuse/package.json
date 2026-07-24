@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-langfuse",
-	"version": "0.27.2",
+	"version": "0.28.0",
 	"description": "Pi extension that traces LLM generations and tool activity to Langfuse.",
 	"type": "module",
 	"license": "MIT",
