@@ -1,20 +1,32 @@
-# ✨ pi-statusline — Configurable Tokyo Night Footer for Pi
+# ✨ pi-statusline — A Beautiful, Practical Footer for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-statusline)](https://www.npmjs.com/package/@narumitw/pi-statusline) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-statusline` is a native [Pi coding agent](https://pi.dev) extension that replaces Pi's footer with a configurable Tokyo Night powerline statusline.
+`@narumitw/pi-statusline` gives [Pi](https://pi.dev) an opinionated powerline footer that looks good
+without setup and keeps useful context visible as the terminal narrows.
+
+A representative uncolored layout:
+
+```text
+░▒▓ 🤖 sonnet-4 🧠 high 📁 pi-extensions 🌿 main ~2 🪟 ctx 42% 💸 $0.184
+```
 
 ## ✨ Features
 
-- Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
-- Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
-- Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
-- Shows, hides, reorders, and adds or removes line breaks from a grouped, row-aware `/statusline` menu, applying each change immediately.
-- Creates an editable default configuration without an inactive custom palette on first session start.
-- Previews palette presets as the picker cursor moves, then applies the selection only on Enter.
-- Applies validated JSON settings edits from the `/statusline` menu immediately after an atomic save.
-- Caches Git state outside footer rendering and guards stale session results.
-- Wraps extension statuses safely at narrow terminal widths.
+- **Zero-config default:** model, thinking, workspace, Git/PR state, context use, and cost.
+- **Responsive:** removes lower-priority segments before important information gets clipped.
+- **Quiet when idle:** activity appears only while Pi is streaming or running tools.
+- **Easy choices:** three information levels and seven previewable color presets.
+- **Still flexible:** custom layouts, multiline rows, colors, labels, separators, and status icons stay
+  available under **Advanced**.
+
+> **Need more customization?** See
+> [`pi-starship`](https://github.com/narumiruna/pi-extensions/tree/main/extensions/pi-starship)
+> ([npm](https://www.npmjs.com/package/@narumitw/pi-starship)). It uses a
+> [Starship-inspired](https://starship.rs/) TOML format and style syntax for deeper control over
+> layout, modules, and colors. Choose `pi-statusline` for practical defaults and quick setup.
+>
+> Do not enable both extensions at the same time because both own Pi's footer.
 
 ## 📦 Install
 
@@ -22,237 +34,240 @@
 pi install npm:@narumitw/pi-statusline
 ```
 
-Try it once or from a checkout:
+Try it without installing, or load it from this repository:
 
 ```bash
 pi -e npm:@narumitw/pi-statusline
 pi -e ./extensions/pi-statusline
 ```
 
-Do not enable this together with `@narumitw/pi-starship`: both extensions own Pi's footer. Use `pi-starship` instead when you need full Starship-style format/style grammar.
+For the best result, use a terminal font that includes Powerline glyphs and emoji.
 
-## ⚙️ Configuration
+## 🚀 Quick start
 
-The only configuration source is:
+1. Install the extension and start Pi.
+2. Run `/statusline`.
+3. Choose an appearance or information level; changes apply immediately.
+
+```text
+Appearance (tokyo-night)
+Information (balanced)
+Advanced
+Status
+Help
+```
+
+| Menu item | What it does |
+| --- | --- |
+| **Appearance** | Preview palettes with Up/Down; Enter applies and Escape cancels |
+| **Information** | Preview and apply a curated set of segments |
+| **Advanced** | Open Custom layout or Edit settings JSON |
+| **Status** | Show the effective source, path, appearance, layout, and diagnostics |
+| **Help** | Show command and schema guidance |
+
+### Information levels
+
+Selecting a level replaces only the `segments` array. Unknown and unrelated JSON fields are
+preserved.
+
+| Level | Included segments |
+| --- | --- |
+| **Minimal** | `model cwd branch context` |
+| **Balanced** (default) | `model thinking cwd branch tools context cost` |
+| **Detailed** | `provider model thinking cwd branch tools context tokens cost time` |
+| **Custom** | Any other segment order, including explicit line breaks |
+
+The `tools` segment takes no space while idle.
+
+## 💬 Commands
+
+| Command | Purpose |
+| --- | --- |
+| `/statusline` | Open Appearance, Information, Advanced, Status, and Help |
+| `/statusline settings` | Open the JSON editor in TUI mode |
+| `/statusline status` | Show the effective settings and diagnostics |
+| `/statusline help` | Show command and schema guidance |
+
+The direct `settings`, `status`, and `help` routes remain for compatibility. RPC receives observable
+notifications instead of TUI-only controls. Unknown subcommands and trailing arguments are rejected.
+
+## 📐 Runtime behavior
+
+### Responsive fitting
+
+Each row keeps its configured segment order. If it is too wide, pi-statusline removes the
+lowest-priority segment, recomputes the powerline transitions, and repeats until the row fits.
+Retention priority is highest to lowest:
+
+```text
+context model branch tools cwd thinking cost provider tokens time turn brand
+```
+
+Explicit `line_break` entries remain row boundaries. A single segment that is still too wide is
+ANSI-safely truncated.
+
+### Activity, Git, and PR state
+
+- During active work, `tools` shows `💭 thinking` or `⚙ <tool>` with parallel counts.
+- Activity disappears after the agent settles and resets across session replacement or shutdown.
+- Clean repositories show no Git counters.
+- Dirty counters are `⇡` ahead, `⇣` behind, `+` staged, `~` modified/deleted, `?` untracked, and `!`
+  conflicts.
+- A linked GitHub PR appears with the branch when possible, avoiding a duplicate extension status.
+- Context color changes to warning at 70% and error at 90%.
+- Git state is cached outside footer rendering and stale session results are ignored.
+
+## ⚙️ Settings
+
+The extension uses one user-level file:
 
 ```text
 <getAgentDir()>/pi-statusline.json
 ```
 
-On first session start, the extension atomically creates an editable default document containing every active appearance and status-icon setting. The inactive custom `palette` is added only when needed. It never overwrites an existing malformed or unreadable file. A valid legacy `pi-statusline-settings.json` is migrated by preserving its original bytes; the canonical filename wins when both exist.
+There are no project or environment overrides. On first session start, pi-statusline atomically
+creates a complete editable default. It never overwrites malformed or unreadable settings. Settings
+reload on startup, `/reload`, and session replacement.
 
-There are no project overrides or environment-variable overrides.
+A valid legacy `pi-statusline-settings.json` is migrated without rewriting its contents. If both files
+exist, `pi-statusline.json` wins.
 
-### Default JSON
+### Settings reference
+
+| Field | Accepted values | Purpose |
+| --- | --- | --- |
+| `palettePreset` | `tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, `mono`, `custom` | Select the active color preset |
+| `palette` | Per-segment `fg`/`bg` `#RRGGBB` colors | Define colors used by `custom` |
+| `density` | `compact`, `cozy` | Control horizontal padding |
+| `separator` | `none`, `dot`, `bar`, `powerline`, `round` | Separate adjacent segments in one color block |
+| `segments` | Ordered unique segment names and `line_break` | Control visibility, order, and rows |
+| `segmentText` | Per-segment `prefix` and `suffix` | Wrap Pi-owned dynamic values |
+| `extensionStatusIcons` | Raw status key or `namespace:*` to icon string | Customize extension status icons |
+
+All fields are optional in an existing document. Missing fields use defaults. Unknown fields produce a
+warning but are preserved by menu saves. Invalid recognized values block saving, leaving the previous
+file and live footer unchanged.
+
+A compact customization example:
 
 ```json
 {
-  "palettePreset": "tokyo-night",
+  "palettePreset": "ocean",
   "density": "compact",
-  "separator": "none",
-  "segments": [
-    "brand",
-    "provider",
-    "model",
-    "thinking",
-    "cwd",
-    "branch",
-    "tools",
-    "context",
-    "tokens",
-    "cost",
-    "time"
-  ],
+  "separator": "dot",
+  "segments": ["model", "thinking", "cwd", "branch", "context", "cost"],
   "segmentText": {
-    "brand": { "prefix": "", "suffix": "" },
-    "provider": { "prefix": "🔌 ", "suffix": "" },
-    "model": { "prefix": "🤖 ", "suffix": "" },
-    "thinking": { "prefix": "🧠 ", "suffix": "" },
-    "cwd": { "prefix": "📁 ", "suffix": "" },
-    "branch": { "prefix": "🌿 ", "suffix": "" },
-    "tools": { "prefix": "", "suffix": "" },
-    "context": { "prefix": "🪟 ctx ", "suffix": "" },
-    "tokens": { "prefix": "🔢 ", "suffix": "" },
-    "cost": { "prefix": "💸 $", "suffix": "" },
-    "time": { "prefix": "🕒 ", "suffix": "" },
-    "turn": { "prefix": "🔁 #", "suffix": "" }
+    "context": { "prefix": "ctx ", "suffix": "" }
   },
   "extensionStatusIcons": {
-    "accounts": "👤",
-    "caffeinate": "💊",
-    "chrome-devtools": "🌐",
-    "firecrawl": "🔥",
-    "github-pr": "🔎",
-    "goal": "🎯",
-    "google-genai": "✨",
-    "lsp": "🧰",
-    "plan-mode": "📝",
-    "retry": "🔁",
-    "subagents": "🧑‍🤝‍🧑",
-    "sync": "🔄",
-    "usage": "📊"
+    "goal": "◎",
+    "foo:*": "🧪"
   }
 }
 ```
 
-All fields are optional in an existing document. Missing fields use defaults.
+Use **Advanced → Edit settings JSON** or `/statusline settings` to edit, validate, atomically save, and
+apply the file.
 
-### Appearance
+## 🎨 Appearance
 
-- `palettePreset`: `tokyo-night`, `ocean`, `sunset`, `forest`, `candy`, `neon`, `mono`, or `custom`.
-- `palette`: maps each segment to foreground (`fg`) and background (`bg`) colors used by `custom`.
-- `density`: `compact` or `cozy`.
-- `separator`: `none`, `dot`, `bar`, `powerline`, or `round`.
+Named palettes provide contrast-checked color ramps. Appearance previews update while the picker
+moves, but save only when Enter is pressed; Escape restores the saved palette.
 
-Named presets use cohesive namesake color ramps while preserving an existing custom `palette` object. Selecting `custom` activates that object. When no palette object exists, choosing `custom` from `/statusline` writes a complete per-segment copy of the active named preset before activating it, so customization starts from the current appearance. The picker labels this editing relationship, and the main menu's `Edit settings JSON (custom colors, layout, icons)` action opens the existing JSON editor. It does not force an editor or present a separate per-color menu.
-
-If both fields exist, `palettePreset` decides which colors render. A palette object without `palettePreset` selects `custom`; with neither field, the default is `tokyo-night`. A manually authored `"palettePreset": "custom"` without a palette uses the built-in Tokyo Night colors. Legacy string palettes such as `"palette": "ocean"` remain accepted as preset selections.
-
-Each custom palette color must be a complete `#RRGGBB` truecolor value. Within an explicit `palette` object, missing segment entries or `fg`/`bg` fields remain unstyled and do not inherit colors from Tokyo Night. The separator applies only between adjacent segments in the same color block, and transitions use ``. Extension statuses remain on separate wrapped lines with their preset-colored separator; `custom` leaves that separator unstyled.
-
-For example, after moving `time` before the header segments, select `custom` and give it the same colors as the Tokyo Night header to keep one continuous block:
+When `palettePreset` is `custom`, `palette` maps segment names to foreground/background colors:
 
 ```json
 {
   "palettePreset": "custom",
-  "segments": ["time", "brand", "provider", "model"],
   "palette": {
-    "time": {
-      "fg": "#090c0c",
-      "bg": "#a3aed2"
-    }
+    "model": { "fg": "#090c0c", "bg": "#a3aed2" },
+    "context": { "fg": "#c0caf5", "bg": "#1d2230" }
   }
 }
 ```
 
-Adjacent custom segments with the same configured foreground and background render as one block. Segments with no configured colors also join into one unstyled block. Invalid presets or colors prevent the menu's JSON settings action from saving. Unknown segment names or palette fields are reported as warnings and ignored.
+- Selecting `custom` without a palette copies the active named preset as a starting point.
+- A manually authored `"palettePreset": "custom"` without `palette` uses Tokyo Night colors.
+- Named presets ignore but preserve an existing custom palette.
+- A `palette` object without `palettePreset` selects `custom`.
+- Legacy string palettes such as `"palette": "ocean"` remain accepted.
+- Missing custom colors remain unstyled instead of inheriting Tokyo Night.
+- Adjacent segments with identical colors share one block; transitions use ``.
 
-### Segments
+`segmentText` values must be single-line text without terminal control characters. Use `line_break`
+for another row rather than inserting a newline into a prefix or suffix.
 
-`segments` is an ordered list containing:
+## 🧩 Advanced layout
+
+Open **Advanced → Custom layout** when the curated levels are not enough.
+
+| Key | Action |
+| --- | --- |
+| Up/Down | Navigate |
+| Page Up/Page Down | Move by one viewport |
+| Enter/Space | Show or hide the selected segment |
+| `M` | Enter or leave Move mode |
+| Up/Down in Move mode | Reorder the selected visible segment |
+| `Alt+Up` / `Alt+Down` | Reorder without entering Move mode |
+| `B` | Add or remove a line break after the selected segment |
+| Escape | Leave Move mode first, then close the screen |
+
+Every successful change saves and applies immediately; closing the screen does not roll it back.
+
+Available data segments:
 
 ```text
-brand provider model thinking cwd branch tools context tokens cost time turn line_break
+brand provider model thinking cwd branch tools context tokens cost time turn
 ```
 
-The array controls visibility and actual rendering order. Data segments must remain unique. The special `line_break` segment starts another footer row and may repeat when another segment separates each occurrence; consecutive `line_break` entries are invalid. Each row receives its own powerline start and end. `line_break` has no `segmentText` entry.
-
-Use `/statusline` → `Segments` to show, hide, reorder, or split data segments across rows without editing JSON. The bounded screen groups visible segments in their effective render order and hidden segments separately, labels every visible segment with the footer row derived from `line_break`, marks segments that have a break after them, and keeps the selected segment in view. Use Up and Down to navigate, Page Up and Page Down for larger jumps, and Enter or Space to show or hide. Press `B` to add or remove a line break after the selected visible segment. A new break requires another visible segment after the selection. Press `M` to enter Move mode, where ordinary Up and Down move the selected visible segment; Enter, Space, or Escape leaves Move mode. `Alt+Up` and `Alt+Down` remain quick-move accelerators, and Escape closes the normal screen. Hidden segments and unavailable move or line-break positions explain the constraint in place.
-
-Every successful toggle, move, or line-break change is atomically saved and applied immediately; leaving Move mode or closing the screen does not undo earlier changes. Remaining segments keep their relative order, newly shown segments are appended to the final row, and leading, trailing, or newly consecutive `line_break` entries are removed after a visibility toggle. Reordering swaps data segments around existing `line_break` positions, so displayed row boundaries stay in place while a segment can move between rows.
-
-An empty array hides the main powerline while still allowing extension statuses to render. `turn` is available but omitted by default.
-
-Example multiline layout:
+Data segments must be unique. `line_break` may repeat when data segments separate occurrences, but
+consecutive breaks are invalid. It has no `segmentText` entry. The menu cleans up leading, trailing,
+and newly consecutive breaks after visibility changes. Manually authored leading/trailing breaks
+represent empty rows.
 
 ```json
 {
-  "segments": ["model", "line_break", "cwd", "line_break", "branch"]
+  "segments": ["model", "line_break", "cwd", "branch", "context"]
 }
 ```
 
-This is valid because the `line_break` entries are separated. `["model", "line_break", "line_break", "cwd"]` is invalid.
+An empty `segments` array hides the main powerline while extension statuses can still render. The
+extension intentionally has no variable or format language; use `pi-starship` when you need one.
 
-### Segment text
+## 🔌 Extension statuses and icons
 
-Each visible segment renders as:
+Other extension statuses appear below the main powerline, wrap to terminal width, and are limited to
+five items. Icons resolve in this order:
 
-```text
-prefix + Pi-owned dynamic value + suffix
-```
+1. Exact configured raw key, such as `goal` or `foo:server`.
+2. Longest configured colon wildcard, such as `foo:*` or `foo:server:*`.
+3. Unambiguous installed-package alias, such as `@vendor/pi-foo`, `pi-foo`, or `foo`.
+4. Leading emoji supplied by the status text.
+5. Built-in icon.
+6. Generic `🔌` fallback.
 
-Override either string independently:
+Set an icon to `""` to hide only the icon. Wildcards match colon namespaces, not slash-delimited keys;
+configure slash keys exactly. Compatibility fallbacks retain `codex-usage`, `pisync`, and
+`unknown-error-retry`; an explicit canonical key wins.
 
-```json
-{
-  "segmentText": {
-    "provider": { "prefix": "Provider: " },
-    "context": { "prefix": "[", "suffix": "]" },
-    "cost": { "prefix": "Cost $", "suffix": " USD" }
-  }
-}
-```
-
-Prefix and suffix values must be single-line text without terminal control characters; use the `line_break` segment for additional rows. The built-in prefixes are `🔌 ` for provider, `🤖 ` for model, `🧠 ` for thinking, `📁 ` for cwd, `🌿 ` for branch, `🪟 ctx ` for context, `🔢 ` for tokens, `💸 $` for cost, `🕒 ` for time, and `🔁 #` for turn; brand and tools have no built-in prefix, and all built-in suffixes are empty.
-
-This structured model intentionally does not provide variables or a format language. Dynamic Git, PR, activity, usage, token, and cost formatting remains owned by the extension.
-
-### Extension status icons
-
-`extensionStatusIcons` accepts any raw key emitted through Pi's `ctx.ui.setStatus()`; it is not
-restricted to extensions in this repository. Icons resolve in this order:
-
-1. An exact configured raw key, such as `goal` or `foo:server`.
-2. The longest explicit colon namespace wildcard, such as `foo:*` or `foo:server:*`.
-3. An unambiguous installed package alias such as `@vendor/pi-foo`,
-   `npm:@vendor/pi-foo@1.2.3`, `pi-foo`, or `foo`.
-4. A leading emoji supplied by the status text.
-5. A built-in icon.
-6. The generic `🔌` fallback.
-
-An empty icon at any configured match hides the icon while retaining status text. `foo:*` matches
-`foo:server` and `foo:server:worker`, but not `foo`, `foobar`, or `foo/server`; use an exact key for a
-slash-delimited third-party status. Installed-package aliases retain delimiter-bound colon and slash
-matching for compatibility, but ambiguous package aliases are ignored.
-
-```json
-{
-  "extensionStatusIcons": {
-    "third_party/key": "🧩",
-    "foo:*": "🧪",
-    "foo:server": "🖥️",
-    "@vendor/pi-other": "📦",
-    "quiet-extension": ""
-  }
-}
-```
-
-Built-in icon mappings for current repository statuses are `accounts` → `👤`, `caffeinate` → `💊`,
-`chrome-devtools` → `🌐`, `firecrawl` → `🔥`, `github-pr` → `🔎`, `goal` → `🎯`, `google-genai` →
-`✨`, `lsp` → `🧰`, `plan-mode` → `📝`, `retry` → `🔁`, `subagents` → `🧑‍🤝‍🧑`, `sync` → `🔄`,
-and `usage` → `📊`. Compatibility fallbacks retain `codex-usage`, `pisync`, and
-`unknown-error-retry`. Existing `pisync` or `unknown-error-retry` settings continue to configure the
-new `sync` or `retry` statuses when the canonical key is absent; files are not rewritten, and an
-explicit canonical key wins.
-
-#### For extension authors
-
-Pi accepts any string as a status key. pi-statusline cannot force another extension to follow a key
-format, and Pi does not expose which package owns a status. Exact raw-key matching is therefore the
-only universally reliable icon contract. Namespace wildcards and package aliases are conveniences,
-not authoritative ownership.
-
-For interoperable new extensions, prefer a stable lowercase kebab-case key:
+For interoperable extensions, prefer one aggregated key or a stable coexistence slot:
 
 ```text
 <extension-id>
 <extension-id>:<stable-slot>
 ```
 
-Use the first form for one aggregated status. Use a stable slot only when statuses must coexist, for
-example `lsp:typescript`; put transient activity in the value (`setStatus("sync", "pushing")`) rather
-than creating keys such as `sync:pushing`. Always clear the same complete key. This is a convention
-other authors may adopt, not a requirement for appearing in pi-statusline.
+Put transient activity in the value and always clear the same complete key.
 
-Statuses from other extensions appear below the main powerline. The linked GitHub PR status is hidden
-from that line when the branch segment already renders it.
+## 🛠️ Troubleshooting
 
-## 💬 Commands
-
-| Command | Purpose |
-| --- | --- |
-| `/statusline` | Open the interactive menu for palette presets, displayed segments, settings JSON, status, and help |
-| `/statusline settings` | Open the JSON settings editor in TUI mode |
-| `/statusline status` | Show the settings source, path, appearance, segments, and diagnostics |
-| `/statusline help` | Show command and schema guidance |
-
-Argument-free `/statusline` requires TUI mode. The established `settings`, `status`, and `help` routes remain available for compatibility; RPC receives notifications instead of opening TUI-only controls. Unknown subcommands and trailing arguments are rejected. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. In the Segments screen, each Enter or Space visibility toggle, `B` line-break change, and Move-mode or `Alt+Up`/`Alt+Down` move saves immediately. Escape leaves Move mode first and closes the normal screen; neither action rolls back saved changes. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled unsaved changes leave both the previous file and effective runtime configuration unchanged.
-
-## 🌿 Git and activity details
-
-Git status tokens are hidden for clean repositories. When present, they mean `⇡` ahead, `⇣` behind, `+` staged, `~` modified/deleted, `?` untracked, and `!` conflicts.
-
-The tools segment distinguishes active tools, streaming/thinking, the last completed tool, and idle state. Parallel calls are summarized without running subprocesses during footer rendering.
+- **Powerline symbols look wrong:** use a font with Powerline glyphs; emoji support is also recommended.
+- **The footer reports settings warnings:** run `/statusline status`, then `/statusline settings` to fix
+  invalid recognized fields.
+- **The footer appears to be replaced:** disable `pi-starship` or another extension that also calls
+  Pi's `setFooter()`.
+- **A custom segment disappears on a narrow terminal:** check the responsive priority above or add an
+  explicit `line_break`.
 
 ## 🗂️ Package layout
 
@@ -260,27 +275,17 @@ The tools segment distinguishes active tools, streaming/thinking, the last compl
 extensions/pi-statusline/
 ├── src/
 │   ├── index.ts
-│   ├── ansi.ts
+│   ├── statusline.ts
+│   ├── render.ts
+│   ├── powerline.ts
+│   ├── information-profiles.ts
 │   ├── commands.ts
+│   ├── settings.ts
 │   ├── extension-status.ts
 │   ├── git-status.ts
-│   ├── powerline.ts
-│   ├── presets/
-│   │   ├── candy.ts
-│   │   ├── create-ramp.ts
-│   │   ├── custom.ts
-│   │   ├── forest.ts
-│   │   ├── index.ts
-│   │   ├── mono.ts
-│   │   ├── neon.ts
-│   │   ├── ocean.ts
-│   │   ├── sunset.ts
-│   │   ├── tokyo-night.ts
-│   │   └── types.ts
-│   ├── render.ts
-│   ├── settings.ts
-│   ├── statusline.ts
-│   └── types.ts
+│   ├── ansi.ts
+│   ├── types.ts
+│   └── presets/
 ├── test/
 ├── README.md
 ├── LICENSE
@@ -288,11 +293,12 @@ extensions/pi-statusline/
 └── package.json
 ```
 
-`src/index.ts` is the Pi entrypoint and forwards to `src/statusline.ts`. Other modules are package-internal.
+`src/index.ts` is the thin Pi entrypoint; all other modules are package-internal.
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, configurable statusline, Tokyo Night, terminal footer, token usage, context window, model status, TypeScript Pi package.
+Pi extension, Pi coding agent, statusline, Tokyo Night, powerline, responsive terminal footer,
+context usage, model status.
 
 ## 📄 License
 

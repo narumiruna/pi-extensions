@@ -26,8 +26,6 @@ type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 export interface RuntimeState extends ExtensionStatusRuntime {
 	turnCount: number;
 	activeTools: Map<string, number>;
-	lastTool?: string;
-	lastCompletedTool?: string;
 	isStreaming: boolean;
 	thinkingLevel: ThinkingLevel;
 	gitStatus?: GitStatusSummary;
@@ -50,17 +48,30 @@ export function renderStatusline(
 ): string {
 	if (width <= 0) return "";
 
-	const segments = config.segments
-		.map((name): RenderItem | undefined =>
-			name === LINE_BREAK_SEGMENT_NAME
-				? { name: LINE_BREAK_SEGMENT_NAME }
-				: buildSegment(name, ctx, footerData, config, runtime),
-		)
-		.filter(
-			(segment): segment is RenderItem =>
-				segment !== undefined &&
-				(segment.name === LINE_BREAK_SEGMENT_NAME || segment.text.length > 0),
-		);
+	const rows: Array<{ configuredSegments: number; segments: RenderSegment[] }> = [
+		{ configuredSegments: 0, segments: [] },
+	];
+	for (const name of config.segments) {
+		if (name === LINE_BREAK_SEGMENT_NAME) {
+			rows.push({ configuredSegments: 0, segments: [] });
+			continue;
+		}
+
+		const row = rows.at(-1);
+		if (!row) continue;
+		row.configuredSegments += 1;
+		const rendered = buildSegment(name, ctx, footerData, config, runtime);
+		if (rendered && rendered.text.length > 0) row.segments.push(rendered);
+	}
+
+	const segments: RenderItem[] = [];
+	const renderedRows = rows.filter(
+		(row) => row.configuredSegments === 0 || row.segments.length > 0,
+	);
+	for (const [index, row] of renderedRows.entries()) {
+		if (index > 0) segments.push({ name: LINE_BREAK_SEGMENT_NAME });
+		segments.push(...row.segments);
+	}
 
 	return renderPowerlineStatusline(width, segments, config);
 }
@@ -121,8 +132,10 @@ function buildSegment(
 		}
 		case "cwd":
 			return segment(name, basename(ctx.cwd) || ctx.cwd, config, "accent", "directory");
-		case "tools":
-			return segment(name, formatToolActivity(runtime), config, "accent", "runtime");
+		case "tools": {
+			const activity = formatToolActivity(runtime);
+			return activity ? segment(name, activity, config, "accent", "runtime") : undefined;
+		}
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const value =
@@ -204,7 +217,7 @@ export function contextColor(percent: number | null | undefined): ThemeColor {
 	return "success";
 }
 
-export function formatToolActivity(runtime: RuntimeState): string {
+export function formatToolActivity(runtime: RuntimeState): string | undefined {
 	const active = [...runtime.activeTools.entries()];
 	if (active.length > 0) {
 		const [name, count] = active[0] ?? ["tool", 1];
@@ -212,9 +225,7 @@ export function formatToolActivity(runtime: RuntimeState): string {
 		return `⚙ ${name}${suffix}`;
 	}
 
-	if (runtime.isStreaming) return "💭 thinking";
-	if (runtime.lastCompletedTool) return `✅ ${runtime.lastCompletedTool}`;
-	return "💤 idle";
+	return runtime.isStreaming ? "💭 thinking" : undefined;
 }
 
 export function prLinkFromStatuses(statuses: ReadonlyMap<string, string>): string | undefined {

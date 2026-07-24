@@ -23,8 +23,10 @@
 - On Windows, extensionless LSP commands can resolve to `.cmd`/`.bat` PATH shims; resolve with the adapter's effective `PATH` and child cwd before wrapping batch launchers through `%ComSpec%`.
 - pi-lsp defaults must use dialect-specific language IDs, nest workspace settings under the server-requested section, and avoid save-only settings unless diagnostics emit `didSave`.
 - pi-statusline owns footer rendering and its `/statusline` settings command; keep it out of prompt interception.
+- Symptom: an idle optional statusline segment leaves a blank multiline row. Cause: filtering the segment while preserving both adjacent `line_break` entries. Fix: group configured rows first, drop only dynamically empty rows, then flatten while preserving explicitly empty rows.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.
 - Symptom: extension actions from `agent_end` may not trigger a new turn. Cause: follow-ups can miss the late drain point. Fix: on Pi 0.80.6+, record intent in `agent_end` and dispatch from `agent_settled`; standalone manual compaction does not emit `agent_settled`, so use a narrowly idle-gated `session_compact` fallback when needed.
+- Symptom: activity status flickers idle before retry, compaction, or a queued follow-up. Cause: `agent_end` marks only a low-level run end. Fix: clear work at `agent_settled` and ignore lifecycle events from a replaced session manager.
 - Detached orchestration recovery is more reliable when `agent_end` queues a `deliverAs: "followUp"` prompt and `agent_settled` retries retained intent if no pending message remains; settled-only `sendUserMessage` can be accepted yet lose the print-mode start race.
 - Symptom: concurrent tools sharing one extension status key can clear or mislabel a still-running sibling. Cause: each call unconditionally owns set/clear. Fix: track active statuses per UI/session, restore the latest remaining status, and invalidate the tracker on session teardown.
 - Run Biome `--write` only on intended files during bounded work; formatting whole extension trees can rewrite unrelated source that is currently outside the root's normal ignore-aware formatting path.
@@ -102,7 +104,7 @@
 
 ### README
 
-- Write extension READMEs in English and mirror the existing visual style, including the emoji title and npm/Pi/license badges.
+- Write extension READMEs in English; preserve the emoji title, npm/Pi/license badges, standard emoji section headings, and `## 🗂️ Package layout` during readability passes.
 
 ### General
 

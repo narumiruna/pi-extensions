@@ -166,7 +166,7 @@ test("statusline renders max thinking in the Tokyo Night footer", async () => {
 	}
 });
 
-test("statusline renders provider next to the model", async () => {
+test("balanced default renders the model without a separate provider segment", async () => {
 	const mock = createMockPi();
 	statusline(mock.pi);
 	const context = createMockContext({
@@ -200,7 +200,7 @@ test("statusline renders provider next to the model", async () => {
 	);
 
 	const line = footer.render(200)[0] ?? "";
-	assert.match(line, /🔌 anthropic/);
+	assert.doesNotMatch(line, /🔌 anthropic/);
 	assert.match(line, /🤖 sonnet-4/);
 	footer.dispose();
 });
@@ -438,10 +438,9 @@ test("statusline invalidates in-flight git status while a debounced refresh is p
 	}
 });
 
-test("formatToolActivity prioritizes active tools, streaming, completed tools, and idle", () => {
+test("formatToolActivity shows only active or streaming work", () => {
 	type Runtime = Parameters<typeof formatToolActivity>[0];
-	const runtime = (value: Partial<Runtime> & Pick<Runtime, "activeTools" | "isStreaming">) =>
-		value as Runtime;
+	const runtime = (value: Pick<Runtime, "activeTools" | "isStreaming">) => value as Runtime;
 
 	assert.equal(
 		formatToolActivity(runtime({ activeTools: new Map([["read", 2]]), isStreaming: false })),
@@ -452,18 +451,8 @@ test("formatToolActivity prioritizes active tools, streaming, completed tools, a
 		"💭 thinking",
 	);
 	assert.equal(
-		formatToolActivity(
-			runtime({
-				activeTools: new Map(),
-				isStreaming: false,
-				lastCompletedTool: "bash",
-			}),
-		),
-		"✅ bash",
-	);
-	assert.equal(
 		formatToolActivity(runtime({ activeTools: new Map(), isStreaming: false })),
-		"💤 idle",
+		undefined,
 	);
 });
 

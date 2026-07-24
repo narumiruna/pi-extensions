@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { ansiStyle } from "./ansi.js";
 import { resolvePreset } from "./presets/index.js";
 import type { BlockColors, PowerlinePreset } from "./presets/types.js";
@@ -27,11 +27,7 @@ export function renderPowerlineStatusline(
 ): string {
 	if (items.length === 0 || width <= 0) return "";
 	return splitLines(items)
-		.map((segments) =>
-			segments.length === 0
-				? ""
-				: truncateToWidth(joinPowerlineSegments(segments, config), width, ""),
-		)
+		.map((segments) => fitPowerlineSegments(segments, width, config))
 		.join("\n");
 }
 
@@ -42,6 +38,48 @@ function splitLines(items: RenderItem[]): RenderSegment[][] {
 		else lines.at(-1)?.push(item);
 	}
 	return lines;
+}
+
+const SEGMENT_RETENTION_PRIORITY: Readonly<Record<RenderSegment["name"], number>> = {
+	context: 120,
+	model: 110,
+	branch: 100,
+	tools: 90,
+	cwd: 80,
+	thinking: 70,
+	cost: 60,
+	provider: 50,
+	tokens: 40,
+	time: 30,
+	turn: 20,
+	brand: 10,
+};
+
+function fitPowerlineSegments(
+	segments: readonly RenderSegment[],
+	width: number,
+	config: Pick<StatuslineConfig, "palettePreset" | "palette" | "density" | "separator">,
+): string {
+	if (segments.length === 0) return "";
+	const fitted = [...segments];
+	while (fitted.length > 1) {
+		const rendered = joinPowerlineSegments(fitted, config);
+		if (visibleWidth(rendered) <= width) return rendered;
+		let removalIndex = 0;
+		for (let index = 1; index < fitted.length; index += 1) {
+			const candidate = fitted[index];
+			const current = fitted[removalIndex];
+			if (
+				candidate &&
+				current &&
+				SEGMENT_RETENTION_PRIORITY[candidate.name] < SEGMENT_RETENTION_PRIORITY[current.name]
+			) {
+				removalIndex = index;
+			}
+		}
+		fitted.splice(removalIndex, 1);
+	}
+	return truncateToWidth(joinPowerlineSegments(fitted, config), width, "");
 }
 
 export function powerlineExtensionSeparator(
