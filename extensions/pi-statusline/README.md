@@ -9,6 +9,7 @@
 - Shows provider, model, thinking, directory, Git/PR state, tools, context, tokens, cost, time, and extension statuses.
 - Uses one Starship-inspired `░▒▓` / `` Tokyo Night layout.
 - Configures segment order, visibility, multiline breaks, surrounding text, palette, density, separators, and extension icons through JSON.
+- Chooses displayed data segments from the `/statusline` menu and applies each toggle immediately.
 - Creates an editable default configuration without an inactive custom palette on first session start.
 - Previews palette presets as the picker cursor moves, then applies the selection only on Enter.
 - Applies validated JSON settings edits from the `/statusline` menu immediately after an atomic save.
@@ -136,6 +137,8 @@ brand provider model thinking cwd branch tools context tokens cost time turn lin
 
 The array controls visibility and actual rendering order. Data segments must remain unique. The special `line_break` segment starts another footer row and may repeat when another segment separates each occurrence; consecutive `line_break` entries are invalid. Each row receives its own powerline start and end. `line_break` has no `segmentText` entry.
 
+Use `/statusline` → `Segments` to show or hide any data segment without editing JSON. The screen supports arrow-key navigation, Enter or Space to toggle, and Escape to close. Every successful toggle is atomically saved and applied immediately; Escape does not undo earlier toggles. Remaining segments keep their relative order, newly shown segments are appended to the final row, and leading, trailing, or newly consecutive `line_break` entries are removed. Continue using the JSON editor when you need to place segments or line breaks at exact positions.
+
 An empty array hides the main powerline while still allowing extension statuses to render. `turn` is available but omitted by default.
 
 Example multiline layout:
@@ -236,12 +239,12 @@ from that line when the branch segment already renders it.
 
 | Command | Purpose |
 | --- | --- |
-| `/statusline` | Open the interactive menu for palette presets, settings JSON, status, and help |
+| `/statusline` | Open the interactive menu for palette presets, displayed segments, settings JSON, status, and help |
 | `/statusline settings` | Open the JSON settings editor in TUI mode |
 | `/statusline status` | Show the settings source, path, appearance, segments, and diagnostics |
 | `/statusline help` | Show command and schema guidance |
 
-Argument-free `/statusline` requires TUI mode. The established `settings`, `status`, and `help` routes remain available for compatibility; RPC receives notifications instead of opening TUI-only controls. Unknown subcommands and trailing arguments are rejected. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled changes leave both the previous file and effective runtime configuration unchanged.
+Argument-free `/statusline` requires TUI mode. The established `settings`, `status`, and `help` routes remain available for compatibility; RPC receives notifications instead of opening TUI-only controls. Unknown subcommands and trailing arguments are rejected. In the palette picker, Up and Down preview the highlighted preset immediately, Enter saves it, and Escape restores the saved preset. In the Segments screen, each Enter or Space toggle saves immediately, while Escape only closes the screen. Applying `custom` also points to the settings JSON palette editor. Invalid or cancelled unsaved changes leave both the previous file and effective runtime configuration unchanged.
 
 ## 🌿 Git and activity details
 

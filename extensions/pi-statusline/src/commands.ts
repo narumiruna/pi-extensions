@@ -2,12 +2,15 @@ import {
 	DynamicBorder,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
+	getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
 	type AutocompleteItem,
 	Container,
 	type SelectItem,
 	SelectList,
+	type SettingItem,
+	SettingsList,
 	Text,
 } from "@earendil-works/pi-tui";
 import { segmentPaletteForPreset } from "./presets/index.js";
@@ -17,13 +20,31 @@ import {
 	saveStatuslineSettingsDocument,
 } from "./settings.js";
 import {
+	type ConfigSegmentName,
+	LINE_BREAK_SEGMENT_NAME,
 	PALETTE_NAMES,
 	PALETTE_PRESET_NAMES,
 	type PaletteName,
 	type PalettePreset,
+	SEGMENT_NAMES,
+	type SegmentName,
 } from "./types.js";
 
 const EDIT_SETTINGS_LABEL = "Edit settings JSON (custom colors, layout, icons)";
+const SEGMENT_DESCRIPTIONS: Record<SegmentName, string> = {
+	brand: "Pi brand mark",
+	provider: "Current model provider",
+	model: "Current model name",
+	thinking: "Current thinking level",
+	cwd: "Current working directory",
+	branch: "Git branch, status, and linked pull request",
+	tools: "Current tool and streaming activity",
+	context: "Current context-window usage",
+	tokens: "Session token totals",
+	cost: "Session cost",
+	time: "Current local time",
+	turn: "Current session turn count",
+};
 const SUBCOMMANDS: AutocompleteItem[] = [
 	{ value: "settings", label: "settings", description: "Edit pi-statusline.json" },
 	{ value: "status", label: "status", description: "Show effective statusline settings" },
@@ -86,9 +107,15 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 		if (ctx.hasUI) ctx.ui.notify("/statusline requires an interactive Pi UI.", "error");
 		return;
 	}
-	const paletteItem = `Palette preset (${options.getLoaded().config.palettePreset})`;
+	const config = options.getLoaded().config;
+	const paletteItem = `Palette preset (${config.palettePreset})`;
+	const visibleSegmentCount = config.segments.filter(
+		(segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME,
+	).length;
+	const segmentsItem = `Segments (${visibleSegmentCount}/${SEGMENT_NAMES.length} shown)`;
 	const selection = await ctx.ui.select("pi-statusline", [
 		paletteItem,
+		segmentsItem,
 		EDIT_SETTINGS_LABEL,
 		"Status",
 		"Help",
@@ -98,6 +125,9 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 		return;
 	}
 	switch (selection) {
+		case segmentsItem:
+			await chooseSegments(ctx, options);
+			return;
 		case EDIT_SETTINGS_LABEL:
 			await editSettings(ctx, options);
 			return;
@@ -203,6 +233,84 @@ async function showPalettePresetPicker(
 	return result ?? undefined;
 }
 
+async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
+	if (ctx.mode !== "tui") {
+		if (ctx.hasUI) ctx.ui.notify(`Edit segments manually: ${options.settingsPath}`, "info");
+		return;
+	}
+	let current = options.getLoaded();
+	const visible = new Set(current.config.segments);
+	const items: SettingItem[] = SEGMENT_NAMES.map((name) => ({
+		id: name,
+		label: name,
+		description: SEGMENT_DESCRIPTIONS[name],
+		currentValue: visible.has(name) ? "visible" : "hidden",
+		values: ["visible", "hidden"],
+	}));
+
+	await ctx.ui.custom((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		const title = new Text("", 1, 0);
+		container.addChild(title);
+		let list: SettingsList;
+		list = new SettingsList(
+			items,
+			Math.min(items.length, 12),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				const name = id as SegmentName;
+				const previousValue = newValue === "visible" ? "hidden" : "visible";
+				try {
+					const { nextDocument, previousDocument } = segmentsDocument(
+						current,
+						name,
+						newValue === "visible",
+					);
+					const save = options.save ?? saveStatuslineSettingsDocument;
+					const next = save(options.settingsPath, nextDocument);
+					try {
+						options.apply(next, ctx);
+					} catch (applyError) {
+						try {
+							const restored = save(options.settingsPath, previousDocument);
+							options.apply(restored, ctx);
+						} catch (rollbackError) {
+							throw new Error(
+								`runtime update failed: ${formatError(applyError)}; rollback failed: ${formatError(rollbackError)}`,
+							);
+						}
+						throw applyError;
+					}
+					current = next;
+				} catch (error) {
+					list.updateValue(id, previousValue);
+					ctx.ui.notify(`Statusline segments were not saved: ${formatError(error)}`, "error");
+				}
+			},
+			() => done(undefined),
+		);
+		container.addChild(list);
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		const updateThemedText = () => {
+			title.setText(theme.fg("accent", theme.bold("Statusline segments")));
+		};
+		updateThemedText();
+
+		return {
+			render: (width: number) => container.render(width),
+			invalidate() {
+				container.invalidate();
+				updateThemedText();
+			},
+			handleInput(data: string) {
+				list.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+}
+
 async function editSettings(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
 	if (ctx.mode !== "tui") {
 		if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${options.settingsPath}`, "info");
@@ -231,15 +339,7 @@ function palettePresetDocument(
 	current: LoadedStatuslineSettings,
 	palettePreset: PalettePreset,
 ): string {
-	if (
-		current.source !== "user" ||
-		current.rawDocument === undefined ||
-		current.diagnostics.some((item) => item.code !== "unknown")
-	) {
-		throw new Error("Fix pi-statusline.json before choosing a palette preset");
-	}
-	const parsed = JSON.parse(current.rawDocument) as unknown;
-	if (!isRecord(parsed)) throw new Error("Settings must contain a JSON object");
+	const { parsed } = editableSettings(current, "choosing a palette preset");
 	if (palettePreset === "custom" && !isRecord(parsed.palette)) {
 		const seedPreset = isPaletteName(current.config.palettePreset)
 			? current.config.palettePreset
@@ -250,6 +350,54 @@ function palettePresetDocument(
 	}
 	parsed.palettePreset = palettePreset;
 	return `${JSON.stringify(parsed, null, "\t")}\n`;
+}
+
+function segmentsDocument(
+	current: LoadedStatuslineSettings,
+	name: SegmentName,
+	shouldShow: boolean,
+): { nextDocument: string; previousDocument: string } {
+	const { parsed, rawDocument: previousDocument } = editableSettings(current, "changing segments");
+	const segments = shouldShow
+		? [...current.config.segments, ...(current.config.segments.includes(name) ? [] : [name])]
+		: current.config.segments.filter((segment) => segment !== name);
+	parsed.segments = normalizeLineBreaks(segments);
+	return {
+		nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
+		previousDocument,
+	};
+}
+
+function normalizeLineBreaks(segments: readonly ConfigSegmentName[]): ConfigSegmentName[] {
+	const normalized: ConfigSegmentName[] = [];
+	for (const segment of segments) {
+		if (
+			segment === LINE_BREAK_SEGMENT_NAME &&
+			(normalized.length === 0 || normalized.at(-1) === LINE_BREAK_SEGMENT_NAME)
+		) {
+			continue;
+		}
+		normalized.push(segment);
+	}
+	if (normalized.at(-1) === LINE_BREAK_SEGMENT_NAME) normalized.pop();
+	return normalized;
+}
+
+function editableSettings(
+	current: LoadedStatuslineSettings,
+	action: string,
+): { parsed: Record<string, unknown>; rawDocument: string } {
+	if (
+		current.source !== "user" ||
+		current.rawDocument === undefined ||
+		current.diagnostics.some((item) => item.code !== "unknown")
+	) {
+		throw new Error(`Fix pi-statusline.json before ${action}`);
+	}
+	const rawDocument = current.rawDocument;
+	const parsed = JSON.parse(rawDocument) as unknown;
+	if (!isRecord(parsed)) throw new Error("Settings must contain a JSON object");
+	return { parsed, rawDocument };
 }
 
 function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
@@ -281,10 +429,11 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 			"/statusline settings — edit and apply JSON",
 			"/statusline status — show source, path, and warnings",
 			"/statusline help — show this help",
-			"Menu actions: Palette preset, Edit settings JSON, Status, Help",
+			"Menu actions: Palette preset, Segments, Edit settings JSON, Status, Help",
 			`Settings: ${settingsPath}`,
 			"Fields: palettePreset, palette, density, separator, segments, segmentText, extensionStatusIcons",
 			"Named presets ignore but preserve palette; custom uses its per-segment fg/bg colors.",
+			"Use the Segments menu to show or hide data segments; changes save and apply immediately.",
 			"Use line_break between segments for another footer row; repeats must not be consecutive.",
 			"The segmentText entries support prefix and suffix strings around Pi-owned dynamic values.",
 		].join("\n"),
