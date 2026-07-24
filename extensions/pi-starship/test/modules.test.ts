@@ -31,13 +31,27 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 		contextUsage: { percent: 75, tokens: 750, contextWindow: 1000 },
 		tokenTotals: { input: 1530, output: 200, cost: 0.1234 },
 		gitBranch: "feature",
+		gitBranchDetails: { name: "feature", detached: false },
+		gitCommit: { hash: "0123456789abcdef", detached: false },
 		gitStatus: {
 			ahead: 2,
 			behind: 1,
-			staged: 3,
-			modified: 4,
-			untracked: 5,
+			stashed: 0,
 			conflicted: 1,
+			deleted: 0,
+			renamed: 0,
+			modified: 4,
+			staged: 3,
+			typechanged: 0,
+			untracked: 5,
+			worktreeAdded: 0,
+			worktreeDeleted: 0,
+			worktreeModified: 4,
+			worktreeTypechanged: 0,
+			indexAdded: 3,
+			indexDeleted: 0,
+			indexModified: 0,
+			indexTypechanged: 0,
 		},
 		extensionStatuses: new Map([
 			["github-pr", `PR ${LINK}: checks failing (2), approved`],
@@ -58,7 +72,7 @@ test("built-in modules expose Pi values through the default format", () => {
 	assert.match(plain, /high/);
 	assert.match(plain, /pi-extensions/);
 	assert.match(plain, /feature/);
-	assert.match(plain, /⇡2 ⇣1 \+3 ~4 \?5 !1/);
+	assert.match(plain, /=1 !4 \+3 \?5 ⇕⇡2⇣1/);
 	assert.match(plain, /read/);
 	assert.match(plain, /75%/);
 	assert.match(plain, /↑1\.5k ↓200/);
@@ -98,6 +112,7 @@ test("empty and disabled modules disappear and make conditionals empty", () => {
 		fixture({
 			model: undefined,
 			gitBranch: null,
+			gitBranchDetails: undefined,
 			gitStatus: undefined,
 			extensionStatuses: new Map(),
 		}),
@@ -153,6 +168,78 @@ test("$all expands enabled modules in default order without explicit duplicates"
 	assert.equal(rendered.ansi.split(modelText).length - 1, 1);
 	assert.ok(rendered.ansi.indexOf("π") > rendered.ansi.indexOf(modelText));
 	assert.match(rendered.ansi, /#7/);
+});
+
+test("Starship Git modules expose branch, commit, state, metrics, and detailed status", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$git_branch|$git_commit|$git_state|$git_metrics|$git_status";
+	config.formatAst = [
+		{ type: "variable", name: "git_branch" },
+		{ type: "text", value: "|" },
+		{ type: "variable", name: "git_commit" },
+		{ type: "text", value: "|" },
+		{ type: "variable", name: "git_state" },
+		{ type: "text", value: "|" },
+		{ type: "variable", name: "git_metrics" },
+		{ type: "text", value: "|" },
+		{ type: "variable", name: "git_status" },
+	];
+	config.modules.git_branch.format = "$branch:$remote_name/$remote_branch";
+	config.modules.git_branch.formatAst = [
+		{ type: "variable", name: "branch" },
+		{ type: "text", value: ":" },
+		{ type: "variable", name: "remote_name" },
+		{ type: "text", value: "/" },
+		{ type: "variable", name: "remote_branch" },
+	];
+	config.modules.git_commit.format = "$hash$tag";
+	config.modules.git_commit.formatAst = [
+		{ type: "variable", name: "hash" },
+		{ type: "variable", name: "tag" },
+	];
+	config.modules.git_state.format = "$state:$progress_current/$progress_total";
+	config.modules.git_state.formatAst = [
+		{ type: "variable", name: "state" },
+		{ type: "text", value: ":" },
+		{ type: "variable", name: "progress_current" },
+		{ type: "text", value: "/" },
+		{ type: "variable", name: "progress_total" },
+	];
+	config.modules.git_metrics.disabled = false;
+	config.modules.git_metrics.format = "+$added/-$deleted";
+	config.modules.git_metrics.formatAst = [
+		{ type: "text", value: "+" },
+		{ type: "variable", name: "added" },
+		{ type: "text", value: "/-" },
+		{ type: "variable", name: "deleted" },
+	];
+	config.modules.git_status.format = "$all_status $ahead_behind";
+	config.modules.git_status.formatAst = [
+		{ type: "variable", name: "all_status" },
+		{ type: "text", value: " " },
+		{ type: "variable", name: "ahead_behind" },
+	];
+
+	const rendered = stripAnsi(
+		renderStatusline(
+			config,
+			fixture({
+				gitBranchDetails: {
+					name: "feature/native-git",
+					remoteName: "origin",
+					remoteBranch: "main",
+					detached: true,
+				},
+				gitCommit: { hash: "0123456789abcdef", tag: "v1.2.3", detached: true },
+				gitState: { state: "REBASING", progressCurrent: 3, progressTotal: 10 },
+				gitMetrics: { added: 12, deleted: 3 },
+			}),
+		).ansi,
+	);
+	assert.equal(
+		rendered,
+		"feature/native-git:origin/main|0123456 🏷 v1.2.3|REBASING:3/10|+12/-3|=1 !4 +3 ?5 ⇕⇡2⇣1",
+	);
 });
 
 test("git worktree renders linked worktree values and stays empty for the primary worktree", () => {

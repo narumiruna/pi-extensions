@@ -10,6 +10,7 @@ import {
 	CONFIG_FILE_NAME,
 	loadOrCreateStarshipConfig,
 	loadStarshipConfig,
+	MODULE_NAMES,
 	settingsFilePath,
 } from "../src/config.js";
 
@@ -66,6 +67,18 @@ test("built-in example uses readable TOML continuations without changing the for
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("Git modules use Starship display order", () => {
+	const gitModules = MODULE_NAMES.filter((name) => name.startsWith("git_"));
+	assert.deepEqual(gitModules, [
+		"git_worktree",
+		"git_branch",
+		"git_commit",
+		"git_state",
+		"git_metrics",
+		"git_status",
+	]);
 });
 
 test("missing settings are atomically initialized from the readable built-in example", () => {

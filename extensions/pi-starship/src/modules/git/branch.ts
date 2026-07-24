@@ -2,7 +2,7 @@ import { defineModule } from "../types.js";
 
 export const gitBranchModule = defineModule({
 	name: "git_branch",
-	variables: ["symbol", "branch", "pr"],
+	variables: ["symbol", "branch", "remote_name", "remote_branch", "pr"],
 	defaults: {
 		format: "[ $symbol $branch( $pr) ]($style)",
 		symbol: "🌿",
@@ -10,9 +10,13 @@ export const gitBranchModule = defineModule({
 		disabled: false,
 	},
 	values: ({ runtime }) => {
-		if (!runtime.gitBranch) return undefined;
+		const branch = runtime.gitBranchDetails;
+		const name = branch?.name ?? runtime.gitBranch;
+		if (!name) return undefined;
 		return {
-			branch: runtime.gitBranch,
+			branch: name,
+			remote_name: branch?.remoteName ?? "",
+			remote_branch: branch?.remoteBranch ?? "",
 			pr: prContextFromStatuses(runtime.extensionStatuses) ?? "",
 		};
 	},

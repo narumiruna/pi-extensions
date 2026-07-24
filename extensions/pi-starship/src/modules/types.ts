@@ -1,17 +1,62 @@
 import type { StyledChunk } from "../format/style.js";
 
+export interface GitBranchSnapshot {
+	name: string;
+	remoteName?: string;
+	remoteBranch?: string;
+	detached: boolean;
+}
+
+export interface GitCommitSnapshot {
+	hash: string;
+	tag?: string;
+	detached: boolean;
+}
+
+export interface GitStateSnapshot {
+	state: string;
+	progressCurrent?: number;
+	progressTotal?: number;
+}
+
+export interface GitMetricsSnapshot {
+	added: number;
+	deleted: number;
+}
+
 export interface GitStatusSnapshot {
 	ahead: number;
 	behind: number;
-	staged: number;
-	modified: number;
-	untracked: number;
+	stashed: number;
 	conflicted: number;
+	deleted: number;
+	renamed: number;
+	modified: number;
+	staged: number;
+	typechanged: number;
+	untracked: number;
+	worktreeAdded: number;
+	worktreeDeleted: number;
+	worktreeModified: number;
+	worktreeTypechanged: number;
+	indexAdded: number;
+	indexDeleted: number;
+	indexModified: number;
+	indexTypechanged: number;
 }
 
 export interface GitWorktreeSnapshot {
 	name: string;
 	path: string;
+}
+
+export interface GitSnapshot {
+	branch?: GitBranchSnapshot;
+	commit?: GitCommitSnapshot;
+	state?: GitStateSnapshot;
+	metrics?: GitMetricsSnapshot;
+	status: GitStatusSnapshot;
+	worktree?: GitWorktreeSnapshot;
 }
 
 export type ExtensionStatusIconAliasMap = ReadonlyMap<string, readonly string[]>;
@@ -31,6 +76,10 @@ export interface StarshipRuntimeSnapshot {
 	};
 	tokenTotals: { input: number; output: number; cost: number };
 	gitBranch: string | null;
+	gitBranchDetails?: GitBranchSnapshot;
+	gitCommit?: GitCommitSnapshot;
+	gitState?: GitStateSnapshot;
+	gitMetrics?: GitMetricsSnapshot;
 	gitStatus?: GitStatusSnapshot;
 	gitWorktree?: GitWorktreeSnapshot;
 	extensionStatuses: ReadonlyMap<string, string>;
