@@ -47,6 +47,7 @@ export default function statusline(pi: ExtensionAPI) {
 	let pendingGitStatusRefresh: { cwd: string; generation: number; requestId: number } | undefined;
 
 	const refresh = () => runtime.requestRender?.();
+	const ownsRuntime = (ctx: ExtensionContext) => ctx.sessionManager === activeSessionManager;
 
 	const setGitStatus = (summary: GitStatusSummary | undefined) => {
 		if (gitStatusSummaryEqual(runtime.gitStatus, summary)) return;
@@ -212,6 +213,7 @@ export default function statusline(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		if (!ownsRuntime(ctx)) return;
 		sessionGeneration += 1;
 		activeSessionManager = undefined;
 		previewPalettePreset = undefined;
@@ -235,36 +237,48 @@ export default function statusline(pi: ExtensionAPI) {
 		refresh();
 	});
 
-	pi.on("agent_start", () => {
+	pi.on("agent_start", (_event, ctx) => {
+		if (!ownsRuntime(ctx)) return;
 		runtime.isStreaming = true;
 		refresh();
 	});
 
 	pi.on("agent_end", (_event, ctx) => {
-		runtime.isStreaming = false;
+		if (!ownsRuntime(ctx)) return;
 		runtime.activeTools.clear();
 		scheduleGitStatusRefreshForContext(ctx);
 		refresh();
 	});
 
-	pi.on("turn_start", () => {
+	pi.on("agent_settled", (_event, ctx) => {
+		if (!ownsRuntime(ctx)) return;
+		runtime.isStreaming = false;
+		runtime.activeTools.clear();
+		refresh();
+	});
+
+	pi.on("turn_start", (_event, ctx) => {
+		if (!ownsRuntime(ctx)) return;
 		runtime.turnCount += 1;
 		runtime.isStreaming = true;
 		refresh();
 	});
 
 	pi.on("turn_end", (_event, ctx) => {
+		if (!ownsRuntime(ctx)) return;
 		scheduleGitStatusRefreshForContext(ctx);
 		refresh();
 	});
 
-	pi.on("tool_execution_start", (event) => {
+	pi.on("tool_execution_start", (event, ctx) => {
+		if (!ownsRuntime(ctx)) return;
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		runtime.activeTools.set(event.toolName, currentCount + 1);
 		refresh();
 	});
 
 	pi.on("tool_execution_end", (event, ctx) => {
+		if (!ownsRuntime(ctx)) return;
 		const currentCount = runtime.activeTools.get(event.toolName) ?? 0;
 		if (currentCount <= 1) runtime.activeTools.delete(event.toolName);
 		else runtime.activeTools.set(event.toolName, currentCount - 1);

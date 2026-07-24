@@ -94,6 +94,8 @@ test("statusline activity appears only while streaming or tools are active and r
 		await emit(mock.events, "tool_execution_end", { toolName: "read" }, context.ctx);
 		assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
 		await emit(mock.events, "agent_end", {}, context.ctx);
+		assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
+		await emit(mock.events, "agent_settled", {}, context.ctx);
 		assert.doesNotMatch(footer.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
 
 		await emit(mock.events, "tool_execution_start", { toolName: "write" }, context.ctx);
@@ -103,6 +105,13 @@ test("statusline activity appears only while streaming or tools are active and r
 		const replacementFooter = createFooter(replacement.footer as FooterFactory);
 		try {
 			assert.doesNotMatch(replacementFooter.render(200)[0] ?? "", /write|💤|✅|⚙|💭/u);
+			await emit(mock.events, "agent_start", {}, replacement.ctx);
+			await emit(mock.events, "session_shutdown", {}, context.ctx);
+			await emit(mock.events, "agent_end", {}, context.ctx);
+			await emit(mock.events, "agent_settled", {}, context.ctx);
+			assert.match(replacementFooter.render(200)[0] ?? "", /💭 thinking/u);
+			await emit(mock.events, "agent_settled", {}, replacement.ctx);
+			assert.doesNotMatch(replacementFooter.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
 		} finally {
 			replacementFooter.dispose();
 		}
