@@ -222,10 +222,24 @@ restore the latest remaining activity rather than letting one completion clear i
 ### Documentation and verification
 
 Package READMEs **SHOULD** remain practical and scannable: capabilities, installation, usage,
-commands/tools/settings, operational behavior, package layout, keywords, and license. Document the
-applicable persistent npm install, temporary npm execution, and local checkout commands. Include
-security, privacy, precedence, persistence, failure, or lifecycle details when users need them to use
-the extension safely.
+commands/tools/settings, operational behavior, package layout, keywords, and license. Apply these
+shared presentation conventions:
+
+- Write user-facing prose in English and retain the package's emoji title plus npm, Pi extension, and
+  license badges.
+- When applicable, use the established section labels and emojis: `✨ Features`, `📦 Install`,
+  `🚀 Quick start`, `⚙️ Settings`, `💬 Commands`, `🗂️ Package layout`, `🔎 Keywords`, and
+  `📄 License`. Additional sections may use a concise, semantically relevant emoji.
+- Keep `## 🗂️ Package layout`, `## 🔎 Keywords`, and `## 📄 License` in active package READMEs.
+  During a readability pass, reorganize or condense technical reference material instead of silently
+  removing supported capabilities, compatibility guidance, or these standard sections.
+- For another package in this monorepo, prefer stable absolute links to its GitHub package directory
+  and npm page so links work from both GitHub and npm. Describe borrowed syntax as "inspired" unless
+  compatibility is actually guaranteed.
+
+Document the applicable persistent npm install, temporary npm execution, and local checkout commands.
+Include security, privacy, precedence, persistence, failure, or lifecycle details when users need them
+to use the extension safely.
 
 - **MUST:** Add or update deterministic tests for changed behavior when practical; when a behavior
   requires a real Pi runtime or external service, record and run the smallest representative smoke

@@ -11,7 +11,7 @@ A representative uncolored layout:
 ░▒▓ 🤖 sonnet-4 🧠 high 📁 pi-extensions 🌿 main ~2 🪟 ctx 42% 💸 $0.184
 ```
 
-## Why pi-statusline?
+## ✨ Features
 
 - **Zero-config default:** model, thinking, workspace, Git/PR state, context use, and cost.
 - **Responsive:** removes lower-priority segments before important information gets clipped.
@@ -28,7 +28,7 @@ A representative uncolored layout:
 >
 > Do not enable both extensions at the same time because both own Pi's footer.
 
-## Install
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-statusline
@@ -43,7 +43,7 @@ pi -e ./extensions/pi-statusline
 
 For the best result, use a terminal font that includes Powerline glyphs and emoji.
 
-## Quick start
+## 🚀 Quick start
 
 1. Install the extension and start Pi.
 2. Run `/statusline`.
@@ -79,7 +79,7 @@ preserved.
 
 The `tools` segment takes no space while idle.
 
-## Commands
+## 💬 Commands
 
 | Command | Purpose |
 | --- | --- |
@@ -91,7 +91,7 @@ The `tools` segment takes no space while idle.
 The direct `settings`, `status`, and `help` routes remain for compatibility. RPC receives observable
 notifications instead of TUI-only controls. Unknown subcommands and trailing arguments are rejected.
 
-## Runtime behavior
+## 📐 Runtime behavior
 
 ### Responsive fitting
 
@@ -117,7 +117,7 @@ ANSI-safely truncated.
 - Context color changes to warning at 70% and error at 90%.
 - Git state is cached outside footer rendering and stale session results are ignored.
 
-## Settings
+## ⚙️ Settings
 
 The extension uses one user-level file:
 
@@ -169,7 +169,7 @@ A compact customization example:
 Use **Advanced → Edit settings JSON** or `/statusline settings` to edit, validate, atomically save, and
 apply the file.
 
-## Appearance
+## 🎨 Appearance
 
 Named palettes provide contrast-checked color ramps. Appearance previews update while the picker
 moves, but save only when Enter is pressed; Escape restores the saved palette.
@@ -197,7 +197,7 @@ When `palettePreset` is `custom`, `palette` maps segment names to foreground/bac
 `segmentText` values must be single-line text without terminal control characters. Use `line_break`
 for another row rather than inserting a newline into a prefix or suffix.
 
-## Advanced layout
+## 🧩 Advanced layout
 
 Open **Advanced → Custom layout** when the curated levels are not enough.
 
@@ -234,7 +234,7 @@ represent empty rows.
 An empty `segments` array hides the main powerline while extension statuses can still render. The
 extension intentionally has no variable or format language; use `pi-starship` when you need one.
 
-## Extension statuses and icons
+## 🔌 Extension statuses and icons
 
 Other extension statuses appear below the main powerline, wrap to terminal width, and are limited to
 five items. Icons resolve in this order:
@@ -259,7 +259,7 @@ For interoperable extensions, prefer one aggregated key or a stable coexistence 
 
 Put transient activity in the value and always clear the same complete key.
 
-## Troubleshooting
+## 🛠️ Troubleshooting
 
 - **Powerline symbols look wrong:** use a font with Powerline glyphs; emoji support is also recommended.
 - **The footer reports settings warnings:** run `/statusline status`, then `/statusline settings` to fix
@@ -269,21 +269,37 @@ Put transient activity in the value and always clear the same complete key.
 - **A custom segment disappears on a narrow terminal:** check the responsive priority above or add an
   explicit `line_break`.
 
-## Package layout
+## 🗂️ Package layout
 
-- `src/index.ts` — thin Pi entrypoint.
-- `src/statusline.ts` — lifecycle, cached runtime state, and footer installation.
-- `src/render.ts` and `src/powerline.ts` — semantic segments and responsive powerline rendering.
-- `src/information-profiles.ts` — curated information levels.
-- `src/commands.ts` and `src/settings.ts` — menu, validation, persistence, and migration.
-- `src/extension-status.ts` and `src/git-status.ts` — extension and Git status formatting.
-- `src/presets/` — built-in color presets.
+```text
+extensions/pi-statusline/
+├── src/
+│   ├── index.ts
+│   ├── statusline.ts
+│   ├── render.ts
+│   ├── powerline.ts
+│   ├── information-profiles.ts
+│   ├── commands.ts
+│   ├── settings.ts
+│   ├── extension-status.ts
+│   ├── git-status.ts
+│   ├── ansi.ts
+│   ├── types.ts
+│   └── presets/
+├── test/
+├── README.md
+├── LICENSE
+├── tsconfig.json
+└── package.json
+```
 
-## Keywords
+`src/index.ts` is the thin Pi entrypoint; all other modules are package-internal.
+
+## 🔎 Keywords
 
 Pi extension, Pi coding agent, statusline, Tokyo Night, powerline, responsive terminal footer,
 context usage, model status.
 
-## License
+## 📄 License
 
 MIT. See [`LICENSE`](./LICENSE).

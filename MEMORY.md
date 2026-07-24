@@ -102,7 +102,7 @@
 
 ### README
 
-- Write extension READMEs in English and mirror the existing visual style, including the emoji title and npm/Pi/license badges.
+- Write extension READMEs in English; preserve the emoji title, npm/Pi/license badges, standard emoji section headings, and `## 🗂️ Package layout` during readability passes.
 
 ### General
 
