@@ -7,9 +7,9 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import fileQuoteExtension, {
 	appendPendingQuote,
+	createFileContextAutocompleteProvider,
 	createFileQuote,
 	discoverProjectFiles,
-	FileQuoteTriggerEditor,
 	formatPromptWithQuote,
 	formatPromptWithQuotes,
 	loadProjectTextFile,
@@ -590,34 +590,57 @@ test("explorer loads validated revisions and attaches explicit Git diff context"
 	assert.equal(diffResult.quote.git?.base, "HEAD");
 });
 
-test("custom editor opens the explorer on a boundary @ without changing the draft", async () => {
+test("autocomplete keeps @ in the editor until the user chooses the quote action", async () => {
 	let opened = 0;
-	const editor = new FileQuoteTriggerEditor(
-		{ requestRender() {} } as never,
-		{
-			borderColor: (text: string) => text,
-			selectList: {
-				selectedPrefix: (text: string) => text,
-				selectedText: (text: string) => text,
-				description: (text: string) => text,
-				scrollInfo: (text: string) => text,
-				noMatch: (text: string) => text,
+	const baseSuggestions = {
+		prefix: "@",
+		items: [{ value: "@src/main.ts", label: "src/main.ts" }],
+	};
+	const current = {
+		async getSuggestions() {
+			return baseSuggestions;
+		},
+		applyCompletion(lines: string[], cursorLine: number, cursorCol: number) {
+			return { lines, cursorLine, cursorCol };
+		},
+	};
+	const provider = createFileContextAutocompleteProvider(current, async () => {
+		opened += 1;
+	});
+
+	const suggestions = await provider.getSuggestions(["draft @"], 0, 7, {
+		signal: new AbortController().signal,
+	});
+	assert.equal(opened, 0);
+	assert.deepEqual(suggestions, {
+		prefix: "@",
+		items: [
+			{
+				value: "@__pi_file_context_quote_lines__",
+				label: "Quote selected lines…",
+				description: "Open File Context",
 			},
-		},
-		{ matches: () => false } as never,
-		async () => {
-			opened += 1;
-		},
+			...baseSuggestions.items,
+		],
+	});
+
+	const completion = provider.applyCompletion(
+		["draft @"],
+		0,
+		7,
+		suggestions?.items[0] as never,
+		"@",
 	);
-	editor.setText("draft ");
-	editor.handleInput("@");
+	assert.deepEqual(completion, { lines: ["draft "], cursorLine: 0, cursorCol: 6 });
 	await Promise.resolve();
 	assert.equal(opened, 1);
-	assert.equal(editor.getText(), "draft ");
 
-	editor.setText("email");
-	editor.handleInput("@");
-	assert.equal(editor.getText(), "email@");
+	assert.equal(
+		await provider.getSuggestions(["email@"], 0, 6, {
+			signal: new AbortController().signal,
+		}),
+		baseSuggestions,
+	);
 });
 
 test("captures an exact normalized line snapshot and formats one focused prompt", () => {
@@ -698,9 +721,8 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 	);
 
 	let customFactory: unknown;
+	let autocompleteFactory: unknown;
 	const widgets = new Map<string, unknown>();
-	const editorFactories: unknown[] = [];
-	let currentEditorFactory: unknown;
 	let quoteIndex = 0;
 	const quoteResults = [
 		{
@@ -736,12 +758,8 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 			setWidget(key: string, value: unknown) {
 				widgets.set(key, value);
 			},
-			setEditorComponent(factory: unknown) {
-				currentEditorFactory = factory;
-				editorFactories.push(factory);
-			},
-			getEditorComponent() {
-				return currentEditorFactory;
+			addAutocompleteProvider(factory: unknown) {
+				autocompleteFactory = factory;
 			},
 			async custom(factory: unknown) {
 				customFactory = factory;
@@ -753,7 +771,7 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 	});
 
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-	assert.equal(editorFactories.length, 1);
+	assert.equal(typeof autocompleteFactory, "function");
 	await mock.commands.get("file-context")?.handler("", context.ctx);
 	await mock.commands.get("file-context")?.handler("", context.ctx);
 	assert.equal(typeof customFactory, "function");
@@ -784,7 +802,6 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 		undefined,
 	);
 	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
-	assert.equal(currentEditorFactory, undefined);
 	assert.equal(widgets.get("file-context"), undefined);
 });
 
@@ -800,10 +817,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
 			theme: { fg: (_color: string, text: string) => text },
 			notify() {},
 			setWidget() {},
-			setEditorComponent() {},
-			getEditorComponent() {
-				return undefined;
-			},
+			addAutocompleteProvider() {},
 			async custom() {
 				return { kind: "reference", path: 'docs/my "note".md' };
 			},
@@ -834,10 +848,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
 				theme: { fg: (_color: string, text: string) => text },
 				notify() {},
 				setWidget() {},
-				setEditorComponent() {},
-				getEditorComponent() {
-					return undefined;
-				},
+				addAutocompleteProvider() {},
 				custom,
 				pasteToEditor() {},
 			},

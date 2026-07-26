@@ -2,17 +2,17 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import {
-	CustomEditor,
-	type ExtensionAPI,
-	type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	AutocompleteItem,
+	AutocompleteProvider,
+	AutocompleteSuggestions,
+} from "@earendil-works/pi-tui";
 import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-context-explorer.js";
 import { createGitContext } from "./git-context.js";
 
 const WIDGET_KEY = "file-context";
+const QUOTE_ACTION_VALUE = "@__pi_file_context_quote_lines__";
 const DEFAULT_MAX_FILES = 5_000;
 const DEFAULT_MAX_BYTES = 1_000_000;
 const MAX_QUOTE_BYTES = 50_000;
@@ -247,40 +247,51 @@ export function formatQuoteContext(quotes: readonly FileQuote[]): string {
 	return `${blocks.join("\n\n")}\n\n${description}`;
 }
 
-export class FileQuoteTriggerEditor extends CustomEditor {
-	private opening = false;
-
-	constructor(
-		tui: TUI,
-		theme: EditorTheme,
-		keybindings: KeybindingsManager,
-		private readonly openExplorer: () => Promise<void>,
-	) {
-		super(tui, theme, keybindings);
-	}
-
-	override handleInput(data: string): void {
-		if (data === "@" && !this.opening && this.isQuoteTriggerPosition()) {
-			this.opening = true;
-			void this.openExplorer().finally(() => {
-				this.opening = false;
-				this.tui.requestRender();
-			});
-			return;
-		}
-		super.handleInput(data);
-	}
-
-	private isQuoteTriggerPosition(): boolean {
-		const { line, col } = this.getCursor();
-		const currentLine = this.getLines()[line] ?? "";
-		return col === 0 || /\s/.test(currentLine[col - 1] ?? "");
-	}
+export function createFileContextAutocompleteProvider(
+	current: AutocompleteProvider,
+	openExplorer: () => void,
+): AutocompleteProvider {
+	return {
+		triggerCharacters: [...new Set([...(current.triggerCharacters ?? []), "@"])],
+		async getSuggestions(
+			lines,
+			cursorLine,
+			cursorCol,
+			options,
+		): Promise<AutocompleteSuggestions | null> {
+			const suggestions = await current.getSuggestions(lines, cursorLine, cursorCol, options);
+			if (options.signal.aborted) return suggestions;
+			const beforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+			if (!/(?:^|[ \t])@$/.test(beforeCursor)) return suggestions;
+			const action: AutocompleteItem = {
+				value: QUOTE_ACTION_VALUE,
+				label: "Quote selected lines…",
+				description: "Open File Context",
+			};
+			return {
+				prefix: "@",
+				items: [action, ...(suggestions?.items ?? [])],
+			};
+		},
+		applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+			if (item.value !== QUOTE_ACTION_VALUE || prefix !== "@") {
+				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+			}
+			const nextLines = [...lines];
+			const currentLine = nextLines[cursorLine] ?? "";
+			const prefixStart = Math.max(0, cursorCol - prefix.length);
+			nextLines[cursorLine] = currentLine.slice(0, prefixStart) + currentLine.slice(cursorCol);
+			queueMicrotask(openExplorer);
+			return { lines: nextLines, cursorLine, cursorCol: prefixStart };
+		},
+		shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+			return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
+		},
+	};
 }
 
 export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	let pendingQuotes: FileQuote[] = [];
-	let installedEditorFactory: unknown;
 	let activeSessionManager: unknown;
 	let sessionGeneration = 0;
 
@@ -379,21 +390,14 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		clearPending(ctx);
 		if (ctx.mode !== "tui") return;
 		ctx.ui.notify(
-			"Experimental File Context loaded. Type @ at a word boundary to browse files.",
+			"Experimental File Context loaded. Type @ and choose ‘Quote selected lines…’ to browse files.",
 			"warning",
 		);
-		const previous = ctx.ui.getEditorComponent();
-		if (previous) {
-			ctx.ui.notify(
-				"File Context left the existing custom editor unchanged; use /file-context.",
-				"warning",
-			);
-			return;
-		}
-		const factory = (tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) =>
-			new FileQuoteTriggerEditor(tui, theme, keybindings, () => openExplorer(ctx));
-		installedEditorFactory = factory;
-		ctx.ui.setEditorComponent(factory);
+		ctx.ui.addAutocompleteProvider((current) =>
+			createFileContextAutocompleteProvider(current, () => {
+				void openExplorer(ctx);
+			}),
+		);
 	});
 
 	pi.on("before_agent_start", (_event, ctx) => {
@@ -412,11 +416,6 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (ctx.sessionManager !== activeSessionManager) return;
 		clearPending(ctx);
-		if (installedEditorFactory && ctx.mode === "tui") {
-			if (ctx.ui.getEditorComponent() === installedEditorFactory)
-				ctx.ui.setEditorComponent(undefined);
-			installedEditorFactory = undefined;
-		}
 	});
 }
 

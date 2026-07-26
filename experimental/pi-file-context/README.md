@@ -11,8 +11,8 @@ Browse project files inside Pi, preview text, select a line range, and attach th
 
 ## ✨ Features
 
-- Opens the file explorer when `@` is typed at a word boundary in Pi's normal editor.
-- Provides `/file-context` as a discoverable fallback when another extension owns the editor.
+- Adds a **Quote selected lines…** action to Pi's built-in `@` autocomplete without replacing the editor or immediately taking over the screen.
+- Provides `/file-context` as a discoverable direct route to the explorer.
 - Fuzzy-searches project files with typo tolerance and relevance ranking, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
 - Shows textual staged, unstaged, untracked, ignored, and conflict status plus branch, HEAD, and dirty state when Git is available.
 - Selects a contiguous line range or changed hunk without using the system clipboard and shows a deterministic token estimate before attachment.
@@ -42,13 +42,14 @@ pi -e ./experimental/pi-file-context
 
 ## 🚀 Quick start
 
-1. Type `@` at the start of a word in Pi's editor. If another custom editor is active, run `/file-context` instead.
-2. Type to fuzzy-search files in relevance order and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
-3. In the preview, move to the first line and press `Space` to anchor the selection.
-4. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
-5. In a Git worktree, use `[`/`]` to select changed hunks, `b` for current-line blame, `h` for file history, `r` to open a commit/branch/tag, or `d` to inspect and attach explicit diff context.
-6. Repeat from `@` to attach more ranges from the same or different files.
-7. Write the question and submit normally. All pending quotes are attached in selection order and then cleared together.
+1. Type `@` at the start of a word in Pi's editor. Pi keeps the character in your draft and shows its normal inline autocomplete with **Quote selected lines…** added.
+2. Choose **Quote selected lines…** to open the explorer. To enter a literal `@`, dismiss autocomplete with `Escape` and continue normally. Pi's built-in file suggestions still insert normal whole-file `@path` references.
+3. In the explorer, type to fuzzy-search files in relevance order and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
+4. In the preview, move to the first line and press `Space` to anchor the selection.
+5. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
+6. In a Git worktree, use `[`/`]` to select changed hunks, `b` for current-line blame, `h` for file history, `r` to open a commit/branch/tag, or `d` to inspect and attach explicit diff context.
+7. Repeat from `@` to attach more ranges from the same or different files.
+8. Write the question and submit normally. All pending quotes are attached in selection order and then cleared together.
 
 `Escape` returns from a preview to the file list; from the file list it cancels without changing the draft. `Ctrl+C` cancels from either view.
 
@@ -91,7 +92,7 @@ Token counts are deterministic byte-based estimates (`ceil(UTF-8 bytes / 4)`), n
 - Keyboard line selection only; mouse drag selection is not implemented.
 - Up to eight pending quotes; there is not yet an interactive remove/reorder action.
 - Pending quotes do not survive `/reload`, session replacement, or shutdown.
-- The `@` trigger is not installed when another extension already owns the custom editor; `/file-context` remains available.
+- Custom editors receive the action only when they support Pi's autocomplete-provider interface; `/file-context` remains available otherwise.
 - File discovery uses a small built-in ignore list rather than `.gitignore` semantics.
 - Git integration degrades to the original filesystem-only workflow outside a repository or when Git metadata cannot be read.
 - File history is limited to the 20 most recent commits. Untracked files have status and provenance but no HEAD diff hunk until Git tracks them.

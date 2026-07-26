@@ -124,6 +124,7 @@
 ### General
 
 - Prefer direct, user-owned context selection; avoid dedicated shortcuts or manual copy steps for routine quoting workflows.
+- Preserve Pi's native editor for trigger-based workflows; stack inline autocomplete actions instead of consuming typed trigger characters or immediately replacing the screen.
 - Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.
 - Keep a predecessor extension active while its successor soaks; move it to `deprecated/` only after an explicit follow-up decision.
