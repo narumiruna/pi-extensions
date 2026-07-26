@@ -39,6 +39,7 @@ interface FileQuoteExplorerOptions {
 	theme: Theme;
 	keybindings: KeybindingsManager;
 	files: readonly string[];
+	initialPath?: string;
 	loadFile: (path: string) => Promise<LoadedProjectTextFile>;
 	gitContext?: GitContext;
 	done: (result: FileQuoteExplorerResult | undefined) => void;
@@ -73,6 +74,10 @@ export class FileQuoteExplorer implements Component, Focusable {
 	constructor(private readonly options: FileQuoteExplorerOptions) {
 		this.fileSearch = new ProjectFileSearch(options.files);
 		this.filteredFiles = [...options.files];
+		if (options.initialPath && options.files.includes(options.initialPath)) {
+			this.selectedFileIndex = options.files.indexOf(options.initialPath);
+			void this.openFile(options.initialPath);
+		}
 	}
 
 	get focused(): boolean {

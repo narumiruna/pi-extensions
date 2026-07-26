@@ -11,7 +11,7 @@ Browse project files inside Pi, preview text, select a line range, and attach th
 
 ## ✨ Features
 
-- Adds a **Quote selected lines…** action to Pi's built-in `@` autocomplete without replacing the editor or immediately taking over the screen.
+- Extends Pi's built-in `@` autocomplete with a **Quote lines · path** companion for each file while preserving the original `@path` completion.
 - Provides `/file-context` as a discoverable direct route to the explorer.
 - Fuzzy-searches project files with typo tolerance and relevance ranking, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
 - Shows textual staged, unstaged, untracked, ignored, and conflict status plus branch, HEAD, and dirty state when Git is available.
@@ -42,9 +42,9 @@ pi -e ./experimental/pi-file-context
 
 ## 🚀 Quick start
 
-1. Type `@` at the start of a word in Pi's editor. Pi keeps the character in your draft and shows its normal inline autocomplete with **Quote selected lines…** added.
-2. Choose **Quote selected lines…** to open the explorer. To enter a literal `@`, dismiss autocomplete with `Escape` and continue normally. Pi's built-in file suggestions still insert normal whole-file `@path` references.
-3. In the explorer, type to fuzzy-search files in relevance order and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
+1. Type `@` at the start of a word in Pi's editor and continue typing to filter files in Pi's normal inline autocomplete.
+2. Each file keeps its native suggestion and gains a **Quote lines · path** companion. Choose the native item to insert a whole-file `@path` reference, or choose its quote companion to open that file's line preview. To enter a literal `@`, dismiss autocomplete with `Escape` and continue normally.
+3. Alternatively, run `/file-context` to open the full explorer. Type to fuzzy-search, use `Up`/`Down` to navigate, press `Tab` to insert a whole-file reference, or press `Enter` to preview.
 4. In the preview, move to the first line and press `Space` to anchor the selection.
 5. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
 6. In a Git worktree, use `[`/`]` to select changed hunks, `b` for current-line blame, `h` for file history, `r` to open a commit/branch/tag, or `d` to inspect and attach explicit diff context.

@@ -12,7 +12,7 @@ import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-context-
 import { createGitContext } from "./git-context.js";
 
 const WIDGET_KEY = "file-context";
-const QUOTE_ACTION_VALUE = "@__pi_file_context_quote_lines__";
+const QUOTE_ACTION_PREFIX = "@__pi_file_context_quote_lines__/";
 const DEFAULT_MAX_FILES = 5_000;
 const DEFAULT_MAX_BYTES = 1_000_000;
 const MAX_QUOTE_BYTES = 50_000;
@@ -249,7 +249,7 @@ export function formatQuoteContext(quotes: readonly FileQuote[]): string {
 
 export function createFileContextAutocompleteProvider(
 	current: AutocompleteProvider,
-	openExplorer: () => void,
+	openPreview: (path: string) => void,
 ): AutocompleteProvider {
 	return {
 		triggerCharacters: [...new Set([...(current.triggerCharacters ?? []), "@"])],
@@ -260,28 +260,41 @@ export function createFileContextAutocompleteProvider(
 			options,
 		): Promise<AutocompleteSuggestions | null> {
 			const suggestions = await current.getSuggestions(lines, cursorLine, cursorCol, options);
-			if (options.signal.aborted) return suggestions;
-			const beforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
-			if (!/(?:^|[ \t])@$/.test(beforeCursor)) return suggestions;
-			const action: AutocompleteItem = {
-				value: QUOTE_ACTION_VALUE,
-				label: "Quote selected lines…",
-				description: "Open File Context",
-			};
-			return {
-				prefix: "@",
-				items: [action, ...(suggestions?.items ?? [])],
-			};
+			if (
+				options.signal.aborted ||
+				!suggestions?.prefix.startsWith("@") ||
+				suggestions.items.length === 0
+			) {
+				return suggestions;
+			}
+			const items = suggestions.items.flatMap((item): AutocompleteItem[] => {
+				if (!item.value.startsWith("@") || item.label.endsWith("/")) return [item];
+				return [
+					item,
+					{
+						value: `${QUOTE_ACTION_PREFIX}${encodeURIComponent(item.label)}`,
+						label: `Quote lines · ${item.label}`,
+						description: "Open line-range preview",
+					},
+				];
+			});
+			return { prefix: suggestions.prefix, items };
 		},
 		applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
-			if (item.value !== QUOTE_ACTION_VALUE || prefix !== "@") {
+			if (!item.value.startsWith(QUOTE_ACTION_PREFIX)) {
+				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+			}
+			let path: string;
+			try {
+				path = decodeURIComponent(item.value.slice(QUOTE_ACTION_PREFIX.length));
+			} catch {
 				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
 			}
 			const nextLines = [...lines];
 			const currentLine = nextLines[cursorLine] ?? "";
 			const prefixStart = Math.max(0, cursorCol - prefix.length);
 			nextLines[cursorLine] = currentLine.slice(0, prefixStart) + currentLine.slice(cursorCol);
-			queueMicrotask(openExplorer);
+			queueMicrotask(() => openPreview(path));
 			return { lines: nextLines, cursorLine, cursorCol: prefixStart };
 		},
 		shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
@@ -325,7 +338,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	const isCurrentSession = (owner: unknown, generation: number) =>
 		owner === activeSessionManager && generation === sessionGeneration;
 
-	const openExplorer = async (ctx: ExtensionContext): Promise<void> => {
+	const openExplorer = async (ctx: ExtensionContext, initialPath?: string): Promise<void> => {
 		if (ctx.mode !== "tui") {
 			rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
 			return;
@@ -348,6 +361,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 						theme,
 						keybindings,
 						files,
+						...(initialPath ? { initialPath } : {}),
 						loadFile: (path) => loadProjectTextFile(ctx.cwd, path),
 						gitContext,
 						done,
@@ -390,12 +404,12 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		clearPending(ctx);
 		if (ctx.mode !== "tui") return;
 		ctx.ui.notify(
-			"Experimental File Context loaded. Type @ and choose ‘Quote selected lines…’ to browse files.",
+			"Experimental File Context loaded. Type @ to insert a file reference or quote its lines.",
 			"warning",
 		);
 		ctx.ui.addAutocompleteProvider((current) =>
-			createFileContextAutocompleteProvider(current, () => {
-				void openExplorer(ctx);
+			createFileContextAutocompleteProvider(current, (path) => {
+				void openExplorer(ctx, path);
 			}),
 		);
 	});

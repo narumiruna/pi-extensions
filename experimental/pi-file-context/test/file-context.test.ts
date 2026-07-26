@@ -167,6 +167,26 @@ test("explorer previews a file, selects a range, and keeps rendered rows width-s
 		},
 	});
 
+	result = undefined;
+	const directPreviewExplorer = new FileQuoteExplorer({
+		tui: tui as never,
+		theme: theme as never,
+		keybindings: keybindings as never,
+		files: ["src/direct.ts"],
+		initialPath: "src/direct.ts",
+		loadFile: async () => ({ path: "src/direct.ts", lines: ["direct"] }),
+		done: (value) => {
+			result = value;
+		},
+	});
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.ok(directPreviewExplorer.render(32).some((line) => line.includes("direct")));
+	directPreviewExplorer.handleInput("enter");
+	assert.deepEqual(result, {
+		kind: "quote",
+		quote: { path: "src/direct.ts", startLine: 1, endLine: 1, text: "direct" },
+	});
+
 	const referenceExplorer = new FileQuoteExplorer({
 		tui: tui as never,
 		theme: theme as never,
@@ -590,57 +610,66 @@ test("explorer loads validated revisions and attaches explicit Git diff context"
 	assert.equal(diffResult.quote.git?.base, "HEAD");
 });
 
-test("autocomplete keeps @ in the editor until the user chooses the quote action", async () => {
-	let opened = 0;
+test("autocomplete preserves native file completions and adds a quote choice per file", async () => {
+	const opened: string[] = [];
+	let delegatedItem: unknown;
 	const baseSuggestions = {
-		prefix: "@",
-		items: [{ value: "@src/main.ts", label: "src/main.ts" }],
+		prefix: "@src",
+		items: [
+			{ value: "@src/main.ts", label: "src/main.ts" },
+			{ value: "@src/components/", label: "src/components/" },
+		],
 	};
 	const current = {
 		async getSuggestions() {
 			return baseSuggestions;
 		},
-		applyCompletion(lines: string[], cursorLine: number, cursorCol: number) {
+		applyCompletion(lines: string[], cursorLine: number, cursorCol: number, item: unknown) {
+			delegatedItem = item;
 			return { lines, cursorLine, cursorCol };
 		},
 	};
-	const provider = createFileContextAutocompleteProvider(current, async () => {
-		opened += 1;
+	const provider = createFileContextAutocompleteProvider(current, (path) => {
+		opened.push(path);
 	});
 
-	const suggestions = await provider.getSuggestions(["draft @"], 0, 7, {
+	const suggestions = await provider.getSuggestions(["draft @src"], 0, 10, {
 		signal: new AbortController().signal,
 	});
-	assert.equal(opened, 0);
 	assert.deepEqual(suggestions, {
-		prefix: "@",
+		prefix: "@src",
 		items: [
+			baseSuggestions.items[0],
 			{
-				value: "@__pi_file_context_quote_lines__",
-				label: "Quote selected lines…",
-				description: "Open File Context",
+				value: "@__pi_file_context_quote_lines__/src%2Fmain.ts",
+				label: "Quote lines · src/main.ts",
+				description: "Open line-range preview",
 			},
-			...baseSuggestions.items,
+			baseSuggestions.items[1],
 		],
 	});
 
-	const completion = provider.applyCompletion(
-		["draft @"],
+	const nativeCompletion = provider.applyCompletion(
+		["draft @src"],
 		0,
-		7,
-		suggestions?.items[0] as never,
-		"@",
+		10,
+		baseSuggestions.items[0] as never,
+		"@src",
 	);
-	assert.deepEqual(completion, { lines: ["draft "], cursorLine: 0, cursorCol: 6 });
-	await Promise.resolve();
-	assert.equal(opened, 1);
+	assert.deepEqual(nativeCompletion, { lines: ["draft @src"], cursorLine: 0, cursorCol: 10 });
+	assert.equal(delegatedItem, baseSuggestions.items[0]);
+	assert.deepEqual(opened, []);
 
-	assert.equal(
-		await provider.getSuggestions(["email@"], 0, 6, {
-			signal: new AbortController().signal,
-		}),
-		baseSuggestions,
+	const quoteCompletion = provider.applyCompletion(
+		["draft @src"],
+		0,
+		10,
+		suggestions?.items[1] as never,
+		"@src",
 	);
+	assert.deepEqual(quoteCompletion, { lines: ["draft "], cursorLine: 0, cursorCol: 6 });
+	await Promise.resolve();
+	assert.deepEqual(opened, ["src/main.ts"]);
 });
 
 test("captures an exact normalized line snapshot and formats one focused prompt", () => {
