@@ -1,10 +1,12 @@
 import { randomBytes } from "node:crypto";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.js";
 import { normalizeCodexBackendPayload } from "./providers/codex.js";
+import { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
 import { normalizeOpenRouterKeyPayload } from "./providers/openrouter.js";
 import type {
 	CodexBackendPayload,
+	GitHubCopilotUsagePayload,
 	OpenRouterKeyPayload,
 	PiModel,
 	ResolvedUsageAuth,
@@ -13,6 +15,7 @@ import type {
 } from "./types.js";
 
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const GITHUB_COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user";
 const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
 const MAX_SUCCESS_BODY_BYTES = 64 * 1024;
 const MAX_ERROR_BODY_BYTES = 4 * 1024;
@@ -36,6 +39,24 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
 				"Codex usage endpoint",
 			);
 			return normalizeCodexBackendPayload(payload as CodexBackendPayload, Date.now());
+		},
+	},
+	{
+		id: "github-copilot",
+		displayName: "GitHub Copilot",
+		semantics: {
+			kind: "consumer-subscription",
+			label: "GitHub Copilot premium request quota",
+		},
+		async query(auth, signal, timeoutMs) {
+			const payload = await fetchProviderJson(
+				GITHUB_COPILOT_USAGE_URL,
+				auth,
+				signal,
+				timeoutMs,
+				"GitHub Copilot usage endpoint",
+			);
+			return normalizeGitHubCopilotUsagePayload(payload as GitHubCopilotUsagePayload, Date.now());
 		},
 	},
 	{
@@ -72,6 +93,7 @@ export async function resolveUsageAuth(
 	ctx: ExtensionContext,
 	adapter: UsageProviderAdapter,
 	salt: Uint8Array = AUTH_FINGERPRINT_SALT,
+	credentialReader: StoredCredentialReader = readStoredCredential,
 ): Promise<ResolvedUsageAuth | undefined> {
 	if (ctx.model?.provider === adapter.id && !hasOfficialOrigin(ctx.model, adapter.id)) {
 		throw new Error(
@@ -104,6 +126,9 @@ export async function resolveUsageAuth(
 	}
 	const auth = modelAuth ?? providerResult?.auth;
 	if (!auth) return undefined;
+	if (adapter.id === "github-copilot") {
+		return resolveGitHubCopilotUsageAuth(auth, model, salt, credentialReader);
+	}
 	const authorization = authorizationFrom(auth);
 	if (!authorization) return undefined;
 	const headers = { Authorization: authorization };
@@ -262,6 +287,8 @@ type RequestAuth = {
 	headers?: Record<string, string | null>;
 };
 
+type StoredCredentialReader = (providerId: string) => unknown;
+
 type UsageAuthRegistry = {
 	getApiKeyAndHeaders?(
 		model: PiModel,
@@ -274,6 +301,51 @@ type UsageAuthRegistry = {
 	>;
 };
 
+function resolveGitHubCopilotUsageAuth(
+	auth: RequestAuth,
+	model: PiModel,
+	salt: Uint8Array,
+	credentialReader: StoredCredentialReader,
+): ResolvedUsageAuth {
+	const credential = asObject(credentialReader("github-copilot"));
+	if (credential?.type !== "oauth") {
+		throw new Error(
+			"GitHub Copilot usage requires the OAuth account configured through Pi /login.",
+		);
+	}
+	if (
+		typeof credential.enterpriseUrl === "string" &&
+		credential.enterpriseUrl &&
+		!isPublicGitHubDomain(credential.enterpriseUrl)
+	) {
+		throw new Error("GitHub Copilot usage does not yet support GitHub Enterprise accounts.");
+	}
+	const refresh = typeof credential.refresh === "string" ? credential.refresh : undefined;
+	const storedAccess = typeof credential.access === "string" ? credential.access : undefined;
+	const resolvedAccess = bearerToken(headerValue(auth.headers, "Authorization")) ?? auth.apiKey;
+	if (!refresh || !storedAccess || !resolvedAccess) {
+		throw new Error("GitHub Copilot OAuth credentials were incomplete.");
+	}
+	if (storedAccess !== resolvedAccess) {
+		throw new Error(
+			"The active GitHub Copilot runtime account does not match Pi's stored OAuth account.",
+		);
+	}
+
+	const authorization = `Bearer ${refresh}`;
+	const headers = {
+		Authorization: authorization,
+		"X-GitHub-Api-Version": "2025-05-01",
+	};
+	return {
+		apiKey: refresh,
+		headers,
+		fingerprint: fingerprintResolvedAuth({ headers }, salt),
+		secrets: [refresh, storedAccess, resolvedAccess, authorization],
+		model,
+	};
+}
+
 function authorizationFrom(auth: RequestAuth): string | undefined {
 	return (
 		headerValue(auth.headers, "Authorization") ??
@@ -281,14 +353,40 @@ function authorizationFrom(auth: RequestAuth): string | undefined {
 	);
 }
 
+function bearerToken(authorization: string | undefined): string | undefined {
+	const match = /^Bearer\s+(.+)$/iu.exec(authorization ?? "");
+	return match?.[1];
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	return value as Record<string, unknown>;
+}
+
+function isPublicGitHubDomain(value: string): boolean {
+	try {
+		const url = new URL(value.includes("://") ? value : `https://${value}`);
+		return url.hostname.toLowerCase() === "github.com";
+	} catch {
+		return false;
+	}
+}
+
 function hasOfficialOrigin(model: PiModel, providerId: string): boolean {
 	return hasOfficialUrlOrigin(model.baseUrl, providerId);
 }
 
 function hasOfficialUrlOrigin(value: string, providerId: string): boolean {
-	const expected = providerId === "openai-codex" ? "https://chatgpt.com" : "https://openrouter.ai";
 	try {
-		return new URL(value).origin === expected;
+		const url = new URL(value);
+		if (providerId === "openai-codex") return url.origin === "https://chatgpt.com";
+		if (providerId === "openrouter") return url.origin === "https://openrouter.ai";
+		if (providerId === "github-copilot") {
+			return (
+				url.protocol === "https:" && /^api\.[a-z0-9-]+\.githubcopilot\.com$/u.test(url.hostname)
+			);
+		}
+		return false;
 	} catch {
 		return false;
 	}

@@ -16,6 +16,7 @@ export function formatUsageReport(report: UsageReport, displayState: UsageDispla
 	lines.push(`Semantics: ${report.semantics.label}`, "");
 
 	if (report.providerId === "openai-codex") formatCodexReport(lines, report);
+	else if (report.providerId === "github-copilot") formatGitHubCopilotReport(lines, report);
 	else if (report.providerId === "openrouter") formatOpenRouterReport(lines, report);
 	else formatGenericReport(lines, report);
 
@@ -27,6 +28,7 @@ export function formatUsageReport(report: UsageReport, displayState: UsageDispla
 
 export function formatUsageStatusline(report: UsageReport, model?: UsageModel): string | undefined {
 	if (report.providerId === "openai-codex") return formatCodexStatusline(report, model);
+	if (report.providerId === "github-copilot") return formatGitHubCopilotStatusline(report);
 	if (report.providerId === "openrouter") {
 		const limit = report.buckets.find((bucket) => bucket.id === "key-limit");
 		if (limit?.remaining !== undefined) return `openrouter ${formatUsd(limit.remaining)} left`;
@@ -73,6 +75,32 @@ function formatCodexReport(lines: string[], report: UsageReport): void {
 			);
 		}
 	}
+}
+
+function formatGitHubCopilotReport(lines: string[], report: UsageReport): void {
+	const premium = report.buckets.find((bucket) => bucket.id === "premium-requests");
+	if (!premium || premium.limit === undefined || premium.remaining === undefined) {
+		lines.push(`${"Premium requests:".padEnd(VALUE_COLUMN)}unlimited`);
+		return;
+	}
+	const percent = percentRemaining(premium);
+	const reset = premium.resetsAt ? ` (resets ${formatReset(premium.resetsAt)})` : "";
+	lines.push(
+		`${"Premium requests:".padEnd(VALUE_COLUMN)}${premium.remaining} of ${premium.limit} left · ${percent}%${reset}`,
+	);
+}
+
+function formatGitHubCopilotStatusline(report: UsageReport): string {
+	const premium = report.buckets.find((bucket) => bucket.id === "premium-requests");
+	if (!premium || premium.limit === undefined || premium.remaining === undefined) {
+		return "copilot premium unlimited";
+	}
+	return `copilot ${premium.remaining}/${premium.limit} ${percentRemaining(premium)}%`;
+}
+
+function percentRemaining(bucket: UsageBucket): number {
+	if (!bucket.limit || bucket.remaining === undefined) return 0;
+	return Math.round(clampPercent((bucket.remaining / bucket.limit) * 100));
 }
 
 function formatOpenRouterReport(lines: string[], report: UsageReport): void {

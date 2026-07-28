@@ -4,8 +4,64 @@ import {
 	formatUsageReport,
 	formatUsageStatusline,
 	normalizeCodexBackendPayload,
+	normalizeGitHubCopilotUsagePayload,
 	normalizeOpenRouterKeyPayload,
 } from "../src/index.js";
+
+test("GitHub Copilot adapter normalizes premium request quota", () => {
+	const report = normalizeGitHubCopilotUsagePayload(
+		{
+			login: "octocat",
+			copilot_plan: "individual",
+			quota_reset_date_utc: "2026-08-01T00:00:00Z",
+			quota_snapshots: {
+				premium_interactions: {
+					entitlement: 300,
+					remaining: 245,
+					percent_remaining: 81.7,
+					unlimited: false,
+				},
+			},
+		},
+		500,
+	);
+
+	assert.equal(report.providerId, "github-copilot");
+	assert.equal(report.accountLabel, "octocat");
+	assert.deepEqual(report.buckets[0], {
+		id: "premium-requests",
+		label: "Premium requests",
+		used: 55,
+		remaining: 245,
+		limit: 300,
+		unit: "count",
+		period: "monthly",
+		resetsAt: 1_785_542_400,
+	});
+	assert.match(formatUsageReport(report, "current"), /245 of 300 left · 82%/);
+	assert.equal(formatUsageStatusline(report), "copilot 245/300 82%");
+});
+
+test("GitHub Copilot adapter handles unlimited quota and rejects incomplete responses", () => {
+	const unlimited = normalizeGitHubCopilotUsagePayload(
+		{
+			quota_snapshots: { premium_interactions: { unlimited: true } },
+		},
+		600,
+	);
+	assert.match(formatUsageReport(unlimited, "configured"), /Premium requests:\s+unlimited/);
+	assert.equal(formatUsageStatusline(unlimited), "copilot premium unlimited");
+
+	assert.throws(() => normalizeGitHubCopilotUsagePayload({}, 0), /premium request quota/iu);
+	assert.throws(
+		() =>
+			normalizeGitHubCopilotUsagePayload(
+				{ quota_snapshots: { premium_interactions: { entitlement: 300 } } },
+				0,
+			),
+		/incomplete/iu,
+	);
+});
 
 test("OpenRouter adapter normalizes documented per-key spend limits without claiming subscription quota", () => {
 	const report = normalizeOpenRouterKeyPayload(

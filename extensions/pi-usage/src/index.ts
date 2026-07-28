@@ -10,6 +10,7 @@ export {
 } from "./core.js";
 export { formatProviderStates, formatUsageReport, formatUsageStatusline } from "./format.js";
 export { normalizeCodexBackendPayload } from "./providers/codex.js";
+export { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
 export { normalizeOpenRouterKeyPayload } from "./providers/openrouter.js";
 export {
 	adapterForProvider,

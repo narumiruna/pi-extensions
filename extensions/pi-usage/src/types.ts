@@ -77,6 +77,15 @@ export type ProviderUsageState =
 			message: string;
 	  };
 
+export type GitHubCopilotUsagePayload = {
+	login?: unknown;
+	copilot_plan?: unknown;
+	access_type_sku?: unknown;
+	quota_reset_date?: unknown;
+	quota_reset_date_utc?: unknown;
+	quota_snapshots?: unknown;
+};
+
 export type OpenRouterKeyPayload = {
 	data?: unknown;
 };

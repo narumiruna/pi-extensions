@@ -204,6 +204,76 @@ test("runtime auth rejects proxy origins and forwards only adapter-approved head
 	assert.deepEqual(modelKeyAuth?.headers, { Authorization: "Bearer current-model-key" });
 });
 
+test("GitHub Copilot usage uses the matching Pi OAuth refresh token", async () => {
+	const adapter = SUPPORTED_ADAPTERS.find((candidate) => candidate.id === "github-copilot");
+	assert.ok(adapter);
+	const model = {
+		id: "gpt-5.4",
+		name: "GPT-5.4",
+		provider: "github-copilot",
+		baseUrl: "https://api.individual.githubcopilot.com",
+	};
+	const { ctx } = createMockContext({
+		model,
+		modelRegistry: {
+			getProviderAuth: async () => ({
+				auth: { apiKey: "copilot-session-token", baseUrl: model.baseUrl },
+			}),
+			getAvailable: () => [model],
+			getAll: () => [model],
+		},
+	});
+	const credentialReader = () => ({
+		type: "oauth",
+		access: "copilot-session-token",
+		refresh: "github-oauth-token",
+		expires: Date.now() + 60_000,
+		enterpriseUrl: "github.com",
+	});
+
+	const auth = await resolveUsageAuth(ctx, adapter, new Uint8Array(32), credentialReader);
+	assert.deepEqual(auth?.headers, {
+		Authorization: "Bearer github-oauth-token",
+		"X-GitHub-Api-Version": "2025-05-01",
+	});
+	assert.ok(auth?.secrets.includes("copilot-session-token"));
+	assert.ok(auth?.secrets.includes("github-oauth-token"));
+
+	await assert.rejects(
+		() =>
+			resolveUsageAuth(ctx, adapter, new Uint8Array(32), () => ({
+				...credentialReader(),
+				access: "another-session-token",
+			})),
+		/does not match/iu,
+	);
+	const { ctx: conflictingHeaderContext } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({
+				ok: true,
+				apiKey: "copilot-session-token",
+				headers: { Authorization: "Bearer another-session-token" },
+			}),
+			getProviderAuth: async () => ({ auth: { apiKey: "copilot-session-token" } }),
+			getAvailable: () => [model],
+			getAll: () => [model],
+		},
+	});
+	await assert.rejects(
+		() => resolveUsageAuth(conflictingHeaderContext, adapter, new Uint8Array(32), credentialReader),
+		/does not match/iu,
+	);
+	await assert.rejects(
+		() =>
+			resolveUsageAuth(ctx, adapter, new Uint8Array(32), () => ({
+				...credentialReader(),
+				enterpriseUrl: "company.ghe.com",
+			})),
+		/Enterprise/iu,
+	);
+});
+
 test("provider cancellation preserves AbortError identity", async () => {
 	const abort = Object.assign(new Error("cancelled"), { name: "AbortError" });
 	const adapter = {
