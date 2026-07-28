@@ -1,6 +1,18 @@
-# 🔁 pi-retry — Retry Hints for Pi Provider Errors
+# 🔁 pi-retry — Deprecated Retry Hints for Pi Provider Errors
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-retry)](https://www.npmjs.com/package/@narumitw/pi-retry) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
+> [!WARNING]
+> `@narumitw/pi-retry` is deprecated, kept under `deprecated/` for reference, and no longer
+> part of the active workspace package set. Current Pi releases provide built-in provider retry,
+> Codex websocket renewal, and configurable HTTP/provider/websocket idle timeouts. Remove it with:
+>
+> ```bash
+> pi uninstall npm:@narumitw/pi-retry
+> ```
+>
+> Use Pi's built-in `retry` and `httpIdleTimeoutMs` settings instead. In particular, removing this
+> extension also removes its more aggressive 90-second stall watchdog.
 
 `@narumitw/pi-retry` is a native [Pi coding agent](https://pi.dev) extension that treats provider responses containing `Unknown error (no error details in response)`, Codex backend errors that explicitly say the request can be retried, Codex `websocket_connection_limit_reached`, and stalled provider streams as retryable.
 
@@ -37,7 +49,7 @@ pi -e npm:@narumitw/pi-retry
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-retry
+pi -e ./deprecated/pi-retry
 ```
 
 Pi's agent-level retry policy must be enabled (the default):
@@ -80,7 +92,7 @@ Use `0`, `off`, or `false` to disable the watchdog. Retry attempts, budget, and 
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-retry/
+deprecated/pi-retry/
 ├── src/
 │   ├── index.ts
 │   └── retry.ts

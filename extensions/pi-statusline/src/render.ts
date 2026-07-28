@@ -21,6 +21,7 @@ import {
 	type SegmentName,
 	type StatuslineConfig,
 } from "./types.js";
+import { type FooterUsageSummary, summarizeFooterUsage } from "./usage.js";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 export interface RuntimeState extends ExtensionStatusRuntime {
@@ -30,11 +31,6 @@ export interface RuntimeState extends ExtensionStatusRuntime {
 	thinkingLevel: ThinkingLevel;
 	gitStatus?: GitStatusSummary;
 	requestRender?: () => void;
-}
-interface TokenTotals {
-	input: number;
-	output: number;
-	cost: number;
 }
 const GITHUB_PR_KEY = "github-pr";
 const GITHUB_PR_STATUS_KEYS = new Set([GITHUB_PR_KEY]);
@@ -48,6 +44,7 @@ export function renderStatusline(
 ): string {
 	if (width <= 0) return "";
 
+	const usageSummary = summarizeFooterUsage(ctx.sessionManager.getEntries());
 	const rows: Array<{ configuredSegments: number; segments: RenderSegment[] }> = [
 		{ configuredSegments: 0, segments: [] },
 	];
@@ -60,7 +57,7 @@ export function renderStatusline(
 		const row = rows.at(-1);
 		if (!row) continue;
 		row.configuredSegments += 1;
-		const rendered = buildSegment(name, ctx, footerData, config, runtime);
+		const rendered = buildSegment(name, ctx, footerData, config, runtime, usageSummary);
 		if (rendered && rendered.text.length > 0) row.segments.push(rendered);
 	}
 
@@ -103,6 +100,7 @@ function buildSegment(
 	footerData: ReadonlyFooterDataProvider,
 	config: StatuslineConfig,
 	runtime: RuntimeState,
+	usageSummary: FooterUsageSummary,
 ): RenderSegment | undefined {
 	switch (name) {
 		case "brand":
@@ -138,25 +136,41 @@ function buildSegment(
 		}
 		case "context": {
 			const usage = ctx.getContextUsage();
-			const value =
+			const percentage =
 				usage?.percent === null || usage?.percent === undefined
 					? "?"
-					: `${usage.percent.toFixed(0)}%`;
-			return segment(name, value, config, contextColor(usage?.percent), "runtime");
-		}
-		case "tokens": {
-			const totals = getTokenTotals(ctx);
-			const value =
-				totals.input === 0 && totals.output === 0
-					? "tok 0"
-					: `↑${formatCount(totals.input)} ↓${formatCount(totals.output)}`;
-			return segment(name, value, config, "accent", "runtime");
-		}
-		case "cost": {
-			const totals = getTokenTotals(ctx);
+					: `${usage.percent.toFixed(1)}%`;
+			const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 			return segment(
 				name,
-				totals.cost.toFixed(totals.cost >= 1 ? 2 : 3),
+				`${percentage}/${formatCount(contextWindow)}`,
+				config,
+				contextColor(usage?.percent),
+				"runtime",
+			);
+		}
+		case "tokens": {
+			const value =
+				usageSummary.input === 0 && usageSummary.output === 0
+					? "tok 0"
+					: `↑${formatCount(usageSummary.input)} ↓${formatCount(usageSummary.output)}`;
+			return segment(name, value, config, "accent", "runtime");
+		}
+		case "cache": {
+			if (usageSummary.cacheRead === 0 && usageSummary.cacheWrite === 0) return undefined;
+			const values: string[] = [];
+			if (usageSummary.cacheRead > 0) values.push(`R${formatCount(usageSummary.cacheRead)}`);
+			if (usageSummary.cacheWrite > 0) values.push(`W${formatCount(usageSummary.cacheWrite)}`);
+			if (usageSummary.latestCacheHitRate !== undefined) {
+				values.push(`CH${usageSummary.latestCacheHitRate.toFixed(1)}%`);
+			}
+			return segment(name, values.join(" "), config, "accent", "runtime");
+		}
+		case "cost": {
+			const subscription = isSubscriptionBacked(ctx) ? " (sub)" : "";
+			return segment(
+				name,
+				`${usageSummary.cost.toFixed(usageSummary.cost >= 1 ? 2 : 3)}${subscription}`,
 				config,
 				"accent",
 				"meter",
@@ -268,26 +282,12 @@ function compactPrState(value: string): string | undefined {
 	return undefined;
 }
 
-function getTokenTotals(ctx: ExtensionContext): TokenTotals {
-	const totals: TokenTotals = { input: 0, output: 0, cost: 0 };
-
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-
-		const usage = entry.message.usage as
-			| {
-					input?: number;
-					output?: number;
-					cost?: { total?: number };
-			  }
-			| undefined;
-
-		totals.input += usage?.input ?? 0;
-		totals.output += usage?.output ?? 0;
-		totals.cost += usage?.cost?.total ?? 0;
-	}
-
-	return totals;
+function isSubscriptionBacked(ctx: ExtensionContext): boolean {
+	const model = ctx.model;
+	return (
+		model !== undefined &&
+		(model.provider === "kimi-coding" || ctx.modelRegistry.isUsingOAuth(model))
+	);
 }
 
 export function formatCount(value: number): string {

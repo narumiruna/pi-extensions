@@ -6,6 +6,8 @@
 		"rootDir": "."
 	},
 	"include": [
+		"packages/*/src/**/*.ts",
+		"packages/*/test/**/*.ts",
 		"extensions/*/src/**/*.ts",
 		"extensions/*/test/**/*.ts",
 		"experimental/*/src/**/*.ts",

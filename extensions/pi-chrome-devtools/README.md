@@ -25,7 +25,7 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 - Retries briefly while Chrome is starting and reports actionable endpoint errors.
 - Shows statusline activity only while Chrome DevTools tools are running.
 - Provides a `/chrome-devtools` menu with quick-start help and tool controls.
-- Provides a Plan-mode-style selector for choosing individual Chrome DevTools tools.
+- Uses `@narumitw/pi-tui-kit` for width-safe menus and individual tool selection.
 - Persists the selected Chrome DevTools tools across Pi restarts.
 
 ## 📦 Install
@@ -155,7 +155,7 @@ Direct subcommands are also available:
   candidates, last launch attempt, and launch hints.
 - `status` shows runtime tool state, persisted selection, settings file path, endpoint source,
   launch mode, last launch attempt, and active non-Chrome tool count.
-- `tools` opens a Plan-mode-style selector for choosing individual `chrome_devtools_*` tools.
+- `tools` opens a width-safe selector for choosing individual `chrome_devtools_*` tools.
 - `toggle` is an alias for `tools`.
 - `enable` enables all `chrome_devtools_*` tools for future turns.
 - `disable` disables all `chrome_devtools_*` tools for future turns. The slash command remains

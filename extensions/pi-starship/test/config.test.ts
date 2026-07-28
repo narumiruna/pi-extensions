@@ -89,6 +89,7 @@ test("built-in example uses readable TOML continuations without changing the for
 				"$activity",
 				"$context",
 				"$tokens",
+				"$cache",
 				"[](fg:runtime bg:meter)",
 				"$cost",
 				"$time",
@@ -147,6 +148,9 @@ test("first-wave modules are registered in deterministic domain order", () => {
 	}
 	assert.ok(MODULE_NAMES.indexOf("package") < MODULE_NAMES.indexOf("nodejs"));
 	assert.ok(MODULE_NAMES.indexOf("openstack") < MODULE_NAMES.indexOf("os"));
+	assert.ok(MODULE_NAMES.indexOf("tokens") < MODULE_NAMES.indexOf("cache"));
+	assert.ok(MODULE_NAMES.indexOf("cache") < MODULE_NAMES.indexOf("cost"));
+	assert.equal(BUILT_IN_CONFIG.modules.cache.disabled, true);
 	assert.ok(MODULE_NAMES.indexOf("fill") < MODULE_NAMES.indexOf("extension_status"));
 });
 
@@ -161,12 +165,16 @@ test("catalog-owned module options normalize values and diagnose invalid input",
 	assert.deepEqual(valid.diagnostics, []);
 
 	const invalid = loadFromText(
-		`format = '$package'\n\n[package]\nversion_format = 7\nfuture = true\n\n[nodejs]\ndetect_files = ['ok', 3]\n`,
+		`format = '$package'\n\n[package]\nversion_format = 7\nfuture = true\n\n[nodejs]\ndetect_files = ['ok', 3]\n\n[cache]\nfuture = true\n`,
 	);
+	const invalidMessages = invalid.diagnostics
+		.map((item) => `${item.path}: ${item.message}`)
+		.join("\n");
 	assert.match(
-		invalid.diagnostics.map((item) => `${item.path}: ${item.message}`).join("\n"),
+		invalidMessages,
 		/package\.version_format.*string|package\.future|nodejs\.detect_files/iu,
 	);
+	assert.match(invalidMessages, /cache\.future/iu);
 });
 
 test("valid TOML loads root, palette, module, and extension status settings", () => {
@@ -175,17 +183,20 @@ test("valid TOML loads root, palette, module, and extension status settings", ()
 	try {
 		writeFileSync(
 			path,
-			`format = '$model$extension_status'\npalette = 'mine'\n\n[palettes.mine]\nblue = '#010203'\n\n[model]\nformat = '[$model]($style)'\nsymbol = 'M'\nstyle = 'bold blue'\ndisabled = true\n\n[extension_status]\nseparator = ' | '\nmax_statuses = 3\n\n[extension_status.icons]\ngoal = ''\n`,
+			`format = '$model$cache$cost$extension_status'\npalette = 'mine'\n\n[palettes.mine]\nblue = '#010203'\n\n[model]\nformat = '[$model]($style)'\nsymbol = 'M'\nstyle = 'bold blue'\ndisabled = true\n\n[cache]\nformat = '$read/$write/$rate'\ndisabled = false\n\n[cost]\nformat = '$cost$subscription'\n\n[extension_status]\nseparator = ' | '\nmax_statuses = 3\n\n[extension_status.icons]\ngoal = ''\n`,
 		);
 		const loaded = loadStarshipConfig(path);
 		assert.equal(loaded.source, "user");
-		assert.equal(loaded.config.format, "$model$extension_status");
+		assert.equal(loaded.config.format, "$model$cache$cost$extension_status");
 		assert.equal(loaded.config.palette, "mine");
 		assert.deepEqual(loaded.config.palettes.mine, { blue: "#010203" });
 		assert.equal(loaded.config.modules.model.format, "[$model]($style)");
 		assert.equal(loaded.config.modules.model.symbol, "M");
 		assert.equal(loaded.config.modules.model.style, "bold blue");
 		assert.equal(loaded.config.modules.model.disabled, true);
+		assert.equal(loaded.config.modules.cache.format, "$read/$write/$rate");
+		assert.equal(loaded.config.modules.cache.disabled, false);
+		assert.equal(loaded.config.modules.cost.format, "$cost$subscription");
 		assert.equal(loaded.config.extensionStatus.separator, " | ");
 		assert.equal(loaded.config.extensionStatus.maxStatuses, 3);
 		assert.deepEqual(loaded.config.extensionStatus.icons, { goal: "" });

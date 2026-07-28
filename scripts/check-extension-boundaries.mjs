@@ -37,8 +37,10 @@ const SOURCE_FILE_SUFFIXES = [
 ];
 
 const rootDirectory = process.cwd();
+const librariesDirectory = path.join(rootDirectory, "packages");
 const extensionsDirectory = path.join(rootDirectory, "extensions");
 const experimentalDirectory = path.join(rootDirectory, "experimental");
+const libraryPackages = findActiveExtensionPackages(librariesDirectory);
 const activePackages = [
 	...findActiveExtensionPackages(extensionsDirectory),
 	...findActiveExtensionPackages(experimentalDirectory),
@@ -46,6 +48,7 @@ const activePackages = [
 const experimentalPackageCount = activePackages.filter(({ directory }) =>
 	directory.startsWith(`${experimentalDirectory}${path.sep}`),
 ).length;
+const libraryPackageNames = new Set(libraryPackages.map(({ name }) => name));
 const failures = [];
 const sourcePaths = activePackages.flatMap((extensionPackage) => {
 	const sourceDirectory = path.join(extensionPackage.directory, "src");
@@ -58,6 +61,7 @@ const compilerSnapshot = compilerApi.updateSnapshot({
 });
 
 try {
+	for (const libraryPackage of libraryPackages) checkLibraryPackage(libraryPackage);
 	for (const extensionPackage of activePackages) {
 		checkPiEntrypoint(extensionPackage);
 		checkPackageDependencies(extensionPackage);
@@ -74,7 +78,7 @@ if (failures.length > 0) {
 	process.exitCode = 1;
 } else {
 	console.log(
-		`Extension boundary check passed: ${activePackages.length} active packages (${experimentalPackageCount} experimental) have no extension-to-extension dependencies.`,
+		`Extension boundary check passed: ${libraryPackages.length} libraries and ${activePackages.length} active extensions (${experimentalPackageCount} experimental) have valid package boundaries.`,
 	);
 }
 
@@ -108,6 +112,30 @@ function findActiveExtensionPackages(directory) {
 	}
 
 	return packages.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function checkLibraryPackage(libraryPackage) {
+	if (libraryPackage.packageJson.pi?.extensions !== undefined) {
+		failures.push(
+			`${relative(libraryPackage.packagePath)} libraries must not declare pi.extensions.`,
+		);
+	}
+	if (!libraryPackage.packageJson.scripts?.build) {
+		failures.push(`${relative(libraryPackage.packagePath)} libraries must define a build script.`);
+	}
+	if (!libraryPackage.packageJson.files?.includes("dist")) {
+		failures.push(`${relative(libraryPackage.packagePath)} libraries must publish dist.`);
+	}
+	if (!String(libraryPackage.packageJson.main ?? "").startsWith("./dist/")) {
+		failures.push(
+			`${relative(libraryPackage.packagePath)} libraries must load JavaScript from dist.`,
+		);
+	}
+	if (!String(libraryPackage.packageJson.types ?? "").startsWith("./dist/")) {
+		failures.push(
+			`${relative(libraryPackage.packagePath)} libraries must load declarations from dist.`,
+		);
+	}
 }
 
 function checkPiEntrypoint(extensionPackage) {
@@ -211,6 +239,11 @@ function stringLiteralText(node) {
 
 function isForbiddenExtensionReference(packageName, specifier) {
 	if (specifier === packageName || specifier.startsWith(`${packageName}/`)) return false;
+	for (const libraryPackageName of libraryPackageNames) {
+		if (specifier === libraryPackageName || specifier.startsWith(`${libraryPackageName}/`)) {
+			return false;
+		}
+	}
 	return EXTENSION_PACKAGE_RE.test(specifier);
 }
 

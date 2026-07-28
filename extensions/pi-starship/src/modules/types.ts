@@ -78,7 +78,15 @@ export interface StarshipRuntimeSnapshot {
 		tokens?: number | null;
 		contextWindow?: number | null;
 	};
-	tokenTotals: { input: number; output: number; cost: number };
+	tokenTotals: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		cost: number;
+		latestCacheHitRate?: number;
+	};
+	usingSubscription: boolean;
 	gitBranch: string | null;
 	gitBranchDetails?: GitBranchSnapshot;
 	gitCommit?: GitCommitSnapshot;

@@ -111,21 +111,29 @@ compatible with Google providers. Give tools explicit names in descriptions and 
   **Verification:** `Test` for rendering, input, user cancellation, and disposal behavior plus
   `Review` against Pi's TUI contract.
 
-Use the callback-provided theme and keybindings. Prefer Pi's `SelectList`, `SettingsList`, and
-`BorderedLoader` over rebuilding equivalent controls. Escape should cancel or close transient UI,
-and long-running interactive work should expose cancellation.
+Use the callback-provided theme and keybindings. For standard action, detail, settings, and
+multi-select flows, new extensions **SHOULD** declare screens and actions with
+`@narumitw/pi-tui-kit` instead of implementing another menu loop. Keep domain state,
+transactional persistence, confirmations, session generation, and specialized UI extension-owned.
+When specialized UI is necessary, prefer Pi's `SelectList`, `SettingsList`, and `BorderedLoader`
+over rebuilding equivalent controls. Escape should cancel or close transient UI, and long-running
+interactive work should expose cancellation.
 
 ## Monorepo conventions
 
 ### Package layout and boundaries
 
-- **MUST:** Keep active production packages under `extensions/<package>/`, experiments under
-  `experimental/<package>/`, and deprecated references under `deprecated/<package>/`.
-  **Verification:** `Review` of package locations and lifecycle moves.
-- **MUST:** Give every active package a thin `src/index.ts` default-export forwarder and declare
+- **MUST:** Keep active production extensions under `extensions/<package>/`, reusable publishable
+  libraries under `packages/<package>/`, experiments under `experimental/<package>/`, and deprecated
+  references under `deprecated/<package>/`. **Verification:** `Review` of package locations and
+  lifecycle moves.
+- **MUST:** Give every active extension a thin `src/index.ts` default-export forwarder and declare
   exactly `"pi": { "extensions": ["./src/index.ts"] }`; keep implementation in descriptive modules.
-  **Verification:** `Validator` via `npm run check:boundaries`.
-- **MUST:** Keep extension packages free of extension-to-extension dependencies.
+  Reusable libraries must not declare `pi.extensions` and must publish built JavaScript plus
+  declarations. **Verification:** `Validator` via `npm run check:boundaries` and a clean-build
+  package smoke.
+- **MUST:** Keep extension packages free of extension-to-extension dependencies. Extensions may
+  depend on publishable helper libraries under `packages/`.
   **Verification:** `Validator` via `npm run check:boundaries`.
 - **MUST:** Keep each extension independently installable, with its own runtime dependencies and
   package metadata. **Verification:** `Review` of package metadata and a `Smoke` npm pack dry run for
@@ -177,9 +185,11 @@ menu-only:
   or JSON result. **Verification:** `Test` for each claimed command mode plus `Review` of every
   unsupported-mode fallback.
 
-Use `ctx.ui.select()` for a small action menu. Use `SelectList` for richer selection and
-`SettingsList` for editable settings; do not repeatedly reopen `ctx.ui.select()` after each toggle,
-because that resets navigation state. Keep related settings or actions on one level when the list has
+Use `@narumitw/pi-tui-kit` for standard multi-screen manager flows; it adapts declarative
+screens to TUI and RPC behavior without repeated `ctx.ui.select()` loops. For a one-off small action
+prompt, use `ctx.ui.select()`. Specialized selectors may use `SelectList`, and specialized settings
+editors may use `SettingsList`; do not repeatedly reopen `ctx.ui.select()` after each toggle, because
+that resets navigation state. Keep related settings or actions on one level when the list has
 seven or fewer items; do not add an **Advanced** submenu merely to shorten such a list. Only consider
 splitting by item count after the list exceeds seven, and then split along a coherent user task rather
 than an arbitrary row boundary.

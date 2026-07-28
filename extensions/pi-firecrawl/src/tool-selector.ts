@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { configuredApiUrl, hasApiKey } from "./client.js";
 import {
 	loadSettings,
@@ -9,15 +10,9 @@ import {
 import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tools.js";
 
 type CommandContext = ExtensionCommandContext;
-
-const TOOL_SELECTOR_DONE = "Done";
-const TOOL_SELECTOR_ENABLE_ALL = "Enable all Firecrawl tools";
-const TOOL_SELECTOR_DISABLE_ALL = "Disable all Firecrawl tools";
 type ToolRuntimeStatus = "enabled" | "disabled" | "partial";
-type ToolSelectorAction = "enableAll" | "disableAll" | "done";
-type ToolSelectorRow =
-	| { kind: "tool"; toolName: FirecrawlToolName }
-	| { kind: "action"; action: ToolSelectorAction; label: string };
+type ToolSelectorScreen = "tools";
+type ToolSelectorAction = "toggle" | "enableAll" | "disableAll";
 interface ToolStatusSummary {
 	runtimeStatus: ToolRuntimeStatus;
 	activeFirecrawlToolCount: number;
@@ -26,8 +21,11 @@ interface ToolStatusSummary {
 
 let settingsNotice: string | undefined;
 let sessionGeneration = 0;
+let sessionController = new AbortController();
 
 export function advanceFirecrawlSessionGeneration(): number {
+	sessionController.abort(new DOMException("Firecrawl session replaced", "AbortError"));
+	sessionController = new AbortController();
 	return ++sessionGeneration;
 }
 
@@ -37,6 +35,10 @@ export function currentFirecrawlSessionGeneration(): number {
 
 export function isCurrentFirecrawlSession(generation: number): boolean {
 	return generation === sessionGeneration;
+}
+
+export function currentFirecrawlSessionSignal(): AbortSignal {
+	return sessionController.signal;
 }
 
 export function clearSettingsNotice() {
@@ -50,156 +52,68 @@ export function recordSettingsNotice(settings: SettingsLoadResult) {
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	const generation = sessionGeneration;
 	if (!ctx.hasUI) return;
-	if (ctx.mode !== "tui") {
-		await showDialogToolSelector(pi, ctx, generation);
-		return;
-	}
-
-	let selectedTools = new Set<FirecrawlToolName>(getActiveFirecrawlTools(pi));
-	let persistQueue = Promise.resolve();
-	let requestedRevision = 0;
-	let requestRender: () => void = () => undefined;
-	const commitSelectedTools = () => {
-		const nextSelectedTools = orderedFirecrawlTools(selectedTools);
-		const revision = ++requestedRevision;
-		persistQueue = persistQueue.then(async () => {
-			const saved = await transactSelectedTools(pi, ctx, nextSelectedTools, generation);
-			if (!saved && isCurrentFirecrawlSession(generation) && revision === requestedRevision) {
-				selectedTools = new Set(getActiveFirecrawlTools(pi));
-				requestRender();
-			}
-		});
-	};
-
-	const customResult = await ctx.ui.custom<"closed" | undefined>(
-		(tui, theme, keybindings, done) => {
-			requestRender = () => tui.requestRender();
-			const rows = firecrawlToolSelectorRows();
-			let selectedIndex = 0;
-			const moveSelection = (delta: number) => {
-				selectedIndex = (selectedIndex + delta + rows.length) % rows.length;
-			};
-			const activateSelectedRow = () => {
-				const row = rows[selectedIndex];
-				if (!row) return;
-
-				if (row.kind === "tool") {
-					if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
-					else selectedTools.add(row.toolName);
-					commitSelectedTools();
-					return;
-				}
-
-				if (row.action === "enableAll") {
-					selectedTools = new Set(allFirecrawlTools());
-					commitSelectedTools();
-					return;
-				}
-				if (row.action === "disableAll") {
-					selectedTools = new Set();
-					commitSelectedTools();
-					return;
-				}
-
-				done("closed");
-			};
-
-			return {
-				invalidate() {},
-				render() {
-					return [
-						theme.fg("accent", theme.bold(toolSelectorTitle(selectedTools))),
-						"",
-						...rows.map((row, index) => {
-							const label = formatToolSelectorRow(row, selectedTools);
-							if (index === selectedIndex) {
-								return `${theme.fg("accent", "›")} ${theme.fg("accent", label)}`;
-							}
-							return `  ${label}`;
-						}),
-						"",
-						theme.fg("dim", "↑↓ navigate • Enter/Space toggle • Esc close"),
-					];
-				},
-				handleInput(data: string) {
-					if (keybindings.matches(data, "tui.select.up")) {
-						moveSelection(-1);
-						tui.requestRender();
-						return;
-					}
-					if (keybindings.matches(data, "tui.select.down")) {
-						moveSelection(1);
-						tui.requestRender();
-						return;
-					}
-					if (keybindings.matches(data, "tui.select.pageUp")) {
-						selectedIndex = 0;
-						tui.requestRender();
-						return;
-					}
-					if (keybindings.matches(data, "tui.select.pageDown")) {
-						selectedIndex = rows.length - 1;
-						tui.requestRender();
-						return;
-					}
-					if (keybindings.matches(data, "tui.select.confirm") || data === " ") {
-						activateSelectedRow();
-						tui.requestRender();
-						return;
-					}
-					if (keybindings.matches(data, "tui.select.cancel")) {
-						done("closed");
-					}
-				},
-			};
+	const menu = defineMenu<undefined, ToolSelectorScreen, ToolSelectorAction>({
+		start: "tools",
+		screens: {
+			tools: () => {
+				const selectedTools = new Set(getActiveFirecrawlTools(pi));
+				return {
+					kind: "multiSelect",
+					title: toolSelectorTitle(selectedTools),
+					items: FIRECRAWL_TOOL_NAMES.map((toolName) => ({
+						id: toolName,
+						label: toolName,
+						selected: selectedTools.has(toolName),
+					})),
+					action: "toggle",
+					actions: [
+						{
+							id: "enable-all",
+							label: "Enable all Firecrawl tools",
+							action: "enableAll",
+						},
+						{
+							id: "disable-all",
+							label: "Disable all Firecrawl tools",
+							action: "disableAll",
+						},
+						{ id: "done", label: "Done", close: true },
+					],
+					hint: "close",
+					doneLabel: "Done",
+				};
+			},
 		},
-	);
-
-	if (!isCurrentFirecrawlSession(generation)) return;
-	if (customResult !== "closed") {
-		await showDialogToolSelector(pi, ctx, generation);
-		return;
-	}
-
-	await persistQueue;
-	if (!isCurrentFirecrawlSession(generation)) return;
-	const status = await buildStatusMessage(pi);
-	if (!isCurrentFirecrawlSession(generation)) return;
-	ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
-}
-
-async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
-	let selectedTools = new Set<FirecrawlToolName>(getActiveFirecrawlTools(pi));
-	while (true) {
-		const rows = firecrawlToolSelectorRows();
-		const choices = rows.map((row) => formatToolSelectorRow(row, selectedTools));
-		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), choices);
-		if (!isCurrentFirecrawlSession(generation) || !choice) break;
-
-		const row = rows[choices.indexOf(choice)];
-		if (!row) continue;
-		if (row.kind === "action" && row.action === "done") break;
-
-		if (row.kind === "tool") {
-			if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
-			else selectedTools.add(row.toolName);
-		} else if (row.action === "enableAll") {
-			selectedTools = new Set(allFirecrawlTools());
-		} else if (row.action === "disableAll") {
-			selectedTools = new Set();
-		}
-
-		const saved = await transactSelectedTools(
-			pi,
-			ctx,
-			orderedFirecrawlTools(selectedTools),
-			generation,
-		);
-		if (!isCurrentFirecrawlSession(generation)) return;
-		if (!saved) selectedTools = new Set(getActiveFirecrawlTools(pi));
-	}
-
-	if (!isCurrentFirecrawlSession(generation)) return;
+		actions: {
+			toggle: async ({ itemId, selected }) => {
+				if (!isFirecrawlToolName(itemId)) return { kind: "rejected" };
+				const selectedTools = new Set(getActiveFirecrawlTools(pi));
+				if (selected) selectedTools.add(itemId);
+				else selectedTools.delete(itemId);
+				const saved = await transactSelectedTools(
+					pi,
+					ctx,
+					orderedFirecrawlTools(selectedTools),
+					generation,
+				);
+				return saved ? { kind: "stay" } : { kind: "rejected" };
+			},
+			enableAll: async () => {
+				const saved = await transactSelectedTools(pi, ctx, allFirecrawlTools(), generation);
+				return saved ? { kind: "stay" } : { kind: "rejected" };
+			},
+			disableAll: async () => {
+				const saved = await transactSelectedTools(pi, ctx, [], generation);
+				return saved ? { kind: "stay" } : { kind: "rejected" };
+			},
+		},
+	});
+	const result = await runMenu(ctx, menu, {
+		getState: () => undefined,
+		signal: sessionController.signal,
+		isCurrent: () => isCurrentFirecrawlSession(generation),
+	});
+	if (result.kind !== "closed" || !isCurrentFirecrawlSession(generation)) return;
 	const status = await buildStatusMessage(pi);
 	if (!isCurrentFirecrawlSession(generation)) return;
 	ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
@@ -353,21 +267,8 @@ function toolSelectorTitle(selectedTools: ReadonlySet<FirecrawlToolName>) {
 	return `Firecrawl tools (${selectedTools.size}/${FIRECRAWL_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
 }
 
-function firecrawlToolSelectorRows(): ToolSelectorRow[] {
-	return [
-		...FIRECRAWL_TOOL_NAMES.map((toolName) => ({ kind: "tool" as const, toolName })),
-		{ kind: "action", action: "enableAll", label: TOOL_SELECTOR_ENABLE_ALL },
-		{ kind: "action", action: "disableAll", label: TOOL_SELECTOR_DISABLE_ALL },
-		{ kind: "action", action: "done", label: TOOL_SELECTOR_DONE },
-	];
-}
-
-function formatToolSelectorRow(
-	row: ToolSelectorRow,
-	selectedTools: ReadonlySet<FirecrawlToolName>,
-) {
-	if (row.kind === "action") return row.label;
-	return `${selectedTools.has(row.toolName) ? "[x]" : "[ ]"} ${row.toolName}`;
+function isFirecrawlToolName(value: string): value is FirecrawlToolName {
+	return FIRECRAWL_TOOL_NAMES.includes(value as FirecrawlToolName);
 }
 
 function getActiveFirecrawlTools(pi: ExtensionAPI) {

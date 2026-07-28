@@ -162,6 +162,25 @@ test("a package introduced inside the release commit falls back to all packages"
 	});
 });
 
+test("publish order places workspace dependencies before consumers", () => {
+	withRepository(
+		[
+			{
+				directory: "pi-consumer",
+				name: "@fixture/a-consumer",
+				dependencies: { "@fixture/z-menu": "<1" },
+			},
+			{ directory: "pi-menu", name: "@fixture/z-menu", root: "packages" },
+		],
+		(repository) => {
+			assert.deepEqual(select(repository, "--all"), [
+				["@fixture/z-menu", "0.0.0"],
+				["@fixture/a-consumer", "0.0.0"],
+			]);
+		},
+	);
+});
+
 test("all-packages mode includes experimental packages and excludes private and deprecated ones", () => {
 	withRepository(
 		[
@@ -185,7 +204,8 @@ type PackageFixture = {
 	directory: string;
 	name: string;
 	private?: boolean;
-	root?: "experimental" | "deprecated";
+	root?: "packages" | "experimental" | "deprecated";
+	dependencies?: Record<string, string>;
 };
 
 function withRepository(packages: PackageFixture[], run: (repository: string) => void) {
@@ -196,7 +216,7 @@ function withRepository(packages: PackageFixture[], run: (repository: string) =>
 			name: "fixture-root",
 			version: "0.0.0",
 			private: true,
-			workspaces: ["extensions/*", "experimental/*"],
+			workspaces: ["packages/*", "extensions/*", "experimental/*"],
 		});
 		for (const packageFixture of packages) addPackage(repository, packageFixture);
 		refreshLockfile(repository);
@@ -213,6 +233,7 @@ function addPackage(repository: string, packageFixture: PackageFixture) {
 		name: packageFixture.name,
 		version: "0.0.0",
 		...(packageFixture.private ? { private: true } : {}),
+		...(packageFixture.dependencies ? { dependencies: packageFixture.dependencies } : {}),
 	});
 	write(repository, `${packageRoot}/${packageFixture.directory}/src/index.ts`, "export {};\n");
 }
@@ -242,7 +263,7 @@ function refreshLockfile(repository: string) {
 			workspaces: rootPackage.workspaces,
 		},
 	};
-	for (const workspaceRoot of ["extensions", "experimental"]) {
+	for (const workspaceRoot of ["packages", "extensions", "experimental"]) {
 		const rootPath = path.join(repository, workspaceRoot);
 		if (!existsSync(rootPath)) continue;
 		for (const directory of readdirPackageDirectories(rootPath)) {
@@ -274,7 +295,7 @@ function readdirPackageDirectories(root: string) {
 }
 
 function publishablePackagePaths(repository: string) {
-	return ["extensions", "experimental"].flatMap((workspaceRoot) =>
+	return ["packages", "extensions", "experimental"].flatMap((workspaceRoot) =>
 		listPackageDirectories(repository, workspaceRoot)
 			.map((directory) => path.join(repository, workspaceRoot, directory, "package.json"))
 			.filter((packagePath) => readJson(packagePath).private !== true),

@@ -38,9 +38,9 @@ doctor package="@narumitw/pi-chrome-devtools":
     npm dist-tag ls {{quote(package)}} || true
     npm view {{quote(package)}} version || true
 
-# Show npm visibility/version information for all extension packages
+# Show npm visibility/version information for all publishable packages
 doctor-all:
-    shopt -s nullglob; for package_json in extensions/*/package.json experimental/*/package.json; do package="$(node -p "require('./$package_json').name")"; just doctor "$package"; done
+    shopt -s nullglob; for package_json in packages/*/package.json extensions/*/package.json experimental/*/package.json; do package="$(node -p "require('./$package_json').name")"; just doctor "$package"; done
 
 # Make an already-published scoped npm package public if npm view returns 404
 # This does not create a package. For a brand-new package, first run:
@@ -72,16 +72,25 @@ try-all:
 install name: (_validate-extension-name name)
     name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
 
-# Manually publish one production or experimental package, skipping an existing version
+_publish-package-json package_json:
+    package_json={{quote(package_json)}}; if [[ "$package_json" == ./experimental/* ]]; then echo "WARNING: publishing experimental Pi extension $(basename "$(dirname "$package_json")")." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
+
+# Manually publish one production or experimental extension, skipping an existing version
 # Usage: just publish subagents
 publish name: (_validate-extension-name name)
-    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; if [[ "$package_json" == ./experimental/* ]]; then echo "WARNING: publishing experimental Pi extension pi-$name." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
+    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; just _publish-package-json "$package_json"
 
-# Publish all production and experimental extension packages to npm
+# Publish all libraries, production extensions, and experimental extensions to npm
 publish-all:
-    for package_json in extensions/*/package.json experimental/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
+    for package_json in packages/*/package.json extensions/*/package.json experimental/*/package.json; do just _publish-package-json "$package_json"; done
 
 # Preview individual packages that npm would publish
+pack-tui-kit:
+    npm --workspace @narumitw/pi-tui-kit pack --dry-run
+
+publish-tui-kit:
+    just _publish-package-json ./packages/pi-tui-kit/package.json
+
 pack-btw:
     just pack btw
 
@@ -123,9 +132,6 @@ pack-lsp:
 
 pack-plan-mode:
     just pack plan-mode
-
-pack-retry:
-    just pack retry
 
 pack-starship:
     just pack starship
@@ -188,9 +194,6 @@ try-lsp:
 try-plan-mode:
     just try plan-mode
 
-try-retry:
-    just try retry
-
 try-starship:
     just try starship
 
@@ -252,9 +255,6 @@ install-lsp:
 install-plan-mode:
     just install plan-mode
 
-install-retry:
-    just install retry
-
 install-statusline:
     just install statusline
 
@@ -312,9 +312,6 @@ publish-lsp:
 
 publish-plan-mode:
     just publish plan-mode
-
-publish-retry:
-    just publish retry
 
 publish-starship:
     just publish starship

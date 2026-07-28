@@ -1,5 +1,6 @@
 import { activityModule } from "./activity.js";
 import { brandModule } from "./brand.js";
+import { cacheModule } from "./cache.js";
 import { cloudModules } from "./cloud.js";
 import { contextModule } from "./context.js";
 import { costModule } from "./cost.js";
@@ -46,6 +47,7 @@ export const MODULE_DEFINITIONS = [
 	activityModule,
 	contextModule,
 	tokensModule,
+	cacheModule,
 	costModule,
 	timeModule,
 	turnModule,

@@ -10,6 +10,7 @@ export const SEGMENT_NAMES = [
 	"tools",
 	"context",
 	"tokens",
+	"cache",
 	"cost",
 	"time",
 	"turn",

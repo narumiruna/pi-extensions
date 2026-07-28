@@ -67,6 +67,7 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
 		tools: { prefix: "", suffix: "" },
 		context: { prefix: "🪟 ctx ", suffix: "" },
 		tokens: { prefix: "🔢 ", suffix: "" },
+		cache: { prefix: "📦 ", suffix: "" },
 		cost: { prefix: "💸 $", suffix: "" },
 		time: { prefix: "🕒 ", suffix: "" },
 		turn: { prefix: "🔁 #", suffix: "" },

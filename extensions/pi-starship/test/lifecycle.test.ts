@@ -101,6 +101,7 @@ test("turn module counts user messages instead of repeated LLM turns", async () 
 					{ type: "message", message: { role: "user" } },
 					{ type: "message", message: { role: "user" } },
 				],
+				getEntries: () => [],
 			},
 		});
 		await emit(mock.events, "session_start", {}, context.ctx);
@@ -117,6 +118,90 @@ test("turn module counts user messages instead of repeated LLM turns", async () 
 			},
 		);
 		assert.equal(stripAnsi(footer.render(80).join("\n")), "🔁 #2 ");
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("TUI footer uses all-entry usage totals and marks subscription-backed cost", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-usage-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		writeFileSync(
+			join(root, "pi-starship.toml"),
+			"format = '$cache$tokens$cost'\n\n[cache]\ndisabled = false\nformat = 'R$read W$write CH$rate '\n",
+		);
+		const makeUsage = (
+			input: number,
+			output: number,
+			cacheRead: number,
+			cacheWrite: number,
+			cost: number,
+		) => ({
+			input,
+			output,
+			cacheRead,
+			cacheWrite,
+			totalTokens: input + output + cacheRead + cacheWrite,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+		});
+		const latest = {
+			type: "message",
+			message: { role: "assistant", usage: makeUsage(10_700, 287, 0, 0, 0.015) },
+		};
+		const entries = [
+			{
+				type: "message",
+				message: { role: "assistant", usage: makeUsage(1000, 0, 4600, 1500, 0.04) },
+			},
+			{
+				type: "message",
+				message: { role: "toolResult", usage: makeUsage(100, 0, 0, 0, 0.005) },
+			},
+			{ type: "compaction", usage: makeUsage(100, 0, 0, 0, 0.005) },
+			{ type: "branch_summary", usage: makeUsage(100, 0, 0, 0, 0.005) },
+			latest,
+		];
+		const mock = createMockPi();
+		piStarship(mock.pi);
+		let oauth = true;
+		const context = createMockContext({
+			mode: "tui",
+			model: { provider: "openai", id: "gpt-5" },
+			modelRegistry: { isUsingOAuth: () => oauth },
+			sessionManager: { getEntries: () => entries, getBranch: () => [latest] },
+		});
+		await emit(mock.events, "session_start", {}, context.ctx);
+		const footer = (context.footer as FooterFactory)(
+			{ requestRender() {} },
+			{},
+			{
+				getGitBranch: () => null,
+				getExtensionStatuses: () => new Map(),
+				onBranchChange: () => () => undefined,
+			},
+		);
+		const rendered = stripAnsi(footer.render(300).join("\n"));
+		assert.match(rendered, /R4\.6k W1\.5k CH0\.0%/u);
+		assert.match(rendered, /↑12k ↓287/u);
+		assert.match(rendered, /\$0\.070 \(sub\)/u);
+
+		oauth = false;
+		(context.ctx as { model: { provider: string; id: string } }).model = {
+			provider: "kimi-coding",
+			id: "kimi",
+		};
+		assert.match(stripAnsi(footer.render(300).join("\n")), /\$0\.070 \(sub\)/u);
+		(context.ctx as { model: { provider: string; id: string } }).model = {
+			provider: "anthropic",
+			id: "claude",
+		};
+		assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /\(sub\)/u);
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	} finally {

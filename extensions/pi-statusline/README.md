@@ -8,7 +8,7 @@ without setup and keeps useful context visible as the terminal narrows.
 A representative uncolored layout:
 
 ```text
-░▒▓ 🤖 sonnet-4 🧠 high 📁 pi-extensions 🌿 main ~2 🪟 ctx 42% 🕒 16:42
+░▒▓ 🤖 sonnet-4 🧠 high 📁 pi-extensions 🌿 main ~2 🪟 ctx 42.0%/200k 🕒 16:42
 ```
 
 ## ✨ Features
@@ -16,6 +16,7 @@ A representative uncolored layout:
 - **Zero-config default:** model, thinking, workspace, Git/PR state, context use, and local time.
 - **Responsive:** removes lower-priority segments before important information gets clipped.
 - **Quiet when idle:** activity appears only while Pi is streaming or running tools.
+- **Native-aligned usage:** optional token, prompt-cache, subscription, and cost details.
 - **Easy choices:** three information levels and seven previewable color presets.
 - **Still flexible:** custom layouts, multiline rows, colors, labels, separators, and status icons stay
   available under **Advanced**.
@@ -74,10 +75,11 @@ preserved.
 | --- | --- |
 | **Minimal** | `model cwd branch context` |
 | **Balanced** (default) | `model thinking cwd branch tools context time` |
-| **Detailed** | `provider model thinking cwd branch tools context tokens cost time` |
+| **Detailed** | `provider model thinking cwd branch tools context tokens cache cost time` |
 | **Custom** | Any other segment order, including explicit line breaks |
 
-The `tools` segment takes no space while idle.
+The `tools` segment takes no space while idle. `cache` takes no space when Pi has reported no cache
+reads or writes.
 
 ## 💬 Commands
 
@@ -100,7 +102,7 @@ lowest-priority segment, recomputes the powerline transitions, and repeats until
 Retention priority is highest to lowest:
 
 ```text
-context model branch tools cwd thinking cost provider tokens time turn brand
+context model branch tools cwd thinking cost provider cache tokens time turn brand
 ```
 
 Explicit `line_break` entries remain row boundaries. A single segment that is still too wide is
@@ -116,6 +118,20 @@ ANSI-safely truncated.
 - A linked GitHub PR appears with the branch when possible, avoiding a duplicate extension status.
 - Context color changes to warning at 70% and error at 90%.
 - Git state is cached outside footer rendering and stale session results are ignored.
+
+### Usage and context
+
+- `context` renders one-decimal current usage and the model window, such as `2.4%/272k`. After
+  compaction it can temporarily render `?/272k` until the next valid assistant response.
+- `tokens`, `cache`, and `cost` total every usage-bearing session entry, matching Pi's native footer:
+  assistant messages, nested-LLM tool results, compactions, and branch summaries, including abandoned
+  branches retained in the session.
+- Cache tokens are `R<read>`, `W<write>`, and `CH<rate>`. `R` and `W` are cumulative; `CH` uses only
+  the latest assistant prompt: `cacheRead / (input + cacheRead + cacheWrite) * 100`.
+- Subscription-backed OAuth models and `kimi-coding` append `(sub)` to cost. The dollar value is
+  usage cost, not proof of an amount billed under a subscription.
+- Pi's public extension API does not expose the current auto-compaction toggle, so this footer cannot
+  reliably show the native `(auto)` marker.
 
 ## ⚙️ Settings
 
@@ -156,7 +172,7 @@ A compact customization example:
   "palettePreset": "ocean",
   "density": "compact",
   "separator": "dot",
-  "segments": ["model", "thinking", "cwd", "branch", "context", "cost"],
+  "segments": ["model", "thinking", "cwd", "branch", "context", "cache", "cost"],
   "segmentText": {
     "context": { "prefix": "ctx ", "suffix": "" }
   },
@@ -218,7 +234,7 @@ Every successful change saves and applies immediately; closing the screen does n
 Available data segments:
 
 ```text
-brand provider model thinking cwd branch tools context tokens cost time turn
+brand provider model thinking cwd branch tools context tokens cache cost time turn
 ```
 
 Data segments must be unique. `line_break` may repeat when data segments separate occurrences, but
@@ -278,6 +294,7 @@ extensions/pi-statusline/
 │   ├── index.ts
 │   ├── statusline.ts
 │   ├── render.ts
+│   ├── usage.ts
 │   ├── powerline.ts
 │   ├── information-profiles.ts
 │   ├── commands.ts
@@ -299,7 +316,7 @@ extensions/pi-statusline/
 ## 🔎 Keywords
 
 Pi extension, Pi coding agent, statusline, Tokyo Night, powerline, responsive terminal footer,
-context usage, model status.
+context usage, prompt cache, cache hit rate, model status.
 
 ## 📄 License
 

@@ -26,6 +26,10 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 		fg: "#a0a9cb",
 		bg: "#1d2230",
 	});
+	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.palette.cache, {
+		fg: "#769ff0",
+		bg: "#212736",
+	});
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.density, "compact");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.separator, "none");
 	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.segments, [
@@ -38,6 +42,7 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 		"time",
 	]);
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.provider.prefix, "🔌 ");
+	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.cache.prefix, "📦 ");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.turn.prefix, "🔁 #");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.goal, "🎯");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.extensionStatusIcons.usage, "📊");
@@ -83,9 +88,10 @@ test("normalization supports partial icon-only settings and structured overrides
 		palette: "ocean",
 		density: "cozy",
 		separator: "dot",
-		segments: ["model", "cwd", "turn"],
+		segments: ["model", "cwd", "cache", "turn"],
 		segmentText: {
 			model: { prefix: "Model: " },
+			cache: { prefix: "Cache: " },
 			turn: { suffix: " turns" },
 		},
 		extensionStatusIcons: { goal: "", custom: "🧪" },
@@ -93,8 +99,9 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.equal(normalized.config.palettePreset, "ocean");
 	assert.equal(normalized.config.density, "cozy");
 	assert.equal(normalized.config.separator, "dot");
-	assert.deepEqual(normalized.config.segments, ["model", "cwd", "turn"]);
+	assert.deepEqual(normalized.config.segments, ["model", "cwd", "cache", "turn"]);
 	assert.deepEqual(normalized.config.segmentText.model, { prefix: "Model: ", suffix: "" });
+	assert.deepEqual(normalized.config.segmentText.cache, { prefix: "Cache: ", suffix: "" });
 	assert.deepEqual(normalized.config.segmentText.turn, { prefix: "🔁 #", suffix: " turns" });
 	assert.equal(normalized.config.extensionStatusIcons.goal, "");
 	assert.equal(normalized.config.extensionStatusIcons.custom, "🧪");

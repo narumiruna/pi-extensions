@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { hasApiKey } from "./client.js";
 import { cleanupResponseArtifacts, openResponseArtifacts } from "./response-format.js";
 import { loadSettings } from "./settings.js";
@@ -11,6 +12,7 @@ import {
 	buildStatusMessage,
 	clearSettingsNotice,
 	currentFirecrawlSessionGeneration,
+	currentFirecrawlSessionSignal,
 	isCurrentFirecrawlSession,
 	recordSettingsNotice,
 	showToolSelector,
@@ -137,31 +139,57 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 		return;
 	}
 
-	const choice = await ctx.ui.select("Firecrawl", Object.values(MENU_OPTIONS));
-	if (!isCurrentFirecrawlSession(generation)) return;
-	switch (choice) {
-		case MENU_OPTIONS.config:
-			ctx.ui.notify(buildConfigMessage(), hasApiKey() ? "info" : "warning");
-			return;
-		case MENU_OPTIONS.help:
-			ctx.ui.notify(buildCommandGuide(), "info");
-			return;
-		case MENU_OPTIONS.status: {
-			const status = await buildStatusMessage(pi);
-			if (!isCurrentFirecrawlSession(generation)) return;
-			ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
-			return;
-		}
-		case MENU_OPTIONS.tools:
-			await showToolSelector(pi, ctx);
-			return;
-		case MENU_OPTIONS.enable:
-			await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "enabled all");
-			return;
-		case MENU_OPTIONS.disable:
-			await updateFirecrawlTools(pi, ctx, [], "disabled all");
-			return;
-	}
+	type Screen = "main";
+	type Action = keyof typeof MENU_OPTIONS;
+	const menu = defineMenu<undefined, Screen, Action>({
+		start: "main",
+		screens: {
+			main: () => ({
+				kind: "actions",
+				title: "Firecrawl",
+				items: Object.entries(MENU_OPTIONS).map(([id, label]) => ({
+					id,
+					label,
+					action: id as Action,
+				})),
+				hint: "close",
+			}),
+		},
+		actions: {
+			config: async () => {
+				ctx.ui.notify(buildConfigMessage(), hasApiKey() ? "info" : "warning");
+				return { kind: "close" };
+			},
+			help: async () => {
+				ctx.ui.notify(buildCommandGuide(), "info");
+				return { kind: "close" };
+			},
+			status: async () => {
+				const status = await buildStatusMessage(pi);
+				if (isCurrentFirecrawlSession(generation)) {
+					ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
+				}
+				return { kind: "close" };
+			},
+			tools: async () => {
+				await showToolSelector(pi, ctx);
+				return { kind: "close" };
+			},
+			enable: async () => {
+				await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "enabled all");
+				return { kind: "close" };
+			},
+			disable: async () => {
+				await updateFirecrawlTools(pi, ctx, [], "disabled all");
+				return { kind: "close" };
+			},
+		},
+	});
+	await runMenu(ctx, menu, {
+		getState: () => undefined,
+		signal: currentFirecrawlSessionSignal(),
+		isCurrent: () => isCurrentFirecrawlSession(generation),
+	});
 }
 
 export function parseCommand(args: string): CommandAction | "unknown" {

@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-jupyter",
-	"version": "0.35.0",
+	"version": "0.37.0",
 	"description": "Experimental Pi extension for previewing Jupyter notebooks in a terminal side panel.",
 	"type": "module",
 	"license": "MIT",

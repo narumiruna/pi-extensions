@@ -89,6 +89,7 @@ $git_status\
 $activity\
 $context\
 $tokens\
+$cache\
 [](fg:runtime bg:meter)\
 $cost\
 $time\

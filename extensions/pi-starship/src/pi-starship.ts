@@ -30,6 +30,7 @@ import {
 	type WorkspaceRefreshInput,
 	workspaceSnapshotEqual,
 } from "./runtime/workspace.js";
+import { summarizeFooterUsage } from "./usage.js";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const EVENT_DEBOUNCE_MS = 250;
@@ -394,7 +395,8 @@ function runtimeSnapshot(
 		isStreaming: runtime.isStreaming,
 		lastCompletedTool: runtime.lastCompletedTool,
 		contextUsage: ctx.getContextUsage() ?? undefined,
-		tokenTotals: tokenTotals(ctx),
+		tokenTotals: summarizeFooterUsage(ctx.sessionManager.getEntries()),
+		usingSubscription: isSubscriptionBacked(ctx),
 		gitBranch: runtime.git?.branch?.name ?? footerData.getGitBranch(),
 		gitBranchDetails: runtime.git?.branch,
 		gitCommit: runtime.git?.commit,
@@ -415,16 +417,12 @@ function userTurnCount(ctx: ExtensionContext): number {
 		.filter((entry) => entry.type === "message" && entry.message.role === "user").length;
 }
 
-function tokenTotals(ctx: ExtensionContext): { input: number; output: number; cost: number } {
-	const totals = { input: 0, output: 0, cost: 0 };
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		const usage = entry.message.usage;
-		totals.input += usage.input ?? 0;
-		totals.output += usage.output ?? 0;
-		totals.cost += usage.cost?.total ?? 0;
-	}
-	return totals;
+function isSubscriptionBacked(ctx: ExtensionContext): boolean {
+	const model = ctx.model;
+	return (
+		model !== undefined &&
+		(model.provider === "kimi-coding" || ctx.modelRegistry.isUsingOAuth(model))
+	);
 }
 
 function formatDiagnostics(loaded: LoadedStarshipConfig): string {

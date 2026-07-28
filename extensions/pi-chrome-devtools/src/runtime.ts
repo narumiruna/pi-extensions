@@ -32,6 +32,7 @@ export interface ChromeDevToolsState {
 	lastLaunchAttempt?: BrowserLaunchAttempt;
 	shuttingDown: boolean;
 	sessionGeneration: number;
+	sessionController: AbortController;
 	settingsNotice?: string;
 }
 
@@ -84,4 +85,5 @@ export const state: ChromeDevToolsState = {
 	browserExecutable: process.env.PI_CHROME_DEVTOOLS_BROWSER,
 	shuttingDown: false,
 	sessionGeneration: 0,
+	sessionController: new AbortController(),
 };

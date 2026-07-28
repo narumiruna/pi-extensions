@@ -37,6 +37,7 @@ const SEGMENT_BLOCKS: Record<SegmentName, PowerlineBlockName> = {
 	tools: "runtime",
 	context: "runtime",
 	tokens: "runtime",
+	cache: "runtime",
 	cost: "meter",
 	time: "meter",
 	turn: "meter",

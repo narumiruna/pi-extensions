@@ -51,6 +51,7 @@ const SEGMENT_DESCRIPTIONS: Record<SegmentName, string> = {
 	tools: "Current tool and streaming activity",
 	context: "Current context-window usage",
 	tokens: "Session token totals",
+	cache: "Prompt-cache reads, writes, and latest hit rate",
 	cost: "Session cost",
 	time: "Current local time",
 	turn: "Current session turn count",

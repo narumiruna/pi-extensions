@@ -18,6 +18,7 @@ export const INFORMATION_PROFILES: Readonly<
 		"tools",
 		"context",
 		"tokens",
+		"cache",
 		"cost",
 		"time",
 	],

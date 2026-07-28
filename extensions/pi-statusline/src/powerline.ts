@@ -49,6 +49,7 @@ const SEGMENT_RETENTION_PRIORITY: Readonly<Record<RenderSegment["name"], number>
 	thinking: 70,
 	cost: 60,
 	provider: 50,
+	cache: 45,
 	tokens: 40,
 	time: 30,
 	turn: 20,

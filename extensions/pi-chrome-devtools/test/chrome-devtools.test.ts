@@ -11,7 +11,13 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+	driveCustomSelector,
+} from "../../../test/support.js";
 import chromeDevtools, {
 	commandCompletions,
 	formatHostForUrl,
@@ -346,6 +352,22 @@ test("endpoint helpers normalize ports, hosts, and launch quoting", () => {
 	assert.equal(quoteCommandPart("/Applications/Google Chrome"), '"/Applications/Google Chrome"');
 });
 
+test("Chrome DevTools main menu dispatches declarative actions at narrow widths", async () => {
+	const mock = createMockPi();
+	chromeDevtools(mock.pi);
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const { renders, result } = driveCustomSelector(factory, ["tui.select.confirm"], 20);
+			assert.ok(renders.flat().every((line) => visibleWidth(line) <= 20));
+			return result;
+		},
+	});
+	await mock.commands.get("chrome-devtools")?.handler("", ctx);
+	assert.match(notifications.at(-1)?.message ?? "", /Chrome DevTools endpoint/);
+});
+
 test("Chrome DevTools tool selection keeps the cursor on the toggled row", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		const mock = createMockPi({ activeTools: ["other_tool"] });
@@ -374,6 +396,53 @@ test("Chrome DevTools tool selection keeps the cursor on the toggled row", async
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [
 			...toolNames.filter((name) => name !== "chrome_devtools_select_page"),
 		]);
+	});
+});
+
+test("Chrome DevTools tool selection refreshes dynamic state after a saved toggle", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		chromeDevtools(mock.pi);
+		const toolNames = mock.tools.map((tool) => String(tool.name));
+		mock.rawPi.setActiveTools(["other_tool", ...toolNames]);
+		let customCalls = 0;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				customCalls += 1;
+				const harness = createCustomSelectorHarness(factory, 80);
+				if (customCalls === 1) harness.handleInput("tui.select.confirm");
+				else {
+					assert.match(harness.render().join("\n"), /Chrome DevTools tools \(4\/5\)/);
+					harness.handleInput("tui.select.cancel");
+				}
+				for (let turn = 0; harness.result === undefined && turn < 2_000; turn += 1) {
+					await new Promise<void>((resolve) => setTimeout(resolve, 1));
+				}
+				assert.notEqual(harness.result, undefined);
+				return harness.result;
+			},
+		});
+		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
+		assert.equal(customCalls, 2);
+	});
+});
+
+test("Chrome DevTools tool selection stays within narrow terminal widths", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		chromeDevtools(mock.pi);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const { renders, result } = driveCustomSelector(factory, ["tui.select.cancel"], 20);
+				assert.ok(renders.flat().every((line) => visibleWidth(line) <= 20));
+				return result;
+			},
+		});
+		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
 	});
 });
 

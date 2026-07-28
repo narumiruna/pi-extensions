@@ -48,10 +48,18 @@ const currentVersion = packages
 	.sort(compareVersions)
 	.at(-1);
 
-const newVersion = bumpVersion(currentVersion, bump).join(".");
+const newVersionParts = bumpVersion(currentVersion, bump);
+const newVersion = newVersionParts.join(".");
+const internalPackageNames = new Set(
+	packages
+		.map(({ packageJson }) => packageJson.name)
+		.filter((name) => typeof name === "string" && name.length > 0),
+);
+const internalDependencyRange = `<${newVersionParts[0] + 1}`;
 
 for (const { packagePath, packageJson } of packages) {
 	packageJson.version = newVersion;
+	updateInternalDependencyRanges(packageJson, internalPackageNames, internalDependencyRange);
 	fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, "\t")}\n`);
 }
 
@@ -63,6 +71,21 @@ console.log(newVersion);
 
 function readPackage(packagePath) {
 	return JSON.parse(fs.readFileSync(packagePath, "utf8"));
+}
+
+function updateInternalDependencyRanges(packageJson, internalPackageNames, range) {
+	for (const field of [
+		"dependencies",
+		"devDependencies",
+		"optionalDependencies",
+		"peerDependencies",
+	]) {
+		const dependencies = packageJson[field];
+		if (!dependencies) continue;
+		for (const dependencyName of Object.keys(dependencies)) {
+			if (internalPackageNames.has(dependencyName)) dependencies[dependencyName] = range;
+		}
+	}
 }
 
 function parseVersion(version) {

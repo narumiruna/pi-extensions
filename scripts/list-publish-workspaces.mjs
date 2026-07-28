@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 
 const releaseTagPattern = /^v(\d+)\.(\d+)\.(\d+)$/;
-const packageRoots = ["extensions", "experimental"];
+const packageRoots = ["packages", "extensions", "experimental"];
 const [mode, ...args] = process.argv.slice(2);
 
 let releaseCommit;
@@ -23,9 +23,11 @@ if (mode === "--all" && args.length === 0) {
 }
 
 const packages = listPublishablePackages(releaseCommit);
-const selectedPackages = selectedPackagePaths
-	? packages.filter(({ packagePath }) => selectedPackagePaths.has(packagePath))
-	: packages;
+const selectedPackages = orderPackagesForPublish(
+	selectedPackagePaths
+		? packages.filter(({ packagePath }) => selectedPackagePaths.has(packagePath))
+		: packages,
+);
 
 process.stdout.write(
 	selectedPackages.length > 0
@@ -157,7 +159,14 @@ function listPublishablePackages(commit) {
 			if (!isTsvValue(name) || !isTsvValue(version)) {
 				throw new Error(`${manifestPath} must contain string name and version fields without tabs`);
 			}
-			packages.push({ directory, manifestPath, name, packagePath, version });
+			packages.push({
+				directory,
+				manifestPath,
+				name,
+				packagePath,
+				version,
+				dependencies: Object.keys(packageJson.dependencies ?? {}),
+			});
 		}
 	}
 
@@ -170,6 +179,46 @@ function listPublishablePackages(commit) {
 		}
 	}
 	return packages;
+}
+
+function orderPackagesForPublish(packages) {
+	const byName = new Map(packages.map((item) => [item.name, item]));
+	const dependents = new Map(packages.map((item) => [item.name, []]));
+	const incoming = new Map(packages.map((item) => [item.name, 0]));
+	for (const item of packages) {
+		for (const dependencyName of item.dependencies) {
+			if (!byName.has(dependencyName)) continue;
+			dependents.get(dependencyName).push(item.name);
+			incoming.set(item.name, incoming.get(item.name) + 1);
+		}
+	}
+
+	const ready = packages.filter((item) => incoming.get(item.name) === 0).sort(comparePackages);
+	const ordered = [];
+	while (ready.length > 0) {
+		const item = ready.shift();
+		ordered.push(item);
+		for (const dependentName of dependents.get(item.name)) {
+			const remaining = incoming.get(dependentName) - 1;
+			incoming.set(dependentName, remaining);
+			if (remaining === 0) {
+				ready.push(byName.get(dependentName));
+				ready.sort(comparePackages);
+			}
+		}
+	}
+	if (ordered.length !== packages.length) {
+		const cyclic = packages
+			.filter((item) => incoming.get(item.name) > 0)
+			.map((item) => item.name)
+			.sort(compareStrings);
+		throw new Error(`Publishable workspace dependency cycle: ${cyclic.join(", ")}`);
+	}
+	return ordered;
+}
+
+function comparePackages(a, b) {
+	return compareStrings(a.name, b.name) || compareStrings(a.packagePath, b.packagePath);
 }
 
 function listTreeDirectories(commit, packageRoot) {

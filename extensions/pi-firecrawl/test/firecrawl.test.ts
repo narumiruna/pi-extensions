@@ -14,6 +14,7 @@ import os from "node:os";
 import path, { dirname } from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import firecrawl, {
 	cleanObject,
@@ -486,6 +487,22 @@ test("firecrawl does not fall back to legacy settings when the new file is inval
 	});
 });
 
+test("Firecrawl main menu dispatches declarative actions at narrow widths", async () => {
+	const mock = createMockPi();
+	firecrawl(mock.pi);
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const { renders, result } = driveCustomSelector(factory, ["tui.select.confirm"], 20);
+			assert.ok(renders.flat().every((line) => visibleWidth(line) <= 20));
+			return result;
+		},
+	});
+	await mock.commands.get("firecrawl")?.handler("", ctx);
+	assert.match(notifications.at(-1)?.message ?? "", /FIRECRAWL_API_KEY/);
+});
+
 test("Firecrawl tool selection keeps the cursor on the toggled row", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		const mock = createMockPi({ activeTools: ["other_tool"] });
@@ -642,6 +659,23 @@ test("firecrawl serializes rapid tool saves in invocation order", async () => {
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("Firecrawl tool selection stays within narrow terminal widths", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		firecrawl(mock.pi);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const { renders, result } = driveCustomSelector(factory, ["tui.select.cancel"], 20);
+				assert.ok(renders.flat().every((line) => visibleWidth(line) <= 20));
+				return result;
+			},
+		});
+		await mock.commands.get("firecrawl")?.handler("tools", ctx);
 	});
 });
 

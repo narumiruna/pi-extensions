@@ -11,9 +11,11 @@ if (!version) {
 }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const workspaceRoots = [path.join(root, "extensions"), path.join(root, "experimental")].filter(
-	(workspaceRoot) => fs.existsSync(workspaceRoot),
-);
+const workspaceRoots = [
+	path.join(root, "packages"),
+	path.join(root, "extensions"),
+	path.join(root, "experimental"),
+].filter((workspaceRoot) => fs.existsSync(workspaceRoot));
 const manifests = [
 	path.join(root, "package.json"),
 	...workspaceRoots.flatMap((workspaceRoot) =>

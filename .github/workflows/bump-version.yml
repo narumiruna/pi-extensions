@@ -51,7 +51,7 @@ jobs:
           new_version="$(node scripts/bump-shared-version.mjs "${{ inputs.version_bump }}" | tail -n 1)"
           tag="v${new_version}"
 
-          git add package.json package-lock.json extensions/*/package.json experimental/*/package.json
+          git add package.json package-lock.json packages/*/package.json extensions/*/package.json experimental/*/package.json
           git commit -m "chore(release): ${tag}"
           git tag "${tag}"
 

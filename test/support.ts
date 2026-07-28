@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 
 type MockHandler = (...args: unknown[]) => unknown;
 
@@ -235,6 +236,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
 			getApiKeyAndHeaders: async () => ({ ok: false, error: "missing" }),
 			getAvailable: () => [],
 			getAll: () => [],
+			isUsingOAuth: () => false,
 		},
 		...overrides,
 	};
@@ -280,7 +282,20 @@ export function createCustomSelectorHarness(
 		},
 		keybindingsOverride ?? {
 			matches(data: string, key: string) {
-				return data === key;
+				const bindings: Record<string, KeyId> = {
+					"tui.select.up": Key.up,
+					"tui.select.down": Key.down,
+					"tui.select.pageUp": Key.pageUp,
+					"tui.select.pageDown": Key.pageDown,
+					"tui.select.confirm": Key.enter,
+					"tui.select.cancel": Key.escape,
+					"tui.input.submit": Key.enter,
+				};
+				const binding = bindings[key];
+				return (
+					(binding !== undefined && matchesKey(data, binding)) ||
+					(key === "tui.select.cancel" && matchesKey(data, Key.ctrl("c")))
+				);
 			},
 			getKeys(key: string): readonly string[] {
 				if (key === "tui.select.up") return ["up"];
@@ -296,7 +311,16 @@ export function createCustomSelectorHarness(
 	);
 	return {
 		handleInput(data: string) {
-			component.handleInput(data);
+			const inputData: Record<string, string> = {
+				"tui.select.up": "\u001b[A",
+				"tui.select.down": "\u001b[B",
+				"tui.select.pageUp": "\u001b[5~",
+				"tui.select.pageDown": "\u001b[6~",
+				"tui.select.confirm": "\r",
+				"tui.select.cancel": "\u001b",
+				"tui.input.submit": "\r",
+			};
+			component.handleInput(inputData[data] ?? data);
 			return component.render(width);
 		},
 		render() {

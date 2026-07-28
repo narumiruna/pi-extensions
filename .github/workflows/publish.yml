@@ -105,17 +105,17 @@ jobs:
             echo
 
             if [[ -s /tmp/pi-published.tsv ]]; then
-              echo "### Published extensions"
+              echo "### Published packages"
               echo
-              echo "| Extension | Version |"
+              echo "| Package | Version |"
               echo "| --- | --- |"
               while IFS=$'\t' read -r package version; do
                 printf '| [%s](https://www.npmjs.com/package/%s) | `%s` |\n' "$package" "$package" "$version"
               done < /tmp/pi-published.tsv
             else
-              echo "### Published extensions"
+              echo "### Published packages"
               echo
-              echo "No extensions were published."
+              echo "No packages were published."
             fi
 
             if [[ -s /tmp/pi-skipped.tsv ]]; then

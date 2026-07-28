@@ -16,7 +16,7 @@ Use it to give your AI coding agent reliable web research capabilities for docum
 - Supports Firecrawl API endpoint overrides.
 - Shows statusline activity only while Firecrawl tools are running.
 - Provides a `/firecrawl` menu with configuration help and tool controls.
-- Provides a Plan-mode-style selector for choosing individual Firecrawl tools.
+- Uses `@narumitw/pi-tui-kit` for width-safe menus and individual tool selection.
 - Persists the selected Firecrawl tools across Pi restarts.
 - Bounds tool output to Pi's 50 KB or 2,000-line limit while preserving oversized responses in private temporary files.
 - Never logs, displays, or stores your Firecrawl API key.
@@ -99,7 +99,7 @@ Direct subcommands are also available:
 - `quickstart` is an alias for `config`.
 - `status` shows runtime tool state, persisted selection, settings file path, API-key presence,
   API URL, and active non-Firecrawl tool count.
-- `tools` opens a Plan-mode-style selector for choosing individual `firecrawl_*` tools.
+- `tools` opens a width-safe selector for choosing individual `firecrawl_*` tools.
 - `toggle` is an alias for `tools`.
 - `enable` enables all `firecrawl_*` tools for future turns.
 - `disable` disables all `firecrawl_*` tools for future turns. The slash command remains

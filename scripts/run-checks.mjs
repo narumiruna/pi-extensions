@@ -4,29 +4,43 @@ import { spawn } from "node:child_process";
 
 const checks = ["biome:check", "check:boundaries", "typecheck", "test"];
 
-console.log(`Running checks in parallel: ${checks.join(", ")}`);
+console.log("Building publishable workspaces before consumer checks");
+const buildResult = await runCheck("build");
+const buildFailures = failuresFrom([buildResult]);
+if (buildFailures.length > 0) {
+	reportFailures(buildFailures);
+	process.exitCode = 1;
+} else {
+	console.log(`Running checks in parallel: ${checks.join(", ")}`);
+	const env = { ...process.env, PI_EXTENSIONS_BUILD_READY: "1" };
+	const results = await Promise.all(checks.map((check) => runCheck(check, env)));
+	const failures = failuresFrom(results);
+	reportFailures(failures);
+	if (failures.length > 0) process.exitCode = 1;
+}
 
-const results = await Promise.all(checks.map(runCheck));
-const failures = results.filter(({ code, error }) => error || code !== 0);
+function failuresFrom(results) {
+	return results.filter(({ code, error }) => error || code !== 0);
+}
 
-for (const { check, code, error, signal } of failures) {
-	if (error) {
-		console.error(`${check} failed to start: ${error.message}`);
-	} else if (signal) {
-		console.error(`${check} failed after receiving ${signal}`);
-	} else {
-		console.error(`${check} failed with exit code ${code}`);
+function reportFailures(failures) {
+	for (const { check, code, error, signal } of failures) {
+		if (error) {
+			console.error(`${check} failed to start: ${error.message}`);
+		} else if (signal) {
+			console.error(`${check} failed after receiving ${signal}`);
+		} else {
+			console.error(`${check} failed with exit code ${code}`);
+		}
 	}
 }
 
-if (failures.length > 0) process.exitCode = 1;
-
-function runCheck(check) {
+function runCheck(check, env = process.env) {
 	const { command, args } = npmRunCommand(check);
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
 			cwd: process.cwd(),
-			env: process.env,
+			env,
 			stdio: "inherit",
 		});
 		let settled = false;

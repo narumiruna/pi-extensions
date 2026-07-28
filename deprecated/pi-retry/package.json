@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-retry",
-	"version": "0.35.0",
-	"description": "Public pi extension that retries empty-detail, Codex websocket-limit, and stalled provider errors.",
+	"version": "0.37.0",
+	"description": "Deprecated Pi extension that classified provider-specific and stalled-stream errors for retry.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -34,6 +34,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-retry"
+		"directory": "deprecated/pi-retry"
 	}
 }

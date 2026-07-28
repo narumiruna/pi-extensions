@@ -14,6 +14,7 @@ const tsc = path.join(
 	process.platform === "win32" ? "tsc.cmd" : "tsc",
 );
 
+if (process.env.PI_EXTENSIONS_BUILD_READY !== "1") runNpm(["run", "build"]);
 fs.rmSync(outDir, { recursive: true, force: true });
 
 const activeExtensionRoots = [
@@ -57,6 +58,16 @@ function activeExtensionDirectories(directory = path.join(root, "extensions")) {
 
 function hasTestFile(directory) {
 	return findFiles(directory, ".test.ts").length > 0;
+}
+
+function runNpm(args) {
+	const command = process.env.npm_execpath
+		? process.execPath
+		: process.platform === "win32"
+			? "npm.cmd"
+			: "npm";
+	const commandArgs = process.env.npm_execpath ? [process.env.npm_execpath, ...args] : args;
+	run(command, commandArgs);
 }
 
 function run(command, args) {

@@ -1,11 +1,12 @@
 {
 	"name": "pi-extensions",
-	"version": "0.35.0",
+	"version": "0.37.0",
 	"private": true,
 	"packageManager": "npm@12.0.1",
 	"description": "Monorepo for @narumitw pi extension packages.",
 	"type": "module",
 	"workspaces": [
+		"packages/*",
 		"extensions/*",
 		"experimental/*"
 	],
@@ -14,7 +15,8 @@
 		"lint": "biome lint .",
 		"biome:check": "biome check .",
 		"check:boundaries": "node ./scripts/check-extension-boundaries.mjs",
-		"typecheck": "npm --workspaces run typecheck",
+		"typecheck": "node ./scripts/run-typechecks.mjs",
+		"build": "npm --workspaces --if-present run build",
 		"test": "node ./scripts/run-tests.mjs",
 		"check": "node ./scripts/run-checks.mjs",
 		"pack:btw": "npm --workspace @narumitw/pi-btw pack --dry-run",
@@ -31,7 +33,6 @@
 		"pack:langfuse": "npm --workspace @narumitw/pi-langfuse pack --dry-run",
 		"pack:lsp": "npm --workspace @narumitw/pi-lsp pack --dry-run",
 		"pack:plan-mode": "npm --workspace @narumitw/pi-plan-mode pack --dry-run",
-		"pack:retry": "npm --workspace @narumitw/pi-retry pack --dry-run",
 		"pack:starship": "npm --workspace @narumitw/pi-starship pack --dry-run",
 		"pack:statusline": "npm --workspace @narumitw/pi-statusline pack --dry-run",
 		"pack:sync": "npm --workspace @narumitw/pi-sync pack --dry-run",

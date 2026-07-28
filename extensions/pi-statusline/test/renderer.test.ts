@@ -106,8 +106,8 @@ test("idle contextual activity rows collapse while explicit empty rows remain", 
 	const config = createDefaultConfig();
 	config.segments = ["model", "line_break", "tools", "line_break", "context"];
 	const context = createMockContext({
-		model: { id: "claude-sonnet-4", provider: "anthropic" },
-		getContextUsage: () => ({ percent: 42 }),
+		model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 1000 },
+		getContextUsage: () => ({ percent: 42, contextWindow: 1000 }),
 	});
 	const footerData: ReadonlyFooterDataProvider = {
 		getGitBranch: () => "main",
@@ -124,7 +124,7 @@ test("idle contextual activity rows collapse while explicit empty rows remain", 
 		extensionStatusIconAliases: new Map(),
 	};
 	const idle = plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
-	assert.deepEqual(idle.split("\n"), ["░▒▓ 🤖 sonnet-4", "░▒▓ 🪟 ctx 42%"]);
+	assert.deepEqual(idle.split("\n"), ["░▒▓ 🤖 sonnet-4", "░▒▓ 🪟 ctx 42.0%/1.0k"]);
 
 	runtime.isStreaming = true;
 	const streaming = plain(
@@ -133,7 +133,7 @@ test("idle contextual activity rows collapse while explicit empty rows remain", 
 	assert.deepEqual(streaming.split("\n"), [
 		"░▒▓ 🤖 sonnet-4",
 		"░▒▓ 💭 thinking",
-		"░▒▓ 🪟 ctx 42%",
+		"░▒▓ 🪟 ctx 42.0%/1.0k",
 	]);
 
 	config.segments = ["line_break", "model", "line_break"];
@@ -155,6 +155,7 @@ test("responsive fitting keeps primary and active information ahead of decorativ
 		segment("tools", "ACTIVE", "runtime"),
 		segment("context", "CONTEXT", "runtime"),
 		segment("tokens", "TOKENS", "runtime"),
+		segment("cache", "CACHE", "runtime"),
 		segment("cost", "COST", "meter"),
 		segment("time", "TIME", "meter"),
 		segment("turn", "TURN", "meter"),
@@ -165,14 +166,14 @@ test("responsive fitting keeps primary and active information ahead of decorativ
 	for (const value of ["MODEL", "WORKSPACE", "BRANCH", "ACTIVE", "CONTEXT"]) {
 		assert.match(normal, new RegExp(value, "u"));
 	}
-	assert.doesNotMatch(normal, /BRAND|PROVIDER|TOKENS|TIME|TURN/u);
+	assert.doesNotMatch(normal, /BRAND|PROVIDER|CACHE|TOKENS|TIME|TURN/u);
 
 	const narrow = plain(renderPowerlineStatusline(40, items, config));
 	assert.ok(visibleWidth(narrow) <= 40);
 	for (const value of ["MODEL", "BRANCH", "ACTIVE", "CONTEXT"]) {
 		assert.match(narrow, new RegExp(value, "u"));
 	}
-	assert.doesNotMatch(narrow, /BRAND|PROVIDER|THINKING|WORKSPACE|TOKENS|COST|TIME|TURN/u);
+	assert.doesNotMatch(narrow, /BRAND|PROVIDER|THINKING|WORKSPACE|CACHE|TOKENS|COST|TIME|TURN/u);
 });
 
 test("responsive fitting preserves explicit row boundaries and fits every rendered line", () => {
@@ -356,6 +357,137 @@ function relativeLuminance(hex: string): number {
 	];
 	return 0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0);
 }
+
+test("usage segments match native cache, context-window, and subscription presentation", () => {
+	const config = createDefaultConfig();
+	config.segments = ["context", "cache", "tokens", "cost"];
+	const makeUsage = (
+		input: number,
+		output: number,
+		cacheRead: number,
+		cacheWrite: number,
+		cost: number,
+	) => ({
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		totalTokens: input + output + cacheRead + cacheWrite,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+	});
+	const latest = {
+		type: "message",
+		message: { role: "assistant", usage: makeUsage(11_000, 287, 0, 0, 0.03) },
+	};
+	const entries = [
+		{
+			type: "message",
+			message: { role: "assistant", usage: makeUsage(700, 0, 4600, 1500, 0.025) },
+		},
+		{
+			type: "message",
+			message: { role: "toolResult", usage: makeUsage(100, 0, 0, 0, 0.005) },
+		},
+		{ type: "compaction", usage: makeUsage(100, 0, 0, 0, 0.005) },
+		{ type: "branch_summary", usage: makeUsage(100, 0, 0, 0, 0.005) },
+		latest,
+	];
+	const context = createMockContext({
+		model: { id: "gpt-5", provider: "openai", contextWindow: 272_000 },
+		modelRegistry: { isUsingOAuth: () => true },
+		getContextUsage: () => ({ percent: 2.4, tokens: 6528, contextWindow: 272_000 }),
+		sessionManager: { getEntries: () => entries, getBranch: () => [latest] },
+	});
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => null,
+		getExtensionStatuses: () => new Map(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+
+	assert.match(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+		/🪟 ctx 2\.4%\/272k 📦 R4\.6k W1\.5k CH0\.0% 🔢 ↑12k ↓287 💸 \$0\.070 \(sub\)/u,
+	);
+});
+
+test("empty cache activity collapses its configured row and context falls back to model window", () => {
+	const config = createDefaultConfig();
+	config.segments = ["model", "line_break", "cache", "line_break", "context"];
+	const context = createMockContext({
+		model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 200_000 },
+		modelRegistry: { isUsingOAuth: () => false },
+		getContextUsage: () => ({ percent: null, tokens: null, contextWindow: null }),
+	});
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => null,
+		getExtensionStatuses: () => new Map(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+
+	assert.deepEqual(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)).split("\n"),
+		["░▒▓ 🤖 sonnet-4", "░▒▓ 🪟 ctx ?/200k"],
+	);
+});
+
+test("Kimi subscription cost is marked while API-key cost is unchanged", () => {
+	const config = createDefaultConfig();
+	config.segments = ["cost"];
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => null,
+		getExtensionStatuses: () => new Map(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+	const usage = {
+		input: 1,
+		output: 1,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 2,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+	};
+	const renderCost = (provider: string, oauth: boolean) => {
+		const context = createMockContext({
+			model: { id: "model", provider },
+			modelRegistry: { isUsingOAuth: () => oauth },
+			sessionManager: {
+				getEntries: () => [{ type: "message", message: { role: "assistant", usage } }],
+				getBranch: () => [],
+			},
+		});
+		return plain(renderStatusline(100, context.ctx, footerData, {} as Theme, config, runtime));
+	};
+
+	assert.match(renderCost("kimi-coding", false), /\$0\.010 \(sub\)/u);
+	assert.doesNotMatch(renderCost("anthropic", false), /\(sub\)/u);
+});
 
 test("segment presentation wraps canonical dynamic values with configured text", () => {
 	const config = createDefaultConfig();

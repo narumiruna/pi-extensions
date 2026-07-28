@@ -13,7 +13,7 @@ export const contextModule = defineModule({
 	values: ({ runtime }) => {
 		const percent = runtime.contextUsage?.percent;
 		return {
-			percentage: percent === null || percent === undefined ? "?" : `${percent.toFixed(0)}%`,
+			percentage: percent === null || percent === undefined ? "?" : `${percent.toFixed(1)}%`,
 			tokens: formatCount(runtime.contextUsage?.tokens ?? 0),
 			window: formatCount(runtime.contextUsage?.contextWindow ?? 0),
 		};

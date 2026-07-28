@@ -22,6 +22,7 @@ test("information profiles expose curated segment sets in deterministic order", 
 		"tools",
 		"context",
 		"tokens",
+		"cache",
 		"cost",
 		"time",
 	]);

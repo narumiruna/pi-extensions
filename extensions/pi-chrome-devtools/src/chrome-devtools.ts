@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { shutdownManagedBrowser } from "./browser-manager.js";
 import { state } from "./runtime.js";
 import { loadSettings } from "./settings.js";
@@ -59,6 +60,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
+		replaceSessionController("Chrome DevTools session replaced");
 		state.shuttingDown = false;
 		state.settingsNotice = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -77,6 +79,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		state.sessionGeneration += 1;
+		replaceSessionController("Chrome DevTools session shut down");
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const browserShutdown = shutdownManagedBrowser(undefined, { cancelLaunch: true });
 		await waitForChromeDevtoolsSettings();
@@ -134,31 +137,60 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 		return;
 	}
 
-	const choice = await ctx.ui.select("Chrome DevTools", Object.values(MENU_OPTIONS));
-	if (generation !== state.sessionGeneration) return;
-	switch (choice) {
-		case MENU_OPTIONS.quickstart:
-			ctx.ui.notify(buildQuickstartMessage(), "info");
-			return;
-		case MENU_OPTIONS.help:
-			ctx.ui.notify(buildCommandGuide(), "info");
-			return;
-		case MENU_OPTIONS.status: {
-			const status = await buildToolStatusMessage(pi);
-			if (generation !== state.sessionGeneration) return;
-			ctx.ui.notify(status, "info");
-			return;
-		}
-		case MENU_OPTIONS.tools:
-			await showToolSelector(pi, ctx);
-			return;
-		case MENU_OPTIONS.enable:
-			await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "enabled all");
-			return;
-		case MENU_OPTIONS.disable:
-			await updateChromeDevtoolsTools(pi, ctx, [], "disabled all");
-			return;
-	}
+	type Screen = "main";
+	type Action = keyof typeof MENU_OPTIONS;
+	const menu = defineMenu<undefined, Screen, Action>({
+		start: "main",
+		screens: {
+			main: () => ({
+				kind: "actions",
+				title: "Chrome DevTools",
+				items: Object.entries(MENU_OPTIONS).map(([id, label]) => ({
+					id,
+					label,
+					action: id as Action,
+				})),
+				hint: "close",
+			}),
+		},
+		actions: {
+			quickstart: async () => {
+				ctx.ui.notify(buildQuickstartMessage(), "info");
+				return { kind: "close" };
+			},
+			help: async () => {
+				ctx.ui.notify(buildCommandGuide(), "info");
+				return { kind: "close" };
+			},
+			status: async () => {
+				const status = await buildToolStatusMessage(pi);
+				if (generation === state.sessionGeneration) ctx.ui.notify(status, "info");
+				return { kind: "close" };
+			},
+			tools: async () => {
+				await showToolSelector(pi, ctx);
+				return { kind: "close" };
+			},
+			enable: async () => {
+				await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "enabled all");
+				return { kind: "close" };
+			},
+			disable: async () => {
+				await updateChromeDevtoolsTools(pi, ctx, [], "disabled all");
+				return { kind: "close" };
+			},
+		},
+	});
+	await runMenu(ctx, menu, {
+		getState: () => undefined,
+		signal: state.sessionController.signal,
+		isCurrent: () => generation === state.sessionGeneration,
+	});
+}
+
+function replaceSessionController(reason: string) {
+	state.sessionController.abort(new DOMException(reason, "AbortError"));
+	state.sessionController = new AbortController();
 }
 
 export function parseCommand(args: string): CommandAction | "unknown" {

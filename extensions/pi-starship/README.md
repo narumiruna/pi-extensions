@@ -10,7 +10,7 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 
 - Uses a readable built-in Tokyo Night configuration until the user explicitly saves settings.
 - Starship-style root/module formats, conditional groups, `$all`, styles, and palettes.
-- Pi modules for model, thinking, activity, context, tokens, cost, turn, and extension statuses.
+- Pi modules for model, thinking, activity, context, tokens, prompt cache, cost, turn, and extension statuses.
 - Cached Git branch, commit, operation state, line metrics, detailed status, and linked-worktree identity.
 - Opt-in package, language, development-shell, deployment, cloud, and execution-context modules.
 - Width-aware `$fill` alignment for native multiline left/right layouts.
@@ -57,7 +57,7 @@ The **Advanced** menu is one level deep and contains configuration details plus 
 ### 📝 Example
 
 ```toml
-format = "$brand$provider$model$thinking\n$directory$git_branch$git_status\n$activity$context$tokens$cost$time$turn\n$extension_status"
+format = "$brand$provider$model$thinking\n$directory$git_branch$git_status\n$activity$context$tokens$cache$cost$time$turn\n$extension_status"
 palette = "tokyo-night"
 
 [palettes.tokyo-night]
@@ -74,6 +74,16 @@ disabled = false
 [activity]
 format = "([ $text ]($style))"
 style = "fg:custom"
+
+[context]
+format = "[$symbol $percentage/$window ]($style)"
+
+[cache]
+format = "[$symbol (R$read )(W$write )(CH$rate )]($style)"
+disabled = false
+
+[cost]
+format = "[ $symbol \\$$cost( $subscription) ]($style)"
 
 [git_branch]
 format = "[ $symbol$branch$pr ]($style)"
@@ -155,7 +165,8 @@ An invalid root format falls back to the built-in root format. An invalid module
 | `activity` | `$symbol`, `$state`, `$tool`, `$count`, `$text` | Active tools, streaming, completion, or idle |
 | `context` | `$symbol`, `$percentage`, `$tokens`, `$window` | Context-window use |
 | `tokens` | `$symbol`, `$input`, `$output`, `$total` | Token totals |
-| `cost` | `$symbol`, `$cost` | Session cost |
+| `cache` | `$symbol`, `$rate`, `$read`, `$write` | Prompt-cache reads, writes, and latest hit rate; disabled by default |
+| `cost` | `$symbol`, `$cost`, `$subscription` | Session cost and optional `(sub)` marker |
 | `time` | `$symbol`, `$time` | Current local time |
 | `turn` | `$symbol`, `$count` | User turn count |
 | `package` | `$symbol`, `$version`, `$source` | Direct project manifest version |
@@ -183,6 +194,25 @@ An invalid root format falls back to the built-in root format. An invalid module
 | `username` | `$symbol`, `$user` | Contextual login identity |
 | `fill` | `$symbol` | Flexible width-aware root-layout marker |
 | `extension_status` | `$symbol`, `$statuses`, `$count` | Pi extension statuses |
+
+### Usage semantics
+
+- `tokens`, `cache`, and `cost` total every usage-bearing session entry, matching Pi's native footer:
+  assistant messages, nested-LLM tool results, compactions, and branch summaries, including abandoned
+  branches retained in the session.
+- Cache `$read` and `$write` are cumulative. `$rate` uses only the latest assistant prompt:
+  `cacheRead / (input + cacheRead + cacheWrite) * 100`. The module is empty when Pi has reported no
+  cache reads or writes.
+- `cache` is disabled by default, but the built-in root format already contains `$cache`; users who
+  inherit that format can enable it with only `[cache] disabled = false`. A custom root format must
+  reference `$cache` or `$all` normally.
+- Context `$percentage` uses native one-decimal precision. For a native-style display, use
+  `format = "[$symbol $percentage/$window ]($style)"` under `[context]`; the module name remains
+  `context`, not `context_usage`.
+- Subscription-backed OAuth models and `kimi-coding` set cost `$subscription` to `(sub)`. The dollar
+  value is usage cost, not proof of an amount billed under a subscription.
+- Pi's public extension API does not expose the current auto-compaction toggle, so pi-starship cannot
+  reliably provide the native `(auto)` marker.
 
 `git_worktree` is empty in the primary worktree. In a linked worktree it defaults to the top-level directory name; use `$path` when the full absolute path is needed.
 
@@ -322,7 +352,7 @@ shell modules, or expose unrestricted `env_var` behavior. JVM/.NET, other long-t
 alternative VCS, system-monitor, and additional DevOps modules remain demand-gated; the first-wave
 review found no issue/discussion evidence for a coherent follow-up batch, so no second wave is added.
 
-Pi-native model, context, cost, Git metrics, and activity remain owned by the existing modules. The
+Pi-native model, context, cache, cost, Git metrics, and activity remain owned by the existing modules. The
 lifecycle design rejects provider-specific duplicates and ambiguous `turn_duration`/`last_result`
 modules until separately approved semantics exist.
 
@@ -336,6 +366,7 @@ Keep `extension_status` last in the catalog so earlier modules can consume exten
 
 - `src/index.ts` — Pi package entrypoint.
 - `src/pi-starship.ts` — extension lifecycle, cached refresh binding, live preview, and footer.
+- `src/usage.ts` — native-aligned session usage and cache aggregation.
 - `src/commands.ts` — goal-oriented menu, preview/confirmation, diagnostics, and compatibility routes.
 - `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
 - `src/format/` — native format/style parser and renderer.
@@ -345,7 +376,8 @@ Keep `extension_status` last in the catalog so earlier modules can consume exten
 
 ## 🔎 Keywords
 
-Pi Coding Agent, Starship statusline, Starship TOML, terminal footer, native statusline, Pi extension
+Pi Coding Agent, Starship statusline, Starship TOML, terminal footer, native statusline, prompt cache,
+cache hit rate, Pi extension
 
 ## 📄 License
 

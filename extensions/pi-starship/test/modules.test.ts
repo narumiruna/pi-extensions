@@ -30,7 +30,14 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 		isStreaming: false,
 		lastCompletedTool: "read",
 		contextUsage: { percent: 75, tokens: 750, contextWindow: 1000 },
-		tokenTotals: { input: 1530, output: 200, cost: 0.1234 },
+		tokenTotals: {
+			input: 1530,
+			output: 200,
+			cacheRead: 0,
+			cacheWrite: 0,
+			cost: 0.1234,
+		},
+		usingSubscription: false,
 		gitBranch: "feature",
 		gitBranchDetails: { name: "feature", detached: false },
 		gitCommit: { hash: "0123456789abcdef", detached: false },
@@ -75,13 +82,133 @@ test("built-in modules expose Pi values through the default format", () => {
 	assert.match(plain, /feature/);
 	assert.match(plain, /=1 !4 \+3 \?5 ⇕⇡2⇣1/);
 	assert.match(plain, /read/);
-	assert.match(plain, /75%/);
+	assert.match(plain, /75\.0%/);
 	assert.match(plain, /↑1\.5k ↓200/);
 	assert.match(plain, /\$0\.123/);
 	assert.match(plain, /09:05/);
 	assert.match(plain, /🎯 active/);
 	assert.doesNotMatch(plain, /PR .*checks failing/);
 	assert.ok(rendered.consumedExtensionStatusKeys.has("github-pr"));
+});
+
+test("context supports native percentage/window precision", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$context";
+	config.formatAst = parseFormat(config.format);
+	config.modules.context.format = "$percentage/$window";
+	config.modules.context.formatAst = parseFormat(config.modules.context.format);
+
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					contextUsage: { percent: 2.4, tokens: 6528, contextWindow: 272_000 },
+				}),
+			).ansi,
+		),
+		"2.4%/272k",
+	);
+});
+
+test("cache and subscription modules expose native usage semantics", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$cache|$cost";
+	config.formatAst = parseFormat(config.format);
+	config.modules.cache.disabled = false;
+	const runtime = fixture({
+		tokenTotals: {
+			input: 100,
+			output: 20,
+			cacheRead: 2300,
+			cacheWrite: 1500,
+			cost: 0.1234,
+			latestCacheHitRate: 87.5,
+		},
+		usingSubscription: true,
+	});
+
+	assert.match(
+		stripAnsi(renderStatusline(config, runtime).ansi),
+		/📦 CH87\.5% \| 💸 \$0\.123 \(sub\) /u,
+	);
+
+	config.modules.cache.format = "$read/$write/$rate";
+	config.modules.cache.formatAst = parseFormat(config.modules.cache.format);
+	assert.match(stripAnsi(renderStatusline(config, runtime).ansi), /^2\.3k\/1\.5k\/87\.5%\|/u);
+
+	config.modules.cache.format = "[$symbol:$rate]($style)";
+	config.modules.cache.formatAst = parseFormat(config.modules.cache.format);
+	config.modules.cache.symbol = "C";
+	config.modules.cache.style = "red";
+	assert.ok(
+		renderStatusline(config, runtime).ansi.includes(`${String.fromCharCode(27)}[31mC:87.5%`),
+	);
+
+	assert.equal(
+		renderStatusline(
+			config,
+			fixture({
+				tokenTotals: {
+					input: 100,
+					output: 20,
+					cacheRead: 0,
+					cacheWrite: 0,
+					cost: 0,
+					latestCacheHitRate: 0,
+				},
+				usingSubscription: false,
+			}),
+		).modules.cache.length,
+		0,
+	);
+
+	config.format = "$cost";
+	config.formatAst = parseFormat(config.format);
+	assert.match(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					tokenTotals: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: 0,
+					},
+					usingSubscription: true,
+				}),
+			).ansi,
+		),
+		/\$0\.000 \(sub\)/u,
+	);
+});
+
+test("cache read and write remain available when the latest rate is unknown", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$cache";
+	config.formatAst = parseFormat(config.format);
+	config.modules.cache.disabled = false;
+	config.modules.cache.format = "$symbol:$read/$write/$rate";
+	config.modules.cache.formatAst = parseFormat(config.modules.cache.format);
+	config.modules.cache.symbol = "C";
+
+	const runtime = fixture({
+		tokenTotals: {
+			input: 100,
+			output: 20,
+			cacheRead: 2300,
+			cacheWrite: 1500,
+			cost: 0.1,
+			latestCacheHitRate: undefined,
+		},
+	});
+	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi), "C:2.3k/1.5k/");
+
+	config.modules.cache.format = BUILT_IN_CONFIG.modules.cache.format;
+	config.modules.cache.formatAst = parseFormat(config.modules.cache.format);
+	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi).trim(), "C");
 });
 
 test("git branch consumes github-pr only when its module format references pr", () => {
