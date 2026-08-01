@@ -55,6 +55,14 @@ test("configured roles guard blocking and detached launches only in active Plan 
 			),
 			undefined,
 		);
+		assert.equal(
+			await hook({ toolName: "subagent", input: { action: "list" } }, context.ctx),
+			undefined,
+		);
+		assert.equal(
+			await hook({ toolName: "subagent", input: { action: "get", agent: "worker" } }, context.ctx),
+			undefined,
+		);
 		assert.match(
 			(
 				(await hook(

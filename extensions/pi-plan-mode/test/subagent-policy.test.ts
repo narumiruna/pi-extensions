@@ -3,6 +3,18 @@ import test from "node:test";
 import { enforcePlanSubagentAllowlist } from "../src/subagent-policy.js";
 
 const ALLOWED = ["plan-scout", "plan-researcher", "plan-reviewer"];
+const READ_ONLY_ACTIONS = [
+	"list",
+	"get",
+	"models",
+	"status",
+	"doctor",
+	"watchdog.status",
+	"watchdog.check",
+	"watchdog.recommend-model",
+	"schedule-list",
+	"schedule-status",
+] as const;
 
 test("subagent policy ignores unrelated tools and permits allowed single roles", () => {
 	assert.equal(
@@ -17,6 +29,52 @@ test("subagent policy ignores unrelated tools and permits allowed single roles",
 		),
 		undefined,
 	);
+});
+
+test("subagent policy permits verified read-only management actions", () => {
+	for (const action of READ_ONLY_ACTIONS) {
+		const input =
+			action === "get" || action === "models" ? { action, agent: "worker" } : { action };
+		assert.equal(
+			enforcePlanSubagentAllowlist("subagent", input, ALLOWED),
+			undefined,
+			JSON.stringify(input),
+		);
+	}
+	assert.equal(enforcePlanSubagentAllowlist("subagent", { action: "list" }, []), undefined);
+});
+
+test("subagent policy keeps execution aliases under role checks", () => {
+	assert.equal(
+		enforcePlanSubagentAllowlist(
+			"subagent",
+			{ action: "single", agent: "plan-scout", task: "Inspect" },
+			ALLOWED,
+		),
+		undefined,
+	);
+	for (const input of [
+		{ action: "single", agent: "worker", task: "Implement" },
+		{ action: "parallel", tasks: [{ agent: "worker", task: "Implement" }] },
+		{ action: "TASKS", tasks: [{ agent: "worker", task: "Implement" }] },
+	]) {
+		assert.match(
+			enforcePlanSubagentAllowlist("subagent", input, ALLOWED)?.reason ?? "",
+			/role\(s\): worker/,
+			JSON.stringify(input),
+		);
+	}
+});
+
+test("subagent policy rejects unknown and non-read-only management actions", () => {
+	for (const action of ["create", "update", "resume", "schedule", "future-inspection"]) {
+		const input = { action, agent: "plan-scout" };
+		assert.match(
+			enforcePlanSubagentAllowlist("subagent", input, ALLOWED)?.reason ?? "",
+			/not a verified read-only management action or role-checked execution mode/,
+			JSON.stringify(input),
+		);
+	}
 });
 
 test("subagent policy blocks disallowed and case-mismatched single roles", () => {
@@ -147,7 +205,10 @@ test("subagent policy rejects malformed covered launch payloads", () => {
 		["subagent", { tasks: [{ task: "Missing role" }] }],
 		["subagent", { chain: "plan-scout" }],
 		["subagent", { aggregator: {} }],
+		["subagent", { action: "" }],
+		["subagent", { action: 42 }],
 		["subagent_spawn", {}],
+		["subagent_spawn", { action: "list" }],
 	] as const) {
 		assert.match(
 			enforcePlanSubagentAllowlist(toolName, input, ALLOWED)?.reason ?? "",

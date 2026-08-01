@@ -4,6 +4,25 @@ export interface PlanSubagentPolicyBlock {
 }
 
 const COVERED_SUBAGENT_TOOLS = new Set(["subagent", "subagent_spawn"]);
+const READ_ONLY_SUBAGENT_ACTIONS = new Set([
+	"list",
+	"get",
+	"models",
+	"status",
+	"doctor",
+	"watchdog.status",
+	"watchdog.check",
+	"watchdog.recommend-model",
+	"schedule-list",
+	"schedule-status",
+]);
+const SUBAGENT_EXECUTION_ACTION_ALIASES = new Set(["single", "parallel", "tasks"]);
+
+type BlockingCallClassification =
+	| { kind: "launch" }
+	| { kind: "read-only" }
+	| { kind: "malformed" }
+	| { kind: "unsupported" };
 
 export function enforcePlanSubagentAllowlist(
 	toolName: string,
@@ -12,15 +31,25 @@ export function enforcePlanSubagentAllowlist(
 ): PlanSubagentPolicyBlock | undefined {
 	if (!COVERED_SUBAGENT_TOOLS.has(toolName)) return undefined;
 
-	const requestedRoleNames =
-		toolName === "subagent_spawn" ? readSpawnRoleNames(input) : readBlockingRoleNames(input);
 	const allowedNames = unique(allowedRoleNames);
-	if (!requestedRoleNames) {
-		return {
-			block: true,
-			reason: `Plan mode could not verify subagent roles for tool '${toolName}'. ${formatAllowedRoles(allowedNames)}`,
-		};
+	let requestedRoleNames: string[] | undefined;
+	if (toolName === "subagent_spawn") {
+		requestedRoleNames = readSpawnRoleNames(input);
+	} else {
+		const classification = classifyBlockingCall(input);
+		if (classification.kind === "read-only") return undefined;
+		if (classification.kind === "unsupported") {
+			return {
+				block: true,
+				reason: `Plan mode blocks this subagent action because it is not a verified read-only management action or role-checked execution mode. ${formatAllowedRoles(allowedNames)}`,
+			};
+		}
+		if (classification.kind === "malformed") {
+			return unverifiedRolesBlock(toolName, allowedNames);
+		}
+		requestedRoleNames = readBlockingRoleNames(input);
 	}
+	if (!requestedRoleNames) return unverifiedRolesBlock(toolName, allowedNames);
 
 	const allowed = new Set(allowedNames);
 	const disallowedNames = unique(requestedRoleNames).filter((name) => !allowed.has(name));
@@ -29,6 +58,25 @@ export function enforcePlanSubagentAllowlist(
 	return {
 		block: true,
 		reason: `Plan mode blocks subagent role(s): ${disallowedNames.join(", ")}. ${formatAllowedRoles(allowedNames)}`,
+	};
+}
+
+function classifyBlockingCall(input: unknown): BlockingCallClassification {
+	if (!isRecord(input) || !Object.hasOwn(input, "action")) return { kind: "launch" };
+	const action = input.action;
+	if (typeof action !== "string" || action.trim().length === 0) return { kind: "malformed" };
+	if (READ_ONLY_SUBAGENT_ACTIONS.has(action)) return { kind: "read-only" };
+	if (SUBAGENT_EXECUTION_ACTION_ALIASES.has(action.toLowerCase())) return { kind: "launch" };
+	return { kind: "unsupported" };
+}
+
+function unverifiedRolesBlock(
+	toolName: string,
+	allowedNames: readonly string[],
+): PlanSubagentPolicyBlock {
+	return {
+		block: true,
+		reason: `Plan mode could not verify subagent roles for tool '${toolName}'. ${formatAllowedRoles(allowedNames)}`,
 	};
 }
 
