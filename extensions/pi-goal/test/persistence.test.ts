@@ -217,6 +217,99 @@ test("malformed persisted safety fields reset without discarding the goal", () =
 	assert.equal(loaded.goal?.safetyPauseCause, undefined);
 });
 
+test("stopped goals persist bounded transition provenance and migrate legacy stops", () => {
+	const providerStop = {
+		...storedGoal("provider stop", "usage_limited"),
+		transition: { source: "provider", cause: "usage_exhausted" } as const,
+	};
+	const loadedProvider = loadGoalStateFromSession(
+		branch({ customType: "goal-state", data: { goal: providerStop } }),
+	);
+	assert.deepEqual(loadedProvider.goal?.transition, {
+		source: "provider",
+		cause: "usage_exhausted",
+	});
+
+	const loadedSafetyLegacy = loadGoalStateFromSession(
+		branch({
+			customType: "goal-state",
+			data: {
+				goal: {
+					...storedGoal("old safety stop", "paused"),
+					safetyPauseCause: "no_progress",
+				},
+			},
+		}),
+	);
+	assert.deepEqual(loadedSafetyLegacy.goal?.transition, {
+		source: "goal_safety",
+		cause: "no_progress",
+	});
+
+	const loadedUnknownLegacy = loadGoalStateFromSession(
+		branch({
+			customType: "goal-state",
+			data: { goal: storedGoal("old unknown stop", "blocked") },
+		}),
+	);
+	assert.deepEqual(loadedUnknownLegacy.goal?.transition, {
+		source: "legacy",
+		cause: "legacy_unknown",
+	});
+});
+
+test("non-stopped goals discard stale transition provenance", () => {
+	const loaded = loadGoalStateFromSession(
+		branch({
+			customType: "goal-state",
+			data: {
+				goal: {
+					...active,
+					transition: { source: "provider", cause: "usage_exhausted" },
+				},
+			},
+		}),
+	);
+	assert.equal(loaded.goal?.transition, undefined);
+});
+
+test("stopped goals keep only status-compatible provenance and degrade corrupt values safely", () => {
+	const cases = [
+		["paused", { source: "operator", cause: "explicit_pause" }],
+		["paused", { source: "managed_run", cause: "consumer_cancel" }],
+		["blocked", { source: "agent", cause: "blocked_report" }],
+		["usage_limited", { source: "provider", cause: "usage_exhausted" }],
+		["budget_limited", { source: "goal_safety", cause: "token_budget" }],
+	] as const;
+	for (const [status, transition] of cases) {
+		const loaded = loadGoalStateFromSession(
+			branch({
+				customType: "goal-state",
+				data: { goal: { ...storedGoal(`${status} valid`, status), transition } },
+			}),
+		);
+		assert.deepEqual(loaded.goal?.transition, transition);
+	}
+
+	for (const [label, status, transition] of [
+		["status mismatch", "paused", { source: "provider", cause: "usage_exhausted" }],
+		["unknown pair", "blocked", { source: "provider", cause: "made_up" }],
+		["malformed shape", "usage_limited", { source: 42, cause: null }],
+	] as const) {
+		const loaded = loadGoalStateFromSession(
+			branch({
+				customType: "goal-state",
+				data: { goal: { ...storedGoal(label, status), transition } },
+			}),
+		);
+		assert.equal(loaded.goal?.status, status);
+		assert.deepEqual(loaded.goal?.transition, {
+			source: "legacy",
+			cause: "legacy_unknown",
+		});
+	}
+});
+
 test("malformed canonical or plural queue state fails closed", () => {
 	for (const [customType, data] of [
 		["goal-state", { goal: { ...active, id: "" } }],

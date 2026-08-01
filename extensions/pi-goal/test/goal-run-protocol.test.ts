@@ -35,6 +35,7 @@ type RunStateEvent = {
 	status: RunStatus;
 	summary?: string;
 	reason?: string;
+	transition?: { source: string; cause: string };
 };
 
 type RunErrorCode =
@@ -594,6 +595,10 @@ test("blocked and usage-limited transitions preserve terminal reasons", async ()
 	);
 	assert.equal(states(blockedEvents).at(-1)?.status, "blocked");
 	assert.match(states(blockedEvents).at(-1)?.reason ?? "", /credentials/i);
+	assert.deepEqual(states(blockedEvents).at(-1)?.transition, {
+		source: "agent",
+		cause: "blocked_report",
+	});
 
 	const usageMock = createMockPi({ activeTools: ["read", "bash"] });
 	registerGoal(usageMock);
@@ -616,6 +621,10 @@ test("blocked and usage-limited transitions preserve terminal reasons", async ()
 	await flush();
 	assert.equal(states(usageEvents).at(-1)?.status, "usage_limited");
 	assert.match(states(usageEvents).at(-1)?.reason ?? "", /usage limit/i);
+	assert.deepEqual(states(usageEvents).at(-1)?.transition, {
+		source: "provider",
+		cause: "usage_exhausted",
+	});
 });
 
 test("budget exhaustion emits the budget-limited terminal state", async () => {

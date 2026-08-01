@@ -79,6 +79,19 @@ test("queued goals activate with fresh ids and rebased independent accounting", 
 	assert.equal(activated.lastToolFreeOutputFingerprint, "b".repeat(64));
 });
 
+test("an exhausted queued goal activates directly into a classified budget stop", () => {
+	const queued = {
+		...createQueuedGoal("exhausted", 75, 1_000),
+		tokensUsed: 75,
+	};
+	const activated = activateQueuedGoal(queued, 1_500, 2_000);
+	assert.equal(activated.status, "budget_limited");
+	assert.deepEqual(activated.transition, {
+		source: "goal_safety",
+		cause: "token_budget",
+	});
+});
+
 test("stopped queued heads keep their status until explicit resume", () => {
 	for (const status of ["paused", "blocked", "usage_limited", "budget_limited"] as const) {
 		const stopped = goal(status, status);

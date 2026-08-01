@@ -117,7 +117,12 @@ export function activateQueuedGoal(
 	};
 	checkpointGoalActiveTime(activated, now, true);
 	if (activated.tokenBudget !== undefined && activated.tokensUsed >= activated.tokenBudget) {
-		return { ...activated, status: "budget_limited", activeStartedAt: undefined };
+		return {
+			...activated,
+			status: "budget_limited",
+			activeStartedAt: undefined,
+			transition: { source: "goal_safety", cause: "token_budget" },
+		};
 	}
 	return activated.safetyResetPending ? resetGoalSafetyEpoch(activated) : activated;
 }

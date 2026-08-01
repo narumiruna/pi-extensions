@@ -1,7 +1,7 @@
 import { checkpointGoalActiveTime, currentTokenTotal } from "./accounting.js";
 import { validateObjective } from "./command.js";
 import { safeGoalMenuText } from "./menu.js";
-import type { ActiveGoal } from "./persistence.js";
+import type { ActiveGoal, GoalTransitionForStatus } from "./persistence.js";
 import { buildGoalPrompt, buildObjectiveUpdatedPrompt, buildResumePrompt } from "./prompts.js";
 import {
 	activateQueuedGoal,
@@ -27,6 +27,7 @@ import {
 	queueGoalSafetyReset,
 	STATUS_KEY,
 	type StatusContext,
+	stopGoal,
 	stoppedStatusLabel,
 	transitionGoal,
 } from "./runtime.js";
@@ -133,7 +134,10 @@ export class GoalCommandController {
 					this.runtime.recordGoalUsage(existingGoal, ctx);
 					if (existingGoal.status === "active") {
 						abortCurrentTurn(ctx);
-						this.runtime.activeGoal = transitionGoal(existingGoal, "paused");
+						this.runtime.activeGoal = stopGoal(existingGoal, "paused", {
+							source: "system",
+							cause: "activation_failed",
+						});
 						this.runtime.blockStaleGoalToolCalls();
 					} else {
 						this.runtime.activeGoal = existingGoal;
@@ -146,7 +150,7 @@ export class GoalCommandController {
 					this.runtime.persistGoal(this.runtime.activeGoal);
 					this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 				} else {
-					this.runtime.clearActiveGoal(ctx);
+					this.runtime.clearActiveGoal(ctx, "goal start rolled back after prompt delivery failed");
 				}
 			}
 			if (rolledBackStartedGoal) {
@@ -344,7 +348,10 @@ export class GoalCommandController {
 		try {
 			this.runtime.prepareGoalToolsForActivation(ctx);
 		} catch (error) {
-			this.runtime.activeGoal = transitionGoal(this.runtime.activeGoal, "paused");
+			this.runtime.activeGoal = stopGoal(this.runtime.activeGoal, "paused", {
+				source: "system",
+				cause: "activation_failed",
+			});
 			this.runtime.blockStaleGoalToolCalls();
 			this.runtime.persistGoal(this.runtime.activeGoal);
 			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
@@ -359,7 +366,10 @@ export class GoalCommandController {
 			false, // Queue reactivation preserves its persisted safety epoch.
 		);
 		if (!sent && this.runtime.activeGoal?.id === activatedGoal.id) {
-			this.runtime.activeGoal = transitionGoal(activatedGoal, "paused");
+			this.runtime.activeGoal = stopGoal(activatedGoal, "paused", {
+				source: "system",
+				cause: "activation_failed",
+			});
 			this.runtime.blockStaleGoalToolCalls();
 			this.runtime.persistGoal(this.runtime.activeGoal);
 			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
@@ -383,7 +393,13 @@ export class GoalCommandController {
 		);
 	}
 
-	pauseGoal(ctx: StatusContext) {
+	pauseGoal(
+		ctx: StatusContext,
+		transition: GoalTransitionForStatus<"paused"> = {
+			source: "operator",
+			cause: "explicit_pause",
+		},
+	) {
 		if (!this.runtime.activeGoal) {
 			ctx.ui.notify("No active goal.", "info");
 			return;
@@ -400,7 +416,7 @@ export class GoalCommandController {
 		this.runtime.clearBudgetWrapUp();
 		this.runtime.blockStaleGoalToolCalls();
 		abortCurrentTurn(ctx);
-		this.runtime.activeGoal = transitionGoal(this.runtime.activeGoal, "paused");
+		this.runtime.activeGoal = stopGoal(this.runtime.activeGoal, "paused", transition);
 		this.runtime.persistGoal(this.runtime.activeGoal);
 		this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 		ctx.ui.notify(`Goal paused: ${this.runtime.activeGoal.text}`, "info");
@@ -515,14 +531,19 @@ export class GoalCommandController {
 		this.runtime.clearBudgetWrapUp();
 		const previousStatus = this.runtime.activeGoal.status;
 		const rotatedGoal = nextGoalInstance(this.runtime.activeGoal);
-		const transitionedGoal = transitionGoal(
-			{
-				...rotatedGoal,
-				text: objective,
-				tokenBudget: tokenBudget ?? this.runtime.activeGoal.tokenBudget,
-			},
-			editedGoalStatus(previousStatus),
-		);
+		const editedStatus = editedGoalStatus(previousStatus);
+		const editedBase = {
+			...rotatedGoal,
+			text: objective,
+			tokenBudget: tokenBudget ?? this.runtime.activeGoal.tokenBudget,
+		};
+		const transitionedGoal = isResumableGoalStatus(editedStatus)
+			? stopGoal(
+					editedBase,
+					editedStatus,
+					previousGoal.transition ?? { source: "legacy", cause: "legacy_unknown" },
+				)
+			: transitionGoal(editedBase, editedStatus);
 		const nextGoal =
 			transitionedGoal.status === "active"
 				? queueGoalSafetyReset(transitionedGoal)
@@ -556,7 +577,10 @@ export class GoalCommandController {
 				if (this.runtime.activeGoal?.id === editedGoal.id) {
 					if (previousStatus === "active") {
 						abortCurrentTurn(ctx);
-						this.runtime.activeGoal = transitionGoal(previousGoal, "paused");
+						this.runtime.activeGoal = stopGoal(previousGoal, "paused", {
+							source: "system",
+							cause: "activation_failed",
+						});
 						this.runtime.blockStaleGoalToolCalls();
 					} else {
 						this.runtime.activeGoal = previousGoal;
@@ -683,7 +707,10 @@ export class GoalCommandController {
 			this.runtime.queuedGoals = previousQueue;
 			if (previousGoal.status === "active") {
 				abortCurrentTurn(ctx);
-				this.runtime.activeGoal = transitionGoal(previousGoal, "paused");
+				this.runtime.activeGoal = stopGoal(previousGoal, "paused", {
+					source: "system",
+					cause: "activation_failed",
+				});
 				this.runtime.blockStaleGoalToolCalls();
 			} else {
 				this.runtime.activeGoal = previousGoal;

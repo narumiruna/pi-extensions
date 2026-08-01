@@ -27,6 +27,7 @@ import {
 	resetGoalSafetyEpoch,
 	STATUS_KEY,
 	type StatusContext,
+	stopGoal,
 	transitionGoal,
 	truncateNotification,
 } from "./runtime.js";
@@ -372,7 +373,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			clearBudgetWrapUp();
 			clearGoalRecoveryForGoal(blockedGoal.id);
 			blockStaleGoalToolCalls();
-			runtime.activeGoal = transitionGoal(blockedGoal, "blocked");
+			runtime.activeGoal = stopGoal(blockedGoal, "blocked", {
+				source: "agent",
+				cause: "blocked_report",
+			});
 			runtime.setTerminalReason(runtime.activeGoal.id, reason);
 			persistGoal(runtime.activeGoal);
 			updateStatus(ctx, runtime.activeGoal);
@@ -577,7 +581,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 					false, // Reloaded queue activation preserves its persisted safety epoch.
 				);
 				if (!sent && runtime.activeGoal?.id === restoredGoal.id) {
-					runtime.activeGoal = transitionGoal(restoredGoal, "paused");
+					runtime.activeGoal = stopGoal(restoredGoal, "paused", {
+						source: "system",
+						cause: "activation_failed",
+					});
 					blockStaleGoalToolCalls();
 					persistGoal(runtime.activeGoal);
 					updateStatus(ctx, runtime.activeGoal);
@@ -1081,7 +1088,13 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearBudgetWrapUp();
 		blockStaleGoalToolCalls();
 		abortCurrentTurn(ctx);
-		runtime.activeGoal = transitionGoal(goal, status);
+		const transition =
+			status === "paused"
+				? ({ source: "agent", cause: "interrupted" } as const)
+				: status === "usage_limited"
+					? ({ source: "provider", cause: "usage_exhausted" } as const)
+					: ({ source: "agent", cause: "terminal_error" } as const);
+		runtime.activeGoal = stopGoal(goal, status, transition);
 		runtime.setTerminalReason(
 			runtime.activeGoal.id,
 			assistant.errorMessage ?? `goal ${status} after agent interruption`,
