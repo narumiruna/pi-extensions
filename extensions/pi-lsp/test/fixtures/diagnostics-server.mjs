@@ -1,7 +1,27 @@
+import { spawn } from "node:child_process";
+
 const scenario = process.argv[2];
 const expectedFiles = Number(process.argv[3] ?? "0");
 let buffer = Buffer.alloc(0);
 const openedUris = [];
+
+if (scenario === "initialize-hang-with-descendant") {
+	const readyPath = process.argv[3];
+	const descendant = spawn(
+		process.execPath,
+		[
+			"-e",
+			`const { writeFileSync } = require("node:fs");
+const readyPath = process.argv[1];
+process.on("SIGTERM", () => {});
+writeFileSync(readyPath, String(process.pid));
+setInterval(() => {}, 1000);`,
+			readyPath,
+		],
+		{ detached: true, stdio: "ignore" },
+	);
+	descendant.unref();
+}
 
 function send(message) {
 	const body = JSON.stringify(message);
@@ -30,6 +50,7 @@ function publish(uri, diagnostics) {
 
 function handle(message) {
 	if (message.method === "initialize") {
+		if (scenario === "initialize-hang-with-descendant") return;
 		send({
 			jsonrpc: "2.0",
 			id: message.id,

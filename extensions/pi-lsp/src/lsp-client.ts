@@ -26,9 +26,13 @@ export function resolveSpawnCommand(
 
 // Quiet period (ms) after each publish before treating push diagnostics as settled.
 const PUBLISHED_DIAGNOSTICS_SETTLE_MS = 800;
+const PROCESS_DISCOVERY_TIMEOUT_MS = 500;
+const PROCESS_LIST_MAX_BYTES = 1024 * 1024;
+const PROCESS_KILL_GRACE_MS = 250;
 
 export class LspClient {
 	#child?: ChildProcessWithoutNullStreams;
+	#terminatedChild?: ChildProcessWithoutNullStreams;
 	#buffer = Buffer.alloc(0);
 	#nextId = 1;
 	#pending = new Map<
@@ -78,8 +82,10 @@ export class LspClient {
 		const spawnCommand = resolveSpawnCommand({ ...this.#command, command: commandPath });
 		const child = spawn(spawnCommand.command, spawnCommand.args, {
 			cwd: this.#cwd,
+			detached: process.platform !== "win32",
 			env: mergeEnvironment(this.#adapter.env),
 			stdio: "pipe",
+			windowsHide: true,
 		});
 		this.#child = child;
 		child.stdout.on("data", (chunk) => {
@@ -100,7 +106,7 @@ export class LspClient {
 			);
 		});
 		child.once("exit", (code, signal) => {
-			if (this.#child === child) this.#child = undefined;
+			this.#terminateProcessTree(child);
 			const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
 			this.#rejectPending(
 				(id) =>
@@ -113,7 +119,7 @@ export class LspClient {
 			child.once("error", (error) => {
 				const message = `${this.#adapter.name} LSP process failed to start: ${error.message}.${this.#formatStderr()}`;
 				this.#rejectPending(message);
-				if (this.#child === child) this.#child = undefined;
+				this.#terminateProcessTree(child);
 				reject(new Error(message));
 			});
 		});
@@ -248,9 +254,7 @@ export class LspClient {
 
 	close() {
 		this.#rejectPending(`${this.#adapter.name} LSP request cancelled.`);
-
-		if (this.#child && !this.#child.killed) this.#child.kill("SIGTERM");
-		this.#child = undefined;
+		this.#terminateProcessTree();
 	}
 
 	#rejectPending(message: string | ((id: number | "diagnostics") => string)) {
@@ -269,8 +273,15 @@ export class LspClient {
 
 	#fail(message: string) {
 		this.#rejectPending(message);
-		if (this.#child && !this.#child.killed) this.#child.kill("SIGTERM");
-		this.#child = undefined;
+		this.#terminateProcessTree();
+	}
+
+	#terminateProcessTree(child = this.#child) {
+		if (!child || this.#terminatedChild === child) return;
+		this.#terminatedChild = child;
+		if (this.#child === child) this.#child = undefined;
+
+		terminateProcessTree(child);
 	}
 
 	private request(method: string, params: unknown) {
@@ -279,11 +290,9 @@ export class LspClient {
 		return new Promise<JsonRpcMessage>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				this.#pending.delete(id);
-				reject(
-					new Error(
-						`${this.#adapter.name} LSP request timed out: ${method}.${this.#formatStderr()}`,
-					),
-				);
+				const message = `${this.#adapter.name} LSP request timed out: ${method}.${this.#formatStderr()}`;
+				reject(new Error(message));
+				this.#fail(message);
 			}, this.#timeoutMs);
 			this.#pending.set(id, { resolve, reject, timeout });
 
@@ -496,6 +505,131 @@ export class LspClient {
 	#formatStderr() {
 		const stderr = this.#stderr.trim();
 		return stderr ? `\nServer stderr:\n${stderr}` : "";
+	}
+}
+
+function terminateProcessTree(child: ChildProcessWithoutNullStreams) {
+	if (!child.pid) return;
+	if (process.platform === "win32") {
+		terminateWindowsProcessTree(child);
+		return;
+	}
+	void discoverDescendantPids(child.pid).then((descendants) =>
+		terminateKnownProcessTree(child, descendants),
+	);
+}
+
+function terminateKnownProcessTree(child: ChildProcessWithoutNullStreams, descendants: number[]) {
+	const descendantsFirst = [...descendants].reverse();
+	for (const pid of descendantsFirst) signalProcess(pid, "SIGTERM");
+	signalProcessGroup(child, "SIGTERM");
+	const escalation = setTimeout(() => {
+		for (const pid of descendantsFirst) signalProcess(pid, "SIGKILL");
+		signalProcessGroup(child, "SIGKILL");
+	}, PROCESS_KILL_GRACE_MS);
+	escalation.unref();
+}
+
+function discoverDescendantPids(rootPid: number) {
+	return new Promise<number[]>((resolve) => {
+		const chunks: Buffer[] = [];
+		let outputBytes = 0;
+		let settled = false;
+		let timeout: NodeJS.Timeout | undefined;
+		const processList = spawn("ps", ["-A", "-o", "ppid=", "-o", "pid="], {
+			stdio: ["ignore", "pipe", "ignore"],
+			windowsHide: true,
+		});
+		const finish = (descendants: number[]) => {
+			if (settled) return;
+			settled = true;
+			if (timeout) clearTimeout(timeout);
+			resolve(descendants);
+		};
+		processList.stdout.on("data", (chunk: Buffer) => {
+			outputBytes += chunk.byteLength;
+			if (outputBytes > PROCESS_LIST_MAX_BYTES) {
+				processList.kill("SIGKILL");
+				finish([]);
+				return;
+			}
+			chunks.push(Buffer.from(chunk));
+		});
+		processList.once("error", () => finish([]));
+		processList.once("close", (code) => {
+			finish(code === 0 ? parseDescendantPids(Buffer.concat(chunks).toString(), rootPid) : []);
+		});
+		timeout = setTimeout(() => {
+			processList.kill("SIGKILL");
+			finish([]);
+		}, PROCESS_DISCOVERY_TIMEOUT_MS);
+	});
+}
+
+function parseDescendantPids(output: string, rootPid: number) {
+	const childrenByParent = new Map<number, number[]>();
+	for (const line of output.split(/\r?\n/)) {
+		const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+		if (!match) continue;
+		const parentPid = Number(match[1]);
+		const pid = Number(match[2]);
+		const children = childrenByParent.get(parentPid) ?? [];
+		children.push(pid);
+		childrenByParent.set(parentPid, children);
+	}
+
+	const descendants: number[] = [];
+	const pendingParents = [rootPid];
+	const seen = new Set(pendingParents);
+	for (let index = 0; index < pendingParents.length; index += 1) {
+		for (const pid of childrenByParent.get(pendingParents[index]) ?? []) {
+			if (seen.has(pid)) continue;
+			seen.add(pid);
+			descendants.push(pid);
+			pendingParents.push(pid);
+		}
+	}
+	return descendants;
+}
+
+function terminateWindowsProcessTree(child: ChildProcessWithoutNullStreams) {
+	if (!child.pid) return;
+	const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+		stdio: "ignore",
+		windowsHide: true,
+	});
+	const killImmediateChild = () => {
+		if (child.pid) signalProcess(child.pid, "SIGKILL");
+	};
+	killer.once("error", killImmediateChild);
+	killer.once("close", (code) => {
+		if (code !== 0) killImmediateChild();
+	});
+	killer.unref();
+}
+
+function signalProcessGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) {
+	if (child.pid) {
+		try {
+			process.kill(-child.pid, signal);
+			return;
+		} catch {
+			// Fall back only while the immediate child is still running.
+		}
+	}
+	if (child.exitCode !== null || child.signalCode !== null) return;
+	try {
+		child.kill(signal);
+	} catch {
+		// The process may already have exited.
+	}
+}
+
+function signalProcess(pid: number, signal: NodeJS.Signals) {
+	try {
+		process.kill(pid, signal);
+	} catch {
+		// The process may already have exited or be unavailable to this user.
 	}
 }
 
