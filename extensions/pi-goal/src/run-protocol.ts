@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateObjective } from "./command.js";
 import type { GoalCommandController } from "./commands.js";
+import type { GoalTransitionProvenance } from "./persistence.js";
 import {
 	formatError,
 	type GoalRuntime,
@@ -34,6 +35,7 @@ export type GoalRunEvent =
 			status: GoalRunStatus;
 			summary?: string;
 			reason?: string;
+			transition?: GoalTransitionProvenance;
 	  }
 	| {
 			type: "error";
@@ -299,7 +301,10 @@ export class GoalRunController {
 			return;
 		}
 		this.runtime.setTerminalReason(goal.id, reason ?? "goal cancelled by managed run");
-		this.commands.pauseGoal(session.ctx);
+		this.commands.pauseGoal(session.ctx, {
+			source: "managed_run",
+			cause: "consumer_cancel",
+		});
 	}
 
 	private handleGoalState(snapshot: GoalStateSnapshot) {
@@ -320,7 +325,7 @@ export class GoalRunController {
 
 	private publishStateEvent(
 		run: ManagedRun,
-		snapshot: Pick<GoalStateSnapshot, "goalId" | "status" | "summary" | "reason">,
+		snapshot: Pick<GoalStateSnapshot, "goalId" | "status" | "summary" | "reason" | "transition">,
 	) {
 		const status = snapshot.status;
 		if (status === "queued") return;
@@ -332,6 +337,7 @@ export class GoalRunController {
 			status,
 			...(snapshot.summary ? { summary: snapshot.summary } : {}),
 			...(snapshot.reason ? { reason: snapshot.reason } : {}),
+			...(snapshot.transition ? { transition: snapshot.transition } : {}),
 		};
 		if (!isTerminalGoalStatus(status)) {
 			this.runtime.pi.events.emit(goalRunEventChannel(run.runId), event);

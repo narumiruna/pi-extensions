@@ -17,6 +17,32 @@ const STATE_FILE = join(
 
 export type SafetyPauseCause = "continuation_limit" | "no_progress";
 
+const STOP_TRANSITIONS = {
+	paused: [
+		{ source: "operator", cause: "explicit_pause" },
+		{ source: "managed_run", cause: "consumer_cancel" },
+		{ source: "agent", cause: "interrupted" },
+		{ source: "goal_safety", cause: "continuation_limit" },
+		{ source: "goal_safety", cause: "no_progress" },
+		{ source: "goal_safety", cause: "tools_unavailable" },
+		{ source: "system", cause: "activation_failed" },
+	],
+	blocked: [
+		{ source: "agent", cause: "blocked_report" },
+		{ source: "agent", cause: "terminal_error" },
+	],
+	usage_limited: [{ source: "provider", cause: "usage_exhausted" }],
+	budget_limited: [{ source: "goal_safety", cause: "token_budget" }],
+} as const;
+
+export type StoppedGoalStatus = keyof typeof STOP_TRANSITIONS;
+type KnownGoalTransition = (typeof STOP_TRANSITIONS)[StoppedGoalStatus][number];
+type LegacyGoalTransition = { source: "legacy"; cause: "legacy_unknown" };
+export type GoalTransitionProvenance = KnownGoalTransition | LegacyGoalTransition;
+export type GoalTransitionForStatus<S extends StoppedGoalStatus> =
+	| (typeof STOP_TRANSITIONS)[S][number]
+	| LegacyGoalTransition;
+
 export interface ActiveGoal {
 	id: string;
 	text: string;
@@ -34,6 +60,7 @@ export interface ActiveGoal {
 	lastToolFreeOutputFingerprint?: string;
 	safetyPauseCause?: SafetyPauseCause;
 	safetyResetPending?: boolean;
+	transition?: GoalTransitionProvenance;
 }
 
 export type PendingQueueAction =
@@ -222,6 +249,12 @@ function normalizeQueuedGoal(goal: ActiveGoal): ActiveGoal {
 
 export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 	const now = Date.now();
+	const safetyPauseCause = normalizeSafetyPauseCause(goal.safetyPauseCause);
+	const transition = normalizeGoalTransitionForStatus(
+		goal.status,
+		goal.transition,
+		safetyPauseCause,
+	);
 	return {
 		...goal,
 		startedAt: isNonNegativeFiniteNumber(goal.startedAt) ? goal.startedAt : now,
@@ -235,9 +268,35 @@ export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 		automaticModelTurns: normalizeSafetyCounter(goal.automaticModelTurns),
 		toolFreeRepeatCount: normalizeSafetyCounter(goal.toolFreeRepeatCount),
 		lastToolFreeOutputFingerprint: normalizeOutputFingerprint(goal.lastToolFreeOutputFingerprint),
-		safetyPauseCause: normalizeSafetyPauseCause(goal.safetyPauseCause),
+		safetyPauseCause,
 		safetyResetPending: goal.safetyResetPending === true ? true : undefined,
+		transition,
 	};
+}
+
+export function isStoppedGoalStatus(status: GoalStatus): status is StoppedGoalStatus {
+	return status in STOP_TRANSITIONS;
+}
+
+function normalizeGoalTransitionForStatus(
+	status: GoalStatus,
+	value: unknown,
+	safetyPauseCause: SafetyPauseCause | undefined,
+): GoalTransitionProvenance | undefined {
+	if (!isStoppedGoalStatus(status)) return undefined;
+	if (isRecord(value)) {
+		const transition = STOP_TRANSITIONS[status].find(
+			(candidate) => candidate.source === value.source && candidate.cause === value.cause,
+		);
+		if (transition) return transition;
+		if (value.source === "legacy" && value.cause === "legacy_unknown") {
+			return { source: "legacy", cause: "legacy_unknown" };
+		}
+	}
+	if (value === undefined && status === "paused" && safetyPauseCause) {
+		return { source: "goal_safety", cause: safetyPauseCause };
+	}
+	return { source: "legacy", cause: "legacy_unknown" };
 }
 
 function normalizeSafetyCounter(value: unknown) {

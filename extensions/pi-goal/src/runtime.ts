@@ -15,8 +15,12 @@ import {
 import {
 	type ActiveGoal,
 	clearLegacyPersistedGoal,
+	type GoalTransitionForStatus,
+	type GoalTransitionProvenance,
+	isStoppedGoalStatus,
 	type PendingQueueAction,
 	type SafetyPauseCause,
+	type StoppedGoalStatus,
 	serializeGoalState,
 } from "./persistence.js";
 import { buildContinuePrompt, type GoalStatus } from "./prompts.js";
@@ -93,6 +97,7 @@ export interface GoalStateSnapshot {
 	status: GoalStateSnapshotStatus;
 	summary?: string;
 	reason?: string;
+	transition?: GoalTransitionProvenance;
 }
 
 /** Terminal statuses for Goal persistence and managed-run lifecycle publication. */
@@ -106,6 +111,9 @@ function buildGoalStateSnapshot(
 	reason: string | undefined,
 ): GoalStateSnapshot {
 	const snapshot: GoalStateSnapshot = { goalId: goal.id, status: goal.status };
+	if (isStoppedGoalStatus(goal.status) && goal.transition) {
+		snapshot.transition = goal.transition;
+	}
 	if (goal.status === "complete" && summary) snapshot.summary = summary;
 	else if (goal.status !== "complete" && isTerminalGoalStatus(goal.status) && reason) {
 		snapshot.reason = reason;
@@ -453,7 +461,10 @@ export class GoalRuntime {
 		this.cancelContinuationWork();
 		this.clearGoalRecoveryForGoal(goal.id);
 		this.clearBudgetWrapUp();
-		this.activeGoal = transitionGoal(goal, "budget_limited");
+		this.activeGoal = stopGoal(goal, "budget_limited", {
+			source: "goal_safety",
+			cause: "token_budget",
+		});
 		this.setTerminalReason(
 			this.activeGoal.id,
 			`token budget reached (${formatBudget(this.activeGoal)})`,
@@ -527,7 +538,10 @@ export class GoalRuntime {
 			this.guardAbortGoalId = goal.id;
 			abortCurrentTurn(ctx);
 		}
-		this.activeGoal = transitionGoal({ ...goal, safetyPauseCause: cause }, "paused");
+		this.activeGoal = stopGoal({ ...goal, safetyPauseCause: cause }, "paused", {
+			source: "goal_safety",
+			cause,
+		});
 		const count =
 			cause === "continuation_limit"
 				? `${this.activeGoal.automaticModelTurns} automatic model responses`
@@ -564,7 +578,10 @@ export class GoalRuntime {
 		this.cancelContinuationWork();
 		this.clearBudgetWrapUp();
 		this.blockStaleGoalToolCalls();
-		this.activeGoal = transitionGoal(goal, "blocked");
+		this.activeGoal = stopGoal(goal, "blocked", {
+			source: "agent",
+			cause: "terminal_error",
+		});
 		const details = recovery.errorMessage ? `: ${truncateNotification(recovery.errorMessage)}` : "";
 		this.setTerminalReason(this.activeGoal.id, `agent error after retries${details}`);
 		this.persistGoal(this.activeGoal);
@@ -947,7 +964,10 @@ export class GoalRuntime {
 		} else {
 			this.clearStaleGoalToolCallBlock();
 		}
-		this.activeGoal = transitionGoal(goal, "paused");
+		this.activeGoal = stopGoal(goal, "paused", {
+			source: "goal_safety",
+			cause: "tools_unavailable",
+		});
 		this.persistGoal(this.activeGoal);
 		this.updateStatus(ctx, this.activeGoal);
 		ctx.ui.notify(
@@ -1053,8 +1073,27 @@ export function transitionGoal(goal: ActiveGoal, requestedStatus: GoalStatus): A
 		goal.tokensUsed >= goal.tokenBudget
 			? "budget_limited"
 			: requestedStatus;
-	const next = { ...goal, status, updatedAt: now };
+	const next = {
+		...goal,
+		status,
+		updatedAt: now,
+		transition:
+			status === "budget_limited"
+				? ({ source: "goal_safety", cause: "token_budget" } satisfies GoalTransitionProvenance)
+				: undefined,
+	};
 	checkpointGoalActiveTime(next, now, status === "active");
+	return next;
+}
+
+export function stopGoal<S extends StoppedGoalStatus>(
+	goal: ActiveGoal,
+	status: S,
+	transition: GoalTransitionForStatus<S>,
+): ActiveGoal {
+	const now = Date.now();
+	const next = { ...goal, status, transition, updatedAt: now };
+	checkpointGoalActiveTime(next, now, false);
 	return next;
 }
 
