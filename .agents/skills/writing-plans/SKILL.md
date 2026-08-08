@@ -23,19 +23,12 @@ Add only useful optional sections from this list:
 
 ```markdown
 ## Context
-
 ## Architecture
-
 ## Tech Stack
-
 ## Non-Goals
-
 ## Assumptions
-
 ## Unknowns
-
 ## Risks
-
 ## Rollback / Recovery
 ```
 
