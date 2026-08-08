@@ -1,0 +1,35 @@
+{
+	"version": 1,
+	"skills": {
+		"designing-user-experiences": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/ui-ux-design/designing-user-experiences/SKILL.md",
+			"computedHash": "9ab72329b2607c4e91794282a5a43f5e8548fec850526d2bcb573a56f2d0fea1"
+		},
+		"explaining-step-by-step": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/learning-explanation/explaining-step-by-step/SKILL.md",
+			"computedHash": "a784d2c39a06c49ce7bb4bf5e3112caf98b16d772f36b3bbca4f00986a162e25"
+		},
+		"hardening-code-paths": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/workflow-repository/hardening-code-paths/SKILL.md",
+			"computedHash": "b45a436278b007e877f6d7f272b859c6d7811ef5a22dafd19f7418f087e512ab"
+		},
+		"reviewing-code": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/workflow-repository/reviewing-code/SKILL.md",
+			"computedHash": "b10d924b8c90c0c82c8ad9ab543733859e5c12aa6030e2d921016313a28d2656"
+		},
+		"writing-plans": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/writing-research/writing-plans/SKILL.md",
+			"computedHash": "35583276a4ee74d77dd47c0a5dd76bae8a7ebce817800eea2b4f3eacf648e737"
+		}
+	}
+}
