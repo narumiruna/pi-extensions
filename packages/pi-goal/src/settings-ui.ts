@@ -23,6 +23,7 @@ interface GoalSettingsApplyOptions {
 
 type LimitField = "automaticTurns" | "noProgressTurns";
 type LimitSelection = "unlimited" | "default" | "custom" | "off";
+type DelaySelection = "custom" | "off";
 export async function showGoalSettings(
 	runtime: GoalRuntime,
 	ctx: ExtensionCommandContext,
@@ -44,12 +45,19 @@ export async function showGoalSettings(
 	if (!isMenuCurrent()) return;
 	const invalid = runtime.settingsLoadIssue?.kind === "invalid";
 	const previewGoalIds = new Map<LimitField, string | null>();
-	type Screen = "settings" | "automatic" | "no-progress" | "invalid";
+	type Screen =
+		| "settings"
+		| "automatic"
+		| "no-progress"
+		| "continuation-delay"
+		| "invalid";
 	type Action =
 		| "open-automatic"
 		| "open-no-progress"
+		| "open-continuation-delay"
 		| "choose-automatic"
 		| "choose-no-progress"
+		| "choose-continuation-delay"
 		| "set-visibility"
 		| "set-queue"
 		| "set-rpc";
@@ -80,6 +88,15 @@ export async function showGoalSettings(
 						action: "open-no-progress",
 					},
 					{
+						id: "minIntervalMs",
+						label: "Continuation delay",
+						description: "Wait before dispatching each eligible automatic continuation.",
+						currentValue: formatContinuationDelay(
+							runtime.settings.continuationLimits.minIntervalMs,
+						),
+						action: "open-continuation-delay",
+					},
+					{
 						id: "toolVisibility",
 						label: "Goal tools",
 						description: "Keep terminal Goal tools visible, or reveal them after the first goal.",
@@ -108,6 +125,7 @@ export async function showGoalSettings(
 			}),
 			automatic: () => limitChoiceScreen(runtime, "automaticTurns", "choose-automatic"),
 			"no-progress": () => limitChoiceScreen(runtime, "noProgressTurns", "choose-no-progress"),
+			"continuation-delay": () => continuationDelayChoiceScreen(runtime),
 			invalid: () => ({
 				kind: "detail",
 				title: "Pi Goal Settings · Read only",
@@ -115,6 +133,9 @@ export async function showGoalSettings(
 					`Invalid settings file. Pi-goal is using built-in defaults. Fix ${safeTerminalText(settingsPath)} and run /reload. The file will not be overwritten.`,
 					`Automatic-work limit: ${formatAutomaticWork(runtime.settings.continuationLimits.automaticTurns)}`,
 					`No-progress guard: ${formatNoProgressProtection(runtime.settings.continuationLimits.noProgressTurns)}`,
+					`Continuation delay: ${formatContinuationDelay(
+						runtime.settings.continuationLimits.minIntervalMs,
+					)}`,
 					`Goal tools: ${visibilityLabel(runtime.settings.toolVisibility)}`,
 					`Ordered goal queue: ${runtime.settings.experimental.goals ? "Experimental" : "Off"}`,
 					`Managed run RPC: ${runtime.settings.rpc.enabled ? "On" : "Off"}`,
@@ -131,6 +152,10 @@ export async function showGoalSettings(
 				previewGoalIds.set("noProgressTurns", runtime.activeGoal?.id ?? null);
 				return { kind: "to", screen: "no-progress" };
 			},
+			"open-continuation-delay": async () => ({
+				kind: "to",
+				screen: "continuation-delay",
+			}),
 			"choose-automatic": async ({ itemId }) =>
 				applyLimitChoice(
 					runtime,
@@ -151,6 +176,15 @@ export async function showGoalSettings(
 					"noProgressTurns",
 					itemId,
 					previewGoalIds.get("noProgressTurns") ?? null,
+					isMenuCurrent,
+				),
+			"choose-continuation-delay": async ({ itemId }) =>
+				applyContinuationDelayChoice(
+					runtime,
+					ctx,
+					options,
+					settingsPath,
+					itemId,
 					isMenuCurrent,
 				),
 			"set-visibility": async ({ value }) => {
@@ -228,6 +262,33 @@ export async function showGoalSettings(
 		signal: runtime.menuController.signal,
 		isCurrent: isMenuCurrent,
 	});
+}
+
+function continuationDelayChoiceScreen(runtime: GoalRuntime) {
+	const value = runtime.settings.continuationLimits.minIntervalMs;
+	return {
+		kind: "actions" as const,
+		title: "Continuation delay",
+		lines: [
+			`Current: ${formatContinuationDelay(value)}`,
+			"Wait this many whole milliseconds after an eligible settled boundary before dispatching.",
+		],
+		items: [
+			{
+				id: "off",
+				label: "Off",
+				description: "Dispatch immediately with a delay of 0 milliseconds.",
+				action: "choose-continuation-delay" as const,
+			},
+			{
+				id: "custom",
+				label: "Set delay…",
+				description: "Choose a non-negative safe whole number of milliseconds.",
+				action: "choose-continuation-delay" as const,
+			},
+		],
+		hint: "back" as const,
+	};
 }
 
 function limitChoiceScreen(
@@ -382,6 +443,12 @@ export function applyGoalSettings(
 		if (runtime.activeGoal && !runtime.queueFrozen) {
 			runtime.updateStatus(ctx, runtime.activeGoal);
 		}
+		if (
+			snapshot.settings.continuationLimits.minIntervalMs !==
+			next.continuationLimits.minIntervalMs
+		) {
+			runtime.reconcileContinuationDispatchTimer(ctx);
+		}
 	} catch (error) {
 		const rollbackErrors: unknown[] = [];
 		try {
@@ -409,6 +476,13 @@ export function applyGoalSettings(
 		}
 		throw error;
 	}
+}
+
+export function parseContinuationDelay(value: string): number | undefined {
+	const normalized = value.trim();
+	if (!/^\d+$/u.test(normalized)) return undefined;
+	const parsed = Number(normalized);
+	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 export function parseGoalLimit(value: string): number | undefined {
@@ -460,6 +534,53 @@ async function resolveLimitSelection(
 			`Enter a whole number greater than 0. Choose ${field === "automaticTurns" ? "Unlimited" : "Off"} from the previous screen if you do not want a limit.`,
 			"warning",
 		);
+	}
+}
+
+async function applyContinuationDelayChoice(
+	runtime: GoalRuntime,
+	ctx: ExtensionCommandContext,
+	options: GoalSettingsUiOptions,
+	settingsPath: string,
+	itemId: string,
+	isCurrent: () => boolean,
+) {
+	if (!isCurrent() || !isDelaySelection(itemId)) return { kind: "rejected" as const };
+	let delay = 0;
+	if (itemId === "custom") {
+		while (true) {
+			const raw = await ctx.ui.input(
+				"Continuation delay (whole milliseconds, 0 or greater)",
+				String(runtime.settings.continuationLimits.minIntervalMs),
+			);
+			if (!isCurrent() || raw === undefined) return { kind: "rejected" as const };
+			const parsed = parseContinuationDelay(raw);
+			if (parsed !== undefined) {
+				delay = parsed;
+				break;
+			}
+			notifyTerminal(ctx.ui, "Enter a whole number of milliseconds, 0 or greater.", "warning");
+		}
+	}
+	if (delay === runtime.settings.continuationLimits.minIntervalMs) {
+		return { kind: "back" as const };
+	}
+	try {
+		const next = {
+			...structuredClone(runtime.settings),
+			continuationLimits: {
+				...runtime.settings.continuationLimits,
+				minIntervalMs: delay,
+			},
+		} satisfies GoalSettings;
+		applyGoalSettings(runtime, next, ctx, {
+			save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
+		});
+		notifyTerminal(ctx.ui, `Continuation delay: ${formatContinuationDelay(delay)}.`, "info");
+		return { kind: "back" as const };
+	} catch (error) {
+		notifySettingsFailure(ctx, settingsPath, error);
+		return { kind: "rejected" as const };
 	}
 }
 
@@ -580,6 +701,10 @@ function withLimit(settings: GoalSettings, field: LimitField, value: number | nu
 	};
 }
 
+function formatContinuationDelay(value: number) {
+	return value === 0 ? "Off" : `${value} ms`;
+}
+
 function formatAutomaticSettingValue(value: number | null) {
 	return value === null ? "Unlimited" : `${value} responses`;
 }
@@ -606,6 +731,10 @@ function formatLimitSuccess(field: LimitField, value: number | null) {
 
 function isLimitSelection(value: string): value is LimitSelection {
 	return value === "unlimited" || value === "default" || value === "custom" || value === "off";
+}
+
+function isDelaySelection(value: string): value is DelaySelection {
+	return value === "custom" || value === "off";
 }
 
 function visibilityLabel(value: GoalSettings["toolVisibility"]) {

@@ -20,6 +20,7 @@ export interface GoalSettings {
 	continuationLimits: {
 		automaticTurns: ContinuationLimit;
 		noProgressTurns: ContinuationLimit;
+		minIntervalMs: number;
 	};
 }
 
@@ -27,7 +28,7 @@ export const DEFAULT_GOAL_SETTINGS: GoalSettings = {
 	toolVisibility: "always",
 	experimental: { goals: false },
 	rpc: { enabled: false },
-	continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+	continuationLimits: { automaticTurns: 25, noProgressTurns: 3, minIntervalMs: 0 },
 };
 
 export type GoalSettingsLoadResult =
@@ -104,13 +105,25 @@ export function normalizeGoalSettings(value: unknown): GoalSettings | undefined 
 				DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns,
 			)
 		: DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns;
-	if (automaticTurns === undefined || noProgressTurns === undefined) return undefined;
+	const minIntervalMs = continuationLimitsValue
+		? normalizeNonNegativeSafeInteger(
+				Reflect.get(continuationLimitsValue, "minIntervalMs"),
+				DEFAULT_GOAL_SETTINGS.continuationLimits.minIntervalMs,
+			)
+		: DEFAULT_GOAL_SETTINGS.continuationLimits.minIntervalMs;
+	if (
+		automaticTurns === undefined ||
+		noProgressTurns === undefined ||
+		minIntervalMs === undefined
+	) {
+		return undefined;
+	}
 
 	return {
 		toolVisibility: toolVisibility as GoalToolVisibility,
 		experimental: { goals },
 		rpc: { enabled: rpcEnabled },
-		continuationLimits: { automaticTurns, noProgressTurns },
+		continuationLimits: { automaticTurns, noProgressTurns, minIntervalMs },
 	};
 }
 
@@ -121,6 +134,13 @@ function normalizeContinuationLimit(
 	if (value === undefined) return fallback;
 	if (value === null) return null;
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function normalizeNonNegativeSafeInteger(value: unknown, fallback: number) {
+	if (value === undefined) return fallback;
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+		? value
+		: undefined;
 }
 
 export function saveGoalSettings(
@@ -158,6 +178,7 @@ export function saveGoalSettings(
 				...continuationLimits,
 				automaticTurns: normalized.continuationLimits.automaticTurns,
 				noProgressTurns: normalized.continuationLimits.noProgressTurns,
+				minIntervalMs: normalized.continuationLimits.minIntervalMs,
 			},
 		},
 		null,

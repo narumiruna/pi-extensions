@@ -16,6 +16,14 @@ export const MISSING_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "missing.json
 export const LOW_LIMITS_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "low-limits.json");
 export const ONE_TURN_LIMIT_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "one-turn-limit.json");
 export const UNLIMITED_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "unlimited.json");
+export const DELAYED_CONTINUATION_SETTINGS_PATH = join(
+	GOAL_SETTINGS_DIRECTORY,
+	"delayed-continuation.json",
+);
+export const DELAYED_QUEUE_SETTINGS_PATH = join(
+	GOAL_SETTINGS_DIRECTORY,
+	"delayed-queue.json",
+);
 
 writeFileSync(ALWAYS_SETTINGS_PATH, '{"toolVisibility":"always"}\n');
 writeFileSync(LAZY_SETTINGS_PATH, '{"toolVisibility":"after-first-goal"}\n');
@@ -31,6 +39,14 @@ writeFileSync(
 writeFileSync(
 	UNLIMITED_SETTINGS_PATH,
 	'{"continuationLimits":{"automaticTurns":null,"noProgressTurns":3}}\n',
+);
+writeFileSync(
+	DELAYED_CONTINUATION_SETTINGS_PATH,
+	'{"continuationLimits":{"minIntervalMs":1000}}\n',
+);
+writeFileSync(
+	DELAYED_QUEUE_SETTINGS_PATH,
+	'{"continuationLimits":{"minIntervalMs":1000},"experimental":{"goals":true}}\n',
 );
 
 afterAll(() => rmSync(GOAL_SETTINGS_DIRECTORY, { recursive: true, force: true }));

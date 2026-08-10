@@ -15,6 +15,7 @@ const DEFAULT_GOAL_SETTINGS_DOCUMENT = `${JSON.stringify(DEFAULT_GOAL_SETTINGS, 
 
 test("normalizeGoalSettings applies defaults and accepts bounded continuation limits", () => {
 	assert.equal(DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns, 25);
+	assert.equal(DEFAULT_GOAL_SETTINGS.continuationLimits.minIntervalMs, 0);
 	assert.deepEqual(DEFAULT_GOAL_SETTINGS.rpc, { enabled: false });
 	assert.deepEqual(normalizeGoalSettings({}), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ futureOption: true }), DEFAULT_GOAL_SETTINGS);
@@ -45,19 +46,32 @@ test("normalizeGoalSettings applies defaults and accepts bounded continuation li
 	assert.deepEqual(normalizeGoalSettings({ continuationLimits: {} }), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ continuationLimits: { automaticTurns: 7 } }), {
 		...DEFAULT_GOAL_SETTINGS,
-		continuationLimits: { automaticTurns: 7, noProgressTurns: 3 },
+		continuationLimits: { automaticTurns: 7, noProgressTurns: 3, minIntervalMs: 0 },
 	});
 	assert.deepEqual(normalizeGoalSettings({ continuationLimits: { noProgressTurns: 2 } }), {
 		...DEFAULT_GOAL_SETTINGS,
-		continuationLimits: { automaticTurns: 25, noProgressTurns: 2 },
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 2, minIntervalMs: 0 },
 	});
+	assert.deepEqual(
+		normalizeGoalSettings({
+			continuationLimits: { automaticTurns: 10, minIntervalMs: 60_000 },
+		}),
+		{
+			...DEFAULT_GOAL_SETTINGS,
+			continuationLimits: {
+				automaticTurns: 10,
+				noProgressTurns: 3,
+				minIntervalMs: 60_000,
+			},
+		},
+	);
 	assert.deepEqual(
 		normalizeGoalSettings({
 			continuationLimits: { automaticTurns: null, noProgressTurns: null, future: true },
 		}),
 		{
 			...DEFAULT_GOAL_SETTINGS,
-			continuationLimits: { automaticTurns: null, noProgressTurns: null },
+			continuationLimits: { automaticTurns: null, noProgressTurns: null, minIntervalMs: 0 },
 		},
 	);
 
@@ -78,6 +92,10 @@ test("normalizeGoalSettings applies defaults and accepts bounded continuation li
 		{ continuationLimits: { automaticTurns: 1.5 } },
 		{ continuationLimits: { automaticTurns: Number.MAX_SAFE_INTEGER + 1 } },
 		{ continuationLimits: { noProgressTurns: "3" } },
+		{ continuationLimits: { minIntervalMs: null } },
+		{ continuationLimits: { minIntervalMs: -1 } },
+		{ continuationLimits: { minIntervalMs: 1.5 } },
+		{ continuationLimits: { minIntervalMs: Number.MAX_SAFE_INTEGER + 1 } },
 	]) {
 		assert.equal(normalizeGoalSettings(value), undefined);
 	}
@@ -112,7 +130,12 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
 			toolVisibility: "after-first-goal",
 			experimental: { goals: false, futureQueue: "keep" },
 			rpc: { enabled: true, futureRpc: "keep" },
-			continuationLimits: { automaticTurns: 25, noProgressTurns: 3, futureLimit: 9 },
+			continuationLimits: {
+				automaticTurns: 25,
+				noProgressTurns: 3,
+				minIntervalMs: 500,
+				futureLimit: 9,
+			},
 		}),
 	);
 
@@ -121,7 +144,11 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
 			toolVisibility: "always",
 			experimental: { goals: true },
 			rpc: { enabled: false },
-			continuationLimits: { automaticTurns: 40, noProgressTurns: null },
+			continuationLimits: {
+				automaticTurns: 40,
+				noProgressTurns: null,
+				minIntervalMs: 1_000,
+			},
 		},
 		settingsPath,
 	);
@@ -131,7 +158,12 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
 		toolVisibility: "always",
 		experimental: { goals: true, futureQueue: "keep" },
 		rpc: { enabled: false, futureRpc: "keep" },
-		continuationLimits: { automaticTurns: 40, noProgressTurns: null, futureLimit: 9 },
+		continuationLimits: {
+			automaticTurns: 40,
+			noProgressTurns: null,
+			minIntervalMs: 1_000,
+			futureLimit: 9,
+		},
 	});
 	assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
 });
@@ -176,9 +208,13 @@ test("readGoalSettings distinguishes missing, loaded, malformed, and unreadable 
 			toolVisibility: "after-first-goal",
 			experimental: { goals: true },
 			rpc: { enabled: false },
-			continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+			continuationLimits: { automaticTurns: 25, noProgressTurns: 3, minIntervalMs: 0 },
 		},
 	});
+
+	await writeFile(settingsPath, '{"continuationLimits":{"minIntervalMs":-1}}', "utf8");
+	const invalidDelay = readGoalSettings(settingsPath);
+	assert.equal(invalidDelay.kind, "invalid");
 
 	await writeFile(settingsPath, "{invalid", "utf8");
 	const malformed = readGoalSettings(settingsPath);

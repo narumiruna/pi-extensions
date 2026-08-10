@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
 	findFinalAssistantMessage,
 	isRetryableGoalInterruption,
@@ -8,6 +8,7 @@ import {
 } from "../src/goal.js";
 import {
 	assistantUsageEntry,
+	DELAYED_CONTINUATION_SETTINGS_PATH,
 	LOW_LIMITS_SETTINGS_PATH,
 	lastGoalStatus,
 	requireLastGoal,
@@ -537,18 +538,29 @@ test("manual compaction cancels stale continuation and sends one fresh continuat
 	assert.equal(compacted.mock.sentUserMessages.length, 3);
 });
 
-test("idle manual compaction defers continuation until Pi clears compaction", async () => {
-	const compacted = await startGoalForTest({ isIdle: () => true });
+test("idle manual compaction waits the configured interval before fallback dispatch", async () => {
+	vi.useFakeTimers();
+	try {
+		const compacted = await startGoalForTest(
+			{ isIdle: () => true },
+			"finish",
+			DELAYED_CONTINUATION_SETTINGS_PATH,
+		);
 
-	await compacted.mock.events.get("session_compact")?.[0]?.(
-		{ reason: "manual", willRetry: false },
-		compacted.ctx,
-	);
-	assert.equal(compacted.mock.sentUserMessages.length, 1);
+		await compacted.mock.events.get("session_compact")?.[0]?.(
+			{ reason: "manual", willRetry: false },
+			compacted.ctx,
+		);
+		assert.equal(compacted.mock.sentUserMessages.length, 1);
 
-	await new Promise((resolve) => setTimeout(resolve, 10));
-	assert.equal(compacted.mock.sentUserMessages.length, 2);
-	assert.match(compacted.mock.sentUserMessages.at(-1)?.text ?? "", /pi-goal-continuation/);
+		await vi.advanceTimersByTimeAsync(999);
+		assert.equal(compacted.mock.sentUserMessages.length, 1);
+		await vi.advanceTimersByTimeAsync(1);
+		assert.equal(compacted.mock.sentUserMessages.length, 2);
+		assert.match(compacted.mock.sentUserMessages.at(-1)?.text ?? "", /pi-goal-continuation/);
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 test("session shutdown cancels a deferred manual-compaction continuation", async () => {

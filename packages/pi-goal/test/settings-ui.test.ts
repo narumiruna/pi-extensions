@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { GoalCommandController } from "../src/commands.js";
 import { createGoal, GoalRuntime } from "../src/runtime.js";
@@ -10,6 +10,7 @@ import { DEFAULT_GOAL_SETTINGS, type GoalSettings } from "../src/settings.js";
 import {
 	applyGoalSettings,
 	formatGoalLimit,
+	parseContinuationDelay,
 	parseGoalLimit,
 	showGoalSettings,
 } from "../src/settings-ui.js";
@@ -52,6 +53,116 @@ test("goal setting custom limits accept only safe whole numbers greater than zer
 	assert.equal(formatGoalLimit(null), "Unlimited");
 });
 
+test("continuation delay accepts non-negative safe whole milliseconds", () => {
+	assert.equal(parseContinuationDelay("0"), 0);
+	assert.equal(parseContinuationDelay(" 1500 "), 1_500);
+	for (const invalid of [
+		"",
+		"-1",
+		"1.5",
+		"off",
+		"many",
+		String(Number.MAX_SAFE_INTEGER + 1),
+	]) {
+		assert.equal(parseContinuationDelay(invalid), undefined);
+	}
+});
+
+test("applyGoalSettings extends an owned continuation timer from its original settled boundary", async () => {
+	vi.useFakeTimers();
+	try {
+		const mock = createMockPi({
+			activeTools: ["goal_complete", "goal_blocked", "goal_wait"],
+		});
+		const state = new GoalRuntime(mock.pi);
+		state.settings = {
+			...structuredClone(DEFAULT_GOAL_SETTINGS),
+			continuationLimits: {
+				...DEFAULT_GOAL_SETTINGS.continuationLimits,
+				minIntervalMs: 1_000,
+			},
+		};
+		state.activeGoal = createGoal("current objective", undefined, 0);
+		const context = createMockContext({ isIdle: () => true });
+		assert.equal(state.requestContinuation(state.activeGoal), true);
+		assert.equal(state.scheduleContinuationDispatch(context.ctx, state.activeGoal.id), true);
+
+		await vi.advanceTimersByTimeAsync(500);
+		applyGoalSettings(
+			state,
+			{
+				...structuredClone(state.settings),
+				continuationLimits: {
+					...state.settings.continuationLimits,
+					minIntervalMs: 2_000,
+				},
+			},
+			context.ctx,
+			{ save() {} },
+		);
+
+		await vi.advanceTimersByTimeAsync(500);
+		assert.equal(mock.sentUserMessages.length, 0);
+		await vi.advanceTimersByTimeAsync(999);
+		assert.equal(mock.sentUserMessages.length, 0);
+		await vi.advanceTimersByTimeAsync(1);
+		assert.equal(mock.sentUserMessages.length, 1);
+		assert.match(mock.sentUserMessages[0]?.text ?? "", /automatic continuation #1/i);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+test("applyGoalSettings dispatches an eligible settled continuation immediately when delay turns Off", async () => {
+	vi.useFakeTimers();
+	try {
+		const mock = createMockPi({
+			activeTools: ["goal_complete", "goal_blocked", "goal_wait"],
+		});
+		const state = new GoalRuntime(mock.pi);
+		state.settings = {
+			...structuredClone(DEFAULT_GOAL_SETTINGS),
+			continuationLimits: {
+				...DEFAULT_GOAL_SETTINGS.continuationLimits,
+				minIntervalMs: 1_000,
+			},
+		};
+		state.activeGoal = createGoal("current objective", undefined, 0);
+		const context = createMockContext({ isIdle: () => true });
+		assert.equal(state.requestContinuation(state.activeGoal), true);
+		assert.equal(state.scheduleContinuationDispatch(context.ctx, state.activeGoal.id), true);
+		await vi.advanceTimersByTimeAsync(500);
+
+		const off = {
+			...structuredClone(state.settings),
+			continuationLimits: {
+				...state.settings.continuationLimits,
+				minIntervalMs: 0,
+			},
+		};
+		assert.throws(
+			() =>
+				applyGoalSettings(state, off, context.ctx, {
+					save() {
+						throw new Error("disk full");
+					},
+				}),
+			/disk full/,
+		);
+		assert.equal(state.settings.continuationLimits.minIntervalMs, 1_000);
+		assert.equal(mock.sentUserMessages.length, 0);
+
+		applyGoalSettings(state, off, context.ctx, { save() {} });
+
+		assert.equal(mock.sentUserMessages.length, 1);
+		assert.match(mock.sentUserMessages[0]?.text ?? "", /automatic continuation #1/i);
+		await vi.advanceTimersByTimeAsync(500);
+		assert.equal(mock.sentUserMessages.length, 1);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
 test("applyGoalSettings saves before committing runtime settings and enforces lower limits", () => {
 	const state = runtime();
 	let saved: GoalSettings | undefined;
@@ -62,7 +173,7 @@ test("applyGoalSettings saves before committing runtime settings and enforces lo
 	};
 	const next: GoalSettings = {
 		...structuredClone(DEFAULT_GOAL_SETTINGS),
-		continuationLimits: { automaticTurns: 10, noProgressTurns: 2 },
+		continuationLimits: { automaticTurns: 10, noProgressTurns: 2, minIntervalMs: 1_000 },
 	};
 	const context = createMockContext();
 
@@ -249,7 +360,7 @@ test("lowering the no-progress limit pauses and aborts in-flight Goal work", () 
 	const state = new GoalRuntime(mock.pi);
 	state.settings = {
 		...structuredClone(DEFAULT_GOAL_SETTINGS),
-		continuationLimits: { automaticTurns: 25, noProgressTurns: 5 },
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 5, minIntervalMs: 0 },
 	};
 	state.activeGoal = createGoal("current objective", undefined, 0);
 	state.activeGoal.toolFreeRepeatCount = 3;
@@ -262,7 +373,7 @@ test("lowering the no-progress limit pauses and aborts in-flight Goal work", () 
 	});
 	const next = {
 		...structuredClone(state.settings),
-		continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 3, minIntervalMs: 0 },
 	};
 
 	applyGoalSettings(state, next, context.ctx, { save() {} });
@@ -277,7 +388,7 @@ test("lowering a reached limit preserves an unrelated in-flight run", () => {
 	const state = new GoalRuntime(mock.pi);
 	state.settings = {
 		...structuredClone(DEFAULT_GOAL_SETTINGS),
-		continuationLimits: { automaticTurns: 25, noProgressTurns: 5 },
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 5, minIntervalMs: 0 },
 	};
 	state.activeGoal = createGoal("current objective", undefined, 0);
 	state.activeGoal.toolFreeRepeatCount = 3;
@@ -290,7 +401,7 @@ test("lowering a reached limit preserves an unrelated in-flight run", () => {
 	});
 	const next = {
 		...structuredClone(state.settings),
-		continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 3, minIntervalMs: 0 },
 	};
 
 	applyGoalSettings(state, next, context.ctx, { save() {} });
@@ -426,7 +537,7 @@ test("unfreezing a pending priority dispatches it at the idle boundary", async (
 	assert.equal(mock.sentUserMessages.length, 1);
 });
 
-test("standard settings keep all five controls on one level", async () => {
+test("standard settings keep all six controls on one level", async () => {
 	const state = runtime();
 	let title = "";
 	let options: string[] = [];
@@ -444,10 +555,70 @@ test("standard settings keep all five controls on one level", async () => {
 	assert.deepEqual(options, [
 		"Automatic-work limit",
 		"No-progress guard",
+		"Continuation delay",
 		"Goal tools",
 		"Ordered goal queue",
 		"Managed run RPC",
 	]);
+});
+
+test("Continuation delay applies Off or custom milliseconds immediately", async () => {
+	for (const scenario of [
+		{
+			initial: 0,
+			selections: ["Continuation delay", "Set delay…", undefined],
+			input: "1500",
+			expected: 1_500,
+		},
+		{
+			initial: 1_500,
+			selections: ["Continuation delay", "Off", undefined],
+			input: undefined,
+			expected: 0,
+		},
+	] as const) {
+		const state = runtime();
+		state.settings.continuationLimits.minIntervalMs = scenario.initial;
+		let saved: GoalSettings | undefined;
+		const selections: Array<string | undefined> = [...scenario.selections];
+		const context = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			input: async () => scenario.input,
+		});
+
+		await showGoalSettings(state, context.ctx, {
+			settingsPath: "/tmp/pi-goal.json",
+			save(settings) {
+				saved = structuredClone(settings);
+			},
+		});
+
+		assert.equal(saved?.continuationLimits.minIntervalMs, scenario.expected);
+		assert.equal(state.settings.continuationLimits.minIntervalMs, scenario.expected);
+	}
+});
+
+test("Continuation delay rolls back after a save failure", async () => {
+	const state = runtime();
+	const selections = ["Continuation delay", "Set delay…", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+		input: async () => "2500",
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("disk full");
+		},
+	});
+
+	assert.equal(state.settings.continuationLimits.minIntervalMs, 0);
+	assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
 });
 
 test("automatic-work settings can open directly from the safety recovery flow", async () => {
@@ -821,6 +992,7 @@ test("invalid settings use a standard read-only detail screen", async () => {
 	assert.match(title, /Read only/i);
 	assert.match(title, /Invalid settings file/i);
 	assert.match(title, /Automatic-work limit: Up to 25 responses/i);
+	assert.match(title, /Continuation delay: Off/i);
 	assert.match(title, /Managed run RPC: Off/i);
 });
 

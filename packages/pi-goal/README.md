@@ -72,22 +72,31 @@ built-in defaults without creating the file:
   },
   "continuationLimits": {
     "automaticTurns": 25,
-    "noProgressTurns": 3
+    "noProgressTurns": 3,
+    "minIntervalMs": 0
   }
 }
 ```
 
-Use `/goal` → **Settings…** in the TUI to create or update the file interactively, or create
-and edit it directly. The standard Settings screen keeps all five controls on one level in task
-order; the two safety limits open standard choice screens:
+Use `/goal` → **Settings…** in the TUI to create or update the file interactively, or create and edit it directly.
+The standard Settings screen keeps all six controls on one level in task order.
+The safety limits and continuation delay open standard choice screens:
 
 - **Automatic-work limit** shows the exact response limit or **Unlimited**. Choose **Set response limit…** to edit the current finite value (or the built-in default of 25 when switching from Unlimited), or choose **Unlimited…**. Unlimited requires confirmation that tool loops may continue consuming tokens and provider cost without a response-count cap.
 - **No-progress guard** shows **_N_ runs** or **Off**. Choose the default threshold, **Off**, or **Set threshold…** and enter a safe whole number greater than zero.
+- **Continuation delay** shows **Off** for `0` or the configured milliseconds.
+  Choose **Off** or **Set delay…** and enter a non-negative safe whole number of milliseconds.
 - **Goal tools** controls whether all Goal tools are always visible or appear after the first goal.
 - **Ordered goal queue** controls the experimental ordered-goal workflows.
 - **Managed run RPC** controls whether trusted installed extensions may start and cancel managed Goal runs. It defaults to **Off** and is a cooperation setting, not an extension security sandbox.
 
-Custom number inputs reject zero, negative numbers, decimals, text, and unsafe integers without saving; use the explicit **Unlimited** or **Off** choice instead. Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime. A successful change updates the visible state immediately. A failed save restores the prior value and reports the settings path so it can be retried. Tool-visibility changes that would alter the active tool schema are rejected while Pi is busy; retry after Pi settles. Escape returns to the previous screen without reverting changes that were already saved.
+Safety-limit number inputs reject zero, negative numbers, decimals, text, and unsafe integers without saving; use the explicit **Unlimited** or **Off** choice instead.
+The continuation-delay input accepts zero and rejects negative numbers, decimals, text, and unsafe integers.
+Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime.
+A successful change updates the visible state immediately.
+A failed save restores the prior value and reports the settings path so it can be retried.
+Tool-visibility changes that would alter the active tool schema are rejected while Pi is busy; retry after Pi settles.
+Escape returns to the previous screen without reverting changes that were already saved.
 
 `toolVisibility` accepts:
 
@@ -102,6 +111,8 @@ Custom number inputs reject zero, negative numbers, decimals, text, and unsafe i
 
 - `automaticTurns` accepts a positive safe integer or `null` and defaults to `25`. It counts every completed normal `turn_end` owned by automatically started Goal work, including model responses inside tool loops and matching Pi-owned retries. The user-triggered kickoff, resume, edit, and ordinary user runs are not charged. At the limit, the goal becomes `paused` with cause `continuation_limit`, pending continuation/recovery is cancelled, and the current operation is aborted before a 26th normal response starts. Pi may invoke a provider adapter once more with an already-aborted signal to produce its synthetic terminal event; that event is not counted and cannot resume Goal work. Set this field explicitly to `null` to opt into Unlimited mode; existing explicit `null` values remain compatible.
 - `noProgressTurns` is a positive safe integer and defaults to `3`. At the end of an automatic run, pi-goal compares visible assistant text after Unicode normalization, lowercasing, control-character removal, and whitespace collapse. Thinking and tool blocks are excluded; empty and punctuation-only output are equivalent. Consecutive empty or identical tool-free outputs increment the repeat count. Different non-empty output starts a new run at one, and any attempted tool call resets it. Set this field to `null` to disable only this heuristic.
+- `minIntervalMs` is a non-negative safe integer and defaults to `0`.
+  It delays normal settled continuation dispatch and the manual-compaction fallback from their eligible scheduling boundary, while `0` preserves immediate dispatch.
 
 Settings are reread at Pi startup, session replacement, and `/reload`; direct external file edits are not watched live, while changes made through the Goal menu apply immediately. A missing file remains absent and uses the built-in defaults. The first successful settings change creates the file atomically; later saves preserve unknown fields.
 
@@ -217,9 +228,15 @@ Before completion, the shared audit tells the agent to treat completion as unpro
 
 To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation. Paused, blocked, and usage-limited goals cannot be completed until resumed; a budget-limited goal permits completion only during its bounded in-flight wrap-up. The summary is completion evidence, not the stale-turn safety token.
 
-If a turn ends before completion, `pi-goal` records usage and creates one continuation intent unless a circuit breaker pauses it first. It dispatches that continuation only from Pi's `agent_settled` lifecycle after retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending. Repeated settled events cannot dispatch the same intent twice. Goal-owned kickoff, resume, active-edit, and automatic-continuation deliveries are bound to the goal instance that created them; a delayed prompt from a replaced goal is aborted without rolling back, injecting, or stopping the newer goal. Plain assistant text never marks a goal complete—even an exact-reply objective pauses safely when the model repeatedly omits `goal_complete`.
+If a turn ends before completion, `pi-goal` records usage and creates one continuation intent unless a circuit breaker pauses it first.
+It dispatches that continuation only after Pi's `agent_settled` lifecycle proves retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending.
+A configured `minIntervalMs` delay starts at that eligible settled scheduling boundary.
+Repeated settled events cannot dispatch the same intent twice or restart its active delay.
+Goal-owned kickoff, resume, active-edit, and automatic-continuation deliveries are bound to the goal instance that created them; a delayed prompt from a replaced goal is aborted without rolling back, injecting, or stopping the newer goal.
+Plain assistant text never marks a goal complete—even an exact-reply objective pauses safely when the model repeatedly omits `goal_complete`.
 
-Manual compaction does not emit `agent_settled`, so its completion hook uses the same single-flight dispatcher as a narrow idle-only fallback. Pi extensions cannot reserve an idle turn atomically like Codex core; another extension can still win the race after the idle check, and its newer turn supersedes the old continuation intent.
+Manual compaction does not emit `agent_settled`, so its completion hook uses the same single owned continuation timer as a narrow idle-only fallback and applies `minIntervalMs` from that eligible boundary.
+Pi extensions cannot reserve an idle turn atomically like Codex core; another extension can still win the race after the idle check, and its newer turn supersedes the old continuation intent.
 
 ## ⏳ External waiting
 

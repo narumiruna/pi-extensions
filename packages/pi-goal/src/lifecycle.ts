@@ -225,9 +225,9 @@ export function registerGoalLifecycle(
 		runtime.requestContinuation(runtime.activeGoal);
 		// Pi emits session_compact before it clears its manual-compaction controller,
 		// so sendUserMessage still rejects inside this hook even when ctx reports idle.
-		// Defer one task; threshold compaction retains the intent for agent_settled
-		// when Pi is still busy.
-		runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
+		// The owned timer defers one task at the default 0 ms or waits the configured interval.
+		// Threshold compaction retains the intent for agent_settled when Pi is still busy.
+		runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id, { deferImmediate: true });
 	});
 
 	pi.on("input", (event, ctx) => {
@@ -631,7 +631,9 @@ export function registerGoalLifecycle(
 		}
 		if (!dispatchedQueueAction) {
 			const resumedWait = runtime.dispatchDueGoalWait(ctx);
-			if (!resumedWait) runtime.dispatchContinuationIfSettled(ctx);
+			if (!resumedWait && runtime.continuationIntent) {
+				runtime.scheduleContinuationDispatch(ctx, runtime.continuationIntent.goalId);
+			}
 		}
 		runtime.clearSettledSafetyTracking();
 	});

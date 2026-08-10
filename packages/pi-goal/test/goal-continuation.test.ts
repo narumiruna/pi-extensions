@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
+	DELAYED_CONTINUATION_SETTINGS_PATH,
+	DELAYED_QUEUE_SETTINGS_PATH,
 	lastGoalStatus,
 	requireGoalTool,
 	requireLastGoal,
@@ -26,6 +28,78 @@ test("agent_settled dispatches one idle continuation after agent_end records int
 
 	await settled.mock.events.get("agent_settled")?.[0]?.({}, settled.ctx);
 	assert.equal(settled.mock.sentUserMessages.length, 2);
+});
+
+test("agent_settled waits the configured interval before dispatching continuation", async () => {
+	vi.useFakeTimers();
+	try {
+		const delayed = await startGoalForTest(
+			{},
+			"finish",
+			DELAYED_CONTINUATION_SETTINGS_PATH,
+		);
+
+		await delayed.mock.events.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", stopReason: "stop" }] },
+			delayed.ctx,
+		);
+		await delayed.mock.events.get("agent_settled")?.[0]?.({}, delayed.ctx);
+
+		assert.equal(delayed.mock.sentUserMessages.length, 1);
+		await vi.advanceTimersByTimeAsync(500);
+		await delayed.mock.events.get("agent_settled")?.[0]?.({}, delayed.ctx);
+		await vi.advanceTimersByTimeAsync(499);
+		assert.equal(delayed.mock.sentUserMessages.length, 1);
+		await vi.advanceTimersByTimeAsync(1);
+		assert.equal(delayed.mock.sentUserMessages.length, 2);
+		assert.match(delayed.mock.sentUserMessages.at(-1)?.text ?? "", /automatic continuation #1/i);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+test("goal transitions cancel delayed continuation dispatch", async () => {
+	vi.useFakeTimers();
+	try {
+		for (const action of ["pause", "clear", "replace", "prioritize", "shutdown"] as const) {
+			const delayed = await startGoalForTest(
+				{},
+				"finish",
+				action === "prioritize"
+					? DELAYED_QUEUE_SETTINGS_PATH
+					: DELAYED_CONTINUATION_SETTINGS_PATH,
+			);
+			await delayed.mock.events.get("agent_end")?.[0]?.(
+				{ messages: [{ role: "assistant", stopReason: "stop" }] },
+				delayed.ctx,
+			);
+			await delayed.mock.events.get("agent_settled")?.[0]?.({}, delayed.ctx);
+
+			if (action === "pause" || action === "clear") {
+				await delayed.mock.commands.get("goal")?.handler(action, delayed.ctx);
+			} else if (action === "replace") {
+				await delayed.mock.commands
+					.get("goal")
+					?.handler("replacement objective", delayed.ctx);
+			} else if (action === "prioritize") {
+				await delayed.mock.commands
+					.get("goal")
+					?.handler("prioritize urgent objective", delayed.ctx);
+			} else {
+				delayed.mock.events.get("session_shutdown")?.[0]?.({}, delayed.ctx);
+			}
+
+			const messagesAfterCancellation = delayed.mock.sentUserMessages.length;
+			await vi.advanceTimersByTimeAsync(1_000);
+			assert.equal(
+				delayed.mock.sentUserMessages.length,
+				messagesAfterCancellation,
+				`${action} must cancel delayed continuation dispatch`,
+			);
+		}
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 test("agent_settled retains intent until idle and pending-message gates allow dispatch", async () => {

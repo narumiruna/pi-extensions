@@ -176,6 +176,13 @@ interface PendingGoalPrompt {
 	prompt: string;
 }
 
+interface ContinuationDispatchOwner {
+	goalId: string;
+	marker: string;
+	generation: number;
+	scheduledAt: number;
+}
+
 interface PendingNonGoalInput {
 	behavior: "steer" | "followUp";
 	fingerprint: string;
@@ -183,6 +190,7 @@ interface PendingNonGoalInput {
 }
 
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_PENDING_GOAL_PROMPTS = 20;
 const MAX_PENDING_NON_GOAL_INPUTS = 20;
 const BUDGET_WRAP_UP_MESSAGE_TYPE = "goal-budget-wrap-up";
@@ -214,6 +222,7 @@ export class GoalRuntime {
 	queueFreezeAwaitingSettle = false;
 	completionStatusTimer?: NodeJS.Timeout;
 	private continuationDispatchTimer?: NodeJS.Timeout;
+	private continuationDispatchOwner?: ContinuationDispatchOwner;
 	private readonly goalWaitTimer = new GoalWaitTimer();
 	private goalWaitDeadlineRetry?: {
 		goalId: string;
@@ -896,26 +905,110 @@ export class GoalRuntime {
 		this.continuationDelivery = undefined;
 	}
 
-	scheduleContinuationDispatch(ctx: StatusContext, goalId: string) {
-		this.clearContinuationDispatchTimer();
-		const generation = this.menuGeneration;
+	scheduleContinuationDispatch(
+		ctx: StatusContext,
+		goalId: string,
+		options: { deferImmediate?: boolean } = {},
+	) {
+		const intent = this.continuationIntent;
+		if (!intent || intent.goalId !== goalId) return false;
+		if (this.continuationDispatchTimer) return true;
+		if (
+			this.settings.continuationLimits.minIntervalMs === 0 &&
+			options.deferImmediate !== true
+		) {
+			return this.dispatchContinuationIfSettled(ctx);
+		}
+		if (this.activeGoal?.status === "active" && !this.toolPolicy.toolsAvailable()) {
+			this.pauseGoalForUnavailableTools(ctx);
+			return false;
+		}
+		if (
+			!this.activeGoal ||
+			this.activeGoal.id !== goalId ||
+			this.activeGoal.status !== "active" ||
+			this.activeGoal.waiting
+		) {
+			this.continuationIntent = undefined;
+			return false;
+		}
+		if (this.enforceAutomaticTurnLimit(ctx, false) || this.enforceNoProgressLimit(ctx)) {
+			return false;
+		}
+		if (ctx.isIdle?.() !== true || hasPendingMessages(ctx)) return false;
+
+		const owner = {
+			goalId,
+			marker: intent.marker,
+			generation: this.menuGeneration,
+			scheduledAt: Date.now(),
+		};
+		this.continuationDispatchOwner = owner;
+		this.armContinuationDispatchTimer(ctx, owner);
+		return true;
+	}
+
+	reconcileContinuationDispatchTimer(ctx: StatusContext) {
+		const owner = this.continuationDispatchOwner;
+		if (!owner || !this.continuationDispatchTimer) return false;
+		clearTimeout(this.continuationDispatchTimer);
+		this.continuationDispatchTimer = undefined;
+		if (!this.isContinuationDispatchOwnerCurrent(owner)) {
+			this.continuationDispatchOwner = undefined;
+			return false;
+		}
+		if (this.settings.continuationLimits.minIntervalMs === 0) {
+			this.continuationDispatchOwner = undefined;
+			return this.dispatchContinuationIfSettled(ctx);
+		}
+		this.armContinuationDispatchTimer(ctx, owner);
+		return true;
+	}
+
+	private armContinuationDispatchTimer(ctx: StatusContext, owner: ContinuationDispatchOwner) {
+		const elapsedMs = Math.max(0, Date.now() - owner.scheduledAt);
+		const remainingMs = Math.max(
+			0,
+			this.settings.continuationLimits.minIntervalMs - elapsedMs,
+		);
+		const delayMs = Math.min(remainingMs, MAX_TIMER_DELAY_MS);
 		this.continuationDispatchTimer = setTimeout(() => {
 			this.continuationDispatchTimer = undefined;
-			if (
-				generation !== this.menuGeneration ||
-				this.activeGoal?.id !== goalId ||
-				this.activeGoal.status !== "active"
-			) {
+			if (!this.isContinuationDispatchOwnerCurrent(owner)) {
+				if (this.continuationDispatchOwner === owner) {
+					this.continuationDispatchOwner = undefined;
+				}
 				return;
 			}
+			const nextRemainingMs = Math.max(
+				0,
+				this.settings.continuationLimits.minIntervalMs -
+					Math.max(0, Date.now() - owner.scheduledAt),
+			);
+			if (nextRemainingMs > 0) {
+				this.armContinuationDispatchTimer(ctx, owner);
+				return;
+			}
+			this.continuationDispatchOwner = undefined;
 			this.dispatchContinuationIfSettled(ctx);
-		}, 0);
+		}, delayMs);
+	}
+
+	private isContinuationDispatchOwnerCurrent(owner: ContinuationDispatchOwner) {
+		return (
+			this.continuationDispatchOwner === owner &&
+			owner.generation === this.menuGeneration &&
+			this.activeGoal?.id === owner.goalId &&
+			this.activeGoal.status === "active" &&
+			this.continuationIntent?.goalId === owner.goalId &&
+			this.continuationIntent.marker === owner.marker
+		);
 	}
 
 	private clearContinuationDispatchTimer() {
-		if (!this.continuationDispatchTimer) return;
-		clearTimeout(this.continuationDispatchTimer);
+		if (this.continuationDispatchTimer) clearTimeout(this.continuationDispatchTimer);
 		this.continuationDispatchTimer = undefined;
+		this.continuationDispatchOwner = undefined;
 	}
 
 	consumeCancelledGoalPrompt(prompt: string) {
