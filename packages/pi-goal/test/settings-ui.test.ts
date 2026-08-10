@@ -107,7 +107,7 @@ test("applyGoalSettings extends an owned continuation timer from its original se
 		assert.equal(mock.sentUserMessages.length, 0);
 		await vi.advanceTimersByTimeAsync(1);
 		assert.equal(mock.sentUserMessages.length, 1);
-		assert.match(mock.sentUserMessages[0]?.text ?? "", /automatic continuation #1/i);
+		assert.match(mock.sentUserMessages[0]?.text ?? "", /automatic continuation #0/i);
 	} finally {
 		vi.useRealTimers();
 	}
@@ -155,7 +155,7 @@ test("applyGoalSettings dispatches an eligible settled continuation immediately 
 		applyGoalSettings(state, off, context.ctx, { save() {} });
 
 		assert.equal(mock.sentUserMessages.length, 1);
-		assert.match(mock.sentUserMessages[0]?.text ?? "", /automatic continuation #1/i);
+		assert.match(mock.sentUserMessages[0]?.text ?? "", /automatic continuation #0/i);
 		await vi.advanceTimersByTimeAsync(500);
 		assert.equal(mock.sentUserMessages.length, 1);
 	} finally {
