@@ -45,6 +45,7 @@ Run commands from the repository root unless a command says otherwise.
 ## Code and package rules
 
 - Root TypeScript uses NodeNext modules, ES2022, strict mode, and no emit.
+- No inline imports (`await import()`, `import("pkg").Type`, dynamic type imports). Top-level imports only.
 - Publishable libraries emit through their own build configuration.
 - Biome requires tabs, double quotes, semicolons, a 100-column line width, and recommended lint rules.
 - Keep extension packages small.
