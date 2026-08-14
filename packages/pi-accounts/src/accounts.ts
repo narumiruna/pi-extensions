@@ -144,9 +144,6 @@ export default function accountsExtension(
 		};
 	});
 	pi.registerCommand("accounts", accountCommand);
-	const anthropic = adapters.get("anthropic");
-	if (anthropic) registerAnthropicProviderAliases(pi, store, anthropic);
-
 	pi.on("session_start", async (_event, ctx) => {
 		sessionGeneration += 1;
 		menuController.abort(new DOMException("Accounts session replaced", "AbortError"));
@@ -209,6 +206,12 @@ export default function accountsExtension(
 		);
 		setStatus(ctx, undefined);
 	});
+
+	// Register after pi-accounts' own lifecycle handlers. Its session_start sync
+	// first projects the active Anthropic credential into the native catalogue,
+	// then aliases can clone the resulting visible models.
+	const anthropic = adapters.get("anthropic");
+	if (anthropic) registerAnthropicProviderAliases(pi, store, anthropic);
 }
 
 function createAccountCommand(
