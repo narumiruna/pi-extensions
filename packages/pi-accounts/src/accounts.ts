@@ -13,6 +13,7 @@ import {
 	parseAccountName,
 	type StoredOAuthCredential,
 } from "./account-store.js";
+import { registerAnthropicProviderAliases } from "./anthropic-provider-aliases.js";
 import {
 	type AccountProviderAdapter,
 	type AccountProviderId,
@@ -206,6 +207,9 @@ export default function accountsExtension(
 		);
 		setStatus(ctx, undefined);
 	});
+
+	const anthropic = adapters.get("anthropic");
+	if (anthropic) registerAnthropicProviderAliases(pi, store, anthropic);
 }
 
 function createAccountCommand(

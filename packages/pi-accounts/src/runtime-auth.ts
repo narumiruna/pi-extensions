@@ -39,7 +39,7 @@ export type RuntimeAccountStore = {
 };
 
 export type EnsureActiveProviderAuthResult =
-	| { status: "inactive"; providerId: AccountProviderId }
+	| { status: "inactive"; providerId: string }
 	| { status: "active"; providerId: AccountProviderId; accountName: string }
 	| { status: "error"; providerId: AccountProviderId; accountName: string; message: string };
 
@@ -47,14 +47,23 @@ export class RuntimeAuthCoordinator {
 	private readonly controller: RuntimeApiKeyController;
 	private readonly overlay: RuntimeProviderOverlay;
 	private availableModelIds: ReadonlySet<string> | undefined;
+	private readonly runtimeProviderId: string;
+	private readonly accountName: string | undefined;
 
 	constructor(
 		pi: ExtensionAPI,
 		readonly provider: AccountProviderAdapter,
 		private readonly failClosedApiKey = RUNTIME_FAIL_CLOSED_API_KEY,
+		options: { providerId?: string; accountName?: string } = {},
 	) {
-		this.controller = new RuntimeApiKeyController(provider.id);
-		this.overlay = new RuntimeProviderOverlay(pi, provider, failClosedApiKey);
+		this.runtimeProviderId = options.providerId ?? provider.id;
+		this.accountName = options.accountName;
+		this.controller = new RuntimeApiKeyController(this.runtimeProviderId);
+		this.overlay = new RuntimeProviderOverlay(
+			pi,
+			{ ...provider, id: this.runtimeProviderId } as AccountProviderAdapter,
+			failClosedApiKey,
+		);
 	}
 
 	async ensureActive(
@@ -70,7 +79,7 @@ export class RuntimeAuthCoordinator {
 		} catch (error) {
 			return this.failClosed(ctx, operation, runtimeOverride, "unknown", error);
 		}
-		const active = state.active;
+		const active = this.accountName ?? state.active;
 		if (!active) {
 			this.availableModelIds = undefined;
 			try {
@@ -112,7 +121,7 @@ export class RuntimeAuthCoordinator {
 			try {
 				current = await store.updateProviderAsync(this.provider.id, async (latest) => {
 					const latestCredential = getOwnCredential(latest.accounts, active);
-					if (latest.active !== active || !latestCredential) return latest;
+					if (!this.isSelectedAccount(latest, active) || !latestCredential) return latest;
 					credential = latestCredential;
 					if (latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
 					try {
@@ -131,7 +140,7 @@ export class RuntimeAuthCoordinator {
 				refreshError = error;
 				credential = getOwnCredential(current.accounts, active) ?? credential;
 			}
-			if (current.active !== active || !getOwnCredential(current.accounts, active)) {
+			if (!this.isSelectedAccount(current, active)) {
 				return this.ensureActive(ctx, store, now);
 			}
 			if (refreshError !== undefined) {
@@ -273,13 +282,20 @@ export class RuntimeAuthCoordinator {
 			const current = getOwnCredential(latest.accounts, accountName);
 			return {
 				matches:
-					latest.active === accountName &&
+					this.isSelectedAccount(latest, accountName) &&
 					current !== undefined &&
 					JSON.stringify(current) === JSON.stringify(expected),
 			};
 		} catch (error) {
 			return { matches: false, error };
 		}
+	}
+
+	private isSelectedAccount(state: ProviderAccountState, accountName: string): boolean {
+		return (
+			(this.accountName ? this.accountName === accountName : state.active === accountName) &&
+			getOwnCredential(state.accounts, accountName) !== undefined
+		);
 	}
 
 	private async verifyOverlay(
