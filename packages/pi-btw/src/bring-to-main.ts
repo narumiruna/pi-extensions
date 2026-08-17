@@ -9,7 +9,8 @@ import {
 } from "@earendil-works/pi-tui";
 import type { SideThreadTurn } from "./side-thread.js";
 
-const RESERVED_APP_ROWS = 3;
+// Title + status lines rendered above the transcript rows.
+const SELECTOR_CHROME_LINES = 2;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface BtwBringToMainSegment {
@@ -38,7 +39,6 @@ export interface BtwTextRangeSelectorState {
 	anchor?: BtwTextPosition;
 	lineAnchor?: number;
 	preferredColumn: number;
-	scrollOffset: number;
 	horizontalOffset: number;
 }
 
@@ -176,7 +176,6 @@ export class BtwTextRangeSelector implements Component {
 	private anchor: BtwTextPosition | undefined;
 	private lineAnchor: number | undefined;
 	private preferredColumn = 0;
-	private scrollOffset = 0;
 	private horizontalOffset = 0;
 	private warning: string | undefined;
 	private finished = false;
@@ -200,9 +199,10 @@ export class BtwTextRangeSelector implements Component {
 					? undefined
 					: Math.max(0, Math.min(this.lines.length - 1, initialState.lineAnchor));
 			this.preferredColumn = Math.max(0, initialState.preferredColumn);
-			this.scrollOffset = Math.max(0, initialState.scrollOffset);
 			this.horizontalOffset = Math.max(0, initialState.horizontalOffset);
 		}
+		// The fullscreen scroll view may be left at the bottom by the previous view.
+		queueMicrotask(() => this.keepCursorVisible());
 	}
 
 	getState(): BtwTextRangeSelectorState {
@@ -211,28 +211,17 @@ export class BtwTextRangeSelector implements Component {
 			anchor: this.anchor ? { ...this.anchor } : undefined,
 			lineAnchor: this.lineAnchor,
 			preferredColumn: this.preferredColumn,
-			scrollOffset: this.scrollOffset,
 			horizontalOffset: this.horizontalOffset,
 		};
 	}
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
-		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
-		const showStatus = availableRows >= 4;
-		const showFooter = availableRows >= 3;
-		const viewportHeight = Math.max(
-			1,
-			availableRows - 1 - (showStatus ? 1 : 0) - (showFooter ? 1 : 0),
-		);
-		this.keepCursorVisible(viewportHeight);
 		const textWidth = Math.max(1, safeWidth - visibleWidth("●> Assistant │ "));
 		this.keepCursorHorizontallyVisible(textWidth);
 		const range = this.getSelectionRange();
 		const lineRange = this.getLineSelectionRange();
-		const visible = this.lines.slice(this.scrollOffset, this.scrollOffset + viewportHeight);
-		const rows = visible.map((line, visibleIndex) => {
-			const lineIndex = this.scrollOffset + visibleIndex;
+		const rows = this.lines.map((line, lineIndex) => {
 			const role = line.role === "user" ? "User" : "Assistant";
 			const lineSelected = lineRange
 				? lineIndex >= lineRange.start && lineIndex <= lineRange.end
@@ -262,27 +251,16 @@ export class BtwTextRangeSelector implements Component {
 				: `Shift+Arrows select • Arrows move${confirmUsesSpace ? "" : " • Space lines"} • ${confirm} bring • ${back} back • Ctrl+C close`;
 		const criticalFooter = `${confirm} bring • ${back} back • Ctrl+C close`;
 		const footer = visibleWidth(detailedFooter) <= safeWidth ? detailedFooter : criticalFooter;
-		return fitRows(
-			[
-				truncateToWidth(
-					this.theme.fg("accent", this.theme.bold("Select text to bring to main")),
-					safeWidth,
-					"",
-				),
-				...(showStatus ? [truncateToWidth(this.theme.fg("muted", status), safeWidth, "")] : []),
-				...rows,
-				...(showFooter
-					? [
-							truncateToWidth(
-								this.theme.fg(this.warning ? "warning" : "muted", footer),
-								safeWidth,
-								"",
-							),
-						]
-					: []),
-			],
-			availableRows,
-		);
+		return [
+			truncateToWidth(
+				this.theme.fg("accent", this.theme.bold("Select text to bring to main")),
+				safeWidth,
+				"",
+			),
+			truncateToWidth(this.theme.fg("muted", status), safeWidth, ""),
+			...rows,
+			truncateToWidth(this.theme.fg(this.warning ? "warning" : "muted", footer), safeWidth, ""),
+		];
 	}
 
 	handleInput(data: string): void {
@@ -343,14 +321,6 @@ export class BtwTextRangeSelector implements Component {
 		}
 		if (this.keybindings.matches(data, "tui.select.down")) {
 			this.moveVertical(1, false);
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.pageUp")) {
-			this.moveVertical(-10, false);
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.pageDown")) {
-			this.moveVertical(10, false);
 			return;
 		}
 	}
@@ -474,15 +444,20 @@ export class BtwTextRangeSelector implements Component {
 
 	private afterMove(): void {
 		this.warning = undefined;
+		this.keepCursorVisible();
 		this.tui.requestRender();
 	}
 
-	private keepCursorVisible(height: number): void {
-		if (height <= 0) return;
-		if (this.cursor.line < this.scrollOffset) this.scrollOffset = this.cursor.line;
-		if (this.cursor.line >= this.scrollOffset + height) {
-			this.scrollOffset = this.cursor.line - height + 1;
-		}
+	// Reveal the cursor row inside the fullscreen scroll view (wheel/PgUp/PgDn scroll it natively).
+	private keepCursorVisible(): void {
+		const view = this.tui as TUI & { viewportTop?: number; scrollBy?: (lines: number) => void };
+		if (typeof view.scrollBy !== "function" || typeof view.viewportTop !== "number") return;
+		const row = SELECTOR_CHROME_LINES + this.cursor.line;
+		const height = Math.max(1, this.tui.terminal.rows);
+		const top = view.viewportTop + SELECTOR_CHROME_LINES;
+		const bottom = view.viewportTop + height - 2;
+		if (row < top) view.scrollBy(row - top);
+		else if (row > bottom) view.scrollBy(row - bottom);
 	}
 
 	private keepCursorHorizontallyVisible(width: number): void {
@@ -539,13 +514,7 @@ function matchesConfirm(data: string, keybindings: KeybindingsManager): boolean 
 
 function keybindingLabel(
 	keybindings: KeybindingsManager,
-	keybinding:
-		| "tui.select.confirm"
-		| "tui.select.cancel"
-		| "tui.select.up"
-		| "tui.select.down"
-		| "tui.select.pageUp"
-		| "tui.select.pageDown",
+	keybinding: "tui.select.confirm" | "tui.select.cancel" | "tui.select.up" | "tui.select.down",
 	excluded: readonly string[] = [],
 	fallback?: string,
 ): string {
@@ -593,12 +562,6 @@ function positionFallsInside(
 		compareTextPositions(position, range.start) >= 0 &&
 		compareTextPositions(position, range.end) < 0
 	);
-}
-
-function fitRows(rows: string[], availableRows: number): string[] {
-	if (rows.length <= availableRows) return rows;
-	if (availableRows <= 1) return rows.slice(0, 1);
-	return [rows[0] ?? "", ...rows.slice(rows.length - availableRows + 1)];
 }
 
 function escapeBringToMainText(text: string): string {

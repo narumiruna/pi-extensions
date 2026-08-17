@@ -524,13 +524,7 @@ export async function runBtwThread({
 	try {
 		while (true) {
 			if (!pendingQuestion) {
-				const action = await interact(
-					thread,
-					thread.turns.length > 0,
-					ctx,
-					composerDraft,
-					createThinkingControl(),
-				);
+				const action = await interact(thread, ctx, composerDraft, createThinkingControl());
 				if (action.kind === "close") return { kind: "closed" };
 				if (action.kind === "bringToMain") {
 					const choice = await chooseBringToMainAction(thread, ctx);
@@ -903,7 +897,6 @@ async function askThreadQuestion(
 
 async function showThreadComposer(
 	thread: SideThread,
-	startAtBottom: boolean,
 	ctx: ExtensionCommandContext,
 	initialQuestion: string | undefined,
 	thinking: BtwThreadThinkingControl,
@@ -911,7 +904,6 @@ async function showThreadComposer(
 	return ctx.ui.custom<TranscriptPagerAction>(
 		(tui, theme, keybindings, done) =>
 			new BtwTranscriptPager(tui, theme, thread.turns, done, {
-				startAtBottom,
 				initialQuestion,
 				thinking: { ...thinking, keybindings },
 			}),

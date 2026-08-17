@@ -8,7 +8,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
-	CURSOR_MARKER,
 	Editor,
 	type EditorTheme,
 	type Focusable,
@@ -23,11 +22,10 @@ import {
 import type { BtwThinkingLevel, SideThreadTurn } from "./side-thread.js";
 import { sanitizeSingleLine } from "./text.js";
 
-const TRANSCRIPT_CHROME_LINES = 2;
+// Scrolling is owned by the fullscreen TUI: the transcript is rendered in full
+// and the alt-screen primary scroll view handles wheel/PgUp/PgDn/Home/End/search.
 const MAX_STEERING_DISPLAY_LINES = 3;
 const OSC133_MARKERS = ["\u001b]133;A\u0007", "\u001b]133;B\u0007", "\u001b]133;C\u0007"];
-// Pi renders a spacer above the custom component and a two-line built-in footer below it.
-const RESERVED_APP_LINES = 3;
 
 export type TranscriptPagerAction =
 	| { kind: "submit"; question: string }
@@ -53,10 +51,6 @@ export class BtwTranscriptPager implements Component, Focusable {
 	private readonly transcriptComponents: Component[];
 	private readonly editor: Editor;
 	private readonly canBringToMain: boolean;
-	private scrollOffset = 0;
-	private lastContentLineCount = 0;
-	private lastViewportHeight = 1;
-	private followBottom: boolean;
 	private warning: string | undefined;
 	private finished = false;
 	private isFocused = false;
@@ -68,14 +62,12 @@ export class BtwTranscriptPager implements Component, Focusable {
 		turns: readonly SideThreadTurn[],
 		private readonly onAction: (action: TranscriptPagerAction) => void,
 		private readonly options: {
-			startAtBottom?: boolean;
 			initialQuestion?: string;
 			thinking?: BtwThinkingControl;
 		} = {},
 	) {
 		this.transcriptComponents = buildTranscriptComponents(turns, this.theme);
 		this.canBringToMain = turns.some((turn) => turn.kind === "answered");
-		this.followBottom = options.startAtBottom ?? false;
 		this.thinkingLevel = options.thinking?.level;
 		const editorTheme: EditorTheme = {
 			borderColor: (text) => this.theme.fg("accent", text),
@@ -115,24 +107,13 @@ export class BtwTranscriptPager implements Component, Focusable {
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		const editorLines = this.editor.render(safeWidth);
-		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
-		const viewportHeight = Math.max(
-			0,
-			availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES,
-		);
 		const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
-		this.lastContentLineCount = contentLines.length;
-		this.lastViewportHeight = viewportHeight;
-		if (this.followBottom) this.scrollOffset = this.getMaxScrollOffset();
-		this.clampScrollOffset();
-
-		return fitComposerLayout(
+		return [
 			renderSideThreadHeader(safeWidth, this.theme, this.thinkingLevel),
-			contentLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
+			...contentLines,
 			this.renderFooter(safeWidth),
-			editorLines,
-			availableRows,
-		);
+			...editorLines,
+		];
 	}
 
 	handleInput(data: string): void {
@@ -163,19 +144,6 @@ export class BtwTranscriptPager implements Component, Focusable {
 			}
 			return;
 		}
-		if (matchesKey(data, Key.pageUp)) {
-			const previousOffset = this.scrollOffset;
-			this.scrollBy(-this.lastViewportHeight);
-			if (this.scrollOffset < previousOffset) this.followBottom = false;
-			this.tui.requestRender();
-			return;
-		}
-		if (matchesKey(data, Key.pageDown)) {
-			this.scrollBy(this.lastViewportHeight);
-			this.followBottom = this.scrollOffset >= this.getMaxScrollOffset();
-			this.tui.requestRender();
-			return;
-		}
 		this.editor.handleInput(data);
 		if (!this.finished) this.tui.requestRender();
 	}
@@ -185,18 +153,11 @@ export class BtwTranscriptPager implements Component, Focusable {
 		this.editor.invalidate();
 	}
 
-	dispose(): void {
-		if (this.finished) return;
-		this.finished = true;
-		this.onAction({ kind: "close" });
-	}
-
 	private renderFooter(width: number): string {
 		if (this.warning) {
 			const warning = width < 32 ? "Empty • Ctrl+C" : `${this.warning} • Ctrl+C exit`;
 			return truncateToWidth(this.theme.fg("warning", warning), width);
 		}
-		const scrollable = this.getMaxScrollOffset() > 0;
 		const thinking = this.options.thinking;
 		const cycleHint =
 			thinking && thinking.levels.length > 1 && this.thinkingLevel
@@ -205,50 +166,16 @@ export class BtwTranscriptPager implements Component, Focusable {
 		const base = this.canBringToMain
 			? "btw • Enter send • Ctrl+R bring to main • Ctrl+C exit"
 			: "btw • Enter send • Ctrl+C exit";
-		const fullBase = `${base}${cycleHint}`;
-		const fallbackBase = "btw • Enter • Ctrl+C";
-		const compactBase = this.canBringToMain ? "btw • Enter • Ctrl+R • Ctrl+C" : fallbackBase;
-		const compactWithThinking = `${compactBase}${cycleHint}`;
-		let hints =
-			visibleWidth(fullBase) <= width
-				? fullBase
-				: visibleWidth(compactWithThinking) <= width
-					? compactWithThinking
-					: visibleWidth(compactBase) <= width
-						? compactBase
-						: fallbackBase;
-		if (scrollable) {
-			const history = ` • ${this.scrollOffset > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history`;
-			const compactHistory = " • PgUp/PgDn";
-			const compactScrollable = this.canBringToMain
-				? "Enter • Ctrl+R • Ctrl+C • PgUp/PgDn"
-				: `${fallbackBase}${compactHistory}`;
-			if (visibleWidth(`${hints}${history}`) <= width) {
-				hints += history;
-			} else if (visibleWidth(`${compactBase}${history}`) <= width) {
-				hints = `${compactBase}${history}`;
-			} else if (visibleWidth(`${hints}${compactHistory}`) <= width) {
-				hints += compactHistory;
-			} else if (visibleWidth(`${compactBase}${compactHistory}`) <= width) {
-				hints = `${compactBase}${compactHistory}`;
-			} else if (visibleWidth(compactScrollable) <= width) {
-				hints = compactScrollable;
-			}
-		}
+		const full = `${base}${cycleHint} • PgUp/PgDn scroll`;
+		const compact = this.canBringToMain ? "btw • Enter • Ctrl+R • Ctrl+C" : "btw • Enter • Ctrl+C";
+		const hints = visibleWidth(full) <= width ? full : compact;
 		return truncateToWidth(this.theme.fg("muted", hints), width);
 	}
 
-	private scrollBy(delta: number): void {
-		this.scrollOffset += delta;
-		this.clampScrollOffset();
-	}
-
-	private clampScrollOffset(): void {
-		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, this.getMaxScrollOffset()));
-	}
-
-	private getMaxScrollOffset(): number {
-		return Math.max(0, this.lastContentLineCount - this.lastViewportHeight);
+	dispose(): void {
+		if (this.finished) return;
+		this.finished = true;
+		this.onAction({ kind: "close" });
 	}
 }
 
@@ -257,10 +184,6 @@ export class BtwAnsweringView implements Component, Focusable {
 	private readonly loader: Loader;
 	private readonly editor: Editor | undefined;
 	private readonly controller = new AbortController();
-	private scrollOffset = 0;
-	private lastContentLineCount = 0;
-	private lastViewportHeight = 1;
-	private followBottom = true;
 	private warning: string | undefined;
 	private finished = false;
 	private isFocused = false;
@@ -325,36 +248,20 @@ export class BtwAnsweringView implements Component, Focusable {
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
-		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
 		const editorLines = this.editor?.render(safeWidth) ?? [];
-		const steeringCapacity = Math.max(
-			0,
-			availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES,
-		);
 		const steeringLines = renderSteeringLines(
 			this.options.steering?.questions ?? [],
 			safeWidth,
 			this.theme,
-			Math.min(MAX_STEERING_DISPLAY_LINES, steeringCapacity),
-		);
-		const viewportHeight = Math.max(
-			0,
-			availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES - steeringLines.length,
 		);
 		const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
-		this.lastContentLineCount = contentLines.length;
-		this.lastViewportHeight = viewportHeight;
-		if (this.followBottom) this.scrollOffset = this.getMaxScrollOffset();
-		this.clampScrollOffset();
-
-		return fitComposerLayout(
+		return [
 			renderSideThreadHeader(safeWidth, this.theme, this.thinkingLevel),
-			contentLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
+			...contentLines,
+			...steeringLines,
 			this.renderFooter(safeWidth),
-			editorLines,
-			availableRows,
-			steeringLines,
-		);
+			...editorLines,
+		];
 	}
 
 	handleInput(data: string): void {
@@ -380,19 +287,6 @@ export class BtwAnsweringView implements Component, Focusable {
 				this.warning = undefined;
 				this.tui.requestRender();
 			}
-			return;
-		}
-		if (matchesKey(data, Key.pageUp)) {
-			const previousOffset = this.scrollOffset;
-			this.scrollBy(-this.lastViewportHeight);
-			if (this.scrollOffset < previousOffset) this.followBottom = false;
-			this.tui.requestRender();
-			return;
-		}
-		if (matchesKey(data, Key.pageDown)) {
-			this.scrollBy(this.lastViewportHeight);
-			this.followBottom = this.scrollOffset >= this.getMaxScrollOffset();
-			this.tui.requestRender();
 			return;
 		}
 		this.editor?.handleInput(data);
@@ -433,26 +327,13 @@ export class BtwAnsweringView implements Component, Focusable {
 			thinking && thinking.levels.length > 1 && this.thinkingLevel
 				? ` • thinking ${this.thinkingLevel} • ${thinkingKeyLabel(thinking.keybindings)} cycle`
 				: "";
-		const scrollHint = this.getMaxScrollOffset() > 0 ? " • PgUp/PgDn history" : "";
+		const scrollHint = " • PgUp/PgDn scroll";
 		const hints = `${baseHint}${cycleHint}${scrollHint}`;
 		const compactHints = this.editor ? "Enter • Ctrl+C" : "Ctrl+C";
 		const selectedHints = visibleWidth(hints) <= width ? hints : compactHints;
 		const loaderWidth = Math.max(1, width - visibleWidth(selectedHints) - 3);
 		const loaderLine = this.loader.render(loaderWidth).at(-1) ?? "Answering…";
 		return truncateToWidth(`${loaderLine} • ${this.theme.fg("muted", selectedHints)}`, width);
-	}
-
-	private scrollBy(delta: number): void {
-		this.scrollOffset += delta;
-		this.clampScrollOffset();
-	}
-
-	private clampScrollOffset(): void {
-		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, this.getMaxScrollOffset()));
-	}
-
-	private getMaxScrollOffset(): number {
-		return Math.max(0, this.lastContentLineCount - this.lastViewportHeight);
 	}
 }
 
@@ -539,52 +420,14 @@ function thinkingKeyLabel(keybindings: KeybindingsManager): string {
 		.join("+");
 }
 
-function fitComposerLayout(
-	header: string,
-	contentLines: string[],
-	footer: string,
-	editorLines: string[],
-	availableRows: number,
-	statusLines: string[] = [],
-): string[] {
-	const lines = [header, ...contentLines, ...statusLines, footer, ...editorLines];
-	if (lines.length <= availableRows) return lines;
-	if (availableRows <= 1) return [header];
-	const editorBudget = Math.max(0, availableRows - 2);
-	return [header, footer, ...fitEditorLines(editorLines, editorBudget)];
-}
-
-function fitEditorLines(editorLines: string[], budget: number): string[] {
-	if (budget <= 0) return [];
-	if (editorLines.length <= budget) return editorLines;
-	const cursorIndex = editorLines.findIndex((line) => line.includes(CURSOR_MARKER));
-	if (cursorIndex < 0) return editorLines.slice(-budget);
-	const start = Math.min(cursorIndex, editorLines.length - budget);
-	return editorLines.slice(start, start + budget);
-}
-
-function renderSteeringLines(
-	questions: readonly string[],
-	width: number,
-	theme: Theme,
-	maxLines: number,
-): string[] {
-	if (questions.length === 0 || maxLines <= 0) return [];
+function renderSteeringLines(questions: readonly string[], width: number, theme: Theme): string[] {
+	if (questions.length === 0) return [];
 	const formatQuestion = (question: string) =>
 		sanitizeSingleLine(question) || "(non-printing message)";
-	if (maxLines === 1 && questions.length > 1) {
-		return [
-			truncateToWidth(
-				theme.fg(
-					"dim",
-					`Steering (+${questions.length - 1} more): ${formatQuestion(questions[0] ?? "")}`,
-				),
-				width,
-			),
-		];
-	}
-	const hasOverflow = questions.length > maxLines;
-	const questionLimit = hasOverflow ? Math.max(1, maxLines - 1) : maxLines;
+	const hasOverflow = questions.length > MAX_STEERING_DISPLAY_LINES;
+	const questionLimit = hasOverflow
+		? Math.max(1, MAX_STEERING_DISPLAY_LINES - 1)
+		: MAX_STEERING_DISPLAY_LINES;
 	const lines = questions
 		.slice(0, questionLimit)
 		.map((question) =>
