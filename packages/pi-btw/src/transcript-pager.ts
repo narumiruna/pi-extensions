@@ -168,7 +168,13 @@ export class BtwTranscriptPager implements Component, Focusable {
 			: "btw • Enter send • Ctrl+C exit";
 		const full = `${base}${cycleHint} • PgUp/PgDn scroll`;
 		const compact = this.canBringToMain ? "btw • Enter • Ctrl+R • Ctrl+C" : "btw • Enter • Ctrl+C";
-		const hints = visibleWidth(full) <= width ? full : compact;
+		const compactWithThinking = cycleHint ? `${compact}${cycleHint}` : compact;
+		const hints =
+			visibleWidth(full) <= width
+				? full
+				: visibleWidth(compactWithThinking) <= width
+					? compactWithThinking
+					: compact;
 		return truncateToWidth(this.theme.fg("muted", hints), width);
 	}
 
@@ -330,7 +336,13 @@ export class BtwAnsweringView implements Component, Focusable {
 		const scrollHint = " • PgUp/PgDn scroll";
 		const hints = `${baseHint}${cycleHint}${scrollHint}`;
 		const compactHints = this.editor ? "Enter • Ctrl+C" : "Ctrl+C";
-		const selectedHints = visibleWidth(hints) <= width ? hints : compactHints;
+		const compactWithThinking = cycleHint ? `${compactHints}${cycleHint}` : compactHints;
+		const selectedHints =
+			visibleWidth(hints) <= width
+				? hints
+				: visibleWidth(compactWithThinking) <= width
+					? compactWithThinking
+					: compactHints;
 		const loaderWidth = Math.max(1, width - visibleWidth(selectedHints) - 3);
 		const loaderLine = this.loader.render(loaderWidth).at(-1) ?? "Answering…";
 		return truncateToWidth(`${loaderLine} • ${this.theme.fg("muted", selectedHints)}`, width);
