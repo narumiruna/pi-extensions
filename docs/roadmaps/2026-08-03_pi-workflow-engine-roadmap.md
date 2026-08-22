@@ -1,6 +1,6 @@
 # Pi Workflow Engine Roadmap
 
-- **Status:** Proposed strategic direction; not an implementation or release commitment
+- **Status:** Superseded on 2026-08-22 by [`2026-08-22_pi-plan-mode-side-thread-roadmap.md`](./2026-08-22_pi-plan-mode-side-thread-roadmap.md); retained as historical rationale.
 - **Audience:** Pi extension and library maintainers
 - **Planning horizon:** Evidence-qualified phases without delivery dates
 - **Selected package name:** `@narumitw/pi-workflow-engine`
