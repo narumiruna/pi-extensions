@@ -29,6 +29,11 @@ const model = {
 	maxTokens: 10_000,
 } as Model<"openai-codex-responses">;
 
+const accountModel = {
+	...model,
+	provider: "openai-codex-account-2",
+} as Model<"openai-codex-responses">;
+
 const usage = {
 	input: 20,
 	output: 1,
@@ -269,6 +274,26 @@ test("registers the settings command and returns a versioned Remote V2 compactio
 	)) as { input: Array<Record<string, unknown>> };
 	assert.equal(rewritten.input.at(-2)?.type, "compaction");
 	assert.match(JSON.stringify(rewritten.input.at(-1)), /later/);
+
+	const crossAlias = createMockContext({
+		model: accountModel,
+		getSystemPrompt: () => "system",
+		sessionManager: {
+			getSessionId: () => "session",
+			getBranch: () => [...entries, compactionEntry],
+		},
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "secret-oauth" }),
+			getProvider: () => fakeProvider(),
+		},
+		hasUI: true,
+	});
+	const crossAliasResult = await handler?.(
+		{ ...event(), branchEntries: [...entries, compactionEntry] },
+		crossAlias.ctx,
+	);
+	assert.equal(crossAliasResult, undefined);
+	assert.match(crossAlias.notifications.at(-1)?.message ?? "", /different Codex provider or model/);
 });
 
 test("valid session startup reloads settings without a package warning", async () => {
@@ -354,6 +379,14 @@ test("disabled, unsupported, auth-failed, and aborted compaction paths remain sa
 		};
 	};
 	assert.equal((await run({ settings: settingsRuntime({ enabled: false }) })).result, undefined);
+	const account = await run({
+		model: accountModel,
+		auth: { ok: true, apiKey: "secret-oauth" },
+	});
+	const accountDetails = parseCheckpointDetails(
+		(account.result as { compaction?: { details?: unknown } } | undefined)?.compaction?.details,
+	);
+	assert.equal(accountDetails?.provider, accountModel.provider);
 	assert.equal(
 		(
 			await run({

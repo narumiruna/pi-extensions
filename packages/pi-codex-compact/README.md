@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Use OpenAI Codex Remote Compaction V2 in Pi instead of generating a local plaintext summary for compatible `openai-codex` sessions.
+Use OpenAI Codex Remote Compaction V2 in Pi instead of generating a local plaintext summary for compatible `openai-codex` sessions, including `pi-multi-account` aliases such as `openai-codex-account-2`.
 
 The extension requests and stores an opaque server-generated checkpoint, then safely replays it in later Codex Responses requests.
 
@@ -10,7 +10,7 @@ Pi still decides when compaction runs and retains its normal `/compact`, thresho
 
 ## ✨ Features
 
-- Uses the active `openai-codex` OAuth credentials without persisting tokens or request headers.
+- Uses the active `openai-codex` OAuth credentials (including `openai-codex-*` provider aliases) without persisting tokens or request headers.
 - Handles manual, threshold, and overflow compaction through Pi's existing lifecycle.
 - Validates and persists one bounded opaque checkpoint that survives compatible reloads, resumes, and forks.
 - Replays the latest checkpoint while preserving newer conversation and extension context.
@@ -46,7 +46,7 @@ Avoid loading a global npm installation and the local workspace at the same time
 ## 🚀 Quick start
 
 1. Sign in through Pi's built-in OpenAI Codex OAuth provider.
-2. Select a model whose provider is `openai-codex` and API is `openai-codex-responses`.
+2. Select a model whose provider is `openai-codex` or an `openai-codex-*` alias and whose API is `openai-codex-responses`.
 3. Work normally.
    Pi's automatic compaction and built-in `/compact` continue to operate.
 4. Run `/codex-compact` to inspect the effective route or choose **Compact now**.
@@ -129,11 +129,11 @@ This extension does **not** read `~/.codex/config.toml`.
 ## ✅ Requirements and compatibility
 
 - Pi APIs compatible with the package's declared peer dependencies.
-- The built-in provider `openai-codex`.
+- The built-in provider `openai-codex`, or a compatible `openai-codex-*` alias such as those created by `pi-multi-account`.
 - API `openai-codex-responses` on the active model.
 - A working OpenAI Codex OAuth login and Remote V2 entitlement.
 
-OpenAI API-key, Azure, GitHub Copilot, proxies, and arbitrary Responses-compatible providers are not supported.
+OpenAI API-key, Azure, GitHub Copilot, proxies, and arbitrary Responses-compatible providers are not supported. Checkpoints remain bound to the exact provider alias that created them, so switching between Codex accounts does not replay one account's opaque checkpoint through another account.
 Switching to another provider or model leaves Pi's visible fallback marker plus retained recent messages in context.
 Switching back to the checkpoint's original compatible model restores opaque replay.
 

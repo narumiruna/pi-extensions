@@ -9,11 +9,21 @@ export const REPLACEMENT_TOKEN_BUDGET = 64_000;
 export const REPLACEMENT_BYTE_BUDGET = 8 * 1024 * 1024;
 const MAX_MEDIA_ITEM_BYTES = 2 * 1024 * 1024;
 
+export type CodexProvider = "openai-codex" | `openai-codex-${string}`;
+
+export function isCodexProvider(value: unknown): value is CodexProvider {
+	return (
+		typeof value === "string" &&
+		(value === "openai-codex" ||
+			(value.startsWith("openai-codex-") && value.length > "openai-codex-".length))
+	);
+}
+
 export interface CodexCheckpointDetails {
 	kind: typeof CHECKPOINT_KIND;
 	version: typeof CHECKPOINT_VERSION;
 	checkpointId: string;
-	provider: "openai-codex";
+	provider: CodexProvider;
 	api: "openai-codex-responses";
 	modelId: string;
 	protocol: "remote-compaction-v2";
@@ -77,7 +87,7 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
 		value.version !== CHECKPOINT_VERSION ||
 		typeof value.checkpointId !== "string" ||
 		value.checkpointId.length < 8 ||
-		value.provider !== "openai-codex" ||
+		!isCodexProvider(value.provider) ||
 		value.api !== "openai-codex-responses" ||
 		typeof value.modelId !== "string" ||
 		value.protocol !== "remote-compaction-v2" ||
@@ -254,6 +264,7 @@ export function buildReplacementHistory(
 }
 
 export function createCheckpointDetails(input: {
+	provider: CodexProvider;
 	modelId: string;
 	replacementHistory: JsonObject[];
 	keptMessages: readonly AgentMessage[];
@@ -264,7 +275,7 @@ export function createCheckpointDetails(input: {
 		kind: CHECKPOINT_KIND,
 		version: CHECKPOINT_VERSION,
 		checkpointId: input.checkpointId ?? randomUUID(),
-		provider: "openai-codex",
+		provider: input.provider,
 		api: "openai-codex-responses",
 		modelId: input.modelId,
 		protocol: "remote-compaction-v2",

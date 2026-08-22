@@ -13,9 +13,11 @@ import {
 import {
 	buildReplacementHistory,
 	type CodexCheckpointDetails,
+	type CodexProvider,
 	checkpointMarker,
 	createCheckpointDetails,
 	fallbackSummary,
+	isCodexProvider,
 	latestCheckpoint,
 	projectCheckpointContext,
 } from "./checkpoint.js";
@@ -30,8 +32,10 @@ import {
 
 const STATUS_KEY = "codex-compact";
 
-function isSupportedModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
-	return model?.provider === "openai-codex" && hasApi(model, "openai-codex-responses");
+type CodexModel = Model<"openai-codex-responses"> & { provider: CodexProvider };
+
+function isSupportedModel(model: Model<Api> | undefined): model is CodexModel {
+	return isCodexProvider(model?.provider) && hasApi(model, "openai-codex-responses");
 }
 
 function activeCheckpoint(ctx: ExtensionContext) {
@@ -41,8 +45,10 @@ function activeCheckpoint(ctx: ExtensionContext) {
 function isCheckpointCompatible(
 	details: CodexCheckpointDetails,
 	model: Model<Api> | undefined,
-): model is Model<"openai-codex-responses"> {
-	return isSupportedModel(model) && model.id === details.modelId;
+): model is CodexModel {
+	return (
+		isSupportedModel(model) && model.provider === details.provider && model.id === details.modelId
+	);
 }
 
 function keptMessages(event: SessionBeforeCompactEvent): AgentMessage[] {
@@ -77,8 +83,8 @@ function projectedCurrentMessages(
 	const session = buildSessionContext(event.branchEntries, leafId);
 	const prior = latestCheckpoint(event.branchEntries)?.details;
 	if (!prior) return { messages: session.messages };
-	if (prior.modelId !== model.id) {
-		throw new Error("The active opaque checkpoint belongs to a different Codex model");
+	if (prior.provider !== model.provider || prior.modelId !== model.id) {
+		throw new Error("The active opaque checkpoint belongs to a different Codex provider or model");
 	}
 	const projected = projectCheckpointContext(session.messages, prior);
 	if (!projected) {
@@ -149,6 +155,7 @@ async function compactRemotely(
 			tokenBudget: settings.replacementTokenBudget,
 		});
 		const details = createCheckpointDetails({
+			provider: model.provider,
 			modelId: model.id,
 			replacementHistory,
 			keptMessages: keptMessages(event),

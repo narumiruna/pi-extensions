@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { MenuDefinition } from "@narumitw/pi-tui-kit";
+import { isCodexProvider } from "./checkpoint.js";
 import type {
 	CodexCompactSettings,
 	CodexCompactSettingsRuntime,
@@ -221,7 +222,7 @@ function compactMenuStatus(ctx: ExtensionCommandContext): CompactMenuStatus {
 	const model = ctx.model;
 	return {
 		model: model ? `${model.provider}/${model.id}` : "none",
-		remoteCompatible: model?.provider === "openai-codex" && model.api === "openai-codex-responses",
+		remoteCompatible: isCodexProvider(model?.provider) && model.api === "openai-codex-responses",
 	};
 }
 
