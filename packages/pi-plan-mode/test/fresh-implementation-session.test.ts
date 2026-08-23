@@ -35,8 +35,13 @@ async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown)
 const IMPLEMENTATION_CHOICES = ["Implement here", "Start fresh and implement"];
 const MISSING_SETTINGS = { readSettings: async () => ({ kind: "missing" as const }) };
 
-function assertImplementationChoiceCopy(title: string, options: string[]) {
-	assert.match(title, /Implement here keeps this planning conversation/i);
+function assertImplementationChoiceCopy(title: string, options: string[], cleanBranch = true) {
+	assert.match(
+		title,
+		cleanBranch
+			? /Implement here returns to where Plan mode started/i
+			: /Implement here keeps this planning conversation/i,
+	);
 	assert.match(title, /Start fresh transfers only the approved plan/i);
 	assert.deepEqual(
 		options.filter((option) => IMPLEMENTATION_CHOICES.includes(option)),
@@ -83,7 +88,7 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
 					const lines = harness.render(width);
 					assert.ok(lines.every((line) => visibleWidth(line) <= width));
 				}
-				assert.match(harness.render().join("\n"), /Continue in this session/i);
+				assert.match(harness.render().join("\n"), /Return to the Plan start/i);
 				harness.handleInput("tui.select.down");
 				assert.match(harness.render(40).join("\n"), /Open a new linked session/i);
 				assert.match(harness.render(24).join("\n"), /Start fresh and implement/i);
@@ -118,6 +123,53 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
 		});
 		assert.equal(actionCalls, 0);
 	}
+});
+
+test("ready menu honors configured cancellation without running an action", async () => {
+	let actionCalls = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 60, {
+				matches(data, key) {
+					return key === "tui.select.cancel" && data === "q";
+				},
+				getKeys(key) {
+					return key === "tui.select.cancel" ? ["q"] : [];
+				},
+			});
+			assert.match(harness.render().join("\n"), /q close/i);
+			harness.handleInput("q");
+			return harness.resultPromise;
+		},
+	});
+	await showReadyPlanMenu(context.ctx, {
+		signal: new AbortController().signal,
+		isCurrent: () => true,
+		implementationOutcome: () => "Plan reinjection: Off.",
+		getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
+		implementHere: () => {
+			actionCalls += 1;
+		},
+		implementFresh: () => {
+			actionCalls += 1;
+		},
+		exportPlan: async () => {
+			actionCalls += 1;
+			return true;
+		},
+		save: () => {
+			actionCalls += 1;
+		},
+		stay: () => {
+			actionCalls += 1;
+		},
+		exit: () => {
+			actionCalls += 1;
+		},
+	});
+	assert.equal(actionCalls, 0);
 });
 
 test("automatic completion presents the ready menu without a model turn exactly once", async () => {
@@ -659,6 +711,6 @@ test("saved-plan RPC menu keeps both implementation choices understandable witho
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	await mock.commands.get("plan")?.handler("", context.ctx);
 	assert.ok(observedMenu);
-	assertImplementationChoiceCopy(observedMenu.title, observedMenu.options);
+	assertImplementationChoiceCopy(observedMenu.title, observedMenu.options, false);
 	assert.ok(observedMenu.options.includes("Show saved plan"));
 });

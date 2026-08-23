@@ -37,9 +37,12 @@ export interface PlanModeState {
 	previousThinkingLevel?: PlanModeFixedThinkingLevel;
 	appliedThinkingLevel?: PlanModeFixedThinkingLevel;
 	manualThinkingLevel?: PlanModeFixedThinkingLevel;
+	branchPointId?: string;
+	toolsBeforePlanMode?: string[];
 }
 
 type SessionEntry = {
+	id?: string;
 	type?: string;
 	customType?: string;
 	data?: unknown;
@@ -91,6 +94,8 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 			: undefined,
 		appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
 		manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
+		branchPointId: enabled ? entryId(entry.data.branchPointId) : undefined,
+		toolsBeforePlanMode: enabled ? stringArray(entry.data.toolsBeforePlanMode) : undefined,
 	};
 }
 
@@ -146,6 +151,10 @@ function planCompletionSource(value: unknown): PlanCompletionSource | undefined 
 	return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan"
 		? value
 		: undefined;
+}
+
+function entryId(value: unknown) {
+	return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : undefined;
 }
 
 function fixedThinkingLevel(value: unknown): PlanModeFixedThinkingLevel | undefined {

@@ -86,6 +86,10 @@ import {
 	snapshotPlanModeToolNames,
 	toolPolicyLabel,
 } from "./tool-selection.js";
+import {
+	capturePlanModeBranchPoint,
+	createTreeImplementationController,
+} from "./tree-implementation.js";
 import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -107,6 +111,8 @@ interface PlanModeDependencies {
 
 // Keep session state, persistence, tool, thinking, and mutex commits in this one closure so an
 // activation path cannot bypass the same atomic transition by crossing module-owned state.
+// This lifecycle owner stays over 1,000 lines for that atomic boundary; tree handoff orchestration
+// lives in tree-implementation.ts so provider navigation and recovery do not remain in this closure.
 export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDependencies = {}) {
 	const workflowMutex = new WorkflowMutex(pi);
 	let workflowOwner: WorkflowMutexOwner | undefined;
@@ -140,6 +146,34 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	const implementationRetention = createImplementationRetentionCoordinator();
 	const finalizationRequest = createFinalizationRequestCoordinator();
 	const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
+	const treeImplementation = createTreeImplementationController({
+		getState: () => state,
+		getCurrentSession: () => currentSession,
+		getWorkflowGeneration: () => workflowGeneration,
+		getRetention: () => configuredImplementationPlanRetention(settings),
+		restoreNormalRuntime: (tools) => {
+			pi.setActiveTools([...tools]);
+			previousTools = undefined;
+			if (state.enabled) {
+				restoreThinkingLevel();
+				releaseWorkflowOwner();
+			}
+			advanceWorkflowGeneration();
+		},
+		publishImplementation: (nextState, activeImplementation, ctx) => {
+			state = nextState;
+			implementationRetention.reset();
+			implementationRetention.restore(activeImplementation);
+			persistState();
+			updateUi(ctx);
+		},
+		publishRecovery: (nextState, ctx) => {
+			state = nextState;
+			persistState();
+			updateUi(ctx);
+		},
+		sendUserMessage: sendPlanModeUserMessage,
+	});
 	const planExports = createPlanExportController({
 		getState: () => state,
 		getSettings: () => settings,
@@ -156,7 +190,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		getExportDestination: (ctx) => planExports.getDestination(ctx),
 		show: (ctx) => showStoredPlan(pi, ctx, state),
 		finalize: requestFinalPlan,
-		implementHere: startImplementation,
+		implementHere: (ctx, signal) => startImplementation(ctx, signal),
 		implementFresh: startFreshImplementation,
 		exportPlan: exportPlan,
 		settings: showSettings,
@@ -445,6 +479,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
 		menuController = new AbortController();
 		readyPresentationIntent = undefined;
+		treeImplementation.cancel();
 		latestCommandContext = undefined;
 		previousTools = undefined;
 		implementationRetention.reset();
@@ -455,7 +490,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (generation !== menuGeneration || menuController.signal.aborted) return;
 		startPlanModeSettingsWatch(generation);
 		const persistFlagActivation = pi.getFlag("plan") === true && !restoredState.enabled;
-		const candidate = persistFlagActivation
+		const activationCandidate = persistFlagActivation
 			? restoredState.savedPlan
 				? {
 						...restoredState,
@@ -468,9 +503,32 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 					}
 				: { ...restoredState, enabled: true, activeImplementation: undefined }
 			: restoredState;
+		const candidate =
+			persistFlagActivation && activationCandidate.enabled
+				? addPlanModeBranchPoint(activationCandidate, ctx)
+				: activationCandidate;
 		if (!installRestoredState(candidate, ctx)) return;
 		implementationRetention.restore(state.activeImplementation);
 		if (persistFlagActivation && state.enabled) persistState();
+		updateUi(ctx);
+	});
+
+	pi.on("session_tree", (event, ctx) => {
+		if (currentSession !== ctx.sessionManager) return;
+		treeImplementation.acceptsTreeEvent(event, ctx);
+
+		finalizationRequest.reset();
+		workflowGeneration += 1;
+		const generation = ++menuGeneration;
+		menuController.abort(new DOMException("Plan-mode branch changed", "AbortError"));
+		menuController = new AbortController();
+		readyPresentationIntent = undefined;
+		refreshStateBeforeFirstAgentStart = false;
+		implementationRetention.reset();
+		stopPlanModeSettingsWatch();
+		startPlanModeSettingsWatch(generation);
+		if (!installRestoredState(readRestoredState(ctx), ctx)) return;
+		implementationRetention.restore(state.activeImplementation);
 		updateUi(ctx);
 	});
 
@@ -493,6 +551,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		menuGeneration += 1;
 		menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
 		readyPresentationIntent = undefined;
+		treeImplementation.cancel();
 		latestCommandContext = undefined;
 		refreshStateBeforeFirstAgentStart = false;
 		implementationRetention.reset();
@@ -674,15 +733,19 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		advanceWorkflowGeneration();
 		try {
 			previousTools = withoutRequiredPlanModeTools(safeGetActiveTools());
-			state = {
-				...state,
-				enabled: true,
-				awaitingAction: false,
-				savedPlan: undefined,
-				activeImplementation: undefined,
-				selectedToolNames: candidate.selectedToolNames,
-				selectedToolKeys: candidate.selectedToolKeys,
-			};
+			state = addPlanModeBranchPoint(
+				{
+					...state,
+					enabled: true,
+					awaitingAction: false,
+					savedPlan: undefined,
+					activeImplementation: undefined,
+					selectedToolNames: candidate.selectedToolNames,
+					selectedToolKeys: candidate.selectedToolKeys,
+				},
+				ctx,
+				previousTools,
+			);
 			activatePlanModeTools();
 			applyPlanThinkingLevel();
 			persistState();
@@ -692,6 +755,21 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			rollbackNewActivation(previousState, previousToolSnapshot, ctx);
 			throw error;
 		}
+	}
+
+	function addPlanModeBranchPoint(
+		candidate: PlanModeState,
+		ctx: ExtensionContext,
+		tools = withoutRequiredPlanModeTools(safeGetActiveTools()),
+	) {
+		const branchPoint = capturePlanModeBranchPoint(pi, ctx, tools);
+		return branchPoint
+			? {
+					...candidate,
+					branchPointId: branchPoint.id,
+					toolsBeforePlanMode: branchPoint.tools,
+				}
+			: candidate;
 	}
 
 	function enterPlanModeWithPrompt(prompt: string, ctx: ExtensionContext) {
@@ -722,6 +800,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			savedPlan: undefined,
 			activeImplementation: undefined,
 			manualThinkingLevel: undefined,
+			branchPointId: undefined,
+			toolsBeforePlanMode: undefined,
 		};
 		if (wasEnabled) {
 			restoreTools();
@@ -845,6 +925,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			savedPlan: { plan, source },
 			activeImplementation: undefined,
 			manualThinkingLevel: undefined,
+			branchPointId: undefined,
+			toolsBeforePlanMode: undefined,
 		};
 		restoreTools();
 		restoreThinkingLevel();
@@ -864,7 +946,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		});
 	}
 
-	async function startImplementation(ctx: ExtensionContext) {
+	async function startImplementation(ctx: ExtensionContext, signal?: AbortSignal) {
 		const savedPlan = state.enabled ? undefined : state.savedPlan;
 		const initialPlan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
 		if (!initialPlan) {
@@ -888,6 +970,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		const source =
 			(state.enabled ? state.latestPlanSource : savedPlan?.source) ?? "legacy_proposed_plan";
 		if (!plan) return;
+		if (state.enabled && state.branchPointId) {
+			await startTreeImplementation(ctx, plan, source, signal);
+			return;
+		}
 
 		advanceWorkflowGeneration();
 		const previousState = state;
@@ -914,6 +1000,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 						retention,
 					},
 			manualThinkingLevel: undefined,
+			branchPointId: undefined,
+			toolsBeforePlanMode: undefined,
 		};
 		if (wasEnabled) {
 			restoreTools();
@@ -942,6 +1030,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			return;
 		}
 		if (wasEnabled) releaseWorkflowOwner();
+	}
+
+	async function startTreeImplementation(
+		ctx: ExtensionContext,
+		plan: string,
+		source: PlanCompletionSource,
+		signal?: AbortSignal,
+	) {
+		await treeImplementation.start(ctx, { plan, source, signal });
 	}
 
 	function clearActiveImplementation(id: string, ctx: ExtensionContext) {
@@ -1158,7 +1255,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	}
 
 	function restoreTools() {
-		const restoredTools = previousTools ?? DEFAULT_TOOLS;
+		const restoredTools = previousTools ?? state.toolsBeforePlanMode ?? DEFAULT_TOOLS;
 		pi.setActiveTools(withoutRequiredPlanModeTools(restoredTools));
 		previousTools = undefined;
 	}
@@ -1254,7 +1351,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			}
 			state = candidate;
 			if (state.enabled) {
-				if (!wasEnabled) previousTools = withoutRequiredPlanModeTools(safeGetActiveTools());
+				if (!wasEnabled) {
+					previousTools =
+						state.toolsBeforePlanMode ?? withoutRequiredPlanModeTools(safeGetActiveTools());
+				}
 				activatePlanModeTools();
 				applyPlanThinkingLevel();
 			} else {

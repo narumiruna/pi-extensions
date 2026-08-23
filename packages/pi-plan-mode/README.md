@@ -12,7 +12,7 @@ This independently installable extension adds a Codex-like `/plan` collaboration
 - Enables read-only exploration tools while blocking mutating tools and unsafe shell forms by default.
 - Requires structured questions for important ambiguity and explicit completion for a decision-ready plan.
 - Reviews the complete plan before implementation, export, save, continued planning, or discard.
-- Starts implementation in the planning session or a fresh linked session with the exact approved plan.
+- Starts implementation on a clean same-session branch or in a fresh linked session with the exact approved plan.
 - Persists Plan state and one saved plan across resume and compaction.
 - Exposes statusline state and configurable tool visibility, export destination, plan reinjection, shortcut, and thinking level.
 - Cooperates anonymously with Workflow Mutex Protocol v1 participants so only one agent workflow starts in a session.
@@ -79,8 +79,10 @@ Exit and start a new workflow if a different tool set is required.
 The `plan_mode_question` tool keeps a dedicated model-requested questionnaire instead of using command-menu navigation.
 `/plan show` displays the stored plan without starting a model turn, including the accepted plan while implementation is active.
 `/plan finalize` explicitly asks the agent to complete the plan or ask one remaining material question, `/plan save` stores a completed ready plan for later and leaves Plan mode, and `/plan export [path]` writes a ready, saved, or active implementation plan to Markdown.
-Completed and saved plan menus offer **Implement here**, which continues with the planning conversation, and **Start fresh and implement**, which opens a new session and transfers only the approved plan.
-The direct `/plan implement` compatibility route remains equivalent to **Implement here** and never opens a selector.
+A completed active Plan offers **Implement here**, which returns to where Plan mode started and transfers only the approved plan onto a clean same-session branch.
+A saved plan has no active Plan branch point, so its **Implement here** action continues from the current branch for compatibility.
+**Start fresh and implement** opens a new session and transfers only the approved plan.
+The direct `/plan implement` compatibility route remains equivalent to the applicable **Implement here** behavior and never opens a selector.
 A successful ready-plan export also leaves Plan mode; saved and active implementation exports retain their existing state.
 `show`, `save`, `export`, and `implement` fail closed when no applicable plan is stored; `finalize` requires active Plan mode.
 Pi executes extension commands immediately during streaming, but changing Plan state or handing off implementation during an active run would mix the run's existing system prompt with a new tool contract.
@@ -164,13 +166,18 @@ Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and 
 
 After completion, `/plan` opens the ready actions when interactive UI is available.
 The same flat menu shows **Implement here** and **Start fresh and implement**, explains which conversation context each choice uses, and previews the selected **Plan reinjection** policy.
-**Implement here**—and the compatibility route `/plan implement`—disables Plan mode, restores full tool access, captures the current policy, and starts implementation in the current session with its planning conversation.
+For plans started by this version, **Implement here**—and the compatibility route `/plan implement`—waits for idle, navigates without a branch summary to a context-free marker created immediately before Plan activation, restores the exact ordered Normal tools, and transfers the approved plan onto a new same-session implementation branch.
+The abandoned Plan conversation, question calls, completion call, and tool results remain inspectable through `/tree` but are absent from the implementation branch and model context.
+A restored legacy ready plan without branch metadata uses the previous linear same-session handoff so an upgrade never makes an existing plan unimplementable.
+A saved plan also uses the linear compatibility path because it can be resumed independently of its original Plan branch.
 **Start fresh and implement** waits for the source session to become idle, verifies the selected model and authentication, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
 The destination still loads its normal `AGENTS.md`, skills, project resources, and extensions.
+Cancellation or failure before clean-branch navigation leaves the completed plan ready on the Plan branch.
+If delivery fails after navigation commits, the exact implementation request is restored to an empty editor when possible and the plan remains saved or active on the new branch.
 Choosing **Export plan…** asks for a destination, writes the plan, restores normal tools and thinking, and leaves Plan mode without starting a model turn.
 Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
 
-When a workflow was started only with `--plan` and no `/plan` command has run in that session, the automatic menu cannot obtain Pi's command-only session replacement capability; choosing fresh asks you to reopen `/plan`, where the same action is available.
+When a workflow was started only with `--plan` and no `/plan` command has run in that session, the automatic menu cannot obtain Pi's command-only tree-navigation or session-replacement capability; choosing either implementation handoff asks you to reopen `/plan`, where the same action is available.
 A successful fresh handoff does not delete or consume the source planning session.
 Resume it later to inspect or hand off the ready/saved plan again; this deliberate duplication is the recovery path if the destination work is abandoned.
 In-memory sessions create an unlinked fresh session because no parent file exists.
@@ -198,8 +205,8 @@ These modes reject saved-plan display and implementation before changing state b
 
 Both implementation paths apply the current **Plan reinjection** policy in their destination.
 The default **Off — conversation history only** policy does not create active-plan state or inject a hidden plan context.
-Implement here sends `Implement the plan.` and leaves the accepted plan in ordinary planning history.
-Start fresh and implement, or implementing a saved plan here, puts the complete plan in one ordinary initial user prompt because no reliable planning conversation is present.
+Clean-branch implementation, fresh implementation, and saved-plan implementation put the complete plan in one ordinary initial user prompt because the Plan conversation is absent or not a reliable canonical source.
+Legacy linear implementation keeps its established `Implement the plan.` handoff while the accepted plan remains in ordinary planning history.
 Later model calls then rely on Pi's normal conversation history and compaction behavior.
 **Through first implementation run** guarantees the exact plan throughout that run, including retries, compaction retries, and queued continuation, then clears active-plan state at `agent_settled`.
 **Until manually cleared** guarantees the exact plan across later turns, resume, and manual or automatic compaction until `/plan exit` or supersession.
@@ -425,10 +432,10 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 - The agent should use `plan_mode_question` for important non-discoverable preferences or tradeoffs before finalizing.
 - The agent completes with a standalone `plan_mode_complete` tool call instead of relying on semantic prose detection.
 - `update_plan` checklist use is blocked while Plan mode is active.
-- The implementation boundary is explicit: Plan mode restores tools before saving or starting implementation, saving keeps the plan outside ordinary model context, and choosing implementation immediately triggers a normal agent turn with full tool access.
+- The implementation boundary is explicit: active Plan implementation restores the exact ordered Normal tools on a clean branch before the handoff, saving keeps the plan outside ordinary model context, and choosing implementation immediately triggers a normal agent turn with full tool access.
 - The default `clear-on-start` policy follows Codex by using ordinary conversation history only; `clear-after-first-run` and `keep` add explicit exact-plan guarantees.
 - Pi extension safety is approximated with tool classification and fail-closed filtering for every effective tool named `bash`; other non-built-in tools remain user-selected at user risk because Pi does not expose standardized tool mutability metadata.
-- Plan and Normal mode intentionally use different instructions and tool schemas, so the first provider request after a genuine mode transition may miss the prompt cache; later requests can reuse the new stable prefix.
+- Plan and Normal mode intentionally use different instructions and tool schemas, so the first provider request on the disposable Plan branch may miss the prompt cache; clean-branch implementation restores the prior Normal contract and may reuse its cached prefix when the provider, model, cache lifetime, and session-affinity policy permit it.
 - Unlike native Codex, this extension uses a terminating Pi tool plus an `agent_settled` ready flow; Pi cannot provide sandbox-level enforcement.
 
 ## 🗂️ Package layout

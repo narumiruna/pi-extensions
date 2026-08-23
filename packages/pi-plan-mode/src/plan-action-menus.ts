@@ -8,7 +8,7 @@ interface MenuLifecycle {
 }
 
 const IMPLEMENTATION_CONTEXT_LINES = [
-	"Implement here keeps this planning conversation.",
+	"Implement here returns to where Plan mode started and transfers only the approved plan.",
 	"Start fresh transfers only the approved plan to a new session.",
 ] as const;
 
@@ -19,7 +19,7 @@ interface PlanMenuOptions extends MenuLifecycle {
 	getExportDestination: PlanExportDestinationProvider;
 	show(): void;
 	finalize(): void;
-	implementHere(): void | Promise<void>;
+	implementHere(signal: AbortSignal): void | Promise<void>;
 	implementFresh(signal: AbortSignal): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
@@ -56,7 +56,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 							{
 								id: "implement-here",
 								label: "Implement here",
-								description: "Continue in this session with the planning conversation.",
+								description: "Return to the Plan start and implement on a clean branch.",
 								action: "implement-here",
 							},
 							{
@@ -89,8 +89,8 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 				options.finalize();
 				return { kind: "close" };
 			},
-			"implement-here": async () => {
-				await options.implementHere();
+			"implement-here": async ({ signal }) => {
+				await options.implementHere(signal);
 				return { kind: "close" };
 			},
 			"implement-fresh": async ({ signal }) => {
@@ -123,7 +123,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 interface ReadyPlanMenuOptions extends MenuLifecycle {
 	implementationOutcome(): string;
 	getExportDestination: PlanExportDestinationProvider;
-	implementHere(): void | Promise<void>;
+	implementHere(signal: AbortSignal): void | Promise<void>;
 	implementFresh(signal: AbortSignal): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
@@ -145,7 +145,7 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 					{
 						id: "implement-here",
 						label: "Implement here",
-						description: "Continue in this session with the planning conversation.",
+						description: "Return to the Plan start and implement on a clean branch.",
 						action: "implement-here",
 					},
 					{
@@ -165,8 +165,8 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
-			"implement-here": async () => {
-				await options.implementHere();
+			"implement-here": async ({ signal }) => {
+				await options.implementHere(signal);
 				return { kind: "close" };
 			},
 			"implement-fresh": async ({ signal }) => {

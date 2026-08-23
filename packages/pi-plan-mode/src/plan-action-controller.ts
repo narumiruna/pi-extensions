@@ -18,7 +18,7 @@ interface PlanActionControllerOptions {
 	getExportDestination(ctx: ExtensionContext): PlanExportDestination;
 	show(ctx: ExtensionContext): void;
 	finalize(ctx: ExtensionContext): void;
-	implementHere(ctx: ExtensionContext): void | Promise<void>;
+	implementHere(ctx: ExtensionContext, signal: AbortSignal): void | Promise<void>;
 	implementFresh(ctx: ExtensionContext, isCurrent: () => boolean): void | Promise<void>;
 	exportPlan(
 		ctx: ExtensionContext,
@@ -50,7 +50,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				signal: lifecycle.signal,
 				isCurrent: lifecycle.isCurrent,
 				show: () => options.show(ctx),
-				implementHere: () => options.implementHere(ctx),
+				implementHere: () => options.implementHere(ctx, lifecycle.signal),
 				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
@@ -74,7 +74,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				...lifecycle,
 				show: () => options.show(ctx),
 				finalize: () => options.finalize(ctx),
-				implementHere: () => options.implementHere(ctx),
+				implementHere: (signal) => options.implementHere(ctx, signal),
 				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
@@ -91,7 +91,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				...lifecycle,
 				implementationOutcome: options.implementationOutcome,
 				getExportDestination: () => options.getExportDestination(ctx),
-				implementHere: () => options.implementHere(ctx),
+				implementHere: (signal) => options.implementHere(ctx, signal),
 				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
