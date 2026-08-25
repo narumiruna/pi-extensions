@@ -373,6 +373,12 @@ export function registerGoalLifecycle(
 		};
 	});
 
+	pi.on("turn_end", (event, ctx) => {
+		if (runtime.activeGoal?.status === "complete" && runtime.activeGoal?.id) {
+			try { runtime.clearActiveGoal(ctx); } catch {}
+		}
+	});
+
 	pi.on("tool_execution_end", (_event, ctx) => {
 		if (
 			runtime.activeGoal?.status === "budget_limited" &&
