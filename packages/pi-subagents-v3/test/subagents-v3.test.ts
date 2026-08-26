@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { discoverAgents } from "../src/agents.js";
-import subagentsV2 from "../src/subagents-v2.js";
+import subagentsV3 from "../src/subagents-v3.js";
 import type { ChildRequest, ChildResult } from "../src/types.js";
 
 interface RegisteredTool {
@@ -35,7 +35,7 @@ let previousAgentDirectory: string | undefined;
 
 beforeEach(() => {
 	previousAgentDirectory = process.env.PI_CODING_AGENT_DIR;
-	agentDirectory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-v2-agent-"));
+	agentDirectory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-v3-agent-"));
 	process.env.PI_CODING_AGENT_DIR = agentDirectory;
 	delete process.env.PI_SUBAGENT_DEPTH;
 });
@@ -47,18 +47,18 @@ afterEach(() => {
 	rmSync(agentDirectory, { recursive: true, force: true });
 });
 
-test("registers only the five minimal subagent-v2 tools with bounded schemas", () => {
+test("registers only the five minimal subagent-v3 tools with bounded schemas", () => {
 	const mock = createMockPi();
-	subagentsV2(mock.pi);
+	subagentsV3(mock.pi);
 	const tools = mock.tools as unknown as RegisteredTool[];
 	assert.deepEqual(
 		tools.map((tool) => tool.name),
 		[
-			"subagent-v2-start",
-			"subagent-v2-inspect",
-			"subagent-v2-cancel",
-			"subagent-v2-wait",
-			"subagent-v2-consult",
+			"subagent-v3-start",
+			"subagent-v3-inspect",
+			"subagent-v3-cancel",
+			"subagent-v3-wait",
+			"subagent-v3-consult",
 		],
 	);
 	assert.equal(tools[0]?.parameters.properties?.task?.maxLength, 50 * 1024);
@@ -91,8 +91,8 @@ test("registers only the five minimal subagent-v2 tools with bounded schemas", (
 
 test("rejects invalid execution timeouts with Pi bash semantics", async () => {
 	const mock = createMockPi();
-	subagentsV2(mock.pi);
-	const start = tool(mock, "subagent-v2-start");
+	subagentsV3(mock.pi);
+	const start = tool(mock, "subagent-v3-start");
 	const context = createMockContext();
 	await assert.rejects(
 		() =>
@@ -125,16 +125,16 @@ test("starts in the background, delivers one completion, and returns terminal ou
 	});
 	let childRequest: ChildRequest | undefined;
 	const mock = createMockPi();
-	subagentsV2(mock.pi, {
+	subagentsV3(mock.pi, {
 		runChild: async (request) => {
 			childRequest = request;
 			return child;
 		},
 	});
 	const context = createMockContext({ cwd: process.cwd(), isProjectTrusted: () => false });
-	const start = tool(mock, "subagent-v2-start");
-	const wait = tool(mock, "subagent-v2-wait");
-	const inspect = tool(mock, "subagent-v2-inspect");
+	const start = tool(mock, "subagent-v3-start");
+	const wait = tool(mock, "subagent-v3-wait");
+	const inspect = tool(mock, "subagent-v3-inspect");
 	const started = await start.execute(
 		"start",
 		{ agent: "explorer", task: "Inspect one thing", timeout: 1 },
@@ -164,6 +164,10 @@ test("starts in the background, delivers one completion, and returns terminal ou
 		result: "Grounded result",
 	});
 	assert.equal(mock.sentMessages.length, 1);
+	assert.equal(
+		(mock.sentMessages[0]?.message as { customType?: unknown } | undefined)?.customType,
+		"pi-subagents-v3-completion",
+	);
 	assert.deepEqual(mock.sentMessages[0]?.options, { deliverAs: "steer" });
 	const completedInspection = await inspect.execute(
 		"inspect-completed",
@@ -181,7 +185,7 @@ test("starts in the background, delivers one completion, and returns terminal ou
 test("wait timeout leaves the job active and cancellation rejects a stale late result", async () => {
 	let resolveChild!: (result: ChildResult) => void;
 	const mock = createMockPi();
-	subagentsV2(mock.pi, {
+	subagentsV3(mock.pi, {
 		runChild: ({ signal }) =>
 			new Promise<ChildResult>((resolve) => {
 				resolveChild = resolve;
@@ -199,7 +203,7 @@ test("wait timeout leaves the job active and cancellation rejects a stale late r
 			}),
 	});
 	const context = createMockContext();
-	const started = await tool(mock, "subagent-v2-start").execute(
+	const started = await tool(mock, "subagent-v3-start").execute(
 		"start",
 		{ agent: "worker", task: "bounded task" },
 		undefined,
@@ -209,7 +213,7 @@ test("wait timeout leaves the job active and cancellation rejects a stale late r
 	assert.equal(started.details.timeout, undefined);
 	const jobId = String(started.details.jobId);
 	await Promise.resolve();
-	const waited = await tool(mock, "subagent-v2-wait").execute(
+	const waited = await tool(mock, "subagent-v3-wait").execute(
 		"wait",
 		{ jobId, timeout: 0.001 },
 		undefined,
@@ -221,7 +225,7 @@ test("wait timeout leaves the job active and cancellation rejects a stale late r
 	waitController.abort();
 	await assert.rejects(
 		() =>
-			tool(mock, "subagent-v2-wait").execute(
+			tool(mock, "subagent-v3-wait").execute(
 				"wait-cancelled",
 				{ jobId },
 				waitController.signal,
@@ -231,7 +235,7 @@ test("wait timeout leaves the job active and cancellation rejects a stale late r
 		(error: Error) => error.name === "AbortError",
 	);
 
-	const cancelTool = tool(mock, "subagent-v2-cancel");
+	const cancelTool = tool(mock, "subagent-v3-cancel");
 	const cancelled = await cancelTool.execute(
 		"cancel",
 		{ jobId },
@@ -252,7 +256,7 @@ test("wait timeout leaves the job active and cancellation rejects a stale late r
 		truncated: false,
 	});
 	await Promise.resolve();
-	const terminal = await tool(mock, "subagent-v2-wait").execute(
+	const terminal = await tool(mock, "subagent-v3-wait").execute(
 		"wait-terminal",
 		{ jobId },
 		undefined,
@@ -267,7 +271,7 @@ test("wait timeout leaves the job active and cancellation rejects a stale late r
 test("consult enforces the read-only request and shutdown suppresses stale delivery", async () => {
 	const requests: ChildRequest[] = [];
 	const mock = createMockPi();
-	subagentsV2(mock.pi, {
+	subagentsV3(mock.pi, {
 		runConsultChild: async (request) => {
 			requests.push(request);
 			return {
@@ -290,7 +294,7 @@ test("consult enforces the read-only request and shutdown suppresses stale deliv
 		},
 	});
 	const context = createMockContext();
-	const consulted = await tool(mock, "subagent-v2-consult").execute(
+	const consulted = await tool(mock, "subagent-v3-consult").execute(
 		"consult",
 		{ agent: "worker", task: "Review without editing" },
 		undefined,
@@ -301,7 +305,7 @@ test("consult enforces the read-only request and shutdown suppresses stale deliv
 	assert.equal(requests[0]?.readOnly, true);
 	assert.equal(requests[0]?.timeout, undefined);
 
-	await tool(mock, "subagent-v2-start").execute(
+	await tool(mock, "subagent-v3-start").execute(
 		"start",
 		{ agent: "worker", task: "Long work" },
 		undefined,
@@ -322,7 +326,7 @@ test("trusted project agents override user agents and inspection exposes only bo
 		path.join(userAgents, "reviewer.md"),
 		"---\nname: reviewer\ndescription: User reviewer\ntools: read\n---\nUser prompt\n",
 	);
-	const project = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-v2-project-"));
+	const project = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-v3-project-"));
 	try {
 		const projectAgents = path.join(project, ".pi", "agents");
 		mkdirSync(projectAgents, { recursive: true });
@@ -331,8 +335,8 @@ test("trusted project agents override user agents and inspection exposes only bo
 			"---\nname: reviewer\ndescription: Project reviewer\ntools: read\ntimeoutMs: 1\n---\nSECRET PROJECT PROMPT\n",
 		);
 		const mock = createMockPi();
-		subagentsV2(mock.pi);
-		const inspect = tool(mock, "subagent-v2-inspect");
+		subagentsV3(mock.pi);
+		const inspect = tool(mock, "subagent-v3-inspect");
 		const untrusted = await inspect.execute(
 			"inspect-user",
 			{},

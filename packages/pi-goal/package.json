@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-goal",
-	"version": "0.53.3",
+	"version": "0.54.0",
 	"description": "Pi extension for autonomous single-objective /goal completion.",
 	"type": "module",
 	"license": "MIT",

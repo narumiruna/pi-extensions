@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.52.2
+
+### Patch Changes
+
+- 42e8940: Allow current-account consumers to verify named OAuth credentials through a process-local protocol, including GitHub Copilot usage and OpenAI Codex reset flows.
+
 ## 0.52.1
 
 ### Patch Changes

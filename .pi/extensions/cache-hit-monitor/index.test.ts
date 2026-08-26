@@ -299,6 +299,25 @@ test("renders restored totals for a summary-only branch", async () => {
 	assert.match(rendered, /Session {2}1 req.*hit 90\.0%/);
 });
 
+test("renders restored summary totals when cache accounting is unavailable", async () => {
+	const summary = assistant(1_000, 0);
+	const harness = createHarness();
+	const current = createContext("tui", [
+		{
+			type: "compaction",
+			id: "compact",
+			parentId: null,
+			usage: summary.usage,
+		} as SessionEntry,
+	]);
+	await harness.emit("session_start", {}, current.ctx);
+	await harness.command("", current.ctx);
+
+	const rendered = renderWidget(current.widgets.at(-1), 120)?.join("\n") ?? "";
+	assert.match(rendered, /summary usage only/);
+	assert.match(rendered, /Session {2}1 req.*hit n\/a.*uncached 1k.*cost \$0\.010.*saved ~n\/a/);
+});
+
 test("clears replacement UI and ignores stale replacement-session events", async () => {
 	const harness = createHarness();
 	const previous = createContext();

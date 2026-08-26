@@ -1,17 +1,4 @@
-import type { CompletionDelivery } from "./agents/types.js";
-
-export function createSpawnPromptGuidelines(
-	completionDelivery: CompletionDelivery,
-	blockingEnabled = true,
-): string[] {
-	const deliveryGuidance =
-		completionDelivery === "auto-resume"
-			? blockingEnabled
-				? "With subagent_spawn completion delivery set to auto-resume, prefer one subagent_spawn for broad asynchronous research or consequential independent review that covers related branches even when the final answer depends on its result; do not choose blocking parallel fan-out merely to keep delegation in the same turn."
-				: "With subagent_spawn completion delivery set to auto-resume, prefer one subagent_spawn for broad asynchronous research or consequential independent review that covers related branches even when the final answer depends on its result."
-			: blockingEnabled
-				? "With subagent_spawn completion delivery set to next-turn (the default), prefer one subagent_spawn for broad asynchronous research or consequential independent review only when the current response does not depend on its result; when it does, use subagent_spawn only with useful overlap and call subagent_await after that overlap is complete. Do not migrate new work to the deprecated subagent tool."
-				: "With subagent_spawn completion delivery set to next-turn (the default), use subagent_spawn only when the current response does not depend on its result; complete final-answer-dependent work directly because an idle root is not awakened.";
+export function createSpawnPromptGuidelines(blockingEnabled = true): string[] {
 	return [
 		"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly. The main agent retains overall planning, immediate critical-path work, integration, final verification, and the final answer.",
 		"Before one ordinary subagent_spawn, identify concrete useful non-overlapping main-agent work you can start immediately and a supported completion integration path. If none exists, perform the task directly instead of calling subagent_spawn.",
@@ -21,12 +8,8 @@ export function createSpawnPromptGuidelines(
 		"For an ordinary subagent_spawn, omit contract; use a delegation contract only when explicit acceptance, authority, evidence, or admission semantics are required.",
 		"Do not set subagent_spawn contract enforcement to enforce with requestedAuthority readPaths, writePaths, network, or secrets; those guarantees are unsupported and reject before child launch, while capabilities and tools remain enforceable.",
 		"If subagent_spawn rejects an unsupported guarantee, retry once with those fields removed or enforcement set to audit only when they were advisory; when any field is a required security boundary, stop instead of weakening it.",
-		deliveryGuidance,
-		...(completionDelivery === "auto-resume"
-			? [
-					'Track every final-answer-dependent subagent_spawn by setting completionRequirement to "required" and retaining its returned agentId or taskPath; treat interim output as progress, and synthesize only after every corresponding completion message is visible or terminal.',
-				]
-			: []),
+		"Read the current pi-subagents session-guidance message before choosing detached completion behavior. With next-turn delivery, use subagent_spawn only when the current response does not depend on its result unless useful overlap ends with an intentional subagent_await. With auto-resume delivery, final-answer-dependent detached work may continue asynchronously.",
+		'Track every final-answer-dependent subagent_spawn by setting completionRequirement to "required" and retaining its returned agentId or taskPath; treat interim output as progress, and synthesize only after every corresponding completion message is visible or terminal.',
 		"Keep ordinary review in the main agent with a review skill and deterministic checks; use subagent_spawn for detached review only when consequential independent verification has concrete parallel value.",
 		"Use a single subagent_spawn for a bounded implementation slice with clear ownership only when it can run beside the identified main-agent work.",
 		"Use a single subagent_spawn without concurrent main-agent work only for an explicit user-requested specialist model, tool profile, or isolation boundary.",

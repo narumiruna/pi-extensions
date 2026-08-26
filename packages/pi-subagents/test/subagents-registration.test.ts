@@ -63,8 +63,9 @@ test("subagents registers consistent blocking guidance and one management comman
 	assert.match(guidanceText, /ordinary review.*main agent.*review skill.*deterministic checks/i);
 	assert.doesNotMatch(guidanceText, /critical-path work needed for.*next action/i);
 	assert.doesNotMatch(guidanceText, /use subagent parallel mode with 2-4/i);
-	assert.match(guidanceText, /configured max 8/i);
-	assert.match(String(tool?.description), /maximum parallel worker tasks per call: 8/i);
+	assert.match(guidanceText, /configured maximum.*session-guidance/i);
+	assert.match(String(tool?.description), /current call limit.*session-guidance/i);
+	assert.doesNotMatch(`${guidanceText}\n${String(tool?.description)}`, /configured max 8/i);
 	assert.match(guidanceText, /omit the aggregator key entirely/i);
 	assert.match(guidanceText, /null, empty strings, or an empty object/i);
 
@@ -241,10 +242,14 @@ test("blocking parallel calls honor the configured worker limit", async () => {
 		subagents(mock.pi);
 		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
 		assert.ok(tool);
-		assert.match(String(mock.tools[0]?.description), /maximum parallel worker tasks per call: 1/i);
+		assert.match(String(mock.tools[0]?.description), /current call limit.*session-guidance/i);
 		const guidance = mock.tools[0]?.promptGuidelines;
 		assert.ok(Array.isArray(guidance));
-		assert.match(guidance.join("\n"), /configured max 1/i);
+		assert.match(guidance.join("\n"), /configured maximum.*session-guidance/i);
+		assert.doesNotMatch(
+			`${String(mock.tools[0]?.description)}\n${guidance.join("\n")}`,
+			/configured max 1/i,
+		);
 
 		await assert.rejects(
 			() =>

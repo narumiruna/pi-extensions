@@ -1,13 +1,7 @@
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
+import { expandReverseDependencies, readWorkspaces } from "./workspace-graph.mjs";
 
-const DEPENDENCY_FIELDS = [
-	"dependencies",
-	"devDependencies",
-	"peerDependencies",
-	"optionalDependencies",
-];
 const DOCUMENTATION_BASENAMES = new Set([
 	"CHANGELOG.md",
 	"LICENSE",
@@ -28,7 +22,7 @@ export function changedFilesSince(root, base, head = "HEAD") {
 
 	const output = execFileSync(
 		"git",
-		["diff", "--name-only", "-z", "--diff-filter=ACDMRTUXB", `${base}...${head}`],
+		["diff", "--no-renames", "--name-only", "-z", "--diff-filter=ACDMRTUXB", `${base}...${head}`],
 		{ cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
 	);
 	return output.split("\0").filter(Boolean);
@@ -110,51 +104,6 @@ export function selectAffectedTests(root, changedFiles) {
 		workspaceDirectories,
 		reason: `${directlyAffected.size} directly changed workspace(s), ${workspaceDirectories.length} affected workspace(s)`,
 	};
-}
-
-function readWorkspaces(root) {
-	const packagesDirectory = path.join(root, "packages");
-	if (!fs.existsSync(packagesDirectory)) return [];
-
-	const workspaces = [];
-	for (const entry of fs.readdirSync(packagesDirectory, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const manifestPath = path.join(packagesDirectory, entry.name, "package.json");
-		if (!fs.existsSync(manifestPath)) continue;
-		const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-		if (typeof manifest.name !== "string") continue;
-		workspaces.push({
-			dependencies: dependencyNames(manifest),
-			directoryName: entry.name,
-			name: manifest.name,
-		});
-	}
-	return workspaces.sort((left, right) => left.directoryName.localeCompare(right.directoryName));
-}
-
-function dependencyNames(manifest) {
-	const names = new Set();
-	for (const field of DEPENDENCY_FIELDS) {
-		const dependencies = manifest[field];
-		if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) continue;
-		for (const name of Object.keys(dependencies)) names.add(name);
-	}
-	return names;
-}
-
-function expandReverseDependencies(workspaces, directlyAffected) {
-	const affected = new Set(directlyAffected);
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const workspace of workspaces) {
-			if (affected.has(workspace.name)) continue;
-			if (![...workspace.dependencies].some((dependency) => affected.has(dependency))) continue;
-			affected.add(workspace.name);
-			changed = true;
-		}
-	}
-	return affected;
 }
 
 function isPackageTestRelevant(relativePath) {

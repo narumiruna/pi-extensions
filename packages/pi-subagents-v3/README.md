@@ -1,14 +1,14 @@
-# 🧩 Pi Subagents v2 — Minimal Bounded Job Primitives
+# 🧩 Pi Subagents v3 — Minimal Bounded Job Primitives
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents-v2)](https://www.npmjs.com/package/@narumitw/pi-subagents-v2) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents-v3)](https://www.npmjs.com/package/@narumitw/pi-subagents-v3) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 > [!WARNING]
-> Pi Subagents v2 is experimental.
+> Pi Subagents v3 is experimental.
 > Its job lifecycle and completion format may change between releases.
 
-Pi Subagents v2 provides only the runtime primitives needed to start, inspect, cancel, wait for, and synchronously consult bounded subagent jobs.
+Pi Subagents v3 provides only the runtime primitives needed to start, inspect, cancel, wait for, and synchronously consult bounded subagent jobs.
 
-A bundled `subagents-v2` skill owns delegation strategy, parallel-work guidance, timeout selection, result handling, verification, and writer safety.
+A bundled `subagents-v3` skill owns delegation strategy, parallel-work guidance, timeout selection, result handling, verification, and writer safety.
 
 ## ✨ Features
 
@@ -24,19 +24,19 @@ A bundled `subagents-v2` skill owns delegation strategy, parallel-work guidance,
 Install persistently after the package is published:
 
 ```bash
-pi install npm:@narumitw/pi-subagents-v2
+pi install npm:@narumitw/pi-subagents-v3
 ```
 
 Try from npm without installing permanently:
 
 ```bash
-pi -e npm:@narumitw/pi-subagents-v2
+pi -e npm:@narumitw/pi-subagents-v3
 ```
 
 Try the extension and bundled skill from a local checkout:
 
 ```bash
-pi --no-extensions -e ./packages/pi-subagents-v2
+pi --no-extensions -e ./packages/pi-subagents-v3
 ```
 
 The package uses its source entrypoint and does not require a build before local loading.
@@ -47,21 +47,21 @@ Review source and agent definitions before installing or invoking them.
 
 ## 🚀 Quick start
 
-Ask Pi to use the bundled `subagents-v2` skill when deciding whether to delegate.
+Ask Pi to use the bundled `subagents-v3` skill when deciding whether to delegate.
 
 A typical background flow starts a job, continues useful main-agent work, and consumes the asynchronous completion without polling.
 
-Use `subagent-v2-wait` only when that result becomes necessary for the next action.
+Use `subagent-v3-wait` only when that result becomes necessary for the next action.
 
 ## 🛠️ Tools
 
 | Tool | Parameters | Purpose |
 | --- | --- | --- |
-| `subagent-v2-start` | `agent`, `task`, optional `timeout` | Start one background job and return its `jobId` immediately. |
-| `subagent-v2-inspect` | none | List bounded available-agent and retained-job metadata. |
-| `subagent-v2-cancel` | `jobId` | Idempotently cancel one queued or running job. |
-| `subagent-v2-wait` | `jobId`, optional `timeout` | Wait for one job without cancelling it. |
-| `subagent-v2-consult` | `agent`, `task`, optional `timeout` | Run one synchronous ephemeral read-only consultation. |
+| `subagent-v3-start` | `agent`, `task`, optional `timeout` | Start one background job and return its `jobId` immediately. |
+| `subagent-v3-inspect` | none | List bounded available-agent and retained-job metadata. |
+| `subagent-v3-cancel` | `jobId` | Idempotently cancel one queued or running job. |
+| `subagent-v3-wait` | `jobId`, optional `timeout` | Wait for one job without cancelling it. |
+| `subagent-v3-consult` | `agent`, `task`, optional `timeout` | Run one synchronous ephemeral read-only consultation. |
 
 Execution timeouts use seconds, accept finite numbers greater than zero through 2,147,483.647, and have no default.
 
@@ -69,13 +69,13 @@ Omitting `timeout` lets the child run until it exits, is cancelled, the session 
 
 Wait timeouts use the same optional seconds format and have no default.
 
-Omitting `timeout` from `subagent-v2-wait` waits until the job becomes terminal or the caller cancels the wait.
+Omitting `timeout` from `subagent-v3-wait` waits until the job becomes terminal or the caller cancels the wait.
 
 Tasks are limited to 50 KiB of UTF-8 text.
 
 The terminal states are `completed`, `partial`, `failed`, `timed_out`, and `cancelled`.
 
-`subagent-v2-inspect` never returns complete task text, child output, prompts, context, credentials, environment variables, or secrets.
+`subagent-v3-inspect` never returns complete task text, child output, prompts, context, credentials, environment variables, or secrets.
 
 ## 🤖 Agent definitions
 
@@ -141,10 +141,10 @@ Jobs and their retained results do not survive extension reload, session replace
 ## 🗂️ Package layout
 
 ```text
-packages/pi-subagents-v2/
+packages/pi-subagents-v3/
 ├── docs/                        # Concise tools and parameters reference
 ├── src/                         # Extension, registry, discovery, and subprocess runtime
-├── skills/subagents-v2/        # Delegation operating manual
+├── skills/subagents-v3/        # Delegation operating manual
 ├── test/                        # Focused lifecycle and policy tests
 ├── package.json                 # Pi extension and skill declarations
 └── README.md                    # User guide and safety boundaries

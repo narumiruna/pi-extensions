@@ -20,7 +20,6 @@ import { fileURLToPath } from "node:url";
 import {
 	analyzeCapabilityEvents,
 	buildCapabilityPrompt,
-	CAPABILITY_MATRIX,
 	CAPABILITY_TASKS,
 	type CapabilityBenchmarkArm,
 	type CapabilityBenchmarkOptions,
@@ -28,12 +27,13 @@ import {
 	type CapabilityTask,
 	type CapabilityTrialPlan,
 	type CapabilityTrialRecord,
+	capabilityBenchmarkVersion,
+	capabilityMatrix,
 	createCapabilityFixture,
 	createCapabilityTrialPlan,
 	parseCapabilityBenchmarkArgs,
 	projectCapabilityEvents,
 	redactCapabilityValue,
-	SUBAGENT_CAPABILITY_BENCHMARK_VERSION,
 	summarizeCapabilityBenchmark,
 	trialSucceeded,
 } from "../test/support/subagent-capability-benchmark.ts";
@@ -51,8 +51,10 @@ Options:
   --output <file>                Redacted JSON record path (required with --run)
   --pi <command>                 Pi executable (default: pi)
   --workspace <path>             Source repository root (default: current repository)
+  --job-version <v2|v3>          Bounded-job arm version (default: v3)
   --v1-extension <path>          pi-subagents entrypoint override
-  --v2-extension <path>          pi-subagents-v2 entrypoint override
+  --v2-extension <path>          Historical v2 entrypoint (required for v2)
+  --v3-extension <path>          pi-subagents-v3 entrypoint override
   --run                          Execute live-provider trials; otherwise preview only
   --resume                       Continue missing trials from a compatible output file
 `;
@@ -66,15 +68,24 @@ const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 const options = parseCapabilityBenchmarkArgs(process.argv.slice(2));
 const root = path.resolve(options.workspace ?? sourceRoot);
 const v1Extension = path.resolve(root, options.v1Extension ?? "packages/pi-subagents/src/index.ts");
-const extensions: Record<CapabilityBenchmarkArm, string | undefined> = {
+const jobArm: CapabilityBenchmarkArm = options.jobVersion === "v2" ? "v2-job" : "v3-job";
+let jobExtension: string;
+if (options.jobVersion === "v2") {
+	if (!options.v2Extension) throw new Error("Historical v2 benchmarks require --v2-extension");
+	jobExtension = path.resolve(root, options.v2Extension);
+} else {
+	jobExtension = path.resolve(root, options.v3Extension ?? "packages/pi-subagents-v3/src/index.ts");
+}
+const extensions: Partial<Record<CapabilityBenchmarkArm, string | undefined>> = {
 	"parent-only": undefined,
 	"v1-sync": v1Extension,
 	"v1-async": v1Extension,
-	"v2-job": path.resolve(root, options.v2Extension ?? "packages/pi-subagents-v2/src/index.ts"),
+	[jobArm]: jobExtension,
 };
-const plan = createCapabilityTrialPlan(options.repetitions);
+const plan = createCapabilityTrialPlan(options.repetitions, options.jobVersion);
+const version = capabilityBenchmarkVersion(options.jobVersion);
 const configuration = {
-	version: SUBAGENT_CAPABILITY_BENCHMARK_VERSION,
+	version,
 	model: options.model,
 	thinkingLevel: options.thinkingLevel,
 	repetitions: options.repetitions,
@@ -94,7 +105,7 @@ const configuration = {
 	},
 	comparability: {
 		quality: "diagnostic matched-task comparison; provider seeds unavailable",
-		cost: "not comparable because arms use different call counts and v2 omits nested child usage",
+		cost: `not comparable because arms use different call counts and ${options.jobVersion} omits nested child usage`,
 		equalInferenceBudget: false,
 		toolSurface:
 			"arm-specific names and surface size are product differences and cannot be blinded",
@@ -105,8 +116,16 @@ const configuration = {
 		description: task.description,
 		evidence: task.evidence,
 	})),
-	capabilityMatrix: CAPABILITY_MATRIX,
+	capabilityMatrix: capabilityMatrix(options.jobVersion),
 	order: plan,
+	resumeFingerprint: {
+		extensions: Object.fromEntries(
+			Object.entries(extensions).map(([arm, value]) => [
+				arm,
+				value ? createHash("sha256").update(path.resolve(value)).digest("hex") : null,
+			]),
+		),
+	},
 	environment: {
 		node: process.version,
 		platform: process.platform,
@@ -172,7 +191,7 @@ process.stdout.write(
 	`${JSON.stringify(
 		{
 			outputPath,
-			summary: summarizeCapabilityBenchmark(records),
+			summary: summarizeCapabilityBenchmark(records, options.jobVersion),
 		},
 		null,
 		2,
@@ -185,7 +204,7 @@ async function persist(): Promise<void> {
 		preview: false,
 		generatedAt: new Date().toISOString(),
 		rawRecords: [...records],
-		summary: summarizeCapabilityBenchmark(records),
+		summary: summarizeCapabilityBenchmark(records, options.jobVersion),
 	};
 	await mkdir(path.dirname(outputPath), { recursive: true });
 	const temporary = `${outputPath}.${process.pid}.tmp`;
@@ -203,6 +222,8 @@ function loadResumeRecords(
 		timeoutMs: number;
 		readinessTimeoutMs: number;
 		order: CapabilityTrialPlan[];
+		resumeFingerprint: { extensions: Record<string, string | null> };
+		environment: { extensions: Record<string, string | null> };
 	},
 	plan: readonly CapabilityTrialPlan[],
 ): CapabilityTrialRecord[] {
@@ -228,6 +249,19 @@ function loadResumeRecords(
 		if (parsed[key] !== expected[key]) {
 			throw new Error(`Cannot resume benchmark output with different ${key}`);
 		}
+	}
+	const parsedEnvironment = isRecord(parsed.environment) ? parsed.environment : undefined;
+	const parsedExtensions = parsedEnvironment?.extensions;
+	const parsedFingerprint = isRecord(parsed.resumeFingerprint)
+		? parsed.resumeFingerprint.extensions
+		: undefined;
+	if (
+		!isRecord(parsedExtensions) ||
+		JSON.stringify(parsedExtensions) !== JSON.stringify(expected.environment.extensions) ||
+		!isRecord(parsedFingerprint) ||
+		JSON.stringify(parsedFingerprint) !== JSON.stringify(expected.resumeFingerprint.extensions)
+	) {
+		throw new Error("Cannot resume benchmark output with different extension identities");
 	}
 	if (JSON.stringify(parsed.order) !== JSON.stringify(expected.order)) {
 		throw new Error("Cannot resume benchmark output with a different trial order");
@@ -335,7 +369,7 @@ async function runTrial(
 		analyzeCapabilityEvents(trial.arm, task, events),
 	) as ReturnType<typeof analyzeCapabilityEvents>;
 	const record: CapabilityTrialRecord = {
-		version: SUBAGENT_CAPABILITY_BENCHMARK_VERSION,
+		version,
 		pairIndex: trial.pairIndex,
 		repetition: trial.repetition,
 		orderIndex: trial.orderIndex,

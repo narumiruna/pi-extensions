@@ -14,6 +14,7 @@ import {
 	applyAvailableChromeDevtoolsTools,
 	availableChromeDevtoolsTools,
 	CHROME_DEVTOOLS_LOAD_TOOL_NAME,
+	chromeDevtoolsToolExposureMode,
 } from "./lazy-tools.js";
 import { state } from "./runtime.js";
 import { loadSettings, saveSettings, settingsFilePath } from "./settings.js";
@@ -49,7 +50,7 @@ export async function updateChromeDevtoolsTools(
 	if (result !== "saved" || generation !== state.sessionGeneration) return;
 	const status = await buildToolStatusMessage(pi);
 	if (generation !== state.sessionGeneration) return;
-	ctx.ui.notify(`Chrome DevTools lazy catalog ${action}.\n\n${status}`, "info");
+	ctx.ui.notify(`Chrome DevTools tool catalog ${action}.\n\n${status}`, "info");
 }
 
 export async function setSelectedChromeDevtoolsTools(
@@ -121,7 +122,11 @@ async function transactSelectedToolsNow(
 			const previousLoadedChromeTools = previousActiveTools.filter((name) =>
 				CHROME_DEVTOOLS_TOOL_NAMES.includes(name as ChromeDevToolsToolName),
 			);
-			pi.setActiveTools(unique([...currentNonChromeTools, ...previousLoadedChromeTools]));
+			const restoredChromeTools =
+				chromeDevtoolsToolExposureMode(pi) === "eager"
+					? previousAvailableTools
+					: previousLoadedChromeTools;
+			pi.setActiveTools(unique([...currentNonChromeTools, ...restoredChromeTools]));
 		} catch (caught) {
 			rollbackError = caught;
 		}
@@ -179,10 +184,11 @@ export async function buildToolStatusMessage(pi: ExtensionAPI) {
 	const persistedSetting = await persistedSettingLabel();
 	return sanitizeChromeDevtoolsDisplay(
 		[
-			`Chrome DevTools tools available to lazy-load: ${formatRuntimeStatus(summary)}`,
+			`Chrome DevTools tools available: ${formatRuntimeStatus(summary)}`,
+			`Tool exposure: ${chromeDevtoolsToolExposureMode(pi)}`,
 			`Loaded capability tools this session: ${summary.loadedChromeToolCount}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
 			`Loader: ${pi.getActiveTools().includes(CHROME_DEVTOOLS_LOAD_TOOL_NAME) ? "active" : "inactive"}`,
-			`Persisted lazy catalog: ${persistedSetting}`,
+			`Persisted tool catalog: ${persistedSetting}`,
 			...browserSettingsStatusLines(),
 			...(state.settingsNotice ? [`Settings note: ${state.settingsNotice}`] : []),
 			`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
@@ -289,9 +295,9 @@ export function buildCommandGuide() {
 		"/chrome-devtools quickstart — show endpoint and launch help",
 		"/chrome-devtools status — show tool and settings status",
 		"/chrome-devtools settings — edit browser connection settings",
-		"/chrome-devtools tools — choose tools available to lazy-load",
+		"/chrome-devtools tools — choose available Chrome DevTools tools",
 		"/chrome-devtools toggle|select — compatibility aliases for tools",
-		"/chrome-devtools enable|on — make all Chrome DevTools tools available to lazy-load",
+		"/chrome-devtools enable|on — make all Chrome DevTools tools available",
 		"/chrome-devtools disable|off — make all Chrome DevTools capability tools unavailable",
 	].join("\n");
 }

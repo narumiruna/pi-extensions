@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { UsageReport } from "../src/index.js";
 import {
@@ -271,6 +271,124 @@ test("GitHub Copilot usage uses the matching Pi OAuth refresh token", async () =
 				enterpriseUrl: "company.ghe.com",
 			})),
 		/Enterprise/iu,
+	);
+});
+
+test("GitHub Copilot named credential selection is deterministic and reaches only the official endpoint", async () => {
+	const adapter = SUPPORTED_ADAPTERS.find((candidate) => candidate.id === "github-copilot");
+	assert.ok(adapter);
+	const model = {
+		id: "gpt-5.4",
+		name: "GPT-5.4",
+		provider: "github-copilot",
+		baseUrl: "https://api.individual.githubcopilot.com",
+	};
+	const { ctx } = createMockContext({
+		model,
+		modelRegistry: {
+			getProviderAuth: async () => ({
+				auth: { apiKey: "runtime-access", baseUrl: model.baseUrl },
+			}),
+			getAvailable: () => [model],
+			getAll: () => [model],
+		},
+	});
+	const matching = {
+		type: "oauth" as const,
+		access: "runtime-access",
+		refresh: "matching-github-oauth",
+		expires: Date.now() + 60_000,
+		enterpriseUrl: "github.com",
+	};
+	const candidateReader = () => ({ ok: true as const, candidates: [matching] });
+	const auth = await resolveUsageAuth(
+		ctx,
+		adapter,
+		new Uint8Array(32),
+		() => ({ ...matching, access: "default-access" }),
+		candidateReader,
+	);
+	assert.ok(auth);
+	assert.equal(auth.apiKey, "matching-github-oauth");
+
+	const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(
+			JSON.stringify({
+				quota_snapshots: {
+					premium_interactions: { entitlement: 10, remaining: 7 },
+				},
+				login: "named-user",
+			}),
+			{ status: 200 },
+		),
+	);
+	try {
+		await queryProviderUsage(adapter, auth, new AbortController().signal, 1_000);
+		assert.equal(fetchMock.mock.calls.length, 1);
+		assert.equal(fetchMock.mock.calls[0]?.[0], "https://api.github.com/copilot_internal/user");
+		const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+		assert.deepEqual(init.headers, {
+			Authorization: "Bearer matching-github-oauth",
+			"X-GitHub-Api-Version": "2025-05-01",
+			"User-Agent": "pi-usage",
+		});
+	} finally {
+		fetchMock.mockRestore();
+	}
+
+	for (const candidates of [
+		[matching, { ...matching, refresh: "conflicting-oauth" }],
+		[{ ...matching, refresh: "conflicting-oauth" }, matching],
+	]) {
+		await assert.rejects(
+			() =>
+				resolveUsageAuth(
+					ctx,
+					adapter,
+					new Uint8Array(32),
+					() => undefined,
+					() => ({
+						ok: true,
+						candidates,
+					}),
+				),
+			/conflicting/iu,
+		);
+	}
+	const duplicate = await resolveUsageAuth(
+		ctx,
+		adapter,
+		new Uint8Array(32),
+		() => undefined,
+		() => ({ ok: true, candidates: [matching, structuredClone(matching)] }),
+	);
+	assert.equal(duplicate?.apiKey, "matching-github-oauth");
+	await assert.rejects(
+		() =>
+			resolveUsageAuth(
+				ctx,
+				adapter,
+				new Uint8Array(32),
+				() => undefined,
+				() => ({
+					ok: true,
+					candidates: [{ ...matching, enterpriseUrl: "company.ghe.test" }],
+				}),
+			),
+		/Enterprise/iu,
+	);
+	await assert.rejects(
+		() =>
+			resolveUsageAuth(
+				ctx,
+				adapter,
+				new Uint8Array(32),
+				() => undefined,
+				() => ({
+					ok: false,
+				}),
+			),
+		/failed closed/iu,
 	);
 });
 

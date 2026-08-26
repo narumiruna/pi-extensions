@@ -16,13 +16,15 @@ export interface CacheUsageRecord {
 	cacheRead: number;
 	cacheWrite: number;
 	promptTokens: number;
-	hitRatePercent: number;
-	uncachedRatePercent: number;
+	hitRatePercent: number | null;
+	uncachedRatePercent: number | null;
 	promptCost: number | null;
 	estimatedSavings: number | null;
 }
 
 export interface CacheSample extends CacheUsageRecord {
+	hitRatePercent: number;
+	uncachedRatePercent: number;
 	epoch: number;
 	timestamp: number;
 	provider: string;
@@ -98,7 +100,9 @@ export function collectCacheSamples(
 	let currentEpoch = 0;
 	for (const entry of entries) {
 		if (entry.type === "compaction" || entry.type === "branch_summary") {
-			const summaryCalculation = entry.usage ? calculateCacheUsage(entry.usage) : null;
+			const summaryCalculation = entry.usage
+				? calculateCacheUsage(entry.usage, { retainUnknownCacheAccounting: true })
+				: null;
 			if (summaryCalculation) summaryRecords.push(summaryCalculation.record);
 			currentEpoch += 1;
 			continue;
@@ -126,11 +130,22 @@ export function createCacheSample(
 	costModel?: Model<Api>,
 	cacheAccountingKnown = false,
 ): CacheSample | null {
-	const calculation = calculateCacheUsage(message.usage, costModel, cacheAccountingKnown);
-	if (!calculation) return null;
+	const calculation = calculateCacheUsage(message.usage, {
+		costModel,
+		cacheAccountingKnown,
+	});
+	if (
+		!calculation ||
+		calculation.record.hitRatePercent === null ||
+		calculation.record.uncachedRatePercent === null
+	) {
+		return null;
+	}
 
 	return {
 		...calculation.record,
+		hitRatePercent: calculation.record.hitRatePercent,
+		uncachedRatePercent: calculation.record.uncachedRatePercent,
 		epoch,
 		timestamp: finiteNumber(message.timestamp),
 		provider: message.provider,
@@ -229,6 +244,7 @@ export function aggregateCacheSamples(
 	let estimatedMissPremium = 0;
 	let hasRebilledTokens = false;
 	let missPremiumComplete = true;
+	let cacheAccountingComplete = true;
 	let bestHitRatePercent: number | null = null;
 	let worstHitRatePercent: number | null = null;
 
@@ -240,14 +256,18 @@ export function aggregateCacheSamples(
 		else promptCost += record.promptCost;
 		if (record.estimatedSavings === null) savingsKnown = false;
 		else estimatedSavings += record.estimatedSavings;
-		bestHitRatePercent = Math.max(
-			bestHitRatePercent ?? record.hitRatePercent,
-			record.hitRatePercent,
-		);
-		worstHitRatePercent = Math.min(
-			worstHitRatePercent ?? record.hitRatePercent,
-			record.hitRatePercent,
-		);
+		if (record.hitRatePercent === null) {
+			cacheAccountingComplete = false;
+		} else {
+			bestHitRatePercent = Math.max(
+				bestHitRatePercent ?? record.hitRatePercent,
+				record.hitRatePercent,
+			);
+			worstHitRatePercent = Math.min(
+				worstHitRatePercent ?? record.hitRatePercent,
+				record.hitRatePercent,
+			);
+		}
 	};
 
 	for (const sample of samples) addUsage(sample);
@@ -277,7 +297,8 @@ export function aggregateCacheSamples(
 		cacheRead,
 		cacheWrite,
 		promptTokens,
-		hitRatePercent: promptTokens > 0 ? (cacheRead / promptTokens) * 100 : null,
+		hitRatePercent:
+			promptTokens > 0 && cacheAccountingComplete ? (cacheRead / promptTokens) * 100 : null,
 		promptCost: promptCostKnown ? promptCost : null,
 		estimatedSavings: requestCount > 0 && savingsKnown ? estimatedSavings : null,
 		rebilledTokens,
@@ -414,21 +435,31 @@ interface CacheUsageCalculation {
 	paidPromptUnitCost: number | null;
 }
 
+interface CacheUsageCalculationOptions {
+	costModel?: Model<Api>;
+	cacheAccountingKnown?: boolean;
+	retainUnknownCacheAccounting?: boolean;
+}
+
 function calculateCacheUsage(
 	usage: Usage,
-	costModel?: Model<Api>,
-	cacheAccountingKnown = false,
+	options: CacheUsageCalculationOptions = {},
 ): CacheUsageCalculation | null {
 	const input = finiteNumber(usage.input);
 	const cacheRead = finiteNumber(usage.cacheRead);
 	const cacheWrite = finiteNumber(usage.cacheWrite);
 	const promptTokens = input + cacheRead + cacheWrite;
-	if (promptTokens <= 0 || (cacheRead === 0 && cacheWrite === 0 && !cacheAccountingKnown)) {
+	const cacheAccountingKnown =
+		cacheRead > 0 || cacheWrite > 0 || options.cacheAccountingKnown === true;
+	if (
+		promptTokens <= 0 ||
+		(!cacheAccountingKnown && options.retainUnknownCacheAccounting !== true)
+	) {
 		return null;
 	}
 
-	const fallbackCosts = costModel
-		? calculateCost(costModel, normalizedUsageCopy(usage, input, cacheRead, cacheWrite))
+	const fallbackCosts = options.costModel
+		? calculateCost(options.costModel, normalizedUsageCopy(usage, input, cacheRead, cacheWrite))
 		: undefined;
 	const inputCost = componentCost(input, finiteNumber(usage.cost?.input), fallbackCosts?.input);
 	const cacheReadCost = componentCost(
@@ -441,11 +472,14 @@ function calculateCacheUsage(
 		finiteNumber(usage.cost?.cacheWrite),
 		fallbackCosts?.cacheWrite,
 	);
-	const inputUnitCost = unitCost(input, inputCost);
+	const inputUnitCost =
+		input > 0
+			? unitCost(input, inputCost)
+			: effectiveInputUnitCost(options.costModel, usage, cacheRead, cacheWrite);
 	const cacheReadUnitCost =
 		cacheRead > 0
 			? unitCost(cacheRead, cacheReadCost)
-			: effectiveCacheReadUnitCost(costModel, usage, input, cacheWrite);
+			: effectiveCacheReadUnitCost(options.costModel, usage, input, cacheWrite);
 	const paidPromptUnitCost = unitCost(
 		input + cacheWrite,
 		sumKnownCosts([inputCost, cacheWriteCost]),
@@ -457,20 +491,33 @@ function calculateCacheUsage(
 			cacheRead,
 			cacheWrite,
 			promptTokens,
-			hitRatePercent: (cacheRead / promptTokens) * 100,
-			uncachedRatePercent: (input / promptTokens) * 100,
+			hitRatePercent: cacheAccountingKnown ? (cacheRead / promptTokens) * 100 : null,
+			uncachedRatePercent: cacheAccountingKnown ? (input / promptTokens) * 100 : null,
 			promptCost: sumKnownCosts([inputCost, cacheReadCost, cacheWriteCost]),
-			estimatedSavings:
-				cacheRead === 0
+			estimatedSavings: cacheAccountingKnown
+				? cacheRead === 0
 					? 0
 					: inputUnitCost !== null && cacheReadUnitCost !== null
 						? cacheRead * Math.max(0, inputUnitCost - cacheReadUnitCost)
-						: null,
+						: null
+				: null,
 		},
 		inputUnitCost,
 		cacheReadUnitCost,
 		paidPromptUnitCost,
 	};
+}
+
+function effectiveInputUnitCost(
+	costModel: Model<Api> | undefined,
+	usage: Usage,
+	cacheRead: number,
+	cacheWrite: number,
+): number | null {
+	if (!costModel || cacheRead <= 0) return null;
+	const probeTokens = Math.min(1, cacheRead);
+	const probeUsage = normalizedUsageCopy(usage, probeTokens, cacheRead - probeTokens, cacheWrite);
+	return calculateCost(costModel, probeUsage).input / probeTokens;
 }
 
 function effectiveCacheReadUnitCost(

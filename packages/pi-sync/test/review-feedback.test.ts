@@ -121,7 +121,7 @@ test("setup switch rejects a destination changed while its review is open", asyn
 			hasUI: true,
 			mode: "tui",
 			select: async (title: string) => {
-				if (title.startsWith("Manage sync")) {
+				if (title.includes("Manage sync")) {
 					mainVisits += 1;
 					return mainVisits === 1 ? "Switch sync setup" : undefined;
 				}

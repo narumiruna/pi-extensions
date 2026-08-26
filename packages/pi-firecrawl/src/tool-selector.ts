@@ -5,6 +5,7 @@ import {
 	applyAvailableFirecrawlTools,
 	availableFirecrawlTools,
 	FIRECRAWL_LOAD_TOOL_NAME,
+	firecrawlToolExposureMode,
 } from "./lazy-tools.js";
 import {
 	loadSettings,
@@ -155,7 +156,7 @@ export async function updateFirecrawlTools(
 	const status = await buildStatusMessage(pi);
 	if (!isCurrentFirecrawlSession(generation)) return;
 	ctx.ui.notify(
-		sanitizeFirecrawlDisplay(`Firecrawl lazy catalog ${action}.\n\n${status}`),
+		sanitizeFirecrawlDisplay(`Firecrawl tool catalog ${action}.\n\n${status}`),
 		hasApiKey() ? "info" : "warning",
 	);
 }
@@ -222,7 +223,9 @@ async function transactSelectedToolsNow(
 			const previousLoadedTools = previousActiveTools.filter((name) =>
 				FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName),
 			);
-			pi.setActiveTools(unique([...currentNonCapabilityTools, ...previousLoadedTools]));
+			const restoredFirecrawlTools =
+				firecrawlToolExposureMode(pi) === "eager" ? previousAvailableTools : previousLoadedTools;
+			pi.setActiveTools(unique([...currentNonCapabilityTools, ...restoredFirecrawlTools]));
 		} catch (caught) {
 			rollbackError = caught;
 		}
@@ -285,10 +288,11 @@ export async function buildStatusMessage(pi: ExtensionAPI) {
 	const persistedSetting = persistedSettingLabel(settings);
 	return sanitizeFirecrawlDisplay(
 		[
-			`Firecrawl tools available to lazy-load: ${formatRuntimeStatus(summary)}`,
+			`Firecrawl tools available: ${formatRuntimeStatus(summary)}`,
+			`Tool exposure: ${firecrawlToolExposureMode(pi)}`,
 			`Loaded capability tools this session: ${summary.loadedFirecrawlToolCount}/${FIRECRAWL_TOOL_NAMES.length}`,
 			`Loader: ${pi.getActiveTools().includes(FIRECRAWL_LOAD_TOOL_NAME) ? "active" : "inactive"}`,
-			`Persisted lazy catalog: ${persistedSetting}`,
+			`Persisted tool catalog: ${persistedSetting}`,
 			`Settings file: ${settingsFilePath()}`,
 			...(settingsNotice ? [`Settings note: ${settingsNotice}`] : []),
 			`Other active tools preserved: ${summary.activeNonFirecrawlToolCount}`,
@@ -318,15 +322,15 @@ export function buildCommandGuide() {
 		"/firecrawl config — show API key presence and API URL",
 		"/firecrawl quickstart — alias for /firecrawl config",
 		"/firecrawl status — show tool and settings status",
-		"/firecrawl tools — choose tools available to lazy-load",
+		"/firecrawl tools — choose available Firecrawl tools",
 		"/firecrawl toggle — alias for /firecrawl tools",
-		"/firecrawl enable — make all Firecrawl tools available to lazy-load",
+		"/firecrawl enable — make all Firecrawl tools available",
 		"/firecrawl disable — make all Firecrawl capability tools unavailable",
 	].join("\n");
 }
 
 function toolSelectorTitle(selectedTools: ReadonlySet<FirecrawlToolName>) {
-	return `Firecrawl tools available to lazy-load (${selectedTools.size}/${FIRECRAWL_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
+	return `Available Firecrawl tools (${selectedTools.size}/${FIRECRAWL_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
 }
 
 function isFirecrawlToolName(value: string): value is FirecrawlToolName {

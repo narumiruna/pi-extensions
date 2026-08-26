@@ -109,6 +109,7 @@ async function executeProcess(
 	const timeoutMs = resolveTimeoutMs(request.timeout);
 	let latestOutput = "";
 	let terminalOutput: string | undefined;
+	let terminalStopReason: "stop" | "length" | undefined;
 	let errorMessage = "";
 	let assistantFailed = false;
 	let stderr = "";
@@ -129,6 +130,7 @@ async function executeProcess(
 				truncated ||= bounded.truncated;
 				if (event.message.stopReason === "stop" || event.message.stopReason === "length") {
 					terminalOutput = bounded.text;
+					terminalStopReason = event.message.stopReason;
 				}
 			}
 			if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
@@ -235,6 +237,9 @@ async function executeProcess(
 			? [`Ignored ${malformedEvents} malformed or oversized child event(s).`]
 			: [];
 	if (truncated) limitations.push("Child output was truncated to runtime limits.");
+	if (terminalStopReason === "length") {
+		limitations.push("Child output ended at the model output limit and may be incomplete.");
+	}
 	if (settlement.cancelled) return cancelledResult(output, limitations, truncated);
 	if (settlement.timedOut) {
 		return {
@@ -246,19 +251,23 @@ async function executeProcess(
 		};
 	}
 	const error = settlement.launchError || errorMessage || stderr.trim();
-	if (settlement.code === 0 && !assistantFailed && !errorMessage) {
+	if (settlement.code === 0 && terminalStopReason === "stop" && !assistantFailed && !errorMessage) {
 		return {
 			state: "completed",
-			result: output || "(no output)",
+			result: terminalOutput,
 			limitations,
 			truncated,
 		};
 	}
 	const failure =
 		error ||
-		(assistantFailed
-			? "Subagent model turn failed."
-			: `Subagent exited with code ${settlement.code}.`);
+		(terminalStopReason === "length"
+			? "Subagent output reached the model limit."
+			: assistantFailed
+				? "Subagent model turn failed."
+				: settlement.code === 0
+					? "Subagent exited without a terminal assistant result."
+					: `Subagent exited with code ${settlement.code}.`);
 	if (output) {
 		return {
 			state: "partial",
@@ -277,7 +286,7 @@ async function executeProcess(
 }
 
 async function writePrompt(prompt: string): Promise<{ directory: string; filePath: string }> {
-	const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-v2-"));
+	const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-v3-"));
 	const filePath = path.join(directory, "agent.md");
 	try {
 		await fs.promises.writeFile(filePath, prompt, { encoding: "utf8", mode: 0o600 });

@@ -12,6 +12,7 @@ Each selection overrides only the chosen provider, and selecting `default` resto
 - Keeps an independent selected account—or Pi's default login—for each provider.
 - Applies provider-specific credentials, endpoints, headers, and model availability through Pi's built-in providers.
 - Refreshes rotating credentials safely and verifies effective runtime authentication before reporting success.
+- Makes only the verified active OAuth credential available process-locally to compatible current-account consumers.
 - Stores credentials atomically in a private local file and fails closed for the affected provider on activation errors.
 - Migrates legacy `pi-codex-accounts.json` data while preserving its rollback source.
 
@@ -116,7 +117,7 @@ Choosing `default` restores Pi's built-in login for that provider.
 Removing an account lists named accounts as `Provider · account`, asks for confirmation, then removes the credential.
 Removing an active account automatically restores that provider to Pi's built-in login.
 
-## 🔐 Auth and fail-closed behavior
+## 🔒 Security and privacy
 
 Each selected account is refreshed through the provider's own OAuth `refresh()` implementation and converted through `toAuth()`.
 The extension then applies the returned API key, headers, and endpoint, verifies the effective runtime state, and reports success.
@@ -127,6 +128,18 @@ Other providers remain independent and usable.
 
 Selecting `default` removes the package-owned runtime override and restores the exact provider registration that existed before activation.
 Pi's built-in credentials are never deleted.
+
+The extension implements the versioned `oauth:credential-source:v1` protocol for compatible current-account consumers such as usage reporters.
+It offers a fresh in-memory clone only after the named OAuth credential has produced and verified the active runtime authentication for the exact Pi session.
+Pending, default, stale, failed, replaced, reloaded, and shut-down states offer nothing.
+The offer contains no account name or extension identity and is never persisted or logged by the protocol.
+A consumer must still match the offered access token and provider-specific metadata against freshly resolved runtime auth before using it.
+Installing `pi-accounts` without a compatible consumer does not change account activation behavior.
+An older or absent consumer simply does not request the credential.
+
+Pi extensions run with the user's process privileges, and the shared event bus is not a security boundary between installed extensions.
+Install only trusted extensions because any installed extension may already read user files and process memory.
+The protocol reduces accidental credential coupling; it does not sandbox malicious code.
 
 GitHub Copilot's `availableModelIds` are projected into the active provider model list.
 Switching Copilot accounts rebuilds the projection from the complete pre-overlay model catalog.
@@ -184,6 +197,7 @@ packages/pi-accounts/
 │   ├── account-store.ts
 │   ├── accounts.ts
 │   ├── oauth.ts
+│   ├── oauth-credential-source.ts
 │   ├── runtime-auth.ts
 │   └── storage.ts
 ├── dist/               # Generated source-mapped Jiti runtime

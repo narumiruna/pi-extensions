@@ -25,7 +25,7 @@ type ExecutionArguments = Static<typeof StartParameters>;
 const InspectParameters = Type.Object({});
 
 const CancelParameters = Type.Object({
-	jobId: Type.String({ description: "Job ID returned by subagent-v2-start." }),
+	jobId: Type.String({ description: "Job ID returned by subagent-v3-start." }),
 });
 
 const WaitParameters = Type.Object({
@@ -66,8 +66,8 @@ export function registerSubagentTools(
 	let generation = 0;
 
 	pi.registerTool({
-		name: "subagent-v2-start",
-		label: "Subagent v2 · Start",
+		name: "subagent-v3-start",
+		label: "Subagent v3 · Start",
 		description:
 			"Start one bounded background subagent job and return its jobId immediately. The job has no follow-up turns and publishes one asynchronous completion when terminal. Optionally provide a timeout in seconds.",
 		promptSnippet: "Start one bounded background subagent job",
@@ -76,7 +76,7 @@ export function registerSubagentTools(
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			throwIfAborted(signal, "Subagent start was cancelled");
 			assertNotNested();
-			const task = validateTask(params.task, "subagent-v2-start");
+			const task = validateTask(params.task, "subagent-v3-start");
 			const agent = requireAgent(ctx.cwd, ctx.isProjectTrusted(), params.agent);
 			resolveTimeoutMs(params.timeout);
 			const result = runtime.start({
@@ -91,8 +91,8 @@ export function registerSubagentTools(
 	});
 
 	pi.registerTool({
-		name: "subagent-v2-inspect",
-		label: "Subagent v2 · Inspect",
+		name: "subagent-v3-inspect",
+		label: "Subagent v3 · Inspect",
 		description:
 			"Return one bounded snapshot of available agents and retained jobs without exposing task text, complete child output, prompts, context, credentials, or environment variables.",
 		promptSnippet: "Inspect available subagents and retained jobs",
@@ -119,8 +119,8 @@ export function registerSubagentTools(
 	});
 
 	pi.registerTool({
-		name: "subagent-v2-cancel",
-		label: "Subagent v2 · Cancel",
+		name: "subagent-v3-cancel",
+		label: "Subagent v3 · Cancel",
 		description:
 			"Idempotently cancel one queued or running job and release its process, timer, session, and temporary resources. Terminal jobs remain unchanged.",
 		promptSnippet: "Cancel one active subagent job",
@@ -132,8 +132,8 @@ export function registerSubagentTools(
 	});
 
 	pi.registerTool({
-		name: "subagent-v2-wait",
-		label: "Subagent v2 · Wait",
+		name: "subagent-v3-wait",
+		label: "Subagent v3 · Wait",
 		description:
 			"Wait for one job to become terminal. A wait timeout or caller cancellation stops only this wait and never cancels the job.",
 		promptSnippet: "Wait for one subagent job to become terminal",
@@ -147,8 +147,8 @@ export function registerSubagentTools(
 	});
 
 	pi.registerTool({
-		name: "subagent-v2-consult",
-		label: "Subagent v2 · Consult",
+		name: "subagent-v3-consult",
+		label: "Subagent v3 · Consult",
 		description:
 			"Run one synchronous ephemeral consultation with only enforced read-only Pi tools. Shell commands, writes, extensions, detached lifecycle tools, and session persistence are unavailable. Optionally provide a timeout in seconds.",
 		promptSnippet: "Run one synchronous read-only subagent consultation",
@@ -158,7 +158,7 @@ export function registerSubagentTools(
 			throwIfAborted(signal, "Subagent consultation was cancelled");
 			assertNotNested();
 			const ownerGeneration = generation;
-			const task = validateTask(params.task, "subagent-v2-consult");
+			const task = validateTask(params.task, "subagent-v3-consult");
 			const agent = requireAgent(ctx.cwd, ctx.isProjectTrusted(), params.agent);
 			resolveTimeoutMs(params.timeout);
 			const lifecycleController = new AbortController();
@@ -261,7 +261,7 @@ function requiredString(value: unknown, field: string): string {
 
 function assertNotNested(): void {
 	if ((Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) > 0) {
-		throw new Error("Nested subagents are not supported by pi-subagents-v2.");
+		throw new Error("Nested subagents are not supported by pi-subagents-v3.");
 	}
 }
 

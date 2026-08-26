@@ -3,7 +3,7 @@ import {
 	type ExtensionContext,
 	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit";
 import { safeTerminalText } from "./manager-helpers.js";
 import type { SetupPullOutcome } from "./setup-switch.js";
@@ -87,7 +87,9 @@ export async function runCancellableOperation(
 				},
 				invalidate: () => loader.invalidate(),
 				handleInput(data: string) {
-					if (!keybindings.matches(data, "tui.select.cancel")) return;
+					if (!matchesKey(data, Key.ctrl("c")) && !keybindings.matches(data, "tui.select.cancel")) {
+						return;
+					}
 					if (commitStarted) {
 						ctx.ui.notify(
 							"Applying or publishing has started and cannot be cancelled safely.",
@@ -117,8 +119,7 @@ function keybindingText(
 	binding: Parameters<KeybindingsManager["getKeys"]>[0],
 	fallback: string,
 ) {
-	const keys = keybindings
-		.getKeys(binding)
+	const keys = [...new Set([...keybindings.getKeys(binding), "ctrl+c"])]
 		.map(String)
 		.map((key) => {
 			if (key === "return") return "enter";

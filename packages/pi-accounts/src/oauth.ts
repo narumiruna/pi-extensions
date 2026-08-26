@@ -2,7 +2,7 @@ import {
 	type AuthEvent,
 	type AuthPrompt,
 	cleanupSessionResources,
-	type ModelAuth,
+	type OAuthAuth,
 	type OAuthCredential,
 	type ProviderAuthInteraction,
 } from "@earendil-works/pi-ai";
@@ -16,11 +16,7 @@ export const SUPPORTED_PROVIDER_IDS = ["anthropic", "github-copilot", "openai-co
 
 export type AccountProviderId = (typeof SUPPORTED_PROVIDER_IDS)[number];
 
-export interface ProviderOwnedOAuth {
-	login(interaction: ProviderAuthInteraction): Promise<OAuthCredential>;
-	refresh(credential: OAuthCredential, signal?: AbortSignal): Promise<OAuthCredential>;
-	toAuth(credential: OAuthCredential): Promise<ModelAuth>;
-}
+export type ProviderOwnedOAuth = Pick<OAuthAuth, "login" | "refresh" | "toAuth">;
 
 export type AccountProviderAdapter = {
 	id: AccountProviderId;

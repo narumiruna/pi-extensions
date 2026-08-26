@@ -29,7 +29,10 @@ test("runTask executes directly outside TUI without opening custom UI", async ()
 });
 
 test("runTask user cancellation aborts and drains the task before returning", async () => {
+	let ctrlCHintCount = 0;
 	let observedAbort = false;
+	let observedAbortAfterInput = false;
+	let resultBeforeDrain: unknown = "not-observed";
 	let settled = false;
 	let releaseDrain: (() => void) | undefined;
 	const drain = new Promise<void>((resolve) => {
@@ -40,10 +43,12 @@ test("runTask user cancellation aborts and drains the task before returning", as
 		hasUI: true,
 		custom: async (factory: unknown) => {
 			const harness = createCustomSelectorHarness(factory, 40);
+			const frame = harness.render().join("\n");
+			ctrlCHintCount = frame.match(/ctrl\+c/gu)?.length ?? 0;
 			harness.handleInput("tui.select.cancel");
 			await new Promise<void>((resolve) => setImmediate(resolve));
-			assert.equal(observedAbort, true);
-			assert.equal(harness.result, undefined);
+			observedAbortAfterInput = observedAbort;
+			resultBeforeDrain = harness.result;
 			releaseDrain?.();
 			return harness.resultPromise;
 		},
@@ -75,10 +80,14 @@ test("runTask user cancellation aborts and drains the task before returning", as
 
 	assert.deepEqual(result, { kind: "cancelled" });
 	assert.equal(settled, true);
+	assert.equal(ctrlCHintCount, 1);
+	assert.equal(observedAbortAfterInput, true);
+	assert.equal(resultBeforeDrain, undefined);
 });
 
 test("runTask uses callback-injected cancellation keys and renders their hint", async () => {
 	let abortedAfterInjectedKey = false;
+	let renderedFrame: readonly string[] = [];
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
@@ -87,10 +96,7 @@ test("runTask uses callback-injected cancellation keys and renders their hint", 
 				matches: (data, binding) => binding === "tui.select.cancel" && data === "x",
 				getKeys: (binding) => (binding === "tui.select.cancel" ? ["x"] : []),
 			});
-			const frame = harness.render();
-			assert.equal(frame[0], "─".repeat(40));
-			assert.equal(frame.at(-1), "─".repeat(40));
-			assert.match(frame.join("\n"), /x cancel/u);
+			renderedFrame = harness.render();
 			harness.handleInput("x");
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			abortedAfterInjectedKey = taskSignal?.aborted ?? false;
@@ -117,6 +123,48 @@ test("runTask uses callback-injected cancellation keys and renders their hint", 
 
 	assert.equal(abortedAfterInjectedKey, true);
 	assert.deepEqual(result, { kind: "cancelled" });
+	assert.equal(renderedFrame[0], "─".repeat(40));
+	assert.equal(renderedFrame.at(-1), "─".repeat(40));
+	assert.match(renderedFrame.join("\n"), /x\/ctrl\+c cancel/u);
+});
+
+test("runTask keeps Ctrl+C as hard cancel when the configured key is remapped", async () => {
+	let renderedFrame = "";
+	let taskSignal: AbortSignal | undefined;
+	let taskSettled = false;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 40, {
+				matches: (data, binding) => binding === "tui.select.cancel" && data === "x",
+				getKeys: (binding) => (binding === "tui.select.cancel" ? ["x"] : []),
+			});
+			renderedFrame = harness.render().join("\n");
+			harness.handleInput("\u0003");
+			return harness.resultPromise;
+		},
+	});
+
+	const result = await runTask(context.ctx, {
+		label: "Loading",
+		task: async ({ signal }) => {
+			taskSignal = signal;
+			await new Promise<void>((resolve) => {
+				if (signal.aborted) resolve();
+				else signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			taskSettled = true;
+			return "late";
+		},
+	});
+
+	assert.equal(taskSignal?.aborted, true);
+	assert.equal(taskSettled, true);
+	assert.deepEqual(result, { kind: "cancelled" });
+	assert.match(renderedFrame, /x\/ctrl\+c cancel/u);
+	assert.equal(renderedFrame.match(/ctrl\+c/gu)?.length, 1);
+	for (const line of renderedFrame.split("\n")) assert.ok(line.length <= 40);
 });
 
 test("runTask non-cancellable mode ignores cancel input and hides the hint", async () => {
@@ -125,15 +173,21 @@ test("runTask non-cancellable mode ignores cancel input and hides the hint", asy
 		releaseTask = resolve;
 	});
 	let taskSignal: AbortSignal | undefined;
+	let renderedFrame = "";
+	let abortedAfterConfiguredCancel: boolean | undefined;
+	let abortedAfterHardCancel: boolean | undefined;
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
 		custom: async (factory: unknown) => {
 			const harness = createCustomSelectorHarness(factory, 40);
-			assert.doesNotMatch(harness.render().join("\n"), /cancel/iu);
+			renderedFrame = harness.render().join("\n");
 			harness.handleInput("tui.select.cancel");
 			await new Promise<void>((resolve) => setImmediate(resolve));
-			assert.equal(taskSignal?.aborted, false);
+			abortedAfterConfiguredCancel = taskSignal?.aborted;
+			harness.handleInput("\u0003");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			abortedAfterHardCancel = taskSignal?.aborted;
 			releaseTask?.();
 			return harness.resultPromise;
 		},
@@ -150,6 +204,9 @@ test("runTask non-cancellable mode ignores cancel input and hides the hint", asy
 	});
 
 	assert.deepEqual(result, { kind: "completed", value: "done" });
+	assert.doesNotMatch(renderedFrame, /cancel/iu);
+	assert.equal(abortedAfterConfiguredCancel, false);
+	assert.equal(abortedAfterHardCancel, false);
 });
 
 test("runTask owner abort is stale and drains before closing TUI", async () => {

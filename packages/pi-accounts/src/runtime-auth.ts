@@ -1,6 +1,7 @@
 import type { ModelAuth, OAuthCredential, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AccountProviderAdapter, AccountProviderId } from "./oauth.js";
+import { cloneOAuthCredential, parseCredentialRequest } from "./oauth-credential-source.js";
 
 export const RUNTIME_FAIL_CLOSED_API_KEY = "pi-accounts-auth-failed";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -30,6 +31,18 @@ type ProviderAccountState = {
 	accounts: Record<string, OAuthCredential>;
 };
 
+type PendingCredentialOffer = {
+	accountName: string;
+	credential: OAuthCredential;
+	operation: number;
+	session: object;
+};
+
+type ActiveCredentialOffer = {
+	credential: OAuthCredential;
+	session: object;
+};
+
 export type RuntimeAccountStore = {
 	readProviderAsync(providerId: AccountProviderId): Promise<ProviderAccountState>;
 	updateProviderAsync(
@@ -47,6 +60,9 @@ export class RuntimeAuthCoordinator {
 	private readonly controller: RuntimeApiKeyController;
 	private readonly overlay: RuntimeProviderOverlay;
 	private availableModelIds: ReadonlySet<string> | undefined;
+	private refreshController = new AbortController();
+	private pendingCredentialOffer: PendingCredentialOffer | undefined;
+	private activeCredentialOffer: ActiveCredentialOffer | undefined;
 
 	constructor(
 		pi: ExtensionAPI,
@@ -62,8 +78,10 @@ export class RuntimeAuthCoordinator {
 		store: RuntimeAccountStore,
 		now = Date.now(),
 	): Promise<EnsureActiveProviderAuthResult> {
+		this.clearCredentialOffer();
 		const operation = this.overlay.beginOperation();
 		const runtimeOverride = this.controller.begin(ctx);
+		const refreshSignal = this.refreshController.signal;
 		let state: ProviderAccountState;
 		try {
 			state = await store.readProviderAsync(this.provider.id);
@@ -99,7 +117,12 @@ export class RuntimeAuthCoordinator {
 			} catch (error) {
 				return this.failClosed(ctx, operation, runtimeOverride, active, error);
 			}
-			if (current.active) return this.ensureActive(ctx, store, now);
+			if (current.active) {
+				if (!this.overlay.isCurrent(operation)) {
+					return { status: "inactive", providerId: this.provider.id };
+				}
+				return this.ensureActive(ctx, store, now);
+			}
 			this.availableModelIds = undefined;
 			await this.controller.clear(ctx);
 			this.overlay.remove(ctx, operation);
@@ -116,7 +139,9 @@ export class RuntimeAuthCoordinator {
 					credential = latestCredential;
 					if (latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
 					try {
-						const refreshed = await this.provider.oauth.refresh(latestCredential);
+						refreshSignal.throwIfAborted();
+						const refreshed = await this.provider.oauth.refresh(latestCredential, refreshSignal);
+						refreshSignal.throwIfAborted();
 						credential = refreshed;
 						return {
 							...latest,
@@ -132,6 +157,9 @@ export class RuntimeAuthCoordinator {
 				credential = getOwnCredential(current.accounts, active) ?? credential;
 			}
 			if (current.active !== active || !getOwnCredential(current.accounts, active)) {
+				if (!this.overlay.isCurrent(operation)) {
+					return { status: "inactive", providerId: this.provider.id };
+				}
 				return this.ensureActive(ctx, store, now);
 			}
 			if (refreshError !== undefined) {
@@ -146,7 +174,12 @@ export class RuntimeAuthCoordinator {
 						credential,
 					);
 				}
-				if (!selection.matches) return this.ensureActive(ctx, store, now);
+				if (!selection.matches) {
+					if (!this.overlay.isCurrent(operation)) {
+						return { status: "inactive", providerId: this.provider.id };
+					}
+					return this.ensureActive(ctx, store, now);
+				}
 				return this.failClosed(ctx, operation, runtimeOverride, active, refreshError, credential);
 			}
 		}
@@ -167,7 +200,12 @@ export class RuntimeAuthCoordinator {
 					credential,
 				);
 			}
-			if (!selection.matches) return this.ensureActive(ctx, store, now);
+			if (!selection.matches) {
+				if (!this.overlay.isCurrent(operation)) {
+					return { status: "inactive", providerId: this.provider.id };
+				}
+				return this.ensureActive(ctx, store, now);
+			}
 			return this.failClosed(ctx, operation, runtimeOverride, active, error, credential);
 		}
 
@@ -175,7 +213,12 @@ export class RuntimeAuthCoordinator {
 		if (selection.error !== undefined) {
 			return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
 		}
-		if (!selection.matches) return this.ensureActive(ctx, store, now);
+		if (!selection.matches) {
+			if (!this.overlay.isCurrent(operation)) {
+				return { status: "inactive", providerId: this.provider.id };
+			}
+			return this.ensureActive(ctx, store, now);
+		}
 
 		try {
 			const availableModelIds = readAvailableModelIds(credential);
@@ -188,7 +231,22 @@ export class RuntimeAuthCoordinator {
 				throw new Error(`Pi did not retain the runtime ${this.provider.displayName} credential.`);
 			}
 			await this.verifyOverlay(ctx, auth, availableModelIds);
+			if (!this.overlay.isCurrent(operation)) {
+				return { status: "inactive", providerId: this.provider.id };
+			}
+			const credentialClone = cloneOAuthCredential(credential);
+			if (!credentialClone) {
+				throw new Error(
+					`${this.provider.displayName} OAuth credential could not be cloned safely.`,
+				);
+			}
 			this.availableModelIds = availableModelIds ? new Set(availableModelIds) : undefined;
+			this.pendingCredentialOffer = {
+				accountName: active,
+				credential: credentialClone,
+				operation,
+				session: ctx.sessionManager,
+			};
 			return { status: "active", providerId: this.provider.id, accountName: active };
 		} catch (error) {
 			return this.failClosed(ctx, operation, runtimeOverride, active, error, credential);
@@ -197,6 +255,43 @@ export class RuntimeAuthCoordinator {
 
 	isModelAvailable(modelId: string): boolean {
 		return !this.availableModelIds || this.availableModelIds.has(modelId);
+	}
+
+	publishCredentialOffer(
+		ctx: ExtensionContext,
+		result: EnsureActiveProviderAuthResult,
+		activeIdentity: string,
+	): void {
+		this.activeCredentialOffer = undefined;
+		const pending = this.pendingCredentialOffer;
+		this.pendingCredentialOffer = undefined;
+		if (result.status !== "active" || !pending) return;
+		if (pending.session !== ctx.sessionManager || pending.accountName !== result.accountName)
+			return;
+		if (!this.overlay.isCurrent(pending.operation)) return;
+		if (activeIdentity !== `${pending.accountName}:${pending.credential.access}`) return;
+		const credential = cloneOAuthCredential(pending.credential);
+		if (!credential) return;
+		this.activeCredentialOffer = { credential, session: pending.session };
+	}
+
+	offerCredential(data: unknown): void {
+		const request = parseCredentialRequest(data);
+		const active = this.activeCredentialOffer;
+		if (!request || !active) return;
+		if (request.session !== active.session || request.provider !== this.provider.id) return;
+		const credential = cloneOAuthCredential(active.credential);
+		if (!credential) return;
+		try {
+			request.offer(credential);
+		} catch {
+			// Credential requests are advisory and must not interrupt runtime authentication.
+		}
+	}
+
+	private clearCredentialOffer(): void {
+		this.pendingCredentialOffer = undefined;
+		this.activeCredentialOffer = undefined;
 	}
 
 	async forceFailClosed(
@@ -216,11 +311,15 @@ export class RuntimeAuthCoordinator {
 	}
 
 	invalidate(ctx: ExtensionContext): void {
+		this.clearCredentialOffer();
 		this.overlay.beginOperation();
 		this.controller.invalidate(ctx);
+		this.refreshController.abort(new DOMException("Account refresh invalidated", "AbortError"));
+		this.refreshController = new AbortController();
 	}
 
 	async clear(ctx: ExtensionContext): Promise<void> {
+		this.clearCredentialOffer();
 		const operation = this.overlay.beginOperation();
 		this.availableModelIds = undefined;
 		await this.controller.clear(ctx);
@@ -235,6 +334,10 @@ export class RuntimeAuthCoordinator {
 		error: unknown,
 		credential?: OAuthCredential,
 	): Promise<EnsureActiveProviderAuthResult> {
+		if (!this.overlay.isCurrent(operation)) {
+			return { status: "inactive", providerId: this.provider.id };
+		}
+		this.clearCredentialOffer();
 		let suffix = "";
 		try {
 			this.overlay.apply(
@@ -336,6 +439,10 @@ class RuntimeProviderOverlay {
 	beginOperation(): number {
 		this.generation += 1;
 		return this.generation;
+	}
+
+	isCurrent(generation: number): boolean {
+		return generation === this.generation;
 	}
 
 	apply(

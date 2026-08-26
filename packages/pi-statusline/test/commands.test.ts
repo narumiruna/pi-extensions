@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { describe, test } from "vitest";
@@ -51,6 +51,27 @@ function selectInformationProfile(title: string, choices: string[]): string | un
 	if (screenTitle(title) === "pi-statusline") return choices[1];
 	if (title.includes("Information level")) return choices[0];
 	return undefined;
+}
+
+function remappedStatuslineKeybindings(): Pick<KeybindingsManager, "matches" | "getKeys"> {
+	return {
+		matches(data, binding) {
+			if (binding === "tui.select.cancel") return data === "q";
+			if (binding === "tui.select.confirm" || binding === "tui.input.submit") {
+				return data === "\r";
+			}
+			if (binding === "tui.select.up") return data === "\u001b[A";
+			if (binding === "tui.select.down") return data === "\u001b[B";
+			return false;
+		},
+		getKeys(binding) {
+			if (binding === "tui.select.cancel") return ["q"];
+			if (binding === "tui.select.confirm" || binding === "tui.input.submit") return ["enter"];
+			if (binding === "tui.select.up") return ["up"];
+			if (binding === "tui.select.down") return ["down"];
+			return [];
+		},
+	};
 }
 
 function customPalettePicker(
@@ -539,7 +560,7 @@ test("segment menu reorders visible segments immediately while preserving multil
 		assert.match(narrowScreen, /Enter\/Space toggle/u);
 		assert.match(narrowScreen, /M move/u);
 		assert.match(narrowScreen, /Alt\+↑\/↓ quick move/u);
-		assert.match(narrowScreen, /Esc close/u);
+		assert.match(narrowScreen, /Esc\/Ctrl\+C close/u);
 		assert.deepEqual(appliedSegments, [
 			["cwd", "line_break", "model", "branch"],
 			["model", "line_break", "cwd", "branch"],
@@ -698,6 +719,78 @@ test("segment menu offers Move mode and explains unavailable moves", async () =>
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test.each(["normal", "move"] as const)(
+	"segment menu keeps Ctrl+C as hard close in %s mode when cancellation is remapped",
+	async (mode) => {
+		const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
+		const path = settingsFilePath(root);
+		writeFileSync(
+			path,
+			`${JSON.stringify({ segments: ["model", "cwd"], future: { retained: true } })}\n`,
+		);
+		try {
+			const mock = createMockPi();
+			let loaded = loadStatuslineSettings(path);
+			const appliedSegments: string[][] = [];
+			registerStatuslineCommand(mock.pi, {
+				settingsPath: path,
+				getLoaded: () => loaded,
+				apply(next) {
+					loaded = next;
+					appliedSegments.push([...next.config.segments]);
+				},
+			});
+			const tui = createTuiHarness({
+				width: 20,
+				rows: 20,
+				keybindings: remappedStatuslineKeybindings(),
+			});
+			const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+			const running = mock.commands.get("statusline")?.handler("", context.ctx);
+
+			await tui.waitForOpen();
+			tui.press("tui.select.down");
+			tui.press("tui.select.down");
+			tui.press("tui.select.confirm");
+			await tui.waitForPending();
+			await tui.waitForOpen();
+			tui.press("tui.select.confirm");
+			await tui.waitForPending();
+			await tui.waitForOpen();
+
+			const initialFrame = tui.render();
+			for (const line of initialFrame) assert.ok(visibleWidth(line) <= 20);
+			assert.match(initialFrame.join("\n"), /q\/Ctrl\+C close/u);
+			assert.equal(initialFrame.join("\n").match(/Ctrl\+C/gu)?.length, 1);
+			if (mode === "normal") {
+				tui.press("tui.select.confirm");
+				assert.deepEqual(appliedSegments, [["cwd"]]);
+			} else {
+				tui.send("m");
+				const moveFrame = tui.render();
+				for (const line of moveFrame) assert.ok(visibleWidth(line) <= 20);
+				assert.match(moveFrame.join("\n"), /q leave move mode/u);
+				assert.match(moveFrame.join("\n"), /Ctrl\+C close/u);
+				tui.send("q");
+				assert.doesNotMatch(tui.render().join("\n"), /Move mode/iu);
+				tui.send("m");
+				assert.match(tui.render().join("\n"), /Move mode/iu);
+			}
+			tui.press("ctrl+c");
+			await running;
+
+			assert.equal(tui.isOpen, false);
+			assert.deepEqual(appliedSegments, mode === "normal" ? [["cwd"]] : []);
+			assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+				segments: mode === "normal" ? ["cwd"] : ["model", "cwd"],
+				future: { retained: true },
+			});
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	},
+);
 
 test("segment menu keeps displayed order when reordering cannot be saved", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));

@@ -29,6 +29,7 @@ The command accepts no arguments and is available in TUI and RPC modes.
 While visible, the widget updates from `message_update` as soon as the provider reports usage and finalizes on `message_end`.
 Cache comparisons reset across compaction and branch-summary boundaries because those events create a new cache prefix epoch.
 Session totals continue to include usage records visible on the active branch.
+When summary usage omits cache accounting, the session request count, tokens, and prompt cost remain included while hit rate and savings stay unavailable.
 The extension rebuilds state after session start, compaction, and tree navigation.
 It clears its widget during session shutdown and ignores events from replaced sessions.
 It does not add model-visible tools, messages, system instructions, or provider payload changes.

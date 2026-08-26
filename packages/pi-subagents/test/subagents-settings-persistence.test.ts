@@ -148,11 +148,18 @@ test("session start re-reads settings before reporting warnings", async () => {
 			await handler({}, context.ctx);
 		}
 		assert.match(context.notifications[0]?.message ?? "", /pi-subagents\.json is invalid/i);
-		const latestDescription = (name: string) =>
-			String(mock.tools.filter((tool) => tool.name === name).at(-1)?.description);
-		assert.match(latestDescription("subagent"), /target policy: current-workspace/i);
-		assert.match(latestDescription("subagent_spawn"), /target policy: current-workspace/i);
-		assert.match(latestDescription("subagent_consult"), /target policy: current-workspace/i);
+		let guidance = "";
+		for (const handler of mock.events.get("before_agent_start") ?? []) {
+			const result = (await handler({ prompt: "continue", systemPrompt: "base" }, context.ctx)) as
+				| { message?: { customType?: string; content?: string } }
+				| undefined;
+			if (result?.message?.customType === "pi-subagents-session-guidance") {
+				guidance = result.message.content ?? "";
+			}
+		}
+		assert.match(guidance, /"consultationCwdPolicy":"current-workspace"/u);
+		assert.match(guidance, /"delegationCwdPolicy":"current-workspace"/u);
+		assert.match(guidance, /"consultResourcePolicy":"none"/u);
 		const command = mock.commands.get("subagents");
 		assert.ok(command);
 		await command.handler("status", context.ctx);

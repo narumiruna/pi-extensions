@@ -1,12 +1,12 @@
 ---
-name: subagents-v2
-description: Operate the minimal pi-subagents-v2 job tools safely, including direct-work decisions, read-only consultations, background delegation, parallel starts, timeout selection, waiting, cancellation, result handling, verification, and writer isolation.
+name: subagents-v3
+description: Operate the minimal pi-subagents-v3 job tools safely, including direct-work decisions, read-only consultations, background delegation, parallel starts, timeout selection, waiting, cancellation, result handling, verification, and writer isolation.
 license: MIT
 ---
 
-# Subagents v2
+# Subagents v3
 
-Use this skill when deciding whether or how to delegate with the `subagent-v2-*` tools.
+Use this skill when deciding whether or how to delegate with the `subagent-v3-*` tools.
 
 ## Prefer direct work
 
@@ -20,11 +20,11 @@ Nested subagents are unsupported.
 
 ## Choose consultation or a background job
 
-Use `subagent-v2-consult` for one bounded research, exploration, or review question when the answer is required before the next main-agent action and enforced read-only isolation is useful.
+Use `subagent-v3-consult` for one bounded research, exploration, or review question when the answer is required before the next main-agent action and enforced read-only isolation is useful.
 
 A consultation blocks the caller and cannot edit files, run shell commands, call extension tools, retain a session, or receive follow-up work.
 
-Use `subagent-v2-start` only for a bounded job that can run independently while the main agent performs concrete non-overlapping work.
+Use `subagent-v3-start` only for a bounded job that can run independently while the main agent performs concrete non-overlapping work.
 
 Do not start a background job when no useful main-agent work can proceed before its result is needed.
 
@@ -76,9 +76,9 @@ Keep fan-in synthesis in the main agent because the runtime does not provide agg
 
 ## Wait intentionally
 
-Use `subagent-v2-wait` only when a specific job result is required for the next action and useful overlapping main-agent work is complete.
+Use `subagent-v3-wait` only when a specific job result is required for the next action and useful overlapping main-agent work is complete.
 
-Set `subagent-v2-wait.timeout` in seconds only when the caller needs a bounded wait.
+Set `subagent-v3-wait.timeout` in seconds only when the caller needs a bounded wait.
 
 Wait timeouts accept positive finite numbers and have no default.
 
@@ -92,11 +92,11 @@ Do not poll repeatedly because asynchronous completion delivery remains active.
 
 ## Inspect and cancel
 
-Use `subagent-v2-inspect` for one bounded snapshot of available agents and retained job metadata.
+Use `subagent-v3-inspect` for one bounded snapshot of available agents and retained job metadata.
 
 Inspection omits task text, complete child output, prompts, context, credentials, environment variables, and secrets.
 
-Use `subagent-v2-cancel` when queued or running work is no longer needed, unsafe, stale, or incorrectly scoped.
+Use `subagent-v3-cancel` when queued or running work is no longer needed, unsafe, stale, or incorrectly scoped.
 
 Cancellation is idempotent, and cancelling a terminal job leaves its state unchanged.
 

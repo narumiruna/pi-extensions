@@ -20,6 +20,7 @@ import {
 	loginWithOAuthUI,
 	SUPPORTED_PROVIDER_IDS,
 } from "./oauth.js";
+import { registerOAuthCredentialSource } from "./oauth-credential-source.js";
 import {
 	type EnsureActiveProviderAuthResult,
 	RUNTIME_FAIL_CLOSED_API_KEY,
@@ -65,6 +66,7 @@ export default function accountsExtension(
 	const coordinators = new Map(
 		providers.map((provider) => [provider.id, new RuntimeAuthCoordinator(pi, provider)]),
 	);
+	registerOAuthCredentialSource(pi, [...coordinators.values()]);
 	const results = new Map<AccountProviderId, EnsureActiveProviderAuthResult>();
 	const appliedIdentities = new Map<AccountProviderId, string>();
 	const abortProviders = new Set<AccountProviderId>();
@@ -83,10 +85,11 @@ export default function accountsExtension(
 			const coordinator = coordinators.get(providerId);
 			if (!coordinator) throw new Error(`Missing runtime coordinator for ${providerId}.`);
 			let result = await coordinator.ensureActive(ctx, store);
+			let identity: string | undefined;
 			let latest = syncTasks.get(providerId);
 			if (latest && latest !== task) return latest;
 			try {
-				const identity = await authIdentity(store, result);
+				identity = await authIdentity(store, result);
 				latest = syncTasks.get(providerId);
 				if (latest && latest !== task) return latest;
 				const previousIdentity = appliedIdentities.get(providerId);
@@ -114,6 +117,7 @@ export default function accountsExtension(
 			}
 			latest = syncTasks.get(providerId);
 			if (latest && latest !== task) return latest;
+			coordinator.publishCredentialOffer(ctx, result, identity ?? "");
 			results.set(providerId, result);
 			updateStatus(ctx, results, model);
 			return result;
@@ -148,6 +152,7 @@ export default function accountsExtension(
 		sessionGeneration += 1;
 		menuController.abort(new DOMException("Accounts session replaced", "AbortError"));
 		menuController = new AbortController();
+		for (const coordinator of coordinators.values()) coordinator.invalidate(ctx);
 		if (migrationNotice) {
 			ctx.ui.notify(migrationNotice, "warning");
 			migrationNotice = undefined;

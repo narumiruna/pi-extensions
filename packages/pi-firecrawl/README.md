@@ -66,9 +66,11 @@ The extension never logs or displays the API key.
 - `firecrawl_map` — discover URLs for a site.
 - `firecrawl_search` — search the web through Firecrawl and optionally scrape result pages.
 
-### Lazy tool loading
+### Tool exposure
 
-All six tools are registered, but only `firecrawl_load` starts active for this extension.
+All six tools are registered.
+
+On a model/provider with native deferred-tool support, only `firecrawl_load` starts active for this extension.
 
 The loader accepts a task-oriented `query`, filters to capabilities allowed by settings, and adds up to three matching tools by default without removing any active Pi tool.
 
@@ -80,13 +82,19 @@ Loaded capability tools remain active for the session unless the user makes them
 
 On reload, resume, or fork, capabilities recorded by `firecrawl_load` on the active branch are restored when the current catalog still allows them.
 
-Pi uses native deferred tool references on compatible Anthropic and OpenAI models.
+Pi uses native deferred tool references on compatible Anthropic models, native additional-tools or tool-search loading on compatible OpenAI and Codex Responses models, and native Kimi loading on compatible OpenAI Chat Completions models.
 
-Other models receive Pi's safe fallback and see the newly active definitions in the normal tool list on the next model request.
+Kimi-compatible models declare `compat.deferredToolsMode: "kimi"` in Pi's model metadata.
 
-The capability tools omit active-only prompt metadata so loading them does not rebuild the system-prompt prefix.
+`azure-openai-responses` remains eager because Pi's Azure adapter does not implement native deferred tool-search serialization.
 
-The saved `tools` array controls which capabilities `firecrawl_load` may expose.
+When the selected model/provider lacks native deferred support, the extension activates every capability allowed by settings before the next model request instead of using Pi's cache-invalidating lazy-loading fallback.
+
+After a session enters eager exposure, it stays eager across later model switches to avoid removing tool definitions within that session.
+
+The capability tools omit active-only prompt metadata so native deferred loading does not rebuild the system-prompt prefix.
+
+The saved `tools` array controls which capabilities the extension may expose.
 
 An empty array leaves the loader active but makes every Firecrawl API capability unavailable.
 
@@ -106,7 +114,7 @@ Oversized Firecrawl error bodies are bounded in the same way.
 /firecrawl
 ```
 
-Opens a menu with configuration quick start, command usage, lazy-catalog status, controls for making all Firecrawl capabilities available or unavailable, and a selector for choosing individual tools.
+Opens a menu with configuration quick start, command usage, tool-catalog status, controls for making all Firecrawl capabilities available or unavailable, and a selector for choosing individual tools.
 
 Direct subcommands are also available:
 
@@ -125,9 +133,9 @@ Direct subcommands are also available:
 - `config` shows API-key presence and API URL without displaying the API key value.
 - `quickstart` is an alias for `config`.
 - `status` shows available and loaded capability counts, loader state, the persisted catalog, settings file path, API-key presence, API URL, and active non-Firecrawl tool count.
-- `tools` opens a width-safe immediate-save selector for choosing capabilities available to lazy-load.
+- `tools` opens a width-safe immediate-save selector for choosing available capabilities.
 - `toggle` is an alias for `tools`.
-- `enable` makes all five API capabilities available but leaves newly available definitions deferred.
+- `enable` makes all five API capabilities available and follows the current native-deferred or eager exposure mode.
 - `disable` makes all five API capabilities unavailable and unloads affected active definitions.
   The slash command and `firecrawl_load` remain available.
 
@@ -149,7 +157,7 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-firecrawl.json
 
 When the file is missing or invalid, the extension preserves Pi's current Firecrawl availability policy instead of replacing it.
 An unsaved catalog remains stable across runtime reloads.
-A valid saved catalog is restored on Pi startup and `/reload`, while its capability definitions remain deferred.
+A valid saved catalog is restored on Pi startup and `/reload`, with capability definitions exposed natively deferred or eagerly according to model/provider support.
 A missing file is created by the first successful availability change.
 Within one Pi process, catalog saves run in invocation order, reread the latest valid document, and preserve unknown fields.
 Malformed JSON or invalid recognized fields block the save without replacement; a failed save restores both the prior availability and loaded capability state while preserving other extensions' active tools.

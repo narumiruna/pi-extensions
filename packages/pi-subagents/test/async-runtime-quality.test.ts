@@ -213,16 +213,78 @@ test("required completion context is canonical, bounded, and omits visible recor
 		[],
 		"background agents must not create a final-answer dependency block",
 	);
-	const first = reconcileRequiredCompletionContext([], [agent]);
-	assert.equal(first.length, 1);
-	const firstContent = String((first[0] as { content?: unknown } | undefined)?.content ?? "");
+	const ordinary = [{ role: "user", content: "continue" }] as never;
+	assert.equal(
+		reconcileRequiredCompletionContext(ordinary, [agent]),
+		ordinary,
+		"an unsummarized context must keep its persisted tool handoff instead of moving a block",
+	);
+	const summary = [
+		{ role: "compactionSummary", summary: "Earlier work", tokensBefore: 100, timestamp: 0 },
+	] as never;
+	const first = reconcileRequiredCompletionContext(summary, [agent]);
+	assert.equal(first.length, 2);
+	const firstContent = String((first[1] as { content?: unknown } | undefined)?.content ?? "");
 	assert.match(firstContent, /PI SUBAGENT REQUIRED COMPLETIONS/);
 	assert.match(firstContent, /run:required/);
-	const second = reconcileRequiredCompletionContext(first, [agent]);
-	assert.equal(second.length, 1, "the canonical block must replace rather than duplicate itself");
+	assert.equal(
+		reconcileRequiredCompletionContext(first, [agent]),
+		first,
+		"the canonical summary fallback must be idempotent",
+	);
 
-	agent.completionRequirements = [{ ...requirement, state: "visible" }];
-	assert.deepEqual(reconcileRequiredCompletionContext(second, [agent]), []);
+	const visiblePending = [
+		...summary,
+		{
+			role: "toolResult",
+			toolCallId: "spawn-call",
+			toolName: "subagent_spawn",
+			content: [{ type: "text", text: "spawned" }],
+			details: { agent: { completionRequirements: [requirement] } },
+			isError: false,
+			timestamp: 0,
+		},
+	] as never;
+	assert.equal(reconcileRequiredCompletionContext(visiblePending, [agent]), visiblePending);
+
+	const available = {
+		...requirement,
+		state: "available" as const,
+		completionId: "completion:required",
+		terminalState: "completed" as const,
+		updatedAt: 11,
+	};
+	agent.completionRequirements = [available];
+	const availableContext = reconcileRequiredCompletionContext(summary, [agent]);
+	assert.match(String((availableContext[1] as { content?: unknown }).content), /available/);
+	const visibleCompletion = [
+		...summary,
+		{
+			role: "custom",
+			customType: "pi-subagent-completion",
+			content: "completed",
+			display: true,
+			details: { completionRequirement: available },
+			timestamp: 0,
+		},
+	] as never;
+	assert.equal(reconcileRequiredCompletionContext(visibleCompletion, [agent]), visibleCompletion);
+
+	const cancelled = Array.from({ length: 70 }, (_, index) => ({
+		...requirement,
+		runId: `run:cancelled:${index.toString().padStart(2, "0")}`,
+		state: "cancelled" as const,
+		terminalState: "interrupted" as const,
+		updatedAt: 11 + index,
+	}));
+	agent.completionRequirements = cancelled;
+	const bounded = reconcileRequiredCompletionContext(summary, [agent]);
+	const boundedContent = String((bounded[1] as { content?: unknown }).content);
+	assert.match(boundedContent, /6 older cancelled requirement record\(s\) were omitted/);
+	assert.equal((boundedContent.match(/run:cancelled:/gu) ?? []).length, 64);
+
+	agent.completionRequirements = [{ ...available, state: "visible" }];
+	assert.deepEqual(reconcileRequiredCompletionContext(first, [agent]), summary);
 });
 
 test("successful budget finalization produces partial evidence, not success or failure", async () => {

@@ -2,10 +2,12 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { hasApiKey } from "./client.js";
 import {
 	availableFirecrawlTools,
-	configureLazyFirecrawlTools,
+	configureFirecrawlToolExposure,
 	createFirecrawlLoadTool,
 	initializeAvailableFirecrawlTools,
 	loadedFirecrawlToolsFromBranch,
+	requireEagerFirecrawlToolExposure,
+	supportsNativeDeferredToolLoading,
 } from "./lazy-tools.js";
 import { cleanupResponseArtifacts, openResponseArtifacts } from "./response-format.js";
 import { loadSettings } from "./settings.js";
@@ -33,8 +35,8 @@ const COMMAND_COMPLETIONS = [
 	{ value: "config", label: "config", description: "Show configuration quick start" },
 	{ value: "quickstart", label: "quickstart", description: "Show configuration quick start" },
 	{ value: "status", label: "status", description: "Show tool and settings status" },
-	{ value: "tools", label: "tools", description: "Choose lazy-loadable Firecrawl tools" },
-	{ value: "toggle", label: "toggle", description: "Choose lazy-loadable Firecrawl tools" },
+	{ value: "tools", label: "tools", description: "Choose available Firecrawl tools" },
+	{ value: "toggle", label: "toggle", description: "Choose available Firecrawl tools" },
 	{ value: "enable", label: "enable", description: "Make all Firecrawl tools available" },
 	{ value: "disable", label: "disable", description: "Make all Firecrawl tools unavailable" },
 ];
@@ -90,12 +92,18 @@ export default function firecrawl(pi: ExtensionAPI) {
 			ctx.sessionManager.getBranch(),
 			availableTools,
 		);
-		configureLazyFirecrawlTools(pi, availableTools, loadedTools, ctx.sessionManager);
+		configureFirecrawlToolExposure(pi, availableTools, loadedTools, ctx.sessionManager, ctx.model);
 		if (settings.kind === "invalid") {
 			ctx.ui.notify(
 				sanitizeFirecrawlDisplay(`Firecrawl settings ignored: ${settings.reason}`),
 				"warning",
 			);
+		}
+	});
+
+	pi.on("model_select", (event) => {
+		if (!supportsNativeDeferredToolLoading(event.model)) {
+			requireEagerFirecrawlToolExposure(pi);
 		}
 	});
 
@@ -224,7 +232,7 @@ function mainMenuLines(pi: ExtensionAPI) {
 	const capabilityNames = allFirecrawlTools();
 	const loadedCount = capabilityNames.filter((name) => active.has(name)).length;
 	return [
-		`Lazy catalog: ${availableFirecrawlTools(pi).length}/${capabilityNames.length} available`,
+		`Tool catalog: ${availableFirecrawlTools(pi).length}/${capabilityNames.length} available`,
 		`Loaded this session: ${loadedCount}/${capabilityNames.length}`,
 		`API key: ${hasApiKey() ? "present" : "missing"}`,
 	];

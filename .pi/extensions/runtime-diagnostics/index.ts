@@ -1,47 +1,60 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+	type CaptureControlAction,
+	CONTROL_ENTRY_TYPE,
+	createCaptureState,
+	createControlEntry,
+	finalizePendingRequests,
+	MAX_CAPTURE_AGE_MINUTES,
+	MAX_CAPTURE_RECORDS,
+	PROVIDER_REQUEST_ENTRY_TYPE,
+	PROVIDER_RESPONSE_ENTRY_TYPE,
+	type ProviderCaptureState,
+	pruneCaptureState,
+	restoreCaptureState,
+} from "./capture-state.js";
+import {
+	attachProviderResponse,
+	createProviderResponseDiagnostic,
 	extractProviderRequestDiagnostic,
-	isProviderRequestDiagnostic,
-	type ProviderRequestDiagnostic,
 } from "./provider-request.js";
 import {
-	createRuntimeReport,
+	boundDiagnosticResponse,
+	createDiagnosticResponse,
+	DIAGNOSTIC_ACTIONS,
+	DIAGNOSTIC_DETAILS,
+	DIAGNOSTIC_SECTIONS,
+	type DiagnosticAction,
+	type DiagnosticSection,
+	formatCommandSummary,
+} from "./report.js";
+import {
 	createRuntimeSnapshot,
 	RUNTIME_ENTRY_TYPE,
 	type RuntimeSnapshotReason,
 	runtimeStateSignature,
 } from "./snapshot.js";
 
-export const PROVIDER_REQUEST_ENTRY_TYPE = "pi-debug:provider-request";
-export const CONTROL_ENTRY_TYPE = "pi-debug:control";
-const TOOL_NAME = "runtime_diagnostics";
-const MAX_SHOW_RECORDS = 20;
-const MAX_OUTPUT_BYTES = 50 * 1024;
-const PROVIDER_HOOK_LIMITATIONS = [
-	"before_provider_request exposes the serialized payload at this extension's position in handler load order; later extensions can still replace it.",
-	"The hook does not prove that the provider accepted or executed the exposed tools.",
-	"ExtensionAPI cannot enumerate passive event-only extensions, so extension visibility is limited to public tool and command surfaces.",
-];
+export { CONTROL_ENTRY_TYPE, PROVIDER_REQUEST_ENTRY_TYPE, PROVIDER_RESPONSE_ENTRY_TYPE };
 
-const ACTIONS = ["status", "enable", "disable", "latest", "show", "compare", "clear"] as const;
-type DebugAction = (typeof ACTIONS)[number];
+const TOOL_NAME = "runtime_diagnostics";
+const COMMAND_NAME = "runtime-diagnostics";
+const MAX_SHOW_RECORDS = 20;
+const COMMAND_ROUTES = [
+	"status",
+	"provider",
+	"cache",
+	"tools",
+	"extensions",
+	"privacy",
+	"help",
+] as const;
+type CommandRoute = (typeof COMMAND_ROUTES)[number];
 
 interface DebugDependencies {
 	now(): number;
-}
-
-interface ControlEntry {
-	version: 1;
-	capturedAt: number;
-	action: "enable" | "disable" | "clear";
-}
-
-interface ProviderCaptureState {
-	enabled: boolean;
-	records: ProviderRequestDiagnostic[];
-	nextRequestIndex: number;
 }
 
 export function createDebugExtension(
@@ -49,41 +62,85 @@ export function createDebugExtension(
 ): (pi: ExtensionAPI) => void {
 	const now = dependencies.now ?? Date.now;
 	return function debugExtension(pi: ExtensionAPI): void {
-		let capture: ProviderCaptureState = { enabled: true, records: [], nextRequestIndex: 1 };
+		let capture: ProviderCaptureState = createCaptureState();
 		let lastRuntimeSignature: string | undefined;
 
 		pi.registerTool({
 			name: TOOL_NAME,
 			label: "Runtime Diagnostics",
 			description:
-				"Inspect and manage privacy-filtered runtime diagnostics for model routing, prompt-cache performance, tool availability, visible extension surfaces, and tools exposed in provider requests.",
+				"Inspect and manage privacy-filtered runtime diagnostics for model routing, cache performance, tool availability and provenance, visible extension surfaces, provider request exposure and timing, retention, comparisons, and shareable bundles. Output is bounded to 50 KB and 2,000 lines.",
 			promptSnippet:
 				"Inspect model, cache, tool, extension-surface, and provider-request diagnostics",
 			promptGuidelines: [
-				"Use runtime_diagnostics when model routing, prompt caching, tool availability, deferred tool loading, or extension registration may be misconfigured.",
+				"Use runtime_diagnostics when model routing, prompt caching, tool availability, deferred tool loading, provider exposure, or extension registration may be misconfigured.",
+				"Start with runtime_diagnostics status and request full or selected sections only when the concise findings need more evidence.",
 			],
 			parameters: Type.Object({
 				action: Type.Optional(
-					StringEnum(ACTIONS, {
+					StringEnum(DIAGNOSTIC_ACTIONS, {
 						description:
-							"status (default), enable/disable provider-request capture, latest, show, compare, or clear captured provider-request diagnostics",
+							"status (default), capture controls, latest/show/compare, retention configure, or a full sanitized bundle",
+					}),
+				),
+				detail: Type.Optional(
+					StringEnum(DIAGNOSTIC_DETAILS, {
+						description: "summary (default) or full diagnostic detail",
+					}),
+				),
+				sections: Type.Optional(
+					Type.Array(StringEnum(DIAGNOSTIC_SECTIONS), {
+						uniqueItems: true,
+						maxItems: DIAGNOSTIC_SECTIONS.length,
+						description: "Optional detail sections to include without requesting the full report",
 					}),
 				),
 				limit: Type.Optional(
 					Type.Integer({
 						minimum: 1,
 						maximum: MAX_SHOW_RECORDS,
-						description: "Maximum provider-request records returned by show",
+						description: "Maximum provider-request records returned by show or bundle",
+					}),
+				),
+				maxRecords: Type.Optional(
+					Type.Integer({
+						minimum: 1,
+						maximum: MAX_CAPTURE_RECORDS,
+						description: "configure only: maximum records in the active reporting window",
+					}),
+				),
+				maxAgeMinutes: Type.Optional(
+					Type.Integer({
+						minimum: 1,
+						maximum: MAX_CAPTURE_AGE_MINUTES,
+						description: "configure only: maximum record age in the active reporting window",
 					}),
 				),
 			}),
 			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 				signal?.throwIfAborted();
-				const action: DebugAction = params.action ?? "status";
-				applyControl(action);
+				const action: DiagnosticAction = params.action ?? "status";
+				validateRetentionParameters(action, params.maxRecords, params.maxAgeMinutes);
+				if (isControlAction(action)) {
+					const control = createControlEntry(capture, action, now(), {
+						maxRecords: params.maxRecords,
+						maxAgeMinutes: params.maxAgeMinutes,
+					});
+					pi.appendEntry(CONTROL_ENTRY_TYPE, control);
+				}
+				pruneCaptureState(capture, now());
 				recordRuntime(ctx, "diagnostic_tool", false);
-				const response = createToolResponse(action, params.limit ?? 10, pi, ctx, capture, now());
-				const bounded = boundResponse(response);
+				const response = createDiagnosticResponse({
+					action,
+					detail: params.detail ?? "summary",
+					sections: params.sections ?? [],
+					limit: params.limit ?? 10,
+					pi,
+					ctx,
+					capture,
+					capturedAt: now(),
+				});
+				const bounded = boundDiagnosticResponse(response);
 				return {
 					content: [{ type: "text", text: bounded.text }],
 					details: bounded.value,
@@ -91,10 +148,52 @@ export function createDebugExtension(
 			},
 		});
 
+		pi.registerCommand(COMMAND_NAME, {
+			description: "Show a concise privacy-filtered runtime diagnostic summary",
+			getArgumentCompletions(prefix) {
+				const normalized = prefix.trimStart();
+				if (normalized.includes(" ")) return null;
+				const matches = COMMAND_ROUTES.filter((route) => route.startsWith(normalized)).map(
+					(route) => ({ value: route, label: route }),
+				);
+				return matches.length > 0 ? matches : null;
+			},
+			async handler(args, ctx) {
+				if (!ctx.hasUI) {
+					throw new Error(
+						`/${COMMAND_NAME} supports TUI and RPC modes only; use the ${TOOL_NAME} tool for machine-readable diagnostics.`,
+					);
+				}
+				const route = parseCommandRoute(args);
+				const sections: DiagnosticSection[] =
+					route === "provider" ||
+					route === "cache" ||
+					route === "tools" ||
+					route === "extensions" ||
+					route === "privacy"
+						? [route]
+						: [];
+				pruneCaptureState(capture, now());
+				const response = createDiagnosticResponse({
+					action: "status",
+					detail: "summary",
+					sections,
+					limit: 5,
+					pi,
+					ctx,
+					capture,
+					capturedAt: now(),
+				});
+				ctx.ui.notify(formatCommandSummary(response, route), "info");
+			},
+		});
+
 		pi.on("session_start", (_event, ctx) => {
-			capture = restoreCaptureState(ctx.sessionManager.getBranch());
-			lastRuntimeSignature = undefined;
-			recordRuntime(ctx, "session_start", true);
+			restoreBranchState(ctx, "session_start");
+		});
+
+		pi.on("session_tree", (_event, ctx) => {
+			restoreBranchState(ctx, "session_tree");
 		});
 
 		pi.on("model_select", (_event, ctx) => {
@@ -107,6 +206,10 @@ export function createDebugExtension(
 
 		pi.on("tool_execution_end", (_event, ctx) => {
 			recordRuntime(ctx, "tools_changed", false);
+		});
+
+		pi.on("agent_end", () => {
+			finalizePendingRequests(capture);
 		});
 
 		pi.on("message_end", (event, ctx) => {
@@ -128,11 +231,38 @@ export function createDebugExtension(
 				sessionId: ctx.sessionManager.getSessionId(),
 				provider: ctx.model?.provider,
 				model: ctx.model?.id,
+				api: ctx.model?.api,
 			});
 			capture.nextRequestIndex += 1;
 			capture.records.push(diagnostic);
+			if (diagnostic.responseTelemetry === "pending") {
+				capture.pendingRequestIndexes.push(diagnostic.requestIndex);
+			}
+			pruneCaptureState(capture, now());
 			pi.appendEntry(PROVIDER_REQUEST_ENTRY_TYPE, diagnostic);
 		});
+
+		pi.on("after_provider_response", (event) => {
+			const requestIndex = capture.pendingRequestIndexes[0];
+			if (requestIndex === undefined) return;
+			const request = capture.records.find((record) => record.requestIndex === requestIndex);
+			if (!request) return;
+			const response = createProviderResponseDiagnostic(request, event.status, now());
+			attachProviderResponse(request, response);
+			pi.appendEntry(PROVIDER_RESPONSE_ENTRY_TYPE, response);
+			if (event.status >= 200 && event.status < 300) {
+				capture.pendingRequestIndexes.shift();
+			}
+		});
+
+		function restoreBranchState(
+			ctx: ExtensionContext,
+			reason: "session_start" | "session_tree",
+		): void {
+			capture = restoreCaptureState(ctx.sessionManager.getBranch(), now());
+			lastRuntimeSignature = undefined;
+			recordRuntime(ctx, reason, true);
+		}
 
 		function recordRuntime(
 			ctx: ExtensionContext,
@@ -145,180 +275,41 @@ export function createDebugExtension(
 			lastRuntimeSignature = signature;
 			pi.appendEntry(RUNTIME_ENTRY_TYPE, snapshot);
 		}
-
-		function applyControl(action: DebugAction): void {
-			if (action !== "enable" && action !== "disable" && action !== "clear") return;
-			if (action === "enable") capture.enabled = true;
-			if (action === "disable") capture.enabled = false;
-			if (action === "clear") capture.records = [];
-			const control: ControlEntry = { version: 1, capturedAt: now(), action };
-			pi.appendEntry(CONTROL_ENTRY_TYPE, control);
-		}
 	};
 }
 
-function createToolResponse(
-	action: DebugAction,
-	limit: number,
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	capture: ProviderCaptureState,
-	capturedAt: number,
-) {
-	const recent = action === "show" ? capture.records.slice(-limit) : [];
-	const latest =
-		action === "latest" || action === "status" || action === "enable" || action === "disable"
-			? (capture.records.at(-1) ?? null)
-			: null;
-	const comparisonRecords = selectComparisonRecords(action, recent, capture.records);
-	return {
-		action,
-		providerRequestCapture: {
-			enabled: capture.enabled,
-			recordCountSinceClear: capture.records.length,
-			latest,
-			recent,
-			comparison:
-				comparisonRecords.length === 2
-					? compareProviderRequests(comparisonRecords[0], comparisonRecords[1])
-					: null,
-		},
-		runtime: createRuntimeReport(pi, ctx, capturedAt),
-		privacy:
-			"Records contain only timestamp, session ID, provider/model IDs, the plan marker boolean, and extracted tool names. Prompts, schemas, arguments, headers, credentials, and message contents are not retained.",
-		limitations: PROVIDER_HOOK_LIMITATIONS,
-	};
-}
-
-function selectComparisonRecords(
-	action: DebugAction,
-	recent: readonly ProviderRequestDiagnostic[],
-	all: readonly ProviderRequestDiagnostic[],
-): readonly ProviderRequestDiagnostic[] {
-	if (all.length < 2) return [];
-	if (action === "compare") return [all[0], all[all.length - 1]];
-	if (action === "show" && recent.length >= 2) {
-		return [recent[0], recent[recent.length - 1]];
-	}
-	return all.slice(-2);
-}
-
-function compareProviderRequests(from: ProviderRequestDiagnostic, to: ProviderRequestDiagnostic) {
-	return {
-		fromRequestIndex: from.requestIndex,
-		toRequestIndex: to.requestIndex,
-		providerChanged: from.provider !== to.provider,
-		modelChanged: from.model !== to.model,
-		planModeMarkerChanged: from.planModeMarkerPresent !== to.planModeMarkerPresent,
-		topLevelTools: diffNames(from.topLevelToolNames, to.topLevelToolNames),
-		transcriptTools: diffNames(from.transcriptToolNames, to.transcriptToolNames),
-	};
-}
-
-function diffNames(from: readonly string[], to: readonly string[]) {
-	const previous = new Set(from);
-	const current = new Set(to);
-	return {
-		added: to.filter((name) => !previous.has(name)),
-		removed: from.filter((name) => !current.has(name)),
-	};
-}
-
-function restoreCaptureState(entries: readonly SessionEntry[]): ProviderCaptureState {
-	const state: ProviderCaptureState = { enabled: true, records: [], nextRequestIndex: 1 };
-	let maximumRequestIndex = 0;
-	for (const entry of entries) {
-		if (entry.type !== "custom") continue;
-		if (
-			entry.customType === PROVIDER_REQUEST_ENTRY_TYPE &&
-			isProviderRequestDiagnostic(entry.data)
-		) {
-			maximumRequestIndex = Math.max(maximumRequestIndex, entry.data.requestIndex);
-			state.records.push(entry.data);
-			continue;
-		}
-		if (entry.customType !== CONTROL_ENTRY_TYPE || !isControlEntry(entry.data)) continue;
-		if (entry.data.action === "enable") state.enabled = true;
-		if (entry.data.action === "disable") state.enabled = false;
-		if (entry.data.action === "clear") state.records = [];
-	}
-	state.nextRequestIndex = maximumRequestIndex + 1;
-	return state;
-}
-
-function isControlEntry(value: unknown): value is ControlEntry {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-	const record = value as Record<string, unknown>;
+function isControlAction(action: DiagnosticAction): action is CaptureControlAction {
 	return (
-		record.version === 1 &&
-		typeof record.capturedAt === "number" &&
-		(record.action === "enable" || record.action === "disable" || record.action === "clear")
+		action === "enable" || action === "disable" || action === "clear" || action === "configure"
 	);
 }
 
-function boundResponse(value: ReturnType<typeof createToolResponse>): {
-	value: unknown;
-	text: string;
-} {
-	let text = JSON.stringify(value, null, 2);
-	if (Buffer.byteLength(text, "utf8") <= MAX_OUTPUT_BYTES) return { value, text };
-
-	const compact = {
-		...value,
-		providerRequestCapture: {
-			...value.providerRequestCapture,
-			recent: value.providerRequestCapture.recent.slice(-2).map(compactProviderRecord),
-			latest: value.providerRequestCapture.latest
-				? compactProviderRecord(value.providerRequestCapture.latest)
-				: null,
-		},
-		runtime: {
-			...value.runtime,
-			extensions: {
-				...value.runtime.extensions,
-				surfaces: [],
-				outputNote: "Extension surface details omitted to keep tool output below 50 KB.",
-			},
-			recentRuntimeRecords: value.runtime.recentRuntimeRecords.slice(-5),
-		},
-		outputNote: "Large diagnostic arrays were compacted to keep tool output below 50 KB.",
-	};
-	text = JSON.stringify(compact, null, 2);
-	if (Buffer.byteLength(text, "utf8") <= MAX_OUTPUT_BYTES) return { value: compact, text };
-
-	const minimal = {
-		action: value.action,
-		providerRequestCapture: {
-			enabled: value.providerRequestCapture.enabled,
-			recordCountSinceClear: value.providerRequestCapture.recordCountSinceClear,
-			latest: value.providerRequestCapture.latest
-				? compactProviderRecord(value.providerRequestCapture.latest)
-				: null,
-			comparison: value.providerRequestCapture.comparison,
-		},
-		runtime: {
-			capturedAt: value.runtime.capturedAt,
-			sessionId: value.runtime.sessionId,
-			current: value.runtime.current,
-			cache: value.runtime.cache,
-			tools: value.runtime.tools,
-			issues: value.runtime.issues,
-		},
-		privacy: value.privacy,
-		limitations: value.limitations,
-		outputNote: "Only the bounded diagnostic summary is shown.",
-	};
-	return { value: minimal, text: JSON.stringify(minimal, null, 2) };
+function validateRetentionParameters(
+	action: DiagnosticAction,
+	maxRecords: number | undefined,
+	maxAgeMinutes: number | undefined,
+): void {
+	const hasPolicy = maxRecords !== undefined || maxAgeMinutes !== undefined;
+	if (action === "configure" && !hasPolicy) {
+		throw new Error("runtime_diagnostics configure requires maxRecords or maxAgeMinutes.");
+	}
+	if (action !== "configure" && hasPolicy) {
+		throw new Error(
+			"runtime_diagnostics maxRecords and maxAgeMinutes are accepted only with action configure.",
+		);
+	}
 }
 
-function compactProviderRecord(record: ProviderRequestDiagnostic) {
-	return {
-		...record,
-		topLevelToolCount: record.topLevelToolNames.length,
-		topLevelToolNames: record.topLevelToolNames.slice(0, 20),
-		transcriptToolCount: record.transcriptToolNames.length,
-		transcriptToolNames: record.transcriptToolNames.slice(0, 20),
-	};
+function parseCommandRoute(args: string): CommandRoute {
+	const normalized = args.trim();
+	if (!normalized) return "status";
+	const parts = normalized.split(/\s+/);
+	if (parts.length !== 1 || !COMMAND_ROUTES.includes(parts[0] as CommandRoute)) {
+		throw new Error(
+			`Unknown /${COMMAND_NAME} route. Expected one of: ${COMMAND_ROUTES.join(", ")}.`,
+		);
+	}
+	return parts[0] as CommandRoute;
 }
 
 export default createDebugExtension();

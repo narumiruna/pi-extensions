@@ -10,6 +10,8 @@ import {
 	resolveCodexResetAuth,
 } from "../src/index.js";
 
+const activeCodexToken = codexAccessToken("account-123");
+
 const codexModel = {
 	id: "gpt-5.3-codex",
 	name: "GPT-5.3 Codex",
@@ -34,15 +36,15 @@ test("Codex reset auth requires the current matching Pi OAuth account", async ()
 	const { ctx } = createMockContext({
 		model: codexModel,
 		modelRegistry: {
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "active-token" }),
-			getProviderAuth: async () => ({ auth: { apiKey: "active-token" } }),
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: activeCodexToken }),
+			getProviderAuth: async () => ({ auth: { apiKey: activeCodexToken } }),
 			getAvailable: () => [codexModel],
 			getAll: () => [codexModel],
 		},
 	});
 	const credential = () => ({
-		type: "oauth",
-		access: "active-token",
+		type: "oauth" as const,
+		access: activeCodexToken,
 		refresh: "refresh-token",
 		expires: Date.now() + 60_000,
 		accountId: "account-123",
@@ -50,10 +52,68 @@ test("Codex reset auth requires the current matching Pi OAuth account", async ()
 
 	const auth = await resolveCodexResetAuth(ctx, new Uint8Array(32), credential);
 	assert.deepEqual(auth.headers, {
-		Authorization: "Bearer active-token",
+		Authorization: `Bearer ${activeCodexToken}`,
 		"chatgpt-account-id": "account-123",
 	});
 	assert.ok(auth.secrets.includes("account-123"));
+
+	const namedAuth = await resolveCodexResetAuth(
+		ctx,
+		new Uint8Array(32),
+		() => ({ ...credential(), access: "default-token" }),
+		() => ({ ok: true, candidates: [credential()] }),
+	);
+	assert.equal(namedAuth.headers["chatgpt-account-id"], "account-123");
+	const duplicate = await resolveCodexResetAuth(
+		ctx,
+		new Uint8Array(32),
+		() => undefined,
+		() => ({ ok: true, candidates: [credential(), structuredClone(credential())] }),
+	);
+	assert.equal(duplicate.fingerprint, namedAuth.fingerprint);
+	for (const candidates of [
+		[credential(), { ...credential(), refresh: "another-refresh" }],
+		[{ ...credential(), refresh: "another-refresh" }, credential()],
+	]) {
+		await assert.rejects(
+			() =>
+				resolveCodexResetAuth(
+					ctx,
+					new Uint8Array(32),
+					() => undefined,
+					() => ({
+						ok: true,
+						candidates,
+					}),
+				),
+			/conflicting/iu,
+		);
+	}
+	await assert.rejects(
+		() =>
+			resolveCodexResetAuth(
+				ctx,
+				new Uint8Array(32),
+				() => undefined,
+				() => ({
+					ok: false,
+				}),
+			),
+		/failed closed/iu,
+	);
+	await assert.rejects(
+		() =>
+			resolveCodexResetAuth(
+				ctx,
+				new Uint8Array(32),
+				() => undefined,
+				() => ({
+					ok: true,
+					candidates: [{ ...credential(), accountId: "another-account" }],
+				}),
+			),
+		/account ID/iu,
+	);
 
 	await assert.rejects(
 		() =>
@@ -85,6 +145,15 @@ test("Codex reset auth requires the current matching Pi OAuth account", async ()
 		/current.*Codex/iu,
 	);
 });
+
+function codexAccessToken(accountId: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({
+			"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+		}),
+	).toString("base64url");
+	return `header.${payload}.signature`;
+}
 
 test("Codex reset details normalize safe available options in expiration order", () => {
 	const availability = normalizeCodexResetCreditsPayload({

@@ -10,11 +10,27 @@ import {
 	formatAgentCatalog,
 	formatAgentList,
 } from "../src/agents.js";
+import { SUBAGENT_GUIDANCE_CONTEXT_TYPE } from "../src/session-guidance-contract.js";
 import subagents from "../src/subagents.js";
 import { installSubagentsTestEnvironment, type SubagentTool } from "./subagents-test-helpers.js";
 
 const restoreTestEnvironment = installSubagentsTestEnvironment();
 afterAll(restoreTestEnvironment);
+
+async function currentSessionGuidance(
+	mock: ReturnType<typeof createMockPi>,
+	ctx: ReturnType<typeof createMockContext>["ctx"],
+): Promise<string> {
+	for (const handler of mock.events.get("before_agent_start") ?? []) {
+		const result = (await handler({ prompt: "continue", systemPrompt: "base" }, ctx)) as
+			| { message?: { customType?: string; content?: string } }
+			| undefined;
+		if (result?.message?.customType === SUBAGENT_GUIDANCE_CONTEXT_TYPE) {
+			return result.message.content ?? "";
+		}
+	}
+	return "";
+}
 
 test("subagent recursion guard rejects nested delegation before spawning", async () => {
 	const mock = createMockPi();
@@ -301,12 +317,13 @@ test("session start refreshes detached limits and retains the last valid snapsho
 			for (const handler of mock.events.get("session_start") ?? []) {
 				await handler({}, context.ctx);
 			}
-			return String(
-				mock.tools.filter((tool) => tool.name === "subagent_spawn").at(-1)?.description ?? "",
-			);
+			return currentSessionGuidance(mock, context.ctx);
 		};
 
-		assert.match(await start(), /3 retained agents, 2 active turns, 4 direct children.*depth 1/i);
+		assert.match(
+			await start(),
+			/"maxAgents":3,"maxActiveTurns":2,"maxChildrenPerAgent":4,"maxDepth":1/u,
+		);
 		writeFileSync(
 			settingsPath,
 			JSON.stringify({
@@ -319,10 +336,16 @@ test("session start refreshes detached limits and retains the last valid snapsho
 				},
 			}),
 		);
-		assert.match(await start(), /7 retained agents, 5 active turns, 6 direct children.*depth 2/i);
+		assert.match(
+			await start(),
+			/"maxAgents":7,"maxActiveTurns":5,"maxChildrenPerAgent":6,"maxDepth":2/u,
+		);
 
 		writeFileSync(settingsPath, "{ malformed");
-		assert.match(await start(), /7 retained agents, 5 active turns, 6 direct children.*depth 2/i);
+		assert.match(
+			await start(),
+			/"maxAgents":7,"maxActiveTurns":5,"maxChildrenPerAgent":6,"maxDepth":2/u,
+		);
 		assert.match(context.notifications.at(-1)?.message ?? "", /malformed|invalid/i);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -365,42 +388,26 @@ test("session start refreshes every agent catalog and gates project metadata on 
 			for (const handler of mock.events.get("session_start") ?? []) {
 				await handler({}, context.ctx);
 			}
-			return {
-				blocking: String(
-					mock.tools.filter((tool) => tool.name === "subagent").at(-1)?.description ?? "",
-				),
-				spawn: String(
-					mock.tools.filter((tool) => tool.name === "subagent_spawn").at(-1)?.description ?? "",
-				),
-				consult: String(
-					mock.tools.filter((tool) => tool.name === "subagent_consult").at(-1)?.description ?? "",
-				),
-			};
+			return currentSessionGuidance(mock, context.ctx);
 		};
 		const untrusted = await start(untrustedCwd, false);
-		for (const description of Object.values(untrusted)) {
-			assert.match(description, /api-reviewer/);
-			assert.match(description, /User explorer override/);
-			assert.doesNotMatch(
-				description,
-				/Project-only description|Project explorer override|local \[source: project|explorer \[source: project/,
-			);
-		}
+		assert.match(untrusted, /api-reviewer/);
+		assert.match(untrusted, /User explorer override/);
+		assert.doesNotMatch(
+			untrusted,
+			/Project-only description|Project explorer override|local \[source: project|explorer \[source: project/,
+		);
 		const trusted = await start(trustedCwd, true);
-		for (const description of Object.values(trusted)) {
-			assert.match(description, /local \[source: project/);
-			assert.match(description, /agentScope: "project" or "both"/);
-			assert.match(description, /Project-only description/);
-			assert.match(description, /Project explorer override/);
-			assert.doesNotMatch(description, /untrusted/);
-		}
+		assert.match(trusted, /local \[source: project/);
+		assert.match(trusted, /agentScope: "project" or "both"/);
+		assert.match(trusted, /Project-only description/);
+		assert.match(trusted, /Project explorer override/);
+		assert.doesNotMatch(trusted, /untrusted/);
 		const untrustedAgain = await start(untrustedCwd, false);
-		for (const description of Object.values(untrustedAgain)) {
-			assert.doesNotMatch(
-				description,
-				/Project-only description|Project explorer override|local \[source: project|explorer \[source: project/,
-			);
-		}
+		assert.doesNotMatch(
+			untrustedAgain,
+			/Project-only description|Project explorer override|local \[source: project|explorer \[source: project/,
+		);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

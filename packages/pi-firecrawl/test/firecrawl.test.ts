@@ -16,8 +16,8 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import {
+	createMockContext as createBaseMockContext,
 	createCustomSelectorHarness,
-	createMockContext,
 	createMockPi,
 	driveCustomSelector,
 } from "../../../test/support.js";
@@ -39,6 +39,17 @@ import firecrawl, {
 import { applyAvailableFirecrawlTools } from "../src/lazy-tools.js";
 import { saveSettings } from "../src/settings.js";
 import { advanceFirecrawlSessionGeneration, buildStatusMessage } from "../src/tool-selector.js";
+
+const NATIVE_DEFERRED_MODEL = {
+	api: "openai-responses",
+	provider: "openai",
+	id: "gpt-5.4",
+	compat: { supportsToolSearch: true },
+};
+
+function createMockContext(overrides: Record<string, unknown> = {}) {
+	return createBaseMockContext({ model: NATIVE_DEFERRED_MODEL, ...overrides });
+}
 
 const NEW_SETTINGS_FILE = "pi-firecrawl.json";
 const LEGACY_SETTINGS_FILE = "pi-firecrawl-settings.json";
@@ -577,7 +588,7 @@ test("Firecrawl main menu dispatches declarative actions at narrow widths", asyn
 	await mock.commands.get("firecrawl")?.handler("", ctx);
 	assert.ok(renderedLines.every((line) => visibleWidth(line) <= 20));
 	const rendered = renderedLines.join("\n");
-	assert.match(rendered, /Lazy catalog: 0\/5/);
+	assert.match(rendered, /Tool catalog: 0\/5/);
 	assert.match(rendered, /Loaded this session:\s+0\/5/);
 	assert.match(notifications.at(-1)?.message ?? "", /FIRECRAWL_API_KEY/);
 });
@@ -607,8 +618,8 @@ test("Firecrawl tool selection keeps the cursor on the toggled row", async () =>
 		assert.equal(toggledRowKeptCursor, true);
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"other_tool",
-			...CAPABILITY_TOOLS.filter((name) => name !== CRAWL_TOOL),
 			LOAD_TOOL,
+			...CAPABILITY_TOOLS.filter((name) => name !== CRAWL_TOOL),
 		]);
 		assert.deepEqual(
 			readSettings(agentDir, NEW_SETTINGS_FILE).tools,
@@ -818,8 +829,8 @@ test("queued selector saves reject stale availability without overwriting it", a
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"other_tool",
-			...CAPABILITY_TOOLS.slice(0, 3),
 			LOAD_TOOL,
+			...CAPABILITY_TOOLS.slice(0, 3),
 		]);
 		assert.ok(notifications.some(({ message }) => /availability changed/i.test(message)));
 	});
@@ -855,6 +866,47 @@ test("firecrawl rejects invalid settings updates and restores active tools", asy
 		writeSettings(agentDir, NEW_SETTINGS_FILE, [CRAWL_TOOL]);
 		await mock.commands.get("firecrawl")?.handler("disable", ctx);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("firecrawl keeps failed-save rollback eager after an unsupported model switch", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		writeFileSync(settingsPath, '{"tools":["invalid"]}\n');
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx, notifications } = createMockContext();
+		firecrawlModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL]);
+
+		let markRuntimeApply: (() => void) | undefined;
+		const runtimeApplied = new Promise<void>((resolve) => {
+			markRuntimeApply = resolve;
+		});
+		const setActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
+		mock.rawPi.setActiveTools = (names) => {
+			setActiveTools(names);
+			markRuntimeApply?.();
+			markRuntimeApply = undefined;
+		};
+
+		const command = mock.commands.get("firecrawl")?.handler("disable", ctx);
+		await runtimeApplied;
+		await mock.events.get("model_select")?.[0]?.(
+			{
+				model: {
+					api: "anthropic-messages",
+					provider: "anthropic",
+					id: "claude-haiku-4-5",
+				},
+			},
+			ctx,
+		);
+		await command;
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, ...CAPABILITY_TOOLS]);
+		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/i);
 	});
 });
 

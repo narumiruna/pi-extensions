@@ -15,6 +15,7 @@ import todoWidgetExtension, {
 	TODO_CONTEXT_MESSAGE_TYPE,
 	TODO_CONTEXT_VERSION,
 	TODO_DETAILS_VERSION,
+	TODO_RESTORED_BOUNDARY_ENTRY_TYPE,
 	TOOL_NAME,
 	type TodoDetails,
 	type TodoItem,
@@ -41,6 +42,7 @@ interface RegisteredTool {
 
 function createHarness() {
 	const handlers = new Map<string, Handler[]>();
+	const entries: Array<{ customType: string; data: unknown }> = [];
 	let tool: RegisteredTool | undefined;
 	const pi = {
 		on(event: string, handler: Handler) {
@@ -49,10 +51,14 @@ function createHarness() {
 		registerTool(definition: RegisteredTool) {
 			tool = definition;
 		},
+		appendEntry(customType: string, data: unknown) {
+			entries.push({ customType, data: structuredClone(data) });
+		},
 	} as unknown as ExtensionAPI;
 	todoWidgetExtension(pi);
 
 	return {
+		entries,
 		get tool(): RegisteredTool {
 			assert.ok(tool);
 			return tool;
@@ -165,13 +171,34 @@ function todoToolCallMessage(
 	};
 }
 
-function toolResultEntry(details: TodoDetails, toolName = TOOL_NAME): SessionEntry {
+function toolResultEntry(
+	details: TodoDetails,
+	toolName = TOOL_NAME,
+	id = "tool-result",
+	parentId: string | null = null,
+): SessionEntry {
 	return {
 		type: "message",
-		id: "tool-result",
-		parentId: null,
+		id,
+		parentId,
 		timestamp: new Date(0).toISOString(),
 		message: todoToolResultMessage(details, toolName),
+	} as SessionEntry;
+}
+
+function customEntry(
+	customType: string,
+	data: unknown,
+	id: string,
+	parentId: string | null,
+): SessionEntry {
+	return {
+		type: "custom",
+		id,
+		parentId,
+		timestamp: new Date(0).toISOString(),
+		customType,
+		data,
 	} as SessionEntry;
 }
 
@@ -198,7 +225,7 @@ test("registers concise guidance for using and maintaining the todo list", () =>
 	]);
 });
 
-test("uses visible todo calls and injects only missing current state", async () => {
+test("restores missing todo state and retains its summary boundary", async () => {
 	const harness = createHarness();
 	const current = createContext();
 	await harness.emit("session_start", current.ctx);
@@ -208,6 +235,15 @@ test("uses visible todo calls and injects only missing current state", async () 
 	];
 	await setTodos(harness, current.ctx, items);
 
+	const ordinary: ContextEvent["messages"] = [
+		{
+			role: "user",
+			content: [{ type: "text", text: "ordinary context" }],
+			timestamp: 0,
+		},
+	];
+	assert.equal(await harness.context(ordinary, current.ctx), ordinary);
+
 	const base: ContextEvent["messages"] = [
 		{
 			role: "compactionSummary",
@@ -215,10 +251,33 @@ test("uses visible todo calls and injects only missing current state", async () 
 			tokensBefore: 100,
 			timestamp: 0,
 		},
+		{
+			role: "branchSummary",
+			summary: "Retained branch state.",
+			fromId: "branch-start",
+			timestamp: 0,
+		},
+		{
+			role: "user",
+			content: [{ type: "text", text: "continue" }],
+			timestamp: 0,
+		},
 	];
+	const initialDetails: TodoDetails = { version: TODO_DETAILS_VERSION, items };
+	const initiallyVisible = [
+		...base,
+		todoToolCallMessage(items),
+		todoToolResultMessage(initialDetails),
+	];
+	assert.equal(
+		await harness.context(initiallyVisible, current.ctx),
+		initiallyVisible,
+		"retained matching evidence must prevent initial restoration",
+	);
+
 	const transformed = await harness.context(base, current.ctx);
-	assert.equal(transformed.length, 2);
-	const reminder = transformed.at(-1);
+	assert.equal(transformed.length, 4);
+	const reminder = transformed[2];
 	assert.equal(reminder?.role, "custom");
 	if (reminder?.role !== "custom") assert.fail("Expected a custom todo reminder");
 	assert.equal(reminder.customType, TODO_CONTEXT_MESSAGE_TYPE);
@@ -230,8 +289,30 @@ test("uses visible todo calls and injects only missing current state", async () 
 	);
 	assert.doesNotMatch(reminder.content as string, /call update_todo_list/u);
 
+	assert.equal(transformed.at(-1), base.at(-1));
 	const unchanged = await harness.context(transformed, current.ctx);
 	assert.equal(unchanged, transformed);
+	const duplicated = [
+		...base.slice(0, 2),
+		reminder,
+		reminder,
+		...base.slice(2),
+	] as ContextEvent["messages"];
+	const deduplicated = await harness.context(duplicated, current.ctx);
+	assert.equal(
+		deduplicated.filter(
+			(message) => message.role === "custom" && message.customType === TODO_CONTEXT_MESSAGE_TYPE,
+		).length,
+		1,
+	);
+	assert.equal(deduplicated[2]?.role, "custom");
+	const repairedVersion = await harness.context(
+		[...base.slice(0, 2), { ...reminder, details: { version: 0 } }, ...base.slice(2)],
+		current.ctx,
+	);
+	assert.deepEqual(repairedVersion[2]?.role === "custom" ? repairedVersion[2].details : undefined, {
+		version: TODO_CONTEXT_VERSION,
+	});
 
 	for (const toolName of [TOOL_NAME, "todo_widget"]) {
 		const details: TodoDetails = { version: TODO_DETAILS_VERSION, items };
@@ -240,7 +321,9 @@ test("uses visible todo calls and injects only missing current state", async () 
 			todoToolCallMessage(items, toolName),
 			todoToolResultMessage(details, toolName),
 		];
-		assert.equal(await harness.context(visible, current.ctx), visible);
+		const retained = await harness.context(visible, current.ctx);
+		assert.deepEqual(retained[2], reminder);
+		assert.deepEqual(retained.slice(3), visible.slice(2));
 	}
 
 	const details: TodoDetails = { version: TODO_DETAILS_VERSION, items };
@@ -274,15 +357,126 @@ test("uses visible todo calls and injects only missing current state", async () 
 		todoToolCallMessage(replacementItems),
 		todoToolResultMessage(replacementDetails),
 	];
-	assert.deepEqual(
+	assert.equal(
 		await harness.context(replacement, current.ctx),
-		replacement.filter(
-			(message) => message.role !== "custom" || message.customType !== TODO_CONTEXT_MESSAGE_TYPE,
-		),
+		replacement,
+		"a later update must supersede rather than remove the restored boundary",
 	);
 
 	await setTodos(harness, current.ctx, []);
-	assert.deepEqual(await harness.context(transformed, current.ctx), base);
+	assert.equal(
+		await harness.context(transformed, current.ctx),
+		transformed,
+		"clearing the list must not rewrite the established summary prefix",
+	);
+	const nextSummaryEpoch = base.map((message, index) =>
+		index === 0 && message.role === "compactionSummary"
+			? { ...message, summary: "Later work was compacted." }
+			: message,
+	);
+	assert.equal(
+		await harness.context(nextSummaryEpoch, current.ctx),
+		nextSummaryEpoch,
+		"a new summary epoch must use the current cleared state",
+	);
+	assert.deepEqual(await harness.context([...ordinary, reminder], current.ctx), ordinary);
+});
+
+test("restored todo boundaries survive reload and stay branch-local", async () => {
+	const initialItems: TodoItem[] = [{ text: "before compaction", status: "in_progress" }];
+	const initialDetails: TodoDetails = { version: TODO_DETAILS_VERSION, items: initialItems };
+	const branch: SessionEntry[] = [
+		toolResultEntry(initialDetails, TOOL_NAME, "initial", null),
+		{
+			type: "compaction",
+			id: "compaction",
+			parentId: "initial",
+			timestamp: new Date(0).toISOString(),
+			summary: "Earlier work was compacted.",
+			firstKeptEntryId: "kept",
+			tokensBefore: 100,
+		} as SessionEntry,
+	];
+	const summaries: ContextEvent["messages"] = [
+		{
+			role: "compactionSummary",
+			summary: "Earlier work was compacted.",
+			tokensBefore: 100,
+			timestamp: 0,
+		},
+	];
+	const firstHarness = createHarness();
+	const current = createContext({ branch });
+	await firstHarness.emit("session_start", current.ctx);
+	const first = await firstHarness.context(summaries, current.ctx);
+	const restored = first[1];
+	assert.equal(
+		restored?.role === "custom" ? restored.customType : undefined,
+		TODO_CONTEXT_MESSAGE_TYPE,
+	);
+	assert.equal(firstHarness.entries.length, 1);
+	const persisted = firstHarness.entries[0];
+	assert.equal(persisted?.customType, TODO_RESTORED_BOUNDARY_ENTRY_TYPE);
+	branch.push(customEntry(persisted?.customType ?? "", persisted?.data, "boundary", "compaction"));
+
+	const cleared: TodoDetails = { version: TODO_DETAILS_VERSION, items: [] };
+	const clearCall = todoToolCallMessage([]);
+	const clearResult = todoToolResultMessage(cleared);
+	branch.push(
+		{
+			type: "message",
+			id: "clear-call",
+			parentId: "boundary",
+			timestamp: new Date(1).toISOString(),
+			message: clearCall,
+		} as SessionEntry,
+		{
+			type: "message",
+			id: "clear-result",
+			parentId: "clear-call",
+			timestamp: new Date(2).toISOString(),
+			message: clearResult,
+		} as SessionEntry,
+	);
+	const reloadedHarness = createHarness();
+	await reloadedHarness.emit("session_start", current.ctx);
+	const afterReload = await reloadedHarness.context(
+		[...summaries, clearCall, clearResult],
+		current.ctx,
+	);
+	assert.deepEqual(afterReload[1], restored);
+	assert.equal(reloadedHarness.entries.length, 0, "reload must reuse persisted boundary metadata");
+
+	branch.splice(
+		0,
+		branch.length,
+		{
+			type: "compaction",
+			id: "sibling-compaction",
+			parentId: null,
+			timestamp: new Date(0).toISOString(),
+			summary: "Earlier work was compacted.",
+			firstKeptEntryId: "sibling-call",
+			tokensBefore: 100,
+		} as SessionEntry,
+		{
+			type: "message",
+			id: "sibling-call",
+			parentId: "sibling-compaction",
+			timestamp: new Date(1).toISOString(),
+			message: clearCall,
+		} as SessionEntry,
+		{
+			type: "message",
+			id: "sibling-result",
+			parentId: "sibling-call",
+			timestamp: new Date(2).toISOString(),
+			message: clearResult,
+		} as SessionEntry,
+	);
+	await reloadedHarness.emit("session_tree", current.ctx);
+	const sibling = [...summaries, clearCall, clearResult];
+	assert.equal(await reloadedHarness.context(sibling, current.ctx), sibling);
 });
 
 test("renders completed, current, and pending tasks with themed semantic symbols", () => {

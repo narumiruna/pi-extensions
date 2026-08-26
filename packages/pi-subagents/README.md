@@ -156,10 +156,11 @@ It does not pretend to stream the background child after the tool call has compl
 Custom transcript rendering is TUI presentation only.
 Tool names, parameter schemas, model-facing final content/details, errors, completion delivery, and print/JSON/RPC final output remain unchanged; JSON/RPC observers may see additive bounded consultation partial-progress details.
 
-After each session starts, the descriptions of the registered `subagent`, `subagent_spawn`, and `subagent_consult` tools include the same bounded parent-facing catalog of the agents available in that session.
+After each session starts, one hidden versioned `pi-subagents` session-guidance message publishes the bounded parent-facing catalog and effective non-secret delegation policies.
 Entries show the source (`built-in`, `user`, or `project`), required `agentScope`, declared capability identifiers, configured tools, filesystem authority, and supported result formats; the `agent` parameters remain unconstrained strings for cwd and scope flexibility.
 The catalog also warns that enforced path, network, and secret guarantees are unsupported.
 It is rebuilt on `/reload` or the next session start, and omitted entries are reported explicitly when the catalog exceeds its metadata bounds.
+The registered tool descriptions, schemas, and prompt metadata remain stable until a reload changes the configured tool surface.
 
 Choose the API by lifecycle:
 
@@ -233,10 +234,10 @@ For real isolation, run Pi in a container, VM, micro-VM, or OS sandbox with only
 ## 🧭 Proactive use
 
 When registered, deprecated `subagent` advertises its migration paths and limits compatibility use to existing callers or explicit requests whose orchestration semantics lack a detached replacement.
-When stateful lifecycle tools are registered, `subagent_spawn` adds detached guidance for the active completion-delivery policy.
-Changing the policy through `/subagents settings` refreshes that guidance immediately.
+When stateful lifecycle tools are registered, stable `subagent_spawn` metadata explains both delivery modes and the session-guidance message identifies the active completion policy.
+Changing a live policy through `/subagents settings` appends a superseding session-guidance message for the next turn without starting a model turn.
 
-The `subagent`, `subagent_spawn`, and `subagent_consult` descriptions advertise the current agent catalog automatically; no preliminary list call is needed.
+The current session-guidance message advertises the agent catalog automatically, so no preliminary list call is needed.
 Each entry exposes the exact declared capability and tool identifiers needed by an enforced contract, plus filesystem authority and result formats.
 Agents without a valid capability manifest are labeled `undeclared` instead of implying support.
 Built-ins and user agents appear under the default `agentScope: "user"`.
@@ -244,7 +245,7 @@ Trusted project agents appear separately and explicitly require `agentScope: "pr
 If a project definition shares a name with a user or built-in definition, the user version is the default and the project version is used only for `"project"`/`"both"`.
 A user override of a built-in also shows the built-in fallback available with `agentScope: "project"`; `"both"` keeps the user definition.
 The catalog is bounded and reports its omission count; metadata discovery also caps files and bytes read per scope.
-Refreshed metadata replaces the previous session's catalog rather than accumulating stale entries.
+Each newer session-guidance message explicitly supersedes earlier guidance while preserving the existing conversation prefix.
 
 Delegation guidance:
 
@@ -646,7 +647,13 @@ Every turn receives an executor-owned `runId`, monotonically increasing agent-lo
 A caller can set `completionRequirement: "required"` on a spawn or follow-up to bind final-answer dependency state to that exact run and generation.
 Required state moves from `pending` to `available` after durable terminal completion and to `visible` only after the intended parent context observes the exact completion ID.
 Interruption, close, stale restore, and shutdown terminalize unfinished requirements explicitly instead of silently dropping them.
-Tool-result details preserve fork-sensitive requirement evidence, inspection projects bounded requirement state, and one canonical hidden context block replaces older copies.
+Tool-result details preserve fork-sensitive requirement evidence, and inspection projects bounded requirement state.
+The successful tool handoff and delivered completion messages are the ordinary model-visible source of requirement state.
+When a resumed session terminalizes an in-flight required run and the retained transcript still contains its pending handoff, one hidden append-only transition supersedes that stale evidence before the next model turn.
+This also covers compacted contexts that retain the handoff.
+If leading compaction or branch summaries remove the handoff, one canonical hidden fallback is restored at a fixed boundary immediately after the summaries.
+Branch-local boundary metadata preserves that exact fallback across reload and branch navigation.
+That restored fallback remains fixed for the summary epoch while later cancellation transitions or completion messages supersede it at the conversation tail.
 The runtime rejects a sixty-fifth unresolved required run before acceptance so every unresolved exact identity fits in the bounded parent context.
 The terminal completion and recipient are persisted before delivery, simultaneous root completions are batched, and the root broker allows at most one in-flight wake until that parent turn starts.
 In TUI mode, completion messages show a compact task and payload summary while collapsed; use the configured tool-output expansion action (`Ctrl+O` by default) to show or hide the complete message globally.
@@ -772,10 +779,13 @@ It never reloads automatically, because reload can interrupt retained detached w
 Lowering retained, depth, or stored capacity shows a projected recovery warning when current records would be omitted.
 Restored parents that already exceed a lowered `maxChildrenPerAgent` remain available, but they cannot gain another child until they fall below the configured limit.
 `cwdPolicy.consultation` defaults to `"anywhere"`, `cwdPolicy.delegation` defaults to `"trusted-targets"`, and `consult.resources` defaults to `"project-context"`.
-The Settings UI applies a saved change immediately to subsequent launches and refreshes the affected tool descriptions; manual edits take effect on session start or `/reload`.
+The Settings UI applies a saved live change immediately to subsequent launches and appends a superseding session-guidance message; manual edits take effect on session start or `/reload`.
 The UI explicitly states that target/trust settings are not filesystem sandboxing and directs trust changes to Pi `/trust`.
-When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions.
-This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
+When stateful tools are enabled, their membership and provider-visible definitions stay fixed across spawn, completion, interrupt, close, mailbox, catalog, and live-policy transitions.
+Ordinary turns preserve the normalized provider-visible prefix, while a new guidance message or required-completion transition starts an explicit append-only prefix epoch.
+Compaction restoration inserts deterministic guidance and requirement fallbacks after leading summaries and retains each restored message for that summary epoch while later tail messages supersede it.
+Branch-local session metadata reconstructs those exact historical boundaries after reload and isolates them during tree navigation, including when refreshed settings require a later guidance transition.
+These rules preserve cache-eligible prefixes but do not guarantee a provider-reported cache hit.
 
 | Tool | Purpose |
 | --- | --- |
@@ -1063,13 +1073,13 @@ An omitted field keeps the agent's default tools; blank, `null`, or `[]` explici
 `capabilityManifest` is optional for legacy custom agents and never grants authority by itself.
 Explicit workflow routing can match declared capabilities, configured tools, filesystem authority, verification roles, and low/medium/high cost or latency hints.
 A missing or malformed manifest remains unknown and cannot satisfy a capability-routed task.
-The parent-facing catalog exposes contract-relevant declarations before the first delegation decision.
+The parent-facing session-guidance message exposes contract-relevant catalog declarations before the first delegation decision.
 Use those identifiers exactly; enforced `readPaths`, `writePaths`, network, and secret guarantees are currently unsupported and require an external enforcement boundary.
 A rejected enforced contract reports both contract repair and stop as recovery choices, but repair is safe only when the unsupported fields were descriptive rather than required protection.
 
 `agentScope` is a top-level tool argument supplied per invocation.
 It is not a setting in `~/.pi/agent/pi-subagents.json` and does not belong in agent frontmatter.
-The parent-facing tool metadata discovers these definitions after session start and labels their source and required scope.
+The parent-facing session-guidance contract discovers these definitions after session start and labels their source and required scope.
 Edit agent files and run `/reload` (or start a new session) to refresh the catalog; there is no live filesystem watcher.
 The scope selects which custom agent directories are loaded; built-in agents remain available in every scope:
 
@@ -1282,7 +1292,8 @@ packages/pi-subagents/
 │   ├── usage-recording.ts        # Opt-in content-free event collection and local identities
 │   ├── usage-recording-store.ts  # Private per-runtime JSONL writers and retention pruning
 │   ├── completion-delivery.ts    # Top-level completion batching and optional idle-root wake
-│   ├── completion-requirement.ts # Exact required-run tracking and canonical context contract
+│   ├── session-guidance-contract.ts # Append-only catalog and effective-policy guidance
+│   ├── completion-requirement.ts # Exact required-run tracking and fixed-boundary fallback
 │   ├── completion-routing.ts     # Direct-parent and live-ancestor recipient selection
 │   ├── task-path.ts              # Canonical retained-agent task identity and resolution
 │   ├── peer-communication.ts     # Session peer routing and authenticated loopback broker

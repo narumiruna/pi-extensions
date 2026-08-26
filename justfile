@@ -95,7 +95,7 @@ benchmark-codex-compact *args:
 benchmark-async-subagents *args:
     node scripts/benchmark-async-subagents.ts {{ args }}
 
-# Preview or run the four-arm parent, v1 sync, v1 async, and v2 benchmark
+# Preview or run the four-arm parent, v1 sync, v1 async, and versioned bounded-job benchmark
 benchmark-subagent-capabilities *args:
     node scripts/benchmark-subagent-capabilities.ts {{ args }}
 

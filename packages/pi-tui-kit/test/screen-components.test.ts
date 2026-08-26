@@ -169,6 +169,46 @@ test("standard screens remain bounded and sanitize terminal controls", () => {
 	}
 });
 
+test("action screens prioritize actionable rows when terminal height is constrained", () => {
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		...actionScreen,
+		lines: [
+			"Sync paused: owner unknown.",
+			"Close other Pi sessions then restore; Settings and More return.",
+		],
+		items: [
+			{ id: "restore", label: "Restore sync access… (recommended)", action: "run" },
+			{ id: "status", label: "Status & changes", action: "run" },
+			{ id: "history", label: "History & recovery…", to: "detail" },
+			{ id: "help", label: "Help", action: "run" },
+		],
+	};
+	const harness = componentHarness(screen, {
+		plainTheme: true,
+		rows: 12,
+		keybindings: inputFriendlyKeybindings,
+	});
+	const lines = plainRender(harness.component, 32);
+	assert.ok(lines.length <= 12);
+	assert.equal(lines[0], "─".repeat(32));
+	assert.equal(lines.at(-1), "─".repeat(32));
+	assert.match(lines.join("\n"), /→ Restore sync access/u);
+	assert.match(lines.join("\n"), /esc\s+close/u);
+
+	const tinyHarness = componentHarness(screen, {
+		selectedItemId: "help",
+		plainTheme: true,
+		rows: 7,
+		keybindings: inputFriendlyKeybindings,
+	});
+	const tinyLines = plainRender(tinyHarness.component, 32);
+	assert.ok(tinyLines.length <= 7);
+	assert.equal(tinyLines[0], "─".repeat(32));
+	assert.equal(tinyLines.at(-1), "─".repeat(32));
+	assert.match(tinyLines.join("\n"), /→ Help/u);
+	assert.match(tinyLines.join("\n"), /esc\s+close/u);
+});
+
 test("action screens honor injected navigation and distinguish Back from Ctrl+C Close", () => {
 	const selected = componentHarness(actionScreen, { selectedItemId: "detail" });
 	selected.component.handleInput("l");
@@ -1073,6 +1113,7 @@ function componentHarness(
 		selectedItemId?: string;
 		themePrefix?: () => string;
 		plainTheme?: boolean;
+		rows?: number;
 		keybindings?: {
 			matches(data: string, binding: string): boolean;
 			getKeys(binding: string): readonly string[];
@@ -1096,7 +1137,7 @@ function componentHarness(
 	const component = createMenuScreenComponent({
 		screen,
 		selectedItemId: options.selectedItemId,
-		tui: { terminal: { rows: 24 }, requestRender() {} },
+		tui: { terminal: { rows: options.rows ?? 24 }, requestRender() {} },
 		theme: {
 			fg(color: string, text: string) {
 				if (options.plainTheme) return text;

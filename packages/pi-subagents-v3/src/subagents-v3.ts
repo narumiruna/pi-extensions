@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerSubagentTools, type SubagentToolsDependencies } from "./tools.js";
 
-export type SubagentsV2Dependencies = SubagentToolsDependencies;
+export type SubagentsV3Dependencies = SubagentToolsDependencies;
 
-export default function subagentsV2(
+export default function subagentsV3(
 	pi: ExtensionAPI,
-	dependencies: SubagentsV2Dependencies = {},
+	dependencies: SubagentsV3Dependencies = {},
 ): void {
 	const tools = registerSubagentTools(pi, dependencies);
 

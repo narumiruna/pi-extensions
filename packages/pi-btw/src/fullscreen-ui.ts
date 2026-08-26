@@ -7,9 +7,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
+	isKeyRelease,
+	Key,
+	matchesKey,
 	type OverlayHandle,
 	type TUI,
 	TuiAltScreen,
+	type TuiInputListener,
+	type TuiInputListenerResult,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeSingleLine } from "./text.js";
@@ -25,6 +30,7 @@ type BtwCustomFactory<T> = (
 type BtwFullscreenTui = TUI & {
 	flash?: (message: string, durationMs?: number) => void;
 	setLayoutRoot(component: Component | undefined): void;
+	addInputListenerBeforeViewport?(listener: TuiInputListener): () => void;
 };
 
 export interface BtwFullscreenLayoutComponent extends Component {
@@ -69,9 +75,10 @@ export async function runBtwFullscreen<T>(
 			));
 	let liveEditorText = ctx.ui.getEditorText();
 	let restoreEditor = false;
+	let host: BtwFullscreenHost<T> | undefined;
 	const outcome = await ctx.ui.custom<FullscreenOutcome<T>>(
-		(parent, theme, keybindings, done) =>
-			new BtwFullscreenHost(
+		(parent, theme, keybindings, done) => {
+			host = new BtwFullscreenHost(
 				parent,
 				theme,
 				keybindings,
@@ -87,7 +94,13 @@ export async function runBtwFullscreen<T>(
 					done(value);
 				},
 				createTui,
-			),
+			);
+			return host;
+		},
+		{
+			overlay: true,
+			onHandle: (handle) => host?.setParentOverlay(handle),
+		},
 	);
 	if (restoreEditor) {
 		try {
@@ -100,6 +113,59 @@ export async function runBtwFullscreen<T>(
 	return outcome.value;
 }
 
+type BtwInputListeners = {
+	beforeViewport: Set<TuiInputListener>;
+	regular: Set<TuiInputListener>;
+};
+
+const btwInputListeners = new WeakMap<BtwTuiAltScreen, BtwInputListeners>();
+
+function dispatchBtwInput(listeners: BtwInputListeners, data: string): TuiInputListenerResult {
+	let current = data;
+	for (const group of [listeners.beforeViewport, listeners.regular]) {
+		for (const listener of group) {
+			const result = listener(current);
+			if (result?.consume) return result;
+			if (result?.data !== undefined) current = result.data;
+		}
+	}
+	return current === data ? undefined : { data: current };
+}
+
+class BtwTuiAltScreen extends TuiAltScreen {
+	override addInputListener(listener: TuiInputListener): () => void {
+		let listeners = btwInputListeners.get(this);
+		if (!listeners) {
+			const registeredListeners: BtwInputListeners = {
+				beforeViewport: new Set(),
+				regular: new Set(),
+			};
+			btwInputListeners.set(this, registeredListeners);
+			super.addInputListener((data) => dispatchBtwInput(registeredListeners, data));
+			listeners = registeredListeners;
+		}
+		listeners.regular.add(listener);
+		return () => listeners.regular.delete(listener);
+	}
+
+	addInputListenerBeforeViewport(listener: TuiInputListener): () => void {
+		const listeners = btwInputListeners.get(this);
+		if (!listeners) return super.addInputListener(listener);
+		listeners.beforeViewport.add(listener);
+		return () => listeners.beforeViewport.delete(listener);
+	}
+
+	override removeInputListener(listener: TuiInputListener): void {
+		const listeners = btwInputListeners.get(this);
+		if (!listeners) {
+			super.removeInputListener(listener);
+			return;
+		}
+		listeners.beforeViewport.delete(listener);
+		listeners.regular.delete(listener);
+	}
+}
+
 function createBtwFullscreenTui(
 	parent: TUI,
 	theme: Theme,
@@ -108,7 +174,7 @@ function createBtwFullscreenTui(
 ): BtwFullscreenTui {
 	const styleSearchMatch = (text: string) =>
 		theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
-	return new TuiAltScreen(parent.terminal, parent.getShowHardwareCursor(), undefined, {
+	return new BtwTuiAltScreen(parent.terminal, parent.getShowHardwareCursor(), undefined, {
 		mouse: true,
 		searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
 		searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
@@ -139,10 +205,18 @@ function openUrlInBrowser(target: string): void {
 
 class BtwFullscreenHost<T> implements Component {
 	private fullscreen: BtwFullscreenTui | undefined;
+	private parentOverlay: OverlayHandle | undefined;
 	private cancelActiveCustom: (() => void) | undefined;
+	private hardCancelActiveCustom: (() => void) | undefined;
+	private removeHardCancelListener: (() => void) | undefined;
 	private started = false;
 	private disposed = false;
 	private finished = false;
+	private parentStopped = false;
+	private parentRestarted = false;
+	private fullscreenCreated = false;
+	private fullscreenStopped = false;
+	private cleanupError: unknown;
 
 	constructor(
 		private readonly parent: TUI,
@@ -154,6 +228,10 @@ class BtwFullscreenHost<T> implements Component {
 		private readonly createTui: BtwFullscreenTuiFactory,
 	) {
 		queueMicrotask(() => void this.start());
+	}
+
+	setParentOverlay(overlay: OverlayHandle): void {
+		this.parentOverlay = overlay;
 	}
 
 	render(width: number): string[] {
@@ -172,45 +250,69 @@ class BtwFullscreenHost<T> implements Component {
 		if (this.started || this.finished) return;
 		this.started = true;
 		let outcome: FullscreenOutcome<T>;
-		let parentStopped = false;
-		let fullscreenCreated = false;
 		try {
 			if (this.disposed) throw new FullscreenUiDisposedError();
 			this.parent.stop({ preserveScreen: true });
-			parentStopped = true;
+			this.parentStopped = true;
 			if (this.disposed) throw new FullscreenUiDisposedError();
 			this.fullscreen = this.createTui(this.parent, this.theme);
-			fullscreenCreated = true;
+			this.fullscreenCreated = true;
 			this.fullscreen.start();
+			// Waiting for the custom promise would leave follow-up keys bound to the side TUI.
+			const addHardCancelListener =
+				this.fullscreen.addInputListenerBeforeViewport?.bind(this.fullscreen) ??
+				this.fullscreen.addInputListener.bind(this.fullscreen);
+			this.removeHardCancelListener = addHardCancelListener((data) => {
+				if (isKeyRelease(data) || !matchesKey(data, Key.ctrl("c"))) return undefined;
+				try {
+					this.hardCancelActiveCustom?.();
+				} finally {
+					this.restoreParent();
+				}
+				return { consume: true };
+			});
 			outcome = { kind: "completed", value: await this.run(this.createContext()) };
 		} catch (error) {
 			outcome = { kind: "failed", error };
 		}
 
-		let cleanupError: unknown;
 		try {
 			this.cancelActiveCustom?.();
 		} catch (error) {
-			cleanupError = error;
+			this.cleanupError ??= error;
 		}
-		if (fullscreenCreated) {
+		this.restoreParent();
+		if (this.cleanupError !== undefined) outcome = { kind: "failed", error: this.cleanupError };
+		this.finished = true;
+		this.done(outcome);
+	}
+
+	private restoreParent(): void {
+		this.removeHardCancelListener?.();
+		this.removeHardCancelListener = undefined;
+		if (this.fullscreenCreated && !this.fullscreenStopped) {
+			this.fullscreenStopped = true;
 			try {
 				this.fullscreen?.stop({ preserveScreen: true });
 			} catch (error) {
-				cleanupError ??= error;
+				this.cleanupError ??= error;
 			}
 		}
-		if (parentStopped) {
-			try {
-				this.parent.start();
-				this.parent.renderNow(false);
-			} catch (error) {
-				cleanupError ??= error;
-			}
+		if (!this.parentStopped || this.parentRestarted) return;
+		const parentOverlay = this.parentOverlay;
+		this.parentOverlay = undefined;
+		try {
+			parentOverlay?.setHidden(true);
+		} catch (error) {
+			this.cleanupError ??= error;
 		}
-		if (cleanupError !== undefined) outcome = { kind: "failed", error: cleanupError };
-		this.finished = true;
-		this.done(outcome);
+		try {
+			this.parent.start();
+			this.parentRestarted = true;
+			this.parent.renderNow(false);
+		} catch (error) {
+			this.cleanupError ??= error;
+		}
 	}
 
 	private createContext(): ExtensionCommandContext {
@@ -296,6 +398,7 @@ class BtwFullscreenHost<T> implements Component {
 				if (promiseSettled || !hasPendingValue) return;
 				promiseSettled = true;
 				this.cancelActiveCustom = undefined;
+				this.hardCancelActiveCustom = undefined;
 				if (!factorySettled) {
 					resolve(pendingValue as Value);
 					return;
@@ -319,6 +422,7 @@ class BtwFullscreenHost<T> implements Component {
 				closed = true;
 				promiseSettled = true;
 				this.cancelActiveCustom = undefined;
+				this.hardCancelActiveCustom = undefined;
 				try {
 					unmount();
 					reject(error);
@@ -330,6 +434,16 @@ class BtwFullscreenHost<T> implements Component {
 				if (promiseSettled) return;
 				disposeComponent();
 				if (!promiseSettled) fail(new FullscreenUiDisposedError());
+			};
+			this.hardCancelActiveCustom = () => {
+				if (promiseSettled) return;
+				try {
+					component?.handleInput?.("\u0003");
+				} catch (error) {
+					fail(error);
+					return;
+				}
+				this.cancelActiveCustom?.();
 			};
 
 			let created: ReturnType<BtwCustomFactory<Value>>;

@@ -10,32 +10,37 @@ test("package declares one source extension and one bundled operating skill", ()
 	const manifest = JSON.parse(
 		readFileSync(path.join(packageDirectory, "package.json"), "utf8"),
 	) as {
+		name: string;
 		files: string[];
 		pi: { extensions: string[]; skills: string[] };
 		piExtension: { lifecycle: string };
+		repository: { directory: string };
 	};
+	assert.equal(manifest.name, "@narumitw/pi-subagents-v3");
+	assert.equal(manifest.repository.directory, "packages/pi-subagents-v3");
 	assert.deepEqual(manifest.pi.extensions, ["./src/index.ts"]);
 	assert.deepEqual(manifest.pi.skills, ["./skills"]);
 	assert.equal(manifest.piExtension.lifecycle, "experimental");
 	assert.ok(manifest.files.includes("src"));
 	assert.ok(manifest.files.includes("skills"));
+	assert.ok(manifest.files.includes("docs"));
 });
 
 test("bundled skill documents every minimal-runtime operating responsibility", () => {
 	const skill = readFileSync(
-		path.join(packageDirectory, "skills", "subagents-v2", "SKILL.md"),
+		path.join(packageDirectory, "skills", "subagents-v3", "SKILL.md"),
 		"utf8",
 	);
 	for (const evidence of [
 		/prefer direct work/i,
-		/subagent-v2-consult/i,
+		/subagent-v3-consult/i,
 		/self-contained tasks/i,
 		/shortest realistic execution deadline/i,
 		/parallel tool batch/i,
-		/subagent-v2-wait/i,
+		/subagent-v3-wait/i,
 		/wait timeout does not cancel/i,
-		/subagent-v2-inspect/i,
-		/subagent-v2-cancel/i,
+		/subagent-v3-inspect/i,
+		/subagent-v3-cancel/i,
 		/partial.*failed.*timed_out.*cancelled/is,
 		/worker's statements.*claims rather than proof/is,
 		/disjoint.*ownership/is,

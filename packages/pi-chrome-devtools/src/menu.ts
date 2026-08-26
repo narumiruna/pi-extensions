@@ -306,7 +306,7 @@ export async function showChromeDevtoolsToolWorkflow(
 				current.draft = new Set(selectedTools);
 				current.applied = true;
 				ctx.ui.notify(
-					`Saved: ${selectedTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} browser tools available to lazy-load.`,
+					`Saved: ${selectedTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} browser tools available.`,
 					"info",
 				);
 				return { kind: "close" };
@@ -378,7 +378,7 @@ function buildMenuSnapshot(pi: ExtensionAPI, settings: SettingsLoadResult): Menu
 
 function mainStateLines(snapshot: MenuSnapshot) {
 	return sanitizeLines([
-		`Lazy catalog: ${snapshot.activeTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} available · ${snapshot.persistenceLabel}`,
+		`Tool catalog: ${snapshot.activeTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} available · ${snapshot.persistenceLabel}`,
 		`Browser: ${browserLifecycleSummary()}`,
 		`Endpoint: ${devToolsEndpoint()}`,
 		...(snapshot.settingsWarning ? [`Settings warning: ${snapshot.settingsWarning}`] : []),
@@ -421,7 +421,7 @@ function buildToolReview(current: ToolWorkflowState) {
 			`Current available browser tools: ${current.accepted.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
 			`Proposed available browser tools: ${current.draft.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
 			"",
-			"Available to lazy-load after apply:",
+			"Available after apply:",
 			...(available.length > 0
 				? available.map((name) => `  - ${TOOL_PRESENTATION[name].label} (${name})`)
 				: ["  - none"]),
@@ -432,7 +432,8 @@ function buildToolReview(current: ToolWorkflowState) {
 				: ["  - none"]),
 			"",
 			"Other active Pi tools remain unchanged.",
-			"Newly available tools remain deferred until chrome_devtools_load selects them.",
+			"Native-capable models defer these tools until chrome_devtools_load selects them.",
+			"Other models expose available tools eagerly before the next model request.",
 			"The accepted availability policy is saved for future sessions.",
 		].join("\n"),
 	);

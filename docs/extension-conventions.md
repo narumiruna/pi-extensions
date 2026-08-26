@@ -120,10 +120,10 @@ These conventions preserve cache-eligible request prefixes but cannot guarantee 
   Provider-visible definitions include `name`, `description`, `parameters`, and `constrainedSampling`; runtime implementations, renderers, and labels do not.
   Remember that `promptSnippet` and `promptGuidelines` rebuild the system prompt even though they are not provider tool-definition fields.
   **Verification:** `Test` the effective system prompt, ordered active names, and normalized provider-visible definitions across consecutive ordinary requests when tool activation or metadata changes.
-- **MUST:** Use Pi's additive deferred-tool-loading path when dynamic loading is required and the selected model and provider support it.
-  Keep the loader active, add tools without removing active tools in the same transition, and normally omit `promptSnippet` and `promptGuidelines` from lazily activated tools.
-  Document fallback behavior because unsupported providers resend the complete active tool list and may invalidate the cached prefix.
-  **Verification:** `Test` additive activation at the loader tool result, `Review` fallback behavior, and run a provider `Smoke` when claiming native deferred loading for a custom model or proxy.
+- **MUST:** Lazy-load extension tools only through Pi's additive deferred-tool-loading path and only when the selected model and provider support Pi's native deferred protocol.
+  Keep the loader active, add tools without removing active tools in the same transition, and omit `promptSnippet` and `promptGuidelines` from lazily activated tools.
+  When native deferred loading is unsupported, expose the configured tools before the next model request and do not use Pi's fallback that resends the complete active tool list after a loader result.
+  **Verification:** `Test` native additive activation at the loader tool result and eager exposure for unsupported models, plus a provider `Smoke` when claiming native deferred loading for a custom model or proxy.
 - **MUST:** Do not rewrite provider message ordering or leading instructions in `before_provider_request` unless provider compatibility requires it.
   Document and test every intentional provider-prefix transition, and treat the first request after the transition as the baseline for the new prefix epoch.
   Correctness and provider compatibility take precedence over cache preservation.
@@ -146,6 +146,23 @@ These conventions preserve cache-eligible request prefixes but cannot guarantee 
   ignoring a stale continuation does not release the underlying task.
   **Verification:** `Test` for rendering, input, user cancellation, and disposal behavior plus
   `Review` against Pi's TUI contract.
+
+#### Shared terminal handoffs
+
+Use this section only when specialized UI temporarily transfers one terminal between a parent TUI and an extension-owned TUI.
+Prefer Pi-owned `ctx.ui` flows and one TUI when they can preserve the required state, interaction, and lifecycle behavior.
+
+- **MUST:** Make shared-terminal handoff cleanup idempotent after normal completion, hard cancellation, partial initialization, disposal, and cleanup failure.
+  Retain and operate on extension-owned overlay handles without closing, hiding, or reordering unrelated overlays.
+  **Verification:** `Test` each applicable completion and failure path with repeated cleanup and an unrelated parent overlay mounted, plus `Review` of every stop, start, focus, and overlay transition.
+- **MUST:** A hard-cancel handoff must synchronously invoke the owning root flow's cancel or close path independently of nested overlay focus before restoring input ownership.
+  The outgoing TUI must consume the triggering input so it cannot reach a stale or unrelated focused component.
+  **Verification:** `Test` hard cancellation with the root component focused and again with at least one nested overlay focused, and assert that the owning flow settles in each case.
+- **MUST:** After a handoff begins, subsequent input from the same terminal batch must reach the restored TUI through its normal input pipeline instead of being dropped or delivered to the stopped TUI.
+  **Verification:** `Test` one synchronous input batch containing the handoff key followed by printable input, and assert that the restored editor receives the printable input.
+
+- **SHOULD:** Prefer terminal ownership transfer to buffering and replaying terminal input.
+  Avoid replaying input directly to a focused component because that bypasses normal TUI listeners, focus routing, key-release filtering, shortcuts, and render scheduling unless Pi exposes and documents an input-injection API for that purpose.
 
 Use the callback-provided theme and keybindings. For standard action, detail, settings, and
 multi-select flows, new extensions **SHOULD** declare screens and actions with
@@ -364,6 +381,7 @@ fragile regular expressions. Until then, label the real verification method hone
 - [ ] For command-surface changes, preserve established routes or explicitly own an approved breaking
       migration, and test every claimed execution mode.
 - [ ] For prompt-cache-sensitive changes, identify each prefix epoch and compare normalized provider-facing inputs across ordinary requests and applicable restoration boundaries.
+- [ ] For shared-terminal handoffs, test hard cancellation under root and nested-overlay focus, same-batch follow-up input, repeated cleanup, and unrelated parent overlays.
 - [ ] Update focused tests and run the verification method named by each relevant MUST.
 - [ ] Run `npm run check` and `npm test`; add pack or Pi runtime smokes when metadata or loading changed.
 - [ ] Report any skipped check, accepted exception, or follow-up validator opportunity in the change

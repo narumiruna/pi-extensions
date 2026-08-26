@@ -136,6 +136,50 @@ test("requires provider cache evidence and prices a confirmed zero-read miss", (
 	assert.match(rendered, /miss premium ~\$0\.018/);
 });
 
+test("preserves input pricing for a fully cached request", () => {
+	const tieredModel: Model<Api> = {
+		...MODEL,
+		cost: {
+			...RATES,
+			tiers: [
+				{
+					inputTokensAbove: 900,
+					input: 20,
+					output: 40,
+					cacheRead: 2,
+					cacheWrite: 30,
+				},
+			],
+		},
+	};
+	const fullyCached = assistant(0, 1_000, 0);
+	fullyCached.usage.cost = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		total: 0,
+	};
+
+	const sample = createCacheSample(fullyCached, 0, tieredModel);
+	assert.ok(sample);
+	assert.deepEqual(fullyCached.usage.cost, {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		total: 0,
+	});
+	assert.ok(Math.abs((sample.inputUnitCost ?? 0) - 0.000_02) < 0.000_000_001);
+	assert.ok(Math.abs((sample.promptCost ?? 0) - 0.002) < 0.000_000_001);
+	assert.ok(Math.abs((sample.estimatedSavings ?? 0) - 0.018) < 0.000_000_001);
+	const rendered = formatMonitorLines(createCacheMonitorView([sample]))
+		.map(({ text }) => text)
+		.join("\n");
+	assert.match(rendered, /cache saved ~\$0\.018/);
+	assert.match(rendered, /Session {2}1 req.*saved ~\$0\.018/);
+});
+
 test("uses weighted session totals and excludes cross-compaction comparisons", () => {
 	const first = createCacheSample(assistant(200, 800, 0), 0, MODEL);
 	const second = createCacheSample(assistant(400, 600, 100), 0, MODEL);
@@ -211,6 +255,42 @@ test("reconstructs cache epochs and includes summarization usage in session tota
 	assert.equal(view.session.cacheRead, 2_700);
 	assert.ok(Math.abs((view.session.promptCost ?? 0) - 0.0157) < 0.000_000_1);
 	assert.ok(Math.abs((view.session.estimatedSavings ?? 0) - 0.0243) < 0.000_000_1);
+});
+
+test("retains summary usage when cache accounting is unavailable", () => {
+	const summaryMessage = assistant(1_000, 0, 0);
+	const restored = collectCacheSamples([
+		{
+			type: "compaction",
+			id: "compact",
+			parentId: null,
+			usage: summaryMessage.usage,
+		},
+		{
+			type: "branch_summary",
+			id: "branch-summary",
+			parentId: null,
+			usage: summaryMessage.usage,
+		},
+	] as SessionEntry[]);
+
+	assert.equal(restored.currentEpoch, 2);
+	assert.equal(restored.summaryRecords.length, 2);
+	assert.ok(restored.summaryRecords.every(({ hitRatePercent }) => hitRatePercent === null));
+	const view = createCacheMonitorView([], undefined, {
+		summaryRecords: restored.summaryRecords,
+	});
+	assert.equal(view.session.requestCount, 2);
+	assert.equal(view.session.input, 2_000);
+	assert.equal(view.session.promptTokens, 2_000);
+	assert.equal(view.session.hitRatePercent, null);
+	assert.ok(Math.abs((view.session.promptCost ?? 0) - 0.02) < 0.000_000_001);
+	assert.equal(view.session.estimatedSavings, null);
+	const rendered = formatMonitorLines(view)
+		.map(({ text }) => text)
+		.join("\n");
+	assert.match(rendered, /summary usage only/);
+	assert.match(rendered, /Session {2}2 req.*hit n\/a.*uncached 2k.*cost \$0\.020.*saved ~n\/a/);
 });
 
 test("does not reconstruct all-zero usage as a miss without provider evidence", () => {

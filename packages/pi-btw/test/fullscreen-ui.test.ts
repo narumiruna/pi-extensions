@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Container,
+	type Focusable,
+	getKeybindings,
+	KeybindingsManager,
+	setKeybindings,
+	type Terminal,
+	type TUI,
+	TUI_KEYBINDINGS,
+	TuiMainScreen,
+} from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { type BtwFullscreenTuiFactory, runBtwFullscreen } from "../src/fullscreen-ui.js";
 
@@ -57,6 +68,9 @@ function createHarness(options: { fullscreenStopError?: Error; layoutMountError?
 		},
 		requestRender() {
 			events.push("fullscreen.render");
+		},
+		addInputListener() {
+			return () => {};
 		},
 		showOverlay() {
 			throw new Error("overlay was not expected");
@@ -123,6 +137,110 @@ function immediateComponent(done: (value: string) => void, events: string[]): Fa
 
 async function flushAsyncWork(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+class InputHandoffTerminal implements Terminal {
+	readonly columns = 80;
+	readonly rows = 12;
+	readonly kittyProtocolActive = false;
+	private inputHandler: ((data: string) => void) | undefined;
+
+	start(onInput: (data: string) => void): void {
+		this.inputHandler = onInput;
+	}
+
+	stop(): void {
+		this.inputHandler = undefined;
+	}
+
+	send(data: string): void {
+		this.inputHandler?.(data);
+	}
+
+	async drainInput(): Promise<void> {}
+	write(): void {}
+	moveBy(): void {}
+	hideCursor(): void {}
+	showCursor(): void {}
+	clearLine(): void {}
+	clearFromCursor(): void {}
+	clearScreen(): void {}
+	setTitle(): void {}
+	setProgress(): void {}
+}
+
+class MainInput implements Component, Focusable {
+	focused = false;
+	text = "";
+
+	render(): string[] {
+		return [this.text];
+	}
+
+	handleInput(data: string): void {
+		if (data.charCodeAt(0) >= 32) this.text += data;
+	}
+
+	invalidate(): void {}
+}
+
+function createInputHandoffHarness() {
+	const terminal = new InputHandoffTerminal();
+	const parent = new TuiMainScreen(terminal, false);
+	const editorContainer = new Container();
+	const mainInput = new MainInput();
+	editorContainer.addChild(mainInput);
+	parent.addChild(editorContainer);
+	parent.setFocus(mainInput);
+	parent.start();
+
+	const ctx = {
+		ui: {
+			custom: <Value>(
+				factory: (
+					tui: TUI,
+					theme: unknown,
+					keybindings: unknown,
+					done: (value: Value) => void,
+				) => Component & { dispose?(): void },
+				options?: {
+					overlay?: boolean;
+					onHandle?: (handle: ReturnType<TUI["showOverlay"]>) => void;
+				},
+			) =>
+				new Promise<Value>((resolve) => {
+					assert.equal(options?.overlay, true);
+					let component: (Component & { dispose?(): void }) | undefined;
+					let closed = false;
+					const done = (value: Value) => {
+						if (closed) return;
+						closed = true;
+						parent.hideOverlay();
+						component?.dispose?.();
+						resolve(value);
+					};
+					component = factory(
+						parent,
+						{
+							fg: (_color: string, text: string) => text,
+							bg: (_color: string, text: string) => text,
+							underline: (text: string) => text,
+							inverse: (text: string) => text,
+							bold: (text: string) => text,
+						},
+						{},
+						done,
+					);
+					const overlay = parent.showOverlay(component);
+					options.onHandle?.(overlay);
+				}),
+			getEditorText: () => mainInput.text,
+			setEditorText: (value: string) => {
+				mainInput.text = value;
+			},
+		},
+	} as never;
+	return { ctx, mainInput, parent, terminal };
 }
 
 function createNativeFullscreenHarness() {
@@ -228,6 +346,135 @@ async function startClipboardSelection(copy: (text: string) => Promise<void>) {
 	harness.input("\u001b[<0;7;1m");
 	return { harness, running, sideTui, closeSide };
 }
+
+test("Ctrl+C hands input back without closing another parent overlay", async () => {
+	const harness = createInputHandoffHarness();
+	const existingOverlay = harness.parent.showOverlay(
+		{
+			render: () => ["existing overlay"],
+			invalidate() {},
+		},
+		{ nonCapturing: true },
+	);
+	try {
+		const running = runBtwFullscreen(harness.ctx, (ctx) =>
+			ctx.ui.custom<"closed">((_tui, _theme, _keybindings, done) => ({
+				focused: false,
+				render: () => ["side thread"],
+				handleInput(data: string) {
+					if (data === "\u0003") done("closed");
+				},
+				invalidate() {},
+			})),
+		);
+		await flushAsyncWork();
+
+		harness.terminal.send("\u0003");
+		harness.terminal.send("x");
+
+		assert.equal(await running, "closed");
+		assert.equal(harness.mainInput.text, "x");
+		assert.equal(harness.parent.hasOverlay(), true);
+	} finally {
+		existingOverlay.hide();
+		harness.parent.stop();
+	}
+});
+
+test("Ctrl+C cancels the side flow when transcript search owns focus", async () => {
+	const harness = createInputHandoffHarness();
+	const ctrlShiftF = "\u001b[102;6u";
+	let sideTui: TUI | undefined;
+	let closeSide: (() => void) | undefined;
+	let settled = false;
+	const running = runBtwFullscreen(harness.ctx, (ctx) =>
+		ctx.ui.custom<"closed">((tui, _theme, _keybindings, done) => {
+			sideTui = tui;
+			closeSide = () => done("closed");
+			return {
+				focused: false,
+				render: () => ["side thread"],
+				invalidate() {},
+			};
+		}),
+	);
+	const observed = running.then(
+		() => {
+			settled = true;
+		},
+		() => {
+			settled = true;
+		},
+	);
+	try {
+		await flushAsyncWork();
+		assert.ok(sideTui);
+
+		harness.terminal.send(ctrlShiftF);
+		assert.equal(sideTui.hasOverlay(), true);
+		harness.terminal.send("\u0003");
+		harness.terminal.send("x");
+		await flushAsyncWork();
+
+		assert.equal(settled, true);
+		assert.equal(harness.mainInput.text, "x");
+	} finally {
+		closeSide?.();
+		await observed;
+		harness.parent.stop();
+	}
+});
+
+test("Ctrl+C hard-cancels the side root before a remapped search close", async (t) => {
+	const previousKeybindings = getKeybindings();
+	t.onTestFinished(() => setKeybindings(previousKeybindings));
+	setKeybindings(
+		new KeybindingsManager(TUI_KEYBINDINGS, {
+			"tui.altScreen.searchClose": "ctrl+c",
+		}),
+	);
+	const harness = createInputHandoffHarness();
+	let sideTui: TUI | undefined;
+	let closeSide: (() => void) | undefined;
+	let sideCancelCount = 0;
+	const running = runBtwFullscreen(harness.ctx, (ctx) =>
+		ctx.ui.custom<"closed">((tui, _theme, _keybindings, done) => {
+			sideTui = tui;
+			closeSide = () => done("closed");
+			return {
+				focused: false,
+				render: () => ["side thread"],
+				handleInput(data: string) {
+					if (data !== "\u0003") return;
+					sideCancelCount += 1;
+					done("closed");
+				},
+				invalidate() {},
+			};
+		}),
+	);
+	try {
+		await flushAsyncWork();
+		assert.ok(sideTui);
+		const searchableTui = sideTui as TUI & {
+			openSearch(): void;
+			isOverlayFocused(): boolean;
+		};
+		searchableTui.openSearch();
+		assert.equal(searchableTui.isOverlayFocused(), true);
+
+		harness.terminal.send("\u0003");
+		harness.terminal.send("x");
+
+		assert.equal(sideCancelCount, 1);
+		assert.equal(await running, "closed");
+		assert.equal(harness.mainInput.text, "x");
+	} finally {
+		closeSide?.();
+		await running.catch(() => undefined);
+		harness.parent.stop();
+	}
+});
 
 test("default fullscreen enables application-owned mouse selection and restores terminal modes", async () => {
 	const writes: string[] = [];

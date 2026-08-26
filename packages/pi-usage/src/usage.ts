@@ -22,6 +22,7 @@ import {
 } from "./codex-resets.js";
 import { awaitWithDeadline, errorMessage, runWithConcurrency, UsageCache } from "./core.js";
 import { formatProviderStates, formatUsageStatusline } from "./format.js";
+import { createOAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import {
 	adapterForProvider,
 	isStaleExtensionContextError,
@@ -80,6 +81,7 @@ export default function usageExtension(
 	dependencies: UsageExtensionDependencies = {},
 ) {
 	const credentialReader = dependencies.credentialReader;
+	const credentialCandidates = createOAuthCredentialCandidateReader(pi, credentialReader);
 	const createRedemptionId = dependencies.createRedemptionId ?? randomUUID;
 	const settingsRuntime = dependencies.settingsRuntime ?? createUsageSettingsRuntime();
 	const cache = new UsageCache(CACHE_TTL_MS);
@@ -189,7 +191,7 @@ export default function usageExtension(
 		let auth: ResolvedUsageAuth | undefined;
 		try {
 			auth = await awaitWithDeadline(
-				resolveUsageAuth(ctx, adapter),
+				resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
 				signal,
 				DEFAULT_TIMEOUT_MS,
 				`resolving ${adapter.displayName} runtime auth`,
@@ -419,7 +421,7 @@ export default function usageExtension(
 			if (!adapter) return false;
 			try {
 				const auth = await awaitWithDeadline(
-					resolveUsageAuth(ctx, adapter),
+					resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
 					signal,
 					DEFAULT_TIMEOUT_MS,
 					`revalidating ${adapter.displayName} runtime auth`,
@@ -438,7 +440,7 @@ export default function usageExtension(
 		if (!adapter) return false;
 		try {
 			const auth = await awaitWithDeadline(
-				resolveUsageAuth(ctx, adapter),
+				resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
 				signal,
 				DEFAULT_TIMEOUT_MS,
 				`revalidating ${adapter.displayName} runtime auth`,
@@ -677,7 +679,7 @@ export default function usageExtension(
 								async (signal) => {
 									const expectedModel = modelIdentity(ctx.model);
 									const auth = await awaitWithDeadline(
-										resolveCodexResetAuth(ctx, undefined, credentialReader),
+										resolveCodexResetAuth(ctx, undefined, credentialReader, credentialCandidates),
 										signal,
 										DEFAULT_TIMEOUT_MS,
 										"resolving current Codex reset authentication",
@@ -695,7 +697,7 @@ export default function usageExtension(
 										};
 									}
 									const revalidated = await awaitWithDeadline(
-										resolveCodexResetAuth(ctx, undefined, credentialReader),
+										resolveCodexResetAuth(ctx, undefined, credentialReader, credentialCandidates),
 										signal,
 										DEFAULT_TIMEOUT_MS,
 										"revalidating current Codex reset authentication",
@@ -759,7 +761,7 @@ export default function usageExtension(
 								controller.signal,
 								async (signal) => {
 									const auth = await awaitWithDeadline(
-										resolveCodexResetAuth(ctx, undefined, credentialReader),
+										resolveCodexResetAuth(ctx, undefined, credentialReader, credentialCandidates),
 										signal,
 										DEFAULT_TIMEOUT_MS,
 										"revalidating current Codex reset authentication",

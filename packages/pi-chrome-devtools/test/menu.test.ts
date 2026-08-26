@@ -43,7 +43,7 @@ test("main menu presents consequential state and five goal-oriented actions with
 
 		await mock.commands.get("chrome-devtools")?.handler("", ctx);
 
-		assert.match(rendered, /Lazy catalog: 2 of 5 available · not\s+saved/);
+		assert.match(rendered, /Tool catalog: 2 of 5 available · not\s+saved/);
 		assert.match(rendered, /Browser: not started · attaches or\s+launches on first use/);
 		assert.match(rendered, /Endpoint: http:\/\/127\.0\.0\.1:9222/);
 		assert.match(rendered, /[→›] Choose available browser tools…/);
@@ -116,7 +116,7 @@ test("main menu shows saved all-enabled state and the reversible disable preview
 
 		await mock.commands.get("chrome-devtools")?.handler("", ctx);
 
-		assert.match(rendered, /Lazy catalog: 5 of 5 available · saved/);
+		assert.match(rendered, /Tool catalog: 5 of 5 available · saved/);
 		assert.match(rendered, /Make all browser tools unavailable…/);
 		assert.match(rendered, /Preview 0 of 5; other active tools stay/);
 	});
@@ -393,8 +393,8 @@ test("apply refreshes review instead of overwriting browser tools changed while 
 		assert.match(refreshedReview, /Proposed availability: 4\/5/);
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"other_tool",
-			...CHROME_TOOLS.slice(0, 3),
 			"chrome_devtools_load",
+			...CHROME_TOOLS.slice(0, 3),
 		]);
 		assert.equal(existsSync(settingsFilePath()), false);
 		assert.match(notifications.at(-1)?.message ?? "", /changed while review was open/i);
@@ -524,8 +524,8 @@ test("RPC dialogs preserve staged review and confirmed apply semantics", async (
 		assert.ok(dialogTitles.some((title) => title.includes("Proposed availability: 4/5")));
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"other_tool",
-			...CHROME_TOOLS.slice(1),
 			"chrome_devtools_load",
+			...CHROME_TOOLS.slice(1),
 		]);
 		assert.deepEqual(
 			JSON.parse(readFileSync(settingsFilePath(), "utf8")).tools,
@@ -588,17 +588,14 @@ test("review previews the exact tool effect and one confirmed apply persists it"
 		assert.deepEqual(applicationOrder, ["wait-for-idle", "apply-runtime"]);
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"other_tool",
-			...CHROME_TOOLS.slice(1),
 			"chrome_devtools_load",
+			...CHROME_TOOLS.slice(1),
 		]);
 		assert.deepEqual(
 			JSON.parse(readFileSync(settingsFilePath(), "utf8")).tools,
 			CHROME_TOOLS.slice(1),
 		);
-		assert.match(
-			notifications.at(-1)?.message ?? "",
-			/Saved: 4 of 5 browser tools available to lazy-load/,
-		);
+		assert.match(notifications.at(-1)?.message ?? "", /Saved: 4 of 5 browser tools available/);
 	});
 });
 

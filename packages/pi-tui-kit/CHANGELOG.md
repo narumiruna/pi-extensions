@@ -1,5 +1,12 @@
 # @narumitw/pi-tui-kit
 
+## 0.58.1
+
+### Patch Changes
+
+- 78276b0: Keep standard menu frames within the live terminal height while preserving actionable rows and exit hints.
+- dc9802e: Keep Ctrl+C available as a hard-cancel input when configurable cancellation bindings are remapped.
+
 ## 0.58.0
 
 ### Minor Changes

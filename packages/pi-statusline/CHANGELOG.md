@@ -1,5 +1,14 @@
 # @narumitw/pi-statusline
 
+## 0.49.14
+
+### Patch Changes
+
+- dc9802e: Keep Ctrl+C available as a hard-cancel input when configurable cancellation bindings are remapped.
+- Updated dependencies [78276b0]
+- Updated dependencies [dc9802e]
+  - @narumitw/pi-tui-kit@0.58.1
+
 ## 0.49.13
 
 ### Patch Changes

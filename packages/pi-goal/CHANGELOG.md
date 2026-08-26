@@ -1,5 +1,12 @@
 # @narumitw/pi-goal
 
+## 0.54.0
+
+### Minor Changes
+
+- b59cdbc: Remove the `toolVisibility` setting and keep Goal helper schemas stable from startup.
+  Retired settings keys are ignored and preserved, while restrictive external tool policies now reject or pause Goal work without being widened.
+
 ## 0.53.3
 
 ### Patch Changes

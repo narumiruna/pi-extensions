@@ -1,4 +1,8 @@
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
 
@@ -13,6 +17,7 @@ const existingAvailableToolsStore = sharedGlobal[AVAILABLE_TOOLS_STORE];
 const availableToolsByApi =
 	existingAvailableToolsStore ?? new WeakMap<ExtensionAPI, Set<ChromeDevToolsToolName>>();
 if (!existingAvailableToolsStore) sharedGlobal[AVAILABLE_TOOLS_STORE] = availableToolsByApi;
+const lazyExposureByApi = new WeakMap<ExtensionAPI, boolean>();
 
 const SEARCH_TEXT: Record<ChromeDevToolsToolName, string> = {
 	chrome_devtools_list_pages: "list open inspectable chrome browser pages tabs targets",
@@ -31,15 +36,30 @@ export function initializeAvailableChromeDevtoolsTools(pi: ExtensionAPI) {
 	);
 }
 
-export function configureLazyChromeDevtoolsTools(
+export function configureChromeDevtoolsToolExposure(
 	pi: ExtensionAPI,
 	availableTools: readonly ChromeDevToolsToolName[],
+	model?: ExtensionContext["model"],
 ) {
-	setAvailableTools(pi, availableTools);
+	const available = setAvailableTools(pi, availableTools);
+	const lazyExposure = supportsNativeDeferredToolLoading(model);
+	lazyExposureByApi.set(pi, lazyExposure);
+	const exposedTools = lazyExposure
+		? []
+		: CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => available.has(name));
 	const nonCapabilityTools = pi
 		.getActiveTools()
 		.filter((name) => !CHROME_DEVTOOLS_TOOL_NAMES.includes(name as ChromeDevToolsToolName));
-	pi.setActiveTools(unique([...nonCapabilityTools, CHROME_DEVTOOLS_LOAD_TOOL_NAME]));
+	pi.setActiveTools(
+		unique([...nonCapabilityTools, CHROME_DEVTOOLS_LOAD_TOOL_NAME, ...exposedTools]),
+	);
+}
+
+export function requireEagerChromeDevtoolsToolExposure(pi: ExtensionAPI) {
+	lazyExposureByApi.set(pi, false);
+	const active = pi.getActiveTools();
+	const available = availableChromeDevtoolsTools(pi);
+	pi.setActiveTools(unique([...active, CHROME_DEVTOOLS_LOAD_TOOL_NAME, ...available]));
 }
 
 export function applyAvailableChromeDevtoolsTools(
@@ -47,14 +67,46 @@ export function applyAvailableChromeDevtoolsTools(
 	availableTools: readonly ChromeDevToolsToolName[],
 ) {
 	const available = setAvailableTools(pi, availableTools);
+	const lazyExposure = lazyExposureByApi.get(pi) === true;
 	const active = pi
 		.getActiveTools()
 		.filter(
 			(name) =>
 				!CHROME_DEVTOOLS_TOOL_NAMES.includes(name as ChromeDevToolsToolName) ||
-				available.has(name as ChromeDevToolsToolName),
+				(lazyExposure && available.has(name as ChromeDevToolsToolName)),
 		);
-	pi.setActiveTools(unique([...active, CHROME_DEVTOOLS_LOAD_TOOL_NAME]));
+	const eagerTools = lazyExposure
+		? []
+		: CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => available.has(name));
+	pi.setActiveTools(unique([...active, CHROME_DEVTOOLS_LOAD_TOOL_NAME, ...eagerTools]));
+}
+
+export function chromeDevtoolsToolExposureMode(pi: ExtensionAPI) {
+	return lazyExposureByApi.get(pi) === true ? "native deferred" : "eager";
+}
+
+export function supportsNativeDeferredToolLoading(model: ExtensionContext["model"]): boolean {
+	if (!model) return false;
+	if (model.api === "anthropic-messages") {
+		const configured = compatBoolean(model.compat, "supportsToolReferences");
+		if (configured !== undefined) return configured;
+		if (model.provider !== "anthropic" || model.id.includes("haiku")) return false;
+		const version = model.id.match(/^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d+))?(?:-|$)/);
+		if (!version) return false;
+		const major = Number(version[1]);
+		const minor = version[2] && version[2].length < 8 ? Number(version[2]) : 0;
+		return major > 4 || (major === 4 && minor >= 5);
+	}
+	if (model.api === "openai-completions") {
+		return compatString(model.compat, "deferredToolsMode") === "kimi";
+	}
+	if (model.api === "openai-responses" || model.api === "openai-codex-responses") {
+		return (
+			compatBoolean(model.compat, "supportsAdditionalTools") === true ||
+			compatBoolean(model.compat, "supportsToolSearch") === true
+		);
+	}
+	return false;
 }
 
 export function availableChromeDevtoolsTools(pi: ExtensionAPI) {
@@ -136,6 +188,18 @@ function setAvailableTools(pi: ExtensionAPI, availableTools: readonly ChromeDevT
 	const available = new Set(availableTools);
 	availableToolsByApi.set(pi, available);
 	return available;
+}
+
+function compatBoolean(value: unknown, key: string) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	return typeof record[key] === "boolean" ? record[key] : undefined;
+}
+
+function compatString(value: unknown, key: string) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	return typeof record[key] === "string" ? record[key] : undefined;
 }
 
 function unique(values: readonly string[]) {

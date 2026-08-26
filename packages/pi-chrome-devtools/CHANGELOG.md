@@ -1,5 +1,11 @@
 # @narumitw/pi-chrome-devtools
 
+## 0.52.3
+
+### Patch Changes
+
+- 3effdd1: Use native deferred tool loading only on supported models and eagerly expose configured tools otherwise.
+
 ## 0.52.2
 
 ### Patch Changes

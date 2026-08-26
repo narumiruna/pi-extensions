@@ -2,9 +2,11 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { shutdownManagedBrowser } from "./browser-manager.js";
 import {
 	availableChromeDevtoolsTools,
-	configureLazyChromeDevtoolsTools,
+	configureChromeDevtoolsToolExposure,
 	createChromeDevtoolsLoadTool,
 	initializeAvailableChromeDevtoolsTools,
+	requireEagerChromeDevtoolsToolExposure,
+	supportsNativeDeferredToolLoading,
 } from "./lazy-tools.js";
 import { applyRuntimeBrowserSettings, state } from "./runtime.js";
 import { loadSettings, waitForSettingsWrites } from "./settings.js";
@@ -41,7 +43,7 @@ const COMMAND_COMPLETIONS = [
 	{ value: "quickstart", label: "quickstart", description: "Show endpoint and launch help" },
 	{ value: "status", label: "status", description: "Show tool and settings status" },
 	{ value: "settings", label: "settings", description: "Edit browser connection settings" },
-	{ value: "tools", label: "tools", description: "Choose lazy-loadable Chrome DevTools tools" },
+	{ value: "tools", label: "tools", description: "Choose available Chrome DevTools tools" },
 	{ value: "toggle", label: "toggle", description: "Alias for tools" },
 	{ value: "select", label: "select", description: "Compatibility alias for tools" },
 	{ value: "enable", label: "enable", description: "Make all Chrome DevTools tools available" },
@@ -90,7 +92,13 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 			settings.kind === "loaded" && settings.settings.tools
 				? settings.settings.tools
 				: availableChromeDevtoolsTools(pi);
-		configureLazyChromeDevtoolsTools(pi, availableTools);
+		configureChromeDevtoolsToolExposure(pi, availableTools, ctx.model);
+	});
+
+	pi.on("model_select", (event) => {
+		if (!supportsNativeDeferredToolLoading(event.model)) {
+			requireEagerChromeDevtoolsToolExposure(pi);
+		}
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {

@@ -1,5 +1,15 @@
 # @narumitw/pi-btw
 
+## 0.55.3
+
+### Patch Changes
+
+- 4fb170b: Restore main-editor input immediately after Ctrl+C exits a dedicated side thread.
+- 2250f3c: Close the active side flow when Ctrl+C restores the main editor while transcript search has focus.
+- Updated dependencies [78276b0]
+- Updated dependencies [dc9802e]
+  - @narumitw/pi-tui-kit@0.58.1
+
 ## 0.55.2
 
 ### Patch Changes

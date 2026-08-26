@@ -1,5 +1,12 @@
 # @narumitw/pi-plan-mode
 
+## 0.55.0
+
+### Minor Changes
+
+- b59cdbc: Remove the `toolVisibility` setting and keep Plan helper schemas stable from startup.
+  Retired settings keys are ignored and preserved, while globally visible helper metadata now distinguishes `/plan` from ordinary planning workflows.
+
 ## 0.54.0
 
 ### Minor Changes

@@ -2,9 +2,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export const SUBAGENT_CAPABILITY_BENCHMARK_VERSION =
-	"pi-extensions:subagent-capability-benchmark:v2" as const;
+	"pi-extensions:subagent-capability-benchmark:v3" as const;
 export const CAPABILITY_RESULT_PREFIX = "CAPABILITY_BENCHMARK_RESULT:";
-export const CAPABILITY_BENCHMARK_ARMS = ["parent-only", "v1-sync", "v1-async", "v2-job"] as const;
+export const CAPABILITY_BENCHMARK_ARMS = ["parent-only", "v1-sync", "v1-async", "v3-job"] as const;
+export const CAPABILITY_BENCHMARK_JOB_VERSIONS = ["v2", "v3"] as const;
+const CAPABILITY_BENCHMARK_V2_ARMS = ["parent-only", "v1-sync", "v1-async", "v2-job"] as const;
 export const CAPABILITY_BENCHMARK_THINKING_LEVELS = [
 	"off",
 	"minimal",
@@ -15,7 +17,10 @@ export const CAPABILITY_BENCHMARK_THINKING_LEVELS = [
 	"max",
 ] as const;
 
-export type CapabilityBenchmarkArm = (typeof CAPABILITY_BENCHMARK_ARMS)[number];
+export type CapabilityBenchmarkJobVersion = (typeof CAPABILITY_BENCHMARK_JOB_VERSIONS)[number];
+export type CapabilityBenchmarkArm =
+	| (typeof CAPABILITY_BENCHMARK_ARMS)[number]
+	| (typeof CAPABILITY_BENCHMARK_V2_ARMS)[number];
 export type CapabilityBenchmarkThinkingLevel =
 	(typeof CAPABILITY_BENCHMARK_THINKING_LEVELS)[number];
 export type CapabilityBenchmarkOutcome =
@@ -154,8 +159,10 @@ export interface CapabilityBenchmarkOptions {
 	run: boolean;
 	resume: boolean;
 	workspace?: string;
+	jobVersion: CapabilityBenchmarkJobVersion;
 	v1Extension?: string;
 	v2Extension?: string;
+	v3Extension?: string;
 }
 
 export interface CapabilityTrialPlan {
@@ -183,7 +190,7 @@ export interface CapabilityEventAnalysis {
 }
 
 export interface CapabilityTrialRecord extends CapabilityEventAnalysis {
-	version: typeof SUBAGENT_CAPABILITY_BENCHMARK_VERSION;
+	version: ReturnType<typeof capabilityBenchmarkVersion>;
 	pairIndex: number;
 	repetition: number;
 	orderIndex: number;
@@ -272,6 +279,29 @@ export const CAPABILITY_MATRIX = [
 	},
 ] as const;
 
+export function capabilityBenchmarkVersion(
+	jobVersion: CapabilityBenchmarkJobVersion,
+): `pi-extensions:subagent-capability-benchmark:${CapabilityBenchmarkJobVersion}` {
+	return `pi-extensions:subagent-capability-benchmark:${jobVersion}`;
+}
+
+export function capabilityBenchmarkArms(
+	jobVersion: CapabilityBenchmarkJobVersion,
+): readonly CapabilityBenchmarkArm[] {
+	return jobVersion === "v2" ? CAPABILITY_BENCHMARK_V2_ARMS : CAPABILITY_BENCHMARK_ARMS;
+}
+
+export function capabilityMatrix(jobVersion: CapabilityBenchmarkJobVersion) {
+	if (jobVersion === "v2") return CAPABILITY_MATRIX;
+	return CAPABILITY_MATRIX.map(({ v2, ...item }) => ({
+		...item,
+		v3: v2,
+		evidence: item.evidence
+			.replaceAll("pi-subagents-v2", "pi-subagents-v3")
+			.replaceAll("v2 registers", "v3 registers"),
+	}));
+}
+
 export function parseCapabilityBenchmarkArgs(args: readonly string[]): CapabilityBenchmarkOptions {
 	let model = "";
 	let thinkingLevel: CapabilityBenchmarkThinkingLevel = "medium";
@@ -281,8 +311,10 @@ export function parseCapabilityBenchmarkArgs(args: readonly string[]): Capabilit
 	let piCommand = "pi";
 	let outputPath: string | undefined;
 	let workspace: string | undefined;
+	let jobVersion: CapabilityBenchmarkJobVersion = "v3";
 	let v1Extension: string | undefined;
 	let v2Extension: string | undefined;
+	let v3Extension: string | undefined;
 	let run = false;
 	let resume = false;
 
@@ -327,11 +359,20 @@ export function parseCapabilityBenchmarkArgs(args: readonly string[]): Capabilit
 			case "--workspace":
 				workspace = value;
 				break;
+			case "--job-version":
+				if (!isOneOf(value, CAPABILITY_BENCHMARK_JOB_VERSIONS)) {
+					throw new Error(`Unsupported job version: ${value}`);
+				}
+				jobVersion = value;
+				break;
 			case "--v1-extension":
 				v1Extension = value;
 				break;
 			case "--v2-extension":
 				v2Extension = value;
+				break;
+			case "--v3-extension":
+				v3Extension = value;
 				break;
 			default:
 				throw new Error(`Unknown benchmark argument: ${argument}`);
@@ -340,6 +381,15 @@ export function parseCapabilityBenchmarkArgs(args: readonly string[]): Capabilit
 	if (!model) throw new Error("--model is required so parent and child use one fixed model");
 	if (run && !outputPath) throw new Error("--output is required with --run");
 	if (resume && (!run || !outputPath)) throw new Error("--resume requires --run and --output");
+	if (jobVersion === "v2" && v3Extension) {
+		throw new Error("--v3-extension requires --job-version v3");
+	}
+	if (jobVersion === "v2" && !v2Extension) {
+		throw new Error("--job-version v2 requires --v2-extension because v2 is historical");
+	}
+	if (jobVersion === "v3" && v2Extension) {
+		throw new Error("--v2-extension requires --job-version v2");
+	}
 	return {
 		model,
 		thinkingLevel,
@@ -349,23 +399,26 @@ export function parseCapabilityBenchmarkArgs(args: readonly string[]): Capabilit
 		piCommand,
 		run,
 		resume,
+		jobVersion,
 		...(outputPath ? { outputPath } : {}),
 		...(workspace ? { workspace } : {}),
 		...(v1Extension ? { v1Extension } : {}),
 		...(v2Extension ? { v2Extension } : {}),
+		...(v3Extension ? { v3Extension } : {}),
 	};
 }
 
-export function createCapabilityTrialPlan(repetitions: number): CapabilityTrialPlan[] {
+export function createCapabilityTrialPlan(
+	repetitions: number,
+	jobVersion: CapabilityBenchmarkJobVersion = "v3",
+): CapabilityTrialPlan[] {
 	const plan: CapabilityTrialPlan[] = [];
+	const arms = capabilityBenchmarkArms(jobVersion);
 	let pairIndex = 0;
 	for (let repetition = 0; repetition < repetitions; repetition++) {
 		for (const [taskIndex, task] of CAPABILITY_TASKS.entries()) {
 			const rotation = (repetition * CAPABILITY_TASKS.length + taskIndex) % 4;
-			const order = [
-				...CAPABILITY_BENCHMARK_ARMS.slice(rotation),
-				...CAPABILITY_BENCHMARK_ARMS.slice(0, rotation),
-			];
+			const order = [...arms.slice(rotation), ...arms.slice(0, rotation)];
 			for (const [orderIndex, arm] of order.entries()) {
 				plan.push({ pairIndex, repetition, orderIndex, arm, taskId: task.id });
 			}
@@ -409,10 +462,7 @@ export function buildCapabilityPrompt(
 			steps.push("Then independently run node --test test/math.test.mjs and inspect src/math.mjs.");
 		}
 	} else {
-		const names =
-			arm === "v1-async"
-				? { start: "subagent_spawn", wait: "subagent_await" }
-				: { start: "subagent-v2-start", wait: "subagent-v2-wait" };
+		const names = capabilityToolNames(arm);
 		steps.push(
 			`Start exactly ${task.requiredStartCount} background job(s) with ${names.start}.`,
 			`Use ${agent}, thinkingLevel ${thinkingLevel}, and timeoutMs 120000.`,
@@ -454,17 +504,18 @@ export function analyzeCapabilityEvents(
 	for (const [index, value] of events.entries()) {
 		if (!isRecord(value) || value.type !== "message_end" || !isRecord(value.message)) continue;
 		const message = value.message;
-		if (message.role === "toolResult" && message.isError !== true) {
+		if (message.role === "toolResult") {
 			const toolName = typeof message.toolName === "string" ? message.toolName : "";
+			if (message.isError === true) {
+				if (toolName.startsWith("subagent")) unexpected++;
+				continue;
+			}
 			if (toolName === "subagent") {
 				sync++;
 				if (arm === "v1-sync") completionIndex = index;
-			} else if (toolName === (arm === "v1-async" ? "subagent_spawn" : "subagent-v2-start")) {
+			} else if (toolName === capabilityToolNames(arm).start) {
 				start++;
-			} else if (
-				toolName === (arm === "v1-async" ? "subagent_await" : "subagent-v2-wait") &&
-				!isTimedOutResult(message.details)
-			) {
+			} else if (toolName === capabilityToolNames(arm).wait && !isTimedOutResult(message.details)) {
 				wait++;
 				if (wait >= expected.wait) completionIndex = index;
 			} else if (toolName.startsWith("subagent")) {
@@ -511,7 +562,7 @@ function expectedToolCounts(
 	task: CapabilityTask,
 ): { sync: number; start: number; wait: number } {
 	if (arm === "v1-sync") return { sync: 1, start: 0, wait: 0 };
-	if (arm === "v1-async" || arm === "v2-job") {
+	if (arm === "v1-async" || arm === "v2-job" || arm === "v3-job") {
 		return {
 			sync: 0,
 			start: task.requiredStartCount,
@@ -519,6 +570,12 @@ function expectedToolCounts(
 		};
 	}
 	return { sync: 0, start: 0, wait: 0 };
+}
+
+function capabilityToolNames(arm: CapabilityBenchmarkArm): { start: string; wait: string } {
+	if (arm === "v1-async") return { start: "subagent_spawn", wait: "subagent_await" };
+	if (arm === "v3-job") return { start: "subagent-v3-start", wait: "subagent-v3-wait" };
+	return { start: "subagent-v2-start", wait: "subagent-v2-wait" };
 }
 
 export function scoreCapabilityEvidence(
@@ -547,7 +604,11 @@ export function trialSucceeded(
 	);
 }
 
-export function summarizeCapabilityBenchmark(records: readonly CapabilityTrialRecord[]) {
+export function summarizeCapabilityBenchmark(
+	records: readonly CapabilityTrialRecord[],
+	jobVersion: CapabilityBenchmarkJobVersion = "v3",
+) {
+	const arms = capabilityBenchmarkArms(jobVersion);
 	const summarize = (arm: CapabilityBenchmarkArm): CapabilityArmSummary => {
 		const selected = records.filter((record) => record.arm === arm);
 		const outcomes = emptyOutcomes();
@@ -581,13 +642,14 @@ export function summarizeCapabilityBenchmark(records: readonly CapabilityTrialRe
 		};
 	};
 	return {
-		version: SUBAGENT_CAPABILITY_BENCHMARK_VERSION,
+		version: capabilityBenchmarkVersion(jobVersion),
 		pairedInstances: new Set(records.map((record) => record.pairIndex)).size,
 		costComparable: false,
 		equalInferenceBudget: false,
-		arms: Object.fromEntries(
-			CAPABILITY_BENCHMARK_ARMS.map((arm) => [arm, summarize(arm)]),
-		) as Record<CapabilityBenchmarkArm, CapabilityArmSummary>,
+		arms: Object.fromEntries(arms.map((arm) => [arm, summarize(arm)])) as Record<
+			CapabilityBenchmarkArm,
+			CapabilityArmSummary
+		>,
 	};
 }
 

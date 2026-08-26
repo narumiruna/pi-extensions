@@ -1,4 +1,8 @@
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tool-names.js";
 
@@ -23,6 +27,7 @@ const availableToolsBySession =
 if (!existingSessionAvailableToolsStore) {
 	sharedGlobal[SESSION_AVAILABLE_TOOLS_STORE] = availableToolsBySession;
 }
+const lazyExposureByApi = new WeakMap<ExtensionAPI, boolean>();
 
 const CRAWL_CREATION_TERMS = new Set(["begin", "create", "launch", "start"]);
 
@@ -58,21 +63,31 @@ export function initializeAvailableFirecrawlTools(pi: ExtensionAPI, sessionOwner
 	);
 }
 
-export function configureLazyFirecrawlTools(
+export function configureFirecrawlToolExposure(
 	pi: ExtensionAPI,
 	availableTools: readonly FirecrawlToolName[],
 	loadedTools: readonly FirecrawlToolName[] = [],
 	sessionOwner?: object,
+	model?: ExtensionContext["model"],
 ) {
 	const available = setAvailableTools(pi, availableTools, sessionOwner);
+	const lazyExposure = supportsNativeDeferredToolLoading(model);
+	lazyExposureByApi.set(pi, lazyExposure);
 	const loaded = new Set(loadedTools);
-	const restoredTools = FIRECRAWL_TOOL_NAMES.filter(
-		(name) => available.has(name) && loaded.has(name),
-	);
+	const exposedTools = lazyExposure
+		? FIRECRAWL_TOOL_NAMES.filter((name) => available.has(name) && loaded.has(name))
+		: FIRECRAWL_TOOL_NAMES.filter((name) => available.has(name));
 	const nonCapabilityTools = pi
 		.getActiveTools()
 		.filter((name) => !FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName));
-	pi.setActiveTools(unique([...nonCapabilityTools, FIRECRAWL_LOAD_TOOL_NAME, ...restoredTools]));
+	pi.setActiveTools(unique([...nonCapabilityTools, FIRECRAWL_LOAD_TOOL_NAME, ...exposedTools]));
+}
+
+export function requireEagerFirecrawlToolExposure(pi: ExtensionAPI) {
+	lazyExposureByApi.set(pi, false);
+	const active = pi.getActiveTools();
+	const available = availableFirecrawlTools(pi);
+	pi.setActiveTools(unique([...active, FIRECRAWL_LOAD_TOOL_NAME, ...available]));
 }
 
 export function applyAvailableFirecrawlTools(
@@ -81,14 +96,44 @@ export function applyAvailableFirecrawlTools(
 	sessionOwner?: object,
 ) {
 	const available = setAvailableTools(pi, availableTools, sessionOwner);
+	const lazyExposure = lazyExposureByApi.get(pi) === true;
 	const active = pi
 		.getActiveTools()
 		.filter(
 			(name) =>
 				!FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName) ||
-				available.has(name as FirecrawlToolName),
+				(lazyExposure && available.has(name as FirecrawlToolName)),
 		);
-	pi.setActiveTools(unique([...active, FIRECRAWL_LOAD_TOOL_NAME]));
+	const eagerTools = lazyExposure ? [] : FIRECRAWL_TOOL_NAMES.filter((name) => available.has(name));
+	pi.setActiveTools(unique([...active, FIRECRAWL_LOAD_TOOL_NAME, ...eagerTools]));
+}
+
+export function firecrawlToolExposureMode(pi: ExtensionAPI) {
+	return lazyExposureByApi.get(pi) === true ? "native deferred" : "eager";
+}
+
+export function supportsNativeDeferredToolLoading(model: ExtensionContext["model"]): boolean {
+	if (!model) return false;
+	if (model.api === "anthropic-messages") {
+		const configured = compatBoolean(model.compat, "supportsToolReferences");
+		if (configured !== undefined) return configured;
+		if (model.provider !== "anthropic" || model.id.includes("haiku")) return false;
+		const version = model.id.match(/^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d+))?(?:-|$)/);
+		if (!version) return false;
+		const major = Number(version[1]);
+		const minor = version[2] && version[2].length < 8 ? Number(version[2]) : 0;
+		return major > 4 || (major === 4 && minor >= 5);
+	}
+	if (model.api === "openai-completions") {
+		return compatString(model.compat, "deferredToolsMode") === "kimi";
+	}
+	if (model.api === "openai-responses" || model.api === "openai-codex-responses") {
+		return (
+			compatBoolean(model.compat, "supportsAdditionalTools") === true ||
+			compatBoolean(model.compat, "supportsToolSearch") === true
+		);
+	}
+	return false;
 }
 
 export function availableFirecrawlTools(pi: ExtensionAPI) {
@@ -239,6 +284,16 @@ function isFirecrawlToolName(value: unknown): value is FirecrawlToolName {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compatBoolean(value: unknown, key: string) {
+	if (!isRecord(value)) return undefined;
+	return typeof value[key] === "boolean" ? value[key] : undefined;
+}
+
+function compatString(value: unknown, key: string) {
+	if (!isRecord(value)) return undefined;
+	return typeof value[key] === "string" ? value[key] : undefined;
 }
 
 function unique(values: readonly string[]) {

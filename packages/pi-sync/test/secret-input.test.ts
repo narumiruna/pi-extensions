@@ -88,9 +88,31 @@ test("masked secret input uses injected submit and cancellation keybindings", as
 	const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
 	const pending = promptSecret(ctx, "Password");
 	await tui.waitForOpen();
-	assert.match(tui.render().join("\n"), /s save • q cancel/u);
+	const frame = tui.render().join("\n");
+	assert.match(frame, /s save • q\/ctrl\+c cancel/u);
+	assert.equal(frame.match(/ctrl\+c/gu)?.length, 1);
 	tui.send("q");
 	assert.equal(await pending, undefined);
+});
+
+test("masked secret input keeps Ctrl+C when cancellation is remapped", async () => {
+	const mapping: Record<string, string> = {
+		"tui.input.submit": "s",
+		"tui.select.cancel": "q",
+	};
+	const keybindings: Pick<KeybindingsManager, "matches" | "getKeys"> = {
+		matches: (data, binding) => data === mapping[binding],
+		getKeys: (binding) => (mapping[binding] ? [mapping[binding] as never] : []),
+	};
+	const tui = createTuiHarness({ width: 40, keybindings });
+	const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+	const pending = promptSecret(ctx, "Password");
+	await tui.waitForOpen();
+	tui.type("secret");
+	assert.doesNotMatch(tui.render().join("\n"), /secret/u);
+	tui.press("ctrl+c");
+	assert.equal(await pending, undefined);
+	assert.equal(tui.isOpen, false);
 });
 
 test("a stale secret prompt never creates its masked component", async () => {

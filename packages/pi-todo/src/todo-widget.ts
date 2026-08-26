@@ -1,10 +1,11 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import type {
-	ContextEvent,
-	ExtensionAPI,
-	ExtensionContext,
-	SessionEntry,
-	Theme,
+import {
+	buildSessionContext,
+	type ContextEvent,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type SessionEntry,
+	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -14,6 +15,8 @@ export const WIDGET_KEY = "todo";
 export const TODO_CONTEXT_MESSAGE_TYPE = "todo-list-status";
 export const TODO_CONTEXT_VERSION = 1;
 export const TODO_DETAILS_VERSION = 1;
+export const TODO_RESTORED_BOUNDARY_ENTRY_TYPE = "todo-restored-context-boundary";
+const TODO_RESTORED_BOUNDARY_VERSION = 1;
 export const MAX_TODO_ITEMS = 50;
 export const MAX_TODO_TEXT_LENGTH = 300;
 
@@ -56,6 +59,7 @@ const TodoParameters = Type.Object({
 export default function todoWidgetExtension(pi: ExtensionAPI): void {
 	let activeSession: ExtensionContext["sessionManager"] | undefined;
 	let items: TodoItem[] = [];
+	let restoredBoundary: { summaryEpoch: string; content: string } | undefined;
 
 	const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
 
@@ -125,21 +129,39 @@ export default function todoWidgetExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	const restoreBranchState = (ctx: ExtensionContext): void => {
+		const branch = ctx.sessionManager.getBranch();
+		items = reconstructItems(branch);
+		restoredBoundary = reconstructRestoredTodoBoundary(branch);
+	};
+
 	pi.on("session_start", (_event, ctx) => {
 		activeSession = ctx.sessionManager;
-		items = reconstructItems(ctx.sessionManager.getBranch());
+		restoreBranchState(ctx);
 		publish(ctx);
 	});
 
 	pi.on("context", (event, ctx) => {
 		if (!ownsSession(ctx)) return;
-		const messages = reconcileTodoContext(event.messages, items);
+		const summaryEpoch = leadingSummaryEpoch(event.messages);
+		if (restoredBoundary?.summaryEpoch !== summaryEpoch) restoredBoundary = undefined;
+		const messages = reconcileTodoContext(event.messages, items, restoredBoundary?.content);
+		if (restoredBoundary === undefined && summaryEpoch) {
+			const boundaryMessage = messages[leadingSummaryBoundary(messages)];
+			if (isTodoContextMessage(boundaryMessage)) {
+				restoredBoundary = { summaryEpoch, content: boundaryMessage.content };
+				pi.appendEntry(TODO_RESTORED_BOUNDARY_ENTRY_TYPE, {
+					version: TODO_RESTORED_BOUNDARY_VERSION,
+					...restoredBoundary,
+				});
+			}
+		}
 		if (messages !== event.messages) return { messages };
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
 		if (!ownsSession(ctx)) return;
-		items = reconstructItems(ctx.sessionManager.getBranch());
+		restoreBranchState(ctx);
 		publish(ctx);
 	});
 
@@ -147,6 +169,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI): void {
 		if (!ownsSession(ctx)) return;
 		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
 		items = [];
+		restoredBoundary = undefined;
 		activeSession = undefined;
 	});
 }
@@ -195,25 +218,30 @@ export function renderTodoWidget(
 export function reconcileTodoContext(
 	messages: ContextEvent["messages"],
 	items: readonly TodoItem[],
+	restoredBoundaryContent?: string,
 ): ContextEvent["messages"] {
 	const existing = messages.filter(isTodoContextMessage);
 	const withoutExisting = messages.filter((message) => !isTodoContextMessage(message));
-	const content =
+	const summaryBoundary = leadingSummaryBoundary(withoutExisting);
+	const currentContent =
 		items.length > 0 && !hasModelVisibleTodoState(withoutExisting, items)
 			? todoContextContent(items)
 			: undefined;
+	const content = summaryBoundary > 0 ? (restoredBoundaryContent ?? currentContent) : undefined;
 	if (
+		content !== undefined &&
 		existing.length === 1 &&
-		messages.at(-1) === existing[0] &&
-		existing[0]?.content === content
+		messages[summaryBoundary] === existing[0] &&
+		existing[0]?.content === content &&
+		hasTodoContextVersion(existing[0])
 	) {
 		return messages;
 	}
 	if (existing.length === 0 && content === undefined) return messages;
-
 	if (content === undefined) return withoutExisting;
+
 	return [
-		...withoutExisting,
+		...withoutExisting.slice(0, summaryBoundary),
 		{
 			role: "custom",
 			customType: TODO_CONTEXT_MESSAGE_TYPE,
@@ -222,6 +250,7 @@ export function reconcileTodoContext(
 			details: { version: TODO_CONTEXT_VERSION },
 			timestamp: 0,
 		},
+		...withoutExisting.slice(summaryBoundary),
 	];
 }
 
@@ -239,6 +268,49 @@ function todoContextContent(items: readonly TodoItem[]): string {
 	return `[PI TODO STATUS v${TODO_CONTEXT_VERSION}]
 Current todo list as JSON data:
 ${JSON.stringify(items)}`;
+}
+
+function reconstructRestoredTodoBoundary(
+	entries: readonly SessionEntry[],
+): { summaryEpoch: string; content: string } | undefined {
+	const summaryEpoch = leadingSummaryEpoch(buildSessionContext([...entries]).messages);
+	if (!summaryEpoch) return undefined;
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index];
+		if (entry?.type !== "custom" || entry.customType !== TODO_RESTORED_BOUNDARY_ENTRY_TYPE) {
+			continue;
+		}
+		if (!isRestoredTodoBoundaryData(entry.data, summaryEpoch)) continue;
+		return { summaryEpoch, content: entry.data.content };
+	}
+	return undefined;
+}
+
+function isRestoredTodoBoundaryData(
+	value: unknown,
+	summaryEpoch: string,
+): value is { version: number; summaryEpoch: string; content: string } {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const data = value as Record<string, unknown>;
+	if (
+		data.version !== TODO_RESTORED_BOUNDARY_VERSION ||
+		data.summaryEpoch !== summaryEpoch ||
+		typeof data.content !== "string"
+	) {
+		return false;
+	}
+	const prefix = `[PI TODO STATUS v${TODO_CONTEXT_VERSION}]\nCurrent todo list as JSON data:\n`;
+	if (!data.content.startsWith(prefix)) return false;
+	try {
+		const restoredItems: unknown = JSON.parse(data.content.slice(prefix.length));
+		return (
+			isTodoItems(restoredItems) &&
+			restoredItems.length > 0 &&
+			todoContextContent(restoredItems) === data.content
+		);
+	} catch {
+		return false;
+	}
 }
 
 function hasModelVisibleTodoState(
@@ -277,10 +349,38 @@ function isTodoToolArguments(value: unknown): value is { items: TodoItem[] } {
 	return isTodoItems((value as Record<string, unknown>).items);
 }
 
+type TodoContextMessage = Extract<ContextEvent["messages"][number], { role: "custom" }> & {
+	content: string;
+};
+
 function isTodoContextMessage(
 	message: ContextEvent["messages"][number],
-): message is ContextEvent["messages"][number] & { content: string } {
+): message is TodoContextMessage {
 	return message.role === "custom" && message.customType === TODO_CONTEXT_MESSAGE_TYPE;
+}
+
+function hasTodoContextVersion(message: TodoContextMessage): boolean {
+	return (
+		typeof message.details === "object" &&
+		message.details !== null &&
+		!Array.isArray(message.details) &&
+		(message.details as Record<string, unknown>).version === TODO_CONTEXT_VERSION
+	);
+}
+
+function leadingSummaryEpoch(messages: ContextEvent["messages"]): string | undefined {
+	const boundary = leadingSummaryBoundary(messages);
+	return boundary === 0 ? undefined : JSON.stringify(messages.slice(0, boundary));
+}
+
+function leadingSummaryBoundary(messages: ContextEvent["messages"]): number {
+	let index = 0;
+	while (index < messages.length) {
+		const role = messages[index]?.role;
+		if (role !== "compactionSummary" && role !== "branchSummary") break;
+		index += 1;
+	}
+	return index;
 }
 
 function validateItems(items: readonly TodoItem[]): void {

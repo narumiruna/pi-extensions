@@ -62,6 +62,7 @@ When pi-sync has already detected a synced-content-list mismatch, the manager in
 Opening the manager still performs no new remote request.
 The standard manager also owns setup and connection lists/details plus history and recovery.
 Secondary screens provide **Back**; Escape goes back and Ctrl+C closes the flow.
+Specialized operation and masked-credential prompts show the effective cancellation bindings and retain Ctrl+C as a hard-cancel input when Back is remapped.
 Destructive, credential-bearing, and externally visible operations retain exact specialized previews and confirmations.
 
 ### Restore sync access

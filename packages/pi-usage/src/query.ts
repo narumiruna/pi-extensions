@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.js";
+import {
+	fallbackOAuthCredentialCandidates,
+	type OAuthCredentialCandidateReader,
+} from "./oauth-credential-source.js";
 import { normalizeCodexBackendPayload } from "./providers/codex.js";
 import { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
 import { normalizeOpenCodeZenPayload } from "./providers/opencode-zen.js";
@@ -111,6 +115,7 @@ export async function resolveUsageAuth(
 	adapter: UsageProviderAdapter,
 	salt: Uint8Array = AUTH_FINGERPRINT_SALT,
 	credentialReader: StoredCredentialReader = readStoredCredential,
+	candidateReader?: OAuthCredentialCandidateReader,
 ): Promise<ResolvedUsageAuth | undefined> {
 	if (ctx.model?.provider === adapter.id && !hasOfficialOrigin(ctx.model, adapter.id)) {
 		throw new Error(
@@ -144,7 +149,19 @@ export async function resolveUsageAuth(
 	const auth = modelAuth ?? providerResult?.auth;
 	if (!auth) return undefined;
 	if (adapter.id === "github-copilot") {
-		return resolveGitHubCopilotUsageAuth(auth, model, salt, credentialReader);
+		const offered = candidateReader
+			? candidateReader(ctx, adapter.id)
+			: fallbackOAuthCredentialCandidates(adapter.id, credentialReader);
+		if (!offered.ok) {
+			throw new Error("GitHub Copilot OAuth credential discovery failed closed.");
+		}
+		return resolveGitHubCopilotUsageAuth(
+			auth,
+			model,
+			salt,
+			offered.candidates,
+			offered.offeredCount === 0,
+		);
 	}
 	const authorization = authorizationFrom(auth);
 	if (!authorization) return undefined;
@@ -334,33 +351,73 @@ function resolveGitHubCopilotUsageAuth(
 	auth: RequestAuth,
 	model: PiModel,
 	salt: Uint8Array,
-	credentialReader: StoredCredentialReader,
+	candidates: readonly unknown[],
+	standaloneFallback: boolean,
 ): ResolvedUsageAuth {
-	const credential = asObject(credentialReader("github-copilot"));
-	if (credential?.type !== "oauth") {
-		throw new Error(
-			"GitHub Copilot usage requires the OAuth account configured through Pi /login.",
-		);
+	const resolvedAccess = bearerToken(headerValue(auth.headers, "Authorization")) ?? auth.apiKey;
+	if (!resolvedAccess) throw new Error("GitHub Copilot OAuth credentials were incomplete.");
+	let sawOAuth = false;
+	let sawMatchingAccess = false;
+	let sawIncompleteMatch = false;
+	let sawEnterpriseMatch = false;
+	const matches = new Map<string, { refresh: string; storedAccess: string }>();
+	for (const candidate of candidates) {
+		try {
+			const credential = asObject(candidate);
+			if (credential?.type !== "oauth") continue;
+			sawOAuth = true;
+			const storedAccess =
+				typeof credential.access === "string" && credential.access ? credential.access : undefined;
+			if (storedAccess !== resolvedAccess) continue;
+			sawMatchingAccess = true;
+			const enterpriseUrl = credential.enterpriseUrl;
+			if (
+				typeof enterpriseUrl === "string" &&
+				enterpriseUrl &&
+				!isPublicGitHubDomain(enterpriseUrl)
+			) {
+				sawEnterpriseMatch = true;
+				continue;
+			}
+			const refresh =
+				typeof credential.refresh === "string" && credential.refresh
+					? credential.refresh
+					: undefined;
+			if (!refresh) {
+				sawIncompleteMatch = true;
+				continue;
+			}
+			matches.set(`${storedAccess.length}:${storedAccess}${refresh}`, { refresh, storedAccess });
+		} catch {
+			// Malformed candidates never authorize a provider request.
+		}
 	}
-	if (
-		typeof credential.enterpriseUrl === "string" &&
-		credential.enterpriseUrl &&
-		!isPublicGitHubDomain(credential.enterpriseUrl)
-	) {
+	if (sawEnterpriseMatch) {
 		throw new Error("GitHub Copilot usage does not yet support GitHub Enterprise accounts.");
 	}
-	const refresh = typeof credential.refresh === "string" ? credential.refresh : undefined;
-	const storedAccess = typeof credential.access === "string" ? credential.access : undefined;
-	const resolvedAccess = bearerToken(headerValue(auth.headers, "Authorization")) ?? auth.apiKey;
-	if (!refresh || !storedAccess || !resolvedAccess) {
-		throw new Error("GitHub Copilot OAuth credentials were incomplete.");
-	}
-	if (storedAccess !== resolvedAccess) {
+	if (sawIncompleteMatch) throw new Error("GitHub Copilot OAuth credentials were incomplete.");
+	if (matches.size > 1) {
 		throw new Error(
-			"The active GitHub Copilot runtime account does not match Pi's stored OAuth account.",
+			"Conflicting OAuth credentials match the active GitHub Copilot runtime account.",
 		);
 	}
-
+	const match = matches.values().next().value;
+	if (!match) {
+		if (!sawOAuth) {
+			throw new Error(
+				standaloneFallback
+					? "GitHub Copilot usage requires the OAuth account configured through Pi /login."
+					: "GitHub Copilot usage requires an OAuth account configured through Pi /login or a compatible credential source.",
+			);
+		}
+		if (sawMatchingAccess) throw new Error("GitHub Copilot OAuth credentials were incomplete.");
+		throw new Error(
+			standaloneFallback
+				? "The active GitHub Copilot runtime account does not match Pi's stored OAuth account."
+				: "The active GitHub Copilot runtime account does not match any available OAuth account.",
+		);
+	}
+	const { refresh, storedAccess } = match;
 	const authorization = `Bearer ${refresh}`;
 	const headers = {
 		Authorization: authorization,

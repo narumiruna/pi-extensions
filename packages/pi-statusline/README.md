@@ -276,8 +276,10 @@ Open **Advanced → Custom layout** when the curated levels are not enough.
 | Up/Down in Move mode | Reorder the selected visible segment |
 | `Alt+Up` / `Alt+Down` | Reorder without entering Move mode |
 | `B` | Add or remove a line break after the selected segment |
-| Escape | Leave Move mode first, then close the screen |
+| Configured Back key (Escape by default) | Leave Move mode first, then close the screen |
+| Ctrl+C | Close the screen immediately, including from Move mode |
 
+The layout displays the effective Back key and keeps Ctrl+C available when Back is remapped.
 Every successful change saves and applies immediately; closing the screen does not roll it back.
 
 Available data segments:

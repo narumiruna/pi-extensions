@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { type Input, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { HorizontalRule } from "../horizontal-rule.js";
 import { formatInteractionHints } from "../interaction-hints.js";
@@ -42,23 +43,70 @@ export function renderFrame<ScreenId extends string, ActionId extends string>(
 ): string[] {
 	const safeWidth = Math.max(1, width);
 	const rule = renderHorizontalRule(safeWidth, options.theme);
-	const result = [
+	const titleRows = wrapTextWithAnsi(
+		options.theme.fg("accent", options.theme.bold(safeMenuText(title))),
+		safeWidth,
+	);
+	const contextRows = lines.flatMap((line) =>
+		wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(line)), safeWidth),
+	);
+	const hintRows = wrapTextWithAnsi(
+		options.theme.fg("dim", menuHint(options.keybindings, destination, confirmAction)),
+		safeWidth,
+	);
+	const fullFrame = [
 		rule,
-		...wrapTextWithAnsi(
-			options.theme.fg("accent", options.theme.bold(safeMenuText(title))),
-			safeWidth,
-		),
-		...lines.flatMap((line) =>
-			wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(line)), safeWidth),
-		),
+		...titleRows,
+		...contextRows,
 		...(content.length > 0 ? ["", ...content] : []),
-		...wrapTextWithAnsi(
-			options.theme.fg("dim", menuHint(options.keybindings, destination, confirmAction)),
-			safeWidth,
-		),
+		...hintRows,
 		rule,
 	];
+	const maxRows = terminalRows(options.tui.terminal.rows);
+	const result =
+		fullFrame.length <= maxRows
+			? fullFrame
+			: compactFrame(rule, titleRows, contextRows, content, hintRows, maxRows);
 	return result.map((line) => truncateToWidth(line, safeWidth, ""));
+}
+
+function compactFrame(
+	rule: string,
+	titleRows: readonly string[],
+	contextRows: readonly string[],
+	contentRows: readonly string[],
+	hintRows: readonly string[],
+	maxRows: number,
+): string[] {
+	if (maxRows === 1) {
+		return [titleRows[0] ?? contentRows[0] ?? hintRows.at(-1) ?? rule];
+	}
+	if (maxRows === 2) return [rule, rule];
+	if (maxRows === 3) return [rule, titleRows[0] ?? contentRows[0] ?? hintRows.at(-1) ?? "", rule];
+	const boundedTitle = titleRows.slice(0, 1);
+	const hintBudget = Math.min(hintRows.length, Math.max(0, maxRows - 2 - boundedTitle.length));
+	const boundedHints = hintBudget > 0 ? hintRows.slice(-hintBudget) : [];
+	const bodyBudget = Math.max(0, maxRows - 2 - boundedTitle.length - boundedHints.length);
+	const boundedContent = focusedRows(contentRows, Math.min(contentRows.length, bodyBudget));
+	const contextBudget = Math.max(0, bodyBudget - boundedContent.length);
+	const boundedContext = contextRows.slice(0, contextBudget);
+	return [rule, ...boundedTitle, ...boundedContext, ...boundedContent, ...boundedHints, rule].slice(
+		0,
+		maxRows,
+	);
+}
+
+function focusedRows(rows: readonly string[], budget: number): readonly string[] {
+	if (budget <= 0) return [];
+	if (rows.length <= budget) return rows;
+	const selectedIndex = rows.findIndex((line) => /^[→›]\s/u.test(stripVTControlCharacters(line)));
+	if (selectedIndex < 0) return rows.slice(0, budget);
+	const start = Math.max(0, Math.min(selectedIndex - Math.floor(budget / 2), rows.length - budget));
+	return rows.slice(start, start + budget);
+}
+
+function terminalRows(rows: number) {
+	return Number.isFinite(rows) ? Math.max(1, Math.floor(rows)) : 24;
 }
 
 export function renderHorizontalRule(

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { OAUTH_CREDENTIAL_SOURCE_CHANNEL } from "../src/oauth-credential-source.js";
 import usageExtension from "../src/usage.js";
 
 initTheme("dark", false);
@@ -12,12 +13,23 @@ const openRouterModel = {
 	provider: "openrouter",
 	baseUrl: "https://openrouter.ai/api/v1",
 };
+const codexToken = codexAccessToken("account-123");
+
 const codexModel = {
 	id: "gpt-5.3-codex",
 	name: "GPT-5.3 Codex",
 	provider: "openai-codex",
 	baseUrl: "https://chatgpt.com/backend-api",
 };
+
+function codexAccessToken(accountId: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({
+			"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+		}),
+	).toString("base64url");
+	return `header.${payload}.signature`;
+}
 
 async function settle(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
@@ -170,13 +182,27 @@ test("current Codex usage can redeem a selected reset and refresh account state"
 	const choices = ["Redeem usage limit reset…", "Weekly + 5h reset", "Yes, use reset", "Close"];
 	const titles: string[] = [];
 	const mock = createMockPi();
+	mock.eventBus.on(OAUTH_CREDENTIAL_SOURCE_CHANNEL, (data) => {
+		const request = data as {
+			provider: string;
+			offer(candidate: unknown): void;
+		};
+		if (request.provider !== "openai-codex") return;
+		request.offer({
+			type: "oauth",
+			access: codexToken,
+			refresh: "named-refresh-token",
+			expires: Date.now() + 60_000,
+			accountId: "account-123",
+		});
+	});
 	usageExtension(mock.pi, {
 		credentialReader: () => ({
 			type: "oauth",
-			access: "codex-token",
-			refresh: "refresh-token",
+			access: "default-codex-token",
+			refresh: "default-refresh-token",
 			expires: Date.now() + 60_000,
-			accountId: "account-123",
+			accountId: "default-account",
 		}),
 		createRedemptionId: () => "redeem-123",
 	});
@@ -193,8 +219,8 @@ test("current Codex usage can redeem a selected reset and refresh account state"
 			return choice;
 		},
 		modelRegistry: {
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "codex-token" }),
-			getProviderAuth: async () => ({ auth: { apiKey: "codex-token" } }),
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: codexToken }),
+			getProviderAuth: async () => ({ auth: { apiKey: codexToken } }),
 			getAvailable: () => [codexModel],
 			getAll: () => [codexModel],
 			getProviderAuthStatus: () => ({ configured: true }),
@@ -248,7 +274,7 @@ test("Codex reset confirmation defaults to cancellation and sends no mutation", 
 	usageExtension(mock.pi, {
 		credentialReader: () => ({
 			type: "oauth",
-			access: "codex-token",
+			access: codexToken,
 			refresh: "refresh-token",
 			expires: Date.now() + 60_000,
 			accountId: "account-123",
@@ -266,8 +292,8 @@ test("Codex reset confirmation defaults to cancellation and sends no mutation", 
 			return choices.shift();
 		},
 		modelRegistry: {
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "codex-token" }),
-			getProviderAuth: async () => ({ auth: { apiKey: "codex-token" } }),
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: codexToken }),
+			getProviderAuth: async () => ({ auth: { apiKey: codexToken } }),
 			getAvailable: () => [codexModel],
 			getAll: () => [codexModel],
 			getProviderAuthStatus: () => ({ configured: true }),

@@ -3,7 +3,9 @@ import {
 	CURSOR_MARKER,
 	decodeKittyPrintable,
 	type Focusable,
+	Key,
 	type KeybindingsManager,
+	matchesKey,
 	Text,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
@@ -24,7 +26,7 @@ export async function promptSecret(
 			const heading = new Text("", 0, 0);
 			const hint = new Text("", 0, 0);
 			const submitKey = keybindingText(keybindings, "tui.input.submit", "enter");
-			const cancelKey = keybindingText(keybindings, "tui.select.cancel", "esc");
+			const cancelKey = keybindingText(keybindings, "tui.select.cancel", "esc", ["ctrl+c"]);
 			const applyTheme = () => {
 				heading.setText(theme.fg("accent", theme.bold(title)));
 				hint.setText(theme.fg("dim", `${submitKey} save • ${cancelKey} cancel • Input is hidden`));
@@ -58,8 +60,9 @@ export async function promptSecret(
 					hint.invalidate();
 				},
 				handleInput(data: string) {
-					if (keybindings.matches(data, "tui.select.cancel")) complete(undefined);
-					else if (keybindings.matches(data, "tui.input.submit")) complete(input.getValue());
+					if (matchesKey(data, Key.ctrl("c")) || keybindings.matches(data, "tui.select.cancel")) {
+						complete(undefined);
+					} else if (keybindings.matches(data, "tui.input.submit")) complete(input.getValue());
 					else input.handleInput(data);
 					tui.requestRender();
 				},
@@ -195,9 +198,9 @@ function keybindingText(
 	keybindings: Pick<KeybindingsManager, "getKeys">,
 	binding: Parameters<KeybindingsManager["getKeys"]>[0],
 	fallback: string,
+	additionalKeys: readonly string[] = [],
 ) {
-	const keys = keybindings
-		.getKeys(binding)
+	const keys = [...new Set([...keybindings.getKeys(binding), ...additionalKeys])]
 		.map(String)
 		.map((key) => {
 			if (key === "return") return "enter";

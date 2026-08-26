@@ -14,7 +14,7 @@ The design is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDevTo
 - Reuses an existing CDP endpoint or lazily launches an isolated Chromium-family browser.
 - Recovers from stale page selections and reports actionable browser startup or endpoint errors.
 - Loads explicitly approved unpacked extensions only in an extension-owned Chrome for Testing or Chromium process.
-- Keeps browser tools lazy and exposes availability, setup, status, and help through `/chrome-devtools`.
+- Uses native deferred browser tools when supported and eager exposure otherwise, with availability, setup, status, and help through `/chrome-devtools`.
 - Shows compact expandable results and activity only while browser tools are running.
 - Persists reviewed tool availability while keeping browser connection settings machine-owned.
 
@@ -148,21 +148,29 @@ It never closes user-started browsers or remote endpoints.
 - `chrome_devtools_evaluate` — evaluate JavaScript in the selected page.
 - `chrome_devtools_screenshot` — capture a PNG screenshot and save it as a PNG file.
 
-### Lazy tool loading
+### Tool exposure
 
-All six tools are registered, but only `chrome_devtools_load` starts active for this extension.
+All six tools are registered.
+
+On a model/provider with native deferred-tool support, only `chrome_devtools_load` starts active for this extension.
 
 The loader accepts a task-oriented `query`, matches it against the five capability tools, and adds matching available tools without removing any active Pi tool.
 
 Loaded capability tools remain active for the rest of the session unless the user makes them unavailable through `/chrome-devtools`.
 
-Pi uses native deferred tool references on compatible Anthropic and OpenAI models.
+Pi uses native deferred tool references on compatible Anthropic models, native additional-tools or tool-search loading on compatible OpenAI and Codex Responses models, and native Kimi loading on compatible OpenAI Chat Completions models.
 
-Other models receive Pi's safe fallback: the newly active definitions appear in the normal tool list on the next model request.
+Kimi-compatible models declare `compat.deferredToolsMode: "kimi"` in Pi's model metadata.
 
-The capability tools omit active-only prompt snippets so a lazy load does not rebuild the system prompt prefix.
+`azure-openai-responses` remains eager because Pi's Azure adapter does not implement native deferred tool-search serialization.
 
-The saved `tools` array controls which capabilities the loader may expose.
+When the selected model/provider lacks native deferred support, the extension activates every capability allowed by settings before the next model request instead of using Pi's cache-invalidating lazy-loading fallback.
+
+After a session enters eager exposure, it stays eager across later model switches to avoid removing tool definitions within that session.
+
+The capability tools omit active-only prompt snippets so native deferred loading does not rebuild the system-prompt prefix.
+
+The saved `tools` array controls which capabilities the extension may expose.
 
 An empty array leaves the loader active but makes every browser capability unavailable.
 
@@ -198,7 +206,7 @@ If the model cannot inspect the inline image, ask it to read the saved path, for
 /chrome-devtools
 ```
 
-Opens a menu that shows the lazy catalog size, whether that catalog is saved, the configured endpoint, the observed managed-browser state, and any settings or launch warning before you choose an action.
+Opens a menu that shows the tool catalog size, whether that catalog is saved, the configured endpoint, the observed managed-browser state, and any settings or launch warning before you choose an action.
 The five actions stay on one level:
 
 - **Choose available browser tools…** — stage any combination of the five capabilities, then review the exact available/unavailable result before selecting **Apply tool changes**.
@@ -235,7 +243,7 @@ Compatibility aliases remain available: `toggle` and `select` mean `tools`, `on`
 - `settings` opens the same immediate-save browser settings flow used by the menu.
 - `tools` opens the same staged, width-safe availability and review flow used by the menu.
 - `toggle` and `select` are compatibility aliases for `tools`.
-- `enable` makes all five capability tools available to the loader and saves that catalog; `on` is a compatibility alias.
+- `enable` makes all five capability tools available and follows the current native-deferred or eager exposure mode; `on` is a compatibility alias.
 - `disable` makes all five capability tools unavailable and saves the empty catalog; `off` is a compatibility alias.
   The slash command and `chrome_devtools_load` remain available.
 
@@ -258,7 +266,7 @@ Confirmed menu changes apply before the next browser connection and close only a
 Manual JSON edits and unpacked-extension changes apply after `/reload` or session replacement.
 
 When the file is missing or invalid, the extension preserves Pi's current Chrome DevTools availability policy instead of replacing it.
-A valid saved catalog is restored on Pi startup and `/reload`, while its capability definitions remain deferred.
+A valid saved catalog is restored on Pi startup and `/reload`, with capability definitions exposed natively deferred or eagerly according to model/provider support.
 A missing file is created by the first confirmed browser or tool setting.
 Within one Pi process, all browser and tool saves run in invocation order, reread the latest valid document, publish by temporary-file rename, and preserve unknown fields.
 Malformed JSON or invalid recognized fields make menu mutation unavailable and block direct saves without replacement; a failed save restores the prior displayed and effective state.

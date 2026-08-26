@@ -2,6 +2,10 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { fingerprintResolvedAuth, sanitizeDisplayText } from "./core.js";
 import {
+	fallbackOAuthCredentialCandidates,
+	type OAuthCredentialCandidateReader,
+} from "./oauth-credential-source.js";
+import {
 	AUTH_FINGERPRINT_SALT,
 	adapterForProvider,
 	fetchProviderJson,
@@ -98,6 +102,7 @@ export async function resolveCodexResetAuth(
 	ctx: ExtensionContext,
 	salt: Uint8Array = AUTH_FINGERPRINT_SALT,
 	credentialReader: StoredCredentialReader = readStoredCredential,
+	candidateReader?: OAuthCredentialCandidateReader,
 ): Promise<ResolvedUsageAuth> {
 	const model = ctx.model;
 	if (model?.provider !== "openai-codex") {
@@ -112,26 +117,22 @@ export async function resolveCodexResetAuth(
 	}
 	if (!auth) throw new Error("No runtime credential is configured for OpenAI Codex.");
 
-	const credential = asObject(credentialReader("openai-codex"));
-	if (credential?.type !== "oauth") {
-		throw new Error(
-			"Usage limit resets require the OpenAI Codex OAuth account configured through Pi /login.",
-		);
-	}
-	const storedAccess = asNonemptyString(credential.access);
 	const resolvedAccess = bearerToken(headerValue(auth.headers, "Authorization")) ?? auth.apiKey;
-	if (!storedAccess || !resolvedAccess) {
-		throw new Error("OpenAI Codex OAuth credentials were incomplete.");
+	if (!resolvedAccess) throw new Error("OpenAI Codex OAuth credentials were incomplete.");
+	const resolvedAccountId = codexAccountIdFromAccessToken(resolvedAccess);
+	if (!resolvedAccountId) {
+		throw new Error("The active OpenAI Codex access token did not contain a valid account ID.");
 	}
-	if (storedAccess !== resolvedAccess) {
-		throw new Error(
-			"The active OpenAI Codex runtime account does not match Pi's stored OAuth account.",
-		);
-	}
-	const accountId = validHeaderValue(credential.accountId);
-	if (!accountId)
-		throw new Error("The OpenAI Codex OAuth credential did not include a valid account ID.");
-
+	const offered = candidateReader
+		? candidateReader(ctx, "openai-codex")
+		: fallbackOAuthCredentialCandidates("openai-codex", credentialReader);
+	if (!offered.ok) throw new Error("OpenAI Codex OAuth credential discovery failed closed.");
+	const { accountId, storedAccess } = selectCodexResetCredential(
+		offered.candidates,
+		resolvedAccess,
+		resolvedAccountId,
+		offered.offeredCount === 0,
+	);
 	const authorization = `Bearer ${resolvedAccess}`;
 	const headers = {
 		Authorization: authorization,
@@ -224,6 +225,70 @@ export function normalizeCodexResetCreditsPayload(
 		options.push(genericCodexResetOption());
 	}
 	return { availableCount, options };
+}
+
+function selectCodexResetCredential(
+	candidates: readonly unknown[],
+	resolvedAccess: string,
+	resolvedAccountId: string,
+	standaloneFallback: boolean,
+): { accountId: string; storedAccess: string } {
+	let sawOAuth = false;
+	let sawMatchingAccess = false;
+	let sawInvalidAccountId = false;
+	const matches = new Map<string, { accountId: string; storedAccess: string }>();
+	for (const candidate of candidates) {
+		try {
+			const credential = asObject(candidate);
+			if (credential?.type !== "oauth") continue;
+			sawOAuth = true;
+			const storedAccess = asNonemptyString(credential.access);
+			if (storedAccess !== resolvedAccess) continue;
+			sawMatchingAccess = true;
+			const accountId = validHeaderValue(credential.accountId);
+			const refresh = asNonemptyString(credential.refresh);
+			if (!accountId || accountId !== resolvedAccountId || !refresh) {
+				sawInvalidAccountId = true;
+				continue;
+			}
+			matches.set(refresh, { accountId, storedAccess });
+		} catch {
+			// Malformed candidates never authorize a reset request.
+		}
+	}
+	if (sawInvalidAccountId) {
+		throw new Error("The OpenAI Codex OAuth credential did not include a valid account ID.");
+	}
+	if (matches.size > 1) {
+		throw new Error("Conflicting OAuth credentials match the active OpenAI Codex runtime account.");
+	}
+	const match = matches.values().next().value;
+	if (match) return match;
+	if (!sawOAuth) {
+		throw new Error(
+			standaloneFallback
+				? "Usage limit resets require the OpenAI Codex OAuth account configured through Pi /login."
+				: "Usage limit resets require an OpenAI Codex OAuth account configured through Pi /login or a compatible credential source.",
+		);
+	}
+	if (sawMatchingAccess) throw new Error("OpenAI Codex OAuth credentials were incomplete.");
+	throw new Error(
+		standaloneFallback
+			? "The active OpenAI Codex runtime account does not match Pi's stored OAuth account."
+			: "The active OpenAI Codex runtime account does not match any available OAuth account.",
+	);
+}
+
+function codexAccountIdFromAccessToken(access: string): string | undefined {
+	try {
+		const parts = access.split(".");
+		if (parts.length !== 3 || !parts[1]) return undefined;
+		const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as unknown;
+		const claims = asObject(asObject(payload)?.["https://api.openai.com/auth"]);
+		return validHeaderValue(claims?.chatgpt_account_id);
+	} catch {
+		return undefined;
+	}
 }
 
 function normalizeResetOption(credit: Record<string, unknown>): CodexResetOption {

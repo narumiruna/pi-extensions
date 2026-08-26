@@ -229,15 +229,11 @@ test("runtime settings validate, save, and immediately apply the blocking worker
 			blocking: { futureBlocking: "keep", maxParallelTasks: 3 },
 		});
 		assert.match(context.notifications.at(-1)?.message ?? "", /saved and applied.*3/i);
-		const refreshedBlocking = mock.tools.filter((tool) => tool.name === "subagent").at(-1);
-		assert.match(
-			String(refreshedBlocking?.description),
-			/maximum parallel worker tasks per call: 3/i,
-		);
-		assert.match(
-			Array.isArray(refreshedBlocking?.promptGuidelines)
-				? refreshedBlocking.promptGuidelines.join("\n")
-				: "",
+		const refreshedBlocking = mock.tools.filter((tool) => tool.name === "subagent");
+		assert.equal(refreshedBlocking.length, 1);
+		assert.match(String(refreshedBlocking[0]?.description), /session-guidance message/i);
+		assert.doesNotMatch(
+			`${String(refreshedBlocking[0]?.description)}\n${String(refreshedBlocking[0]?.promptGuidelines)}`,
 			/configured max 3/i,
 		);
 		await command.handler("status", context.ctx);
@@ -676,22 +672,17 @@ test("detached-limit save failure preserves the previous configured value", asyn
 test("parallel-limit UI keeps the runtime unchanged after a settings save failure", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parallel-limit-failure-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const originalRenameSync = fs.renameSync;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
 		const settingsPath = path.join(directory, "pi-subagents.json");
 		writeFileSync(settingsPath, "{}\n");
 		const mock = createMockPi();
 		subagents(mock.pi);
-		const registerTool = mock.rawPi.registerTool.bind(mock.rawPi);
-		let failNextSave = true;
-		mock.rawPi.registerTool = (candidate: unknown) => {
-			registerTool(candidate);
-			if (failNextSave && (candidate as { name?: string }).name === "subagent") {
-				failNextSave = false;
-				rmSync(settingsPath);
-				mkdirSync(settingsPath);
-			}
-		};
+		fs.renameSync = (() => {
+			throw new Error("rename unavailable");
+		}) as typeof fs.renameSync;
+		syncBuiltinESMExports();
 		const command = mock.commands.get("subagents");
 		assert.ok(command);
 		let call = 0;
@@ -728,16 +719,19 @@ test("parallel-limit UI keeps the runtime unchanged after a settings save failur
 		await command.handler("", context.ctx);
 		assert.equal(call, 4);
 		assert.match(context.notifications.at(-1)?.message ?? "", /were not saved/i);
-		const blocking = mock.tools.filter((tool) => tool.name === "subagent").at(-1);
-		assert.match(String(blocking?.description), /maximum parallel worker tasks per call: 8/i);
+		const blocking = mock.tools.filter((tool) => tool.name === "subagent");
+		assert.equal(blocking.length, 1);
+		assert.match(String(blocking[0]?.description), /session-guidance message/i);
 	} finally {
+		fs.renameSync = originalRenameSync;
+		syncBuiltinESMExports();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
 
-test("parallel-limit UI leaves settings and runtime unchanged after registration failure", async () => {
+test("parallel-limit UI applies runtime changes without re-registering tools", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parallel-limit-runtime-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -748,13 +742,6 @@ test("parallel-limit UI leaves settings and runtime unchanged after registration
 		subagents(mock.pi);
 		const blocking = mock.tools.find((tool) => tool.name === "subagent") as SubagentTool;
 		assert.ok(blocking);
-		const registerTool = mock.rawPi.registerTool.bind(mock.rawPi);
-		mock.rawPi.registerTool = (candidate: unknown) => {
-			if ((candidate as { name?: string }).name === "subagent") {
-				throw new Error("registration failed");
-			}
-			registerTool(candidate);
-		};
 		const command = mock.commands.get("subagents");
 		assert.ok(command);
 		let call = 0;
@@ -773,28 +760,31 @@ test("parallel-limit UI leaves settings and runtime unchanged after registration
 				} else if (call === 2) {
 					harness.handleInput("tui.select.down");
 					harness.handleInput("tui.select.confirm");
-				} else {
+				} else if (call === 3) {
 					harness.setFocused(true);
 					harness.handleInput("4");
 					harness.handleInput("tui.input.submit");
 					await harness.waitForPending();
+				} else {
 					harness.handleInput("\u0003");
-					await harness.resultPromise;
 				}
 				call++;
 				return harness.result;
 			},
 		});
 		await command.handler("", context.ctx);
-		assert.equal(call, 4);
-		assert.equal(readFileSync(settingsPath, "utf8"), "{}\n");
-		assert.match(context.notifications.at(-1)?.message ?? "", /not applied.*unchanged/i);
+		assert.equal(call, 5);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			blocking: { maxParallelTasks: 4 },
+		});
+		assert.match(context.notifications.at(-1)?.message ?? "", /saved and applied.*4/i);
+		assert.equal(mock.tools.filter((tool) => tool.name === "subagent").length, 1);
 		await assert.rejects(
 			() =>
 				blocking.execute(
-					"runtime-rollback",
+					"runtime-limit",
 					{
-						tasks: Array.from({ length: 9 }, (_, index) => ({
+						tasks: Array.from({ length: 5 }, (_, index) => ({
 							agent: "missing",
 							task: `task ${index + 1}`,
 						})),
@@ -803,7 +793,7 @@ test("parallel-limit UI leaves settings and runtime unchanged after registration
 					undefined,
 					createMockContext().ctx,
 				),
-			/configured max is 8/i,
+			/configured max is 4/i,
 		);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -830,8 +820,8 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 			(tool) => tool.name === "subagent_spawn",
 		)?.promptGuidelines;
 		assert.ok(Array.isArray(initialSpawnGuidance));
-		assert.match(initialSpawnGuidance.join("\n"), /next-turn.*default/i);
-		assert.doesNotMatch(initialSpawnGuidance.join("\n"), /even when.*final answer.*depends/i);
+		assert.match(initialSpawnGuidance.join("\n"), /session-guidance/i);
+		assert.match(initialSpawnGuidance.join("\n"), /next-turn.*auto-resume/i);
 		let customCalls = 0;
 		const context = createMockContext({
 			mode: "tui",
@@ -860,15 +850,23 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 				return harness.result;
 			},
 		});
+		for (const handler of mock.events.get("session_start") ?? []) {
+			await handler({ reason: "new" }, context.ctx);
+		}
 		await command.handler("settings", context.ctx);
 		assert.equal(customCalls, 3);
-		const updatedSpawnGuidance = mock.tools
-			.filter((tool) => tool.name === "subagent_spawn")
-			.at(-1)?.promptGuidelines;
-		assert.ok(Array.isArray(updatedSpawnGuidance));
-		assert.match(updatedSpawnGuidance.join("\n"), /auto-resume/i);
-		assert.match(updatedSpawnGuidance.join("\n"), /even when.*final answer.*depends/i);
-		assert.doesNotMatch(updatedSpawnGuidance.join("\n"), /next-turn.*default/i);
+		const spawnRegistrations = mock.tools.filter((tool) => tool.name === "subagent_spawn");
+		assert.equal(spawnRegistrations.length, 1);
+		const updatedSpawnGuidance = spawnRegistrations[0]?.promptGuidelines;
+		assert.deepEqual(updatedSpawnGuidance, initialSpawnGuidance);
+		assert.deepEqual(mock.sentMessages.at(-1)?.options, {
+			deliverAs: "nextTurn",
+			triggerTurn: false,
+		});
+		assert.match(
+			String((mock.sentMessages.at(-1)?.message as { content?: unknown } | undefined)?.content),
+			/"completionDelivery":"auto-resume"/u,
+		);
 		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 			futureOption: true,
 			stateful: {
@@ -905,10 +903,14 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		});
 		await command.handler("status", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /No project resources/);
-		const refreshedConsultDescription = mock.tools
-			.filter((tool) => tool.name === "subagent_consult")
-			.at(-1)?.description;
-		assert.match(String(refreshedConsultDescription), /configured trusted-target resources: none/i);
+		const consultRegistrations = mock.tools.filter((tool) => tool.name === "subagent_consult");
+		assert.equal(consultRegistrations.length, 1);
+		assert.match(String(consultRegistrations[0]?.description), /session-guidance message/i);
+		assert.doesNotMatch(String(consultRegistrations[0]?.description), /resources: none/i);
+		assert.match(
+			String((mock.sentMessages.at(-1)?.message as { content?: unknown } | undefined)?.content),
+			/"consultResourcePolicy":"none"/u,
+		);
 
 		const nonTui = createMockContext({
 			mode: "json",
@@ -919,6 +921,9 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		});
 		await command.handler("settings", nonTui.ctx);
 		assert.match(nonTui.notifications[0]?.message ?? "", /Edit settings manually/);
+		for (const handler of mock.events.get("session_shutdown") ?? []) {
+			await handler({ reason: "quit" }, context.ctx);
+		}
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -1033,9 +1038,10 @@ test("subagent settings UI exposes and immediately applies both cwd policies", a
 		const consultDescription = mock.tools
 			.filter((tool) => tool.name === "subagent_consult")
 			.at(-1)?.description;
-		assert.match(String(blockingDescription), /target policy: current-workspace/i);
-		assert.match(String(spawnDescription), /target policy: current-workspace/i);
-		assert.match(String(consultDescription), /target policy: current-workspace/i);
+		for (const description of [blockingDescription, spawnDescription, consultDescription]) {
+			assert.match(String(description), /session-guidance message/i);
+			assert.doesNotMatch(String(description), /target policy: current-workspace/i);
+		}
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

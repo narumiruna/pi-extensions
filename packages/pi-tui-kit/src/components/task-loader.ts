@@ -44,9 +44,10 @@ export class TaskLoader extends Container {
 		if (this.disposed || !this.cancellable) return;
 		const matches = this.keybindings.matches;
 		const cancelled =
-			typeof matches === "function"
+			matchesKey(data, Key.ctrl("c")) ||
+			(typeof matches === "function"
 				? matches.call(this.keybindings, data, "tui.select.cancel")
-				: matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"));
+				: matchesKey(data, Key.escape));
 		if (cancelled) this.onAbort?.();
 	}
 
@@ -59,10 +60,9 @@ export class TaskLoader extends Container {
 
 function cancelKeyText(keybindings: MenuKeybindings): string {
 	const getKeys = keybindings.getKeys;
-	const keys =
-		typeof getKeys === "function"
-			? getKeys.call(keybindings, "tui.select.cancel")
-			: ["escape", "ctrl+c"];
+	const configuredKeys =
+		typeof getKeys === "function" ? getKeys.call(keybindings, "tui.select.cancel") : ["escape"];
+	const keys = [...new Set([...configuredKeys, "ctrl+c"])];
 	return keys.map(displayKey).join("/");
 }
 

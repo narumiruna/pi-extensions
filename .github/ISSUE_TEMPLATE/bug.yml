@@ -8,23 +8,27 @@ body:
     attributes:
       value: |
         Thanks for taking the time to report a bug.
-        Please search existing issues before submitting a new report and remove any secrets from logs or screenshots.
+        Please search existing issues before submitting a new report.
+        Remove API keys, tokens, credentials, and personal data from logs, configuration, and screenshots.
+        Reproduce the issue with extension discovery disabled and only the affected extension loaded when possible.
+        Run `pi -ne -e SOURCE` with `SOURCE` replaced by the exact npm specifier or local extension path reported below.
+        Include the result in the reproduction steps.
 
   - type: input
     id: package
     attributes:
       label: Package
       description: Which package is affected?
-      placeholder: "@narumitw/pi-example"
+      placeholder: "@narumitw/pi-statusline"
     validations:
       required: true
 
   - type: input
     id: package-version
     attributes:
-      label: Package version
-      description: Which version of the affected package are you using?
-      placeholder: "For example: 1.2.3"
+      label: Package version and source
+      description: Include the exact version and npm specifier or local path used to load the package.
+      placeholder: "For example: 1.2.3 from npm:@scope/package@1.2.3"
     validations:
       required: true
 
@@ -33,7 +37,7 @@ body:
     attributes:
       label: Pi version
       description: Run `pi --version` and paste the result.
-      placeholder: "For example: 0.84.2"
+      placeholder: "For example: 0.84.3"
     validations:
       required: true
 
@@ -50,7 +54,7 @@ body:
     id: description
     attributes:
       label: What happened?
-      description: Describe the problem and its impact.
+      description: Describe the specific problem, its impact, and any visible error messages.
     validations:
       required: true
 
@@ -58,7 +62,9 @@ body:
     id: reproduction
     attributes:
       label: Steps to reproduce
-      description: Provide the smallest set of steps or a minimal repository that reproduces the problem.
+      description: >-
+        Provide the smallest set of steps, configuration, or repository that reproduces the problem.
+        Include the extension isolation result, or explain why the check is not possible.
       placeholder: |
         1. Install ...
         2. Configure ...
@@ -78,15 +84,15 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Logs or screenshots
-      description: Add relevant output, stack traces, or screenshots after removing secrets and personal data.
+      label: Logs
+      description: Add relevant output or stack traces after removing secrets and personal data.
       render: shell
 
   - type: textarea
     id: additional-context
     attributes:
-      label: Additional context
-      description: Add any other details that may help diagnose the problem.
+      label: Additional context or screenshots
+      description: Add screenshots, related issues, or any other details that may help diagnose the problem.
 
   - type: checkboxes
     id: checks

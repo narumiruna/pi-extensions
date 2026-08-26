@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-tui-kit",
-	"version": "0.58.0",
+	"version": "0.58.1",
 	"description": "Declarative UI flows and navigation helpers built on Pi TUI.",
 	"type": "module",
 	"license": "MIT",

@@ -62,30 +62,28 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 				properties?: Record<string, { description?: string; maximum?: number; enum?: string[] }>;
 			};
 		};
-		controller.setAgentCatalog(
-			'Available agent definitions\n- api-reviewer [source: user; agentScope: "user"] — Reviews APIs',
-		);
-		const catalogRegistration = mock.tools
-			.filter((tool) => tool.name === "subagent_spawn")
-			.at(-1) as typeof spawn | undefined;
-		assert.match(catalogRegistration?.description ?? "", /api-reviewer/);
+		const spawnRegistrations = () =>
+			mock.tools.filter((tool) => tool.name === "subagent_spawn") as (typeof spawn)[];
+		assert.equal(spawnRegistrations().length, 1);
+		const providerVisibleDefinition = {
+			description: spawn.description,
+			parameters: spawn.parameters,
+			promptGuidelines: spawn.promptGuidelines,
+		};
+		assert.match(spawn.description, /session-guidance message/i);
+		assert.match(spawn.promptGuidelines.join("\n"), /next-turn.*auto-resume/i);
+		for (const guideline of spawn.promptGuidelines) assert.match(guideline, /subagent_spawn/);
 		controller.setCompletionDelivery("auto-resume");
-		const autoResumeRegistration = mock.tools
-			.filter((tool) => tool.name === "subagent_spawn")
-			.at(-1) as typeof spawn | undefined;
-		assert.match(autoResumeRegistration?.description ?? "", /api-reviewer/);
-		assert.match(autoResumeRegistration?.promptGuidelines?.join("\n") ?? "", /auto-resume/);
-		for (const guideline of autoResumeRegistration?.promptGuidelines ?? []) {
-			assert.match(guideline, /subagent_spawn/);
-		}
-		controller.setAgentCatalog("Available agent definitions\n- worker [source: built-in]");
-		const refreshedRegistration = mock.tools
-			.filter((tool) => tool.name === "subagent_spawn")
-			.at(-1) as typeof spawn | undefined;
-		assert.match(refreshedRegistration?.description ?? "", /worker/);
-		assert.doesNotMatch(refreshedRegistration?.description ?? "", /api-reviewer/);
-		assert.match(refreshedRegistration?.promptGuidelines?.join("\n") ?? "", /auto-resume/);
 		controller.setCompletionDelivery("next-turn");
+		assert.equal(spawnRegistrations().length, 1);
+		assert.deepEqual(
+			{
+				description: spawn.description,
+				parameters: spawn.parameters,
+				promptGuidelines: spawn.promptGuidelines,
+			},
+			providerVisibleDefinition,
+		);
 		assert.equal(spawn.name, "subagent_spawn");
 		assert.match(spawn.parameters.properties?.timeoutMs?.description ?? "", /work deadline/i);
 		assert.match(spawn.parameters.properties?.idleTimeoutMs?.description ?? "", /completed/i);
@@ -416,16 +414,16 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			spawnGuidance,
 			/before.*one.*subagent_spawn.*identify.*non-overlapping.*main-agent work.*start immediately.*integration path/i,
 		);
-		assert.match(spawnGuidance, /prefer one subagent_spawn.*broad.*research/i);
+		assert.match(spawnGuidance, /session-guidance.*next-turn.*auto-resume/i);
 		assert.match(spawnGuidance, /ordinary review.*main agent.*review skill.*deterministic checks/i);
 		assert.match(
 			spawnGuidance,
 			/detached review.*consequential independent verification.*concrete parallel value/i,
 		);
 		assert.doesNotMatch(spawnGuidance, /broad asynchronous research or review/i);
-		assert.match(spawnGuidance, /next-turn.*default/i);
-		assert.match(spawnGuidance, /current response.*does not depend/i);
-		assert.match(spawnGuidance, /subagent_await.*overlap.*complete/i);
+		assert.match(spawnGuidance, /next-turn.*current response.*does not depend/i);
+		assert.match(spawnGuidance, /overlap.*subagent_await/i);
+		assert.match(spawnGuidance, /completionRequirement.*required/i);
 		assert.match(spawnGuidance, /deprecated subagent/i);
 		assert.doesNotMatch(spawnGuidance, /even when.*final answer.*depends/i);
 		assert.match(
@@ -553,8 +551,8 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		const autoResumeSpawn = autoResume.tools.find((tool) => tool.name === "subagent_spawn");
 		assert.ok(Array.isArray(autoResumeSpawn?.promptGuidelines));
 		const autoResumeGuidance = autoResumeSpawn.promptGuidelines.join("\n");
-		assert.match(autoResumeGuidance, /auto-resume/i);
-		assert.match(autoResumeGuidance, /even when.*final answer.*depends/i);
+		assert.equal(autoResumeGuidance, spawnGuidance);
+		assert.match(autoResumeGuidance, /next-turn.*auto-resume/i);
 		assert.match(
 			autoResumeGuidance,
 			/every final-answer-dependent subagent_spawn.*completionRequirement.*required.*visible.*terminal/i,
@@ -578,7 +576,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.doesNotMatch(autoResumeGuidance, /broad asynchronous research or review/i);
 		assert.match(autoResumeGuidance, /immediately continue.*identified.*local task/i);
 		assert.doesNotMatch(autoResumeGuidance, /tell the user.*end the response/i);
-		assert.doesNotMatch(autoResumeGuidance, /next-turn.*default/i);
+		assert.match(autoResumeGuidance, /session-guidance/i);
 
 		writeFileSync(
 			path.join(dir, "pi-subagents.json"),

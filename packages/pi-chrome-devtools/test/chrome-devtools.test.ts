@@ -13,8 +13,8 @@ import path from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import {
+	createMockContext as createBaseMockContext,
 	createCustomSelectorHarness,
-	createMockContext,
 	createMockPi,
 } from "../../../test/support.js";
 import chromeDevtools, {
@@ -33,6 +33,17 @@ import chromeDevtools, {
 	selectAllowedRoot,
 } from "../src/chrome-devtools.js";
 import { saveSettings } from "../src/settings.js";
+
+const NATIVE_DEFERRED_MODEL = {
+	api: "openai-responses",
+	provider: "openai",
+	id: "gpt-5.4",
+	compat: { supportsToolSearch: true },
+};
+
+function createMockContext(overrides: Record<string, unknown> = {}) {
+	return createBaseMockContext({ model: NATIVE_DEFERRED_MODEL, ...overrides });
+}
 
 const NEW_SETTINGS_FILE = "pi-chrome-devtools.json";
 const LEGACY_SETTINGS_FILE = "pi-chrome-devtools-settings.json";
@@ -81,7 +92,11 @@ test("chrome-devtools registers deferred CDP tools and one loader", () => {
 		assert.equal(tool.promptSnippet, undefined);
 	}
 	assert.ok(mock.commands.has("chrome-devtools"));
-	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
+	assert.deepEqual([...mock.events.keys()].sort(), [
+		"model_select",
+		"session_shutdown",
+		"session_start",
+	]);
 });
 
 test("chrome-devtools command parsing and completions cover aliases", () => {
@@ -168,6 +183,114 @@ test("chrome-devtools loader additively activates matching allowed tools", async
 	});
 });
 
+test("chrome-devtools keeps Azure Responses eager when compat enables tool search", async () => {
+	await withTempAgentDir(async () => {
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const unsupportedModel = {
+			api: "azure-openai-responses",
+			provider: "azure-openai-responses",
+			id: "gpt-5.4",
+			compat: { supportsToolSearch: true },
+		};
+		const nativeModel = {
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-5.4",
+			compat: { supportsToolSearch: true },
+		};
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext({ model: unsupportedModel });
+		chromeDevtoolsModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, ...CAPABILITY_TOOLS]);
+
+		await mock.events.get("model_select")?.[0]?.({ model: nativeModel }, ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, ...CAPABILITY_TOOLS]);
+	});
+});
+
+test("chrome-devtools keeps uppercase Anthropic model IDs eager", async () => {
+	await withTempAgentDir(async () => {
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const model = {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "CLAUDE-SONNET-4-5",
+		};
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext({ model });
+		chromeDevtoolsModule.default(mock.pi);
+
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, ...CAPABILITY_TOOLS]);
+	});
+});
+
+test("chrome-devtools honors native Kimi deferred-tool support", async () => {
+	await withTempAgentDir(async () => {
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const model = {
+			api: "openai-completions",
+			provider: "moonshotai",
+			id: "kimi-k2.6",
+			compat: { deferredToolsMode: "kimi" },
+		};
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext({ model });
+		chromeDevtoolsModule.default(mock.pi);
+
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL]);
+	});
+});
+
+test("chrome-devtools honors native additional-tools support", async () => {
+	await withTempAgentDir(async () => {
+		for (const api of ["openai-responses", "openai-codex-responses"]) {
+			const chromeDevtoolsModule = await importFreshChromeDevtools();
+			const model = {
+				api,
+				provider: api === "openai-responses" ? "openai" : "openai-codex",
+				id: "gpt-5.4",
+				compat: { supportsAdditionalTools: true },
+			};
+			const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+			const { ctx } = createMockContext({ model });
+			chromeDevtoolsModule.default(mock.pi);
+
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+			assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL]);
+		}
+	});
+});
+
+test("chrome-devtools activates every available tool before switching to an unsupported model", async () => {
+	await withTempAgentDir(async () => {
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const nativeModel = {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-sonnet-4-5",
+		};
+		const unsupportedModel = {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-haiku-4-5",
+		};
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext({ model: nativeModel });
+		chromeDevtoolsModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL]);
+
+		await mock.events.get("model_select")?.[0]?.({ model: unsupportedModel }, ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, ...CAPABILITY_TOOLS]);
+	});
+});
+
 test("chrome-devtools keeps its missing-settings catalog across session replacement", async () => {
 	await withTempAgentDir(async () => {
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
@@ -241,7 +364,7 @@ test("chrome-devtools loader does not expose tools outside the saved catalog", a
 	});
 });
 
-test("chrome-devtools loads the new settings file as the lazy catalog without a warning", async () => {
+test("chrome-devtools loads the new settings file as the tool catalog without a warning", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, NEW_SETTINGS_FILE, [SCREENSHOT_TOOL]);
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
@@ -449,6 +572,47 @@ test("chrome-devtools rejects invalid settings updates and restores active tools
 	});
 });
 
+test("chrome-devtools keeps failed-save rollback eager after an unsupported model switch", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		writeFileSync(settingsPath, '{"tools":["invalid"]}\n');
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx, notifications } = createMockContext();
+		chromeDevtoolsModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL]);
+
+		let markRuntimeApply: (() => void) | undefined;
+		const runtimeApplied = new Promise<void>((resolve) => {
+			markRuntimeApply = resolve;
+		});
+		const setActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
+		mock.rawPi.setActiveTools = (names) => {
+			setActiveTools(names);
+			markRuntimeApply?.();
+			markRuntimeApply = undefined;
+		};
+
+		const command = mock.commands.get("chrome-devtools")?.handler("disable", ctx);
+		await runtimeApplied;
+		await mock.events.get("model_select")?.[0]?.(
+			{
+				model: {
+					api: "anthropic-messages",
+					provider: "anthropic",
+					id: "claude-haiku-4-5",
+				},
+			},
+			ctx,
+		);
+		await command;
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, ...CAPABILITY_TOOLS]);
+		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/i);
+	});
+});
+
 test("chrome-devtools rolls back a failed save after shutdown invalidates its session", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		mkdirSync(path.join(agentDir, NEW_SETTINGS_FILE));
@@ -520,7 +684,7 @@ test("Chrome DevTools main menu dispatches declarative actions at narrow widths"
 	});
 	await mock.commands.get("chrome-devtools")?.handler("", ctx);
 	assert.ok(renders.flat().every((line) => visibleWidth(line) <= 20));
-	assert.match(renders.flat().join("\n"), /Lazy catalog: 0 of 5/);
+	assert.match(renders.flat().join("\n"), /Tool catalog: 0 of 5/);
 	assert.deepEqual(notifications, []);
 });
 

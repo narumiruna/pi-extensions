@@ -15,11 +15,12 @@ The extension reports each provider's native semantics instead of presenting unl
 - Redeems eligible Codex resets only after fresh account matching and explicit confirmation.
 - Refreshes one or all configured providers with bounded concurrency and partial-result preservation.
 - Keeps statusline and cache data scoped to the current provider and runtime account.
-- Resolves credentials through Pi and validates the effective provider endpoint before sending them.
+- Resolves credentials through Pi or the process-local OAuth credential-source protocol and validates the effective provider endpoint before sending them.
 
 ## 📦 Install
 
 Requires Pi 0.81.0 or newer so the extension can validate the effective base URL attached to resolved provider auth before sending credentials to an official usage endpoint.
+The v1 credential-source interoperability path is characterized against Pi 0.84.3; other runtimes retain standalone fallback but do not receive the protocol timing guarantee.
 
 ```bash
 pi install npm:@narumitw/pi-usage
@@ -111,7 +112,7 @@ Repair or remove an invalid file, then run `/reload` before trying the toggle ag
 The statusline selects a returned bucket that matches the current Codex model when one is available.
 Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
 
-Reset redemption is available only when Codex is the current provider and Pi's freshly resolved access token exactly matches its stored OpenAI Codex OAuth credential.
+Reset redemption is available only when Codex is the current provider and Pi's freshly resolved access token exactly matches an OAuth credential from Pi's stored login or a compatible credential source.
 `pi-usage` forwards only the bearer authorization and matching `chatgpt-account-id` to the official ChatGPT origin.
 API-key credentials, configured-but-not-current Codex accounts, account changes during the flow, and custom/proxy origins fail before mutation.
 Backend-provided titles and descriptions are sanitized for terminal display.
@@ -126,7 +127,9 @@ Opaque credit and account IDs are never shown or persisted by the extension.
 - Statusline examples: `copilot credits 1200/1500 80%`, `copilot 245/300 82%`, or `copilot chat 40/50 80%`
 
 GitHub's quota endpoint requires the original GitHub OAuth token rather than the short-lived Copilot inference token exposed by runtime auth.
-`pi-usage` therefore supports Copilot accounts created through Pi's `/login` flow, reads that stored credential through Pi's public API, and uses it only when its short-lived access token matches the active runtime credential.
+`pi-usage` supports Copilot accounts created through Pi's `/login` flow and named accounts offered by a compatible `oauth:credential-source:v1` owner.
+It uses a candidate only when its short-lived access token exactly matches the freshly resolved active runtime credential.
+Duplicate equivalent candidates are harmless, while conflicting matches fail closed without choosing by extension load order.
 API-key credentials, account mismatches, GitHub Enterprise accounts, and proxy/custom provider origins fail closed.
 The detailed report follows the endpoint's `token_based_billing` marker so AI credits are not mislabeled as legacy premium requests, and it reports overage without treating a negative included balance as a malformed response.
 
@@ -158,6 +161,9 @@ The usage endpoint is derived from the model's base URL (`…/zen/go/v1/usage`) 
 
 The extension does not enumerate multiple accounts inside one provider and does not switch accounts.
 Account selection remains owned by Pi or an account-management extension.
+A compatible credential owner may offer the verified active named account through the versioned process-local protocol without exposing its account label or storage.
+Without such an owner, `pi-usage` retains its standalone Pi `auth.json` behavior.
+An older or incompatible owner degrades to the existing authentication-unavailable result when the stored login does not match runtime auth.
 After the active runtime credential changes, the next command, turn, or scheduled refresh resolves auth again and cannot reuse another account's cached report.
 
 ## 📊 Statusline behavior
@@ -187,11 +193,20 @@ Behavior changes:
 - Codex CLI fallback is removed to preserve active-runtime-account correctness.
 - The status key changes from `codex-usage` to `usage`.
 
+## 🔒 Security and privacy
+
+Credential candidates are collected synchronously in memory and are not cached, persisted, logged, formatted, or appended to the Pi session.
+The protocol carries no account name or extension identity.
+Only the selected provider's exact runtime match is used, and secrets are sent only to the validated official provider origin.
+Pi extensions run with the user's process privileges, so the shared event bus is not a security boundary between installed extensions.
+Install only trusted extensions because any installed extension may already read user files and process memory.
+Protocol v1 interoperability is characterized for the repository's supported Pi runtime; an absent or incompatible peer preserves standalone fallback and fail-closed mismatch behavior.
+
 ## 🚧 Limitations
 
 - Only providers with a meaningful usage source and verifiable Pi runtime auth are supported.
 - GitHub Copilot quota and OpenAI Codex reset redemption use undocumented provider endpoints that may change without notice.
-- Codex reset redemption requires a current ChatGPT OAuth login created through Pi; Codex API keys cannot redeem earned subscription resets.
+- Codex reset redemption requires a current ChatGPT OAuth credential from Pi's login or a compatible credential source; Codex API keys cannot redeem earned subscription resets.
 - Credentials resolved for custom provider base URLs are never forwarded to the providers' official usage endpoints; effective auth origin validation requires Pi 0.81.0 or newer.
 - Provider reports are snapshots and may themselves be delayed by the provider.
 - OpenRouter successful inference responses do not expose proactive request-rate counters; `/usage` reports the documented per-key credit/spend fields instead.
@@ -216,6 +231,7 @@ packages/pi-usage/
 │   ├── settings.ts    # Validated user settings and atomic persistence
 │   ├── usage-helpers.ts # Small orchestration helpers
 │   ├── query.ts       # Runtime auth resolution and bounded provider queries
+│   ├── oauth-credential-source.ts # Ephemeral OAuth candidate collection
 │   ├── codex-resets.ts # Codex reset auth, API contracts, and normalization
 │   ├── format.ts      # Provider-aware notifications and statusline text
 │   ├── core.ts        # Cache, concurrency, fingerprint, and redaction helpers

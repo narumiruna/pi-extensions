@@ -20,7 +20,6 @@ import type { CompletionDeliveryBroker } from "./completion-delivery.js";
 import {
 	CompletionRequirementModeSchema,
 	completionRequirementsFromBranch,
-	reconcileRequiredCompletionContext,
 } from "./completion-requirement.js";
 import type { ContextMode } from "./context.js";
 import type { CreateStatefulTransportOptions } from "./create-stateful-transport.js";
@@ -267,8 +266,6 @@ export interface StatefulSubagentRuntimeStatus {
 export interface StatefulSubagentController {
 	getCompletionDelivery(): CompletionDelivery;
 	setCompletionDelivery(value: CompletionDelivery): void;
-	setAgentCatalog(value: string): void;
-	refreshSettingsGuidance(): void;
 	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
 	listAgents(includeClosed?: boolean): ManagedAgent[];
 	listRunInspection(includeClosed?: boolean): AgentRunInspectionSummary[];
@@ -293,10 +290,8 @@ export function registerStatefulSubagents(
 	const transportKind = resolveStatefulTransportKind(settings.transport);
 	let completionDelivery = resolveCompletionDelivery(settings.completionDelivery);
 	let runtimeLimits = resolveStatefulLimits(settings);
-	let agentCatalog = "";
 	let completionBroker: CompletionDeliveryBroker | undefined;
 	let peerBroker: import("./peer-communication.js").PeerCommunicationBroker | undefined;
-	let refreshSpawnToolRegistration: (() => void) | undefined;
 	let registry: AgentRegistry | undefined;
 	let persistence: AgentPersistence | undefined;
 	let sweepTimer: NodeJS.Timeout | undefined;
@@ -350,14 +345,6 @@ export function registerStatefulSubagents(
 		setCompletionDelivery(value) {
 			completionDelivery = value;
 			completionBroker?.setDelivery(value);
-			refreshSpawnToolRegistration?.();
-		},
-		setAgentCatalog(value) {
-			agentCatalog = value;
-			refreshSpawnToolRegistration?.();
-		},
-		refreshSettingsGuidance() {
-			refreshSpawnToolRegistration?.();
 		},
 		getRuntimeStatus() {
 			const counts = registry?.inspectionCounts() ?? { activeAgents: 0, retainedAgents: 0 };
@@ -617,7 +604,6 @@ export function registerStatefulSubagents(
 				if (completion.recipientId === "root") sessionBroker.enqueue(completion);
 			}
 			runtimeLimits = nextLimits;
-			refreshSpawnToolRegistration?.();
 			const sweepEveryMs = Math.max(
 				1_000,
 				Math.min(sessionSettings.idleTtlMs ?? 60 * 60 * 1000, 60_000),
@@ -642,9 +628,6 @@ export function registerStatefulSubagents(
 
 	pi.on("context", (event) => {
 		completionBroker?.onParentContext(event.messages);
-		const agents = registry?.list() ?? [];
-		const messages = reconcileRequiredCompletionContext(event.messages, agents);
-		if (messages !== event.messages) return { messages };
 	});
 
 	pi.on("agent_settled", () => {
@@ -687,14 +670,13 @@ export function registerStatefulSubagents(
 		await transition;
 	});
 
-	const baseSpawnDescription = () =>
-		`Start an addressable background subagent with an opaque agentId and canonical taskPath, plus an optional thinking level and execution budgets chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
 	const spawnTool = defineTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
-		description: appendAgentCatalog(baseSpawnDescription(), agentCatalog),
+		description:
+			"Start an addressable background subagent with an opaque agentId and canonical taskPath, an optional thinking level and execution budgets chosen for the task difficulty, and asynchronous completion delivery. The current bounded capacity, completion policy, working-directory policy, and available agent definitions are published in the pi-subagents session-guidance message. Working-directory policy controls launch targets and protected project resources, not filesystem access or sandboxing.",
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
-		promptGuidelines: createSpawnPromptGuidelines(completionDelivery, blockingEnabled),
+		promptGuidelines: createSpawnPromptGuidelines(blockingEnabled),
 		parameters: grammarSafeToolObject({
 			agent: Type.String({ minLength: 1 }),
 			taskName: Type.Optional(
@@ -975,12 +957,7 @@ export function registerStatefulSubagents(
 			}
 		},
 	});
-	refreshSpawnToolRegistration = () => {
-		spawnTool.description = appendAgentCatalog(baseSpawnDescription(), agentCatalog);
-		spawnTool.promptGuidelines = createSpawnPromptGuidelines(completionDelivery, blockingEnabled);
-		pi.registerTool(spawnTool);
-	};
-	refreshSpawnToolRegistration();
+	pi.registerTool(spawnTool);
 
 	pi.registerTool({
 		name: "subagent_send",
@@ -1301,10 +1278,6 @@ async function cleanupClosedWorkspaces(
 		await workspaceManager.cleanup(owner);
 		isolatedAgents.delete(agentId);
 	}
-}
-
-function appendAgentCatalog(baseDescription: string, catalog: string): string {
-	return catalog ? `${baseDescription}\n\n${catalog}` : baseDescription;
 }
 
 function result(agent: ManagedAgent, text: string) {

@@ -17,7 +17,7 @@ const codexModel = {
 
 const credential = (access = "codex-token") => ({
 	type: "oauth",
-	access,
+	access: normalizeTestToken(access),
 	refresh: "refresh-token",
 	expires: Date.now() + 60_000,
 	accountId: "account-123",
@@ -35,13 +35,31 @@ function usageResponse(resetCount: number): Response {
 
 function codexRegistry(activeToken: () => string) {
 	return {
-		getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: activeToken() }),
-		getProviderAuth: async () => ({ auth: { apiKey: activeToken() } }),
+		getApiKeyAndHeaders: async () => ({
+			ok: true as const,
+			apiKey: normalizeTestToken(activeToken()),
+		}),
+		getProviderAuth: async () => ({ auth: { apiKey: normalizeTestToken(activeToken()) } }),
 		getAvailable: () => [codexModel],
 		getAll: () => [codexModel],
 		getProviderAuthStatus: () => ({ configured: true }),
 		getProviderDisplayName: (provider: string) => provider,
 	};
+}
+
+function normalizeTestToken(value: string): string {
+	return value.split(".").length === 3
+		? value
+		: codexAccessToken(value === "codex-token" ? "account-123" : value);
+}
+
+function codexAccessToken(accountId: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({
+			"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+		}),
+	).toString("base64url");
+	return `header.${payload}.signature`;
 }
 
 test("zero Codex reset availability is visible and cannot mutate", async (t) => {

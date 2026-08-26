@@ -12,7 +12,7 @@ import {
 const MAX_ACTIVE_JOBS = 8;
 const MAX_RETAINED_TERMINAL_JOBS = 32;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
-const COMPLETION_MESSAGE_TYPE = "pi-subagents-v2-completion";
+const COMPLETION_MESSAGE_TYPE = "pi-subagents-v3-completion";
 
 interface InternalJob extends JobSummary {
 	controller: AbortController;

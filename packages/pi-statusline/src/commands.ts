@@ -2,6 +2,7 @@ import {
 	DynamicBorder,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
+	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
@@ -11,6 +12,7 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { completeStatuslineArguments } from "./command-contract.js";
 import {
 	INFORMATION_PROFILE_NAMES,
@@ -480,7 +482,7 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
 			}
 
 			lines.push("");
-			const hints = segmentControlHints(safeWidth, moveMode, selected);
+			const hints = segmentControlHints(safeWidth, moveMode, selected, keybindings);
 			for (const hint of hints) {
 				lines.push(theme.fg("dim", truncateToWidth(`  ${hint}`, safeWidth)));
 			}
@@ -505,6 +507,10 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
 				updateThemedText();
 			},
 			handleInput(data: string) {
+				if (matchesKey(data, Key.ctrl("c"))) {
+					done(undefined);
+					return;
+				}
 				const moveModeKey = matchesKey(data, "m") || matchesKey(data, Key.shift("m"));
 				const lineBreakKey = matchesKey(data, "b") || matchesKey(data, Key.shift("b"));
 				if (matchesKey(data, Key.alt("up"))) {
@@ -656,19 +662,32 @@ function segmentControlHints(
 	width: number,
 	moveMode: boolean,
 	selected: SegmentName | undefined,
+	keybindings: Pick<KeybindingsManager, "getKeys">,
 ): string[] {
+	const configuredCancel = [
+		...new Set(
+			keybindings
+				.getKeys("tui.select.cancel")
+				.filter((key) => key !== "ctrl+c")
+				.map(displayKey)
+				.filter(Boolean),
+		),
+	];
+	const closeKeys = [...new Set([...configuredCancel, "Ctrl+C"])].join("/");
 	if (moveMode) {
+		const cancellation = [
+			...(configuredCancel.length > 0 ? [`${configuredCancel.join("/")} leave move mode`] : []),
+			"Ctrl+C close",
+		].join(" · ");
 		return width < 30
 			? [
 					`Move mode: ${selected ?? "segment"}`,
 					"↑↓ move segment",
 					"Enter/Space finish",
-					"Esc leave move mode",
+					...(configuredCancel.length > 0 ? [`${configuredCancel.join("/")} leave move mode`] : []),
+					"Ctrl+C close",
 				]
-			: [
-					`Move mode — ${selected ?? "segment"}`,
-					"↑↓ move · Enter/Space finish · Esc leave move mode",
-				];
+			: [`Move mode — ${selected ?? "segment"}`, "↑↓ move · Enter/Space finish", cancellation];
 	}
 	return width < 30
 		? [
@@ -676,12 +695,25 @@ function segmentControlHints(
 				"Enter/Space toggle",
 				"M move · B line break",
 				"Alt+↑/↓ quick move",
-				"Esc close",
+				`${closeKeys} close`,
 			]
 		: [
 				"↑↓ navigate · Enter/Space show/hide · M move mode",
-				"B add/remove line break after · Alt+↑/↓ quick move · Esc close",
+				`B add/remove line break after · Alt+↑/↓ quick move · ${closeKeys} close`,
 			];
+}
+
+function displayKey(key: string): string {
+	return sanitizeTerminalText(key)
+		.split("+")
+		.map((part) => {
+			if (part === "escape") return "Esc";
+			if (part === "ctrl") return "Ctrl";
+			if (part === "alt") return process.platform === "darwin" ? "Option" : "Alt";
+			if (part === "shift") return "Shift";
+			return part;
+		})
+		.join("+");
 }
 
 function segmentsDocument(
