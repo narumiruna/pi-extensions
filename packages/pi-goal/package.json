@@ -15,12 +15,16 @@
 	"files": [
 		"src",
 		"dist",
+		"skills",
 		"README.md",
 		"LICENSE"
 	],
 	"pi": {
 		"extensions": [
 			"./dist/index.ts"
+		],
+		"skills": [
+			"./skills"
 		]
 	},
 	"piExtension": {
