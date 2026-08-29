@@ -74,12 +74,15 @@ const MUTATING_COMMANDS = new Set([
 	"subl",
 ]);
 const READ_ONLY_POWERSHELL_COMMANDS = new Set([
+	"cd",
 	"format-list",
 	"format-table",
 	"get-childitem",
 	"get-content",
 	"get-item",
 	"get-location",
+	"get-process",
+	"get-service",
 	"measure-object",
 	"out-string",
 	"resolve-path",
@@ -90,7 +93,13 @@ const READ_ONLY_POWERSHELL_COMMANDS = new Set([
 ]);
 const READ_ONLY_COMMANDS = new Set([
 	"cat",
+	"cd",
 	"head",
+	"hostname",
+	"ipconfig",
+	"netstat",
+	"tasklist",
+	"where",
 	"tail",
 	"grep",
 	"find",
@@ -123,6 +132,7 @@ const READ_ONLY_COMMANDS = new Set([
 	"bat",
 	"eza",
 ]);
+const WMIC_BLOCKED_VERBS = new Set(["call", "create", "delete", "set"]);
 
 export function isBuiltinTool(tool: ToolInfo) {
 	return tool.sourceInfo.source === "builtin";
@@ -291,13 +301,17 @@ function powerShellWords(segment: string): string[] | undefined {
 function splitShellSegments(command: string): string[] | undefined {
 	const trimmed = command.trim();
 	if (!trimmed || /[\n\r`]/.test(trimmed)) return undefined;
+	// Tolerate pure stderr sinks so habitual `2>/dev/null` / `2>&1` suffixes don't trip the `<`/`>`/`&` guards below.
+	const scanned = trimmed
+		.replace(/2>&1(?!\d)/g, " ")
+		.replace(/2>>?\s*(?:\/dev\/null|\$null|\$\{null\})(?![\w/])/g, " ");
 
 	const segments: string[] = [];
 	let quote: "'" | '"' | undefined;
 	let escaped = false;
 	let start = 0;
-	for (let index = 0; index < trimmed.length; index += 1) {
-		const character = trimmed[index];
+	for (let index = 0; index < scanned.length; index += 1) {
+		const character = scanned[index];
 		if (escaped) {
 			escaped = false;
 			continue;
@@ -317,7 +331,7 @@ function splitShellSegments(command: string): string[] | undefined {
 		if (character === ">" || character === "<" || character === "(" || character === ")") {
 			return undefined;
 		}
-		const next = trimmed[index + 1];
+		const next = scanned[index + 1];
 		if (character === "&" && next !== "&") return undefined;
 		const separatorLength =
 			character === ";" || character === "|"
@@ -328,14 +342,14 @@ function splitShellSegments(command: string): string[] | undefined {
 					? 2
 					: 0;
 		if (separatorLength === 0) continue;
-		const segment = trimmed.slice(start, index).trim();
+		const segment = scanned.slice(start, index).trim();
 		if (!segment) return undefined;
 		segments.push(segment);
 		index += separatorLength - 1;
 		start = index + 1;
 	}
 	if (quote || escaped) return undefined;
-	const finalSegment = trimmed.slice(start).trim();
+	const finalSegment = scanned.slice(start).trim();
 	if (!finalSegment) return undefined;
 	segments.push(finalSegment);
 	return segments;
@@ -346,14 +360,20 @@ function isSafeSegment(
 	safeSubcommands: SafeSubcommands,
 	workingDirectory?: string,
 ) {
-	if (hasShellExpansion(segment) || /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) {
+	if (hasShellExpansion(segment)) {
 		return false;
 	}
 	const tokens = shellWords(segment);
 	if (!tokens || tokens.length === 0) return false;
-	const command = tokens[0]?.toLowerCase();
-	if (!command || MUTATING_COMMANDS.has(command)) return false;
-	const args = tokens.slice(1);
+	// Leading `VAR=value` prefixes only scope environment within the (already vetted) command.
+	let commandIndex = 0;
+	while (commandIndex < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[commandIndex])) {
+		commandIndex += 1;
+	}
+	const command = tokens[commandIndex]?.toLowerCase();
+	if (!command) return true;
+	if (MUTATING_COMMANDS.has(command)) return false;
+	const args = tokens.slice(commandIndex + 1);
 	if (!hasSafeArguments(command, args)) return false;
 	if (READ_ONLY_COMMANDS.has(command)) return true;
 	return isSafeStructuredCommand(command, args, safeSubcommands, workingDirectory);
@@ -362,7 +382,8 @@ function isSafeSegment(
 function hasShellExpansion(segment: string) {
 	let quote: "'" | '"' | undefined;
 	let escaped = false;
-	for (const character of segment) {
+	for (let index = 0; index < segment.length; index += 1) {
+		const character = segment[index];
 		if (escaped) {
 			escaped = false;
 			continue;
@@ -373,14 +394,16 @@ function hasShellExpansion(segment: string) {
 		}
 		if (quote) {
 			if (character === quote) quote = undefined;
-			else if (character === "$" && quote === '"') return true;
+			// "$VAR" / "${VAR}" inside double quotes is harmless; keep blocking command substitution.
+			else if (quote === '"' && character === "$" && segment[index + 1] === "(") return true;
 			continue;
 		}
 		if (character === "'" || character === '"') {
 			quote = character;
 			continue;
 		}
-		if (["$", "*", "?", "[", "{"].includes(character)) return true;
+		// Bare * ? [ ] globbing is read-only; keep blocking $ and { } (brace expansion can forge flags).
+		if (["$", "{", "}"].includes(character)) return true;
 	}
 	return false;
 }
@@ -575,6 +598,9 @@ function isSafeStructuredCommand(
 			return true;
 		}
 		return subcommand === "run" && ["test", "check", "typecheck", "lint"].includes(args[1] ?? "");
+	}
+	if (command === "wmic") {
+		return !args.some((argument) => WMIC_BLOCKED_VERBS.has(argument.toLowerCase()));
 	}
 	if (["cargo", "go", "pytest", "vitest", "jest"].includes(command)) {
 		return (

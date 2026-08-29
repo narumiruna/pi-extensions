@@ -53,7 +53,9 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
 			{
 				block: true,
 				reason:
-					"Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: gh pr list --json number",
+					"Plan mode bash policy (read-only inspection) blocked a segment: gh pr list --json number\n" +
+					"Allowed: read-only commands (cat, ls, grep, rg, find, jq, cd, tasklist, ...), git status/log/diff/show/branch, gh pr|issue view|list --json, npm list/ls/view/test, tsc --noEmit, pytest/vitest/jest; pipes, ; and && chains; stderr redirects 2>&1 and 2>/dev/null.\n" +
+					"Not allowed: output redirects (> >>), command substitution ($(...) or backticks), python/node -e, curl, mutating commands (rm, mv, cp, mkdir, tee, ...). Adjust the command; do not conclude bash is disabled.",
 			},
 		);
 	});
@@ -94,7 +96,7 @@ test("active Plan mode enforces limited policy for effective bash overrides", as
 		const blocked = await hook({ toolName: "bash", input: { command: heredoc } }, context.ctx);
 		assert.deepEqual(blocked, {
 			block: true,
-			reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${heredoc}`,
+			reason: `Plan mode bash policy (read-only inspection) blocked a segment: ${heredoc}\nAllowed: read-only commands (cat, ls, grep, rg, find, jq, cd, tasklist, ...), git status/log/diff/show/branch, gh pr|issue view|list --json, npm list/ls/view/test, tsc --noEmit, pytest/vitest/jest; pipes, ; and && chains; stderr redirects 2>&1 and 2>/dev/null.\nNot allowed: output redirects (> >>), command substitution ($(...) or backticks), python/node -e, curl, mutating commands (rm, mv, cp, mkdir, tee, ...). Adjust the command; do not conclude bash is disabled.`,
 		});
 		assert.equal(
 			await hook(
@@ -152,7 +154,8 @@ test("active Plan mode enforces limited policy for effective PowerShell override
 			{
 				block: true,
 				reason:
-					"Plan mode blocks PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax.\nBlocked command: Remove-Item README.md",
+					"Plan mode powershell policy (read-only inspection) blocked a segment: Remove-Item README.md\n" +
+					"Allowed: read-only cmdlets (Get-Content, Get-ChildItem, Select-String, Get-Process, Get-Service, cd, ...), git/gh/npm read-only forms. Not allowed: variables ($), expressions, redirects, mutating verbs. Adjust the command; do not conclude powershell is disabled.",
 			},
 		);
 	});

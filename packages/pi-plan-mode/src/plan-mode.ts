@@ -612,7 +612,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			if (blocked !== undefined) {
 				return {
 					block: true,
-					reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${blocked}`,
+					reason: `Plan mode bash policy (read-only inspection) blocked a segment: ${blocked}\nAllowed: read-only commands (cat, ls, grep, rg, find, jq, cd, tasklist, ...), git status/log/diff/show/branch, gh pr|issue view|list --json, npm list/ls/view/test, tsc --noEmit, pytest/vitest/jest; pipes, ; and && chains; stderr redirects 2>&1 and 2>/dev/null.\nNot allowed: output redirects (> >>), command substitution ($(...) or backticks), python/node -e, curl, mutating commands (rm, mv, cp, mkdir, tee, ...). Adjust the command; do not conclude bash is disabled.`,
 				};
 			}
 		}
@@ -625,7 +625,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			if (blocked !== undefined) {
 				return {
 					block: true,
-					reason: `Plan mode blocks PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax.\nBlocked command: ${blocked}`,
+					reason: `Plan mode powershell policy (read-only inspection) blocked a segment: ${blocked}\nAllowed: read-only cmdlets (Get-Content, Get-ChildItem, Select-String, Get-Process, Get-Service, cd, ...), git/gh/npm read-only forms. Not allowed: variables ($), expressions, redirects, mutating verbs. Adjust the command; do not conclude powershell is disabled.`,
 				};
 			}
 		}
@@ -1692,7 +1692,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	}
 
 	function formatToolSummary() {
-		const names = planModePolicyToolNames();
+		const names = planModePolicyToolNames().map((name) =>
+			name === "bash" || name === "powershell" ? `${name} (read-only inspection)` : name,
+		);
 		return `Plan policy allows: ${names.length > 0 ? names.join(", ") : "none"}. Model-visible tools stay unchanged.`;
 	}
 
