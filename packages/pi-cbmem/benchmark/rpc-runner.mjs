@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { StringDecoder } from "node:string_decoder";
 import {
 	buildPrompt,
+	CBMEM_MEASURED_TOOLS,
 	CBMEM_READ_ONLY_TOOLS,
 	READ_ONLY_TOOLS,
 	scoreTrial,
@@ -32,6 +33,7 @@ export async function runPiTrial({ arm, evidencePacket, options, repetition, sig
 			arm,
 			evidencePacket,
 			processStarted,
+			project: options.project,
 			rpc,
 			task,
 		});
@@ -56,7 +58,10 @@ export function buildPiArguments({ arm, cacheNonce, options, task }) {
 			? []
 			: arm === "baseline"
 				? READ_ONLY_TOOLS
-				: [...READ_ONLY_TOOLS, ...CBMEM_READ_ONLY_TOOLS];
+				: [
+						...READ_ONLY_TOOLS,
+						...(task.kind === "same-evidence" ? CBMEM_MEASURED_TOOLS : CBMEM_READ_ONLY_TOOLS),
+					];
 	const args = [
 		"--mode",
 		"rpc",
@@ -81,7 +86,7 @@ export function buildPiArguments({ arm, cacheNonce, options, task }) {
 	return args;
 }
 
-async function executeTrial({ arm, evidencePacket, processStarted, rpc, task }) {
+async function executeTrial({ arm, evidencePacket, processStarted, project, rpc, task }) {
 	await rpc.send({ type: "set_auto_compaction", enabled: false });
 	await rpc.send({ type: "set_auto_retry", enabled: false });
 	const commandsResponse = await rpc.send({ type: "get_commands" });
@@ -94,7 +99,7 @@ async function executeTrial({ arm, evidencePacket, processStarted, rpc, task }) 
 		throw new Error("treatment did not expose the codebase-memory package skill");
 	}
 
-	const prompt = buildPrompt({ arm, task, evidencePacket });
+	const prompt = buildPrompt({ arm, task, evidencePacket, project });
 	rpc.beginPrompt(task);
 	const promptStarted = performance.now();
 	const promptResponse = await rpc.send({ type: "prompt", message: prompt });
@@ -114,6 +119,7 @@ async function executeTrial({ arm, evidencePacket, processStarted, rpc, task }) 
 		toolCalls: captured.toolCalls,
 		toolResults: captured.toolResults,
 		evidencePacket,
+		project,
 	});
 	if (captured.extensionErrors.length > 0) {
 		score.success = false;

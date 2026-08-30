@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { prepareDaemon, prepareProjectDiscovery } from "./cbmem-preparation.mjs";
 import { parseArguments } from "./config.mjs";
 import {
 	BENCHMARK_ID,
@@ -23,7 +24,7 @@ import {
 } from "./index-preparation.mjs";
 import { buildPiArguments, runPiTrial } from "./rpc-runner.mjs";
 
-assert.equal(BENCHMARK_ID, "pi-cbmem-retrieval-comparison:v1");
+assert.equal(BENCHMARK_ID, "pi-cbmem-retrieval-comparison:v2");
 
 const projectPlaceholder = `$${"{project}"}`;
 const suiteInput = {
@@ -79,12 +80,29 @@ assert.deepEqual(
 );
 
 const packet = '{"value":"alpha"}';
-const baselinePrompt = buildPrompt({ arm: "baseline", task: exact, evidencePacket: packet });
+const baselinePrompt = buildPrompt({
+	arm: "baseline",
+	task: exact,
+	evidencePacket: packet,
+	project: "project-name",
+});
 assert.match(baselinePrompt, /Do not call tools/);
 assert.match(baselinePrompt, /alpha/);
-const cbmemPrompt = buildPrompt({ arm: "cbmem", task: exact, evidencePacket: packet });
+const cbmemPrompt = buildPrompt({
+	arm: "cbmem",
+	task: exact,
+	evidencePacket: packet,
+	project: "project-name",
+});
 assert.match(cbmemPrompt, /Call search_code exactly once/);
 assert.doesNotMatch(cbmemPrompt, /"value":"alpha"/);
+const sameEvidencePrompt = buildPrompt({
+	arm: "cbmem",
+	task: suite.tasks[1],
+	project: "project-name",
+});
+assert.match(sameEvidencePrompt, /Prepared Codebase Memory project: project-name/);
+assert.match(sameEvidencePrompt, /Do not call list_projects or index_status/);
 
 const responseText = '{"answers":{"value":"alpha"}}';
 const exactScore = scoreTrial({
@@ -126,6 +144,34 @@ assert.equal(
 		responseText: '{"answers":{"value":"beta"}}',
 		toolCalls: [],
 		toolResults: [],
+		project: "project-name",
+	}).success,
+	false,
+);
+const discoveredAgain = scoreTrial({
+	arm: "cbmem",
+	task: suite.tasks[1],
+	responseText: '{"answers":{"value":"beta"}}',
+	toolCalls: [
+		{ name: "list_projects", args: {} },
+		{ name: "search_code", args: { project: "project-name", pattern: "beta" } },
+	],
+	toolResults: [
+		{ name: "list_projects", text: "{}" },
+		{ name: "search_code", text: "beta" },
+	],
+	project: "project-name",
+});
+assert.equal(discoveredAgain.success, false);
+assert.match(discoveredAgain.errors.join("\n"), /repeated project discovery/);
+assert.equal(
+	scoreTrial({
+		arm: "cbmem",
+		task: suite.tasks[1],
+		responseText: '{"answers":{"value":"beta"}}',
+		toolCalls: [{ name: "search_code", args: { project: "wrong", pattern: "beta" } }],
+		toolResults: [{ name: "search_code", text: "beta" }],
+		project: "project-name",
 	}).success,
 	false,
 );
@@ -178,7 +224,7 @@ assert.deepEqual(treatmentArguments.slice(-2), ["-e", "npm:@narumitw/pi-cbmem"])
 assert.match(treatmentArguments[treatmentArguments.indexOf("--tools") + 1], /search_graph/);
 assert.doesNotMatch(
 	treatmentArguments[treatmentArguments.indexOf("--tools") + 1],
-	/delete_project/,
+	/delete_project|list_projects|index_status/,
 );
 
 const parsed = await parseArguments([
@@ -294,8 +340,96 @@ assert.throws(
 	/repository changed during full indexing/,
 );
 
+const daemonStatus = "daemon: active (permanent)\n  pid: 123\n  build: 0.10.8 (abc123)\n";
+const existingDaemonCalls = [];
+const existingDaemon = await prepareDaemon({
+	execute: async (args) => {
+		existingDaemonCalls.push(args.join(" "));
+		return args[1] === "start" ? "daemon: already active (permanent, pid 123)\n" : daemonStatus;
+	},
+});
+assert.equal(existingDaemon.provenance.startedByBenchmark, false);
+assert.equal(existingDaemon.provenance.pid, 123);
+assert.equal(await existingDaemon.verify(), true);
+await existingDaemon.dispose();
+assert.deepEqual(existingDaemonCalls, ["daemon start", "daemon status", "daemon status"]);
+
+const ownedDaemonCalls = [];
+const ownedDaemonController = new AbortController();
+const ownedDaemon = await prepareDaemon({
+	execute: async (args, signal) => {
+		ownedDaemonCalls.push({ command: args.join(" "), setupSignal: signal !== undefined });
+		if (args[1] === "start") return "daemon: started (permanent, pid 123)\n";
+		if (args[1] === "stop") return "daemon: stopped\n";
+		return daemonStatus;
+	},
+	signal: ownedDaemonController.signal,
+});
+assert.equal(ownedDaemon.provenance.startedByBenchmark, true);
+await ownedDaemon.dispose();
+await ownedDaemon.dispose();
+assert.deepEqual(ownedDaemonCalls, [
+	{ command: "daemon start", setupSignal: true },
+	{ command: "daemon status", setupSignal: true },
+	{ command: "daemon stop", setupSignal: false },
+]);
+
+let driftStatusCalls = 0;
+const driftingDaemon = await prepareDaemon({
+	execute: async (args) => {
+		if (args[1] === "start") return "daemon: already active (permanent, pid 123)\n";
+		driftStatusCalls += 1;
+		return driftStatusCalls === 1
+			? daemonStatus
+			: "daemon: active (permanent)\n  pid: 124\n  build: 0.10.8 (abc123)\n";
+	},
+});
+assert.equal(await driftingDaemon.verify(), false);
+await driftingDaemon.dispose();
+
+const failedDaemonCalls = [];
+await assert.rejects(
+	prepareDaemon({
+		execute: async (args) => {
+			failedDaemonCalls.push(args.join(" "));
+			if (args[1] === "start") return "daemon: started\n";
+			if (args[1] === "stop") return "daemon: stopped\n";
+			return "daemon: inactive\n";
+		},
+	}),
+	/not active after startup/,
+);
+assert.deepEqual(failedDaemonCalls, ["daemon start", "daemon status", "daemon stop"]);
+
 const rpcRoot = await mkdtemp(path.join(tmpdir(), "pi-cbmem-benchmark-rpc-"));
 try {
+	const discoveryCalls = [];
+	const discovery = await prepareProjectDiscovery({
+		callTool: async (_options, tool, args) => {
+			discoveryCalls.push({ tool, args });
+			if (tool === "list_projects") {
+				return JSON.stringify({
+					projects: [{ name: "project-name", root_path: rpcRoot }],
+				});
+			}
+			return '{"nodeLabels":[]}';
+		},
+		options: { ...options, project: "project-name", repo: rpcRoot },
+	});
+	assert.equal(discovery.project, "project-name");
+	assert.equal(discovery.rootPath, rpcRoot);
+	assert.deepEqual(discoveryCalls, [
+		{ tool: "list_projects", args: {} },
+		{ tool: "get_graph_schema", args: { project: "project-name" } },
+	]);
+	await assert.rejects(
+		prepareProjectDiscovery({
+			callTool: async () => '{"projects":[]}',
+			options: { ...options, project: "project-name", repo: rpcRoot },
+		}),
+		/did not discover project/,
+	);
+
 	const packageRoot = path.join(rpcRoot, "package");
 	const skillPath = path.join(packageRoot, "skills", "codebase-memory", "SKILL.md");
 	await mkdir(path.dirname(skillPath), { recursive: true });

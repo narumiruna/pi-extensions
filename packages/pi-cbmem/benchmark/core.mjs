@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
-export const BENCHMARK_ID = "pi-cbmem-retrieval-comparison:v1";
+export const BENCHMARK_ID = "pi-cbmem-retrieval-comparison:v2";
 export const ARMS = ["baseline", "cbmem"];
 export const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 export const CBMEM_TOOLS = [
@@ -21,8 +21,12 @@ export const CBMEM_TOOLS = [
 	"manage_adr",
 	"ingest_traces",
 ];
+export const CBMEM_DISCOVERY_TOOLS = ["list_projects", "index_status"];
 export const CBMEM_READ_ONLY_TOOLS = CBMEM_TOOLS.filter(
 	(name) => !["index_repository", "delete_project", "manage_adr", "ingest_traces"].includes(name),
+);
+export const CBMEM_MEASURED_TOOLS = CBMEM_READ_ONLY_TOOLS.filter(
+	(name) => !CBMEM_DISCOVERY_TOOLS.includes(name),
 );
 
 const TASK_FIELDS = new Set(["id", "kind", "question", "facts", "exactTool"]);
@@ -88,7 +92,7 @@ export function createSchedule(tasks, runs) {
 	return schedule;
 }
 
-export function buildPrompt({ arm, task, evidencePacket }) {
+export function buildPrompt({ arm, task, evidencePacket, project }) {
 	const factIds = task.facts.map((fact) => fact.id);
 	const schema = JSON.stringify({ answers: Object.fromEntries(factIds.map((id) => [id, "..."])) });
 	const lines = [
@@ -99,6 +103,12 @@ export function buildPrompt({ arm, task, evidencePacket }) {
 		"Do not include Markdown, commentary, or additional keys.",
 		`Question: ${task.question}`,
 	];
+	if (task.kind === "same-evidence") {
+		lines.push(
+			`Prepared Codebase Memory project: ${project}.`,
+			"Project discovery and daemon warmup are complete outside this measured trial.",
+		);
+	}
 
 	if (task.kind === "exact-payload" && arm === "baseline") {
 		lines.push("Do not call tools. Use only this evidence packet:", evidencePacket ?? "");
@@ -113,13 +123,23 @@ export function buildPrompt({ arm, task, evidencePacket }) {
 	} else {
 		lines.push(
 			"Use at least one Codebase Memory tool to acquire evidence.",
+			`Use project ${project} in every project-scoped Codebase Memory call.`,
+			"Do not call list_projects or index_status; setup already completed project discovery.",
 			"Target source verification with read-only Pi tools is allowed when needed.",
 		);
 	}
 	return lines.join("\n");
 }
 
-export function scoreTrial({ arm, task, responseText, toolCalls, toolResults, evidencePacket }) {
+export function scoreTrial({
+	arm,
+	task,
+	responseText,
+	toolCalls,
+	toolResults,
+	evidencePacket,
+	project,
+}) {
 	const errors = [];
 	let parsed;
 	try {
@@ -144,6 +164,7 @@ export function scoreTrial({ arm, task, responseText, toolCalls, toolResults, ev
 	});
 
 	const cbmemCalls = toolCalls.filter((call) => CBMEM_TOOLS.includes(call.name));
+	const discoveryCalls = toolCalls.filter((call) => CBMEM_DISCOVERY_TOOLS.includes(call.name));
 	const successfulCbmemResults = toolResults.filter(
 		(result) => CBMEM_TOOLS.includes(result.name) && result.isError !== true,
 	);
@@ -156,6 +177,16 @@ export function scoreTrial({ arm, task, responseText, toolCalls, toolResults, ev
 	}
 	if (task.kind === "same-evidence" && arm === "cbmem" && successfulCbmemResults.length === 0) {
 		errors.push("cbmem arm had no successful cbmem tool result");
+	}
+	if (task.kind === "same-evidence" && arm === "cbmem" && discoveryCalls.length > 0) {
+		errors.push("measured cbmem arm repeated project discovery");
+	}
+	if (
+		task.kind === "same-evidence" &&
+		arm === "cbmem" &&
+		cbmemCalls.some((call) => call.name !== "list_projects" && call.args?.project !== project)
+	) {
+		errors.push("measured cbmem arm used an unexpected project");
 	}
 	let exactPayload;
 	if (task.kind === "exact-payload" && arm === "cbmem") {

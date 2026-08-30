@@ -19,12 +19,14 @@ The treatment is derived from:
 pi -ne -e npm:@narumitw/pi-cbmem
 ```
 
-The runner adds RPC mode, an ephemeral session, fixed model and thinking settings, disabled automatic retry and compaction, no discovered skills, prompts, themes, context files, or project resources, and a read-only tool allowlist.
+The runner adds RPC mode, an ephemeral model session, fixed model and thinking settings, disabled automatic retry and compaction, no discovered skills, prompts, themes, context files, or project resources, and a read-only tool allowlist.
 Explicit resources from the treatment package still load even though ordinary discovery is disabled.
+The runner keeps one warmed Codebase Memory daemon across all trials and supplies the project discovered during unmeasured setup to every same-evidence prompt.
 
 The baseline can use `read`, `grep`, `find`, and `ls` for same-evidence tasks.
 The treatment can use those tools plus the non-mutating pi-cbmem tools.
 Indexing, project deletion, ADR replacement, and trace ingestion are excluded from the active treatment tools.
+Same-evidence trials also exclude `list_projects` and `index_status` from the active tool set because discovery completed during setup.
 
 ## Studies
 
@@ -43,6 +45,9 @@ It does not claim that the full provider payload is identical between arms.
 Both arms inspect the same repository path and answer the same hidden exact-fact keys.
 The baseline must not call a Codebase Memory tool.
 The treatment must call at least one Codebase Memory tool and may use read-only Pi tools for source verification.
+The measured treatment tool set does not expose `list_projects` or `index_status` because project discovery already completed during setup.
+Any captured discovery call still fails the run as a protocol violation.
+Every project-scoped treatment call must use the prepared project name.
 A run succeeds only when every expected fact matches and its method policy is satisfied.
 
 This study measures whether graph retrieval can avoid irrelevant source context while preserving required-fact accuracy.
@@ -83,7 +88,7 @@ The runner requires the build response to report `status: "indexed"`, the reques
 Files deliberately excluded by Git ignore rules, `.cbmignore`, or Codebase Memory skip lists remain valid for a full-mode build, and their count is recorded as `notIndexedFiles`.
 It then requires `index_status` to report `ready`, the requested project, and a canonical root matching `--repo`.
 A `check_index_coverage` preflight independently requires metadata for a complete, hash-recorded `full` generation.
-Measured trial latency starts only after these checks finish.
+Measured trial latency starts only after index, daemon, discovery, and warmup checks finish.
 
 The result records full-index wall time, mode, persistence policy, generation, node and edge totals, parse-partial count, and response hashes.
 A parse-partial file was indexed with parser recovery and remains a best-effort coverage warning rather than a skipped file.
@@ -92,6 +97,20 @@ Codebase Memory cannot guarantee that every language construct was understood ev
 The runner captures the Git commit and status before indexing and rejects any source-tree change during the build.
 It rechecks the Git commit, Git status, index-status hash, and coverage-generation hash after the final trial and labels detected changes as `runtime-drift`.
 It also requires `--cbmem-bin` to resolve to the `~/.local/bin/codebase-memory-mcp` executable that the npm extension invokes.
+
+## Daemon and project discovery
+
+Before indexing, the runner calls `codebase-memory-mcp daemon start` and requires `daemon status` to report an active PID and build.
+An already active daemon remains owned by the user and is never stopped by the benchmark.
+A daemon started by the benchmark is stopped during normal completion, cancellation, setup failure, or shutdown cleanup.
+The runner verifies that the same daemon PID and build remain active after the final measured trial.
+
+After full indexing, the runner calls `list_projects` exactly once outside measured trials and verifies the requested project and canonical repository root.
+It then calls `get_graph_schema` once to load the prepared graph through the warmed daemon.
+The result records daemon ownership, PID, build, setup time, discovered project, root, warmup tool, byte count, and response hashes.
+
+Each measured trial still uses a fresh Pi process to isolate model history and provider usage.
+The measured prompt supplies the discovered project directly, so a fresh model session does not repeat Codebase Memory project discovery.
 
 ## Live run
 
@@ -117,6 +136,8 @@ Pi catalog cost is an estimate and can remain zero for subscription-backed provi
 
 ## Cache regimes
 
+The Codebase Memory daemon is warmed before every live benchmark regardless of `--cache-mode`.
+The `--cache-mode` option controls only provider prompt-cache eligibility.
 `--cache-mode warm` keeps the benchmark system prefix stable across repetitions.
 `--cache-mode cold` adds a deterministic per-task and repetition nonce to the system prompt.
 The paired baseline and treatment receive the same nonce.
@@ -179,7 +200,7 @@ Do not use tasks whose expected values can be inferred from their ids alone.
 
 ## Interpretation
 
-Treat results as diagnostic unless the suite, model, package version, Codebase Memory binary, repository commit, index, run count, cache regime, and execution protocol were locked before inspecting outcomes.
+Treat results as diagnostic unless the suite, model, package version, Codebase Memory binary, daemon PID, discovered project, repository commit, index, run count, provider cache regime, and execution protocol were locked before inspecting outcomes.
 
 A practical adoption threshold can require all of the following:
 
@@ -199,13 +220,15 @@ The runner does not store raw assistant responses or raw tool results in the rep
 It stores hashes, byte counts, exact grader values, tool names, tool arguments, usage, timing, and package provenance.
 
 The runner replaces the named local Codebase Memory index before provider-backed trials.
+It preserves an already running daemon and stops only a daemon that it started.
 The runner uses `--no-session` and closes every RPC process after `agent_settled` or failure.
 SIGINT, SIGTERM, and operation deadlines terminate the active subprocess.
 The npm source is resolved by Pi using its normal temporary package behavior.
 
 ## Limits
 
-- Hosted model behavior, provider load, and caching remain nondeterministic.
+- Hosted model behavior, provider load, and provider caching remain nondeterministic.
+- Fresh Pi processes isolate trial history even though they share one warmed Codebase Memory daemon and prepared project name.
 - The default suite is small and repository-specific.
 - Exact string grading can reject semantically equivalent wording by design.
 - Tool-result literal detection is a timing proxy and does not prove when the model internally recognized a fact.

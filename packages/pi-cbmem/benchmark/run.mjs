@@ -6,6 +6,7 @@ import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promis
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { prepareDaemon, prepareProjectDiscovery } from "./cbmem-preparation.mjs";
 import { parseArguments, printHelp } from "./config.mjs";
 import {
 	BENCHMARK_ID,
@@ -56,6 +57,7 @@ function createDryRun(options) {
 		),
 		commandShapes: commandShapes(options, tasks),
 		liveRequirements: [
+			"Permission to start and, when benchmark-owned, stop the Codebase Memory daemon.",
 			"Permission to fully rebuild the named Codebase Memory project for --repo.",
 			"A fixed --model and explicit --max-cost-usd guard.",
 			"Provider credentials available to the selected Pi installation.",
@@ -71,8 +73,16 @@ async function runLive(options) {
 	const trials = [];
 	let status = "completed";
 	let failure;
+	let daemonHandle;
 	try {
 		const binaryPath = await resolveCbmemBinary(options);
+		daemonHandle = await prepareDaemon({
+			execute: (args, signal) => runDaemonCommand(options, args, signal),
+			signal: controller.signal,
+		});
+		process.stderr.write(
+			`Using Codebase Memory daemon PID ${daemonHandle.provenance.pid} before measured trials\n`,
+		);
 		const repositoryBeforeIndex = await collectRepositoryState(options, controller.signal);
 		process.stderr.write("Preparing a fresh full Codebase Memory index before measured trials\n");
 		const indexPreparation = await prepareFullIndex({
@@ -80,8 +90,19 @@ async function runLive(options) {
 			options,
 			signal: controller.signal,
 		});
+		const projectDiscovery = await prepareProjectDiscovery({
+			callTool: callCbmem,
+			options,
+			signal: controller.signal,
+		});
 		const provenance = await collectProvenance(options, binaryPath, controller.signal);
-		assertRepositoryStable(repositoryBeforeIndex, provenance.repository, "during full indexing");
+		assertRepositoryStable(
+			repositoryBeforeIndex,
+			provenance.repository,
+			"during unmeasured cbmem setup",
+		);
+		provenance.daemon = daemonHandle.provenance;
+		provenance.projectDiscovery = projectDiscovery;
 		provenance.index.preparation = indexPreparation;
 		const tasks = options.suite.tasks.map((task) => materializeTask(task, options.project));
 		const exactPayloads = await captureExactPayloads(options, tasks, controller.signal);
@@ -129,6 +150,8 @@ async function runLive(options) {
 		}
 		try {
 			provenance.runtimeDrift = await checkRuntimeDrift(options, provenance, controller.signal);
+			provenance.runtimeDrift.checks.daemon = await daemonHandle.verify(controller.signal);
+			provenance.runtimeDrift.detected ||= !provenance.runtimeDrift.checks.daemon;
 			provenance.treatmentPackages = treatmentPackageVariants(trials);
 			provenance.runtimeDrift.checks.treatmentPackage = provenance.treatmentPackages.length <= 1;
 			provenance.runtimeDrift.detected ||= provenance.treatmentPackages.length > 1;
@@ -147,8 +170,12 @@ async function runLive(options) {
 			trials,
 		});
 	} finally {
-		process.off("SIGINT", cancel);
-		process.off("SIGTERM", cancel);
+		try {
+			await daemonHandle?.dispose();
+		} finally {
+			process.off("SIGINT", cancel);
+			process.off("SIGTERM", cancel);
+		}
 	}
 }
 
@@ -180,6 +207,8 @@ function createLiveResult({ exactPayloads, failure, options, provenance, status,
 				"All provider-reported tokens spent by an arm divided by that arm's successful runs.",
 			latency:
 				"processWallMs includes Pi startup and temporary npm package resolution; agentWallMs begins immediately before the RPC prompt command.",
+			cbmemSetup:
+				"Daemon startup, full indexing, project discovery, and graph warmup complete before measured trial latency.",
 		},
 	};
 }
@@ -292,6 +321,15 @@ async function captureExactPayloads(options, tasks, signal) {
 	return packets;
 }
 
+async function runDaemonCommand(options, args, signal) {
+	return await runText(options.cbmemBin, args, {
+		cwd: options.repo,
+		env: { ...process.env, CBM_LOG_LEVEL: "error" },
+		signal,
+		timeoutMs: options.timeoutMs,
+	});
+}
+
 async function callCbmem(options, tool, args, signal) {
 	const result = await runProcess(options.cbmemBin, ["cli", tool], {
 		cwd: options.repo,
@@ -337,6 +375,11 @@ function publicConfig(options) {
 		measuredTrialsReadOnly: true,
 		timeoutMs: options.timeoutMs,
 		maxEstimatedCostUsd: options.maxCostUsd,
+		cbmemPreparation: {
+			daemon: "required-warm",
+			projectDiscovery: "unmeasured-once",
+			measuredDiscoveryCalls: "forbidden",
+		},
 		indexPreparation: {
 			mode: "full",
 			persistence: false,
