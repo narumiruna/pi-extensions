@@ -1,0 +1,58 @@
+{
+	"schemaVersion": 1,
+	"id": "pi-cbmem-repository-facts:v1",
+	"description": "Fact-recovery tasks about the pi-cbmem implementation in this repository.",
+	"tasks": [
+		{
+			"id": "exact-cli-bridge",
+			"kind": "exact-payload",
+			"question": "From the supplied evidence, report the bridge executable as a home-relative path and the CBM_LOG_LEVEL value.",
+			"facts": [
+				{ "id": "executable", "expected": "~/.local/bin/codebase-memory-mcp" },
+				{ "id": "log_level", "expected": "error" }
+			],
+			"exactTool": {
+				"name": "search_code",
+				"args": {
+					"project": "${project}",
+					"pattern": "const BIN|CBM_LOG_LEVEL",
+					"path_filter": "packages/pi-cbmem/src/cbmem.ts",
+					"mode": "full",
+					"context": 4,
+					"regex": true,
+					"limit": 20
+				}
+			}
+		},
+		{
+			"id": "destructive-confirmation",
+			"kind": "same-evidence",
+			"question": "Inspect pi-cbmem and identify both destructive operations that require confirmation and the two Pi modes where confirmation is allowed. Normalize the operation answers as tool or tool:mode and modes as a comma-separated list in source order.",
+			"facts": [
+				{ "id": "delete_operation", "expected": "delete_project" },
+				{ "id": "adr_operation", "expected": "manage_adr:update" },
+				{ "id": "allowed_modes", "expected": "tui,rpc" }
+			]
+		},
+		{
+			"id": "output-contract",
+			"kind": "same-evidence",
+			"question": "Inspect pi-cbmem and report its maximum output lines, maximum output size label, and which complete JSON response is selected from noisy stdout. Return the JSON selection rule as last_complete_json.",
+			"facts": [
+				{ "id": "max_lines", "expected": "2000" },
+				{ "id": "max_size", "expected": "50KB" },
+				{ "id": "json_selection", "expected": "last_complete_json" }
+			]
+		},
+		{
+			"id": "cancellation-contract",
+			"kind": "same-evidence",
+			"question": "Inspect pi-cbmem and report the first cancellation signal, fallback signal, and force-kill delay in milliseconds.",
+			"facts": [
+				{ "id": "first_signal", "expected": "SIGTERM" },
+				{ "id": "fallback_signal", "expected": "SIGKILL" },
+				{ "id": "force_kill_delay_ms", "expected": "250" }
+			]
+		}
+	]
+}

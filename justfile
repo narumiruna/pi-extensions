@@ -87,6 +87,10 @@ smoke-chat-network:
 benchmark-codex-compact *args:
     node packages/pi-codex-compact/benchmark/run.mjs {{ args }}
 
+# Preview or explicitly run the pi-cbmem retrieval benchmark
+benchmark-cbmem *args:
+    node packages/pi-cbmem/benchmark/run.mjs {{ args }}
+
 # Install dependencies, build local package artifacts, and start every local extension package
 # pi-statusline and pi-tui-kit are intentionally excluded from Pi extension loading
 # PI_TIMING reports startup timing and PI_CODING_AGENT_DIR isolates local development state
