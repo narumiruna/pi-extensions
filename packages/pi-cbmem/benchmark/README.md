@@ -73,29 +73,25 @@ node packages/pi-cbmem/benchmark/self-test.mjs
 
 The benchmark self-test remains outside normal CI because this is a manual measurement workflow.
 
-## Index prerequisite
+## Automatic full-index preparation
 
-Create or refresh a Codebase Memory index for the exact repository path before a live run.
-The runner does not mutate the index.
+Every live run rebuilds the named Codebase Memory project before any measured trial.
+The runner invokes `index_repository` with the exact `--repo`, `--project`, `mode: "full"`, and `persistence: false`.
+Disabling repository artifact persistence keeps `.codebase-memory` output from changing the source tree; it does not skip index construction.
 
-For example:
+The runner requires the build response to report `status: "indexed"`, the requested project, complete expected node and edge totals, and zero skipped files.
+Files deliberately excluded by Git ignore rules, `.cbmignore`, or Codebase Memory skip lists remain valid for a full-mode build, and their count is recorded as `notIndexedFiles`.
+It then requires `index_status` to report `ready`, the requested project, and a canonical root matching `--repo`.
+A `check_index_coverage` preflight independently requires metadata for a complete, hash-recorded `full` generation.
+Measured trial latency starts only after these checks finish.
 
-```bash
-printf '%s\n' "$(jq -nc --arg path "$PWD" '{repo_path:$path,mode:"full",persistence:true}')" \
-  | ~/.local/bin/codebase-memory-mcp cli index_repository
-```
+The result records full-index wall time, mode, persistence policy, generation, node and edge totals, parse-partial count, and response hashes.
+A parse-partial file was indexed with parser recovery and remains a best-effort coverage warning rather than a skipped file.
+Codebase Memory cannot guarantee that every language construct was understood even after a successful full build, so inspect `parsePartialFiles` when interpreting results.
 
-List the resulting exact project name with:
-
-```bash
-printf '{}\n' | ~/.local/bin/codebase-memory-mcp cli list_projects
-```
-
-A live preflight rejects an index whose status is not `ready` or whose canonical root differs from `--repo`.
+The runner captures the Git commit and status before indexing and rejects any source-tree change during the build.
+It rechecks the Git commit, Git status, index-status hash, and coverage-generation hash after the final trial and labels detected changes as `runtime-drift`.
 It also requires `--cbmem-bin` to resolve to the `~/.local/bin/codebase-memory-mcp` executable that the npm extension invokes.
-The result records index status, root, node and edge counts, and a status-response hash.
-The runner rechecks the Git commit, Git status, and index-status hash after the final trial and labels detected changes as `runtime-drift`.
-The benchmark cannot prove index freshness from `index_status` alone, so an already stale graph can still cause treatment failures.
 
 ## Live run
 
@@ -105,7 +101,7 @@ Live execution requires explicit model, project, and estimated-cost guard option
 just benchmark-cbmem \
   --live \
   --model <provider/model> \
-  --project <exact-indexed-project> \
+  --project <project-to-rebuild> \
   --runs 5 \
   --max-cost-usd <approved-amount> \
   --output packages/pi-cbmem/benchmark/results/<result>.json
@@ -169,19 +165,6 @@ all provider tokens spent by an arm / successful runs in that arm
 The report also preserves successful-run medians, median absolute deviations, P95 values, failure counts, exact fact scores, tool names, result hashes, and package version provenance.
 Do not discard failed runs when interpreting token efficiency.
 
-## Indexing amortization
-
-Index creation is outside measured trial latency.
-Supply a separately measured indexing duration and expected reuse count when amortized treatment latency matters:
-
-```bash
-just benchmark-cbmem \
-  --indexing-ms <milliseconds> \
-  --index-reuse-count <expected-tasks-sharing-index>
-```
-
-The report adds `indexingMs / indexReuseCount` to the successful treatment median process time.
-
 ## Suite format
 
 The default suite is [`suites/pi-extensions.json`](./suites/pi-extensions.json).
@@ -204,7 +187,7 @@ A practical adoption threshold can require all of the following:
 - Median provider tokens per successful run fall by at least 15%.
 - Median agent wall time per successful run falls by at least 10%.
 - P95 agent wall time does not develop an unacceptable tail.
-- Amortized indexing cost remains acceptable for the expected reuse count.
+- The separately reported full-index preparation time remains acceptable for the expected reuse pattern.
 
 Exact-payload treatment is expected to use more tokens and time because it adds tool definitions, a tool-call turn, a tool-result envelope, and a local subprocess.
 Same-evidence treatment can win only when more selective retrieval offsets that fixed overhead.
@@ -215,8 +198,9 @@ Live trials send prompts and retrieved repository content to the selected model 
 The runner does not store raw assistant responses or raw tool results in the report.
 It stores hashes, byte counts, exact grader values, tool names, tool arguments, usage, timing, and package provenance.
 
+The runner replaces the named local Codebase Memory index before provider-backed trials.
 The runner uses `--no-session` and closes every RPC process after `agent_settled` or failure.
-SIGINT, SIGTERM, and per-trial deadlines terminate the active subprocess.
+SIGINT, SIGTERM, and operation deadlines terminate the active subprocess.
 The npm source is resolved by Pi using its normal temporary package behavior.
 
 ## Limits
@@ -226,4 +210,5 @@ The npm source is resolved by Pi using its normal temporary package behavior.
 - Exact string grading can reject semantically equivalent wording by design.
 - Tool-result literal detection is a timing proxy and does not prove when the model internally recognized a fact.
 - Summed tool duration can overlap when tools execute in parallel.
+- Full indexing honors configured ignore rules and remains best-effort for parser-recovery files even when the build completes successfully.
 - The benchmark does not measure code-edit correctness, test execution, or long-session memory behavior.

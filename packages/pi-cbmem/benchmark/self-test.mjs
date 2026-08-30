@@ -16,6 +16,11 @@ import {
 	summarizeTrials,
 	validateSuite,
 } from "./core.mjs";
+import {
+	assertRepositoryStable,
+	prepareFullIndex,
+	validateFullIndexMetadata,
+} from "./index-preparation.mjs";
 import { buildPiArguments, runPiTrial } from "./rpc-runner.mjs";
 
 assert.equal(BENCHMARK_ID, "pi-cbmem-retrieval-comparison:v1");
@@ -184,7 +189,102 @@ assert.equal(
 	true,
 );
 await assert.rejects(parseArguments(["--live"]), /requires --model/);
-await assert.rejects(parseArguments(["--indexing-ms", "10"]), /must be supplied together/);
+await assert.rejects(parseArguments(["--indexing-ms", "10"]), /unknown argument/);
+
+const fullIndexCalls = [];
+const fullIndexPacket = JSON.stringify({
+	project: "project-name",
+	status: "indexed",
+	nodes: 20,
+	edges: 30,
+	expected_nodes: 20,
+	expected_edges: 30,
+	skipped_count: 0,
+	not_indexed_files_count: 17,
+	parse_partial_count: 1,
+});
+const fullIndex = await prepareFullIndex({
+	callTool: async (...args) => {
+		fullIndexCalls.push(args);
+		return fullIndexPacket;
+	},
+	options: { ...options, project: "project-name" },
+	signal: undefined,
+});
+assert.deepEqual(fullIndexCalls[0].slice(1, 3), [
+	"index_repository",
+	{
+		repo_path: "/repo",
+		mode: "full",
+		name: "project-name",
+		persistence: false,
+	},
+]);
+assert.equal(fullIndex.status, "indexed");
+assert.equal(fullIndex.notIndexedFiles, 17);
+assert.equal(fullIndex.parsePartialFiles, 1);
+assert.equal(fullIndex.responseSha256.length, 64);
+const coverageMetadata = validateFullIndexMetadata(
+	JSON.stringify({
+		project: "project-name",
+		indexed_at: "2026-08-30T00:00:00Z",
+		metadata: {
+			generation: "2026-08-30T00:00:00Z",
+			index_mode: "full",
+			recording_status: "complete",
+			generation_matches: true,
+			hash_records_complete: true,
+		},
+	}),
+	"project-name",
+);
+assert.equal(coverageMetadata.indexMode, "full");
+assert.equal(coverageMetadata.responseSha256.length, 64);
+assert.throws(
+	() =>
+		validateFullIndexMetadata(
+			JSON.stringify({
+				project: "project-name",
+				indexed_at: "2026-08-30T00:00:00Z",
+				metadata: {
+					generation: "2026-08-30T00:00:00Z",
+					index_mode: "fast",
+					recording_status: "complete",
+					generation_matches: true,
+					hash_records_complete: true,
+				},
+			}),
+			"project-name",
+		),
+	/does not confirm a complete full-index generation/,
+);
+await assert.rejects(
+	prepareFullIndex({
+		callTool: async () =>
+			JSON.stringify({
+				...JSON.parse(fullIndexPacket),
+				skipped_count: 1,
+			}),
+		options: { ...options, project: "project-name" },
+	}),
+	/skipped 1 files/,
+);
+assert.doesNotThrow(() =>
+	assertRepositoryStable(
+		{ gitCommit: "abc", statusSha256: "clean" },
+		{ gitCommit: "abc", statusSha256: "clean" },
+		"during full indexing",
+	),
+);
+assert.throws(
+	() =>
+		assertRepositoryStable(
+			{ gitCommit: "abc", statusSha256: "clean" },
+			{ gitCommit: "def", statusSha256: "clean" },
+			"during full indexing",
+		),
+	/repository changed during full indexing/,
+);
 
 const rpcRoot = await mkdtemp(path.join(tmpdir(), "pi-cbmem-benchmark-rpc-"));
 try {

@@ -18,8 +18,6 @@ export async function parseArguments(args) {
 			path.join(process.env.HOME ?? "", ".local", "bin", "codebase-memory-mcp"),
 		extension: "npm:@narumitw/pi-cbmem",
 		help: false,
-		indexingMs: undefined,
-		indexReuseCount: undefined,
 		kind: "all",
 		live: false,
 		maxCostUsd: undefined,
@@ -44,10 +42,6 @@ export async function parseArguments(args) {
 			options.cbmemBin = requireValue(args, ++index, argument);
 		} else if (argument === "--extension") {
 			options.extension = requireValue(args, ++index, argument);
-		} else if (argument === "--indexing-ms") {
-			options.indexingMs = nonNegativeNumber(requireValue(args, ++index, argument), argument);
-		} else if (argument === "--index-reuse-count") {
-			options.indexReuseCount = positiveInteger(requireValue(args, ++index, argument), argument);
 		} else if (argument === "--kind") {
 			options.kind = enumValue(args, ++index, argument, ["all", "exact-payload", "same-evidence"]);
 		} else if (argument === "--max-cost-usd") {
@@ -85,12 +79,9 @@ export async function parseArguments(args) {
 		tasks: suite.tasks.filter((task) => options.kind === "all" || task.kind === options.kind),
 	};
 	if (options.suite.tasks.length === 0) throw new Error("the selected suite has no matching tasks");
-	if ((options.indexingMs === undefined) !== (options.indexReuseCount === undefined)) {
-		throw new Error("--indexing-ms and --index-reuse-count must be supplied together");
-	}
 	if (options.live) {
 		if (!options.model) throw new Error("--live requires --model <provider/model>");
-		if (!options.project) throw new Error("--live requires --project <indexed-project>");
+		if (!options.project) throw new Error("--live requires --project <project-name>");
 		if (options.maxCostUsd === undefined) {
 			throw new Error("--live requires --max-cost-usd <amount>");
 		}
@@ -103,20 +94,18 @@ export function printHelp() {
 	process.stdout.write("Without --live, the command makes no provider request.\n\n");
 	process.stdout.write("  --live                    Execute paired Pi subprocess trials.\n");
 	process.stdout.write("  --model <provider/model>  Fixed model for both arms.\n");
-	process.stdout.write("  --project <name>          Exact indexed Codebase Memory project name.\n");
+	process.stdout.write("  --project <name>          Project name to fully rebuild and query.\n");
 	process.stdout.write("  --repo <path>             Repository visible to both arms.\n");
 	process.stdout.write("  --suite <path>            Versioned benchmark suite JSON.\n");
 	process.stdout.write("  --kind <kind>             all, exact-payload, or same-evidence.\n");
 	process.stdout.write("  --runs <count>            Trials per task and arm (default: 1).\n");
-	process.stdout.write("  --indexing-ms <ms>        Optional one-time indexing duration.\n");
-	process.stdout.write("  --index-reuse-count <n>   Tasks expected to share that index.\n");
 	process.stdout.write("  --cache-mode <mode>       warm or cold (default: warm).\n");
 	process.stdout.write("  --thinking <level>        Fixed Pi thinking level (default: off).\n");
 	process.stdout.write(
 		"  --extension <source>      Treatment source (default: npm:@narumitw/pi-cbmem).\n",
 	);
 	process.stdout.write("  --max-cost-usd <amount>   Between-trial Pi-catalog cost guard.\n");
-	process.stdout.write("  --timeout-ms <ms>         Per-trial deadline.\n");
+	process.stdout.write("  --timeout-ms <ms>         Index, tool, and trial deadline.\n");
 	process.stdout.write("  --output <path>           Atomically write the JSON result.\n");
 	process.stdout.write("  --pi <path>               Pi executable (default: pi).\n");
 	process.stdout.write("  --cbmem-bin <path>        Codebase Memory CLI path.\n");
@@ -133,14 +122,6 @@ function positiveInteger(value, option) {
 	const number = Number(value);
 	if (!Number.isSafeInteger(number) || number <= 0) {
 		throw new Error(`${option} must be a positive integer`);
-	}
-	return number;
-}
-
-function nonNegativeNumber(value, option) {
-	const number = Number(value);
-	if (!Number.isFinite(number) || number < 0) {
-		throw new Error(`${option} must be a non-negative number`);
 	}
 	return number;
 }

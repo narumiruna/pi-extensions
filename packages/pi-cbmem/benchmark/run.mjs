@@ -15,6 +15,11 @@ import {
 	sha256,
 	summarizeTrials,
 } from "./core.mjs";
+import {
+	assertRepositoryStable,
+	prepareFullIndex,
+	validateFullIndexMetadata,
+} from "./index-preparation.mjs";
 import { buildPiArguments, runPiTrial } from "./rpc-runner.mjs";
 
 try {
@@ -32,7 +37,7 @@ try {
 
 function createDryRun(options) {
 	const tasks = options.suite.tasks.map((task) =>
-		materializeTask(task, options.project ?? "<indexed-project>"),
+		materializeTask(task, options.project ?? "<project-to-rebuild>"),
 	);
 	const schedule = createSchedule(tasks, options.runs);
 	return {
@@ -51,7 +56,7 @@ function createDryRun(options) {
 		),
 		commandShapes: commandShapes(options, tasks),
 		liveRequirements: [
-			"A prepared Codebase Memory index whose root exactly matches --repo.",
+			"Permission to fully rebuild the named Codebase Memory project for --repo.",
 			"A fixed --model and explicit --max-cost-usd guard.",
 			"Provider credentials available to the selected Pi installation.",
 		],
@@ -67,7 +72,17 @@ async function runLive(options) {
 	let status = "completed";
 	let failure;
 	try {
-		const provenance = await collectProvenance(options, controller.signal);
+		const binaryPath = await resolveCbmemBinary(options);
+		const repositoryBeforeIndex = await collectRepositoryState(options, controller.signal);
+		process.stderr.write("Preparing a fresh full Codebase Memory index before measured trials\n");
+		const indexPreparation = await prepareFullIndex({
+			callTool: callCbmem,
+			options,
+			signal: controller.signal,
+		});
+		const provenance = await collectProvenance(options, binaryPath, controller.signal);
+		assertRepositoryStable(repositoryBeforeIndex, provenance.repository, "during full indexing");
+		provenance.index.preparation = indexPreparation;
 		const tasks = options.suite.tasks.map((task) => materializeTask(task, options.project));
 		const exactPayloads = await captureExactPayloads(options, tasks, controller.signal);
 		const schedule = createSchedule(tasks, options.runs);
@@ -139,21 +154,6 @@ async function runLive(options) {
 
 function createLiveResult({ exactPayloads, failure, options, provenance, status, tasks, trials }) {
 	const summary = summarizeTrials(trials);
-	const amortizedIndexing =
-		options.indexingMs === undefined
-			? undefined
-			: {
-					indexingMs: options.indexingMs,
-					indexReuseCount: options.indexReuseCount,
-					indexingMsPerRun: round(options.indexingMs / options.indexReuseCount),
-					cbmemMedianAmortizedProcessWallMs:
-						summary.byArm.cbmem.successful.processWallMs?.median === undefined
-							? undefined
-							: round(
-									summary.byArm.cbmem.successful.processWallMs.median +
-										options.indexingMs / options.indexReuseCount,
-								),
-				};
 	return {
 		benchmark: BENCHMARK_ID,
 		mode: "live",
@@ -172,10 +172,7 @@ function createLiveResult({ exactPayloads, failure, options, provenance, status,
 		plannedTrials: createSchedule(tasks, options.runs).length,
 		completedTrials: trials.length,
 		trials,
-		summary: {
-			...summary,
-			...(amortizedIndexing ? { amortizedIndexing } : {}),
-		},
+		summary,
 		interpretation: {
 			primarySuccessRule:
 				"A run must recover every exact fact and obey its arm's retrieval-method policy.",
@@ -187,31 +184,26 @@ function createLiveResult({ exactPayloads, failure, options, provenance, status,
 	};
 }
 
-async function collectProvenance(options, signal) {
+async function collectProvenance(options, binaryPath, signal) {
 	const processOptions = { cwd: options.repo, signal };
-	const [repoRoot, binaryPath, piVersion, cbmemVersion, gitCommit, gitStatus, indexPacket] =
+	const [repoRoot, piVersion, cbmemVersion, repository, indexPacket, coveragePacket] =
 		await Promise.all([
 			realpath(options.repo),
-			realpath(options.cbmemBin),
 			runText(options.pi, ["--version"], processOptions),
 			runText(options.cbmemBin, ["--version"], processOptions),
-			runText("git", ["-C", options.repo, "rev-parse", "HEAD"], { signal }),
-			runText("git", ["-C", options.repo, "status", "--short"], { signal }),
+			collectRepositoryState(options, signal),
 			callCbmem(options, "index_status", { project: options.project }, signal),
+			callCbmem(options, "check_index_coverage", coverageArguments(options), signal),
 		]);
 	const index = JSON.parse(indexPacket);
+	const coverage = validateFullIndexMetadata(coveragePacket, options.project);
 	if (index.status !== "ready")
 		throw new Error(`Codebase Memory index is not ready: ${index.status}`);
+	if (index.project !== options.project) {
+		throw new Error(`indexed project ${index.project} does not match ${options.project}`);
+	}
 	if ((await realpath(index.root_path)) !== repoRoot) {
 		throw new Error(`indexed root ${index.root_path} does not match repository ${repoRoot}`);
-	}
-	const bridgeBinaryPath = await realpath(
-		path.join(homedir(), ".local", "bin", "codebase-memory-mcp"),
-	);
-	if (binaryPath !== bridgeBinaryPath) {
-		throw new Error(
-			`--cbmem-bin resolves to ${binaryPath}, but pi-cbmem invokes ${bridgeBinaryPath}`,
-		);
 	}
 	const binary = await readFile(binaryPath);
 	return {
@@ -221,12 +213,7 @@ async function collectProvenance(options, signal) {
 			version: cbmemVersion.trim(),
 			sha256: createHash("sha256").update(binary).digest("hex"),
 		},
-		repository: {
-			root: repoRoot,
-			gitCommit: gitCommit.trim(),
-			dirty: gitStatus.trim().length > 0,
-			statusSha256: sha256(gitStatus),
-		},
+		repository: { root: repoRoot, ...repository },
 		index: {
 			project: index.project,
 			status: index.status,
@@ -234,7 +221,33 @@ async function collectProvenance(options, signal) {
 			nodes: index.nodes,
 			edges: index.edges,
 			statusSha256: sha256(indexPacket),
+			coverage,
 		},
+	};
+}
+
+async function resolveCbmemBinary(options) {
+	const [binaryPath, bridgeBinaryPath] = await Promise.all([
+		realpath(options.cbmemBin),
+		realpath(path.join(homedir(), ".local", "bin", "codebase-memory-mcp")),
+	]);
+	if (binaryPath !== bridgeBinaryPath) {
+		throw new Error(
+			`--cbmem-bin resolves to ${binaryPath}, but pi-cbmem invokes ${bridgeBinaryPath}`,
+		);
+	}
+	return binaryPath;
+}
+
+async function collectRepositoryState(options, signal) {
+	const [gitCommit, gitStatus] = await Promise.all([
+		runText("git", ["-C", options.repo, "rev-parse", "HEAD"], { signal }),
+		runText("git", ["-C", options.repo, "status", "--short"], { signal }),
+	]);
+	return {
+		gitCommit: gitCommit.trim(),
+		dirty: gitStatus.trim().length > 0,
+		statusSha256: sha256(gitStatus),
 	};
 }
 
@@ -249,17 +262,23 @@ function treatmentPackageVariants(trials) {
 }
 
 async function checkRuntimeDrift(options, provenance, signal) {
-	const [gitCommit, gitStatus, indexPacket] = await Promise.all([
+	const [gitCommit, gitStatus, indexPacket, coveragePacket] = await Promise.all([
 		runText("git", ["-C", options.repo, "rev-parse", "HEAD"], { signal }),
 		runText("git", ["-C", options.repo, "status", "--short"], { signal }),
 		callCbmem(options, "index_status", { project: options.project }, signal),
+		callCbmem(options, "check_index_coverage", coverageArguments(options), signal),
 	]);
 	const checks = {
 		gitCommit: gitCommit.trim() === provenance.repository.gitCommit,
 		gitStatus: sha256(gitStatus) === provenance.repository.statusSha256,
 		indexStatus: sha256(indexPacket) === provenance.index.statusSha256,
+		indexCoverage: sha256(coveragePacket) === provenance.index.coverage.responseSha256,
 	};
 	return { detected: Object.values(checks).includes(false), checks };
+}
+
+function coverageArguments(options) {
+	return { project: options.project, scopes: ["."], scope_limit: 1 };
 }
 
 async function captureExactPayloads(options, tasks, signal) {
@@ -315,12 +334,14 @@ function publicConfig(options) {
 		extension: options.extension,
 		baselineInvocation: "pi -ne",
 		cbmemInvocation: `pi -ne -e ${options.extension}`,
-		readOnly: true,
+		measuredTrialsReadOnly: true,
 		timeoutMs: options.timeoutMs,
 		maxEstimatedCostUsd: options.maxCostUsd,
-		...(options.indexingMs === undefined
-			? {}
-			: { indexingMs: options.indexingMs, indexReuseCount: options.indexReuseCount }),
+		indexPreparation: {
+			mode: "full",
+			persistence: false,
+			includedInTrialLatency: false,
+		},
 	};
 }
 
@@ -443,8 +464,4 @@ function safeText(value) {
 			return point > 31 && (point < 127 || point > 159);
 		})
 		.join("");
-}
-
-function round(value) {
-	return Number(value.toFixed(3));
 }
