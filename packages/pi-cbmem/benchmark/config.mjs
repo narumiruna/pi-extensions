@@ -126,6 +126,14 @@ function positiveInteger(value, option) {
 	return number;
 }
 
+function nonNegativeNumber(value, option) {
+	const number = Number(value);
+	if (!Number.isFinite(number) || number < 0) {
+		throw new Error(`${option} must be a non-negative number`);
+	}
+	return number;
+}
+
 function enumValue(args, index, option, values) {
 	const value = requireValue(args, index, option);
 	if (!values.includes(value)) throw new Error(`${option} must be one of: ${values.join(", ")}`);

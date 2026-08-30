@@ -181,9 +181,17 @@ assert.doesNotMatch(
 	/delete_project/,
 );
 
-const parsed = await parseArguments(["--runs", "2", "--kind", "same-evidence"]);
+const parsed = await parseArguments([
+	"--runs",
+	"2",
+	"--kind",
+	"same-evidence",
+	"--max-cost-usd",
+	"5",
+]);
 assert.equal(parsed.live, false);
 assert.equal(parsed.runs, 2);
+assert.equal(parsed.maxCostUsd, 5);
 assert.equal(
 	parsed.suite.tasks.every((task) => task.kind === "same-evidence"),
 	true,
