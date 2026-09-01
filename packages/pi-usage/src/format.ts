@@ -427,12 +427,22 @@ function selectMiniMaxGroup(report: UsageReport, model?: UsageModel): string | u
 		patterns.some((pattern) => !pattern.includes("*") && modelKeys.includes(pattern)),
 	);
 	if (exact) return exact.group;
-	return candidates.find(({ patterns }) =>
+	const wildcard = candidates.find(({ patterns }) =>
 		patterns.some(
 			(pattern) =>
 				pattern.includes("*") && modelKeys.some((key) => wildcardKeyMatches(pattern, key)),
 		),
-	)?.group;
+	);
+	if (wildcard) return wildcard.group;
+	// Fallback: no model-specific match. Prefer the "general" group when present —
+	// it is the MiniMax Token Plan catch-all bucket that applies across models
+	// (e.g. for users on a Coding Plan where specific model rows are 0/0). Matches
+	// the prior local usage extension's behavior of always showing "general".
+	// If no "general" group exists, return undefined so callers can hide the chip
+	// rather than guess.
+	const general = candidates.find((candidate) => candidate.group === "general");
+	if (general) return general.group;
+	return undefined;
 }
 
 function normalizeMiniMaxModelKey(value: string | undefined): string | undefined {
