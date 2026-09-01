@@ -258,6 +258,114 @@ test("MiniMax normalizers reject failed, malformed, or contradictory responses",
 	}
 });
 
+test("MiniMax Token Plan renders percent-based buckets when total is zero but percent is valid", () => {
+	// The general row in the user's API has total=0 / usage=0 but reports
+	// meaningful *_remaining_percent values (the API uses percent as the canonical
+	// indicator for Token Plan rows). It must NOT be skipped and must render with
+	// unit="percent".
+	const base = quotaPayload().model_remains[0];
+	const payload = {
+		base_resp: { status_code: 0, status_msg: "success" },
+		model_remains: [
+			{
+				...base,
+				model_name: "general",
+				current_interval_total_count: 0,
+				current_interval_usage_count: 0,
+				current_interval_remaining_percent: 38,
+				current_weekly_total_count: 0,
+				current_weekly_usage_count: 0,
+				current_weekly_remaining_percent: 32,
+			},
+			{
+				...base,
+				model_name: "video",
+				current_interval_total_count: 5,
+				current_interval_usage_count: 0,
+				current_interval_remaining_percent: 100,
+				current_weekly_total_count: 35,
+				current_weekly_usage_count: 2,
+				current_weekly_remaining_percent: 94,
+			},
+		],
+	};
+	const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
+	// Both rows render: 4 buckets total (2 per row).
+	assert.equal(report.buckets.length, 4);
+	const general = report.buckets.filter((b) => b.groupLabel === "general");
+	const video = report.buckets.filter((b) => b.groupLabel === "video");
+	assert.equal(general.length, 2);
+	assert.equal(video.length, 2);
+	const generalInterval = general.find((b) => b.label === "Rolling window");
+	const generalWeekly = general.find((b) => b.label === "Weekly window");
+	assert.equal(generalInterval?.unit, "percent");
+	assert.equal(generalInterval?.remaining, 38);
+	assert.equal(generalInterval?.used, 62);
+	assert.equal(generalInterval?.limit, 0);
+	assert.equal(generalWeekly?.unit, "percent");
+	assert.equal(generalWeekly?.remaining, 32);
+	assert.equal(generalWeekly?.used, 68);
+	assert.equal(generalWeekly?.limit, 0);
+});
+
+test("MiniMax Token Plan rejects rows with zero total and no usable percent", () => {
+	const base = quotaPayload().model_remains[0];
+	const payload = {
+		base_resp: { status_code: 0, status_msg: "success" },
+		model_remains: [
+			{
+				...base,
+				model_name: "general",
+				current_interval_total_count: 0,
+				current_interval_usage_count: 0,
+				current_interval_remaining_percent: undefined,
+				current_weekly_total_count: 0,
+				current_weekly_usage_count: 0,
+				current_weekly_remaining_percent: undefined,
+			},
+		],
+	};
+	// We strip the undefined percent fields via JSON serialization; the API never
+	// returns them as undefined, but the production code defends against it.
+	const cleaned = JSON.parse(JSON.stringify(payload));
+	assert.throws(
+		() => normalizeMiniMaxUsagePayload("minimax", "token-plan", cleaned, 0),
+		/no quota and no percent/iu,
+	);
+});
+
+test("MiniMax Token Plan keeps mixed rows where one window is zero-total and the other has counts", () => {
+	const base = quotaPayload().model_remains[0];
+	const payload = {
+		base_resp: { status_code: 0, status_msg: "success" },
+		model_remains: [
+			{
+				...base,
+				model_name: "general",
+				current_interval_total_count: 0,
+				current_interval_usage_count: 0,
+				current_interval_remaining_percent: 0,
+				current_weekly_total_count: 1000,
+				current_weekly_usage_count: 200,
+				current_weekly_remaining_percent: 80,
+			},
+		],
+	};
+	const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
+	assert.equal(report.buckets.length, 2);
+	const interval = report.buckets.find((b) => b.label === "Rolling window");
+	const weekly = report.buckets.find((b) => b.label === "Weekly window");
+	// Rolling: percent-based (percent=0 → 100% used).
+	assert.equal(interval?.unit, "percent");
+	assert.equal(interval?.remaining, 0);
+	assert.equal(interval?.used, 100);
+	// Weekly: count-based.
+	assert.equal(weekly?.unit, "count");
+	assert.equal(weekly?.limit, 1000);
+	assert.equal(weekly?.used, 200);
+	assert.equal(weekly?.remaining, 800);
+});
+
 test("MiniMax runtime auth accepts only its matching official region", async () => {
 	const fetchMock = vi.spyOn(globalThis, "fetch");
 	try {
