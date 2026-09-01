@@ -333,6 +333,41 @@ test("MiniMax Token Plan percent-only buckets render with percent and resets, no
 	assert.match(formatted, /\(resets [^)]+\)/u);
 });
 
+test("MiniMax statusline falls back to general group when no model-specific match exists", () => {
+	// A user on a MiniMax Token Plan (Coding Plan) with rows for "general" and
+	// "video" but no model-specific row for their actual model (e.g. MiniMax-M3)
+	// should see the "general" row in the statusline — matches the prior local
+	// usage extension's behavior of preferring general as the catch-all.
+	const base = quotaPayload().model_remains[0];
+	const payload = {
+		base_resp: { status_code: 0, status_msg: "success" },
+		model_remains: [
+			{
+				...base,
+				model_name: "general",
+				current_interval_total_count: 0,
+				current_interval_usage_count: 0,
+				current_interval_remaining_percent: 38,
+				current_weekly_total_count: 0,
+				current_weekly_usage_count: 0,
+				current_weekly_remaining_percent: 32,
+			},
+			{
+				...base,
+				model_name: "video",
+				current_interval_total_count: 5,
+				current_interval_usage_count: 0,
+				current_interval_remaining_percent: 100,
+				current_weekly_total_count: 35,
+				current_weekly_usage_count: 2,
+				current_weekly_remaining_percent: 94,
+			},
+		],
+	};
+	const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
+	assert.equal(formatUsageStatusline(report, MODELS.minimax), "minimax 38% 5h 32% wk");
+});
+
 test("MiniMax Token Plan rejects rows with zero total and no usable percent", () => {
 	const base = quotaPayload().model_remains[0];
 	const payload = {
