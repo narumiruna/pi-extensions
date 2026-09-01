@@ -152,6 +152,28 @@ function normalizeWindow(row: Record<string, unknown>, fields: WindowFields): Us
 	}
 	const total = nonnegativeInteger(row[fields.totalField], fields.totalField);
 	const count = nonnegativeInteger(row[fields.countField], fields.countField);
+	// Total of zero with no usable percent: no quota, no usage — drop the bucket entirely
+	// so it does not surface as a confusing row in /usage or the footer chip.
+	if (total === 0 && percent === undefined) {
+		throw new Error(`MiniMax Token Plan ${fields.label} returned no quota and no percent.`);
+	}
+	// Total of zero but percent available: the API uses percent as the canonical
+	// indicator for these rows (matches the behavior of the prior local usage
+	// extension). Emit a percent-based bucket instead of count-based.
+	if (total === 0) {
+		return {
+			id: fields.id,
+			label: fields.label,
+			groupId: fields.groupId,
+			groupLabel: fields.groupLabel,
+			remaining: percent as number,
+			used: 100 - (percent as number),
+			limit: 0,
+			unit: "percent",
+			windowMinutes,
+			resetsAt,
+		};
+	}
 	const resolved = resolveQuotaCounts(count, total, percent);
 	if (!resolved) throw new Error(`MiniMax Token Plan ${fields.label} counts were inconsistent.`);
 	return {
@@ -171,7 +193,15 @@ function resolveQuotaCounts(
 	total: number,
 	remainingPercent: number | undefined,
 ): Pick<UsageBucket, "used" | "remaining" | "limit"> | undefined {
-	if (total <= 0 || reportedCount > total) return undefined;
+	if (reportedCount > total) return undefined;
+	if (total === 0 && remainingPercent !== undefined) {
+		// No countable quota in this window but the API still reports a meaningful
+		// `*_remaining_percent` (the percent field is the canonical indicator for
+		// Token Plan rows). Defer percent-only rendering to `normalizeWindow` where
+		// it sits next to the existing unlimited branch.
+		return { used: 100 - remainingPercent, remaining: remainingPercent, limit: 0 };
+	}
+	if (total === 0) return undefined;
 	let remaining = reportedCount;
 	if (remainingPercent !== undefined) {
 		const asRemaining = (reportedCount / total) * 100;
