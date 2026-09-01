@@ -624,7 +624,9 @@ export default function usageExtension(
 	) => {
 		void refreshCurrentStatus(ctx, model, force).catch((error) => {
 			if (isStaleExtensionContextError(error) || isAbortError(error)) return;
-			safeSetStatus(ctx, "usage error");
+			const message = errorMessage(error);
+			console.error("[pi-usage] refresh failed:", message);
+			safeSetStatus(ctx, `usage err: ${message.slice(0, 50)}`);
 		});
 	};
 
