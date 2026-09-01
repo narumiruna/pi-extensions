@@ -367,9 +367,11 @@ function formatMiniMaxReport(lines: string[], report: UsageReport): void {
 		const value =
 			bucket.period === "unlimited"
 				? "unlimited"
-				: bucket.limit && bucket.remaining !== undefined
-					? `${bucket.remaining} of ${bucket.limit} left · ${percentRemaining(bucket)}%${reset}`
-					: "unavailable";
+				: bucket.unit === "percent" && bucket.remaining !== undefined
+					? `${bucket.remaining}% remaining${reset}`
+					: bucket.limit && bucket.remaining !== undefined
+						? `${bucket.remaining} of ${bucket.limit} left · ${percentRemaining(bucket)}%${reset}`
+						: "unavailable";
 		lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${value}`);
 	}
 }
@@ -389,6 +391,10 @@ function formatMiniMaxStatusline(report: UsageReport, model?: UsageModel): strin
 		const window = formatWindowLabel(bucket.windowMinutes, fallback, true);
 		if (bucket.period === "unlimited") {
 			parts.push(`unlimited ${window}`);
+			continue;
+		}
+		if (bucket.unit === "percent" && bucket.remaining !== undefined) {
+			parts.push(`${bucket.remaining}% ${window}`);
 			continue;
 		}
 		if (!bucket.limit || bucket.remaining === undefined) continue;
