@@ -308,6 +308,31 @@ test("MiniMax Token Plan renders percent-based buckets when total is zero but pe
 	assert.equal(generalWeekly?.limit, 0);
 });
 
+test("MiniMax Token Plan percent-only buckets render with percent and resets, not 'unavailable'", () => {
+	const base = quotaPayload().model_remains[0];
+	const payload = {
+		base_resp: { status_code: 0, status_msg: "success" },
+		model_remains: [
+			{
+				...base,
+				model_name: "general",
+				current_interval_total_count: 0,
+				current_interval_usage_count: 0,
+				current_interval_remaining_percent: 38,
+				current_weekly_total_count: 0,
+				current_weekly_usage_count: 0,
+				current_weekly_remaining_percent: 32,
+			},
+		],
+	};
+	const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
+	const formatted = formatUsageReport(report, "current");
+	assert.doesNotMatch(formatted, /unavailable/iu);
+	assert.match(formatted, /Rolling window:\s+38% remaining/iu);
+	assert.match(formatted, /Weekly window:\s+32% remaining/iu);
+	assert.match(formatted, /\(resets [^)]+\)/u);
+});
+
 test("MiniMax Token Plan rejects rows with zero total and no usable percent", () => {
 	const base = quotaPayload().model_remains[0];
 	const payload = {
