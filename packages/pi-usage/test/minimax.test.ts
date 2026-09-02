@@ -259,10 +259,6 @@ test("MiniMax normalizers reject failed, malformed, or contradictory responses",
 });
 
 test("MiniMax Token Plan renders percent-based buckets when total is zero but percent is valid", () => {
-	// The general row in the user's API has total=0 / usage=0 but reports
-	// meaningful *_remaining_percent values (the API uses percent as the canonical
-	// indicator for Token Plan rows). It must NOT be skipped and must render with
-	// unit="percent".
 	const base = quotaPayload().model_remains[0];
 	const payload = {
 		base_resp: { status_code: 0, status_msg: "success" },
@@ -290,7 +286,6 @@ test("MiniMax Token Plan renders percent-based buckets when total is zero but pe
 		],
 	};
 	const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
-	// Both rows render: 4 buckets total (2 per row).
 	assert.equal(report.buckets.length, 4);
 	const general = report.buckets.filter((b) => b.groupLabel === "general");
 	const video = report.buckets.filter((b) => b.groupLabel === "video");
@@ -334,10 +329,6 @@ test("MiniMax Token Plan percent-only buckets render with percent and resets, no
 });
 
 test("MiniMax statusline falls back to general group when no model-specific match exists", () => {
-	// A user on a MiniMax Token Plan (Coding Plan) with rows for "general" and
-	// "video" but no model-specific row for their actual model (e.g. MiniMax-M3)
-	// should see the "general" row in the statusline — matches the prior local
-	// usage extension's behavior of preferring general as the catch-all.
 	const base = quotaPayload().model_remains[0];
 	const payload = {
 		base_resp: { status_code: 0, status_msg: "success" },
@@ -366,6 +357,11 @@ test("MiniMax statusline falls back to general group when no model-specific matc
 	};
 	const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
 	assert.equal(formatUsageStatusline(report, MODELS.minimax), "minimax 38% 5h 32% wk");
+	assert.equal(formatUsageStatusline(report), "minimax 38% 5h 32% wk");
+	assert.equal(
+		formatUsageStatusline(report, { ...MODELS.minimax, provider: "openai-codex" }),
+		undefined,
+	);
 });
 
 test("MiniMax Token Plan rejects rows with zero total and no usable percent", () => {
@@ -415,15 +411,29 @@ test("MiniMax Token Plan keeps mixed rows where one window is zero-total and the
 	assert.equal(report.buckets.length, 2);
 	const interval = report.buckets.find((b) => b.label === "Rolling window");
 	const weekly = report.buckets.find((b) => b.label === "Weekly window");
-	// Rolling: percent-based (percent=0 → 100% used).
 	assert.equal(interval?.unit, "percent");
 	assert.equal(interval?.remaining, 0);
 	assert.equal(interval?.used, 100);
-	// Weekly: count-based.
 	assert.equal(weekly?.unit, "count");
 	assert.equal(weekly?.limit, 1000);
 	assert.equal(weekly?.used, 200);
 	assert.equal(weekly?.remaining, 800);
+});
+
+test("MiniMax Token Plan count buckets with remaining 0 still render", () => {
+	const payload = quotaPayload();
+	payload.model_remains[0] = {
+		...payload.model_remains[0],
+		current_interval_usage_count: 0,
+		current_weekly_usage_count: 0,
+		current_weekly_remaining_percent: 0,
+	};
+	const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
+	const formatted = formatUsageReport(report, "current");
+	assert.doesNotMatch(formatted, /unavailable/iu);
+	assert.match(formatted, /Rolling window:\s+0 of 1500 left · 0%/u);
+	assert.match(formatted, /Weekly window:\s+0 of 1000 left · 0%/u);
+	assert.equal(formatUsageStatusline(report), "minimax 0% 5h 0% wk");
 });
 
 test("MiniMax runtime auth accepts only its matching official region", async () => {

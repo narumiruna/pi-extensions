@@ -369,7 +369,7 @@ function formatMiniMaxReport(lines: string[], report: UsageReport): void {
 				? "unlimited"
 				: bucket.unit === "percent" && bucket.remaining !== undefined
 					? `${bucket.remaining}% remaining${reset}`
-					: bucket.limit && bucket.remaining !== undefined
+					: bucket.limit !== undefined && bucket.remaining !== undefined
 						? `${bucket.remaining} of ${bucket.limit} left · ${percentRemaining(bucket)}%${reset}`
 						: "unavailable";
 		lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${value}`);
@@ -397,7 +397,7 @@ function formatMiniMaxStatusline(report: UsageReport, model?: UsageModel): strin
 			parts.push(`${bucket.remaining}% ${window}`);
 			continue;
 		}
-		if (!bucket.limit || bucket.remaining === undefined) continue;
+		if (bucket.limit === undefined || bucket.remaining === undefined) continue;
 		parts.push(`${percentRemaining(bucket)}% ${window}`);
 	}
 	return parts.length > 1 ? parts.join(" ") : undefined;
@@ -412,37 +412,32 @@ function selectMiniMaxGroup(report: UsageReport, model?: UsageModel): string | u
 		),
 	];
 	if (groups.length <= 1) return groups[0];
-	if (model?.provider !== report.providerId) return undefined;
-	const modelKeys = [model.id, model.name]
-		.map(normalizeMiniMaxModelKey)
-		.filter((key): key is string => key !== undefined);
-	const candidates = groups.map((group) => {
-		const bucket = report.buckets.find((candidate) => candidate.groupId === group);
-		const patterns = [bucket?.groupLabel, ...(bucket?.modelKeys ?? []), group]
+	if (model && model.provider !== report.providerId) return undefined;
+	if (model) {
+		const modelKeys = [model.id, model.name]
 			.map(normalizeMiniMaxModelKey)
 			.filter((key): key is string => key !== undefined);
-		return { group, patterns };
-	});
-	const exact = candidates.find(({ patterns }) =>
-		patterns.some((pattern) => !pattern.includes("*") && modelKeys.includes(pattern)),
-	);
-	if (exact) return exact.group;
-	const wildcard = candidates.find(({ patterns }) =>
-		patterns.some(
-			(pattern) =>
-				pattern.includes("*") && modelKeys.some((key) => wildcardKeyMatches(pattern, key)),
-		),
-	);
-	if (wildcard) return wildcard.group;
-	// Fallback: no model-specific match. Prefer the "general" group when present —
-	// it is the MiniMax Token Plan catch-all bucket that applies across models
-	// (e.g. for users on a Coding Plan where specific model rows are 0/0). Matches
-	// the prior local usage extension's behavior of always showing "general".
-	// If no "general" group exists, return undefined so callers can hide the chip
-	// rather than guess.
-	const general = candidates.find((candidate) => candidate.group === "general");
-	if (general) return general.group;
-	return undefined;
+		const candidates = groups.map((group) => {
+			const bucket = report.buckets.find((candidate) => candidate.groupId === group);
+			const patterns = [bucket?.groupLabel, ...(bucket?.modelKeys ?? []), group]
+				.map(normalizeMiniMaxModelKey)
+				.filter((key): key is string => key !== undefined);
+			return { group, patterns };
+		});
+		const exact = candidates.find(({ patterns }) =>
+			patterns.some((pattern) => !pattern.includes("*") && modelKeys.includes(pattern)),
+		);
+		if (exact) return exact.group;
+		const wildcard = candidates.find(({ patterns }) =>
+			patterns.some(
+				(pattern) =>
+					pattern.includes("*") && modelKeys.some((key) => wildcardKeyMatches(pattern, key)),
+			),
+		);
+		if (wildcard) return wildcard.group;
+	}
+	// Prefer the Coding Plan catch-all over hiding the chip.
+	return groups.find((group) => group === "general");
 }
 
 function normalizeMiniMaxModelKey(value: string | undefined): string | undefined {
