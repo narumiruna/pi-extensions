@@ -1594,6 +1594,39 @@ test("MiniMax account rotation at the request boundary retries without querying 
 	assert.equal(statuses.get("usage"), undefined);
 });
 
+test("MiniMax query-failed status chip includes the truncated error message", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.onTestFinished(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = async () =>
+		new Response("nope", { status: 500, statusText: "Internal Server Error" });
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const { ctx, statuses } = createMockContext({
+		model: miniMaxModel,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-cp-test" }),
+			getProviderAuth: async () => ({
+				auth: { apiKey: "sk-cp-test", baseUrl: miniMaxModel.baseUrl },
+			}),
+			getAvailable: () => [miniMaxModel],
+			getAll: () => [miniMaxModel],
+		},
+	});
+
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	await settle();
+	await settle();
+
+	const chip = statuses.get("usage");
+	assert.equal(typeof chip, "string");
+	assert.match(String(chip), /^usage err: MiniMax usage endpoint returned 500 /u);
+	assert.ok(String(chip).length <= "usage err: ".length + 50);
+	mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+	assert.equal(statuses.get("usage"), undefined);
+});
+
 test("DeepSeek session replacement aborts a stale balance request before publication", async (t) => {
 	const originalFetch = globalThis.fetch;
 	t.onTestFinished(() => {
