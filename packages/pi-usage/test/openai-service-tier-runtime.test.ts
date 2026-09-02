@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { correctCodexFastMessageCost } from "../src/codex-fast.js";
-import { registerCodexFastMode } from "../src/codex-fast-runtime.js";
+import { correctOpenAIServiceTierMessageCost } from "../src/openai-service-tier.js";
+import { registerOpenAIServiceTiers } from "../src/openai-service-tier-runtime.js";
 import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
 
 const codexModel = {
@@ -30,7 +30,7 @@ function memoryRuntime(
 		kind: options.kind ?? "loaded",
 		path: "/tmp/pi-usage.json",
 		settings: {
-			codexFastMode: options.enabled ?? false,
+			openaiServiceTier: options.enabled ? "priority" : "default",
 			codexStatusResetCountdown: false,
 			selectedTargets: {},
 		},
@@ -61,7 +61,7 @@ function memoryRuntime(
 			return structuredClone(state);
 		},
 		async updateSelectedTarget() {
-			throw new Error("target selection is not used in Codex Fast tests");
+			throw new Error("target selection is not used in service-tier tests");
 		},
 		async flush() {
 			flushes += 1;
@@ -84,6 +84,7 @@ function context(overrides: Record<string, unknown> = {}) {
 		hasUI: true,
 		mode: "rpc",
 		model: codexModel,
+		select: async () => "Fast",
 		sessionManager: {
 			getSessionId: () => "session-a",
 			getBranch: () => [],
@@ -93,46 +94,50 @@ function context(overrides: Record<string, unknown> = {}) {
 	});
 }
 
-test("/fast toggles one persistent setting on and off with visible usage guidance", async () => {
+test("/speed opens a Fast/Flex/None picker and applies its selection", async () => {
 	const memory = memoryRuntime();
 	const mock = createMockPi();
 	let refreshes = 0;
-	registerCodexFastMode(mock.pi, memory.runtime, () => {
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => {
 		refreshes += 1;
 	});
-	const command = mock.commands.get("fast");
+	const command = mock.commands.get("speed");
 	assert.ok(command);
-	const first = context();
+	let pickerOptions: string[] = [];
+	const first = context({
+		select: async (_title: string, options: string[]) => {
+			pickerOptions = options;
+			return "Fast";
+		},
+	});
 	await command.handler("", first.ctx);
-	assert.equal(memory.state.settings.codexFastMode, true);
+	assert.deepEqual(pickerOptions, ["Fast", "Flex", "None"]);
+	assert.equal(memory.state.settings.openaiServiceTier, "priority");
 	assert.match(first.notifications[0]?.message ?? "", /1\.5× faster.*uses more/);
-	const second = context();
+	const second = context({ select: async () => "None" });
 	await command.handler("", second.ctx);
-	assert.equal(memory.state.settings.codexFastMode, false);
+	assert.equal(memory.state.settings.openaiServiceTier, "default");
 	assert.match(second.notifications[0]?.message ?? "", /standard routing/);
 	assert.equal(refreshes, 2);
 });
 
-test("/fast rejects arguments and unsafe modes before mutation", async () => {
+test("/speed accepts explicit tiers and rejects unsafe modes before mutation", async () => {
 	const memory = memoryRuntime();
 	const mock = createMockPi();
-	registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
-	const command = mock.commands.get("fast");
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => undefined);
+	const command = mock.commands.get("speed");
 	assert.ok(command);
 	const rpc = context();
 	await command.handler("on", rpc.ctx);
-	assert.match(rpc.notifications[0]?.message ?? "", /does not accept arguments/);
+	assert.match(rpc.notifications[0]?.message ?? "", /Usage: \/speed/);
 	const print = context({ hasUI: false, mode: "print" });
 	await assert.rejects(Promise.resolve(command.handler("", print.ctx)), /requires TUI or RPC/);
 	const json = context({ hasUI: false, mode: "json" });
-	await assert.rejects(
-		Promise.resolve(command.handler("on", json.ctx)),
-		/does not accept arguments/,
-	);
+	await assert.rejects(Promise.resolve(command.handler("flex", json.ctx)), /requires TUI or RPC/);
 	assert.deepEqual(memory.patches, []);
 });
 
-test("/fast rejects foreign, unsupported, custom-origin, and invalid-file contexts", async () => {
+test("/speed rejects foreign, unsupported, custom-origin, and invalid-file contexts", async () => {
 	for (const currentModel of [
 		{ ...codexModel, provider: "openrouter" },
 		{ ...codexModel, id: "gpt-5.4-mini" },
@@ -140,17 +145,17 @@ test("/fast rejects foreign, unsupported, custom-origin, and invalid-file contex
 	]) {
 		const memory = memoryRuntime();
 		const mock = createMockPi();
-		registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
+		registerOpenAIServiceTiers(mock.pi, memory.runtime, () => undefined);
 		const current = context({ model: currentModel });
-		await mock.commands.get("fast")?.handler("", current.ctx);
+		await mock.commands.get("speed")?.handler("", current.ctx);
 		assert.deepEqual(memory.patches, []);
 		assert.equal(current.notifications[0]?.level, "warning");
 	}
 	const invalid = memoryRuntime({ kind: "invalid" });
 	const mock = createMockPi();
-	registerCodexFastMode(mock.pi, invalid.runtime, () => undefined);
+	registerOpenAIServiceTiers(mock.pi, invalid.runtime, () => undefined);
 	const current = context();
-	await mock.commands.get("fast")?.handler("", current.ctx);
+	await mock.commands.get("speed")?.handler("", current.ctx);
 	assert.deepEqual(invalid.patches, []);
 	assert.equal(current.notifications[0]?.level, "error");
 });
@@ -158,27 +163,27 @@ test("/fast rejects foreign, unsupported, custom-origin, and invalid-file contex
 test("failed persistence rolls back effective state and the queue permits retry", async () => {
 	const memory = memoryRuntime({ failUpdates: 1 });
 	const mock = createMockPi();
-	registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
-	const command = mock.commands.get("fast");
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => undefined);
+	const command = mock.commands.get("speed");
 	assert.ok(command);
 	const failed = context();
 	await command.handler("", failed.ctx);
-	assert.equal(memory.state.settings.codexFastMode, false);
+	assert.equal(memory.state.settings.openaiServiceTier, "default");
 	assert.match(failed.notifications[0]?.message ?? "", /disk full/);
 	const retried = context();
 	await command.handler("", retried.ctx);
-	assert.equal(memory.state.settings.codexFastMode, true);
+	assert.equal(memory.state.settings.openaiServiceTier, "priority");
 });
 
-test("provider payload captures the toggle state when its hook begins", async () => {
+test("provider payload captures the priority state when its hook begins", async () => {
 	const memory = memoryRuntime();
 	const mock = createMockPi();
-	registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => undefined);
 	const hook = mock.events.get("before_provider_request")?.[0];
 	assert.ok(hook);
 	const current = context();
 	const before = await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
-	await mock.commands.get("fast")?.handler("", current.ctx);
+	await mock.commands.get("speed")?.handler("", current.ctx);
 	const after = await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
 	assert.deepEqual(before, { model: "gpt-5.4", service_tier: "default" });
 	assert.deepEqual(after, { model: "gpt-5.4", service_tier: "priority" });
@@ -187,15 +192,15 @@ test("provider payload captures the toggle state when its hook begins", async ()
 test("cost correction follows the captured request tier across a later toggle", async () => {
 	const memory = memoryRuntime();
 	const mock = createMockPi();
-	registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => undefined);
 	const hook = mock.events.get("before_provider_request")?.[0];
 	const messageEnd = mock.events.get("message_end")?.[0];
 	assert.ok(hook);
 	assert.ok(messageEnd);
 	const current = context();
-	await mock.commands.get("fast")?.handler("", current.ctx);
+	await mock.commands.get("speed")?.handler("", current.ctx);
 	await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
-	await mock.commands.get("fast")?.handler("", current.ctx);
+	await mock.commands.get("speed")?.handler("none", current.ctx);
 	const usage = {
 		input: 100,
 		output: 20,
@@ -242,7 +247,7 @@ test("cost correction follows the captured request tier across a later toggle", 
 test("an already-correct cost still consumes its request marker", async () => {
 	const memory = memoryRuntime({ enabled: true });
 	const mock = createMockPi();
-	registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => undefined);
 	const hook = mock.events.get("before_provider_request")?.[0];
 	const messageEnd = mock.events.get("message_end")?.[0];
 	assert.ok(hook);
@@ -263,7 +268,7 @@ test("an already-correct cost still consumes its request marker", async () => {
 			total: 0.001105,
 		},
 	};
-	const alreadyCorrect = correctCodexFastMessageCost(
+	const alreadyCorrect = correctOpenAIServiceTierMessageCost(
 		{
 			role: "assistant",
 			provider: "openai-codex",
@@ -271,7 +276,7 @@ test("an already-correct cost still consumes its request marker", async () => {
 			usage,
 		},
 		codexModel as never,
-		true,
+		"priority",
 	) as { usage: typeof usage };
 	assert.ok(alreadyCorrect);
 	const event = { message: alreadyCorrect };
@@ -288,7 +293,7 @@ test("session reload warns for invalid settings, refreshes status, and shutdown 
 	const memory = memoryRuntime({ kind: "invalid" });
 	const mock = createMockPi();
 	let refreshes = 0;
-	registerCodexFastMode(mock.pi, memory.runtime, () => {
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => {
 		refreshes += 1;
 	});
 	const current = context();
@@ -307,7 +312,7 @@ test("session replacement aborts stale loads and accepted writes before UI publi
 	const memory = memoryRuntime({ reload: () => slowLoad });
 	const mock = createMockPi();
 	let refreshes = 0;
-	registerCodexFastMode(mock.pi, memory.runtime, () => {
+	registerOpenAIServiceTiers(mock.pi, memory.runtime, () => {
 		refreshes += 1;
 	});
 	const first = context();
@@ -316,8 +321,12 @@ test("session replacement aborts stale loads and accepted writes before UI publi
 	releaseLoad({
 		kind: "loaded",
 		path: "/tmp/pi-usage.json",
-		settings: { codexFastMode: true, codexStatusResetCountdown: false, selectedTargets: {} },
-		document: { codexFastMode: true },
+		settings: {
+			openaiServiceTier: "priority",
+			codexStatusResetCountdown: false,
+			selectedTargets: {},
+		},
+		document: { openaiServiceTier: "priority" },
 	});
 	await pendingLoad;
 	assert.equal(refreshes, 0);

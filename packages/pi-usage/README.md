@@ -1,8 +1,8 @@
-# 📊 pi-usage — Check Provider Usage, API Balance, and Codex Fast Mode
+# 📊 pi-usage — Check Provider Usage, API Balance, and OpenAI Service Tiers
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-usage)](https://www.npmjs.com/package/@narumitw/pi-usage) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Inspect usage and DeepSeek API balance for Pi's active provider account, query other configured providers, and toggle Fast mode for supported OpenAI Codex models.
+Inspect usage and DeepSeek API balance for Pi's active provider account, query other configured providers, and select Priority or Flex processing for supported OpenAI models.
 The extension keeps each provider's native quota, allowance, and spending semantics instead of treating unlike values as equivalent.
 xAI OAuth subscription reporting follows the reviewed Grok Build contract and runs only after an explicit `/usage` action.
 
@@ -20,7 +20,7 @@ xAI OAuth subscription reporting follows the reviewed Grok Build contract and ru
 - Reports Vercel AI Gateway credit balance and lifetime spend.
 - Reports Baseten organization Model APIs spend after credits for the last 30 days.
 - Reports xAI OAuth subscription allowances and credits.
-- Toggles persistent Codex Fast routing through `/fast` or the usage menu.
+- Selects persistent OpenAI Priority or Flex routing through `/speed` or the usage menu.
 - Redeems eligible Codex resets only after fresh account matching and explicit confirmation.
 - Refreshes one or all configured providers with bounded concurrency while preserving partial results.
 - Scopes statusline and cache data to the active provider and runtime account.
@@ -57,7 +57,7 @@ The package declares `dist/index.ts`, so an unbuilt local checkout must run the 
 
 Run `/usage` in TUI or RPC mode to inspect the active provider, refresh its usage, or choose another configured provider.
 When a provider exposes several billing targets, `/usage` asks for one target before querying usage.
-Run `/fast` to toggle Fast mode for a supported active Codex model.
+Run `/speed` to choose Fast, Flex, or None from a picker.
 
 ## 💬 Commands
 
@@ -72,7 +72,7 @@ In TUI or RPC mode, the menu first queries the active model provider and then of
 ```text
 Refresh current usage
 Settings
-Turn Fast mode on/off       # Supported current Codex models only
+Service tier controls        # `/speed` picker or `/speed fast|flex|none|status`
 Redeem usage limit reset…   # Current Codex OAuth accounts only
 View another configured provider…
 View all configured providers…
@@ -109,7 +109,7 @@ Successful, already-completed, not-needed, and no-credit outcomes are reported s
 
 ## ⚙️ Settings
 
-Choose **Settings** in `/usage` to edit Codex Fast mode and the Codex reset countdown through Pi's settings-list interaction in TUI mode.
+Choose **Settings** in `/usage` to edit the OpenAI service tier and the Codex reset countdown through Pi's settings-list interaction in TUI mode.
 RPC mode reports the active manual settings path instead of opening terminal UI.
 
 These preferences live in `pi-usage.json` under Pi's user agent directory, normally `~/.pi/agent/pi-usage.json`.
@@ -124,20 +124,18 @@ Target selections are stored only as IDs in the provider-neutral `selectedTarget
 The former `fireworksAccountId` field remains read-compatible: it supplies `selectedTargets.fireworks` in memory only when the generic value is absent.
 A successful explicit Fireworks account selection writes the generic field and removes the legacy field atomically; ordinary reads do not rewrite the file.
 
-### Codex Fast mode
+### OpenAI service tiers
 
-Run `/fast` without arguments to toggle Fast for the active supported Codex model, or use **Turn Fast mode on/off** in `/usage`.
-Fast is about 1.5× faster and uses more of your plan allowance.
-The `codexFastMode` preference defaults to Off.
+Run `/speed` without arguments to choose `Fast`, `Flex`, or `None` from a picker. Direct forms are `/speed fast`, `/speed flex`, `/speed none`, and `/speed status`.
+Priority processing is about 1.5× faster and uses more allowance. Flex processing costs about 50% less but may be slower and can time out.
+The `openaiServiceTier` preference defaults to `default`.
 
-Fast currently applies only to official `openai-codex-responses` requests for `gpt-5.4`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` at `https://chatgpt.com`.
-It sends `service_tier: "priority"` while enabled and explicit `service_tier: "default"` otherwise.
-The statusline adds `fast` only while the preference is effective, for example `codex fast 59% ↻ 2h30m` with the default reset countdown.
-Unsupported models and custom or proxy origins are left unchanged.
+Priority applies to official `openai-responses` and `openai-codex-responses` requests for supported models at the official OpenAI or ChatGPT origins. Flex applies only to supported official `openai-responses` models.
+The extension sends the selected `service_tier` value and uses explicit `service_tier: "default"` for `None`.
 
-`/fast` supports TUI and RPC mode, accepts no arguments, and rejects print or JSON mode before mutation.
-A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
-Repair or remove an invalid file, then run `/reload` before trying the toggle again.
+The Codex statusline adds the effective tier, for example `codex priority 59% ↻ 2h30m`. Unsupported models and custom or proxy origins are left unchanged.
+`/speed` supports TUI and RPC mode and rejects print or JSON mode before mutation. A selection affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
+Existing `codexFastMode: true` settings are read as `openaiServiceTier: "priority"` and removed on the next tier save. Repair or remove an invalid file, then run `/reload` before changing the tier.
 
 ### Codex statusline reset countdown
 
@@ -159,7 +157,7 @@ Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `fal
 - Source: the Codex usage and earned-reset endpoints using Pi's resolved runtime authorization
 - Displayed data: returned duration-based windows, resets, credits, earned usage-limit resets, and additional model buckets
 - Reset mutation: `POST /wham/rate-limit-reset-credits/consume` with a unique redemption request ID and, when available, the selected opaque credit ID
-- Statusline examples: `codex 59% ↻ 2h30m 61% ↻ 2d15m`, `codex fast 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusResetCountdown` to `false` for the legacy `5h` and `wk` labels.
+- Statusline examples: `codex 59% ↻ 2h30m 61% ↻ 2d15m`, `codex priority 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusResetCountdown` to `false` for the legacy `5h` and `wk` labels.
 
 The statusline selects a returned bucket that matches the current Codex model when one is available.
 Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
@@ -473,7 +471,7 @@ An absent or incompatible peer preserves standalone fallback and fail-closed mis
 - A provider may not return a safe human-readable account identity.
   In that case the provider and runtime credential state remain visible without exposing secrets.
 - Immediate account-change events are not available from Pi; auth is re-resolved before commands, turns, and scheduled refreshes.
-- Fast model support is intentionally conservative and may require an extension update when Codex adds or removes service tiers.
+- OpenAI service-tier model support is intentionally conservative and may require an extension update when OpenAI adds or removes service tiers.
 - Another later-loaded extension can replace the final provider payload, so arbitrary third-party payload-rewrite conflicts cannot be prevented.
 
 ## 🗂️ Package layout
@@ -487,8 +485,8 @@ packages/pi-usage/
 │   ├── index.ts       # Pi package entrypoint and helper export barrel
 │   ├── usage.ts       # Menu, cache, and usage lifecycle orchestration
 │   ├── usage-settings-ui.ts # Pi SettingsList interaction and save rollback
-│   ├── codex-fast.ts  # Fast eligibility, request tier, and cost correction
-│   ├── codex-fast-runtime.ts # Fast command, persistence lifecycle, and request hooks
+│   ├── openai-service-tier.ts  # OpenAI tier eligibility, payload rewriting, and cost correction
+│   ├── openai-service-tier-runtime.ts # Speed picker, persistence, and request hooks
 │   ├── settings.ts    # Validated user settings and atomic persistence
 │   ├── usage-helpers.ts # Small orchestration helpers
 │   ├── usage-targets.ts # Provider-neutral target resolution and safe picker descriptors

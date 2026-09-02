@@ -1,14 +1,3 @@
-export {
-	CODEX_FAST_MODEL_IDS,
-	CODEX_FAST_SERVICE_TIER,
-	CODEX_STANDARD_SERVICE_TIER,
-	codexFastAvailability,
-	codexFastIsEffective,
-	codexFastRequestTier,
-	codexFastStatusLabel,
-	correctCodexFastMessageCost,
-	rewriteCodexFastPayload,
-} from "./codex-fast.js";
 export type {
 	CodexResetAvailability,
 	CodexResetOption,
@@ -32,6 +21,27 @@ export {
 	UsageCache,
 } from "./core.js";
 export { formatProviderStates, formatUsageReport, formatUsageStatusline } from "./format.js";
+export type {
+	ActiveServiceTier,
+	ServiceTier,
+	ServiceTierAvailability,
+} from "./openai-service-tier.js";
+export {
+	CODEX_PRIORITY_MODEL_IDS,
+	correctOpenAIServiceTierMessageCost,
+	OPENAI_FLEX_MODEL_IDS,
+	OPENAI_FLEX_SERVICE_TIER,
+	OPENAI_PRIORITY_SERVICE_TIER,
+	OPENAI_SERVICE_TIERS,
+	OPENAI_STANDARD_SERVICE_TIER,
+	openAIServiceTierStatusLabel,
+	rewriteOpenAIServiceTierPayload,
+	serviceTierAvailability,
+	serviceTierCostMultiplier,
+	serviceTierIsEffective,
+	serviceTierRequestTier,
+	serviceTierSupport,
+} from "./openai-service-tier.js";
 export { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
 export { normalizeCodexBackendPayload } from "./providers/codex.js";
 export { normalizeDeepSeekBalancePayload } from "./providers/deepseek.js";
@@ -65,6 +75,7 @@ export {
 	XAI_ADAPTER,
 } from "./query.js";
 export type {
+	OpenAIServiceTier,
 	UsageSettings,
 	UsageSettingsRuntime,
 	UsageSettingsState,

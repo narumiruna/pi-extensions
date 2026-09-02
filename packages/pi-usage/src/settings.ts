@@ -9,14 +9,16 @@ import { isBoundedTargetId } from "./usage-targets.js";
 export const USAGE_SETTINGS_FILE = "pi-usage.json";
 export const MAX_USAGE_SETTINGS_BYTES = 64 * 1024;
 
+export type OpenAIServiceTier = "default" | "priority" | "flex";
+
 export interface UsageSettings {
-	codexFastMode: boolean;
+	openaiServiceTier: OpenAIServiceTier;
 	codexStatusResetCountdown: boolean;
 	selectedTargets: Record<string, string>;
 }
 
 export const DEFAULT_USAGE_SETTINGS: Readonly<UsageSettings> = Object.freeze({
-	codexFastMode: false,
+	openaiServiceTier: "default",
 	codexStatusResetCountdown: true,
 	selectedTargets: Object.freeze({}),
 });
@@ -63,6 +65,9 @@ export function usageSettingsPath(): string {
 
 export function normalizeUsageSettings(value: unknown): UsageSettings | undefined {
 	if (!isRecord(value)) return undefined;
+	if (Object.hasOwn(value, "openaiServiceTier") && !isOpenAIServiceTier(value.openaiServiceTier)) {
+		return undefined;
+	}
 	if (Object.hasOwn(value, "codexFastMode") && typeof value.codexFastMode !== "boolean") {
 		return undefined;
 	}
@@ -85,10 +90,11 @@ export function normalizeUsageSettings(value: unknown): UsageSettings | undefine
 		effectiveTargets.fireworks = value.fireworksAccountId;
 	}
 	return {
-		codexFastMode:
-			typeof value.codexFastMode === "boolean"
-				? value.codexFastMode
-				: DEFAULT_USAGE_SETTINGS.codexFastMode,
+		openaiServiceTier: isOpenAIServiceTier(value.openaiServiceTier)
+			? value.openaiServiceTier
+			: value.codexFastMode === true
+				? "priority"
+				: DEFAULT_USAGE_SETTINGS.openaiServiceTier,
 		codexStatusResetCountdown:
 			typeof value.codexStatusResetCountdown === "boolean"
 				? value.codexStatusResetCountdown
@@ -229,6 +235,7 @@ async function saveUsageSettingsPatch(
 	return saveUsageSettingsDocument(
 		path,
 		(document) => {
+			if (Object.hasOwn(patch, "openaiServiceTier")) delete document.codexFastMode;
 			for (const [key, value] of Object.entries(patch)) {
 				if (value === undefined) delete document[key];
 				else document[key] = value;
@@ -348,6 +355,10 @@ function sameUsageSettingsDocument(
 	return (
 		left.kind === right.kind && JSON.stringify(left.document) === JSON.stringify(right.document)
 	);
+}
+
+function isOpenAIServiceTier(value: unknown): value is OpenAIServiceTier {
+	return value === "default" || value === "priority" || value === "flex";
 }
 
 async function chmodPrivate(path: string): Promise<void> {
