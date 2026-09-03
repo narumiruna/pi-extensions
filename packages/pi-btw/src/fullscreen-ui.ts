@@ -304,6 +304,7 @@ class BtwFullscreenHost<T> implements Component {
 	private fullscreenCreated = false;
 	private fullscreenStopped = false;
 	private parentRestoreQueued = false;
+	private parentRestorePromise: Promise<void> | undefined;
 	private cleanupError: unknown;
 
 	constructor(
@@ -357,8 +358,8 @@ class BtwFullscreenHost<T> implements Component {
 				try {
 					this.hardCancelActiveCustom?.();
 				} finally {
-					// ProcessTerminal.stop() destroys its active input buffer. Defer only the
-					// physical handoff so Windows can finish dispatching this Ctrl+C first.
+					// ProcessTerminal.stop() destroys its active input buffer. Keep cancellation
+					// synchronous, then drain input before the physical Windows terminal handoff.
 					// Pi has no public input injection, so do not replay bytes already coalesced
 					// behind the hard-cancel key.
 					this.queueParentRestore();
@@ -375,7 +376,8 @@ class BtwFullscreenHost<T> implements Component {
 		} catch (error) {
 			this.cleanupError ??= error;
 		}
-		this.restoreParent();
+		if (this.parentRestorePromise) await this.parentRestorePromise;
+		else this.restoreParent();
 		if (this.cleanupError !== undefined) outcome = { kind: "failed", error: this.cleanupError };
 		this.finished = true;
 		this.done(outcome);
@@ -384,7 +386,12 @@ class BtwFullscreenHost<T> implements Component {
 	private queueParentRestore(): void {
 		if (this.parentRestoreQueued || this.parentRestoreAttempted) return;
 		this.parentRestoreQueued = true;
-		queueMicrotask(() => {
+		this.parentRestorePromise = Promise.resolve().then(async () => {
+			try {
+				await this.fullscreen?.terminal.drainInput?.();
+			} catch (error) {
+				this.cleanupError ??= error;
+			}
 			this.parentRestoreQueued = false;
 			this.restoreParent();
 		});
