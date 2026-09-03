@@ -1,5 +1,11 @@
 # @narumitw/pi-btw
 
+## 0.56.2
+
+### Patch Changes
+
+- c0fe03e: Wait for Pi's terminal input drain before restoring the parent fullscreen TUI after Ctrl+C.
+
 ## 0.56.1
 
 ### Patch Changes
