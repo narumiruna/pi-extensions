@@ -218,14 +218,12 @@ export async function showCodexCompactMenu(
 	ctx: ExtensionCommandContext,
 	owner: SettingsMenuOwner,
 ): Promise<void> {
-	if (ctx.mode !== "tui") {
-		if (ctx.mode === "rpc" && ctx.hasUI) {
-			ctx.ui.notify(
-				`Edit Responses compaction settings at ${safeText(runtime.get().path)}.`,
-				"info",
-			);
-		}
+	if (ctx.mode === "rpc" && ctx.hasUI) {
+		ctx.ui.notify(`Edit Responses compaction settings at ${safeText(runtime.get().path)}.`, "info");
 		return;
+	}
+	if (ctx.mode !== "tui") {
+		throw new Error("/codex-compact requires TUI or RPC UI support");
 	}
 	const { runMenu } = await import("@narumitw/pi-tui-kit");
 	if (owner.signal.aborted || !owner.isCurrent()) return;

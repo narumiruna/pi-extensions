@@ -213,14 +213,21 @@ test("rejects unsafe, malformed, oversized, and aborted unary compact responses"
 		collectCompactResponse(new Response("{invalid", { status: 200 })),
 		/malformed JSON/,
 	);
+	let oversizedBodyCancelled = false;
 	await assert.rejects(
 		collectCompactResponse(
-			new Response(JSON.stringify({ output: [item] }), {
-				headers: { "content-length": "9000000" },
-			}),
+			new Response(
+				new ReadableStream<Uint8Array>({
+					cancel(reason) {
+						oversizedBodyCancelled = reason instanceof CodexCompactionProtocolError;
+					},
+				}),
+				{ headers: { "content-length": "9000000" } },
+			),
 		),
 		/response exceeded/,
 	);
+	assert.equal(oversizedBodyCancelled, true);
 	await assert.rejects(
 		collectCompactResponse(Response.json({ output: [item] }), { maxBytes: 10 }),
 		/response exceeded/,

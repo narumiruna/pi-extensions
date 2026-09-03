@@ -286,7 +286,7 @@ test("unary compact retries transient HTTP failures but not malformed successful
 	);
 });
 
-test("unary compact rejects duplicate provider dispatch without a second external request", async () => {
+test("unary compact rejects overlapping provider dispatch without a second external request", async () => {
 	const model = modelFor("openai-responses");
 	const provider: Provider = {
 		id: model.provider,
@@ -298,8 +298,10 @@ test("unary compact rejects duplicate provider dispatch without a second externa
 			void (async () => {
 				try {
 					await options?.onPayload?.({ model: activeModel.id, input: [] }, activeModel);
-					await options?.fetch?.("https://example.test/v1/responses", { method: "POST" });
-					await options?.fetch?.("https://example.test/v1/responses", { method: "POST" });
+					await Promise.all([
+						options?.fetch?.("https://example.test/v1/responses", { method: "POST" }),
+						options?.fetch?.("https://example.test/v1/responses", { method: "POST" }),
+					]);
 					const message = {
 						role: "assistant" as const,
 						content: [],
@@ -344,7 +346,7 @@ test("unary compact rejects duplicate provider dispatch without a second externa
 				return compactResponse();
 			},
 		}),
-		/dispatched again/,
+		/overlapping/,
 	);
 	assert.equal(externalRequests, 1);
 });

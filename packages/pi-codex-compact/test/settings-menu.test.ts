@@ -245,7 +245,7 @@ test("stale menu ownership cannot trigger delayed manual compaction", async () =
 	assert.equal(compactions, 0);
 });
 
-test("non-TUI command reports through RPC and remains silent in print mode", async () => {
+test("non-TUI command reports through RPC and rejects print and JSON modes", async () => {
 	const memory = memoryRuntime();
 	let compactions = 0;
 	const rpc = createMockContext({
@@ -261,11 +261,16 @@ test("non-TUI command reports through RPC and remains silent in print mode", asy
 	});
 	assert.match(rpc.notifications[0]?.message ?? "", /pi-codex-compact\.json/);
 
-	const print = createMockContext({ mode: "print", hasUI: false });
-	await showCodexCompactMenu(memory.runtime, print.ctx, {
-		signal: new AbortController().signal,
-		isCurrent: () => true,
-	});
-	assert.deepEqual(print.notifications, []);
+	for (const mode of ["print", "json"] as const) {
+		const nonInteractive = createMockContext({ mode, hasUI: false });
+		await assert.rejects(
+			showCodexCompactMenu(memory.runtime, nonInteractive.ctx, {
+				signal: new AbortController().signal,
+				isCurrent: () => true,
+			}),
+			/requires TUI or RPC UI support/,
+		);
+		assert.deepEqual(nonInteractive.notifications, []);
+	}
 	assert.equal(compactions, 0);
 });

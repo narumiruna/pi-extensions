@@ -240,6 +240,18 @@ test("command rejects undocumented arguments in every mode", async () => {
 	}
 });
 
+test("command rejects no-argument use in print and JSON modes", async () => {
+	const mock = createMockPi();
+	createCodexCompactExtension({ settingsRuntime: settingsRuntime() })(mock.pi);
+	const command = mock.commands.get("codex-compact");
+	assert.ok(command);
+	for (const mode of ["print", "json"] as const) {
+		await assert.rejects(async () => {
+			await command.handler("", createMockContext({ mode, hasUI: false }).ctx);
+		}, /requires TUI or RPC UI support/);
+	}
+});
+
 test("custom Codex Responses providers compact and replay by API and exact model ID", async () => {
 	const mock = createMockPi();
 	const customModel = { ...model, provider: "company-codex-proxy" };

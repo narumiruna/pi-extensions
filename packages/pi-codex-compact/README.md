@@ -76,7 +76,7 @@ Close
 Escape or Ctrl+C closes without compacting, and an obsolete menu cannot trigger work after session replacement or shutdown.
 **Settings** opens the bounded settings editor.
 In RPC mode, the command reports the manual settings path instead of opening custom UI or compacting.
-Print and JSON modes remain silent because they have no command-result channel that can safely replace their normal output.
+Print and JSON modes reject the command explicitly because they cannot open the menu or safely replace their normal output with an interactive result.
 
 Pi's built-in `/compact` remains available and follows the same extension hook for all three supported Responses APIs.
 

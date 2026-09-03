@@ -192,6 +192,7 @@ export async function requestResponsesCompact(
 	let sentInput: JsonObject[] | undefined;
 	let compactResult: CollectedCompactResponse | undefined;
 	let bridgeError: unknown;
+	let dispatchInFlight = false;
 	let successfulResponses = 0;
 	const baseFetch = request.fetch ?? globalThis.fetch;
 	const bridgeFetch: typeof globalThis.fetch = async (input, init) => {
@@ -199,6 +200,12 @@ export async function requestResponsesCompact(
 		if (successfulResponses > 0) {
 			bridgeError = new CodexCompactionProtocolError(
 				"Provider dispatched again after Responses Compact succeeded",
+			);
+			return nonRetryableBridgeFailure(bridgeError);
+		}
+		if (dispatchInFlight) {
+			bridgeError = new CodexCompactionProtocolError(
+				"Provider dispatched overlapping Responses Compact requests",
 			);
 			return nonRetryableBridgeFailure(bridgeError);
 		}
@@ -216,27 +223,32 @@ export async function requestResponsesCompact(
 			return nonRetryableBridgeFailure(error);
 		}
 		const signal = mergedSignal(input, init, request.signal);
-		const response = await baseFetch(compactUrl, {
-			...init,
-			method: "POST",
-			headers: mergedHeaders(input, init),
-			body: JSON.stringify(preparedPayload),
-			signal,
-		});
-		if (!response.ok) return response;
+		dispatchInFlight = true;
 		try {
-			const result = await collectCompactResponse(response, { signal });
-			successfulResponses += 1;
-			if (successfulResponses !== 1) {
-				throw new CodexCompactionProtocolError(
-					"Provider returned more than one successful Responses Compact response",
-				);
+			const response = await baseFetch(compactUrl, {
+				...init,
+				method: "POST",
+				headers: mergedHeaders(input, init),
+				body: JSON.stringify(preparedPayload),
+				signal,
+			});
+			if (!response.ok) return response;
+			try {
+				const result = await collectCompactResponse(response, { signal });
+				successfulResponses += 1;
+				if (successfulResponses !== 1) {
+					throw new CodexCompactionProtocolError(
+						"Provider returned more than one successful Responses Compact response",
+					);
+				}
+				compactResult = result;
+				return syntheticCompletion(result, preparedPayload);
+			} catch (error) {
+				bridgeError = error;
+				return nonRetryableBridgeFailure(error);
 			}
-			compactResult = result;
-			return syntheticCompletion(result, preparedPayload);
-		} catch (error) {
-			bridgeError = error;
-			return nonRetryableBridgeFailure(error);
+		} finally {
+			dispatchInFlight = false;
 		}
 	};
 

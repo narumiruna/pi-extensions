@@ -252,7 +252,11 @@ export async function collectCompactResponse(
 	const maxBytes = options.maxBytes ?? MAX_COMPACT_JSON_BYTES;
 	const declaredLength = Number(response.headers.get("content-length"));
 	if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-		throw new CodexCompactionProtocolError("Responses Compact response exceeded the size limit");
+		const error = new CodexCompactionProtocolError(
+			"Responses Compact response exceeded the size limit",
+		);
+		await response.body?.cancel(error).catch(() => undefined);
+		throw error;
 	}
 	if (!response.body) {
 		throw new CodexCompactionProtocolError("Responses Compact response did not contain a body");
