@@ -85,6 +85,17 @@ function mergedHeaders(input: string | URL | Request, init?: RequestInit): Heade
 	return headers;
 }
 
+function mergedSignal(
+	input: string | URL | Request,
+	init: RequestInit | undefined,
+	ownerSignal: AbortSignal,
+): AbortSignal {
+	const signals = [ownerSignal];
+	if (input instanceof Request) signals.push(input.signal);
+	if (init?.signal) signals.push(init.signal);
+	return signals.length === 1 ? ownerSignal : AbortSignal.any(signals);
+}
+
 function nonRetryableBridgeFailure(error: unknown): Response {
 	const message = error instanceof Error ? error.message : String(error);
 	return Response.json(
@@ -204,17 +215,17 @@ export async function requestResponsesCompact(
 			bridgeError = error;
 			return nonRetryableBridgeFailure(error);
 		}
+		const signal = mergedSignal(input, init, request.signal);
 		const response = await baseFetch(compactUrl, {
 			...init,
 			method: "POST",
 			headers: mergedHeaders(input, init),
 			body: JSON.stringify(preparedPayload),
+			signal,
 		});
 		if (!response.ok) return response;
 		try {
-			const result = await collectCompactResponse(response, {
-				signal: init?.signal ?? request.signal,
-			});
+			const result = await collectCompactResponse(response, { signal });
 			successfulResponses += 1;
 			if (successfulResponses !== 1) {
 				throw new CodexCompactionProtocolError(

@@ -163,15 +163,42 @@ export async function collectCompactionSse(
 	return { item: [...items.values()][0], completedResponse };
 }
 
+function isRetainedCompactContent(value: unknown): value is JsonObject {
+	if (!isObject(value)) return false;
+	if (value.type === "input_text") return typeof value.text === "string";
+	if (value.type !== "input_image") return false;
+	if (
+		value.detail !== undefined &&
+		value.detail !== null &&
+		value.detail !== "auto" &&
+		value.detail !== "low" &&
+		value.detail !== "high" &&
+		value.detail !== "original"
+	) {
+		return false;
+	}
+	if (
+		(value.file_id !== undefined && value.file_id !== null && typeof value.file_id !== "string") ||
+		(value.image_url !== undefined &&
+			value.image_url !== null &&
+			typeof value.image_url !== "string")
+	) {
+		return false;
+	}
+	return (
+		(typeof value.file_id === "string" && value.file_id.length > 0) ||
+		(typeof value.image_url === "string" && value.image_url.length > 0)
+	);
+}
+
 function isRetainedCompactMessage(value: unknown): value is JsonObject {
 	return (
 		isObject(value) &&
 		value.role === "user" &&
 		(value.type === undefined || value.type === "message") &&
 		Array.isArray(value.content) &&
-		value.content.every(
-			(part) => isObject(part) && (part.type === "input_text" || part.type === "input_image"),
-		)
+		value.content.length > 0 &&
+		value.content.every(isRetainedCompactContent)
 	);
 }
 

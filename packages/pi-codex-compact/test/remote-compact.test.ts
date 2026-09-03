@@ -349,6 +349,90 @@ test("unary compact rejects duplicate provider dispatch without a second externa
 	assert.equal(externalRequests, 1);
 });
 
+test("unary compact preserves cancellation carried by a Request input", async () => {
+	const model = modelFor("openai-responses");
+	const provider: Provider = {
+		id: model.provider,
+		name: "Request input fixture",
+		auth: {} as Provider["auth"],
+		getModels: () => [model],
+		stream(activeModel, _context, options) {
+			const stream = createAssistantMessageEventStream();
+			void (async () => {
+				try {
+					await options?.onPayload?.({ model: activeModel.id, input: [] }, activeModel);
+					await options?.fetch?.(
+						new Request("https://example.test/v1/responses", {
+							method: "POST",
+							signal: options.signal,
+						}),
+					);
+					assert.fail("Aborted bridge request unexpectedly completed");
+				} catch (error) {
+					const message = {
+						role: "assistant" as const,
+						content: [],
+						api: activeModel.api,
+						provider: activeModel.provider,
+						model: activeModel.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "error" as const,
+						errorMessage: error instanceof Error ? error.message : String(error),
+						timestamp: Date.now(),
+					};
+					stream.push({ type: "error", reason: "error", error: message });
+					stream.end(message);
+				}
+			})();
+			return stream;
+		},
+		streamSimple() {
+			throw new Error("not used");
+		},
+	};
+	const controller = new AbortController();
+	let requestStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		requestStarted = resolve;
+	});
+	let forwardedSignal: AbortSignal | undefined;
+	const pending = requestRemoteCompaction({
+		provider,
+		model,
+		context: context(),
+		protocol: "responses-compact",
+		apiKey: "fixture",
+		signal: controller.signal,
+		maxRetries: 0,
+		fetch: async (_input, init) => {
+			forwardedSignal = init?.signal ?? undefined;
+			requestStarted();
+			return new Promise<Response>((_resolve, reject) => {
+				if (forwardedSignal?.aborted) {
+					reject(new DOMException("Compaction aborted", "AbortError"));
+					return;
+				}
+				forwardedSignal?.addEventListener(
+					"abort",
+					() => reject(new DOMException("Compaction aborted", "AbortError")),
+					{ once: true },
+				);
+			});
+		},
+	});
+	await started;
+	controller.abort();
+	await assert.rejects(pending, /aborted/i);
+	assert.equal(forwardedSignal?.aborted, true);
+});
+
 test("unary compact aborts stalled response parsing without publishing output", async () => {
 	const api = "openai-responses";
 	const provider = await providerFor(api);

@@ -179,12 +179,31 @@ test("rejects unsafe, malformed, oversized, and aborted unary compact responses"
 		() => validateCompactedResponse({ output: [{ type: "compaction_trigger" }, item] }),
 		/unsupported retained/,
 	);
-	assert.throws(
-		() =>
-			validateCompactedResponse({
-				output: [{ role: "user", content: [{ type: "input_file", file_data: "opaque" }] }, item],
-			}),
-		/unsupported retained/,
+	for (const retained of [
+		{ role: "user", content: [] },
+		{ role: "user", content: [{ type: "input_text" }] },
+		{ role: "user", content: [{ type: "input_text", text: 42 }] },
+		{ role: "user", content: [{ type: "input_image", detail: "auto" }] },
+		{ role: "user", content: [{ type: "input_image", image_url: 42 }] },
+		{ role: "user", content: [{ type: "input_image", image_url: "image", detail: "huge" }] },
+		{ role: "user", content: [{ type: "input_file", file_data: "opaque" }] },
+	]) {
+		assert.throws(
+			() => validateCompactedResponse({ output: [retained, item] }),
+			/unsupported retained/,
+		);
+	}
+	assert.doesNotThrow(() =>
+		validateCompactedResponse({
+			output: [
+				{
+					role: "user",
+					type: "message",
+					content: [{ type: "input_image", file_id: "file_fixture", detail: "auto" }],
+				},
+				item,
+			],
+		}),
 	);
 	assert.throws(
 		() => validateCompactedResponse({ output: [item] }, { maxBytes: 10 }),
