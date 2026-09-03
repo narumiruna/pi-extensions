@@ -1,5 +1,11 @@
 # @narumitw/pi-worktree
 
+## 0.51.7
+
+### Patch Changes
+
+- 7f56adf: Normalize the cwd comparison in `writeTargetSession` so `/worktree` workspace switching works on Windows, where Git reports forward-slash paths but session headers store backslashes.
+
 ## 0.51.6
 
 ### Patch Changes

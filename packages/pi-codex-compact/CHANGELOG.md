@@ -1,5 +1,11 @@
 # @narumitw/pi-codex-compact
 
+## 0.52.0
+
+### Minor Changes
+
+- ac74542: Add Remote V2 and unary Responses Compact routing for OpenAI Codex, OpenAI, Azure OpenAI, and compatible custom providers while preserving existing checkpoints.
+
 ## 0.51.3
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-codex-compact",
-	"version": "0.51.3",
+	"version": "0.52.0",
 	"description": "Responses compaction protocols for compatible Pi providers.",
 	"type": "module",
 	"license": "MIT",
