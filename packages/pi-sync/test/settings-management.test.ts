@@ -76,6 +76,7 @@ test("first Cloudflare R2 setup writes exact paths and masked version 3 credenti
 		});
 		await mock.commands.get("sync")?.handler("", ctx);
 		const saved = await readLocalConfigObject();
+		assert.equal(saved?.skipSecretScan, false);
 		assert.deepEqual(saved?.storageConnections.r2, {
 			type: "s3",
 			endpoint: "https://account.r2.cloudflarestorage.com",
@@ -571,6 +572,32 @@ test("settings UI exposes local editing and synced-content comparison", async ()
 	});
 });
 
+test("settings UI persists the global secret-scan override", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeSettings();
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 100);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("\r");
+				for (let attempt = 0; attempt < 100 && notifications.length === 0; attempt += 1) {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				harness.handleInput("\u001b");
+				return harness.result;
+			},
+		});
+
+		await showSyncSettings(ctx, async () => undefined);
+
+		assert.equal((await loadConfig()).skipSecretScan, true);
+		assert.equal((await readLocalConfigObject())?.skipSecretScan, true);
+	});
+});
+
 test("settings UI disposes on session replacement without mutating settings", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
@@ -606,6 +633,7 @@ test("settings UI restores its displayed value when a private atomic save is rej
 			mode: "tui",
 			custom: async (factory: unknown) => {
 				const harness = createCustomSelectorHarness(factory, 80);
+				harness.handleInput("tui.select.down");
 				harness.handleInput("\r");
 				for (let attempt = 0; attempt < 100 && notifications.length === 0; attempt += 1) {
 					await new Promise((resolve) => setTimeout(resolve, 10));
@@ -623,10 +651,10 @@ test("settings UI restores its displayed value when a private atomic save is rej
 			},
 			() => showSyncSettings(ctx, async () => undefined),
 		);
-		assert.match(afterFailure, /Automatic sync/u);
+		assert.match(afterFailure, /Skip secret scan/u);
 		assert.match(afterFailure, /Off/u);
 		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/iu);
-		assert.equal((await loadConfig()).automatic, false);
+		assert.equal((await loadConfig()).skipSecretScan, false);
 	});
 });
 

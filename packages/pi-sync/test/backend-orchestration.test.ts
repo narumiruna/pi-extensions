@@ -205,6 +205,32 @@ test("push reports a typed partial outcome when remote commits but local state c
 	});
 });
 
+test("global setting skips push secret blocking but keeps doctor scanning", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			path.join(agentDir, "settings.json"),
+			'{"OPENAI_API_KEY":"sk-123456789012345678901234567890"}\n',
+		);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
+		const blockedBackend = new MemorySyncBackend();
+		const { ctx } = createMockContext({ hasUI: true });
+		await assert.rejects(
+			push(ctx, commandOptions(), undefined, () => blockedBackend),
+			/Refusing to push possible secrets/u,
+		);
+		assert.equal(await blockedBackend.readHead(), undefined);
+
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig({ skipSecretScan: true })));
+		const allowedBackend = new MemorySyncBackend();
+		const allowed = createMockContext({ hasUI: true });
+		await push(allowed.ctx, commandOptions(), undefined, () => allowedBackend);
+		assert.ok(await allowedBackend.readHead());
+		await doctor(allowed.ctx, commandOptions(), () => allowedBackend);
+		assert.match(allowed.notifications.at(-1)?.message ?? "", /possible secrets found/u);
+	});
+});
+
 test("fake backend exercises status, diff, sync, and backend diagnostics", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });

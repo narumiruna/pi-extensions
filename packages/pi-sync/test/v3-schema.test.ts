@@ -72,9 +72,20 @@ test("version 3 resolves exhaustive S3, Git, and WebDAV setup shapes", async () 
 			assert.equal(config.backend.type, type);
 			assert.deepEqual(config.include, ["settings.json", "AGENTS.md", "sessions"]);
 			assert.equal(config.automatic, true);
+			assert.equal(config.skipSecretScan, false);
 			assert.equal(config.storagePath, "pi-sync/home");
 		});
 	}
+});
+
+test("version 3 validates the optional global secret-scan override", () => {
+	const enabled = settings("s3") as ReturnType<typeof settings> & {
+		skipSecretScan?: unknown;
+	};
+	enabled.skipSecretScan = true;
+	assert.equal(effectiveValidated(enabled), enabled);
+	enabled.skipSecretScan = "true";
+	assert.throws(() => effectiveValidated(enabled), /skipSecretScan must be boolean/u);
 });
 
 test("version 3 accepts an empty catalog only without an active setup", async () => {

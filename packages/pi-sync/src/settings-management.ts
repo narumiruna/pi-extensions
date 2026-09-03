@@ -31,6 +31,7 @@ export async function saveNewV3Settings(
 		version: 3,
 		activeSyncSetup: input.setupName,
 		onSwitch: "ask-before-pull",
+		skipSecretScan: false,
 		storageConnections: { [input.connectionName]: structuredClone(input.connection) },
 		syncSetups: {
 			[input.setupName]: {

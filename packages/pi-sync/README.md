@@ -155,6 +155,7 @@ If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
   "version": 3,
   "activeSyncSetup": "home",
   "onSwitch": "ask-before-pull",
+  "skipSecretScan": false,
   "storageConnections": {
     "r2": {
       "type": "s3",
@@ -228,6 +229,8 @@ Temporary S3 credentials may additionally include `credentials.sessionToken`.
 - **WebDAV setup storage:** `connection` and complete relative `path`; `bucket` and `branch` are rejected.
 
 Every setup requires `sync.include` and explicit `sync.automatic`.
+The global `skipSecretScan` setting defaults to `false`; when `true`, pushes skip the local secret scan, while `/sync doctor` still scans and reports possible secrets.
+Set it through **/sync → Settings → Skip secret scan** only when the destination and selected content have been reviewed.
 `activeSyncSetup` must reference an own-property setup when any setups exist and must be absent when the setup catalog is empty.
 A referenced connection cannot be removed.
 The current setup must be switched before removal.
@@ -367,7 +370,7 @@ Preserve both roots before manual recovery; with every Pi process closed and no 
 ## 🔒 Security and privacy
 
 - Canonical, legacy, temporary, and recovery settings paths are denied from snapshots; both `pi-sync/` and `.pisync/` state roots are permanently denied.
-- Push scans managed local content for common secret patterns.
+- Push scans managed local content for common secret patterns unless the user explicitly enables **Skip secret scan**; `/sync doctor` always retains the diagnostic scan.
 - Remote snapshot references, checksums, paths, manifests, response sizes, and publication revisions are validated.
 - Symlink parents, path escapes, duplicate paths, and unsafe file/directory replacement fail before local mutation.
 - Live locks block mutation; stale recovery rechecks process and guard ownership.

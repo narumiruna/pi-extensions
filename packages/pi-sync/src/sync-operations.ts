@@ -362,11 +362,13 @@ export async function push(
 		remoteForUpload,
 		options.signal,
 	);
-	const secrets = scanSnapshot(local);
-	if (secrets.length > 0) {
-		throw new Error(
-			`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`,
-		);
+	if (!config.skipSecretScan) {
+		const secrets = scanSnapshot(local);
+		if (secrets.length > 0) {
+			throw new Error(
+				`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`,
+			);
+		}
 	}
 
 	if (!(await confirmPush(ctx, options, config, backend, local, upload, head, remoteForUpload))) {
