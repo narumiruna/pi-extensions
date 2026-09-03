@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-codex-compact",
 	"version": "0.51.3",
-	"description": "Codex Remote Compaction V2 for compatible Pi providers.",
+	"description": "Responses compaction protocols for compatible Pi providers.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,

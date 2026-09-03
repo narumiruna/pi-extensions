@@ -26,11 +26,20 @@ afterEach(async () => {
 
 test("normalizes defaults and bounded user settings", () => {
 	assert.deepEqual(normalizeCodexCompactSettings({}), DEFAULT_CODEX_COMPACT_SETTINGS);
-	assert.deepEqual(normalizeCodexCompactSettings({ enabled: false, maxRetries: 0 }), {
-		...DEFAULT_CODEX_COMPACT_SETTINGS,
-		enabled: false,
-		maxRetries: 0,
-	});
+	assert.deepEqual(
+		normalizeCodexCompactSettings({
+			enabled: false,
+			protocol: "responses-compact",
+			maxRetries: 0,
+		}),
+		{
+			...DEFAULT_CODEX_COMPACT_SETTINGS,
+			enabled: false,
+			protocol: "responses-compact",
+			maxRetries: 0,
+		},
+	);
+	assert.equal(normalizeCodexCompactSettings({ protocol: "unknown" }), undefined);
 	assert.equal(normalizeCodexCompactSettings({ maxRetries: 3 }), undefined);
 	assert.equal(normalizeCodexCompactSettings({ requestTimeoutMs: 10 }), undefined);
 	assert.equal(normalizeCodexCompactSettings({ replacementTokenBudget: 1_000_000 }), undefined);

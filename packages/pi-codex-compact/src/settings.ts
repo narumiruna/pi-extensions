@@ -3,12 +3,14 @@ import { constants } from "node:fs";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { RemoteCompactionProtocolSetting } from "./model-api.js";
 
 export const CODEX_COMPACT_SETTINGS_FILE = "pi-codex-compact.json";
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
 export interface CodexCompactSettings {
 	enabled: boolean;
+	protocol: RemoteCompactionProtocolSetting;
 	requestTimeoutMs: number;
 	maxRetries: number;
 	replacementTokenBudget: number;
@@ -17,6 +19,7 @@ export interface CodexCompactSettings {
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Object.freeze({
 	enabled: true,
+	protocol: "auto",
 	requestTimeoutMs: 300_000,
 	maxRetries: 2,
 	replacementTokenBudget: 64_000,
@@ -60,6 +63,14 @@ function validInteger(value: unknown, minimum: number, maximum: number): value i
 export function normalizeCodexCompactSettings(value: unknown): CodexCompactSettings | undefined {
 	if (!isRecord(value)) return undefined;
 	if (Object.hasOwn(value, "enabled") && typeof value.enabled !== "boolean") return undefined;
+	if (
+		Object.hasOwn(value, "protocol") &&
+		value.protocol !== "auto" &&
+		value.protocol !== "remote-v2" &&
+		value.protocol !== "responses-compact"
+	) {
+		return undefined;
+	}
 	if (Object.hasOwn(value, "notifyOnFallback") && typeof value.notifyOnFallback !== "boolean") {
 		return undefined;
 	}
@@ -76,6 +87,10 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
 	return {
 		enabled:
 			typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CODEX_COMPACT_SETTINGS.enabled,
+		protocol:
+			value.protocol === "remote-v2" || value.protocol === "responses-compact"
+				? value.protocol
+				: DEFAULT_CODEX_COMPACT_SETTINGS.protocol,
 		requestTimeoutMs:
 			typeof value.requestTimeoutMs === "number"
 				? value.requestTimeoutMs
