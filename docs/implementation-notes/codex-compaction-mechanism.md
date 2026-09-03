@@ -788,29 +788,57 @@ The transferable design is the checkpoint protocol rather than any one summary p
 9. **Do not infer losslessness from persistence.** An exactly replayable summary checkpoint can still
    omit critical task state, so long conversations and repeated compactions remain accuracy risks.
 
+## Current protocol addendum
+
+Research date: 2026-09-03.
+
+The current `~/workspace/codex` checkout at commit `36984da4` retains both remote protocols:
+
+- `codex-api/src/endpoint/compact.rs` implements unary `POST responses/compact`;
+- `core/src/compact_remote_v2_attempt.rs` appends `ResponseItem::CompactionTrigger {}` to a normal Responses request;
+- `model-provider/src/provider.rs` marks OpenAI and Azure Responses providers as Remote V2-capable;
+- `features/src/lib.rs` keeps `remote_compaction_v2` stable and enabled by default.
+
+The installed OpenAI SDK `6.40.0` also publishes the official `responses.compact()` client plus
+`ResponseCompactParams`, `CompactedResponse`, `ResponseCompactionItem`, and
+`ResponseInputItem.CompactionTrigger` types. Its unary response contract returns retained user
+messages followed by one opaque compaction item and includes compaction usage. This official OpenAI
+surface is distinct from undocumented Codex-backend metadata, headers, and lifecycle behavior.
+
+The installed Pi provider interface has no first-class compact method. It does expose public
+`onPayload`, injected `fetch`, credentials, provider headers and environment, timeout, retry, and
+cancellation options. Deterministic adapter tests verify that the built-in Codex, OpenAI, and Azure
+Responses adapters each expose one HTTP Responses request and accept a compaction-only or synthetic
+completed SSE response. That public bridge is the supported package boundary; custom adapters that
+do not honor it fail closed to Pi-native compaction.
+
 ## Current Pi extension boundary
 
 The external Codex research above remains pinned, while this section describes the maintained repository extension boundary and must be reconciled when that package changes.
 
 This repository contains
 [`packages/pi-codex-compact`](../../packages/pi-codex-compact/README.md), a stable Pi extension that
-detects remote-compaction support from the active model's `openai-codex-responses` API capability.
-It implements the Remote V2 wire path inside Pi's public extension boundary:
+supports `openai-codex-responses`, `openai-responses`, and `azure-openai-responses`. It selects Remote
+V2 or unary Responses Compact automatically and permits an explicit protocol choice:
 
-- add `compaction_trigger` to an extension-owned Codex Responses request;
-- validate and persist the opaque `compaction` item in versioned `CompactionEntry.details`;
+- expand a prior compatible checkpoint in the provider-built input;
+- either append one final `compaction_trigger` to a normal Responses SSE request or rewrite the same-origin `/responses` request to unary `/responses/compact`;
+- validate one bounded opaque `compaction` item and protocol-approved retained user messages;
+- persist a version 2 checkpoint while reading version 1 Codex checkpoints without rewriting sessions;
 - identify the fallback summary from the active entry's persisted `CompactionEntry.summary` rather than regenerated prose;
-- collapse that summary and its fingerprint-verified kept suffix to a marker;
+- collapse that summary and its fingerprint-verified kept suffix to one deterministic marker;
 - replace that marker with bounded remote replacement history in `before_provider_request`;
-- fall back to native Pi compaction for other model APIs or Remote V2 failure.
+- fall back to native Pi compaction for unsupported APIs or remote failure.
 
 The package deliberately keeps Pi's threshold, `/compact`, overflow retry, append-only session tree,
 and `CompactionEntry` publication. A TUI control menu, opened with `/codex-compact`, provides
 manual compaction and writes bounded user options to `pi-codex-compact.json`.
 
 This is payload replay, not full Codex-core parity. A pure Pi extension cannot own Codex's context
-window generations, exact pre-turn and mid-turn continuation state, pending-input boundary,
-provider `comp_hash` compatibility checks, request lineage headers, or prompt-cache window identity.
-Checkpoint replay requires the exact model ID and an active model with the
-`openai-codex-responses` API capability; stored provider provenance does not gate replay.
-Full resume history also requires the extension and a working route for that API.
+window generations, summary-free token-budget reset, exact pre-turn and mid-turn continuation state,
+pending-input boundary, provider `comp_hash` compatibility checks, request lineage headers, or
+prompt-cache window identity. Pi's public `getAllTools()` metadata also omits the optional
+`constrainedSampling` field, so Remote V2 can preserve exposed tool order and schema fields but not
+that field. Checkpoint replay requires the exact model ID and API label; stored provider provenance
+does not gate replay. Full resume history also requires the extension and a working route for that
+API and protocol.

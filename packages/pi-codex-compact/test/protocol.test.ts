@@ -4,8 +4,11 @@ import {
 	appendCompactionTrigger,
 	CodexCompactionProtocolError,
 	collectCompactionSse,
+	collectCompactResponse,
+	expandRemoteCompactionPayload,
 	prepareRemoteCompactionPayload,
 	rewriteCheckpointMarker,
+	validateCompactedResponse,
 } from "../src/protocol.js";
 
 const encoder = new TextEncoder();
@@ -36,13 +39,16 @@ test("collects one compaction from fragmented CRLF SSE and deduplicates complete
 	assert.ok(result.completedResponse);
 });
 
-test("joins multiline data fields and ignores unrelated events", async () => {
-	const outputItem = JSON.stringify({
-		type: "response.output_item.done",
-		item: { type: "compaction", encrypted_content: "opaque" },
-	});
+test("joins multiline data fields and ignores unrelated output items", async () => {
+	const message = { type: "message", role: "assistant", content: [] };
+	const item = { type: "compaction", encrypted_content: "opaque" };
+	const outputItem = JSON.stringify({ type: "response.output_item.done", item });
 	const stream = fragmentedStream(
-		`data: ${outputItem}\n\ndata: {"type":"response.completed",\ndata: "response":{"output":[]}}\n\n`,
+		[
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: message })}\n\n`,
+			`data: ${outputItem}\n\n`,
+			`data: {"type":"response.completed",\ndata: "response":{"output":[${JSON.stringify(message)},${JSON.stringify(item)}]}}\n\n`,
+		].join(""),
 		3,
 	);
 	const result = await collectCompactionSse(stream);
@@ -142,6 +148,89 @@ test("rewrites exactly one marker and appends exactly one final trigger", () => 
 		{ type: "compaction_trigger" },
 	]);
 	assert.equal(payload.input.length, 2, "does not mutate caller payload");
+});
+
+test("validates bounded unary compact output and response streaming", async () => {
+	const value = {
+		id: "resp_compact",
+		object: "response.compaction",
+		output: [
+			{ role: "user", content: [{ type: "input_text", text: "retained" }] },
+			{ type: "compaction", encrypted_content: "opaque" },
+		],
+		usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+	};
+	const validated = validateCompactedResponse(value);
+	assert.equal(validated.item.encrypted_content, "opaque");
+	assert.equal(validated.output.length, 2);
+	const collected = await collectCompactResponse(Response.json(value));
+	assert.deepEqual(collected.output, validated.output);
+});
+
+test("rejects unsafe, malformed, oversized, and aborted unary compact responses", async () => {
+	const item = { type: "compaction", encrypted_content: "opaque" };
+	assert.throws(() => validateCompactedResponse({ output: [] }), /no output/);
+	assert.throws(() => validateCompactedResponse({ output: [item, item] }), /followed by one/);
+	assert.throws(
+		() => validateCompactedResponse({ output: [{ role: "developer", content: [] }, item] }),
+		/unsupported retained/,
+	);
+	assert.throws(
+		() => validateCompactedResponse({ output: [{ type: "compaction_trigger" }, item] }),
+		/unsupported retained/,
+	);
+	assert.throws(
+		() =>
+			validateCompactedResponse({
+				output: [{ role: "user", content: [{ type: "input_file", file_data: "opaque" }] }, item],
+			}),
+		/unsupported retained/,
+	);
+	assert.throws(
+		() => validateCompactedResponse({ output: [item] }, { maxBytes: 10 }),
+		/response exceeded/,
+	);
+	await assert.rejects(
+		collectCompactResponse(new Response("{invalid", { status: 200 })),
+		/malformed JSON/,
+	);
+	await assert.rejects(
+		collectCompactResponse(
+			new Response(JSON.stringify({ output: [item] }), {
+				headers: { "content-length": "9000000" },
+			}),
+		),
+		/response exceeded/,
+	);
+	await assert.rejects(
+		collectCompactResponse(Response.json({ output: [item] }), { maxBytes: 10 }),
+		/response exceeded/,
+	);
+	await assert.rejects(
+		collectCompactResponse(Response.json({ output: [item] }), { maxItemBytes: 10 }),
+		/output item exceeded/,
+	);
+	const controller = new AbortController();
+	controller.abort();
+	await assert.rejects(
+		collectCompactResponse(Response.json({ output: [item] }), { signal: controller.signal }),
+		/aborted/i,
+	);
+});
+
+test("expands checkpoint payloads without mutating or adding a trigger", () => {
+	const payload = {
+		model: "gpt",
+		input: [{ role: "user", content: [{ type: "input_text", text: "checkpoint" }] }],
+	};
+	const expanded = expandRemoteCompactionPayload(payload, {
+		marker: "checkpoint",
+		replacementHistory: [{ type: "compaction", encrypted_content: "prior" }],
+	});
+	assert.deepEqual(expanded.input, [{ type: "compaction", encrypted_content: "prior" }]);
+	assert.deepEqual(payload.input, [
+		{ role: "user", content: [{ type: "input_text", text: "checkpoint" }] },
+	]);
 });
 
 test("payload validators reject malformed inputs, missing/duplicate markers, and duplicate triggers", () => {

@@ -34,7 +34,9 @@ function checkpoint(
 ) {
 	return createCheckpointDetails({
 		provider,
+		api: "openai-codex-responses",
 		modelId: "gpt-5.6",
+		protocol: "remote-v2",
 		replacementHistory: [rawUser("old"), opaque],
 		keptMessages: kept,
 		checkpointId: id,
@@ -136,11 +138,30 @@ test("validates versioned details and rejects malformed or unbounded persisted d
 	const customProvider = checkpoint([], "checkpoint-custom", "company-codex-proxy");
 	assert.deepEqual(parseCheckpointDetails(details), details);
 	assert.deepEqual(parseCheckpointDetails(customProvider), customProvider);
-	assert.equal(parseCheckpointDetails({ ...details, version: 2 }), undefined);
+	assert.deepEqual(
+		parseCheckpointDetails({
+			...details,
+			version: 1,
+			protocol: "remote-compaction-v2",
+		}),
+		details,
+	);
+	assert.equal(parseCheckpointDetails({ ...details, version: 3 }), undefined);
+	assert.equal(parseCheckpointDetails({ ...details, checkpointId: "x".repeat(129) }), undefined);
 	assert.equal(parseCheckpointDetails({ ...details, provider: "" }), undefined);
 	assert.equal(parseCheckpointDetails({ ...details, provider: "x".repeat(257) }), undefined);
+	assert.equal(parseCheckpointDetails({ ...details, modelId: "" }), undefined);
+	assert.equal(parseCheckpointDetails({ ...details, modelId: "x".repeat(513) }), undefined);
 	assert.equal(parseCheckpointDetails({ ...details, replacementHistory: [] }), undefined);
 	assert.equal(parseCheckpointDetails({ ...details, keptMessageFingerprints: ["bad"] }), undefined);
+	const cyclic: Record<string, unknown> = { ...details };
+	cyclic.self = cyclic;
+	assert.equal(parseCheckpointDetails(cyclic), undefined);
+	for (const api of ["openai-responses", "azure-openai-responses"] as const) {
+		for (const protocol of ["remote-v2", "responses-compact"] as const) {
+			assert.equal(parseCheckpointDetails({ ...details, api, protocol })?.api, api);
+		}
+	}
 	assert.doesNotMatch(JSON.stringify(details), /token|authorization|header/i);
 });
 

@@ -1,23 +1,29 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CompactionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { RemoteCompactionProtocol, ResponsesCompactionApi } from "./model-api.js";
+import { RESPONSES_COMPACTION_APIS } from "./model-api.js";
 import { type JsonObject, validateCompactionItem } from "./protocol.js";
 
 export const CHECKPOINT_KIND = "pi-codex-remote-compaction";
-export const CHECKPOINT_VERSION = 1;
+export const CHECKPOINT_VERSION = 2;
 export const REPLACEMENT_TOKEN_BUDGET = 64_000;
 export const REPLACEMENT_BYTE_BUDGET = 8 * 1024 * 1024;
 const MAX_MEDIA_ITEM_BYTES = 2 * 1024 * 1024;
+const MAX_CHECKPOINT_DETAILS_BYTES = 10 * 1024 * 1024;
+const MAX_CHECKPOINT_ID_LENGTH = 128;
 const MAX_PROVIDER_ID_LENGTH = 256;
+const MAX_MODEL_ID_LENGTH = 512;
+const MAX_KEPT_FINGERPRINTS = 100_000;
 
 export interface CodexCheckpointDetails {
 	kind: typeof CHECKPOINT_KIND;
 	version: typeof CHECKPOINT_VERSION;
 	checkpointId: string;
 	provider: string;
-	api: "openai-codex-responses";
+	api: ResponsesCompactionApi;
 	modelId: string;
-	protocol: "remote-compaction-v2";
+	protocol: RemoteCompactionProtocol;
 	replacementHistory: JsonObject[];
 	keptMessageFingerprints: string[];
 	createdAt: string;
@@ -51,14 +57,14 @@ export function checkpointMarker(checkpointId: string): string {
 	return [
 		`[PI_CODEX_REMOTE_CHECKPOINT:${checkpointId}]`,
 		"Opaque checkpoint injection failed. Do not infer missing history; tell the user to re-enable",
-		"@narumitw/pi-codex-compact with a model using the openai-codex-responses API.",
+		"@narumitw/pi-codex-compact with the same model and Responses API.",
 	].join(" ");
 }
 
 export function fallbackSummary(checkpointId: string): string {
 	return [
-		`OpenAI Codex Remote Compaction V2 checkpoint ${checkpointId} stores the older history opaquely.`,
-		"Full replay requires @narumitw/pi-codex-compact and the same model through a compatible Codex Responses provider.",
+		`Responses compaction checkpoint ${checkpointId} stores the older history opaquely.`,
+		"Full replay requires @narumitw/pi-codex-compact and the same model through a compatible Responses provider.",
 		"Without them, only Pi's retained recent messages remain available.",
 	].join(" ");
 }
@@ -73,20 +79,36 @@ function markerMessage(checkpointId: string, timestamp: number): AgentMessage {
 
 export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails | undefined {
 	if (!isObject(value)) return undefined;
+	try {
+		if (serializedBytes(value) > MAX_CHECKPOINT_DETAILS_BYTES) return undefined;
+	} catch {
+		return undefined;
+	}
+	const isVersionOne =
+		value.version === 1 &&
+		value.api === "openai-codex-responses" &&
+		value.protocol === "remote-compaction-v2";
+	const isVersionTwo =
+		value.version === CHECKPOINT_VERSION &&
+		RESPONSES_COMPACTION_APIS.includes(value.api as ResponsesCompactionApi) &&
+		(value.protocol === "remote-v2" || value.protocol === "responses-compact");
 	if (
 		value.kind !== CHECKPOINT_KIND ||
-		value.version !== CHECKPOINT_VERSION ||
+		(!isVersionOne && !isVersionTwo) ||
 		typeof value.checkpointId !== "string" ||
 		value.checkpointId.length < 8 ||
+		value.checkpointId.length > MAX_CHECKPOINT_ID_LENGTH ||
 		typeof value.provider !== "string" ||
 		value.provider.length === 0 ||
 		value.provider.length > MAX_PROVIDER_ID_LENGTH ||
-		value.api !== "openai-codex-responses" ||
 		typeof value.modelId !== "string" ||
-		value.protocol !== "remote-compaction-v2" ||
+		value.modelId.length === 0 ||
+		value.modelId.length > MAX_MODEL_ID_LENGTH ||
 		!Array.isArray(value.replacementHistory) ||
 		!Array.isArray(value.keptMessageFingerprints) ||
-		typeof value.createdAt !== "string"
+		value.keptMessageFingerprints.length > MAX_KEPT_FINGERPRINTS ||
+		typeof value.createdAt !== "string" ||
+		value.createdAt.length > 64
 	) {
 		return undefined;
 	}
@@ -106,7 +128,18 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
 	} catch {
 		return undefined;
 	}
-	return structuredClone(value) as unknown as CodexCheckpointDetails;
+	return {
+		kind: CHECKPOINT_KIND,
+		version: CHECKPOINT_VERSION,
+		checkpointId: value.checkpointId,
+		provider: value.provider,
+		api: isVersionOne ? "openai-codex-responses" : (value.api as ResponsesCompactionApi),
+		modelId: value.modelId,
+		protocol: isVersionOne ? "remote-v2" : (value.protocol as RemoteCompactionProtocol),
+		replacementHistory: structuredClone(value.replacementHistory),
+		keptMessageFingerprints: [...value.keptMessageFingerprints],
+		createdAt: value.createdAt,
+	};
 }
 
 export function latestCheckpoint(entries: readonly SessionEntry[]):
@@ -258,7 +291,9 @@ export function buildReplacementHistory(
 
 export function createCheckpointDetails(input: {
 	provider: string;
+	api: ResponsesCompactionApi;
 	modelId: string;
+	protocol: RemoteCompactionProtocol;
 	replacementHistory: JsonObject[];
 	keptMessages: readonly AgentMessage[];
 	checkpointId?: string;
@@ -269,9 +304,9 @@ export function createCheckpointDetails(input: {
 		version: CHECKPOINT_VERSION,
 		checkpointId: input.checkpointId ?? randomUUID(),
 		provider: input.provider,
-		api: "openai-codex-responses",
+		api: input.api,
 		modelId: input.modelId,
-		protocol: "remote-compaction-v2",
+		protocol: input.protocol,
 		replacementHistory: structuredClone(input.replacementHistory),
 		keptMessageFingerprints: input.keptMessages.map(fingerprintMessage),
 		createdAt: input.createdAt ?? new Date().toISOString(),

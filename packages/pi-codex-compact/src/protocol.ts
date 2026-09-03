@@ -1,4 +1,5 @@
 export const MAX_SSE_BYTES = 8 * 1024 * 1024;
+export const MAX_COMPACT_JSON_BYTES = 8 * 1024 * 1024;
 export const MAX_COMPACTION_ITEM_BYTES = 2 * 1024 * 1024;
 
 export type JsonObject = Record<string, unknown>;
@@ -45,6 +46,12 @@ export function validateCompactionItem(
 export interface CollectedCompaction {
 	item: JsonObject;
 	completedResponse?: JsonObject;
+}
+
+export interface CollectedCompactResponse {
+	item: JsonObject;
+	output: JsonObject[];
+	response: JsonObject;
 }
 
 function compactionItemsFromEvent(event: JsonObject): unknown[] {
@@ -156,6 +163,116 @@ export async function collectCompactionSse(
 	return { item: [...items.values()][0], completedResponse };
 }
 
+function isRetainedCompactMessage(value: unknown): value is JsonObject {
+	return (
+		isObject(value) &&
+		value.role === "user" &&
+		(value.type === undefined || value.type === "message") &&
+		Array.isArray(value.content) &&
+		value.content.every(
+			(part) => isObject(part) && (part.type === "input_text" || part.type === "input_image"),
+		)
+	);
+}
+
+export function validateCompactedResponse(
+	value: unknown,
+	options: { maxBytes?: number; maxItemBytes?: number } = {},
+): CollectedCompactResponse {
+	if (!isObject(value) || !Array.isArray(value.output)) {
+		throw new CodexCompactionProtocolError("Responses Compact returned an invalid response object");
+	}
+	const maxBytes = options.maxBytes ?? MAX_COMPACT_JSON_BYTES;
+	const maxItemBytes = options.maxItemBytes ?? MAX_COMPACTION_ITEM_BYTES;
+	if (byteLength(value) > maxBytes) {
+		throw new CodexCompactionProtocolError("Responses Compact response exceeded the size limit");
+	}
+	if (value.output.length === 0) {
+		throw new CodexCompactionProtocolError("Responses Compact returned no output items");
+	}
+	const output = value.output.map((item) => {
+		if (!isObject(item)) {
+			throw new CodexCompactionProtocolError("Responses Compact returned a non-object output item");
+		}
+		if (byteLength(item) > maxItemBytes) {
+			throw new CodexCompactionProtocolError(
+				"Responses Compact output item exceeded the size limit",
+			);
+		}
+		return structuredClone(item);
+	});
+	const compactionItems = output.filter((item) => item.type === "compaction");
+	if (compactionItems.length !== 1 || output.at(-1)?.type !== "compaction") {
+		throw new CodexCompactionProtocolError(
+			"Responses Compact must return retained messages followed by one compaction item",
+		);
+	}
+	for (const item of output.slice(0, -1)) {
+		if (!isRetainedCompactMessage(item)) {
+			throw new CodexCompactionProtocolError(
+				"Responses Compact returned an unsupported retained output item",
+			);
+		}
+	}
+	const item = validateCompactionItem(output.at(-1), maxItemBytes);
+	return { item, output: [...output.slice(0, -1), item], response: structuredClone(value) };
+}
+
+export async function collectCompactResponse(
+	response: Response,
+	options: { signal?: AbortSignal; maxBytes?: number; maxItemBytes?: number } = {},
+): Promise<CollectedCompactResponse> {
+	const maxBytes = options.maxBytes ?? MAX_COMPACT_JSON_BYTES;
+	const declaredLength = Number(response.headers.get("content-length"));
+	if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+		throw new CodexCompactionProtocolError("Responses Compact response exceeded the size limit");
+	}
+	if (!response.body) {
+		throw new CodexCompactionProtocolError("Responses Compact response did not contain a body");
+	}
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	const onAbort = () => {
+		void reader.cancel(new DOMException("Compaction aborted", "AbortError")).catch(() => undefined);
+	};
+	options.signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		while (true) {
+			if (options.signal?.aborted) throw new DOMException("Compaction aborted", "AbortError");
+			const { done, value } = await reader.read();
+			if (done) break;
+			bytes += value.byteLength;
+			if (bytes > maxBytes) {
+				throw new CodexCompactionProtocolError(
+					"Responses Compact response exceeded the size limit",
+				);
+			}
+			chunks.push(value);
+		}
+		if (options.signal?.aborted) throw new DOMException("Compaction aborted", "AbortError");
+	} catch (error) {
+		await reader.cancel(error).catch(() => undefined);
+		throw error;
+	} finally {
+		options.signal?.removeEventListener("abort", onAbort);
+		reader.releaseLock();
+	}
+	const body = new Uint8Array(bytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(new TextDecoder().decode(body));
+	} catch {
+		throw new CodexCompactionProtocolError("Responses Compact returned malformed JSON");
+	}
+	return validateCompactedResponse(parsed, options);
+}
+
 function markerTextFromItem(item: unknown): string | undefined {
 	if (!isObject(item) || item.role !== "user" || !Array.isArray(item.content)) return undefined;
 	if (item.content.length !== 1) return undefined;
@@ -205,14 +322,24 @@ export function appendCompactionTrigger(payload: unknown): JsonObject {
 	return { ...payload, input: [...payload.input, { type: "compaction_trigger" }] };
 }
 
+export function expandRemoteCompactionPayload(
+	payload: unknown,
+	checkpoint?: { marker: string; replacementHistory: readonly unknown[] },
+): JsonObject {
+	if (checkpoint) {
+		return rewriteCheckpointMarker(payload, checkpoint.marker, checkpoint.replacementHistory);
+	}
+	if (!isObject(payload) || !Array.isArray(payload.input)) {
+		throw new CodexCompactionProtocolError("Responses payload is missing an input array");
+	}
+	return structuredClone(payload);
+}
+
 export function prepareRemoteCompactionPayload(
 	payload: unknown,
 	checkpoint?: { marker: string; replacementHistory: readonly unknown[] },
 ): JsonObject {
-	const expanded = checkpoint
-		? rewriteCheckpointMarker(payload, checkpoint.marker, checkpoint.replacementHistory)
-		: payload;
-	return appendCompactionTrigger(expanded);
+	return appendCompactionTrigger(expandRemoteCompactionPayload(payload, checkpoint));
 }
 
 export function hasCheckpointMarker(payload: unknown, marker: string): boolean {

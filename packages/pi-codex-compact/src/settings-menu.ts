@@ -1,16 +1,19 @@
+import type { Api } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { MenuDefinition } from "@narumitw/pi-tui-kit";
-import { usesCodexResponsesApi } from "./model-api.js";
+import { resolveCompactionRouteForApi } from "./model-api.js";
 import type {
 	CodexCompactSettings,
 	CodexCompactSettingsRuntime,
 	CodexCompactSettingsState,
 } from "./settings.js";
+import { terminalText as safeText } from "./terminal.js";
 
 type Screen = "main" | "settings" | "invalid";
 type Action =
 	| "compact-now"
 	| "set-enabled"
+	| "set-protocol"
 	| "set-timeout"
 	| "set-retries"
 	| "set-retention"
@@ -23,14 +26,7 @@ export interface SettingsMenuOwner {
 
 interface CompactMenuStatus {
 	model: string;
-	remoteEligible: boolean;
-}
-
-function safeText(value: string): string {
-	return Array.from(value, (character) => {
-		const codePoint = character.codePointAt(0) ?? 0;
-		return codePoint < 32 || (codePoint >= 127 && codePoint <= 159) ? " " : character;
-	}).join("");
+	api?: Api;
 }
 
 function timeoutLabel(milliseconds: number): string {
@@ -41,6 +37,17 @@ function retentionLabel(tokens: number): string {
 	return `${tokens / 1000}K tokens`;
 }
 
+function protocolLabel(protocol: CodexCompactSettings["protocol"]): string {
+	switch (protocol) {
+		case "auto":
+			return "Auto";
+		case "remote-v2":
+			return "Remote V2";
+		case "responses-compact":
+			return "Responses Compact";
+	}
+}
+
 async function update(
 	runtime: CodexCompactSettingsRuntime,
 	ctx: ExtensionCommandContext,
@@ -49,7 +56,8 @@ async function update(
 ) {
 	try {
 		await runtime.update(patch, signal);
-		ctx.ui.notify("Codex compaction settings saved.", "info");
+		if (signal.aborted) return { kind: "rejected" as const };
+		ctx.ui.notify("Responses compaction settings saved.", "info");
 		return { kind: "stay" as const };
 	} catch (error) {
 		if (signal.aborted) return { kind: "rejected" as const };
@@ -70,9 +78,10 @@ export function createCodexCompactMenu(
 		screens: {
 			main: ({ state }) => ({
 				kind: "actions",
-				title: "Codex Remote Compaction",
+				title: "Responses Compaction",
 				lines: [
-					`Remote V2: ${state.settings.enabled ? "On" : "Off"}`,
+					`Remote compaction: ${state.settings.enabled ? "On" : "Off"}`,
+					`Protocol setting: ${protocolLabel(state.settings.protocol)}`,
 					`Active model: ${safeText(options.status?.model ?? "none")}`,
 					`Compact route: ${safeText(compactRoute(state, options.status))}`,
 				],
@@ -97,16 +106,24 @@ export function createCodexCompactMenu(
 			}),
 			settings: ({ state }) => ({
 				kind: "settings",
-				title: "Codex Remote Compaction Settings",
+				title: "Responses Compaction Settings",
 				lines: [`User settings · ${safeText(state.path)}`],
 				items: [
 					{
 						id: "enabled",
 						label: "Remote compaction",
-						description: "Use Codex Remote V2 when the model uses openai-codex-responses.",
+						description: "Use a supported Responses compaction protocol.",
 						currentValue: state.settings.enabled ? "On" : "Off",
 						values: ["On", "Off"],
 						action: "set-enabled",
+					},
+					{
+						id: "protocol",
+						label: "Protocol",
+						description: "Choose automatically or force one supported remote protocol.",
+						currentValue: protocolLabel(state.settings.protocol),
+						values: ["Auto", "Remote V2", "Responses Compact"],
+						action: "set-protocol",
 					},
 					{
 						id: "requestTimeoutMs",
@@ -135,7 +152,7 @@ export function createCodexCompactMenu(
 					{
 						id: "notifyOnFallback",
 						label: "Fallback notifications",
-						description: "Warn when Remote V2 fails and native Pi compaction takes over.",
+						description: "Warn when remote compaction fails and Pi native takes over.",
 						currentValue: state.settings.notifyOnFallback ? "On" : "Off",
 						values: ["On", "Off"],
 						action: "set-notify",
@@ -160,6 +177,20 @@ export function createCodexCompactMenu(
 			},
 			"set-enabled": ({ ctx, value, signal }) =>
 				update(runtime, ctx, { enabled: value === "On" }, signal),
+			"set-protocol": ({ ctx, value, signal }) =>
+				update(
+					runtime,
+					ctx,
+					{
+						protocol:
+							value === "Remote V2"
+								? "remote-v2"
+								: value === "Responses Compact"
+									? "responses-compact"
+									: "auto",
+					},
+					signal,
+				),
 			"set-timeout": ({ ctx, value, signal }) =>
 				update(
 					runtime,
@@ -188,7 +219,12 @@ export async function showCodexCompactMenu(
 	owner: SettingsMenuOwner,
 ): Promise<void> {
 	if (ctx.mode !== "tui") {
-		ctx.ui.notify(`Edit Codex compaction settings at ${safeText(runtime.get().path)}.`, "info");
+		if (ctx.mode === "rpc" && ctx.hasUI) {
+			ctx.ui.notify(
+				`Edit Responses compaction settings at ${safeText(runtime.get().path)}.`,
+				"info",
+			);
+		}
 		return;
 	}
 	const { runMenu } = await import("@narumitw/pi-tui-kit");
@@ -222,7 +258,7 @@ export function compactMenuStatus(ctx: ExtensionCommandContext): CompactMenuStat
 	const model = ctx.model;
 	return {
 		model: model ? `${model.provider}/${model.id}` : "none",
-		remoteEligible: usesCodexResponsesApi(model),
+		api: model?.api,
 	};
 }
 
@@ -230,6 +266,7 @@ function compactRoute(
 	state: Readonly<CodexCompactSettingsState>,
 	status: CompactMenuStatus | undefined,
 ): string {
-	if (!state.settings.enabled) return "Pi native (Remote V2 off)";
-	return status?.remoteEligible ? "Codex Remote V2" : "Pi native (requires openai-codex-responses)";
+	const route = resolveCompactionRouteForApi(status?.api, state.settings);
+	if (route.kind === "native") return `Pi native (${route.reason})`;
+	return route.protocol === "remote-v2" ? "Responses Remote V2" : "Responses Compact API";
 }

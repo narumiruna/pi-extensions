@@ -46,14 +46,17 @@ test("root menu makes manual compaction primary and exposes its effective route"
 	const customContext = createMockContext({ model: customModel }).ctx;
 	assert.deepEqual(compactMenuStatus(customContext), {
 		model: "company-codex-proxy/gpt-5.6",
-		remoteEligible: true,
+		api: "openai-codex-responses",
 	});
-	const ineligibleStatus = compactMenuStatus(
+	const openAIStatus = compactMenuStatus(
 		createMockContext({ model: { ...customModel, api: "openai-responses" } }).ctx,
 	);
-	assert.equal(ineligibleStatus.remoteEligible, false);
+	assert.equal(openAIStatus.api, "openai-responses");
+	const ineligibleStatus = compactMenuStatus(
+		createMockContext({ model: { ...customModel, api: "anthropic-messages" } }).ctx,
+	);
 	const menu = createCodexCompactMenu(current.runtime, {
-		status: { model: "openai-codex/gpt-5.6", remoteEligible: true },
+		status: { model: "openai-codex/gpt-5.6", api: "openai-codex-responses" },
 	});
 	assert.equal(menu.start, "main");
 	const main = resolveMenuScreen(menu, "main", current.runtime.get());
@@ -64,7 +67,7 @@ test("root menu makes manual compaction primary and exposes its effective route"
 		["Compact now", "Settings", "Close"],
 	);
 	assert.match(main.lines?.join("\n") ?? "", /openai-codex\/gpt-5\.6/);
-	assert.match(main.lines?.join("\n") ?? "", /Codex Remote V2/);
+	assert.match(main.lines?.join("\n") ?? "", /Responses Remote V2/);
 	const ineligible = resolveMenuScreen(
 		createCodexCompactMenu(current.runtime, { status: ineligibleStatus }),
 		"main",
@@ -72,14 +75,25 @@ test("root menu makes manual compaction primary and exposes its effective route"
 	);
 	assert.equal(ineligible.kind, "actions");
 	if (ineligible.kind !== "actions") assert.fail("Expected ineligible actions screen");
-	assert.match(ineligible.lines?.join("\n") ?? "", /Pi native \(requires openai-codex-responses\)/);
+	assert.match(
+		ineligible.lines?.join("\n") ?? "",
+		/Pi native \(API anthropic-messages does not support Responses compaction\)/,
+	);
 	const disabled = resolveMenuScreen(menu, "main", {
 		...current.runtime.get(),
 		settings: { ...current.runtime.get().settings, enabled: false },
 	});
 	assert.equal(disabled.kind, "actions");
 	if (disabled.kind !== "actions") assert.fail("Expected disabled actions screen");
-	assert.match(disabled.lines?.join("\n") ?? "", /Pi native \(Remote V2 off\)/);
+	assert.match(disabled.lines?.join("\n") ?? "", /Pi native \(remote compaction is disabled\)/);
+	const openAI = resolveMenuScreen(
+		createCodexCompactMenu(current.runtime, { status: openAIStatus }),
+		"main",
+		current.runtime.get(),
+	);
+	assert.equal(openAI.kind, "actions");
+	if (openAI.kind !== "actions") assert.fail("Expected OpenAI actions screen");
+	assert.match(openAI.lines?.join("\n") ?? "", /Responses Compact API/);
 });
 
 test("settings screen exposes bounded controls and invalid files remain repairable", () => {
@@ -92,6 +106,7 @@ test("settings screen exposes bounded controls and invalid files remain repairab
 		screen.items.map((item) => [item.id, item.currentValue]),
 		[
 			["enabled", "On"],
+			["protocol", "Auto"],
 			["requestTimeoutMs", "5 min"],
 			["maxRetries", "2"],
 			["replacementTokenBudget", "64K tokens"],
@@ -141,17 +156,48 @@ test("menu actions persist exact setting patches", async () => {
 		value,
 	});
 	await menu.actions["set-enabled"](action("Off"));
+	await menu.actions["set-protocol"](action("Responses Compact"));
 	await menu.actions["set-timeout"](action("10 min"));
 	await menu.actions["set-retries"](action("1"));
 	await menu.actions["set-retention"](action("96K tokens"));
 	await menu.actions["set-notify"](action("Off"));
 	assert.deepEqual(memory.patches, [
 		{ enabled: false },
+		{ protocol: "responses-compact" },
 		{ requestTimeoutMs: 600_000 },
 		{ maxRetries: 1 },
 		{ replacementTokenBudget: 96_000 },
 		{ notifyOnFallback: false },
 	]);
+});
+
+test("stale settings saves do not notify through a disposed menu", async () => {
+	const memory = memoryRuntime();
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime: CodexCompactSettingsRuntime = {
+		...memory.runtime,
+		async update(patch) {
+			await blocked;
+			return memory.runtime.update(patch);
+		},
+	};
+	const menu = createCodexCompactMenu(runtime);
+	const controller = new AbortController();
+	const { ctx, notifications } = createMockContext({ mode: "tui" });
+	const pending = menu.actions["set-enabled"]({
+		ctx,
+		state: runtime.get(),
+		signal: controller.signal,
+		itemId: "enabled",
+		value: "Off",
+	});
+	controller.abort();
+	release();
+	assert.deepEqual(await pending, { kind: "rejected" });
+	assert.deepEqual(notifications, []);
 });
 
 test("TUI manual action compacts once after close and reports core errors", async () => {
@@ -199,20 +245,27 @@ test("stale menu ownership cannot trigger delayed manual compaction", async () =
 	assert.equal(compactions, 0);
 });
 
-test("non-TUI command reports the settings path without compacting", async () => {
+test("non-TUI command reports through RPC and remains silent in print mode", async () => {
 	const memory = memoryRuntime();
 	let compactions = 0;
-	const { ctx, notifications } = createMockContext({
-		mode: "print",
-		hasUI: false,
+	const rpc = createMockContext({
+		mode: "rpc",
+		hasUI: true,
 		compact: () => {
 			compactions += 1;
 		},
 	});
-	await showCodexCompactMenu(memory.runtime, ctx, {
+	await showCodexCompactMenu(memory.runtime, rpc.ctx, {
 		signal: new AbortController().signal,
 		isCurrent: () => true,
 	});
-	assert.match(notifications[0]?.message ?? "", /pi-codex-compact\.json/);
+	assert.match(rpc.notifications[0]?.message ?? "", /pi-codex-compact\.json/);
+
+	const print = createMockContext({ mode: "print", hasUI: false });
+	await showCodexCompactMenu(memory.runtime, print.ctx, {
+		signal: new AbortController().signal,
+		isCurrent: () => true,
+	});
+	assert.deepEqual(print.notifications, []);
 	assert.equal(compactions, 0);
 });
