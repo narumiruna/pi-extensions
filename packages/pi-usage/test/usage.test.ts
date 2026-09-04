@@ -2603,6 +2603,7 @@ test("the Settings frame respects the live terminal row budget", async () => {
 	const terminal = { rows: 24 };
 	let full: string[] = [];
 	let constrained: string[] = [];
+	let tiny: string[] = [];
 	const { ctx } = createMockContext({
 		hasUI: true,
 		mode: "tui",
@@ -2635,7 +2636,10 @@ test("the Settings frame respects the live terminal row budget", async () => {
 				);
 				full = component.render(100);
 				terminal.rows = 12;
-				constrained = component.render(100);
+				constrained = component.render(20);
+				terminal.rows = 4;
+				component.handleInput("\u001b[B");
+				tiny = component.render(20);
 				component.handleInput("\u0003");
 			}),
 	});
@@ -2652,10 +2656,13 @@ test("the Settings frame respects the live terminal row budget", async () => {
 	assert.equal(fullPlain[0], "─".repeat(100));
 	assert.equal(fullPlain.at(-1), "─".repeat(100));
 	const constrainedPlain = constrained.map(stripVTControlCharacters);
-	assert.ok(constrainedPlain.length <= terminal.rows - 3);
-	assert.notEqual(constrainedPlain[0], "─".repeat(100));
-	assert.notEqual(constrainedPlain.at(-1), "─".repeat(100));
+	assert.ok(constrainedPlain.length <= 9);
+	assert.notEqual(constrainedPlain[0], "─".repeat(20));
+	assert.notEqual(constrainedPlain.at(-1), "─".repeat(20));
 	assert.match(constrainedPlain.join("\n"), /[→›]\s+Codex Fast mode/u);
+	const tinyPlain = tiny.map(stripVTControlCharacters);
+	assert.equal(tinyPlain.length, 1);
+	assert.match(tinyPlain[0] ?? "", /[→›]\s+Codex reset/u);
 });
 
 test("Ctrl+C hard-cancels Settings before conflicting configurable actions", async (t) => {

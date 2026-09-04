@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import {
 	type ExtensionCommandContext,
 	getSettingsListTheme,
@@ -17,6 +18,26 @@ const OFF = "Off";
 const ON = "On";
 
 type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown";
+
+function fitSettingsRows(lines: string[], maxRows: number): string[] {
+	if (lines.length <= maxRows) return lines;
+	const content = lines.filter((line) => stripVTControlCharacters(line).trim().length > 0);
+	if (content.length <= maxRows) return content;
+	const selectedIndex = content.findIndex((line) =>
+		/^[→›]\s/u.test(stripVTControlCharacters(line)),
+	);
+	if (selectedIndex < 0) return content.slice(0, maxRows);
+	return content
+		.map((line, index) => ({ index, line }))
+		.sort(
+			(left, right) =>
+				Math.abs(left.index - selectedIndex) - Math.abs(right.index - selectedIndex) ||
+				left.index - right.index,
+		)
+		.slice(0, maxRows)
+		.sort((left, right) => left.index - right.index)
+		.map(({ line }) => line);
+}
 
 export async function showUsageSettings(
 	ctx: ExtensionCommandContext,
@@ -115,7 +136,9 @@ export async function showUsageSettings(
 						? Math.floor(tui.terminal.rows)
 						: 24;
 					const availableRows = Math.max(1, terminalRows - 3);
-					if (content.length + 2 > availableRows) return content;
+					if (content.length + 2 > availableRows) {
+						return fitSettingsRows(content, availableRows);
+					}
 					const [ruleLine = ""] = rule.render(width);
 					return [ruleLine, ...content, ruleLine];
 				},
