@@ -237,12 +237,18 @@ function createBtwFullscreenTui(
 			copyOnSelect,
 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
 			scrollToEndIndicator: () => {
+				const unavailableKeys = new Set<string>([Key.ctrl("c")]);
+				if (!copyOnSelect) {
+					for (const copyKey of keybindings.getKeys("app.message.copy")) {
+						unavailableKeys.add(String(copyKey));
+					}
+				}
 				const key = keybindings
 					.getKeys("tui.altScreen.bottom")
-					.map((candidate) => formatKeyLabel(String(candidate)))
-					.find((candidate) => candidate && candidate.toLowerCase() !== "ctrl+c");
+					.map((candidate) => String(candidate))
+					.find((candidate) => !unavailableKeys.has(candidate) && formatKeyLabel(candidate));
 				const label = theme.fg("text", " ↓ Jump to latest message");
-				const shortcut = key ? theme.fg("muted", ` · ${key}`) : "";
+				const shortcut = key ? theme.fg("muted", ` · ${formatKeyLabel(key)}`) : "";
 				return theme.bg("selectedBg", `${label}${shortcut} `);
 			},
 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),

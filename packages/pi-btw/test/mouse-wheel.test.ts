@@ -16,6 +16,14 @@ import { test } from "vitest";
 import { runBtwFullscreen } from "../src/fullscreen-ui.js";
 import { BtwAnsweringView, BtwTranscriptPager } from "../src/transcript-pager.js";
 
+const JUMP_TEST_KEYBINDINGS = {
+	...TUI_KEYBINDINGS,
+	"app.message.copy": {
+		defaultKeys: "ctrl+x",
+		description: "Copy the active fullscreen selection",
+	},
+} as const;
+
 function response(text: string): AssistantMessage {
 	return {
 		role: "assistant",
@@ -269,11 +277,12 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
 	assert.equal(await running, "cancelled");
 });
 
-test("configured bottom key skips Ctrl+C and wins over the focused composer", async (t) => {
+test("configured bottom key skips higher-priority bindings and wins over the composer", async (t) => {
 	initTheme("dark");
 	const previousKeybindings = getKeybindings();
-	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
-		"tui.altScreen.bottom": ["ctrl+c", "x"],
+	const keybindings = new KeybindingsManager(JUMP_TEST_KEYBINDINGS, {
+		"app.message.copy": "end",
+		"tui.altScreen.bottom": ["ctrl+c", "end", "x"],
 	});
 	setKeybindings(keybindings);
 	t.onTestFinished(() => setKeybindings(previousKeybindings));
@@ -281,20 +290,23 @@ test("configured bottom key skips Ctrl+C and wins over the focused composer", as
 	const answer = Array.from({ length: 40 }, (_, index) => `history ${index + 1}`).join("\n");
 	const actions: string[] = [];
 	let sideTui: TUI | undefined;
-	const running = runBtwFullscreen(harness.ctx, (fullscreenCtx) =>
-		fullscreenCtx.ui.custom<"closed">((tui, theme, _keys, done) => {
-			sideTui = tui;
-			return new BtwTranscriptPager(
-				tui,
-				theme,
-				[{ question: "question", answer, kind: "answered", response: response(answer) }],
-				(action) => {
-					actions.push(action.kind);
-					if (action.kind === "close") done("closed");
-				},
-				{ startAtBottom: true, initialQuestion: "draft" },
-			);
-		}),
+	const running = runBtwFullscreen(
+		harness.ctx,
+		(fullscreenCtx) =>
+			fullscreenCtx.ui.custom<"closed">((tui, theme, _keys, done) => {
+				sideTui = tui;
+				return new BtwTranscriptPager(
+					tui,
+					theme,
+					[{ question: "question", answer, kind: "answered", response: response(answer) }],
+					(action) => {
+						actions.push(action.kind);
+						if (action.kind === "close") done("closed");
+					},
+					{ startAtBottom: true, initialQuestion: "draft" },
+				);
+			}),
+		{ copyOnSelect: false },
 	);
 	await flushAsyncWork();
 	assert.ok(sideTui);
@@ -304,7 +316,15 @@ test("configured bottom key skips Ctrl+C and wins over the focused composer", as
 	harness.writes.length = 0;
 	harness.input("\u001b[<64;1;1M");
 	sideTui.renderNow(true);
+	const manualTop = viewport.viewportTop;
 	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · X/u);
+
+	harness.writes.length = 0;
+	harness.input("\u001b[F");
+	sideTui.renderNow(true);
+	assert.equal(viewport.viewportTop, manualTop);
+	assert.equal(viewport.isFollowingOutput, false);
+	assert.match(latestFrame(harness.writes), /No selection to copy/u);
 
 	harness.writes.length = 0;
 	harness.input("x");
