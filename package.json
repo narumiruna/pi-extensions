@@ -40,7 +40,8 @@
 		],
 		"skills": [
 			"./packages/pi-herdr/skills",
-			"./packages/pi-starship/skills"
+			"./packages/pi-starship/skills",
+			"./packages/pi-sync/skills"
 		]
 	},
 	"scripts": {

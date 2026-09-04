@@ -8,6 +8,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 ## ✨ Features
 
 - Manages Git, WebDAV, Cloudflare R2, and general S3-compatible storage through `/sync`.
+- Bundles the `setting-up-pi-sync` skill for guided, safety-first installation and first sync.
 - Separates reusable storage connections from named setups with exact reviewed remote paths.
 - Uses one ordered list for Pi roots, safe agent-relative paths, and privacy-sensitive sessions.
 - Protects changes with immutable snapshots, secret scanning, locks, conflict checks, pull backups, transactional apply, and recovery journals.
@@ -45,6 +46,10 @@ Before saving, review the storage connection, exact remote path, included conten
 
 Buckets and remote repositories must already exist.
 Git uses existing non-interactive SSH or credential-helper configuration and never stores Git credentials.
+
+The package also loads a setup skill automatically.
+Ask Pi to set up pi-sync, or invoke it explicitly with `/skill:setting-up-pi-sync`.
+The skill keeps credentials in masked extension prompts and guides backend preparation, validation, and the reviewed first push or pull.
 
 ## 🧭 Manager, conflicts, and recovery
 
@@ -266,6 +271,7 @@ packages/pi-sync/
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── docs/                              # Published reference documentation
+├── skills/setting-up-pi-sync/          # Bundled guided setup skill
 └── test/                              # Behavior and lifecycle coverage
 ```
 

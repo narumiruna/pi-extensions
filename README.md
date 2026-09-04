@@ -46,7 +46,7 @@ These extensions are part of my daily Pi setup:
 | [`pi-codex-compact`](./packages/pi-codex-compact) | Spend a little more for better compaction quality. |
 | [`pi-stamp`](./packages/pi-stamp) | See useful details for each response, such as its timestamp. |
 | [`pi-starship`](./packages/pi-starship) | Match Pi's footer to my Starship shell setup. |
-| [`pi-sync`](./packages/pi-sync) | Sync my Pi configuration across all my devices through S3. |
+| [`pi-sync`](./packages/pi-sync) | Sync my Pi configuration across devices through Git, WebDAV, R2, or S3. |
 | [`pi-usage`](./packages/pi-usage) | Check my Codex usage and limit reset times without opening Codex. |
 
 ## 📦 Choose an extension
@@ -95,7 +95,7 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | [`pi-accounts`](./packages/pi-accounts) | Switch named OpenAI Codex, Anthropic, GitHub Copilot, Kimi For Coding, OpenRouter, Radius, and xAI OAuth accounts with `/accounts`. | `pi install npm:@narumitw/pi-accounts` |
 | [`pi-recall`](./packages/pi-recall) | Save selected text messages locally and preview or quote them across Pi sessions. | `pi install npm:@narumitw/pi-recall` |
 | [`pi-usage`](./packages/pi-usage) | View current-account Codex subscription limits or OpenRouter API-key spend limits with `/usage`. | `pi install npm:@narumitw/pi-usage` |
-| [`pi-sync`](./packages/pi-sync) | Sync allowlisted Pi settings and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
+| [`pi-sync`](./packages/pi-sync) | Sync allowlisted Pi settings and optional sessions through Git, WebDAV, R2, or S3 with bundled setup guidance. | `pi install npm:@narumitw/pi-sync` |
 
 ### Status and observability
 
