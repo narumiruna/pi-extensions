@@ -812,7 +812,10 @@ export class GoalRuntime {
 	) {
 		const goal = this.activeGoal;
 		if (goal?.id !== goalId || goal.status !== "active") return false;
-		const next = nextToolFreeRepeatState(goal, messages, toolAttempted);
+		const next = nextToolFreeRepeatState(goal, messages, toolAttempted, {
+			progressTools: this.settings.continuationLimits.progressTools,
+			chromeTools: this.settings.continuationLimits.chromeTools,
+		});
 		goal.toolFreeRepeatCount = next.toolFreeRepeatCount;
 		goal.lastToolFreeOutputFingerprint = next.lastToolFreeOutputFingerprint;
 		this.persistGoal(goal);

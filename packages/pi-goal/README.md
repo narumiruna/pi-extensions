@@ -113,11 +113,14 @@ Reload, replacement, and shutdown clear that in-memory ownership.
   Pi may invoke a provider adapter once more with an already-aborted signal to produce its synthetic terminal event; that event is not counted and cannot resume Goal work.
   Set this field explicitly to `null` to opt into Unlimited mode; existing explicit `null` values remain compatible.
 - `noProgressTurns` is a positive safe integer and defaults to `3`.
-  At the end of an automatic run, pi-goal compares visible assistant text after Unicode normalization, lowercase conversion, control-character removal, and whitespace collapse.
+  At the end of an automatic run, pi-goal classifies the turn's tools before looking at text.
+  Workspace work (`read` / `write` / `edit` / `bash` / `grep` / `find` / `ls` / `subagent`, or any call with a `path` or `command` argument) resets the repeat count.
+  Session-chrome calls (no `path`, no `command`) increment it even when the visible pep talk changes, so a checkbox/overlay loop cannot reset the guard.
+  Tool-free runs still compare visible assistant text after Unicode normalization, lowercase conversion, control-character removal, and whitespace collapse.
   Thinking and tool blocks are excluded; empty and punctuation-only output are equivalent.
-  Consecutive empty or identical tool-free outputs increment the repeat count.
-  Different non-empty output starts a new run at one, and any attempted tool call resets it.
-  Set this field to `null` to disable only this heuristic.
+  Consecutive empty or identical tool-free outputs increment the repeat count; different non-empty tool-free output starts a new run at one.
+  Optional `continuationLimits.progressTools` / `chromeTools` string lists are exceptions only.
+  Set `noProgressTurns` to `null` to disable only this heuristic.
 
 Settings are reread at Pi startup, session replacement, and `/reload`.
 Direct file edits are not watched, while Goal-menu changes apply immediately.

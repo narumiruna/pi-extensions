@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "vitest";
 import {
+	classifyAssistantTools,
 	fingerprintVisibleAssistantOutput,
 	hasAssistantToolCall,
+	isWorkspaceToolCall,
 	nextToolFreeRepeatState,
 	normalizeVisibleAssistantOutput,
 } from "../src/safety.js";
@@ -12,6 +14,7 @@ import {
 	ONE_TURN_LIMIT_SETTINGS_PATH,
 	requireLastGoal,
 	startGoalForTest,
+	UNLIMITED_SETTINGS_PATH,
 } from "./support/goal-fixture.js";
 
 test("no-progress classifier normalizes visible output conservatively", () => {
@@ -68,6 +71,67 @@ test("no-progress classifier normalizes visible output conservatively", () => {
 	assert.equal(state.toolFreeRepeatCount, 1);
 	state = nextToolFreeRepeatState(state, blank, true);
 	assert.deepEqual(state, { toolFreeRepeatCount: 0 });
+
+	assert.equal(isWorkspaceToolCall("read", { path: "src/a.ts" }), true);
+	assert.equal(isWorkspaceToolCall("bash", { command: "npm test" }), true);
+	assert.equal(isWorkspaceToolCall("scratch_board", { action: "update" }), false);
+	assert.equal(isWorkspaceToolCall("overlay_tick", {}), false);
+	assert.equal(
+		isWorkspaceToolCall("custom_ui", { path: "x" }, { chromeTools: ["custom_ui"] }),
+		false,
+	);
+	assert.equal(isWorkspaceToolCall("my_deploy", {}, { progressTools: ["my_deploy"] }), true);
+	assert.equal(
+		classifyAssistantTools([
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", name: "scratch_board", arguments: { id: 1 } }],
+			},
+		]),
+		"chrome",
+	);
+	assert.equal(
+		classifyAssistantTools([
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", name: "read", arguments: { path: "a.ts" } }],
+			},
+		]),
+		"progress",
+	);
+	let chromeState = { toolFreeRepeatCount: 0 };
+	chromeState = nextToolFreeRepeatState(
+		chromeState,
+		[
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "step 1 is the gate" },
+					{ type: "toolCall", name: "scratch_board", arguments: { action: "update" } },
+				],
+			},
+		],
+		false,
+	);
+	assert.equal(chromeState.toolFreeRepeatCount, 1);
+	chromeState = nextToolFreeRepeatState(
+		chromeState,
+		[
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "step 1 still owns this" },
+					{ type: "toolCall", name: "overlay_tick", arguments: {} },
+				],
+			},
+		],
+		false,
+	);
+	assert.equal(
+		chromeState.toolFreeRepeatCount,
+		2,
+		"chrome-only paraphrases must increment even when visible text changes",
+	);
 });
 
 test("assistant toolCall blocks reset no-progress even when tool_call hook never fires", async () => {
@@ -99,7 +163,7 @@ test("assistant toolCall blocks reset no-progress even when tool_call hook never
 				{
 					role: "assistant",
 					stopReason: "toolUse",
-					content: [{ type: "toolCall", name: "unknown", arguments: {} }],
+					content: [{ type: "toolCall", name: "read", arguments: { path: "src/a.ts" } }],
 				},
 			],
 		},
@@ -880,6 +944,90 @@ test("queued non-goal follow-up does not inherit automatic recovery ownership", 
 	);
 	await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
 	assert.equal(active.mock.sentUserMessages.length, 3);
+});
+
+/** Session-chrome: no path, no command. Names must not matter (not `todo`). */
+function chromeOnlyAssistant(text: string, toolName: string, args: Record<string, unknown>) {
+	return {
+		role: "assistant" as const,
+		stopReason: "toolUse" as const,
+		content: [
+			{ type: "text", text },
+			{ type: "toolCall", name: toolName, arguments: args },
+		],
+	};
+}
+
+test("session-chrome automatic runs with paraphrased text still trip no-progress", async () => {
+	const stalled = await startGoalForTest({}, "close remaining Xid holes", UNLIMITED_SETTINGS_PATH);
+	await stalled.mock.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{
+					role: "assistant",
+					stopReason: "stop",
+					content: [{ type: "text", text: "starting" }],
+				},
+			],
+		},
+		stalled.ctx,
+	);
+	await stalled.mock.events.get("agent_settled")?.[0]?.({}, stalled.ctx);
+
+	const chromeTurns = [
+		{
+			text: "Step 1 is still the gate: hashing and block-submit must never overlap.",
+			toolName: "scratch_board",
+			input: { action: "update", id: 1, status: "in_progress" },
+		},
+		{
+			text: "Step 1 still owns this: I'll close remaining SIGTERM holes.",
+			toolName: "session_flags",
+			input: { flag: "working" },
+		},
+		{
+			text: "Continuing the goal. Step 1 remains incomplete.",
+			toolName: "overlay_tick",
+			input: {},
+		},
+	];
+	for (const [i, turn] of chromeTurns.entries()) {
+		const prompt = stalled.mock.sentUserMessages.at(-1)?.text ?? "";
+		stalled.mock.events.get("before_agent_start")?.[0]?.(
+			{ prompt, systemPrompt: "base" },
+			stalled.ctx,
+		);
+		stalled.mock.events.get("tool_call")?.[0]?.(
+			{
+				toolName: turn.toolName,
+				toolCallId: `chrome-${i + 1}`,
+				input: turn.input,
+			},
+			stalled.ctx,
+		);
+		await stalled.mock.events.get("agent_end")?.[0]?.(
+			{ messages: [chromeOnlyAssistant(turn.text, turn.toolName, turn.input)] },
+			stalled.ctx,
+		);
+		await stalled.mock.events.get("agent_settled")?.[0]?.({}, stalled.ctx);
+	}
+
+	const stopped = requireLastGoal(stalled.mock);
+	assert.equal(
+		stopped.status,
+		"paused",
+		"chrome-only continuations (no path, no command) must not reset no-progress, regardless of tool name",
+	);
+	assert.equal(stopped.safetyPauseCause, "no_progress");
+	assert.ok(
+		(stopped.toolFreeRepeatCount ?? 0) >= 3,
+		`expected no-progress count >= 3, got ${stopped.toolFreeRepeatCount}`,
+	);
+	assert.equal(
+		stalled.mock.sentUserMessages.length,
+		4,
+		"must not keep injecting Continue the active /goal after three chrome-only runs",
+	);
 });
 
 test("three blank automatic runs pause for no progress without a fourth continuation", async () => {

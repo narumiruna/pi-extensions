@@ -1,5 +1,11 @@
 # @narumitw/pi-goal
 
+## Unreleased
+
+### Patch Changes
+
+- Treat session-chrome tool calls (no `path`, no `command`) as no-progress even when assistant text paraphrases. Workspace tools still reset the guard. Optional `progressTools` / `chromeTools` lists are exceptions only.
+
 ## 0.54.4
 
 ### Patch Changes

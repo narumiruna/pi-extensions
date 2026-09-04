@@ -25,7 +25,7 @@ import {
 	transitionGoal,
 	truncateNotification,
 } from "./runtime.js";
-import { hasAssistantToolCall } from "./safety.js";
+import { hasWorkspaceToolCall, isWorkspaceToolCall } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, readGoalSettings } from "./settings.js";
 
 const REMOVED_QUEUE_SETTING_WARNING =
@@ -344,7 +344,14 @@ export function registerGoalLifecycle(
 	});
 
 	pi.on("tool_call", (event, ctx) => {
-		runtime.markAgentToolAttempted();
+		if (
+			isWorkspaceToolCall(event.toolName, event.input, {
+				progressTools: runtime.settings.continuationLimits.progressTools,
+				chromeTools: runtime.settings.continuationLimits.chromeTools,
+			})
+		) {
+			runtime.markAgentToolAttempted();
+		}
 		if (
 			runtime.activeGoal?.status === "budget_limited" &&
 			runtime.budgetWrapUp?.goalId === runtime.activeGoal.id &&
@@ -565,7 +572,11 @@ export function registerGoalLifecycle(
 				ctx,
 				goalId,
 				event.messages,
-				run.toolAttempted || hasAssistantToolCall(event.messages),
+				run.toolAttempted ||
+					hasWorkspaceToolCall(event.messages, {
+						progressTools: runtime.settings.continuationLimits.progressTools,
+						chromeTools: runtime.settings.continuationLimits.chromeTools,
+					}),
 			)
 		) {
 			return;

@@ -14,6 +14,8 @@ export interface GoalSettings {
 	continuationLimits: {
 		automaticTurns: ContinuationLimit;
 		noProgressTurns: ContinuationLimit;
+		progressTools?: string[];
+		chromeTools?: string[];
 	};
 }
 
@@ -76,11 +78,30 @@ export function normalizeGoalSettings(value: unknown): GoalSettings | undefined 
 			)
 		: DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns;
 	if (automaticTurns === undefined || noProgressTurns === undefined) return undefined;
+	const progressTools = continuationLimitsValue
+		? normalizeToolNameList(Reflect.get(continuationLimitsValue, "progressTools"))
+		: undefined;
+	const chromeTools = continuationLimitsValue
+		? normalizeToolNameList(Reflect.get(continuationLimitsValue, "chromeTools"))
+		: undefined;
+	if (progressTools === false || chromeTools === false) return undefined;
 
 	return {
 		rpc: { enabled: rpcEnabled },
-		continuationLimits: { automaticTurns, noProgressTurns },
+		continuationLimits: {
+			automaticTurns,
+			noProgressTurns,
+			...(progressTools ? { progressTools } : {}),
+			...(chromeTools ? { chromeTools } : {}),
+		},
 	};
+}
+
+function normalizeToolNameList(value: unknown): string[] | undefined | false {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) return false;
+	const names = value.map((entry) => entry.trim()).filter(Boolean);
+	return names;
 }
 
 function normalizeContinuationLimit(
@@ -124,6 +145,12 @@ export function saveGoalSettings(
 				...continuationLimits,
 				automaticTurns: normalized.continuationLimits.automaticTurns,
 				noProgressTurns: normalized.continuationLimits.noProgressTurns,
+				...(normalized.continuationLimits.progressTools
+					? { progressTools: normalized.continuationLimits.progressTools }
+					: {}),
+				...(normalized.continuationLimits.chromeTools
+					? { chromeTools: normalized.continuationLimits.chromeTools }
+					: {}),
 			},
 		},
 		null,
