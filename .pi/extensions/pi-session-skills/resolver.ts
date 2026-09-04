@@ -110,7 +110,9 @@ export class SessionSkillResolver implements SkillResolverLike {
 		entryRoot: string,
 	): Promise<ResolvedSessionSkill> {
 		options.signal?.throwIfAborted();
-		const current = await this.#readCachedEntry(entryRoot, options);
+		const current = await withFileMutationQueue(entryRoot, () =>
+			this.#readCachedEntry(entryRoot, options),
+		);
 		options.signal?.throwIfAborted();
 		if (!options.refresh && current) return current.result;
 

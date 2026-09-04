@@ -198,6 +198,37 @@ test("rollback restores the index observed when a concurrent transaction commits
 	assert.equal((await resolver.resolve({ source })).path, candidateA.path);
 });
 
+test("keeps failed cache publication invisible to concurrent readers", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-publication-read-");
+	const skillRoot = await writeSkill(workspace, "source", "original-skill");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(skillRoot, workspace);
+	const original = await resolveAndCommit(resolver, { source });
+
+	await writeFile(
+		join(skillRoot, "SKILL.md"),
+		"---\nname: candidate-skill\ndescription: Candidate skill.\n---\n",
+	);
+	const candidate = await resolver.resolve({ source, refresh: true });
+	const transaction = candidate.transaction;
+	assert.ok(transaction);
+	let concurrentRead: ReturnType<SessionSkillResolver["resolve"]> | undefined;
+	await assert.rejects(
+		() =>
+			transaction.commit(() => {
+				concurrentRead = resolver.resolve({ source });
+				throw new Error("activation snapshot failed");
+			}),
+		/activation snapshot failed/,
+	);
+
+	assert.ok(concurrentRead);
+	const observed = await concurrentRead;
+	assert.equal(observed.path, original.path);
+	assert.equal(observed.name, original.name);
+	await assert.rejects(() => stat(candidate.path), { code: "ENOENT" });
+});
+
 test("excludes a nested cache root from broad local discovery", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-cache-subtree-");
 	await writeSkill(workspace, "skills/source", "source-skill");
