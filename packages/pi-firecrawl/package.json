@@ -43,7 +43,7 @@
 		"typescript": "7.0.2"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.49.1"
+		"@narumitw/pi-tui-kit": "^0.59.0"
 	},
 	"repository": {
 		"type": "git",

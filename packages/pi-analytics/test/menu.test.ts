@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runConfirmation, runMenu } from "@narumitw/pi-tui-kit";
@@ -522,7 +523,10 @@ test("dashboard rendering is width-safe and owner cancellation settles the menu"
 	await tui.waitForOpen();
 	for (const width of [40, 80, 120]) {
 		tui.resize({ width, rows: 20 });
-		for (const line of tui.render()) assert.ok(visibleWidth(line) <= width);
+		const frame = tui.render();
+		for (const line of frame) assert.ok(visibleWidth(line) <= width);
+		assert.equal(stripVTControlCharacters(frame[0] ?? ""), "─".repeat(width));
+		assert.equal(stripVTControlCharacters(frame.at(-1) ?? ""), "─".repeat(width));
 	}
 	owner.abort();
 	assert.equal((await running).kind, "stale");

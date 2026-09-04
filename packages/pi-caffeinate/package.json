@@ -47,7 +47,7 @@
 		"directory": "packages/pi-caffeinate"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.49.1",
+		"@narumitw/pi-tui-kit": "^0.59.0",
 		"dbus-native": "^0.15.2"
 	}
 }
