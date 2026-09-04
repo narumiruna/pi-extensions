@@ -16,9 +16,11 @@ Follow this workflow:
    Use the current repository for a bare number and the current branch when no target was supplied.
    Ask if the target is missing or ambiguous, and pin every boundary commit before reviewing.
    If a pinned boundary changes, restart the review or stop and report the exact commits already reviewed.
-2. Read the applicable repository instructions and the complete pull request context.
-   Include the title, description, linked issues, commits, changed files, checks, submitted reviews, inline comments, and discussion threads.
-   Paginate API results when necessary instead of assuming a truncated response is complete.
+2. Read the applicable repository instructions and the pull request context required for a responsible decision.
+   Include the title, description, linked issues, commits, changed files, check summaries, submitted reviews, inline comments, and discussion threads.
+   Retrieve the complete diff and review or discussion thread state, paginating when necessary instead of assuming a truncated response is complete.
+   Expand linked context, check annotations, or logs only when they bear on a required fact, failed or unclear check, finding, or merge decision.
+   Retry transient retrieval failures at most twice. If required evidence remains unavailable, stop retrieving and report `Needs more context` with the specific gap.
 3. Establish the exact review boundary.
    Compare the pinned head commit with the pinned base-side commit required by the repository host's merge semantics.
    Inspect every changed file and separate pull request changes from unrelated local or base-branch changes.

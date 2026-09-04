@@ -5,15 +5,17 @@ argument-hint: "<plan path>"
 
 Plan: $ARGUMENTS
 
+If no plan path was provided, ask for it and stop.
 Execute and complete the specified plan end to end.
 
 1. Read the repository instructions and the complete plan before changing anything.
 2. Inspect the working tree, preserve unrelated changes, and create a focused new branch from the appropriate base branch.
 3. Execute every required plan item in dependency order, keeping the plan synchronized with discoveries and verified progress.
+   If a material scope, architecture, risk, or acceptance criterion changes, update the plan and wait for explicit approval before continuing.
 4. Create or update the code, tests, documentation, configuration, and other artifacts required by the plan.
 5. Run focused verification and all repository-required checks.
 6. Review the complete diff for correctness, security, lifecycle safety, compatibility, regressions, and unnecessary changes.
-7. When code is affected, harden plausible edge cases and failure paths, add regression coverage for any fixes, and rerun affected checks.
+7. Within the approved scope, harden plausible edge cases and failure paths, add regression coverage for any fixes, and rerun affected checks.
 8. Audit the finished work against every plan requirement and completion criterion.
 9. After every required checkbox has passed, delete the completed plan file; keep any incomplete plan and its unchecked evidence.
 10. Stage only the intended files, create focused signed commits that follow repository conventions, and push the branch.
