@@ -277,12 +277,12 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
 	assert.equal(await running, "cancelled");
 });
 
-test("configured bottom key skips higher-priority bindings and wins over the composer", async (t) => {
+test("configured bottom key skips semantic conflicts and wins over the composer", async (t) => {
 	initTheme("dark");
 	const previousKeybindings = getKeybindings();
 	const keybindings = new KeybindingsManager(JUMP_TEST_KEYBINDINGS, {
-		"app.message.copy": "end",
-		"tui.altScreen.bottom": ["ctrl+c", "end", "pageUp", "x"],
+		"app.message.copy": ["end", "enter"],
+		"tui.altScreen.bottom": ["ctrl+c", "return", "end", "pageUp", "shift+ctrl+g", "x"],
 	});
 	setKeybindings(keybindings);
 	t.onTestFinished(() => setKeybindings(previousKeybindings));
@@ -318,6 +318,13 @@ test("configured bottom key skips higher-priority bindings and wins over the com
 	sideTui.renderNow(true);
 	const manualTop = viewport.viewportTop;
 	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · X/u);
+
+	harness.writes.length = 0;
+	harness.input("\r");
+	sideTui.renderNow(true);
+	assert.equal(viewport.viewportTop, manualTop);
+	assert.equal(viewport.isFollowingOutput, false);
+	assert.match(latestFrame(harness.writes), /No selection to copy/u);
 
 	harness.writes.length = 0;
 	harness.input("\u001b[F");

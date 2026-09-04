@@ -221,6 +221,17 @@ const ALT_SCREEN_ACTIONS_BEFORE_BOTTOM = [
 	"tui.altScreen.nextPrompt",
 	"tui.altScreen.top",
 ] as const;
+const KEY_MODIFIER_ORDER = ["shift", "ctrl", "alt", "super"] as const;
+
+// Mirror matchesKey(): key ids are case-insensitive, modifier-order-insensitive, and alias-aware.
+function keyInputIdentity(key: string): string {
+	const parts = sanitizeSingleLine(key).toLowerCase().split("+");
+	const base = parts.at(-1);
+	if (!base) return "";
+	const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
+	const modifiers = KEY_MODIFIER_ORDER.filter((modifier) => parts.includes(modifier));
+	return [...modifiers, normalizedBase].join("+");
+}
 
 function hasManualSelectionCopyApi(): boolean {
 	return (
@@ -254,21 +265,24 @@ function createBtwFullscreenTui(
 			copyOnSelect,
 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
 			scrollToEndIndicator: () => {
-				const unavailableKeys = new Set<string>([Key.ctrl("c")]);
+				const unavailableKeyIdentities = new Set<string>([keyInputIdentity(Key.ctrl("c"))]);
 				for (const action of ALT_SCREEN_ACTIONS_BEFORE_BOTTOM) {
 					for (const actionKey of keybindings.getKeys(action)) {
-						unavailableKeys.add(String(actionKey));
+						unavailableKeyIdentities.add(keyInputIdentity(String(actionKey)));
 					}
 				}
 				if (!copyOnSelect) {
 					for (const copyKey of keybindings.getKeys("app.message.copy")) {
-						unavailableKeys.add(String(copyKey));
+						unavailableKeyIdentities.add(keyInputIdentity(String(copyKey)));
 					}
 				}
 				const key = keybindings
 					.getKeys("tui.altScreen.bottom")
 					.map((candidate) => String(candidate))
-					.find((candidate) => !unavailableKeys.has(candidate) && formatKeyLabel(candidate));
+					.find((candidate) => {
+						const identity = keyInputIdentity(candidate);
+						return identity && !unavailableKeyIdentities.has(identity) && formatKeyLabel(candidate);
+					});
 				const label = theme.fg("text", " ↓ Jump to latest message");
 				const shortcut = key ? theme.fg("muted", ` · ${formatKeyLabel(key)}`) : "";
 				return theme.bg("selectedBg", `${label}${shortcut} `);
