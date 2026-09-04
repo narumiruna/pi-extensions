@@ -66,6 +66,8 @@ interface SessionStateSnapshot {
 
 interface SessionEntryWriter {
 	appendCustomEntry(customType: string, data?: unknown): string;
+	branch(entryId: string): void;
+	resetLeaf(): void;
 }
 
 export function registerSessionSkills(
@@ -89,7 +91,14 @@ export function registerSessionSkills(
 		};
 		const sessionManager = ctx.sessionManager as ExtensionContext["sessionManager"] &
 			SessionEntryWriter;
-		sessionManager.appendCustomEntry(ACTIVATION_ENTRY_TYPE, snapshot);
+		const previousLeafId = sessionManager.getLeafId();
+		try {
+			sessionManager.appendCustomEntry(ACTIVATION_ENTRY_TYPE, snapshot);
+		} catch (error) {
+			if (previousLeafId === null) sessionManager.resetLeaf();
+			else sessionManager.branch(previousLeafId);
+			throw error;
+		}
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -396,6 +405,7 @@ function commandCompletions(
 		const completedTokens = base.trim().split(/\s+/u);
 		if (["--skill", "-s"].includes(completedTokens.at(-1) ?? "")) return null;
 		const used = new Set(completedTokens);
+		if (used.has("-s")) used.add("--skill");
 		const values = ["--skill", "--refresh"]
 			.filter((value) => !used.has(value) && value.startsWith(valuePrefix))
 			.map((value) => ({ value: `${base}${value}`, label: value }));

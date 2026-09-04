@@ -101,7 +101,7 @@ export class SessionSkillResolver implements SkillResolverLike {
 		options.signal?.throwIfAborted();
 		const key = cacheKey(options.source, options.selector);
 		const entryPath = join(this.#cacheRoot, "entries", key);
-		return withFileMutationQueue(entryPath, () => this.#resolveEntry(options, key, entryPath));
+		return this.#resolveEntry(options, key, entryPath);
 	}
 
 	async #resolveEntry(
@@ -119,8 +119,8 @@ export class SessionSkillResolver implements SkillResolverLike {
 		await mkdir(join(entryRoot, "versions"), { recursive: true, mode: 0o700 });
 		options.signal?.throwIfAborted();
 		const stagingPath = await mkdtemp(join(this.#cacheRoot, "staging", `${key}-`));
-		options.signal?.throwIfAborted();
 		try {
+			options.signal?.throwIfAborted();
 			const sourcePath = await this.#materializeSource(options.source, stagingPath, options.signal);
 			options.signal?.throwIfAborted();
 			const selected = await selectSkill(
@@ -503,6 +503,12 @@ async function discoverSkillPaths(
 	signal: AbortSignal | undefined,
 ): Promise<string[]> {
 	const discovered: string[] = [];
+	const addSkill = (skillPath: string) => {
+		if (discovered.length >= MAX_DISCOVERED_SKILLS) {
+			throw new Error(`Skill source exceeds the ${MAX_DISCOVERED_SKILLS}-skill discovery limit.`);
+		}
+		discovered.push(skillPath);
+	};
 	const canonicalExcludedRoot = excludedRoot ? await realpath(excludedRoot) : undefined;
 	signal?.throwIfAborted();
 	const walk = async (current: string, depth: number): Promise<void> => {
@@ -513,7 +519,7 @@ async function discoverSkillPaths(
 		if (currentStat.isSymbolicLink())
 			throw new Error(`Skill source contains a symbolic link: ${current}`);
 		if (currentStat.isFile()) {
-			if (basename(current) === "SKILL.md") discovered.push(current);
+			if (basename(current) === "SKILL.md") addSkill(current);
 			return;
 		}
 		if (!currentStat.isDirectory() || depth > MAX_DISCOVERY_DEPTH) return;
@@ -529,7 +535,7 @@ async function discoverSkillPaths(
 			throw new Error(`Skill source contains a symbolic link: ${rootSkill}`);
 		}
 		if (rootSkillStat?.isFile()) {
-			discovered.push(rootSkill);
+			addSkill(rootSkill);
 			return;
 		}
 		const entries = await readdir(current, { withFileTypes: true });
@@ -537,9 +543,6 @@ async function discoverSkillPaths(
 		entries.sort((left, right) => left.name.localeCompare(right.name));
 		for (const entry of entries) {
 			if (!entry.isDirectory() || SKIPPED_DISCOVERY_DIRECTORIES.has(entry.name)) continue;
-			if (discovered.length >= MAX_DISCOVERED_SKILLS) {
-				throw new Error(`Skill source exceeds the ${MAX_DISCOVERED_SKILLS}-skill discovery limit.`);
-			}
 			await walk(join(current, entry.name), depth + 1);
 		}
 	};

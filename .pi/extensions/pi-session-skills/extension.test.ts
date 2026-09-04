@@ -79,13 +79,16 @@ function createHarness(
 			entriesBySession.set(ctx.sessionManager, sessionEntries);
 			const sessionManager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
 				appendCustomEntry(customType: string, data?: unknown): string;
+				appendTestCustomEntry(customType: string, data: unknown, id: string): void;
 			};
 			sessionManager.appendCustomEntry = (customType, data) => {
-				options.beforeAppendEntry?.();
+				const id = crypto.randomUUID();
+				sessionManager.appendTestCustomEntry(customType, data, id);
 				const entry = { customType, data };
 				entries.push(entry);
 				sessionEntries.push(entry);
-				return crypto.randomUUID();
+				options.beforeAppendEntry?.();
+				return id;
 			};
 			await command.handler(args, ctx);
 		},
@@ -103,8 +106,39 @@ function createContext(
 	let reloads = 0;
 	const notifications: Array<[string, string | undefined]> = [];
 	const statuses: Array<[string, string | undefined]> = [];
+	const entries = [...branch];
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	let leafId = entries.at(-1)?.id ?? null;
 	const sessionManager = {
-		getBranch: () => branch,
+		getBranch: () => {
+			const activeBranch: SessionEntry[] = [];
+			let entry = leafId ? byId.get(leafId) : undefined;
+			while (entry) {
+				activeBranch.push(entry);
+				entry = entry.parentId ? byId.get(entry.parentId) : undefined;
+			}
+			return activeBranch.reverse();
+		},
+		getLeafId: () => leafId,
+		branch: (entryId: string) => {
+			leafId = entryId;
+		},
+		resetLeaf: () => {
+			leafId = null;
+		},
+		appendTestCustomEntry: (customType: string, data: unknown, id: string) => {
+			const entry = {
+				type: "custom",
+				id,
+				parentId: leafId,
+				timestamp: new Date().toISOString(),
+				customType,
+				data,
+			} as SessionEntry;
+			entries.push(entry);
+			byId.set(id, entry);
+			leafId = id;
+		},
 	} as unknown as ExtensionContext["sessionManager"];
 	const ctx = {
 		cwd: "/work/project",
@@ -175,6 +209,9 @@ test("registers one session-skills command with status and route completions", a
 	assert.equal(complete?.("load owner/repo -s "), null);
 	assert.deepEqual(complete?.("load owner/repo --skill name --"), [
 		{ value: "load owner/repo --skill name --refresh", label: "--refresh" },
+	]);
+	assert.deepEqual(complete?.("load owner/repo -s name --"), [
+		{ value: "load owner/repo -s name --refresh", label: "--refresh" },
 	]);
 	const current = createContext();
 	await harness.emit("session_start", { reason: "startup" }, current.ctx);
@@ -307,6 +344,7 @@ test("rolls back a committed candidate when activation snapshot persistence fail
 		snapshotEntry([{ name: "old-name", path: oldPath, source: "owner/repo" }]),
 	]);
 	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+	const previousLeafId = current.ctx.sessionManager.getLeafId();
 
 	await assert.rejects(
 		() => harness.command("session-skills", "load owner/repo --refresh", current.ctx),
@@ -317,6 +355,14 @@ test("rolls back a committed candidate when activation snapshot persistence fail
 	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {
 		skillPaths: [oldPath],
 	});
+	assert.equal(current.ctx.sessionManager.getLeafId(), previousLeafId);
+	const activeSnapshot = current.ctx.sessionManager.getBranch().at(-1);
+	assert.equal(activeSnapshot?.type, "custom");
+	if (activeSnapshot?.type === "custom") {
+		assert.deepEqual((activeSnapshot.data as { skills: Array<{ name: string }> }).skills, [
+			{ name: "old-name", path: oldPath, source: "owner/repo" },
+		]);
+	}
 	assert.equal(current.reloads, 0);
 });
 
@@ -541,6 +587,7 @@ test("restores activation state when snapshot persistence fails", async () => {
 		snapshotEntry([{ name: "demo-skill", path: skillPath, source: "owner/repo" }]),
 	]);
 	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+	const previousLeafId = current.ctx.sessionManager.getLeafId();
 
 	await assert.rejects(
 		() => harness.command("session-skills", "unload demo-skill", current.ctx),
@@ -549,6 +596,14 @@ test("restores activation state when snapshot persistence fails", async () => {
 	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {
 		skillPaths: [skillPath],
 	});
+	assert.equal(current.ctx.sessionManager.getLeafId(), previousLeafId);
+	const activeSnapshot = current.ctx.sessionManager.getBranch().at(-1);
+	assert.equal(activeSnapshot?.type, "custom");
+	if (activeSnapshot?.type === "custom") {
+		assert.deepEqual((activeSnapshot.data as { skills: Array<{ name: string }> }).skills, [
+			{ name: "demo-skill", path: skillPath, source: "owner/repo" },
+		]);
+	}
 	assert.equal(current.reloads, 0);
 });
 

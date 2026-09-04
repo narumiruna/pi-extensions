@@ -210,6 +210,28 @@ test("excludes a nested cache root from broad local discovery", async () => {
 	await refreshed.transaction?.rollback();
 });
 
+test("allows exactly 500 discovered skills and rejects the 501st", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-discovery-limit-");
+	const sourceRoot = join(workspace, "skills");
+	await Promise.all(
+		Array.from({ length: 500 }, (_, index) => {
+			const suffix = String(index).padStart(3, "0");
+			return writeSkill(sourceRoot, suffix, `skill-${suffix}`);
+		}),
+	);
+	await mkdir(join(sourceRoot, "zzz-empty"));
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(sourceRoot, workspace);
+	const accepted = await resolver.resolve({ source, selector: "skill-000" });
+	await accepted.transaction?.rollback();
+
+	await writeSkill(sourceRoot, "zzz-skill", "skill-500");
+	await assert.rejects(
+		() => resolver.resolve({ source, selector: "skill-000", refresh: true }),
+		/exceeds the 500-skill discovery limit/,
+	);
+});
+
 test("does not copy a cache nested inside a local skill root", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-root-cache-");
 	const skillRoot = await writeSkill(workspace, ".", "root-skill");
@@ -317,6 +339,52 @@ test("retries GitLab HTTPS authentication failures over SSH", async () => {
 		"https://gitlab.com/group/subgroup/private.git",
 		"git@gitlab.com:group/subgroup/private.git",
 	]);
+});
+
+test("cancels a same-source resolution without waiting for another materialization", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-queued-cancel-");
+	const fixture = join(workspace, "fixture");
+	await writeSkill(fixture, "demo", "concurrent-skill");
+	let callCount = 0;
+	let startFirst!: () => void;
+	let startSecond!: () => void;
+	let releaseFirst!: () => void;
+	const firstStarted = new Promise<void>((resolve) => {
+		startFirst = resolve;
+	});
+	const secondStarted = new Promise<void>((resolve) => {
+		startSecond = resolve;
+	});
+	const firstRelease = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	const cloneRepository: CloneRepository = async (_repository, target, _ref, signal) => {
+		callCount++;
+		if (callCount === 1) {
+			startFirst();
+			await firstRelease;
+			await cp(fixture, target, { recursive: true });
+			return;
+		}
+		startSecond();
+		await new Promise<void>((_resolve, reject) => {
+			signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+		});
+	};
+	const cacheRoot = join(workspace, "cache");
+	const resolver = new SessionSkillResolver({ cacheRoot, cloneRepository });
+	const source = parseSkillSource("https://example.com/repo.git", workspace);
+	const first = resolver.resolve({ source });
+	await firstStarted;
+	const controller = new AbortController();
+	const second = resolver.resolve({ source, signal: controller.signal });
+	await secondStarted;
+	controller.abort();
+	await assert.rejects(() => second, /cancelled/);
+	releaseFirst();
+	const firstResult = await first;
+	await firstResult.transaction?.rollback();
+	assert.deepEqual(await readdir(join(cacheRoot, "staging")), []);
 });
 
 test("clones through the system Git executable", async () => {

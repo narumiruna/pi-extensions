@@ -62,7 +62,13 @@ Cache content is stored under:
 ${XDG_CACHE_HOME}/pi/session-skills
 ```
 
-When `XDG_CACHE_HOME` is unset or relative, the fallback is:
+When `XDG_CACHE_HOME` is unset or relative, Windows uses `LOCALAPPDATA` when available:
+
+```text
+%LOCALAPPDATA%\pi\session-skills
+```
+
+Other platforms use:
 
 ```text
 ~/.cache/pi/session-skills
