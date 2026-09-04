@@ -205,6 +205,8 @@ test("registers one session-skills command with status and route completions", a
 		{ value: "load owner/repo --skill", label: "--skill" },
 		{ value: "load owner/repo --refresh", label: "--refresh" },
 	]);
+	assert.equal(complete?.("load owner/repo -- "), null);
+	assert.equal(complete?.("load owner/repo -- --"), null);
 	assert.equal(complete?.("load owner/repo --skill "), null);
 	assert.equal(complete?.("load owner/repo -s "), null);
 	assert.deepEqual(complete?.("load owner/repo --skill name --"), [
@@ -435,6 +437,30 @@ test("unload --all clears skipped activations whose cache entries are missing", 
 	assert.ok(snapshot);
 	assert.deepEqual((snapshot.data as { skills: unknown[] }).skills, []);
 	assert.equal(current.reloads, 1);
+});
+
+test("omits unsafe restored names from completions while keeping them unloadable", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-unsafe-completion-"));
+	temporaryPaths.push(cacheRoot);
+	const missingPath = join(cacheRoot, "entries", "missing", "skill");
+	const resolver = { getCacheRoot: () => cacheRoot, resolve: async () => assert.fail("unused") };
+	const harness = createHarness(resolver);
+	const current = createContext([
+		snapshotEntry([
+			{ name: "ansi\u001b[31m", path: missingPath, source: "owner/ansi" },
+			{ name: "bidi\u202ename", path: missingPath, source: "owner/bidi" },
+			{ name: "line\nbreak", path: missingPath, source: "owner/line" },
+		]),
+	]);
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+
+	assert.deepEqual(harness.commands.get("session-skills")?.getArgumentCompletions?.("unload "), [
+		{ value: "unload --all", label: "--all" },
+	]);
+	await harness.command("session-skills", "unload --all", current.ctx);
+	const snapshot = harness.entries.at(-1);
+	assert.ok(snapshot);
+	assert.deepEqual((snapshot.data as { skills: unknown[] }).skills, []);
 });
 
 test("keeps activation state isolated across concurrent session managers", async () => {

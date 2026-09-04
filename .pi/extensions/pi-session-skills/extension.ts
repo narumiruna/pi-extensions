@@ -403,7 +403,12 @@ function commandCompletions(
 		if (valuePrefix && !valuePrefix.startsWith("-")) return null;
 		const base = input.slice(0, lastSpace + 1);
 		const completedTokens = base.trim().split(/\s+/u);
-		if (["--skill", "-s"].includes(completedTokens.at(-1) ?? "")) return null;
+		if (
+			completedTokens.includes("--") ||
+			["--skill", "-s"].includes(completedTokens.at(-1) ?? "")
+		) {
+			return null;
+		}
 		const used = new Set(completedTokens);
 		if (used.has("-s")) used.add("--skill");
 		const values = ["--skill", "--refresh"]
@@ -414,11 +419,20 @@ function commandCompletions(
 	const unload = input.match(/^unload\s+([^\s]*)$/u);
 	if (!unload) return null;
 	const valuePrefix = unload[1];
-	const values = ["--all", ...desiredNames]
+	const values = ["--all", ...[...desiredNames].filter(isSafeCompletionValue)]
 		.filter((value) => value.startsWith(valuePrefix))
 		.sort()
 		.map((value) => ({ value: `unload ${value}`, label: value }));
 	return values.length > 0 ? values : null;
+}
+
+function isSafeCompletionValue(value: string): boolean {
+	return (
+		value.length > 0 &&
+		!value.startsWith("-") &&
+		!/\s/u.test(value) &&
+		sanitizeDisplayLine(value) === value
+	);
 }
 
 function collectDesiredActivationNames(

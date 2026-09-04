@@ -87,7 +87,7 @@ Existing project or global skills win name collisions. The extension rejects act
 ## ⚠️ Limitations
 
 - Direct HTTP files, archives, well-known endpoints, and GitHub API downloads are not supported.
-- Discovery follows `SKILL.md` directories to a maximum depth of eight and rejects sources with more than 500 discovered skills.
+- Discovery follows Pi's hidden-directory and `.gitignore`, `.ignore`, and `.fdignore` rules, scans `SKILL.md` directories to a maximum depth of eight, and rejects sources with more than 500 discovered skills.
 - GitHub and GitLab tree URLs treat the segment after `tree` as the ref; refs containing `/` are not currently supported.
 - Cache publication is serialized within one Pi process; independent Pi processes can still race while refreshing the same source.
 - The command supports TUI and RPC modes. Print and JSON modes reject it explicitly.

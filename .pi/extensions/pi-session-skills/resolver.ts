@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import {
 	chmod,
+	copyFile,
 	lstat,
 	mkdir,
 	mkdtemp,
@@ -25,13 +26,7 @@ const GIT_TIMEOUT_MS = 300_000;
 const MAX_GIT_OUTPUT_CHARS = 32_000;
 const MAX_DISCOVERY_DEPTH = 8;
 const MAX_DISCOVERED_SKILLS = 500;
-const SKIPPED_DISCOVERY_DIRECTORIES = new Set([
-	".git",
-	"node_modules",
-	"dist",
-	"build",
-	"__pycache__",
-]);
+const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 
 export interface ResolvedSkillTransaction {
 	commit(apply?: () => void): Promise<void>;
@@ -130,6 +125,7 @@ export class SessionSkillResolver implements SkillResolverLike {
 				options.selector,
 				this.#cacheRoot,
 				options.source.kind === "local" ? this.#cacheRoot : undefined,
+				join(stagingPath, "discovery"),
 				options.signal,
 			);
 			options.signal?.throwIfAborted();
@@ -455,9 +451,16 @@ async function selectSkill(
 	selector: string | undefined,
 	cacheRoot: string,
 	excludedRoot: string | undefined,
+	discoveryRoot: string,
 	signal: AbortSignal | undefined,
 ): Promise<Skill> {
-	const skillPaths = await discoverSkillPaths(sourcePath, excludedRoot, signal);
+	const skillPaths = await discoverSkillPaths(
+		sourcePath,
+		excludedRoot,
+		discoveryRoot,
+		cacheRoot,
+		signal,
+	);
 	signal?.throwIfAborted();
 	const loaded = loadSkills({
 		cwd: dirname(sourcePath),
@@ -502,29 +505,55 @@ async function selectSkill(
 async function discoverSkillPaths(
 	sourcePath: string,
 	excludedRoot: string | undefined,
+	discoveryRoot: string,
+	cacheRoot: string,
 	signal: AbortSignal | undefined,
 ): Promise<string[]> {
-	const discovered: string[] = [];
-	const addSkill = (skillPath: string) => {
-		if (discovered.length >= MAX_DISCOVERED_SKILLS) {
-			throw new Error(`Skill source exceeds the ${MAX_DISCOVERED_SKILLS}-skill discovery limit.`);
-		}
-		discovered.push(skillPath);
-	};
+	const discovered: Array<{ sourcePath: string; discoveryPath: string }> = [];
 	const canonicalExcludedRoot = excludedRoot ? await realpath(excludedRoot) : undefined;
 	signal?.throwIfAborted();
-	const walk = async (current: string, depth: number): Promise<void> => {
+	const sourceStat = await lstat(sourcePath);
+	signal?.throwIfAborted();
+	const sourceIsFile = sourceStat.isFile();
+	const copyDiscoveryFile = async (source: string, destination: string): Promise<void> => {
+		await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+		signal?.throwIfAborted();
+		await copyFile(source, destination);
+		signal?.throwIfAborted();
+	};
+	const walk = async (current: string, mirror: string, depth: number): Promise<void> => {
 		signal?.throwIfAborted();
 		if (canonicalExcludedRoot && isPathInside(canonicalExcludedRoot, current)) return;
 		const currentStat = await lstat(current);
 		signal?.throwIfAborted();
-		if (currentStat.isSymbolicLink())
+		if (currentStat.isSymbolicLink()) {
 			throw new Error(`Skill source contains a symbolic link: ${current}`);
+		}
 		if (currentStat.isFile()) {
-			if (basename(current) === "SKILL.md") addSkill(current);
+			if (basename(current) === "SKILL.md") {
+				await copyDiscoveryFile(current, mirror);
+				discovered.push({ sourcePath: current, discoveryPath: mirror });
+			}
 			return;
 		}
 		if (!currentStat.isDirectory() || depth > MAX_DISCOVERY_DEPTH) return;
+		await mkdir(mirror, { recursive: true, mode: 0o700 });
+		signal?.throwIfAborted();
+		for (const ignoreFileName of IGNORE_FILE_NAMES) {
+			const ignoreFile = join(current, ignoreFileName);
+			try {
+				const ignoreStat = await lstat(ignoreFile);
+				signal?.throwIfAborted();
+				if (ignoreStat.isSymbolicLink()) {
+					throw new Error(`Skill source contains a symbolic link: ${ignoreFile}`);
+				}
+				if (ignoreStat.isFile()) {
+					await copyDiscoveryFile(ignoreFile, join(mirror, ignoreFileName));
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+		}
 		const rootSkill = join(current, "SKILL.md");
 		let rootSkillStat: Awaited<ReturnType<typeof lstat>> | undefined;
 		try {
@@ -537,20 +566,51 @@ async function discoverSkillPaths(
 			throw new Error(`Skill source contains a symbolic link: ${rootSkill}`);
 		}
 		if (rootSkillStat?.isFile()) {
-			addSkill(rootSkill);
+			const discoverySkill = join(mirror, "SKILL.md");
+			await copyDiscoveryFile(rootSkill, discoverySkill);
+			discovered.push({ sourcePath: rootSkill, discoveryPath: discoverySkill });
 			return;
 		}
 		const entries = await readdir(current, { withFileTypes: true });
 		signal?.throwIfAborted();
 		entries.sort((left, right) => left.name.localeCompare(right.name));
 		for (const entry of entries) {
-			if (!entry.isDirectory() || SKIPPED_DISCOVERY_DIRECTORIES.has(entry.name)) continue;
-			await walk(join(current, entry.name), depth + 1);
+			if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+			const entryPath = join(current, entry.name);
+			if (entry.isSymbolicLink()) {
+				throw new Error(`Skill source contains a symbolic link: ${entryPath}`);
+			}
+			if (!entry.isDirectory()) continue;
+			await walk(entryPath, join(mirror, entry.name), depth + 1);
 		}
 	};
-	await walk(sourcePath, 0);
+	const discoveryPath = sourceIsFile ? join(discoveryRoot, basename(sourcePath)) : discoveryRoot;
+	await walk(sourcePath, discoveryPath, 0);
 	signal?.throwIfAborted();
-	return discovered;
+	const includedPaths = piDiscoveredPaths(discoveryPath, cacheRoot);
+	signal?.throwIfAborted();
+	const included = discovered
+		.filter((skill) => includedPaths.has(resolve(skill.discoveryPath)))
+		.map((skill) => skill.sourcePath);
+	if (included.length > MAX_DISCOVERED_SKILLS) {
+		throw new Error(`Skill source exceeds the ${MAX_DISCOVERED_SKILLS}-skill discovery limit.`);
+	}
+	return included;
+}
+
+function piDiscoveredPaths(discoveryPath: string, cacheRoot: string): Set<string> {
+	const discovery = loadSkills({
+		cwd: dirname(discoveryPath),
+		agentDir: cacheRoot,
+		skillPaths: [discoveryPath],
+		includeDefaults: false,
+	});
+	return new Set([
+		...discovery.skills.map((skill) => resolve(skill.filePath)),
+		...discovery.diagnostics.flatMap((diagnostic) =>
+			diagnostic.path ? [resolve(diagnostic.path)] : [],
+		),
+	]);
 }
 
 function validateMaterializedSkill(path: string, expectedName: string, cacheRoot: string): void {

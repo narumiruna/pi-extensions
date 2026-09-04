@@ -106,6 +106,40 @@ test("ignores frontmatter in Markdown files that are not named SKILL.md", async 
 	assert.equal(result.name, "real-skill");
 });
 
+test("honors Pi ignore files and hidden directories during discovery", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-ignore-");
+	const sourceRoot = join(workspace, "skills");
+	await writeSkill(sourceRoot, "visible", "visible-skill");
+	await writeSkill(sourceRoot, "ignored-git", "ignored-git-skill");
+	await writeSkill(sourceRoot, "ignored-general", "ignored-general-skill");
+	await writeSkill(sourceRoot, "ignored-fd", "ignored-fd-skill");
+	await writeSkill(sourceRoot, "group/keep", "reincluded-skill");
+	await writeSkill(sourceRoot, ".hidden", "hidden-skill");
+	await writeFile(
+		join(sourceRoot, ".gitignore"),
+		"ignored-git/\ngroup/*\n!group/keep/\n!group/keep/**\n",
+	);
+	await writeFile(join(sourceRoot, ".ignore"), "ignored-general/\n");
+	await writeFile(join(sourceRoot, ".fdignore"), "ignored-fd/\n");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+
+	const source = parseSkillSource(sourceRoot, workspace);
+	const visible = await resolver.resolve({ source, selector: "visible-skill" });
+	assert.equal(visible.name, "visible-skill");
+	await visible.transaction?.rollback();
+	const reincluded = await resolver.resolve({ source, selector: "reincluded-skill" });
+	assert.equal(reincluded.name, "reincluded-skill");
+	await reincluded.transaction?.rollback();
+	for (const ignored of [
+		"ignored-git-skill",
+		"ignored-general-skill",
+		"ignored-fd-skill",
+		"hidden-skill",
+	]) {
+		await assert.rejects(() => resolver.resolve({ source, selector: ignored }), /No skill named/);
+	}
+});
+
 test("selects one skill from a multi-skill source", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-select-");
 	await writeSkill(workspace, "skills/alpha", "alpha");
