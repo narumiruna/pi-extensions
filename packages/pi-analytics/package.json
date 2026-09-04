@@ -32,7 +32,7 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.51.0"
+		"@narumitw/pi-tui-kit": "^0.59.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
