@@ -272,7 +272,7 @@ Accepted style fields:
 
 ### `package`
 
-Current workspace package name and version.
+Current workspace package version and manifest source.
 
 - Format variables: `$symbol`, `$version`, `$source`.
 - Style variables in `format`: `$style`.

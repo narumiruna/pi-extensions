@@ -44,7 +44,9 @@ Read [runtime and security](references/runtime-and-security.md) before enabling 
 
 Use an explicit user-provided path when present.
 
-Otherwise use `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/pi-starship.toml`.
+Otherwise resolve the active path through Pi's `getAgentDir()` API by running `node scripts/config-path.mjs` relative to this `SKILL.md`.
+
+The resolver prints a JSON string containing the exact absolute path, including correct expansion of a configured `~`.
 
 Read the existing document before editing it.
 
@@ -72,20 +74,32 @@ Preserve an existing malformed document while diagnosing it, and change only the
 
 ## Validate and hand off an edit
 
-Resolve `scripts/validate.mjs` relative to this `SKILL.md`, then run it with the absolute configuration path:
+Create a separate draft without changing the active document, then make the smallest requested edit in that draft.
+
+Immediately before publication, re-read the active path and stop to reconcile if it differs from the document initially inspected or if a missing document has appeared.
+
+Resolve the bundled scripts relative to this `SKILL.md`, validate the draft, and publish it through the atomic apply script:
 
 ```bash
 skill_dir="<directory containing this SKILL.md>"
-config_path="<absolute path to pi-starship.toml>"
-node "$skill_dir/scripts/validate.mjs" "$config_path"
+draft_path="<path to the proposed pi-starship.toml draft>"
+config_path="<absolute path to the active pi-starship.toml>"
+node "$skill_dir/scripts/validate.mjs" "$draft_path"
+node "$skill_dir/scripts/apply.mjs" "$draft_path" "$config_path"
 ```
 
-Fix every TOML syntax error and rerun the validator unless the user explicitly requested an invalid test fixture.
+The apply script stages the proposed bytes in the destination directory, validates that staged file, and renames it over the active path only after validation succeeds.
 
-Re-read the saved document and review the exact change for accidental replacement or unrelated edits.
+Fix every TOML syntax error and rerun the validator unless the user explicitly requested an invalid test fixture, which must not replace the active document.
 
-Report the edited path, the effective layout or module change, and the validator result.
+Remove the separate draft after a successful publication, then re-read the saved document and review the exact change for accidental replacement or unrelated edits.
 
-External edits do not update the active footer immediately, so tell the user to run `/reload` and inspect `/starship status` for pi-starship semantic warnings.
+Report the edited path, the effective layout or module change, and the validator and atomic-publication results.
+
+External edits do not update an active footer immediately.
+
+When the pi-starship extension and `/starship status` command are available, tell the user to run `/reload` and inspect `/starship status` for semantic warnings.
+
+When the extension or command is unavailable, report that only standalone TOML syntax and atomic publication were verified.
 
 Do not claim semantic validation or an active-footer update unless that runtime verification actually occurred.

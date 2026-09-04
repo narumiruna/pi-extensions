@@ -35,8 +35,9 @@ export async function collectCloud(context: CollectorContext): Promise<MutableMo
 
 async function collectAws(context: CollectorContext): Promise<Record<string, string> | undefined> {
 	const env = context.input.environment;
-	const profile = safeMetadata(env.AWS_PROFILE ?? env.AWS_DEFAULT_PROFILE) ?? "default";
-	let region = safeMetadata(env.AWS_REGION ?? env.AWS_DEFAULT_REGION);
+	const profile =
+		safeMetadata(env.AWS_PROFILE) ?? safeMetadata(env.AWS_DEFAULT_PROFILE) ?? "default";
+	let region = safeMetadata(env.AWS_REGION) ?? safeMetadata(env.AWS_DEFAULT_REGION);
 	if (!region) {
 		const configPath =
 			safeMetadata(env.AWS_CONFIG_FILE, 1_024) ?? joinHome(context.input, ".aws", "config");

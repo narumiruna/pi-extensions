@@ -109,7 +109,7 @@ function usernameValues(context: CollectorContext): Record<string, string> | und
 	const user = safeMetadata(context.input.username);
 	if (!user) return undefined;
 	const env = context.input.environment;
-	const login = safeMetadata(env.LOGNAME ?? env.USER ?? env.USERNAME);
+	const login = safeMetadata(env.LOGNAME) ?? safeMetadata(env.USER) ?? safeMetadata(env.USERNAME);
 	const privileged = /^(?:root|administrator)$/iu.test(user);
 	const detected = optionStrings(context, "username", "detect_env_vars").some(
 		(name) => safeMetadata(env[name]) !== undefined,

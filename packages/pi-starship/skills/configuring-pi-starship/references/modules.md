@@ -56,8 +56,10 @@ For exact default formats, symbols, enabled state, accepted style fields, displa
 ## Reachability and collection rules
 
 A module contributes work only when it is enabled and reachable from the root `format` directly or through `$all`.
-A collector obtains only values referenced by that module's `format`.
-For example, a reachable language module does not run its version command when its format omits `$version`.
+Reachability activates that module's collector at module scope, even when its module format references only `$symbol`.
+Omitting a data variable does not prevent the package, deployment, cloud, or execution collectors from reading that reachable module's allowlisted files and environment metadata.
+Language project detection also runs at module scope, while its version command, Node engine-file read, and optional Python or Rust environment values are collected only when their corresponding variables are referenced.
+The mise health, direnv status, Pixi version, and Terraform/OpenTofu version commands are likewise variable-gated, but their module-level detection and non-command metadata reads still occur when reachable.
 A disabled module is absent even when the root format names it or `$all` is present.
 
 Workspace detection uses at most one direct listing of the current working directory, stops at 2,048 entries, and never recurses.

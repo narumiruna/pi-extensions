@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -17,7 +17,10 @@ const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url
 const skillsDirectory = path.join(packageDirectory, "skills");
 const skillDirectory = path.join(skillsDirectory, "configuring-pi-starship");
 const referencesDirectory = path.join(skillDirectory, "references");
-const validatorPath = path.join(skillDirectory, "scripts", "validate.mjs");
+const scriptsDirectory = path.join(skillDirectory, "scripts");
+const applyPath = path.join(scriptsDirectory, "apply.mjs");
+const configPathResolver = path.join(scriptsDirectory, "config-path.mjs");
+const validatorPath = path.join(scriptsDirectory, "validate.mjs");
 
 test("package bundles one focused pi-starship configuration skill", async () => {
 	const manifest = JSON.parse(
@@ -77,11 +80,16 @@ test("skill answers from references or source and edits configuration safely", (
 		"[the complete module catalog](references/module-catalog.md)",
 		"[module behavior](references/modules.md)",
 		"[runtime and security](references/runtime-and-security.md)",
+		"resolve the active path through Pi's `getAgentDir()` API",
 		"Read the existing document before editing it.",
 		"Preserve comments, ordering, unknown fields, and unrelated custom settings",
 		"make it reachable from the root `format` or `$all`",
 		"Do not enable network, command-backed, cloud, deployment, host, or user metadata",
-		"run `/reload` and inspect `/starship status`",
+		"Create a separate draft without changing the active document",
+		"re-read the active path and stop to reconcile if it differs",
+		"stages the proposed bytes in the destination directory",
+		"When the pi-starship extension and `/starship status` command are available",
+		"When the extension or command is unavailable",
 		"Do not claim semantic validation or an active-footer update",
 	]) {
 		assert.ok(skill.includes(contract), `missing editing contract: ${contract}`);
@@ -221,7 +229,20 @@ test("complete module catalog covers every public module schema", () => {
 	}
 });
 
-test("bundled validator accepts valid TOML and rejects invalid TOML", () => {
+test("config path resolver uses Pi's tilde-aware agent directory", () => {
+	const configuredAgentDir = `~/pi-starship-skill-${process.pid}`;
+	const result = spawnSync(process.execPath, [configPathResolver], {
+		encoding: "utf8",
+		env: { ...process.env, PI_CODING_AGENT_DIR: configuredAgentDir },
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(
+		JSON.parse(result.stdout),
+		path.join(homedir(), configuredAgentDir.slice(2), "pi-starship.toml"),
+	);
+});
+
+test("bundled validator accepts valid TOML and bounds terminal-safe errors", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-"));
 	try {
 		const validPath = path.join(directory, "pi-starship.toml");
@@ -231,16 +252,65 @@ test("bundled validator accepts valid TOML and rejects invalid TOML", () => {
 		assert.match(valid.stdout, /Valid TOML/u);
 
 		const invalidPath = path.join(directory, "invalid-pi-starship.toml");
-		writeFileSync(invalidPath, "[model\nstyle = 1\n");
+		writeFileSync(invalidPath, `[model\u001b]0;spoof\u0007\u202e${"x".repeat(5000)}\n`);
 		const invalid = spawnSync(process.execPath, [validatorPath, invalidPath], {
 			encoding: "utf8",
 		});
 		assert.equal(invalid.status, 1);
 		assert.match(invalid.stderr, /Invalid TOML/u);
+		assert.ok(invalid.stderr.includes("…"));
+		assert.ok(invalid.stderr.length < 1200, `unbounded stderr: ${invalid.stderr.length}`);
+		assert.equal(hasUnsafeTerminalControl(invalid.stderr), false);
 	} finally {
 		rmSync(directory, { force: true, recursive: true });
 	}
 });
+
+test("atomic apply validates staged TOML before replacing the active document", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-apply-"));
+	const settingsDirectory = path.join(directory, "agent");
+	const destinationPath = path.join(settingsDirectory, "pi-starship.toml");
+	const draftPath = path.join(directory, "draft.toml");
+	const original = 'format = "$model"\n';
+	const replacement = 'format = "$directory"\n[directory]\nstyle = "bold blue"\n';
+	try {
+		mkdirSync(settingsDirectory);
+		writeFileSync(destinationPath, original, { flag: "wx", flush: true });
+		writeFileSync(draftPath, replacement);
+		const applied = spawnSync(process.execPath, [applyPath, draftPath, destinationPath], {
+			encoding: "utf8",
+		});
+		assert.equal(applied.status, 0, applied.stderr);
+		assert.match(applied.stdout, /Applied valid TOML atomically/u);
+		assert.equal(readFileSync(destinationPath, "utf8"), replacement);
+		assert.deepEqual(readdirSync(settingsDirectory), ["pi-starship.toml"]);
+
+		writeFileSync(draftPath, "[model\n");
+		const rejected = spawnSync(process.execPath, [applyPath, draftPath, destinationPath], {
+			encoding: "utf8",
+		});
+		assert.equal(rejected.status, 1);
+		assert.match(rejected.stderr, /Draft was not applied/u);
+		assert.equal(readFileSync(destinationPath, "utf8"), replacement);
+		assert.deepEqual(readdirSync(settingsDirectory), ["pi-starship.toml"]);
+	} finally {
+		rmSync(directory, { force: true, recursive: true });
+	}
+});
+
+function hasUnsafeTerminalControl(value: string): boolean {
+	return [...value].some((character) => {
+		const codePoint = character.codePointAt(0) ?? 0;
+		return (
+			(codePoint !== 10 && (codePoint < 32 || (codePoint >= 127 && codePoint <= 159))) ||
+			codePoint === 0x061c ||
+			codePoint === 0x200e ||
+			codePoint === 0x200f ||
+			(codePoint >= 0x202a && codePoint <= 0x202e) ||
+			(codePoint >= 0x2066 && codePoint <= 0x2069)
+		);
+	});
+}
 
 function markdownCode(value: unknown): string {
 	return `\`${JSON.stringify(value).replaceAll("|", "\\|")}\``;
