@@ -307,7 +307,7 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
 		return key as KeyId;
 	});
 	const keybindings = new KeybindingsManager(JUMP_TEST_KEYBINDINGS, {
-		"app.message.copy": ["end", ...legacyCopyKeys],
+		"app.message.copy": ["delete", ...legacyCopyKeys],
 		"tui.altScreen.bottom": [
 			"ctrl+c",
 			"return",
@@ -324,10 +324,12 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
 			"ctrl+alt+h",
 			"ctrl+alt+m",
 			"ctrl+alt+_",
-			"end",
+			"delete",
 			"pageUp",
 			"shift+ctrl+g",
 			"not-a-key" as KeyId,
+			" end " as KeyId,
+			"\u001bend" as KeyId,
 			"ctrl+escape",
 			"alt+clear",
 			"shift+f1",
@@ -382,7 +384,7 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
 	}
 
 	harness.writes.length = 0;
-	harness.input("\u001b[F");
+	harness.input("\u001b[3~");
 	sideTui.renderNow(true);
 	assert.equal(viewport.viewportTop, manualTop);
 	assert.equal(viewport.isFollowingOutput, false);

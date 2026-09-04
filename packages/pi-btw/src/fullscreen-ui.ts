@@ -243,7 +243,7 @@ const MATCHABLE_SPECIAL_KEYS = new Set([
 const MATCHABLE_SYMBOL_KEYS = new Set("`-=[]\\;',./!@#$%^&*()_+|~{}:<>?");
 
 function normalizedKeyId(key: string): string {
-	const parts = sanitizeSingleLine(key).toLowerCase().split("+");
+	const parts = key.toLowerCase().split("+");
 	const base = parts.at(-1);
 	if (!base) return "";
 	const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
