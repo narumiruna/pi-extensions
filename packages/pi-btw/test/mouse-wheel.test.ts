@@ -269,11 +269,11 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
 	assert.equal(await running, "cancelled");
 });
 
-test("configured bottom key is displayed and wins over the focused composer", async (t) => {
+test("configured bottom key skips Ctrl+C and wins over the focused composer", async (t) => {
 	initTheme("dark");
 	const previousKeybindings = getKeybindings();
 	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
-		"tui.altScreen.bottom": "x",
+		"tui.altScreen.bottom": ["ctrl+c", "x"],
 	});
 	setKeybindings(keybindings);
 	t.onTestFinished(() => setKeybindings(previousKeybindings));
@@ -321,11 +321,11 @@ test("configured bottom key is displayed and wins over the focused composer", as
 	assert.deepEqual(actions, ["close"]);
 });
 
-test("narrow unbound indicator stays bounded and search overlay owns overlapping clicks", async (t) => {
+test("narrow indicator without a usable key stays bounded and defers to search", async (t) => {
 	initTheme("dark");
 	const previousKeybindings = getKeybindings();
 	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
-		"tui.altScreen.bottom": [],
+		"tui.altScreen.bottom": ["ctrl+c"],
 	});
 	setKeybindings(keybindings);
 	t.onTestFinished(() => setKeybindings(previousKeybindings));

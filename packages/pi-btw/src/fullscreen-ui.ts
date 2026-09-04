@@ -237,7 +237,10 @@ function createBtwFullscreenTui(
 			copyOnSelect,
 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
 			scrollToEndIndicator: () => {
-				const key = formatKeyLabel(String(keybindings.getKeys("tui.altScreen.bottom")[0] ?? ""));
+				const key = keybindings
+					.getKeys("tui.altScreen.bottom")
+					.map((candidate) => formatKeyLabel(String(candidate)))
+					.find((candidate) => candidate && candidate.toLowerCase() !== "ctrl+c");
 				const label = theme.fg("text", " ↓ Jump to latest message");
 				const shortcut = key ? theme.fg("muted", ` · ${key}`) : "";
 				return theme.bg("selectedBg", `${label}${shortcut} `);
