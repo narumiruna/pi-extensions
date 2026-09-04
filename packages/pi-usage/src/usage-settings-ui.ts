@@ -56,9 +56,7 @@ export async function showUsageSettings(
 				},
 			];
 			const container = new Container();
-			const createRule = () =>
-				new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
-			container.addChild(createRule());
+			const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
 			container.addChild(new Text(theme.fg("accent", theme.bold("pi-usage Settings")), 1, 1));
 
 			let settingsList: SettingsList;
@@ -108,11 +106,19 @@ export async function showUsageSettings(
 				cancel,
 			);
 			container.addChild(settingsList);
-			container.addChild(createRule());
 
 			parentSignal.addEventListener("abort", cancel, { once: true });
 			return {
-				render: (width: number) => container.render(width),
+				render(width: number) {
+					const content = container.render(width);
+					const terminalRows = Number.isFinite(tui.terminal?.rows)
+						? Math.floor(tui.terminal.rows)
+						: 24;
+					const availableRows = Math.max(1, terminalRows - 3);
+					if (content.length + 2 > availableRows) return content;
+					const [ruleLine = ""] = rule.render(width);
+					return [ruleLine, ...content, ruleLine];
+				},
 				invalidate: () => container.invalidate(),
 				handleInput(data: string) {
 					if (closing) return;

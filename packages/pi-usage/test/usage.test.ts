@@ -2598,6 +2598,66 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
 	assert.doesNotMatch(renderedSettings.join("\n"), /xAI|warning|undocumented|experimental/iu);
 });
 
+test("the Settings frame respects the live terminal row budget", async () => {
+	const settings = memorySettingsRuntime();
+	const terminal = { rows: 24 };
+	let full: string[] = [];
+	let constrained: string[] = [];
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) =>
+			new Promise<boolean>((resolve) => {
+				let component: {
+					dispose?(): void;
+					handleInput(data: string): void;
+					render(width: number): string[];
+				};
+				const done = (value: boolean) => {
+					component.dispose?.();
+					resolve(value);
+				};
+				component = (
+					factory as (
+						tui: { terminal: { rows: number }; requestRender(): void },
+						theme: {
+							bold(text: string): string;
+							fg(_color: string, text: string): string;
+						},
+						keybindings: object,
+						done: (value: boolean) => void,
+					) => typeof component
+				)(
+					{ terminal, requestRender() {} },
+					{ bold: (text) => text, fg: (_color, text) => text },
+					{ matches: () => false },
+					done,
+				);
+				full = component.render(100);
+				terminal.rows = 12;
+				constrained = component.render(100);
+				component.handleInput("\u0003");
+			}),
+	});
+
+	await showUsageSettings(
+		ctx,
+		settings.runtime,
+		new AbortController().signal,
+		() => true,
+		() => assert.fail("rendering must not change settings"),
+	);
+
+	const fullPlain = full.map(stripVTControlCharacters);
+	assert.equal(fullPlain[0], "─".repeat(100));
+	assert.equal(fullPlain.at(-1), "─".repeat(100));
+	const constrainedPlain = constrained.map(stripVTControlCharacters);
+	assert.ok(constrainedPlain.length <= terminal.rows - 3);
+	assert.notEqual(constrainedPlain[0], "─".repeat(100));
+	assert.notEqual(constrainedPlain.at(-1), "─".repeat(100));
+	assert.match(constrainedPlain.join("\n"), /[→›]\s+Codex Fast mode/u);
+});
+
 test("Ctrl+C hard-cancels Settings before conflicting configurable actions", async (t) => {
 	const settings = memorySettingsRuntime();
 	let applied = 0;
