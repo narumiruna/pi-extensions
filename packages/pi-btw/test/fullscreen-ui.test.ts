@@ -838,10 +838,9 @@ test("Ctrl+C hard-cancels the side root before a remapped search close", async (
 		await flushAsyncWork();
 		assert.ok(sideTui);
 		const searchableTui = sideTui as TUI & {
-			openSearch(): void;
 			isOverlayFocused(): boolean;
 		};
-		searchableTui.openSearch();
+		harness.terminal.send("\u001b[102;6u");
 		assert.equal(searchableTui.isOverlayFocused(), true);
 
 		harness.terminal.send("\u0003");
@@ -1029,7 +1028,7 @@ test("manual fullscreen defers a printable copy binding while transcript search 
 	await flushAsyncWork();
 	sideTui.renderNow(true);
 	assert.equal(copyCalls, 0);
-	assert.match(stripVTControlCharacters(harness.writes.join("")), />\s+x/u);
+	assert.match(stripVTControlCharacters(harness.writes.join("")), /x\s+No matches/u);
 	closeSide();
 	assert.equal(await running, "closed");
 });

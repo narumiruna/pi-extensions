@@ -9,7 +9,7 @@ Only context you explicitly bring back is loaded into the main editor.
 
 - Starts a side thread immediately with `/btw <question>` or opens the manager with `/btw`.
 - Uses any persisted main-session branch as context without switching branches.
-- Supports scrollable answers, transcript search, follow-up questions, queued steering, and in-memory resume.
+- Supports scrollable answers, transcript search, a clickable jump-to-latest control, follow-up questions, queued steering, and in-memory resume.
 - Keeps side questions and answers out of the main conversation by default.
 - Brings back the latest answer, a question suffix, an exact range, or the complete thread only when requested.
 - Uses Pi's current model and thinking level or saved pi-btw choices.
@@ -120,6 +120,9 @@ A failed response remains visible and does not discard later queued questions.
 Steering never appends to the main conversation or editor.
 
 Use the mouse wheel, trackpad, or `PgUp`/`PgDn` to scroll transcript history.
+On Pi 0.85 or newer, scrolling away from a following transcript shows **Jump to latest message** over its final visible row.
+Click the control or use Pi's effective `tui.altScreen.bottom` binding (`End` by default) to resume at the latest content.
+The control disappears after the transcript returns to follow-end mode.
 The footer shows history keys only when scrolling is available.
 Ctrl+C cancels the active response and discards the current draft and steering queue.
 Completed questions, answers, and visible errors remain available through Resume until the extension instance ends.
@@ -216,6 +219,7 @@ The file is read for every `/btw` invocation, so edits apply without `/reload`.
 - Resume state is memory-only and lasts only for the current extension instance.
 - A side thread retains the latest 40,000 characters of main-conversation context and adds a truncation notice when earlier content is omitted.
 - Clipboard access depends on Pi's host helper, the operating system, and the terminal.
+- Pi versions before 0.85 omit the clickable jump-to-latest control.
 
 ## 🗂️ Package layout
 
