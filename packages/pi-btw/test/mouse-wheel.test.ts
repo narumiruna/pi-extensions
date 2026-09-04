@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI, TuiAltScreen } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	getKeybindings,
+	KeybindingsManager,
+	setKeybindings,
+	type TUI,
+	TUI_KEYBINDINGS,
+	type TuiAltScreen,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { runBtwFullscreen } from "../src/fullscreen-ui.js";
 import { BtwAnsweringView, BtwTranscriptPager } from "../src/transcript-pager.js";
@@ -27,11 +36,16 @@ function response(text: string): AssistantMessage {
 	} as AssistantMessage;
 }
 
-function createFullscreenHarness(rows = 12) {
+function createFullscreenHarness(
+	rows = 12,
+	options: { columns?: number; keybindings?: KeybindingsManager } = {},
+) {
 	const writes: string[] = [];
+	const themeCalls: string[] = [];
+	const columns = options.columns ?? 80;
 	let handleInput: ((data: string) => void) | undefined;
 	const terminal = {
-		columns: 80,
+		columns,
 		rows,
 		start(onInput: (data: string) => void) {
 			handleInput = onInput;
@@ -62,8 +76,17 @@ function createFullscreenHarness(rows = 12) {
 				});
 				factory(
 					parent as never,
-					{ fg: (_color: string, text: string) => text } as never,
-					{} as never,
+					{
+						fg: (color: string, text: string) => {
+							themeCalls.push(`fg:${color}`);
+							return text;
+						},
+						bg: (color: string, text: string) => {
+							themeCalls.push(`bg:${color}`);
+							return text;
+						},
+					} as never,
+					(options.keybindings ?? getKeybindings()) as never,
 					((value: unknown) => outerDone?.(value)) as never,
 				);
 				return result;
@@ -77,6 +100,8 @@ function createFullscreenHarness(rows = 12) {
 	return {
 		ctx,
 		writes,
+		themeCalls,
+		columns,
 		get input() {
 			assert.ok(handleInput);
 			return handleInput;
@@ -86,6 +111,40 @@ function createFullscreenHarness(rows = 12) {
 
 async function flushAsyncWork(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+const JUMP_TO_LATEST = "↓ Jump to latest message";
+const ESCAPE = String.fromCharCode(27);
+
+function getRowMarkers(text: string): RegExpStringIterator<RegExpExecArray> {
+	return text.matchAll(new RegExp(`${ESCAPE}\\[(\\d+);1H${ESCAPE}\\[2K`, "gu"));
+}
+
+function latestFrame(writes: readonly string[]): string {
+	return stripVTControlCharacters(writes.at(-1) ?? "");
+}
+
+function findJumpIndicator(writes: readonly string[]): { column: number; row: number } {
+	const frame = writes.at(-1) ?? "";
+	const indicatorIndex = frame.indexOf(JUMP_TO_LATEST);
+	assert.notEqual(indicatorIndex, -1, "jump-to-latest indicator was not rendered");
+	const prefix = frame.slice(0, indicatorIndex);
+	const rowMarkers = [...getRowMarkers(prefix)];
+	const marker = rowMarkers.at(-1);
+	assert.ok(marker?.index !== undefined, "indicator row marker was not rendered");
+	const row = Number(marker[1]);
+	const rowPrefix = prefix.slice(marker.index + marker[0].length);
+	return { column: visibleWidth(rowPrefix) + 1, row };
+}
+
+function renderedRows(write: string): string[] {
+	const markers = [...getRowMarkers(write)];
+	return markers.map((marker, index) => {
+		assert.ok(marker.index !== undefined);
+		const start = marker.index + marker[0].length;
+		const end = markers[index + 1]?.index ?? write.length;
+		return write.slice(start, end);
+	});
 }
 
 test("mouse wheel and history keys scroll the native side-thread viewport", async () => {
@@ -111,6 +170,7 @@ test("mouse wheel and history keys scroll the native side-thread viewport", asyn
 	assert.ok(sideTui);
 
 	sideTui.renderNow(true);
+	assert.doesNotMatch(latestFrame(harness.writes), /Jump to latest message/u);
 	const viewport = sideTui as TuiAltScreen;
 	const initialTop = viewport.viewportTop;
 	assert.ok(initialTop > 0, "long transcript should use the native primary scroll viewport");
@@ -127,6 +187,10 @@ test("mouse wheel and history keys scroll the native side-thread viewport", asyn
 	assert.match(wheelFrame, /btw · side thread/);
 	assert.match(wheelFrame, /Ctrl\+C/);
 	assert.match(wheelFrame, /PgUp\/PgDn/);
+	assert.match(wheelFrame, /↓ Jump to latest message · End/u);
+	assert.ok(harness.themeCalls.includes("fg:text"));
+	assert.ok(harness.themeCalls.includes("fg:muted"));
+	assert.ok(harness.themeCalls.includes("bg:selectedBg"));
 
 	harness.input("\u001b[<65;1;1M");
 	sideTui.renderNow(true);
@@ -140,6 +204,12 @@ test("mouse wheel and history keys scroll the native side-thread viewport", asyn
 	harness.input("\u001b[6~");
 	sideTui.renderNow(true);
 	assert.ok(viewport.viewportTop > pageOlderTop, "PageDown should return toward newer history");
+
+	harness.writes.length = 0;
+	harness.input("\u001b[F");
+	sideTui.renderNow(true);
+	assert.equal(viewport.isFollowingOutput, true);
+	assert.doesNotMatch(latestFrame(harness.writes), /Jump to latest message/u);
 
 	harness.input("\u0003");
 	assert.equal(await running, "closed");
@@ -186,7 +256,129 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
 	assert.match(wheelFrame, /btw · side thread/);
 	assert.match(wheelFrame, /Answering…/);
 	assert.match(wheelFrame, /Ctrl\+C/);
+	assert.match(wheelFrame, /↓ Jump to latest message · End/u);
+
+	const indicator = findJumpIndicator(harness.writes);
+	harness.writes.length = 0;
+	harness.input(`\u001b[<0;${indicator.column};${indicator.row}M`);
+	sideTui.renderNow(true);
+	assert.equal(viewport.isFollowingOutput, true);
+	assert.doesNotMatch(latestFrame(harness.writes), /Jump to latest message/u);
 
 	harness.input("\u0003");
 	assert.equal(await running, "cancelled");
+});
+
+test("configured bottom key is displayed and wins over the focused composer", async (t) => {
+	initTheme("dark");
+	const previousKeybindings = getKeybindings();
+	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+		"tui.altScreen.bottom": "x",
+	});
+	setKeybindings(keybindings);
+	t.onTestFinished(() => setKeybindings(previousKeybindings));
+	const harness = createFullscreenHarness(12, { keybindings });
+	const answer = Array.from({ length: 40 }, (_, index) => `history ${index + 1}`).join("\n");
+	const actions: string[] = [];
+	let sideTui: TUI | undefined;
+	const running = runBtwFullscreen(harness.ctx, (fullscreenCtx) =>
+		fullscreenCtx.ui.custom<"closed">((tui, theme, _keys, done) => {
+			sideTui = tui;
+			return new BtwTranscriptPager(
+				tui,
+				theme,
+				[{ question: "question", answer, kind: "answered", response: response(answer) }],
+				(action) => {
+					actions.push(action.kind);
+					if (action.kind === "close") done("closed");
+				},
+				{ startAtBottom: true, initialQuestion: "draft" },
+			);
+		}),
+	);
+	await flushAsyncWork();
+	assert.ok(sideTui);
+
+	sideTui.renderNow(true);
+	const viewport = sideTui as TuiAltScreen;
+	harness.writes.length = 0;
+	harness.input("\u001b[<64;1;1M");
+	sideTui.renderNow(true);
+	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · X/u);
+
+	harness.writes.length = 0;
+	harness.input("x");
+	sideTui.renderNow(true);
+	const returnedFrame = latestFrame(harness.writes);
+	assert.equal(viewport.isFollowingOutput, true);
+	assert.doesNotMatch(returnedFrame, /Jump to latest message/u);
+	assert.match(returnedFrame, /draft/u);
+	assert.doesNotMatch(returnedFrame, /draftx/u);
+	assert.deepEqual(actions, []);
+
+	harness.input("\u0003");
+	assert.equal(await running, "closed");
+	assert.deepEqual(actions, ["close"]);
+});
+
+test("narrow unbound indicator stays bounded and search overlay owns overlapping clicks", async (t) => {
+	initTheme("dark");
+	const previousKeybindings = getKeybindings();
+	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+		"tui.altScreen.bottom": [],
+	});
+	setKeybindings(keybindings);
+	t.onTestFinished(() => setKeybindings(previousKeybindings));
+	const harness = createFullscreenHarness(7, { columns: 40, keybindings });
+	const answer = Array.from({ length: 40 }, (_, index) => `history ${index + 1}`).join("\n");
+	let sideTui: TUI | undefined;
+	const running = runBtwFullscreen(harness.ctx, (fullscreenCtx) =>
+		fullscreenCtx.ui.custom<"closed">((tui, theme, _keys, done) => {
+			sideTui = tui;
+			return new BtwTranscriptPager(
+				tui,
+				theme,
+				[{ question: "question", answer, kind: "answered", response: response(answer) }],
+				(action) => {
+					if (action.kind === "close") done("closed");
+				},
+				{ startAtBottom: true },
+			);
+		}),
+	);
+	await flushAsyncWork();
+	assert.ok(sideTui);
+
+	sideTui.renderNow(true);
+	const viewport = sideTui as TuiAltScreen;
+	harness.writes.length = 0;
+	harness.input("\u001b[<64;1;1M");
+	sideTui.renderNow(true);
+	const manualTop = viewport.viewportTop;
+	const indicator = findJumpIndicator(harness.writes);
+	const indicatorFrame = latestFrame(harness.writes);
+	assert.match(indicatorFrame, /↓ Jump to latest message/u);
+	assert.doesNotMatch(indicatorFrame, /Jump to latest message ·/u);
+	for (const row of renderedRows(harness.writes.at(-1) ?? "")) {
+		const width = visibleWidth(stripVTControlCharacters(row));
+		assert.ok(width <= harness.columns, `rendered row width ${width}: ${JSON.stringify(row)}`);
+	}
+
+	harness.input("\u001b[102;6u");
+	sideTui.renderNow(true);
+	assert.equal(sideTui.hasOverlay(), true);
+	harness.input(`\u001b[<0;${indicator.column};${indicator.row}M`);
+	sideTui.renderNow(true);
+	assert.equal(viewport.viewportTop, manualTop);
+	assert.equal(viewport.isFollowingOutput, false);
+
+	harness.input("\u001b");
+	sideTui.renderNow(true);
+	const visibleIndicator = findJumpIndicator(harness.writes);
+	harness.input(`\u001b[<0;${visibleIndicator.column};${visibleIndicator.row}M`);
+	sideTui.renderNow(true);
+	assert.equal(viewport.isFollowingOutput, true);
+
+	harness.input("\u0003");
+	assert.equal(await running, "closed");
 });

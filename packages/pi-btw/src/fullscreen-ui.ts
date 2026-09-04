@@ -17,7 +17,7 @@ import {
 	type TuiInputListenerResult,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { sanitizeSingleLine } from "./text.js";
+import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
 
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
 type BtwCustomFactory<T> = (
@@ -236,6 +236,12 @@ function createBtwFullscreenTui(
 			mouse: true,
 			copyOnSelect,
 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
+			scrollToEndIndicator: () => {
+				const key = formatKeyLabel(String(keybindings.getKeys("tui.altScreen.bottom")[0] ?? ""));
+				const label = theme.fg("text", " ↓ Jump to latest message");
+				const shortcut = key ? theme.fg("muted", ` · ${key}`) : "";
+				return theme.bg("selectedBg", `${label}${shortcut} `);
+			},
 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
 			openUrl,
 			copySelection: async (text) => {
