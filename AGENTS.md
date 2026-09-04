@@ -25,7 +25,7 @@
 - Keep deprecated reference packages under `deprecated/`, which active checks exclude.
 - Root files such as `package.json`, `package-lock.json`, `biome.json`, `tsconfig.json`, and `.github/workflows/*` own shared tooling.
 - Never edit `node_modules/`.
-- Read `node_modules/` to confirm external API types and usage instead of guessing.
+- When code mirrors, filters, or predicts external runtime behavior, inspect the installed implementation and enumerate all relevant decision branches and equivalence classes; do not infer behavior from types, raw values, or review examples.
 - Keep published files aligned with each manifest's `files` list and `pi.extensions` entry.
 
 ## Commands
@@ -97,7 +97,7 @@
 - Audit settings reads and writes together for ordering, failure recovery, stale reads, invalid-file protection, unknown-field preservation, and atomic publication.
 - Audit the final diff against the guides' touched-area and verification checklists.
 - Do not use a passing `npm run check` as a substitute for the semantic audit.
-- When review finds one convention failure, inspect the whole pull-request diff for the same failure class.
+- When review identifies one failure class, derive the complete class from authoritative code, audit the whole pull-request diff for every occurrence, and verify representative tests before replying or resolving the thread.
 - Name the guides, audits, checks, smokes, deviations, and unverified paths in the handoff.
 
 ## Runtime and lifecycle constraints
@@ -118,6 +118,7 @@
 - Use callback-provided theme roles instead of hard-coded terminal colors, and render secondary descriptions and key hints with a muted theme role.
 - Show selection cursors and highlights only for content that users can activate, and render read-only reviews or summaries without selection affordances.
 - Use callback-provided keybindings for standard actions, derive displayed key hints from the effective bindings, and give configured standard actions priority over additive shortcuts.
+- Before displaying a custom TUI key hint, prove that the candidate can match input and is not consumed by any earlier listener under the effective keybindings and active terminal mode.
 - Keep `Ctrl+C` available as a hard-cancel path in dismissible custom flows even when configurable cancellation is remapped.
 - Preserve Pi's Backspace, newline, submission, and paste behavior when embedding `Input` or `Editor`, and ensure screen-level shortcuts respect input focus and paste state.
 - Test custom key handling with at least one non-default keybinding set, and test changed review or editor behavior for non-interactive rendering or editing and paste behavior respectively.
@@ -133,6 +134,7 @@
 - Keep active tests under `packages/<package>/test/*.test.ts` and run them with `npm test`.
 - Keep archived tests under `deprecated/` and outside active checks.
 - Keep every Vitest test within a 5,000 ms hard timeout, never add a larger per-test override, and split or synchronize a slow test instead of raising the limit.
+- For custom keybinding filters, use table-driven tests that cover matcher aliases, modifier order, legacy input collisions, terminal-mode differences, invalid configured strings, and the first usable fallback.
 - Set the Bash tool timeout to 300 seconds.
 - Run `npm run check` for the build, Biome, boundaries, and workspace typechecks.
 - Run `npm test` separately for active tests.
