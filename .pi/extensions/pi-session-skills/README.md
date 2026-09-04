@@ -80,7 +80,7 @@ Temporary clone and copy directories are removed after success, failure, cancell
 
 Remote skills contain instructions and executable files that can run with the full permissions of the Pi process. Review the source before invoking the loaded skill.
 
-The extension rejects embedded URL credentials, unsafe repository subpaths, unsupported file types, and symbolic links inside skills. Git credentials remain owned by Git credential helpers or SSH and are not copied into the cache metadata.
+The extension rejects embedded URL credentials, unsafe repository subpaths, invalid skill names, unsupported file types, and symbolic links inside skills. Git credentials remain owned by Git credential helpers or SSH and are not copied into the cache metadata.
 
 Existing project or global skills win name collisions. The extension rejects activation when the selected name is already provided by another active skill path.
 

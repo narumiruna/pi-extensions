@@ -245,6 +245,7 @@ export class SessionSkillResolver implements SkillResolverLike {
 			if (
 				metadata.version !== CACHE_VERSION ||
 				typeof metadata.name !== "string" ||
+				!isValidSkillName(metadata.name) ||
 				metadata.source !== options.source.original ||
 				metadata.selector !== options.selector
 			) {
@@ -446,6 +447,17 @@ export function isRelativePathInside(pathFromRoot: string): boolean {
 	);
 }
 
+export function isValidSkillName(name: string): boolean {
+	return (
+		name.length > 0 &&
+		name.length <= 64 &&
+		/^[a-z0-9-]+$/u.test(name) &&
+		!name.startsWith("-") &&
+		!name.endsWith("-") &&
+		!name.includes("--")
+	);
+}
+
 async function selectSkill(
 	sourcePath: string,
 	selector: string | undefined,
@@ -478,6 +490,11 @@ async function selectSkill(
 		? loaded.skills.filter((skill) => skill.name.toLowerCase() === selector.toLowerCase())
 		: loaded.skills;
 	if (skills.length === 1) {
+		if (!isValidSkillName(skills[0].name)) {
+			throw new Error(
+				"Selected skill has an invalid name. Use 1-64 lowercase letters, numbers, or single hyphens.",
+			);
+		}
 		const sourceStat = await stat(sourcePath);
 		signal?.throwIfAborted();
 		const sourceRoot = await realpath(sourceStat.isDirectory() ? sourcePath : dirname(sourcePath));
@@ -526,9 +543,7 @@ async function discoverSkillPaths(
 		if (canonicalExcludedRoot && isPathInside(canonicalExcludedRoot, current)) return;
 		const currentStat = await lstat(current);
 		signal?.throwIfAborted();
-		if (currentStat.isSymbolicLink()) {
-			throw new Error(`Skill source contains a symbolic link: ${current}`);
-		}
+		if (currentStat.isSymbolicLink()) return;
 		if (currentStat.isFile()) {
 			if (basename(current) === "SKILL.md") {
 				await copyDiscoveryFile(current, mirror);
@@ -544,9 +559,7 @@ async function discoverSkillPaths(
 			try {
 				const ignoreStat = await lstat(ignoreFile);
 				signal?.throwIfAborted();
-				if (ignoreStat.isSymbolicLink()) {
-					throw new Error(`Skill source contains a symbolic link: ${ignoreFile}`);
-				}
+				if (ignoreStat.isSymbolicLink()) continue;
 				if (ignoreStat.isFile()) {
 					await copyDiscoveryFile(ignoreFile, join(mirror, ignoreFileName));
 				}
@@ -562,9 +575,7 @@ async function discoverSkillPaths(
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 		signal?.throwIfAborted();
-		if (rootSkillStat?.isSymbolicLink()) {
-			throw new Error(`Skill source contains a symbolic link: ${rootSkill}`);
-		}
+		if (rootSkillStat?.isSymbolicLink()) rootSkillStat = undefined;
 		if (rootSkillStat?.isFile()) {
 			const discoverySkill = join(mirror, "SKILL.md");
 			await copyDiscoveryFile(rootSkill, discoverySkill);
@@ -577,10 +588,7 @@ async function discoverSkillPaths(
 		for (const entry of entries) {
 			if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
 			const entryPath = join(current, entry.name);
-			if (entry.isSymbolicLink()) {
-				throw new Error(`Skill source contains a symbolic link: ${entryPath}`);
-			}
-			if (!entry.isDirectory()) continue;
+			if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
 			await walk(entryPath, join(mirror, entry.name), depth + 1);
 		}
 	};
@@ -699,9 +707,7 @@ function createCacheTransaction(entryRoot: string, entry: string): ResolvedSkill
 			if (state === "rolled-back") return;
 			await withFileMutationQueue(entryRoot, async () => {
 				const current = await readCacheIndex(entryRoot);
-				if (state === "committed" && current?.entry === entry) {
-					await writeCacheIndex(entryRoot, predecessor);
-				}
+				if (current?.entry === entry) await writeCacheIndex(entryRoot, predecessor);
 				await rm(versionPath, { recursive: true, force: true });
 			});
 			state = "rolled-back";

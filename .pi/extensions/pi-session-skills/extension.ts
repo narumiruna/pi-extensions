@@ -17,6 +17,7 @@ import {
 import {
 	GitCommandError,
 	isPathInside,
+	isValidSkillName,
 	type ResolvedSessionSkill,
 	SessionSkillResolver,
 	type SkillResolverLike,
@@ -516,6 +517,7 @@ function isUsableActivation(
 ): activation is SessionSkillActivation {
 	if (
 		!isActivationRecord(activation) ||
+		!isValidSkillName(activation.name) ||
 		!isPathInside(join(cacheRoot, "entries"), activation.path) ||
 		!existsSync(join(activation.path, "SKILL.md"))
 	) {

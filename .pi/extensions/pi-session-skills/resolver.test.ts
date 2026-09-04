@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 import {
 	chmod,
 	cp,
@@ -13,7 +14,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, test } from "vitest";
 import {
@@ -21,6 +22,7 @@ import {
 	defaultCacheRoot,
 	GitCommandError,
 	isRelativePathInside,
+	isValidSkillName,
 	type ResolveSessionSkillOptions,
 	runGitClone,
 	SessionSkillResolver,
@@ -92,6 +94,46 @@ test("copies and caches one local skill without linking it", async () => {
 	const second = await resolver.resolve({ source });
 	assert.equal(second.cacheHit, true);
 	assert.equal(second.path, first.path);
+});
+
+test("rejects invalid skill names before caching", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-invalid-name-");
+	const skillRoot = join(workspace, "source");
+	await mkdir(skillRoot);
+	await writeFile(
+		join(skillRoot, "SKILL.md"),
+		'---\nname: "evil\\u001b[31m"\ndescription: Unsafe name.\n---\n',
+	);
+	const cacheRoot = join(workspace, "cache");
+	const resolver = new SessionSkillResolver({ cacheRoot });
+
+	await assert.rejects(
+		() => resolver.resolve({ source: parseSkillSource(skillRoot, workspace) }),
+		/invalid name/,
+	);
+	assert.deepEqual(await readdir(join(cacheRoot, "staging")), []);
+});
+
+test("does not reuse cached skills with invalid names", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-invalid-cache-name-");
+	const skillRoot = await writeSkill(workspace, "source", "valid-skill");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(skillRoot, workspace);
+	const original = await resolveAndCommit(resolver, { source });
+	const metadataPath = join(dirname(original.path), "metadata.json");
+	const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as { name: string };
+	metadata.name = "evil\u001b[31m";
+	await writeFile(metadataPath, JSON.stringify(metadata));
+	await writeFile(
+		join(original.path, "SKILL.md"),
+		'---\nname: "evil\\u001b[31m"\ndescription: Unsafe name.\n---\n',
+	);
+
+	const replacement = await resolver.resolve({ source });
+	assert.equal(replacement.cacheHit, false);
+	assert.equal(replacement.name, "valid-skill");
+	assert.notEqual(replacement.path, original.path);
+	await replacement.transaction?.rollback();
 });
 
 test("ignores frontmatter in Markdown files that are not named SKILL.md", async () => {
@@ -232,6 +274,40 @@ test("rollback restores the index observed when a concurrent transaction commits
 	assert.equal((await resolver.resolve({ source })).path, candidateA.path);
 });
 
+test("restores a published index when rollback follows failed recovery", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-pending-rollback-");
+	const skillRoot = await writeSkill(workspace, "source", "original-skill");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(skillRoot, workspace);
+	const original = await resolveAndCommit(resolver, { source });
+
+	await writeFile(
+		join(skillRoot, "SKILL.md"),
+		"---\nname: candidate-skill\ndescription: Candidate skill.\n---\n",
+	);
+	const candidate = await resolver.resolve({ source, refresh: true });
+	const transaction = candidate.transaction;
+	assert.ok(transaction);
+	const entryRoot = dirname(dirname(dirname(candidate.path)));
+	const displacedRoot = `${entryRoot}-displaced`;
+	try {
+		await assert.rejects(() =>
+			transaction.commit(() => {
+				renameSync(entryRoot, displacedRoot);
+				writeFileSync(entryRoot, "block cache index recovery");
+				throw new Error("activation snapshot failed");
+			}),
+		);
+	} finally {
+		rmSync(entryRoot, { force: true });
+		renameSync(displacedRoot, entryRoot);
+	}
+
+	await transaction.rollback();
+	assert.equal((await resolver.resolve({ source })).path, original.path);
+	await assert.rejects(() => stat(candidate.path), { code: "ENOENT" });
+});
+
 test("keeps failed cache publication invisible to concurrent readers", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-publication-read-");
 	const skillRoot = await writeSkill(workspace, "source", "original-skill");
@@ -335,6 +411,20 @@ test("rejects symbolic links in a skill and removes staging files", async () => 
 		/symbolic link/,
 	);
 	assert.deepEqual(await readdir(join(cacheRoot, "staging")), []);
+});
+
+test("skips symlinks outside the selected skill", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-unrelated-symlink-");
+	const sourceRoot = join(workspace, "source");
+	await writeSkill(sourceRoot, "selected", "selected-skill");
+	const linkedRoot = join(workspace, "linked");
+	await writeSkill(linkedRoot, "other", "other-skill");
+	await symlink(linkedRoot, join(sourceRoot, "unrelated-link"));
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+
+	const result = await resolver.resolve({ source: parseSkillSource(sourceRoot, workspace) });
+	assert.equal(result.name, "selected-skill");
+	await result.transaction?.rollback();
 });
 
 test("uses a clone adapter for Git sources and forwards the ref", async () => {
@@ -505,6 +595,24 @@ test("honors cancellation before resolution starts", async () => {
 			}),
 		/aborted/i,
 	);
+});
+
+test("validates skill names against the activation-safe grammar", () => {
+	for (const name of ["a", "valid-skill", "skill-123"]) {
+		assert.equal(isValidSkillName(name), true);
+	}
+	for (const name of [
+		"",
+		"Uppercase",
+		"two words",
+		"-leading",
+		"trailing-",
+		"double--hyphen",
+		"evil\u001b[31m",
+		"a".repeat(65),
+	]) {
+		assert.equal(isValidSkillName(name), false);
+	}
 });
 
 test("rejects absolute cross-drive relative results as outside a root", () => {

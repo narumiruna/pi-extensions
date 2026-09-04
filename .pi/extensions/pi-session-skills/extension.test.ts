@@ -443,17 +443,24 @@ test("omits unsafe restored names from completions while keeping them unloadable
 	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-unsafe-completion-"));
 	temporaryPaths.push(cacheRoot);
 	const missingPath = join(cacheRoot, "entries", "missing", "skill");
+	const unsafePath = join(cacheRoot, "entries", "unsafe", "skill");
+	await mkdir(unsafePath, { recursive: true });
+	await writeFile(
+		join(unsafePath, "SKILL.md"),
+		'---\nname: "ansi\\u001b[31m"\ndescription: Unsafe name.\n---\n',
+	);
 	const resolver = { getCacheRoot: () => cacheRoot, resolve: async () => assert.fail("unused") };
 	const harness = createHarness(resolver);
 	const current = createContext([
 		snapshotEntry([
-			{ name: "ansi\u001b[31m", path: missingPath, source: "owner/ansi" },
+			{ name: "ansi\u001b[31m", path: unsafePath, source: "owner/ansi" },
 			{ name: "bidi\u202ename", path: missingPath, source: "owner/bidi" },
 			{ name: "line\nbreak", path: missingPath, source: "owner/line" },
 		]),
 	]);
 	await harness.emit("session_start", { reason: "resume" }, current.ctx);
 
+	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {});
 	assert.deepEqual(harness.commands.get("session-skills")?.getArgumentCompletions?.("unload "), [
 		{ value: "unload --all", label: "--all" },
 	]);
