@@ -27,6 +27,13 @@ test("parses GitHub and GitLab tree URLs", () => {
 			sshFallback: "git@github.com:owner/repo.git",
 		},
 	);
+	const commit = "0123456789abcdef0123456789abcdef01234567";
+	const commitSource = parseSkillSource(
+		`https://github.com/owner/repo/tree/${commit}/skills/foo`,
+		"/work",
+	);
+	assert.equal(commitSource.kind, "git");
+	if (commitSource.kind === "git") assert.equal(commitSource.ref, commit);
 	assert.deepEqual(
 		parseSkillSource("https://gitlab.com/group/subgroup/repo/-/tree/v1/skills/foo", "/work"),
 		{
@@ -60,6 +67,8 @@ test("parses explicit SSH, HTTPS, and local sources", () => {
 		original: "./skills/foo",
 		localPath: "/work/project/skills/foo",
 	});
+	assert.equal(parseSkillSource(".\\skills\\foo", "/work/project").kind, "local");
+	assert.equal(parseSkillSource("..\\skills\\foo", "/work/project").kind, "local");
 });
 
 test("rejects unsupported protocols, embedded credentials, and unsafe paths", () => {

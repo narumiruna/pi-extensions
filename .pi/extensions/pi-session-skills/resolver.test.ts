@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
+	chmod,
 	cp,
 	mkdir,
 	mkdtemp,
@@ -19,8 +20,11 @@ import {
 	type CloneRepository,
 	defaultCacheRoot,
 	GitCommandError,
+	type ResolveSessionSkillOptions,
 	runGitClone,
 	SessionSkillResolver,
+	type SkillResolverLike,
+	windowsProcessTreeKillArguments,
 } from "./resolver.js";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +43,12 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 	const path = await mkdtemp(join(tmpdir(), prefix));
 	temporaryPaths.push(path);
 	return path;
+}
+
+async function resolveAndCommit(resolver: SkillResolverLike, options: ResolveSessionSkillOptions) {
+	const result = await resolver.resolve(options);
+	await result.transaction?.commit();
+	return result;
 }
 
 async function writeSkill(
@@ -67,7 +77,7 @@ test("copies and caches one local skill without linking it", async () => {
 	const resolver = new SessionSkillResolver({ cacheRoot });
 	const source = parseSkillSource(skillRoot, workspace);
 
-	const first = await resolver.resolve({ source });
+	const first = await resolveAndCommit(resolver, { source });
 	assert.equal(first.name, "demo-skill");
 	assert.equal(first.cacheHit, false);
 	assert.notEqual(first.path, skillRoot);
@@ -124,7 +134,7 @@ test("refresh replaces a cache entry only after the new skill validates", async 
 	const skillRoot = await writeSkill(workspace, "source", "refreshable");
 	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
 	const source = parseSkillSource(skillRoot, workspace);
-	const first = await resolver.resolve({ source });
+	const first = await resolveAndCommit(resolver, { source });
 
 	await writeFile(join(skillRoot, "SKILL.md"), "---\nname: refreshable\n---\n\n# Invalid\n");
 	await assert.rejects(() => resolver.resolve({ source, refresh: true }), /No valid skills/);
@@ -137,8 +147,67 @@ test("refresh replaces a cache entry only after the new skill validates", async 
 	const cached = await resolver.resolve({ source });
 	assert.doesNotMatch(await readFile(join(cached.path, "SKILL.md"), "utf8"), /Updated/);
 	const refreshed = await resolver.resolve({ source, refresh: true });
-	assert.equal(refreshed.path, first.path);
+	assert.notEqual(refreshed.path, first.path);
 	assert.match(await readFile(join(refreshed.path, "SKILL.md"), "utf8"), /Updated/);
+	await refreshed.transaction?.commit();
+	assert.doesNotMatch(await readFile(join(first.path, "SKILL.md"), "utf8"), /Updated/);
+});
+
+test("keeps the previous cache current until a refresh transaction commits", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-transaction-");
+	const skillRoot = await writeSkill(workspace, "source", "old-name");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(skillRoot, workspace);
+	const original = await resolveAndCommit(resolver, { source });
+
+	await writeFile(
+		join(skillRoot, "SKILL.md"),
+		"---\nname: new-name\ndescription: Renamed skill.\n---\n",
+	);
+	const refreshed = await resolver.resolve({ source, refresh: true });
+	assert.equal(refreshed.previousName, "old-name");
+	assert.notEqual(refreshed.path, original.path);
+	assert.equal((await resolver.resolve({ source })).name, "old-name");
+
+	await refreshed.transaction?.rollback();
+	assert.equal((await resolver.resolve({ source })).path, original.path);
+});
+
+test("excludes a nested cache root from broad local discovery", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-cache-subtree-");
+	await writeSkill(workspace, "skills/source", "source-skill");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, ".cache") });
+	const source = parseSkillSource(workspace, workspace);
+	await resolveAndCommit(resolver, { source });
+
+	const refreshed = await resolver.resolve({ source, refresh: true });
+	assert.equal(refreshed.name, "source-skill");
+	await refreshed.transaction?.rollback();
+});
+
+test("does not copy a cache nested inside a local skill root", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-root-cache-");
+	const skillRoot = await writeSkill(workspace, ".", "root-skill");
+	const cacheRoot = join(workspace, ".cache");
+	const resolver = new SessionSkillResolver({ cacheRoot });
+	const result = await resolver.resolve({ source: parseSkillSource(skillRoot, workspace) });
+	await assert.rejects(() => stat(join(result.path, ".cache")), { code: "ENOENT" });
+	await result.transaction?.rollback();
+});
+
+test("populates read-only directories before restoring their modes", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-read-only-");
+	const skillRoot = await writeSkill(workspace, "source", "read-only-skill", true);
+	const scriptsPath = join(skillRoot, "scripts");
+	await chmod(scriptsPath, 0o555);
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const result = await resolver.resolve({ source: parseSkillSource(skillRoot, workspace) });
+	const copiedScripts = join(result.path, "scripts");
+	assert.equal((await stat(copiedScripts)).mode & 0o777, 0o555);
+	assert.match(await readFile(join(copiedScripts, "run.sh"), "utf8"), /echo ok/);
+	await chmod(scriptsPath, 0o755);
+	await chmod(copiedScripts, 0o755);
+	await result.transaction?.rollback();
 });
 
 test("rejects symbolic links in a skill and removes staging files", async () => {
@@ -207,6 +276,36 @@ test("clones through the system Git executable", async () => {
 	await execFileAsync("git", ["init", "--bare", source]);
 	await runGitClone(`file://${source}`, target, undefined, undefined);
 	assert.ok((await stat(join(target, ".git"))).isDirectory());
+});
+
+test("fetches and checks out a commit hash without treating it as a branch", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-commit-");
+	const source = join(workspace, "source");
+	const target = join(workspace, "clone");
+	await execFileAsync("git", ["init", source]);
+	await writeSkill(source, "skill", "commit-skill");
+	await execFileAsync("git", ["-C", source, "add", "."]);
+	await execFileAsync("git", [
+		"-C",
+		source,
+		"-c",
+		"user.name=Test",
+		"-c",
+		"user.email=test@example.com",
+		"commit",
+		"-m",
+		"fixture",
+	]);
+	const { stdout } = await execFileAsync("git", ["-C", source, "rev-parse", "HEAD"]);
+	const commit = stdout.trim();
+	assert.match(commit, /^[0-9a-f]{40}$/u);
+
+	await runGitClone(`file://${source}`, target, commit, undefined);
+	assert.match(await readFile(join(target, "skill", "SKILL.md"), "utf8"), /commit-skill/);
+});
+
+test("builds a forced Windows process-tree termination command", () => {
+	assert.deepEqual(windowsProcessTreeKillArguments(42), ["/PID", "42", "/T", "/F"]);
 });
 
 test("honors cancellation before resolution starts", async () => {

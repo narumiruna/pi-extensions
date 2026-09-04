@@ -45,15 +45,16 @@ The `load` route activates exactly one skill. A source containing multiple skill
 /session-skills load git@github.com:owner/repo.git --skill <name>
 /session-skills load ssh://git@example.com/team/repo.git --skill <name>
 /session-skills load ./local-skills --skill <name>
+/session-skills load .\\local-skills --skill <name>
 ```
 
-Use `--refresh` to resolve and replace an existing cache entry. Without it, the command reuses cached content, including for mutable branches and local paths. The `list` route shows active skills with their source and cache path. The `unload` route deactivates skills without deleting cached content.
+Use `--refresh` to resolve a fresh cache version. The prior version remains intact until validation and collision checks pass. Without refresh, the command reuses cached content, including for mutable branches and local paths. The `list` route shows active skills with their source and cache path. The `unload` route deactivates skills without deleting cached content.
 
-GitHub shorthand and HTTPS URLs first use normal Git credentials. Authentication failures retry the equivalent SSH URL when one can be derived. Explicit SSH sources use the user's SSH configuration and agent. Git runs non-interactively and times out after five minutes.
+GitHub shorthand and HTTPS URLs first use normal Git credentials. Authentication failures retry the equivalent SSH URL when one can be derived. Explicit SSH sources use the user's SSH configuration and agent. Git runs non-interactively, and each Git command times out after five minutes. Tree URLs with a 40-character commit hash fetch that commit directly and check it out detached.
 
 ## 🔄 Session and cache behavior
 
-Activation is stored as a full snapshot in the current session branch. A new session starts empty, while resume and fork follow the snapshot present on their active branch.
+Activation is stored as a full snapshot in the current session branch. The desired snapshot is written before Pi reloads so the replacement runtime can discover it. If the broader Pi reload fails, that snapshot is applied by the next successful reload. A new session starts empty, while resume and fork follow the snapshot present on their active branch.
 
 Cache content is stored under:
 
@@ -83,7 +84,7 @@ Existing project or global skills win name collisions. The extension rejects act
 - Discovery follows `SKILL.md` directories to a maximum depth of eight and rejects sources with more than 500 discovered skills.
 - GitHub and GitLab tree URLs treat the segment after `tree` as the ref; refs containing `/` are not currently supported.
 - Cache publication is serialized within one Pi process; independent Pi processes can still race while refreshing the same source.
-- Commands support TUI and RPC modes. Print and JSON modes reject them explicitly.
+- The command supports TUI and RPC modes. Print and JSON modes reject it explicitly.
 
 ## 🗂️ Layout
 

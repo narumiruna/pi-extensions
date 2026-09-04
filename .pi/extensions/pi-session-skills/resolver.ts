@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import {
-	access,
 	chmod,
 	lstat,
 	mkdir,
@@ -34,12 +33,19 @@ const SKIPPED_DISCOVERY_DIRECTORIES = new Set([
 	"__pycache__",
 ]);
 
+export interface ResolvedSkillTransaction {
+	commit(): Promise<void>;
+	rollback(): Promise<void>;
+}
+
 export interface ResolvedSessionSkill {
 	name: string;
 	path: string;
 	source: string;
 	selector?: string;
 	cacheHit: boolean;
+	previousName?: string;
+	transaction?: ResolvedSkillTransaction;
 }
 
 export interface ResolveSessionSkillOptions {
@@ -69,6 +75,16 @@ interface CacheMetadata {
 	createdAt: string;
 }
 
+interface CacheIndex {
+	version: number;
+	entry: string;
+}
+
+interface CurrentCacheEntry {
+	index: CacheIndex;
+	result: ResolvedSessionSkill;
+}
+
 export class SessionSkillResolver implements SkillResolverLike {
 	readonly #cacheRoot: string;
 	readonly #cloneRepository: CloneRepository;
@@ -92,18 +108,16 @@ export class SessionSkillResolver implements SkillResolverLike {
 	async #resolveEntry(
 		options: ResolveSessionSkillOptions,
 		key: string,
-		entryPath: string,
+		entryRoot: string,
 	): Promise<ResolvedSessionSkill> {
 		options.signal?.throwIfAborted();
-		if (!options.refresh) {
-			const cached = await this.#readCachedEntry(entryPath, options);
-			options.signal?.throwIfAborted();
-			if (cached) return cached;
-		}
+		const current = await this.#readCachedEntry(entryRoot, options);
+		options.signal?.throwIfAborted();
+		if (!options.refresh && current) return current.result;
 
 		await mkdir(join(this.#cacheRoot, "staging"), { recursive: true, mode: 0o700 });
 		options.signal?.throwIfAborted();
-		await mkdir(join(this.#cacheRoot, "entries"), { recursive: true, mode: 0o700 });
+		await mkdir(join(entryRoot, "versions"), { recursive: true, mode: 0o700 });
 		options.signal?.throwIfAborted();
 		const stagingPath = await mkdtemp(join(this.#cacheRoot, "staging", `${key}-`));
 		options.signal?.throwIfAborted();
@@ -114,15 +128,19 @@ export class SessionSkillResolver implements SkillResolverLike {
 				sourcePath,
 				options.selector,
 				this.#cacheRoot,
+				options.source.kind === "local" ? this.#cacheRoot : undefined,
 				options.signal,
 			);
 			options.signal?.throwIfAborted();
 
 			const candidateEntry = join(stagingPath, "entry");
 			const candidateSkill = join(candidateEntry, "skill");
+			const excludedCopyRoot =
+				options.source.kind === "local" ? await realpath(this.#cacheRoot) : undefined;
+			options.signal?.throwIfAborted();
 			await mkdir(candidateEntry, { recursive: true, mode: 0o700 });
 			options.signal?.throwIfAborted();
-			await copySkillTree(selected.baseDir, candidateSkill, options.signal);
+			await copySkillTree(selected.baseDir, candidateSkill, excludedCopyRoot, options.signal);
 			options.signal?.throwIfAborted();
 			await chmod(candidateEntry, 0o700);
 			options.signal?.throwIfAborted();
@@ -140,15 +158,23 @@ export class SessionSkillResolver implements SkillResolverLike {
 			options.signal?.throwIfAborted();
 			validateMaterializedSkill(candidateSkill, selected.name, this.#cacheRoot);
 			options.signal?.throwIfAborted();
-			await publishEntry(candidateEntry, entryPath, options.signal);
-			options.signal?.throwIfAborted();
 
+			const entry = randomUUID();
+			const versionPath = join(entryRoot, "versions", entry);
+			await rename(candidateEntry, versionPath);
+			const transaction = createCacheTransaction(entryRoot, entry, current?.index);
+			if (options.signal?.aborted) {
+				await rm(versionPath, { recursive: true, force: true });
+				options.signal.throwIfAborted();
+			}
 			return {
 				name: selected.name,
-				path: join(entryPath, "skill"),
+				path: join(versionPath, "skill"),
 				source: options.source.original,
 				selector: options.selector,
 				cacheHit: false,
+				previousName: current?.result.name,
+				transaction,
 			};
 		} finally {
 			await rm(stagingPath, { recursive: true, force: true });
@@ -204,12 +230,19 @@ export class SessionSkillResolver implements SkillResolverLike {
 	}
 
 	async #readCachedEntry(
-		entryPath: string,
+		entryRoot: string,
 		options: ResolveSessionSkillOptions,
-	): Promise<ResolvedSessionSkill | undefined> {
+	): Promise<CurrentCacheEntry | undefined> {
 		try {
+			const index = JSON.parse(
+				await readFile(join(entryRoot, "current.json"), "utf8"),
+			) as CacheIndex;
+			options.signal?.throwIfAborted();
+			if (index.version !== CACHE_VERSION || !isCacheEntryName(index.entry)) return undefined;
+			const versionPath = join(entryRoot, "versions", index.entry);
+			assertPathInside(join(entryRoot, "versions"), versionPath);
 			const metadata = JSON.parse(
-				await readFile(join(entryPath, "metadata.json"), "utf8"),
+				await readFile(join(versionPath, "metadata.json"), "utf8"),
 			) as CacheMetadata;
 			options.signal?.throwIfAborted();
 			if (
@@ -220,15 +253,18 @@ export class SessionSkillResolver implements SkillResolverLike {
 			) {
 				return undefined;
 			}
-			const skillPath = join(entryPath, "skill");
+			const skillPath = join(versionPath, "skill");
 			validateMaterializedSkill(skillPath, metadata.name, this.#cacheRoot);
 			options.signal?.throwIfAborted();
 			return {
-				name: metadata.name,
-				path: skillPath,
-				source: metadata.source,
-				selector: metadata.selector,
-				cacheHit: true,
+				index,
+				result: {
+					name: metadata.name,
+					path: skillPath,
+					source: metadata.source,
+					selector: metadata.selector,
+					cacheHit: true,
+				},
 			};
 		} catch {
 			options.signal?.throwIfAborted();
@@ -258,11 +294,25 @@ export async function runGitClone(
 	ref: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<void> {
-	if (signal?.aborted) throw new Error("Skill resolution cancelled.");
+	if (ref && isCommitHash(ref)) {
+		await runGitCommand(["init", target], signal);
+		signal?.throwIfAborted();
+		await runGitCommand(["-C", target, "remote", "add", "origin", repository], signal);
+		signal?.throwIfAborted();
+		await runGitCommand(["-C", target, "fetch", "--depth", "1", "origin", ref], signal);
+		signal?.throwIfAborted();
+		await runGitCommand(["-C", target, "checkout", "--detach", "FETCH_HEAD"], signal);
+		return;
+	}
+
 	const args = ["clone", "--depth", "1"];
 	if (ref) args.push("--branch", ref);
 	args.push("--", repository, target);
+	await runGitCommand(args, signal);
+}
 
+async function runGitCommand(args: string[], signal: AbortSignal | undefined): Promise<void> {
+	if (signal?.aborted) throw new Error("Skill resolution cancelled.");
 	await new Promise<void>((resolvePromise, rejectPromise) => {
 		const detached = process.platform !== "win32";
 		const child = spawn("git", args, {
@@ -279,6 +329,7 @@ export async function runGitClone(
 		let output = "";
 		let timedOut = false;
 		let settled = false;
+		let terminationRequested = false;
 		let killTimer: NodeJS.Timeout | undefined;
 
 		const appendOutput = (chunk: Buffer) => {
@@ -287,17 +338,34 @@ export async function runGitClone(
 		child.stdout?.on("data", appendOutput);
 		child.stderr?.on("data", appendOutput);
 
+		const killWindowsTree = () => {
+			if (!child.pid) {
+				child.kill("SIGTERM");
+				return;
+			}
+			const killer = spawn("taskkill", windowsProcessTreeKillArguments(child.pid), {
+				stdio: "ignore",
+				windowsHide: true,
+			});
+			killer.once("error", () => child.kill("SIGTERM"));
+			killer.once("close", (code) => {
+				if (code !== 0 && child.exitCode === null) child.kill("SIGTERM");
+			});
+		};
 		const terminate = () => {
-			if (child.exitCode !== null || child.signalCode !== null) return;
+			if (terminationRequested || child.exitCode !== null || child.signalCode !== null) return;
+			terminationRequested = true;
 			try {
-				if (detached && child.pid) process.kill(-child.pid, "SIGTERM");
+				if (process.platform === "win32") killWindowsTree();
+				else if (detached && child.pid) process.kill(-child.pid, "SIGTERM");
 				else child.kill("SIGTERM");
 			} catch {
 				child.kill("SIGTERM");
 			}
 			killTimer = setTimeout(() => {
 				try {
-					if (detached && child.pid) process.kill(-child.pid, "SIGKILL");
+					if (process.platform === "win32") killWindowsTree();
+					else if (detached && child.pid) process.kill(-child.pid, "SIGKILL");
 					else child.kill("SIGKILL");
 				} catch {
 					// The process already exited.
@@ -333,12 +401,21 @@ export async function runGitClone(
 		child.on("close", (code) => {
 			finish(() => {
 				if (signal?.aborted) rejectPromise(new Error("Skill resolution cancelled."));
-				else if (timedOut) rejectPromise(new Error("Git clone timed out after 300 seconds."));
+				else if (timedOut) rejectPromise(new Error("Git command timed out after 300 seconds."));
 				else if (code === 0) resolvePromise();
-				else rejectPromise(new GitCommandError(`Git clone failed with exit code ${code}.`, output));
+				else
+					rejectPromise(new GitCommandError(`Git command failed with exit code ${code}.`, output));
 			});
 		});
 	});
+}
+
+export function windowsProcessTreeKillArguments(pid: number): string[] {
+	return ["/PID", String(pid), "/T", "/F"];
+}
+
+function isCommitHash(ref: string): boolean {
+	return /^[0-9a-f]{40}$/iu.test(ref);
 }
 
 export function defaultCacheRoot(
@@ -362,9 +439,10 @@ async function selectSkill(
 	sourcePath: string,
 	selector: string | undefined,
 	cacheRoot: string,
+	excludedRoot: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<Skill> {
-	const skillPaths = await discoverSkillPaths(sourcePath, signal);
+	const skillPaths = await discoverSkillPaths(sourcePath, excludedRoot, signal);
 	signal?.throwIfAborted();
 	const loaded = loadSkills({
 		cwd: dirname(sourcePath),
@@ -408,11 +486,15 @@ async function selectSkill(
 
 async function discoverSkillPaths(
 	sourcePath: string,
+	excludedRoot: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<string[]> {
 	const discovered: string[] = [];
+	const canonicalExcludedRoot = excludedRoot ? await realpath(excludedRoot) : undefined;
+	signal?.throwIfAborted();
 	const walk = async (current: string, depth: number): Promise<void> => {
 		signal?.throwIfAborted();
+		if (canonicalExcludedRoot && isPathInside(canonicalExcludedRoot, current)) return;
 		const currentStat = await lstat(current);
 		signal?.throwIfAborted();
 		if (currentStat.isSymbolicLink())
@@ -468,21 +550,31 @@ function validateMaterializedSkill(path: string, expectedName: string, cacheRoot
 async function copySkillTree(
 	source: string,
 	destination: string,
+	excludedRoot: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<void> {
 	signal?.throwIfAborted();
+	if (excludedRoot && isPathInside(excludedRoot, source)) return;
 	const sourceStat = await lstat(source);
 	signal?.throwIfAborted();
 	if (sourceStat.isSymbolicLink()) throw new Error(`Skill contains a symbolic link: ${source}`);
 	if (sourceStat.isDirectory()) {
-		await mkdir(destination, { mode: sourceStat.mode & 0o777 });
+		const sourceMode = sourceStat.mode & 0o777;
+		await mkdir(destination, { mode: sourceMode | 0o700 });
 		signal?.throwIfAborted();
 		const entries = await readdir(source, { withFileTypes: true });
 		signal?.throwIfAborted();
 		for (const entry of entries) {
 			if (entry.name === ".git") continue;
-			await copySkillTree(join(source, entry.name), join(destination, entry.name), signal);
+			await copySkillTree(
+				join(source, entry.name),
+				join(destination, entry.name),
+				excludedRoot,
+				signal,
+			);
 		}
+		await chmod(destination, sourceMode);
+		signal?.throwIfAborted();
 		return;
 	}
 	if (!sourceStat.isFile()) throw new Error(`Skill contains an unsupported file type: ${source}`);
@@ -502,31 +594,66 @@ function assertPathInside(root: string, candidate: string): void {
 		throw new Error("Skill source path escapes its repository root.");
 }
 
-async function publishEntry(
-	candidate: string,
-	destination: string,
-	signal: AbortSignal | undefined,
-): Promise<void> {
+function createCacheTransaction(
+	entryRoot: string,
+	entry: string,
+	previousIndex: CacheIndex | undefined,
+): ResolvedSkillTransaction {
+	let state: "pending" | "committed" | "rolled-back" = "pending";
+	const versionPath = join(entryRoot, "versions", entry);
+	return {
+		async commit() {
+			if (state === "committed") return;
+			if (state === "rolled-back")
+				throw new Error("Cannot commit a rolled-back skill cache entry.");
+			await withFileMutationQueue(entryRoot, () =>
+				writeCacheIndex(entryRoot, { version: CACHE_VERSION, entry }),
+			);
+			state = "committed";
+		},
+		async rollback() {
+			if (state === "rolled-back") return;
+			await withFileMutationQueue(entryRoot, async () => {
+				const current = await readCacheIndex(entryRoot);
+				if (state === "committed" && current?.entry === entry) {
+					await writeCacheIndex(entryRoot, previousIndex);
+				}
+				await rm(versionPath, { recursive: true, force: true });
+			});
+			state = "rolled-back";
+		},
+	};
+}
+
+async function readCacheIndex(entryRoot: string): Promise<CacheIndex | undefined> {
 	try {
-		await access(destination);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		signal?.throwIfAborted();
-		await rename(candidate, destination);
+		const index = JSON.parse(await readFile(join(entryRoot, "current.json"), "utf8")) as CacheIndex;
+		return index.version === CACHE_VERSION && isCacheEntryName(index.entry) ? index : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function writeCacheIndex(entryRoot: string, index: CacheIndex | undefined): Promise<void> {
+	const indexPath = join(entryRoot, "current.json");
+	if (!index) {
+		await rm(indexPath, { force: true });
 		return;
 	}
-
-	signal?.throwIfAborted();
-	// Once replacement starts, finish the atomic recovery sequence even if the session is cancelled.
-	const backup = join(dirname(candidate), "previous");
-	await rename(destination, backup);
+	const temporaryPath = join(entryRoot, `.current-${randomUUID()}.json`);
 	try {
-		await rename(candidate, destination);
-	} catch (error) {
-		await rename(backup, destination).catch(() => {});
-		throw error;
+		await writeFile(temporaryPath, JSON.stringify(index, null, 2), {
+			encoding: "utf8",
+			mode: 0o600,
+		});
+		await rename(temporaryPath, indexPath);
+	} finally {
+		await rm(temporaryPath, { force: true });
 	}
-	// The caller removes the staging parent, including the previous cache entry.
+}
+
+function isCacheEntryName(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f-]{36}$/iu.test(value);
 }
 
 function cacheKey(source: ParsedSkillSource, selector: string | undefined): string {

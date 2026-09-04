@@ -195,6 +195,8 @@ function isLocalSource(input: string): boolean {
 		input === "~" ||
 		input.startsWith("./") ||
 		input.startsWith("../") ||
+		input.startsWith(".\\") ||
+		input.startsWith("..\\") ||
 		input.startsWith("~/") ||
 		input.startsWith("~\\") ||
 		/^[A-Za-z]:[/\\]/u.test(input)

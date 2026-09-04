@@ -30,7 +30,17 @@ type CommandDefinition = {
 	getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> | null;
 };
 
-function createHarness(resolver: SkillResolverLike) {
+function createHarness(
+	resolver: SkillResolverLike,
+	options: {
+		beforeAppendEntry?: () => void;
+		commands?: Array<{
+			name: string;
+			source: "skill";
+			sourceInfo: { path: string };
+		}>;
+	} = {},
+) {
 	const handlers = new Map<string, Handler[]>();
 	const commands = new Map<string, CommandDefinition>();
 	const entries: Array<{ customType: string; data: unknown }> = [];
@@ -42,7 +52,11 @@ function createHarness(resolver: SkillResolverLike) {
 			commands.set(name, definition);
 		},
 		appendEntry(customType: string, data: unknown) {
+			options.beforeAppendEntry?.();
 			entries.push({ customType, data });
+		},
+		getCommands() {
+			return options.commands ?? [];
 		},
 	} as unknown as ExtensionAPI;
 	registerSessionSkills(pi, { resolver });
@@ -134,6 +148,13 @@ test("registers one session-skills command with status and route completions", a
 		{ value: "load", label: "load" },
 		{ value: "list", label: "list" },
 	]);
+	assert.deepEqual(
+		harness.commands.get("session-skills")?.getArgumentCompletions?.("load owner/repo --"),
+		[
+			{ value: "load owner/repo --skill", label: "--skill" },
+			{ value: "load owner/repo --refresh", label: "--refresh" },
+		],
+	);
 	const current = createContext();
 	await harness.emit("session_start", { reason: "startup" }, current.ctx);
 	await harness.command("session-skills", "", current.ctx);
@@ -184,6 +205,98 @@ test("loads a remote skill, snapshots activation, and reloads exactly once", asy
 	assert.match(current.notifications.at(-1)?.[0] ?? "", /already active/);
 });
 
+test("replaces a renamed activation by source only after committing its cache transaction", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-rename-"));
+	temporaryPaths.push(cacheRoot);
+	const oldPath = await createCachedSkill(cacheRoot, "old", "old-name");
+	const newPath = await createCachedSkill(cacheRoot, "new", "new-name");
+	let committed = false;
+	let rolledBack = false;
+	const resolver: SkillResolverLike = {
+		getCacheRoot: () => cacheRoot,
+		resolve: async (options) => ({
+			name: "new-name",
+			path: newPath,
+			source: options.source.original,
+			cacheHit: false,
+			previousName: "old-name",
+			transaction: {
+				commit: async () => {
+					committed = true;
+				},
+				rollback: async () => {
+					rolledBack = true;
+				},
+			},
+		}),
+	};
+	const harness = createHarness(resolver);
+	const current = createContext(
+		[snapshotEntry([{ name: "old-name", path: oldPath, source: "owner/repo" }])],
+		"tui",
+		[{ name: "old-name", baseDir: oldPath, filePath: join(oldPath, "SKILL.md") }],
+	);
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+	await harness.command("session-skills", "load owner/repo --refresh", current.ctx);
+
+	assert.equal(committed, true);
+	assert.equal(rolledBack, false);
+	const snapshot = harness.entries.at(-1);
+	assert.ok(snapshot);
+	assert.deepEqual((snapshot.data as { skills: unknown[] }).skills, [
+		{ name: "new-name", path: newPath, source: "owner/repo" },
+	]);
+	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {
+		skillPaths: [newPath],
+	});
+});
+
+test("rolls back a committed candidate when activation snapshot persistence fails", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-load-snapshot-failure-"));
+	temporaryPaths.push(cacheRoot);
+	const oldPath = await createCachedSkill(cacheRoot, "old", "old-name");
+	const newPath = await createCachedSkill(cacheRoot, "new", "new-name");
+	let committed = false;
+	let rolledBack = false;
+	const resolver: SkillResolverLike = {
+		getCacheRoot: () => cacheRoot,
+		resolve: async (options) => ({
+			name: "new-name",
+			path: newPath,
+			source: options.source.original,
+			cacheHit: false,
+			transaction: {
+				commit: async () => {
+					committed = true;
+				},
+				rollback: async () => {
+					rolledBack = true;
+				},
+			},
+		}),
+	};
+	const harness = createHarness(resolver, {
+		beforeAppendEntry: () => {
+			throw new Error("snapshot failed");
+		},
+	});
+	const current = createContext([
+		snapshotEntry([{ name: "old-name", path: oldPath, source: "owner/repo" }]),
+	]);
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+
+	await assert.rejects(
+		() => harness.command("session-skills", "load owner/repo --refresh", current.ctx),
+		/snapshot failed/,
+	);
+	assert.equal(committed, true);
+	assert.equal(rolledBack, true);
+	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {
+		skillPaths: [oldPath],
+	});
+	assert.equal(current.reloads, 0);
+});
+
 test("restores the newest root-to-leaf snapshot and keeps discovery stable", async () => {
 	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-restore-"));
 	temporaryPaths.push(cacheRoot);
@@ -203,6 +316,98 @@ test("restores the newest root-to-leaf snapshot and keeps discovery stable", asy
 	assert.deepEqual(second, first);
 });
 
+test("skips restored activations that now collide with native skills", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-restore-collision-"));
+	temporaryPaths.push(cacheRoot);
+	const skillPath = await createCachedSkill(cacheRoot, "cached", "same-name");
+	const resolver = { getCacheRoot: () => cacheRoot, resolve: async () => assert.fail("unused") };
+	const harness = createHarness(resolver, {
+		commands: [
+			{
+				name: "skill:same-name",
+				source: "skill",
+				sourceInfo: { path: "/global/same-name/SKILL.md" },
+			},
+		],
+	});
+	const current = createContext([
+		snapshotEntry([{ name: "same-name", path: skillPath, source: "owner/repo" }]),
+	]);
+
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {});
+	assert.match(current.notifications.at(-1)?.[0] ?? "", /conflicting.*same-name/);
+});
+
+test("keeps activation state isolated across concurrent session managers", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-concurrent-"));
+	temporaryPaths.push(cacheRoot);
+	const firstPath = await createCachedSkill(cacheRoot, "first", "first-skill");
+	const secondPath = await createCachedSkill(cacheRoot, "second", "second-skill");
+	const resolver = { getCacheRoot: () => cacheRoot, resolve: async () => assert.fail("unused") };
+	const harness = createHarness(resolver);
+	const first = createContext([
+		snapshotEntry([{ name: "first-skill", path: firstPath, source: "owner/first" }]),
+	]);
+	const second = createContext([
+		snapshotEntry([{ name: "second-skill", path: secondPath, source: "owner/second" }]),
+	]);
+
+	await harness.emit("session_start", { reason: "startup" }, first.ctx);
+	await harness.emit("session_start", { reason: "startup" }, second.ctx);
+	assert.deepEqual(await harness.emit("resources_discover", {}, first.ctx), {
+		skillPaths: [firstPath],
+	});
+	assert.deepEqual(await harness.emit("resources_discover", {}, second.ctx), {
+		skillPaths: [secondPath],
+	});
+	await harness.emit("session_shutdown", { reason: "quit" }, second.ctx);
+	assert.deepEqual(await harness.emit("resources_discover", {}, first.ctx), {
+		skillPaths: [firstPath],
+	});
+});
+
+test("runs operations independently for concurrent session managers", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-concurrent-operations-"));
+	temporaryPaths.push(cacheRoot);
+	const fastPath = await createCachedSkill(cacheRoot, "fast", "fast-skill");
+	let slowStarted!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		slowStarted = resolve;
+	});
+	const resolver: SkillResolverLike = {
+		getCacheRoot: () => cacheRoot,
+		resolve: (options) => {
+			if (options.source.original !== "owner/slow") {
+				return Promise.resolve({
+					name: "fast-skill",
+					path: fastPath,
+					source: options.source.original,
+					cacheHit: false,
+				});
+			}
+			return new Promise((_resolve, reject) => {
+				slowStarted();
+				options.signal?.addEventListener("abort", () => reject(new Error("cancelled")), {
+					once: true,
+				});
+			});
+		},
+	};
+	const harness = createHarness(resolver);
+	const slow = createContext();
+	const fast = createContext();
+	await harness.emit("session_start", { reason: "startup" }, slow.ctx);
+	await harness.emit("session_start", { reason: "startup" }, fast.ctx);
+
+	const slowCommand = harness.command("session-skills", "load owner/slow", slow.ctx);
+	await ready;
+	await harness.command("session-skills", "load owner/fast", fast.ctx);
+	assert.equal(fast.reloads, 1);
+	await harness.emit("session_shutdown", { reason: "quit" }, slow.ctx);
+	await assert.rejects(() => slowCommand, /cancelled/);
+});
+
 test("unloads a selected skill, snapshots the empty state, and completes known values", async () => {
 	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-unload-"));
 	temporaryPaths.push(cacheRoot);
@@ -213,16 +418,40 @@ test("unloads a selected skill, snapshots the empty state, and completes known v
 		snapshotEntry([{ name: "demo-skill", path: skillPath, source: "owner/repo" }]),
 	]);
 	await harness.emit("session_start", { reason: "resume" }, current.ctx);
-	assert.deepEqual(
-		harness.commands.get("session-skills")?.getArgumentCompletions?.("unload demo"),
-		[{ value: "unload demo-skill", label: "demo-skill" }],
-	);
+	assert.deepEqual(harness.commands.get("session-skills")?.getArgumentCompletions?.("unload --"), [
+		{ value: "unload --all", label: "--all" },
+	]);
 
 	await harness.command("session-skills", "unload demo-skill", current.ctx);
 	assert.equal(current.reloads, 1);
 	const snapshot = harness.entries.at(-1);
 	assert.ok(snapshot);
 	assert.deepEqual((snapshot.data as { skills: unknown[] }).skills, []);
+});
+
+test("restores activation state when snapshot persistence fails", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-snapshot-failure-"));
+	temporaryPaths.push(cacheRoot);
+	const skillPath = await createCachedSkill(cacheRoot, "demo", "demo-skill");
+	const resolver = { getCacheRoot: () => cacheRoot, resolve: async () => assert.fail("unused") };
+	const harness = createHarness(resolver, {
+		beforeAppendEntry: () => {
+			throw new Error("snapshot failed");
+		},
+	});
+	const current = createContext([
+		snapshotEntry([{ name: "demo-skill", path: skillPath, source: "owner/repo" }]),
+	]);
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+
+	await assert.rejects(
+		() => harness.command("session-skills", "unload demo-skill", current.ctx),
+		/snapshot failed/,
+	);
+	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {
+		skillPaths: [skillPath],
+	});
+	assert.equal(current.reloads, 0);
 });
 
 test("unloads all active skills through the documented --all route", async () => {
@@ -246,10 +475,12 @@ test("unloads all active skills through the documented --all route", async () =>
 	assert.equal(current.reloads, 1);
 });
 
-test("rejects native skill collisions without changing activation", async () => {
+test("rejects native skill collisions and rolls back candidate cache entries", async () => {
 	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-collision-"));
 	temporaryPaths.push(cacheRoot);
 	const skillPath = await createCachedSkill(cacheRoot, "demo", "demo-skill");
+	let committed = false;
+	let rolledBack = false;
 	const resolver: SkillResolverLike = {
 		getCacheRoot: () => cacheRoot,
 		resolve: async (options): Promise<ResolvedSessionSkill> => ({
@@ -257,6 +488,14 @@ test("rejects native skill collisions without changing activation", async () => 
 			path: skillPath,
 			source: options.source.original,
 			cacheHit: false,
+			transaction: {
+				commit: async () => {
+					committed = true;
+				},
+				rollback: async () => {
+					rolledBack = true;
+				},
+			},
 		}),
 	};
 	const harness = createHarness(resolver);
@@ -270,6 +509,8 @@ test("rejects native skill collisions without changing activation", async () => 
 	);
 	assert.equal(harness.entries.length, 0);
 	assert.equal(current.reloads, 0);
+	assert.equal(committed, false);
+	assert.equal(rolledBack, true);
 });
 
 test("shutdown aborts an in-flight resolver and clears owned status", async () => {
@@ -307,6 +548,23 @@ test("shutdown aborts an in-flight resolver and clears owned status", async () =
 	await assert.rejects(() => command, /cancelled/);
 	assert.deepEqual(current.statuses.at(-1), [STATUS_KEY, undefined]);
 	assert.equal(harness.entries.length, 0);
+});
+
+test("renders identifier and path fields as single-line terminal-safe text", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-display-safety-"));
+	temporaryPaths.push(cacheRoot);
+	const skillPath = await createCachedSkill(cacheRoot, "safe", "safe-name");
+	const resolver = { getCacheRoot: () => cacheRoot, resolve: async () => assert.fail("unused") };
+	const harness = createHarness(resolver);
+	const current = createContext([
+		snapshotEntry([{ name: "safe-name", path: skillPath, source: "owner/\nrepo\tname" }]),
+	]);
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+	await harness.command("session-skills", "list", current.ctx);
+
+	const lines = current.notifications.at(-1)?.[0].split("\n") ?? [];
+	assert.equal(lines.length, 4);
+	assert.equal(lines[2], "    source: owner/ repo name");
 });
 
 test("commands reject unsupported modes and trailing arguments", async () => {

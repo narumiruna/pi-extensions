@@ -52,85 +52,104 @@ interface RunningOperation {
 	settled: Promise<void>;
 }
 
+interface SessionState {
+	activations: Map<string, SessionSkillActivation>;
+	generation: number;
+	operation?: RunningOperation;
+}
+
 export function registerSessionSkills(
 	pi: ExtensionAPI,
 	options: SessionSkillsExtensionOptions = {},
 ): void {
 	const resolver = options.resolver ?? new SessionSkillResolver();
-	const activations = new Map<string, SessionSkillActivation>();
-	let activeSession: ExtensionContext["sessionManager"] | undefined;
-	let generation = 0;
-	let currentOperation: RunningOperation | undefined;
+	const sessionStates = new Map<ExtensionContext["sessionManager"], SessionState>();
 
-	const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
-
-	const requireCommandContext = (ctx: ExtensionCommandContext): void => {
+	const requireCommandContext = (ctx: ExtensionCommandContext): SessionState => {
 		if (!ctx.hasUI) throw new Error("/session-skills requires TUI or RPC mode.");
-		if (!ownsSession(ctx)) throw new Error("/session-skills is unavailable for a stale session.");
+		const state = sessionStates.get(ctx.sessionManager);
+		if (!state) throw new Error("/session-skills is unavailable for a stale session.");
+		return state;
 	};
 
-	const saveSnapshot = (): void => {
+	const saveSnapshot = (state: SessionState): void => {
 		const snapshot: ActivationSnapshot = {
 			version: 1,
-			skills: [...activations.values()],
+			skills: [...state.activations.values()],
 		};
 		pi.appendEntry(ACTIVATION_ENTRY_TYPE, snapshot);
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		if (activeSession && activeSession !== ctx.sessionManager && ctx.hasUI) {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
+		let state = sessionStates.get(ctx.sessionManager);
+		if (!state) {
+			state = { activations: new Map(), generation: 0 };
+			sessionStates.set(ctx.sessionManager, state);
 		}
-		const startGeneration = ++generation;
-		const previousOperation = currentOperation;
+		const startGeneration = ++state.generation;
+		const previousOperation = state.operation;
 		previousOperation?.controller.abort();
 		if (previousOperation) await previousOperation.settled;
-		if (generation !== startGeneration) return;
-		currentOperation = undefined;
-		activeSession = ctx.sessionManager;
-		activations.clear();
+		if (sessionStates.get(ctx.sessionManager) !== state || state.generation !== startGeneration) {
+			return;
+		}
+		state.operation = undefined;
+		state.activations.clear();
 
 		const snapshot = latestSnapshot(ctx.sessionManager.getBranch());
-		const missing: string[] = [];
+		const nativeSkillNames = getNonSessionSkillNames(pi, resolver.getCacheRoot());
+		const skipped: string[] = [];
 		for (const activation of snapshot?.skills ?? []) {
-			if (isUsableActivation(activation, resolver.getCacheRoot())) {
-				activations.set(activation.name, activation);
+			if (
+				isUsableActivation(activation, resolver.getCacheRoot()) &&
+				!nativeSkillNames.has(activation.name)
+			) {
+				state.activations.set(activation.name, activation);
 			} else if (typeof activation?.name === "string") {
-				missing.push(sanitizeDisplay(activation.name));
+				skipped.push(sanitizeDisplayLine(activation.name));
 			}
 		}
-		if (missing.length > 0 && ctx.hasUI) {
-			ctx.ui.notify(`Skipped missing or unsafe session skills: ${missing.join(", ")}`, "warning");
+		if (skipped.length > 0 && ctx.hasUI) {
+			ctx.ui.notify(
+				`Skipped missing, unsafe, or conflicting session skills: ${skipped.join(", ")}`,
+				"warning",
+			);
 		}
 	});
 
 	pi.on("resources_discover", (_event, ctx) => {
-		if (!ownsSession(ctx) || activations.size === 0) return {};
-		return { skillPaths: [...activations.values()].map((activation) => activation.path) };
+		const state = sessionStates.get(ctx.sessionManager);
+		if (!state || state.activations.size === 0) return {};
+		return { skillPaths: [...state.activations.values()].map((activation) => activation.path) };
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		if (!ownsSession(ctx)) return;
-		generation++;
-		const operation = currentOperation;
+		const state = sessionStates.get(ctx.sessionManager);
+		if (!state) return;
+		const shutdownGeneration = ++state.generation;
+		const operation = state.operation;
 		operation?.controller.abort();
 		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (operation) await operation.settled;
-		if (!ownsSession(ctx)) return;
-		currentOperation = undefined;
-		activeSession = undefined;
-		activations.clear();
+		if (
+			sessionStates.get(ctx.sessionManager) !== state ||
+			state.generation !== shutdownGeneration
+		) {
+			return;
+		}
+		sessionStates.delete(ctx.sessionManager);
+		state.activations.clear();
 	});
 
 	const loadSkill = async (
 		command: LoadCommandArguments,
 		ctx: ExtensionCommandContext,
+		state: SessionState,
 	): Promise<void> => {
-		if (currentOperation) throw new Error("Another session skill operation is already running.");
+		if (state.operation) throw new Error("Another session skill operation is already running.");
 		const source = parseSkillSource(command.source, ctx.cwd);
 		const selector = resolveSkillSelector(source, command.skill);
-		const commandGeneration = generation;
-		const commandSession = ctx.sessionManager;
+		const commandGeneration = state.generation;
 		const controller = new AbortController();
 
 		if (source.kind === "git") {
@@ -141,7 +160,8 @@ export function registerSessionSkills(
 		}
 		ctx.ui.setStatus(STATUS_KEY, "Resolving session skill…");
 
-		let result: ResolvedSessionSkill;
+		let result: ResolvedSessionSkill | undefined;
+		let prepared = false;
 		const resolution = Promise.resolve().then(() =>
 			resolver.resolve({
 				source,
@@ -150,71 +170,99 @@ export function registerSessionSkills(
 				signal: controller.signal,
 			}),
 		);
+		let settleOperation!: () => void;
 		const operation: RunningOperation = {
 			controller,
-			settled: resolution.then(
-				() => {},
-				() => {},
-			),
+			settled: new Promise<void>((resolve) => {
+				settleOperation = resolve;
+			}),
 		};
-		currentOperation = operation;
+		state.operation = operation;
 		try {
 			result = await resolution;
+			assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
+
+			const existing = state.activations.get(result.name);
 			if (
-				generation !== commandGeneration ||
-				activeSession !== commandSession ||
-				controller.signal.aborted
+				!command.refresh &&
+				existing?.path === result.path &&
+				existing.source === result.source &&
+				existing.selector === result.selector
 			) {
-				throw new Error("Session changed while the skill was resolving.");
+				await result.transaction?.rollback();
+				assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
+				ctx.ui.notify(`Skill already active: ${sanitizeDisplayLine(result.name)}`, "info");
+				return;
 			}
-		} catch (error) {
-			throw new Error(formatResolverError(error));
-		} finally {
-			if (currentOperation === operation) currentOperation = undefined;
-			if (ownsSession(ctx) && ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
-		}
 
-		const existing = activations.get(result.name);
-		if (
-			!command.refresh &&
-			existing?.path === result.path &&
-			existing.source === result.source &&
-			existing.selector === result.selector
-		) {
-			ctx.ui.notify(`Skill already active: ${sanitizeDisplay(result.name)}`, "info");
-			return;
-		}
-
-		const ownPaths = new Set([...activations.values()].map((activation) => activation.path));
-		const conflict = ctx
-			.getSystemPromptOptions()
-			.skills?.find((skill) => skill.name === result.name && !ownPaths.has(skill.baseDir));
-		if (conflict) {
-			throw new Error(
-				`Skill "${sanitizeDisplay(result.name)}" is already provided by ${sanitizeDisplay(conflict.filePath)}.`,
+			const ownPaths = new Set(
+				[...state.activations.values()].map((activation) => activation.path),
 			);
+			const resultName = result.name;
+			const conflict = ctx
+				.getSystemPromptOptions()
+				.skills?.find((skill) => skill.name === resultName && !ownPaths.has(skill.baseDir));
+			if (conflict) {
+				throw new Error(
+					`Skill "${sanitizeDisplayLine(result.name)}" is already provided by ${sanitizeDisplayLine(conflict.filePath)}.`,
+				);
+			}
+
+			const previousActivations = new Map(state.activations);
+			await result.transaction?.commit();
+			assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
+			for (const [name, activation] of state.activations) {
+				if (activation.source === result.source && activation.selector === result.selector) {
+					state.activations.delete(name);
+				}
+			}
+			state.activations.set(result.name, {
+				name: result.name,
+				path: result.path,
+				source: result.source,
+				...(result.selector === undefined ? {} : { selector: result.selector }),
+			});
+			try {
+				saveSnapshot(state);
+			} catch (error) {
+				restoreActivations(state, previousActivations);
+				throw error;
+			}
+			prepared = true;
+		} catch (error) {
+			let failure = error;
+			if (!prepared && result?.transaction) {
+				try {
+					await result.transaction.rollback();
+				} catch (rollbackError) {
+					failure = new Error(
+						`${formatResolverError(error)} Cache rollback failed: ${formatResolverError(rollbackError)}`,
+					);
+				}
+			}
+			throw new Error(formatResolverError(failure));
+		} finally {
+			settleOperation();
+			if (state.operation === operation) state.operation = undefined;
+			if (sessionStates.get(ctx.sessionManager) === state && ctx.hasUI) {
+				ctx.ui.setStatus(STATUS_KEY, undefined);
+			}
 		}
 
-		activations.set(result.name, {
-			name: result.name,
-			path: result.path,
-			source: result.source,
-			selector: result.selector,
-		});
-		saveSnapshot();
-		ctx.ui.notify(
-			`${result.cacheHit ? "Activated cached" : "Loaded"} skill: ${sanitizeDisplay(result.name)}`,
-			"info",
-		);
+		ctx.ui.notify(`Reloading to activate skill: ${sanitizeDisplayLine(result.name)}`, "info");
 		await ctx.reload();
 	};
 
-	const showSkills = (ctx: ExtensionCommandContext, includeUsage: boolean): void => {
-		const lines = activations.size === 0 ? ["Session skills: none"] : ["Session skills:"];
-		for (const activation of activations.values()) {
-			lines.push(`  ${sanitizeDisplay(activation.name)}`);
-			lines.push(`    source: ${sanitizeDisplay(activation.source)}`);
-			lines.push(`    cache: ${sanitizeDisplay(activation.path)}`);
+	const showSkills = (
+		ctx: ExtensionCommandContext,
+		state: SessionState,
+		includeUsage: boolean,
+	): void => {
+		const lines = state.activations.size === 0 ? ["Session skills: none"] : ["Session skills:"];
+		for (const activation of state.activations.values()) {
+			lines.push(`  ${sanitizeDisplayLine(activation.name)}`);
+			lines.push(`    source: ${sanitizeDisplayLine(activation.source)}`);
+			lines.push(`    cache: ${sanitizeDisplayLine(activation.path)}`);
 		}
 		if (includeUsage) lines.push("", SESSION_SKILLS_USAGE);
 		ctx.ui.notify(lines.join("\n"), "info");
@@ -223,48 +271,49 @@ export function registerSessionSkills(
 	const unloadSkill = async (
 		command: UnloadCommandArguments,
 		ctx: ExtensionCommandContext,
+		state: SessionState,
 	): Promise<void> => {
-		if (currentOperation) throw new Error("Another session skill operation is already running.");
+		if (state.operation) throw new Error("Another session skill operation is already running.");
+		const previousActivations = new Map(state.activations);
 		let changed = false;
-		let message: string;
 		if (command.all) {
-			const count = activations.size;
-			activations.clear();
-			changed = count > 0;
-			message = changed
-				? `Unloaded ${count} session skill${count === 1 ? "" : "s"}.`
-				: "No session skills loaded.";
+			changed = state.activations.size > 0;
+			state.activations.clear();
 		} else {
-			const name = command.name ?? "";
-			changed = activations.delete(name);
-			message = changed
-				? `Unloaded skill: ${sanitizeDisplay(name)}`
-				: `Session skill not loaded: ${sanitizeDisplay(name)}`;
+			changed = state.activations.delete(command.name ?? "");
 		}
-		ctx.ui.notify(message, changed ? "info" : "warning");
-		if (!changed) return;
-		saveSnapshot();
+		if (!changed) {
+			ctx.ui.notify("No matching session skills are loaded.", "warning");
+			return;
+		}
+		try {
+			saveSnapshot(state);
+		} catch (error) {
+			restoreActivations(state, previousActivations);
+			throw error;
+		}
+		ctx.ui.notify("Reloading to apply session skill changes.", "info");
 		await ctx.reload();
 	};
 
 	pi.registerCommand("session-skills", {
 		description: "Manage skills loaded into the current session",
-		getArgumentCompletions: (prefix) => commandCompletions(prefix, activations.keys()),
+		getArgumentCompletions: commandCompletions,
 		handler: async (rawArguments, ctx) => {
-			requireCommandContext(ctx);
+			const state = requireCommandContext(ctx);
 			const command = parseSessionSkillsCommandArguments(rawArguments);
 			switch (command.action) {
 				case "status":
-					showSkills(ctx, true);
+					showSkills(ctx, state, true);
 					return;
 				case "list":
-					showSkills(ctx, false);
+					showSkills(ctx, state, false);
 					return;
 				case "load":
-					await loadSkill(command, ctx);
+					await loadSkill(command, ctx, state);
 					return;
 				case "unload":
-					await unloadSkill(command, ctx);
+					await unloadSkill(command, ctx, state);
 					return;
 			}
 		},
@@ -275,10 +324,7 @@ export default function sessionSkills(pi: ExtensionAPI): void {
 	registerSessionSkills(pi);
 }
 
-function commandCompletions(
-	prefix: string,
-	activeNames: Iterable<string>,
-): Array<{ value: string; label: string }> | null {
+function commandCompletions(prefix: string): Array<{ value: string; label: string }> | null {
 	const input = prefix.trimStart();
 	if (!/\s/u.test(input)) {
 		const routes = ["load", "list", "unload"]
@@ -286,13 +332,55 @@ function commandCompletions(
 			.map((route) => ({ value: route, label: route }));
 		return routes.length > 0 ? routes : null;
 	}
-	const unload = input.match(/^unload\s+([^\s]*)$/u);
-	if (!unload) return null;
-	const valuePrefix = unload[1];
-	const values = ["--all", ...activeNames]
-		.filter((value) => value.startsWith(valuePrefix))
-		.map((value) => ({ value: `unload ${value}`, label: value }));
-	return values.length > 0 ? values : null;
+	if (input.startsWith("load ")) {
+		const lastSpace = input.lastIndexOf(" ");
+		const valuePrefix = input.slice(lastSpace + 1);
+		if (valuePrefix && !valuePrefix.startsWith("-")) return null;
+		const base = input.slice(0, lastSpace + 1);
+		const used = new Set(base.trim().split(/\s+/u));
+		const values = ["--skill", "--refresh"]
+			.filter((value) => !used.has(value) && value.startsWith(valuePrefix))
+			.map((value) => ({ value: `${base}${value}`, label: value }));
+		return values.length > 0 ? values : null;
+	}
+	const unload = input.match(/^unload\s+(--[^\s]*)$/u);
+	if (!unload || !"--all".startsWith(unload[1])) return null;
+	return [{ value: "unload --all", label: "--all" }];
+}
+
+function assertCurrentSessionState(
+	states: Map<ExtensionContext["sessionManager"], SessionState>,
+	ctx: ExtensionContext,
+	state: SessionState,
+	generation: number,
+	signal: AbortSignal,
+): void {
+	if (
+		states.get(ctx.sessionManager) !== state ||
+		state.generation !== generation ||
+		signal.aborted
+	) {
+		throw new Error("Session changed while the skill was resolving.");
+	}
+}
+
+function restoreActivations(
+	state: SessionState,
+	previous: Map<string, SessionSkillActivation>,
+): void {
+	state.activations.clear();
+	for (const [name, activation] of previous) state.activations.set(name, activation);
+}
+
+function getNonSessionSkillNames(pi: ExtensionAPI, cacheRoot: string): Set<string> {
+	const names = new Set<string>();
+	for (const command of pi.getCommands()) {
+		if (command.source !== "skill" || isPathInside(cacheRoot, command.sourceInfo.path)) continue;
+		names.add(
+			command.name.startsWith("skill:") ? command.name.slice("skill:".length) : command.name,
+		);
+	}
+	return names;
 }
 
 function latestSnapshot(entries: SessionEntry[]): RestoredActivationSnapshot | undefined {
@@ -338,18 +426,27 @@ function isUsableActivation(
 
 function formatResolverError(error: unknown): string {
 	if (error instanceof GitCommandError) {
-		const detail = sanitizeDisplay(error.output).trim().slice(-2_000);
-		return detail ? `${error.message}\n${detail}` : error.message;
+		const detail = sanitizeDiagnostic(error.output).trim().slice(-2_000);
+		const message = sanitizeDisplayLine(error.message);
+		return detail ? `${message}\n${detail}` : message;
 	}
-	return sanitizeDisplay(error instanceof Error ? error.message : String(error));
+	return sanitizeDisplayLine(error instanceof Error ? error.message : String(error));
 }
 
-function sanitizeDisplay(value: string): string {
+function sanitizeDisplayLine(value: string): string {
+	return sanitizeCharacters(value, false);
+}
+
+function sanitizeDiagnostic(value: string): string {
+	return sanitizeCharacters(value, true);
+}
+
+function sanitizeCharacters(value: string, preserveNewlines: boolean): string {
 	return [...stripTerminalSequences(value)]
 		.map((character) => {
 			const codePoint = character.codePointAt(0) ?? 0;
 			const unsafe =
-				(codePoint <= 0x1f && character !== "\n" && character !== "\t") ||
+				(codePoint <= 0x1f && !(preserveNewlines && character === "\n")) ||
 				(codePoint >= 0x7f && codePoint <= 0x9f) ||
 				(codePoint >= 0x202a && codePoint <= 0x202e) ||
 				(codePoint >= 0x2066 && codePoint <= 0x2069);
