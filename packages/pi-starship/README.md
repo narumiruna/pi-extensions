@@ -16,6 +16,7 @@ The extension parses and renders the footer itself, so it does not need the `sta
 - Wraps native multiline layouts to terminal width instead of truncating them.
 - Keeps rendering pure while refreshing filesystem, process, and network-derived data through bounded caches.
 - Uses `/starship` for presets, preview, configuration health, searchable module details, customization, and recovery.
+- Bundles a focused skill that assists only when Pi is asked to edit `pi-starship.toml`.
 - Loads a generated split runtime to reduce Pi package startup work.
 
 ## 📦 Install
@@ -38,13 +39,15 @@ pi -e ./packages/pi-starship
 ```
 
 The package declares `dist/index.ts`, so build an unbuilt local checkout before Pi loads the package directory.
-Install only from sources you trust because Pi extensions run with Pi's permissions.
+Install only from sources you trust because Pi extensions and skills run with Pi's permissions.
 Do not enable this with `@narumitw/pi-statusline`: both own Pi's footer, and Pi does not arbitrate that conflict.
 
 ## 🚀 Quick start
 
 Start Pi with the extension to use the built-in footer without creating a settings file.
 Run `/starship` to inspect the footer, choose a preset, or customize the configuration.
+When you ask Pi to create, modify, repair, or migrate `pi-starship.toml`, the bundled `editing-pi-starship-toml` skill supplies the focused editing and validation workflow.
+It does not trigger for read-only explanation, general TOML work, shell Starship configuration, or extension source changes.
 
 ## 💬 Commands
 
@@ -718,6 +721,7 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 ## 🗂️ Package layout
 
 - `dist/` — generated split TypeScript runtime loaded through Pi's Jiti loader.
+- `skills/editing-pi-starship-toml/` — bundled configuration editing workflow and TOML syntax validator.
 - `scripts/build-runtime.mjs` — deterministic runtime bundler and eager-boundary validator.
 - `src/index.ts` — thin authoritative source entrypoint.
 - `src/pi-starship.ts` — authoritative extension lifecycle, cached refresh binding, live preview, and footer.
@@ -740,7 +744,7 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 
 ## 🔎 Keywords
 
-Pi Coding Agent, Starship statusline, Starship TOML, terminal footer, native statusline, GitHub pull request, prompt cache, cache hit rate, Pi extension
+Pi Coding Agent, Starship statusline, Starship TOML, terminal footer, native statusline, configuration editing, agent skill, GitHub pull request, prompt cache, cache hit rate, Pi extension
 
 ## 📄 License
 
