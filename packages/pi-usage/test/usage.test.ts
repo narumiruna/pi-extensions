@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
 	getKeybindings,
@@ -787,6 +788,7 @@ test("TUI usage queries complete through the loader before opening the menu", as
 	const command = mock.commands.get("usage");
 	assert.ok(command);
 	let customCalls = 0;
+	let menuLines: string[] = [];
 	const { ctx } = createMockContext({
 		hasUI: true,
 		mode: "tui",
@@ -806,13 +808,26 @@ test("TUI usage queries complete through the loader before opening the menu", as
 				};
 				component = (
 					factory as (
-						tui: { requestRender(): void },
-						theme: { fg(_color: string, text: string): string },
-						keybindings: object,
+						tui: { requestRender(): void; terminal: { rows: number } },
+						theme: {
+							bold(text: string): string;
+							fg(_color: string, text: string): string;
+						},
+						keybindings: ReturnType<typeof getKeybindings>,
 						done: (value: unknown) => void,
 					) => typeof component
-				)({ requestRender() {} }, { fg: (_color, text) => text }, {}, done);
-				if (customCalls === 2) setImmediate(() => component.handleInput("\u0003"));
+				)(
+					{ requestRender() {}, terminal: { rows: 24 } },
+					{ bold: (text) => text, fg: (_color, text) => text },
+					getKeybindings(),
+					done,
+				);
+				if (customCalls === 2) {
+					setImmediate(() => {
+						menuLines = component.render(40).map(stripVTControlCharacters);
+						component.handleInput("\u0003");
+					});
+				}
 			}),
 		modelRegistry: {
 			getProviderAuth: async () => ({ auth: { apiKey: "openrouter-key" } }),
@@ -826,6 +841,8 @@ test("TUI usage queries complete through the loader before opening the menu", as
 	await command.handler("", ctx);
 
 	assert.equal(customCalls, 2);
+	assert.equal(menuLines[0], "─".repeat(40));
+	assert.equal(menuLines.at(-1), "─".repeat(40));
 });
 
 test("a loader UI failure propagates once without an extra task notification", async () => {
