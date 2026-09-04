@@ -5,8 +5,12 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	getKeybindings,
+	isKittyProtocolActive,
 	KeybindingsManager,
+	type KeyId,
+	parseKey,
 	setKeybindings,
+	setKittyProtocolActive,
 	type TUI,
 	TUI_KEYBINDINGS,
 	type TuiAltScreen,
@@ -280,12 +284,57 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
 test("configured bottom key skips semantic conflicts and wins over the composer", async (t) => {
 	initTheme("dark");
 	const previousKeybindings = getKeybindings();
+	const previousKittyProtocol = isKittyProtocolActive();
+	setKittyProtocolActive(false);
+	const legacyConflicts = [
+		["ctrl+m", "\r"],
+		["ctrl+j", "\n"],
+		["ctrl+i", "\t"],
+		["ctrl+[", "\u001b"],
+		["ctrl+h", "\x08"],
+		["ctrl+_", "\x1f"],
+		["alt+b", "\u001bb"],
+		["alt+f", "\u001bf"],
+		["alt+p", "\u001bp"],
+		["alt+n", "\u001bn"],
+		["ctrl+alt+h", "\u001b\x08"],
+		["ctrl+alt+m", "\u001b\r"],
+		["ctrl+alt+_", "\u001b\x1f"],
+	] as const;
+	const legacyCopyKeys = legacyConflicts.map(([, input]) => {
+		const key = parseKey(input);
+		assert.ok(key);
+		return key as KeyId;
+	});
 	const keybindings = new KeybindingsManager(JUMP_TEST_KEYBINDINGS, {
-		"app.message.copy": ["end", "enter"],
-		"tui.altScreen.bottom": ["ctrl+c", "return", "end", "pageUp", "shift+ctrl+g", "x"],
+		"app.message.copy": ["end", ...legacyCopyKeys],
+		"tui.altScreen.bottom": [
+			"ctrl+c",
+			"return",
+			"ctrl+h",
+			"ctrl+i",
+			"ctrl+j",
+			"ctrl+m",
+			"ctrl+[",
+			"ctrl+_",
+			"alt+b",
+			"alt+f",
+			"alt+p",
+			"alt+n",
+			"ctrl+alt+h",
+			"ctrl+alt+m",
+			"ctrl+alt+_",
+			"end",
+			"pageUp",
+			"shift+ctrl+g",
+			"x",
+		],
 	});
 	setKeybindings(keybindings);
-	t.onTestFinished(() => setKeybindings(previousKeybindings));
+	t.onTestFinished(() => {
+		setKeybindings(previousKeybindings);
+		setKittyProtocolActive(previousKittyProtocol);
+	});
 	const harness = createFullscreenHarness(12, { keybindings });
 	const answer = Array.from({ length: 40 }, (_, index) => `history ${index + 1}`).join("\n");
 	const actions: string[] = [];
@@ -319,12 +368,14 @@ test("configured bottom key skips semantic conflicts and wins over the composer"
 	const manualTop = viewport.viewportTop;
 	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · X/u);
 
-	harness.writes.length = 0;
-	harness.input("\r");
-	sideTui.renderNow(true);
-	assert.equal(viewport.viewportTop, manualTop);
-	assert.equal(viewport.isFollowingOutput, false);
-	assert.match(latestFrame(harness.writes), /No selection to copy/u);
+	for (const [key, input] of legacyConflicts) {
+		harness.writes.length = 0;
+		harness.input(input);
+		sideTui.renderNow(true);
+		assert.equal(viewport.viewportTop, manualTop, `${key} should remain consumed by copy`);
+		assert.equal(viewport.isFollowingOutput, false);
+		assert.match(latestFrame(harness.writes), /No selection to copy/u);
+	}
 
 	harness.writes.length = 0;
 	harness.input("\u001b[F");

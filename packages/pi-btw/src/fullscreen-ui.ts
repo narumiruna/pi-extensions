@@ -8,9 +8,11 @@ import {
 import {
 	type Component,
 	isKeyRelease,
+	isKittyProtocolActive,
 	Key,
 	matchesKey,
 	type OverlayHandle,
+	parseKey,
 	type TUI,
 	TuiAltScreen,
 	type TuiInputListener,
@@ -223,14 +225,40 @@ const ALT_SCREEN_ACTIONS_BEFORE_BOTTOM = [
 ] as const;
 const KEY_MODIFIER_ORDER = ["shift", "ctrl", "alt", "super"] as const;
 
-// Mirror matchesKey(): key ids are case-insensitive, modifier-order-insensitive, and alias-aware.
-function keyInputIdentity(key: string): string {
+function normalizedKeyId(key: string): string {
 	const parts = sanitizeSingleLine(key).toLowerCase().split("+");
 	const base = parts.at(-1);
 	if (!base) return "";
 	const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
 	const modifiers = KEY_MODIFIER_ORDER.filter((modifier) => parts.includes(modifier));
 	return [...modifiers, normalizedBase].join("+");
+}
+
+function rawCtrlInput(base: string): string | undefined {
+	if (base.length !== 1) return undefined;
+	const rawBase = base === "-" ? "_" : base;
+	if (!"abcdefghijklmnopqrstuvwxyz[\\]_".includes(rawBase)) return undefined;
+	return String.fromCharCode(rawBase.charCodeAt(0) & 0x1f);
+}
+
+function legacyRawInput(key: string): string | undefined {
+	const parts = key.split("+");
+	const base = parts.at(-1) ?? "";
+	if (parts.length === 2 && parts[0] === "ctrl") return rawCtrlInput(base);
+	if (isKittyProtocolActive()) return undefined;
+	if (parts.length === 2 && parts[0] === "alt" && base.length === 1) return `\u001b${base}`;
+	if (parts.length === 3 && parts[0] === "ctrl" && parts[1] === "alt") {
+		const input = rawCtrlInput(base);
+		return input ? `\u001b${input}` : undefined;
+	}
+	return undefined;
+}
+
+// Mirror matchesKey(), using parseKey() to canonicalize IDs that share legacy raw input.
+function keyInputIdentity(key: string): string {
+	const identity = normalizedKeyId(key);
+	const input = legacyRawInput(identity);
+	return input ? normalizedKeyId(parseKey(input) ?? identity) : identity;
 }
 
 function hasManualSelectionCopyApi(): boolean {
