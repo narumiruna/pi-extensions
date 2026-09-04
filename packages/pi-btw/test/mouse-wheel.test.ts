@@ -281,7 +281,7 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
 	assert.equal(await running, "cancelled");
 });
 
-test("configured bottom key skips semantic conflicts and wins over the composer", async (t) => {
+test("configured bottom key skips conflicts and unsupported bindings before the composer", async (t) => {
 	initTheme("dark");
 	const previousKeybindings = getKeybindings();
 	const previousKittyProtocol = isKittyProtocolActive();
@@ -327,6 +327,10 @@ test("configured bottom key skips semantic conflicts and wins over the composer"
 			"end",
 			"pageUp",
 			"shift+ctrl+g",
+			"not-a-key" as KeyId,
+			"ctrl+escape",
+			"alt+clear",
+			"shift+f1",
 			"x",
 		],
 	});

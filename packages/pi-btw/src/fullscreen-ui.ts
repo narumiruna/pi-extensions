@@ -224,6 +224,23 @@ const ALT_SCREEN_ACTIONS_BEFORE_BOTTOM = [
 	"tui.altScreen.top",
 ] as const;
 const KEY_MODIFIER_ORDER = ["shift", "ctrl", "alt", "super"] as const;
+const MATCHABLE_SPECIAL_KEYS = new Set([
+	"space",
+	"tab",
+	"enter",
+	"backspace",
+	"delete",
+	"insert",
+	"home",
+	"end",
+	"pageup",
+	"pagedown",
+	"up",
+	"down",
+	"left",
+	"right",
+]);
+const MATCHABLE_SYMBOL_KEYS = new Set("`-=[]\\;',./!@#$%^&*()_+|~{}:<>?");
 
 function normalizedKeyId(key: string): string {
 	const parts = sanitizeSingleLine(key).toLowerCase().split("+");
@@ -232,6 +249,24 @@ function normalizedKeyId(key: string): string {
 	const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
 	const modifiers = KEY_MODIFIER_ORDER.filter((modifier) => parts.includes(modifier));
 	return [...modifiers, normalizedBase].join("+");
+}
+
+function canMatchKeyInput(key: string): boolean {
+	const parts = key.split("+");
+	const base = parts.at(-1) ?? "";
+	const modifiers = parts.slice(0, -1);
+	if (base === "escape") return modifiers.length === 0;
+	if (base === "clear") {
+		return (
+			modifiers.length === 0 ||
+			(modifiers.length === 1 && (modifiers[0] === "shift" || modifiers[0] === "ctrl"))
+		);
+	}
+	if (/^f(?:[1-9]|1[0-2])$/u.test(base)) return modifiers.length === 0;
+	return (
+		MATCHABLE_SPECIAL_KEYS.has(base) ||
+		(base.length === 1 && (/^[a-z0-9]$/u.test(base) || MATCHABLE_SYMBOL_KEYS.has(base)))
+	);
 }
 
 function rawCtrlInput(base: string): string | undefined {
@@ -309,7 +344,12 @@ function createBtwFullscreenTui(
 					.map((candidate) => String(candidate))
 					.find((candidate) => {
 						const identity = keyInputIdentity(candidate);
-						return identity && !unavailableKeyIdentities.has(identity) && formatKeyLabel(candidate);
+						return (
+							identity &&
+							canMatchKeyInput(identity) &&
+							!unavailableKeyIdentities.has(identity) &&
+							formatKeyLabel(candidate)
+						);
 					});
 				const label = theme.fg("text", " ↓ Jump to latest message");
 				const shortcut = key ? theme.fg("muted", ` · ${formatKeyLabel(key)}`) : "";
