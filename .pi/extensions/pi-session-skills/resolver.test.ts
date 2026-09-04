@@ -20,6 +20,7 @@ import {
 	type CloneRepository,
 	defaultCacheRoot,
 	GitCommandError,
+	isRelativePathInside,
 	type ResolveSessionSkillOptions,
 	runGitClone,
 	SessionSkillResolver,
@@ -173,6 +174,30 @@ test("keeps the previous cache current until a refresh transaction commits", asy
 	assert.equal((await resolver.resolve({ source })).path, original.path);
 });
 
+test("rollback restores the index observed when a concurrent transaction commits", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-concurrent-cache-");
+	const skillRoot = await writeSkill(workspace, "source", "concurrent-skill");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(skillRoot, workspace);
+	await resolveAndCommit(resolver, { source });
+
+	await writeFile(
+		join(skillRoot, "SKILL.md"),
+		"---\nname: concurrent-skill\ndescription: Candidate A.\n---\n",
+	);
+	const candidateA = await resolver.resolve({ source, refresh: true });
+	await writeFile(
+		join(skillRoot, "SKILL.md"),
+		"---\nname: concurrent-skill\ndescription: Candidate B.\n---\n",
+	);
+	const candidateB = await resolver.resolve({ source, refresh: true });
+
+	await candidateA.transaction?.commit();
+	await candidateB.transaction?.commit();
+	await candidateB.transaction?.rollback();
+	assert.equal((await resolver.resolve({ source })).path, candidateA.path);
+});
+
 test("excludes a nested cache root from broad local discovery", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-cache-subtree-");
 	await writeSkill(workspace, "skills/source", "source-skill");
@@ -322,6 +347,13 @@ test("honors cancellation before resolution starts", async () => {
 			}),
 		/aborted/i,
 	);
+});
+
+test("rejects absolute cross-drive relative results as outside a root", () => {
+	assert.equal(isRelativePathInside("child/skill"), true);
+	assert.equal(isRelativePathInside("../skill"), false);
+	assert.equal(isRelativePathInside("D:\\repo\\skill"), false);
+	assert.equal(isRelativePathInside("\\\\server\\share\\skill"), false);
 });
 
 test("chooses a private cache root and ignores relative XDG_CACHE_HOME", () => {

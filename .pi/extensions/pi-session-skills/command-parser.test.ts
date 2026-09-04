@@ -19,6 +19,9 @@ test("tokenizes quoted, escaped, and Windows-style command arguments", () => {
 		"load",
 		`C:\\Users\\name\\skill`,
 	]);
+	const uncPath = String.raw`\\server\share\skill`;
+	assert.deepEqual(tokenizeCommandArguments(`load ${uncPath}`), ["load", uncPath]);
+	assert.deepEqual(tokenizeCommandArguments(`load "${uncPath}"`), ["load", uncPath]);
 	assert.throws(() => tokenizeCommandArguments(`load "unfinished`), /Unterminated quote/);
 });
 

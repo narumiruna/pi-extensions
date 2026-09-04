@@ -54,7 +54,7 @@ GitHub shorthand and HTTPS URLs first use normal Git credentials. Authentication
 
 ## 🔄 Session and cache behavior
 
-Activation is stored as a full snapshot in the current session branch. The desired snapshot is written before Pi reloads so the replacement runtime can discover it. If the broader Pi reload fails, that snapshot is applied by the next successful reload. A new session starts empty, while resume and fork follow the snapshot present on their active branch.
+Activation is stored as a full snapshot in the current session branch. The desired snapshot is written before Pi reloads so the replacement runtime can discover it. If the broader Pi reload fails, that snapshot is applied by the next successful reload. A saved activation skipped because it is missing, unsafe, or conflicting remains unloadable by name or with `unload --all`. A new session starts empty, while resume and fork follow the snapshot present on their active branch.
 
 Cache content is stored under:
 

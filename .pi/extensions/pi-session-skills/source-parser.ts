@@ -66,6 +66,7 @@ export function parseSkillSource(input: string, cwd: string): ParsedSkillSource 
 	if (url.protocol !== "https:" && url.protocol !== "ssh:") {
 		throw new Error(`Unsupported Git protocol: ${url.protocol}`);
 	}
+	if (url.protocol === "ssh:") return { kind: "git", original, repository: original };
 
 	if (url.hostname.toLowerCase() === "github.com") return parseGitHubUrl(original, url);
 	if (url.hostname.toLowerCase() === "gitlab.com") return parseGitLabUrl(original, url);
@@ -199,6 +200,7 @@ function isLocalSource(input: string): boolean {
 		input.startsWith("..\\") ||
 		input.startsWith("~/") ||
 		input.startsWith("~\\") ||
+		input.startsWith("\\\\") ||
 		/^[A-Za-z]:[/\\]/u.test(input)
 	);
 }

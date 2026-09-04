@@ -221,8 +221,9 @@ test("replaces a renamed activation by source only after committing its cache tr
 			cacheHit: false,
 			previousName: "old-name",
 			transaction: {
-				commit: async () => {
+				commit: async (apply) => {
 					committed = true;
+					apply?.();
 				},
 				rollback: async () => {
 					rolledBack = true;
@@ -266,8 +267,9 @@ test("rolls back a committed candidate when activation snapshot persistence fail
 			source: options.source.original,
 			cacheHit: false,
 			transaction: {
-				commit: async () => {
+				commit: async (apply) => {
 					committed = true;
+					apply?.();
 				},
 				rollback: async () => {
 					rolledBack = true;
@@ -337,6 +339,35 @@ test("skips restored activations that now collide with native skills", async () 
 	await harness.emit("session_start", { reason: "resume" }, current.ctx);
 	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {});
 	assert.match(current.notifications.at(-1)?.[0] ?? "", /conflicting.*same-name/);
+	assert.deepEqual(
+		harness.commands.get("session-skills")?.getArgumentCompletions?.("unload same"),
+		[{ value: "unload same-name", label: "same-name" }],
+	);
+
+	await harness.command("session-skills", "unload same-name", current.ctx);
+	const snapshot = harness.entries.at(-1);
+	assert.ok(snapshot);
+	assert.deepEqual((snapshot.data as { skills: unknown[] }).skills, []);
+	assert.equal(current.reloads, 1);
+});
+
+test("unload --all clears skipped activations whose cache entries are missing", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-missing-unload-"));
+	temporaryPaths.push(cacheRoot);
+	const missingPath = join(cacheRoot, "entries", "missing", "skill");
+	const resolver = { getCacheRoot: () => cacheRoot, resolve: async () => assert.fail("unused") };
+	const harness = createHarness(resolver);
+	const current = createContext([
+		snapshotEntry([{ name: "missing-skill", path: missingPath, source: "owner/repo" }]),
+	]);
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {});
+
+	await harness.command("session-skills", "unload --all", current.ctx);
+	const snapshot = harness.entries.at(-1);
+	assert.ok(snapshot);
+	assert.deepEqual((snapshot.data as { skills: unknown[] }).skills, []);
+	assert.equal(current.reloads, 1);
 });
 
 test("keeps activation state isolated across concurrent session managers", async () => {
@@ -421,6 +452,10 @@ test("unloads a selected skill, snapshots the empty state, and completes known v
 	assert.deepEqual(harness.commands.get("session-skills")?.getArgumentCompletions?.("unload --"), [
 		{ value: "unload --all", label: "--all" },
 	]);
+	assert.deepEqual(
+		harness.commands.get("session-skills")?.getArgumentCompletions?.("unload demo"),
+		[{ value: "unload demo-skill", label: "demo-skill" }],
+	);
 
 	await harness.command("session-skills", "unload demo-skill", current.ctx);
 	assert.equal(current.reloads, 1);
@@ -489,8 +524,9 @@ test("rejects native skill collisions and rolls back candidate cache entries", a
 			source: options.source.original,
 			cacheHit: false,
 			transaction: {
-				commit: async () => {
+				commit: async (apply) => {
 					committed = true;
+					apply?.();
 				},
 				rollback: async () => {
 					rolledBack = true;

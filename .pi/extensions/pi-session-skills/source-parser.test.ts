@@ -57,6 +57,16 @@ test("parses explicit SSH, HTTPS, and local sources", () => {
 		original: "ssh://git@example.com/team/repo.git",
 		repository: "ssh://git@example.com/team/repo.git",
 	});
+	for (const source of [
+		"ssh://custom@github.com:2222/owner/repo.git",
+		"ssh://custom@gitlab.com:2222/group/repo.git",
+	]) {
+		assert.deepEqual(parseSkillSource(source, "/work"), {
+			kind: "git",
+			original: source,
+			repository: source,
+		});
+	}
 	assert.deepEqual(parseSkillSource("https://example.com/team/repo.git", "/work"), {
 		kind: "git",
 		original: "https://example.com/team/repo.git",
@@ -69,6 +79,7 @@ test("parses explicit SSH, HTTPS, and local sources", () => {
 	});
 	assert.equal(parseSkillSource(".\\skills\\foo", "/work/project").kind, "local");
 	assert.equal(parseSkillSource("..\\skills\\foo", "/work/project").kind, "local");
+	assert.equal(parseSkillSource("\\\\server\\share\\skill", "/work/project").kind, "local");
 });
 
 test("rejects unsupported protocols, embedded credentials, and unsafe paths", () => {

@@ -34,7 +34,7 @@ const SKIPPED_DISCOVERY_DIRECTORIES = new Set([
 ]);
 
 export interface ResolvedSkillTransaction {
-	commit(): Promise<void>;
+	commit(apply?: () => void): Promise<void>;
 	rollback(): Promise<void>;
 }
 
@@ -81,7 +81,6 @@ interface CacheIndex {
 }
 
 interface CurrentCacheEntry {
-	index: CacheIndex;
 	result: ResolvedSessionSkill;
 }
 
@@ -162,7 +161,7 @@ export class SessionSkillResolver implements SkillResolverLike {
 			const entry = randomUUID();
 			const versionPath = join(entryRoot, "versions", entry);
 			await rename(candidateEntry, versionPath);
-			const transaction = createCacheTransaction(entryRoot, entry, current?.index);
+			const transaction = createCacheTransaction(entryRoot, entry);
 			if (options.signal?.aborted) {
 				await rm(versionPath, { recursive: true, force: true });
 				options.signal.throwIfAborted();
@@ -257,7 +256,6 @@ export class SessionSkillResolver implements SkillResolverLike {
 			validateMaterializedSkill(skillPath, metadata.name, this.#cacheRoot);
 			options.signal?.throwIfAborted();
 			return {
-				index,
 				result: {
 					name: metadata.name,
 					path: skillPath,
@@ -330,6 +328,7 @@ async function runGitCommand(args: string[], signal: AbortSignal | undefined): P
 		let timedOut = false;
 		let settled = false;
 		let terminationRequested = false;
+		let timeout: NodeJS.Timeout | undefined;
 		let killTimer: NodeJS.Timeout | undefined;
 
 		const appendOutput = (chunk: Buffer) => {
@@ -374,23 +373,26 @@ async function runGitCommand(args: string[], signal: AbortSignal | undefined): P
 			killTimer.unref();
 		};
 		const onAbort = () => terminate();
-		const timeout = setTimeout(() => {
-			timedOut = true;
-			terminate();
-		}, GIT_TIMEOUT_MS);
-		timeout.unref();
 		signal?.addEventListener("abort", onAbort, { once: true });
 		if (signal?.aborted) terminate();
 
 		const finish = (callback: () => void) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timeout);
+			if (timeout) clearTimeout(timeout);
 			if (killTimer) clearTimeout(killTimer);
 			signal?.removeEventListener("abort", onAbort);
 			callback();
 		};
 
+		child.once("spawn", () => {
+			if (settled) return;
+			timeout = setTimeout(() => {
+				timedOut = true;
+				terminate();
+			}, GIT_TIMEOUT_MS);
+			timeout.unref();
+		});
 		child.on("error", (error) => {
 			finish(() => {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -431,8 +433,19 @@ export function defaultCacheRoot(
 }
 
 export function isPathInside(root: string, candidate: string): boolean {
-	const pathFromRoot = relative(resolve(root), resolve(candidate));
-	return pathFromRoot === "" || (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== "..");
+	return isRelativePathInside(relative(resolve(root), resolve(candidate)));
+}
+
+export function isRelativePathInside(pathFromRoot: string): boolean {
+	const absoluteOnAnotherPlatform =
+		/^[A-Za-z]:[/\\]/u.test(pathFromRoot) || pathFromRoot.startsWith("\\\\");
+	return (
+		pathFromRoot === "" ||
+		(!isAbsolute(pathFromRoot) &&
+			!absoluteOnAnotherPlatform &&
+			!pathFromRoot.startsWith(`..${sep}`) &&
+			pathFromRoot !== "..")
+	);
 }
 
 async function selectSkill(
@@ -594,21 +607,27 @@ function assertPathInside(root: string, candidate: string): void {
 		throw new Error("Skill source path escapes its repository root.");
 }
 
-function createCacheTransaction(
-	entryRoot: string,
-	entry: string,
-	previousIndex: CacheIndex | undefined,
-): ResolvedSkillTransaction {
+function createCacheTransaction(entryRoot: string, entry: string): ResolvedSkillTransaction {
 	let state: "pending" | "committed" | "rolled-back" = "pending";
+	let predecessor: CacheIndex | undefined;
 	const versionPath = join(entryRoot, "versions", entry);
 	return {
-		async commit() {
+		async commit(apply) {
 			if (state === "committed") return;
 			if (state === "rolled-back")
 				throw new Error("Cannot commit a rolled-back skill cache entry.");
-			await withFileMutationQueue(entryRoot, () =>
-				writeCacheIndex(entryRoot, { version: CACHE_VERSION, entry }),
-			);
+			await withFileMutationQueue(entryRoot, async () => {
+				predecessor = await readCacheIndex(entryRoot);
+				await writeCacheIndex(entryRoot, { version: CACHE_VERSION, entry });
+				try {
+					apply?.();
+				} catch (error) {
+					await writeCacheIndex(entryRoot, predecessor);
+					await rm(versionPath, { recursive: true, force: true });
+					state = "rolled-back";
+					throw error;
+				}
+			});
 			state = "committed";
 		},
 		async rollback() {
@@ -616,7 +635,7 @@ function createCacheTransaction(
 			await withFileMutationQueue(entryRoot, async () => {
 				const current = await readCacheIndex(entryRoot);
 				if (state === "committed" && current?.entry === entry) {
-					await writeCacheIndex(entryRoot, previousIndex);
+					await writeCacheIndex(entryRoot, predecessor);
 				}
 				await rm(versionPath, { recursive: true, force: true });
 			});

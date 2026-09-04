@@ -54,8 +54,14 @@ interface RunningOperation {
 
 interface SessionState {
 	activations: Map<string, SessionSkillActivation>;
+	desiredActivations: Map<string, SessionSkillActivation>;
 	generation: number;
 	operation?: RunningOperation;
+}
+
+interface SessionStateSnapshot {
+	activations: Map<string, SessionSkillActivation>;
+	desiredActivations: Map<string, SessionSkillActivation>;
 }
 
 export function registerSessionSkills(
@@ -75,7 +81,7 @@ export function registerSessionSkills(
 	const saveSnapshot = (state: SessionState): void => {
 		const snapshot: ActivationSnapshot = {
 			version: 1,
-			skills: [...state.activations.values()],
+			skills: [...state.desiredActivations.values()],
 		};
 		pi.appendEntry(ACTIVATION_ENTRY_TYPE, snapshot);
 	};
@@ -83,7 +89,7 @@ export function registerSessionSkills(
 	pi.on("session_start", async (_event, ctx) => {
 		let state = sessionStates.get(ctx.sessionManager);
 		if (!state) {
-			state = { activations: new Map(), generation: 0 };
+			state = { activations: new Map(), desiredActivations: new Map(), generation: 0 };
 			sessionStates.set(ctx.sessionManager, state);
 		}
 		const startGeneration = ++state.generation;
@@ -95,17 +101,23 @@ export function registerSessionSkills(
 		}
 		state.operation = undefined;
 		state.activations.clear();
+		state.desiredActivations.clear();
 
 		const snapshot = latestSnapshot(ctx.sessionManager.getBranch());
 		const nativeSkillNames = getNonSessionSkillNames(pi, resolver.getCacheRoot());
 		const skipped: string[] = [];
 		for (const activation of snapshot?.skills ?? []) {
-			if (
-				isUsableActivation(activation, resolver.getCacheRoot()) &&
-				!nativeSkillNames.has(activation.name)
-			) {
-				state.activations.set(activation.name, activation);
-			} else if (typeof activation?.name === "string") {
+			if (isActivationRecord(activation)) {
+				state.desiredActivations.set(activation.name, activation);
+				if (
+					isUsableActivation(activation, resolver.getCacheRoot()) &&
+					!nativeSkillNames.has(activation.name)
+				) {
+					state.activations.set(activation.name, activation);
+					continue;
+				}
+			}
+			if (typeof activation?.name === "string") {
 				skipped.push(sanitizeDisplayLine(activation.name));
 			}
 		}
@@ -139,6 +151,7 @@ export function registerSessionSkills(
 		}
 		sessionStates.delete(ctx.sessionManager);
 		state.activations.clear();
+		state.desiredActivations.clear();
 	});
 
 	const loadSkill = async (
@@ -208,27 +221,41 @@ export function registerSessionSkills(
 				);
 			}
 
-			const previousActivations = new Map(state.activations);
-			await result.transaction?.commit();
-			assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
-			for (const [name, activation] of state.activations) {
-				if (activation.source === result.source && activation.selector === result.selector) {
-					state.activations.delete(name);
+			const resolvedResult = result;
+			const previousState = snapshotSessionState(state);
+			let applied = false;
+			const applyActivation = () => {
+				applied = true;
+				assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
+				for (const activations of [state.activations, state.desiredActivations]) {
+					for (const [name, activation] of activations) {
+						if (
+							activation.source === resolvedResult.source &&
+							activation.selector === resolvedResult.selector
+						) {
+							activations.delete(name);
+						}
+					}
 				}
-			}
-			state.activations.set(result.name, {
-				name: result.name,
-				path: result.path,
-				source: result.source,
-				...(result.selector === undefined ? {} : { selector: result.selector }),
-			});
-			try {
-				saveSnapshot(state);
-			} catch (error) {
-				restoreActivations(state, previousActivations);
-				throw error;
-			}
-			prepared = true;
+				const activation: SessionSkillActivation = {
+					name: resolvedResult.name,
+					path: resolvedResult.path,
+					source: resolvedResult.source,
+					...(resolvedResult.selector === undefined ? {} : { selector: resolvedResult.selector }),
+				};
+				state.activations.set(resolvedResult.name, activation);
+				state.desiredActivations.set(resolvedResult.name, activation);
+				try {
+					saveSnapshot(state);
+				} catch (error) {
+					restoreSessionState(state, previousState);
+					throw error;
+				}
+				prepared = true;
+			};
+			await resolvedResult.transaction?.commit(applyActivation);
+			if (!applied) applyActivation();
+			assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
 		} catch (error) {
 			let failure = error;
 			if (!prepared && result?.transaction) {
@@ -274,13 +301,16 @@ export function registerSessionSkills(
 		state: SessionState,
 	): Promise<void> => {
 		if (state.operation) throw new Error("Another session skill operation is already running.");
-		const previousActivations = new Map(state.activations);
+		const previousState = snapshotSessionState(state);
 		let changed = false;
 		if (command.all) {
-			changed = state.activations.size > 0;
+			changed = state.desiredActivations.size > 0;
 			state.activations.clear();
+			state.desiredActivations.clear();
 		} else {
-			changed = state.activations.delete(command.name ?? "");
+			const name = command.name ?? "";
+			changed = state.desiredActivations.delete(name);
+			state.activations.delete(name);
 		}
 		if (!changed) {
 			ctx.ui.notify("No matching session skills are loaded.", "warning");
@@ -289,7 +319,7 @@ export function registerSessionSkills(
 		try {
 			saveSnapshot(state);
 		} catch (error) {
-			restoreActivations(state, previousActivations);
+			restoreSessionState(state, previousState);
 			throw error;
 		}
 		ctx.ui.notify("Reloading to apply session skill changes.", "info");
@@ -298,7 +328,8 @@ export function registerSessionSkills(
 
 	pi.registerCommand("session-skills", {
 		description: "Manage skills loaded into the current session",
-		getArgumentCompletions: commandCompletions,
+		getArgumentCompletions: (prefix) =>
+			commandCompletions(prefix, collectDesiredActivationNames(sessionStates)),
 		handler: async (rawArguments, ctx) => {
 			const state = requireCommandContext(ctx);
 			const command = parseSessionSkillsCommandArguments(rawArguments);
@@ -324,7 +355,10 @@ export default function sessionSkills(pi: ExtensionAPI): void {
 	registerSessionSkills(pi);
 }
 
-function commandCompletions(prefix: string): Array<{ value: string; label: string }> | null {
+function commandCompletions(
+	prefix: string,
+	desiredNames: Iterable<string>,
+): Array<{ value: string; label: string }> | null {
 	const input = prefix.trimStart();
 	if (!/\s/u.test(input)) {
 		const routes = ["load", "list", "unload"]
@@ -343,9 +377,24 @@ function commandCompletions(prefix: string): Array<{ value: string; label: strin
 			.map((value) => ({ value: `${base}${value}`, label: value }));
 		return values.length > 0 ? values : null;
 	}
-	const unload = input.match(/^unload\s+(--[^\s]*)$/u);
-	if (!unload || !"--all".startsWith(unload[1])) return null;
-	return [{ value: "unload --all", label: "--all" }];
+	const unload = input.match(/^unload\s+([^\s]*)$/u);
+	if (!unload) return null;
+	const valuePrefix = unload[1];
+	const values = ["--all", ...desiredNames]
+		.filter((value) => value.startsWith(valuePrefix))
+		.sort()
+		.map((value) => ({ value: `unload ${value}`, label: value }));
+	return values.length > 0 ? values : null;
+}
+
+function collectDesiredActivationNames(
+	states: Map<ExtensionContext["sessionManager"], SessionState>,
+): string[] {
+	const names = new Set<string>();
+	for (const state of states.values()) {
+		for (const name of state.desiredActivations.keys()) names.add(name);
+	}
+	return [...names];
 }
 
 function assertCurrentSessionState(
@@ -364,12 +413,20 @@ function assertCurrentSessionState(
 	}
 }
 
-function restoreActivations(
-	state: SessionState,
-	previous: Map<string, SessionSkillActivation>,
-): void {
+function snapshotSessionState(state: SessionState): SessionStateSnapshot {
+	return {
+		activations: new Map(state.activations),
+		desiredActivations: new Map(state.desiredActivations),
+	};
+}
+
+function restoreSessionState(state: SessionState, previous: SessionStateSnapshot): void {
 	state.activations.clear();
-	for (const [name, activation] of previous) state.activations.set(name, activation);
+	state.desiredActivations.clear();
+	for (const [name, activation] of previous.activations) state.activations.set(name, activation);
+	for (const [name, activation] of previous.desiredActivations) {
+		state.desiredActivations.set(name, activation);
+	}
 }
 
 function getNonSessionSkillNames(pi: ExtensionAPI, cacheRoot: string): Set<string> {
@@ -394,15 +451,23 @@ function latestSnapshot(entries: SessionEntry[]): RestoredActivationSnapshot | u
 	return undefined;
 }
 
+function isActivationRecord(
+	activation: Partial<SessionSkillActivation> | undefined,
+): activation is SessionSkillActivation {
+	return (
+		typeof activation?.name === "string" &&
+		typeof activation.path === "string" &&
+		typeof activation.source === "string" &&
+		(activation.selector === undefined || typeof activation.selector === "string")
+	);
+}
+
 function isUsableActivation(
 	activation: Partial<SessionSkillActivation> | undefined,
 	cacheRoot: string,
 ): activation is SessionSkillActivation {
 	if (
-		typeof activation?.name !== "string" ||
-		typeof activation.path !== "string" ||
-		typeof activation.source !== "string" ||
-		(activation.selector !== undefined && typeof activation.selector !== "string") ||
+		!isActivationRecord(activation) ||
 		!isPathInside(join(cacheRoot, "entries"), activation.path) ||
 		!existsSync(join(activation.path, "SKILL.md"))
 	) {

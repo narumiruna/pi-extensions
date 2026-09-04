@@ -30,6 +30,12 @@ export function tokenizeCommandArguments(input: string): string[] {
 	for (let index = 0; index < text.length; index++) {
 		const character = text[index];
 		const next = text[index + 1];
+		if (character === "\\" && next === "\\" && current === "") {
+			current = "\\\\";
+			index++;
+			started = true;
+			continue;
+		}
 		if (
 			character === "\\" &&
 			quote !== "'" &&
