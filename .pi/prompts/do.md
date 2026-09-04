@@ -15,7 +15,7 @@ Execute and complete the specified plan end to end.
 4. Create or update the code, tests, documentation, configuration, and other artifacts required by the plan.
 5. Run focused verification and all repository-required checks.
 6. Review the complete diff for correctness, security, lifecycle safety, compatibility, regressions, and unnecessary changes.
-7. Within the approved scope, harden plausible edge cases and failure paths, add regression coverage for any fixes, and rerun affected checks.
+7. When executable behavior is affected, harden plausible edge cases and failure paths within the approved scope, add applicable regression coverage, and rerun affected checks.
 8. Audit the finished work against every plan requirement and completion criterion.
 9. After every required checkbox has passed, delete the completed plan file; keep any incomplete plan and its unchecked evidence.
 10. Stage only the intended files, create focused signed commits that follow repository conventions, and push the branch.

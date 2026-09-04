@@ -18,7 +18,7 @@ Follow this workflow:
    If a pinned boundary changes, restart the review or stop and report the exact commits already reviewed.
 2. Read the applicable repository instructions and the pull request context required for a responsible decision.
    Include the title, description, linked issues, commits, changed files, check summaries, submitted reviews, inline comments, and discussion threads.
-   Retrieve the complete diff and review or discussion thread state, paginating when necessary instead of assuming a truncated response is complete.
+   Retrieve the complete diff and every decision-relevant collection, including linked issues, commits, changed-file records, checks, submitted reviews, inline comments, and discussion threads; paginate when necessary instead of assuming a truncated response is complete.
    Expand linked context, check annotations, or logs only when they bear on a required fact, failed or unclear check, finding, or merge decision.
    Retry transient retrieval failures at most twice. If required evidence remains unavailable, stop retrieving and report `Needs more context` with the specific gap.
 3. Establish the exact review boundary.

@@ -13,6 +13,7 @@ Resolve the pull request feedback end to end.
 1. Identify the target pull request without guessing.
 2. Confirm that the current checkout matches the target pull request's repository; if it does not, stop and ask for the correct checkout.
 3. Read the repository instructions, pull request description, commits, full diff, checks, submitted reviews, inline comments, and conversation threads.
+   Paginate every decision-relevant collection when necessary instead of assuming a truncated response is complete.
 4. Inspect the working tree before editing, and preserve unrelated or pre-existing changes.
 5. Create a review ledger that maps every feedback item to one of these outcomes.
    Require repository evidence, changed artifacts, or observed behavior for every actionable item, and follow repository rules for every action.
