@@ -29,6 +29,8 @@ export async function showUsageSettings(
 		if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${settingsRuntime.get().path}`, "info");
 		return false;
 	}
+	const { HorizontalRule } = await import("@narumitw/pi-tui-kit");
+	if (parentSignal.aborted || !isCurrent()) return false;
 	return (
 		(await ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
 			const localController = new AbortController();
@@ -54,6 +56,9 @@ export async function showUsageSettings(
 				},
 			];
 			const container = new Container();
+			const createRule = () =>
+				new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
+			container.addChild(createRule());
 			container.addChild(new Text(theme.fg("accent", theme.bold("pi-usage Settings")), 1, 1));
 
 			let settingsList: SettingsList;
@@ -103,6 +108,7 @@ export async function showUsageSettings(
 				cancel,
 			);
 			container.addChild(settingsList);
+			container.addChild(createRule());
 
 			parentSignal.addEventListener("abort", cancel, { once: true });
 			return {
