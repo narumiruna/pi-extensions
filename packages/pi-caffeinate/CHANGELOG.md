@@ -1,5 +1,11 @@
 # @narumitw/pi-caffeinate
 
+## 0.49.7
+
+### Patch Changes
+
+- bd00d53: Render standard horizontal frames around the remaining extension menus.
+
 ## 0.49.6
 
 ### Patch Changes

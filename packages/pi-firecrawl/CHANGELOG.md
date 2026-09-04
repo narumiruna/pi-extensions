@@ -1,5 +1,11 @@
 # @narumitw/pi-firecrawl
 
+## 0.50.3
+
+### Patch Changes
+
+- bd00d53: Render standard horizontal frames around the remaining extension menus.
+
 ## 0.50.2
 
 ### Patch Changes
