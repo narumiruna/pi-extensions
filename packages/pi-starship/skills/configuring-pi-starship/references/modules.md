@@ -51,6 +51,77 @@ Use this authoritative public reference whenever a question or change involves a
 | `fill` | `$symbol` | Flexible width-aware root-layout marker |
 | `extension_status` | `$symbol`, `$statuses`, `$count` | Pi extension statuses |
 
+For exact default formats, symbols, enabled state, accepted style fields, display defaults, option types, numeric ranges, and enum values, use [the complete module catalog](module-catalog.md).
+
+## Reachability and collection rules
+
+A module contributes work only when it is enabled and reachable from the root `format` directly or through `$all`.
+A collector obtains only values referenced by that module's `format`.
+For example, a reachable language module does not run its version command when its format omits `$version`.
+A disabled module is absent even when the root format names it or `$all` is present.
+
+Workspace detection uses at most one direct listing of the current working directory, stops at 2,048 entries, and never recurses.
+A positive file, extension, or folder rule must match for direct detection to succeed.
+Any matching `!` rule rejects the module before positive matches are considered.
+Extensions may be configured with or without a leading dot, but defaults omit the dot.
+
+For language modules, each non-empty `detect_files`, `detect_extensions`, or `detect_folders` array replaces only that category's built-in defaults.
+An empty category keeps its built-in defaults.
+For `mise`, `direnv`, and `pixi`, an empty `detect_files` uses the listed default files while configured extension and folder arrays remain additive detector categories.
+
+## Exact language defaults
+
+| Module | Default files | Default extensions | Default folders | Version command |
+| --- | --- | --- | --- | --- |
+| `nodejs` | `package.json`, `.node-version`, `.nvmrc`, `!bun.lock`, `!bun.lockb`, `!deno.json`, `!deno.jsonc` | `js`, `mjs`, `cjs`, `ts`, `mts`, `cts` | `node_modules` | `node --version` |
+| `python` | `pyproject.toml`, `requirements.txt`, `Pipfile`, `poetry.lock`, `.python-version` | `py` | `.venv`, `venv` | existing active virtualenv interpreter, otherwise `python --version` |
+| `rust` | `Cargo.toml` | `rs` | none | safe native `rustc --version` |
+| `golang` | `go.mod`, `go.sum`, `go.work` | `go` | none | `go version` |
+| `bun` | `bun.lock`, `bun.lockb`, `bunfig.toml` | none | none | `bun --version` |
+| `deno` | `deno.json`, `deno.jsonc`, `deno.lock` | none | none | `deno -V` |
+
+Node's negative file defaults prevent Bun and Deno projects from matching Node solely through overlapping JavaScript or TypeScript files.
+Node `$engines_version` reads only `engines.node` from a direct `package.json` and does not evaluate the constraint.
+Python `$virtualenv` uses the basename of `VIRTUAL_ENV`, then `CONDA_DEFAULT_ENV` when no virtualenv is active.
+Python `$pyenv_prefix` reads `PYENV_VERSION` without invoking pyenv.
+Rust `$toolchain` reads `RUSTUP_TOOLCHAIN`.
+Rust rejects compiler paths beneath `.cargo` or `.rustup` and does not invoke rustup because a shim may install a toolchain.
+Go `$mod_version` is reserved and remains empty.
+
+Every language `version_format` defaults to `v$raw` and replaces every `$raw` occurrence with the parsed version without a leading `v`.
+Malformed, multiline, replacement-character, failed, killed, timed-out, or oversized version output leaves the command-backed value empty.
+
+## Exact environment and deployment defaults
+
+| Module | Activation default | Optional command or read |
+| --- | --- | --- |
+| `mise` | direct `mise.toml`, `.mise.toml`, or `.tool-versions` | `mise doctor` only for `$health` |
+| `direnv` | direct `.envrc` | `direnv status --json` only for `$rc_path`, `$allowed`, or `$loaded` |
+| `conda` | non-empty `CONDA_DEFAULT_ENV`, excluding exact `base` by default | none |
+| `pixi` | direct `pixi.toml` or `pixi.lock` | `pixi --version` only for `$version`; direct `pixi.toml` may supply project/workspace name |
+| `nix_shell` | `IN_NIX_SHELL` is exactly `pure` or `impure` | none |
+| `guix_shell` | non-empty `GUIX_ENVIRONMENT` | none |
+| `docker_context` | a non-default Docker context; project files are not required by default | `DOCKER_CONTEXT`, then Docker `config.json` |
+| `kubernetes` | a current context from `KUBECONFIG` or `~/.kube/config` | reads at most 8 config files by default |
+| `terraform` | direct `.tf`, `.tfplan`, `.tfstate`, or `.terraform` | workspace metadata; `terraform version`, then `tofu version`, only for `$version` |
+
+`mise` maps recognized healthy output to `healthy`, recognized warning/problem output to `issues`, and otherwise leaves `$health` empty.
+`direnv` never reads or sources `.envrc`.
+`direnv` maps `foundRC.allowed` to `allowed` or `denied`, reports loaded state as `loaded` or `not loaded`, and accepts a bounded legacy `Found RC path ...` fallback.
+`pixi` hides the exact environment name `default` unless `show_default_environment = true`.
+`pixi` prefers `PIXI_PROJECT_NAME`, then reads `project.name` or `workspace.name` from direct `pixi.toml`.
+`nix_shell` publishes allowlisted `NIX_SHELL_NAME` and `NIX_SHELL_LEVEL` only when its state is valid.
+`guix_shell` reports only the literal state `active`.
+
+When `[docker_context].only_with_files = true`, default detection checks `Dockerfile`, `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, and `compose.yaml`.
+Non-empty Docker detection arrays replace or extend those direct categories as described above.
+Docker suppresses the exact context `default`.
+
+Terraform differs from category-by-category language fallback.
+When any Terraform detection array is non-empty, only the complete configured file, extension, and folder arrays are used.
+When all three are empty, the built-in `.tf`, `.tfplan`, `.tfstate`, and `.terraform` rules apply.
+Terraform workspace precedence is `TF_WORKSPACE`, `TF_DATA_DIR/environment`, then `.terraform/environment`.
+
 ### Usage semantics
 
 - During a blocking extension UI prompt, `activity` sets `$state` to `waiting`, `$kind` to the prompt kind, and `$title` to the sanitized bounded title or an empty string.

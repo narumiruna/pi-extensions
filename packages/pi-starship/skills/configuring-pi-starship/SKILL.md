@@ -32,7 +32,11 @@ State clearly when an answer comes from implementation detail rather than a docu
 
 Read [configuration and format](references/configuration.md) for settings location and persistence, presets, complete examples, root and module formats, styles, palettes, and display thresholds.
 
-Read [modules](references/modules.md) whenever answering about or changing a module, variable, alias, truncation rule, detection option, or module-specific field.
+Read [the complete module catalog](references/module-catalog.md) for exact module names, format variables, default formats, symbols, enabled state, style fields, display defaults, option types, ranges, and enum values.
+
+For one module, search that catalog for its exact `### \`module_name\`` heading and read only through the next module heading.
+
+Read [module behavior](references/modules.md) for output semantics, detection defaults, aliases, truncation, and module-specific behavior.
 
 Read [runtime and security](references/runtime-and-security.md) before enabling or explaining network, command-backed, development, cloud, deployment, host, user, or width-sensitive modules, and when checking limitations.
 

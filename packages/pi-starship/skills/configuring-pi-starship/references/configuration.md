@@ -169,6 +169,90 @@ Extension authors may use `<extension-id>` or `<extension-id>:<stable-slot>` for
 
 **Icon migration:** configurations that relied on package-ID aliases, built-in known-extension icons, or compatibility mappings must use an exact raw status key, an explicit namespace wildcard, a leading emoji in the status value, or `fallback`.
 
+## Configuration schema and validation
+
+### Root fields
+
+A settings document is one TOML table with these accepted root keys:
+
+| Key | Type | Behavior |
+| --- | --- | --- |
+| `format` | string | Root layout whose variables are module names or `$all`. |
+| `palette` | string | Selects one exact table name from `[palettes.<name>]`. |
+| `palettes` | table of tables | Defines direct color names used by style expressions. |
+| `<module>` | table | Configures one module listed in [the complete module catalog](module-catalog.md). |
+
+Unknown root keys produce warnings and remain inactive.
+The loader normalizes `palettes` before resolving `palette`, so their textual order in TOML does not matter.
+An unknown selected palette warns and supplies no custom colors.
+
+### Shared module fields
+
+Every module table accepts `format`, `symbol`, and `disabled`.
+The exact accepted style fields, display arrays, module-specific options, defaults, enum values, and numeric ranges are listed in [the complete module catalog](module-catalog.md).
+
+`format` and `symbol` must be strings.
+`disabled` must be boolean.
+A standard `style` field must be a valid style string.
+`thinking` accepts `style` plus `style_off`, `style_minimal`, `style_low`, `style_medium`, `style_high`, `style_xhigh`, and `style_max`.
+`git_metrics` accepts `added_style` and `deleted_style` instead of `style`.
+`username` accepts `style_user` and `style_root` instead of `style`.
+`context` and `cost` accept `display` arrays instead of a direct `style` field.
+
+`[[context.display]]` and `[[cost.display]]` entries require these typed fields:
+
+```toml
+threshold = 60 # finite number
+style = "bold yellow" # valid style string
+hidden = false # boolean
+```
+
+Unknown display fields warn.
+Invalid display entries are discarded independently.
+When no valid entries remain, the complete module display default is restored.
+
+`extension_status` additionally accepts `separator`, `max_statuses`, and `icons`.
+`separator` is a string, `max_statuses` is an integer from 0 through 100, and `icons` is a string-to-string table.
+
+### Module option types
+
+Module-specific options use these validation rules:
+
+| Type | Accepted value |
+| --- | --- |
+| string | A TOML string; options marked non-empty reject `""`. |
+| string enum | An exact case-sensitive listed string. |
+| boolean | A TOML boolean, not a quoted string. |
+| integer | An integer inside the inclusive range listed in the module catalog. |
+| string array | An array containing only non-empty strings. |
+| string-to-string table | A TOML table whose values are all strings. |
+
+Language `detect_files`, `detect_extensions`, and `detect_folders` arrays allow entries beginning with `!` as rejection rules.
+Other string-array options reject entries beginning with `!`.
+Detection fallback and replacement behavior differs by module and is specified in [module behavior](modules.md).
+
+### Diagnostic and fallback behavior
+
+| Failure | Result |
+| --- | --- |
+| Missing file | Use built-in defaults without creating a file or directory. |
+| Read failure | Use built-in defaults and report an error diagnostic. |
+| TOML syntax failure | Preserve the raw document, use built-in defaults, and report an error diagnostic. |
+| Unknown root, module, option, or display field | Warn, ignore that field, and keep processing the document. |
+| Wrong field type | Warn and retain the default for that field. |
+| Invalid root `format` | Warn and restore only the built-in root format. |
+| Invalid module `format` | Warn and restore only that module's default format. |
+| Unknown format or style variable | Warn and render that variable empty. |
+| Invalid literal group style | Warn and render that group unstyled. |
+| Invalid module style field | Warn and restore only that style field's module default. |
+| Invalid palette color | Warn and omit only that palette entry. |
+| Invalid module option | Warn and restore only that option's default. |
+| Invalid display entry | Warn and discard only that entry; restore defaults if none remain. |
+
+TOML syntax and read failures are errors that block interactive saving or reload application.
+Semantic warnings do not prevent a document from loading or being saved, but `/starship status` reports them.
+Unknown fields and comments remain in the settings document even though they are excluded from the normalized effective configuration.
+
 ## 🧩 Format grammar
 
 - Variables: `$name` and `${name}`.

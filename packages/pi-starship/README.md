@@ -77,11 +77,21 @@ The skill answers from its references and consults the bundled source only when 
 
 Read the references directly when preferred:
 
-- [Configuration and format](./skills/configuring-pi-starship/references/configuration.md) — settings location and persistence, presets, examples, format grammar, styles, palettes, and display thresholds.
-- [Modules](./skills/configuring-pi-starship/references/modules.md) — the module catalog and format variables, plus documented usage rules, aliases, truncation rules, detection options, and module-specific fields.
+- [Configuration and format](./skills/configuring-pi-starship/references/configuration.md) — settings schema, validation and fallback behavior, presets, examples, format grammar, styles, palettes, and display thresholds.
+- [Complete module catalog](./skills/configuring-pi-starship/references/module-catalog.md) — exact variables, default formats, symbols, enabled state, style fields, display defaults, option types, ranges, and enum values.
+- [Module behavior](./skills/configuring-pi-starship/references/modules.md) — reachability, exact detection defaults, command gates, output semantics, aliases, truncation, and module-specific behavior.
 - [Runtime and security](./skills/configuring-pi-starship/references/runtime-and-security.md) — network and command execution, local metadata, cloud and deployment context, fill layout, refresh behavior, and limitations.
 
 The only configuration source remains `<getAgentDir()>/pi-starship.toml`.
+A minimal custom document can select and style only the modules it needs:
+
+```toml
+format = "$model$directory$git_branch"
+
+[model]
+style = "bold blue"
+```
+
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
 

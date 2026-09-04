@@ -10,6 +10,8 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
+import { BUILT_IN_CONFIG } from "../src/config.js";
+import { MODULE_DEFINITIONS, MODULE_NAMES } from "../src/modules/catalog.js";
 
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillsDirectory = path.join(packageDirectory, "skills");
@@ -72,7 +74,8 @@ test("skill answers from references or source and edits configuration safely", (
 		"../../src/modules/catalog.ts",
 		"../../src/presets/",
 		"[configuration and format](references/configuration.md)",
-		"[modules](references/modules.md)",
+		"[the complete module catalog](references/module-catalog.md)",
+		"[module behavior](references/modules.md)",
 		"[runtime and security](references/runtime-and-security.md)",
 		"Read the existing document before editing it.",
 		"Preserve comments, ordering, unknown fields, and unrelated custom settings",
@@ -90,11 +93,17 @@ test("skill references own the detailed public configuration guidance", () => {
 		"configuration.md": [
 			"## ⚙️ Settings",
 			"### 🎛️ Presets",
+			"## Configuration schema and validation",
+			"### Diagnostic and fallback behavior",
 			"## 🧩 Format grammar",
 			"## 🎨 Styles and palettes",
 		],
+		"module-catalog.md": ["## Shared module fields", "## Catalog order", "## Module schemas"],
 		"modules.md": [
 			"## 🧱 Modules",
+			"## Reachability and collection rules",
+			"## Exact language defaults",
+			"## Exact environment and deployment defaults",
 			"### Usage semantics",
 			"### Directory, Git, and environment contraction",
 			"### Model and provider aliases and model truncation",
@@ -133,6 +142,85 @@ test("skill references own the detailed public configuration guidance", () => {
 	}
 });
 
+test("complete module catalog covers every public module schema", () => {
+	const catalog = readFileSync(path.join(referencesDirectory, "module-catalog.md"), "utf8");
+	assert.deepEqual(
+		[...catalog.matchAll(/^### `([^`]+)`$/gmu)].map((match) => match[1]),
+		MODULE_NAMES,
+	);
+	assert.ok(catalog.includes(MODULE_NAMES.map((name) => `\`${name}\``).join(" → ")));
+
+	for (const [index, definition] of MODULE_DEFINITIONS.entries()) {
+		const heading = `### \`${definition.name}\``;
+		const start = catalog.indexOf(heading);
+		const nextName = MODULE_DEFINITIONS[index + 1]?.name;
+		const end = nextName ? catalog.indexOf(`### \`${nextName}\``, start) : catalog.length;
+		const section = catalog.slice(start, end);
+		assert.ok(start >= 0 && end > start, `missing schema for ${definition.name}`);
+		assert.ok(section.includes(definition.description));
+		assert.ok(
+			section.includes(
+				`Format variables: ${definition.variables.map((name) => `\`$${name}\``).join(", ")}`,
+			),
+		);
+		const styleVariables = definition.styleVariables ?? ["style"];
+		assert.ok(
+			section.includes(
+				`Style variables in \`format\`: ${styleVariables.map((name) => `\`$${name}\``).join(", ")}`,
+			),
+		);
+		assert.ok(section.includes(`Default \`format\`: ${markdownCode(definition.defaults.format)}`));
+		assert.ok(section.includes(`Default \`symbol\`: ${markdownCode(definition.defaults.symbol)}`));
+		assert.ok(
+			section.includes(`Default \`disabled\`: ${markdownCode(definition.defaults.disabled)}`),
+		);
+		if (definition.layout) {
+			assert.ok(section.includes(`Layout role: ${markdownCode(definition.layout)}`));
+		}
+
+		const styleFields = definition.styleDefaults
+			? [
+					...(definition.fallbackStyle ? ([["style", definition.defaults.style]] as const) : []),
+					...Object.entries(definition.styleDefaults),
+				]
+			: definition.displayDefaults
+				? []
+				: [["style", definition.defaults.style]];
+		for (const [name, value] of styleFields) {
+			assert.ok(section.includes(`| \`${name}\` | ${markdownCode(value)} |`));
+		}
+		if (definition.displayDefaults) {
+			assert.ok(
+				section.includes(`Default \`display\`: ${markdownCode(definition.displayDefaults)}`),
+			);
+		}
+
+		for (const [name, schema] of Object.entries(definition.options ?? {})) {
+			const row = section.split("\n").find((line) => line.startsWith(`| \`${name}\` |`));
+			assert.ok(row, `${definition.name}.${name} is missing`);
+			assert.ok(row.includes(optionType(schema.kind)));
+			assert.ok(row.includes(markdownCode(schema.default)));
+			if (schema.kind === "integer") {
+				assert.ok(section.includes(`Inclusive range ${schema.minimum} through ${schema.maximum}.`));
+			}
+			if (schema.kind === "string-enum") {
+				for (const value of schema.values) assert.ok(section.includes(`\`${value}\``));
+			}
+		}
+	}
+
+	const extensionStatus = catalog.slice(catalog.indexOf("### `extension_status`"));
+	for (const [field, value] of Object.entries({
+		separator: BUILT_IN_CONFIG.extensionStatus.separator,
+		max_statuses: BUILT_IN_CONFIG.extensionStatus.maxStatuses,
+		icons: BUILT_IN_CONFIG.extensionStatus.icons,
+	})) {
+		const row = extensionStatus.split("\n").find((line) => line.startsWith(`| \`${field}\` |`));
+		assert.ok(row, `extension_status.${field} is missing`);
+		assert.ok(row.includes(markdownCode(value)));
+	}
+});
+
 test("bundled validator accepts valid TOML and rejects invalid TOML", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-"));
 	try {
@@ -153,3 +241,18 @@ test("bundled validator accepts valid TOML and rejects invalid TOML", () => {
 		rmSync(directory, { force: true, recursive: true });
 	}
 });
+
+function markdownCode(value: unknown): string {
+	return `\`${JSON.stringify(value).replaceAll("|", "\\|")}\``;
+}
+
+function optionType(kind: string): string {
+	return {
+		boolean: "boolean",
+		integer: "integer",
+		string: "string",
+		"string-array": "string array",
+		"string-enum": "string enum",
+		"string-map": "string-to-string table",
+	}[kind] as string;
+}
