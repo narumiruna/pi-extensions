@@ -13,10 +13,11 @@ import { test } from "vitest";
 
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillsDirectory = path.join(packageDirectory, "skills");
-const skillDirectory = path.join(skillsDirectory, "editing-pi-starship-toml");
+const skillDirectory = path.join(skillsDirectory, "configuring-pi-starship");
+const referencesDirectory = path.join(skillDirectory, "references");
 const validatorPath = path.join(skillDirectory, "scripts", "validate.mjs");
 
-test("package bundles one narrowly triggered pi-starship editing skill", async () => {
+test("package bundles one focused pi-starship configuration skill", async () => {
 	const manifest = JSON.parse(
 		readFileSync(path.join(packageDirectory, "package.json"), "utf8"),
 	) as {
@@ -30,13 +31,13 @@ test("package bundles one narrowly triggered pi-starship editing skill", async (
 	assert.deepEqual(result.diagnostics, []);
 	assert.equal(result.skills.length, 1);
 	const skill = result.skills[0];
-	assert.equal(skill?.name, "editing-pi-starship-toml");
-	assert.match(skill?.description ?? "", /Use only when .*write .*pi-starship\.toml/u);
+	assert.equal(skill?.name, "configuring-pi-starship");
+	assert.match(skill?.description ?? "", /Configure .* answer questions .*pi-starship\.toml/u);
 	for (const excludedTask of [
-		"read-only explanation",
-		"general TOML work",
+		"generic TOML",
 		"shell Starship configuration",
-		"pi-starship source-code changes",
+		"pi-starship source-code development",
+		"unrelated footer work",
 	]) {
 		assert.ok(
 			skill?.description.includes(excludedTask),
@@ -56,15 +57,23 @@ test("package bundles one narrowly triggered pi-starship editing skill", async (
 		await loader.reload();
 		const loaded = loader.getSkills();
 		assert.deepEqual(loaded.diagnostics, []);
-		assert.ok(loaded.skills.some(({ name }) => name === "editing-pi-starship-toml"));
+		assert.ok(loaded.skills.some(({ name }) => name === "configuring-pi-starship"));
 	} finally {
 		rmSync(agentDir, { force: true, recursive: true });
 	}
 });
 
-test("skill instructions preserve user configuration and require honest validation", () => {
+test("skill answers from references or source and edits configuration safely", () => {
 	const skill = readFileSync(path.join(skillDirectory, "SKILL.md"), "utf8");
 	for (const contract of [
+		"For a configuration question, load only the smallest relevant reference",
+		"Do not read or modify the user's settings file for a question",
+		"../../src/config.ts",
+		"../../src/modules/catalog.ts",
+		"../../src/presets/",
+		"[configuration and format](references/configuration.md)",
+		"[modules](references/modules.md)",
+		"[runtime and security](references/runtime-and-security.md)",
 		"Read the existing document before editing it.",
 		"Preserve comments, ordering, unknown fields, and unrelated custom settings",
 		"make it reachable from the root `format` or `$all`",
@@ -73,6 +82,54 @@ test("skill instructions preserve user configuration and require honest validati
 		"Do not claim semantic validation or an active-footer update",
 	]) {
 		assert.ok(skill.includes(contract), `missing editing contract: ${contract}`);
+	}
+});
+
+test("skill references own the detailed public configuration guidance", () => {
+	const expectedCoverage = {
+		"configuration.md": [
+			"## ⚙️ Settings",
+			"### 🎛️ Presets",
+			"## 🧩 Format grammar",
+			"## 🎨 Styles and palettes",
+		],
+		"modules.md": [
+			"## 🧱 Modules",
+			"### Usage semantics",
+			"### Directory, Git, and environment contraction",
+			"### Model and provider aliases and model truncation",
+		],
+		"runtime-and-security.md": [
+			"## 🔒 Security and privacy",
+			"### 📦 Package and language modules",
+			"### 🚢 Deployment and cloud context",
+			"## 📐 Layout and lifecycle",
+			"## 🚧 Limitations",
+		],
+	} as const;
+
+	for (const [file, headings] of Object.entries(expectedCoverage)) {
+		const content = readFileSync(path.join(referencesDirectory, file), "utf8");
+		assert.match(content, /authoritative public reference/u);
+		for (const heading of headings)
+			assert.ok(content.includes(heading), `${file} lacks ${heading}`);
+	}
+
+	const readme = readFileSync(path.join(packageDirectory, "README.md"), "utf8");
+	for (const file of Object.keys(expectedCoverage)) {
+		assert.ok(readme.includes(`./skills/configuring-pi-starship/references/${file}`));
+	}
+	for (const movedHeading of [
+		"## 🧩 Format grammar",
+		"## 🎨 Styles and palettes",
+		"## 🧱 Modules",
+		"## 📐 Layout and lifecycle",
+	]) {
+		assert.equal(
+			readme.includes(movedHeading),
+			false,
+			`${movedHeading} must live in skill references`,
+		);
 	}
 });
 
