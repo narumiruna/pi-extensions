@@ -64,11 +64,12 @@ Wait for explicit approval before implementation.
 After approval:
 
 1. Implement the approved design using the product's established components and conventions where appropriate.
-2. Keep state transitions, confirmations, cancellation, failures, and persistence behavior explicit and safe.
-3. Render and exercise the primary flows at the supported screen sizes and input methods when practical.
+2. If the scope, design, risk, or acceptance criteria materially change, update the proposal and wait for explicit approval before continuing.
+3. Keep state transitions, confirmations, cancellation, failures, and persistence behavior explicit and safe.
+4. Render and exercise the primary flows at the supported screen sizes and input methods when practical.
    Inspect layout, overflow, clipping, focus, responsive behavior, accessibility, and loading, empty, partial, success, error, disabled, cancellation, and recovery states; record direct evidence or state the specific unverified paths.
-4. Add or update tests for primary flows, previews, confirmations, cancellations, navigation, failures, responsive behavior, accessibility, and compatibility as applicable.
-5. Update user-facing documentation when behavior or workflows change.
-6. Run focused verification and all required repository checks.
-7. Compare the result with every acceptance criterion and inspect the final diff for regressions or unrelated changes.
-8. Summarize the implemented experience, direct verification evidence, trade-offs, and any unverified paths.
+5. Add or update tests for primary flows, previews, confirmations, cancellations, navigation, failures, responsive behavior, accessibility, and compatibility as applicable.
+6. Update user-facing documentation when behavior or workflows change.
+7. Run focused verification and all required repository checks.
+8. Compare the result with every acceptance criterion and inspect the final diff for regressions or unrelated changes.
+9. Summarize the implemented experience, direct verification evidence, trade-offs, and any unverified paths.

@@ -25,17 +25,18 @@ Follow this workflow:
 5. Define the scope, expected outcome, implementation approach, risks, and verification plan.
 6. Present a concise implementation plan that begins with the reproduction result and supporting evidence for a bug, then wait for explicit approval.
 
-Before approval, do not intentionally edit tracked source contents, create or switch branches, or change issue metadata.
-Reversible local setup and isolated reproduction artifacts are allowed; use a temporary worktree or copy when setup may alter tracked files, then inspect the working tree and remove unintended artifacts.
+Before approval, do not create or modify repository files, create or switch branches, or change issue metadata.
+The only exception is disposable reproduction artifacts in an isolated temporary directory or worktree; do not use them as implementation changes, and remove them before presenting the plan.
 
 After approval:
 
 1. Implement the smallest complete solution that addresses the root cause or accepted requirements.
-2. Preserve unrelated behavior and follow all repository conventions.
-3. Add or update tests that would fail without the solution.
-4. Run focused verification and the repository's required checks.
-5. If a reproduced issue is genuinely a bug and the repository uses a `bug` label, add it only when the approved plan explicitly includes that metadata write.
-6. Recheck the acceptance criteria and inspect the final diff for unintended changes.
-7. Summarize the solution, verification evidence, and any remaining risks or unverified paths.
+2. If the root cause, scope, risk, or acceptance criteria materially change, update the plan and wait for explicit approval before continuing.
+3. Preserve unrelated behavior and follow all repository conventions.
+4. Add or update tests when executable behavior changes or a regression needs coverage.
+5. Run focused verification and the repository's required checks.
+6. If a reproduced issue is genuinely a bug and the repository uses a `bug` label, add it only when the approved plan explicitly includes that metadata write.
+7. Recheck the acceptance criteria and inspect the final diff for unintended changes.
+8. Summarize the solution, verification evidence, and any remaining risks or unverified paths.
 
 Do not claim reproduction, root cause, completion, or passing checks without direct evidence.

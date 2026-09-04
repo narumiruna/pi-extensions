@@ -14,7 +14,7 @@ Resolve the pull request feedback end to end.
 2. Read the repository instructions, pull request description, commits, full diff, checks, submitted reviews, inline comments, and conversation threads.
 3. Inspect the working tree before editing, and preserve unrelated or pre-existing changes.
 4. Create a review ledger that maps every feedback item to one of these outcomes.
-   Treat feedback as actionable only when it is supported by the code and aligns with the pull request goal, repository rules, and user-authorized scope:
+   Treat feedback as actionable only when it is supported by repository evidence, changed artifacts, or observed behavior and aligns with the pull request goal, repository rules, and user-authorized scope:
    - Actionable and not yet addressed.
    - Already addressed by the current code.
    - Outdated or superseded.
