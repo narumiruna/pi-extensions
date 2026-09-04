@@ -205,6 +205,23 @@ class BtwTuiAltScreen extends TuiAltScreen {
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
 
+// TuiAltScreen evaluates these actions before bottom, so shared keys cannot jump to latest.
+const ALT_SCREEN_ACTIONS_BEFORE_BOTTOM = [
+	"tui.altScreen.search",
+	"tui.altScreen.searchNext",
+	"tui.altScreen.searchPrevious",
+	"tui.altScreen.searchClose",
+	"tui.altScreen.pageUp",
+	"tui.altScreen.pageDown",
+	"tui.altScreen.halfPageUp",
+	"tui.altScreen.halfPageDown",
+	"tui.altScreen.lineUp",
+	"tui.altScreen.lineDown",
+	"tui.altScreen.previousPrompt",
+	"tui.altScreen.nextPrompt",
+	"tui.altScreen.top",
+] as const;
+
 function hasManualSelectionCopyApi(): boolean {
 	return (
 		typeof TuiAltScreen.prototype.hasActiveSelection === "function" &&
@@ -238,6 +255,11 @@ function createBtwFullscreenTui(
 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
 			scrollToEndIndicator: () => {
 				const unavailableKeys = new Set<string>([Key.ctrl("c")]);
+				for (const action of ALT_SCREEN_ACTIONS_BEFORE_BOTTOM) {
+					for (const actionKey of keybindings.getKeys(action)) {
+						unavailableKeys.add(String(actionKey));
+					}
+				}
 				if (!copyOnSelect) {
 					for (const copyKey of keybindings.getKeys("app.message.copy")) {
 						unavailableKeys.add(String(copyKey));

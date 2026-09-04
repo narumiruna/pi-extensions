@@ -282,7 +282,7 @@ test("configured bottom key skips higher-priority bindings and wins over the com
 	const previousKeybindings = getKeybindings();
 	const keybindings = new KeybindingsManager(JUMP_TEST_KEYBINDINGS, {
 		"app.message.copy": "end",
-		"tui.altScreen.bottom": ["ctrl+c", "end", "x"],
+		"tui.altScreen.bottom": ["ctrl+c", "end", "pageUp", "x"],
 	});
 	setKeybindings(keybindings);
 	t.onTestFinished(() => setKeybindings(previousKeybindings));
@@ -325,6 +325,13 @@ test("configured bottom key skips higher-priority bindings and wins over the com
 	assert.equal(viewport.viewportTop, manualTop);
 	assert.equal(viewport.isFollowingOutput, false);
 	assert.match(latestFrame(harness.writes), /No selection to copy/u);
+
+	harness.writes.length = 0;
+	harness.input("\u001b[5~");
+	sideTui.renderNow(true);
+	assert.ok(viewport.viewportTop < manualTop);
+	assert.equal(viewport.isFollowingOutput, false);
+	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · X/u);
 
 	harness.writes.length = 0;
 	harness.input("x");
