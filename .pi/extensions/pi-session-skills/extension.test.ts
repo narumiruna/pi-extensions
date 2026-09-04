@@ -44,6 +44,10 @@ function createHarness(
 	const handlers = new Map<string, Handler[]>();
 	const commands = new Map<string, CommandDefinition>();
 	const entries: Array<{ customType: string; data: unknown }> = [];
+	const entriesBySession = new Map<
+		ExtensionContext["sessionManager"],
+		Array<{ customType: string; data: unknown }>
+	>();
 	const pi = {
 		on(event: string, handler: Handler) {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -51,9 +55,8 @@ function createHarness(
 		registerCommand(name: string, definition: CommandDefinition) {
 			commands.set(name, definition);
 		},
-		appendEntry(customType: string, data: unknown) {
-			options.beforeAppendEntry?.();
-			entries.push({ customType, data });
+		appendEntry() {
+			throw new Error("factory-bound persistence is not allowed");
 		},
 		getCommands() {
 			return options.commands ?? [];
@@ -72,7 +75,22 @@ function createHarness(
 		async command(name: string, args: string, ctx: ExtensionCommandContext) {
 			const command = commands.get(name);
 			assert.ok(command, `missing command ${name}`);
+			const sessionEntries = entriesBySession.get(ctx.sessionManager) ?? [];
+			entriesBySession.set(ctx.sessionManager, sessionEntries);
+			const sessionManager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
+				appendCustomEntry(customType: string, data?: unknown): string;
+			};
+			sessionManager.appendCustomEntry = (customType, data) => {
+				options.beforeAppendEntry?.();
+				const entry = { customType, data };
+				entries.push(entry);
+				sessionEntries.push(entry);
+				return crypto.randomUUID();
+			};
 			await command.handler(args, ctx);
+		},
+		entriesFor(ctx: ExtensionContext) {
+			return entriesBySession.get(ctx.sessionManager) ?? [];
 		},
 	};
 }
@@ -399,6 +417,48 @@ test("keeps activation state isolated across concurrent session managers", async
 	assert.deepEqual(await harness.emit("resources_discover", {}, first.ctx), {
 		skillPaths: [firstPath],
 	});
+});
+
+test("persists each command snapshot through its owning session manager", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-session-writers-"));
+	temporaryPaths.push(cacheRoot);
+	const firstPath = await createCachedSkill(cacheRoot, "first", "first-skill");
+	const secondPath = await createCachedSkill(cacheRoot, "second", "second-skill");
+	const resolver: SkillResolverLike = {
+		getCacheRoot: () => cacheRoot,
+		resolve: async (options) => ({
+			name: options.source.original === "owner/first" ? "first-skill" : "second-skill",
+			path: options.source.original === "owner/first" ? firstPath : secondPath,
+			source: options.source.original,
+			cacheHit: false,
+		}),
+	};
+	const harness = createHarness(resolver);
+	const first = createContext();
+	const second = createContext();
+	await harness.emit("session_start", { reason: "startup" }, first.ctx);
+	await harness.emit("session_start", { reason: "startup" }, second.ctx);
+
+	await harness.command("session-skills", "load owner/first", first.ctx);
+	await harness.command("session-skills", "load owner/second", second.ctx);
+	assert.deepEqual(
+		(harness.entriesFor(first.ctx)[0].data as { skills: Array<{ source: string }> }).skills.map(
+			(skill) => skill.source,
+		),
+		["owner/first"],
+	);
+	assert.deepEqual(
+		(harness.entriesFor(second.ctx)[0].data as { skills: Array<{ source: string }> }).skills.map(
+			(skill) => skill.source,
+		),
+		["owner/second"],
+	);
+
+	await harness.command("session-skills", "unload first-skill", first.ctx);
+	const firstFinalEntry = harness.entriesFor(first.ctx).at(-1);
+	assert.ok(firstFinalEntry);
+	assert.deepEqual((firstFinalEntry.data as { skills: unknown[] }).skills, []);
+	assert.equal(harness.entriesFor(second.ctx).length, 1);
 });
 
 test("runs operations independently for concurrent session managers", async () => {

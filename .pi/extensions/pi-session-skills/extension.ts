@@ -64,6 +64,10 @@ interface SessionStateSnapshot {
 	desiredActivations: Map<string, SessionSkillActivation>;
 }
 
+interface SessionEntryWriter {
+	appendCustomEntry(customType: string, data?: unknown): string;
+}
+
 export function registerSessionSkills(
 	pi: ExtensionAPI,
 	options: SessionSkillsExtensionOptions = {},
@@ -78,12 +82,14 @@ export function registerSessionSkills(
 		return state;
 	};
 
-	const saveSnapshot = (state: SessionState): void => {
+	const saveSnapshot = (ctx: ExtensionCommandContext, state: SessionState): void => {
 		const snapshot: ActivationSnapshot = {
 			version: 1,
 			skills: [...state.desiredActivations.values()],
 		};
-		pi.appendEntry(ACTIVATION_ENTRY_TYPE, snapshot);
+		const sessionManager = ctx.sessionManager as ExtensionContext["sessionManager"] &
+			SessionEntryWriter;
+		sessionManager.appendCustomEntry(ACTIVATION_ENTRY_TYPE, snapshot);
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -262,7 +268,7 @@ export function registerSessionSkills(
 				state.activations.set(resolvedResult.name, activation);
 				state.desiredActivations.set(resolvedResult.name, activation);
 				try {
-					saveSnapshot(state);
+					saveSnapshot(ctx, state);
 				} catch (error) {
 					restoreSessionState(state, previousState);
 					throw error;
@@ -333,7 +339,7 @@ export function registerSessionSkills(
 			return;
 		}
 		try {
-			saveSnapshot(state);
+			saveSnapshot(ctx, state);
 		} catch (error) {
 			restoreSessionState(state, previousState);
 			throw error;
