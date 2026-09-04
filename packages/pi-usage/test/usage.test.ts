@@ -2583,6 +2583,12 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
 	assert.deepEqual(applied, new Set(["codexFastMode", "codexStatusResetCountdown"]));
 	const renderedSettings = rendered.map((lines) => lines.join("\n"));
 	assert.ok(
+		rendered.some((frame) => {
+			const plain = frame.map(stripVTControlCharacters);
+			return plain[0] === "─".repeat(100) && plain.at(-1) === "─".repeat(100);
+		}),
+	);
+	assert.ok(
 		renderedSettings.some((frame) =>
 			/Show time remaining until each Codex usage limit resets/.test(frame),
 		),
