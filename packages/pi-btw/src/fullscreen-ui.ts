@@ -251,6 +251,14 @@ function normalizedKeyId(key: string): string {
 	return [...modifiers, normalizedBase].join("+");
 }
 
+function formatEffectiveKeyLabel(key: string): string {
+	const parts = key.split("+");
+	const base = parts.at(-1);
+	if (base === "pageup") parts[parts.length - 1] = "pageUp";
+	if (base === "pagedown") parts[parts.length - 1] = "pageDown";
+	return formatKeyLabel(parts.join("+"));
+}
+
 function canMatchKeyInput(key: string): boolean {
 	const parts = key.split("+");
 	const base = parts.at(-1) ?? "";
@@ -341,18 +349,16 @@ function createBtwFullscreenTui(
 				}
 				const key = keybindings
 					.getKeys("tui.altScreen.bottom")
-					.map((candidate) => String(candidate))
-					.find((candidate) => {
-						const identity = keyInputIdentity(candidate);
-						return (
+					.map((candidate) => keyInputIdentity(String(candidate)))
+					.find(
+						(identity) =>
 							identity &&
 							canMatchKeyInput(identity) &&
 							!unavailableKeyIdentities.has(identity) &&
-							formatKeyLabel(candidate)
-						);
-					});
+							formatEffectiveKeyLabel(identity),
+					);
 				const label = theme.fg("text", " ↓ Jump to latest message");
-				const shortcut = key ? theme.fg("muted", ` · ${formatKeyLabel(key)}`) : "";
+				const shortcut = key ? theme.fg("muted", ` · ${formatEffectiveKeyLabel(key)}`) : "";
 				return theme.bg("selectedBg", `${label}${shortcut} `);
 			},
 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),

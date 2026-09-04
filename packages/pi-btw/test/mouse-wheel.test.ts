@@ -333,6 +333,7 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
 			"ctrl+escape",
 			"alt+clear",
 			"shift+f1",
+			"bogus+ctrl+ctrl+x" as KeyId,
 			"x",
 		],
 	});
@@ -372,7 +373,7 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
 	harness.input("\u001b[<64;1;1M");
 	sideTui.renderNow(true);
 	const manualTop = viewport.viewportTop;
-	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · X/u);
+	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · Ctrl\+X/u);
 
 	for (const [key, input] of legacyConflicts) {
 		harness.writes.length = 0;
@@ -395,10 +396,10 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
 	sideTui.renderNow(true);
 	assert.ok(viewport.viewportTop < manualTop);
 	assert.equal(viewport.isFollowingOutput, false);
-	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · X/u);
+	assert.match(latestFrame(harness.writes), /↓ Jump to latest message · Ctrl\+X/u);
 
 	harness.writes.length = 0;
-	harness.input("x");
+	harness.input("\x18");
 	sideTui.renderNow(true);
 	const returnedFrame = latestFrame(harness.writes);
 	assert.equal(viewport.isFollowingOutput, true);
