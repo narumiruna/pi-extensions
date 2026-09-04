@@ -194,34 +194,50 @@ export function registerSessionSkills(
 		try {
 			result = await resolution;
 			assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
+			const resolvedResult = result;
 
-			const existing = state.activations.get(result.name);
+			const existing = state.activations.get(resolvedResult.name);
 			if (
 				!command.refresh &&
-				existing?.path === result.path &&
-				existing.source === result.source &&
-				existing.selector === result.selector
+				existing?.path === resolvedResult.path &&
+				existing.source === resolvedResult.source &&
+				existing.selector === resolvedResult.selector
 			) {
-				await result.transaction?.rollback();
+				await resolvedResult.transaction?.rollback();
 				assertCurrentSessionState(sessionStates, ctx, state, commandGeneration, controller.signal);
-				ctx.ui.notify(`Skill already active: ${sanitizeDisplayLine(result.name)}`, "info");
+				ctx.ui.notify(`Skill already active: ${sanitizeDisplayLine(resolvedResult.name)}`, "info");
 				return;
 			}
 
-			const ownPaths = new Set(
-				[...state.activations.values()].map((activation) => activation.path),
+			const sameNameActivation = state.desiredActivations.get(resolvedResult.name);
+			if (
+				sameNameActivation &&
+				(sameNameActivation.source !== resolvedResult.source ||
+					sameNameActivation.selector !== resolvedResult.selector)
+			) {
+				throw new Error(
+					`Skill "${sanitizeDisplayLine(resolvedResult.name)}" already belongs to session source ${sanitizeDisplayLine(sameNameActivation.source)}.`,
+				);
+			}
+			const refreshedPaths = new Set(
+				[...state.activations.values()]
+					.filter(
+						(activation) =>
+							activation.source === resolvedResult.source &&
+							activation.selector === resolvedResult.selector,
+					)
+					.map((activation) => activation.path),
 			);
-			const resultName = result.name;
+			const resultName = resolvedResult.name;
 			const conflict = ctx
 				.getSystemPromptOptions()
-				.skills?.find((skill) => skill.name === resultName && !ownPaths.has(skill.baseDir));
+				.skills?.find((skill) => skill.name === resultName && !refreshedPaths.has(skill.baseDir));
 			if (conflict) {
 				throw new Error(
-					`Skill "${sanitizeDisplayLine(result.name)}" is already provided by ${sanitizeDisplayLine(conflict.filePath)}.`,
+					`Skill "${sanitizeDisplayLine(resolvedResult.name)}" is already provided by ${sanitizeDisplayLine(conflict.filePath)}.`,
 				);
 			}
 
-			const resolvedResult = result;
 			const previousState = snapshotSessionState(state);
 			let applied = false;
 			const applyActivation = () => {
@@ -371,7 +387,9 @@ function commandCompletions(
 		const valuePrefix = input.slice(lastSpace + 1);
 		if (valuePrefix && !valuePrefix.startsWith("-")) return null;
 		const base = input.slice(0, lastSpace + 1);
-		const used = new Set(base.trim().split(/\s+/u));
+		const completedTokens = base.trim().split(/\s+/u);
+		if (["--skill", "-s"].includes(completedTokens.at(-1) ?? "")) return null;
+		const used = new Set(completedTokens);
 		const values = ["--skill", "--refresh"]
 			.filter((value) => !used.has(value) && value.startsWith(valuePrefix))
 			.map((value) => ({ value: `${base}${value}`, label: value }));

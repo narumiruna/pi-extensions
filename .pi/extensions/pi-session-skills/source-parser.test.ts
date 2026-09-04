@@ -42,6 +42,7 @@ test("parses GitHub and GitLab tree URLs", () => {
 			repository: "https://gitlab.com/group/subgroup/repo.git",
 			ref: "v1",
 			subpath: "skills/foo",
+			sshFallback: "git@gitlab.com:group/subgroup/repo.git",
 		},
 	);
 });

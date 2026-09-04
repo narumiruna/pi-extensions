@@ -294,6 +294,31 @@ test("retries a GitHub authentication failure over SSH", async () => {
 	]);
 });
 
+test("retries GitLab HTTPS authentication failures over SSH", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-gitlab-fallback-");
+	const fixture = join(workspace, "fixture");
+	await writeSkill(fixture, "demo", "private-skill");
+	const repositories: string[] = [];
+	const cloneRepository: CloneRepository = async (repository, target) => {
+		repositories.push(repository);
+		if (repositories.length === 1) {
+			throw new GitCommandError("Git clone failed.", "Authentication failed");
+		}
+		await cp(fixture, target, { recursive: true });
+	};
+	const resolver = new SessionSkillResolver({
+		cacheRoot: join(workspace, "cache"),
+		cloneRepository,
+	});
+	const source = parseSkillSource("https://gitlab.com/group/subgroup/private", workspace);
+	const result = await resolver.resolve({ source });
+	assert.equal(result.name, "private-skill");
+	assert.deepEqual(repositories, [
+		"https://gitlab.com/group/subgroup/private.git",
+		"git@gitlab.com:group/subgroup/private.git",
+	]);
+});
+
 test("clones through the system Git executable", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-real-git-");
 	const source = join(workspace, "source.git");

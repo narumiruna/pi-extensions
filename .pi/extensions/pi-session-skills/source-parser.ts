@@ -136,6 +136,7 @@ function parseGitLabUrl(original: string, url: URL): GitSkillSource {
 		kind: "git",
 		original,
 		repository: `https://${url.host}/${repositoryParts.join("/")}.git`,
+		sshFallback: `git@${url.hostname}:${repositoryParts.join("/")}.git`,
 	};
 	if (markerIndex < 0) return result;
 	const rawRef = segments[markerIndex + 2];

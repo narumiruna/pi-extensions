@@ -148,13 +148,16 @@ test("registers one session-skills command with status and route completions", a
 		{ value: "load", label: "load" },
 		{ value: "list", label: "list" },
 	]);
-	assert.deepEqual(
-		harness.commands.get("session-skills")?.getArgumentCompletions?.("load owner/repo --"),
-		[
-			{ value: "load owner/repo --skill", label: "--skill" },
-			{ value: "load owner/repo --refresh", label: "--refresh" },
-		],
-	);
+	const complete = harness.commands.get("session-skills")?.getArgumentCompletions;
+	assert.deepEqual(complete?.("load owner/repo --"), [
+		{ value: "load owner/repo --skill", label: "--skill" },
+		{ value: "load owner/repo --refresh", label: "--refresh" },
+	]);
+	assert.equal(complete?.("load owner/repo --skill "), null);
+	assert.equal(complete?.("load owner/repo -s "), null);
+	assert.deepEqual(complete?.("load owner/repo --skill name --"), [
+		{ value: "load owner/repo --skill name --refresh", label: "--refresh" },
+	]);
 	const current = createContext();
 	await harness.emit("session_start", { reason: "startup" }, current.ctx);
 	await harness.command("session-skills", "", current.ctx);
@@ -547,6 +550,46 @@ test("rejects native skill collisions and rolls back candidate cache entries", a
 	assert.equal(current.reloads, 0);
 	assert.equal(committed, false);
 	assert.equal(rolledBack, true);
+});
+
+test("rejects a same-name skill from a different session source", async () => {
+	const cacheRoot = await mkdtemp(join(tmpdir(), "pi-session-skills-source-collision-"));
+	temporaryPaths.push(cacheRoot);
+	const existingPath = await createCachedSkill(cacheRoot, "existing", "same-name");
+	const candidatePath = await createCachedSkill(cacheRoot, "candidate", "same-name");
+	let rolledBack = false;
+	const resolver: SkillResolverLike = {
+		getCacheRoot: () => cacheRoot,
+		resolve: async (options) => ({
+			name: "same-name",
+			path: candidatePath,
+			source: options.source.original,
+			cacheHit: false,
+			transaction: {
+				commit: async (apply) => apply?.(),
+				rollback: async () => {
+					rolledBack = true;
+				},
+			},
+		}),
+	};
+	const harness = createHarness(resolver);
+	const current = createContext(
+		[snapshotEntry([{ name: "same-name", path: existingPath, source: "owner/first" }])],
+		"tui",
+		[{ name: "same-name", baseDir: existingPath, filePath: join(existingPath, "SKILL.md") }],
+	);
+	await harness.emit("session_start", { reason: "resume" }, current.ctx);
+
+	await assert.rejects(
+		() => harness.command("session-skills", "load owner/second", current.ctx),
+		/already belongs to session source owner\/first/,
+	);
+	assert.equal(rolledBack, true);
+	assert.equal(harness.entries.length, 0);
+	assert.deepEqual(await harness.emit("resources_discover", {}, current.ctx), {
+		skillPaths: [existingPath],
+	});
 });
 
 test("shutdown aborts an in-flight resolver and clears owned status", async () => {
