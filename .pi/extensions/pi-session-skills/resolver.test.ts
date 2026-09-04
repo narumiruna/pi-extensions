@@ -8,13 +8,14 @@ import {
 	mkdtemp,
 	readdir,
 	readFile,
+	rename,
 	rm,
 	stat,
 	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, test } from "vitest";
 import {
@@ -96,6 +97,47 @@ test("copies and caches one local skill without linking it", async () => {
 	assert.equal(second.path, first.path);
 });
 
+test("reuses legacy flat cache entries without skill-directory metadata", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-legacy-cache-");
+	const skillRoot = await writeSkill(workspace, "source", "legacy-skill");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(skillRoot, workspace);
+	const original = await resolveAndCommit(resolver, { source });
+	const versionPath = dirname(dirname(original.path));
+	const metadataPath = join(versionPath, "metadata.json");
+	const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+		skillDirectory?: string;
+	};
+	delete metadata.skillDirectory;
+	await writeFile(metadataPath, JSON.stringify(metadata));
+	const flatSkillPath = dirname(original.path);
+	const temporarySkillPath = join(versionPath, "legacy-skill");
+	await rename(original.path, temporarySkillPath);
+	await rm(flatSkillPath, { recursive: true });
+	await rename(temporarySkillPath, flatSkillPath);
+
+	const cached = await resolver.resolve({ source });
+	assert.equal(cached.cacheHit, true);
+	assert.equal(cached.path, flatSkillPath);
+});
+
+test("preserves inferred skill names in the cache layout", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-inferred-name-");
+	const skillRoot = join(workspace, "inferred-skill");
+	await mkdir(skillRoot);
+	await writeFile(join(skillRoot, "SKILL.md"), "---\ndescription: Inferred name.\n---\n");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+	const source = parseSkillSource(skillRoot, workspace);
+
+	const first = await resolveAndCommit(resolver, { source });
+	assert.equal(first.name, "inferred-skill");
+	assert.equal(basename(dirname(first.path)), "skill");
+	assert.equal(basename(first.path), "inferred-skill");
+	const second = await resolver.resolve({ source });
+	assert.equal(second.cacheHit, true);
+	assert.equal(second.path, first.path);
+});
+
 test("rejects invalid skill names before caching", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-invalid-name-");
 	const skillRoot = join(workspace, "source");
@@ -120,7 +162,7 @@ test("does not reuse cached skills with invalid names", async () => {
 	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
 	const source = parseSkillSource(skillRoot, workspace);
 	const original = await resolveAndCommit(resolver, { source });
-	const metadataPath = join(dirname(original.path), "metadata.json");
+	const metadataPath = join(dirname(dirname(original.path)), "metadata.json");
 	const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as { name: string };
 	metadata.name = "evil\u001b[31m";
 	await writeFile(metadataPath, JSON.stringify(metadata));
@@ -182,6 +224,24 @@ test("honors Pi ignore files and hidden directories during discovery", async () 
 	}
 });
 
+test("continues into nested skills when the root skill is ignored", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-ignored-root-");
+	const sourceRoot = await writeSkill(workspace, "source", "root-skill");
+	await writeSkill(sourceRoot, "nested", "nested-skill");
+	await writeFile(join(sourceRoot, ".gitignore"), "SKILL.md\n!nested/SKILL.md\n");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+
+	const source = parseSkillSource(sourceRoot, workspace);
+	const result = await resolver.resolve({ source });
+	assert.equal(result.name, "nested-skill");
+	await result.transaction?.rollback();
+
+	await rm(join(sourceRoot, ".gitignore"));
+	const visibleRoot = await resolver.resolve({ source });
+	assert.equal(visibleRoot.name, "root-skill");
+	await visibleRoot.transaction?.rollback();
+});
+
 test("selects one skill from a multi-skill source", async () => {
 	const workspace = await temporaryDirectory("pi-session-skills-select-");
 	await writeSkill(workspace, "skills/alpha", "alpha");
@@ -204,6 +264,21 @@ test("rejects duplicate skill names instead of choosing a discovery winner", asy
 			resolver.resolve({ source: parseSkillSource("./skills", workspace), selector: "duplicate" }),
 		/duplicate names: duplicate/,
 	);
+});
+
+test("allows a unique selection despite unrelated duplicate names", async () => {
+	const workspace = await temporaryDirectory("pi-session-skills-unrelated-duplicate-");
+	await writeSkill(workspace, "skills/alpha", "alpha");
+	await writeSkill(workspace, "skills/beta-one", "beta");
+	await writeSkill(workspace, "skills/beta-two", "beta");
+	const resolver = new SessionSkillResolver({ cacheRoot: join(workspace, "cache") });
+
+	const result = await resolver.resolve({
+		source: parseSkillSource("./skills", workspace),
+		selector: "alpha",
+	});
+	assert.equal(result.name, "alpha");
+	await result.transaction?.rollback();
 });
 
 test("refresh replaces a cache entry only after the new skill validates", async () => {

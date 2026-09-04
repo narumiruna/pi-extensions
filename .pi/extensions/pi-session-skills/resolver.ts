@@ -65,6 +65,7 @@ export type CloneRepository = (
 interface CacheMetadata {
 	version: number;
 	name: string;
+	skillDirectory?: string;
 	source: string;
 	selector?: string;
 	createdAt: string;
@@ -131,11 +132,12 @@ export class SessionSkillResolver implements SkillResolverLike {
 			options.signal?.throwIfAborted();
 
 			const candidateEntry = join(stagingPath, "entry");
-			const candidateSkill = join(candidateEntry, "skill");
+			const skillDirectory = selected.name;
+			const candidateSkill = join(candidateEntry, "skill", skillDirectory);
 			const excludedCopyRoot =
 				options.source.kind === "local" ? await realpath(this.#cacheRoot) : undefined;
 			options.signal?.throwIfAborted();
-			await mkdir(candidateEntry, { recursive: true, mode: 0o700 });
+			await mkdir(dirname(candidateSkill), { recursive: true, mode: 0o700 });
 			options.signal?.throwIfAborted();
 			await copySkillTree(selected.baseDir, candidateSkill, excludedCopyRoot, options.signal);
 			options.signal?.throwIfAborted();
@@ -144,6 +146,7 @@ export class SessionSkillResolver implements SkillResolverLike {
 			const metadata: CacheMetadata = {
 				version: CACHE_VERSION,
 				name: selected.name,
+				skillDirectory,
 				source: options.source.original,
 				selector: options.selector,
 				createdAt: new Date().toISOString(),
@@ -166,7 +169,7 @@ export class SessionSkillResolver implements SkillResolverLike {
 			}
 			return {
 				name: selected.name,
-				path: join(versionPath, "skill"),
+				path: join(versionPath, "skill", skillDirectory),
 				source: options.source.original,
 				selector: options.selector,
 				cacheHit: false,
@@ -246,12 +249,16 @@ export class SessionSkillResolver implements SkillResolverLike {
 				metadata.version !== CACHE_VERSION ||
 				typeof metadata.name !== "string" ||
 				!isValidSkillName(metadata.name) ||
+				(metadata.skillDirectory !== undefined && metadata.skillDirectory !== metadata.name) ||
 				metadata.source !== options.source.original ||
 				metadata.selector !== options.selector
 			) {
 				return undefined;
 			}
-			const skillPath = join(versionPath, "skill");
+			const skillPath =
+				metadata.skillDirectory === undefined
+					? join(versionPath, "skill")
+					: join(versionPath, "skill", metadata.skillDirectory);
 			validateMaterializedSkill(skillPath, metadata.name, this.#cacheRoot);
 			options.signal?.throwIfAborted();
 			return {
@@ -480,9 +487,11 @@ async function selectSkill(
 		skillPaths: skillPaths,
 		includeDefaults: false,
 	});
-	const collisionNames = loaded.diagnostics.flatMap((diagnostic) =>
-		diagnostic.type === "collision" && diagnostic.collision ? [diagnostic.collision.name] : [],
-	);
+	const collisionNames = loaded.diagnostics.flatMap((diagnostic) => {
+		if (diagnostic.type !== "collision" || !diagnostic.collision) return [];
+		const name = diagnostic.collision.name;
+		return !selector || name.toLowerCase() === selector.toLowerCase() ? [name] : [];
+	});
 	if (collisionNames.length > 0) {
 		throw new Error(`Skill source contains duplicate names: ${collisionNames.join(", ")}`);
 	}
@@ -580,7 +589,6 @@ async function discoverSkillPaths(
 			const discoverySkill = join(mirror, "SKILL.md");
 			await copyDiscoveryFile(rootSkill, discoverySkill);
 			discovered.push({ sourcePath: rootSkill, discoveryPath: discoverySkill });
-			return;
 		}
 		const entries = await readdir(current, { withFileTypes: true });
 		signal?.throwIfAborted();
@@ -592,7 +600,9 @@ async function discoverSkillPaths(
 			await walk(entryPath, join(mirror, entry.name), depth + 1);
 		}
 	};
-	const discoveryPath = sourceIsFile ? join(discoveryRoot, basename(sourcePath)) : discoveryRoot;
+	const discoveryPath = sourceIsFile
+		? join(discoveryRoot, basename(dirname(sourcePath)), basename(sourcePath))
+		: join(discoveryRoot, basename(sourcePath));
 	await walk(sourcePath, discoveryPath, 0);
 	signal?.throwIfAborted();
 	const includedPaths = piDiscoveredPaths(discoveryPath, cacheRoot);
