@@ -6,10 +6,12 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { parse } from "smol-toml";
 import { formatDisplayValue, formatError } from "./script-support.mjs";
 
-const [draftPath, destinationPath, ...extraArguments] = process.argv.slice(2);
+const [draftPath, destinationPath, expectedPath, ...extraArguments] = process.argv.slice(2);
 
-if (!draftPath || !destinationPath || extraArguments.length > 0) {
-	console.error("Usage: node scripts/apply.mjs <draft-path> <absolute-pi-starship.toml-path>");
+if (!draftPath || !destinationPath || !expectedPath || extraArguments.length > 0) {
+	console.error(
+		"Usage: node scripts/apply.mjs <draft-path> <absolute-pi-starship.toml-path> <expected-path|--expect-missing>",
+	);
 	process.exitCode = 2;
 } else if (!isAbsolute(destinationPath) || basename(destinationPath) !== "pi-starship.toml") {
 	console.error("The destination must be an absolute path named pi-starship.toml.");
@@ -18,10 +20,13 @@ if (!draftPath || !destinationPath || extraArguments.length > 0) {
 	let temporaryPath;
 	try {
 		const draft = await readFile(draftPath, "utf8");
+		const expectMissing = expectedPath === "--expect-missing";
+		const expected = expectMissing ? undefined : await readFile(expectedPath, "utf8");
 		await mkdir(dirname(destinationPath), { recursive: true });
 		temporaryPath = join(dirname(destinationPath), `.pi-starship.toml.${randomUUID()}.tmp`);
 		await writeFile(temporaryPath, draft, { encoding: "utf8", flag: "wx" });
 		parse(await readFile(temporaryPath, "utf8"));
+		await assertDestinationUnchanged(destinationPath, expectMissing, expected);
 		await rename(temporaryPath, destinationPath);
 		temporaryPath = undefined;
 		console.log(`Applied valid TOML atomically to ${formatDisplayValue(destinationPath)}`);
@@ -39,4 +44,21 @@ if (!draftPath || !destinationPath || extraArguments.length > 0) {
 			}
 		}
 	}
+}
+
+async function assertDestinationUnchanged(destinationPath, expectMissing, expected) {
+	let current;
+	try {
+		current = await readFile(destinationPath, "utf8");
+	} catch (error) {
+		if (error && typeof error === "object" && error.code === "ENOENT") {
+			if (expectMissing) return;
+			throw new Error("The active pi-starship.toml was removed after inspection.");
+		}
+		throw error;
+	}
+	if (!expectMissing && current === expected) return;
+	throw new Error(
+		"The active pi-starship.toml changed after inspection; the newer file was preserved.",
+	);
 }

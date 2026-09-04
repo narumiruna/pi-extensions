@@ -87,8 +87,12 @@ test("skill answers from references or source and edits configuration safely", (
 		"make it reachable from the root `format` or `$all`",
 		"Do not enable network, command-backed, cloud, deployment, host, or user metadata",
 		"Create a separate draft without changing the active document",
-		"re-read the active path and stop to reconcile if it differs",
+		"keep an untouched baseline file containing the exact bytes initially inspected",
+		"use the explicit `--expect-missing` state",
 		"stages the proposed bytes in the destination directory",
+		"immediately re-reads the active path",
+		"rejects publication when the active bytes differ",
+		"do not claim cross-process synchronization",
 		"When the pi-starship extension and `/starship status` command are available",
 		"When the extension or command is unavailable",
 		"Do not claim semantic validation or an active-footer update",
@@ -220,6 +224,12 @@ test("complete module catalog covers every public module schema", () => {
 		}
 	}
 
+	assert.match(catalog, /model-ID replacements that bypass built-in Claude\/GPT shortening/u);
+	assert.match(
+		catalog,
+		/replacements applied to the home- or repository-contracted display path before component truncation/u,
+	);
+
 	const extensionStatus = catalog.slice(catalog.indexOf("### `extension_status`"));
 	for (const [field, value] of Object.entries({
 		separator: BUILT_IN_CONFIG.extensionStatus.separator,
@@ -232,17 +242,27 @@ test("complete module catalog covers every public module schema", () => {
 	}
 });
 
-test("config path resolver uses Pi's tilde-aware agent directory", () => {
-	const configuredAgentDir = `~/pi-starship-skill-${process.pid}`;
-	const result = spawnSync(process.execPath, [configPathResolver], {
-		encoding: "utf8",
-		env: { ...process.env, PI_CODING_AGENT_DIR: configuredAgentDir },
-	});
-	assert.equal(result.status, 0, result.stderr);
-	assert.equal(
-		JSON.parse(result.stdout),
-		path.join(homedir(), configuredAgentDir.slice(2), "pi-starship.toml"),
-	);
+test("config path resolver returns Pi's tilde-aware absolute agent path", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-path-resolver-"));
+	try {
+		for (const [configuredAgentDir, expected] of [
+			[
+				`~/pi-starship-skill-${process.pid}`,
+				path.join(homedir(), `pi-starship-skill-${process.pid}`, "pi-starship.toml"),
+			],
+			[".pi/agent", path.join(directory, ".pi", "agent", "pi-starship.toml")],
+		] as const) {
+			const result = spawnSync(process.execPath, [configPathResolver], {
+				cwd: directory,
+				encoding: "utf8",
+				env: { ...process.env, PI_CODING_AGENT_DIR: configuredAgentDir },
+			});
+			assert.equal(result.status, 0, result.stderr);
+			assert.equal(JSON.parse(result.stdout), expected);
+		}
+	} finally {
+		rmSync(directory, { force: true, recursive: true });
+	}
 });
 
 test("bundled validator accepts valid TOML and bounds terminal-safe errors", () => {
@@ -269,33 +289,87 @@ test("bundled validator accepts valid TOML and bounds terminal-safe errors", () 
 	}
 });
 
-test("atomic apply validates staged TOML before replacing the active document", () => {
+test("atomic apply validates staged TOML and rejects stale destinations", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-apply-"));
 	const settingsDirectory = path.join(directory, "agent");
 	const destinationPath = path.join(settingsDirectory, "pi-starship.toml");
 	const draftPath = path.join(directory, "draft.toml");
+	const baselinePath = path.join(directory, "baseline.toml");
 	const original = 'format = "$model"\n';
 	const replacement = 'format = "$directory"\n[directory]\nstyle = "bold blue"\n';
 	try {
 		mkdirSync(settingsDirectory);
 		writeFileSync(destinationPath, original, { flag: "wx", flush: true });
+		writeFileSync(baselinePath, original);
 		writeFileSync(draftPath, replacement);
-		const applied = spawnSync(process.execPath, [applyPath, draftPath, destinationPath], {
-			encoding: "utf8",
-		});
+		const applied = spawnSync(
+			process.execPath,
+			[applyPath, draftPath, destinationPath, baselinePath],
+			{ encoding: "utf8" },
+		);
 		assert.equal(applied.status, 0, applied.stderr);
 		assert.match(applied.stdout, /Applied valid TOML atomically/u);
 		assert.equal(readFileSync(destinationPath, "utf8"), replacement);
 		assert.deepEqual(readdirSync(settingsDirectory), ["pi-starship.toml"]);
 
+		writeFileSync(baselinePath, replacement);
 		writeFileSync(draftPath, "[model\n");
-		const rejected = spawnSync(process.execPath, [applyPath, draftPath, destinationPath], {
-			encoding: "utf8",
-		});
-		assert.equal(rejected.status, 1);
-		assert.match(rejected.stderr, /Draft was not applied/u);
+		const invalid = spawnSync(
+			process.execPath,
+			[applyPath, draftPath, destinationPath, baselinePath],
+			{ encoding: "utf8" },
+		);
+		assert.equal(invalid.status, 1);
+		assert.match(invalid.stderr, /Draft was not applied/u);
 		assert.equal(readFileSync(destinationPath, "utf8"), replacement);
 		assert.deepEqual(readdirSync(settingsDirectory), ["pi-starship.toml"]);
+
+		const concurrent = 'format = "$brand"\n';
+		writeFileSync(draftPath, original);
+		writeFileSync(destinationPath, concurrent);
+		const changed = spawnSync(
+			process.execPath,
+			[applyPath, draftPath, destinationPath, baselinePath],
+			{ encoding: "utf8" },
+		);
+		assert.equal(changed.status, 1);
+		assert.match(changed.stderr, /changed after inspection/u);
+		assert.equal(readFileSync(destinationPath, "utf8"), concurrent);
+		assert.deepEqual(readdirSync(settingsDirectory), ["pi-starship.toml"]);
+
+		writeFileSync(baselinePath, concurrent);
+		rmSync(destinationPath);
+		const removed = spawnSync(
+			process.execPath,
+			[applyPath, draftPath, destinationPath, baselinePath],
+			{ encoding: "utf8" },
+		);
+		assert.equal(removed.status, 1);
+		assert.match(removed.stderr, /removed after inspection/u);
+		assert.deepEqual(readdirSync(settingsDirectory), []);
+
+		const appearedDirectory = path.join(directory, "appeared-agent");
+		const appearedPath = path.join(appearedDirectory, "pi-starship.toml");
+		mkdirSync(appearedDirectory);
+		writeFileSync(appearedPath, concurrent);
+		const appeared = spawnSync(
+			process.execPath,
+			[applyPath, draftPath, appearedPath, "--expect-missing"],
+			{ encoding: "utf8" },
+		);
+		assert.equal(appeared.status, 1);
+		assert.match(appeared.stderr, /changed after inspection/u);
+		assert.equal(readFileSync(appearedPath, "utf8"), concurrent);
+		assert.deepEqual(readdirSync(appearedDirectory), ["pi-starship.toml"]);
+
+		const newDestination = path.join(directory, "new-agent", "pi-starship.toml");
+		const created = spawnSync(
+			process.execPath,
+			[applyPath, draftPath, newDestination, "--expect-missing"],
+			{ encoding: "utf8" },
+		);
+		assert.equal(created.status, 0, created.stderr);
+		assert.equal(readFileSync(newDestination, "utf8"), original);
 	} finally {
 		rmSync(directory, { force: true, recursive: true });
 	}

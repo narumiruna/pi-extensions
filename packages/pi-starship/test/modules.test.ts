@@ -592,8 +592,25 @@ test("directory applies Starship home, repository, substitution, and component d
 		"src/lib/deep|/home/alice/work/repository/src/lib/deep",
 	);
 
-	config.modules.directory.options.substitutions = { repository: "repo" };
+	config.modules.directory.options.substitutions = {
+		"/home/alice/work/repository": "absolute replacement does not match",
+	};
 	config.modules.directory.options.truncation_length = 0;
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					cwd: "/home/alice/work/repository/src",
+					homeDir: "/home/alice",
+					gitRoot: "/home/alice/work/repository",
+				}),
+			).ansi,
+		),
+		"repository/src|/home/alice/work/repository/src",
+	);
+
+	config.modules.directory.options.substitutions = { repository: "repo" };
 	assert.equal(
 		stripAnsi(
 			renderStatusline(
@@ -753,19 +770,21 @@ test("Git branch and commit honor Starship truncation options", () => {
 	);
 });
 
-test("model exact aliases apply before Pi-specific shortening and truncation", () => {
+test("model exact aliases bypass Pi-specific shortening and then truncate", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
 	config.format = "$model";
 	config.formatAst = parseFormat(config.format);
 	config.modules.model.format = "$model";
 	config.modules.model.formatAst = parseFormat(config.modules.model.format);
 	config.modules.model.options.model_aliases = {
-		"claude-sonnet-4-20250514": "Team Sonnet Model",
+		"claude-sonnet-4-20250514": "claude-team-latest",
 	};
-	config.modules.model.options.truncation_length = 9;
+	config.modules.model.options.truncation_length = 0;
 	config.modules.model.options.truncation_direction = "end";
 
-	assert.equal(stripAnsi(renderStatusline(config, fixture()).ansi), "Team Sonn…");
+	assert.equal(stripAnsi(renderStatusline(config, fixture()).ansi), "claude-team-latest");
+	config.modules.model.options.truncation_length = 9;
+	assert.equal(stripAnsi(renderStatusline(config, fixture()).ansi), "claude-te…");
 	assert.equal(
 		stripAnsi(
 			renderStatusline(config, fixture({ model: { provider: "custom", id: "constructor" } })).ansi,

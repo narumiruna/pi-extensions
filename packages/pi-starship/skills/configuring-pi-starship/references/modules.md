@@ -174,7 +174,7 @@ trim_at = "." # set to "" to keep the complete hostname
 Directory `$path` contracts the home directory and, by default, the current Git repository root before retaining the last three path components.
 `$full_path` remains the unmodified absolute cwd.
 A positive `fish_style_pwd_dir_length` abbreviates otherwise omitted parent components when no substitution is configured.
-`substitutions` is an ordered TOML string table of literal replacements.
+`substitutions` is an ordered TOML string table of literal replacements applied to the already home- or repository-contracted display path, before component truncation.
 Pi exposes one cwd rather than separate logical and physical paths, and pi-starship does not implement Starship's regex substitution array or repo-root-specific split style/format fields.
 Directory rendering reads only immutable home and repository-root snapshot data and performs no filesystem or Git work.
 
@@ -200,7 +200,7 @@ truncation_symbol = "…"
 truncation_direction = "middle"
 ```
 
-An exact alias is selected before the built-in Claude/GPT shortening rules, then the resulting label is subject to the configured truncation.
+An exact alias replaces the label that the built-in Claude/GPT shortening rules would otherwise produce, bypasses those rules, and is then subject to the configured truncation.
 `truncation_length` counts model grapheme clusters retained before the symbol; `0` disables truncation and is the default.
 The direction names the removed portion: `start` retains the suffix, `end` retains the prefix and is the default, and `middle` retains both ends.
 When no alias matches, truncation runs after the built-in Claude/GPT shortening rules.

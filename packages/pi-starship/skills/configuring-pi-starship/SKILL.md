@@ -77,23 +77,30 @@ Preserve an existing malformed document while diagnosing it, and change only the
 
 Create a separate draft without changing the active document, then make the smallest requested edit in that draft.
 
-Immediately before publication, re-read the active path and stop to reconcile if it differs from the document initially inspected or if a missing document has appeared.
+When the active document exists, also keep an untouched baseline file containing the exact bytes initially inspected.
 
-Resolve the bundled scripts relative to this `SKILL.md`, validate the draft, and publish it through the atomic apply script:
+When it is missing, use the explicit `--expect-missing` state instead of creating a baseline.
+
+Resolve the bundled scripts relative to this `SKILL.md`, validate the draft, and publish it through the guarded atomic apply script:
 
 ```bash
 skill_dir="<directory containing this SKILL.md>"
 draft_path="<path to the proposed pi-starship.toml draft>"
 config_path="<absolute path to the active pi-starship.toml>"
+expected_state="<path to the untouched baseline, or --expect-missing>"
 node "$skill_dir/scripts/validate.mjs" "$draft_path"
-node "$skill_dir/scripts/apply.mjs" "$draft_path" "$config_path"
+node "$skill_dir/scripts/apply.mjs" "$draft_path" "$config_path" "$expected_state"
 ```
 
-The apply script stages the proposed bytes in the destination directory, validates that staged file, and renames it over the active path only after validation succeeds.
+The apply script stages the proposed bytes in the destination directory, validates that staged file, and immediately re-reads the active path.
+
+It rejects publication when the active bytes differ from the baseline or when a supposedly missing document has appeared, then renames the staged file over the unchanged path.
+
+This comparison does not lock out other processes after the re-read, so do not claim cross-process synchronization.
 
 Fix every TOML syntax error and rerun the validator unless the user explicitly requested an invalid test fixture, which must not replace the active document.
 
-Remove the separate draft after a successful publication, then re-read the saved document and review the exact change for accidental replacement or unrelated edits.
+Remove the separate draft and baseline after a successful publication, then re-read the saved document and review the exact change for accidental replacement or unrelated edits.
 
 Report the edited path, the effective layout or module change, and the validator and atomic-publication results.
 

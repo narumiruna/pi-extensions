@@ -91,7 +91,7 @@ Additional options:
 | `truncation_length` | integer | `0` | Inclusive range 0 through 1000. Maximum retained model-label grapheme clusters; zero disables truncation. |
 | `truncation_symbol` | string | `"…"` | May be empty. Marker placed at the removed start, middle, or end; an empty string removes text without a marker. |
 | `truncation_direction` | string enum | `"end"` | One of `start`, `middle`, `end`. Which part of the model label is removed when truncating. |
-| `model_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact model-ID to display-label replacements applied before built-in shortening and truncation. |
+| `model_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact model-ID replacements that bypass built-in Claude/GPT shortening and are then subject to configured truncation. |
 
 ### `thinking`
 
@@ -142,7 +142,7 @@ Additional options:
 | `truncation_symbol` | string | `""` | May be empty. Prefix placed before a contracted or component-truncated path when fish-style abbreviation is inactive. |
 | `home_symbol` | string | `"~"` | May be empty. Replacement for the current user's home-directory prefix. |
 | `use_os_path_sep` | boolean | `true` | Uses the platform path separator instead of always rendering `/`. |
-| `substitutions` | string-to-string table | `{}` | Keys and values are strings. Ordered literal path replacements applied before ordinary path contraction. |
+| `substitutions` | string-to-string table | `{}` | Keys and values are strings. Ordered literal replacements applied to the home- or repository-contracted display path before component truncation. |
 
 ### `git_worktree`
 
