@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-usage",
-	"version": "0.60.2",
+	"version": "0.60.3",
 	"description": "Pi extension that shows current-account usage and DeepSeek API balance for supported providers.",
 	"type": "module",
 	"license": "MIT",

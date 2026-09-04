@@ -1,5 +1,13 @@
 # @narumitw/pi-usage
 
+## 0.60.3
+
+### Patch Changes
+
+- cb85e77: Keep the Settings frame from hiding interactive rows in short terminals.
+- 96ab4db: Render the standard horizontal frame around the pi-usage Settings screen.
+- 4cf2daa: Render the usage menu with the standard horizontal frame used by other Pi extension menus.
+
 ## 0.60.2
 
 ### Patch Changes
