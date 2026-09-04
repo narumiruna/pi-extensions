@@ -1,5 +1,11 @@
 # @narumitw/pi-btw
 
+## 0.57.0
+
+### Minor Changes
+
+- f24a5b0: Add a themed, clickable Jump to latest control that honors Pi's effective fullscreen bottom keybinding.
+
 ## 0.56.2
 
 ### Patch Changes
