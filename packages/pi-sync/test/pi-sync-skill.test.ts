@@ -63,6 +63,10 @@ test("setup guidance protects secrets and requires a verified first transfer", a
 		"Do not read or print `pi-sync.json`",
 		"Keep sessions excluded",
 		"/sync doctor",
+		"Git diagnostics contact the remote",
+		"WebDAV diagnostics contact the server",
+		"S3 and R2 diagnostics are local-only",
+		"do not validate the endpoint, bucket, credentials, permissions, or connectivity",
 		"/sync push",
 		"/sync pull",
 		"without `--yes` or `--force`",
@@ -70,4 +74,5 @@ test("setup guidance protects secrets and requires a verified first transfer", a
 	]) {
 		assert.ok(skill.includes(requirement), `missing setup requirement: ${requirement}`);
 	}
+	assert.ok(!skill.includes("contacts the configured backend"));
 });

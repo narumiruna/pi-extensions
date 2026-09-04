@@ -77,9 +77,15 @@ Explain that saving a setup changes only local settings and does not contact, cr
 
 Ask the user to run `/sync config` and confirm the setup name, backend, exact remote location, included content, and automatic-sync state.
 
-Explain that `/sync doctor` contacts the configured backend and that WebDAV capability validation uses an isolated probe.
+Explain that `/sync doctor` validates local configuration, selected files, secret warnings, and lock state for every backend.
 
-After the user accepts that check, ask them to run `/sync doctor` and resolve every blocking result before transfer.
+Explain that Git diagnostics contact the remote and inspect the configured sync branch.
+
+Explain that WebDAV diagnostics contact the server, run and clean up a conditional-write probe, and may repair the active history entry.
+
+Explain that S3 and R2 diagnostics are local-only and do not validate the endpoint, bucket, credentials, permissions, or connectivity.
+
+After the user accepts any backend-specific remote checks, ask them to run `/sync doctor` and resolve every blocking result before transfer.
 
 Choose the first reviewed operation from the intended source of truth:
 
