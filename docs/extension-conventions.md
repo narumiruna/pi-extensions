@@ -327,8 +327,10 @@ restore the latest remaining activity rather than letting one completion clear i
 [`docs/readme-conventions.md`](readme-conventions.md) owns the shared structure, labels, applicability rules, and verification checklist for active package READMEs.
 
 Package READMEs **SHOULD** remain practical and scannable: capabilities, installation, usage,
-commands/tools/settings, operational behavior, package layout, keywords, and license. Apply these
-shared presentation conventions:
+commands/tools/settings, operational behavior, package layout, keywords, and license. Keep complex
+configuration details in package-owned documentation or a bundled package-owned skill when that is
+more practical, while the README retains the entry point, minimal example, essential behavior, and
+access instructions. Apply these shared presentation conventions:
 
 - Write user-facing prose in English and retain the package's emoji title plus npm, Pi extension, and
   license badges.
@@ -343,8 +345,9 @@ shared presentation conventions:
   compatibility is actually guaranteed.
 
 Document the applicable persistent npm install, temporary npm execution, and local checkout commands.
-Include security, privacy, precedence, persistence, failure, or lifecycle details when users need them
-to use the extension safely.
+Keep security, privacy, and other information users need before installation or enablement in the
+README. Put additional precedence, persistence, failure, or lifecycle details in the README or its
+linked package-owned guidance when users need them to use the extension safely.
 
 - **MUST:** Add or update deterministic tests for changed behavior when practical; when a behavior
   requires a real Pi runtime or external service, record and run the smallest representative smoke

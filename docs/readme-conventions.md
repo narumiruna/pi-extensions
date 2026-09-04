@@ -29,7 +29,7 @@ Use these exact labels when the subject applies:
 - `## 🚀 Quick start` for the shortest successful first use.
 - `## 💬 Commands` for user-facing slash commands.
 - `## 🛠️ Tools` for tools registered for the model.
-- `## ⚙️ Settings` for configuration sources, defaults, precedence, persistence, and interactive settings.
+- `## ⚙️ Settings` for configuration entry points, minimal examples, essential defaults or safety behavior, and links to detailed guidance.
 - `## 🔒 Security and privacy` for permissions, credentials, external data, or other material trust boundaries.
 - `## 🚧 Limitations` for known unsupported behavior and important constraints.
 - `## 🗂️ Package layout` for the package's maintained source and publication structure.
@@ -63,9 +63,14 @@ Treat model IDs, paths, session text, and pasted text shown in examples as untru
 Use stable absolute GitHub and npm links when referring to another package in this monorepo.
 Describe borrowed syntax as inspired by another project unless compatibility is guaranteed.
 
+Keep Settings sections focused on the configuration entry points, a minimal example, and essential default or safety behavior.
+Detailed configuration guidance may live in package-owned documentation or a package-owned skill bundled with the package.
+When it does, the README must identify that source and explain how to access it instead of duplicating the complete configuration reference.
+
 Installation instructions must state that extensions run with Pi's permissions when that warning is material to the package's install flow.
 Build-backed packages must explain that an unbuilt local checkout needs its build before package-directory loading.
-Document security, privacy, precedence, persistence, failure, cancellation, recovery, or lifecycle behavior when users need it for safe operation.
+Keep security, privacy, and other information that users must understand before installing or enabling the package in the README.
+Document additional precedence, persistence, failure, cancellation, recovery, or lifecycle behavior in the README or its linked package-owned guidance when users need it for safe operation.
 
 ## Verification
 
