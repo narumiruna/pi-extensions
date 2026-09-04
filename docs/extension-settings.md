@@ -197,7 +197,11 @@ defaults -> user settings -> trusted project overrides -> explicit runtime overr
 - Return or retain storage errors for the command, lifecycle, or UI layer to report through a
   mode-appropriate channel; do not print from the persistence helper.
 - Reload settings on `session_start`, including starts caused by `/reload` and session replacement.
-- Document defaults, precedence, paths, reload behavior, and accepted values in the package README.
+- Document defaults, precedence, paths, reload behavior, and accepted values in package-owned
+  guidance. The detailed guidance may live in the package README, package-owned documentation, or a
+  bundled package-owned skill. Keep the README's Settings section aligned with
+  [`docs/readme-conventions.md`](readme-conventions.md), including access instructions when the
+  detailed guidance lives elsewhere.
 
 For a filename migration, prefer the canonical file when both names exist. Validate legacy content,
 copy its original JSON bytes to the canonical path, install it without overwriting a concurrently
@@ -222,8 +226,9 @@ created canonical file, and remove the legacy file only after confirming it did 
 `ctx.ui.custom()` is TUI-only. In print, JSON, and RPC modes, the Settings action and any justified
 direct settings route must not attempt to open the interactive screen. RPC mode may use
 `ctx.ui.notify()` to provide the active settings path. Do not write ad hoc output that would corrupt
-JSON protocol output. Keep settings paths and manual instructions available through the package
-README and any supported Status or Help route.
+JSON protocol output. Keep the settings entry point and access instructions available through the
+package README and any supported Status or Help route. Detailed manual instructions may live in the
+linked package-owned guidance.
 
 ## Verification
 
