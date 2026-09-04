@@ -30,13 +30,15 @@ The only exception is disposable reproduction artifacts in an isolated temporary
 
 After approval:
 
-1. Implement the smallest complete solution that addresses the root cause or accepted requirements.
-2. If the root cause, scope, risk, or acceptance criteria materially change, update the plan and wait for explicit approval before continuing.
-3. Preserve unrelated behavior and follow all repository conventions.
-4. Add or update tests when executable behavior changes or a regression needs coverage.
-5. Run focused verification and the repository's required checks.
-6. If a reproduced issue is genuinely a bug and the repository uses a `bug` label, add it only when the approved plan explicitly includes that metadata write.
-7. Recheck the acceptance criteria and inspect the final diff for unintended changes.
-8. Summarize the solution, verification evidence, and any remaining risks or unverified paths.
+1. Confirm that the current checkout matches the selected issue's repository; if it does not, stop and ask for the correct checkout.
+2. Inspect the working tree and preserve unrelated or pre-existing changes before editing.
+3. Implement the smallest complete solution that addresses the root cause or accepted requirements.
+4. If the root cause, scope, risk, or acceptance criteria materially change, update the plan and wait for explicit approval before continuing.
+5. Preserve unrelated behavior and follow all repository conventions.
+6. Add or update tests when executable behavior changes or a regression needs coverage.
+7. Run focused verification and the repository's required checks.
+8. If a reproduced issue is genuinely a bug and the repository uses a `bug` label, add it only when the approved plan explicitly includes that metadata write.
+9. Recheck the acceptance criteria and inspect the final diff for unintended changes.
+10. Summarize the solution, verification evidence, and any remaining risks or unverified paths.
 
 Do not claim reproduction, root cause, completion, or passing checks without direct evidence.
