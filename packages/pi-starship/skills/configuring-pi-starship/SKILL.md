@@ -2,6 +2,7 @@
 name: configuring-pi-starship
 description: Configure @narumitw/pi-starship and answer questions about its pi-starship.toml settings. Use when the user asks to create, edit, repair, migrate, or understand pi-starship.toml, or asks which pi-starship module, variable, option, style, palette, preset, or runtime behavior to use. Do not use for generic TOML, shell Starship configuration, pi-starship source-code development, or unrelated footer work.
 license: MIT
+disable-model-invocation: true
 ---
 
 # Configuring pi-starship

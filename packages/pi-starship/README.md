@@ -46,8 +46,17 @@ Do not enable this with `@narumitw/pi-statusline`: both own Pi's footer, and Pi 
 
 Start Pi with the extension to use the built-in footer without creating a settings file.
 Run `/starship` to inspect the footer, choose a preset, or customize the configuration.
-Ask Pi to configure the footer or edit `pi-starship.toml`; the bundled `configuring-pi-starship` skill loads the relevant reference and validates file edits.
-It does not trigger for general TOML, shell Starship configuration, extension source development, or unrelated footer work.
+
+The bundled configuration skill is manual-only and is not available for automatic model invocation.
+Run `/skill:configuring-pi-starship` before asking Pi to explain or edit `pi-starship.toml`:
+
+```text
+/skill:configuring-pi-starship explain the aws module
+/skill:configuring-pi-starship enable the directory and git_branch modules
+```
+
+The skill loads the relevant reference and validates file edits.
+It does not cover general TOML, shell Starship configuration, extension source development, or unrelated footer work.
 
 ## 💬 Commands
 
@@ -72,7 +81,7 @@ Print and JSON modes produce no ad hoc output, and footer lifecycle work runs on
 ## ⚙️ Settings
 
 The package bundles the `configuring-pi-starship` skill as the authoritative configuration guide for users and agents.
-Ask Pi how to configure the footer, ask it to edit `pi-starship.toml`, or invoke `/skill:configuring-pi-starship` explicitly.
+Invoke `/skill:configuring-pi-starship` before asking Pi how to configure the footer or edit `pi-starship.toml`.
 The skill answers from its references and consults the bundled source only when the public documentation does not cover a question.
 
 Read the references directly when preferred:

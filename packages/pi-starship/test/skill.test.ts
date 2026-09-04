@@ -37,6 +37,7 @@ test("package bundles one focused pi-starship configuration skill", async () => 
 	assert.equal(result.skills.length, 1);
 	const skill = result.skills[0];
 	assert.equal(skill?.name, "configuring-pi-starship");
+	assert.equal(skill?.disableModelInvocation, true);
 	assert.match(skill?.description ?? "", /Configure .* answer questions .*pi-starship\.toml/u);
 	for (const excludedTask of [
 		"generic TOML",
@@ -133,6 +134,8 @@ test("skill references own the detailed public configuration guidance", () => {
 	}
 
 	const readme = readFileSync(path.join(packageDirectory, "README.md"), "utf8");
+	assert.match(readme, /configuration skill is manual-only/u);
+	assert.match(readme, /Run `\/skill:configuring-pi-starship` before asking Pi/u);
 	for (const file of Object.keys(expectedCoverage)) {
 		assert.ok(readme.includes(`./skills/configuring-pi-starship/references/${file}`));
 	}
