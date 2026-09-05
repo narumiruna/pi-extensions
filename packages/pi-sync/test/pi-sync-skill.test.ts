@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
 	DefaultPackageManager,
 	DefaultResourceLoader,
+	formatSkillsForPrompt,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
@@ -48,6 +49,8 @@ test("Pi validates the bundled setup skill without diagnostics", async () => {
 
 		const skills = loader.getSkills();
 		assert.deepEqual(skills.diagnostics, []);
+		assert.equal(skills.skills[0]?.disableModelInvocation, true);
+		assert.equal(formatSkillsForPrompt(skills.skills), "");
 		assert.deepEqual(
 			skills.skills.map(({ name }) => name),
 			["setting-up-pi-sync"],

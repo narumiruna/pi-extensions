@@ -2,6 +2,7 @@
 name: setting-up-pi-sync
 description: Set up or reconfigure pi-sync safely, including choosing Git, WebDAV, Cloudflare R2, or S3 storage, preparing prerequisites, selecting content, validating the setup, and choosing the first push or pull. Use when a user asks to install, configure, initialize, validate, onboard another device, or troubleshoot first-time pi-sync setup.
 license: MIT
+disable-model-invocation: true
 ---
 
 # Setting Up Pi Sync

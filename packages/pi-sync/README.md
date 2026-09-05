@@ -47,8 +47,8 @@ Before saving, review the storage connection, exact remote path, included conten
 Buckets and remote repositories must already exist.
 Git uses existing non-interactive SSH or credential-helper configuration and never stores Git credentials.
 
-The package also loads a setup skill automatically.
-Ask Pi to set up pi-sync, or invoke it explicitly with `/skill:setting-up-pi-sync`.
+Invoke the bundled setup skill explicitly with `/skill:setting-up-pi-sync`.
+It is excluded from the model's automatic skill discovery.
 The skill guides backend preparation, validation, and the reviewed first push or pull without asking for credentials in chat.
 Secret access keys, session tokens, and WebDAV passwords use masked prompts; access key IDs and WebDAV usernames remain visible during input, so avoid entering them during screen sharing or recording.
 For temporary S3 or R2 credentials, choose **Store temporary credentials privately** to include the required session token; use the storage connection's **Change credential source** flow to replace expired credentials.
