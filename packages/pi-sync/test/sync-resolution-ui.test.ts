@@ -20,6 +20,32 @@ import { v3S3Settings, withTempHome } from "./helpers.js";
 
 initTheme("dark", false);
 
+for (const direction of ["push", "pull"] as const) {
+	test(`manager preserves an explicit ${direction} direction through conflict resolution`, async () => {
+		await withConfiguredDecision(async (decision) => {
+			const choices = [
+				"More…",
+				direction === "push" ? "Push to remote…" : "Pull from remote…",
+				direction === "push"
+					? "Keep local content and replace remote…"
+					: "Use remote content and replace local…",
+			];
+			const routes: string[] = [];
+			const { ctx } = createMockContext({
+				hasUI: true,
+				mode: "rpc",
+				select: async () => choices.shift(),
+			});
+			await showSyncManager(ctx, async (route) => {
+				routes.push(route);
+				if (route === direction) return { kind: "decision-required", decision };
+				return { kind: "completed", outcome: "applied" };
+			});
+			assert.deepEqual(routes, [direction, `${direction} --force`]);
+		});
+	});
+}
+
 test("resolution reviews exact differences and invokes local-wins push through the captured setup", async () => {
 	await withConfiguredDecision(async (decision) => {
 		const tui = createTuiHarness({ width: 60, rows: 18 });

@@ -15,7 +15,39 @@ import {
 	showEditGitTarget,
 	showGitSetup,
 } from "../src/git-ui.js";
+import { showStorageConnections } from "../src/storage-connections-ui.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
+
+for (const remote of [
+	"git@github.com:owner-a/pi-sync.git",
+	"git@github.com:owner-b/another-repo.git",
+	"ssh://git@github.com/owner-a/pi-sync.git",
+	"https://github.com/owner-a/pi-sync.git",
+]) {
+	test(`storage connection review preserves the exact Git repository ${remote}`, async () => {
+		await withTempHome(async (agentDir) => {
+			mkdirSync(agentDir, { recursive: true });
+			const settings = v3S3Settings();
+			Object.assign(settings.storageConnections, { git: { type: "git", remote } });
+			const before = JSON.stringify(settings);
+			writeFileSync(localConfigPath(), before, { mode: 0o600 });
+			const choices = ["git", "Back"];
+			const reviews: string[] = [];
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "rpc",
+				select: async (title: string) => {
+					reviews.push(title);
+					return choices.shift();
+				},
+			});
+			await showStorageConnections(ctx);
+			assert.ok(reviews.some((review) => review.includes(`Endpoint: ${remote}`)));
+			assert.deepEqual(notifications, []);
+			assert.equal(readFileSync(localConfigPath(), "utf8"), before);
+		});
+	});
+}
 
 test("first Git setup writes the exact version 3 connection and setup shapes", async () => {
 	await withTempHome(async (agentDir) => {
