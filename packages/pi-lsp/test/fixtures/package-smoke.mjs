@@ -1,11 +1,11 @@
 // Non-interactive package-directory smoke with a loopback-only scripted provider.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-package-smoke-"));
 const agentDir = path.join(root, "agent");
@@ -111,17 +111,26 @@ const args = [
 	"--model",
 	"fixture",
 	"-e",
-	"./packages/pi-lsp",
+	process.argv[2] ?? "./packages/pi-lsp",
 	"-e",
 	helper,
 ];
-const child = spawn("pi", args, {
+const child = spawn(process.argv[3] ?? "pi", args, {
 	cwd: process.cwd(),
 	env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
 	stdio: "pipe",
 });
-const exited = once(child, "exit");
+let childClosed = false;
+const exited = new Promise((resolve) =>
+	child.once("close", (code, signal) => {
+		childClosed = true;
+		resolve([code, signal]);
+	}),
+);
 let stderr = "";
+child.on("error", (error) => {
+	stderr += `${error.message}\n`;
+});
 child.stderr.setEncoding("utf8");
 child.stderr.on("data", (chunk) => {
 	stderr += chunk;
@@ -162,11 +171,12 @@ function waitFor(predicate, offset = 0) {
 		}
 		function cleanup() {
 			listeners.delete(check);
-			child.off("exit", failed);
+			child.off("close", failed);
 		}
 		listeners.add(check);
-		child.once("exit", failed);
+		child.once("close", failed);
 		check();
+		if (childClosed && listeners.has(check)) failed();
 	});
 }
 async function command(id, message) {
@@ -175,6 +185,13 @@ async function command(id, message) {
 	const response = await waitFor((event) => event.type === "response" && event.id === id, offset);
 	assert.equal(response.success, true, JSON.stringify(response));
 	return offset;
+}
+function readRecords() {
+	return readFileSync(log, "utf8")
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line));
 }
 async function run(id, message) {
 	const offset = await command(id, message);
@@ -201,16 +218,40 @@ try {
 	assert.equal(readFileSync(file, "utf8"), "// fixed\npackage main\n");
 	await command("reload", "/smoke-reload");
 	await run("after-reload", "diagnostics after reload");
+	const settingsPath = path.join(agentDir, "pi-lsp.json");
+	const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+	settings.servers.fixture.command[2] = "lifecycle-hang-textDocument/diagnostic";
+	writeFileSync(settingsPath, JSON.stringify(settings));
+	await command("reload-for-abort", "/smoke-reload");
+	const previousPids = new Set(readRecords().map((event) => event.pid));
+	const abortOffset = await command("cancelled-diagnostics", "diagnostics to cancel");
+	// Wait for a server-observable request rather than racing startup with a fixed sleep.
+	while (
+		!readRecords().some(
+			(event) => !previousPids.has(event.pid) && event.method === "textDocument/diagnostic",
+		)
+	) {
+		if (child.exitCode !== null || child.signalCode !== null)
+			throw new Error(`Pi exited: ${stderr}`);
+		await delay(5);
+	}
+	send({ id: "abort", type: "abort" });
+	const aborted = await waitFor(
+		(event) => event.type === "response" && event.id === "abort",
+		abortOffset,
+	);
+	assert.equal(aborted.success, true);
+	await waitFor((event) => event.type === "agent_settled", abortOffset);
+	const cancelled = events.slice(abortOffset).find((event) => event.type === "tool_execution_end");
+	assert.equal(cancelled?.isError, true, JSON.stringify(cancelled));
+	assert.match(JSON.stringify(cancelled.result), /abort|cancel/i);
 	await command("quit", "/smoke-quit");
 	const [code, signal] = await exited;
 	assert.equal(code, 0, `${signal}: ${stderr}`);
 	assert.ok(!events.some((event) => event.type === "extension_error"), JSON.stringify(events));
-	const records = readFileSync(log, "utf8")
-		.trim()
-		.split("\n")
-		.map((line) => JSON.parse(line));
+	const records = readRecords();
 	const pids = [...new Set(records.map((event) => event.pid))];
-	assert.equal(pids.length, 4);
+	assert.equal(pids.length, 5);
 	for (const pid of pids) {
 		assert.ok(records.some((event) => event.pid === pid && event.method === "exited"));
 		assert.throws(() => process.kill(pid, 0), /ESRCH/);
@@ -225,6 +266,8 @@ try {
 			["session_start", "startup"],
 			["session_shutdown", "reload"],
 			["session_start", "reload"],
+			["session_shutdown", "reload"],
+			["session_start", "reload"],
 			["session_shutdown", "quit"],
 		],
 	);
@@ -235,6 +278,7 @@ try {
 			diagnostics: "passed",
 			preview: "passed",
 			write: "passed",
+			cancellation: "passed",
 			reload: "passed",
 			shutdown: "passed",
 			exitedServers: pids.length,
@@ -244,7 +288,7 @@ try {
 	);
 } finally {
 	clearTimeout(deadline);
-	if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+	if (!childClosed) child.kill("SIGKILL");
 	await exited;
 	server.closeAllConnections();
 	await new Promise((resolve) => server.close(resolve));
