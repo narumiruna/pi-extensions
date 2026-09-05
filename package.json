@@ -82,7 +82,7 @@
 		"@earendil-works/pi-coding-agent": "0.85.0",
 		"@earendil-works/pi-server": "0.85.0",
 		"@earendil-works/pi-tui": "0.85.0",
-		"@types/node": "^26.4.0",
+		"@types/node": "^26.4.1",
 		"concurrently": "^10.0.5",
 		"husky": "9.1.7",
 		"npm-check-updates": "23.1.0",

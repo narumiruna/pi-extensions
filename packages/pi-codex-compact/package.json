@@ -44,7 +44,7 @@
 		"@earendil-works/pi-agent-core": "0.85.0",
 		"@earendil-works/pi-ai": "0.85.0",
 		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@types/node": "26.4.0",
+		"@types/node": "26.4.1",
 		"esbuild": "0.28.2",
 		"typescript": "7.0.2"
 	},
