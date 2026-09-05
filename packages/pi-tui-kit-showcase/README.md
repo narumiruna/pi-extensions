@@ -51,19 +51,18 @@ Those values reset when the command runs again or Pi replaces the session owner.
 
 ## 💬 Commands
 
-### `/tui-kit-showcase`
-
-Opens the showcase menu in TUI mode.
-The command accepts no arguments.
-Any argument is rejected with `Usage: /tui-kit-showcase`.
+Run `/tui-kit-showcase` to browse interactive component demos in TUI mode.
+It accepts no arguments and rejects RPC, print, and JSON modes.
 
 ## 🗂️ Package layout
 
-- `src/index.ts` — thin Pi extension entrypoint forwarder.
-- `src/showcase.ts` — command registration, lazy runtime loading, mode handling, and session owner cancellation.
-- `src/runtime.ts` — menu loop plus standalone Kit interactions.
-- `src/menu.ts` — declarative showcase screens and in-memory demo state.
-- `test/` — focused package behavior tests.
+```text
+packages/pi-tui-kit-showcase/
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── showcase.ts                    # Demo command and lifecycle
+└── test/                              # Behavior and lifecycle coverage
+```
 
 ## 🔎 Keywords
 
@@ -71,4 +70,4 @@ pi, pi-extension, tui, showcase, demo
 
 ## 📄 License
 
-MIT © narumiruna
+[MIT](./LICENSE) © narumiruna

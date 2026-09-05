@@ -388,7 +388,12 @@ test("development, deployment, and cloud readers publish only allowlisted local 
 		const snapshot = await collectWorkspaceSnapshot({
 			cwd: root,
 			config: config("$docker_context$aws$gcloud"),
-			environment: { AWS_PROFILE: "work" },
+			environment: {
+				AWS_PROFILE: " ",
+				AWS_DEFAULT_PROFILE: "work",
+				AWS_REGION: " ",
+				AWS_DEFAULT_REGION: "eu-west-1",
+			},
 			homeDir: root,
 			platform: "linux",
 			hostname: "host",
@@ -498,6 +503,8 @@ test("execution fixtures cover macOS, Windows, WSL, Docker, Podman, and contextu
 	assert.equal(windows.modules.os?.type, "windows");
 	assert.equal(windows.modules.username?.user, "Administrator");
 	assert.equal(windows.styleSelectors?.username, "root");
+	const fallbackLogin = await run("linux", { LOGNAME: " ", USER: "different" }, "developer");
+	assert.equal(fallbackLogin.modules.username?.user, "developer");
 	const wsl = await run("linux", { WSL_DISTRO_NAME: "Ubuntu" }, "developer");
 	assert.equal(wsl.modules.os?.type, "wsl");
 	assert.equal(wsl.modules.container?.type, "wsl");
@@ -568,12 +575,32 @@ test("all language collectors use bounded exact commands and degrade independent
 	}
 });
 
+test("python virtualenv falls back to Conda when VIRTUAL_ENV is blank", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-python-environment-"));
+	try {
+		writeFileSync(join(root, "pyproject.toml"), "[project]\nname = 'demo'\n");
+		const snapshot = await collectWorkspaceSnapshot({
+			cwd: root,
+			config: config("$python", { python: { format: "$virtualenv" } }),
+			environment: { VIRTUAL_ENV: " \t ", CONDA_DEFAULT_ENV: "/envs/conda-work" },
+			homeDir: root,
+			platform: "linux",
+			hostname: "host",
+			username: "user",
+			exec: noExec,
+		});
+		assert.equal(snapshot.modules.python?.virtualenv, "conda-work");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("development environment modules use allowlisted activation data and lazy commands", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-development-"));
 	try {
 		writeFileSync(join(root, "mise.toml"), "");
 		writeFileSync(join(root, ".envrc"), "export SECRET=never-read\n");
-		writeFileSync(join(root, "pixi.toml"), "[workspace]\nname = 'demo'\n");
+		writeFileSync(join(root, "pixi.toml"), "[project]\nname = ' '\n[workspace]\nname = 'demo'\n");
 		const calls: string[] = [];
 		const snapshot = await collectWorkspaceSnapshot({
 			cwd: root,

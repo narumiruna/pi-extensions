@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { type Component, getKeybindings, type TUI } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { runBtwFullscreen } from "../src/fullscreen-ui.js";
 import { BtwAnsweringView, BtwTranscriptPager } from "../src/transcript-pager.js";
@@ -65,9 +65,13 @@ function createSearchHarness(rows = 14) {
 			return `\u001b[31m${text}\u001b[39m`;
 		},
 		bg: (color: string, text: string) => {
-			assert.equal(color, "searchMatchBg");
-			styleCalls.push(`bg:${stripVTControlCharacters(text)}`);
-			return `\u001b[42m${text}\u001b[49m`;
+			if (color === "searchMatchBg") {
+				styleCalls.push(`bg:${stripVTControlCharacters(text)}`);
+				return `\u001b[42m${text}\u001b[49m`;
+			}
+			assert.equal(color, "selectedBg");
+			styleCalls.push("bg:selectedBg");
+			return `\u001b[44m${text}\u001b[49m`;
 		},
 		underline: (text: string) => {
 			styleCalls.push(`underline:${stripVTControlCharacters(text)}`);
@@ -91,7 +95,7 @@ function createSearchHarness(rows = 14) {
 				factory(
 					parent as never,
 					theme as never,
-					{} as never,
+					getKeybindings() as never,
 					((value: unknown) => outerDone?.(value)) as never,
 				);
 				return result;
@@ -183,7 +187,7 @@ test.each(cases)(
 		assert.ok(harness.styleCalls.some((call) => call.startsWith("inverse:needle")));
 		assert.ok(harness.styleCalls.some((call) => call.startsWith("bold:needle")));
 		const searchFrame = stripVTControlCharacters(harness.writes.join(""));
-		assert.match(searchFrame, /Find transcript/);
+		assert.match(searchFrame, /needle/);
 		assert.match(searchFrame, /btw · side thread/);
 		assert.match(searchFrame, kind === "completed" ? /Ctrl\+C/ : /Answering…/);
 

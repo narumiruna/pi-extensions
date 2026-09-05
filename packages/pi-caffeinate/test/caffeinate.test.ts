@@ -12,8 +12,9 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { test, vi } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import caffeinate, {
 	commandCompletions,
 	formatMode,
@@ -49,6 +50,30 @@ test("parseCommand accepts documented commands and aliases", () => {
 	assert.equal(parseCommand("screen"), "display");
 	assert.equal(parseCommand("off"), "stop");
 	assert.equal(parseCommand("wat"), "unknown");
+});
+
+test("caffeinate menu uses the standard horizontal frame", async () => {
+	await withTempAgentDir(async () => {
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		let frame: string[] = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const driven = driveCustomSelector(factory, ["\u0003"], 40);
+				frame = driven.renders[0] ?? [];
+				return driven.result;
+			},
+		});
+		caffeinateModule.default(mock.pi);
+
+		await mock.commands.get("caffeinate")?.handler("", ctx);
+
+		const plain = frame.map(stripVTControlCharacters);
+		assert.equal(plain[0], "─".repeat(40));
+		assert.equal(plain.at(-1), "─".repeat(40));
+	});
 });
 
 test("commandCompletions filters single-token prefixes", () => {

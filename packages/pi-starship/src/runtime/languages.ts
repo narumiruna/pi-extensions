@@ -95,7 +95,7 @@ function addEnvironmentValues(
 ): void {
 	const env = context.input.environment;
 	if (name === "python") {
-		const virtualenv = safeMetadata(env.VIRTUAL_ENV ?? env.CONDA_DEFAULT_ENV);
+		const virtualenv = safeMetadata(env.VIRTUAL_ENV) ?? safeMetadata(env.CONDA_DEFAULT_ENV);
 		if (virtualenv && context.needs(name, "virtualenv")) values.virtualenv = pathName(virtualenv);
 		const pyenv = safeMetadata(env.PYENV_VERSION);
 		if (pyenv && context.needs(name, "pyenv_prefix")) values.pyenv_prefix = pyenv;

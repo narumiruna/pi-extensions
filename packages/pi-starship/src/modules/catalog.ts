@@ -95,7 +95,7 @@ const MODULE_DESCRIPTIONS = {
 	nodejs: "Node.js version detected in the current workspace.",
 	openstack: "Active OpenStack cloud and project.",
 	os: "Current operating system identity.",
-	package: "Current workspace package name and version.",
+	package: "Current workspace package version and manifest source.",
 	pixi: "Active Pixi environment and project.",
 	provider: "Current Pi model provider.",
 	python: "Python version, virtual environment, and pyenv state.",

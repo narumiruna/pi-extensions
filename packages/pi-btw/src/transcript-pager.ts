@@ -24,7 +24,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { BtwFullscreenLayoutComponent } from "./fullscreen-ui.js";
 import type { BtwThinkingLevel, SideThreadTurn } from "./side-thread.js";
-import { sanitizeSingleLine } from "./text.js";
+import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
 
 const TRANSCRIPT_CHROME_LINES = 2;
 const MAX_STEERING_DISPLAY_LINES = 3;
@@ -613,21 +613,10 @@ function renderSideThreadHeader(
 }
 
 function thinkingKeyLabel(keybindings: KeybindingsManager): string {
-	const key =
-		sanitizeSingleLine(String(keybindings.getKeys("app.thinking.cycle")[0] ?? "shift+tab")) ||
-		"Shift+Tab";
-	return key
-		.split("+")
-		.map((part) => {
-			const lower = part.toLowerCase();
-			if (lower === "shift") return "Shift";
-			if (lower === "ctrl") return "Ctrl";
-			if (lower === "alt") return "Alt";
-			return part.length === 1
-				? part.toUpperCase()
-				: `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`;
-		})
-		.join("+");
+	return (
+		formatKeyLabel(String(keybindings.getKeys("app.thinking.cycle")[0] ?? "shift+tab")) ||
+		"Shift+Tab"
+	);
 }
 
 function fitComposerLayout(

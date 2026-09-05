@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path, { dirname } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
@@ -587,6 +588,9 @@ test("Firecrawl main menu dispatches declarative actions at narrow widths", asyn
 	});
 	await mock.commands.get("firecrawl")?.handler("", ctx);
 	assert.ok(renderedLines.every((line) => visibleWidth(line) <= 20));
+	const plain = renderedLines.map(stripVTControlCharacters);
+	assert.equal(plain[0], "─".repeat(20));
+	assert.equal(plain.at(-1), "─".repeat(20));
 	const rendered = renderedLines.join("\n");
 	assert.match(rendered, /Tool catalog: 0\/5/);
 	assert.match(rendered, /Loaded this session:\s+0\/5/);

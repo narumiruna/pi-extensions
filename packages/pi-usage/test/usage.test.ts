@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
 	getKeybindings,
@@ -787,6 +788,7 @@ test("TUI usage queries complete through the loader before opening the menu", as
 	const command = mock.commands.get("usage");
 	assert.ok(command);
 	let customCalls = 0;
+	let menuLines: string[] = [];
 	const { ctx } = createMockContext({
 		hasUI: true,
 		mode: "tui",
@@ -806,13 +808,26 @@ test("TUI usage queries complete through the loader before opening the menu", as
 				};
 				component = (
 					factory as (
-						tui: { requestRender(): void },
-						theme: { fg(_color: string, text: string): string },
-						keybindings: object,
+						tui: { requestRender(): void; terminal: { rows: number } },
+						theme: {
+							bold(text: string): string;
+							fg(_color: string, text: string): string;
+						},
+						keybindings: ReturnType<typeof getKeybindings>,
 						done: (value: unknown) => void,
 					) => typeof component
-				)({ requestRender() {} }, { fg: (_color, text) => text }, {}, done);
-				if (customCalls === 2) setImmediate(() => component.handleInput("\u0003"));
+				)(
+					{ requestRender() {}, terminal: { rows: 24 } },
+					{ bold: (text) => text, fg: (_color, text) => text },
+					getKeybindings(),
+					done,
+				);
+				if (customCalls === 2) {
+					setImmediate(() => {
+						menuLines = component.render(40).map(stripVTControlCharacters);
+						component.handleInput("\u0003");
+					});
+				}
 			}),
 		modelRegistry: {
 			getProviderAuth: async () => ({ auth: { apiKey: "openrouter-key" } }),
@@ -826,6 +841,8 @@ test("TUI usage queries complete through the loader before opening the menu", as
 	await command.handler("", ctx);
 
 	assert.equal(customCalls, 2);
+	assert.equal(menuLines[0], "─".repeat(40));
+	assert.equal(menuLines.at(-1), "─".repeat(40));
 });
 
 test("a loader UI failure propagates once without an extra task notification", async () => {
@@ -2566,6 +2583,12 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
 	assert.deepEqual(applied, new Set(["codexFastMode", "codexStatusResetCountdown"]));
 	const renderedSettings = rendered.map((lines) => lines.join("\n"));
 	assert.ok(
+		rendered.some((frame) => {
+			const plain = frame.map(stripVTControlCharacters);
+			return plain[0] === "─".repeat(100) && plain.at(-1) === "─".repeat(100);
+		}),
+	);
+	assert.ok(
 		renderedSettings.some((frame) =>
 			/Show time remaining until each Codex usage limit resets/.test(frame),
 		),
@@ -2573,6 +2596,73 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
 	assert.ok(renderedSettings.some((frame) => /Use faster Codex routing/.test(frame)));
 	assert.doesNotMatch(renderedSettings.join("\n"), /Fireworks account/u);
 	assert.doesNotMatch(renderedSettings.join("\n"), /xAI|warning|undocumented|experimental/iu);
+});
+
+test("the Settings frame respects the live terminal row budget", async () => {
+	const settings = memorySettingsRuntime();
+	const terminal = { rows: 24 };
+	let full: string[] = [];
+	let constrained: string[] = [];
+	let tiny: string[] = [];
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) =>
+			new Promise<boolean>((resolve) => {
+				let component: {
+					dispose?(): void;
+					handleInput(data: string): void;
+					render(width: number): string[];
+				};
+				const done = (value: boolean) => {
+					component.dispose?.();
+					resolve(value);
+				};
+				component = (
+					factory as (
+						tui: { terminal: { rows: number }; requestRender(): void },
+						theme: {
+							bold(text: string): string;
+							fg(_color: string, text: string): string;
+						},
+						keybindings: object,
+						done: (value: boolean) => void,
+					) => typeof component
+				)(
+					{ terminal, requestRender() {} },
+					{ bold: (text) => text, fg: (_color, text) => text },
+					{ matches: () => false },
+					done,
+				);
+				full = component.render(100);
+				terminal.rows = 12;
+				constrained = component.render(20);
+				terminal.rows = 4;
+				component.handleInput("\u001b[B");
+				tiny = component.render(20);
+				component.handleInput("\u0003");
+			}),
+	});
+
+	await showUsageSettings(
+		ctx,
+		settings.runtime,
+		new AbortController().signal,
+		() => true,
+		() => assert.fail("rendering must not change settings"),
+	);
+
+	const fullPlain = full.map(stripVTControlCharacters);
+	assert.equal(fullPlain[0], "─".repeat(100));
+	assert.equal(fullPlain.at(-1), "─".repeat(100));
+	const constrainedPlain = constrained.map(stripVTControlCharacters);
+	assert.ok(constrainedPlain.length <= 9);
+	assert.notEqual(constrainedPlain[0], "─".repeat(20));
+	assert.notEqual(constrainedPlain.at(-1), "─".repeat(20));
+	assert.match(constrainedPlain.join("\n"), /[→›]\s+Codex Fast mode/u);
+	const tinyPlain = tiny.map(stripVTControlCharacters);
+	assert.equal(tinyPlain.length, 1);
+	assert.match(tinyPlain[0] ?? "", /[→›]\s+Codex reset/u);
 });
 
 test("Ctrl+C hard-cancels Settings before conflicting configurable actions", async (t) => {

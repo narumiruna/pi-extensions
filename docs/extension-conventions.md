@@ -159,8 +159,8 @@ Prefer Pi-owned `ctx.ui` flows and one TUI when they can preserve the required s
   The outgoing TUI must consume the triggering input so it cannot reach a stale or unrelated focused component.
   **Verification:** `Test` hard cancellation with the root component focused and again with at least one nested overlay focused, and assert that the owning flow settles in each case.
 - **MUST:** Do not stop or start a shared terminal reentrantly from its active input callback.
-  Keep logical cancellation synchronous, but defer the physical terminal transfer until the triggering callback unwinds when either TUI rebuilds terminal input state during stop or start.
-  **Verification:** `Test` input-dispatch depth and assert that every terminal stop, start, and restored redraw occurs only after the triggering callback returns.
+  Keep logical cancellation synchronous, but wait for the terminal's native input-drain boundary before the physical transfer when the host exposes one; otherwise defer until the triggering callback unwinds.
+  **Verification:** `Test` with a controllable input drain and input-dispatch depth, then assert that every terminal stop, start, and restored redraw occurs only after the applicable boundary settles.
 - **MUST:** After terminal restoration completes, the next separately dispatched input must reach the restored TUI through its normal input pipeline instead of being delivered to the stopped TUI.
   Do not promise replay of bytes already coalesced behind the handoff key in the triggering raw dispatch when Pi exposes no public input-injection API.
   **Verification:** `Test` the first post-restoration printable and viewport inputs and assert that the restored editor and scroll region receive them without another handoff key.
@@ -327,8 +327,10 @@ restore the latest remaining activity rather than letting one completion clear i
 [`docs/readme-conventions.md`](readme-conventions.md) owns the shared structure, labels, applicability rules, and verification checklist for active package READMEs.
 
 Package READMEs **SHOULD** remain practical and scannable: capabilities, installation, usage,
-commands/tools/settings, operational behavior, package layout, keywords, and license. Apply these
-shared presentation conventions:
+commands/tools/settings, operational behavior, package layout, keywords, and license. Keep complex
+configuration details in package-owned documentation or a bundled package-owned skill when that is
+more practical, while the README retains the entry point, minimal example, essential behavior, and
+access instructions. Apply these shared presentation conventions:
 
 - Write user-facing prose in English and retain the package's emoji title plus npm, Pi extension, and
   license badges.
@@ -343,8 +345,9 @@ shared presentation conventions:
   compatibility is actually guaranteed.
 
 Document the applicable persistent npm install, temporary npm execution, and local checkout commands.
-Include security, privacy, precedence, persistence, failure, or lifecycle details when users need them
-to use the extension safely.
+Keep security, privacy, and other information users need before installation or enablement in the
+README. Put additional precedence, persistence, failure, or lifecycle details in the README or its
+linked package-owned guidance when users need them to use the extension safely.
 
 - **MUST:** Add or update deterministic tests for changed behavior when practical; when a behavior
   requires a real Pi runtime or external service, record and run the smallest representative smoke
@@ -385,7 +388,7 @@ fragile regular expressions. Until then, label the real verification method hone
 - [ ] For command-surface changes, preserve established routes or explicitly own an approved breaking
       migration, and test every claimed execution mode.
 - [ ] For prompt-cache-sensitive changes, identify each prefix epoch and compare normalized provider-facing inputs across ordinary requests and applicable restoration boundaries.
-- [ ] For shared-terminal handoffs, test hard cancellation under root and nested-overlay focus, same-batch follow-up input, repeated cleanup, and unrelated parent overlays.
+- [ ] For shared-terminal handoffs, test hard cancellation under root and nested-overlay focus, pending input drain, post-restoration input, repeated cleanup, and unrelated parent overlays.
 - [ ] Update focused tests and run the verification method named by each relevant MUST.
 - [ ] Run `npm run check` and `npm test`; add pack or Pi runtime smokes when metadata or loading changed.
 - [ ] Report any skipped check, accepted exception, or follow-up validator opportunity in the change

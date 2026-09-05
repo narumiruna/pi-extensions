@@ -46,34 +46,11 @@ Before each Git mutation, the extension runs its safety checks and shows the exa
 
 ## 💬 Commands
 
-Open the manager without arguments:
-
-```text
-/worktree
-```
-
-The root menu provides these actions:
-
-- **Worktree status** — browse a local snapshot for every registered worktree without fetching remotes.
-- **Add worktree** — enter a branch, optional start point, and optional path; review exact base provenance, confirm creation, and optionally switch.
-- **Switch worktree** — search for another existing worktree by displayed path, branch, or HEAD and continue this Pi conversation there.
-- **Remove worktree** — search for a linked worktree by path, branch, or HEAD, then remove it without deleting its branch.
-- **Prune stale metadata** — inspect Git's dry-run output, then optionally run the matching prune.
-- **Configure worktree root** — set a machine-local default root or submit a blank value to restore `~/.worktrees`.
-
-The root menu shows the registered count, current path, effective worktree root, its source, and any settings warning.
-Escape closes the root menu.
-`/worktree` accepts no arguments and provides no argument completions.
-Every operation starts through TUI or RPC dialogs, and destructive Git changes require confirmation.
-Print and JSON modes reject the command before any Git call.
-The extension owns branch and path inputs, searchable worktree selectors, preflight previews, and destructive confirmations.
-These flows enforce Git safety and commit-aware revalidation.
-
-The status browser runs only when selected and uses no watcher, timer, persistent cache, or network fetch.
-Each card shows current, main, or detached state; the full snapshot HEAD; aggregate working-tree counts; configured upstream divergence; and the last commit timestamp and subject.
-A missing upstream is reported as **not configured**; it is not treated as proof that no commits are unpushed.
-Bare, missing, prunable, or individually failing worktrees remain visible with an unavailable reason.
-The snapshot is informational and can become stale immediately, so Remove still performs its stricter inventory and identity checks.
+Run `/worktree` to inspect, create, switch, or remove Git worktrees, prune stale metadata, and configure the default root in TUI or RPC mode.
+It accepts no arguments; print and JSON modes reject it before any Git call.
+Git must be installed and Pi must be inside a non-bare worktree.
+Destructive changes require confirmation and never delete branches; review [Safety boundaries](#-safety-boundaries), including ignored-file and recovery-pointer loss.
+See [Add defaults](#-add-defaults) for creation rules and [Pi workspace switching](#-pi-workspace-switching) for conversation transfer and failure recovery.
 
 ## 🌿 Add defaults
 
@@ -185,6 +162,11 @@ Resolve the reported Pi or session issue, then run `/worktree` and choose **Swit
 - The status browser uses only local Git state and never fetches a remote; its cards never authorize Remove or Prune.
 - The extension does not commit, push, fetch, rebase, repair, move, lock, or unlock worktrees.
 
+Status is an on-demand local snapshot of each worktree's state, full HEAD, working-tree counts, upstream divergence, and last commit.
+Unavailable worktrees remain visible with a reason.
+A missing upstream means **not configured**, not proof that no commits are unpushed.
+Snapshots can become stale immediately and never replace the stricter Remove and Prune checks.
+
 Use Git directly for force removal, branch deletion, custom prune expiry, detach or orphan creation, move, repair, lock, unlock, and remote refresh operations.
 
 ## 🚧 Limitations
@@ -198,35 +180,15 @@ Use Git directly for force removal, branch deletion, custom prune expiry, detach
 
 ```text
 packages/pi-worktree/
-├── src/
-│   ├── index.ts
-│   ├── command.ts
-│   ├── git.ts
-│   ├── session.ts
-│   ├── settings.ts
-│   ├── status.ts
-│   └── worktree.ts
-├── dist/                  # Generated source-mapped Jiti runtime
-├── scripts/
-│   └── build-runtime.mjs
-├── test/
-│   ├── add-command.test.ts
-│   ├── command-test-support.ts
-│   ├── command.test.ts
-│   ├── build-runtime.test.ts
-│   ├── git.integration.test.ts
-│   ├── git.test.ts
-│   ├── remove-ignored-command.test.ts
-│   ├── session.test.ts
-│   ├── settings-command.test.ts
-│   ├── settings.test.ts
-│   ├── status-command.test.ts
-│   └── status.test.ts
-├── package.json
-├── README.md
-├── LICENSE
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── worktree.ts                    # Worktree manager and lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 
@@ -234,4 +196,4 @@ packages/pi-worktree/
 
 ## 📄 License
 
-MIT
+[MIT](./LICENSE)

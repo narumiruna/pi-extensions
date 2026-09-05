@@ -108,7 +108,7 @@ Choose **Review differences (recommended)** in an ordinary file-direction confli
 Then choose one reviewed direction:
 
 - **Keep local content and replace remote…** uses the existing forced-push path.
-  It scans managed local files for secrets, shows the exact remote publication effect, re-reads a changed remote head, and asks again if the reviewed plan changed.
+  It applies the [secret-scan setting](./docs/settings.md#secret-scanning), shows the exact remote publication effect, re-reads a changed remote head, and asks again if the reviewed plan changed.
 - **Use remote content and replace local…** uses the existing forced-pull path.
   It shows exact local writes and deletions, protects the live session, and creates a local backup before applying.
 - First sync uses **Use local as initial source…** and **Use remote as initial source…** labels.
@@ -130,25 +130,13 @@ Print and JSON modes do not support `/sync` because UI output is not observable 
 
 ## ⚙️ Settings
 
-The canonical private user file is:
+Run `/sync` → **Set up sync** to create the canonical private user file at `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`).
+Use **Settings** to manage an existing setup.
+Missing settings stay unconfigured without creating files or locks.
+**Settings → Skip secret scan** defaults to **Off**; enable it only after reviewing the destination and selected content because it disables push scanning for every setup.
+See [Secret scanning](./docs/settings.md#secret-scanning) for the setting and diagnostic behavior.
 
-```text
-~/.pi/agent/pi-sync.json
-```
-
-Pi's configured agent directory replaces `~/.pi/agent` when applicable.
-Missing settings load as unconfigured without creating an agent directory, file, temporary file, or lock.
-
-An explicit setup creates the file atomically.
-On POSIX, pi-sync creates and replaces it with mode `0600`.
-Pi-sync processes coordinate settings access through `pi-sync.json.mutation-lock`; lock-unaware editors are outside that serialization boundary and should not save the file while a pi-sync settings operation is running.
-Credentials stay in this canonical private file and are never shown in menus, reviews, status, notifications, errors, logs, or completion metadata.
-
-A private `pi-sync.local.json` containing a valid version 3 document is copied byte-for-byte to `pi-sync.json`.
-The old file remains as a recovery copy.
-If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
-
-### Complete version 3 example
+A minimal Git setup uses an existing private remote and keeps automatic sync off:
 
 ```json
 {
@@ -157,41 +145,13 @@ If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
   "onSwitch": "ask-before-pull",
   "skipSecretScan": false,
   "storageConnections": {
-    "r2": {
-      "type": "s3",
-      "endpoint": "https://example.r2.cloudflarestorage.com",
-      "region": "auto",
-      "credentials": {
-        "accessKeyId": "<access-key-id>",
-        "secretAccessKey": "<secret-access-key>"
-      }
-    },
     "github": {
       "type": "git",
       "remote": "git@github.com:owner/private-pi-sync.git"
-    },
-    "nextcloud": {
-      "type": "webdav",
-      "url": "https://cloud.example.com/remote.php/dav/files/user",
-      "credentials": {
-        "username": "user",
-        "password": "<app-password>"
-      }
     }
   },
   "syncSetups": {
     "home": {
-      "storage": {
-        "connection": "r2",
-        "bucket": "personal-pi",
-        "path": "pi-sync/home"
-      },
-      "sync": {
-        "include": ["settings.json", "AGENTS.md", "skills", "prompts", "themes"],
-        "automatic": true
-      }
-    },
-    "git-backup": {
       "storage": {
         "connection": "github",
         "branch": "pi-sync/home",
@@ -201,139 +161,53 @@ If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
         "include": ["settings.json", "AGENTS.md"],
         "automatic": false
       }
-    },
-    "webdav-backup": {
-      "storage": {
-        "connection": "nextcloud",
-        "path": "pi-sync/home"
-      },
-      "sync": {
-        "include": ["settings.json", "sessions"],
-        "automatic": false
-      }
     }
   }
 }
 ```
 
-Cloudflare R2 is persisted as `"type": "s3"`; R2 is a setup preset, not another schema type.
-Temporary S3 credentials may additionally include `credentials.sessionToken`.
-
-### Required backend shapes
-
-- **S3/R2 connection:** `type`, `endpoint`, `region`, and `credentials.accessKeyId` / `credentials.secretAccessKey`.
-- **S3/R2 setup storage:** `connection`, `bucket`, and complete relative `path`; `branch` is rejected.
-- **Git connection:** `type` and a credential-free SSH or HTTPS `remote`.
-- **Git setup storage:** `connection`, `branch`, and complete repository `path`; `bucket` is rejected.
-- **WebDAV connection:** `type`, HTTPS `url`, and `credentials.username` / `credentials.password`.
-- **WebDAV setup storage:** `connection` and complete relative `path`; `bucket` and `branch` are rejected.
-
-Every setup requires `sync.include` and explicit `sync.automatic`.
-The global `skipSecretScan` setting defaults to `false`; when `true`, pushes skip the local secret scan, while `/sync doctor` still scans and reports possible secrets.
-Set it through **/sync → Settings → Skip secret scan** only when the destination and selected content have been reviewed.
-`activeSyncSetup` must reference an own-property setup when any setups exist and must be absent when the setup catalog is empty.
-A referenced connection cannot be removed.
-The current setup must be switched before removal.
-Two setups cannot resolve to the same normalized backend location.
-
-`onSwitch` accepts:
-
-- `ask-before-pull` — switch, then ask in TUI whether to start a reviewed pull;
-- `pull-after-switch` — require observable UI and start the normal reviewed pull;
-- `switch-only` — switch without reading or applying remote content.
-
-### Included content
-
-`sync.include` is ordered and duplicate-free.
-Supported Pi roots are:
-
-```text
-settings.json, keybindings.json, models.json, AGENTS.md, APPEND_SYSTEM.md,
-skills, prompts, themes, extensions, sessions
-```
-
-Safe agent-relative custom files or directories may also be included.
-Absolute paths, `..`, backslashes, controls, denied secret/settings paths, duplicate case variants, and ambiguous nested paths under reserved roots are rejected.
-
-An empty array is valid.
-It means no useful transfer is selected: **Sync now** reports the condition and does not claim that the setup is up to date.
-Unselected content remains unmanaged locally and is preserved when republishing existing remote snapshots.
-
-The Included Content editor is a standard bounded multi-select backed by one in-memory draft.
-Toggles never write settings.
-**Add custom path…** accepts a safe agent-relative file or directory even when it does not exist locally yet, allowing a new environment to select content that exists only in the remote snapshot.
-Leaving the editor opens an exact Include/Exclude review with **Save changes**, **Discard changes**, and **Continue editing**; only reviewed Save publishes, while Continue preserves the draft and Discard/cancellation preserves the settings bytes.
-RPC remains a read-only summary with the manual `sync.include` path.
-
-Every new snapshot stores the normalized included-content selection separately from the files that happened to exist.
-This preserves selected-but-missing paths without syncing `pi-sync.json`, storage credentials, automatic-sync preferences, or setup names.
-**Settings → Compare synced content** opens the same review-first flow as a manager operation when local and remote lists differ.
-Adoption revalidates the remote head, immutable snapshot, reviewed storage coordinates, and local include list before one atomic settings update.
-The saved state changes only `sync.include`, preserves unknown settings fields, and never pulls files or writes sync state.
-Its explicit Continue action starts a fresh **Sync now** route, while **Done** leaves the reviewed settings change saved without implying a file operation.
-Keeping this device's list opens the reviewed force-push path and explicitly replaces the remote policy while preserving eligible unmanaged remote files.
-
-Automatic sync and pull, including forced pull, pause on an explicit remote-policy difference rather than silently expanding local scope.
-Status reports matches and exact local-only/remote-only paths.
-Old snapshots remain readable.
-Because they have no authoritative selection, pi-sync offers only a clearly labeled read-only partial discovery from safe remote file roots; selected-but-missing and preserved-unmanaged intent cannot be reconstructed.
-Use **Add custom path…** for any needed path.
-
-Adding `sessions` requires a privacy acknowledgement in interactive flows.
-Session JSONL can contain prompts, tool output, file paths, images, and secrets.
-Automatic apply protects the currently open session file; restart Pi or resume a pulled session to use newly synchronized conversations.
-
-### Unsupported old settings and recovery
-
-Version 1, version 2, and non-empty unversioned documents are unsupported after the version 3 schema reset.
-Pi Sync does **not** migrate, partially interpret, downgrade, or overwrite them.
-Automatic sync pauses and reports an actionable version 3 error without displaying secrets.
-
-Recovery:
-
-1. retain the old file byte-for-byte;
-2. move it aside manually;
-3. create a new version 3 document or run the setup manager;
-4. run `/sync doctor`, inspect the exact storage path, and review the first pull or push;
-5. restore the retained file and a compatible older package only if rolling back.
-
+Setup saves are atomic and private (`0600` on POSIX), preserve unknown fields, and coordinate across pi-sync processes.
+Do not save from a lock-unaware editor during a pi-sync settings operation.
 Malformed, invalid, unsupported, symlinked, or concurrently changed documents remain untouched.
-Failed UI saves keep the previous file and displayed/effective state.
+Version 1, version 2, and non-empty unversioned settings require manual recovery rather than automatic migration.
+
+Adding `sessions` can upload prompts, tool output, paths, images, and secrets; interactive flows require a privacy acknowledgement.
+Automatic sync and pull pause when the remote included-content policy differs instead of silently expanding local scope.
+
+Read the [settings reference](./docs/settings.md) for complete S3/R2, Git, and WebDAV examples, backend fields, included-content rules, legacy paths, and recovery steps.
 
 ## 💬 Commands
 
-The menu is preferred, while deterministic routes remain available:
+| Command | Purpose |
+| --- | --- |
+| `/sync` | Set up storage, manage synced content, and review sync operations or recovery. |
+| `/sync help` | Show command usage. |
+| `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
+| `/sync init` | Create a local configuration template. |
+| `/sync config` | Show resolved configuration. |
+| `/sync files` | List included local files. |
+| `/sync status` | Compare local and remote snapshot state. |
+| `/sync diff` | Show local and remote differences. |
+| `/sync doctor` | Check configuration, connectivity, and backend safety. |
+| `/sync push` | Publish local content to remote storage. |
+| `/sync pull` | Back up local content, then apply the remote snapshot. |
+| `/sync sync` | Choose a safe sync direction or require conflict review. |
+| `/sync history` | Browse remote snapshots and review a rollback. |
+| `/sync rollback <snapshot-id>` | Back up local content, apply a historical snapshot, and republish it remotely. |
+| `/sync migrate-state` | Migrate the legacy local state directory. |
+| `/sync unlock --stale` | Recover an abandoned local lock after guarded ownership checks. |
 
-```text
-/sync help
-/sync use <setup>
-/sync init
-/sync config [--setup <name>]
-/sync files [--setup <name>]
-/sync status [--setup <name>]
-/sync diff [--setup <name>]
-/sync doctor [--setup <name>]
-/sync push [--setup <name>]
-/sync pull [--setup <name>]
-/sync sync [--setup <name>]
-/sync history [--setup <name>]
-/sync rollback <snapshot-id> [--setup <name>]
-/sync migrate-state [--yes]
-/sync unlock --stale
-```
+All routes support TUI and RPC; RPC settings and included-content screens are read-only.
+Print and JSON modes reject `/sync`.
+Unknown commands or flags, trailing values, and missing setup/snapshot values are rejected, including the former version 2 setup-addressing flag.
 
-- `--setup <name>` addresses a setup without switching it.
-- `--yes` or `-y` skips confirmation for `push`, `pull`, `sync`, `rollback`, or `migrate-state`.
-- `--force` lets `push`, `pull`, and `sync` accept a reviewed content conflict without disabling backend concurrency protection.
-- `--stale` applies only to guarded stale-lock recovery through `unlock`.
+- `--setup <name>` targets a setup without switching it on `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, and `rollback`.
+- `--yes` (alias: `-y`) skips confirmation on `push`, `pull`, `sync`, `rollback`, and `migrate-state`; use only after reviewing the affected content.
+- `--force` lets `push` or `pull` accept content conflicts without disabling backend concurrency protection. It is also accepted by `sync`, which still requires a direction choice for divergent content, and by `rollback`, where it has no additional effect.
+- `--stale` is accepted only by `unlock` and is required to remove a stale lock.
 
-The former version 2 setup-addressing flag is rejected.
-Unknown flags, unknown commands, trailing values, and missing setup/snapshot values are rejected.
-Completion includes known setup names and preserves preceding command tokens.
-
-TUI mode provides manager, settings, resource, included-content, secret, wizard, confirmation, and operation-review screens.
-In RPC mode, the **Settings** and **Included Content** interfaces provide read-only summaries through Pi's dialog and notification protocol.
-Print and JSON modes reject `/sync` before entering interactive screens.
+Push and rollback publish data externally; pull and rollback can replace or delete local managed files.
+Review [Settings](#-settings) for included-content privacy and [Manager, conflicts, and recovery](#-manager-conflicts-and-recovery) before forcing a direction, skipping confirmation, or removing a lock.
 
 ## 🔄 Backend and recovery model
 
@@ -389,43 +263,16 @@ Color is supplementary, and the attention widget is informational rather than in
 
 ```text
 packages/pi-sync/
-├── dist/                    # Generated split TypeScript runtime loaded through Pi's Jiti loader
-├── scripts/
-│   └── build-runtime.mjs    # Deterministic bundler and eager-boundary validator
-├── src/
-│   ├── index.ts
-│   ├── sync-extension.ts      # Lightweight Pi entry runtime and cached lazy loaders
-│   ├── sync.ts                # Compatibility barrel for package-local helpers
-│   ├── sync-errors.ts         # Lightweight setup/decision error contracts
-│   ├── config.ts
-│   ├── config-file.ts
-│   ├── state-directory.ts
-│   ├── settings-management.ts
-│   ├── manager-ui.ts
-│   ├── manager-state.ts
-│   ├── manager-recovery.ts
-│   ├── operation-availability.ts
-│   ├── manager-attention.ts
-│   ├── sync-attention.ts
-│   ├── storage-connections-ui.ts
-│   ├── sync-setups-ui.ts
-│   ├── file-selection.ts
-│   ├── remote-selection-ui.ts
-│   ├── remote-snapshot.ts
-│   ├── sync-operations.ts
-│   ├── sync-backend.ts
-│   ├── backend-factory.ts      # lazy selected-backend loader
-│   ├── s3-backend.ts
-│   ├── webdav-backend.ts
-│   ├── git-backend.ts
-│   ├── snapshot-paths.ts      # Eager recovery-safe session path helpers
-│   ├── snapshot.ts            # Loaded only for snapshot operations/session push
-│   └── *.ts
-├── test/
-├── README.md
-├── LICENSE
-└── package.json
+├── src/                               # Backends, settings, snapshots, and recovery modules
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── sync-extension.ts              # Sync lifecycle and lazy loading
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+├── docs/                              # Published reference documentation
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

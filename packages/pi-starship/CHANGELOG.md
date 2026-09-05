@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.55.0
+
+### Minor Changes
+
+- f1fffcb: Bundle an authoritative configuration skill with detailed schema, module, runtime, and security references for answering pi-starship setup questions and safely editing or syntax-checking `pi-starship.toml`.
+
 ## 0.54.0
 
 ### Minor Changes

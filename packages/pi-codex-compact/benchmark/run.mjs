@@ -635,7 +635,7 @@ async function compactArm({ arm, isCancelled, sessionState }) {
 	assertSessionReady({ arm, extensionErrors, isCancelled, operation: "compaction" });
 	const isCodexCheckpoint =
 		compaction.details?.kind === "pi-codex-remote-compaction" &&
-		compaction.details?.protocol === "remote-compaction-v2";
+		compaction.details?.protocol === "remote-v2";
 	if (arm === "codex" && !isCodexCheckpoint) {
 		throw new Error(
 			"Codex arm did not produce a Remote V2 checkpoint; refusing to report a Pi fallback as Codex",

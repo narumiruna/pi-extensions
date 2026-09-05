@@ -115,6 +115,7 @@ test("uses the public provider stream with SSE, bounded retry options, and a fin
 		provider,
 		model,
 		context: { messages: [] } satisfies Context,
+		protocol: "remote-v2",
 		apiKey: "oauth-token",
 		signal: new AbortController().signal,
 		fetch: async () => responseSse(),
@@ -135,6 +136,7 @@ test("expands a previous checkpoint before requesting repeated compaction", asyn
 		provider,
 		model,
 		context: { messages: [] },
+		protocol: "remote-v2",
 		apiKey: "oauth-token",
 		signal: new AbortController().signal,
 		priorCheckpoint: {
@@ -159,6 +161,7 @@ test("propagates abort and malformed remote output", async () => {
 			provider,
 			model,
 			context: { messages: [] },
+			protocol: "remote-v2",
 			apiKey: "oauth-token",
 			signal: controller.signal,
 			fetch: async () => responseSse(),
@@ -170,6 +173,7 @@ test("propagates abort and malformed remote output", async () => {
 			provider,
 			model,
 			context: { messages: [] },
+			protocol: "remote-v2",
 			apiKey: "oauth-token",
 			signal: new AbortController().signal,
 			fetch: async () =>

@@ -16,20 +16,6 @@ It does not register a command or model tool, render a widget, or inject model c
 - Never reads or displays discussion bodies, review text, inline comments, or review threads.
 - Runs without commands, model tools, widgets, webhooks, or a separate service.
 
-Example statusline text:
-
-```text
-PR #123: checks passing, approved, 7 comments
-PR #123: checks failing (2), changes requested, 3 comments
-PR #123: checks pending (5), commented, 12 comments
-PR #123: no checks, draft, no comments
-```
-
-The pull request number is an OSC 8 link when Pi's effective terminal capabilities enable hyperlinks and plain text otherwise.
-The check wording follows GitHub's Checks terminology.
-The trailing comment count is the combined comments + reviews count.
-When rendered by `pi-statusline`, the `github-pr` icon comes from pi-statusline icon settings.
-
 ## 📦 Install
 
 Install and authenticate GitHub CLI first:
@@ -71,7 +57,18 @@ Review extension source before installing it.
 ## 🚀 Quick start
 
 Authenticate `gh`, then start Pi in a Git worktree whose current branch has a GitHub pull request.
-The pull request status appears automatically.
+The pull request status appears automatically:
+
+```text
+PR #123: checks passing, approved, 7 comments
+PR #123: checks failing (2), changes requested, 3 comments
+PR #123: checks pending (5), commented, 12 comments
+PR #123: no checks, draft, no comments
+```
+
+The PR number is an OSC 8 link when Pi's terminal capabilities allow hyperlinks, and plain text otherwise.
+Checks use GitHub's terminology; the trailing count combines comments and reviews.
+When rendered by `pi-statusline`, the `github-pr` icon comes from its icon settings.
 
 ## 🔄 Refresh behavior
 
@@ -99,17 +96,15 @@ The extension runs passively:
 
 ```text
 packages/pi-github-pr/
-├── src/index.ts
-├── src/github-pr.ts
-├── dist/index.ts
-├── scripts/build-runtime.mjs
-├── test/github-pr.test.ts
-├── test/build-runtime.test.ts
-├── package.json
-├── README.md
-├── LICENSE
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── github-pr.ts                   # GitHub queries and status refresh
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

@@ -207,6 +207,10 @@ class InputHandoffTerminal implements Terminal {
 	private inputHandler: ((data: string) => void) | undefined;
 	private inputDispatchDepth = 0;
 	private nextStopError: Error | undefined;
+	private pendingDrain: Promise<void> | undefined;
+	private resolvePendingDrain: (() => void) | undefined;
+	private rejectPendingDrain: ((error: Error) => void) | undefined;
+	drainCallCount = 0;
 
 	start(onInput: (data: string) => void): void {
 		this.recordLifecycle("start");
@@ -225,6 +229,25 @@ class InputHandoffTerminal implements Terminal {
 		this.nextStopError = error;
 	}
 
+	deferDrain(): void {
+		this.pendingDrain = new Promise<void>((resolve, reject) => {
+			this.resolvePendingDrain = resolve;
+			this.rejectPendingDrain = reject;
+		});
+	}
+
+	resolveDrain(): void {
+		this.resolvePendingDrain?.();
+		this.resolvePendingDrain = undefined;
+		this.rejectPendingDrain = undefined;
+	}
+
+	rejectDrain(error: Error): void {
+		this.rejectPendingDrain?.(error);
+		this.resolvePendingDrain = undefined;
+		this.rejectPendingDrain = undefined;
+	}
+
 	send(data: string): void {
 		const handler = this.inputHandler;
 		if (!handler) return;
@@ -241,7 +264,10 @@ class InputHandoffTerminal implements Terminal {
 		if (this.inputDispatchDepth > 0) this.lifecycleDuringInput.push(event);
 	}
 
-	async drainInput(): Promise<void> {}
+	async drainInput(): Promise<void> {
+		this.drainCallCount += 1;
+		await this.pendingDrain;
+	}
 	write(data: string): void {
 		if (this.inputDispatchDepth > 0) this.outputDuringInput.push(data);
 	}
@@ -465,6 +491,93 @@ async function startClipboardSelection(
 		copyInput: inputForCopyBinding(keybindings),
 	};
 }
+
+test("Ctrl+C waits for terminal input drain before restoring the parent", async () => {
+	const harness = createInputHandoffHarness();
+	harness.terminal.deferDrain();
+	let sideCancelCount = 0;
+	let settled = false;
+	const running = runBtwFullscreen(harness.ctx, (ctx) =>
+		ctx.ui.custom<"closed">((_tui, _theme, _keybindings, done) => ({
+			focused: false,
+			render: () => ["side thread"],
+			handleInput(data: string) {
+				if (data !== "\u0003") return;
+				sideCancelCount += 1;
+				done("closed");
+			},
+			invalidate() {},
+		})),
+	);
+	void running.then(
+		() => {
+			settled = true;
+		},
+		() => {
+			settled = true;
+		},
+	);
+	try {
+		await flushAsyncWork();
+		const lifecycleBeforeCancel = harness.terminal.lifecycle.length;
+
+		harness.terminal.send("\u0003");
+
+		assert.equal(sideCancelCount, 1);
+		await Promise.resolve();
+		assert.equal(harness.terminal.drainCallCount, 1);
+		assert.equal(settled, false);
+		assert.equal(harness.terminal.lifecycle.length, lifecycleBeforeCancel);
+
+		harness.terminal.send("\u0003");
+		await Promise.resolve();
+		assert.equal(sideCancelCount, 1);
+		assert.equal(harness.terminal.drainCallCount, 1);
+		assert.equal(harness.terminal.lifecycle.length, lifecycleBeforeCancel);
+
+		harness.terminal.resolveDrain();
+
+		assert.equal(await running, "closed");
+		assert.deepEqual(harness.terminal.lifecycle.slice(lifecycleBeforeCancel), ["stop", "start"]);
+	} finally {
+		harness.terminal.resolveDrain();
+		await running.catch(() => undefined);
+		harness.parent.stop();
+	}
+});
+
+test("a drainInput failure still restores the parent once and propagates", async () => {
+	const harness = createInputHandoffHarness();
+	harness.terminal.deferDrain();
+	const running = runBtwFullscreen(harness.ctx, (ctx) =>
+		ctx.ui.custom<"closed">((_tui, _theme, _keybindings, done) => ({
+			focused: false,
+			render: () => ["side thread"],
+			handleInput(data: string) {
+				if (data === "\u0003") done("closed");
+			},
+			invalidate() {},
+		})),
+	);
+	try {
+		await flushAsyncWork();
+		const lifecycleBeforeCancel = harness.terminal.lifecycle.length;
+
+		harness.terminal.send("\u0003");
+		await Promise.resolve();
+
+		assert.equal(harness.terminal.drainCallCount, 1);
+		assert.equal(harness.terminal.lifecycle.length, lifecycleBeforeCancel);
+		harness.terminal.rejectDrain(new Error("input drain failed"));
+
+		await assert.rejects(running, /input drain failed/u);
+		assert.deepEqual(harness.terminal.lifecycle.slice(lifecycleBeforeCancel), ["stop", "start"]);
+	} finally {
+		harness.terminal.resolveDrain();
+		await running.catch(() => undefined);
+		harness.parent.stop();
+	}
+});
 
 test("Ctrl+C restores a fullscreen parent only after input dispatch unwinds", async () => {
 	const harness = createInputHandoffHarness(createBtwTestKeybindings(), {
@@ -725,10 +838,9 @@ test("Ctrl+C hard-cancels the side root before a remapped search close", async (
 		await flushAsyncWork();
 		assert.ok(sideTui);
 		const searchableTui = sideTui as TUI & {
-			openSearch(): void;
 			isOverlayFocused(): boolean;
 		};
-		searchableTui.openSearch();
+		harness.terminal.send("\u001b[102;6u");
 		assert.equal(searchableTui.isOverlayFocused(), true);
 
 		harness.terminal.send("\u0003");
@@ -916,7 +1028,7 @@ test("manual fullscreen defers a printable copy binding while transcript search 
 	await flushAsyncWork();
 	sideTui.renderNow(true);
 	assert.equal(copyCalls, 0);
-	assert.match(stripVTControlCharacters(harness.writes.join("")), />\s+x/u);
+	assert.match(stripVTControlCharacters(harness.writes.join("")), /x\s+No matches/u);
 	closeSide();
 	assert.equal(await running, "closed");
 });

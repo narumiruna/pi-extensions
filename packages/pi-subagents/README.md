@@ -57,11 +57,6 @@ Review the source before installing or invoking the extension.
 
 Call `subagent_spawn` with a self-contained task and only the work tools that task needs.
 
-The package intentionally does not register or publish a skill.
-Create a project skill under `.pi/skills/<your-skill>/SKILL.md` or a global skill under `~/.pi/agent/skills/<your-skill>/SKILL.md` when you want reusable delegation policy.
-Choose a name, trigger description, tool policy, task format, and verification workflow for your own use case.
-The repository-only [`using-pi-subagents` example](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-subagents/skills/using-pi-subagents) demonstrates one possible design without imposing it on installed users.
-
 The call returns a `jobId` immediately, and the job continues in the background.
 Continue useful main-agent work until the result is required or a completion arrives.
 
@@ -119,6 +114,10 @@ See [`docs/tools.md`](./docs/tools.md) for the concise schema reference.
 ## ⚙️ Job configuration
 
 The task should state the child's role, objective, scope, constraints, and expected result.
+For reusable delegation policy, you can create your own project skill under `.pi/skills/<your-skill>/SKILL.md` or global skill under `~/.pi/agent/skills/<your-skill>/SKILL.md`.
+Choose its name, trigger, tool policy, task format, and verification workflow for your use case.
+The package intentionally registers and publishes no skill; the repository-only [`using-pi-subagents` example](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-subagents/skills/using-pi-subagents) is an optional starting point.
+
 The optional `tools` list limits what the child can do:
 
 - Accepted names are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`.
@@ -220,15 +219,17 @@ Parallel writers require disjoint ownership or workspace isolation outside this 
 
 ```text
 packages/pi-subagents/
-├── dist/                        # Generated Jiti runtime and child bridge
-├── docs/                        # Concise tools and design references
-├── scripts/                     # Deterministic runtime builder
-├── skills/using-pi-subagents/  # Repository-only example delegation skill
-├── src/                         # Extension, broker, child bridge, and subprocess runtime
-├── test/                        # Protocol, lifecycle, process, and policy tests
-├── package.json                 # Pi extension declaration
-└── README.md                    # User guide and safety boundaries
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── subagents.ts                   # Job, broker, and child lifecycle
+├── dist/                              # Generated Jiti runtime and child bridge
+├── scripts/build-runtime.mjs          # Runtime builder
+├── docs/                              # Published reference documentation
+├── skills/using-pi-subagents/         # Repository-only example; not published
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

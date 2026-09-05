@@ -1,5 +1,11 @@
 # @narumitw/pi-analytics
 
+## 0.49.9
+
+### Patch Changes
+
+- bd00d53: Render standard horizontal frames around the remaining extension menus.
+
 ## 0.49.8
 
 ### Patch Changes

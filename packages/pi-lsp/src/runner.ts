@@ -22,6 +22,7 @@ export async function runDiagnostics(
 	ctx: StatusContext,
 	statusKey: string,
 ) {
+	throwIfAborted(signal, adapter);
 	const root = resolveRoot(params.root);
 	const command = adapter.defaultCommand;
 	const files =
@@ -36,48 +37,44 @@ export async function runDiagnostics(
 		});
 	}
 
-	const client = new LspClient(adapter, command, root, timeoutMs);
-	const abort = () => client.close();
-	throwIfAborted(signal, adapter);
-	signal?.addEventListener("abort", abort, { once: true });
+	return withLspClient(
+		adapter,
+		root,
+		timeoutMs,
+		signal,
+		ctx,
+		statusKey,
+		"diagnostics",
+		async (client) => {
+			const openedFiles: Array<{ file: string; uri: string }> = [];
+			try {
+				for (const file of files) {
+					throwIfAborted(signal, adapter);
+					const uri = pathToFileURL(file).href;
+					const text = readFileSync(file, "utf8");
+					client.didOpen(uri, text, adapter.languageIdFor(file));
+					openedFiles.push({ file, uri });
+				}
 
-	try {
-		ctx.ui.setStatus(statusKey, `${adapter.name} diagnostics`);
-		throwIfAborted(signal, adapter);
-		await client.start();
-		await client.initialize(root);
-
-		const openedFiles: Array<{ file: string; uri: string }> = [];
-		try {
-			for (const file of files) {
+				const entries: DiagnosticEntry[] = await Promise.all(
+					openedFiles.map(async ({ file, uri }) => ({
+						path: path.relative(root, file) || file,
+						uri,
+						diagnostics: await client.diagnostics(uri),
+					})),
+				);
 				throwIfAborted(signal, adapter);
-				const uri = pathToFileURL(file).href;
-				const text = readFileSync(file, "utf8");
-				client.didOpen(uri, text, adapter.languageIdFor(file));
-				openedFiles.push({ file, uri });
+				return textResult(formatDiagnostics(adapter, entries), {
+					root,
+					command,
+					files: entries,
+					summary: summarize(entries),
+				});
+			} finally {
+				for (const { uri } of openedFiles) client.didClose(uri);
 			}
-
-			const entries: DiagnosticEntry[] = await Promise.all(
-				openedFiles.map(async ({ file, uri }) => ({
-					path: path.relative(root, file) || file,
-					uri,
-					diagnostics: await client.diagnostics(uri),
-				})),
-			);
-			return textResult(formatDiagnostics(adapter, entries), {
-				root,
-				command,
-				files: entries,
-				summary: summarize(entries),
-			});
-		} finally {
-			for (const { uri } of openedFiles) client.didClose(uri);
-		}
-	} finally {
-		ctx.ui.setStatus(statusKey, undefined);
-		signal?.removeEventListener("abort", abort);
-		await client.shutdown();
-	}
+		},
+	);
 }
 
 export async function runFix(
@@ -92,18 +89,7 @@ export async function runFix(
 	const file = resolveSupportedFile(adapter, root, params.path);
 	const actionKind = params.kind?.trim() || "source.fixAll";
 
-	const command = adapter.defaultCommand;
-	const client = new LspClient(adapter, command, root, timeoutMs);
-	const abort = () => client.close();
-	throwIfAborted(signal, adapter);
-	signal?.addEventListener("abort", abort, { once: true });
-
-	try {
-		ctx.ui.setStatus(statusKey, `${adapter.name} fix`);
-		throwIfAborted(signal, adapter);
-		await client.start();
-		await client.initialize(root);
-		throwIfAborted(signal, adapter);
+	return withLspClient(adapter, root, timeoutMs, signal, ctx, statusKey, "fix", async (client) => {
 		const uri = pathToFileURL(file).href;
 		const text = readFileSync(file, "utf8");
 		client.didOpen(uri, text, adapter.languageIdFor(file));
@@ -113,8 +99,11 @@ export async function runFix(
 		let newText: string;
 		try {
 			const diagnostics = await client.diagnostics(uri);
+			throwIfAborted(signal, adapter);
 			const actions = await client.codeActions(uri, text, diagnostics, actionKind);
+			throwIfAborted(signal, adapter);
 			resolvedActions = await client.resolveActions(actions);
+			throwIfAborted(signal, adapter);
 			selectedActions = selectCodeActions(resolvedActions, actionKind);
 			edits = selectedActions.flatMap((action) => collectWorkspaceEdits(action.edit, uri));
 			if (hasOverlappingTextEdits(text, edits)) {
@@ -130,6 +119,7 @@ export async function runFix(
 		}
 		const changed = newText !== text;
 
+		throwIfAborted(signal, adapter);
 		if (params.write && changed) writeFileSync(file, newText);
 
 		return textResult(
@@ -146,10 +136,54 @@ export async function runFix(
 				text: params.write ? undefined : newText,
 			},
 		);
+	});
+}
+
+async function withLspClient<T>(
+	adapter: LspServerAdapter,
+	root: string,
+	timeoutMs: number,
+	signal: AbortSignal | undefined,
+	ctx: StatusContext,
+	statusKey: string,
+	activity: "diagnostics" | "fix",
+	operation: (client: LspClient) => Promise<T>,
+): Promise<T> {
+	throwIfAborted(signal, adapter);
+	const client = new LspClient(adapter, adapter.defaultCommand, root, timeoutMs);
+	const abort = () => client.close();
+	signal?.addEventListener("abort", abort, { once: true });
+	let cleanupFailure: { error: unknown } | undefined;
+	let result: T;
+	try {
+		ctx.ui.setStatus(statusKey, `${adapter.name} ${activity}`);
+		throwIfAborted(signal, adapter);
+		await client.start();
+		throwIfAborted(signal, adapter);
+		await client.initialize(root);
+		throwIfAborted(signal, adapter);
+		result = await operation(client);
 	} finally {
+		clearStatus(ctx, statusKey);
+		try {
+			await client.shutdown();
+		} catch (error) {
+			cleanupFailure = { error };
+		} finally {
+			signal?.removeEventListener("abort", abort);
+		}
+	}
+	// An operation rejection already propagates through finally and remains primary.
+	if (cleanupFailure) throw cleanupFailure.error;
+	throwIfAborted(signal, adapter);
+	return result;
+}
+
+export function clearStatus(ctx: StatusContext, statusKey: string) {
+	try {
 		ctx.ui.setStatus(statusKey, undefined);
-		signal?.removeEventListener("abort", abort);
-		await client.shutdown();
+	} catch {
+		// UI may be unavailable during teardown; it must never bypass resource cleanup.
 	}
 }
 

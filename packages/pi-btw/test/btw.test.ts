@@ -17,6 +17,7 @@ import btw, {
 	resolveBtwModel,
 	sanitizeSingleLine,
 } from "../src/btw.js";
+import { formatKeyLabel } from "../src/text.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -930,4 +931,10 @@ test("buildUserPrompt falls back when no conversation context exists", () => {
 
 test("sanitizeSingleLine removes controls and collapses whitespace", () => {
 	assert.equal(sanitizeSingleLine(" /btw\nhello\t\u0000 world  "), "/btw hello world");
+});
+
+test("formatKeyLabel humanizes effective keys after stripping terminal controls", () => {
+	assert.equal(formatKeyLabel("ctrl+shift+x"), "Ctrl+Shift+X");
+	assert.equal(formatKeyLabel("\u001b\u009bctrl+x\n"), "Ctrl+X");
+	assert.equal(formatKeyLabel(""), "");
 });

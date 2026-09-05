@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import {
 	type ExtensionCommandContext,
 	getSettingsListTheme,
@@ -18,6 +19,26 @@ const ON = "On";
 
 type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown";
 
+function fitSettingsRows(lines: string[], maxRows: number): string[] {
+	if (lines.length <= maxRows) return lines;
+	const content = lines.filter((line) => stripVTControlCharacters(line).trim().length > 0);
+	if (content.length <= maxRows) return content;
+	const selectedIndex = content.findIndex((line) =>
+		/^[→›]\s/u.test(stripVTControlCharacters(line)),
+	);
+	if (selectedIndex < 0) return content.slice(0, maxRows);
+	return content
+		.map((line, index) => ({ index, line }))
+		.sort(
+			(left, right) =>
+				Math.abs(left.index - selectedIndex) - Math.abs(right.index - selectedIndex) ||
+				left.index - right.index,
+		)
+		.slice(0, maxRows)
+		.sort((left, right) => left.index - right.index)
+		.map(({ line }) => line);
+}
+
 export async function showUsageSettings(
 	ctx: ExtensionCommandContext,
 	settingsRuntime: UsageSettingsRuntime,
@@ -29,6 +50,8 @@ export async function showUsageSettings(
 		if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${settingsRuntime.get().path}`, "info");
 		return false;
 	}
+	const { HorizontalRule } = await import("@narumitw/pi-tui-kit");
+	if (parentSignal.aborted || !isCurrent()) return false;
 	return (
 		(await ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
 			const localController = new AbortController();
@@ -54,6 +77,7 @@ export async function showUsageSettings(
 				},
 			];
 			const container = new Container();
+			const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
 			container.addChild(new Text(theme.fg("accent", theme.bold("pi-usage Settings")), 1, 1));
 
 			let settingsList: SettingsList;
@@ -106,7 +130,18 @@ export async function showUsageSettings(
 
 			parentSignal.addEventListener("abort", cancel, { once: true });
 			return {
-				render: (width: number) => container.render(width),
+				render(width: number) {
+					const content = container.render(width);
+					const terminalRows = Number.isFinite(tui.terminal?.rows)
+						? Math.floor(tui.terminal.rows)
+						: 24;
+					const availableRows = Math.max(1, terminalRows - 3);
+					if (content.length + 2 > availableRows) {
+						return fitSettingsRows(content, availableRows);
+					}
+					const [ruleLine = ""] = rule.render(width);
+					return [ruleLine, ...content, ruleLine];
+				},
 				invalidate: () => container.invalidate(),
 				handleInput(data: string) {
 					if (closing) return;

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import {
+	type Api,
+	type Context,
 	createAssistantMessageEventStream,
 	type Model,
 	type OpenAICodexResponsesOptions,
@@ -8,7 +10,11 @@ import {
 import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { createCheckpointDetails, parseCheckpointDetails } from "../src/checkpoint.js";
+import {
+	createCheckpointDetails,
+	fallbackSummary,
+	parseCheckpointDetails,
+} from "../src/checkpoint.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import {
 	type CodexCompactSettingsRuntime,
@@ -60,8 +66,10 @@ function settingsRuntime(overrides = {}): CodexCompactSettingsRuntime {
 
 function fakeProvider(
 	onOptions?: (options: OpenAICodexResponsesOptions) => void,
-	providerModel: Model<"openai-codex-responses"> = model,
+	providerModel: Model<Api> = model,
 	onPreparedPayload?: (payload: unknown) => void,
+	protocol: "remote-v2" | "responses-compact" = "remote-v2",
+	onContext?: (context: Context) => void,
 ): Provider {
 	return {
 		id: providerModel.provider,
@@ -69,6 +77,7 @@ function fakeProvider(
 		auth: {} as Provider["auth"],
 		getModels: () => [providerModel],
 		stream(activeModel, context, options) {
+			onContext?.(context);
 			const codexOptions = options as OpenAICodexResponsesOptions;
 			onOptions?.(codexOptions);
 			const stream = createAssistantMessageEventStream();
@@ -83,10 +92,15 @@ function fakeProvider(
 					});
 					const payload = await options?.onPayload?.({ model: activeModel.id, input }, activeModel);
 					onPreparedPayload?.(payload);
-					assert.deepEqual((payload as { input: unknown[] }).input.at(-1), {
-						type: "compaction_trigger",
+					const payloadInput = (payload as { input: Array<Record<string, unknown>> }).input;
+					assert.equal(
+						payloadInput.at(-1)?.type === "compaction_trigger",
+						protocol === "remote-v2",
+					);
+					const response = await options?.fetch?.("https://example.test/responses", {
+						method: "POST",
+						signal: options?.signal,
 					});
-					const response = await options?.fetch?.("https://example.test", { method: "POST" });
 					await response?.text();
 					const message = {
 						role: "assistant" as const,
@@ -156,6 +170,8 @@ function branch(): SessionEntry[] {
 function event(
 	signal = new AbortController().signal,
 	branchEntries = branch(),
+	reason: SessionBeforeCompactEvent["reason"] = "manual",
+	willRetry = false,
 ): SessionBeforeCompactEvent {
 	return {
 		type: "session_before_compact",
@@ -169,8 +185,8 @@ function event(
 			settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
 		},
 		branchEntries,
-		reason: "manual",
-		willRetry: false,
+		reason,
+		willRetry,
 		signal,
 	};
 }
@@ -182,6 +198,25 @@ function sseResponse() {
 	);
 }
 
+function compactJsonResponse() {
+	return Response.json({
+		id: "resp_compact",
+		object: "response.compaction",
+		created_at: 1,
+		output: [
+			{ role: "user", content: [{ type: "input_text", text: "retained" }] },
+			{ type: "compaction", encrypted_content: "opaque-openai" },
+		],
+		usage: {
+			input_tokens: 20,
+			input_tokens_details: { cached_tokens: 0 },
+			output_tokens: 1,
+			output_tokens_details: { reasoning_tokens: 0 },
+			total_tokens: 21,
+		},
+	});
+}
+
 function legacyFallbackSummary(checkpointId: string): string {
 	return [
 		`OpenAI Codex Remote Compaction V2 checkpoint ${checkpointId} stores the older history opaquely.`,
@@ -189,6 +224,33 @@ function legacyFallbackSummary(checkpointId: string): string {
 		"Without them, only Pi's retained recent messages remain available.",
 	].join(" ");
 }
+
+test("command rejects undocumented arguments in every mode", async () => {
+	const mock = createMockPi();
+	createCodexCompactExtension({ settingsRuntime: settingsRuntime() })(mock.pi);
+	const command = mock.commands.get("codex-compact");
+	assert.ok(command);
+	for (const mode of ["tui", "rpc", "print", "json"] as const) {
+		await assert.rejects(
+			async () => {
+				await command.handler("unexpected", createMockContext({ mode }).ctx);
+			},
+			{ message: "Usage: /codex-compact" },
+		);
+	}
+});
+
+test("command rejects no-argument use in print and JSON modes", async () => {
+	const mock = createMockPi();
+	createCodexCompactExtension({ settingsRuntime: settingsRuntime() })(mock.pi);
+	const command = mock.commands.get("codex-compact");
+	assert.ok(command);
+	for (const mode of ["print", "json"] as const) {
+		await assert.rejects(async () => {
+			await command.handler("", createMockContext({ mode, hasUI: false }).ctx);
+		}, /requires TUI or RPC UI support/);
+	}
+});
 
 test("custom Codex Responses providers compact and replay by API and exact model ID", async () => {
 	const mock = createMockPi();
@@ -200,7 +262,7 @@ test("custom Codex Responses providers compact and replay by API and exact model
 	);
 	assert.equal(
 		mock.commands.get("codex-compact")?.description,
-		"Compact now or configure Codex Remote Compaction V2",
+		"Compact now or configure Responses compaction",
 	);
 	const handler = mock.events.get("session_before_compact")?.[0];
 	assert.ok(handler);
@@ -304,13 +366,232 @@ test("custom Codex Responses providers compact and replay by API and exact model
 	assert.equal(await contextHandler?.(contextEvent, differentApi), undefined);
 });
 
-test("repeated compaction projects a checkpoint using its persisted legacy summary", async () => {
+test("generic OpenAI Responses compacts through the unary endpoint", async () => {
+	const mock = createMockPi();
+	const openAIModel = {
+		...model,
+		api: "openai-responses" as const,
+		provider: "company-openai-proxy",
+		baseUrl: "https://example.test",
+	};
+	createCodexCompactExtension({
+		settingsRuntime: settingsRuntime(),
+		fetch: async (input, init) => {
+			assert.equal(String(input), "https://example.test/responses/compact");
+			assert.equal(new Headers(init?.headers).get("content-encoding"), null);
+			return compactJsonResponse();
+		},
+	})(mock.pi);
+	const handler = mock.events.get("session_before_compact")?.[0];
+	const entries = branch();
+	const { ctx, notifications, statuses } = createMockContext({
+		model: openAIModel,
+		getSystemPrompt: () => "system",
+		sessionManager: { getSessionId: () => "session", getBranch: () => entries },
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "fixture" }),
+			getProvider: () => fakeProvider(undefined, openAIModel, undefined, "responses-compact"),
+		},
+		hasUI: true,
+	});
+
+	const result = (await handler?.(event(), ctx)) as {
+		compaction: { details: unknown; usage: unknown };
+	};
+	const details = parseCheckpointDetails(result.compaction.details);
+	assert.ok(details);
+	assert.equal(details.api, "openai-responses");
+	assert.equal(details.protocol, "responses-compact");
+	assert.deepEqual(result.compaction.usage, usage);
+	assert.deepEqual(notifications, []);
+	assert.equal(statuses.get("codex-compact"), undefined);
+});
+
+test("manual, threshold, and overflow compaction preserve Pi preparation boundaries", async () => {
+	for (const [reason, willRetry] of [
+		["manual", false],
+		["threshold", false],
+		["overflow", true],
+	] as const) {
+		const mock = createMockPi();
+		createCodexCompactExtension({
+			settingsRuntime: settingsRuntime(),
+			fetch: async () => sseResponse(),
+		})(mock.pi);
+		const handler = mock.events.get("session_before_compact")?.[0];
+		const { ctx } = createMockContext({
+			model,
+			getSystemPrompt: () => "system",
+			sessionManager: { getSessionId: () => "session", getBranch: () => branch() },
+			modelRegistry: {
+				getApiKeyAndHeaders: async () => ({ ok: true }),
+				getProvider: () => fakeProvider(),
+			},
+		});
+		const compactEvent = event(new AbortController().signal, branch(), reason, willRetry);
+		if (reason === "overflow") {
+			compactEvent.preparation.isSplitTurn = true;
+			compactEvent.preparation.turnPrefixMessages = [
+				{ role: "user", content: [{ type: "text", text: "split prefix" }], timestamp: 1 },
+			];
+		}
+		const result = (await handler?.(compactEvent, ctx)) as {
+			compaction: { firstKeptEntryId: string; tokensBefore: number };
+		};
+		assert.equal(result.compaction.firstKeptEntryId, compactEvent.preparation.firstKeptEntryId);
+		assert.equal(result.compaction.tokensBefore, compactEvent.preparation.tokensBefore);
+	}
+});
+
+test("remote requests preserve ordered active tool fields exposed by Pi", async () => {
+	const constrainedSampling = { type: "json_schema" as const, strict: "require" as const };
+	const mock = createMockPi({
+		activeTools: ["second", "first"],
+		allTools: [
+			{
+				name: "first",
+				description: "first tool",
+				parameters: { type: "object" },
+				constrainedSampling,
+			},
+			{
+				name: "second",
+				description: "second tool",
+				parameters: { type: "object" },
+			},
+		],
+	});
+	let observed: Context | undefined;
+	createCodexCompactExtension({
+		settingsRuntime: settingsRuntime(),
+		fetch: async () => sseResponse(),
+	})(mock.pi);
+	const handler = mock.events.get("session_before_compact")?.[0];
+	const { ctx } = createMockContext({
+		model,
+		getSystemPrompt: () => "system",
+		sessionManager: { getSessionId: () => "session", getBranch: () => branch() },
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true }),
+			getProvider: () =>
+				fakeProvider(undefined, model, undefined, "remote-v2", (context) => {
+					observed = context;
+				}),
+		},
+	});
+
+	await handler?.(event(), ctx);
+	assert.deepEqual(observed?.tools, [
+		{
+			name: "second",
+			description: "second tool",
+			parameters: { type: "object" },
+		},
+		{
+			name: "first",
+			description: "first tool",
+			parameters: { type: "object" },
+		},
+	]);
+});
+
+test("checkpoint projection is idempotent and preserves ordinary request prefixes", async () => {
 	const mock = createMockPi();
 	const entries = branch();
 	const kept = entries[1].type === "message" ? entries[1].message : assert.fail("kept message");
 	const details = createCheckpointDetails({
 		provider: model.provider,
+		api: model.api,
 		modelId: model.id,
+		protocol: "remote-v2",
+		replacementHistory: [
+			{ role: "user", content: [{ type: "input_text", text: "older context" }] },
+			{ type: "compaction", encrypted_content: "prior-opaque" },
+		],
+		keptMessages: [kept],
+		checkpointId: "prefix-checkpoint",
+		createdAt: "2026-01-01T00:00:02.000Z",
+	});
+	const summary = fallbackSummary(details.checkpointId);
+	const checkpointEntry = {
+		type: "compaction" as const,
+		id: "compact",
+		parentId: "assistant",
+		timestamp: "2026-01-01T00:00:02.000Z",
+		summary,
+		firstKeptEntryId: "assistant",
+		tokensBefore: 123,
+		details,
+	};
+	createCodexCompactExtension({ settingsRuntime: settingsRuntime() })(mock.pi);
+	const { ctx } = createMockContext({
+		model,
+		sessionManager: {
+			getSessionId: () => "session",
+			getBranch: () => [...entries, checkpointEntry],
+		},
+	});
+	const contextHandler = mock.events.get("context")?.[0];
+	const payloadHandler = mock.events.get("before_provider_request")?.[0];
+	const summaryMessage = {
+		role: "compactionSummary" as const,
+		summary,
+		tokensBefore: 123,
+		timestamp: 3,
+	};
+	const later = {
+		role: "user" as const,
+		content: [{ type: "text" as const, text: "later" }],
+		timestamp: 4,
+	};
+	const contextEvent = {
+		type: "context" as const,
+		messages: [summaryMessage, kept, later],
+	};
+	const firstProjection = (await contextHandler?.(contextEvent, ctx)) as {
+		messages: Array<{ content: Array<{ text: string }> }>;
+	};
+	assert.deepEqual(await contextHandler?.(contextEvent, ctx), firstProjection);
+	const marker = firstProjection.messages[0].content[0].text;
+	const firstPayload = {
+		input: [
+			{ role: "user", content: [{ type: "input_text", text: marker }] },
+			{ role: "user", content: [{ type: "input_text", text: "later" }] },
+		],
+	};
+	const first = (await payloadHandler?.(
+		{ type: "before_provider_request", payload: firstPayload },
+		ctx,
+	)) as { input: unknown[] };
+	const second = (await payloadHandler?.(
+		{
+			type: "before_provider_request",
+			payload: {
+				...firstPayload,
+				input: [
+					...firstPayload.input,
+					{ role: "user", content: [{ type: "input_text", text: "new tail" }] },
+				],
+			},
+		},
+		ctx,
+	)) as { input: unknown[] };
+	assert.deepEqual(second.input.slice(0, first.input.length), first.input);
+	assert.equal(
+		await payloadHandler?.({ type: "before_provider_request", payload: first }, ctx),
+		undefined,
+	);
+});
+
+test("repeated compaction projects a persisted legacy summary across protocols", async () => {
+	const mock = createMockPi();
+	const entries = branch();
+	const kept = entries[1].type === "message" ? entries[1].message : assert.fail("kept message");
+	const details = createCheckpointDetails({
+		provider: model.provider,
+		api: model.api,
+		modelId: model.id,
+		protocol: "remote-v2",
 		replacementHistory: [
 			{ role: "user", content: [{ type: "input_text", text: "older context" }] },
 			{ type: "compaction", encrypted_content: "prior-opaque" },
@@ -333,8 +614,8 @@ test("repeated compaction projects a checkpoint using its persisted legacy summa
 	const repeatedBranch = [...entries, checkpointEntry];
 	let preparedPayload: unknown;
 	createCodexCompactExtension({
-		settingsRuntime: settingsRuntime(),
-		fetch: async () => sseResponse(),
+		settingsRuntime: settingsRuntime({ protocol: "responses-compact" }),
+		fetch: async () => compactJsonResponse(),
 	})(mock.pi);
 	const handler = mock.events.get("session_before_compact")?.[0];
 	const { ctx, notifications, statuses } = createMockContext({
@@ -347,9 +628,14 @@ test("repeated compaction projects a checkpoint using its persisted legacy summa
 		modelRegistry: {
 			getApiKeyAndHeaders: async () => ({ ok: true }),
 			getProvider: () =>
-				fakeProvider(undefined, model, (payload) => {
-					preparedPayload = payload;
-				}),
+				fakeProvider(
+					undefined,
+					model,
+					(payload) => {
+						preparedPayload = payload;
+					},
+					"responses-compact",
+				),
 		},
 		hasUI: true,
 	});
@@ -357,8 +643,10 @@ test("repeated compaction projects a checkpoint using its persisted legacy summa
 	const result = (await handler?.(event(new AbortController().signal, repeatedBranch), ctx)) as {
 		compaction: { details: unknown };
 	};
-	assert.ok(parseCheckpointDetails(result.compaction.details));
-	assert.deepEqual((preparedPayload as { input: unknown[] }).input.at(-2), {
+	const parsed = parseCheckpointDetails(result.compaction.details);
+	assert.ok(parsed);
+	assert.equal(parsed.protocol, "responses-compact");
+	assert.deepEqual((preparedPayload as { input: unknown[] }).input.at(-1), {
 		type: "compaction",
 		encrypted_content: "prior-opaque",
 	});
@@ -423,6 +711,47 @@ test("session lifecycle reloads settings and drops stale reload continuations", 
 	assert.equal(statuses.get("codex-compact"), undefined);
 });
 
+test("session shutdown aborts an in-flight remote compaction and clears its status", async () => {
+	const mock = createMockPi();
+	let requestStarted!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		requestStarted = resolve;
+	});
+	createCodexCompactExtension({
+		settingsRuntime: settingsRuntime(),
+		fetch: async (_input, init) => {
+			requestStarted();
+			return new Promise<Response>((_resolve, reject) => {
+				if (init?.signal?.aborted) {
+					reject(new DOMException("aborted", "AbortError"));
+					return;
+				}
+				init?.signal?.addEventListener(
+					"abort",
+					() => reject(new DOMException("aborted", "AbortError")),
+					{ once: true },
+				);
+			});
+		},
+	})(mock.pi);
+	const handler = mock.events.get("session_before_compact")?.[0];
+	const shutdown = mock.events.get("session_shutdown")?.[0];
+	const { ctx, statuses } = createMockContext({
+		model,
+		getSystemPrompt: () => "system",
+		sessionManager: { getSessionId: () => "session", getBranch: () => branch() },
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "fixture" }),
+			getProvider: () => fakeProvider(),
+		},
+	});
+	const pending = handler?.(event(), ctx);
+	await ready;
+	await shutdown?.({ type: "session_shutdown", reason: "reload" }, ctx);
+	assert.deepEqual(await pending, { cancel: true });
+	assert.equal(statuses.get("codex-compact"), undefined);
+});
+
 test("disabled, wrong-API, remote-failed, auth-failed, and aborted paths remain safe", async () => {
 	const run = async (options: {
 		settings?: CodexCompactSettingsRuntime;
@@ -458,7 +787,7 @@ test("disabled, wrong-API, remote-failed, auth-failed, and aborted paths remain 
 	assert.equal(
 		(
 			await run({
-				model: { ...model, provider: "openai", api: "openai-responses" },
+				model: { ...model, provider: "anthropic", api: "anthropic-messages" },
 			})
 		).result,
 		undefined,
