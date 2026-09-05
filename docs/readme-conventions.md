@@ -50,27 +50,70 @@ Split safety, privacy, recovery, and limitations into separate headings when use
 
 Package-specific sections belong between the common interface sections and Package layout.
 Order them from first-use information to deeper behavior, lifecycle, recovery, limitations, and development material.
-Do not remove supported behavior, compatibility guidance, or safety details merely to shorten a README.
+Preserve documentation of supported behavior, compatibility, and safety when shortening a README; move detail to linked package-owned guidance rather than silently deleting it.
+Keep essential warnings in the README near the action they affect.
 
 ## Content rules
 
 Write user-facing prose in English.
 Group narrative text into concise Markdown paragraphs, keeping related source lines together without blank lines between every sentence.
 Use lists when independent items, choices, steps, or references are easier to scan separately.
-Keep the introduction and Features section concise enough to scan before installation.
+Give each topic one authoritative explanation and link to it from other sections instead of repeating its details.
+Repeat a command when needed for a runnable example, or a brief warning at a risky action, but do not repeat the surrounding reference material.
+Choose depth by what users need to decide, start, or operate safely, not by the number of implementation branches or tests.
 Document only commands, tools, settings, modes, and guarantees implemented by the package.
 Treat model IDs, paths, session text, and pasted text shown in examples as untrusted terminal input where relevant.
 Use stable absolute GitHub and npm links when referring to another package in this monorepo.
 Describe borrowed syntax as inspired by another project unless compatibility is guaranteed.
 
-Keep Settings sections focused on the configuration entry points, a minimal example, and essential default or safety behavior.
-Detailed configuration guidance may live in package-owned documentation or a package-owned skill bundled with the package.
-When it does, the README must identify that source and explain how to access it instead of duplicating the complete configuration reference.
+Detailed user guidance may live in linked package-owned documentation or a package-owned skill bundled with the package.
+Identify the authoritative source and explain how to access it instead of duplicating the complete reference.
+Keep implementation rationale, component ownership, and internal lifecycle mechanics in developer documentation or code comments unless they explain a user-visible constraint.
+Do not create extra documents for short explanations that already fit naturally in the README.
+
+## Section scope
+
+Use these boundaries without adding sections that do not apply:
+
+| Section | Keep in the README | Avoid |
+| --- | --- | --- |
+| Title, badges, and summary | Package identity, purpose, and a short explanation of when to use it. | Restating the title or listing features in the summary. |
+| Features | Distinct user-facing capabilities that help readers choose the package. | Command inventories, configuration fields, implementation details, or guarantees repeated verbatim elsewhere. |
+| Install | Applicable persistent, temporary, and local-checkout commands, with required prerequisites and trust warnings. | Full usage tutorials or repeated setup instructions for each install method. |
+| Quick start | One shortest successful path after installation, including required setup and the expected result. | Repeating Install, showing every alternative, or touring the entire menu. |
+| Tools | Registered tool names or concise groups, their purpose, and important prerequisites or side effects. | Complete parameter schemas and tool-result examples for every variant; link a detailed catalog when needed. |
+| Security and privacy | Permissions, credentials, data access, storage, external destinations, and controls needed for informed use. | Internal security mechanisms that do not change a user's decision or required precautions. |
+| Limitations | Material unsupported behavior, compatibility constraints, and practical workarounds. | Every defensive check, hypothetical failure, or a second copy of security guidance. |
+| Package-specific sections | Distinct concepts and operational or recovery guidance users need beyond the common sections. | Moving an exhaustive menu tour or internal lifecycle specification under a new heading just to shorten Commands. |
+| Package layout | Main maintained directories, entrypoints, publication boundaries, and their responsibilities. | Exhaustive file trees, generated chunks, or a description of every helper and test file. |
+| Keywords | A short set of relevant discovery terms. | Feature prose, repeated synonyms, or unrelated search terms. |
+| License | License name and a link to the package license. | Reproducing the license text. |
 
 Installation instructions must state that extensions run with Pi's permissions when that warning is material to the package's install flow.
 Build-backed packages must explain that an unbuilt local checkout needs its build before package-directory loading.
-Keep security, privacy, and other information that users must understand before installing or enabling the package in the README.
+Keep security, privacy, experimental-feature warnings, and other information users must understand before installing or enabling the package in the README.
 Document additional precedence, persistence, failure, cancellation, recovery, or lifecycle behavior in the README or its linked package-owned guidance when users need it for safe operation.
+
+### Commands
+
+Keep Commands a quick reference to public slash-command syntax and outcomes, not a complete UI specification.
+Use a short paragraph for a single command and a compact list or table for multiple routes; a table is not required.
+Document each accepted route and compatibility alias with a concise purpose, grouping aliases that behave identically.
+State common supported modes and argument restrictions once, then note only route-specific differences.
+Include important prerequisites, side effects, and safety constraints directly or through a clearly labeled reference to their owning section.
+Add an example only when it clarifies syntax or behavior not already clear from the reference or Quick start.
+
+For menu-first commands, describe what the manager lets users accomplish instead of transcribing every menu item, state, dialog, or standard keybinding.
+Explain unusual interaction or cancellation behavior when it affects safe use, such as changes saved immediately that Escape does not undo.
+Keep destructive-operation and external-data warnings visible; link detailed workflows, recovery instructions, or long command references from a concise overview.
+
+### Settings
+
+Keep Settings focused on configuration entry points, a minimal example when configuration is needed, and essential defaults or safety behavior.
+State the settings path and scope, how to edit settings, and when changes take effect.
+Keep accepted values, full defaults, precedence, validation, migration, and persistence details in one authoritative package-owned reference, following [Extension settings conventions](extension-settings.md).
+A small reference may stay in the README; a large one should be linked with access instructions rather than copied into it.
+Do not repeat the same fields in a menu inventory, a defaults dump, and a reference table.
 
 ## Verification
 
@@ -80,8 +123,11 @@ For every README change:
 2. Run a fenced-code-aware heading audit over `packages/*/README.md`.
 3. Confirm every active package has Features, Install, Quick start, Package layout, Keywords, and License.
 4. Confirm standard labels and emojis are used where applicable.
-5. Run `npm run check`.
-6. Run `npm test`.
+5. Review section scope and duplication: keep one detailed explanation per topic and justify repeated examples or warnings by their local purpose.
+6. Confirm Commands remains a syntax-and-outcome reference, and that moved interface, compatibility, and safety details remain accessible through working links.
+7. Confirm installation and enablement warnings remain in the README, and linked skills or guidance are available to installed-package users.
+8. Run `npm run check`.
+9. Run `npm test`.
 
 Run a package dry-run pack when package metadata or published contents change.
 Run the package build and local Pi loading smoke when extension runtime loading changes.
