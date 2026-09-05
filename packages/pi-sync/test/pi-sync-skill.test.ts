@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+	DefaultPackageManager,
+	DefaultResourceLoader,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,9 +74,66 @@ test("setup guidance protects secrets and requires a verified first transfer", a
 		"/sync push",
 		"/sync pull",
 		"without `--yes` or `--force`",
+		"existing remote with authoritative local content",
+		"**More… → Push to remote…**",
+		"Do not choose **Sync now** when the user has explicitly chosen a direction",
+		"**Use local as initial source…**",
+		"**Keep local content and replace remote…**",
+		"If a direct push or pull reports a conflict, return to `/sync`",
+		"guarded forced operation internally after preview and confirmation",
+		"session token when using temporary credentials",
+		"**Store temporary credentials privately**",
+		"session token in its masked prompt",
+		"Change credential source**",
+		"full repository path shown in **Endpoint**",
+		"Do not approve an exact Git destination from a host-only summary",
+		"complete collection URL during the storage-connection input step",
+		"first check `pi list`",
+		"re-enable the pi-sync extension resource",
+		"project overrides with Tab or `pi config -l`",
+		"reinstalling preserves that filter",
+		"Only when the package is absent",
+		"Access key IDs and WebDAV usernames are visible during input",
+		"warn the user before screen sharing or recording",
 		"Report setup as complete only when",
 	]) {
 		assert.ok(skill.includes(requirement), `missing setup requirement: ${requirement}`);
 	}
 	assert.ok(!skill.includes("contacts the configured backend"));
+	assert.ok(!skill.includes("because it masks credentials"));
+	const readme = await readFile(path.join(packageDirectory, "README.md"), "utf8");
+	assert.ok(readme.includes("access key IDs and WebDAV usernames remain visible during input"));
+	assert.ok(!readme.includes("keeps credentials in masked extension prompts"));
 });
+
+for (const extensions of [[], ["-dist/index.ts"]]) {
+	test(`package filter ${JSON.stringify(extensions)} can disable sync while retaining its skill`, async () => {
+		const agentDir = await mkdtemp(path.join(tmpdir(), "pi-sync-filter-"));
+		try {
+			const settingsManager = SettingsManager.inMemory({
+				packages: [{ source: packageDirectory, extensions }],
+			});
+			const manager = new DefaultPackageManager({ cwd: agentDir, agentDir, settingsManager });
+			manager.addSourceToSettings(packageDirectory);
+			assert.equal(manager.addSourceToSettings(packageDirectory), false);
+			const packages = settingsManager.getGlobalSettings().packages;
+			assert.equal(packages?.length, 1);
+			assert.equal(typeof packages[0], "object");
+			assert.deepEqual(typeof packages[0] === "object" && packages[0].extensions, extensions);
+			const filtered = await manager.resolve();
+			assert.ok(filtered.extensions.some((resource) => resource.path.endsWith("dist/index.ts")));
+			assert.ok(filtered.extensions.every((resource) => !resource.enabled));
+			assert.ok(filtered.skills.some((resource) => resource.enabled));
+
+			settingsManager.setPackages([packageDirectory]);
+			const enabled = await manager.resolve();
+			assert.ok(
+				enabled.extensions.some(
+					(resource) => resource.enabled && resource.path.endsWith("dist/index.ts"),
+				),
+			);
+		} finally {
+			await rm(agentDir, { recursive: true, force: true });
+		}
+	});
+}

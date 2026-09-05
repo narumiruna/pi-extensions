@@ -2,7 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { promptSecret } from "./secret-input.js";
 
 export interface ChosenS3Credentials {
-	profileFields: { accessKeyId?: string; secretAccessKey?: string };
+	profileFields: { accessKeyId?: string; secretAccessKey?: string; sessionToken?: string };
 	summary: string;
 	ready: boolean;
 	replace?: boolean;
@@ -50,19 +50,28 @@ export async function chooseS3Credentials(
 ): Promise<ChosenS3Credentials | undefined> {
 	const choice = await ctx.ui.select(
 		"Credentials\n\nCredentials are stored in the private pi-sync settings file. Secret values are masked during input and never shown afterward.",
-		["Store credentials privately", "Cancel"],
+		["Store credentials privately", "Store temporary credentials privately", "Cancel"],
 		{ signal },
 	);
 	throwIfAborted(signal);
-	if (choice !== "Store credentials privately") return undefined;
+	const temporary = choice === "Store temporary credentials privately";
+	if (choice !== "Store credentials privately" && !temporary) return undefined;
 	const accessKeyId = await requiredCredentialInput(ctx, "Access key ID", "access-key-id", signal);
 	if (!accessKeyId) return undefined;
 	const secretAccessKey = await promptSecret(ctx, "Secret access key", { signal });
 	throwIfAborted(signal);
 	if (secretAccessKey === undefined) return undefined;
+	let sessionToken: string | undefined;
+	if (temporary) {
+		sessionToken = await promptSecret(ctx, "Session token", { signal });
+		throwIfAborted(signal);
+		if (sessionToken === undefined) return undefined;
+	}
 	return {
-		profileFields: { accessKeyId, secretAccessKey },
-		summary: "Stored privately (values hidden)",
+		profileFields: { accessKeyId, secretAccessKey, ...(temporary ? { sessionToken } : {}) },
+		summary: temporary
+			? "Stored privately with session token (values hidden)"
+			: "Stored privately (values hidden)",
 		ready: true,
 	};
 }

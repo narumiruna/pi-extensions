@@ -450,6 +450,7 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 				endpoint,
 				region,
 				credentials: {
+					...credentials.profileFields,
 					accessKeyId: credentials.profileFields.accessKeyId ?? "",
 					secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
 				},

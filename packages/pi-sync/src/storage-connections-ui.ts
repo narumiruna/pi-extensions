@@ -326,6 +326,7 @@ export async function showAddStorageConnection(ctx: ExtensionCommandContext, sig
 			endpoint,
 			region,
 			credentials: {
+				...credentials.profileFields,
 				accessKeyId: credentials.profileFields.accessKeyId ?? "",
 				secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
 			},
