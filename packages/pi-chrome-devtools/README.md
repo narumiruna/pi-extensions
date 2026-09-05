@@ -134,55 +134,25 @@ If the model cannot inspect the inline image, ask it to read the saved path, for
 
 ## 💬 Commands
 
-```text
-/chrome-devtools
-```
+| Command | Purpose |
+| --- | --- |
+| `/chrome-devtools` | Manage browser-tool availability and browser settings. |
+| `/chrome-devtools help` | Show command usage. |
+| `/chrome-devtools quickstart` | Show the CDP endpoint, launch candidates, and setup hints. |
+| `/chrome-devtools status` | Inspect tools, settings sources, and the last browser launch without probing or starting Chrome. |
+| `/chrome-devtools settings` | Change browser settings; successful edits save immediately. |
+| `/chrome-devtools tools` (aliases: `toggle`, `select`) | Stage tool availability, review the result, and apply it. |
+| `/chrome-devtools enable` (alias: `on`) | Immediately make all currently gated capabilities available and save the selection. |
+| `/chrome-devtools disable` (alias: `off`) | Immediately make all capabilities unavailable and save the empty selection. |
 
-Opens a menu that shows the tool catalog size, whether that catalog is saved, the configured endpoint, the observed managed-browser state, and any settings or launch warning before you choose an action.
-The menu keeps five actions on one level:
+All routes support TUI and RPC and reject unknown or trailing arguments.
+Only `enable` and `disable` also support print and JSON modes.
+Disabling capabilities leaves the slash command and `chrome_devtools_load` available; see [Tool exposure](#tool-exposure).
 
-- **Choose available browser tools…** — stage any combination of the five stable capabilities and, when enabled, the two experimental WebMCP gateways, then review the exact available/unavailable result before selecting **Apply tool changes**.
-- **Make all browser tools available…** or **Make all browser tools unavailable…** — preview the context-appropriate bulk change before applying it.
-- **Browser status** — inspect runtime, endpoint, launch mode, and the last launch attempt without probing the endpoint or starting Chrome.
-- **Browser settings** — immediately save the endpoint, auto-launch policy, browser executable, or experimental WebMCP gate.
-  Inspect unpacked-extension paths and effective sources.
-  A deprecated environment override remains effective until removed even when its underlying JSON value changes.
-- **Help** — view command usage and return to the menu.
-
-In the tool screen, **Select all** and **Select none** are unambiguous shortcuts; individual rows use friendly task labels while retaining their raw `chrome_devtools_*` identity in the description.
-Toggles remain a command-local draft.
-**Review changes** previews the exact effect, **Apply tool changes** saves it, and Cancel, Escape, Ctrl+C, disposal, or session replacement discards an unconfirmed draft without changing runtime tools or settings.
-A failed apply restores the previous availability and loaded-tool state, preserves the settings file, retains the draft for retry, and reports how to recover.
-
-Direct subcommands are also available:
-
-```text
-/chrome-devtools help
-/chrome-devtools quickstart
-/chrome-devtools status
-/chrome-devtools settings
-/chrome-devtools tools
-/chrome-devtools toggle
-/chrome-devtools enable
-/chrome-devtools disable
-```
-
-Compatibility aliases remain available: `toggle` and `select` mean `tools`, `on` means `enable`, and `off` means `disable`.
-
-- `help` shows command usage.
-- `quickstart` shows the configured CDP endpoint, endpoint source, auto-launch mode, browser candidates, last launch attempt, and launch hints.
-- `status` shows available and loaded capability counts, loader state, the persisted catalog, settings file path, endpoint source, launch mode, last launch attempt, and active non-Chrome tool count.
-- `settings` opens the same immediate-save browser settings flow used by the menu.
-- `tools` opens the same staged, width-safe availability and review flow used by the menu.
-- `toggle` and `select` are compatibility aliases for `tools`.
-- `enable` makes all currently gated capability tools available and follows the current native-deferred or eager exposure mode; `on` is a compatibility alias.
-- `disable` makes all capability tools unavailable and saves the empty catalog; `off` is a compatibility alias.
-  The slash command and `chrome_devtools_load` remain available.
-
-The menu, `settings`, `tools`, `help`, `quickstart`, and `status` require TUI or RPC mode.
-TUI uses keyboard navigation and injected Pi keybindings; RPC receives equivalent standard dialogs.
-In print and JSON modes, interactive and informational routes reject explicitly instead of silently opening unavailable UI.
-The immediate `enable`/`disable` routes remain available for deterministic non-interactive use.
+Menu tool changes require **Apply tool changes**; cancellation discards the unconfirmed draft.
+Failed apply leaves previous tool availability and settings intact and retains the draft for retry.
+Browser settings instead save immediately, and closing the flow does not undo them.
+See [Browser setup](./docs/browser-setup.md) for prerequisites and environment-override precedence, and [Experimental WebMCP](#experimental-webmcp) before enabling its gateways.
 
 ## ⚙️ Settings
 

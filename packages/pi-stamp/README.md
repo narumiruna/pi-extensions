@@ -70,7 +70,7 @@ Existing compatible stamps reformat on the next render, and new stamps use the s
 
 ## 💬 Commands
 
-Run `/stamp` in TUI or RPC mode to open Settings, Status, and Help.
+Run `/stamp` in TUI or RPC mode to configure transcript timestamps, response metadata, and tool stamps, or inspect their effective settings.
 The command rejects arguments, print mode, and JSON mode without changing settings.
 
 ## ⚙️ Settings

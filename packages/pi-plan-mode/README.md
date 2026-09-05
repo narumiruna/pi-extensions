@@ -47,68 +47,28 @@ Run `/plan <prompt>` when the first planning request is already known.
 
 ## 💬 Commands
 
-```text
-/plan
-/plan start
-/plan <prompt>
-/plan tools
-/plan show
-/plan finalize
-/plan implement
-/plan save
-/plan export [path]
-/plan exit
-```
+| Command | Purpose |
+| --- | --- |
+| `/plan` | Start or manage planning, review a plan, or choose same-session or fresh-session implementation. |
+| `/plan start` | Enter Plan mode without sending a model message. |
+| `/plan <prompt>` | Start planning with a prompt, or send a follow-up while already active. |
+| `/plan tools` | Choose a session-specific tool policy, then start; cancellation changes nothing. |
+| `/plan show` | Display the stored plan without starting a model turn. |
+| `/plan finalize` | Ask the active planner to finish or ask one remaining material question. |
+| `/plan implement` | Implement a completed or saved plan in this session, without a selector. |
+| `/plan save` | Save a ready plan in this Pi session and leave Plan mode. |
+| `/plan export [path]` | Write a ready, saved, or active implementation plan to Markdown. |
+| `/plan exit` (alias: `off`) | Leave Plan mode and discard its ready plan, or clear a saved/active plan. |
 
-In TUI and RPC, use bare `/plan` to open the menu for the current Plan state.
-When Plan mode is off and no plan is stored, the launch menu shows the effective next-start tools and offers **Start Plan mode**, **Choose tools, then start…**, **Settings**, and **How Plan mode works**.
-Settings edits the persistent defaults for later workflows.
-Launch-menu policy changes remain a draft until **Done — start with this policy** is selected; Back, Escape, Ctrl+C, disposal, session replacement, and shutdown discard the draft without changing Plan state, active tools, thinking, or the stored selection.
+All routes support TUI and RPC.
+Print and JSON modes reject the menu and `tools`; stored-plan display and implementation have [additional mode restrictions](#-planning-and-implementation).
+Exact subcommand words select routes; other text is a planning prompt, so `/plan start a migration` sends a prompt rather than rejecting trailing text.
+There is no startup flag.
 
-Use `/plan start` when you want to enter Plan mode directly without sending a model message.
-Use `/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user message.
-The exact argument `start` is reserved for direct activation; longer text such as `/plan start a migration` remains an inline planning prompt.
-The extension does not register a startup flag; run `/plan start` after launch for direct activation.
-
-Use **Choose tools, then start…** or the `/plan tools` compatibility shortcut to choose a session-specific Plan policy before planning starts.
-Both routes use the same draft selector: **Done — start with this policy** stores the allowlist and starts the workflow, while cancellation leaves Plan mode off and changes nothing.
-The bounded multi-select shows 10 rows at a time, supports viewport paging, descriptions, and explicit unavailable rows for blocked, currently inactive, or configured but not-yet-registered tools.
-Configured or previously selected names without current metadata appear as pending registration and remain selected for first-request resolution.
-Reopen the picker to refresh tools registered while it was closed because Pi exposes no live tool-registration event.
-In TUI mode, type to fuzzy-search tool names, descriptions, policy, and source metadata; RPC shows the complete unfiltered list.
-Once Plan mode is active, tools are locked: `/plan` no longer offers tool or Settings actions, and `/plan tools` rejects the request.
-Exit and start a new workflow if a different tool set is required.
-The `plan_mode_question` tool keeps a dedicated model-requested questionnaire instead of using command-menu navigation.
-`/plan show` displays the stored plan without starting a model turn, including the accepted plan while implementation is active.
-`/plan finalize` explicitly asks the agent to complete the plan or ask one remaining material question, `/plan save` stores a completed ready plan for later and leaves Plan mode, and `/plan export [path]` writes a ready, saved, or active implementation plan to Markdown.
-Completed and saved plan menus offer **Implement here**, which continues with the planning conversation, and **Start fresh and implement**, which opens a new session and transfers only the approved plan.
-The direct `/plan implement` compatibility route remains equivalent to **Implement here** and never opens a selector.
-A successful ready-plan export also leaves Plan mode; saved and active implementation exports retain their existing state.
-`show`, `save`, `export`, and `implement` fail closed when no applicable plan is stored; `finalize` requires active Plan mode.
-Pi executes extension commands immediately during streaming, but changing Plan state or handing off implementation during an active run would mix two mode contracts inside one run.
-Plan mode therefore rejects busy start, exit, save, ready-plan export, implementation, state-changing menu action, and configured-shortcut transitions without changing state; wait for the run to settle and retry.
-Prompts submitted while Plan mode is already active remain ordinary Plan follow-ups, and `/plan finalize` remains available as a Plan-preserving follow-up.
-TUI and RPC show a warning for a rejected busy transition, while print and JSON routes throw an observable error.
-
-`/plan export` uses the configured **Export destination**, which defaults to `PLAN.md`.
-Supply a path to override that default for one export.
-Relative paths resolve from the command's current `ctx.cwd` at export time, absolute paths remain absolute, a leading `@` is accepted for Pi path compatibility, and missing parent directories are created.
-Explicit `/plan export <path>` input always wins over the setting.
-Export never overwrites an existing file, directory, or symbolic link: choose another path or remove the existing target first.
-A successful export adds one trailing newline but otherwise preserves the accepted Markdown exactly.
-After a ready plan is written, Plan mode ends, its thinking level is restored, the stable helper envelope is unchanged, and the ready state is cleared without starting a model turn.
-Exporting a saved or active implementation plan leaves that state unchanged.
-Failed or cancelled exports leave every Plan-mode state unchanged.
-The resulting file is available to the agent through its normal file-reading tools.
-Export is an explicit user-requested file mutation.
-Model-initiated Plan-mode writes remain blocked.
-
-In TUI and RPC, **Export plan…** opens a single-line path input from every ready, saved, or active plan menu.
-The input shows both the configured value and its currently resolved path.
-Submit an empty value to use the configured destination, or enter a relative or absolute one-off path.
-A failed TUI export retains the draft for correction; RPC reopens its input dialog.
-Escape returns to the owning menu without writing a file.
-A successful ready-plan export closes the menu and ends Plan mode; saved and active implementation menus close without changing their stored state.
+State-changing transitions require an idle run; tool selection is locked once planning starts.
+`show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
+Export defaults to the configured destination (`PLAN.md` when unset), never overwrites an existing target, and ends Plan mode only when exporting a ready plan.
+See [command workflows](./docs/command-workflows.md) for tool selection, busy-state recovery, path handling, and export cancellation, and [Security and privacy](#-security-and-privacy) before allowing custom tools.
 
 ## 🔒 Security and privacy
 

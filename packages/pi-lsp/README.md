@@ -129,12 +129,9 @@ Parameters:
 
 ## 💬 Commands
 
-```text
-/lsp
-```
-
-In TUI and RPC modes, it shows each configured LSP command and whether it is available on `PATH`.
-For compatibility, `/lsp` ignores command arguments.
+Run `/lsp` to show configured LSP commands and their availability on `PATH` in TUI or RPC mode.
+Arguments are ignored for compatibility.
+Print and JSON modes do not display its notification output.
 
 ## 🔒 Security and privacy
 

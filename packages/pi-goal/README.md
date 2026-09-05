@@ -118,60 +118,24 @@ Guaranteed coexistence with Plan mode requires `@narumitw/pi-plan-mode` `0.52.0`
 
 ## 💬 Commands
 
-```text
-/goal
-/goal status
-/goal implement snake game
-/goal --tokens 100k fix the failing test and verify it
-/goal edit ship the smaller fix first
-/goal pause
-/goal resume
-/goal clear
-```
+| Command | Purpose |
+| --- | --- |
+| `/goal` | Manage the current goal in TUI; report its summary in RPC. |
+| `/goal status` | Report the current goal and progress. |
+| `/goal [--tokens <budget>] <objective>` | Start automatic work, confirming replacement of an unfinished goal. |
+| `/goal edit [--tokens <budget>] <objective>` | Update the objective or budget without resetting cumulative usage. |
+| `/goal pause` | Pause an active goal and abort its current turn, preserving progress. |
+| `/goal resume` | Resume an eligible stopped goal or wake an active waiting goal. |
+| `/goal clear` (alias: `stop`) | Immediately clear the goal and pending continuation, not unrelated in-flight work. |
 
-- In the TUI, `/goal` opens a standard state-aware manager.
-  Its first action follows the current state: start when empty, pause when active, review a reached automatic-work limit, resume for other stopped states, or increase an exhausted token budget.
-  Active and paused views show **Automatic work: _used_ of _limit_ responses** with the remaining count, or explicitly show **Unlimited**.
-  A hard-cap pause opens **Review and continue…** and confirms that the objective, cumulative usage, and active time are preserved.
-  Continuing resets the counter to zero and allows one more configured epoch.
-  **Change automatic-work limit…** opens that setting while leaving the goal paused; Back and Escape make no change.
-  **Start with token budget…** first offers `25k`, a suggested `100k`, `300k`, and **Set a custom budget…**, then collects the objective with the selected budget still visible.
-  Custom input accepts examples such as `300000`, `300k`, `2.5k`, and `1.5m`; invalid input retains its draft for correction.
-  Status, Settings, Help, invalid-settings guidance, Clear, and Close remain shallow, labeled routes.
-  Arrow keys navigate, Enter selects or submits, Escape goes Back, and Ctrl+C closes the full flow.
-- In RPC mode, bare `/goal` and `/goal status` report the current summary through an observable notification without opening terminal UI.
-  Pi exposes no extension-command output channel in print or JSON mode.
-  Those routes return an explicit unsupported-mode error instead of treating stderr as status output.
-- Menu-driven Replace and Clear actions preview the exact affected goal and require confirmation.
-  Existing direct routes remain immediate for compatibility and automation.
-- `/goal <goal_to_complete>` starts goal mode.
-  If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters.
-  Failed kickoff delivery clears a new goal or restores the exact prior Goal and tool-policy snapshot; a previously active or waiting Goal keeps its existing workflow ownership.
-- `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget.
-  `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
-- `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters.
-  A successful active edit rotates the stale-turn guard and starts a fresh safety epoch.
-  Paused, blocked, and usage-limited goals stay stopped and retain their safety state until resume.
-  A budget-limited goal reactivates only when `edit --tokens` raises its budget above current usage.
-  Failed prompt delivery restores the exact previous Goal, guard id, safety counters, cause, tool-policy snapshot, and active ownership when applicable.
-- `/goal pause` stops prompt injection and auto-continuation, aborts the current turn, and keeps the goal for later resume.
-  Only active goals can be paused.
-- `/goal resume` resumes a paused, blocked, usage-limited, or budget-limited goal when its token budget allows it.
-  When the queued resume prompt starts, pi-goal rotates the stale-turn guard id, resets the automatic-response and repeat safety epoch, and clears a safety-pause cause.
-  The command reports the new finite epoch or explicit Unlimited state.
-  Objective, cumulative usage, and elapsed time are preserved.
-  If prompt delivery fails, the original stopped state, guard id, counters, fingerprint, and cause are restored.
-- `/goal clear` clears the current goal, status, pending continuation, inert legacy queue state, and legacy persisted state for the current working directory.
-  It does not abort unrelated in-flight work.
+All routes support TUI and RPC; bare `/goal` and `status` reject print and JSON modes, while direct mutation routes remain available.
+Objectives are limited to 4,000 characters; reference a file for longer instructions.
+`--tokens` must precede the objective and accepts positive amounts such as `100k` or `1.5m`.
+`status`, `pause`, `resume`, and `clear`/`stop` reject trailing arguments; other text starts an objective.
 
-The experimental ordered-goal queue has been removed.
-Use `/goal edit <objective>` to reprioritize the active objective instead.
-For example, if `task b` is complete and `task c` is in progress, edit the objective to say: `task b is complete; do task a next; after task a, continue task c, then task d; do not redo task b unless verification shows it is incomplete.`
-Former queue command words such as `add`, `prioritize`, `drop-last`, `skip`, `push`, `unshift`, `pop`, and `shift` are ordinary objective text for unaffected users.
-If a session still has legacy queue settings or persisted queue state, those words show a migration warning instead of replacing the active Goal.
-
-Goal objectives are limited to 4,000 characters.
-Put longer instructions in a file and reference the file path from `/goal`.
+Starting, editing an active goal, or resuming can trigger paid model work; [token budgets](#-token-budgets-and-elapsed-time) are not dollar-cost caps.
+Direct Clear is immediate, while menu Clear requires confirmation.
+See [Managing goals](./docs/managing-goals.md) for safety-epoch resets, failed-delivery recovery, budget-limited edits, and migration from removed queue commands.
 
 ## 🛠️ Tools
 

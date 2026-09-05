@@ -88,17 +88,15 @@ The `tools` segment takes no space while idle.
 
 | Command | Purpose |
 | --- | --- |
-| `/statusline` | Open Appearance, Information, Advanced, Status, and Help |
-| `/statusline settings` | Open the JSON editor in TUI mode |
-| `/statusline status` | Show the effective settings and diagnostics |
-| `/statusline help` | Show command and schema guidance |
+| `/statusline` | Customize footer appearance, information density, and layout. |
+| `/statusline settings` | Edit the settings JSON. |
+| `/statusline status` | Show effective settings and diagnostics. |
+| `/statusline help` | Show command and schema guidance. |
 
-The direct `settings`, `status`, and `help` routes remain for compatibility.
-The main menu is TUI-only; Escape returns from Advanced or closes the menu.
-RPC receives notifications instead of TUI-only controls.
+The menu and editor require TUI; RPC receives notifications instead, including the manual settings path for `settings`.
+Status and help support TUI and RPC; print and JSON modes produce no command output.
 Unknown subcommands and trailing arguments are rejected.
-The standard palette picker owns navigation and cleanup; pi-statusline owns footer previews, settings, and rollback.
-The width-aware layout editor and JSON editor remain specialized UI.
+Palette previews save on Enter and revert on Escape, but layout changes save immediately and are not undone by closing the editor; see the [configuration guide](./docs/configuration.md).
 
 ## 📐 Runtime behavior
 

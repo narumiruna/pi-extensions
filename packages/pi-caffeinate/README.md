@@ -67,19 +67,17 @@ If no supported inhibitor is available, the extension stays loaded and reports t
 
 | Command | Purpose |
 | --- | --- |
-| `/caffeinate` | Open keep-awake controls in TUI or RPC. |
-| `/caffeinate display` | Keep the system and display awake. |
-| `/caffeinate sleep` | Keep the system awake while allowing display sleep. |
+| `/caffeinate` | Open keep-awake controls. |
+| `/caffeinate display` (alias: `screen`) | Keep the system and display awake. |
+| `/caffeinate sleep` (alias: `system`) | Keep the system awake while allowing display sleep. |
 | `/caffeinate status` | Show inhibitor state, mode, quiet mode, and settings path. |
-| `/caffeinate mode` | Open the TUI/RPC mode selector; Escape closes it. |
-| `/caffeinate stop` | Release the inhibitor until the next agent run. |
-| `/caffeinate help` | Show canonical command routes. |
+| `/caffeinate mode` (aliases: `config`, `settings`) | Choose the keep-awake mode. |
+| `/caffeinate stop` (alias: `off`) | Release the inhibitor until the next agent run. |
+| `/caffeinate help` | Show command usage. |
 
-Changing to `display` or `sleep` restarts an active inhibitor so the mode applies immediately.
-Print and JSON modes reject the interactive menu.
-Direct routes avoid interactive UI, but those modes do not display their notification feedback.
-In TUI and RPC mode, unknown commands and trailing text show a rejection with the command guide.
-Compatibility aliases are `screen` for `display`, `system` for `sleep`, `off` for `stop`, and `config` or `settings` for `mode`.
+All routes support TUI and RPC and reject unknown or trailing arguments.
+Print and JSON modes reject the menu and mode selector; other direct routes run but do not display notification feedback.
+Changing to `display` or `sleep` restarts an active inhibitor immediately.
 
 ## ⚙️ Settings
 

@@ -134,15 +134,15 @@ Explicit `F8` and `Ctrl+Alt+F` values remain supported, but the default is now `
 
 ## 💬 Commands
 
-| Command | Mode | Description |
-| --- | --- | --- |
-| `/file-context` | TUI only | Open the Add, Review, Settings, Status, and Help menu. |
-| `/file-context browse` | TUI only | Scan and open the file explorer directly. |
-| `/file-context remove` | TUI only | Open selected-context review directly through the compatibility route. |
+| Command | Purpose |
+| --- | --- |
+| `/file-context` | Select and review file context for the next prompt, or change settings. |
+| `/file-context browse` | Scan and open the file explorer directly. |
+| `/file-context remove` | Review selected context through the compatibility route; it does not delete files. |
 
-Unknown and trailing arguments are rejected.
-RPC reports that File Context requires the interactive TUI.
-Print and JSON modes reject the command before opening interactive UI.
+All routes require TUI mode and reject unknown or trailing arguments.
+RPC reports the TUI requirement; print and JSON modes reject the command before opening UI.
+See [Security and privacy](#-security-and-privacy) before sending selected file content.
 
 ## 🔒 Security and privacy
 

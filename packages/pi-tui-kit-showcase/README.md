@@ -51,11 +51,8 @@ Those values reset when the command runs again or Pi replaces the session owner.
 
 ## 💬 Commands
 
-### `/tui-kit-showcase`
-
-Opens the showcase menu in TUI mode.
-The command accepts no arguments.
-Any argument is rejected with `Usage: /tui-kit-showcase`.
+Run `/tui-kit-showcase` to browse interactive component demos in TUI mode.
+It accepts no arguments and rejects RPC, print, and JSON modes.
 
 ## 🗂️ Package layout
 

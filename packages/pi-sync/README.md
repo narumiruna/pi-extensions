@@ -175,38 +175,36 @@ Read the [settings reference](./docs/settings.md) for complete S3/R2, Git, and W
 
 ## 💬 Commands
 
-The menu is preferred, while deterministic routes remain available:
+| Command | Purpose |
+| --- | --- |
+| `/sync` | Set up storage, manage synced content, and review sync operations or recovery. |
+| `/sync help` | Show command usage. |
+| `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
+| `/sync init` | Create a local configuration template. |
+| `/sync config` | Show resolved configuration. |
+| `/sync files` | List included local files. |
+| `/sync status` | Compare local and remote snapshot state. |
+| `/sync diff` | Show local and remote differences. |
+| `/sync doctor` | Check configuration, connectivity, and backend safety. |
+| `/sync push` | Publish local content to remote storage. |
+| `/sync pull` | Back up local content, then apply the remote snapshot. |
+| `/sync sync` | Choose a safe sync direction or require conflict review. |
+| `/sync history` | Browse remote snapshots and review a rollback. |
+| `/sync rollback <snapshot-id>` | Back up local content, apply a historical snapshot, and republish it remotely. |
+| `/sync migrate-state` | Migrate the legacy local state directory. |
+| `/sync unlock --stale` | Recover an abandoned local lock after guarded ownership checks. |
 
-```text
-/sync help
-/sync use <setup>
-/sync init
-/sync config [--setup <name>]
-/sync files [--setup <name>]
-/sync status [--setup <name>]
-/sync diff [--setup <name>]
-/sync doctor [--setup <name>]
-/sync push [--setup <name>]
-/sync pull [--setup <name>]
-/sync sync [--setup <name>]
-/sync history [--setup <name>]
-/sync rollback <snapshot-id> [--setup <name>]
-/sync migrate-state [--yes]
-/sync unlock --stale
-```
+All routes support TUI and RPC; RPC settings and included-content screens are read-only.
+Print and JSON modes reject `/sync`.
+Unknown commands or flags, trailing values, and missing setup/snapshot values are rejected, including the former version 2 setup-addressing flag.
 
-- `--setup <name>` addresses a setup without switching it.
-- `--yes` or `-y` skips confirmation for `push`, `pull`, `sync`, `rollback`, or `migrate-state`.
-- `--force` lets `push`, `pull`, and `sync` accept a reviewed content conflict without disabling backend concurrency protection.
-- `--stale` applies only to guarded stale-lock recovery through `unlock`.
+- `--setup <name>` targets a setup without switching it on `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, and `rollback`.
+- `--yes` (alias: `-y`) skips confirmation on `push`, `pull`, `sync`, `rollback`, and `migrate-state`; use only after reviewing the affected content.
+- `--force` lets `push` or `pull` accept content conflicts without disabling backend concurrency protection. It is also accepted by `sync`, which still requires a direction choice for divergent content, and by `rollback`, where it has no additional effect.
+- `--stale` is accepted only by `unlock` and is required to remove a stale lock.
 
-The former version 2 setup-addressing flag is rejected.
-Unknown flags, unknown commands, trailing values, and missing setup/snapshot values are rejected.
-Completion includes known setup names and preserves preceding command tokens.
-
-TUI mode provides manager, settings, resource, included-content, secret, wizard, confirmation, and operation-review screens.
-In RPC mode, the **Settings** and **Included Content** interfaces provide read-only summaries through Pi's dialog and notification protocol.
-Print and JSON modes reject `/sync` before entering interactive screens.
+Push and rollback publish data externally; pull and rollback can replace or delete local managed files.
+Review [Settings](#-settings) for included-content privacy and [Manager, conflicts, and recovery](#-manager-conflicts-and-recovery) before forcing a direction, skipping confirmation, or removing a lock.
 
 ## 🔄 Backend and recovery model
 

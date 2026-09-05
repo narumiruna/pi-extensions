@@ -100,18 +100,9 @@ Raw error messages are classified in memory and discarded.
 
 ## 💬 Commands
 
-```text
-/analytics
-```
-
-The command accepts no arguments.
-TUI mode shows the full dashboard, and RPC mode adapts the same screens to dialogs.
-Print and JSON modes reject the command before reading analytics data.
-
-The root menu contains Change time range, Skills, Tools, Provider reliability, Response cycles, Data & privacy, and Close.
-Skills and Tools provide searchable details and model breakdowns.
-Escape goes back from nested screens and closes the root, while Ctrl+C closes the menu.
-Deleting data requires confirmation; Back keeps the dashboard open, Ctrl+C closes it in TUI mode, and cancellation leaves data unchanged.
+Run `/analytics` to inspect local usage, skills, tools, and provider reliability over a chosen time range.
+It accepts no arguments and supports TUI and RPC; print and JSON modes reject it before reading analytics data.
+Deleting analytics data requires confirmation, and cancellation leaves data unchanged.
 
 ## 🔒 Security and privacy
 

@@ -59,26 +59,13 @@ When the active model uses another API, compaction remains entirely Pi-native.
 
 ## 💬 Commands
 
-```text
-/codex-compact
-```
+Run `/codex-compact` to inspect the effective compaction path, change settings, or request manual compaction in TUI mode.
+It accepts no arguments.
+RPC reports the manual settings path without compacting; print and JSON modes reject the command.
+Closing the menu with Escape or Ctrl+C does not compact the session.
 
-In TUI mode, the menu shows whether remote compaction is enabled, the protocol setting, the active model, and whether manual compaction will use **Responses Remote V2**, **Responses Compact API**, or **Pi native**.
-It contains:
-
-```text
-Compact now
-Settings
-Close
-```
-
-**Compact now** closes the menu before asking Pi to compact the active session.
-Escape or Ctrl+C closes without compacting, and an obsolete menu cannot trigger work after session replacement or shutdown.
-**Settings** opens the bounded settings editor.
-In RPC mode, the command reports the manual settings path instead of opening custom UI or compacting.
-Print and JSON modes reject the command explicitly because they cannot open the menu or safely replace their normal output with an interactive result.
-
-Pi's built-in `/compact` remains available and follows the same extension hook for all three supported Responses APIs.
+Manual compaction uses **Responses Remote V2**, **Responses Compact API**, or **Pi native**, as described in [Settings](#-settings).
+Pi's built-in `/compact` remains available and follows the same extension hook.
 
 ## ⚙️ Settings
 

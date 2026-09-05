@@ -101,17 +101,13 @@ Peer-list text and details share a 40 KiB UTF-8 result budget below Pi's tool-ou
 
 ## 💬 Commands
 
-| Command | Modes | Description |
-| --- | --- | --- |
-| `/fleet` | TUI, RPC | Open the state-aware Pi Fleet manager. |
-| `/fleet <pifleet:v1:invite>` | TUI, RPC | Review the join confirmation and join one ephemeral local group. |
+| Command | Purpose |
+| --- | --- |
+| `/fleet` | Launch Pi sessions and manage group messaging, peers, invites, and request policy. |
+| `/fleet <pifleet:v1:invite>` | Review the join confirmation and join one ephemeral local group. |
 
-Unknown and trailing arguments are rejected.
-JSON and print command routes fail before opening sockets or custom UI.
-
-The manager keeps **New Pi session…** first whether connected or disconnected.
-Its **Settings** screen changes the default terminal and final launch confirmation.
-Connected sessions can send a message, inspect peers, copy the explicit invite, change request policy, inspect settings, status, and help, or leave the group.
+All routes support TUI and RPC, reject unknown or trailing arguments, and fail in print or JSON mode before opening sockets.
+Review the [launch flow](#-launch-flow) and [Security and privacy](#-security-and-privacy): accepted peer requests can start paid model turns.
 
 ## 🖥️ Terminal backends
 

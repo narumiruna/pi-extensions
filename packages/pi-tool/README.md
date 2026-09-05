@@ -57,12 +57,9 @@ It rejects arguments, print mode, and JSON mode before opening an interactive fl
 
 ## 💬 Commands
 
-| Command | Description |
-| --- | --- |
-| `/tool` | Browse configured tools and configure the active-tool widget. |
-
-`/tool` accepts no arguments and never enables, disables, or executes tools.
-Its menu provides **Browse tools**, **Active tool status**, **Status**, and **Help**.
+Run `/tool` to browse configured tools and configure the active-tool widget in TUI or RPC mode.
+It accepts no arguments and rejects print and JSON modes.
+The command never enables, disables, or executes tools.
 
 ## ⚙️ Settings
 

@@ -51,51 +51,18 @@ Run `/fast` to toggle Fast mode for a supported active Codex model.
 
 ## 💬 Commands
 
-Open the manager with:
+| Command | Purpose |
+| --- | --- |
+| `/usage` | Query the active provider's usage, then manage provider queries, preferences, or eligible Codex resets. |
+| `/fast` | Toggle Fast mode for the active supported Codex model. |
 
-```text
-/usage
-```
+Both commands support TUI and RPC, accept no arguments, and reject print and JSON modes.
+Cross-provider queries require an explicit interactive choice; there are no provider-ID, `--refresh`, or `--all` arguments.
+Requests use the matched provider credentials; see [Security and privacy](#-security-and-privacy).
+Fast mode uses more plan allowance; see [Codex Fast mode](#codex-fast-mode) for eligibility and when changes apply.
 
-In TUI or RPC mode, the menu first queries the active model provider and then offers these actions:
-
-```text
-Refresh current usage
-Settings
-Turn Fast mode on/off       # Supported current Codex models only
-Redeem usage limit reset…   # Current Codex OAuth accounts only
-View another configured provider…
-View all configured providers…
-Close
-```
-
-`/usage` accepts no arguments, including `--refresh`, a provider ID, or `--all`.
-Cross-provider requests require an explicit interactive choice.
-Escape returns from provider selection or closes the root menu.
-Print and JSON modes reject `/usage` because they cannot host the interactive flow.
-The extension owns the cancellable live-query progress view because it streams provider work and supports in-flight abort.
-
-### Provider targets
-
-A target is the provider-owned account, organization, project, team, or workspace used for one usage query.
-Providers without target discovery query immediately, and a single returned target is selected automatically without writing settings.
-When several targets are available, `/usage` remembers an explicit selection by provider and reuses it only while it remains in a fresh listing.
-A missing remembered target returns **Selection required** instead of querying another target silently.
-The current provider then offers **Select &lt;target&gt;…**, while a ready current or individually viewed provider offers **Change &lt;target&gt;…**.
-
-Selecting another provider may open one Pi target prompt after that provider is queried lazily.
-Cancelling the prompt changes nothing.
-Auth and target membership are revalidated before an explicit selection is saved, then both are resolved again before billing is queried.
-**View all configured providers…** never opens nested target prompts: unresolved providers remain visible with guidance to view them individually.
-Background status refresh also stays non-interactive and shows `selection required` until `/usage` completes the choice.
-Fireworks accounts are the first implementation of this provider-neutral flow.
-
-For the current OpenAI Codex provider, **Redeem usage limit reset…** first checks fresh earned-reset details.
-When details are available, you select a reset and review its exact effect before confirmation.
-**No, go back** is the safe default and cancellation before confirmation sends no mutation.
-After confirmation, the reset operation cannot be cancelled from its progress view; session replacement or shutdown still aborts owned work.
-A transport failure offers **Try again** with the same redemption request ID so the backend can treat an uncertain retry idempotently.
-Successful, already-completed, not-needed, and no-credit outcomes are reported separately, then usage and the statusline are refreshed for the still-current account.
+Codex reset redemption requires a freshly matched current OAuth account and explicit confirmation; **after confirmation, its progress view cannot cancel the reset**.
+Read the [query and reset guide](./docs/operations.md) for target selection, cancellation, and safe retry behavior.
 
 ## ⚙️ Settings
 
@@ -125,7 +92,6 @@ It sends `service_tier: "priority"` while enabled and explicit `service_tier: "d
 The statusline adds `fast` only while the preference is effective, for example `codex fast 59% ↻ 2h30m` with the default reset countdown.
 Unsupported models and custom or proxy origins are left unchanged.
 
-`/fast` supports TUI and RPC mode, accepts no arguments, and rejects print or JSON mode before mutation.
 A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
 Repair or remove an invalid file, then run `/reload` before trying the toggle again.
 

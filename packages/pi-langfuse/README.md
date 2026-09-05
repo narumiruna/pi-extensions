@@ -196,26 +196,12 @@ To wait for completed exports, run `/langfuse` and choose **Flush completed trac
 
 ## 💬 Commands
 
-```text
-/langfuse
-```
+Run `/langfuse` to configure tracing, inspect its state without exposing credentials, or flush completed traces for the current session in TUI or RPC mode.
+Arguments are ignored for compatibility and cannot bypass the menu.
+Print and JSON modes reject the command with an error containing tracing state and the manual configuration path.
 
-The command opens one context-aware standard menu in TUI or RPC mode.
-Its state lines show the current session's tracing state, endpoint, content-capture mode, initialization failure when applicable, and private configuration path.
-It never displays credentials.
-Escape closes the menu.
-Credential and endpoint text inputs remain extension-owned because they enforce secret-preserving setup/update semantics rather than standard navigation.
-
-Available actions depend on that state:
-
-- **Flush completed traces for this session** appears first when tracing is active and waits for completed observations to export.
-- **Set up Langfuse for this Pi agent directory** appears when no valid config was loaded.
-- **Update Langfuse for this Pi agent directory** appears when a valid config exists.
-- **Show setup and privacy help** explains the agent-directory scope, manual configuration path, and content-capture risk.
-
-Connection actions state their agent-directory scope and per-process restart requirement before selection.
-For compatibility, command arguments are ignored and cannot select or bypass a menu action.
-Print and JSON modes reject the interactive command with an observable error that includes current tracing state and the manual configuration path.
+Connection changes apply to the current Pi agent directory and require each process to restart; see [Settings](#-settings).
+Flushing exports completed observations to the configured endpoint; review [Security and privacy](#-security-and-privacy) before enabling content capture.
 
 ## 🔒 Security and privacy
 

@@ -73,13 +73,10 @@ The quote sent to the editor omits cwd, session IDs, entry IDs, session files, a
 
 ## 💬 Commands
 
-| Command | Modes | Description |
-| --- | --- | --- |
-| `/recall` | TUI, RPC | Open the Pi Recall manager; arguments are rejected. |
-
-Print and JSON modes reject `/recall` before opening an interactive flow.
-TUI and RPC expose the same save, preview, quote, delete, status, and help capabilities; RPC uses explicit dialogs instead of terminal shortcuts.
-In RPC, quoting emits Pi's `set_editor_text` extension UI request.
+Run `/recall` to save messages and review, quote, or delete saved context in TUI or RPC mode.
+It accepts no arguments and rejects print and JSON modes.
+Quoting fills the editor without submitting; RPC uses Pi's `set_editor_text` request.
+Deletion requires confirmation; see [recall controls](#-tui-fuzzy-search) for deletion and cancellation behavior.
 
 ## 🧭 Recall scopes
 

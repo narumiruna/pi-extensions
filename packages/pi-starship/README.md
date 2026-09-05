@@ -62,21 +62,15 @@ It does not cover general TOML, shell Starship configuration, extension source d
 
 | Command | Purpose |
 | --- | --- |
-| `/starship` | Open the current-state menu in TUI mode; show help in RPC |
-| `/starship settings` | Edit, preview, and confirm TOML in TUI; show the file path in RPC |
-| `/starship status` | Show the configuration source, path, and diagnostics in TUI or RPC |
-| `/starship help` | Show command and configuration help in TUI or RPC |
+| `/starship` | Customize the footer, preview presets, inspect modules, or restore built-in configuration; RPC shows help. |
+| `/starship settings` | Edit, preview, and confirm TOML; RPC shows the file path. |
+| `/starship status` | Show the configuration source, path, and diagnostics. |
+| `/starship help` | Show command and configuration help. |
 
-The main menu keeps seven actions on one level: **Customize footer**, **Presets**, **Explain footer**, **Modules**, **Configuration**, **Help**, and **Restore built-in…**.
-It shows the current source and configuration health.
-Presets, Explain, Modules, and Configuration are menu-only; they do not add textual subcommands.
-Restore is unavailable when there is no document to replace.
-
-The TOML editor, live footer previews, Explain view, module inspector, and configuration reviews use specialized TUI screens.
-Their content and key hints adapt to terminal width and Pi's configured keybindings.
-Escape returns to the previous screen, while Ctrl+C closes the workflow.
-Direct routes reject trailing arguments.
-Print and JSON modes produce no ad hoc output, and footer lifecycle work runs only in TUI mode.
+All routes support TUI and RPC with the exceptions above and reject unknown or trailing arguments.
+Print and JSON modes produce no command output; the footer runs only in TUI mode.
+Preset selection, module inspection, and recovery are menu-only, not extra subcommands.
+Restoring built-in configuration requires an existing settings document to replace; see [Settings](#-settings).
 
 ## ⚙️ Settings
 

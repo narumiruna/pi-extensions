@@ -88,14 +88,16 @@ Pi Chat never claims exactly-once delivery, delivery receipts, or offline retry.
 
 ## 💬 Commands
 
-| Command | Modes | Description |
-| --- | --- | --- |
-| `/chat` | TUI | Open the state-aware Pi Chat manager. |
-| `/chat <pichat:v1-or-v2:invite>` | TUI | Choose private persistence, join, and open chat. |
-| `/chat #<public-slug>` | TUI | Review the warning, join, and open the chat composer directly. |
+| Command | Purpose |
+| --- | --- |
+| `/chat` | Create, join, resume, or manage a chat room. |
+| `/chat <pichat:v1-or-v2:invite>` | Choose private-room persistence, join, and open chat. |
+| `/chat #<public-slug>` | Review the public-room warning, join, and open chat. |
 
-RPC, print, and JSON modes reject the command before starting networking or custom TUI work.
-Unknown and trailing arguments are rejected instead of ignored.
+All routes require TUI mode; RPC, print, and JSON modes reject them before networking starts.
+Unknown and trailing arguments are rejected.
+Escape or Ctrl+C returns to Pi without leaving the room or discarding the draft.
+Read [Security and privacy](#-security-and-privacy) before sharing messages or invites.
 
 ## 🪪 Identity and nicknames
 
