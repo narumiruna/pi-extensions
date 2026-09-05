@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 
 const scenario = process.argv[2];
 const expectedFiles = Number(process.argv[3] ?? "0");
@@ -6,6 +6,21 @@ let buffer = Buffer.alloc(0);
 const openedUris = [];
 
 if (scenario === "delayed-sigterm") process.on("SIGTERM", exitAfterDelay);
+
+const lifecycle = scenario.startsWith("lifecycle-");
+function record(event) {
+	if (process.env.PI_LSP_TEST_LOG) {
+		appendFileSync(
+			process.env.PI_LSP_TEST_LOG,
+			`${JSON.stringify({ pid: process.pid, ...event })}\n`,
+		);
+	}
+}
+if (lifecycle) {
+	process.on("SIGTERM", () => setTimeout(() => process.exit(0), 25));
+	process.on("exit", () => record({ method: "exited" }));
+	record({ method: "ready" });
+}
 
 function exitAfterDelay() {
 	setTimeout(() => {
@@ -58,6 +73,73 @@ function publish(uri, diagnostics) {
 }
 
 function handle(message) {
+	record(message);
+	if (lifecycle) {
+		if (scenario === `lifecycle-hang-${message.method}`) return;
+		if (scenario === `lifecycle-error-${message.method}`) {
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				error: { code: -32603, message: "intentional operation failure" },
+			});
+			return;
+		}
+		if (message.method === "initialize") {
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				result: {
+					capabilities: { diagnosticProvider: {}, codeActionProvider: { resolveProvider: true } },
+				},
+			});
+			return;
+		}
+		if (message.method === "textDocument/diagnostic") {
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				result: { items: scenario === "lifecycle-large" ? [diagnostic("x".repeat(60_000))] : [] },
+			});
+			return;
+		}
+		if (message.method === "textDocument/codeAction") {
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				result:
+					scenario === "lifecycle-unchanged"
+						? []
+						: [
+								{
+									title: "fixture fix",
+									kind: "source.fixAll",
+									data: { uri: message.params.textDocument.uri },
+								},
+							],
+			});
+			return;
+		}
+		if (message.method === "codeAction/resolve") {
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				result: {
+					...message.params,
+					edit: {
+						changes: {
+							[message.params.data.uri]: [
+								{
+									range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+									newText: scenario === "lifecycle-large" ? "x".repeat(60_000) : "// fixed\n",
+								},
+							],
+						},
+					},
+				},
+			});
+			return;
+		}
+	}
 	if (message.method === "initialize") {
 		if (scenario === "require-environment" && process.env.PI_LSP_TEST_ENV !== "forwarded") {
 			send({

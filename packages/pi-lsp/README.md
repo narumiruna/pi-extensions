@@ -127,6 +127,16 @@ Parameters:
   Defaults to false.
 - `server?`: optional configured server name.
 
+## 🛑 Cancellation and shutdown
+
+Cancellation stops the current server and prevents further diagnostics routes or fix writes once observed.
+Session shutdown, replacement, and reload cancel and await all LSP calls owned by that session before teardown completes, including partially initialized servers.
+Other sessions retain their own calls, even when they share a headless UI.
+A completed write is not rolled back if cancellation arrives during subsequent server shutdown.
+
+Status cleanup is best effort and cannot bypass process cleanup or replace an operation's result or error.
+A server-cleanup failure is reported when there is no earlier operation failure.
+
 ## 💬 Commands
 
 Run `/lsp` to show configured LSP commands and their availability on `PATH` in TUI or RPC mode.
@@ -147,6 +157,9 @@ A server process inherits Pi's environment and receives any `servers[].env` over
 - The tools provide diagnostics and source code actions, not symbol navigation, references, or semantic rename.
 - A clean LSP result does not replace the repository's formatter, linter, type checker, build, or tests.
 - This project has not demonstrated through benchmarks that LSP improves agent task success, latency, or tool use.
+- Overlapping calls share one activity status; one completion can clear another call's indicator.
+- Fix writes do not participate in Pi's shared file-mutation queue. Avoid concurrent edits to the same file.
+- Diagnostics and fix previews are returned in full without an output-size bound. Keep requests targeted.
 
 This guidance is informed by [Eric Traut's comment on LSP integration for coding agents](https://github.com/openai/codex/issues/8745#issuecomment-3713058579).
 The comment notes that repository-native checks may already provide much of the useful verification.
