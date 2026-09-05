@@ -264,40 +264,15 @@ Enabling them permits trusted invite holders to start paid model turns that may 
 
 ```text
 packages/pi-fleet/
-├── dist/                  # Generated TypeScript runtime loaded by Jiti
-├── scripts/
-│   ├── build-runtime.mjs  # Deterministic runtime builder and boundary validator
-│   └── ghostty-smoke.ts   # Opt-in Ghostty process smoke
-├── src/
-│   ├── index.ts
-│   ├── pi-fleet.ts
-│   ├── fleet-controller.ts
-│   ├── tools.ts
-│   ├── menu.ts
-│   ├── protocol.ts
-│   ├── transport.ts
-│   ├── transport-io.ts
-│   ├── runtime-directory.ts
-│   ├── terminal.ts
-│   ├── settings.ts
-│   ├── tmux.ts
-│   ├── ghostty.ts
-│   ├── zellij.ts
-│   ├── pi-invocation.ts
-│   ├── launcher.ts
-│   ├── launch-envelope.ts
-│   ├── reload-handoff.ts
-│   ├── renderer.ts
-│   └── text.ts
-├── test/
-├── README.md
-├── LICENSE
-├── package.json
-├── tsconfig.json
-└── tsconfig.process-smoke.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── pi-fleet.ts                    # Local session launch and messaging
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The generated runtime is built from the authoritative `src/index.ts` graph and does not import back into `src`.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

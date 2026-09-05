@@ -65,53 +65,19 @@ If no supported inhibitor is available, the extension stays loaded and reports t
 
 ## 💬 Commands
 
-```text
-/caffeinate
-```
+| Command | Purpose |
+| --- | --- |
+| `/caffeinate` | Open keep-awake controls in TUI or RPC. |
+| `/caffeinate display` | Keep the system and display awake. |
+| `/caffeinate sleep` | Keep the system awake while allowing display sleep. |
+| `/caffeinate status` | Show inhibitor state, mode, quiet mode, and settings path. |
+| `/caffeinate mode` | Open the TUI/RPC mode selector; Escape closes it. |
+| `/caffeinate stop` | Release the inhibitor until the next agent run. |
+| `/caffeinate help` | Show canonical command routes. |
 
-Opens keep-awake controls in TUI or RPC mode.
+Changing to `display` or `sleep` restarts an active inhibitor so the mode applies immediately.
 Print and JSON modes reject the interactive menu.
-Direct routes avoid interactive UI, but Pi's print and JSON modes do not display their notification feedback.
-
-```text
-/caffeinate display
-```
-
-Keeps the system and screen/display awake.
-If an inhibitor is currently active, it is restarted so the new mode applies immediately.
-
-```text
-/caffeinate sleep
-```
-
-Keeps the system awake while allowing normal display sleep.
-If an inhibitor is currently active, it is restarted so the new mode applies immediately.
-
-```text
-/caffeinate status
-```
-
-Shows whether the inhibitor is active, unavailable, disabled, or idle.
-The result includes the mode, quiet-mode state, and settings path.
-
-```text
-/caffeinate mode
-```
-
-Opens the keep-awake mode selector in TUI or RPC mode.
-Escape closes it.
-
-```text
-/caffeinate stop
-```
-
-Releases the active inhibitor until Pi starts another agent run.
-
-```text
-/caffeinate help
-```
-
-Shows the canonical command routes.
+Direct routes avoid interactive UI, but those modes do not display their notification feedback.
 In TUI and RPC mode, unknown commands and trailing text show a rejection with the command guide.
 Compatibility aliases are `screen` for `display`, `system` for `sleep`, `off` for `stop`, and `config` or `settings` for `mode`.
 
@@ -193,26 +159,17 @@ On Linux, `display` mode uses the pure-JavaScript `dbus-native` package to call 
 
 ## 🗂️ Package layout
 
-```txt
+```text
 packages/pi-caffeinate/
-├── src/
-│   ├── index.ts       # Pi package entrypoint
-│   ├── caffeinate.ts  # Extension registration and lifecycle orchestration
-│   └── *.ts           # Package-local inhibitor and settings modules
-├── dist/              # Generated source-mapped Jiti runtime
-├── scripts/
-│   └── build-runtime.mjs
-├── test/
-│   ├── build-runtime.test.ts
-│   └── caffeinate.test.ts
-├── README.md
-├── LICENSE
-├── tsconfig.json
-└── package.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── caffeinate.ts                  # Sleep inhibitors and lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-`src/index.ts` remains the thin authoritative forwarder, while Pi loads the generated `dist/index.ts` runtime.
-The other source modules are internal.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

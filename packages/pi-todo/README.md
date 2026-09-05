@@ -147,37 +147,15 @@ Terminal escape sequences, control characters, and bidirectional display control
 
 ```text
 packages/pi-todo/
-├── dist/
-│   └── index.ts                        # Generated Jiti runtime entrypoint
-├── scripts/
-│   └── build-runtime.mjs               # Deterministic runtime builder and validator
-├── src/
-│   ├── index.ts                        # Thin extension entrypoint
-│   ├── settings.ts                     # Read-only user settings loader and validation
-│   ├── todo-widget.ts                  # Tool, lifecycle, and state reconstruction
-│   └── widget-renderer.ts              # Adaptive themed widget rendering
-├── test/
-│   ├── build-runtime.test.ts           # Build, boundary, and Jiti loader coverage
-│   ├── settings.test.ts                # Settings validation and read safety
-│   ├── todo-cache-contract.test.ts     # Normalized provider-prefix coverage
-│   ├── todo-harness.ts                 # Shared extension lifecycle harness
-│   ├── todo-widget-enhancements.test.ts # Adaptive, settings, and blocked coverage
-│   └── todo-widget.test.ts             # Core extension behavior coverage
-├── LICENSE
-├── README.md
-├── package.json
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── todo-widget.ts                 # Todo tool, branch state, and widget lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The package exposes its Pi extension through `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./dist/index.ts"]
-  }
-}
-```
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

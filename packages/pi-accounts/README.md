@@ -241,40 +241,15 @@ It is excluded from active workspace checks, version bumps, and publishing.
 
 ```text
 packages/pi-accounts/
-├── src/
-│   ├── index.ts
-│   ├── account-menu.ts
-│   ├── account-store.ts
-│   ├── accounts.ts
-│   ├── oauth.ts
-│   ├── oauth-credential-source.ts
-│   ├── runtime-auth.ts
-│   ├── session-selection.ts
-│   └── storage.ts
-├── dist/               # Generated source-mapped Jiti runtime
-├── scripts/
-│   └── build-runtime.mjs
-├── test/
-│   ├── accounts-storage.test.ts
-│   ├── accounts.test.ts
-│   ├── build-runtime.test.ts
-│   ├── radius.test.ts
-│   └── session-selection.test.ts
-├── README.md
-├── LICENSE
-├── tsconfig.json
-└── package.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── accounts.ts                    # Account activation and session lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The package exposes its Pi extension through `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./dist/index.ts"]
-  }
-}
-```
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

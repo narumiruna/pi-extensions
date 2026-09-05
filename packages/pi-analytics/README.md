@@ -183,30 +183,15 @@ Never copy or remove only the main DB while an old process may still own its WAL
 
 ```text
 packages/pi-analytics/
-├── dist/                  # Generated TypeScript runtime loaded by Jiti
-├── scripts/
-│   └── build-runtime.mjs  # Deterministic runtime builder and boundary validator
-├── src/
-│   ├── index.ts              # Thin Pi entrypoint
-│   ├── analytics.ts          # Pi lifecycle, command, and session ownership
-│   ├── collector.ts          # Content-free response-cycle state machine
-│   ├── errors.ts             # Conservative error classification
-│   ├── skills.ts             # Explicit and model skill detection
-│   ├── menu.ts               # TUI/RPC analytics dashboard
-│   ├── types.ts              # Observation records
-│   └── storage/
-│       ├── files.ts          # Private generations, writes, reads, and Clear
-│       ├── format.ts         # Versioned JSONL codec and validation
-│       ├── queries.ts        # Incremental aggregate projections
-│       └── store.ts          # Lifecycle-safe storage facade
-├── test/
-├── README.md
-├── LICENSE
-├── package.json
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── analytics.ts                   # Collection lifecycle and dashboard command
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The generated runtime is built from the authoritative `src/index.ts` graph and does not import back into `src`.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

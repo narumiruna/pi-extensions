@@ -109,20 +109,15 @@ Therefore, **None in the current system prompt** does not prove that an inactive
 
 ```text
 packages/pi-tool/
-├── src/
-│   ├── index.ts               # Thin repository entrypoint
-│   ├── tool.ts                # Command, settings, and session lifecycle ownership
-│   ├── tool-catalog.ts        # Lazy menu and exact catalog detail projection
-│   ├── active-tool-status.ts  # Widget formatting, refresh, and cleanup
-│   └── settings.ts            # pi-tool.json validation and atomic persistence
-├── dist/                # Generated Jiti runtime and lazy catalog chunk
-├── scripts/build-runtime.mjs
-├── test/
-├── README.md
-├── LICENSE
-├── package.json
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── tool.ts                        # Tool catalog, settings, and lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

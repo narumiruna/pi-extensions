@@ -17,6 +17,7 @@
 	"files": [
 		"src",
 		"dist",
+		"docs",
 		"README.md",
 		"LICENSE"
 	],

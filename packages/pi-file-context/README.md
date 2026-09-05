@@ -185,39 +185,16 @@ Print and JSON modes reject the command before opening interactive UI.
 ## 🗂️ Package layout
 
 ```text
-dist/                         Generated TypeScript runtime loaded by Jiti
-scripts/build-runtime.mjs      Deterministic runtime builder and boundary validator
-src/index.ts                   Thin Pi entrypoint
-src/file-context.ts            Lifecycle, routes, filesystem boundaries, selected state, prompt injection
-src/file-context-menu.ts       Add, review, Settings, Status, Help, and removal flow
-src/file-context-settings.ts   Shortcut validation, coordinated reads, and atomic persistence
-src/external-editor.ts          Safe configured-editor process, path, queue, and TUI lifecycle
-src/file-context-explorer.ts   Folder, file, content, Git, editing, and line-range controller
-src/file-browser.ts            Safe hierarchy model for discovered project paths
-src/file-browser-ui.ts         Width-safe folder and file list rendering with effective key hints
-src/file-context-preview-ui.ts Width-safe preview, capacity, and progressive action help
-src/content-search.ts          Bounded literal and fuzzy content matching
-src/content-search-session.ts  Search input, toggles, navigation, and cancellation
-src/content-search-ui.ts       Width-safe result cards and highlighted context
-src/file-search.ts             Bounded native fuzzy file-name ranking
-src/git-context.ts             Bounded read-only Git status, diff, blame, history, revisions
-
-test/content-search.test.ts     Content matcher behavior and limits
-test/content-search-ui.test.ts  Content interaction, rendering, and lifecycle tests
-test/file-context-search.test.ts  File-name ranking, typo tolerance, and query-bound tests
-test/file-context-folder-browser.test.ts  Folder hierarchy, navigation, keybinding, and terminal-safety tests
-test/file-context.test.ts       Filesystem, prompt, lifecycle, shortcut, and explorer tests
-test/file-context-selection.test.ts  Add-and-continue, capacity, and progressive-help tests
-test/file-context-lifecycle.test.ts  Session replacement and shutdown disposal tests
-test/file-context-menu.test.ts  Menu, shortcut settings, exact review, removal, and rendering tests
-test/file-context-command-menu.test.ts  Command routes, loading, and direct browser compatibility tests
-test/pending-quotes.test.ts     Exact selected-context removal, cancellation, and stale-flow tests
-test/file-context-settings.test.ts  Shortcut defaults, validation, ordering, and atomic-write tests
-test/external-editor.test.ts    External process, path, queue, and cancellation tests
-test/git-context.test.ts        Git repository behavior and parser tests
+packages/pi-file-context/
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── file-context.ts                # Context selection and prompt attachment
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The generated runtime is built from the authoritative `src/index.ts` graph and does not import back into `src`.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

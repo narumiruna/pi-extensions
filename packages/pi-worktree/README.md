@@ -198,35 +198,15 @@ Use Git directly for force removal, branch deletion, custom prune expiry, detach
 
 ```text
 packages/pi-worktree/
-├── src/
-│   ├── index.ts
-│   ├── command.ts
-│   ├── git.ts
-│   ├── session.ts
-│   ├── settings.ts
-│   ├── status.ts
-│   └── worktree.ts
-├── dist/                  # Generated source-mapped Jiti runtime
-├── scripts/
-│   └── build-runtime.mjs
-├── test/
-│   ├── add-command.test.ts
-│   ├── command-test-support.ts
-│   ├── command.test.ts
-│   ├── build-runtime.test.ts
-│   ├── git.integration.test.ts
-│   ├── git.test.ts
-│   ├── remove-ignored-command.test.ts
-│   ├── session.test.ts
-│   ├── settings-command.test.ts
-│   ├── settings.test.ts
-│   ├── status-command.test.ts
-│   └── status.test.ts
-├── package.json
-├── README.md
-├── LICENSE
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── worktree.ts                    # Worktree manager and lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 
@@ -234,4 +214,4 @@ packages/pi-worktree/
 
 ## 📄 License
 
-MIT
+[MIT](./LICENSE)

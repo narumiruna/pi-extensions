@@ -65,17 +65,15 @@ Restart every running Pi process after saving so later sessions use the new conn
 `/reload` is not sufficient because the isolated Langfuse runtime is initialized once per process.
 In print or JSON mode, edit the file manually because the interactive manager is unavailable.
 
-You can also create the file manually:
+You can also create `<getAgentDir()>/pi-langfuse.json` (normally `~/.pi/agent/pi-langfuse.json`) manually.
+This minimal example keeps prompts, responses, and tool content local:
 
 ```json
 {
   "publicKey": "pk-lf-...",
   "secretKey": "sk-lf-...",
   "baseUrl": "https://us.cloud.langfuse.com",
-  "environment": "development",
-  "release": "local",
-  "userId": "your-user-id",
-  "captureContent": true
+  "captureContent": false
 }
 ```
 
@@ -87,7 +85,8 @@ Prefer HTTPS because HTTP sends Langfuse credentials and trace content without t
 `environment`, `release`, and `userId` are optional Langfuse trace attributes.
 An environment must match Langfuse's contract: at most 40 lowercase letters, numbers, hyphens, or underscores, and it cannot start with `langfuse`.
 `userId` populates the Langfuse user dimension, which is what the Sessions and Traces views group by; Langfuse accepts at most 200 characters, and leaving it unset reports no user.
-Set `captureContent` to `false` to trace timing, model, usage, cost, status, and bounded diagnostic metadata.
+`captureContent` defaults to `true` when omitted.
+Set it to `false` to trace only timing, model, usage, cost, status, and bounded diagnostic metadata.
 In that mode, pi-langfuse does not export prompts, provider-request snapshots, responses, or tool content.
 
 The extension automatically restricts an existing config file to mode `0600` and refuses to load credentials if that protection cannot be enforced.
@@ -236,26 +235,17 @@ Compaction summaries, tool partial results, opaque continuation signatures, auth
 
 ## 🗂️ Package layout
 
-```txt
+```text
 packages/pi-langfuse/
-├── src/
-│   ├── index.ts     # Thin repository entrypoint
-│   ├── langfuse.ts  # Pi lifecycle integration and slash command
-│   ├── tracing.ts   # Observation lifecycle, outcomes, and bounded metadata
-│   ├── sanitizer.ts # Content bounding and opaque-signature removal
-│   ├── runtime.ts   # Lazy Langfuse/OpenTelemetry runtime
-│   └── config.ts    # Private pi-langfuse.json loading and validation
-├── dist/            # Generated Jiti runtime and lazy chunks
-├── scripts/build-runtime.mjs
-├── test/
-├── README.md
-├── LICENSE
-├── tsconfig.json
-└── package.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── langfuse.ts                    # Tracing lifecycle and command
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The package build generates the published Pi entrypoint at `dist/index.ts` and preserves `runtime.ts` as a first-use chunk.
-The source modules remain authoritative.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

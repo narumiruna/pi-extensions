@@ -59,11 +59,13 @@ Any argument is rejected with `Usage: /tui-kit-showcase`.
 
 ## 🗂️ Package layout
 
-- `src/index.ts` — thin Pi extension entrypoint forwarder.
-- `src/showcase.ts` — command registration, lazy runtime loading, mode handling, and session owner cancellation.
-- `src/runtime.ts` — menu loop plus standalone Kit interactions.
-- `src/menu.ts` — declarative showcase screens and in-memory demo state.
-- `test/` — focused package behavior tests.
+```text
+packages/pi-tui-kit-showcase/
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── showcase.ts                    # Demo command and lifecycle
+└── test/                              # Behavior and lifecycle coverage
+```
 
 ## 🔎 Keywords
 
@@ -71,4 +73,4 @@ pi, pi-extension, tui, showcase, demo
 
 ## 📄 License
 
-MIT © narumiruna
+[MIT](./LICENSE) © narumiruna

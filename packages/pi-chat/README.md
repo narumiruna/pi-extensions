@@ -279,32 +279,15 @@ This smoke is intentionally excluded from `npm test` and CI because local UDP sc
 
 ```text
 packages/pi-chat/
-├── src/
-│   ├── index.ts
-│   ├── pi-chat.ts
-│   ├── chat-session.ts
-│   ├── network-contract.ts
-│   ├── network.ts             # Loaded only when a room needs a transport
-│   ├── public-room-directory.ts
-│   ├── directory-network.ts   # Loaded only for public-room discovery
-│   ├── room.ts                # Lightweight invite and room descriptor compatibility
-│   ├── protocol.ts            # Signed wire messages and framing
-│   ├── nickname.ts            # Lightweight nickname normalization
-│   ├── identity.ts            # Loads DHT and sodium implementations on first cryptographic use
-│   ├── settings.ts
-│   ├── menu.ts                # Loaded on the first menu request
-│   ├── chat-view.ts           # Loaded on the first composer request
-│   ├── widget.ts              # Loaded before the first room joins
-│   └── text.ts
-├── dist/                     # Generated source-mapped Jiti runtime and lazy feature chunks
-├── scripts/                  # Runtime builder plus opt-in real local network smoke and fixture
-├── test/                     # Deterministic behavior, builder, and mocked network coverage
-├── README.md
-├── LICENSE
-├── package.json
-├── tsconfig.json
-└── tsconfig.network-smoke.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── pi-chat.ts                     # Room lifecycle and chat command
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

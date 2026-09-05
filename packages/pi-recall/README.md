@@ -47,11 +47,17 @@ Install only from sources you trust because Pi extensions run with Pi's permissi
 
 ## 🧭 Recall workflow
 
-1. Type to fuzzy-search saved messages.
-2. Press `Tab` or `Shift+Tab` to change scope.
-3. Use the configured `/tree` filter-cycle keys to change the message view; the defaults are `Ctrl+O` and `Ctrl+Shift+O`.
-4. Press `Enter` to open the selected message, or press `Ctrl+D` to review and confirm deletion from the picker.
-5. Preview or quote the message, then add your instruction and submit the draft normally.
+Use these controls as needed in the saved-message picker:
+
+| Control | Action |
+| --- | --- |
+| Type | Fuzzy-search saved messages. |
+| `Tab` / `Shift+Tab` | Change scope. |
+| Configured `/tree` filter-cycle keys | Change message view; defaults to `Ctrl+O` / `Ctrl+Shift+O`. |
+| `Enter` | Open the selected message for preview or quoting. |
+| `Ctrl+D` | Review and confirm deletion. |
+
+After quoting, add your instruction and submit the draft normally.
 
 A quoted draft uses this form:
 
@@ -179,28 +185,15 @@ The raw stored text is not modified merely for display.
 
 ```text
 packages/pi-recall/
-├── src/
-│   ├── index.ts       # Thin Pi package entrypoint
-│   ├── menu.ts        # Standard manager screens and TUI/RPC flow
-│   ├── messages.ts    # Text extraction, scope filtering, previews, and quote format
-│   ├── picker.ts      # Scoped TUI saved-message picker
-│   ├── recall.ts      # Command registration and session lifecycle ownership
-│   └── store.ts       # Locked, validated, atomic JSONL storage
-├── dist/               # Generated source-mapped Jiti runtime and lazy menu chunks
-├── scripts/
-│   └── build-runtime.mjs
-├── test/
-│   ├── build-runtime.test.ts
-│   ├── menu.test.ts
-│   ├── messages.test.ts
-│   ├── picker.test.ts
-│   ├── recall.test.ts
-│   └── store.test.ts
-├── README.md
-├── LICENSE
-├── package.json
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── recall.ts                      # Saved-message command and lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

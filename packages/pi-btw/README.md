@@ -44,21 +44,8 @@ The side thread stays separate until you explicitly bring context to the main ed
 ## 💬 Commands
 
 `/btw` is TUI-only.
-Open the manager or provide the first question immediately:
-
-```text
-/btw
-/btw <your side question>
-```
-
-Examples:
-
-```text
-/btw
-/btw what does this TypeScript error mean?
-/btw summarize the current implementation before we continue
-/btw is this API name idiomatic?
-```
+- `/btw` opens the manager to choose context, resume a thread, or change settings.
+- `/btw <question>` starts a new side thread immediately, for example `/btw what does this TypeScript error mean?`.
 
 ### Choose context or resume a thread
 
@@ -223,40 +210,17 @@ The file is read for every `/btw` invocation, so edits apply without `/reload`.
 
 ## 🗂️ Package layout
 
-```txt
+```text
 packages/pi-btw/
-├── dist/                  # Generated TypeScript runtime loaded by Jiti
-├── scripts/
-│   └── build-runtime.mjs  # Deterministic runtime builder and boundary validator
-├── src/
-│   ├── index.ts
-│   ├── btw.ts
-│   ├── bring-to-main.ts
-│   ├── fullscreen-ui.ts
-│   ├── main-tree-picker.ts
-│   ├── menu.ts
-│   ├── settings.ts
-│   ├── side-thread.ts
-│   ├── text.ts
-│   └── transcript-pager.ts
-├── test/
-├── README.md
-├── LICENSE
-├── tsconfig.json
-└── package.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── btw.ts                         # Side-thread lifecycle and command
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The package exposes its Pi extension through `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./dist/index.ts"]
-  }
-}
-```
-
-The generated runtime is built from the authoritative `src/index.ts` graph and does not import back into `src`.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

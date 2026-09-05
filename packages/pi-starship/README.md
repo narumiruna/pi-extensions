@@ -123,27 +123,18 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 
 ## 🗂️ Package layout
 
-- `dist/` — generated split TypeScript runtime loaded through Pi's Jiti loader.
-- `skills/configuring-pi-starship/` — authoritative configuration workflow, public references, and TOML syntax validator.
-- `scripts/build-runtime.mjs` — deterministic runtime bundler and eager-boundary validator.
-- `src/index.ts` — thin authoritative source entrypoint.
-- `src/pi-starship.ts` — authoritative extension lifecycle, cached refresh binding, live preview, and footer.
-- `src/usage.ts` — native-aligned session usage and cache aggregation.
-- `src/command-contract.ts` — lightweight command routes and completions loaded at startup.
-- `src/commands.ts` — lazily loaded top-level menu, preview/confirmation workflows, and compatibility routes.
-- `src/command-configuration.ts` — nested configuration presentation, exact document views, and safe runtime-only disk reload.
-- `src/effective-config.ts` — explicit catalog-ordered public TOML projection and deterministic serialization.
-- `src/command-preset-picker.ts` — lifecycle-owned preset cursor and temporary footer-preview UI.
-- `src/presets/` — bundled complete TOML documents and stable preset metadata.
-- `src/command-inspector.ts` — adaptive Explain and searchable read-only module inspection surfaces.
-- `src/command-preview.ts` — adaptive, scrollable, keybinding-aware preview action surface.
-- `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
-- `src/format/` — native format/style parser and renderer.
-- `src/modules/` — domain module definitions, ordered registry, reachability, and width-aware renderer.
-- `src/modules/git/` — bounded local Git reader plus branch, status, and worktree modules.
-- `src/modules/github-pr.ts` — pure native GitHub PR snapshot presentation.
-- `src/runtime/github-pr.ts` — bounded `gh` query, validation, terminal-safe links, and expiry data.
-- `src/runtime/` — shared refresh controller and requirement-gated, lazily loaded package/language/context collectors.
+```text
+packages/pi-starship/
+├── src/                               # Modules, formats, presets, and runtime collectors
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── pi-starship.ts                 # Footer lifecycle and cached refresh
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+├── skills/configuring-pi-starship/    # Authoritative configuration skill and references
+└── test/                              # Behavior and lifecycle coverage
+```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 
