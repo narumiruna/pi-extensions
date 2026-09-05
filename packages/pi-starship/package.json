@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-starship",
-	"version": "0.54.0",
+	"version": "0.55.0",
 	"description": "Native Starship-style TOML statusline and configuration skill for Pi.",
 	"type": "module",
 	"license": "MIT",
