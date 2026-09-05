@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.49.15
+
+### Patch Changes
+
+- ec874c3: Add a global Settings option to skip push secret scanning while keeping the safe default and doctor diagnostics.
+
 ## 0.49.14
 
 ### Patch Changes
