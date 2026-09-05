@@ -17,128 +17,188 @@ const credentials = {
 
 for (const backend of ["Cloudflare R2", "Other S3-compatible storage"]) {
 	for (const route of ["setup", "add", "edit"] as const) {
-		test(`${backend} ${route} persists a masked session token and signs requests with it`, async () => {
-			await withTempHome(async (agentDir) => {
-				mkdirSync(agentDir, { recursive: true });
-				const { showSetupWizard } = await import("../src/manager-ui.js");
-				const { showAddStorageConnection, showStorageConnections } = await import(
-					"../src/storage-connections-ui.js"
-				);
-				const settings = v3S3Settings();
-				const endpoint =
-					backend === "Cloudflare R2"
-						? settings.storageConnections.r2.endpoint
-						: "https://s3.example.com";
-				settings.storageConnections.r2.endpoint = endpoint;
-				settings.storageConnections.r2.region = "auto";
-				if (route !== "setup") {
-					writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
-				}
-				const choices =
-					route === "setup"
-						? [
-								backend,
-								"Personal / Home",
-								backend === "Cloudflare R2"
-									? "Use suggested location (recommended)"
-									: "Use existing bucket with suggested path (recommended)",
-								temporaryChoice,
-								"Minimal settings",
-								"Keep automatic sync off",
-								"Keep sessions off (recommended)",
-								"Save sync setup",
-							]
-						: route === "add"
-							? [backend, temporaryChoice, "Add storage connection"]
-							: [
-									"r2",
-									"Edit storage connection…",
-									"Change credential source",
-									temporaryChoice,
-									"Save storage connection",
-									"Back",
-									"Back",
-								];
-				const frames: string[] = [];
-				const secrets = [credentials.secretAccessKey, credentials.sessionToken];
-				const { ctx, notifications } = createMockContext({
-					hasUI: true,
-					mode: "tui",
-					input: async (title: string) => {
-						if (title === "Access key ID") return credentials.accessKeyId;
-						if (title === "Name this storage connection") return "temporary";
-						if (title === "Existing bucket") return "pi-sync-test";
-						if (/region/iu.test(title)) return "auto";
-						if (/endpoint/iu.test(title)) return endpoint;
-						throw new Error(`Unexpected input: ${title}`);
-					},
-					select: async (title: string, options: string[]) => {
-						frames.push(title);
-						const choice = choices.shift();
-						assert.ok(choice && options.includes(choice), `Unexpected choice: ${choice}`);
-						return choice;
-					},
-					custom: async (factory: unknown) => {
-						const tui = createTuiHarness({ width: 60 });
-						const running = tui.custom(factory as Parameters<typeof tui.custom>[0]);
-						await tui.waitForOpen();
-						tui.send(`\u001b[200~${secrets.shift()}\u001b[201~`);
-						frames.push(tui.render().join("\n"));
-						tui.press("tui.input.submit");
-						return running;
-					},
-				});
-				if (route === "setup") assert.equal(await showSetupWizard(ctx), true);
-				else if (route === "add") assert.equal(await showAddStorageConnection(ctx), true);
-				else await showStorageConnections(ctx);
-				const saved = await readLocalConfigObject();
-				const name =
-					route === "add"
-						? "temporary"
-						: backend === "Cloudflare R2" || route === "edit"
-							? "r2"
-							: "s3";
-				const connection = saved?.storageConnections[name];
-				assert.deepEqual(connection?.credentials, credentials);
-				assert.equal(secrets.length, 0);
-				assert.match(frames.join("\n"), /Session token/u);
-				assert.match(frames.join("\n"), /with session token \(values hidden\)/u);
-				assert.doesNotMatch(
-					JSON.stringify({ frames, notifications }),
-					/temporary-secret-key|temporary-session-token/u,
-				);
-				if (process.platform !== "win32") {
-					assert.equal(statSync(localConfigPath()).mode & 0o777, 0o600);
-				}
-				// Exercise the persisted config rather than constructing signing credentials separately.
-				if (route === "add") {
-					const { addSyncSetup } = await import("../src/settings-management.js");
-					await addSyncSetup("temporary", {
-						storage: { connection: name, bucket: "pi-sync-test", path: "pi-sync/temporary" },
-						sync: { include: [], automatic: false },
-					});
-				}
-				{
-					const config = await loadConfig(route === "add" ? "temporary" : undefined);
-					assert.equal(config.backend.type, "s3");
-					if (config.backend.type !== "s3") return;
-					const originalFetch = globalThis.fetch;
-					const tokens: Array<string | null> = [];
-					globalThis.fetch = async (_url, init) => {
-						tokens.push(new Headers(init?.headers).get("x-amz-security-token"));
-						return Response.json({ ok: true });
-					};
-					try {
-						await new S3Client(config.backend).getJson("latest.json");
-						assert.deepEqual(tokens, [credentials.sessionToken]);
-					} finally {
-						globalThis.fetch = originalFetch;
+		test.each(["valid", "whitespace-only"])(
+			`${backend} ${route} handles %s temporary credentials`,
+			async (tokenKind) => {
+				const valid = tokenKind === "valid";
+				await withTempHome(async (agentDir) => {
+					mkdirSync(agentDir, { recursive: true });
+					const { showSetupWizard } = await import("../src/manager-ui.js");
+					const { showAddStorageConnection, showStorageConnections } = await import(
+						"../src/storage-connections-ui.js"
+					);
+					const settings = v3S3Settings();
+					const endpoint =
+						backend === "Cloudflare R2"
+							? settings.storageConnections.r2.endpoint
+							: "https://s3.example.com";
+					settings.storageConnections.r2.endpoint = endpoint;
+					settings.storageConnections.r2.region = "auto";
+					const before = JSON.stringify(settings);
+					if (route !== "setup") {
+						writeFileSync(localConfigPath(), before, { mode: 0o600 });
 					}
-				}
-			});
-		});
+					const choices =
+						route === "setup"
+							? [
+									backend,
+									"Personal / Home",
+									backend === "Cloudflare R2"
+										? "Use suggested location (recommended)"
+										: "Use existing bucket with suggested path (recommended)",
+									temporaryChoice,
+									"Minimal settings",
+									"Keep automatic sync off",
+									"Keep sessions off (recommended)",
+									"Save sync setup",
+								]
+							: route === "add"
+								? [backend, temporaryChoice, "Add storage connection"]
+								: [
+										"r2",
+										"Edit storage connection…",
+										"Change credential source",
+										temporaryChoice,
+										...(valid ? ["Save storage connection"] : []),
+										"Back",
+									];
+					const frames: string[] = [];
+					const unexpectedChoices: string[] = [];
+					const secrets = [
+						credentials.secretAccessKey,
+						valid ? credentials.sessionToken : " \t\r\n\u00a0 ",
+					];
+					const { ctx, notifications } = createMockContext({
+						hasUI: true,
+						mode: "tui",
+						input: async (title: string) => {
+							if (title === "Access key ID") return credentials.accessKeyId;
+							if (title === "Name this storage connection") return "temporary";
+							if (title === "Existing bucket") return "pi-sync-test";
+							if (/region/iu.test(title)) return "auto";
+							if (/endpoint/iu.test(title)) return endpoint;
+							throw new Error(`Unexpected input: ${title}`);
+						},
+						select: async (title: string, options: string[]) => {
+							frames.push(title);
+							const choice = choices.shift();
+							if (choice !== undefined && !options.includes(choice)) {
+								unexpectedChoices.push(choice);
+								return undefined;
+							}
+							return choice;
+						},
+						custom: async (factory: unknown) => {
+							const tui = createTuiHarness({ width: 60 });
+							const running = tui.custom(factory as Parameters<typeof tui.custom>[0]);
+							await tui.waitForOpen();
+							tui.send(`\u001b[200~${secrets.shift()}\u001b[201~`);
+							frames.push(tui.render().join("\n"));
+							tui.press("tui.input.submit");
+							return running;
+						},
+					});
+					if (route === "setup") assert.equal(await showSetupWizard(ctx), valid);
+					else if (route === "add") assert.equal(await showAddStorageConnection(ctx), valid);
+					else await showStorageConnections(ctx);
+					assert.deepEqual(unexpectedChoices, []);
+					if (!valid) {
+						if (route === "setup") assert.equal(await readLocalConfigObject(), undefined);
+						else assert.equal(readFileSync(localConfigPath(), "utf8"), before);
+						assert.equal(secrets.length, 0);
+						assert.deepEqual(notifications, [
+							{ message: "Session token is required.", level: "warning" },
+						]);
+						assert.doesNotMatch(
+							frames.join("\n"),
+							/Review sync setup|Review storage connection|with session token/u,
+						);
+						return;
+					}
+					const saved = await readLocalConfigObject();
+					const name =
+						route === "add"
+							? "temporary"
+							: backend === "Cloudflare R2" || route === "edit"
+								? "r2"
+								: "s3";
+					const connection = saved?.storageConnections[name];
+					assert.deepEqual(connection?.credentials, credentials);
+					assert.equal(secrets.length, 0);
+					assert.match(frames.join("\n"), /Session token/u);
+					assert.match(frames.join("\n"), /with session token \(values hidden\)/u);
+					assert.doesNotMatch(
+						JSON.stringify({ frames, notifications }),
+						/temporary-secret-key|temporary-session-token/u,
+					);
+					if (process.platform !== "win32") {
+						assert.equal(statSync(localConfigPath()).mode & 0o777, 0o600);
+					}
+					// Exercise the persisted config rather than constructing signing credentials separately.
+					if (route === "add") {
+						const { addSyncSetup } = await import("../src/settings-management.js");
+						await addSyncSetup("temporary", {
+							storage: { connection: name, bucket: "pi-sync-test", path: "pi-sync/temporary" },
+							sync: { include: [], automatic: false },
+						});
+					}
+					{
+						const config = await loadConfig(route === "add" ? "temporary" : undefined);
+						assert.equal(config.backend.type, "s3");
+						if (config.backend.type !== "s3") return;
+						const originalFetch = globalThis.fetch;
+						const tokens: Array<string | null> = [];
+						globalThis.fetch = async (_url, init) => {
+							tokens.push(new Headers(init?.headers).get("x-amz-security-token"));
+							return Response.json({ ok: true });
+						};
+						try {
+							await new S3Client(config.backend).getJson("latest.json");
+							assert.deepEqual(tokens, [credentials.sessionToken]);
+						} finally {
+							globalThis.fetch = originalFetch;
+						}
+					}
+				});
+			},
+		);
 	}
 }
+
+test.each([
+	"",
+	"   ",
+	"\t\r\n",
+	"\u00a0\u2003\ufeff",
+	credentials.sessionToken,
+	`  ${credentials.sessionToken}  `,
+])("temporary token validation preserves nonblank pasted values: %j", async (token) => {
+	const tui = createTuiHarness({ width: 60 });
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => temporaryChoice,
+		input: async () => credentials.accessKeyId,
+		custom: tui.custom,
+	});
+	const running = chooseS3Credentials(ctx);
+	await tui.waitForOpen();
+	tui.type(credentials.secretAccessKey);
+	tui.press("tui.input.submit");
+	await tui.waitForOpen();
+	tui.send(`\u001b[200~${token}\u001b[201~`);
+	tui.press("tui.input.submit");
+	const result = await running;
+	if (token.trim()) {
+		assert.deepEqual(result?.profileFields, { ...credentials, sessionToken: token });
+		assert.equal(result?.ready, true);
+		assert.deepEqual(notifications, []);
+	} else {
+		assert.equal(result, undefined);
+		assert.deepEqual(notifications, [{ message: "Session token is required.", level: "warning" }]);
+	}
+	assert.equal(tui.isOpen, false);
+});
 
 for (const end of ["blank", "cancel", "dispose", "replace-session", "shutdown"] as const) {
 	test(`temporary token ${end} never returns a partial credential set`, async () => {

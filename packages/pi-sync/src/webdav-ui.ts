@@ -109,7 +109,7 @@ export async function showAddWebDavTarget(
 	if (!content) return false;
 	const review = await select(
 		ctx,
-		`Review WebDAV sync setup\n\nSync setup: ${safe(name)}\nStorage connection: ${safe(profile)}\nStorage location: ${safe(destination.path)}\nIncluded content: ${content.length} built-in groups · Sessions: Off\nAdding this setup does not sync or modify remote data.`,
+		`Review WebDAV sync setup\n\nSync setup: ${safe(name)}\nStorage connection: ${safe(profile)}\nStorage location: ${safe(destination.path)}\nIncluded content: ${content.length} built-in groups · Sessions: Off\nAutomatic sync: Off\nAdding this setup does not sync or modify remote data.`,
 		["Add sync setup", "Cancel"],
 		signal,
 	);
@@ -121,7 +121,7 @@ export async function showAddWebDavTarget(
 			name,
 			{
 				storage: { connection: profile, path: destination.path },
-				sync: { include: content, automatic: true },
+				sync: { include: content, automatic: false },
 			},
 			signal,
 		),

@@ -66,6 +66,10 @@ export async function chooseS3Credentials(
 		sessionToken = await promptSecret(ctx, "Session token", { signal });
 		throwIfAborted(signal);
 		if (sessionToken === undefined) return undefined;
+		if (!sessionToken.trim()) {
+			ctx.ui.notify("Session token is required.", "warning");
+			return undefined;
+		}
 	}
 	return {
 		profileFields: { accessKeyId, secretAccessKey, ...(temporary ? { sessionToken } : {}) },

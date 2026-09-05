@@ -138,7 +138,9 @@ Print and JSON modes do not support `/sync` because UI output is not observable 
 ## ⚙️ Settings
 
 Run `/sync` → **Set up sync** to create the canonical private user file at `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`).
-Use **Settings** to manage an existing setup.
+Use **Settings** to manage the current setup.
+Additional S3 and WebDAV setups start with automatic sync off; Git asks explicitly.
+Adding or editing a setup does not make it current: use `/sync use <setup>` before its diagnostics or transfers, and select **Settings → After switching setup → Switch only** first when no switch-time remote check is intended.
 Missing settings stay unconfigured without creating files or locks.
 
 A minimal Git setup uses an existing private remote and keeps automatic sync off:

@@ -291,6 +291,9 @@ test("S3 manager reuses a connection and derives a separate complete path", asyn
 		const config = await loadConfig("work");
 		assert.equal(config.connectionName, "r2");
 		assert.equal(config.storagePath, "pi-sync/work");
+		assert.equal(config.automatic, false);
+		assert.equal((await loadConfig()).setupName, "home");
+		assert.match(rendered.join("\n"), /Automatic sync: Off/u);
 		assert.match(rendered.join("\n"), /Remote path: pi-sync\/work/u);
 		assert.doesNotMatch(rendered.join("\n"), /profiles\//u);
 	});

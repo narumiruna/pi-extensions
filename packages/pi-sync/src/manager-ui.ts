@@ -744,6 +744,7 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 			`Storage location: ${safeTerminalText(storagePath)}`,
 			"Bucket must already exist. pi-sync will not create it.",
 			`Included content: ${syncFiles.length} built-in groups · Sessions: Off`,
+			"Automatic sync: Off",
 			...(overlapsExistingTarget
 				? [
 						"Warning: this setup shares local content with another setup; only the current setup syncs automatically.",
@@ -759,7 +760,7 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 		name,
 		{
 			storage: { connection: profile, bucket, path: storagePath },
-			sync: { include: syncFiles, automatic: true },
+			sync: { include: syncFiles, automatic: false },
 		},
 		signal,
 	);

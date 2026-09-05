@@ -87,6 +87,9 @@ test("WebDAV connection reuse adds a second setup without exposing credentials",
 		const config = await loadConfig("work");
 		assert.equal(config.connectionName, "dav");
 		assert.equal(config.storagePath, "backups/work");
+		assert.equal(config.automatic, false);
+		assert.equal((await loadConfig()).setupName, "home");
+		assert.match(reviews.join("\n"), /Automatic sync: Off/u);
 		assert.doesNotMatch(reviews.join("\n"), /private-password/u);
 	});
 });

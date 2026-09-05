@@ -70,14 +70,14 @@ Ask the user to reload or restart Pi after installation.
 
 In a Pi TUI, ask the user to run `/sync` and choose **Set up sync**, or run `/sync init` directly.
 
-If settings already exist, use the manager's **Settings**, **Sync setups…**, and **Storage connections…** actions instead of overwriting the file.
+If settings already exist, use the manager's named **Sync setups…** and **Storage connections…** actions instead of overwriting the file; use **Settings** for content or automatic-sync changes only after selecting the intended current setup below.
 
 Guide the user through these decisions:
 
 1. Select the prepared backend.
 2. Review or enter clear names for the sync setup and reusable storage connection.
 3. Enter the exact backend-specific bucket, branch, and storage path requested by the wizard.
-4. Choose **Recommended Pi settings** or **Minimal settings** when offered, then adjust **Included content** from **Settings** if needed.
+4. Choose **Recommended Pi settings** or **Minimal settings** when offered; defer any **Settings → Included content** adjustments until the intended setup is current.
 5. Keep automatic sync off until the first manual sync is verified unless the user explicitly prefers otherwise.
 6. Keep sessions off unless the privacy acknowledgement is deliberate.
 7. Review the backend, remote location, included content, automatic-sync choice, and masked credential summary before saving.
@@ -90,15 +90,29 @@ Temporary credentials expire; replace them through the same reviewed flow before
 
 Explain that saving a setup changes only local settings and does not contact, create, pull from, or publish to remote storage.
 
-## Validate before the first transfer
+New S3 and WebDAV setups added to existing settings start with automatic sync off; Git asks for this choice explicitly.
 
-Ask the user to run `/sync config` and confirm the setup name, backend, storage path, included content, and automatic-sync state.
+## Select and validate the intended setup
 
-For Git, `/sync config` can abbreviate an SCP-style remote to its host, so also open `/sync` → **More… → Storage connections…**, select the configured connection, and confirm the full repository path shown in **Endpoint** together with the branch and storage path from config.
+Adding or editing a setup does not necessarily make it current; every unqualified diagnostic or transfer and the main manager operate on the current setup.
 
-Do not approve an exact Git destination from a host-only summary.
+Before switching, ask for approval to set `/sync` → **Settings → After switching setup → Switch only**, then run `/sync use <setup>` with the exact intended setup name.
 
-For WebDAV, confirm the complete collection URL during the storage-connection input step and its setup storage path in config; URL summaries intentionally hide the collection path.
+Keep **Switch only** until the first reviewed transfer is complete; **Start pull** can contact the remote immediately, and **Ask before pull** can offer an early pull.
+
+If switching is declined or fails, stop instead of validating or transferring the previously current setup.
+
+Run `/sync config` and verify the intended setup name is current before any doctor, status, diff, push, pull, or manager transfer; repeat this check after any setup switch.
+
+For an existing setup, turn **Settings → Automatic sync** off before restarting Pi or continuing validation unless the user explicitly approves automatic remote operations before the first reviewed transfer.
+
+Confirm the backend, storage path, included content, and automatic-sync state in config.
+
+Open `/sync` → **More… → Sync setups…**, select the intended setup, and review its persistent **Endpoint** and **Storage location** without editing it.
+
+For Git, confirm the full repository path shown in **Endpoint** together with its branch and storage path; do not approve an exact Git destination from a host-only summary.
+
+For WebDAV, confirm the complete collection URL in the sync-setup detail and its setup storage path, including for an already saved connection; config and storage-connection summaries hide the collection path.
 
 Explain that `/sync doctor` validates local configuration, selected files, secret warnings, and lock state for every backend.
 
@@ -125,7 +139,7 @@ The manager performs the guarded forced operation internally after preview and c
 
 Use the interactive operation without `--yes` or `--force`, and require the user to review the displayed writes, deletions, remote publication, and conflict guidance.
 
-After a successful first operation, ask the user to run `/sync status` and enable automatic sync only if desired.
+After a successful first operation, ask the user to run `/sync status` for the confirmed current setup and enable automatic sync or restore the preferred switch policy only if desired.
 
 ## Finish with evidence
 
