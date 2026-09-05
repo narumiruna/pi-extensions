@@ -108,7 +108,7 @@ Choose **Review differences (recommended)** in an ordinary file-direction confli
 Then choose one reviewed direction:
 
 - **Keep local content and replace remote…** uses the existing forced-push path.
-  It scans managed local files for secrets, shows the exact remote publication effect, re-reads a changed remote head, and asks again if the reviewed plan changed.
+  It applies the [secret-scan setting](./docs/settings.md#secret-scanning), shows the exact remote publication effect, re-reads a changed remote head, and asks again if the reviewed plan changed.
 - **Use remote content and replace local…** uses the existing forced-pull path.
   It shows exact local writes and deletions, protects the live session, and creates a local backup before applying.
 - First sync uses **Use local as initial source…** and **Use remote as initial source…** labels.
@@ -133,6 +133,8 @@ Print and JSON modes do not support `/sync` because UI output is not observable 
 Run `/sync` → **Set up sync** to create the canonical private user file at `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`).
 Use **Settings** to manage an existing setup.
 Missing settings stay unconfigured without creating files or locks.
+**Settings → Skip secret scan** defaults to **Off**; enable it only after reviewing the destination and selected content because it disables push scanning for every setup.
+See [Secret scanning](./docs/settings.md#secret-scanning) for the setting and diagnostic behavior.
 
 A minimal Git setup uses an existing private remote and keeps automatic sync off:
 
@@ -141,6 +143,7 @@ A minimal Git setup uses an existing private remote and keeps automatic sync off
   "version": 3,
   "activeSyncSetup": "home",
   "onSwitch": "ask-before-pull",
+  "skipSecretScan": false,
   "storageConnections": {
     "github": {
       "type": "git",
@@ -241,7 +244,7 @@ Preserve both roots before manual recovery; with every Pi process closed and no 
 ## 🔒 Security and privacy
 
 - Canonical, legacy, temporary, and recovery settings paths are denied from snapshots; both `pi-sync/` and `.pisync/` state roots are permanently denied.
-- Push scans managed local content for common secret patterns.
+- Push scans managed local content for common secret patterns unless the user explicitly enables **Skip secret scan**; `/sync doctor` always retains the diagnostic scan.
 - Remote snapshot references, checksums, paths, manifests, response sizes, and publication revisions are validated.
 - Symlink parents, path escapes, duplicate paths, and unsafe file/directory replacement fail before local mutation.
 - Live locks block mutation; stale recovery rechecks process and guard ownership.

@@ -90,7 +90,14 @@ export async function loadConfig(setupName?: string): Promise<AnySyncConfig> {
 			`Invalid pi-sync settings: sync setup “${selectedName}” references missing storage connection “${connectionName}”.`,
 		);
 	}
-	return resolveSyncConfig(selectedName, setup, connectionName, connection, settings.onSwitch);
+	return resolveSyncConfig(
+		selectedName,
+		setup,
+		connectionName,
+		connection,
+		settings.onSwitch,
+		settings.skipSecretScan ?? false,
+	);
 }
 
 export type SyncSetupStorageReview = Pick<
@@ -117,7 +124,7 @@ export function syncSetupStorageReview(
 	connection: StorageConnectionSettings,
 ): SyncSetupStorageReview {
 	return storageReviewFromConfig(
-		resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH),
+		resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH, false),
 	);
 }
 
@@ -128,7 +135,7 @@ export function syncSetupReviewIdentity(
 	connection: StorageConnectionSettings,
 ) {
 	return syncConfigReviewIdentity(
-		resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH),
+		resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH, false),
 	);
 }
 
@@ -185,6 +192,7 @@ function resolveSyncConfig(
 	connectionName: string,
 	connection: StorageConnectionSettings,
 	onSwitch: OnSwitchAction,
+	skipSecretScan: boolean,
 ): AnySyncConfig {
 	const storagePath = normalizeStoragePath(setup.storage.path);
 	const namespace = storagePath.slice(storagePath.lastIndexOf("/") + 1);
@@ -197,6 +205,7 @@ function resolveSyncConfig(
 		include,
 		automatic: setup.sync.automatic,
 		onSwitch,
+		skipSecretScan,
 	};
 	if (connection.type === "git") {
 		return {
@@ -285,6 +294,9 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
 		"top level",
 	);
 	normalizeOnSwitch(value.onSwitch);
+	if (value.skipSecretScan !== undefined && typeof value.skipSecretScan !== "boolean") {
+		throw new Error("Invalid pi-sync settings: skipSecretScan must be boolean.");
+	}
 	const storageConnections = requireNamedObjectMap(
 		value.storageConnections,
 		"storageConnections",
@@ -762,6 +774,7 @@ export function localConfigTemplate(): PiSyncSettingsV3 {
 	return {
 		version: 3,
 		onSwitch: DEFAULT_ON_SWITCH,
+		skipSecretScan: false,
 		storageConnections: {},
 		syncSetups: {},
 	};

@@ -317,6 +317,7 @@ function s3Config(): SyncConfig {
 		include: [],
 		automatic: false,
 		onSwitch: "switch-only",
+		skipSecretScan: false,
 	};
 }
 

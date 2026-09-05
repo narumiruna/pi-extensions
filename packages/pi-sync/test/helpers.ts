@@ -26,12 +26,19 @@ export function snapshot(files: Array<{ path: string; content: Buffer }>) {
 }
 
 export function v3S3Settings(
-	options: { automatic?: boolean; include?: string[]; path?: string; bucket?: string } = {},
+	options: {
+		automatic?: boolean;
+		include?: string[];
+		path?: string;
+		bucket?: string;
+		skipSecretScan?: boolean;
+	} = {},
 ) {
 	return {
 		version: 3,
 		activeSyncSetup: "home",
 		onSwitch: "ask-before-pull",
+		skipSecretScan: options.skipSecretScan ?? false,
 		storageConnections: {
 			r2: {
 				type: "s3",

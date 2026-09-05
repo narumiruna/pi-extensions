@@ -186,6 +186,7 @@ test("RPC init creates a valid empty version 3 document", async () => {
 		assert.deepEqual(await readLocalConfigObject(), {
 			version: 3,
 			onSwitch: "ask-before-pull",
+			skipSecretScan: false,
 			storageConnections: {},
 			syncSetups: {},
 		});

@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import type { RunRoute } from "./cancellable-operation.js";
-import { loadConfig, localConfigPath } from "./config.js";
+import { loadConfig, localConfigPath, updateLocalConfig } from "./config.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { updateSyncSetup } from "./settings-management.js";
 import {
@@ -26,7 +26,7 @@ export async function showSyncSettings(
 	const initial = await loadConfig();
 	if (signal?.aborted) return;
 	const setupName = initial.setupName;
-	type Action = "automatic" | "on-switch" | "include" | "remote-include";
+	type Action = "automatic" | "skip-secret-scan" | "on-switch" | "include" | "remote-include";
 	const menu = defineMenu<
 		Awaited<ReturnType<typeof loadConfig>>,
 		"settings",
@@ -49,6 +49,14 @@ export async function showSyncSettings(
 						currentValue: state.automatic ? "On" : "Off",
 						values: ["On", "Off"],
 						action: "automatic",
+					},
+					{
+						id: "skipSecretScan",
+						label: "Skip secret scan",
+						description: "Allow pushes without checking managed local files for possible secrets.",
+						currentValue: state.skipSecretScan ? "On" : "Off",
+						values: ["On", "Off"],
+						action: "skip-secret-scan",
 					},
 					{
 						id: "onSwitch",
@@ -92,6 +100,25 @@ export async function showSyncSettings(
 					if (mutationSignal.aborted) return { kind: "rejected" };
 					ctx.ui.notify(
 						`Automatic sync ${automatic ? "enabled" : "disabled"} for “${safeTerminalText(setupName)}”.`,
+						"info",
+					);
+					return { kind: "stay" };
+				} catch (error) {
+					if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
+					return { kind: "rejected" };
+				}
+			},
+			"skip-secret-scan": async ({ value, signal: actionSignal }) => {
+				const skipSecretScan = value === "On";
+				const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+				try {
+					const latest = await loadConfig(setupName);
+					if (mutationSignal.aborted) return { kind: "rejected" };
+					if (latest.skipSecretScan === skipSecretScan) return { kind: "stay" };
+					await updateLocalConfig((settings) => ({ ...settings, skipSecretScan }), mutationSignal);
+					if (mutationSignal.aborted) return { kind: "rejected" };
+					ctx.ui.notify(
+						`Secret scan ${skipSecretScan ? "disabled" : "enabled"} for pushes.`,
 						"info",
 					);
 					return { kind: "stay" };

@@ -4,6 +4,7 @@
 
 - [Complete version 3 example](#complete-version-3-example)
 - [Required backend shapes](#required-backend-shapes)
+- [Secret scanning](#secret-scanning)
 - [Included content](#included-content)
 - [Unsupported old settings and recovery](#unsupported-old-settings-and-recovery)
 
@@ -34,6 +35,7 @@ If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
   "version": 3,
   "activeSyncSetup": "home",
   "onSwitch": "ask-before-pull",
+  "skipSecretScan": false,
   "storageConnections": {
     "r2": {
       "type": "s3",
@@ -117,6 +119,14 @@ Two setups cannot resolve to the same normalized backend location.
 - `ask-before-pull` — switch, then ask in TUI whether to start a reviewed pull;
 - `pull-after-switch` — require observable UI and start the normal reviewed pull;
 - `switch-only` — switch without reading or applying remote content.
+
+### Secret scanning
+
+The global `skipSecretScan` setting accepts a boolean and defaults to `false`, including when omitted from an existing version 3 document.
+Set it through **/sync → Settings → Skip secret scan**; changes are saved immediately and apply to subsequent pushes for every sync setup, including automatic pushes.
+When `true`, pushes skip the local secret scan; other safety checks and confirmations remain unchanged.
+Enable it only after reviewing the destination and selected content because files containing secrets can be uploaded.
+`/sync doctor` still scans and reports possible secrets regardless of this setting.
 
 ### Included content
 
