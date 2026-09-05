@@ -49,36 +49,23 @@ Review third-party extension source before installing it.
 
 1. Sign in through Pi's built-in OpenAI, OpenAI Codex, or Azure OpenAI provider, or configure a compatible custom provider.
 2. Select a model using `openai-codex-responses`, `openai-responses`, or `azure-openai-responses`.
-3. Work normally.
-   Pi's automatic compaction and built-in `/compact` continue to operate.
-4. Run `/codex-compact` to inspect the effective route or choose **Compact now**.
-5. After compaction, continue the session normally; compatible requests replay the opaque checkpoint.
+3. Work normally; Pi's automatic compaction and built-in `/compact` continue to operate.
+
+Run `/codex-compact` when you want to inspect the effective route or choose **Compact now**.
+After compaction, compatible requests replay the opaque checkpoint automatically.
 
 With the default `auto` protocol, Codex Responses uses Remote V2 while OpenAI and Azure OpenAI Responses use unary `responses/compact`.
 When the active model uses another API, compaction remains entirely Pi-native.
 
 ## 💬 Commands
 
-```text
-/codex-compact
-```
+Run `/codex-compact` to inspect the effective compaction path, change settings, or request manual compaction in TUI mode.
+It accepts no arguments.
+RPC reports the manual settings path without compacting; print and JSON modes reject the command.
+Closing the menu with Escape or Ctrl+C does not compact the session.
 
-In TUI mode, the menu shows whether remote compaction is enabled, the protocol setting, the active model, and whether manual compaction will use **Responses Remote V2**, **Responses Compact API**, or **Pi native**.
-It contains:
-
-```text
-Compact now
-Settings
-Close
-```
-
-**Compact now** closes the menu before asking Pi to compact the active session.
-Escape or Ctrl+C closes without compacting, and an obsolete menu cannot trigger work after session replacement or shutdown.
-**Settings** opens the bounded settings editor.
-In RPC mode, the command reports the manual settings path instead of opening custom UI or compacting.
-Print and JSON modes reject the command explicitly because they cannot open the menu or safely replace their normal output with an interactive result.
-
-Pi's built-in `/compact` remains available and follows the same extension hook for all three supported Responses APIs.
+Manual compaction uses **Responses Remote V2**, **Responses Compact API**, or **Pi native**, as described in [Settings](#-settings).
+Pi's built-in `/compact` remains available and follows the same extension hook.
 
 ## ⚙️ Settings
 
@@ -223,29 +210,22 @@ npm test
 npm run package:pack -- codex-compact
 ```
 
-See [`docs/implementation-notes/codex-compaction-mechanism.md`](../../docs/implementation-notes/codex-compaction-mechanism.md) for the underlying Codex mechanism research and the extension boundary.
+See the [Codex compaction mechanism notes](https://github.com/narumiruna/pi-extensions/blob/main/docs/implementation-notes/codex-compaction-mechanism.md) for the underlying Codex mechanism research and the extension boundary.
 
 ## 🗂️ Package layout
 
 ```text
-src/index.ts          Thin Pi entrypoint
-src/codex-compact.ts  Pi lifecycle, command, provider projection, and fallback
-src/remote.ts         Protocol dispatch
-src/remote-v2.ts      Remote V2 provider stream and SSE inspection
-src/remote-compact.ts Unary Compact API bridge and usage normalization
-src/remote-shared.ts  Shared provider completion handling
-src/remote-types.ts   Protocol-neutral request and response types
-src/protocol.ts       Bounded SSE/JSON parsing and payload/output validation
-src/checkpoint.ts     Replacement history, fingerprints, persistence, and replay projection
-src/model-api.ts      Responses API and protocol route selection
-src/settings.ts       Global settings validation and atomic persistence
-src/settings-menu.ts  First-use manual compaction and settings TUI
-
-dist/                 Generated source-mapped Jiti runtime and lazy menu chunk
-scripts/              Runtime builder
-benchmark/            Three-arm compaction benchmark, self-test, and methodology
-test/                 Protocol, checkpoint, lifecycle, remote, settings, menu, and builder coverage
+packages/pi-codex-compact/
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── codex-compact.ts               # Compaction routing, replay, and fallback
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+├── benchmark/                         # Repository-only benchmark and methodology
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

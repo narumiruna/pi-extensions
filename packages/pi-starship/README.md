@@ -62,21 +62,15 @@ It does not cover general TOML, shell Starship configuration, extension source d
 
 | Command | Purpose |
 | --- | --- |
-| `/starship` | Open the current-state menu in TUI mode; show help in RPC |
-| `/starship settings` | Edit, preview, and confirm TOML in TUI; show the file path in RPC |
-| `/starship status` | Show the configuration source, path, and diagnostics in TUI or RPC |
-| `/starship help` | Show command and configuration help in TUI or RPC |
+| `/starship` | Customize the footer, preview presets, inspect modules, or restore built-in configuration; RPC shows help. |
+| `/starship settings` | Edit, preview, and confirm TOML; RPC shows the file path. |
+| `/starship status` | Show the configuration source, path, and diagnostics. |
+| `/starship help` | Show command and configuration help. |
 
-The main menu keeps seven actions on one level: **Customize footer**, **Presets**, **Explain footer**, **Modules**, **Configuration**, **Help**, and **Restore built-in…**.
-It shows the current source and configuration health.
-Presets, Explain, Modules, and Configuration are menu-only; they do not add textual subcommands.
-Restore is unavailable when there is no document to replace.
-
-The TOML editor, live footer previews, Explain view, module inspector, and configuration reviews use specialized TUI screens.
-Their content and key hints adapt to terminal width and Pi's configured keybindings.
-Escape returns to the previous screen, while Ctrl+C closes the workflow.
-Direct routes reject trailing arguments.
-Print and JSON modes produce no ad hoc output, and footer lifecycle work runs only in TUI mode.
+All routes support TUI and RPC with the exceptions above and reject unknown or trailing arguments.
+Print and JSON modes produce no command output; the footer runs only in TUI mode.
+Preset selection, module inspection, and recovery are menu-only, not extra subcommands.
+Restoring built-in configuration requires an existing settings document to replace; see [Settings](#-settings).
 
 ## ⚙️ Settings
 
@@ -123,27 +117,18 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 
 ## 🗂️ Package layout
 
-- `dist/` — generated split TypeScript runtime loaded through Pi's Jiti loader.
-- `skills/configuring-pi-starship/` — authoritative configuration workflow, public references, and TOML syntax validator.
-- `scripts/build-runtime.mjs` — deterministic runtime bundler and eager-boundary validator.
-- `src/index.ts` — thin authoritative source entrypoint.
-- `src/pi-starship.ts` — authoritative extension lifecycle, cached refresh binding, live preview, and footer.
-- `src/usage.ts` — native-aligned session usage and cache aggregation.
-- `src/command-contract.ts` — lightweight command routes and completions loaded at startup.
-- `src/commands.ts` — lazily loaded top-level menu, preview/confirmation workflows, and compatibility routes.
-- `src/command-configuration.ts` — nested configuration presentation, exact document views, and safe runtime-only disk reload.
-- `src/effective-config.ts` — explicit catalog-ordered public TOML projection and deterministic serialization.
-- `src/command-preset-picker.ts` — lifecycle-owned preset cursor and temporary footer-preview UI.
-- `src/presets/` — bundled complete TOML documents and stable preset metadata.
-- `src/command-inspector.ts` — adaptive Explain and searchable read-only module inspection surfaces.
-- `src/command-preview.ts` — adaptive, scrollable, keybinding-aware preview action surface.
-- `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
-- `src/format/` — native format/style parser and renderer.
-- `src/modules/` — domain module definitions, ordered registry, reachability, and width-aware renderer.
-- `src/modules/git/` — bounded local Git reader plus branch, status, and worktree modules.
-- `src/modules/github-pr.ts` — pure native GitHub PR snapshot presentation.
-- `src/runtime/github-pr.ts` — bounded `gh` query, validation, terminal-safe links, and expiry data.
-- `src/runtime/` — shared refresh controller and requirement-gated, lazily loaded package/language/context collectors.
+```text
+packages/pi-starship/
+├── src/                               # Modules, formats, presets, and runtime collectors
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── pi-starship.ts                 # Footer lifecycle and cached refresh
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+├── skills/configuring-pi-starship/    # Authoritative configuration skill and references
+└── test/                              # Behavior and lifecycle coverage
+```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

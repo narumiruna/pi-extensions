@@ -138,23 +138,15 @@ The extension displays ticker symbols and quote data locally without adding them
 
 ```text
 packages/pi-ticker/
-├── src/
-│   ├── index.ts       # Thin source entrypoint for repository loading and runtime builds
-│   ├── ticker.ts      # Registration, commands, polling, and lifecycle ownership
-│   ├── menu.ts        # Mode dispatch and RPC management flow
-│   ├── tui-menu.ts    # Searchable TUI manager and reorder shortcuts
-│   ├── settings.ts    # Validation and atomic user-settings persistence
-│   ├── quotes.ts      # Yahoo Finance requests and response parsing
-│   └── render.ts      # Width-bounded plain and themed widget rendering
-├── scripts/
-│   └── build-runtime.mjs  # Deterministic runtime builder and boundary validator
-├── dist/              # Generated Jiti entrypoint, lazy chunks, and source maps
-├── test/              # Deterministic package behavior and generated-runtime tests
-├── README.md
-├── LICENSE
-├── package.json
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── ticker.ts                      # Quote polling and widget lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

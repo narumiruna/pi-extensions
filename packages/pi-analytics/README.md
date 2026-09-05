@@ -100,18 +100,9 @@ Raw error messages are classified in memory and discarded.
 
 ## 💬 Commands
 
-```text
-/analytics
-```
-
-The command accepts no arguments.
-TUI mode shows the full dashboard, and RPC mode adapts the same screens to dialogs.
-Print and JSON modes reject the command before reading analytics data.
-
-The root menu contains Change time range, Skills, Tools, Provider reliability, Response cycles, Data & privacy, and Close.
-Skills and Tools provide searchable details and model breakdowns.
-Escape goes back from nested screens and closes the root, while Ctrl+C closes the menu.
-Deleting data requires confirmation; Back keeps the dashboard open, Ctrl+C closes it in TUI mode, and cancellation leaves data unchanged.
+Run `/analytics` to inspect local usage, skills, tools, and provider reliability over a chosen time range.
+It accepts no arguments and supports TUI and RPC; print and JSON modes reject it before reading analytics data.
+Deleting analytics data requires confirmation, and cancellation leaves data unchanged.
 
 ## 🔒 Security and privacy
 
@@ -183,30 +174,15 @@ Never copy or remove only the main DB while an old process may still own its WAL
 
 ```text
 packages/pi-analytics/
-├── dist/                  # Generated TypeScript runtime loaded by Jiti
-├── scripts/
-│   └── build-runtime.mjs  # Deterministic runtime builder and boundary validator
-├── src/
-│   ├── index.ts              # Thin Pi entrypoint
-│   ├── analytics.ts          # Pi lifecycle, command, and session ownership
-│   ├── collector.ts          # Content-free response-cycle state machine
-│   ├── errors.ts             # Conservative error classification
-│   ├── skills.ts             # Explicit and model skill detection
-│   ├── menu.ts               # TUI/RPC analytics dashboard
-│   ├── types.ts              # Observation records
-│   └── storage/
-│       ├── files.ts          # Private generations, writes, reads, and Clear
-│       ├── format.ts         # Versioned JSONL codec and validation
-│       ├── queries.ts        # Incremental aggregate projections
-│       └── store.ts          # Lifecycle-safe storage facade
-├── test/
-├── README.md
-├── LICENSE
-├── package.json
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── analytics.ts                   # Collection lifecycle and dashboard command
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The generated runtime is built from the authoritative `src/index.ts` graph and does not import back into `src`.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

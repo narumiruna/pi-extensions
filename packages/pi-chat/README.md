@@ -88,14 +88,16 @@ Pi Chat never claims exactly-once delivery, delivery receipts, or offline retry.
 
 ## 💬 Commands
 
-| Command | Modes | Description |
-| --- | --- | --- |
-| `/chat` | TUI | Open the state-aware Pi Chat manager. |
-| `/chat <pichat:v1-or-v2:invite>` | TUI | Choose private persistence, join, and open chat. |
-| `/chat #<public-slug>` | TUI | Review the warning, join, and open the chat composer directly. |
+| Command | Purpose |
+| --- | --- |
+| `/chat` | Create, join, resume, or manage a chat room. |
+| `/chat <pichat:v1-or-v2:invite>` | Choose private-room persistence, join, and open chat. |
+| `/chat #<public-slug>` | Review the public-room warning, join, and open chat. |
 
-RPC, print, and JSON modes reject the command before starting networking or custom TUI work.
-Unknown and trailing arguments are rejected instead of ignored.
+All routes require TUI mode; RPC, print, and JSON modes reject them before networking starts.
+Unknown and trailing arguments are rejected.
+Escape or Ctrl+C returns to Pi without leaving the room or discarding the draft.
+Read [Security and privacy](#-security-and-privacy) before sharing messages or invites.
 
 ## 🪪 Identity and nicknames
 
@@ -279,32 +281,15 @@ This smoke is intentionally excluded from `npm test` and CI because local UDP sc
 
 ```text
 packages/pi-chat/
-├── src/
-│   ├── index.ts
-│   ├── pi-chat.ts
-│   ├── chat-session.ts
-│   ├── network-contract.ts
-│   ├── network.ts             # Loaded only when a room needs a transport
-│   ├── public-room-directory.ts
-│   ├── directory-network.ts   # Loaded only for public-room discovery
-│   ├── room.ts                # Lightweight invite and room descriptor compatibility
-│   ├── protocol.ts            # Signed wire messages and framing
-│   ├── nickname.ts            # Lightweight nickname normalization
-│   ├── identity.ts            # Loads DHT and sodium implementations on first cryptographic use
-│   ├── settings.ts
-│   ├── menu.ts                # Loaded on the first menu request
-│   ├── chat-view.ts           # Loaded on the first composer request
-│   ├── widget.ts              # Loaded before the first room joins
-│   └── text.ts
-├── dist/                     # Generated source-mapped Jiti runtime and lazy feature chunks
-├── scripts/                  # Runtime builder plus opt-in real local network smoke and fixture
-├── test/                     # Deterministic behavior, builder, and mocked network coverage
-├── README.md
-├── LICENSE
-├── package.json
-├── tsconfig.json
-└── tsconfig.network-smoke.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── pi-chat.ts                     # Room lifecycle and chat command
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

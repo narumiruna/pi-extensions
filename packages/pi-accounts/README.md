@@ -71,72 +71,14 @@ Use the manager to log in, switch accounts, restore a provider's default Pi logi
 
 ## 💬 Commands
 
-Open the interactive account manager:
+Run `/accounts` to log in, switch provider accounts for the current Pi session, or remove saved accounts in TUI or RPC mode.
+Arguments are ignored for compatibility; print and JSON modes provide no account-manager output.
+Login uses Pi's native OAuth flow, including device codes and cancellation, with equivalent RPC dialogs.
 
-```text
-/accounts
-```
-
-The manager supports TUI and RPC mode.
-Back returns through provider and account screens, and Escape closes the root.
-Print and JSON modes do not provide account-manager output.
-Extra text after `/accounts` is ignored.
-OAuth challenges, account names, and replacement or removal confirmations use dedicated dialogs.
-
-When no accounts are saved yet, the menu starts with login:
-
-```text
-Accounts
-
-No saved accounts yet.
-
-What do you want to do?
-› Login new account
-```
-
-After accounts exist, `/accounts` shows the current model and the current Pi session's selected account for every supported provider before offering actions:
-
-```text
-Accounts
-
-Current model:
-  Anthropic / claude-sonnet-4
-
-Active accounts:
-  Anthropic: work
-  GitHub Copilot: enterprise
-  Kimi For Coding: fast
-  OpenAI Codex: default
-  OpenRouter: credits
-  Radius: work
-  xAI: personal
-
-What do you want to do?
-› Switch Anthropic account
-  Login new account
-  Remove account
-  Switch another provider’s account
-```
-
-### Login
-
-In TUI mode, login uses Pi's native `/login` dialog with links, device codes, progress, prompts, and Escape cancellation.
-Provider-owned choices temporarily open Pi's native selector, then return to the login dialog.
-RPC mode uses Pi's standard extension UI requests for the same OAuth flow.
 `default` is reserved for Pi's built-in login.
-Reusing a provider and account name requires confirmation before replacement.
-
-### Switch or remove an account
-
-The primary switch action targets the current model's provider.
-To switch another provider, choose **Switch another provider’s account**, then choose the provider and account.
-Choosing `default` restores Pi's built-in login for that provider in the current Pi session only.
-Switching or logging in does not change selections owned by other running or resumable sessions.
-`/accounts` changes account identity, not the model.
-
-Removal lists accounts as `Provider · account` and requires confirmation.
-Removing the current session's selected account records `default` for that provider.
-Because named credentials are shared, another session that selected the removed name fails closed on its next turn until the user chooses another account or `default`.
+Switching affects account identity for the chosen provider, not the model or other sessions' selections.
+Replacing an existing provider/account name or removing an account requires confirmation.
+Removal returns the current session's affected selection to `default`, but other sessions using the removed shared credential fail closed until they choose another account or `default`; see [Security and privacy](#-security-and-privacy).
 
 ## 🔒 Security and privacy
 
@@ -241,40 +183,15 @@ It is excluded from active workspace checks, version bumps, and publishing.
 
 ```text
 packages/pi-accounts/
-├── src/
-│   ├── index.ts
-│   ├── account-menu.ts
-│   ├── account-store.ts
-│   ├── accounts.ts
-│   ├── oauth.ts
-│   ├── oauth-credential-source.ts
-│   ├── runtime-auth.ts
-│   ├── session-selection.ts
-│   └── storage.ts
-├── dist/               # Generated source-mapped Jiti runtime
-├── scripts/
-│   └── build-runtime.mjs
-├── test/
-│   ├── accounts-storage.test.ts
-│   ├── accounts.test.ts
-│   ├── build-runtime.test.ts
-│   ├── radius.test.ts
-│   └── session-selection.test.ts
-├── README.md
-├── LICENSE
-├── tsconfig.json
-└── package.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── accounts.ts                    # Account activation and session lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-The package exposes its Pi extension through `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./dist/index.ts"]
-  }
-}
-```
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

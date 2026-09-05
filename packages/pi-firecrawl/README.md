@@ -122,41 +122,20 @@ Oversized Firecrawl error bodies are bounded in the same way.
 
 ## 💬 Commands
 
-```text
-/firecrawl
-```
+| Command | Purpose |
+| --- | --- |
+| `/firecrawl` | Manage available Firecrawl tools and inspect configuration. |
+| `/firecrawl help` | Show command usage. |
+| `/firecrawl config` (alias: `quickstart`) | Show API-key presence and API URL without revealing the key. |
+| `/firecrawl status` | Show available and loaded tools, loader state, saved catalog, and configuration status. |
+| `/firecrawl tools` (aliases: `toggle`, `select`) | Choose available capabilities; each toggle saves immediately. |
+| `/firecrawl enable` (alias: `on`) | Make all five API capabilities available and save the selection. |
+| `/firecrawl disable` (alias: `off`) | Make all API capabilities unavailable and save the empty selection. |
 
-Opens a menu with configuration quick start, command usage, tool-catalog status, controls for making all Firecrawl capabilities available or unavailable, and a selector for choosing individual tools.
-
-Direct subcommands are also available:
-
-```text
-/firecrawl help
-/firecrawl config
-/firecrawl quickstart
-/firecrawl status
-/firecrawl tools
-/firecrawl toggle
-/firecrawl enable
-/firecrawl disable
-```
-
-- `help` shows command usage.
-- `config` shows API-key presence and API URL without displaying the API key value.
-- `quickstart` is an alias for `config`.
-- `status` shows available and loaded capability counts, loader state, the persisted catalog, settings file path, API-key presence, API URL, and active non-Firecrawl tool count.
-- `tools` opens a width-safe immediate-save selector for choosing available capabilities.
-- `toggle` is an alias for `tools`.
-- `enable` makes all five API capabilities available and follows the current native-deferred or eager exposure mode.
-- `disable` makes all five API capabilities unavailable and unloads affected active definitions.
-  The slash command and `firecrawl_load` remain available.
-
-The menu, `tools`, `help`, `config`, `quickstart`, and `status` routes require TUI or RPC mode.
-Print and JSON modes reject those routes and unknown commands before entering interactive UI.
-The deterministic `enable` and `disable` routes remain available in every mode.
-
-Tool-selector toggles save immediately in user action order.
-Done, Escape, or cancellation closes the selector without undoing changes that were already saved.
+All routes support TUI and RPC and reject unknown or trailing arguments.
+Only `enable` and `disable` also support print and JSON modes.
+Disabling capabilities leaves the slash command and `firecrawl_load` available; see [Tool exposure](#tool-exposure) for native-deferred and eager behavior.
+Done, Escape, or cancellation closes the tool selector **without undoing saved changes**.
 
 ## 🔒 Security and privacy
 
@@ -168,7 +147,7 @@ Truncated response artifacts use private temporary files, remain available only 
 
 ## 🧪 Examples
 
-Scrape a page as markdown:
+Call `firecrawl_scrape` to scrape a page as Markdown:
 
 ```json
 {
@@ -177,7 +156,7 @@ Scrape a page as markdown:
 }
 ```
 
-Map a small site:
+Call `firecrawl_map` to discover URLs on a small site:
 
 ```json
 {
@@ -186,7 +165,7 @@ Map a small site:
 }
 ```
 
-Start a crawl with markdown extraction:
+Call `firecrawl_crawl` to start a crawl with Markdown extraction:
 
 ```json
 {
@@ -208,24 +187,17 @@ Start a crawl with markdown extraction:
 
 ## 🗂️ Package layout
 
-```txt
+```text
 packages/pi-firecrawl/
-├── dist/                  # Generated TypeScript runtime loaded by Jiti
-├── scripts/
-│   └── build-runtime.mjs  # Deterministic runtime builder and boundary validator
-├── src/
-│   ├── index.ts       # Pi package entrypoint
-│   ├── firecrawl.ts   # Extension registration and command orchestration
-│   ├── lazy-tools.ts  # Deferred capability catalog and loader tool
-│   └── *.ts           # Package-local client, settings, selector, and tool modules
-├── README.md
-├── LICENSE
-├── tsconfig.json
-└── package.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── firecrawl.ts                   # Web tools and command orchestration
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
 
-`index.ts` is the Pi entrypoint and forwards to `firecrawl.ts`; the other source modules are internal.
-The generated runtime is built from the authoritative `src/index.ts` graph and does not import back into `src`.
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 

@@ -147,27 +147,11 @@ Command recipes, approval handling, and other operating safety rules come from t
 
 ```text
 packages/pi-herdr/
-├── skills/herdr/
-│   └── SKILL.md              # Thin bootstrap for CLI-owned operating guidance
-├── src/
-│   ├── index.ts              # Thin Pi entrypoint
-│   ├── herdr-agent-state.ts  # Pi lifecycle and integration ownership
-│   ├── herdr-client.ts       # Bounded Herdr socket transport
-│   ├── herdr-metadata.ts     # Token normalization and request helpers
-│   ├── herdr-observer.ts     # Read-only event subscription lifecycle
-│   ├── herdr-protocol.ts     # Narrow response and event validation
-│   └── herdr-widget.ts       # Agent state model and presentation
-├── test/
-│   ├── herdr-agent-state.test.ts
-│   ├── herdr-client.test.ts
-│   ├── herdr-metadata.test.ts
-│   ├── herdr-observer.test.ts
-│   ├── herdr-skill.test.ts
-│   └── herdr-widget.test.ts
-├── package.json              # Pi extension and skill declarations
-├── tsconfig.json
-├── README.md
-└── LICENSE
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── herdr-agent-state.ts           # Herdr lifecycle integration
+├── skills/herdr/                      # Published bootstrap for CLI-owned guidance
+└── test/                              # Behavior and lifecycle coverage
 ```
 
 ## 🔎 Keywords

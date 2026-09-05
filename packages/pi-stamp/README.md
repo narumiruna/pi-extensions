@@ -70,7 +70,7 @@ Existing compatible stamps reformat on the next render, and new stamps use the s
 
 ## 💬 Commands
 
-Run `/stamp` in TUI or RPC mode to open Settings, Status, and Help.
+Run `/stamp` in TUI or RPC mode to configure transcript timestamps, response metadata, and tool stamps, or inspect their effective settings.
 The command rejects arguments, print mode, and JSON mode without changing settings.
 
 ## ⚙️ Settings
@@ -155,6 +155,7 @@ Transcript stamps are appended only in TUI mode; RPC provides configuration dial
 First content is the first non-empty text, thinking, or tool-call update observed by Pi.
 It is not a provider-server timestamp or guaranteed time to first token.
 `first n/a` means Pi finalized the response without such an update; completion time is not substituted.
+
 - If an assistant message invokes tools, response timing ends at the assistant's `message_end` and excludes tool execution even though the assistant stamp appears after the complete tool block.
 - Error and aborted assistant messages use the same local completion boundary.
   Invalid or backwards clock observations degrade to timestamp-only data rather than showing a negative or clamped value.
@@ -257,30 +258,15 @@ Messages and tools created before `pi-stamp` observed them are not backfilled be
 
 ```text
 packages/pi-stamp/
-├── src/
-│   ├── index.ts       # Thin Pi package entrypoint
-│   ├── format.ts      # Date, clock, and response-elapsed formatting/settings types
-│   ├── metadata.ts    # Bounded metadata capture, validation, and compact/expanded labels
-│   ├── menu.ts        # /stamp presentation menu
-│   ├── settings.ts    # Validation and atomic user settings
-│   └── stamp.ts       # Entry compatibility, rendering, and lifecycle ownership
-├── dist/               # Generated source-mapped Jiti runtime and lazy menu chunk
-├── scripts/
-│   └── build-runtime.mjs
-├── test/
-│   ├── build-runtime.test.ts
-│   ├── format.test.ts
-│   ├── metadata.test.ts
-│   ├── menu.test.ts
-│   ├── settings.test.ts
-│   ├── stamp-renderer.test.ts
-│   ├── stamp-tool.test.ts
-│   └── stamp.test.ts
-├── README.md
-├── LICENSE
-├── package.json
-└── tsconfig.json
+├── src/                               # Authoritative implementation and helpers
+│   ├── index.ts                       # Thin Pi entrypoint
+│   └── stamp.ts                       # Transcript entries and rendering lifecycle
+├── dist/                              # Generated Jiti runtime
+├── scripts/build-runtime.mjs          # Runtime builder
+└── test/                              # Behavior and lifecycle coverage
 ```
+
+The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
 ## 🔎 Keywords
 
