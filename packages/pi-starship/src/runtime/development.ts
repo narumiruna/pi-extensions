@@ -141,7 +141,7 @@ async function readPixiProject(context: CollectorContext): Promise<string | unde
 		const document = parse(source);
 		const project = isRecord(document.project) ? document.project : undefined;
 		const workspace = isRecord(document.workspace) ? document.workspace : undefined;
-		return safeMetadata(project?.name ?? workspace?.name);
+		return safeMetadata(project?.name) ?? safeMetadata(workspace?.name);
 	} catch {
 		return undefined;
 	}

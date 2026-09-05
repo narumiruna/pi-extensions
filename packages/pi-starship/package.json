@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-starship",
 	"version": "0.54.0",
-	"description": "Native Starship-style TOML statusline for the Pi coding agent.",
+	"description": "Native Starship-style TOML statusline and configuration skill for Pi.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -12,11 +12,13 @@
 		"starship",
 		"statusline",
 		"footer",
-		"toml"
+		"toml",
+		"agent-skill"
 	],
 	"files": [
 		"src",
 		"dist",
+		"skills",
 		"README.md",
 		"LICENSE",
 		"NOTICES.md"
@@ -24,12 +26,15 @@
 	"pi": {
 		"extensions": [
 			"./dist/index.ts"
+		],
+		"skills": [
+			"./skills"
 		]
 	},
 	"scripts": {
 		"build": "node scripts/build-runtime.mjs",
-		"check": "npm run build && biome check --vcs-use-ignore-file=false src test scripts package.json tsconfig.json README.md NOTICES.md && npm run typecheck",
-		"format": "biome check --write --vcs-use-ignore-file=false src test scripts package.json tsconfig.json README.md NOTICES.md",
+		"check": "npm run build && biome check --vcs-use-ignore-file=false src test scripts skills package.json tsconfig.json README.md NOTICES.md && npm run typecheck",
+		"format": "biome check --write --vcs-use-ignore-file=false src test scripts skills package.json tsconfig.json README.md NOTICES.md",
 		"prepack": "npm run build",
 		"typecheck": "tsc --noEmit"
 	},

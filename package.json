@@ -39,7 +39,8 @@
 			"./packages/pi-worktree/src/index.ts"
 		],
 		"skills": [
-			"./packages/pi-herdr/skills"
+			"./packages/pi-herdr/skills",
+			"./packages/pi-starship/skills"
 		]
 	},
 	"scripts": {
