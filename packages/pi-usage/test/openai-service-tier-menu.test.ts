@@ -21,7 +21,11 @@ function runtime(kind: UsageSettingsState["kind"] = "loaded") {
 	let state: UsageSettingsState = {
 		kind,
 		path: "/tmp/pi-usage.json",
-		settings: { codexFastMode: false, codexStatusResetCountdown: false, selectedTargets: {} },
+		settings: {
+			openaiServiceTier: "default",
+			codexStatusResetCountdown: false,
+			selectedTargets: {},
+		},
 		...(kind === "invalid" ? { issue: "bad file" } : { document: {} }),
 	};
 	const patches: unknown[] = [];
@@ -41,7 +45,7 @@ function runtime(kind: UsageSettingsState["kind"] = "loaded") {
 			return structuredClone(state);
 		},
 		async updateSelectedTarget() {
-			throw new Error("target selection is not used in Codex Fast menu tests");
+			throw new Error("target selection is not used in service-tier menu tests");
 		},
 		async flush() {},
 	};
@@ -76,7 +80,7 @@ function response(): Promise<Response> {
 	);
 }
 
-test("/usage shows Fast state and toggles the same persistent preference", async (t) => {
+test("/usage shows service-tier state and toggles the same persistent preference", async (t) => {
 	const originalFetch = globalThis.fetch;
 	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
@@ -85,7 +89,7 @@ test("/usage shows Fast state and toggles the same persistent preference", async
 	const memory = runtime();
 	const mock = createMockPi();
 	usageExtension(mock.pi, { settingsRuntime: memory.settingsRuntime });
-	const choices = ["Turn Fast mode on", "Close"];
+	const choices = ["Turn Priority mode on", "Close"];
 	const titles: string[] = [];
 	const { ctx, notifications } = createMockContext({
 		hasUI: true,
@@ -98,13 +102,13 @@ test("/usage shows Fast state and toggles the same persistent preference", async
 		modelRegistry: registry(),
 	});
 	await mock.commands.get("usage")?.handler("", ctx);
-	assert.deepEqual(memory.patches, [{ codexFastMode: true }]);
-	assert.match(titles[0] ?? "", /Fast mode: Off/);
+	assert.deepEqual(memory.patches, [{ openaiServiceTier: "priority" }]);
+	assert.match(titles[0] ?? "", /OpenAI service tier: default/);
 	assert.match(titles[0] ?? "", /1\.5× faster.*uses more/);
-	assert.match(notifications[0]?.message ?? "", /Fast mode enabled/);
+	assert.match(notifications[0]?.message ?? "", /Priority.*enabled/);
 });
 
-test("/usage cancellation does not change Fast and unsupported models show no toggle", async (t) => {
+test("/usage cancellation does not change service tier and unsupported models show no toggle", async (t) => {
 	const originalFetch = globalThis.fetch;
 	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
@@ -125,7 +129,7 @@ test("/usage cancellation does not change Fast and unsupported models show no to
 		modelRegistry: registry(),
 	});
 	await mock.commands.get("usage")?.handler("", ctx);
-	assert.ok(options.includes("Turn Fast mode on"));
+	assert.ok(options.includes("Turn Priority mode on"));
 	assert.deepEqual(cancelled.patches, []);
 
 	const unsupported = runtime();
@@ -150,11 +154,11 @@ test("/usage cancellation does not change Fast and unsupported models show no to
 		},
 	});
 	await unsupportedMock.commands.get("usage")?.handler("", unsupportedContext.ctx);
-	assert.match(unsupportedTitle, /Fast mode: Unavailable/);
-	assert.ok(!unsupportedOptions.some((value) => value.includes("Fast mode on")));
+	assert.match(unsupportedTitle, /OpenAI service tier: Unavailable/);
+	assert.ok(!unsupportedOptions.some((value) => value.includes("Priority mode on")));
 });
 
-test("invalid settings make the /usage Fast action visibly read-only", async (t) => {
+test("invalid settings make the /usage service-tier actions visibly read-only", async (t) => {
 	const originalFetch = globalThis.fetch;
 	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
@@ -177,7 +181,7 @@ test("invalid settings make the /usage Fast action visibly read-only", async (t)
 		modelRegistry: registry(),
 	});
 	await mock.commands.get("usage")?.handler("", ctx);
-	assert.match(rendered, /Fast mode: Off/);
-	assert.ok(options.includes("Turn Fast mode on"));
+	assert.match(rendered, /OpenAI service tier: default/);
+	assert.ok(options.includes("Turn Priority mode on"));
 	assert.deepEqual(invalid.patches, []);
 });

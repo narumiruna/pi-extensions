@@ -6,7 +6,6 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { FAST_USAGE_WARNING, registerCodexFastMode } from "./codex-fast-runtime.js";
 import {
 	type CodexResetAvailability,
 	type CodexResetOption,
@@ -31,6 +30,11 @@ import {
 } from "./core.js";
 import { formatProviderStates, formatUsageStatusline } from "./format.js";
 import { createOAuthCredentialCandidateReader } from "./oauth-credential-source.js";
+import {
+	FLEX_USAGE_WARNING,
+	PRIORITY_USAGE_WARNING,
+	registerOpenAIServiceTiers,
+} from "./openai-service-tier-runtime.js";
 import {
 	adapterForProvider,
 	isStaleExtensionContextError,
@@ -121,7 +125,7 @@ export default function usageExtension(
 	let statusRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	let statusCountdownTimer: ReturnType<typeof setTimeout> | undefined;
 	let statusController: AbortController | undefined;
-	let fastRuntime: ReturnType<typeof registerCodexFastMode>;
+	let serviceTierRuntime: ReturnType<typeof registerOpenAIServiceTiers>;
 
 	const clearStatusRefreshTimer = () => {
 		if (statusRefreshTimer) clearTimeout(statusRefreshTimer);
@@ -207,7 +211,7 @@ export default function usageExtension(
 			now,
 			showCodexResetCountdown,
 		);
-		const value = rawValue ? fastRuntime.decorateStatus(model, rawValue) : undefined;
+		const value = rawValue ? serviceTierRuntime.decorateStatus(model, rawValue) : undefined;
 		if (!safeSetStatus(ctx, value)) return;
 		if (shouldSchedule && sessionActive) scheduleStatusRefresh(ctx, model);
 		if (
@@ -764,7 +768,7 @@ export default function usageExtension(
 			publishStableCurrent(ctx, stableCurrent);
 			let current = stableCurrent.outcome;
 			let visibleStates: ProviderUsageState[] = [current.state];
-			let fastState = settingsRuntime.get();
+			let serviceTierState = settingsRuntime.get();
 			let resetAvailability: CodexResetAvailability | undefined;
 			let selectedReset: CodexResetOption | undefined;
 			let resetAuthFingerprint: string | undefined;
@@ -900,7 +904,8 @@ export default function usageExtension(
 				| "refresh"
 				| "settings"
 				| "target"
-				| "toggle-fast"
+				| "toggle-priority"
+				| "toggle-flex"
 				| "another"
 				| "all"
 				| "provider"
@@ -914,19 +919,30 @@ export default function usageExtension(
 				start: "main",
 				screens: {
 					main: () => {
-						const fastAvailability = fastRuntime.availability(ctx.model);
+						const tierAvailability = serviceTierRuntime.availability(ctx.model);
+						const supportedTiers = serviceTierRuntime.supportedTiers(ctx.model);
+						const configuredTier = serviceTierRuntime.tier();
 						const targetState = actionableTargetState();
 						const targetAdapter = adapterForProvider(targetState?.providerId);
-						const fastLines =
-							fastAvailability.kind === "available"
-								? [`Fast mode: ${fastAvailability.enabled ? "On" : "Off"}`, FAST_USAGE_WARNING]
-								: fastAvailability.kind === "unavailable"
-									? [`Fast mode: Unavailable · ${fastAvailability.reason}`]
+						const tierLines =
+							tierAvailability.kind === "available"
+								? [
+										`OpenAI service tier: ${configuredTier}`,
+										...(configuredTier === "priority"
+											? [PRIORITY_USAGE_WARNING]
+											: configuredTier === "flex"
+												? [FLEX_USAGE_WARNING]
+												: supportedTiers.includes("priority")
+													? [PRIORITY_USAGE_WARNING]
+													: []),
+									]
+								: tierAvailability.kind === "unavailable"
+									? [`OpenAI service tier: Unavailable · ${tierAvailability.reason}`]
 									: [];
 						return {
 							kind: "actions",
 							title: "Provider usage",
-							lines: [...formatProviderStates(visibleStates).split("\n"), ...fastLines],
+							lines: [...formatProviderStates(visibleStates).split("\n"), ...tierLines],
 							items: [
 								{ id: "refresh", label: REFRESH_CURRENT, action: "refresh" },
 								{ id: "settings", label: SETTINGS, action: "settings" },
@@ -939,19 +955,35 @@ export default function usageExtension(
 											},
 										]
 									: []),
-								...(fastAvailability.kind === "available"
+								...(supportedTiers.includes("priority")
 									? [
 											{
-												id: "toggle-fast",
-												label: fastAvailability.enabled
-													? "Turn Fast mode off"
-													: "Turn Fast mode on",
+												id: "toggle-priority",
+												label:
+													configuredTier === "priority"
+														? "Turn Priority mode off"
+														: "Turn Priority mode on",
 												description:
-													fastState.kind === "invalid"
-														? "Repair pi-usage.json and reload before changing Fast mode."
-														: FAST_USAGE_WARNING,
-												disabled: fastState.kind === "invalid",
-												action: "toggle-fast" as const,
+													serviceTierState.kind === "invalid"
+														? "Repair pi-usage.json and reload before changing service tier."
+														: PRIORITY_USAGE_WARNING,
+												disabled: serviceTierState.kind === "invalid",
+												action: "toggle-priority" as const,
+											},
+										]
+									: []),
+								...(supportedTiers.includes("flex")
+									? [
+											{
+												id: "toggle-flex",
+												label:
+													configuredTier === "flex" ? "Turn Flex mode off" : "Turn Flex mode on",
+												description:
+													serviceTierState.kind === "invalid"
+														? "Repair pi-usage.json and reload before changing service tier."
+														: FLEX_USAGE_WARNING,
+												disabled: serviceTierState.kind === "invalid",
+												action: "toggle-flex" as const,
 											},
 										]
 									: []),
@@ -1116,7 +1148,7 @@ export default function usageExtension(
 								}
 							},
 						);
-						fastState = settingsRuntime.get();
+						serviceTierState = settingsRuntime.get();
 						const revalidated = await queryStableCurrent(
 							ctx,
 							false,
@@ -1130,14 +1162,28 @@ export default function usageExtension(
 						publishStableCurrent(ctx, revalidated);
 						return { kind: "stay" };
 					},
-					"toggle-fast": async () => {
-						const availability = fastRuntime.availability(ctx.model);
-						if (availability.kind !== "available" || fastState.kind === "invalid") {
+					"toggle-priority": async () => {
+						if (
+							!serviceTierRuntime.supportedTiers(ctx.model).includes("priority") ||
+							serviceTierState.kind === "invalid"
+						) {
 							return { kind: "rejected" };
 						}
-						const changed = await fastRuntime.toggle(ctx, !availability.enabled, controller.signal);
+						const changed = await serviceTierRuntime.toggle(ctx, "priority", controller.signal);
 						if (!changed) return { kind: "rejected" };
-						fastState = settingsRuntime.get();
+						serviceTierState = settingsRuntime.get();
+						return { kind: "stay" };
+					},
+					"toggle-flex": async () => {
+						if (
+							!serviceTierRuntime.supportedTiers(ctx.model).includes("flex") ||
+							serviceTierState.kind === "invalid"
+						) {
+							return { kind: "rejected" };
+						}
+						const changed = await serviceTierRuntime.toggle(ctx, "flex", controller.signal);
+						if (!changed) return { kind: "rejected" };
+						serviceTierState = settingsRuntime.get();
 						return { kind: "stay" };
 					},
 					"open-resets": async () => {
@@ -1450,7 +1496,7 @@ export default function usageExtension(
 		sessionActive = true;
 		const ownerGeneration = sessionGeneration;
 		try {
-			await fastRuntime.prepareSession(ctx);
+			await serviceTierRuntime.prepareSession(ctx);
 		} catch (error) {
 			if (isStaleExtensionContextError(error) || ownerGeneration !== sessionGeneration) return;
 			throw error;
@@ -1480,7 +1526,7 @@ export default function usageExtension(
 		safeSetStatus(ctx, undefined);
 	});
 
-	fastRuntime = registerCodexFastMode(
+	serviceTierRuntime = registerOpenAIServiceTiers(
 		pi,
 		settingsRuntime,
 		(ctx) => startStatusRefresh(ctx, ctx.model, false),

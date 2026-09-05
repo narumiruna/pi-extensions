@@ -36,13 +36,18 @@ afterEach(async () => {
 
 test("normalizes owned settings and ignores the retired xAI field", () => {
 	assert.deepEqual(normalizeUsageSettings({}), DEFAULT_USAGE_SETTINGS);
+	assert.deepEqual(normalizeUsageSettings({ openaiServiceTier: "priority" }), {
+		openaiServiceTier: "priority",
+		codexStatusResetCountdown: true,
+		selectedTargets: {},
+	});
 	assert.deepEqual(normalizeUsageSettings({ codexFastMode: true }), {
-		codexFastMode: true,
+		openaiServiceTier: "priority",
 		codexStatusResetCountdown: true,
 		selectedTargets: {},
 	});
 	assert.deepEqual(normalizeUsageSettings({ fireworksAccountId: "acme-prod" }), {
-		codexFastMode: false,
+		openaiServiceTier: "default",
 		codexStatusResetCountdown: true,
 		selectedTargets: { fireworks: "acme-prod" },
 	});
@@ -52,7 +57,7 @@ test("normalizes owned settings and ignores the retired xAI field", () => {
 			selectedTargets: { fireworks: "current", custom: "project-1" },
 		}),
 		{
-			codexFastMode: false,
+			openaiServiceTier: "default",
 			codexStatusResetCountdown: true,
 			selectedTargets: { fireworks: "current", custom: "project-1" },
 		},
@@ -83,7 +88,7 @@ test("missing loads are side-effect free and valid loads preserve unknown fields
 	);
 	const loaded = await loadUsageSettings(path);
 	assert.equal(loaded.kind, "loaded");
-	assert.equal(loaded.settings.codexFastMode, true);
+	assert.equal(loaded.settings.openaiServiceTier, "priority");
 	assert.equal(loaded.settings.selectedTargets.fireworks, "acme");
 	assert.equal(loaded.document?.xaiUsage, false);
 	assert.equal(loaded.document?.future, "kept");
@@ -96,7 +101,10 @@ test("malformed, invalid, oversized, and symbolic-link settings stay read-only",
 	assert.equal(malformed.kind, "invalid");
 	const runtime = createUsageSettingsRuntime(malformedPath);
 	await runtime.reload();
-	await assert.rejects(runtime.update({ codexFastMode: true }), /Cannot overwrite an invalid/);
+	await assert.rejects(
+		runtime.update({ openaiServiceTier: "priority" }),
+		/Cannot overwrite an invalid/,
+	);
 	assert.equal(await readFile(malformedPath, "utf8"), "{invalid");
 
 	const invalidPath = await tempSettingsPath();
@@ -117,17 +125,17 @@ test("malformed, invalid, oversized, and symbolic-link settings stay read-only",
 test("the first explicit save creates a private file and preserves unknown fields", async () => {
 	const path = await tempSettingsPath();
 	const runtime = createUsageSettingsRuntime(path);
-	await runtime.update({ codexFastMode: true });
+	await runtime.update({ openaiServiceTier: "priority" });
 	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-		codexFastMode: true,
+		openaiServiceTier: "priority",
 	});
 	if (process.platform !== "win32") assert.equal((await stat(path)).mode & 0o777, 0o600);
 
 	await writeFile(path, '{"codexFastMode":true,"xaiUsage":false,"future":"kept"}\n');
 	if (process.platform !== "win32") await chmod(path, 0o644);
-	await runtime.update({ codexFastMode: false });
+	await runtime.update({ openaiServiceTier: "default" });
 	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-		codexFastMode: false,
+		openaiServiceTier: "default",
 		xaiUsage: false,
 		future: "kept",
 	});
@@ -218,12 +226,12 @@ test("serialized updates reread the latest document and leave no temporary files
 	await runtime.reload();
 	await writeFile(path, '{"codexFastMode":false,"external":"newer"}\n');
 	await Promise.all([
-		runtime.update({ codexFastMode: true }),
-		runtime.update({ codexFastMode: false }),
+		runtime.update({ openaiServiceTier: "priority" }),
+		runtime.update({ openaiServiceTier: "default" }),
 	]);
 	await runtime.flush();
 	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-		codexFastMode: false,
+		openaiServiceTier: "default",
 		external: "newer",
 	});
 	assert.deepEqual(
@@ -235,12 +243,12 @@ test("serialized updates reread the latest document and leave no temporary files
 test("reload waits for queued writes and observes the latest durable Codex value", async () => {
 	const path = await tempSettingsPath();
 	const runtime = createUsageSettingsRuntime(path);
-	const update = runtime.update({ codexFastMode: true });
+	const update = runtime.update({ openaiServiceTier: "priority" });
 	const reload = runtime.reload();
 	await update;
 	const reloaded = await reload;
-	assert.equal(reloaded.settings.codexFastMode, true);
-	assert.equal(JSON.parse(await readFile(path, "utf8")).codexFastMode, true);
+	assert.equal(reloaded.settings.openaiServiceTier, "priority");
+	assert.equal(JSON.parse(await readFile(path, "utf8")).openaiServiceTier, "priority");
 });
 
 test("aborted saves retain prior runtime state", async () => {
@@ -249,10 +257,10 @@ test("aborted saves retain prior runtime state", async () => {
 	const controller = new AbortController();
 	controller.abort();
 	await assert.rejects(
-		abortedRuntime.update({ codexFastMode: true }, controller.signal),
+		abortedRuntime.update({ openaiServiceTier: "priority" }, controller.signal),
 		/aborted/i,
 	);
-	assert.equal(abortedRuntime.get().settings.codexFastMode, false);
+	assert.equal(abortedRuntime.get().settings.openaiServiceTier, "default");
 	assert.equal((await loadUsageSettings(abortedPath)).kind, "missing");
 });
 
@@ -268,8 +276,8 @@ test("failed saves retain prior runtime state, clean up, and do not poison retri
 			},
 		},
 	});
-	await assert.rejects(runtime.update({ codexFastMode: true }), /rename rejected/);
-	assert.equal(runtime.get().settings.codexFastMode, false);
+	await assert.rejects(runtime.update({ openaiServiceTier: "priority" }), /rename rejected/);
+	assert.equal(runtime.get().settings.openaiServiceTier, "default");
 	assert.equal((await loadUsageSettings(path)).kind, "missing");
 	assert.deepEqual(
 		(await readdir(join(path, ".."))).filter((name) => name.endsWith(".tmp")),
@@ -277,8 +285,8 @@ test("failed saves retain prior runtime state, clean up, and do not poison retri
 	);
 
 	rejectRename = false;
-	await runtime.update({ codexFastMode: true });
-	assert.equal(runtime.get().settings.codexFastMode, true);
+	await runtime.update({ openaiServiceTier: "priority" });
+	assert.equal(runtime.get().settings.openaiServiceTier, "priority");
 });
 
 test("failed explicit target migration keeps legacy data and allows a retry", async () => {
@@ -309,7 +317,7 @@ test("failed explicit target migration keeps legacy data and allows a retry", as
 
 test("normalizes the Codex reset countdown status preference", () => {
 	assert.deepEqual(normalizeUsageSettings({ codexStatusResetCountdown: false }), {
-		codexFastMode: false,
+		openaiServiceTier: "default",
 		codexStatusResetCountdown: false,
 		selectedTargets: {},
 	});

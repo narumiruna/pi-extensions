@@ -12,12 +12,15 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import { errorMessage } from "./core.js";
-import type { UsageSettingsRuntime } from "./settings.js";
+import type { OpenAIServiceTier, UsageSettings, UsageSettingsRuntime } from "./settings.js";
 
+const DEFAULT = "Default";
+const FLEX = "Flex";
 const OFF = "Off";
 const ON = "On";
+const PRIORITY = "Priority";
 
-type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown";
+type UsageSettingId = "openaiServiceTier" | "codexStatusResetCountdown";
 
 function fitSettingsRows(lines: string[], maxRows: number): string[] {
 	if (lines.length <= maxRows) return lines;
@@ -62,11 +65,11 @@ export async function showUsageSettings(
 			const state = settingsRuntime.get();
 			const items: SettingItem[] = [
 				{
-					id: "codexFastMode",
-					label: "Codex Fast mode",
-					description: "Use faster Codex routing at increased plan allowance consumption.",
-					currentValue: state.settings.codexFastMode ? ON : OFF,
-					values: [OFF, ON],
+					id: "openaiServiceTier",
+					label: "OpenAI service tier",
+					description: "Choose standard, faster Priority, or lower-cost Flex processing.",
+					currentValue: displayServiceTier(state.settings.openaiServiceTier),
+					values: [DEFAULT, PRIORITY, FLEX],
 				},
 				{
 					id: "codexStatusResetCountdown",
@@ -87,11 +90,15 @@ export async function showUsageSettings(
 				localController.abort();
 				done(changed);
 			};
-			const queueUpdate = (id: UsageSettingId, requested: boolean, display: string) => {
+			const queueUpdate = (
+				id: UsageSettingId,
+				requested: UsageSettings[UsageSettingId],
+				display: string,
+			) => {
 				saveQueue = saveQueue.then(async () => {
 					const previous = settingsRuntime.get().settings[id];
 					if (settingsRuntime.get().kind === "invalid") {
-						settingsList.updateValue(id, previous ? ON : OFF);
+						settingsList.updateValue(id, displaySetting(id, previous));
 						if (!signal.aborted && isCurrent()) {
 							ctx.ui.notify("Repair pi-usage.json and reload before changing settings.", "error");
 							tui.requestRender();
@@ -102,7 +109,7 @@ export async function showUsageSettings(
 						await settingsRuntime.update({ [id]: requested }, signal);
 					} catch (error) {
 						if (signal.aborted || !isCurrent()) return;
-						settingsList.updateValue(id, previous ? ON : OFF);
+						settingsList.updateValue(id, displaySetting(id, previous));
 						ctx.ui.notify(`Could not save pi-usage.json: ${errorMessage(error)}`, "error");
 						tui.requestRender();
 						return;
@@ -122,7 +129,12 @@ export async function showUsageSettings(
 				getSettingsListTheme(),
 				(id, value) => {
 					if (closing || signal.aborted || !isCurrent()) return;
-					queueUpdate(id as UsageSettingId, value !== OFF, value);
+					if (id === "openaiServiceTier") {
+						const requested = parseServiceTier(value);
+						if (requested) queueUpdate(id, requested, value);
+						return;
+					}
+					queueUpdate(id as "codexStatusResetCountdown", value !== OFF, value);
 				},
 				cancel,
 			);
@@ -156,4 +168,22 @@ export async function showUsageSettings(
 			};
 		})) ?? false
 	);
+}
+
+function displaySetting(id: UsageSettingId, value: UsageSettings[UsageSettingId]): string {
+	if (id === "openaiServiceTier") return displayServiceTier(value);
+	return value ? ON : OFF;
+}
+
+function displayServiceTier(value: unknown): string {
+	if (value === "priority") return PRIORITY;
+	if (value === "flex") return FLEX;
+	return DEFAULT;
+}
+
+function parseServiceTier(value: string): OpenAIServiceTier | undefined {
+	if (value === PRIORITY) return "priority";
+	if (value === FLEX) return "flex";
+	if (value === DEFAULT) return "default";
+	return undefined;
 }

@@ -113,7 +113,7 @@ function memorySettingsRuntime(
 		kind,
 		path: "/tmp/pi-usage.json",
 		settings: {
-			codexFastMode: false,
+			openaiServiceTier: "default",
 			codexStatusResetCountdown: options.codexStatusResetCountdown ?? false,
 			selectedTargets: {
 				...(options.fireworksAccountId ? { fireworks: options.fireworksAccountId } : {}),
@@ -124,7 +124,7 @@ function memorySettingsRuntime(
 			? { issue: "invalid test settings" }
 			: {
 					document: {
-						codexFastMode: false,
+						openaiServiceTier: "default",
 						selectedTargets: {
 							...(options.fireworksAccountId ? { fireworks: options.fireworksAccountId } : {}),
 							...options.selectedTargets,
@@ -237,15 +237,16 @@ function usageFetch(input: string | URL | Request): Promise<Response> {
 	);
 }
 
-test("pi-usage registers its usage and Fast commands with lifecycle hooks", () => {
+test("pi-usage registers its usage and speed command with lifecycle hooks", () => {
 	const mock = createMockPi();
 	usageExtension(mock.pi);
 
 	assert.ok(mock.commands.has("usage"));
-	assert.ok(mock.commands.has("fast"));
+	assert.ok(mock.commands.has("speed"));
+	assert.equal(mock.commands.has("fast"), false);
 	assert.equal(mock.commands.has("codex-status"), false);
 	assert.equal(mock.commands.get("usage")?.getArgumentCompletions, undefined);
-	assert.equal(mock.commands.get("fast")?.getArgumentCompletions, undefined);
+	assert.equal(typeof mock.commands.get("speed")?.getArgumentCompletions, "function");
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"before_provider_request",
 		"message_end",
@@ -2578,9 +2579,9 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
 	);
 
 	assert.equal(changed, true);
-	assert.equal(settings.state().settings.codexFastMode, true);
+	assert.equal(settings.state().settings.openaiServiceTier, "priority");
 	assert.equal(settings.state().settings.codexStatusResetCountdown, true);
-	assert.deepEqual(applied, new Set(["codexFastMode", "codexStatusResetCountdown"]));
+	assert.deepEqual(applied, new Set(["openaiServiceTier", "codexStatusResetCountdown"]));
 	const renderedSettings = rendered.map((lines) => lines.join("\n"));
 	assert.ok(
 		rendered.some((frame) => {
@@ -2593,7 +2594,7 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
 			/Show time remaining until each Codex usage limit resets/.test(frame),
 		),
 	);
-	assert.ok(renderedSettings.some((frame) => /Use faster Codex routing/.test(frame)));
+	assert.ok(renderedSettings.some((frame) => /Choose standard, faster Priority/.test(frame)));
 	assert.doesNotMatch(renderedSettings.join("\n"), /Fireworks account/u);
 	assert.doesNotMatch(renderedSettings.join("\n"), /xAI|warning|undocumented|experimental/iu);
 });
@@ -2722,7 +2723,7 @@ test("Ctrl+C hard-cancels Settings before conflicting configurable actions", asy
 
 	assert.equal(changed, false);
 	assert.deepEqual(settings.state().settings, {
-		codexFastMode: false,
+		openaiServiceTier: "default",
 		codexStatusResetCountdown: false,
 		selectedTargets: {},
 	});
