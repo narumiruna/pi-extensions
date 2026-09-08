@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { UsageUnsupportedError } from "../src/core.js";
 import {
 	formatUsageReport,
 	formatUsageStatusline,
@@ -288,10 +289,7 @@ test("Z.AI adapter derives window length and label from the payload window numbe
 });
 
 test("Z.AI adapter rejects malformed or empty quota responses", () => {
-	assert.throws(
-		() => normalizeZaiQuotaPayload("zai", "Z.AI", {}, 0),
-		/No GLM Coding Plan on this Z\.AI credential/,
-	);
+	assert.throws(() => normalizeZaiQuotaPayload("zai", "Z.AI", {}, 0), /not an object/);
 	assert.throws(
 		() => normalizeZaiQuotaPayload("zai", "Z.AI", { data: { limits: [] } }, 0),
 		/no displayable usage data/,
@@ -300,6 +298,75 @@ test("Z.AI adapter rejects malformed or empty quota responses", () => {
 		() => normalizeZaiQuotaPayload("zai", "Z.AI", { data: { limits: "broken" } }, 0),
 		/no displayable usage data/,
 	);
+});
+
+test("Z.AI only classifies the explicit no-plan response as unsupported", () => {
+	const noPlan = { code: 500, success: false, msg: "当前用户不存在coding plan" };
+	for (const data of [undefined, null]) {
+		assert.throws(
+			() => normalizeZaiQuotaPayload("zai", "Z.AI", { ...noPlan, data }, 0),
+			(error: unknown) =>
+				error instanceof UsageUnsupportedError &&
+				error.message === "No GLM Coding Plan on this Z.AI credential; API usage is not metered.",
+		);
+	}
+	for (const payload of [
+		{},
+		{ data: [] },
+		{ ...noPlan, data: [] },
+		{ ...noPlan, data: "broken" },
+		{ ...noPlan, data: false },
+		{ ...noPlan, data: 0 },
+		{ ...noPlan, data: {} },
+		{ ...noPlan, code: undefined },
+		{ ...noPlan, code: "500" },
+		{ ...noPlan, code: 401 },
+		{ ...noPlan, success: undefined },
+		{ ...noPlan, success: true },
+		{ ...noPlan, success: "false" },
+		{ ...noPlan, msg: undefined },
+		{ ...noPlan, msg: "Internal server error" },
+		{ ...noPlan, msg: `${noPlan.msg} extra details` },
+	]) {
+		assert.throws(
+			() => normalizeZaiQuotaPayload("zai", "Z.AI", payload, 0),
+			(error: unknown) => error instanceof Error && !(error instanceof UsageUnsupportedError),
+			JSON.stringify(payload),
+		);
+	}
+});
+
+test("Z.AI quota errors do not echo credentials across message truncation boundaries", async () => {
+	const secret = "s".repeat(100);
+	try {
+		for (const [providerId, baseUrl] of ZAI_ORIGINS) {
+			const adapter = SUPPORTED_ADAPTERS.find((candidate) => candidate.id === providerId);
+			assert.ok(adapter);
+			const auth = zaiUsageAuth({ ...ZAI_MODEL, provider: providerId, baseUrl }, secret);
+			for (const msg of [secret, `当前用户不存在coding plan ${secret}`, `Invalid key: ${secret}`]) {
+				vi.stubGlobal(
+					"fetch",
+					zaiFetchStub(
+						[],
+						() => new Response(JSON.stringify({ code: 500, success: false, msg }), { status: 200 }),
+					),
+				);
+				await assert.rejects(
+					() =>
+						queryProviderUsage(adapter, auth, new AbortController().signal, 5_000, async () => {}),
+					(error: unknown) => {
+						assert.ok(error instanceof Error);
+						assert.equal(error.message, "Z.AI quota response data was not an object.");
+						assert.ok(!error.message.includes(secret.slice(0, 20)));
+						assert.ok(!(error instanceof UsageUnsupportedError));
+						return true;
+					},
+				);
+			}
+		}
+	} finally {
+		vi.unstubAllGlobals();
+	}
 });
 
 test("Z.AI adapters query the official quota and plan endpoints with the raw API key", async () => {
@@ -593,9 +660,112 @@ test("Z.AI usage resolves only official origins", async () => {
 	}
 });
 
+test("malformed Z.AI quota responses keep the error chip and scheduled recovery", async () => {
+	vi.useFakeTimers();
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const { ctx, statuses } = createMockContext({
+		model: ZAI_MODEL,
+		modelRegistry: {
+			getProviderAuth: async () => ({ auth: { apiKey: "zai-secret-key" } }),
+			getAvailable: () => [ZAI_MODEL],
+			getAll: () => [ZAI_MODEL],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: () => "Z.AI",
+		},
+	});
+	let quotaPayload: object = {};
+	vi.stubGlobal(
+		"fetch",
+		zaiFetchStub(
+			[],
+			(url) =>
+				new Response(
+					JSON.stringify(
+						url.endsWith("/subscription/list") ? ZAI_SUBSCRIPTION_PAYLOAD : quotaPayload,
+					),
+					{ status: 200 },
+				),
+		),
+	);
+	try {
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await vi.advanceTimersByTimeAsync(0);
+		assert.equal(statuses.get("usage"), "usage err: Z.AI quota response data was not an object.");
+		quotaPayload = ZAI_QUOTA_PAYLOAD;
+		await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+		assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
+	} finally {
+		await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	}
+});
+
+test("a no-plan refresh invalidates ready usage beyond the unsupported backoff", async () => {
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const actions = ["Refresh current usage", "Close"];
+	const { ctx, statuses } = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		model: ZAI_MODEL,
+		select: async () => actions.shift() ?? "Close",
+		modelRegistry: {
+			getProviderAuth: async () => ({ auth: { apiKey: "zai-secret-key" } }),
+			getAvailable: () => [ZAI_MODEL],
+			getAll: () => [ZAI_MODEL],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: () => "Z.AI",
+		},
+	});
+	let quotaPayload: object = ZAI_QUOTA_PAYLOAD;
+	const requests: Array<{ url: string; authorization: string | undefined }> = [];
+	const now = Date.now();
+	const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+	vi.stubGlobal(
+		"fetch",
+		zaiFetchStub(
+			requests,
+			(url) =>
+				new Response(
+					JSON.stringify(
+						url.endsWith("/subscription/list") ? ZAI_SUBSCRIPTION_PAYLOAD : quotaPayload,
+					),
+					{ status: 200 },
+				),
+		),
+	);
+	try {
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk"));
+		assert.equal(requests.length, 2);
+		quotaPayload = { code: 500, success: false, msg: "当前用户不存在coding plan" };
+		await mock.commands.get("usage")?.handler("", ctx);
+		assert.equal(statuses.get("usage"), undefined);
+		assert.equal(requests.length, 4);
+		await mock.events.get("turn_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
+		assert.equal(requests.length, 4);
+		clock.mockReturnValue(now + 30_001);
+		await mock.events.get("turn_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
+		assert.equal(requests.length, 6);
+		quotaPayload = ZAI_QUOTA_PAYLOAD;
+		clock.mockReturnValue(now + 60_002);
+		await mock.events.get("turn_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk"));
+		assert.equal(requests.length, 8);
+	} finally {
+		await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+		clock.mockRestore();
+		vi.unstubAllGlobals();
+	}
+});
+
 // Both API and coding plan credentials use the same coding base URL, so the no-plan answer is the
 // only signal that a credential carries no subscription.
-test("a Z.AI credential with no coding plan leaves the statusline empty", async () => {
+test("a Z.AI credential with no coding plan leaves the statusline empty", async (t) => {
 	const noCodingPlan = { code: 500, msg: "当前用户不存在coding plan", success: false };
 	vi.stubGlobal(
 		"fetch",
@@ -615,10 +785,11 @@ test("a Z.AI credential with no coding plan leaves the statusline empty", async 
 			},
 		});
 
+		t.onTestFinished(async () => {
+			await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+		});
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
-		for (let index = 0; index < 8; index += 1) {
-			await new Promise<void>((resolve) => setImmediate(resolve));
-		}
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
 
 		assert.equal(statuses.get("usage"), undefined);
 	} finally {
@@ -628,7 +799,7 @@ test("a Z.AI credential with no coding plan leaves the statusline empty", async 
 
 // The verdict does not change on retry, so it is throttled like a failure instead of re-querying
 // the quota and plan endpoints on every turn.
-test("an unsupported Z.AI credential is throttled instead of re-queried each turn", async () => {
+test("an unsupported Z.AI credential is throttled instead of re-queried each turn", async (t) => {
 	const noCodingPlan = { code: 500, msg: "当前用户不存在coding plan", success: false };
 	const requests: Array<{ url: string; authorization: string | undefined }> = [];
 	vi.stubGlobal(
@@ -649,12 +820,14 @@ test("an unsupported Z.AI credential is throttled instead of re-queried each tur
 			},
 		});
 
+		t.onTestFinished(async () => {
+			await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+		});
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
 		for (let turn = 0; turn < 3; turn += 1) {
 			await mock.events.get("turn_start")?.[0]?.({}, ctx);
-			for (let index = 0; index < 8; index += 1) {
-				await new Promise<void>((resolve) => setImmediate(resolve));
-			}
+			await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
 		}
 
 		assert.equal(statuses.get("usage"), undefined);

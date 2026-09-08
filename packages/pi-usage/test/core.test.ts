@@ -60,6 +60,18 @@ test("usage cache isolates identities, expires entries, and remains bounded", ()
 	assert.equal(cache.size, 0);
 });
 
+test("usage cache deletion preserves other credentials and providers", () => {
+	const cache = new UsageCache(300_000);
+	cache.set("zai", "account-a", report, 1_000);
+	cache.set("zai", "account-b", report, 1_000);
+	cache.set("zai-coding-cn", "account-a", report, 1_000);
+	cache.delete("zai", "account-a");
+	cache.delete("zai", "account-a");
+	assert.equal(cache.get("zai", "account-a", 1_001), undefined);
+	assert.equal(cache.get("zai", "account-b", 1_001), report);
+	assert.equal(cache.get("zai-coding-cn", "account-a", 1_001), report);
+});
+
 test("bounded orchestration retains stable partial results and respects cancellation", async () => {
 	let active = 0;
 	let maximumActive = 0;
