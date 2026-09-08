@@ -1,10 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
-import {
-	type Input,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { type Input, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { renderBoundedFrame } from "../bounded-frame.js";
 import { HorizontalRule } from "../horizontal-rule.js";
 import { formatInteractionHints } from "../interaction-hints.js";
 import { replaceTerminalControls, safeMenuText } from "../text.js";
@@ -92,152 +88,29 @@ export function renderFrame<ScreenId extends string, ActionId extends string>(
 			safeWidth,
 		),
 	);
-	const fullFrame = [
+	// Selection affordances belong to the menu adapter, not the public frame primitive.
+	const compactContent = content
+		.map((line, index) => ({ line, index }))
+		.filter(({ line }) => stripVTControlCharacters(line).trim().length > 0);
+	const compactRows = compactContent.map(({ line }) => line);
+	const priorities = priorityRowIndexes(
+		compactRows,
+		layout.pinnedContentRows ?? 0,
+		layout.priorityTailRows ?? 0,
+	);
+	return renderBoundedFrame({
+		width: safeWidth,
+		maxRows: componentRows(options.tui.terminal.rows),
 		rule,
-		...titleRows,
-		...contextRows,
-		...(content.length > 0 ? ["", ...content] : []),
-		...hintRows,
-		rule,
-	];
-	const maxRows = componentRows(options.tui.terminal.rows);
-	const result =
-		fullFrame.length <= maxRows
-			? fullFrame
-			: compactFrame(
-					rule,
-					titleRows,
-					contextRows,
-					content,
-					compactFullHintRows,
-					compactHintRow,
-					maxRows,
-					layout.pinnedContentRows ?? 0,
-					layout.priorityTailRows ?? 0,
-				);
-	return result.map((line) => truncateToWidth(line, safeWidth, ""));
-}
-
-function compactFrame(
-	rule: string,
-	titleRows: readonly string[],
-	contextRows: readonly string[],
-	contentRows: readonly string[],
-	hintRows: readonly string[],
-	compactHintRow: string,
-	maxRows: number,
-	pinnedContentRows: number,
-	priorityTailRows: number,
-): string[] {
-	const framed = maxRows >= 5;
-	const availableRows = framed ? maxRows - 2 : maxRows;
-	const compactContentRows = contentRows.filter(
-		(line) => stripVTControlCharacters(line).trim().length > 0,
-	);
-	const body =
-		compactContentRows.length > 0
-			? compactInteractiveRows(
-					titleRows,
-					contextRows,
-					compactContentRows,
-					hintRows,
-					compactHintRow,
-					availableRows,
-					pinnedContentRows,
-					priorityTailRows,
-				)
-			: compactStaticRows(titleRows, contextRows, compactHintRow, availableRows);
-	return framed ? [rule, ...body, rule] : body;
-}
-
-function compactInteractiveRows(
-	titleRows: readonly string[],
-	contextRows: readonly string[],
-	contentRows: readonly string[],
-	hintRows: readonly string[],
-	compactHintRow: string,
-	availableRows: number,
-	pinnedContentRows: number,
-	priorityTailRows: number,
-): string[] {
-	const hintBudget = compactHintRow && availableRows > 1 ? 1 : 0;
-	const minimumContentRows = Math.min(
-		availableRows - hintBudget,
-		minimumFocusedRows(contentRows, pinnedContentRows, priorityTailRows),
-	);
-	let remainingRows = Math.max(0, availableRows - hintBudget - minimumContentRows);
-	const titleBudget = titleRows.length > 0 && remainingRows > 0 ? 1 : 0;
-	remainingRows -= titleBudget;
-	const extraHintRows = Math.max(0, hintRows.length - hintBudget);
-	const useFullHints = hintBudget > 0 && extraHintRows <= remainingRows;
-	if (useFullHints) remainingRows -= extraHintRows;
-	const contentBudget = Math.min(contentRows.length, minimumContentRows + remainingRows);
-	remainingRows -= contentBudget - minimumContentRows;
-	const contextBudget = Math.min(contextRows.length, remainingRows);
-	const boundedContent = focusedRows(
-		contentRows,
-		contentBudget,
-		pinnedContentRows,
-		priorityTailRows,
-	);
-	return [
-		...titleRows.slice(0, titleBudget),
-		...contextRows.slice(0, contextBudget),
-		...boundedContent,
-		...(hintBudget > 0 ? (useFullHints ? hintRows : [compactHintRow]) : []),
-	];
-}
-
-function compactStaticRows(
-	titleRows: readonly string[],
-	contextRows: readonly string[],
-	compactHintRow: string,
-	availableRows: number,
-): string[] {
-	if (availableRows <= 0) return [];
-	if (availableRows === 1) {
-		return [contextRows[0] || compactHintRow || titleRows[0] || ""];
-	}
-	const hintBudget = compactHintRow ? 1 : 0;
-	const minimumContextRows = contextRows.length > 0 ? 1 : 0;
-	let remainingRows = Math.max(0, availableRows - hintBudget - minimumContextRows);
-	const titleBudget = titleRows.length > 0 && remainingRows > 0 ? 1 : 0;
-	remainingRows -= titleBudget;
-	const contextBudget = Math.min(contextRows.length, minimumContextRows + remainingRows);
-	return [
-		...titleRows.slice(0, titleBudget),
-		...contextRows.slice(0, contextBudget),
-		...(hintBudget > 0 ? [compactHintRow] : []),
-	];
-}
-
-function minimumFocusedRows(rows: readonly string[], pinnedRows: number, priorityTailRows: number) {
-	const priorities = priorityRowIndexes(rows, pinnedRows, priorityTailRows);
-	return Math.max(1, priorities.size);
-}
-
-function focusedRows(
-	rows: readonly string[],
-	budget: number,
-	pinnedRows = 0,
-	priorityTailRows = 0,
-): readonly string[] {
-	if (budget <= 0) return [];
-	if (rows.length <= budget) return rows;
-	const indexes = priorityRowIndexes(rows, pinnedRows, priorityTailRows, budget);
-	const selectedIndex = selectedRowIndex(rows);
-	const fillOrder = Array.from({ length: rows.length }, (_, index) => index).sort((left, right) => {
-		if (selectedIndex < 0) return left - right;
-		return Math.abs(left - selectedIndex) - Math.abs(right - selectedIndex) || left - right;
+		title: titleRows,
+		context: contextRows,
+		content,
+		hints: hintRows,
+		compactHints: compactFullHintRows,
+		compactHint: compactHintRow,
+		priorityRows: [...priorities].map((index) => compactContent[index]?.index ?? -1),
+		focusedRow: compactContent[selectedRowIndex(compactRows)]?.index,
 	});
-	for (const index of fillOrder) {
-		if (indexes.size >= budget) break;
-		indexes.add(index);
-	}
-	return [...indexes]
-		.sort((left, right) => left - right)
-		.map((index) => rows[index])
-		.filter((line): line is string => line !== undefined);
 }
 
 function priorityRowIndexes(

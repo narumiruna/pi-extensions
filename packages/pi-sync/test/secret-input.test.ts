@@ -186,6 +186,42 @@ test("a stale secret prompt never creates its masked component", async () => {
 	assert.equal(await pending, undefined);
 });
 
+test("masked input omits unbound submit hints and deduplicates cancel aliases", async () => {
+	const tui = createTuiHarness({
+		width: 80,
+		keybindings: {
+			matches: (data, binding) => binding === "tui.select.cancel" && data === "\u001b",
+			getKeys: (binding) => (binding === "tui.select.cancel" ? ["escape", "esc", "ctrl+c"] : []),
+		},
+	});
+	const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+	const pending = promptSecret(ctx, "Password");
+	await tui.waitForOpen();
+	const frame = tui.render().join("\n");
+	assert.match(frame, /esc\/ctrl\+c cancel/u);
+	assert.doesNotMatch(frame, /continue|enter/u);
+	tui.send("\u001b");
+	assert.equal(await pending, undefined);
+});
+
+test("masked input does not advertise a binding reconstructed from control characters", async () => {
+	const tui = createTuiHarness({
+		width: 80,
+		keybindings: {
+			matches: () => false,
+			getKeys: () => ["\u0000enter" as never],
+		},
+	});
+	const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+	const pending = promptSecret(ctx, "Password");
+	await tui.waitForOpen();
+	const frame = tui.render().join("\n");
+	tui.press("ctrl+c");
+	assert.equal(await pending, undefined);
+	assert.doesNotMatch(frame, /enter|continue/u);
+	assert.match(frame, /ctrl\+c cancel/u);
+});
+
 async function flushAsync() {
 	await Promise.resolve();
 	await new Promise<void>((resolve) => setImmediate(resolve));

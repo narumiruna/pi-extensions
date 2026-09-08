@@ -5,6 +5,7 @@ import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
+import { runCancellableOperation } from "../src/ui/cancellable-operation.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { withTempHome } from "./helpers.js";
 
@@ -166,6 +167,47 @@ test.each([
 		});
 	},
 );
+
+test("cancellable operation omits control-bearing key labels", async () => {
+	const tui = createTuiHarness({
+		width: 48,
+		rows: 16,
+		keybindings: {
+			matches: () => false,
+			getKeys: (binding) => (binding === "tui.select.cancel" ? ["\u0000enter" as never] : []),
+		},
+	});
+	const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+	let routeSignal: AbortSignal | undefined;
+	let releaseRoute: () => void = () => undefined;
+	const routeGate = new Promise<void>((resolve) => {
+		releaseRoute = resolve;
+	});
+	const running = runCancellableOperation(ctx, "Working", "sync", async (_route, signal) => {
+		routeSignal = signal;
+		await routeGate;
+		return undefined;
+	});
+
+	await tui.waitForOpen();
+	let result: Awaited<typeof running>;
+	try {
+		const frame = tui.render().join("\n");
+		assert.doesNotMatch(frame, /enter/u);
+		assert.match(frame, /ctrl\+c cancel/u);
+		tui.send("\r");
+		await flushAsync();
+		assert.equal(routeSignal?.aborted, false);
+		tui.press("ctrl+c");
+		await flushAsync();
+		assert.equal(routeSignal?.aborted, true);
+	} finally {
+		releaseRoute();
+		result = await running;
+		if (tui.isOpen) tui.dispose();
+	}
+	assert.deepEqual(result, { kind: "cancelled" });
+});
 
 test("commit-aware hard cancellation stays open until the active operation settles", async () => {
 	await withTempHome(async (agentDir) => {

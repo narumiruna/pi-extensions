@@ -192,7 +192,10 @@ export function isStampThinkingLevel(value: unknown): value is StampThinkingLeve
 	return STAMP_THINKING_LEVELS.includes(value as StampThinkingLevel);
 }
 
-export function sanitizeTerminalText(value: string): string {
+// Display parsing is shared; persisted snapshots retain their historical normalization below.
+export { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
+
+function normalizePersistedMetadataText(value: string): string {
 	return [...value]
 		.map((character) =>
 			isUnsafeTerminalCodePoint(character.codePointAt(0) ?? 0) ? " " : character,
@@ -205,7 +208,7 @@ export function sanitizeMetadataText(
 	maximumLength = MAX_METADATA_TEXT_LENGTH,
 ): string | undefined {
 	if (typeof value !== "string" || maximumLength < 1) return undefined;
-	const safe = sanitizeTerminalText(value).replace(/\s+/gu, " ").trim();
+	const safe = normalizePersistedMetadataText(value).replace(/\s+/gu, " ").trim();
 	if (!safe) return undefined;
 	return [...safe].slice(0, maximumLength).join("");
 }
