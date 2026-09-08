@@ -11,6 +11,11 @@ import {
 } from "./herdr-metadata.js";
 import { createHerdrWidgetObserver, type HerdrWidgetObserver } from "./herdr-observer.js";
 
+import {
+	createHerdrSettingsController,
+	type HerdrSettingsOptions,
+} from "./herdr-settings-controller.js";
+
 const SOURCE = "herdr:pi";
 
 export type AgentState = "working" | "blocked" | "idle";
@@ -35,7 +40,7 @@ interface QueuedMetadata {
 	generation: number;
 }
 
-export interface HerdrAgentStateOptions {
+export interface HerdrAgentStateOptions extends HerdrSettingsOptions {
 	environment?: HerdrEnvironment;
 	now?: () => number;
 	random?: () => number;
@@ -89,6 +94,7 @@ export function createHerdrAgentStateExtension(
 
 	return function herdrAgentState(pi: ExtensionAPI): void {
 		if (!environment.enabled) return;
+		const widget = createHerdrSettingsController(pi, widgetObserver, options);
 
 		let sessionGeneration = 0;
 		let sessionController = new AbortController();
@@ -340,18 +346,21 @@ export function createHerdrAgentStateExtension(
 			sessionController = new AbortController();
 			activeSession = ctx.sessionManager;
 			rootSession = ctx.mode === "tui";
-			if (rootSession) widgetObserver.start(ctx);
+			const widgetStart = widget.start(ctx);
 			agentActive = false;
 			blockedCount = 0;
 			blockedMessage = undefined;
 			lastState = undefined;
 			lastMessage = undefined;
-			if (!rootSession) return;
+			if (!rootSession) {
+				await widgetStart;
+				return;
+			}
 
 			updateSessionRef(ctx);
 			const sessionReport = reportSession(event.reason);
 			publishMetadata(ctx);
-			await sessionReport;
+			await Promise.all([sessionReport, widgetStart]);
 			if (generation !== sessionGeneration || sessionController.signal.aborted || !rootSession) {
 				return;
 			}
@@ -382,7 +391,7 @@ export function createHerdrAgentStateExtension(
 
 		pi.on("session_shutdown", async (_event, ctx) => {
 			if (ctx.sessionManager !== activeSession) {
-				await Promise.allSettled([widgetObserver.shutdown(ctx)]);
+				await Promise.allSettled([widget.shutdown(ctx)]);
 				return;
 			}
 			if (shutdownTask && shutdownSession === ctx.sessionManager) {
@@ -400,7 +409,7 @@ export function createHerdrAgentStateExtension(
 				sessionController.abort(new DOMException("Herdr session shut down", "AbortError"));
 				queuedState = undefined;
 				queuedMetadata = undefined;
-				await Promise.allSettled([drainTask, metadataDrainTask, widgetObserver.shutdown(ctx)]);
+				await Promise.allSettled([drainTask, metadataDrainTask, widget.shutdown(ctx)]);
 				const stillOwnsShutdown =
 					shutdownGeneration === sessionGeneration && activeSession === session && !rootSession;
 				if (shouldClearMetadata && stillOwnsShutdown) {
