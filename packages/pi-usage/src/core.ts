@@ -36,6 +36,10 @@ export class UsageCache {
 		this.entries.set(key, { createdAt: now, report });
 	}
 
+	delete(providerId: string, fingerprint: string): void {
+		this.entries.delete(cacheKey(providerId, fingerprint));
+	}
+
 	clearProvider(providerId: string): void {
 		for (const key of this.entries.keys()) {
 			if (key.startsWith(`${providerId}:`)) this.entries.delete(key);

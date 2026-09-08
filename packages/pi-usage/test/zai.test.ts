@@ -702,9 +702,70 @@ test("malformed Z.AI quota responses keep the error chip and scheduled recovery"
 	}
 });
 
+test("a no-plan refresh invalidates ready usage beyond the unsupported backoff", async () => {
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const actions = ["Refresh current usage", "Close"];
+	const { ctx, statuses } = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		model: ZAI_MODEL,
+		select: async () => actions.shift() ?? "Close",
+		modelRegistry: {
+			getProviderAuth: async () => ({ auth: { apiKey: "zai-secret-key" } }),
+			getAvailable: () => [ZAI_MODEL],
+			getAll: () => [ZAI_MODEL],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: () => "Z.AI",
+		},
+	});
+	let quotaPayload: object = ZAI_QUOTA_PAYLOAD;
+	const requests: Array<{ url: string; authorization: string | undefined }> = [];
+	const now = Date.now();
+	const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+	vi.stubGlobal(
+		"fetch",
+		zaiFetchStub(
+			requests,
+			(url) =>
+				new Response(
+					JSON.stringify(
+						url.endsWith("/subscription/list") ? ZAI_SUBSCRIPTION_PAYLOAD : quotaPayload,
+					),
+					{ status: 200 },
+				),
+		),
+	);
+	try {
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk"));
+		assert.equal(requests.length, 2);
+		quotaPayload = { code: 500, success: false, msg: "当前用户不存在coding plan" };
+		await mock.commands.get("usage")?.handler("", ctx);
+		assert.equal(statuses.get("usage"), undefined);
+		assert.equal(requests.length, 4);
+		await mock.events.get("turn_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
+		assert.equal(requests.length, 4);
+		clock.mockReturnValue(now + 30_001);
+		await mock.events.get("turn_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
+		assert.equal(requests.length, 6);
+		quotaPayload = ZAI_QUOTA_PAYLOAD;
+		clock.mockReturnValue(now + 60_002);
+		await mock.events.get("turn_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk"));
+		assert.equal(requests.length, 8);
+	} finally {
+		await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+		clock.mockRestore();
+		vi.unstubAllGlobals();
+	}
+});
+
 // Both API and coding plan credentials use the same coding base URL, so the no-plan answer is the
 // only signal that a credential carries no subscription.
-test("a Z.AI credential with no coding plan leaves the statusline empty", async () => {
+test("a Z.AI credential with no coding plan leaves the statusline empty", async (t) => {
 	const noCodingPlan = { code: 500, msg: "当前用户不存在coding plan", success: false };
 	vi.stubGlobal(
 		"fetch",
@@ -724,10 +785,11 @@ test("a Z.AI credential with no coding plan leaves the statusline empty", async 
 			},
 		});
 
+		t.onTestFinished(async () => {
+			await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+		});
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
-		for (let index = 0; index < 8; index += 1) {
-			await new Promise<void>((resolve) => setImmediate(resolve));
-		}
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
 
 		assert.equal(statuses.get("usage"), undefined);
 	} finally {
@@ -737,7 +799,7 @@ test("a Z.AI credential with no coding plan leaves the statusline empty", async 
 
 // The verdict does not change on retry, so it is throttled like a failure instead of re-querying
 // the quota and plan endpoints on every turn.
-test("an unsupported Z.AI credential is throttled instead of re-queried each turn", async () => {
+test("an unsupported Z.AI credential is throttled instead of re-queried each turn", async (t) => {
 	const noCodingPlan = { code: 500, msg: "当前用户不存在coding plan", success: false };
 	const requests: Array<{ url: string; authorization: string | undefined }> = [];
 	vi.stubGlobal(
@@ -758,12 +820,14 @@ test("an unsupported Z.AI credential is throttled instead of re-queried each tur
 			},
 		});
 
+		t.onTestFinished(async () => {
+			await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+		});
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
 		for (let turn = 0; turn < 3; turn += 1) {
 			await mock.events.get("turn_start")?.[0]?.({}, ctx);
-			for (let index = 0; index < 8; index += 1) {
-				await new Promise<void>((resolve) => setImmediate(resolve));
-			}
+			await vi.waitFor(() => assert.equal(statuses.get("usage"), undefined));
 		}
 
 		assert.equal(statuses.get("usage"), undefined);

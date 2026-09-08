@@ -491,6 +491,8 @@ export default function usageExtension(
 			// Unsupported is throttled like a failure, so a credential the provider cannot meter does
 			// not re-query on every turn; the entry carries its status so the replay stays unsupported.
 			if (queryId === undefined || latestQueries.get(failureKey) === queryId) {
+				// A definitive unsupported verdict invalidates ready data even after backoff expires.
+				if (status === "unsupported") cache.delete(adapter.id, queryFingerprint);
 				setBoundedMap(
 					failureBackoff,
 					failureKey,
