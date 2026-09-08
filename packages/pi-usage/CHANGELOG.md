@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.60.6
+
+### Patch Changes
+
+- 157e6f8: Show fixed English hints for documented Z.AI business error codes, with HTTP-status and unknown-code fallbacks. Use the top-level code when the nested code is absent. Stop classifying credentials from provider message text or echoing error bodies. Z.AI quota failures now retain the error statusline, request backoff, and scheduled recovery instead of being reported as unsupported. Invalidate the matching cached Z.AI report on query failure so expired backoff retries do not restore stale usage.
+
 ## 0.60.5
 
 ### Patch Changes

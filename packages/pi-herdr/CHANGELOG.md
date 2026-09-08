@@ -1,5 +1,11 @@
 # @narumitw/pi-herdr
 
+## 0.2.0
+
+### Minor Changes
+
+- 4b143f4: Add a /herdr menu with a persistent agent-widget toggle, status, and help. Keep the widget enabled by default and lifecycle reporting independent of visibility.
+
 ## 0.1.1
 
 ### Patch Changes
