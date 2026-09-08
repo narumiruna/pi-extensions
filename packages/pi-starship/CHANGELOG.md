@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.55.1
+
+### Patch Changes
+
+- c5c0151: Avoid periodic TUI redraw requests when cached footer snapshots are unchanged, while preserving clock updates without rescanning session history on idle ticks.
+
 ## 0.55.0
 
 ### Minor Changes
