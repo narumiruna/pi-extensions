@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { writeFileSync } from "node:fs";
+import {
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import {
 	FRESH_PREFERENCES_ENTRY,
 	freshPreferencesApplied,
@@ -141,7 +146,17 @@ export async function startFreshImplementationSession(
 	const handoff = usesConversationHistory
 		? formatTransferredPlanPrompt(request.plan, true)
 		: formatImplementationHandoff(request.plan);
-	const parentSession = ctx.sessionManager.getSessionFile();
+	let parentSession: string;
+	try {
+		parentSession = resumableParentSession(ctx);
+	} catch (error) {
+		safeNotify(
+			ctx,
+			`Unable to preserve the source planning session: ${safeErrorDetail(error)}. The source plan remains available; retry before starting a fresh implementation session.`,
+			"error",
+		);
+		return { kind: "rejected" };
+	}
 	let setupError: string | undefined;
 	let kickoffError: string | undefined;
 
@@ -150,7 +165,7 @@ export async function startFreshImplementationSession(
 	let result: Awaited<ReturnType<ExtensionCommandContext["newSession"]>>;
 	try {
 		result = await ctx.newSession({
-			...(parentSession ? { parentSession } : {}),
+			parentSession,
 			setup: async (sessionManager) => {
 				try {
 					if (preferencesId)
@@ -224,6 +239,23 @@ export async function startFreshImplementationSession(
 		return { kind: "cancelled" };
 	}
 	return setupError || kickoffError ? { kind: "partial" } : { kind: "started" };
+}
+
+function resumableParentSession(ctx: ExtensionCommandContext) {
+	const existing = ctx.sessionManager.getSessionFile();
+	if (existing) return existing;
+
+	const sourceCopy = SessionManager.create(ctx.cwd, undefined, {
+		parentSession: ctx.sessionManager.getHeader()?.parentSession,
+	});
+	const path = sourceCopy.getSessionFile();
+	const header = sourceCopy.getHeader();
+	if (!path || !header) throw new Error("Pi did not provide a destination for the source copy");
+	const entries = [header, ...ctx.sessionManager.getBranch()];
+	writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, {
+		flag: "wx",
+	});
+	return path;
 }
 
 async function preflightModel(ctx: ExtensionCommandContext, isCurrent: () => boolean) {

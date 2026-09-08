@@ -23,6 +23,7 @@ export async function applyFreshImplementationPreferences(
 	ctx: ExtensionContext,
 	isCurrent: () => boolean,
 	selectionSnapshot?: () => ImplementationSnapshot | undefined,
+	isSessionCurrent: () => boolean = isCurrent,
 ) {
 	if (!isCurrent() || !ctx.isIdle()) return;
 	const entry = latestPreferenceEntry(ctx);
@@ -36,7 +37,7 @@ export async function applyFreshImplementationPreferences(
 	const change = createImplementationPreferenceChange(
 		pi,
 		ctx,
-		isCurrent,
+		isSessionCurrent,
 		undefined,
 		selectionSnapshot,
 	);
@@ -64,7 +65,6 @@ export async function applyFreshImplementationPreferences(
 			thinking: pi.getThinkingLevel(),
 		});
 	} catch (error) {
-		if (!isCurrent()) return;
 		await change.rollback().catch(() => undefined);
 		if (!isCurrent()) return;
 		pi.appendEntry(FRESH_PREFERENCES_ENTRY, {

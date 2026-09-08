@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import {
 	applyFreshImplementationPreferences,
 	FRESH_PREFERENCES_ENTRY,
 	freshPreferencesApplied,
 } from "../src/fresh-implementation-preferences.js";
+import planMode from "../src/plan-mode.js";
 import { implementationRuntime } from "./implementation-runtime-support.js";
 
 test("Pi model selection is session-only and applies per-model defaults and capability clamping", async () => {
@@ -37,6 +39,71 @@ test("Pi model selection is session-only and applies per-model defaults and capa
 		assert.equal(fixture.settings.getDefaultThinkingLevel(), "low");
 		assert.ok(fixture.events.includes("model"));
 		assert.ok(fixture.events.includes("thinking"));
+	} finally {
+		await fixture.dispose();
+	}
+});
+
+test("fresh preference application rolls back before a concurrent replacement", async () => {
+	let releaseSelection!: () => void;
+	let selectionStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		selectionStarted = resolve;
+	});
+	const fixture = await implementationRuntime((pi) => {
+		planMode(pi, {
+			readSettings: async () => ({
+				kind: "loaded" as const,
+				settings: { thinkingLevel: "inherit" },
+			}),
+		});
+		pi.on("model_select", async (event) => {
+			if (event.model.id !== "worker") return;
+			selectionStarted();
+			await new Promise<void>((resolve) => {
+				releaseSelection = resolve;
+			});
+		});
+	});
+	try {
+		let preferenceSession: SessionManager | undefined;
+		const firstReplacement = fixture.runtime.newSession({
+			setup: async (sessionManager) => {
+				preferenceSession = sessionManager;
+				sessionManager.appendCustomEntry(FRESH_PREFERENCES_ENTRY, {
+					id: "replace-pending",
+					status: "pending",
+					preferences: {
+						implementationModel: { provider: "plan-test", id: "worker" },
+						implementationThinkingLevel: "high",
+					},
+				});
+			},
+		});
+		await started;
+		let replacementSettled = false;
+		const secondReplacement = fixture.runtime.newSession().then((result) => {
+			replacementSettled = true;
+			return result;
+		});
+		await Promise.resolve();
+		assert.equal(replacementSettled, false);
+		releaseSelection();
+		await Promise.all([firstReplacement, secondReplacement]);
+		assert.ok(preferenceSession);
+		assert.deepEqual(preferenceSession.buildSessionContext().model, {
+			provider: "plan-test",
+			modelId: "planner",
+		});
+		assert.equal(preferenceSession.buildSessionContext().thinkingLevel, "low");
+		assert.deepEqual(
+			preferenceSession
+				.getBranch()
+				.filter((entry) => entry.type === "model_change")
+				.map((entry) => entry.modelId)
+				.slice(-2),
+			["worker", "planner"],
+		);
 	} finally {
 		await fixture.dispose();
 	}

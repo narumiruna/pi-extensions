@@ -15,6 +15,8 @@ import {
 
 export async function implementationRuntime(extension?: ExtensionFactory) {
 	const root = mkdtempSync(join(tmpdir(), "plan-implementation-runtime-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
 	let pi!: ExtensionAPI;
 	let ctx!: ExtensionContext;
 	let cancelReplacement = false;
@@ -125,6 +127,7 @@ export async function implementationRuntime(extension?: ExtensionFactory) {
 	runtime.setRebindSession(bind);
 	await bind();
 	return {
+		root,
 		runtime,
 		settings,
 		events,
@@ -138,8 +141,13 @@ export async function implementationRuntime(extension?: ExtensionFactory) {
 			cancelReplacement = true;
 		},
 		async dispose() {
-			await runtime.dispose();
-			rmSync(root, { recursive: true, force: true });
+			try {
+				await runtime.dispose();
+			} finally {
+				if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+				else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+				rmSync(root, { recursive: true, force: true });
+			}
 		},
 	};
 }

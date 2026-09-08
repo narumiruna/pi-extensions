@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionCommandContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { startFreshImplementationSession } from "../src/fresh-implementation.js";
 import {
@@ -17,10 +17,12 @@ for (const retention of IMPLEMENTATION_PLAN_RETENTIONS) {
 			});
 		});
 		try {
+			const sourceManager = fixture.runtime.session.sessionManager;
+			sourceManager.appendCustomEntry("planning-marker", { plan: "# Approved plan" });
 			const source = fixture.runtime.session.createReplacedSessionContext();
-			const sourceManager = source.sessionManager;
 			const sourceEntries = sourceManager.getBranch();
 			const kickoffs: Array<{ model?: string; thinking?: string; prompt: string }> = [];
+			let parentSession: string | undefined;
 			const ctx = new Proxy(source, {
 				get(target, key) {
 					if (key === "newSession")
@@ -28,6 +30,7 @@ for (const retention of IMPLEMENTATION_PLAN_RETENTIONS) {
 							fixture.runtime.newSession({
 								...options,
 								withSession: async (replacement) => {
+									parentSession = replacement.sessionManager.getHeader()?.parentSession;
 									const destination = new Proxy(replacement, {
 										get(target, key) {
 											if (key === "sendUserMessage")
@@ -64,6 +67,8 @@ for (const retention of IMPLEMENTATION_PLAN_RETENTIONS) {
 			assert.equal(kickoffs[0]?.thinking, "max");
 			assert.match(kickoffs[0]?.prompt ?? "", /# Approved plan/);
 			assert.deepEqual(sourceManager.getBranch(), sourceEntries);
+			assert.ok(parentSession);
+			assert.deepEqual(SessionManager.open(parentSession).getBranch(), sourceEntries);
 			fixture.pi.setThinkingLevel("high");
 			await fixture.runtime.session.extensionRunner.emit({
 				type: "session_start",

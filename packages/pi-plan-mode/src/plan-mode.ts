@@ -120,6 +120,11 @@ interface PendingWorkflowToolPolicy {
 	generation: number;
 	mode: "resolve" | "revalidate";
 }
+interface ActiveImplementationPreferencePreparation {
+	sessionManager: ExtensionContext["sessionManager"];
+	completion: Promise<void>;
+	finish(): void;
+}
 type InteractiveUi = typeof import("./interactive-ui.js");
 
 interface PlanModeDependencies {
@@ -166,6 +171,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	let menuGeneration = 0;
 	let implementationInFlight = false;
 	let applyingImplementationPreferences = false;
+	let activeImplementationPreferencePreparation:
+		| ActiveImplementationPreferencePreparation
+		| undefined;
 	let workflowGeneration = 0;
 	let refreshStateBeforeFirstAgentStart = false;
 	let menuController = new AbortController();
@@ -174,6 +182,24 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	const implementationRetention = createImplementationRetentionCoordinator();
 	const finalizationRequest = createFinalizationRequestCoordinator();
 	const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
+	const beginImplementationPreferencePreparation = (
+		sessionManager: ExtensionContext["sessionManager"],
+	) => {
+		let resolveCompletion!: () => void;
+		const preparation: ActiveImplementationPreferencePreparation = {
+			sessionManager,
+			completion: new Promise<void>((resolve) => {
+				resolveCompletion = resolve;
+			}),
+			finish() {
+				if (activeImplementationPreferencePreparation === preparation)
+					activeImplementationPreferencePreparation = undefined;
+				resolveCompletion();
+			},
+		};
+		activeImplementationPreferencePreparation = preparation;
+		return preparation.finish;
+	};
 	const planExports = createPlanExportController({
 		getState: () => state,
 		getSettings: () => settings,
@@ -484,13 +510,21 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (!installRestoredState(restoredState, ctx)) return;
 		implementationRetention.restore(state.activeImplementation);
 		updateUi(ctx);
-		if (event.reason === "new")
-			await applyFreshImplementationPreferences(
-				pi,
-				ctx,
-				() => generation === menuGeneration && !menuController.signal.aborted,
-				selectionSnapshot,
-			);
+		if (event.reason === "new") {
+			const sessionManager = ctx.sessionManager;
+			const finishPreparation = beginImplementationPreferencePreparation(sessionManager);
+			try {
+				await applyFreshImplementationPreferences(
+					pi,
+					ctx,
+					() => generation === menuGeneration && !menuController.signal.aborted,
+					selectionSnapshot,
+					() => currentSession === sessionManager,
+				);
+			} finally {
+				finishPreparation();
+			}
+		}
 	});
 
 	pi.on("session_before_tree", (event, ctx) => {
@@ -539,6 +573,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		const shutdownSession = ctx.sessionManager;
+		const preferencePreparation =
+			activeImplementationPreferencePreparation?.sessionManager === shutdownSession
+				? activeImplementationPreferencePreparation
+				: undefined;
 		finalizationRequest.reset();
 		menuGeneration += 1;
 		menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
@@ -548,6 +586,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		workflowAllowedToolNames = undefined;
 		pendingWorkflowToolPolicy = undefined;
 		implementationRetention.reset();
+		if (preferencePreparation) await preferencePreparation.completion;
+		if (currentSession !== undefined && currentSession !== shutdownSession) {
+			workflowMutex.unbindSession(shutdownSession);
+			return;
+		}
 		await awaitPlanModeSettingsWrites(dependencies.settingsPath);
 		if (currentSession !== undefined && currentSession !== shutdownSession) {
 			workflowMutex.unbindSession(shutdownSession);
@@ -1037,11 +1080,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (!(state.enabled ? state.latestPlan : state.savedPlan?.plan)) return;
 		const generation = menuGeneration;
 		const workflow = workflowGeneration;
+		const sessionManager = ctx.sessionManager;
 		const original = { model: ctx.model, thinking: pi.getThinkingLevel() };
-		const sessionCurrent = () => generation === menuGeneration && !menuController.signal.aborted;
+		const sessionActive = () => currentSession === sessionManager;
+		const flowCurrent = () =>
+			sessionActive() && generation === menuGeneration && !menuController.signal.aborted;
 		let expectedState = state;
 		const current = () =>
-			sessionCurrent() &&
+			flowCurrent() &&
 			workflow === workflowGeneration &&
 			state === expectedState &&
 			menuIsCurrent() &&
@@ -1049,10 +1095,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		const change = createImplementationPreferenceChange(
 			pi,
 			ctx,
-			sessionCurrent,
+			sessionActive,
 			original,
 			selectionSnapshot,
 		);
+		const finishPreparation = beginImplementationPreferencePreparation(sessionManager);
 		implementationInFlight = true;
 		let started = false;
 		try {
@@ -1071,22 +1118,26 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			if (!(await change.apply(model, preferences, current)) || !current()) return;
 			started = (await startImplementationCore(ctx, true)) === true;
 		} catch (error) {
-			if (sessionCurrent())
+			if (flowCurrent())
 				ctx.ui.notify(`Unable to start implementation: ${preferenceError(error)}`, "error");
 		} finally {
-			if (!started && sessionCurrent()) {
-				await change.rollback().catch((error) => {
-					if (sessionCurrent()) ctx.ui.notify(preferenceError(error), "error");
-				});
-				if (sessionCurrent() && state === expectedState) {
-					state = previousState;
-					captureManualThinkingLevel();
-					persistState();
-					updateUi(ctx);
+			try {
+				if (!started && sessionActive()) {
+					await change.rollback().catch((error) => {
+						if (flowCurrent()) ctx.ui.notify(preferenceError(error), "error");
+					});
+					if (sessionActive() && state === expectedState) {
+						state = previousState;
+						captureManualThinkingLevel();
+						persistState();
+						updateUi(ctx);
+					}
 				}
+			} finally {
+				applyingImplementationPreferences = false;
+				implementationInFlight = false;
+				finishPreparation();
 			}
-			applyingImplementationPreferences = false;
-			implementationInFlight = false;
 		}
 	}
 

@@ -145,6 +145,40 @@ test("manual thinking changed by a later model-selection listener is preserved w
 	}
 });
 
+test("session shutdown waits for pending model selection and rolls back before replacement", async () => {
+	const fixture = await readyFixture();
+	let releaseSelection!: () => void;
+	let selectionStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		selectionStarted = resolve;
+	});
+	fixture.mock.rawPi.on("model_select", async (event) => {
+		if ((event as { model?: { id?: string } }).model?.id !== "worker") return;
+		selectionStarted();
+		await new Promise<void>((resolve) => {
+			releaseSelection = resolve;
+		});
+	});
+	try {
+		const pending = fixture.command("implement");
+		await started;
+		let shutdownSettled = false;
+		const shutdown = fixture.emit("session_shutdown").then(() => {
+			shutdownSettled = true;
+		});
+		await Promise.resolve();
+		assert.equal(shutdownSettled, false);
+		releaseSelection();
+		await Promise.all([pending, shutdown]);
+		assert.equal(fixture.mock.sentUserMessages.length, 0);
+		assert.deepEqual(fixture.mock.setModels, [WORKER, PLANNER]);
+		assert.deepEqual(fixture.ctx.model, PLANNER);
+		assert.equal(fixture.mock.thinkingLevel, "low");
+	} finally {
+		await fixture.dispose();
+	}
+});
+
 for (const failure of ["missing-model", "removed-model", "auth", "selection", "kickoff"] as const) {
 	test(`implementation ${failure} failure retains the ready plan and previous runtime`, async () => {
 		const fixture = await readyFixture(
@@ -202,13 +236,13 @@ for (const interruption of [
 		try {
 			const pending = fixture.command("implement");
 			await started;
-			if (interruption === "shutdown") await fixture.emit("session_shutdown");
+			const shutdown = interruption === "shutdown" ? fixture.emit("session_shutdown") : undefined;
 			if (interruption === "exit") await fixture.command("exit");
 			if (interruption === "manual-model") fixture.manualModel(WORKER);
 			if (interruption === "manual-thinking") fixture.mock.rawPi.setThinkingLevel("max");
 			if (interruption === "busy") fixture.ctx.isIdle = () => false;
 			release({ ok: true });
-			await pending;
+			await Promise.all([pending, shutdown]);
 			assert.equal(fixture.mock.sentUserMessages.length, 0);
 			assert.equal(fixture.mock.setModels.length, 0);
 		} finally {
