@@ -101,6 +101,8 @@ export async function showUsageSettings(
 			parentSignal.addEventListener("abort", cancel, { once: true });
 			return {
 				render(width: number) {
+					// Compatibility: Kit puts the title directly below the top rule and keeps compact
+					// rules when at least five rows fit; both replace the legacy wrapper layout.
 					const title = new Text(theme.fg("accent", theme.bold("pi-usage Settings")), 1, 0).render(
 						width,
 					);

@@ -2655,6 +2655,7 @@ test("the Settings frame respects the live terminal row budget", async () => {
 
 	const fullPlain = full.map(stripVTControlCharacters);
 	assert.equal(fullPlain[0], "─".repeat(100));
+	assert.match(fullPlain[1] ?? "", /pi-usage Settings/u);
 	assert.equal(fullPlain.at(-1), "─".repeat(100));
 	const constrainedPlain = constrained.map(stripVTControlCharacters);
 	assert.ok(constrainedPlain.length <= 9);
