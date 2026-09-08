@@ -302,11 +302,41 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 				requestGithubPr(target);
 				tui.requestRender();
 			});
+			let lastRender:
+				| {
+						snapshot: StarshipRuntimeSnapshot;
+						lines: string[];
+						config: StarshipConfig;
+						width: number;
+				  }
+				| undefined;
 			const timer = setInterval(() => {
 				if (!isActiveTarget(target)) return;
 				clearDebounce();
 				requestRefresh(target, "periodic");
-				tui.requestRender();
+				// Collectors publish only changed snapshots. The clock is the sole value
+				// that changes without publication; reuse the last render's session data.
+				if (!lastRender || !reachableModuleRequirements(lastRender.config).get("time")?.has("time"))
+					return;
+				const now = new Date();
+				const previous = lastRender.snapshot.now;
+				if (now.getHours() === previous.getHours() && now.getMinutes() === previous.getMinutes())
+					return;
+				const lines = wrapFormattedStatusline(
+					renderStatusline(
+						lastRender.config,
+						{ ...lastRender.snapshot, now },
+						lastRender.width,
+						getCapabilities().trueColor,
+					).ansi,
+					lastRender.width,
+				);
+				const previousLines = lastRender.lines;
+				if (
+					lines.length !== previousLines.length ||
+					lines.some((line, index) => line !== previousLines[index])
+				)
+					tui.requestRender();
 			}, REFRESH_INTERVAL_MS);
 			let disposed = false;
 
@@ -336,10 +366,12 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 					const current = previewLoaded ?? loaded;
 					if (!current) return [];
 					const snapshot = runtimeSnapshot(ctx, footerData, runtime);
-					return wrapFormattedStatusline(
+					const lines = wrapFormattedStatusline(
 						renderStatusline(current.config, snapshot, width, getCapabilities().trueColor).ansi,
 						width,
 					);
+					lastRender = { snapshot, lines, config: current.config, width };
+					return lines;
 				},
 			};
 		});

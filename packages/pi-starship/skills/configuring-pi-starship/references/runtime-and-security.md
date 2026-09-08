@@ -194,7 +194,11 @@ Root format reachability, `$all`, module `disabled`, and module-format variables
 Workspace/Git refreshes run at session start, after accepted settings, branch changes, tool/turn completion, and a 30-second fallback.
 GitHub PR uses the narrower lifecycle and 60-second network refresh described above.
 One read runs with at most one latest pending refresh.
-Immutable snapshot equality suppresses redraws, and session or request generations reject stale results.
+Immutable snapshot equality suppresses collector-driven redraws, and session or request generations reject stale results.
+The 30-second fallback does not request a redraw for unchanged snapshots.
+When the effective format displays the clock, the fallback also checks for changed clock output using the last rendered snapshot, without re-reading session history.
+Clock text changes still request a redraw; unrelated Pi events can also redraw the footer.
+Background collection continues even when a terminal pane is not visible.
 Shutdown, replacement, footer disposal, branch changes, and accepted settings abort active command work before starting replacements; disabling `github_pr` also stops its query and timers.
 Bounded local filesystem operations may finish, but stale generations cannot publish them.
 Execution identity is retained rather than re-read by the periodic fallback.
