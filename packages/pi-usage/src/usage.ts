@@ -28,7 +28,6 @@ import {
 	errorMessage,
 	runWithConcurrency,
 	UsageCache,
-	UsageUnsupportedError,
 } from "./core.js";
 import { formatProviderStates, formatUsageStatusline } from "./format.js";
 import { createOAuthCredentialCandidateReader } from "./oauth-credential-source.js";
@@ -111,10 +110,7 @@ export default function usageExtension(
 	const createRedemptionId = dependencies.createRedemptionId ?? randomUUID;
 	const settingsRuntime = dependencies.settingsRuntime ?? createUsageSettingsRuntime();
 	const cache = new UsageCache(CACHE_TTL_MS);
-	const failureBackoff = new Map<
-		string,
-		{ until: number; message: string; status: "query-failed" | "unsupported" }
-	>();
+	const failureBackoff = new Map<string, { until: number; message: string }>();
 	const latestQueries = new Map<string, number>();
 	const activeControllers = new Set<AbortController>();
 	let querySequence = 0;
@@ -363,7 +359,7 @@ export default function usageExtension(
 						providerId: adapter.id,
 						providerName,
 						displayState,
-						status: previousDiscoveryFailure.status,
+						status: "query-failed",
 						message: previousDiscoveryFailure.message,
 					},
 					fingerprint: auth.fingerprint,
@@ -424,7 +420,7 @@ export default function usageExtension(
 						providerId: adapter.id,
 						providerName,
 						displayState,
-						status: previousFailure.status,
+						status: "query-failed",
 						message: previousFailure.message,
 					},
 					fingerprint: auth.fingerprint,
@@ -483,20 +479,15 @@ export default function usageExtension(
 				);
 			}
 			const message = errorMessage(error);
-			const status = error instanceof UsageUnsupportedError ? "unsupported" : "query-failed";
 			const now = Date.now();
 			for (const [key, failure] of failureBackoff) {
 				if (failure.until <= now) failureBackoff.delete(key);
 			}
-			// Unsupported is throttled like a failure, so a credential the provider cannot meter does
-			// not re-query on every turn; the entry carries its status so the replay stays unsupported.
 			if (queryId === undefined || latestQueries.get(failureKey) === queryId) {
-				// A definitive unsupported verdict invalidates ready data even after backoff expires.
-				if (status === "unsupported") cache.delete(adapter.id, queryFingerprint);
 				setBoundedMap(
 					failureBackoff,
 					failureKey,
-					{ until: now + FAILURE_BACKOFF_MS, message, status },
+					{ until: now + FAILURE_BACKOFF_MS, message },
 					MAX_ACCOUNT_STATES,
 				);
 			}
@@ -505,7 +496,7 @@ export default function usageExtension(
 					providerId: adapter.id,
 					providerName,
 					displayState,
-					status,
+					status: "query-failed",
 					message,
 				},
 				fingerprint: auth.fingerprint,

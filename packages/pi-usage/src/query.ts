@@ -2,12 +2,7 @@
 // separating that security boundary would duplicate request and redaction policy across providers.
 import { randomBytes } from "node:crypto";
 import { type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
-import {
-	errorMessage,
-	fingerprintResolvedAuth,
-	redactUsageError,
-	UsageUnsupportedError,
-} from "./core.js";
+import { errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.js";
 import {
 	fallbackOAuthCredentialCandidates,
 	type OAuthCredentialCandidateReader,
@@ -29,6 +24,7 @@ import { normalizeOpenRouterKeyPayload } from "./providers/openrouter.js";
 import { normalizeVercelAIGatewayCreditsPayload } from "./providers/vercel-ai-gateway.js";
 import { normalizeXaiBillingPayload } from "./providers/xai.js";
 import { normalizeZaiQuotaPayload, normalizeZaiSubscriptionPayload } from "./providers/zai.js";
+import { zaiResponseError } from "./providers/zai-errors.js";
 import type {
 	BasetenBillingUsagePayload,
 	CodexBackendPayload,
@@ -552,11 +548,7 @@ export async function queryProviderUsage(
 		);
 	} catch (error) {
 		if (isStaleExtensionContextError(error) || isAbortError(error)) throw error;
-		const message = redactUsageError(errorMessage(error), auth.secrets);
-		// Redaction rebuilds the error, so the unsupported signal has to be carried across.
-		throw error instanceof UsageUnsupportedError
-			? new UsageUnsupportedError(message)
-			: new Error(message);
+		throw new Error(redactUsageError(errorMessage(error), auth.secrets));
 	}
 }
 
@@ -636,6 +628,7 @@ export async function fetchProviderJson(
 		body?: Record<string, unknown>;
 		redirect?: RequestRedirect;
 		userAgent?: boolean;
+		responseError?: (status: number, text: string) => string | undefined;
 	} = {},
 ): Promise<Record<string, unknown>> {
 	const controller = new AbortController();
@@ -674,6 +667,8 @@ export async function fetchProviderJson(
 		);
 		if (controller.signal.aborted)
 			throw Object.assign(new Error("Usage query aborted."), { name: "AbortError" });
+		const responseError = request.responseError?.(response.status, text);
+		if (responseError) throw new Error(responseError);
 		if (!response.ok) {
 			throw new Error(
 				`${description} returned ${response.status} ${response.statusText}: ${redactUsageError(text, auth.secrets)}`,
@@ -1110,6 +1105,7 @@ async function queryZaiUsage(
 		signal,
 		remainingTimeout(timeoutMs, startedAt, `fetching ${providerName} quota`),
 		`${providerName} quota endpoint`,
+		{ responseError: zaiResponseError },
 	)) as ZaiQuotaPayload;
 	await guard();
 	const planTimeoutMs = timeoutMs - (Date.now() - startedAt);
@@ -1134,6 +1130,7 @@ async function fetchZaiPlan(
 			signal,
 			timeoutMs,
 			`${providerName} plan endpoint`,
+			{ responseError: zaiResponseError },
 		)) as ZaiSubscriptionPayload;
 		return normalizeZaiSubscriptionPayload(payload);
 	} catch (error) {

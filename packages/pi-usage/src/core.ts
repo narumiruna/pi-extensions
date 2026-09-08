@@ -36,10 +36,6 @@ export class UsageCache {
 		this.entries.set(key, { createdAt: now, report });
 	}
 
-	delete(providerId: string, fingerprint: string): void {
-		this.entries.delete(cacheKey(providerId, fingerprint));
-	}
-
 	clearProvider(providerId: string): void {
 		for (const key of this.entries.keys()) {
 			if (key.startsWith(`${providerId}:`)) this.entries.delete(key);
@@ -201,10 +197,6 @@ export function redactUsageError(value: string, secrets: readonly string[] = [])
 export function errorMessage(error: unknown): string {
 	return sanitizeDisplayText(error instanceof Error ? error.message : String(error), 600);
 }
-
-// A credential the provider cannot meter is not a query failure: it is reported as unsupported, so
-// the statusline stays empty instead of holding an error chip that no retry will clear.
-export class UsageUnsupportedError extends Error {}
 
 export function abortError(): Error {
 	return Object.assign(new Error("Usage query aborted."), { name: "AbortError" });

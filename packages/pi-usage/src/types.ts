@@ -191,13 +191,14 @@ export type OpenCodeZenPayload = {
 };
 
 export type ZaiQuotaPayload = {
+	error?: unknown;
 	code?: unknown;
 	success?: unknown;
-	msg?: unknown;
 	data?: unknown;
 };
 
 export type ZaiSubscriptionPayload = {
+	error?: unknown;
 	code?: unknown;
 	success?: unknown;
 	data?: unknown;
