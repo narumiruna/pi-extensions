@@ -1,14 +1,24 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	FRESH_PREFERENCES_ENTRY,
+	freshPreferencesApplied,
+} from "./fresh-implementation-preferences.js";
+import {
+	hasImplementationPreferences,
+	preflightImplementationPreferences,
+	sameModel,
+} from "./implementation-preferences.js";
 import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.js";
 import { createModeContractMessage } from "./mode-contract.js";
-import type { ImplementationPlanRetention } from "./settings.js";
+import type { ImplementationPlanRetention, ImplementationPreferences } from "./settings.js";
 import type { PlanCompletionSource, PlanModeState } from "./state.js";
 
 type NewSessionOptions = Exclude<Parameters<ExtensionCommandContext["newSession"]>[0], undefined>;
 type ReplacementContext = Parameters<NonNullable<NewSessionOptions["withSession"]>>[0];
 
 export interface FreshImplementationRequest {
+	preferences?: ImplementationPreferences;
 	plan: string;
 	source: PlanCompletionSource;
 	retention: ImplementationPlanRetention;
@@ -17,6 +27,7 @@ export interface FreshImplementationRequest {
 }
 
 interface FreshImplementationFromStateOptions {
+	preferences?: ImplementationPreferences;
 	getState(): PlanModeState;
 	menuIsCurrent(): boolean;
 	retention: ImplementationPlanRetention;
@@ -76,6 +87,7 @@ export async function startFreshImplementationFromState(
 	return startFreshImplementationSession(ctx, {
 		plan,
 		source,
+		preferences: options.preferences,
 		retention: options.retention,
 		stateEntryType: options.stateEntryType,
 		isCurrent,
@@ -92,8 +104,25 @@ export async function startFreshImplementationSession(
 
 	await ctx.waitForIdle();
 	if (!request.isCurrent()) return { kind: "stale" };
-	if (!(await preflightModel(ctx, request.isCurrent))) return { kind: "rejected" };
-	if (!request.isCurrent()) return { kind: "stale" };
+	const preferences = request.preferences ?? {};
+	const originalModel = ctx.model;
+	const originalThinking = ctx.thinkingLevel;
+	const preflightCurrent = () =>
+		request.isCurrent() &&
+		sameModel(ctx.model, originalModel) &&
+		ctx.thinkingLevel === originalThinking;
+	const preferencesId = hasImplementationPreferences(preferences) ? randomUUID() : undefined;
+	if (preferencesId) {
+		try {
+			if (!(await preflightImplementationPreferences(ctx, preferences, preflightCurrent)))
+				return { kind: "stale" };
+		} catch (error) {
+			if (preflightCurrent())
+				safeNotify(ctx, `Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
+			return { kind: "rejected" };
+		}
+	} else if (!(await preflightModel(ctx, preflightCurrent))) return { kind: "rejected" };
+	if (!preflightCurrent() || !ctx.isIdle()) return { kind: "stale" };
 
 	const usesConversationHistory = request.retention === "clear-on-start";
 	const destinationState: PlanModeState | undefined = usesConversationHistory
@@ -124,6 +153,12 @@ export async function startFreshImplementationSession(
 			...(parentSession ? { parentSession } : {}),
 			setup: async (sessionManager) => {
 				try {
+					if (preferencesId)
+						sessionManager.appendCustomEntry(FRESH_PREFERENCES_ENTRY, {
+							id: preferencesId,
+							status: "pending",
+							preferences,
+						});
 					const contract = createModeContractMessage("normal");
 					sessionManager.appendCustomMessageEntry(
 						contract.customType,
@@ -139,6 +174,14 @@ export async function startFreshImplementationSession(
 				}
 			},
 			withSession: async (replacementCtx) => {
+				if (
+					!setupError &&
+					preferencesId &&
+					!freshPreferencesApplied(replacementCtx, preferencesId)
+				) {
+					setupError =
+						"Implementation model/thinking could not be applied or changed before kickoff";
+				}
 				if (setupError) {
 					recoverSetupFailure(replacementCtx, handoff, setupError);
 					return;

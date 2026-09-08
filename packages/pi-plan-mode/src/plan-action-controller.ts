@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PlanExportDestination } from "./plan-export.js";
+import type { ImplementationPreferences } from "./settings.js";
 import type { PlanModeState } from "./state.js";
 
 type InteractiveUi = typeof import("./interactive-ui.js");
@@ -18,8 +19,17 @@ interface PlanActionControllerOptions {
 	getExportDestination(ctx: ExtensionContext): PlanExportDestination;
 	show(ctx: ExtensionContext): void;
 	finalize(ctx: ExtensionContext): void;
-	implementHere(ctx: ExtensionContext): void | Promise<void>;
-	implementFresh(ctx: ExtensionContext, isCurrent: () => boolean): void | Promise<void>;
+	getImplementationPreferences?(): ImplementationPreferences;
+	implementHere(
+		ctx: ExtensionContext,
+		preferences?: ImplementationPreferences,
+		isCurrent?: () => boolean,
+	): void | Promise<void>;
+	implementFresh(
+		ctx: ExtensionContext,
+		isCurrent: () => boolean,
+		preferences?: ImplementationPreferences,
+	): void | Promise<void>;
 	exportPlan(
 		ctx: ExtensionContext,
 		path: string,
@@ -34,8 +44,17 @@ interface PlanActionControllerOptions {
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {
-	const freshAction = (ctx: ExtensionContext, lifecycle: MenuLifecycle, signal: AbortSignal) =>
-		options.implementFresh(ctx, () => lifecycle.isCurrent() && !signal.aborted);
+	const implementationActions = (ctx: ExtensionContext, lifecycle: MenuLifecycle) => ({
+		implementationPreferences: options.getImplementationPreferences?.(),
+		implementHere: (preferences?: ImplementationPreferences, signal?: AbortSignal) =>
+			options.implementHere(
+				ctx,
+				preferences,
+				() => lifecycle.isCurrent() && !lifecycle.signal.aborted && !signal?.aborted,
+			),
+		implementFresh: (signal: AbortSignal, preferences?: ImplementationPreferences) =>
+			options.implementFresh(ctx, () => lifecycle.isCurrent() && !signal.aborted, preferences),
+	});
 
 	return {
 		async showSaved(ctx: ExtensionContext) {
@@ -50,8 +69,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				signal: lifecycle.signal,
 				isCurrent: lifecycle.isCurrent,
 				show: () => options.show(ctx),
-				implementHere: () => options.implementHere(ctx),
-				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
+				...implementationActions(ctx, lifecycle),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
 				clear: () => options.clearSaved(ctx),
@@ -74,8 +92,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				...lifecycle,
 				show: () => options.show(ctx),
 				finalize: () => options.finalize(ctx),
-				implementHere: () => options.implementHere(ctx),
-				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
+				...implementationActions(ctx, lifecycle),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
 				stay: () => options.stay(ctx),
@@ -91,8 +108,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				...lifecycle,
 				implementationOutcome: options.implementationOutcome,
 				getExportDestination: () => options.getExportDestination(ctx),
-				implementHere: () => options.implementHere(ctx),
-				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
+				...implementationActions(ctx, lifecycle),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
 				stay: () => undefined,

@@ -30,6 +30,7 @@ const forbiddenEagerInputs: readonly string[] = [
 	"src/plan-launch-menu.ts",
 	"src/saved-plan-menu.ts",
 	"src/settings-menu.ts",
+	"src/implementation-options.ts",
 ];
 
 type BuildMetadata = {

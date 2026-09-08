@@ -17,7 +17,8 @@ Persistent defaults belong in [Settings](./settings.md).
 The TUI selector supports fuzzy search and paging; RPC shows the unfiltered list.
 Blocked, inactive, or not-yet-registered tools remain distinguishable, and selected names awaiting metadata stay selected for first-request resolution.
 Reopen the selector to refresh newly registered tools.
-Active and ready workflows lock tools and settings; exit and start a new workflow to change the allowlist.
+Active and ready workflows lock planning tools and persistent settings; exit and start a new workflow to change the allowlist.
+Ready and saved plans expose **Implementation options…**, which stages model/thinking for that menu's implementation actions without changing the planner or saved defaults.
 See [Planning and implementation](../README.md#-planning-and-implementation) for the first-request policy boundary, completion, and same-session versus fresh-session handoff.
 
 ## Busy transitions and recovery
@@ -28,6 +29,9 @@ An ordinary follow-up or `/plan finalize` can still run while Plan mode is activ
 
 `show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
 Cancellation and failed implementation preflight leave the stored plan intact.
+`/plan implement` applies saved implementation preferences; menu actions additionally accept the current menu's draft overrides.
+After kickoff, settlement, abort, and clearing an active plan do not restore model/thinking.
+See [implementation preferences](./settings.md#implementation-model-and-thinking) for inheritance, provider-transfer effects, and partial fresh-session recovery.
 For finalization retries, fresh-session recovery, and non-interactive limitations, see [Planning and implementation](../README.md#-planning-and-implementation).
 
 ## Export Markdown
