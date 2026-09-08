@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.60.7
+
+### Patch Changes
+
+- 0ece6da: Reuse pi-tui-kit's bounded frame renderer for the Usage settings screen while retaining the focused setting on short terminals.
+
 ## 0.60.6
 
 ### Patch Changes
