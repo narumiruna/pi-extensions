@@ -30,7 +30,6 @@ const FORBIDDEN_EAGER_INPUTS = [
 	"src/plan-launch-menu.ts",
 	"src/saved-plan-menu.ts",
 	"src/settings-menu.ts",
-	"src/implementation-options.ts",
 ];
 const FORBIDDEN_EAGER_EXTERNALS = ["@narumitw/pi-tui-kit"];
 

@@ -11,7 +11,6 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 - Uses structured questions for important ambiguity and explicit completion for a decision-ready plan.
 - Reviews the complete plan before implementation, export, save, further planning, or discard.
 - Implements in the planning session or a fresh linked session with the approved plan.
-- Selects an implementation model and thinking level through saved defaults or one-menu overrides, without switching back automatically.
 - Restores Plan state and one saved plan across resume and compaction.
 - Configures the Plan tool allowlist, reviewed shell commands, user-trusted subcommands, export path, plan reinjection, shortcut, and thinking level.
 - Publishes statusline state and cooperates anonymously with Workflow Mutex Protocol v1 participants.
@@ -151,14 +150,6 @@ Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and 
 
 After completion, `/plan` opens the ready actions when interactive UI is available.
 The same flat menu shows **Implement here** and **Start fresh and implement**, explains which conversation context each choice uses, and previews the selected **Plan reinjection** policy.
-**Implementation options…** stages model and thinking choices for either action in that menu; `/plan implement` uses saved defaults.
-Choices take effect only when implementation starts and do not change Pi's global defaults.
-After kickoff, run settlement, user abort, and active-plan clearing do not restore the previous model or thinking; subsequent manual choices remain yours.
-Implementation preferences are characterized on Pi 0.85.0; use that release or newer for this feature.
-See [implementation preferences](./docs/settings.md#implementation-model-and-thinking) for inheritance and failure behavior.
-
-Selecting another provider with **Implement here** sends the retained planning conversation to that provider.
-Fresh implementation transfers only the approved plan plus the destination's normal resources.
 **Implement here**—and the compatibility route `/plan implement`—appends the Normal contract, lifts the Plan runtime policy, captures the reinjection setting, and starts implementation in the current session with its complete planning conversation and tool calls.
 **Start fresh and implement** waits for the source session to become idle, verifies the selected model and authentication, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
 The destination still loads its normal `AGENTS.md`, skills, project resources, and extensions.
@@ -251,10 +242,6 @@ Only the latest active Plan contract authorizes the helpers; inactive or stale c
 Plan mode does not widen a restrictive active-tool policy; start or restore fails when a required helper is unavailable.
 Stable schemas preserve a cache-eligible prefix but cannot guarantee a hit because provider serialization, cache lifetime, minimum prefix size, implementation details, and session affinity remain external.
 
-An explicit implementation model or thinking change is an intentional provider/cache boundary at handoff, not an ordinary-turn context rewrite.
-Preferences and fresh-session acknowledgements are non-model state; they do not add tool schemas or leading prompt instructions.
-Subsequent turns retain the existing append-only context behavior.
-
 The default `thinkingLevel: "inherit"` avoids a Plan-specific reasoning-parameter change.
 A fixed Plan thinking level remains supported, but changing reasoning parameters can prevent provider-side state reuse even when prompts and tool schemas stay stable.
 
@@ -307,7 +294,6 @@ The optional file is read at session start and watched for changes; only an expl
 ```
 
 By default, Plan mode inherits thinking, allows active safe built-ins, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
-Implementation model and thinking defaults are optional Settings rows; unset values keep existing behavior, including normal restoration of Plan-specific thinking.
 The shortcut is disabled unless configured.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
