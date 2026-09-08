@@ -6,6 +6,7 @@ import {
 	KeybindingsManager,
 	setKeybindings,
 	TUI_KEYBINDINGS,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -2657,12 +2658,16 @@ test("the Settings frame respects the live terminal row budget", async () => {
 	assert.equal(fullPlain.at(-1), "─".repeat(100));
 	const constrainedPlain = constrained.map(stripVTControlCharacters);
 	assert.ok(constrainedPlain.length <= 9);
-	assert.notEqual(constrainedPlain[0], "─".repeat(20));
-	assert.notEqual(constrainedPlain.at(-1), "─".repeat(20));
+	assert.equal(constrainedPlain[0], "─".repeat(20));
+	assert.equal(constrainedPlain.at(-1), "─".repeat(20));
+	assert.match(constrainedPlain.join("\n"), /pi-usage Settings/u);
 	assert.match(constrainedPlain.join("\n"), /[→›]\s+Codex Fast mode/u);
 	const tinyPlain = tiny.map(stripVTControlCharacters);
 	assert.equal(tinyPlain.length, 1);
 	assert.match(tinyPlain[0] ?? "", /[→›]\s+Codex reset/u);
+	assert.ok(full.every((line) => visibleWidth(line) <= 100));
+	assert.ok(constrained.every((line) => visibleWidth(line) <= 20));
+	assert.ok(tiny.every((line) => visibleWidth(line) <= 20));
 });
 
 test("Ctrl+C hard-cancels Settings before conflicting configurable actions", async (t) => {
