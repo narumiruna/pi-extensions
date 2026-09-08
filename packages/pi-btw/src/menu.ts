@@ -6,6 +6,13 @@ import type {
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { MenuContext, RunMenuResult } from "@narumitw/pi-tui-kit";
 import {
+	BTW_SHORTCUT_ACTIONS,
+	type BtwShortcutAction,
+	normalizeBtwKey,
+	resolveBtwShortcuts,
+	validateBtwShortcutEdit,
+} from "./keybindings.js";
+import {
 	type BtwSettings,
 	type BtwSettingsPatch,
 	btwSettingsPath,
@@ -16,7 +23,7 @@ import {
 	updateBtwSettings,
 } from "./settings.js";
 import { BTW_THINKING_LEVELS, type BtwThinkingLevel } from "./side-thread.js";
-import { sanitizeSingleLine } from "./text.js";
+import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
 
 interface BtwMenuState {
 	kind: "valid" | "invalid";
@@ -48,14 +55,17 @@ export type BtwCommandMenuResult =
 	| "closed"
 	| { kind: "resume"; threadId: string };
 
-type BtwMenuScreen = "main" | "resume" | "settings" | "invalid";
+type BtwMenuScreen = "main" | "resume" | "settings" | "invalid" | "shortcut" | "shortcut-input";
 type BtwMenuAction =
 	| "start"
 	| "start-tree"
 	| "resume"
 	| "set-thinking"
 	| "set-remember"
-	| "set-fullscreen-copy";
+	| "set-fullscreen-copy"
+	| "edit-shortcut"
+	| "save-shortcut"
+	| "reset-shortcut";
 const SAME_AS_MAIN_THREAD = "Same as main thread";
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
 
@@ -85,6 +95,74 @@ export async function showBtwCommandMenu(
 	let startSelected = false;
 	let treeSelected = false;
 	let resumedThreadId: string | undefined;
+	let keybindings: KeybindingsManager | undefined;
+	let shortcut: BtwShortcutAction = "exit";
+	const shortcutLabels: Record<BtwShortcutAction, string> = {
+		exit: "Exit shortcut",
+		cycleThinkingLevel: "Cycle thinking level shortcut",
+		bringToMain: "Bring to main shortcut",
+	};
+	const shortcutValue = (settings: BtwSettings, action: BtwShortcutAction): string => {
+		if (!keybindings) return "Default";
+		const effective = resolveBtwShortcuts(
+			settings.keybindings,
+			keybindings,
+			effectiveFullscreenCopyOnSelect(settings),
+		);
+		const configured = settings.keybindings?.[action];
+		if (configured !== undefined && !effective.keys[action].includes(configured)) {
+			return `Fallback (${effective.label(action)}; saved ${formatKeyLabel(configured)})`;
+		}
+		const source =
+			configured === undefined
+				? action === "cycleThinkingLevel"
+					? "Inherit Pi"
+					: "Default"
+				: "Custom";
+		return `${source} (${effective.label(action)})`;
+	};
+	const saveShortcut = async (
+		state: BtwMenuState,
+		value: string | undefined,
+		signal: AbortSignal,
+	) => {
+		if (!keybindings || state.kind !== "valid" || signal.aborted)
+			return { kind: "rejected" } as const;
+		const action = shortcut;
+		const manager = keybindings;
+		const validate = (settings: BtwSettings) =>
+			validateBtwShortcutEdit(
+				action,
+				value,
+				settings.keybindings ?? {},
+				manager,
+				effectiveFullscreenCopyOnSelect(settings),
+			);
+		const error = validate(state.settings);
+		if (error) {
+			notifySafely(ctx, error, "error");
+			return { kind: "rejected" } as const;
+		}
+		try {
+			await updateSettings(
+				{ keybindings: { [action]: value === undefined ? undefined : normalizeBtwKey(value) } },
+				{
+					settingsPath,
+					signal,
+					validateCurrent: (settings) => {
+						const conflict = validate(settings);
+						if (conflict) throw new Error(conflict);
+					},
+				},
+			);
+			if (signal.aborted) return { kind: "rejected" } as const;
+			notifySafely(ctx, "Pi BTW shortcut saved; applies when opening or resuming BTW.", "info");
+			return { kind: "back" } as const;
+		} catch (error) {
+			if (!signal.aborted) notifySaveFailure(ctx, error);
+			return { kind: "rejected" } as const;
+		}
+	};
 
 	const loadState = async (): Promise<BtwMenuState> => {
 		const loaded = await readSettings(settingsPath);
@@ -146,7 +224,7 @@ export async function showBtwCommandMenu(
 					{
 						id: "settings",
 						label: "Settings",
-						description: "Choose thinking, shortcut memory, and selection copying",
+						description: "Choose thinking, keybindings, and selection copying",
 						to: state.kind === "invalid" ? "invalid" : "settings",
 					},
 				],
@@ -195,7 +273,33 @@ export async function showBtwCommandMenu(
 						values: ["On", "Off"],
 						action: "set-fullscreen-copy",
 					},
+					...BTW_SHORTCUT_ACTIONS.map((action) => ({
+						id: action,
+						label: shortcutLabels[action],
+						description:
+							"Edit a BTW-only key combination or restore its default. Ctrl+C always hard-cancels.",
+						currentValue: shortcutValue(state.settings, action),
+						action: "edit-shortcut" as const,
+					})),
 				],
+			}),
+			shortcut: ({ state }) => ({
+				kind: "actions",
+				title: shortcutLabels[shortcut],
+				lines: [shortcutValue(state.settings, shortcut), "Ctrl+C always hard-cancels BTW."],
+				items: [
+					{ id: "edit", label: "Edit key combination…", to: "shortcut-input" },
+					{ id: "reset", label: "Restore default", action: "reset-shortcut" },
+				],
+				hint: "back",
+			}),
+			"shortcut-input": () => ({
+				kind: "input",
+				title: shortcutLabels[shortcut],
+				lines: ["Type a key name, not the shortcut itself. For example: ctrl+q or f6."],
+				placeholder: "Key combination",
+				action: "save-shortcut",
+				hint: "back",
 			}),
 			invalid: ({ state }) => ({
 				kind: "detail",
@@ -208,6 +312,15 @@ export async function showBtwCommandMenu(
 			}),
 		},
 		actions: {
+			"edit-shortcut": ({ itemId }) => {
+				if (!BTW_SHORTCUT_ACTIONS.includes(itemId as BtwShortcutAction))
+					return { kind: "rejected" };
+				shortcut = itemId as BtwShortcutAction;
+				return { kind: "to", screen: "shortcut" };
+			},
+			"save-shortcut": ({ state, value, signal }) =>
+				saveShortcut(state, value?.trim() ?? "", signal),
+			"reset-shortcut": ({ state, signal }) => saveShortcut(state, undefined, signal),
 			start: async () => {
 				startSelected = true;
 				return { kind: "close" };
@@ -275,8 +388,12 @@ export async function showBtwCommandMenu(
 		},
 	});
 
-	const result = await runBtwMenuPreservingEditor(ctx, (menuContext) =>
-		runMenu(menuContext, menu, { getState: loadState }),
+	const result = await runBtwMenuPreservingEditor(
+		ctx,
+		(menuContext) => runMenu(menuContext, menu, { getState: loadState }),
+		(manager) => {
+			keybindings = manager;
+		},
 	);
 	if (result.kind !== "closed" || result.reason !== "close") return "closed";
 	if (resumedThreadId) return { kind: "resume", threadId: resumedThreadId };
@@ -314,6 +431,7 @@ export async function showBtwCustomPreservingEditor<T>(
 export async function runBtwMenuPreservingEditor(
 	ctx: ExtensionCommandContext,
 	run: (menuContext: MenuContext) => Promise<RunMenuResult>,
+	onKeybindings?: (keybindings: KeybindingsManager) => void,
 ): Promise<RunMenuResult> {
 	let liveEditorText = ctx.ui.getEditorText();
 	let completed = false;
@@ -321,19 +439,18 @@ export async function runBtwMenuPreservingEditor(
 		get(target, property) {
 			if (property === "custom") {
 				return <Value>(factory: BtwCustomFactory<Value>, customOptions?: BtwCustomOptions) =>
-					target.custom<Value>(
-						(tui, theme, keybindings, done) =>
-							factory(tui, theme, keybindings, (value) => {
-								try {
-									liveEditorText = target.getEditorText();
-								} catch {
-									// Keep completion finite if session replacement invalidates the editor context.
-								}
-								completed = true;
-								done(value);
-							}),
-						customOptions,
-					);
+					target.custom<Value>((tui, theme, keybindings, done) => {
+						onKeybindings?.(keybindings);
+						return factory(tui, theme, keybindings, (value) => {
+							try {
+								liveEditorText = target.getEditorText();
+							} catch {
+								// Keep completion finite if session replacement invalidates the editor context.
+							}
+							completed = true;
+							done(value);
+						});
+					}, customOptions);
 			}
 			const value = Reflect.get(target, property, target) as unknown;
 			return typeof value === "function" ? value.bind(target) : value;

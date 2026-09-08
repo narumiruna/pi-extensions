@@ -753,7 +753,7 @@ test("side-thread sends custom APIs through Pi core's effective provider", async
 							fg: (_color: string, text: string) => text,
 							bold: (text: string) => text,
 						} as never,
-						{} as never,
+						keybindings() as never,
 						resolve as never,
 					);
 				});

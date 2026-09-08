@@ -409,20 +409,26 @@ test("btw command routes no arguments through the menu and preserves direct ques
 	assert.deepEqual(mock.thinkingLevels, []);
 });
 
-test("btw resolves automatic selection copying once from each invocation's loaded settings", async () => {
+test("btw resolves copying and shortcut overrides from each invocation's loaded settings", async () => {
 	const mock = createMockPi();
 	const selected = {
 		model: { provider: "test", id: "side" } as Model<Api>,
 		auth: { apiKey: "key" },
 	};
-	const loaded = [{}, {}, { fullscreenCopyOnSelect: false }] as const;
+	const loaded = [
+		{},
+		{ keybindings: { exit: "ctrl+q" } },
+		{ fullscreenCopyOnSelect: false, keybindings: { cycleThinkingLevel: "f6", bringToMain: "f7" } },
+	] as const;
 	const copyModes: Array<boolean | undefined> = [];
+	const shortcutOverrides: unknown[] = [];
 	let settingsReads = 0;
 	btw(mock.pi, {
 		loadSettings: async () => loaded[settingsReads++] ?? {},
 		resolveModel: async () => ({ kind: "selected", selected }),
 		runFullscreen: async (ctx, run, options) => {
 			copyModes.push(options?.copyOnSelect);
+			shortcutOverrides.push(options?.keybindings);
 			return run(ctx);
 		},
 		runThread: async () => ({ kind: "closed" }),
@@ -437,6 +443,11 @@ test("btw resolves automatic selection copying once from each invocation's loade
 
 	assert.equal(settingsReads, 3);
 	assert.deepEqual(copyModes, [true, true, false]);
+	assert.deepEqual(shortcutOverrides, [
+		undefined,
+		{ exit: "ctrl+q" },
+		{ cycleThinkingLevel: "f6", bringToMain: "f7" },
+	]);
 });
 
 test("btw same-as-main mode starts fresh threads from the current main level without remembering shortcut changes", async () => {

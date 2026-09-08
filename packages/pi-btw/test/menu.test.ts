@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { runBtwMenuPreservingEditor, showBtwCommandMenu } from "../src/menu.js";
 import { BTW_SETTINGS_FILE } from "../src/settings.js";
@@ -19,7 +19,14 @@ async function withMenu(
 	}) => Promise<void>,
 ): Promise<void> {
 	const directory = await mkdtemp(join(tmpdir(), "pi-btw-menu-test-"));
-	const tui = createTuiHarness({ width: 80, rows: 24 });
+	const tui = createTuiHarness({
+		width: 80,
+		rows: 24,
+		keybindings: new KeybindingsManager({
+			...TUI_KEYBINDINGS,
+			"app.thinking.cycle": { defaultKeys: "shift+tab" },
+		}) as never,
+	});
 	const mock = createMockContext({
 		mode: "tui",
 		hasUI: true,
@@ -214,6 +221,133 @@ test("btw Resume choice returns to the main menu with Back and closes with Ctrl+
 		assert.equal(await running, "closed");
 		assert.equal(ctx.ui.getEditorText(), "draft");
 		await assert.rejects(readFile(settingsPath, "utf8"), { code: "ENOENT" });
+	});
+});
+
+test.each([
+	["exit", "Exit shortcut", "ctrl+q", "Ctrl+Q"],
+	["cycleThinkingLevel", "Cycle thinking level shortcut", "f6", "F6"],
+	["bringToMain", "Bring to main shortcut", "f7", "F7"],
+])(
+	"BTW Settings edits and resets %s without changing the main draft",
+	async (action, label, key, display) => {
+		await withMenu(async ({ settingsPath, tui, ctx }) => {
+			const running = showBtwCommandMenu(ctx, {
+				settingsPath,
+				currentThinkingLevel: "low",
+				availableThinkingLevels: ["off", "low"],
+			});
+			await openSettings(tui);
+			tui.type(label);
+			tui.press("tui.select.confirm");
+			await vi.waitFor(() => assert.match(tui.render().join("\n"), /Edit key combination/));
+			tui.press("tui.select.confirm");
+			await vi.waitFor(() => assert.match(tui.render().join("\n"), /Type a key name/));
+			tui.type(key);
+			tui.press("tui.input.submit");
+			await vi.waitFor(() => assert.ok(tui.render().join("\n").includes(`Custom (${display})`)));
+			assert.equal(JSON.parse(await readFile(settingsPath, "utf8")).keybindings[action], key);
+			tui.press("tui.select.down");
+			tui.press("tui.select.confirm");
+			await vi.waitFor(() => assert.match(tui.render().join("\n"), /Pi BTW Settings/));
+			assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {});
+			tui.press("ctrl+c");
+			assert.equal(await running, "closed");
+			assert.equal(ctx.ui.getEditorText(), "draft");
+		});
+	},
+);
+
+test.each(["invalid", "cancel", "failed-save", "dispose", "concurrent"])(
+	"shortcut editing handles %s without publishing a changed binding",
+	async (scenario) => {
+		await withMenu(async ({ settingsPath, tui, ctx, notifications }) => {
+			await writeFile(settingsPath, '{"keybindings":{"exit":"f6"},"future":true}');
+			let started = false;
+			let aborted = false;
+			const running = showBtwCommandMenu(ctx, {
+				settingsPath,
+				currentThinkingLevel: "low",
+				availableThinkingLevels: ["off", "low"],
+				...(scenario === "failed-save" || scenario === "dispose"
+					? {
+							updateSettings: async (_patch: unknown, options: { signal?: AbortSignal }) => {
+								started = true;
+								if (scenario === "failed-save") throw new Error("disk unavailable");
+								await new Promise<void>((resolve) =>
+									options.signal?.addEventListener(
+										"abort",
+										() => {
+											aborted = true;
+											resolve();
+										},
+										{ once: true },
+									),
+								);
+								throw new Error("disposed");
+							},
+						}
+					: {}),
+			});
+			await openSettings(tui);
+			tui.type("Exit shortcut");
+			tui.press("tui.select.confirm");
+			await vi.waitFor(() => assert.match(tui.render().join("\n"), /Edit key combination/));
+			tui.press("tui.select.confirm");
+			await vi.waitFor(() => assert.match(tui.render().join("\n"), /Type a key name/));
+			tui.type(scenario === "invalid" ? "ctrl+i" : "ctrl+q");
+			if (scenario === "cancel") {
+				tui.press("tui.select.cancel");
+				await vi.waitFor(() => assert.match(tui.render().join("\n"), /Custom \(F6\)/));
+			} else {
+				if (scenario === "concurrent")
+					await writeFile(
+						settingsPath,
+						JSON.stringify({
+							keybindings: { exit: "f6", cycleThinkingLevel: "ctrl+q" },
+							future: true,
+						}),
+					);
+				tui.press("tui.input.submit");
+				if (scenario === "dispose") {
+					await vi.waitFor(() => assert.equal(started, true));
+					tui.dispose();
+				} else {
+					await vi.waitFor(() =>
+						assert.ok(notifications.some((notice) => notice.level === "error")),
+					);
+				}
+			}
+			if (scenario !== "dispose") tui.press("ctrl+c");
+			assert.equal(await running, "closed");
+			assert.equal(aborted, scenario === "dispose");
+			assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+				keybindings: {
+					exit: "f6",
+					...(scenario === "concurrent" ? { cycleThinkingLevel: "ctrl+q" } : {}),
+				},
+				future: true,
+			});
+		});
+	},
+);
+
+test("Settings distinguishes a conflicting saved shortcut from its effective fallback", async () => {
+	await withMenu(async ({ settingsPath, tui, ctx }) => {
+		await writeFile(settingsPath, '{"keybindings":{"exit":"ctrl+b"}}');
+		const running = showBtwCommandMenu(ctx, {
+			settingsPath,
+			currentThinkingLevel: "low",
+			availableThinkingLevels: ["off", "low"],
+		});
+		await openSettings(tui);
+		tui.type("Exit shortcut");
+		assert.match(tui.render(160).join("\n"), /Fallback \(Ctrl\+C; saved Ctrl\+B\)/);
+		tui.press("ctrl+c");
+		assert.equal(await running, "closed");
+		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+			keybindings: { exit: "ctrl+b" },
+		});
 	});
 });
 
