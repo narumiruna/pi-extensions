@@ -262,6 +262,7 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
 	{
 		id: "zai",
 		displayName: "Z.AI",
+		invalidateCacheOnFailure: true,
 		semantics: { kind: "consumer-subscription", label: "GLM Coding Plan usage" },
 		async query(auth, signal, timeoutMs, guard) {
 			return queryZaiUsage("zai", "Z.AI", auth, signal, timeoutMs, guard);
@@ -270,6 +271,7 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
 	{
 		id: "zai-coding-cn",
 		displayName: "Z.AI Coding CN",
+		invalidateCacheOnFailure: true,
 		semantics: { kind: "consumer-subscription", label: "GLM Coding Plan usage" },
 		async query(auth, signal, timeoutMs, guard) {
 			return queryZaiUsage("zai-coding-cn", "Z.AI Coding CN", auth, signal, timeoutMs, guard);

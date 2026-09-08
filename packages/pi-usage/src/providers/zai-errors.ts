@@ -49,7 +49,8 @@ export function zaiPayloadError(payload: unknown): string | undefined {
 	const object = asObject(payload);
 	if (!object) return undefined;
 	const nested = asObject(object.error);
-	const rawCode = nested ? nested.code : object.code;
+	// Missing nested metadata must not hide a top-level code; explicit nested values retain priority.
+	const rawCode = nested?.code === undefined ? object.code : nested.code;
 	const code = errorCode(rawCode);
 	if (
 		object.error === undefined &&

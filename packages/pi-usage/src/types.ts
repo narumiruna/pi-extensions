@@ -91,6 +91,8 @@ export interface UsageProviderAdapter {
 	displayName: string;
 	semantics: UsageSemantics;
 	publishesStatusline?: boolean;
+	/** Invalidate the matching ready report when the latest query fails; default preserves it. */
+	invalidateCacheOnFailure?: boolean;
 	targets?: UsageTargetResolver;
 	query(
 		auth: ResolvedUsageAuth,

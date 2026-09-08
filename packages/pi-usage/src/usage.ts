@@ -484,6 +484,7 @@ export default function usageExtension(
 				if (failure.until <= now) failureBackoff.delete(key);
 			}
 			if (queryId === undefined || latestQueries.get(failureKey) === queryId) {
+				if (adapter.invalidateCacheOnFailure) cache.delete(adapter.id, queryFingerprint);
 				setBoundedMap(
 					failureBackoff,
 					failureKey,

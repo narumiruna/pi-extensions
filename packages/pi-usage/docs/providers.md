@@ -260,10 +260,12 @@ The quota monitor expects a raw API key without a `Bearer` prefix.
 The extension removes that prefix from resolved authorization before sending it to the monitor endpoint.
 Fingerprinting and redaction keep using the original resolved credential.
 Quota errors use fixed English hints for the [documented Z.AI business error codes](https://docs.z.ai/api-reference/api-code), accepting nested `error.code` and the monitor endpoint's top-level `code` as strings or numbers.
+An explicit nested code takes precedence; when it is absent, the top-level code is used.
 For example, `1113` reports insufficient balance or no resource package, and `1309` reports an expired GLM Coding Plan.
 When a failed HTTP response has no business error code, the hint uses its HTTP status; unknown business codes use a generic API failure message.
 The monitor's top-level `code: 500` is not a documented business code and is not treated as HTTP 500 or proof that the credential has no Coding Plan.
 Error classification never matches or echoes provider `msg` or `error.message` text, which may contain credentials.
 Quota errors and missing or malformed quota data remain query failures with a statusline error hint, a 30-second request backoff, and scheduled retries; they no longer clear the statusline as unsupported.
+An accepted Z.AI query failure discards the matching cached report, so the next turn after backoff expires retries instead of restoring stale usage.
 The plan endpoint only contributes the plan name and renewal date; when it is unavailable or fails, the quota windows remain reported and the plan note falls back to the quota response's plan level.
 Only the official `api.z.ai` and `open.bigmodel.cn` origins are queried; other origins fail before sending the credential.

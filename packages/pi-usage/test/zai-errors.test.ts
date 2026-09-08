@@ -85,6 +85,34 @@ test("Z.AI handles unknown, malformed, and conflicting codes without echoing raw
 	}
 });
 
+test("Z.AI falls back to top-level codes only when the nested code is absent", () => {
+	for (const code of [1113, "1113"]) {
+		for (const error of [
+			undefined,
+			null,
+			[],
+			"ignored",
+			{},
+			{ message: "ignored" },
+			{ code: undefined },
+		]) {
+			const payload = { code, error, success: false };
+			const expected =
+				"Z.AI 1113: Insufficient balance or no resource package. Recharge your account.";
+			assert.equal(zaiPayloadError(payload), expected);
+			assert.equal(zaiResponseError(429, JSON.stringify(payload)), expected);
+		}
+	}
+	for (const code of [null, false, [], {}, "1309secret", "0", "200"]) {
+		assert.equal(zaiPayloadError({ code: 1113, error: { code } }), "Z.AI: API request failed.");
+	}
+	assert.equal(
+		zaiPayloadError({ code: 1113, error: { code: "9999" } }),
+		"Z.AI 9999: API request failed.",
+	);
+	assert.match(zaiPayloadError({ code: 1113, error: { code: "1309" } }) ?? "", /1309: .*expired/);
+});
+
 test("Z.AI uses HTTP fallbacks only when no business error is available", () => {
 	for (const [status, expected] of [
 		[400, /Invalid request/],

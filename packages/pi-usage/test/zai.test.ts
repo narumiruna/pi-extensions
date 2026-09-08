@@ -736,70 +736,157 @@ test("malformed Z.AI quota responses keep the error chip and scheduled recovery"
 	}
 });
 
-test("a coded Z.AI refresh failure shows its reason and recovers on the scheduled retry", async () => {
+test.each(
+	ZAI_ORIGINS.flatMap(([provider, baseUrl]) => [
+		{
+			provider,
+			baseUrl,
+			failure: { error: { code: "1003" } },
+			message: "Z.AI 1003: Authentication token expired. Obtain a new token.",
+		},
+		{
+			provider,
+			baseUrl,
+			failure: { code: 500, success: false },
+			message: "Z.AI 500: API request failed.",
+		},
+	]),
+)(
+	"$provider failed refresh retries after backoff: $message",
+	async ({ provider, baseUrl, failure, message }) => {
+		vi.useFakeTimers();
+		const model = { ...ZAI_MODEL, provider, baseUrl };
+		const mock = createMockPi();
+		usageExtension(mock.pi);
+		const actions = ["Refresh current usage", "Close"];
+		const titles: string[] = [];
+		const { ctx, statuses } = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			model,
+			select: async (title: string) => {
+				titles.push(title);
+				return actions.shift() ?? "Close";
+			},
+			modelRegistry: {
+				getProviderAuth: async () => ({ auth: { apiKey: "zai-secret-key" } }),
+				getAvailable: () => [model],
+				getAll: () => [model],
+				getProviderAuthStatus: () => ({ configured: true }),
+				getProviderDisplayName: () => "Z.AI",
+			},
+		});
+		let quotaPayload: object = ZAI_QUOTA_PAYLOAD;
+		const requests: Array<{ url: string; authorization: string | undefined }> = [];
+		vi.stubGlobal(
+			"fetch",
+			zaiFetchStub(
+				requests,
+				(url) =>
+					new Response(
+						JSON.stringify(
+							url.endsWith("/subscription/list") ? ZAI_SUBSCRIPTION_PAYLOAD : quotaPayload,
+						),
+						{ status: 200 },
+					),
+			),
+		);
+		try {
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			await vi.advanceTimersByTimeAsync(0);
+			assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
+			assert.equal(requests.length, 2);
+			quotaPayload = failure;
+			await mock.commands.get("usage")?.handler("", ctx);
+			assert.ok(titles.some((title) => title.includes(message)));
+			const chip = `usage err: ${message.slice(0, 50)}`;
+			assert.equal(statuses.get("usage"), chip);
+			assert.equal(requests.length, 3);
+			await mock.events.get("turn_start")?.[0]?.({}, ctx);
+			await vi.advanceTimersByTimeAsync(0);
+			assert.equal(statuses.get("usage"), chip);
+			assert.equal(requests.length, 3);
+			await vi.advanceTimersByTimeAsync(30_001);
+			await mock.events.get("turn_start")?.[0]?.({}, ctx);
+			await vi.advanceTimersByTimeAsync(0);
+			assert.equal(statuses.get("usage"), chip);
+			assert.equal(requests.length, 4, "expired backoff retries instead of returning cached usage");
+			quotaPayload = ZAI_QUOTA_PAYLOAD;
+			await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+			assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
+			assert.equal(requests.length, 6);
+		} finally {
+			await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	},
+);
+
+test("only Z.AI adapters opt into failed-query cache invalidation", () => {
+	assert.deepEqual(
+		SUPPORTED_ADAPTERS.filter((adapter) => adapter.invalidateCacheOnFailure).map(
+			(adapter) => adapter.id,
+		),
+		["zai", "zai-coding-cn"],
+	);
+});
+
+test("a superseded Z.AI failure cannot evict a newer successful refresh", async () => {
 	vi.useFakeTimers();
 	const mock = createMockPi();
 	usageExtension(mock.pi);
-	const actions = ["Refresh current usage", "Close"];
-	const titles: string[] = [];
+	const actions = ["Refresh current usage", "Refresh current usage", "Close"];
 	const { ctx, statuses } = createMockContext({
 		hasUI: true,
 		mode: "rpc",
 		model: ZAI_MODEL,
-		select: async (title: string) => {
-			titles.push(title);
-			return actions.shift() ?? "Close";
-		},
+		select: async () => actions.shift() ?? "Close",
 		modelRegistry: {
-			getProviderAuth: async () => ({ auth: { apiKey: "zai-secret-key" } }),
+			getProviderAuth: async () => ({ auth: { apiKey: "zai-key" } }),
 			getAvailable: () => [ZAI_MODEL],
 			getAll: () => [ZAI_MODEL],
 			getProviderAuthStatus: () => ({ configured: true }),
 			getProviderDisplayName: () => "Z.AI",
 		},
 	});
-	let quotaPayload: object = ZAI_QUOTA_PAYLOAD;
-	const requests: Array<{ url: string; authorization: string | undefined }> = [];
-	vi.stubGlobal(
-		"fetch",
-		zaiFetchStub(
-			requests,
-			(url) =>
-				new Response(
-					JSON.stringify(
-						url.endsWith("/subscription/list") ? ZAI_SUBSCRIPTION_PAYLOAD : quotaPayload,
-					),
-					{ status: 200 },
-				),
-		),
-	);
+	let releaseOld: (response: Response) => void = () => {};
+	const oldResponse = new Promise<Response>((resolve) => {
+		releaseOld = resolve;
+	});
+	let fetches = 0;
+	vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+		fetches += 1;
+		if (fetches === 3) return oldResponse;
+		return new Response(
+			JSON.stringify(
+				String(input).endsWith("/subscription/list") ? ZAI_SUBSCRIPTION_PAYLOAD : ZAI_QUOTA_PAYLOAD,
+			),
+		);
+	});
+	let older: Promise<unknown> | undefined;
 	try {
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 		await vi.advanceTimersByTimeAsync(0);
-		assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
-		assert.equal(requests.length, 2);
-		quotaPayload = { error: { code: "1003", message: "ignored" } };
-		await mock.commands.get("usage")?.handler("", ctx);
-		assert.ok(
-			titles.some((title) =>
-				title.includes("Z.AI 1003: Authentication token expired. Obtain a new token."),
-			),
-		);
-		const chip = "usage err: Z.AI 1003: Authentication token expired. Obtain a ";
-		assert.equal(statuses.get("usage"), chip);
-		assert.equal(requests.length, 3);
+		assert.equal(fetches, 2);
+		const command = mock.commands.get("usage");
+		assert.ok(command);
+		older = Promise.resolve(command.handler("", ctx));
+		await vi.waitFor(() => assert.equal(fetches, 3));
+		await command.handler("", ctx);
+		assert.equal(fetches, 5);
+		releaseOld(new Response(JSON.stringify({ code: 500, success: false })));
+		await older;
 		await mock.events.get("turn_start")?.[0]?.({}, ctx);
 		await vi.advanceTimersByTimeAsync(0);
-		assert.equal(statuses.get("usage"), chip);
-		assert.equal(requests.length, 3);
-		quotaPayload = ZAI_QUOTA_PAYLOAD;
-		await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
 		assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
-		assert.equal(requests.length, 5);
+		assert.equal(fetches, 5, "the newer ready report remains cached");
 	} finally {
+		releaseOld(new Response("{}"));
 		await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
-		vi.useRealTimers();
+		await older;
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	}
 });
 
