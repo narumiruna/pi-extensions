@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.60.5
+
+### Patch Changes
+
+- 81327a2: Report the explicit Z.AI no-GLM-Coding-Plan response as unsupported instead of publishing a usage error to the statusline. Invalidate previously cached usage when a credential becomes unsupported. Preserve query failures and scheduled retries for malformed quota responses, and omit provider error messages to avoid exposing echoed credentials.
+
 ## 0.60.4
 
 ### Patch Changes
