@@ -1,5 +1,13 @@
 # @narumitw/pi-todo
 
+## 0.3.1
+
+### Patch Changes
+
+- 3d4054b: Reuse published Kit terminal-document sanitization and editor-status frames for Todo widgets. Preserve control spacing and adaptive row priorities while removing unterminated terminal sequences from display text.
+- Updated dependencies [317f7bd]
+  - @narumitw/pi-tui-kit@0.61.0
+
 ## 0.3.0
 
 ### Minor Changes

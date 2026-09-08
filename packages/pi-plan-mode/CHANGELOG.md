@@ -1,5 +1,16 @@
 # @narumitw/pi-plan-mode
 
+## 0.57.0
+
+### Minor Changes
+
+- e2af16b: Add optional implementation model and thinking defaults plus per-menu implementation options for same-session and fresh-session handoffs. Apply choices only at implementation start without changing Pi defaults or automatically restoring the planner's model after a run ends.
+
+### Patch Changes
+
+- Updated dependencies [317f7bd]
+  - @narumitw/pi-tui-kit@0.61.0
+
 ## 0.56.0
 
 ### Minor Changes

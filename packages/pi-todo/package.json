@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-todo",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "Pi extension that gives coding agents a persistent session todo widget.",
 	"type": "module",
 	"license": "MIT",

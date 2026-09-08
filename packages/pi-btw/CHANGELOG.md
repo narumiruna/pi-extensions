@@ -1,5 +1,16 @@
 # @narumitw/pi-btw
 
+## 0.58.0
+
+### Minor Changes
+
+- 609f6a8: Add BTW-only exit, thinking-cycle, and bring-to-main keybindings in `/btw` → Settings, with conflict validation and per-action reset. Preserve Ctrl+C as hard cancel and keep pasted input out of shortcut handling.
+
+### Patch Changes
+
+- Updated dependencies [317f7bd]
+  - @narumitw/pi-tui-kit@0.61.0
+
 ## 0.57.1
 
 ### Patch Changes

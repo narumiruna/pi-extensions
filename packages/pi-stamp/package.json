@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-stamp",
-	"version": "0.50.0",
+	"version": "0.50.1",
 	"description": "Pi extension for transcript timestamps, assistant metadata, and tool timing.",
 	"type": "module",
 	"license": "MIT",

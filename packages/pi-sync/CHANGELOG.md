@@ -1,5 +1,13 @@
 # @narumitw/pi-sync
 
+## 0.50.3
+
+### Patch Changes
+
+- 7ec32e4: Reuse published Kit interaction hints for secret input and cancellable operations. Deduplicate cancel aliases and omit the submit hint when no submit key is configured.
+- Updated dependencies [317f7bd]
+  - @narumitw/pi-tui-kit@0.61.0
+
 ## 0.50.2
 
 ### Patch Changes
