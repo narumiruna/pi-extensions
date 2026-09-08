@@ -7,6 +7,7 @@ import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { statePathForConfig, writeStateForConfig } from "../src/state/sync-state-store.js";
 import { inspectSync } from "../src/sync/sync-inspection.js";
+import { classifyObservation } from "../src/ui/sync-attention.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 
 const head: RemoteHead = {
@@ -85,6 +86,22 @@ const cases = [
 	},
 ];
 
+const presentations: Record<string, string> = {
+	"unchanged baseline": "none",
+	"local edit": "status",
+	"local deletion": "status",
+	"remote snapshot changed": "status",
+	"revision only changed": "status",
+	"both changed": "review",
+	"remote removed": "review",
+	"first sync": "review",
+	"both empty without baseline": "guidance",
+	"empty include": "guidance",
+	"ordered selection mismatch": "review",
+	"content selection mismatch": "review",
+	"unknown legacy selection": "none",
+};
+
 for (const scenario of cases) {
 	test(`inspection: ${scenario.name} remains advisory and read-only`, async () => {
 		await withTempHome(async (agentDir) => {
@@ -142,6 +159,15 @@ for (const scenario of cases) {
 			assert.equal(
 				result.selectionState?.kind,
 				scenario.missingRemote ? undefined : (scenario.selection ?? "same"),
+			);
+			assert.equal(
+				classifyObservation({
+					setupName: config.setupName,
+					configIdentity: "test",
+					checkedAt: "test",
+					inspection: result,
+				}),
+				presentations[scenario.name],
 			);
 			assert.equal("files" in result, false);
 			assert.deepEqual(await readFile(localConfigPath()), settingsBefore);

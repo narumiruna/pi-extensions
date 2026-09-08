@@ -12,9 +12,11 @@ import { localConfigPath } from "../src/settings/config-file.js";
 import type { Snapshot } from "../src/snapshot/snapshot-types.js";
 import { statePathForConfig, writeStateForConfig } from "../src/state/sync-state-store.js";
 import { SyncDecisionRequiredError } from "../src/sync/sync-decision.js";
+import { inspectSync } from "../src/sync/sync-inspection.js";
 import { pull, push, status, syncBoth } from "../src/sync/sync-operations.js";
 import { RemoteSelectionMismatchError } from "../src/sync/sync-policy.js";
 import sync from "../src/sync.js";
+import { classifyObservation } from "../src/ui/sync-attention.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
 
@@ -425,6 +427,76 @@ test("pull from an empty remote offers only a structured push decision", async (
 		assert.equal(await backend.readHead(), undefined);
 	});
 });
+
+test("order-only selection differences still block sync, forced pull, and ordinary push", async () => {
+	await withInitializedSync(async ({ backend }) => {
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify(v3S3Settings({ include: ["settings.json", "AGENTS.md"] })),
+		);
+		const remote = {
+			...namedSnapshot("reordered", '{"base":true}\n'),
+			selection: { version: 1 as const, include: ["AGENTS.md", "settings.json"] },
+		};
+		await backend.publishSnapshot(remote, expectedRemoteHead(await backend.readHead()));
+		const before = await backend.readHead();
+		const { ctx } = createMockContext({ mode: "tui" });
+		for (const run of [
+			() => syncBoth(ctx, options, () => backend),
+			() => pull(ctx, { ...options, force: true }, () => backend),
+			() => push(ctx, options, undefined, () => backend),
+		]) {
+			await assert.rejects(run(), (error: unknown) => {
+				assert.ok(error instanceof RemoteSelectionMismatchError);
+				assert.match(error.message, /Only ordering differs/u);
+				return true;
+			});
+		}
+		assert.deepEqual(await backend.readHead(), before);
+	});
+});
+
+for (const legacy of [false, true]) {
+	test(`status-only remote change legacy=${legacy} still requires pull confirmation`, async () => {
+		await withInitializedSync(async ({ agentDir, backend, config }) => {
+			const remote = {
+				...namedSnapshot("remote-change", '{"remote":true}\n'),
+				...(legacy ? {} : { selection: { version: 1 as const, include: config.include } }),
+			};
+			await backend.publishSnapshot(remote, expectedRemoteHead(await backend.readHead()));
+			const inspection = await inspectSync(
+				config,
+				{ include: config.include },
+				undefined,
+				() => backend,
+			);
+			assert.equal(inspection.selectionState?.kind, legacy ? "legacy" : "same");
+			assert.equal(
+				classifyObservation({
+					setupName: config.setupName,
+					configIdentity: "test",
+					checkedAt: "test",
+					inspection,
+				}),
+				"status",
+			);
+			const stateBefore = readFileSync(statePathForConfig(config));
+			let confirmations = 0;
+			const { ctx } = createMockContext({
+				mode: "tui",
+				confirm: async () => {
+					confirmations++;
+					return false;
+				},
+			});
+			assert.equal(await pull(ctx, { ...options, yes: false }, () => backend), "cancelled");
+			assert.equal(confirmations, 1);
+			assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"base":true}\n');
+			assert.deepEqual(readFileSync(statePathForConfig(config)), stateBefore);
+			assert.equal((await backend.readHead())?.snapshotId, "remote-change");
+		});
+	});
+}
 
 async function withInitializedSync(
 	run: (state: {
