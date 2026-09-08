@@ -116,6 +116,30 @@ test("eager graph validation preserves first-use boundaries and external package
 	);
 });
 
+test("only the dependency-free Kit terminal-text leaf may load eagerly", async () => {
+	const builder = await loadBuilder();
+	for (const [specifier, allowed] of [
+		["@narumitw/pi-tui-kit/terminal-text", true],
+		["@narumitw/pi-tui-kit/terminal-document", false],
+		["@narumitw/pi-tui-kit/testing", false],
+		["@narumitw/pi-tui-kit/terminal-text/other", false],
+	] as const) {
+		const metadata = validMetadata();
+		requireOutput(metadata, "dist/index.ts").imports?.push({
+			path: specifier,
+			kind: "import-statement",
+			external: true,
+		});
+		if (allowed) assert.doesNotThrow(() => builder.validateEagerGraph(metadata));
+		else assert.throws(() => builder.validateEagerGraph(metadata), /Eager external dependency/u);
+	}
+	const manifest = JSON.parse(await readFile(join(resolvedKitRoot, "package.json"), "utf8"));
+	const leaf = manifest.exports["./terminal-text"].import;
+	assert.equal(leaf, "./dist/terminal-text.js");
+	const source = await readFile(join(resolvedKitRoot, leaf), "utf8");
+	assert.doesNotMatch(source, /\b(?:import\s|import\(|require\(|from\s+["'])/u);
+});
+
 test("runtime build rejects destructive output paths and symlink escapes", async () => {
 	const builder = await loadBuilder();
 	const outside = await mkdtemp(join(tmpdir(), "pi-stamp-build-outside-"));

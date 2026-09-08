@@ -14,6 +14,8 @@ const GENERATED_BANNER = [
 ].join("\n");
 const FORBIDDEN_EAGER_INPUTS = ["src/menu.ts"];
 const FORBIDDEN_EAGER_EXTERNALS = ["@narumitw/pi-tui-kit"];
+// This pure, dependency-free presentation leaf does not load the Kit menu runtime.
+const EAGER_PRESENTATION_LEAF = "@narumitw/pi-tui-kit/terminal-text";
 
 export async function buildRuntime({
 	outputDirectory = distDirectory,
@@ -82,6 +84,7 @@ export function validateEagerGraph(metadata) {
 			if (
 				imported.external &&
 				imported.kind !== "dynamic-import" &&
+				imported.path !== EAGER_PRESENTATION_LEAF &&
 				FORBIDDEN_EAGER_EXTERNALS.some(
 					(dependency) =>
 						imported.path === dependency || imported.path.startsWith(`${dependency}/`),
