@@ -197,39 +197,68 @@ function resolveShortcutSnapshot(
 		cycleThinkingLevel: keybindings.getKeys("app.thinking.cycle"),
 		bringToMain: ["ctrl+r"],
 	};
+	const usable = (
+		action: BtwShortcutAction,
+		candidate: string,
+		inherited = false,
+	): string | undefined => {
+		const key = normalizeBtwKey(candidate);
+		if (!key || (!inherited && isTextKey(key))) return undefined;
+		const inputs = inputsFor(key);
+		if (!inputs.length) return undefined;
+		if (action === "exit" && key === "ctrl+c") return key;
+		if (
+			reserved.some(
+				(other) =>
+					typeof other === "string" && inputs.some((input) => matchesKey(input, other as KeyId)),
+			)
+		)
+			return undefined;
+		return key;
+	};
+	const candidates: BtwKeybindingOverrides = {};
+	const availableDefaults = { ...defaults };
 	for (const action of BTW_SHORTCUT_ACTIONS) {
-		const usable = (candidate: string, inherited = false): string | undefined => {
-			const key = normalizeBtwKey(candidate);
-			if (!key || (!inherited && isTextKey(key))) return undefined;
-			const inputs = inputsFor(key);
-			if (!inputs.length) return undefined;
-			if (action === "exit" && key === "ctrl+c") return key;
-			if (
-				reserved.some(
-					(other) =>
-						typeof other === "string" && inputs.some((input) => matchesKey(input, other as KeyId)),
-				)
-			)
-				return undefined;
-			if (
-				BTW_SHORTCUT_ACTIONS.some(
-					(other) => other !== action && keys[other].some((used) => btwKeysOverlap(key, used)),
-				)
-			)
-				return undefined;
-			return key;
-		};
+		availableDefaults[action] = defaults[action]
+			.map((key) => usable(action, key, action === "cycleThinkingLevel"))
+			.filter((key): key is string => key !== undefined);
 		const override = overrides[action];
-		const selected = override === undefined ? undefined : usable(override);
+		if (override !== undefined) candidates[action] = usable(action, override);
+	}
+	// Compare the complete proposal, not only actions visited earlier. Reject conflicts
+	// together, then repeat because a rejected override restores its default bindings.
+	for (;;) {
+		const rejected = BTW_SHORTCUT_ACTIONS.filter((action) => {
+			const candidate = candidates[action];
+			return (
+				candidate !== undefined &&
+				BTW_SHORTCUT_ACTIONS.some(
+					(other) =>
+						other !== action &&
+						(candidates[other] ? [candidates[other]] : availableDefaults[other]).some((key) =>
+							btwKeysOverlap(candidate, key),
+						),
+				)
+			);
+		});
+		if (!rejected.length) break;
+		for (const action of rejected) delete candidates[action];
+	}
+	for (const action of BTW_SHORTCUT_ACTIONS) {
+		const override = overrides[action];
+		const selected = candidates[action];
 		if (override !== undefined && !selected)
 			warnings.push(
 				`${action}: configured shortcut is invalid or conflicts with a reserved action; using an available default.`,
 			);
 		const effective = selected
 			? [selected]
-			: defaults[action]
-					.map((key) => usable(key, action === "cycleThinkingLevel"))
-					.filter((key): key is string => key !== undefined);
+			: availableDefaults[action].filter(
+					(key) =>
+						!BTW_SHORTCUT_ACTIONS.some(
+							(other) => other !== action && keys[other].some((used) => btwKeysOverlap(key, used)),
+						),
+				);
 		keys[action] = action === "exit" ? [...new Set([...effective, "ctrl+c"])] : effective;
 		if (!keys[action].length && (override !== undefined || defaults[action].length > 0))
 			warnings.push(`${action}: no usable shortcut; change Pi BTW Settings or Pi keybindings.`);

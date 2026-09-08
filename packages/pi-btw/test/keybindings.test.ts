@@ -3,6 +3,7 @@ import {
 	isKittyProtocolActive,
 	KeybindingsManager,
 	matchesKey,
+	StdinBuffer,
 	setKittyProtocolActive,
 	TUI_KEYBINDINGS,
 } from "@earendil-works/pi-tui";
@@ -219,6 +220,48 @@ test("keypad input follows the same conflict and activation identity", () => {
 	const shortcuts = resolveBtwShortcuts({ exit: "ctrl+1" }, manager());
 	assert.equal(shortcuts.matches("\u001b[57399;5u", "exit"), false);
 	assert.equal(shortcuts.matches("\u001b[57400;5u", "exit"), true);
+});
+
+test.each([
+	[{ exit: "shift+tab" }, ["ctrl+c"], ["shift+tab"], ["ctrl+r"]],
+	[{ cycleThinkingLevel: "ctrl+r" }, ["ctrl+c"], ["shift+tab"], ["ctrl+r"]],
+	[{ exit: "f6", cycleThinkingLevel: "f6" }, ["ctrl+c"], ["shift+tab"], ["ctrl+r"]],
+	[{ exit: "shift+tab", cycleThinkingLevel: "ctrl+r" }, ["ctrl+c"], ["shift+tab"], ["ctrl+r"]],
+	[{ exit: "shift+tab", cycleThinkingLevel: "f6" }, ["shift+tab", "ctrl+c"], ["f6"], ["ctrl+r"]],
+] as const)("resolves the complete shortcut proposal %j", (overrides, exit, cycle, bring) => {
+	const resolved = resolveBtwShortcuts(overrides, manager());
+	assert.deepEqual(resolved.keys, { exit, cycleThinkingLevel: cycle, bringToMain: bring });
+	if (exit.length === 1) assert.ok(resolved.warnings.length);
+});
+
+test("Pi stdin buffering delivers complete pastes across every delimiter split", () => {
+	const start = "\u001b[200~";
+	const end = "\u001b[201~";
+	for (let opening = 1; opening < start.length; opening++) {
+		for (let closing = 1; closing < end.length; closing++) {
+			const buffer = new StdinBuffer();
+			const guard = new BtwPasteGuard();
+			const events: boolean[] = [];
+			buffer.on("data", (data) => events.push(guard.consume(data)));
+			// ProcessTerminal.setupStdinBuffer uses this exact paste rewrapping boundary.
+			buffer.on("paste", (data) => events.push(guard.consume(`${start}${data}${end}`)));
+			try {
+				for (const chunk of [
+					start.slice(0, opening),
+					start.slice(opening),
+					"x".repeat(10000),
+					"\u0003",
+					end.slice(0, closing),
+					end.slice(closing),
+					"\u0003",
+				])
+					buffer.process(chunk);
+				assert.deepEqual(events, [true, false]);
+			} finally {
+				buffer.destroy();
+			}
+		}
+	}
 });
 
 test("paste guard covers whole, split, repeated and closed bracketed payloads", () => {

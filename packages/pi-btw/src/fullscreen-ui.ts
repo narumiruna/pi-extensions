@@ -485,13 +485,21 @@ class BtwFullscreenHost<T> implements Component {
 				this.options.copyOnSelect ?? true,
 			);
 			setBtwShortcuts(this.fullscreen, shortcuts);
-			for (const warning of shortcuts.warnings) {
-				try {
-					this.ctx.ui.notify(`Pi BTW: ${warning}`, "warning");
-				} catch {
-					/* A replaced context must not prevent terminal cleanup. */
+			// Negotiate before warning when possible: the first dispatched user input uses
+			// the current mode. Recheck each input, including later mode transitions.
+			let previousWarnings: readonly string[] = [];
+			const reportWarnings = () => {
+				const warnings = shortcuts.warnings;
+				for (const warning of warnings) {
+					if (previousWarnings.includes(warning)) continue;
+					try {
+						this.ctx.ui.notify(`Pi BTW: ${warning}`, "warning");
+					} catch {
+						/* A replaced context must not prevent terminal cleanup. */
+					}
 				}
-			}
+				previousWarnings = warnings;
+			};
 			const pasteGuard = new BtwPasteGuard();
 			// Waiting for the custom promise would leave follow-up keys bound to the side TUI.
 			const addHardCancelListener =
@@ -499,6 +507,7 @@ class BtwFullscreenHost<T> implements Component {
 				this.fullscreen.addInputListenerBeforeViewport?.bind(this.fullscreen) ??
 				this.fullscreen.addInputListener.bind(this.fullscreen);
 			this.removeHardCancelListener = addHardCancelListener((data) => {
+				reportWarnings();
 				if (pasteGuard.consume(data) || !shortcuts.matches(data, "exit")) return undefined;
 				this.disposed = true;
 				try {

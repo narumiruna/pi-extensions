@@ -6,8 +6,10 @@ import {
 	Container,
 	type Focusable,
 	getKeybindings,
+	isKittyProtocolActive,
 	KeybindingsManager,
 	setKeybindings,
+	setKittyProtocolActive,
 	type Terminal,
 	type TUI,
 	TUI_KEYBINDINGS,
@@ -55,6 +57,7 @@ function inputForCopyBinding(keybindings: KeybindingsManager): string {
 
 function createHarness(
 	options: {
+		keybindings?: KeybindingsManager;
 		fullscreenStopError?: Error;
 		hardCancelRemoveError?: Error;
 		layoutMountError?: Error;
@@ -150,7 +153,7 @@ function createHarness(
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					} as never,
-					createBtwTestKeybindings() as never,
+					(options.keybindings ?? createBtwTestKeybindings()) as never,
 					((value: unknown) => outerDone?.(value)) as never,
 				);
 				customOptions?.onHandle?.({
@@ -188,6 +191,51 @@ function createHarness(
 		},
 	};
 }
+
+test("shortcut warnings follow negotiated mode, deduplicate, and stop at disposal", async () => {
+	const initialMode = isKittyProtocolActive();
+	setKittyProtocolActive(false);
+	const harness = createHarness({
+		keybindings: new KeybindingsManager(BTW_TEST_KEYBINDINGS, {
+			"tui.editor.cursorWordLeft": "alt+left",
+		}),
+	});
+	let finish!: (value: string) => void;
+	const running = runBtwFullscreen(
+		harness.ctx,
+		() =>
+			new Promise<string>((resolve) => {
+				finish = resolve;
+			}),
+		{ keybindings: { exit: "alt+b" } },
+		{ createTui: harness.createTui },
+	);
+	try {
+		await flushAsyncWork();
+		assert.deepEqual(harness.notifications, []);
+		setKittyProtocolActive(true);
+		harness.input("x");
+		assert.deepEqual(harness.notifications, []);
+		setKittyProtocolActive(false);
+		harness.input("x");
+		assert.equal(harness.notifications.length, 1);
+		assert.match(harness.notifications[0] ?? "", /exit: configured shortcut/);
+		harness.input("x");
+		assert.equal(harness.notifications.length, 1);
+		setKittyProtocolActive(true);
+		harness.input("x");
+		setKittyProtocolActive(false);
+		harness.input("x");
+		assert.equal(harness.notifications.length, 2);
+		finish("done");
+		assert.equal(await running, "done");
+		assert.throws(() => harness.input("x"));
+	} finally {
+		finish?.("done");
+		await running;
+		setKittyProtocolActive(initialMode);
+	}
+});
 
 function immediateComponent(done: (value: string) => void, events: string[]): FakeComponent {
 	done("side result");
