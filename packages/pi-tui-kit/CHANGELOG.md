@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.61.0
+
+### Minor Changes
+
+- 317f7bd: Expose a stateless bounded-frame renderer with caller-owned row priorities, and reuse it in standard menus without changing their input or save lifecycle.
+
 ## 0.60.0
 
 ### Minor Changes
