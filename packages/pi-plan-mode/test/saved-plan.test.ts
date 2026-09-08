@@ -179,6 +179,7 @@ test("automatic and manual ready menus expose Save for later", async () => {
 						? [
 								"Implement here",
 								"Start fresh and implement",
+								"Implementation options…",
 								"Export plan…",
 								"Save for later",
 								"Stay in Plan mode",
@@ -188,6 +189,7 @@ test("automatic and manual ready menus expose Save for later", async () => {
 								"Show latest proposed plan",
 								"Implement here",
 								"Start fresh and implement",
+								"Implementation options…",
 								"Export plan…",
 								"Save for later",
 								"Stay in Plan mode",
@@ -237,6 +239,7 @@ test("saved Plan management can show, implement, clear, or cancel", async () => 
 						"Show saved plan",
 						"Implement here",
 						"Start fresh and implement",
+						"Implementation options…",
 						"Export plan…",
 						"Settings",
 						"Clear saved plan",

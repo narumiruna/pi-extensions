@@ -52,7 +52,7 @@ function menuOptions(
 	};
 }
 
-test("Plan settings show five flat workflow rows without materializing a missing file", async () => {
+test("Plan settings show seven flat workflow rows without materializing a missing file", async () => {
 	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
 		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
 		await tui.waitForOpen();
@@ -341,6 +341,8 @@ test("RPC Settings changes retention and export destination with the same flat n
 					"Plan reinjection (Off — conversation history only)",
 					"Export destination (PLAN.md)",
 					"Plan mode shortcut (none)",
+					"Implementation model (Use current)",
+					"Implementation thinking (inherit)",
 					"Back",
 				],
 				response: "Plan reinjection (Off — conversation history only)",
@@ -353,6 +355,8 @@ test("RPC Settings changes retention and export destination with the same flat n
 					"Plan reinjection (Through first implementation run)",
 					"Export destination (PLAN.md)",
 					"Plan mode shortcut (none)",
+					"Implementation model (Use current)",
+					"Implementation thinking (inherit)",
 					"Back",
 				],
 				response: "Export destination (PLAN.md)",
@@ -370,6 +374,8 @@ test("RPC Settings changes retention and export destination with the same flat n
 					"Plan reinjection (Through first implementation run)",
 					"Export destination (rpc/PLAN.md)",
 					"Plan mode shortcut (none)",
+					"Implementation model (Use current)",
+					"Implementation thinking (inherit)",
 					"Back",
 				],
 				response: undefined,
@@ -396,6 +402,8 @@ test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight s
 				"Plan reinjection (Off — conversation history only)",
 				"Export destination (PLAN.md)",
 				"Plan mode shortcut (none)",
+				"Implementation model (Use current)",
+				"Implementation thinking (inherit)",
 				"Back",
 			],
 			response: undefined,

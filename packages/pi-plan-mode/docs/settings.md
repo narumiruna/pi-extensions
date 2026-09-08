@@ -2,6 +2,7 @@
 
 [Back to README](../README.md)
 
+- [Implementation model and thinking](#implementation-model-and-thinking)
 - [Default Plan policy tools](#default-plan-policy-tools)
 - [Plan reinjection](#plan-reinjection)
 - [Export destination](#export-destination)
@@ -11,7 +12,7 @@
 
 ## ⚙️ Settings
 
-Open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Export destination**, and **Plan mode shortcut**.
+Open **Settings** from an inactive `/plan` menu to edit planning defaults, implementation model/thinking, reinjection, export destination, and the shortcut.
 You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
 `safeSubcommands` is JSON-only.
 The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
@@ -31,6 +32,27 @@ The shortcut is disabled when `toggleShortcut` is omitted.
   "toggleShortcut": "<your_key>"
 }
 ```
+
+### Implementation model and thinking
+
+`implementationModel` is an optional object with exact, case-sensitive `provider` and `id` strings. Both must be non-blank and at most 4,096 characters; IDs are opaque, so slashes and colons are not parsed. Omit this field or choose **Use current** to make no model change. For fresh implementation, that means the destination's normal startup model, not a forced copy of the source model.
+
+`implementationThinkingLevel` accepts `inherit` (the default), `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. `inherit` preserves normal behavior: same-session handoff restores a temporary Plan thinking override when appropriate, a model switch uses Pi's model/default thinking policy, and a fresh session uses its normal startup thinking. It does not promise to retain the planner's temporary thinking level. Explicit implementation thinking applies after model selection; Pi clamps it to the target's supported levels, and Plan mode reports an adjustment.
+
+```json
+{
+  "implementationModel": { "provider": "openai", "id": "your-registered-model-id" },
+  "implementationThinkingLevel": "high"
+}
+```
+
+Settings saves immediately but does not switch the running session. Each implementation menu snapshots those defaults when opened. **Implementation options…** edits a draft shared by both implementation actions in that menu; backing out of a nested picker leaves its previous choice, while closing the owning menu discards all its overrides. Reopen `/plan` to use updated defaults. `/plan implement` uses current saved defaults without a selector. Precedence is built-in behavior, user defaults, then the current menu's override; **Use current** and `inherit` can explicitly override fixed defaults.
+
+The model picker uses Pi's scoped models when configured, otherwise its available catalogue. It does not refresh providers or resolve auth merely to display choices; close and reopen the owning menu after refreshing Pi's catalogue. Display labels are sanitized without changing raw model identity. No registered match or failed authentication blocks an explicit target rather than silently selecting a fallback.
+
+Before kickoff, failed or cancelled preparation retains the ready/saved plan. Same-session recovery restores only still-owned runtime changes and does not overwrite a later manual choice. Pi owns authentication and model-selection operations, which have no public cancellation signal; the extension waits for them to settle and rejects stale continuations. After a fresh replacement commits, a preference failure leaves the request in the destination editor instead of starting with a fallback. If kickoff then fails, the destination retains its selected model/thinking and existing editor or active-plan recovery; the source remains resumable. Reload/resume never replays a pending preference request.
+
+After successful kickoff there is **no automatic restoration** on `agent_end`, `agent_settled`, user abort, or active-plan clearing. A settled run is not proof that the implementation task is complete. Later manual model/thinking changes are preserved. These preferences never write Pi's global model or thinking defaults, and existing plan-retention cleanup is unchanged.
 
 ### Plan helper tools
 

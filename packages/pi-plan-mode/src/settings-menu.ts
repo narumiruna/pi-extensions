@@ -1,6 +1,11 @@
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type RunMenuResult, runMenu } from "@narumitw/pi-tui-kit";
 import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+import {
+	createImplementationModelPicker,
+	type ImplementationOptionAction,
+	implementationSettingItems,
+} from "./implementation-options.js";
 import { retentionLabel } from "./implementation-retention.js";
 import { planExportDestination } from "./plan-export.js";
 import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
@@ -44,8 +49,9 @@ export interface PlanModeSettingsMenuOptions {
 	onSaved(settings: PlanModeSettings): void;
 }
 
-type Screen = "settings" | "tools" | "export" | "shortcut";
+type Screen = "settings" | "tools" | "export" | "shortcut" | "implementation-model";
 type Action =
+	| ImplementationOptionAction
 	| "set-thinking"
 	| "open-tools"
 	| "toggle-tool"
@@ -92,6 +98,7 @@ export async function showPlanModeSettings(
 		};
 	};
 
+	let implementationPicker: ReturnType<typeof createImplementationModelPicker> | undefined;
 	const menu = defineMenu<SettingsMenuState, Screen, Action, ExtensionContext>({
 		start: "settings",
 		screens: {
@@ -144,8 +151,13 @@ export async function showPlanModeSettings(
 									currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
 									action: "open-shortcut",
 								},
+								...implementationSettingItems(state.settings),
 							],
 						},
+			"implementation-model": ({ state }) => {
+				implementationPicker ??= createImplementationModelPicker(ctx);
+				return implementationPicker.screen(state.settings);
+			},
 			tools: ({ state }) => ({
 				kind: "multiSelect",
 				title: "Default Plan policy allowlist",
@@ -203,6 +215,28 @@ export async function showPlanModeSettings(
 			}),
 		},
 		actions: {
+			"open-implementation-model": async () => ({ kind: "to", screen: "implementation-model" }),
+			"set-implementation-model": async ({ ctx: actionCtx, itemId, signal }) => {
+				const model = implementationPicker?.selection(itemId);
+				if (model === undefined) return { kind: "rejected" };
+				const result = await savePatch(
+					actionCtx,
+					{ implementationModel: model },
+					signal,
+					"Implementation model saved. Applies when implementation starts.",
+				);
+				return result.kind === "stay" ? { kind: "back" } : result;
+			},
+			"set-implementation-thinking": async ({ ctx: actionCtx, value, signal }) => {
+				const level = PLAN_MODE_THINKING_LEVELS.find((level) => level === value);
+				if (!level) return { kind: "rejected" };
+				return savePatch(
+					actionCtx,
+					{ implementationThinkingLevel: level },
+					signal,
+					"Implementation thinking saved. Applies when implementation starts.",
+				);
+			},
 			"set-thinking": async ({ ctx: actionCtx, value, signal }) => {
 				if (
 					!PLAN_MODE_THINKING_LEVELS.includes(value as (typeof PLAN_MODE_THINKING_LEVELS)[number])
