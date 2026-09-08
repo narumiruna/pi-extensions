@@ -1,5 +1,11 @@
 # @narumitw/pi-plan-mode
 
+## 0.57.1
+
+### Patch Changes
+
+- 31b3dde: Remove the implementation model and thinking selectors, restoring Plan implementation handoffs to the current model and normal thinking behavior.
+
 ## 0.57.0
 
 ### Minor Changes
