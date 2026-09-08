@@ -1,9 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import { DEFAULT_TODO_SETTINGS, type TodoWidgetSettings } from "./settings.js";
 import type { Todo } from "./todo-widget.js";
-
-const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
 export interface RenderTodoWidgetOptions {
 	settings?: Readonly<TodoWidgetSettings>;
@@ -61,21 +61,15 @@ export function renderTodoWidget(
 }
 
 export function renderCompletionSummary(total: number, theme: Theme, width: number): string[] {
-	const renderWidth = Math.max(0, width);
-	return [
-		theme.fg("borderMuted", "─".repeat(renderWidth)),
-		theme.fg("success", `✓ ${total}/${total} tasks completed`),
-	].map((line) => truncateToWidth(line, renderWidth, ""));
+	return new EditorStatusWidget({
+		theme,
+		renderBody: () => [theme.fg("success", `✓ ${total}/${total} tasks completed`)],
+	}).render(width);
 }
 
 export function sanitizeTodoText(value: string): string {
-	let text = "";
-	for (const character of stripTerminalSequences(value).replace(BIDI_CONTROLS, "")) {
-		const codePoint = character.codePointAt(0) ?? 0;
-		const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
-		text += isControl ? " " : character;
-	}
-	return text.replace(/\s+/gu, " ").trim();
+	// Document sanitization preserves Todo's control-to-space policy; whitespace is local.
+	return sanitizeTerminalDocument(value).replace(/\s+/gu, " ").trim();
 }
 
 export function widgetRowBudget(terminalRows?: number): number {
@@ -93,10 +87,13 @@ function renderHeader(
 	showProgress: boolean,
 ): string[] {
 	const completed = todos.filter((todo) => todo.status === "completed").length;
-	return [
-		theme.fg("borderMuted", "─".repeat(width)),
-		theme.fg("muted", showProgress ? `Todo · ${completed}/${todos.length} complete` : "Todo"),
-	];
+	// Keep both heading rows inside Todo's existing adaptive budget.
+	return new EditorStatusWidget({
+		theme,
+		renderBody: () => [
+			theme.fg("muted", showProgress ? `Todo · ${completed}/${todos.length} complete` : "Todo"),
+		],
+	}).render(width);
 }
 
 function renderTodo(todo: Todo, theme: Theme, width: number): string[] {
