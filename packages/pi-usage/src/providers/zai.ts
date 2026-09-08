@@ -1,4 +1,4 @@
-import { sanitizeDisplayText, UsageUnsupportedError } from "../core.js";
+import { sanitizeDisplayText } from "../core.js";
 import type {
 	UsageBucket,
 	UsageMetric,
@@ -7,6 +7,8 @@ import type {
 	ZaiQuotaPayload,
 	ZaiSubscriptionPayload,
 } from "../types.js";
+
+import { zaiPayloadError } from "./zai-errors.js";
 
 const FIVE_HOUR_WINDOW_MINUTES = 300;
 const WEEKLY_WINDOW_MINUTES = 10_080;
@@ -18,23 +20,10 @@ export function normalizeZaiQuotaPayload(
 	capturedAt: number,
 	plan?: ZaiPlanInfo,
 ): UsageReport {
+	const error = zaiPayloadError(payload);
+	if (error) throw new Error(error);
 	const data = asObject(payload.data);
-	if (!data) {
-		// Only the observed no-plan response establishes that this credential cannot be metered.
-		// Missing or malformed data alone can also indicate a transient provider failure.
-		if (
-			(payload.data === undefined || payload.data === null) &&
-			payload.code === 500 &&
-			payload.success === false &&
-			payload.msg === "当前用户不存在coding plan"
-		) {
-			throw new UsageUnsupportedError(
-				"No GLM Coding Plan on this Z.AI credential; API usage is not metered.",
-			);
-		}
-		// Do not echo msg: truncating provider text before redaction can expose secret prefixes.
-		throw new Error("Z.AI quota response data was not an object.");
-	}
+	if (!data) throw new Error("Z.AI quota response data was not an object.");
 	const limits = Array.isArray(data.limits) ? (data.limits as unknown[]) : [];
 
 	const buckets: UsageBucket[] = [];
@@ -96,10 +85,7 @@ export function normalizeZaiQuotaPayload(
 export function normalizeZaiSubscriptionPayload(
 	payload: ZaiSubscriptionPayload,
 ): ZaiPlanInfo | undefined {
-	if (payload.success === false) return undefined;
-	if (typeof payload.code === "number" && payload.code !== 0 && payload.code !== 200) {
-		return undefined;
-	}
+	if (zaiPayloadError(payload)) return undefined;
 	if (!Array.isArray(payload.data)) return undefined;
 
 	const candidates: Array<{

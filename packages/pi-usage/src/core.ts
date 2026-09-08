@@ -202,10 +202,6 @@ export function errorMessage(error: unknown): string {
 	return sanitizeDisplayText(error instanceof Error ? error.message : String(error), 600);
 }
 
-// A credential the provider cannot meter is not a query failure: it is reported as unsupported, so
-// the statusline stays empty instead of holding an error chip that no retry will clear.
-export class UsageUnsupportedError extends Error {}
-
 export function abortError(): Error {
 	return Object.assign(new Error("Usage query aborted."), { name: "AbortError" });
 }
