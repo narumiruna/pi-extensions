@@ -4,6 +4,7 @@
 
 - [Horizontal rules](#-horizontal-rules)
 - [Editor status widgets](#-editor-status-widgets)
+- [Bounded frames](#bounded-frames)
 - [Complete menu example](#-complete-menu-example)
 - [Standalone interactions](#standalone-tasks)
 - [Standard screens](#-standard-screens)
@@ -67,6 +68,33 @@ export function publishProgress(ctx: ExtensionContext, lines: readonly string[])
 `EditorStatusWidget` treats body rows as terminal-formatted display text and does not sanitize or wrap them.
 Sanitize untrusted values before styling or width-sensitive formatting, and perform product-specific wrapping in `renderBody()`.
 Publish plain string arrays separately when an extension supports Pi RPC widgets because RPC ignores component factories.
+
+## Bounded frames
+
+Use `renderBoundedFrame()` to share the standard menu's height-bounded presentation without adopting its input or save lifecycle. It accepts already sanitized, styled, wrapped single-line rows and a rendered horizontal rule. The caller owns terminal row reservations, themes, input, persistence, and which content must survive clipping. This is a stateless layout primitive, not another screen or lifecycle API.
+
+```ts
+import { HorizontalRule, renderBoundedFrame } from "@narumitw/pi-tui-kit";
+
+const width = 40;
+const rows = renderBoundedFrame({
+  width,
+  maxRows: 8,
+  rule: new HorizontalRule().render(width)[0] ?? "",
+  title: ["Settings"],
+  content: ["First setting", "Selected setting", "Saving…"],
+  hints: ["enter change • esc cancel"], // Supply effective, reachable bindings in real UI.
+  compactHint: "esc cancel",
+  priorityRows: [1, 2],
+  focusedRow: 1,
+});
+```
+
+A full frame contains the rule, title, context, a blank separator before nonempty content, hints, and the closing rule. On overflow, blank content rows are removed. `priorityRows` refers to indexes in the original content array, in retention order; invalid, duplicate, and blank-row indexes are ignored. `focusedRow` determines proximity when filling remaining space, not selection styling. Explicitly include the focused row in `priorityRows` when it must survive. The function never infers selection from cursor glyphs.
+
+Compact layout reserves a hint row when `compactHint` is nonempty and at least two body rows remain, then retains priority content, one title row, full hints when they fit, neighboring content, and context. `compactHints` can replace full hints during compact rendering, for example to include an overflow count. Rules remain when at least five total rows are available. Static frames prioritize context at one row. Output retains original row order.
+
+Width and row budgets are floored and clamped to zero; non-finite values normalize to zero. A zero row budget returns no rows. Every line is truncated by terminal cells, without an ellipsis. The helper preserves ANSI styling, does not sanitize or wrap rows, and holds no cached theme or dimension state. Sanitize raw values before wrapping or styling, and rebuild rows after resize or theme changes.
 
 ## 🧭 Complete menu example
 
@@ -805,12 +833,14 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `sanitizeTerminalText()` — removes terminal and bidirectional controls from untrusted single-line display text without changing raw payloads; `@narumitw/pi-tui-kit/terminal-text` also exports it.
 - `EditorStatusWidget` — frames passive editor status rows with a muted top rule and terminal-width guard; `@narumitw/pi-tui-kit/editor-status-widget` exports it and its options.
 - `HorizontalRule` — renders a full-width or inset horizontal divider with an optional sanitized and aligned label plus render-time style callbacks.
+- `renderBoundedFrame()` and `BoundedFrameOptions` — frame preformatted rows within explicit width and height budgets, with caller-owned content priorities and no input or lifecycle ownership.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending-work draining, and typed results for one custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — test-only subpath for `createTuiHarness()`, `createRpcHarness()`, strict scripts, and their types; the production root does not re-export it.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`15`).
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`16`).
+Version 16 adds the stateless bounded-frame helper while version-15 menu definitions remain valid.
 Version 15 adds opt-in review and browse-detail search plus public multiline terminal-document helpers while version-14 menu definitions remain valid.
 Version 14 adds the standalone `runQuestionnaire()` interaction while version-13 menu definitions remain valid.
 Version 13 adds opt-in Markdown, LaTeX, and Mermaid document formatting while version-12 menu definitions remain valid.

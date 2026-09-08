@@ -1,3 +1,4 @@
+export { type BoundedFrameOptions, renderBoundedFrame } from "./bounded-frame.js";
 export {
 	type RunConfirmationOptions,
 	type RunConfirmationResult,
@@ -80,4 +81,4 @@ export type {
 	SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 15;
+export const PI_EXTENSION_MENU_API_VERSION = 16;
