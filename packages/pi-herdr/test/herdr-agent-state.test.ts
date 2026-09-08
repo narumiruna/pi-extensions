@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -585,6 +585,26 @@ test("shutdown aborts a delayed session report before it can publish state", asy
 	);
 	await flushReporting();
 	assert.equal(requests.length, requestCount);
+});
+
+test("a disabled widget does not disable lifecycle or metadata reporting", async () => {
+	const settingsPath = join(agentDir, "disabled-widget.json");
+	await writeFile(settingsPath, JSON.stringify({ widget: false }));
+	const requests: HerdrRequest[] = [];
+	const mock = createMockPi();
+	const start = vi.fn();
+	herdrModule.createHerdrAgentStateExtension({
+		...enabledOptions(requests),
+		settingsPath,
+		widgetObserver: { start, async shutdown() {} },
+	})(mock.pi);
+	const ctx = tuiContext().ctx;
+	await emit(mock, "session_start", { reason: "startup" }, ctx);
+	await flushReporting();
+	assert.equal(start.mock.calls.length, 0);
+	assert.ok(requests.some(({ method }) => method === "pane.report_metadata"));
+	assert.equal(stateRequests(requests).at(-1)?.params.state, "idle");
+	await emit(mock, "session_shutdown", {}, ctx);
 });
 
 test("package resources load one extension and the bundled herdr skill", async () => {

@@ -8,7 +8,7 @@ Connect Pi's interactive lifecycle to Herdr and bootstrap the operating guidance
 
 - Reports Pi session identity and `working`, `blocked`, and `idle` lifecycle states to the current Herdr pane.
 - Publishes bounded `model`, `provider`, `thinking`, `session`, and `context_usage` tokens for Herdr sidebar rows.
-- Shows recognized sibling agents from the current Herdr workspace in a passive widget above Pi's editor.
+- Shows recognized sibling agents from the current Herdr workspace in a passive widget above Pi's editor, with a saved visibility toggle in `/herdr`.
 - Updates the widget from Herdr pane lifecycle and agent-status events without polling the CLI.
 - Coalesces rapid state changes and retries short-lived local socket failures without interrupting Pi.
 - Derives blocked state from Pi's public `ui_prompt_start` and `ui_prompt_end` lifecycle events.
@@ -55,6 +55,31 @@ rm -rf ~/.agents/skills/herdr
 ```
 
 Run `/reload` or restart Pi after changing the installed resources.
+
+## 💬 Commands
+
+`/herdr` opens a menu to toggle the agent widget and view status or help, inspired by `/tool`.
+It accepts no arguments and is available inside Herdr in TUI and RPC modes; print and JSON modes reject it.
+RPC can save the preference but does not display the widget.
+Changes apply immediately and closing the menu does not undo saved changes.
+
+## ⚙️ Settings
+
+Toggle **Agent widget** in `/herdr`, or edit `<getAgentDir()>/pi-herdr.json` (normally `~/.pi/agent/pi-herdr.json`):
+
+```json
+{
+  "widget": false
+}
+```
+
+`widget` accepts only `true` or `false` and defaults to `true` when absent.
+Only user settings are supported; project files are not read.
+Manual edits apply after `/reload` or the next session start.
+Missing files are not created until an explicit save. Invalid files trigger a warning, use defaults, and block saves until repaired.
+Saves preserve unknown fields and use atomic temporary-file-plus-rename publication, with reads and writes ordered within one Pi process, not across processes.
+Failed saves restore the previous effective value and leave the existing file untouched.
+Turning the widget off closes its subscription and pending requests without disabling lifecycle or metadata reporting.
 
 ## 🔄 Lifecycle reporting
 
@@ -135,7 +160,7 @@ Command recipes, approval handling, and other operating safety rules come from t
 ## 🚧 Limitations
 
 - Lifecycle reporting, metadata reporting, and the agent widget are disabled in RPC, JSON, and print modes.
-- The widget has no settings for placement, workspace scope, visibility, or row count.
+- The widget has no settings for placement, workspace scope, or row count.
 - The widget cannot show blocked prompt text because Herdr does not expose it through public pane responses.
 - Herdr exposes no rename event, so agent and pane renames appear after the next topology refresh, reconnect, Pi `/reload`, or session start rather than immediately.
 - Integration requires a running compatible Herdr session and valid injected environment variables.
