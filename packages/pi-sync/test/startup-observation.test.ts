@@ -26,7 +26,7 @@ test("advisory widget is read-only, sanitized, narrow, themed at render time, an
 			setupName: "測試\u001b]8;;spoof",
 			configIdentity: syncCheckConfigFingerprint(config),
 			checkedAt: "2026-09-06T12:00:00.000Z",
-			inspection: await inspectionFixture(config, { localChanged: true }),
+			inspection: await inspectionFixture(config, { localChanged: true, remoteChanged: true }),
 		};
 		const context = createMockContext({ mode: "tui" });
 		attention.observe(observation);
@@ -199,8 +199,9 @@ test("replacement sessions sharing a UI cannot inherit a late failure or clear n
 		const completion = observeCheckCompletion(second.ctx);
 		await mock.events.get("session_start")?.[0]?.({}, second.ctx);
 		await completion.completed;
-		assert.equal(first.statuses.get("sync"), "changes to review");
-		assert.ok(first.notifications.every((n) => !n.message.includes("obsolete failure")));
+		assert.equal(first.statuses.get("sync"), "local changes pending");
+		assert.equal(first.widgets.get("sync:attention"), undefined);
+		assert.deepEqual(first.notifications, []);
 		await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, second.ctx);
 	});
 });

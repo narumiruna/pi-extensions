@@ -60,7 +60,7 @@ export function createSyncAttentionController(): SyncAttentionController {
 			observation = undefined;
 		},
 		notifyObservation(ctx) {
-			if (observation && observationNeedsAttention(observation)) {
+			if (ctx.hasUI && observation && observationNeedsAttention(observation)) {
 				ctx.ui.notify(observationLines(observation).join("\n"), "warning");
 			}
 		},
@@ -89,9 +89,20 @@ export function createSyncAttentionController(): SyncAttentionController {
 		},
 		async publish(ctx, signal) {
 			const currentGeneration = ++generation;
-			if (signal?.aborted) return;
-			if (!state && (!observation || !observationNeedsAttention(observation))) {
+			if (signal?.aborted || !ctx.hasUI) return;
+			const classification = observation ? classifyObservation(observation) : "none";
+			if (!state && (classification === "none" || classification === "guidance")) {
 				clearAttentionPresentation(ctx);
+				return;
+			}
+			if (!state && classification === "status") {
+				ctx.ui.setWidget(WIDGET_KEY, undefined);
+				ctx.ui.setStatus(
+					STATUS_KEY,
+					observation?.inspection.remoteChanged
+						? "remote changes pending"
+						: "local changes pending",
+				);
 				return;
 			}
 			const presentation = state
@@ -101,11 +112,15 @@ export function createSyncAttentionController(): SyncAttentionController {
 						lines: observationLines(observation as StartupObservation),
 					};
 			if (ctx.mode !== "tui") {
+				ctx.ui.setWidget(WIDGET_KEY, undefined);
 				ctx.ui.setStatus(STATUS_KEY, presentation.status);
 				return;
 			}
 			// Keep Kit outside the eager startup graph; module loading owns no cancellable resources.
-			const { EditorStatusWidget } = await import("./attention-widget.js");
+			const { EditorStatusWidget } = await import("./attention-widget.js").catch((error) => {
+				if (generation === currentGeneration && !signal?.aborted) clearAttentionPresentation(ctx);
+				throw error;
+			});
 			if (generation !== currentGeneration || signal?.aborted) return;
 			ctx.ui.setStatus(STATUS_KEY, presentation.status);
 			ctx.ui.setWidget(
@@ -161,16 +176,24 @@ export function observationSummary(observation: StartupObservation) {
 	return "No changes detected since last sync";
 }
 
-export function observationNeedsAttention(observation: StartupObservation) {
+export type ObservationClassification = "none" | "guidance" | "status" | "review";
+
+/** Presentation only: never discard an observation or authorize a transfer here. */
+export function classifyObservation(observation: StartupObservation): ObservationClassification {
 	const result = observation.inspection;
-	return (
-		result.emptyInclude ||
-		result.firstSync ||
-		!result.head ||
-		result.localChanged ||
-		result.remoteChanged ||
-		result.selectionState?.kind !== "same"
-	);
+	// Sync now exits before reading remote content when nothing is selected.
+	if (result.emptyInclude) return "guidance";
+	// Ordering is part of the existing transfer policy, not merely display order.
+	if (result.selectionState?.kind === "different") return "review";
+	if (result.firstSync) return result.head ? "review" : "guidance";
+	if (!result.head || (result.localChanged && result.remoteChanged)) return "review";
+	if (result.localChanged || result.remoteChanged) return "status";
+	// Legacy metadata alone requires no scope confirmation in transfer operations.
+	return "none";
+}
+
+export function observationNeedsAttention(observation: StartupObservation) {
+	return classifyObservation(observation) === "review";
 }
 
 function observationLines(observation: StartupObservation) {
@@ -182,6 +205,7 @@ function observationLines(observation: StartupObservation) {
 }
 
 function clearAttentionPresentation(ctx: ExtensionContext) {
+	if (!ctx.hasUI) return;
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.setWidget(WIDGET_KEY, undefined);
 }

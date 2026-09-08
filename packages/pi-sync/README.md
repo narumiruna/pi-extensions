@@ -131,14 +131,15 @@ Then choose one reviewed direction:
 Cancelling a preparation or confirmation returns to conflict resolution with no side effects.
 Back returns to the sync manager, and Ctrl+C closes the complete flow.
 
-Startup checks never open a dialog. Detected changes leave a compact hint above the editor; open `/sync` when ready. An included-content mismatch puts **Review synced content (recommended)** in the manager, where a fresh review verifies the remote snapshot before offering changes.
+Startup checks never open a dialog. With a sync baseline and no content-list mismatch, ordinary one-sided changes appear only as **local changes pending** or **remote changes pending** in status. A persistent widget above the editor is reserved for both sides changing, first sync with an existing remote snapshot, a differing content list (including order-only differences), or a missing remote snapshot despite an existing baseline. Both sides changing is a reason to review, not a confirmed file conflict.
+No selected content and first sync with an empty remote stay quiet outside `/sync`, which provides setup or initialization guidance. Legacy remote metadata without an authoritative content list does not independently trigger a widget; the baseline and change conditions still apply. An included-content mismatch puts **Review synced content (recommended)** in the manager, where a fresh review verifies the remote snapshot before offering changes.
 Check results are advisory observations against the last sync baseline, not proof of a file conflict or current equality. Opening the manager uses local information and shows when the check completed; it does not contact remote storage. Transfer actions recheck current content.
-Attention stays in memory and is invalidated by relevant settings/state changes or a foreground transfer's commit boundary, and cleared on session replacement or shutdown. Cancelling a review or a failure before commit preserves a still-valid hint.
+The widget has no expiry timer. Attention stays in memory and is invalidated by relevant settings/state changes or a foreground transfer's commit boundary, and cleared on session replacement or shutdown. A newer observation replaces the presentation, clearing the widget when only status or no reminder is needed. Cancelling a review or a failure before commit preserves a still-valid observation and its appropriate presentation.
 
 Interactive TUI `/sync sync`, `/sync pull`, and `/sync push` routes without `--yes` open the same review flow when they detect the mismatch.
 Explicit `--yes` routes remain non-interactive and report exact remote-only, device-only, or order-only guidance while leaving visible attention for later review.
 Shutdown automatic sync never opens a dialog because Pi is exiting.
-RPC startup check results use nonblocking notifications; included-content review remains read-only.
+RPC startup checks use status for one-sided changes and nonblocking warning notifications for review conditions; included-content review remains read-only.
 Print and JSON modes do not support `/sync` because UI output is not observable there.
 
 ## ⚙️ Settings
@@ -149,7 +150,7 @@ Missing settings stay unconfigured without creating files or locks.
 
 ### Background startup checks
 
-With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Unchanged results are quiet; changes or failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.
+With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.
 
 Checks run once per session start, including `/reload`, new, resumed, and forked sessions, in TUI and RPC only. Print/JSON skip startup checks. There is no polling or automatic check retry loop. The overall deadline is 30 seconds, followed by underlying cleanup where needed; Git process termination and temporary-ref cleanup can take additional time. Git checks can still fetch objects and update the extension's private bare cache, but never push, apply managed files, update the sync baseline, or reload Pi.
 
