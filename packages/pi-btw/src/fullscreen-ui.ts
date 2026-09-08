@@ -10,7 +10,6 @@ import {
 	isKeyRelease,
 	isKittyProtocolActive,
 	Key,
-	matchesKey,
 	type OverlayHandle,
 	parseKey,
 	type TUI,
@@ -19,6 +18,12 @@ import {
 	type TuiInputListenerResult,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
+import {
+	type BtwKeybindingOverrides,
+	BtwPasteGuard,
+	resolveBtwShortcuts,
+	setBtwShortcuts,
+} from "./keybindings.js";
 import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
 
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
@@ -41,6 +46,7 @@ export interface BtwFullscreenLayoutComponent extends Component {
 }
 
 export interface BtwFullscreenOptions {
+	keybindings?: BtwKeybindingOverrides;
 	copyOnSelect?: boolean;
 }
 
@@ -473,13 +479,37 @@ class BtwFullscreenHost<T> implements Component {
 			this.fullscreen = this.createTui(this.parent, this.theme, this.keybindings, this.options);
 			this.fullscreenCreated = true;
 			this.fullscreen.start();
+			const shortcuts = resolveBtwShortcuts(
+				this.options.keybindings,
+				this.keybindings,
+				this.options.copyOnSelect ?? true,
+			);
+			setBtwShortcuts(this.fullscreen, shortcuts);
+			// Negotiate before warning when possible: the first dispatched user input uses
+			// the current mode. Recheck each input, including later mode transitions.
+			let previousWarnings: readonly string[] = [];
+			const reportWarnings = () => {
+				const warnings = shortcuts.warnings;
+				for (const warning of warnings) {
+					if (previousWarnings.includes(warning)) continue;
+					try {
+						this.ctx.ui.notify(`Pi BTW: ${warning}`, "warning");
+					} catch {
+						/* A replaced context must not prevent terminal cleanup. */
+					}
+				}
+				previousWarnings = warnings;
+			};
+			const pasteGuard = new BtwPasteGuard();
 			// Waiting for the custom promise would leave follow-up keys bound to the side TUI.
 			const addHardCancelListener =
 				this.fullscreen.addInputListenerBeforeAll?.bind(this.fullscreen) ??
 				this.fullscreen.addInputListenerBeforeViewport?.bind(this.fullscreen) ??
 				this.fullscreen.addInputListener.bind(this.fullscreen);
 			this.removeHardCancelListener = addHardCancelListener((data) => {
-				if (isKeyRelease(data) || !matchesKey(data, Key.ctrl("c"))) return undefined;
+				reportWarnings();
+				if (pasteGuard.consume(data) || !shortcuts.matches(data, "exit")) return undefined;
+				this.disposed = true;
 				try {
 					this.hardCancelActiveCustom?.();
 				} finally {

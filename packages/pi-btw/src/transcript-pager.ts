@@ -23,8 +23,9 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { BtwFullscreenLayoutComponent } from "./fullscreen-ui.js";
+import { BtwPasteGuard, type BtwShortcuts, getBtwShortcuts } from "./keybindings.js";
 import type { BtwThinkingLevel, SideThreadTurn } from "./side-thread.js";
-import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
+import { sanitizeSingleLine } from "./text.js";
 
 const TRANSCRIPT_CHROME_LINES = 2;
 const MAX_STEERING_DISPLAY_LINES = 3;
@@ -68,6 +69,8 @@ export interface BtwAnsweringViewOptions {
 }
 
 export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusable {
+	private readonly shortcuts: BtwShortcuts;
+	private readonly pasteGuard = new BtwPasteGuard();
 	private readonly transcriptComponents: Component[];
 	private readonly editor: Editor;
 	private readonly canBringToMain: boolean;
@@ -90,6 +93,7 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 			thinking?: BtwThinkingControl;
 		} = {},
 	) {
+		this.shortcuts = getBtwShortcuts(tui, options.thinking?.keybindings);
 		this.transcriptComponents = buildTranscriptComponents(turns, this.theme);
 		this.canBringToMain = turns.some((turn) => turn.kind === "answered");
 		this.thinkingLevel = options.thinking?.level;
@@ -144,6 +148,7 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 	}
 
 	render(width: number): string[] {
+		if (width <= 0) return [];
 		const safeWidth = Math.max(1, width);
 		const editorLines = this.editor.render(safeWidth);
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
@@ -163,17 +168,22 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 			this.renderFooter(safeWidth),
 			editorLines,
 			availableRows,
-		);
+		).map((line) => truncateToWidth(line, safeWidth));
 	}
 
 	handleInput(data: string): void {
 		if (this.finished) return;
-		if (matchesKey(data, Key.ctrl("c"))) {
+		if (this.pasteGuard.consume(data)) {
+			this.editor.handleInput(data);
+			this.tui.requestRender();
+			return;
+		}
+		if (this.shortcuts.matches(data, "exit")) {
 			this.finished = true;
 			this.onAction({ kind: "close" });
 			return;
 		}
-		if (this.canBringToMain && matchesKey(data, Key.ctrl("r"))) {
+		if (this.canBringToMain && this.shortcuts.matches(data, "bringToMain")) {
 			this.finished = true;
 			this.onAction({ kind: "bringToMain", questionDraft: this.editor.getExpandedText() });
 			return;
@@ -182,7 +192,7 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 		if (
 			thinking &&
 			thinking.levels.length > 1 &&
-			thinking.keybindings.matches(data, "app.thinking.cycle")
+			this.shortcuts.matches(data, "cycleThinkingLevel")
 		) {
 			const currentIndex = thinking.levels.indexOf(this.thinkingLevel ?? thinking.level);
 			const nextLevel = thinking.levels[(currentIndex + 1) % thinking.levels.length];
@@ -219,22 +229,28 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 	}
 
 	private renderFooter(width: number): string {
+		const exit = this.shortcuts.label("exit");
+		const bring = this.canBringToMain && this.shortcuts.keys.bringToMain.length > 0;
+		const bringKey = this.shortcuts.label("bringToMain");
 		if (this.warning) {
-			const warning = width < 32 ? "Empty • Ctrl+C" : `${this.warning} • Ctrl+C exit`;
+			const warning = width < 32 ? `Empty • ${exit}` : `${this.warning} • ${exit} exit`;
 			return truncateToWidth(this.theme.fg("warning", warning), width);
 		}
 		const scrollable = this.getMaxScrollOffset() > 0;
 		const thinking = this.options.thinking;
 		const cycleHint =
-			thinking && thinking.levels.length > 1 && this.thinkingLevel
-				? ` • thinking ${this.thinkingLevel} • ${thinkingKeyLabel(thinking.keybindings)} cycle`
+			thinking &&
+			thinking.levels.length > 1 &&
+			this.thinkingLevel &&
+			this.shortcuts.keys.cycleThinkingLevel.length
+				? ` • thinking ${this.thinkingLevel} • ${this.shortcuts.label("cycleThinkingLevel")} cycle`
 				: "";
-		const base = this.canBringToMain
-			? "btw • Enter send • Ctrl+R bring to main • Ctrl+C exit"
-			: "btw • Enter send • Ctrl+C exit";
+		const base = bring
+			? `btw • Enter send • ${bringKey} bring to main • ${exit} exit`
+			: `btw • Enter send • ${exit} exit`;
 		const fullBase = `${base}${cycleHint}`;
-		const fallbackBase = "btw • Enter • Ctrl+C";
-		const compactBase = this.canBringToMain ? "btw • Enter • Ctrl+R • Ctrl+C" : fallbackBase;
+		const fallbackBase = `btw • Enter • ${exit}`;
+		const compactBase = bring ? `btw • Enter • ${bringKey} • ${exit}` : fallbackBase;
 		const compactWithThinking = `${compactBase}${cycleHint}`;
 		let hints =
 			visibleWidth(fullBase) <= width
@@ -247,8 +263,8 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 		if (scrollable) {
 			const history = ` • ${this.scrollView.scrollTop > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history`;
 			const compactHistory = " • PgUp/PgDn";
-			const compactScrollable = this.canBringToMain
-				? "Enter • Ctrl+R • Ctrl+C • PgUp/PgDn"
+			const compactScrollable = bring
+				? `Enter • ${bringKey} • ${exit} • PgUp/PgDn`
 				: `${fallbackBase}${compactHistory}`;
 			if (visibleWidth(`${hints}${history}`) <= width) {
 				hints += history;
@@ -298,6 +314,8 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 }
 
 export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable {
+	private readonly shortcuts: BtwShortcuts;
+	private readonly pasteGuard = new BtwPasteGuard();
 	private readonly transcriptComponents: Component[];
 	private readonly loader: Loader;
 	private readonly editor: Editor | undefined;
@@ -319,6 +337,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 		thinkingLevel?: BtwThinkingLevel,
 		private readonly options: BtwAnsweringViewOptions = {},
 	) {
+		this.shortcuts = getBtwShortcuts(tui, options.steering?.thinking?.keybindings);
 		this.transcriptComponents = buildTranscriptComponents(turns, this.theme, pendingQuestion);
 		this.thinkingLevel = options.steering?.thinking?.level ?? thinkingLevel;
 		this.loader = new Loader(
@@ -389,6 +408,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 	}
 
 	render(width: number): string[] {
+		if (width <= 0) return [];
 		const safeWidth = Math.max(1, width);
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
 		const editorLines = this.editor?.render(safeWidth) ?? [];
@@ -419,12 +439,17 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 			editorLines,
 			availableRows,
 			steeringLines,
-		);
+		).map((line) => truncateToWidth(line, safeWidth));
 	}
 
 	handleInput(data: string): void {
 		if (this.finished) return;
-		if (matchesKey(data, Key.ctrl("c"))) {
+		if (this.pasteGuard.consume(data)) {
+			this.editor?.handleInput(data);
+			this.tui.requestRender();
+			return;
+		}
+		if (this.shortcuts.matches(data, "exit")) {
 			this.finished = true;
 			this.loader.stop();
 			this.controller.abort();
@@ -435,7 +460,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 		if (
 			thinking &&
 			thinking.levels.length > 1 &&
-			thinking.keybindings.matches(data, "app.thinking.cycle")
+			this.shortcuts.matches(data, "cycleThinkingLevel")
 		) {
 			const currentIndex = thinking.levels.indexOf(this.thinkingLevel ?? thinking.level);
 			const nextLevel = thinking.levels[(currentIndex + 1) % thinking.levels.length];
@@ -483,19 +508,23 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 	}
 
 	private renderFooter(width: number): string {
+		const exit = this.shortcuts.label("exit");
 		if (this.warning) {
-			const warning = width < 32 ? "Empty • Ctrl+C" : `${this.warning} • Ctrl+C cancel`;
+			const warning = width < 32 ? `Empty • ${exit}` : `${this.warning} • ${exit} cancel`;
 			return truncateToWidth(this.theme.fg("warning", warning), width);
 		}
-		const baseHint = this.editor ? "Enter steer • Ctrl+C cancel" : "Ctrl+C cancel";
+		const baseHint = this.editor ? `Enter steer • ${exit} cancel` : `${exit} cancel`;
 		const thinking = this.options.steering?.thinking;
 		const cycleHint =
-			thinking && thinking.levels.length > 1 && this.thinkingLevel
-				? ` • thinking ${this.thinkingLevel} • ${thinkingKeyLabel(thinking.keybindings)} cycle`
+			thinking &&
+			thinking.levels.length > 1 &&
+			this.thinkingLevel &&
+			this.shortcuts.keys.cycleThinkingLevel.length
+				? ` • thinking ${this.thinkingLevel} • ${this.shortcuts.label("cycleThinkingLevel")} cycle`
 				: "";
 		const scrollHint = this.getMaxScrollOffset() > 0 ? " • PgUp/PgDn history" : "";
 		const hints = `${baseHint}${cycleHint}${scrollHint}`;
-		const compactHints = this.editor ? "Enter • Ctrl+C" : "Ctrl+C";
+		const compactHints = this.editor ? `Enter • ${exit}` : exit;
 		const selectedHints = visibleWidth(hints) <= width ? hints : compactHints;
 		const loaderWidth = Math.max(1, width - visibleWidth(selectedHints) - 3);
 		const loaderLine = this.loader.render(loaderWidth).at(-1) ?? "Answering…";
@@ -610,13 +639,6 @@ function renderSideThreadHeader(
 	const title = truncateToWidth(`─ btw · side thread${thinking} `, width);
 	const ruleWidth = Math.max(0, width - visibleWidth(title));
 	return theme.fg("muted", `${title}${"─".repeat(ruleWidth)}`);
-}
-
-function thinkingKeyLabel(keybindings: KeybindingsManager): string {
-	return (
-		formatKeyLabel(String(keybindings.getKeys("app.thinking.cycle")[0] ?? "shift+tab")) ||
-		"Shift+Tab"
-	);
 }
 
 function fitComposerLayout(

@@ -3,6 +3,11 @@ import { constants } from "node:fs";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+	BTW_SHORTCUT_ACTIONS,
+	type BtwKeybindingOverrides,
+	normalizeBtwKey,
+} from "./keybindings.js";
 import { BTW_THINKING_LEVELS, type BtwThinkingLevel } from "./side-thread.js";
 
 export const BTW_SETTINGS_FILE = "pi-btw.json";
@@ -11,6 +16,7 @@ export const DEFAULT_REMEMBER_THINKING_LEVEL_CHANGES = true;
 const MAX_SETTINGS_BYTES = 64 * 1024;
 
 export interface BtwSettings {
+	keybindings?: BtwKeybindingOverrides;
 	model?: string;
 	thinkingLevel?: BtwThinkingLevel;
 	rememberThinkingLevelChanges?: boolean;
@@ -23,12 +29,15 @@ export type BtwSettingsLoadResult =
 	| { kind: "loaded"; settings: BtwSettings };
 
 export interface BtwSettingsPatch {
+	keybindings?: BtwKeybindingOverrides;
 	thinkingLevel?: BtwThinkingLevel;
 	rememberThinkingLevelChanges?: boolean;
 	fullscreenCopyOnSelect?: boolean;
 }
 
 export interface UpdateBtwSettingsOptions {
+	/** Validate against the latest document inside the mutation queue, before applying the patch. */
+	validateCurrent?: (settings: BtwSettings) => void;
 	settingsPath?: string;
 	signal?: AbortSignal;
 	beforeRename?: (temporaryPath: string, settingsPath: string) => Promise<void>;
@@ -46,6 +55,17 @@ export function normalizeBtwSettings(value: unknown): BtwSettings | undefined {
 	if (!isSettingsDocument(value)) return undefined;
 
 	const settings: BtwSettings = {};
+	if (Object.hasOwn(value, "keybindings")) {
+		const keys = value.keybindings;
+		if (!isSettingsDocument(keys)) return undefined;
+		settings.keybindings = {};
+		for (const action of BTW_SHORTCUT_ACTIONS) {
+			if (!Object.hasOwn(keys, action)) continue;
+			const key = normalizeBtwKey(keys[action]);
+			if (!key) return undefined;
+			settings.keybindings[action] = key;
+		}
+	}
 	if (Object.hasOwn(value, "model")) {
 		const model = Reflect.get(value, "model");
 		if (typeof model !== "string" || !parseBtwModelReference(model)) return undefined;
@@ -101,6 +121,8 @@ export function updateBtwSettings(
 	return enqueueMutation(settingsPath, async () => {
 		options.signal?.throwIfAborted();
 		const current = await readSettingsDocumentForUpdate(settingsPath);
+		options.signal?.throwIfAborted();
+		options.validateCurrent?.(normalizeBtwSettings(current) ?? {});
 		const updated = applyBtwSettingsPatch(current, patch);
 		const settings = normalizeBtwSettings(updated);
 		if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
@@ -238,6 +260,16 @@ function applyBtwSettingsPatch(
 	patch: BtwSettingsPatch,
 ): SettingsDocument {
 	const updated: SettingsDocument = { ...current };
+	if (patch.keybindings) {
+		const keys = isSettingsDocument(current.keybindings) ? { ...current.keybindings } : {};
+		for (const action of BTW_SHORTCUT_ACTIONS) {
+			if (!Object.hasOwn(patch.keybindings, action)) continue;
+			if (patch.keybindings[action] === undefined) delete keys[action];
+			else keys[action] = patch.keybindings[action];
+		}
+		if (Object.keys(keys).length) updated.keybindings = keys;
+		else delete updated.keybindings;
+	}
 	if (Object.hasOwn(patch, "thinkingLevel")) {
 		if (patch.thinkingLevel === undefined) delete updated.thinkingLevel;
 		else updated.thinkingLevel = patch.thinkingLevel;

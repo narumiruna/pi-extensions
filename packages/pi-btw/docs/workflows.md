@@ -39,7 +39,8 @@ Click it or use Pi's effective `tui.altScreen.bottom` binding (`End` by default)
 ## Thinking and queued questions
 
 The header shows the current side-thread thinking level.
-Use Pi's `app.thinking.cycle` shortcut (`Shift+Tab` by default) in the composer to cycle supported levels for later questions.
+Use the thinking-cycle shortcut shown in the composer to cycle supported levels for later questions.
+It inherits Pi's `app.thinking.cycle` (`Shift+Tab` by default) unless overridden in [Keybindings](../README.md#keybindings).
 Whether that change is remembered depends on [Settings](../README.md#-settings); it never changes the main session's thinking level.
 
 During a response, submit another question to queue it as `Steering`.
@@ -47,12 +48,12 @@ Queued questions run in order after the current response, using the thinking lev
 A failed response remains visible without discarding later queued questions.
 Steering does not append to the main conversation or editor.
 
-Ctrl+C cancels the active response and discards the current draft and steering queue.
+The configured exit shortcut, or the permanent Ctrl+C hard-cancel key, cancels the active response and discards the current draft and steering queue.
 Completed questions, answers, and visible errors remain resumable until the extension instance ends.
 
 ## Bring context to the main editor
 
-After a successful answer, press `Ctrl+R` to choose the latest question and answer, everything from one question onward, an exact range, or the full thread.
+After a successful answer, use the bring-to-main shortcut (`Ctrl+R` by default) to choose the latest question and answer, everything from one question onward, an exact range, or the full thread.
 The scope chooser reports the latest exchange and full-thread sizes.
 Question-suffix, exact-range, and full-thread choices preview an editable context block before closing the side thread.
 Escape returns; Ctrl+C closes without bringing context back.

@@ -13,6 +13,7 @@ Only context you explicitly bring back is loaded into the main editor.
 - Keeps side questions and answers out of the main conversation by default.
 - Brings back the latest answer, a question suffix, an exact range, or the complete thread only when requested.
 - Uses Pi's current model and thinking level or saved pi-btw choices.
+- Offers BTW-only exit, thinking-cycle, and bring-to-main keybindings.
 
 ## 📦 Install
 
@@ -102,6 +103,44 @@ A failed Settings-screen save instead restores the previous displayed value.
 `fullscreenCopyOnSelect` controls only pi-btw's dedicated fullscreen view and defaults to `true` when omitted.
 Turn **Copy selection automatically** off to retain highlighted selections and copy them with Pi's effective `app.message.copy` binding.
 Pi-btw does not inherit Pi core's setting of the same name because Pi's public extension API does not expose its effective value.
+
+### Keybindings
+
+Open `/btw` → **Settings**, select a shortcut row, then choose **Edit key combination…** or **Restore default**.
+Type a key name such as `ctrl+q` or `f6`; this is not a key-recording prompt.
+Changes save immediately and apply when opening or resuming BTW, without `/reload`. Escape cancels an unfinished edit, not earlier saves.
+The literal `/btw settings` remains a side question, not a settings subcommand.
+
+| JSON field under `keybindings` | Default | Action |
+| --- | --- | --- |
+| `exit` | `ctrl+c` | Cancel and leave the dedicated side-thread workspace, including its nested dialogs. |
+| `cycleThinkingLevel` | Inherit Pi's `app.thinking.cycle` | Cycle supported levels while composing or generating. |
+| `bringToMain` | `ctrl+r` | Open the bring-to-main chooser after a completed answer. |
+
+For example, merge these overrides into `pi-btw.json`:
+
+```json
+{
+  "keybindings": {
+    "exit": "ctrl+q",
+    "cycleThinkingLevel": "f6",
+    "bringToMain": "f7"
+  }
+}
+```
+
+Each override accepts one Pi key name with optional `ctrl`, `shift`, `alt`, and `super` modifiers; modifier order and letter case do not matter.
+Letters, digits, Pi special keys and symbols are recognized, except the literal `+`, which Pi's matcher cannot parse as a base key.
+Function keys `f1`–`f12` and Escape accept no modifiers; Clear accepts only no modifier, Shift, or Ctrl.
+Actual availability depends on the terminal; `super` and some modified combinations require extended keyboard reporting.
+
+New overrides cannot take ordinary typing keys or conflict with BTW actions, Pi editing, selection, search, scrolling, or enabled manual-copy bindings.
+Pi's explicitly configured printable thinking shortcuts remain inherited for compatibility.
+If a saved override becomes conflicting, BTW warns and uses an available default; if none is usable, that shortcut is unavailable and its activation hint is omitted.
+An explicitly unbound Pi thinking action stays unbound. Remove an override field to restore its default; neither saving nor resetting modifies Pi's global keybindings.
+**Ctrl+C always remains available as hard cancel**, even after configuring another exit key. Shortcut handling does not interpret bracketed-paste payloads as commands.
+
+### Persistence
 
 Reading a missing settings file has no side effects.
 Pi-btw creates it only after a Settings change or a remembered shortcut change.

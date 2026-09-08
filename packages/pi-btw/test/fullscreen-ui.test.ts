@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	Container,
 	type Focusable,
 	getKeybindings,
+	isKittyProtocolActive,
 	KeybindingsManager,
 	setKeybindings,
+	setKittyProtocolActive,
 	type Terminal,
 	type TUI,
 	TUI_KEYBINDINGS,
@@ -15,6 +18,11 @@ import {
 } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { type BtwFullscreenTuiFactory, runBtwFullscreen } from "../src/fullscreen-ui.js";
+import {
+	BtwAnsweringView,
+	BtwTranscriptPager,
+	type TranscriptPagerAction,
+} from "../src/transcript-pager.js";
 
 // Keep these tests together because selection, input priority, and cleanup share stateful harnesses.
 interface FakeComponent extends Component {
@@ -23,6 +31,7 @@ interface FakeComponent extends Component {
 
 const BTW_TEST_KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
+	"app.thinking.cycle": { defaultKeys: "shift+tab", description: "Cycle thinking" },
 	"app.message.copy": {
 		defaultKeys: "ctrl+y",
 		description: "Copy the active fullscreen selection",
@@ -48,6 +57,7 @@ function inputForCopyBinding(keybindings: KeybindingsManager): string {
 
 function createHarness(
 	options: {
+		keybindings?: KeybindingsManager;
 		fullscreenStopError?: Error;
 		hardCancelRemoveError?: Error;
 		layoutMountError?: Error;
@@ -143,7 +153,7 @@ function createHarness(
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					} as never,
-					{} as never,
+					(options.keybindings ?? createBtwTestKeybindings()) as never,
 					((value: unknown) => outerDone?.(value)) as never,
 				);
 				customOptions?.onHandle?.({
@@ -181,6 +191,51 @@ function createHarness(
 		},
 	};
 }
+
+test("shortcut warnings follow negotiated mode, deduplicate, and stop at disposal", async () => {
+	const initialMode = isKittyProtocolActive();
+	setKittyProtocolActive(false);
+	const harness = createHarness({
+		keybindings: new KeybindingsManager(BTW_TEST_KEYBINDINGS, {
+			"tui.editor.cursorWordLeft": "alt+left",
+		}),
+	});
+	let finish!: (value: string) => void;
+	const running = runBtwFullscreen(
+		harness.ctx,
+		() =>
+			new Promise<string>((resolve) => {
+				finish = resolve;
+			}),
+		{ keybindings: { exit: "alt+b" } },
+		{ createTui: harness.createTui },
+	);
+	try {
+		await flushAsyncWork();
+		assert.deepEqual(harness.notifications, []);
+		setKittyProtocolActive(true);
+		harness.input("x");
+		assert.deepEqual(harness.notifications, []);
+		setKittyProtocolActive(false);
+		harness.input("x");
+		assert.equal(harness.notifications.length, 1);
+		assert.match(harness.notifications[0] ?? "", /exit: configured shortcut/);
+		harness.input("x");
+		assert.equal(harness.notifications.length, 1);
+		setKittyProtocolActive(true);
+		harness.input("x");
+		setKittyProtocolActive(false);
+		harness.input("x");
+		assert.equal(harness.notifications.length, 2);
+		finish("done");
+		assert.equal(await running, "done");
+		assert.throws(() => harness.input("x"));
+	} finally {
+		finish?.("done");
+		await running;
+		setKittyProtocolActive(initialMode);
+	}
+});
 
 function immediateComponent(done: (value: string) => void, events: string[]): FakeComponent {
 	done("side result");
@@ -491,6 +546,174 @@ async function startClipboardSelection(
 		copyInput: inputForCopyBinding(keybindings),
 	};
 }
+
+test.each([
+	["custom exit", "\u0011", false],
+	["hard cancel", "\u0003", false],
+	["custom exit with overlay", "\u0011", true],
+	["hard cancel with overlay", "\u0003", true],
+] as const)(
+	"native terminal smoke: %s restores parent input after cycling thinking",
+	async (_label, exitInput, nested) => {
+		initTheme("dark");
+		const keys = createBtwTestKeybindings();
+		const previous = getKeybindings();
+		setKeybindings(keys);
+		const harness = createInputHandoffHarness(keys);
+		let cycleCount = 0;
+		let overlayInput = 0;
+		let side: TUI | undefined;
+		const running = runBtwFullscreen(
+			harness.ctx,
+			(ctx) =>
+				ctx.ui.custom<TranscriptPagerAction>((tui, theme, keybindings, done) => {
+					side = tui;
+					return new BtwTranscriptPager(tui, theme, [], done, {
+						thinking: {
+							level: "low",
+							levels: ["low", "high"],
+							keybindings,
+							onChange: () => {
+								cycleCount += 1;
+							},
+						},
+					});
+				}),
+			{ keybindings: { exit: "ctrl+q", cycleThinkingLevel: "f6", bringToMain: "f7" } },
+		);
+		try {
+			await flushAsyncWork();
+			assert.ok(side);
+			side.renderNow(true);
+			harness.terminal.send("\u001b[17~");
+			assert.equal(cycleCount, 1);
+			if (nested)
+				side.showOverlay({
+					render: () => ["nested"],
+					invalidate() {},
+					handleInput() {
+						overlayInput += 1;
+					},
+				});
+			harness.terminal.deferDrain();
+			harness.terminal.send(exitInput);
+			await flushAsyncWork();
+			assert.deepEqual(harness.terminal.lifecycle, ["start", "stop", "start"]);
+			assert.deepEqual(harness.terminal.lifecycleDuringInput, []);
+			assert.equal(overlayInput, 0);
+			harness.terminal.resolveDrain();
+			assert.deepEqual(await running, { kind: "close" });
+			harness.terminal.send("restored");
+			assert.equal(harness.mainInput.text, "restored");
+			assert.deepEqual(harness.terminal.lifecycleDuringInput, []);
+		} finally {
+			harness.terminal.resolveDrain();
+			harness.parent.stop();
+			setKeybindings(previous);
+		}
+	},
+);
+
+test("native terminal smoke: custom bring-to-main preserves an expanded pasted draft", async () => {
+	initTheme("dark");
+	const keys = createBtwTestKeybindings();
+	const previous = getKeybindings();
+	setKeybindings(keys);
+	const harness = createInputHandoffHarness(keys);
+	let side: TUI | undefined;
+	const running = runBtwFullscreen(
+		harness.ctx,
+		(ctx) =>
+			ctx.ui.custom<TranscriptPagerAction>((tui, theme, _keys, done) => {
+				side = tui;
+				return new BtwTranscriptPager(
+					tui,
+					theme,
+					[
+						{
+							kind: "answered",
+							question: "Q",
+							answer: "A",
+							response: {
+								role: "assistant",
+								content: [{ type: "text", text: "A" }],
+								stopReason: "stop",
+							} as never,
+						},
+					],
+					done,
+				);
+			}),
+		{ keybindings: { bringToMain: "f7" } },
+	);
+	try {
+		await flushAsyncWork();
+		assert.ok(side);
+		side.renderNow(true);
+		const draft = "pasted draft ".repeat(300);
+		harness.terminal.send(`\u001b[200~${draft}\u001b[201~`);
+		harness.terminal.send("\u001b[18~");
+		assert.deepEqual(await running, { kind: "bringToMain", questionDraft: draft });
+		harness.terminal.send("main");
+		assert.equal(harness.mainInput.text, "main");
+	} finally {
+		harness.parent.stop();
+		setKeybindings(previous);
+	}
+});
+
+test("native terminal smoke: split pasted exit bytes do not cancel streaming; explicit exit aborts once", async () => {
+	initTheme("dark");
+	const keys = createBtwTestKeybindings();
+	const previous = getKeybindings();
+	setKeybindings(keys);
+	const harness = createInputHandoffHarness(keys);
+	let view: BtwAnsweringView | undefined;
+	let cancellations = 0;
+	const running = runBtwFullscreen(
+		harness.ctx,
+		(ctx) =>
+			ctx.ui.custom<"closed">((tui, theme, keybindings, done) => {
+				view = new BtwAnsweringView(
+					tui,
+					theme,
+					[],
+					"question",
+					() => {
+						cancellations += 1;
+						done("closed");
+					},
+					"low",
+					{
+						steering: {
+							questions: [],
+							onSubmit() {},
+							thinking: { level: "low", levels: ["low", "high"], keybindings, onChange() {} },
+						},
+					},
+				);
+				return view;
+			}),
+		{ keybindings: { exit: "ctrl+q" } },
+	);
+	try {
+		await flushAsyncWork();
+		assert.ok(view);
+		for (const data of ["\u001b[200~", "\u0011", "\u0003", "\u001b[201~"])
+			harness.terminal.send(data);
+		assert.equal(view.signal.aborted, false);
+		assert.equal(cancellations, 0);
+		harness.terminal.send("\u0011");
+		assert.equal(await running, "closed");
+		assert.equal(view.signal.aborted, true);
+		view.dispose();
+		assert.equal(cancellations, 1);
+	} finally {
+		view?.dispose();
+		harness.parent.stop();
+		setKeybindings(previous);
+	}
+});
 
 test("Ctrl+C waits for terminal input drain before restoring the parent", async () => {
 	const harness = createInputHandoffHarness();
@@ -890,7 +1113,7 @@ test("default fullscreen enables application-owned mouse selection and restores 
 				factory(
 					parent as never,
 					{ fg: (_color: string, text: string) => text } as never,
-					{} as never,
+					createBtwTestKeybindings() as never,
 					((value: unknown) => outerDone?.(value)) as never,
 				);
 				return result;
@@ -1286,7 +1509,7 @@ test("default fullscreen activates OSC-8 links through the configured URL opener
 				factory(
 					parent as never,
 					{ fg: (_color: string, text: string) => text } as never,
-					{} as never,
+					createBtwTestKeybindings() as never,
 					((value: unknown) => outerDone?.(value)) as never,
 				);
 				return result;
