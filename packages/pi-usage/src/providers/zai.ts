@@ -19,13 +19,21 @@ export function normalizeZaiQuotaPayload(
 	plan?: ZaiPlanInfo,
 ): UsageReport {
 	const data = asObject(payload.data);
-	// A credential with no coding plan answers HTTP 200 with no data object:
-	// {"code":500,"msg":"当前用户不存在coding plan","success":false}. API usage is not metered.
 	if (!data) {
-		const reason = asString(payload.msg);
-		throw new UsageUnsupportedError(
-			`No GLM Coding Plan on this Z.AI credential; API usage is not metered.${reason ? ` Z.AI reported: ${reason}` : ""}`,
-		);
+		// Only the observed no-plan response establishes that this credential cannot be metered.
+		// Missing or malformed data alone can also indicate a transient provider failure.
+		if (
+			(payload.data === undefined || payload.data === null) &&
+			payload.code === 500 &&
+			payload.success === false &&
+			payload.msg === "当前用户不存在coding plan"
+		) {
+			throw new UsageUnsupportedError(
+				"No GLM Coding Plan on this Z.AI credential; API usage is not metered.",
+			);
+		}
+		// Do not echo msg: truncating provider text before redaction can expose secret prefixes.
+		throw new Error("Z.AI quota response data was not an object.");
 	}
 	const limits = Array.isArray(data.limits) ? (data.limits as unknown[]) : [];
 
