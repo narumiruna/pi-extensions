@@ -27,15 +27,6 @@ import {
 	formatTransferredPlanPrompt,
 	startFreshImplementationFromState,
 } from "./fresh-implementation.js";
-import { applyFreshImplementationPreferences } from "./fresh-implementation-preferences.js";
-import {
-	createImplementationPreferenceChange,
-	hasImplementationPreferences,
-	observeImplementationModelSelections,
-	preferenceError,
-	preflightImplementationPreferences,
-	sameModel,
-} from "./implementation-preferences.js";
 import {
 	createImplementationRetentionCoordinator,
 	implementationRetentionPreview,
@@ -83,7 +74,6 @@ import {
 	configuredImplementationPlanRetention,
 	configuredPlanModeToggleShortcut,
 	configuredThinkingLevel,
-	type ImplementationPreferences,
 	type PlanModeSettings,
 	type PlanModeSettingsPatch,
 	planModeSettingsPath,
@@ -135,7 +125,6 @@ interface PlanModeDependencies {
 // Keep session state, persistence, tool, thinking, and mutex commits in this one closure so an
 // activation path cannot bypass the same atomic transition by crossing module-owned state.
 export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDependencies = {}) {
-	const selectionSnapshot = observeImplementationModelSelections(pi);
 	const workflowMutex = new WorkflowMutex(pi);
 	let workflowOwner: WorkflowMutexOwner | undefined;
 	let currentSession: object | undefined;
@@ -164,8 +153,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	let latestCommandContext: ExtensionCommandContext | undefined;
 	let nextReadyPresentationNonce = 0;
 	let menuGeneration = 0;
-	let implementationInFlight = false;
-	let applyingImplementationPreferences = false;
 	let workflowGeneration = 0;
 	let refreshStateBeforeFirstAgentStart = false;
 	let menuController = new AbortController();
@@ -190,10 +177,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		getExportDestination: (ctx) => planExports.getDestination(ctx),
 		show: (ctx) => showStoredPlan(pi, ctx, state),
 		finalize: requestFinalPlan,
-		getImplementationPreferences: () => ({
-			implementationModel: settings.implementationModel,
-			implementationThinkingLevel: settings.implementationThinkingLevel,
-		}),
 		implementHere: startImplementation,
 		implementFresh: startFreshImplementation,
 		exportPlan: exportPlan,
@@ -484,13 +467,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (!installRestoredState(restoredState, ctx)) return;
 		implementationRetention.restore(state.activeImplementation);
 		updateUi(ctx);
-		if (event.reason === "new")
-			await applyFreshImplementationPreferences(
-				pi,
-				ctx,
-				() => generation === menuGeneration && !menuController.signal.aborted,
-				selectionSnapshot,
-			);
 	});
 
 	pi.on("session_before_tree", (event, ctx) => {
@@ -525,7 +501,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	});
 
 	pi.on("thinking_level_select", (event) => {
-		if (applyingImplementationPreferences || !state.enabled || !state.appliedThinkingLevel) return;
+		if (!state.enabled || !state.appliedThinkingLevel) return;
 		if (event.level !== state.appliedThinkingLevel) {
 			state = {
 				...state,
@@ -1006,13 +982,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		ctx.ui.notify("Plan saved for later. Plan mode disabled.", "info");
 	}
 
-	async function startFreshImplementation(
-		ctx: ExtensionContext,
-		menuIsCurrent: () => boolean,
-		preferences: ImplementationPreferences = settings,
-	) {
+	async function startFreshImplementation(ctx: ExtensionContext, menuIsCurrent: () => boolean) {
 		await startFreshImplementationFromState(ctx, {
-			preferences,
 			getState: () => state,
 			menuIsCurrent,
 			retention: configuredImplementationPlanRetention(settings),
@@ -1020,77 +991,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		});
 	}
 
-	async function startImplementation(
-		ctx: ExtensionContext,
-		preferences: ImplementationPreferences = settings,
-		menuIsCurrent: () => boolean = () => true,
-	) {
-		if (implementationInFlight || !menuIsCurrent()) return;
-		if (!hasImplementationPreferences(preferences)) {
-			await startImplementationCore(ctx);
-			return;
-		}
-		if (!allowModeTransition(ctx, "start plan implementation")) return;
-		if (ctx.mode === "print" || ctx.mode === "json")
-			throw new Error("Implementation model options require TUI or RPC mode.");
-		const previousState = state;
-		if (!(state.enabled ? state.latestPlan : state.savedPlan?.plan)) return;
-		const generation = menuGeneration;
-		const workflow = workflowGeneration;
-		const original = { model: ctx.model, thinking: pi.getThinkingLevel() };
-		const sessionCurrent = () => generation === menuGeneration && !menuController.signal.aborted;
-		let expectedState = state;
-		const current = () =>
-			sessionCurrent() &&
-			workflow === workflowGeneration &&
-			state === expectedState &&
-			menuIsCurrent() &&
-			ctx.isIdle();
-		const change = createImplementationPreferenceChange(
-			pi,
-			ctx,
-			sessionCurrent,
-			original,
-			selectionSnapshot,
-		);
-		implementationInFlight = true;
-		let started = false;
-		try {
-			const model = await preflightImplementationPreferences(
-				ctx,
-				preferences,
-				() =>
-					current() &&
-					sameModel(ctx.model, original.model) &&
-					pi.getThinkingLevel() === original.thinking,
-			);
-			if (!model || !current()) return;
-			applyingImplementationPreferences = true;
-			if (state.enabled) restoreThinkingLevel();
-			expectedState = state;
-			if (!(await change.apply(model, preferences, current)) || !current()) return;
-			started = (await startImplementationCore(ctx, true)) === true;
-		} catch (error) {
-			if (sessionCurrent())
-				ctx.ui.notify(`Unable to start implementation: ${preferenceError(error)}`, "error");
-		} finally {
-			if (!started && sessionCurrent()) {
-				await change.rollback().catch((error) => {
-					if (sessionCurrent()) ctx.ui.notify(preferenceError(error), "error");
-				});
-				if (sessionCurrent() && state === expectedState) {
-					state = previousState;
-					captureManualThinkingLevel();
-					persistState();
-					updateUi(ctx);
-				}
-			}
-			applyingImplementationPreferences = false;
-			implementationInFlight = false;
-		}
-	}
-
-	async function startImplementationCore(ctx: ExtensionContext, preferencesApplied = false) {
+	async function startImplementation(ctx: ExtensionContext) {
 		const savedPlan = state.enabled ? undefined : state.savedPlan;
 		const initialPlan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
 		if (!initialPlan) {
@@ -1098,7 +999,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			return;
 		}
 		if (!allowModeTransition(ctx, "start plan implementation")) return;
-		if (savedPlan && !preferencesApplied) {
+		if (savedPlan) {
 			const sessionGeneration = menuGeneration;
 			const planWorkflowGeneration = workflowGeneration;
 			const isCurrent = () =>
@@ -1143,7 +1044,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			workflowToolPolicy: undefined,
 			manualThinkingLevel: undefined,
 		};
-		if (wasEnabled && !preferencesApplied) {
+		if (wasEnabled) {
 			restoreThinkingLevel();
 			state = { ...state, manualThinkingLevel: undefined };
 		}
@@ -1162,14 +1063,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			if (wasEnabled) {
 				restoreWorkflowToolPolicy(state.workflowToolPolicy);
 				publishModeContract("plan", ctx);
-				if (!preferencesApplied) applyPlanThinkingLevel();
+				applyPlanThinkingLevel();
 			}
 			persistState();
 			updateUi(ctx);
 			return;
 		}
 		if (wasEnabled) releaseWorkflowOwner();
-		return true;
 	}
 
 	function clearActiveImplementation(id: string, ctx: ExtensionContext) {

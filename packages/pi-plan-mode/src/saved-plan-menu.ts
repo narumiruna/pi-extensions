@@ -1,11 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import {
-	createImplementationOptions,
-	type ImplementationOptionAction,
-} from "./implementation-options.js";
 import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
-import type { ImplementationPreferences } from "./settings.js";
 
 interface SavedPlanMenuOptions {
 	statusText: string;
@@ -14,15 +9,8 @@ interface SavedPlanMenuOptions {
 	signal: AbortSignal;
 	isCurrent(): boolean;
 	show(): void;
-	implementationPreferences?: ImplementationPreferences;
-	implementHere(
-		preferences?: ImplementationPreferences,
-		signal?: AbortSignal,
-	): void | Promise<void>;
-	implementFresh(
-		signal: AbortSignal,
-		preferences?: ImplementationPreferences,
-	): void | Promise<void>;
+	implementHere(): void | Promise<void>;
+	implementFresh(signal: AbortSignal): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	settings(signal: AbortSignal): Promise<boolean>;
 	clear(): void;
@@ -34,20 +22,11 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 			`${options.statusText} Use /plan show, /plan implement, /plan export, or /plan exit.`,
 		);
 	}
-	const implementation = createImplementationOptions(ctx, options.implementationPreferences);
-	type Screen = "saved" | "export" | "implementation-options" | "implementation-model";
-	type Action =
-		| ImplementationOptionAction
-		| "show"
-		| "implement-here"
-		| "implement-fresh"
-		| "export"
-		| "settings"
-		| "clear";
+	type Screen = "saved" | "export";
+	type Action = "show" | "implement-here" | "implement-fresh" | "export" | "settings" | "clear";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "saved",
 		screens: {
-			...implementation.screens,
 			saved: () => ({
 				kind: "actions",
 				title: "Saved plan",
@@ -56,7 +35,6 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 					"Implement here keeps this planning conversation.",
 					"Start fresh transfers only the approved plan to a new session.",
 					options.implementationOutcome(),
-					implementation.summary(),
 				],
 				items: [
 					{ id: "show", label: "Show saved plan", action: "show" },
@@ -73,11 +51,6 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 						action: "implement-fresh",
 						busyLabel: "Starting fresh implementation session…",
 					},
-					{
-						id: "implementation-options",
-						label: "Implementation options…",
-						to: "implementation-options",
-					},
 					{ id: "export", label: "Export plan…", to: "export" },
 					{ id: "settings", label: "Settings", action: "settings" },
 					{ id: "clear", label: "Clear saved plan", action: "clear" },
@@ -87,17 +60,16 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
-			...implementation.actions,
 			show: async () => {
 				options.show();
 				return { kind: "close" };
 			},
-			"implement-here": async ({ signal }) => {
-				await options.implementHere(implementation.get(), signal);
+			"implement-here": async () => {
+				await options.implementHere();
 				return { kind: "close" };
 			},
 			"implement-fresh": async ({ signal }) => {
-				await options.implementFresh(signal, implementation.get());
+				await options.implementFresh(signal);
 				return { kind: "close" };
 			},
 			export: async ({ value, signal }) =>

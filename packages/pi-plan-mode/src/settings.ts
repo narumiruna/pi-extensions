@@ -84,11 +84,7 @@ const MAX_PLAN_EXPORT_PATH_LENGTH = 4096;
 export type PlanModeThinkingLevel = (typeof PLAN_MODE_THINKING_LEVELS)[number];
 export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS)[number];
 export type PlanModeFixedThinkingLevel = Exclude<PlanModeThinkingLevel, "inherit">;
-export interface ImplementationPreferences {
-	implementationModel?: { provider: string; id: string };
-	implementationThinkingLevel?: PlanModeThinkingLevel;
-}
-export interface PlanModeSettings extends ImplementationPreferences {
+export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
 	defaultPlanTools?: string[];
 	implementationPlanRetention?: ImplementationPlanRetention;
@@ -97,8 +93,6 @@ export interface PlanModeSettings extends ImplementationPreferences {
 	toggleShortcut?: KeyId;
 }
 export interface PlanModeSettingsPatch {
-	implementationModel?: ImplementationPreferences["implementationModel"] | null;
-	implementationThinkingLevel?: PlanModeThinkingLevel;
 	thinkingLevel?: PlanModeThinkingLevel;
 	defaultPlanTools?: readonly string[] | null;
 	implementationPlanRetention?: ImplementationPlanRetention;
@@ -143,21 +137,6 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 	const settings: PlanModeSettings = {
 		thinkingLevel: thinkingLevel as PlanModeThinkingLevel,
 	};
-	if (Object.hasOwn(value, "implementationModel")) {
-		const model = Reflect.get(value, "implementationModel");
-		if (
-			!isSettingsDocument(model) ||
-			!validModelIdentity(model.provider) ||
-			!validModelIdentity(model.id)
-		)
-			return undefined;
-		settings.implementationModel = { provider: model.provider, id: model.id };
-	}
-	if (Object.hasOwn(value, "implementationThinkingLevel")) {
-		const level = Reflect.get(value, "implementationThinkingLevel");
-		if (!PLAN_MODE_THINKING_LEVELS.includes(level as PlanModeThinkingLevel)) return undefined;
-		settings.implementationThinkingLevel = level as PlanModeThinkingLevel;
-	}
 	if (Object.hasOwn(value, "defaultPlanTools")) {
 		const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
 		if (!defaultPlanTools) return undefined;
@@ -193,10 +172,6 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 		settings.safeSubcommands = safeSubcommands;
 	}
 	return settings;
-}
-
-function validModelIdentity(value: unknown): value is string {
-	return typeof value === "string" && value.trim().length > 0 && value.length <= 4096;
 }
 
 function normalizeToolNames(value: unknown) {
@@ -314,15 +289,6 @@ export function updatePlanModeSettings(
 		const current = await readSettingsDocumentForUpdate(settingsPath, legacySettingsPath);
 		const updated: SettingsDocument = { ...current };
 		if (patch.thinkingLevel !== undefined) updated.thinkingLevel = patch.thinkingLevel;
-		if (patch.implementationModel === null) delete updated.implementationModel;
-		else if (patch.implementationModel !== undefined) {
-			const previous = isSettingsDocument(updated.implementationModel)
-				? updated.implementationModel
-				: {};
-			updated.implementationModel = { ...previous, ...patch.implementationModel };
-		}
-		if (patch.implementationThinkingLevel !== undefined)
-			updated.implementationThinkingLevel = patch.implementationThinkingLevel;
 		if (patch.defaultPlanTools === null) delete updated.defaultPlanTools;
 		else if (patch.defaultPlanTools !== undefined) {
 			updated.defaultPlanTools = [...patch.defaultPlanTools];
