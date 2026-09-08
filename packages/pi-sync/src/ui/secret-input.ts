@@ -9,7 +9,7 @@ import {
 	Text,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { runCustomInteraction } from "@narumitw/pi-tui-kit";
+import { formatInteractionHints, runCustomInteraction } from "@narumitw/pi-tui-kit";
 
 const MASK = "•";
 
@@ -25,13 +25,22 @@ export async function promptSecret(
 		create: ({ tui, theme, keybindings, complete }) => {
 			const heading = new Text("", 0, 0);
 			const hint = new Text("", 0, 0);
-			const submitKey = keybindingText(keybindings, "tui.input.submit", "enter");
-			const cancelKey = keybindingText(keybindings, "tui.select.cancel", "esc", ["ctrl+c"]);
+			const interactionHint = formatInteractionHints(keybindings, [
+				{
+					keys: keybindings.getKeys("tui.input.submit").filter((key) => !hasControlCharacter(key)),
+					label: "continue",
+				},
+				{
+					keys: [
+						...keybindings.getKeys("tui.select.cancel").filter((key) => !hasControlCharacter(key)),
+						"ctrl+c",
+					],
+					label: "cancel",
+				},
+			]);
 			const applyTheme = () => {
 				heading.setText(theme.fg("accent", theme.bold(title)));
-				hint.setText(
-					theme.fg("dim", `${submitKey} continue • ${cancelKey} cancel • Input is hidden`),
-				);
+				hint.setText(theme.fg("dim", `${interactionHint} • Input is hidden`));
 			};
 			applyTheme();
 			const input = new MaskedInput(keybindings);
@@ -210,23 +219,6 @@ class MaskedInput implements Focusable {
 		this.value.splice(this.cursor, 0, ...characters);
 		this.cursor += characters.length;
 	}
-}
-
-function keybindingText(
-	keybindings: Pick<KeybindingsManager, "getKeys">,
-	binding: Parameters<KeybindingsManager["getKeys"]>[0],
-	fallback: string,
-	additionalKeys: readonly string[] = [],
-) {
-	const keys = [...new Set([...keybindings.getKeys(binding), ...additionalKeys])]
-		.map(String)
-		.map((key) => {
-			if (key === "return") return "enter";
-			if (key === "escape") return "esc";
-			return hasControlCharacter(key) ? "" : key;
-		})
-		.filter(Boolean);
-	return keys.join("/") || fallback;
 }
 
 function hasControlCharacter(value: string) {

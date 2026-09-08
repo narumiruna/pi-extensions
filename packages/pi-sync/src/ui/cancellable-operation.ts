@@ -1,14 +1,9 @@
-import {
-	BorderedLoader,
-	type ExtensionContext,
-	type KeybindingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
-import { runCustomInteraction } from "@narumitw/pi-tui-kit";
+import { formatInteractionHints, runCustomInteraction } from "@narumitw/pi-tui-kit";
 import type { SetupPullOutcome } from "../sync/setup-switch.js";
 import type { SyncDecision } from "../sync/sync-decision.js";
 import type { RemoteSelectionDecision } from "../sync/sync-policy.js";
-import { safeTerminalText } from "./terminal-text.js";
 
 export type RunRouteResult =
 	| { kind: "completed"; outcome?: SetupPullOutcome }
@@ -61,7 +56,9 @@ export async function runCancellableOperation(
 		isCurrent: () => !signal?.aborted,
 		create: ({ tui, theme, keybindings, signal: interactionSignal, complete }) => {
 			const loader = new BorderedLoader(tui, theme, message, { cancellable: false });
-			const cancelHint = `${keybindingText(keybindings, "tui.select.cancel", "esc")} cancel`;
+			const cancelHint = formatInteractionHints(keybindings, [
+				{ bindings: ["tui.select.cancel"], keys: ["ctrl+c"], label: "cancel" },
+			]);
 			const operation = runRoute(
 				route,
 				interactionSignal,
@@ -112,20 +109,4 @@ export async function runCancellableOperation(
 	}
 	if (interaction.value.error) throw interaction.value.error;
 	return routeResult ?? { kind: "failed" };
-}
-
-function keybindingText(
-	keybindings: Pick<KeybindingsManager, "getKeys">,
-	binding: Parameters<KeybindingsManager["getKeys"]>[0],
-	fallback: string,
-) {
-	const keys = [...new Set([...keybindings.getKeys(binding), "ctrl+c"])]
-		.map(String)
-		.map((key) => {
-			if (key === "return") return "enter";
-			if (key === "escape") return "esc";
-			return safeTerminalText(key);
-		})
-		.filter(Boolean);
-	return keys.join("/") || fallback;
 }
