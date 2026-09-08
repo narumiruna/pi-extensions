@@ -13,10 +13,18 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
-export async function implementationRuntime(extension?: ExtensionFactory) {
+export async function implementationRuntime(extension?: ExtensionFactory, beforeBind?: () => void) {
 	const root = mkdtempSync(join(tmpdir(), "plan-implementation-runtime-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;
+	let cleaned = false;
+	const cleanup = () => {
+		if (cleaned) return;
+		cleaned = true;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	};
 	let pi!: ExtensionAPI;
 	let ctx!: ExtensionContext;
 	let cancelReplacement = false;
@@ -107,47 +115,54 @@ export async function implementationRuntime(extension?: ExtensionFactory) {
 		});
 		return { ...result, services, diagnostics: services.diagnostics };
 	};
-	const runtime = await createAgentSessionRuntime(factory, {
-		cwd: root,
-		agentDir: root,
-		sessionManager: SessionManager.inMemory(root),
-	});
-	const bind = async () =>
-		runtime.session.bindExtensions({
-			mode: "rpc",
-			commandContextActions: {
-				waitForIdle: async () => {},
-				newSession: (options) => runtime.newSession(options),
-				fork: (entryId, options) => runtime.fork(entryId, options),
-				switchSession: (path, options) => runtime.switchSession(path, options),
-				navigateTree: (id, options) => runtime.session.navigateTree(id, options),
-				reload: async () => {},
-			},
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	try {
+		runtime = await createAgentSessionRuntime(factory, {
+			cwd: root,
+			agentDir: root,
+			sessionManager: SessionManager.inMemory(root),
 		});
-	runtime.setRebindSession(bind);
-	await bind();
-	return {
-		root,
-		runtime,
-		settings,
-		events,
-		get pi() {
-			return pi;
-		},
-		get ctx() {
-			return ctx;
-		},
-		cancelReplacement() {
-			cancelReplacement = true;
-		},
-		async dispose() {
-			try {
-				await runtime.dispose();
-			} finally {
-				if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-				else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-				rmSync(root, { recursive: true, force: true });
-			}
-		},
-	};
+		const activeRuntime = runtime;
+		const bind = async () =>
+			activeRuntime.session.bindExtensions({
+				mode: "rpc",
+				commandContextActions: {
+					waitForIdle: async () => {},
+					newSession: (options) => activeRuntime.newSession(options),
+					fork: (entryId, options) => activeRuntime.fork(entryId, options),
+					switchSession: (path, options) => activeRuntime.switchSession(path, options),
+					navigateTree: (id, options) => activeRuntime.session.navigateTree(id, options),
+					reload: async () => {},
+				},
+			});
+		activeRuntime.setRebindSession(bind);
+		beforeBind?.();
+		await bind();
+		return {
+			root,
+			runtime: activeRuntime,
+			settings,
+			events,
+			get pi() {
+				return pi;
+			},
+			get ctx() {
+				return ctx;
+			},
+			cancelReplacement() {
+				cancelReplacement = true;
+			},
+			async dispose() {
+				try {
+					await activeRuntime.dispose();
+				} finally {
+					cleanup();
+				}
+			},
+		};
+	} catch (error) {
+		await runtime?.dispose().catch(() => undefined);
+		cleanup();
+		throw error;
+	}
 }

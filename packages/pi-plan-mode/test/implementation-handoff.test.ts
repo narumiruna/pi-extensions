@@ -237,6 +237,7 @@ for (const interruption of [
 			const pending = fixture.command("implement");
 			await started;
 			const shutdown = interruption === "shutdown" ? fixture.emit("session_shutdown") : undefined;
+			if (shutdown) await shutdown;
 			if (interruption === "exit") await fixture.command("exit");
 			if (interruption === "manual-model") fixture.manualModel(WORKER);
 			if (interruption === "manual-thinking") fixture.mock.rawPi.setThinkingLevel("max");

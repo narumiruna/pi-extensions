@@ -24,6 +24,7 @@ export async function applyFreshImplementationPreferences(
 	isCurrent: () => boolean,
 	selectionSnapshot?: () => ImplementationSnapshot | undefined,
 	isSessionCurrent: () => boolean = isCurrent,
+	beginPreferenceApplication?: () => () => void,
 ) {
 	if (!isCurrent() || !ctx.isIdle()) return;
 	const entry = latestPreferenceEntry(ctx);
@@ -41,6 +42,7 @@ export async function applyFreshImplementationPreferences(
 		undefined,
 		selectionSnapshot,
 	);
+	let finishPreferenceApplication: (() => void) | undefined;
 	try {
 		const originalModel = ctx.model;
 		const originalThinking = pi.getThinkingLevel();
@@ -54,6 +56,7 @@ export async function applyFreshImplementationPreferences(
 				pi.getThinkingLevel() === originalThinking,
 		);
 		if (!model || !current()) return;
+		finishPreferenceApplication = beginPreferenceApplication?.();
 		if (!(await change.apply(model, preferences, current)) || !current()) {
 			await change.rollback();
 			return;
@@ -72,6 +75,8 @@ export async function applyFreshImplementationPreferences(
 			status: "failed",
 			error: preferenceError(error),
 		});
+	} finally {
+		finishPreferenceApplication?.();
 	}
 }
 

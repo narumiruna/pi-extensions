@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, statSync } from "node:fs";
 import { type ExtensionCommandContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { startFreshImplementationSession } from "../src/fresh-implementation.js";
@@ -69,6 +70,7 @@ for (const retention of IMPLEMENTATION_PLAN_RETENTIONS) {
 			assert.deepEqual(sourceManager.getBranch(), sourceEntries);
 			assert.ok(parentSession);
 			assert.deepEqual(SessionManager.open(parentSession).getBranch(), sourceEntries);
+			if (process.platform !== "win32") assert.equal(statSync(parentSession).mode & 0o777, 0o600);
 			fixture.pi.setThinkingLevel("high");
 			await fixture.runtime.session.extensionRunner.emit({
 				type: "session_start",
@@ -96,12 +98,14 @@ for (const failure of ["cancelled", "missing-target", "missing-ack", "kickoff"] 
 			const before = sourceManager.getBranch();
 			let sends = 0;
 			let recovered = "";
+			let attemptedParentSession: string | undefined;
 			if (failure === "cancelled") fixture.cancelReplacement();
 			const ctx = new Proxy(source, {
 				get(target, key) {
 					if (key === "newSession")
-						return (options: Parameters<ExtensionCommandContext["newSession"]>[0]) =>
-							fixture.runtime.newSession({
+						return (options: Parameters<ExtensionCommandContext["newSession"]>[0]) => {
+							attemptedParentSession = options?.parentSession;
+							return fixture.runtime.newSession({
 								...options,
 								withSession: async (replacement) => {
 									const destination = new Proxy(replacement, {
@@ -124,6 +128,7 @@ for (const failure of ["cancelled", "missing-target", "missing-ack", "kickoff"] 
 									await options?.withSession?.(destination);
 								},
 							});
+						};
 					return Reflect.get(target, key);
 				},
 			});
@@ -150,6 +155,10 @@ for (const failure of ["cancelled", "missing-target", "missing-ack", "kickoff"] 
 			);
 			assert.equal(sends, failure === "kickoff" ? 1 : 0);
 			assert.deepEqual(sourceManager.getBranch(), before);
+			if (failure === "cancelled") {
+				assert.ok(attemptedParentSession);
+				assert.equal(existsSync(attemptedParentSession), false);
+			}
 			if (result.kind === "partial") assert.match(recovered, /# Approved plan/);
 			else assert.equal(fixture.ctx.model?.id, "planner");
 		} finally {
@@ -157,6 +166,50 @@ for (const failure of ["cancelled", "missing-target", "missing-ack", "kickoff"] 
 		}
 	});
 }
+
+test("fresh preference preflight starts lifecycle draining only when mutation begins", async () => {
+	const fixture = await implementationRuntime();
+	let releaseAuth!: (value: { ok: true }) => void;
+	let markAuthStarted!: () => void;
+	const authStarted = new Promise<void>((resolve) => {
+		markAuthStarted = resolve;
+	});
+	fixture.ctx.modelRegistry.getApiKeyAndHeaders = () =>
+		new Promise((resolve) => {
+			releaseAuth = resolve;
+			markAuthStarted();
+		});
+	try {
+		fixture.pi.appendEntry(FRESH_PREFERENCES_ENTRY, {
+			id: "preflight-boundary",
+			status: "pending",
+			preferences: { implementationThinkingLevel: "high" },
+		});
+		let applications = 0;
+		let completions = 0;
+		const pending = applyFreshImplementationPreferences(
+			fixture.pi,
+			fixture.ctx,
+			() => true,
+			undefined,
+			() => true,
+			() => {
+				applications += 1;
+				return () => {
+					completions += 1;
+				};
+			},
+		);
+		await authStarted;
+		assert.equal(applications, 0);
+		releaseAuth({ ok: true });
+		await pending;
+		assert.equal(applications, 1);
+		assert.equal(completions, 1);
+	} finally {
+		await fixture.dispose();
+	}
+});
 
 test("fresh destination consumes failed preference requests without replay", async () => {
 	const fixture = await implementationRuntime();

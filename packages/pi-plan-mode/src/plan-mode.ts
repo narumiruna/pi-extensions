@@ -512,18 +512,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		updateUi(ctx);
 		if (event.reason === "new") {
 			const sessionManager = ctx.sessionManager;
-			const finishPreparation = beginImplementationPreferencePreparation(sessionManager);
-			try {
-				await applyFreshImplementationPreferences(
-					pi,
-					ctx,
-					() => generation === menuGeneration && !menuController.signal.aborted,
-					selectionSnapshot,
-					() => currentSession === sessionManager,
-				);
-			} finally {
-				finishPreparation();
-			}
+			await applyFreshImplementationPreferences(
+				pi,
+				ctx,
+				() => generation === menuGeneration && !menuController.signal.aborted,
+				selectionSnapshot,
+				() => currentSession === sessionManager,
+				() => beginImplementationPreferencePreparation(sessionManager),
+			);
 		}
 	});
 
@@ -1099,7 +1095,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			original,
 			selectionSnapshot,
 		);
-		const finishPreparation = beginImplementationPreferencePreparation(sessionManager);
+		let finishPreparation: (() => void) | undefined;
 		implementationInFlight = true;
 		let started = false;
 		try {
@@ -1112,6 +1108,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 					pi.getThinkingLevel() === original.thinking,
 			);
 			if (!model || !current()) return;
+			finishPreparation = beginImplementationPreferencePreparation(sessionManager);
 			applyingImplementationPreferences = true;
 			if (state.enabled) restoreThinkingLevel();
 			expectedState = state;
@@ -1136,7 +1133,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			} finally {
 				applyingImplementationPreferences = false;
 				implementationInFlight = false;
-				finishPreparation();
+				finishPreparation?.();
 			}
 		}
 	}

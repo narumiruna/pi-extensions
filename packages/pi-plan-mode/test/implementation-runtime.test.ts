@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import {
@@ -6,8 +8,28 @@ import {
 	FRESH_PREFERENCES_ENTRY,
 	freshPreferencesApplied,
 } from "../src/fresh-implementation-preferences.js";
-import planMode from "../src/plan-mode.js";
 import { implementationRuntime } from "./implementation-runtime-support.js";
+
+test("runtime setup failure restores the agent directory and removes its fixture", async () => {
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = "previous-agent-directory";
+	let isolatedRoot: string | undefined;
+	try {
+		await assert.rejects(
+			implementationRuntime(undefined, () => {
+				isolatedRoot = process.env.PI_CODING_AGENT_DIR;
+				throw new Error("injected bind setup failure");
+			}),
+			/injected bind setup failure/,
+		);
+		assert.equal(process.env.PI_CODING_AGENT_DIR, "previous-agent-directory");
+		assert.ok(isolatedRoot);
+		assert.equal(existsSync(isolatedRoot), false);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
+});
 
 test("Pi model selection is session-only and applies per-model defaults and capability clamping", async () => {
 	const fixture = await implementationRuntime();
@@ -50,7 +72,11 @@ test("fresh preference application rolls back before a concurrent replacement", 
 	const started = new Promise<void>((resolve) => {
 		selectionStarted = resolve;
 	});
-	const fixture = await implementationRuntime((pi) => {
+	const fixture = await implementationRuntime(async (pi) => {
+		const planModeUrl = new URL("../src/plan-mode.js", import.meta.url);
+		const { default: planMode } = (await import(
+			`${planModeUrl.href}?test=${randomUUID()}`
+		)) as typeof import("../src/plan-mode.js");
 		planMode(pi, {
 			readSettings: async () => ({
 				kind: "loaded" as const,

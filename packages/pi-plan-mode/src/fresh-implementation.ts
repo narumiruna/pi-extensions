@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import {
 	type ExtensionCommandContext,
 	type ExtensionContext,
@@ -37,6 +37,11 @@ interface FreshImplementationFromStateOptions {
 	menuIsCurrent(): boolean;
 	retention: ImplementationPlanRetention;
 	stateEntryType: string;
+}
+
+interface ResumableParentSession {
+	path: string;
+	created: boolean;
 }
 
 export type FreshImplementationResult =
@@ -146,7 +151,7 @@ export async function startFreshImplementationSession(
 	const handoff = usesConversationHistory
 		? formatTransferredPlanPrompt(request.plan, true)
 		: formatImplementationHandoff(request.plan);
-	let parentSession: string;
+	let parentSession: ResumableParentSession;
 	try {
 		parentSession = resumableParentSession(ctx);
 	} catch (error) {
@@ -165,7 +170,7 @@ export async function startFreshImplementationSession(
 	let result: Awaited<ReturnType<ExtensionCommandContext["newSession"]>>;
 	try {
 		result = await ctx.newSession({
-			parentSession,
+			parentSession: parentSession.path,
 			setup: async (sessionManager) => {
 				try {
 					if (preferencesId)
@@ -235,15 +240,16 @@ export async function startFreshImplementationSession(
 	}
 
 	if (result.cancelled) {
+		if (parentSession.created) removeCreatedParentSession(ctx, parentSession.path);
 		safeNotify(ctx, "Fresh implementation cancelled. The plan remains available.", "info");
 		return { kind: "cancelled" };
 	}
 	return setupError || kickoffError ? { kind: "partial" } : { kind: "started" };
 }
 
-function resumableParentSession(ctx: ExtensionCommandContext) {
+function resumableParentSession(ctx: ExtensionCommandContext): ResumableParentSession {
 	const existing = ctx.sessionManager.getSessionFile();
-	if (existing) return existing;
+	if (existing) return { path: existing, created: false };
 
 	const sourceCopy = SessionManager.create(ctx.cwd, undefined, {
 		parentSession: ctx.sessionManager.getHeader()?.parentSession,
@@ -253,9 +259,23 @@ function resumableParentSession(ctx: ExtensionCommandContext) {
 	if (!path || !header) throw new Error("Pi did not provide a destination for the source copy");
 	const entries = [header, ...ctx.sessionManager.getBranch()];
 	writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, {
+		encoding: "utf8",
 		flag: "wx",
+		mode: 0o600,
 	});
-	return path;
+	return { path, created: true };
+}
+
+function removeCreatedParentSession(ctx: ExtensionCommandContext, path: string) {
+	try {
+		rmSync(path, { force: true });
+	} catch (error) {
+		safeNotify(
+			ctx,
+			`Fresh implementation was cancelled, but its temporary source copy could not be removed: ${safeErrorDetail(error)}`,
+			"warning",
+		);
+	}
 }
 
 async function preflightModel(ctx: ExtensionCommandContext, isCurrent: () => boolean) {
