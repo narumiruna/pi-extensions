@@ -57,7 +57,13 @@ export async function runCancellableOperation(
 		create: ({ tui, theme, keybindings, signal: interactionSignal, complete }) => {
 			const loader = new BorderedLoader(tui, theme, message, { cancellable: false });
 			const cancelHint = formatInteractionHints(keybindings, [
-				{ bindings: ["tui.select.cancel"], keys: ["ctrl+c"], label: "cancel" },
+				{
+					keys: [
+						...keybindings.getKeys("tui.select.cancel").filter((key) => !hasControlCharacter(key)),
+						"ctrl+c",
+					],
+					label: "cancel",
+				},
 			]);
 			const operation = runRoute(
 				route,
@@ -109,4 +115,9 @@ export async function runCancellableOperation(
 	}
 	if (interaction.value.error) throw interaction.value.error;
 	return routeResult ?? { kind: "failed" };
+}
+
+function hasControlCharacter(value: string) {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Unsafe key labels must be omitted.
+	return /[\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
