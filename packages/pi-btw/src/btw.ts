@@ -146,7 +146,12 @@ export async function resolveBtwModel({
 				: `falling back to ${fallback}`;
 			try {
 				const auth = await modelRegistry.getApiKeyAndHeaders(configuredModel);
-				if (auth.ok && hasRequestAuth(auth)) return { model: configuredModel, auth };
+				if (auth.ok && hasRequestAuth(auth)) {
+					return {
+						model: auth.baseUrl ? { ...configuredModel, baseUrl: auth.baseUrl } : configuredModel,
+						auth,
+					};
+				}
 				const reason = auth.ok ? "has no request credentials" : auth.error;
 				reportWarning(
 					`pi-btw model ${settings.model} is unavailable (${reason}); ${fallbackAction}.`,
@@ -163,7 +168,13 @@ export async function resolveBtwModel({
 	if (!currentModel) return undefined;
 	try {
 		const auth = await modelRegistry.getApiKeyAndHeaders(currentModel);
-		if (auth.ok && hasRequestAuth(auth)) return { model: currentModel, auth };
+		if (auth.ok && hasRequestAuth(auth)) {
+			// Direct provider streams bypass Pi's request preparation, including OAuth routing.
+			return {
+				model: auth.baseUrl ? { ...currentModel, baseUrl: auth.baseUrl } : currentModel,
+				auth,
+			};
+		}
 	} catch {
 		// The caller reports the final lack of an available model.
 	}
