@@ -163,6 +163,45 @@ test("resolveBtwModel inherits current model when no model is configured", async
 	assert.equal(result?.auth.apiKey, "current-key");
 });
 
+for (const selection of ["current", "configured", "fallback"] as const) {
+	for (const baseUrl of [undefined, "", "https://api.business.githubcopilot.com"]) {
+		test(`resolveBtwModel preserves auth routing for ${selection} model (${baseUrl || "default endpoint"})`, async () => {
+			const model = Object.freeze({
+				provider: "github-copilot",
+				id: "test-model",
+				baseUrl: "https://api.individual.githubcopilot.com",
+			}) as Model<Api>;
+			const unavailableModel = { provider: "other", id: "side" } as Model<Api>;
+			const auth = {
+				ok: true as const,
+				apiKey: "test-key",
+				headers: { "X-Test": "preserved", Authorization: null },
+				env: { TEST_PROVIDER_TOKEN: "test" },
+				baseUrl,
+			};
+			const result = await resolveBtwModel({
+				settings:
+					selection === "current"
+						? {}
+						: { model: selection === "configured" ? "github-copilot/test-model" : "other/side" },
+				currentModel: selection === "configured" ? unavailableModel : model,
+				modelRegistry: {
+					find: () => (selection === "configured" ? model : unavailableModel),
+					getApiKeyAndHeaders: async (selectedModel: Model<Api>) =>
+						selectedModel === model ? auth : { ok: false as const, error: "unavailable" },
+				},
+			});
+
+			assert.ok(result);
+			assert.deepEqual(result.model, { ...model, baseUrl: baseUrl || model.baseUrl });
+			assert.equal(result.auth, auth);
+			assert.equal(model.baseUrl, "https://api.individual.githubcopilot.com");
+			if (baseUrl) assert.notEqual(result.model, model);
+			else assert.equal(result.model, model);
+		});
+	}
+}
+
 test("resolveBtwModel warns and falls back for unavailable configured models", async () => {
 	const currentModel = { provider: "current", id: "main" } as Model<Api>;
 	for (const configuredAuth of [
