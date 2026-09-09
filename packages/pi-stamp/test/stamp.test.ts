@@ -456,6 +456,93 @@ test("session replacement clears finalized timing owned by the prior session", a
 	assert.deepEqual(mock.entries, [stampEntry("assistant", ASSISTANT_TIMESTAMP)]);
 });
 
+test("cost since user accumulates assistant and tool-result costs and resets on user messages", async () => {
+	const mock = createMockPi();
+	stamp(mock.pi, { settingsRuntime: settingsRuntimeWith({ showCostSinceUser: true }) });
+	const { ctx } = createMockContext({ mode: "tui" });
+	const firstUser = userMessage(USER_TIMESTAMP);
+	const firstToolUse = assistantMessage(ASSISTANT_TIMESTAMP, "toolUse", 0.012);
+	const firstToolResult = toolResultMessage(ASSISTANT_TIMESTAMP + 500, 0.006);
+	const secondToolUse = assistantMessage(ASSISTANT_TIMESTAMP + 1_000, "toolUse", 0.018);
+	const final = assistantMessage(ASSISTANT_TIMESTAMP + 2_000, "stop", 0.009);
+
+	await emit(mock, "session_start", { reason: "startup" }, ctx);
+	await emit(mock, "message_end", { message: firstUser }, ctx);
+	await emit(mock, "message_start", { message: firstToolUse }, ctx);
+	await emit(
+		mock,
+		"turn_end",
+		{ message: firstToolUse, toolResults: [firstToolResult], turnIndex: 0 },
+		ctx,
+	);
+	await emit(mock, "message_start", { message: secondToolUse }, ctx);
+	await emit(mock, "turn_end", { message: secondToolUse, toolResults: [], turnIndex: 1 }, ctx);
+	await emit(mock, "message_start", { message: final }, ctx);
+	await emit(mock, "turn_end", { message: final, toolResults: [], turnIndex: 2 }, ctx);
+
+	assert.deepEqual(
+		[0, 1, 2].map((index) => messageStampDataAt(mock, index).version),
+		[2, 2, 2],
+	);
+	const finalStamp = messageStampDataAt(mock, 3);
+	assert.equal(finalStamp.version, 6);
+	if (finalStamp.version !== 6) assert.fail("Expected a version-6 cost stamp");
+	assert.equal(finalStamp.estimatedCost, 0.009);
+	assert.ok(Math.abs(finalStamp.costSinceUser - 0.045) < 1e-12);
+	assert.equal(finalStamp.metadata, undefined);
+
+	await emit(mock, "agent_end", { messages: [firstToolUse, secondToolUse, final] }, ctx);
+	const autonomous = assistantMessage(ASSISTANT_TIMESTAMP + 3_000, "stop", 0.001);
+	await emit(mock, "message_start", { message: autonomous }, ctx);
+	await emit(mock, "turn_end", { message: autonomous, toolResults: [], turnIndex: 3 }, ctx);
+	const autonomousStamp = messageStampDataAt(mock, 4);
+	assert.equal(autonomousStamp.version, 6);
+	if (autonomousStamp.version !== 6) assert.fail("Expected a version-6 cost stamp");
+	assert.ok(Math.abs(autonomousStamp.costSinceUser - 0.046) < 1e-12);
+
+	const secondUser = userMessage(USER_TIMESTAMP + 10_000);
+	const secondFinal = assistantMessage(ASSISTANT_TIMESTAMP + 11_000, "stop", 0.004);
+	await emit(mock, "message_end", { message: secondUser }, ctx);
+	await emit(mock, "message_start", { message: secondFinal }, ctx);
+	await emit(mock, "turn_end", { message: secondFinal, toolResults: [], turnIndex: 4 }, ctx);
+	const resetStamp = messageStampDataAt(mock, 6);
+	assert.equal(resetStamp.version, 6);
+	if (resetStamp.version !== 6) assert.fail("Expected a version-6 cost stamp");
+	assert.equal(resetStamp.costSinceUser, 0.004);
+});
+
+test("session resume rebuilds cost since user from assistant and tool-result usage", async () => {
+	const mock = createMockPi();
+	stamp(mock.pi, { settingsRuntime: settingsRuntimeWith({ showCostSinceUser: true }) });
+	const resumedUser = userMessage(USER_TIMESTAMP);
+	const firstToolUse = assistantMessage(ASSISTANT_TIMESTAMP, "toolUse", 0.012);
+	const firstToolResult = toolResultMessage(ASSISTANT_TIMESTAMP + 500, 0.006);
+	const secondToolUse = assistantMessage(ASSISTANT_TIMESTAMP + 1_000, "toolUse", 0.018);
+	const { ctx } = createMockContext({
+		mode: "tui",
+		sessionManager: {
+			getSessionId: () => "test-session",
+			getSessionName: () => undefined,
+			getEntries: () => [],
+			getBranch: () => [
+				{ type: "message", message: assistantMessage(USER_TIMESTAMP - 1_000, "stop", 1) },
+				{ type: "message", message: resumedUser },
+				{ type: "message", message: firstToolUse },
+				{ type: "message", message: firstToolResult },
+				{ type: "message", message: secondToolUse },
+			],
+		},
+	});
+
+	await emit(mock, "session_start", { reason: "resume" }, ctx);
+	const final = assistantMessage(ASSISTANT_TIMESTAMP + 2_000, "stop", 0.009);
+	await emit(mock, "turn_end", { message: final, toolResults: [], turnIndex: 2 }, ctx);
+	const finalStamp = messageStampDataAt(mock);
+	assert.equal(finalStamp.version, 6);
+	if (finalStamp.version !== 6) assert.fail("Expected a version-6 cost stamp");
+	assert.ok(Math.abs(finalStamp.costSinceUser - 0.045) < 1e-12);
+});
+
 test("assistant tool and error turns receive one stamp without stamping tool results", async () => {
 	const mock = createMockPi();
 	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
@@ -672,9 +759,29 @@ function userMessage(timestamp: number) {
 	return { role: "user" as const, content: "hello", timestamp };
 }
 
+function toolResultMessage(timestamp: number, estimatedCost: number) {
+	return {
+		role: "toolResult" as const,
+		toolCallId: "call-1",
+		toolName: "model-backed-tool",
+		content: [],
+		usage: {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: estimatedCost },
+		},
+		isError: false,
+		timestamp,
+	};
+}
+
 function assistantMessage(
 	timestamp: number,
 	stopReason: "stop" | "toolUse" | "error" | "aborted" = "stop",
+	estimatedCost = 0,
 ) {
 	return {
 		role: "assistant" as const,
@@ -688,7 +795,7 @@ function assistantMessage(
 			cacheRead: 0,
 			cacheWrite: 0,
 			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: estimatedCost },
 		},
 		stopReason,
 		timestamp,
@@ -720,6 +827,7 @@ function defaultSettingsState(): Readonly<StampSettingsState> {
 			showExactTimeline: "built-in",
 			showThinkingLevel: "built-in",
 			showCompactAbnormalOutcome: "built-in",
+			showCostSinceUser: "built-in",
 			toolStamps: "built-in",
 		},
 		canSave: true,

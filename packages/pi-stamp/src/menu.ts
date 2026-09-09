@@ -21,6 +21,7 @@ type StampAction =
 	| "set-exact-timeline"
 	| "set-thinking-level"
 	| "set-compact-abnormal-outcome"
+	| "set-cost-since-user"
 	| "set-tool-stamps"
 	| "open-locale"
 	| "choose-invariant-locale"
@@ -146,6 +147,15 @@ export function createStampMenu(
 						currentValue: visibilityLabel(state.settings.showCompactAbnormalOutcome),
 						values: ["Show", "Hide"],
 						action: "set-compact-abnormal-outcome",
+					},
+					{
+						id: "showCostSinceUser",
+						label: "Cost since user message",
+						description:
+							"Show the final call cost and the running total since the last user message.",
+						currentValue: visibilityLabel(state.settings.showCostSinceUser),
+						values: ["Show", "Hide"],
+						action: "set-cost-since-user",
 					},
 					{
 						id: "toolStamps",
@@ -279,6 +289,12 @@ export function createStampMenu(
 						"showCompactAbnormalOutcome",
 					),
 					settingStatus(
+						"Cost since user message",
+						visibilityLabel(state.settings.showCostSinceUser),
+						state,
+						"showCostSinceUser",
+					),
+					settingStatus(
 						"Tool stamps",
 						toolStampsLabel(state.settings.toolStamps),
 						state,
@@ -298,6 +314,7 @@ export function createStampMenu(
 					"First n/a means no meaningful update was observed; no other boundary is substituted.",
 					"Thinking level capture requires both assistant metadata and its own setting to be enabled.",
 					"Compact abnormal labels require their setting; normal stops always stay quiet there.",
+					"Cost since user message resets at every user message and appears on non-tool-use responses.",
 					"Expanded exact UTC/Unix rows require Exact timeline; debug metadata remains separate.",
 					"Tool stamps pair start/end by ID, exclude tool data, and appear after the complete block.",
 					"Assistant timing excludes tool execution and is unavailable on legacy stamp entries.",
@@ -373,6 +390,14 @@ export function createStampMenu(
 					signal,
 					{ showCompactAbnormalOutcome: value === "Show" },
 					`Compact abnormal outcome: ${value}.`,
+				),
+			"set-cost-since-user": ({ ctx, value, signal }) =>
+				savePatch(
+					runtime,
+					ctx,
+					signal,
+					{ showCostSinceUser: value === "Show" },
+					`Cost since user message: ${value}.`,
 				),
 			"set-tool-stamps": ({ ctx, value, signal }) =>
 				savePatch(runtime, ctx, signal, { toolStamps: value === "Show" }, `Tool stamps: ${value}.`),
@@ -506,6 +531,7 @@ function formatCompactStatus(state: StampSettingsState): string {
 		`Metadata ${assistantMetadataLabel(state.settings.assistantMetadata).toLowerCase()}`,
 		`Thinking ${state.settings.showThinkingLevel ? "shown" : "hidden"}`,
 		`Abnormal ${state.settings.showCompactAbnormalOutcome ? "shown" : "hidden"}`,
+		`Cost since user ${state.settings.showCostSinceUser ? "shown" : "hidden"}`,
 		`Tool stamps ${state.settings.toolStamps ? "shown" : "hidden"}`,
 	].join(" · ");
 }

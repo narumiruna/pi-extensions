@@ -31,6 +31,11 @@ export interface AssistantStampDiagnosticSummary {
 	errorCode?: string;
 }
 
+export interface AssistantCostSinceUserData {
+	estimatedCost?: number;
+	costSinceUser: number;
+}
+
 export interface AssistantMetadataData {
 	api: string;
 	provider: string;
@@ -55,6 +60,13 @@ const USAGE_FIELDS = [
 	"totalTokens",
 	"estimatedCost",
 ] as const satisfies readonly (keyof AssistantStampUsageData)[];
+
+export function captureReportedCost(value: unknown): number | undefined {
+	if (!isRecord(value) || !isRecord(value.usage) || !isRecord(value.usage.cost)) {
+		return undefined;
+	}
+	return isAssistantEstimatedCost(value.usage.cost.total) ? value.usage.cost.total : undefined;
+}
 
 export function captureAssistantMetadata(value: unknown): AssistantMetadataData | undefined {
 	if (!isRecord(value)) return undefined;
@@ -128,23 +140,37 @@ export function isAssistantMetadataData(value: unknown): value is AssistantMetad
 }
 
 export function formatAssistantMetadataLines(
-	metadata: Readonly<AssistantMetadataData>,
+	metadata: Readonly<AssistantMetadataData> | undefined,
 	mode: StampAssistantMetadataMode,
 	debug: boolean,
 	thinkingLevel?: StampThinkingLevel,
 	showCompactAbnormalOutcome = true,
+	costSinceUserData?: Readonly<AssistantCostSinceUserData>,
 ): string[] {
 	if (
-		mode === "off" ||
-		!isAssistantMetadataData(metadata) ||
-		(thinkingLevel !== undefined && !isStampThinkingLevel(thinkingLevel))
+		(thinkingLevel !== undefined && !isStampThinkingLevel(thinkingLevel)) ||
+		(costSinceUserData !== undefined && !isAssistantCostSinceUserData(costSinceUserData))
 	) {
 		return [];
 	}
+	const costSinceUserLine =
+		costSinceUserData === undefined
+			? undefined
+			: formatAssistantCostSinceUserLine(costSinceUserData);
+	if (mode === "off" || !isAssistantMetadataData(metadata)) {
+		return costSinceUserLine === undefined ? [] : [costSinceUserLine];
+	}
 	const lines =
 		mode === "compact"
-			? [formatCompactMetadata(metadata, thinkingLevel, showCompactAbnormalOutcome)]
-			: formatExpandedMetadata(metadata, thinkingLevel);
+			? [
+					formatCompactMetadata(
+						metadata,
+						thinkingLevel,
+						showCompactAbnormalOutcome,
+						costSinceUserData,
+					),
+				]
+			: formatExpandedMetadata(metadata, thinkingLevel, costSinceUserData);
 	if (!debug) return lines;
 	if (metadata.responseId) lines.push(`debug · response id ${metadata.responseId}`);
 	if (metadata.diagnosticCount !== undefined) {
@@ -220,7 +246,7 @@ function captureUsage(value: unknown): AssistantStampUsageData | undefined {
 		const amount = value[field];
 		if (isReportedTokenCount(amount)) assignUsage(usage, field, amount);
 	}
-	if (isRecord(value.cost) && isReportedCost(value.cost.total)) {
+	if (isRecord(value.cost) && isAssistantEstimatedCost(value.cost.total)) {
 		usage.estimatedCost = value.cost.total;
 	}
 	return Object.keys(usage).length > 0 ? usage : undefined;
@@ -260,13 +286,14 @@ function formatCompactMetadata(
 	metadata: Readonly<AssistantMetadataData>,
 	thinkingLevel: StampThinkingLevel | undefined,
 	showCompactAbnormalOutcome: boolean,
+	costSinceUserData: Readonly<AssistantCostSinceUserData> | undefined,
 ): string {
 	const model =
 		metadata.responseModel && metadata.responseModel !== metadata.model
 			? `${metadata.model} → ${metadata.responseModel}`
 			: metadata.model;
 	const tokens = metadata.usage?.totalTokens;
-	const cost = metadata.usage?.estimatedCost;
+	const cost = costSinceUserData?.estimatedCost ?? metadata.usage?.estimatedCost;
 	const abnormalStopReason =
 		showCompactAbnormalOutcome &&
 		(metadata.stopReason === "length" ||
@@ -280,6 +307,9 @@ function formatCompactMetadata(
 		abnormalStopReason === undefined ? undefined : `stop ${abnormalStopReason}`,
 		tokens === undefined ? undefined : `${formatInteger(tokens)} tok`,
 		cost === undefined ? undefined : `est ${formatCost(cost)}`,
+		costSinceUserData === undefined
+			? undefined
+			: `since user ${formatCost(costSinceUserData.costSinceUser)}`,
 	]
 		.filter((part): part is string => part !== undefined)
 		.join(" · ");
@@ -288,6 +318,7 @@ function formatCompactMetadata(
 function formatExpandedMetadata(
 	metadata: Readonly<AssistantMetadataData>,
 	thinkingLevel: StampThinkingLevel | undefined,
+	costSinceUserData: Readonly<AssistantCostSinceUserData> | undefined,
 ): string[] {
 	const provenance = [
 		`api ${metadata.api}`,
@@ -300,7 +331,12 @@ function formatExpandedMetadata(
 		.filter((part): part is string => part !== undefined)
 		.join(" · ");
 	const usage = metadata.usage;
-	if (!usage) return [provenance];
+	if (!usage) {
+		return costSinceUserData === undefined
+			? [provenance]
+			: [provenance, formatAssistantCostSinceUserLine(costSinceUserData)];
+	}
+	const estimatedCost = costSinceUserData?.estimatedCost ?? usage.estimatedCost;
 	const usageLine = [
 		usage.input === undefined ? undefined : `tokens in ${formatInteger(usage.input)}`,
 		usage.output === undefined ? undefined : `out ${formatInteger(usage.output)}`,
@@ -308,7 +344,10 @@ function formatExpandedMetadata(
 		usage.cacheRead === undefined ? undefined : `cache read ${formatInteger(usage.cacheRead)}`,
 		usage.cacheWrite === undefined ? undefined : `cache write ${formatInteger(usage.cacheWrite)}`,
 		usage.totalTokens === undefined ? undefined : `total ${formatInteger(usage.totalTokens)}`,
-		usage.estimatedCost === undefined ? undefined : `est cost ${formatCost(usage.estimatedCost)}`,
+		estimatedCost === undefined ? undefined : `est cost ${formatCost(estimatedCost)}`,
+		costSinceUserData === undefined
+			? undefined
+			: `since user ${formatCost(costSinceUserData.costSinceUser)}`,
 	]
 		.filter((part): part is string => part !== undefined)
 		.join(" · ");
@@ -336,7 +375,7 @@ function isUsageData(value: unknown): value is AssistantStampUsageData {
 		if (!Object.hasOwn(value, field)) continue;
 		const amount = value[field];
 		if (field === "estimatedCost") {
-			if (!isReportedCost(amount)) return false;
+			if (!isAssistantEstimatedCost(amount)) return false;
 		} else if (!isReportedTokenCount(amount)) {
 			return false;
 		}
@@ -382,8 +421,30 @@ function isReportedTokenCount(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isReportedCost(value: unknown): value is number {
+export function isAssistantEstimatedCost(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isAssistantCostSinceUserData(value: unknown): value is AssistantCostSinceUserData {
+	return (
+		isRecord(value) &&
+		hasOnlyKeys(value, ["estimatedCost", "costSinceUser"]) &&
+		(!Object.hasOwn(value, "estimatedCost") || isAssistantEstimatedCost(value.estimatedCost)) &&
+		isAssistantEstimatedCost(value.costSinceUser)
+	);
+}
+
+function formatAssistantCostSinceUserLine(
+	costSinceUserData: Readonly<AssistantCostSinceUserData>,
+): string {
+	return [
+		costSinceUserData.estimatedCost === undefined
+			? undefined
+			: `est ${formatCost(costSinceUserData.estimatedCost)}`,
+		`since user ${formatCost(costSinceUserData.costSinceUser)}`,
+	]
+		.filter((part): part is string => part !== undefined)
+		.join(" · ");
 }
 
 function assignUsage<K extends keyof AssistantStampUsageData>(

@@ -9,10 +9,13 @@ import {
 	type StampTimelineBoundary,
 } from "./format.js";
 import {
+	type AssistantCostSinceUserData,
 	type AssistantMetadataData,
 	captureAssistantMetadata,
+	captureReportedCost,
 	formatAssistantMetadataLines,
 	formatToolStampLabel,
+	isAssistantEstimatedCost,
 	isAssistantMetadataData,
 	isStampThinkingLevel,
 	type StampThinkingLevel,
@@ -68,6 +71,19 @@ export interface AssistantMessageStampDataV5 {
 	thinkingLevel: StampThinkingLevel;
 }
 
+export interface AssistantMessageStampDataV6 {
+	version: 6;
+	role: "assistant";
+	timestamp: number;
+	previousTimestamp?: number;
+	completedAt?: number;
+	firstContentAt?: number;
+	metadata?: AssistantMetadataData;
+	thinkingLevel?: StampThinkingLevel;
+	estimatedCost?: number;
+	costSinceUser: number;
+}
+
 export interface ToolStampDataV1 {
 	version: 1;
 	kind: "tool";
@@ -83,7 +99,8 @@ export type MessageStampData =
 	| MessageStampDataV2
 	| AssistantMessageStampDataV3
 	| AssistantMessageStampDataV4
-	| AssistantMessageStampDataV5;
+	| AssistantMessageStampDataV5
+	| AssistantMessageStampDataV6;
 export type StampEntryData = MessageStampData | ToolStampDataV1;
 
 export interface StampExtensionOptions {
@@ -98,6 +115,12 @@ interface AssistantTimingObservation {
 
 interface FinalizedAssistantTiming extends AssistantTimingObservation {
 	completedAt: number;
+}
+
+interface CostSinceUserAccumulator {
+	total: number;
+	hasReportedCost: boolean;
+	valid: boolean;
 }
 
 interface ToolTimingObservation {
@@ -148,6 +171,30 @@ export function isMessageStampData(value: unknown): value is MessageStampData {
 					value.firstContentAt <= value.completedAt))
 		);
 	}
+	if (value.version === 6) {
+		return (
+			value.role === "assistant" &&
+			hasOnlyKeys(value, [
+				"version",
+				"role",
+				"timestamp",
+				"previousTimestamp",
+				"completedAt",
+				"firstContentAt",
+				"metadata",
+				"thinkingLevel",
+				"estimatedCost",
+				"costSinceUser",
+			]) &&
+			(!Object.hasOwn(value, "metadata") || isAssistantMetadataData(value.metadata)) &&
+			(!Object.hasOwn(value, "thinkingLevel") || isStampThinkingLevel(value.thinkingLevel)) &&
+			isAssistantEstimatedCost(value.costSinceUser) &&
+			(!Object.hasOwn(value, "estimatedCost") ||
+				(isAssistantEstimatedCost(value.estimatedCost) &&
+					value.estimatedCost <= value.costSinceUser)) &&
+			hasValidOptionalAssistantTiming(value, value.timestamp)
+		);
+	}
 	if ((value.version !== 4 && value.version !== 5) || value.role !== "assistant") return false;
 	const allowedKeys = [
 		"version",
@@ -159,22 +206,11 @@ export function isMessageStampData(value: unknown): value is MessageStampData {
 		"metadata",
 		...(value.version === 5 ? ["thinkingLevel"] : []),
 	];
-	if (
-		!hasOnlyKeys(value, allowedKeys) ||
-		(Object.hasOwn(value, "previousTimestamp") && !isValidTimestamp(value.previousTimestamp)) ||
-		!isAssistantMetadataData(value.metadata) ||
-		(value.version === 5 && !isStampThinkingLevel(value.thinkingLevel))
-	) {
-		return false;
-	}
-	if (!Object.hasOwn(value, "completedAt")) return !Object.hasOwn(value, "firstContentAt");
 	return (
-		isValidTimestamp(value.completedAt) &&
-		value.completedAt >= value.timestamp &&
-		(!Object.hasOwn(value, "firstContentAt") ||
-			(isValidTimestamp(value.firstContentAt) &&
-				value.firstContentAt >= value.timestamp &&
-				value.firstContentAt <= value.completedAt))
+		hasOnlyKeys(value, allowedKeys) &&
+		isAssistantMetadataData(value.metadata) &&
+		(value.version !== 5 || isStampThinkingLevel(value.thinkingLevel)) &&
+		hasValidOptionalAssistantTiming(value, value.timestamp)
 	);
 }
 
@@ -241,7 +277,8 @@ export function createStampEntryRenderer(
 		return dynamicRightAlignedText(
 			() => {
 				const settings = getSettings();
-				const hasAssistantTiming = data.version === 3 || data.version === 4 || data.version === 5;
+				const hasAssistantTiming =
+					data.version === 3 || data.version === 4 || data.version === 5 || data.version === 6;
 				const label = formatMessageStampLabel(
 					{
 						timestamp: data.timestamp,
@@ -270,13 +307,23 @@ export function createStampEntryRenderer(
 						? exactTimelineLines(timelineObservations)
 						: [];
 				const metadataLines =
-					data.version === 4 || data.version === 5
+					data.version === 4 || data.version === 5 || data.version === 6
 						? formatAssistantMetadataLines(
 								data.metadata,
 								settings.assistantMetadata,
 								options.expanded,
-								data.version === 5 && settings.showThinkingLevel ? data.thinkingLevel : undefined,
+								(data.version === 5 || data.version === 6) && settings.showThinkingLevel
+									? data.thinkingLevel
+									: undefined,
 								settings.showCompactAbnormalOutcome,
+								data.version === 6 && settings.showCostSinceUser
+									? {
+											...(data.estimatedCost === undefined
+												? {}
+												: { estimatedCost: data.estimatedCost }),
+											costSinceUser: data.costSinceUser,
+										}
+									: undefined,
 							)
 						: [];
 				return [regularLine(label), ...timelineLines, ...metadataLines.map(regularLine)];
@@ -359,6 +406,7 @@ export default function stampExtension(
 	let activeAssistantTiming: AssistantTimingObservation | undefined;
 	let finalizedAssistantTiming: FinalizedAssistantTiming | undefined;
 	let activeThinkingLevel: StampThinkingLevel | undefined;
+	let costSinceUser = emptyCostSinceUserAccumulator();
 	const activeToolTimings = new Map<string, ToolTimingObservation>();
 	const pendingUserStamps: Array<{ role: "user"; timestamp: number }> = [];
 
@@ -406,12 +454,40 @@ export default function stampExtension(
 		timing: FinalizedAssistantTiming | undefined,
 		message: unknown,
 		thinkingLevel: StampThinkingLevel | undefined,
+		costSinceUserData: AssistantCostSinceUserData | undefined,
 	): void => {
 		const matchingTiming = timing?.timestamp === timestamp ? timing : undefined;
 		const metadata =
 			settingsRuntime.get().settings.assistantMetadata === "off"
 				? undefined
 				: captureAssistantMetadata(message);
+		if (costSinceUserData) {
+			const stamp: AssistantMessageStampDataV6 = {
+				version: 6,
+				role: "assistant",
+				timestamp,
+				...(lastStampTimestamp === undefined ? {} : { previousTimestamp: lastStampTimestamp }),
+				...(matchingTiming
+					? {
+							completedAt: matchingTiming.completedAt,
+							...(matchingTiming.firstContentAt === undefined
+								? {}
+								: { firstContentAt: matchingTiming.firstContentAt }),
+						}
+					: {}),
+				...(metadata === undefined ? {} : { metadata }),
+				...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+				...(costSinceUserData.estimatedCost === undefined
+					? {}
+					: { estimatedCost: costSinceUserData.estimatedCost }),
+				costSinceUser: costSinceUserData.costSinceUser,
+			};
+			if (isMessageStampData(stamp)) {
+				pi.appendEntry<AssistantMessageStampDataV6>(STAMP_ENTRY_TYPE, stamp);
+				lastStampTimestamp = timestamp;
+				return;
+			}
+		}
 		if (metadata && thinkingLevel !== undefined) {
 			const stamp: AssistantMessageStampDataV5 = {
 				version: 5,
@@ -529,7 +605,9 @@ export default function stampExtension(
 		activeThinkingLevel = undefined;
 		activeToolTimings.clear();
 		tuiSessionActive = ctx.mode === "tui";
-		lastStampTimestamp = lastStampTimestampFromBranch(ctx.sessionManager.getBranch());
+		const branch = ctx.sessionManager.getBranch();
+		lastStampTimestamp = lastStampTimestampFromBranch(branch);
+		costSinceUser = costSinceUserFromBranch(branch);
 		try {
 			const state = await settingsRuntime.reload(controller.signal);
 			if (
@@ -629,12 +707,15 @@ export default function stampExtension(
 	});
 
 	pi.on("message_end", (event) => {
-		if (!tuiSessionActive || !isValidTimestamp(event.message.timestamp)) return;
+		if (!tuiSessionActive) return;
 		if (event.message.role === "user") {
-			pendingUserStamps.push({ role: "user", timestamp: event.message.timestamp });
+			costSinceUser = emptyCostSinceUserAccumulator();
+			if (isValidTimestamp(event.message.timestamp)) {
+				pendingUserStamps.push({ role: "user", timestamp: event.message.timestamp });
+			}
 			return;
 		}
-		if (event.message.role !== "assistant") return;
+		if (event.message.role !== "assistant" || !isValidTimestamp(event.message.timestamp)) return;
 		const completedAt = now();
 		if (!isValidTimestamp(completedAt) || completedAt < event.message.timestamp) {
 			activeAssistantTiming = undefined;
@@ -663,7 +744,29 @@ export default function stampExtension(
 		finalizedAssistantTiming = undefined;
 		activeThinkingLevel = undefined;
 		if (tuiSessionActive && event.message.role === "assistant") {
-			appendAssistantStamp(event.message.timestamp, timing, event.message, thinkingLevel);
+			const estimatedCost = captureReportedCost(event.message);
+			addReportedCostSinceUser(costSinceUser, estimatedCost);
+			for (const toolResult of event.toolResults) {
+				addReportedCostSinceUser(costSinceUser, captureReportedCost(toolResult));
+			}
+			const settings = settingsRuntime.get().settings;
+			const costSinceUserData =
+				settings.showCostSinceUser &&
+				event.message.stopReason !== "toolUse" &&
+				costSinceUser.valid &&
+				costSinceUser.hasReportedCost
+					? {
+							...(estimatedCost === undefined ? {} : { estimatedCost }),
+							costSinceUser: costSinceUser.total,
+						}
+					: undefined;
+			appendAssistantStamp(
+				event.message.timestamp,
+				timing,
+				event.message,
+				thinkingLevel,
+				costSinceUserData,
+			);
 		}
 		flushToolStamps(event.toolResults);
 	});
@@ -687,8 +790,53 @@ export default function stampExtension(
 		activeToolTimings.clear();
 		tuiSessionActive = false;
 		lastStampTimestamp = undefined;
+		costSinceUser = emptyCostSinceUserAccumulator();
 		await settingsRuntime.flush();
 	});
+}
+
+function emptyCostSinceUserAccumulator(): CostSinceUserAccumulator {
+	return { total: 0, hasReportedCost: false, valid: true };
+}
+
+function addReportedCostSinceUser(
+	accumulator: CostSinceUserAccumulator,
+	estimatedCost: number | undefined,
+): void {
+	if (estimatedCost === undefined || !accumulator.valid) return;
+	const total = accumulator.total + estimatedCost;
+	if (!isAssistantEstimatedCost(total)) {
+		accumulator.valid = false;
+		return;
+	}
+	accumulator.total = total;
+	accumulator.hasReportedCost = true;
+}
+
+function costSinceUserFromBranch(entries: readonly unknown[]): CostSinceUserAccumulator {
+	let costSinceUserStart = 0;
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index];
+		if (
+			isRecord(entry) &&
+			entry.type === "message" &&
+			isRecord(entry.message) &&
+			entry.message.role === "user"
+		) {
+			costSinceUserStart = index + 1;
+			break;
+		}
+	}
+
+	const accumulator = emptyCostSinceUserAccumulator();
+	for (let index = costSinceUserStart; index < entries.length; index += 1) {
+		const entry = entries[index];
+		if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+		if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
+			addReportedCostSinceUser(accumulator, captureReportedCost(entry.message));
+		}
+	}
+	return accumulator;
 }
 
 function lastStampTimestampFromBranch(entries: readonly unknown[]): number | undefined {
@@ -704,6 +852,24 @@ function lastStampTimestampFromBranch(entries: readonly unknown[]): number | und
 		}
 	}
 	return undefined;
+}
+
+function hasValidOptionalAssistantTiming(
+	value: Record<string, unknown>,
+	timestamp: number,
+): boolean {
+	if (Object.hasOwn(value, "previousTimestamp") && !isValidTimestamp(value.previousTimestamp)) {
+		return false;
+	}
+	if (!Object.hasOwn(value, "completedAt")) return !Object.hasOwn(value, "firstContentAt");
+	return (
+		isValidTimestamp(value.completedAt) &&
+		value.completedAt >= timestamp &&
+		(!Object.hasOwn(value, "firstContentAt") ||
+			(isValidTimestamp(value.firstContentAt) &&
+				value.firstContentAt >= timestamp &&
+				value.firstContentAt <= value.completedAt))
+	);
 }
 
 function isMeaningfulAssistantUpdate(value: unknown): boolean {
