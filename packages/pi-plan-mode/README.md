@@ -153,7 +153,7 @@ After completion, `/plan` opens the ready actions when interactive UI is availab
 The same flat menu shows **Implement here** and **Start fresh and implement**, explains which conversation context each choice uses, and previews the selected **Plan reinjection** policy.
 **Implement here**—and the compatibility route `/plan implement`—appends the Normal contract, lifts the Plan runtime policy, captures the reinjection setting, and starts implementation in the current session with its complete planning conversation and tool calls.
 **Start fresh and implement** opens a settings page before replacement.
-Its searchable model list is a snapshot of Pi's currently available models and shows each provider, model ID, and friendly name.
+Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
 The model and thinking rows default independently to **Destination default**; the fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Back navigation preserves this menu-local draft, while closing and reopening the menu resets both rows.
 The saved-plan menu keeps its direct fresh-session action without these optional rows.
@@ -174,6 +174,7 @@ In-memory sessions create an unlinked fresh session because no parent file exist
 Escape, Ctrl+C, menu disposal, source replacement/shutdown, model/auth failure, or cancellation by another extension before replacement leaves the source plan unchanged.
 Under **Off — conversation history only**, the destination receives the complete plan in its initial user prompt and does not persist active-plan state.
 When a one-shot runtime choice exists, only that temporary non-model state is persisted and it is removed before the first request.
+If that removal cannot be persisted, the request is not sent and can be retried after session persistence is available.
 If that kickoff fails, the complete request remains in the destination editor and the source remains resumable.
 Under either guaranteed-plan policy, the destination persists active-plan state before kickoff.
 If guaranteed-plan persistence fails, the complete request is placed in the destination editor and the source remains resumable.

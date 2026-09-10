@@ -94,6 +94,57 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
 	}
 });
 
+test("fresh model picker honors the nonempty session model scope", async () => {
+	let availableReads = 0;
+	let freshVisits = 0;
+	let modelOptions: string[] = [];
+	let selectedRuntime: unknown;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		scopedModels: [{ model: AVAILABLE_MODELS[1], thinkingLevel: "high" }],
+		modelRegistry: {
+			getAvailable: () => {
+				availableReads += 1;
+				return AVAILABLE_MODELS;
+			},
+		},
+		select: async (title: string, options: string[]) => {
+			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+			if (title.startsWith("Fresh implementation settings")) {
+				freshVisits += 1;
+				return freshVisits === 1
+					? options.find((option) => option.startsWith("Implementation model"))
+					: "Start fresh implementation";
+			}
+			if (title.startsWith("Implementation model")) {
+				modelOptions = options;
+				return options.find((option) => option.includes("provider-two/model-two"));
+			}
+			return undefined;
+		},
+	});
+
+	await showReadyPlanMenu(
+		context.ctx,
+		menuOptions({
+			implementFresh: (runtime: unknown) => {
+				selectedRuntime = runtime;
+			},
+		}),
+	);
+
+	assert.equal(availableReads, 0);
+	assert.ok(modelOptions.some((option) => option.includes("provider-two/model-two")));
+	assert.equal(
+		modelOptions.some((option) => option.includes("provider-one/model-one")),
+		false,
+	);
+	assert.deepEqual(selectedRuntime, {
+		model: { provider: "provider-two", modelId: "model-two" },
+	});
+});
+
 test("fresh model choice is searchable in TUI mode", async () => {
 	let screen = 0;
 	let filteredModelScreen = "";

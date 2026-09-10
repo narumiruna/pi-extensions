@@ -349,8 +349,13 @@ function createFreshImplementationFlow(
 
 function snapshotAvailableModels(ctx: ExtensionContext): ModelChoice[] {
 	const getAvailable = ctx.modelRegistry.getAvailable;
-	const available = typeof getAvailable === "function" ? getAvailable.call(ctx.modelRegistry) : [];
-	return available.map((model, index) => {
+	const models =
+		ctx.scopedModels.length > 0
+			? ctx.scopedModels.map((entry) => entry.model)
+			: typeof getAvailable === "function"
+				? getAvailable.call(ctx.modelRegistry)
+				: [];
+	return models.map((model, index) => {
 		const provider = safeModelMetadata(model.provider, "unknown provider");
 		const modelId = safeModelMetadata(model.id, "unknown model");
 		const name = safeModelMetadata(model.name, "");

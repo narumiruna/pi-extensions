@@ -205,13 +205,18 @@ async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplem
 		try {
 			model = ctx.modelRegistry.find(requestedModel.provider, requestedModel.modelId);
 		} catch (error: unknown) {
-			if (request.isCurrent()) {
-				ctx.ui.notify(`Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
-			}
+			notifyCurrent(
+				ctx,
+				request,
+				`Unable to implement the plan: ${safeErrorDetail(error)}`,
+				"error",
+			);
 			return false;
 		}
 		if (!model) {
-			ctx.ui.notify(
+			notifyCurrent(
+				ctx,
+				request,
 				`Unable to implement the plan: implementation model ${safeModelReference(requestedModel)} is no longer available. Choose another model and retry.`,
 				"warning",
 			);
@@ -219,21 +224,21 @@ async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplem
 		}
 	}
 	if (!model) {
-		ctx.ui.notify("Unable to implement the plan: no model is selected.", "warning");
+		notifyCurrent(ctx, request, "Unable to implement the plan: no model is selected.", "warning");
 		return false;
 	}
 	let auth: Awaited<ReturnType<ExtensionCommandContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
 	try {
 		auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	} catch (error: unknown) {
-		if (request.isCurrent()) {
-			ctx.ui.notify(`Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
-		}
+		notifyCurrent(ctx, request, `Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
 		return false;
 	}
 	if (!request.isCurrent()) return false;
 	if (!auth.ok) {
-		ctx.ui.notify(
+		notifyCurrent(
+			ctx,
+			request,
 			requestedModel
 				? `Unable to implement the plan with ${safeModelReference(model)}: ${safeErrorDetail(auth.error)}. Choose another model or configure authentication, then retry.`
 				: `Unable to implement the plan: ${safeErrorDetail(auth.error)}`,
@@ -242,6 +247,15 @@ async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplem
 		return false;
 	}
 	return true;
+}
+
+function notifyCurrent(
+	ctx: Pick<ExtensionContext, "ui">,
+	request: FreshImplementationRequest,
+	message: string,
+	level: "info" | "warning" | "error",
+) {
+	if (request.isCurrent()) safeNotify(ctx, message, level);
 }
 
 function pendingRuntimeIntent(

@@ -112,10 +112,11 @@ interface PendingWorkflowToolPolicy {
 	generation: number;
 	mode: "resolve" | "revalidate";
 }
+type ImplementationRuntimeApplicationResult = "ready" | "blocked" | "stale";
 interface ActiveImplementationRuntimeApplication {
 	sessionManager: ExtensionContext["sessionManager"];
-	completion: Promise<void>;
-	finish(): void;
+	completion: Promise<ImplementationRuntimeApplicationResult>;
+	drainOnShutdown: boolean;
 }
 type InteractiveUi = typeof import("./interactive-ui.js");
 
@@ -169,25 +170,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	const implementationRetention = createImplementationRetentionCoordinator();
 	const finalizationRequest = createFinalizationRequestCoordinator();
 	const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
-	const beginImplementationRuntimeApplication = (
-		sessionManager: ExtensionContext["sessionManager"],
-	) => {
-		let resolveCompletion!: () => void;
-		const application: ActiveImplementationRuntimeApplication = {
-			sessionManager,
-			completion: new Promise<void>((resolve) => {
-				resolveCompletion = resolve;
-			}),
-			finish() {
-				if (activeImplementationRuntimeApplication === application) {
-					activeImplementationRuntimeApplication = undefined;
-				}
-				resolveCompletion();
-			},
-		};
-		activeImplementationRuntimeApplication = application;
-		return application.finish;
-	};
 	const planExports = createPlanExportController({
 		getState: () => state,
 		getSettings: () => settings,
@@ -543,7 +525,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	pi.on("session_shutdown", async (_event, ctx) => {
 		const shutdownSession = ctx.sessionManager;
 		const runtimeApplication =
-			activeImplementationRuntimeApplication?.sessionManager === shutdownSession
+			activeImplementationRuntimeApplication?.sessionManager === shutdownSession &&
+			activeImplementationRuntimeApplication.drainOnShutdown
 				? activeImplementationRuntimeApplication
 				: undefined;
 		finalizationRequest.reset();
@@ -690,18 +673,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		return { messages: messages as typeof event.messages };
 	});
 
-	pi.on("before_agent_start", async (_event, ctx) => {
-		if (refreshStateBeforeFirstAgentStart) {
-			refreshStateBeforeFirstAgentStart = false;
-			implementationRetention.reset();
-			const branch = ctx.sessionManager.getBranch();
-			const restoredState = restorePlanModeState(branch, STATE_ENTRY_TYPE);
-			restoreModeContractTracking(branch, restoredState);
-			if (!installRestoredState(restoredState, ctx)) return;
-			implementationRetention.restore(state.activeImplementation);
-			updateUi(ctx);
-		}
-		if (!(await applyPendingImplementationRuntime(ctx))) return;
+	pi.on("input", async (_event, ctx) => {
+		refreshStateForFirstPrompt(ctx);
+		const result = await applyPendingImplementationRuntime(ctx);
+		if (result !== "ready") return { action: "handled" };
+	});
+
+	pi.on("before_agent_start", (_event, ctx) => {
+		refreshStateForFirstPrompt(ctx);
 		if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
 		if (state.latestPlan || state.awaitingAction) {
 			readyPresentationIntent = undefined;
@@ -1529,121 +1508,149 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		}
 	}
 
-	async function applyPendingImplementationRuntime(ctx: ExtensionContext) {
-		const intent = state.enabled ? undefined : state.pendingImplementationRuntime;
-		if (!intent) return true;
+	function refreshStateForFirstPrompt(ctx: ExtensionContext) {
+		if (!refreshStateBeforeFirstAgentStart) return;
+		refreshStateBeforeFirstAgentStart = false;
+		implementationRetention.reset();
+		const branch = ctx.sessionManager.getBranch();
+		const restoredState = restorePlanModeState(branch, STATE_ENTRY_TYPE);
+		restoreModeContractTracking(branch, restoredState);
+		if (!installRestoredState(restoredState, ctx)) return;
+		implementationRetention.restore(state.activeImplementation);
+		updateUi(ctx);
+	}
+
+	async function applyPendingImplementationRuntime(
+		ctx: ExtensionContext,
+	): Promise<ImplementationRuntimeApplicationResult> {
 		const session = ctx.sessionManager;
+		const activeApplication = activeImplementationRuntimeApplication;
+		if (activeApplication?.sessionManager === session) return activeApplication.completion;
+
+		const intent = state.enabled ? undefined : state.pendingImplementationRuntime;
+		if (!intent) return "ready";
 		const generation = menuGeneration;
-		state = { ...state, pendingImplementationRuntime: undefined };
-		try {
-			persistState();
-		} catch (error: unknown) {
-			if (currentSession === session && generation === menuGeneration) {
-				ctx.ui.notify(
-					`Unable to apply fresh implementation settings because their one-shot state could not be consumed: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. Destination defaults will be used.`,
-					"warning",
-				);
-			}
-			return false;
-		}
 		const isCurrent = () =>
 			currentSession === session && generation === menuGeneration && !menuController.signal.aborted;
-		const applyThinking = () => {
-			if (!intent.thinkingLevel) return;
+		const notifyCurrent = (message: string) => {
+			if (!isCurrent()) return;
 			try {
-				pi.setThinkingLevel(intent.thinkingLevel);
-				const effectiveLevel = pi.getThinkingLevel();
-				if (isCurrent() && effectiveLevel !== intent.thinkingLevel) {
-					ctx.ui.notify(
-						`Implementation thinking ${intent.thinkingLevel} is unsupported by the destination model; Pi is using ${effectiveLevel}.`,
-						"warning",
-					);
-				}
-			} catch (error: unknown) {
-				if (isCurrent()) {
-					ctx.ui.notify(
-						`Implementation thinking ${intent.thinkingLevel} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default will continue.`,
-						"warning",
-					);
-				}
+				ctx.ui.notify(message, "warning");
+			} catch {
+				// The session can become stale while an asynchronous runtime application settles.
 			}
 		};
-		if (intent.model) {
-			let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
-			let resolutionFailed = false;
-			try {
-				model = ctx.modelRegistry.find(intent.model.provider, intent.model.modelId);
-			} catch (error: unknown) {
-				if (isCurrent()) {
-					ctx.ui.notify(
-						`Implementation model ${terminalModelReference(intent.model)} could not be resolved: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-						"warning",
-					);
-				}
-				resolutionFailed = true;
-				model = undefined;
-			}
-			if (!model && !resolutionFailed && isCurrent()) {
-				ctx.ui.notify(
-					`Implementation model ${terminalModelReference(intent.model)} is no longer available. The destination default model will continue.`,
-					"warning",
-				);
-			}
-			if (model) {
-				let authenticated = false;
+		let application!: ActiveImplementationRuntimeApplication;
+		const completion = Promise.resolve()
+			.then(async (): Promise<ImplementationRuntimeApplicationResult> => {
+				if (!isCurrent()) return "stale";
+				const pendingState = state;
+				state = { ...state, pendingImplementationRuntime: undefined };
 				try {
-					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-					if (!isCurrent()) return false;
-					if (auth.ok) authenticated = true;
-					else {
-						ctx.ui.notify(
-							`Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(auth.error)}. The destination default model will continue.`,
-							"warning",
-						);
-					}
+					persistState();
 				} catch (error: unknown) {
-					if (isCurrent()) {
-						ctx.ui.notify(
-							`Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-							"warning",
+					state = pendingState;
+					try {
+						persistState();
+					} catch {
+						// SessionManager mutates its in-memory branch before a disk append can fail.
+						// A best-effort rollback entry keeps that branch aligned with durable pending state.
+					}
+					notifyCurrent(
+						`Unable to apply fresh implementation settings because their one-shot state could not be consumed: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The implementation request was not sent; retry after session persistence is available.`,
+					);
+					return "blocked";
+				}
+				if (!isCurrent()) return "stale";
+
+				const applyThinking = () => {
+					if (!intent.thinkingLevel) return;
+					try {
+						pi.setThinkingLevel(intent.thinkingLevel);
+						const effectiveLevel = pi.getThinkingLevel();
+						if (effectiveLevel !== intent.thinkingLevel) {
+							notifyCurrent(
+								`Implementation thinking ${intent.thinkingLevel} is unsupported by the destination model; Pi is using ${effectiveLevel}.`,
+							);
+						}
+					} catch (error: unknown) {
+						notifyCurrent(
+							`Implementation thinking ${intent.thinkingLevel} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default will continue.`,
 						);
 					}
-				}
-				if (!isCurrent()) return false;
-				if (authenticated) {
-					let applied = false;
-					let applicationFailed = false;
-					const finishApplication = beginImplementationRuntimeApplication(session);
+				};
+
+				if (intent.model) {
+					let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+					let resolutionFailed = false;
 					try {
+						model = ctx.modelRegistry.find(intent.model.provider, intent.model.modelId);
+					} catch (error: unknown) {
+						notifyCurrent(
+							`Implementation model ${terminalModelReference(intent.model)} could not be resolved: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
+						);
+						resolutionFailed = true;
+						model = undefined;
+					}
+					if (!model && !resolutionFailed) {
+						notifyCurrent(
+							`Implementation model ${terminalModelReference(intent.model)} is no longer available. The destination default model will continue.`,
+						);
+					}
+					if (model) {
+						let authenticated = false;
 						try {
-							applied = await pi.setModel(model);
+							const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+							if (!isCurrent()) return "stale";
+							if (auth.ok) authenticated = true;
+							else {
+								notifyCurrent(
+									`Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(auth.error)}. The destination default model will continue.`,
+								);
+							}
 						} catch (error: unknown) {
-							applicationFailed = true;
-							if (isCurrent()) {
-								ctx.ui.notify(
-									`Implementation model ${terminalModelReference(intent.model)} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-									"warning",
+							notifyCurrent(
+								`Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
+							);
+						}
+						if (!isCurrent()) return "stale";
+						if (authenticated) {
+							let applied = false;
+							let applicationFailed = false;
+							application.drainOnShutdown = true;
+							try {
+								try {
+									applied = await pi.setModel(model);
+								} catch (error: unknown) {
+									applicationFailed = true;
+									notifyCurrent(
+										`Implementation model ${terminalModelReference(intent.model)} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
+									);
+								}
+							} finally {
+								application.drainOnShutdown = false;
+							}
+							if (!isCurrent()) return "stale";
+							if (!applied && !applicationFailed) {
+								notifyCurrent(
+									`Implementation model ${terminalModelReference(intent.model)} could not be applied after authentication changed. The destination default model will continue.`,
 								);
 							}
 						}
-						if (currentSession !== session) return false;
-						if (isCurrent() && !applied && !applicationFailed) {
-							ctx.ui.notify(
-								`Implementation model ${terminalModelReference(intent.model)} could not be applied after authentication changed. The destination default model will continue.`,
-								"warning",
-							);
-						}
-						applyThinking();
-						return isCurrent();
-					} finally {
-						finishApplication();
 					}
 				}
-			}
-		}
-		if (!isCurrent()) return false;
-		applyThinking();
-		return isCurrent();
+				if (!isCurrent()) return "stale";
+				applyThinking();
+				return isCurrent() ? "ready" : "stale";
+			})
+			.finally(() => {
+				if (activeImplementationRuntimeApplication === application) {
+					activeImplementationRuntimeApplication = undefined;
+				}
+			});
+		application = { sessionManager: session, completion, drainOnShutdown: false };
+		activeImplementationRuntimeApplication = application;
+		return completion;
 	}
 
 	function applyPlanThinkingLevel() {

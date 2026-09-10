@@ -13,6 +13,16 @@ function stateEntry(data: Record<string, unknown>) {
 	return { type: "custom" as const, customType: STATE_ENTRY_TYPE, data };
 }
 
+async function submitInput(
+	mock: ReturnType<typeof createMockPi>,
+	ctx: unknown,
+	text = "implement",
+) {
+	const input = mock.events.get("input")?.[0];
+	assert.ok(input);
+	return Promise.resolve(input({ text, source: "extension" }, ctx));
+}
+
 test("pending implementation runtime state restores only strict bounded one-shot values", () => {
 	const valid = restorePlanModeState(
 		[
@@ -206,6 +216,71 @@ test("missing or unauthenticated selected models reject before replacing the sou
 	}
 });
 
+test("fresh preflight suppresses stale warnings and contains notification failures", async () => {
+	const staleScenarios = [
+		{
+			model: { provider: "planning-provider", id: "planning-model" },
+			runtime: { model: { provider: TARGET.provider, modelId: TARGET.id } },
+			modelRegistry: { find: () => undefined },
+		},
+		{
+			model: undefined,
+			runtime: undefined,
+			modelRegistry: {},
+		},
+		{
+			model: { provider: "planning-provider", id: "planning-model" },
+			runtime: undefined,
+			modelRegistry: {
+				getApiKeyAndHeaders: async () => {
+					throw new Error("stale auth");
+				},
+			},
+		},
+	];
+	for (const scenario of staleScenarios) {
+		let currentChecks = 0;
+		const context = createMockContext({
+			mode: "rpc",
+			hasUI: true,
+			model: scenario.model,
+			modelRegistry: scenario.modelRegistry,
+		});
+		const result = await startFreshImplementationSession(context.ctx, {
+			plan: PLAN,
+			source: "plan_mode_complete",
+			retention: "keep",
+			stateEntryType: STATE_ENTRY_TYPE,
+			runtime: scenario.runtime,
+			isCurrent: () => {
+				currentChecks += 1;
+				return currentChecks === 1;
+			},
+		});
+		assert.equal(result.kind, "rejected");
+		assert.deepEqual(context.notifications, []);
+	}
+
+	const throwingNotification = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: { provider: "planning-provider", id: "planning-model" },
+		modelRegistry: { find: () => undefined },
+	});
+	(throwingNotification.ctx as { ui: { notify(): void } }).ui.notify = () => {
+		throw new Error("stale UI");
+	};
+	const result = await startFreshImplementationSession(throwingNotification.ctx, {
+		plan: PLAN,
+		source: "plan_mode_complete",
+		retention: "keep",
+		stateEntryType: STATE_ENTRY_TYPE,
+		runtime: { model: { provider: TARGET.provider, modelId: TARGET.id } },
+		isCurrent: () => true,
+	});
+	assert.equal(result.kind, "rejected");
+});
+
 test("destination consumes and applies all runtime override classes exactly once", async () => {
 	const cases = [
 		{ name: "none", runtime: undefined, expectedOrder: [] },
@@ -265,9 +340,7 @@ test("destination consumes and applies all runtime override classes exactly once
 			},
 		});
 		await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-		const before = mock.events.get("before_agent_start")?.[0];
-		assert.ok(before);
-		await before({ prompt: "implement", systemPrompt: "system" }, context.ctx);
+		assert.equal(await submitInput(mock, context.ctx), undefined);
 		assert.deepEqual(order, scenario.expectedOrder, scenario.name);
 		if (scenario.runtime) {
 			const consumed = mock.entries.at(-1)?.data as {
@@ -275,7 +348,7 @@ test("destination consumes and applies all runtime override classes exactly once
 			};
 			assert.equal(consumed.pendingImplementationRuntime, undefined, scenario.name);
 		}
-		await before({ prompt: "again", systemPrompt: "system" }, context.ctx);
+		assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 		assert.deepEqual(order, scenario.expectedOrder, `${scenario.name} reapplied`);
 	}
 });
@@ -310,10 +383,8 @@ test("destination warns on thinking clamping and consumes a model race failure w
 		},
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-	const before = mock.events.get("before_agent_start")?.[0];
-	assert.ok(before);
-	await before({ prompt: "implement", systemPrompt: "system" }, context.ctx);
-	await before({ prompt: "again", systemPrompt: "system" }, context.ctx);
+	assert.equal(await submitInput(mock, context.ctx), undefined);
+	assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 
 	assert.equal(setModelCalls, 1);
 	assert.equal(mock.thinkingLevel, "high");
@@ -330,7 +401,148 @@ test("destination warns on thinking clamping and consumes a model race failure w
 	);
 });
 
-test("destination drains an asynchronous model and thinking application before shutdown", async () => {
+test("destination serializes concurrent prompts across the full runtime application", async () => {
+	let releaseModel!: () => void;
+	let markModelStarted!: () => void;
+	const modelStarted = new Promise<void>((resolve) => {
+		markModelStarted = resolve;
+	});
+	const modelGate = new Promise<void>((resolve) => {
+		releaseModel = resolve;
+	});
+	const branch = [
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: {
+				version: 1,
+				model: { provider: TARGET.provider, modelId: TARGET.id },
+				thinkingLevel: "high",
+			},
+		}),
+	];
+	const mock = createMockPi({ thinkingLevel: "low" });
+	const setModel = mock.rawPi.setModel.bind(mock.rawPi);
+	mock.rawPi.setModel = async (model) => {
+		markModelStarted();
+		await modelGate;
+		return setModel(model);
+	};
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		modelRegistry: {
+			find: () => TARGET,
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+	const first = submitInput(mock, context.ctx);
+	await modelStarted;
+	let secondSettled = false;
+	const second = submitInput(mock, context.ctx, "concurrent").then((result) => {
+		secondSettled = true;
+		return result;
+	});
+	await Promise.resolve();
+	assert.equal(secondSettled, false);
+	releaseModel();
+	assert.deepEqual(await Promise.all([first, second]), [undefined, undefined]);
+	assert.equal(mock.setModels.length, 1);
+	assert.equal(mock.thinkingLevel, "high");
+});
+
+test("destination serializes a concurrent prompt while authentication is pending", async () => {
+	let releaseAuth!: () => void;
+	let markAuthStarted!: () => void;
+	const authStarted = new Promise<void>((resolve) => {
+		markAuthStarted = resolve;
+	});
+	const authGate = new Promise<void>((resolve) => {
+		releaseAuth = resolve;
+	});
+	const branch = [
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: {
+				version: 1,
+				model: { provider: TARGET.provider, modelId: TARGET.id },
+			},
+		}),
+	];
+	const mock = createMockPi();
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		modelRegistry: {
+			find: () => TARGET,
+			getApiKeyAndHeaders: async () => {
+				markAuthStarted();
+				await authGate;
+				return { ok: true as const };
+			},
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+	const first = submitInput(mock, context.ctx);
+	await authStarted;
+	let secondSettled = false;
+	const second = submitInput(mock, context.ctx, "concurrent").then((result) => {
+		secondSettled = true;
+		return result;
+	});
+	await Promise.resolve();
+	assert.equal(secondSettled, false);
+	releaseAuth();
+	assert.deepEqual(await Promise.all([first, second]), [undefined, undefined]);
+	assert.equal(mock.setModels.length, 1);
+});
+
+test("destination blocks a prompt until runtime intent consumption can persist", async () => {
+	const branch = [
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: { version: 1, thinkingLevel: "high" },
+		}),
+	];
+	const mock = createMockPi({ thinkingLevel: "low" });
+	const appendEntry = mock.rawPi.appendEntry.bind(mock.rawPi);
+	const attemptedStates: unknown[] = [];
+	let persistenceAvailable = false;
+	mock.rawPi.appendEntry = (customType, data) => {
+		attemptedStates.push(data);
+		if (!persistenceAvailable) throw new Error("disk unavailable");
+		appendEntry(customType, data);
+	};
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+
+	assert.deepEqual(await submitInput(mock, context.ctx), { action: "handled" });
+	assert.equal(mock.thinkingLevel, "low");
+	assert.equal(attemptedStates.length, 2);
+	assert.deepEqual(
+		(attemptedStates.at(-1) as { pendingImplementationRuntime?: unknown })
+			.pendingImplementationRuntime,
+		{ version: 1, thinkingLevel: "high" },
+	);
+	assert.match(context.notifications.at(-1)?.message ?? "", /request was not sent/iu);
+
+	persistenceAvailable = true;
+	assert.equal(await submitInput(mock, context.ctx, "retry"), undefined);
+	assert.equal(mock.thinkingLevel, "high");
+	assert.equal(
+		(mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
+			?.pendingImplementationRuntime,
+		undefined,
+	);
+});
+
+test("destination drains asynchronous model application without applying stale thinking", async () => {
 	let releaseModel!: () => void;
 	let markModelStarted!: () => void;
 	const modelStarted = new Promise<void>((resolve) => {
@@ -365,10 +577,7 @@ test("destination drains an asynchronous model and thinking application before s
 		},
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-	const pending = mock.events.get("before_agent_start")?.[0]?.(
-		{ prompt: "implement", systemPrompt: "system" },
-		context.ctx,
-	);
+	const pending = submitInput(mock, context.ctx);
 	await modelStarted;
 	let shutdownSettled = false;
 	const shutdown = Promise.resolve(
@@ -381,7 +590,7 @@ test("destination drains an asynchronous model and thinking application before s
 	releaseModel();
 	await Promise.all([pending, shutdown]);
 
-	assert.equal(mock.thinkingLevel, "high");
+	assert.equal(mock.thinkingLevel, "low");
 	assert.equal(
 		(mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
 			?.pendingImplementationRuntime,
@@ -422,10 +631,7 @@ test("destination shutdown does not wait for uncancellable authentication prefli
 		},
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-	const pending = mock.events.get("before_agent_start")?.[0]?.(
-		{ prompt: "implement", systemPrompt: "system" },
-		context.ctx,
-	);
+	const pending = submitInput(mock, context.ctx);
 	await authStarted;
 	await mock.events.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx);
 	releaseAuth();
@@ -461,10 +667,8 @@ test("destination consumes a thrown model application without retrying", async (
 		},
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-	const before = mock.events.get("before_agent_start")?.[0];
-	assert.ok(before);
-	await before({ prompt: "implement", systemPrompt: "system" }, context.ctx);
-	await before({ prompt: "again", systemPrompt: "system" }, context.ctx);
+	assert.equal(await submitInput(mock, context.ctx), undefined);
+	assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 
 	assert.equal(calls, 1);
 	assert.match(context.notifications.at(-1)?.message ?? "", /could not be applied/u);
