@@ -1,4 +1,5 @@
 import type { AgentToolResult, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 const STATUS_KEY = "chrome-devtools";
 interface StatusContext {
@@ -89,14 +90,10 @@ class PiTextComponent implements RenderComponent {
 			.replace(/\t/g, "   ")
 			.split(/\r?\n/)
 			.map((line) => {
-				const truncatedLine = truncateLine(line, Math.max(1, width));
+				const truncatedLine = truncateToWidth(line, Math.max(0, width), "");
 				return this.theme && this.color ? this.theme.fg(this.color, truncatedLine) : truncatedLine;
 			});
 	}
-}
-
-function truncateLine(line: string, maxWidth: number) {
-	return Array.from(line).slice(0, maxWidth).join("");
 }
 
 export async function withStatus<T>(
