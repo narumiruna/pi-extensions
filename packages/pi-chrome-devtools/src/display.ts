@@ -4,6 +4,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 const MAX_SANITIZER_INPUT_CODE_UNITS = 50_000;
 
 export function sanitizeChromeDevtoolsDisplay(value: string, maxCharacters = 50_000) {
+	const inputWasTruncated = value.length > MAX_SANITIZER_INPUT_CODE_UNITS;
 	const boundedInput = truncateCodeUnits(value, MAX_SANITIZER_INPUT_CODE_UNITS);
 	const safeTerminalInput = truncateAtIncompleteTerminalSequence(boundedInput);
 	const normalizedLineEndings = stripTerminalSequences(safeTerminalInput).replace(/\r\n/g, "\n");
@@ -20,9 +21,10 @@ export function sanitizeChromeDevtoolsDisplay(value: string, maxCharacters = 50_
 		const loneSurrogate = character.length === 1 && codePoint >= 0xd800 && codePoint <= 0xdfff;
 		return unsafeControl || loneSurrogate ? "�" : character;
 	}).join("");
-	if (sanitized.length <= maxCharacters) return sanitized;
+	const outputLimit = Math.min(maxCharacters, MAX_SANITIZER_INPUT_CODE_UNITS);
+	if (!inputWasTruncated && sanitized.length <= outputLimit) return sanitized;
 
-	return `${truncateCodeUnits(sanitized, Math.max(0, maxCharacters - 1))}…`;
+	return `${truncateCodeUnits(sanitized, Math.max(0, outputLimit - 1))}…`;
 }
 
 // Preflight Pi-recognized sequences linearly so malformed suffixes never reach its parser.

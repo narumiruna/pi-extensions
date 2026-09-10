@@ -74,7 +74,8 @@ test("expanded output bounds zero-width text by code units", () => {
 	const component = renderTextResult(result, { expanded: true, isPartial: false }, plainTheme);
 	const rendered = component.render(3)[0] ?? "";
 
-	assert.ok(rendered.length <= 50_000);
+	assert.equal(rendered.length, 50_000);
+	assert.ok(rendered.endsWith("…"));
 	assert.ok(visibleWidth(rendered) <= 3);
 	assert.equal(result.content[0]?.type === "text" ? result.content[0].text : undefined, input);
 });
