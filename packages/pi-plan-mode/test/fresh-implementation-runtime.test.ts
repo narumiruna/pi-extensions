@@ -447,6 +447,52 @@ test("destination consumes and applies all runtime override classes exactly once
 	}
 });
 
+test("destination applies restored runtime during resumed session startup", async () => {
+	const branch = [
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: {
+				version: 1,
+				model: { provider: TARGET.provider, modelId: TARGET.id },
+				thinkingLevel: "high",
+			},
+		}),
+	];
+	const order: string[] = [];
+	const mock = createMockPi({ thinkingLevel: "low" });
+	const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+	mock.rawPi.setModel = async (model) => {
+		order.push("model");
+		return originalSetModel(model);
+	};
+	const originalSetThinking = mock.rawPi.setThinkingLevel.bind(mock.rawPi);
+	mock.rawPi.setThinkingLevel = (level) => {
+		order.push(`thinking:${level}`);
+		originalSetThinking(level);
+	};
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		modelRegistry: {
+			find: (provider: string, id: string) =>
+				provider === TARGET.provider && id === TARGET.id ? TARGET : undefined,
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
+	});
+
+	await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+
+	assert.deepEqual(order, ["model", "thinking:high"]);
+	assert.deepEqual(mock.setModels, [TARGET]);
+	assert.equal(mock.thinkingLevel, "high");
+	assert.equal(
+		(mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
+			?.pendingImplementationRuntime,
+		undefined,
+	);
+});
+
 test("destination warns on thinking clamping and consumes a model race failure without retry", async () => {
 	const branch = [
 		stateEntry({

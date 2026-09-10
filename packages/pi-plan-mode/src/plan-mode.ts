@@ -476,6 +476,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (!installRestoredState(restoredState, ctx)) return;
 		implementationRetention.restore(state.activeImplementation);
 		updateUi(ctx);
+		// A new session receives its setup entries after session_start, so its input gate refreshes
+		// them. Resumed and forked sessions already have the intent and must apply it here because
+		// extension-triggered custom-message turns bypass both input and before_agent_start.
+		if (event.reason !== "new") await applyPendingImplementationRuntime(ctx);
 	});
 
 	pi.on("session_before_tree", (event, ctx) => {
