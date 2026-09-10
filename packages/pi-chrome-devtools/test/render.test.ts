@@ -4,8 +4,12 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { renderTextResult, renderToolCall, withStatus } from "../src/render.js";
 
-const theme = {
+const plainTheme = {
 	bold: (text: string) => text,
+	fg: (_color: string, text: string) => text,
+};
+const theme = {
+	...plainTheme,
 	fg: (_color: string, text: string) => `\u001b[31m${text}\u001b[0m`,
 };
 
@@ -43,6 +47,26 @@ test.each([
 
 	assert.ok(lines.every((line) => visibleWidth(line) <= width));
 	assert.equal(stripTerminalSequences(lines[0] ?? ""), expected);
+});
+
+test("expanded output sanitizes terminal controls before truncation", () => {
+	const input =
+		"safe\u001b[31m red\u001b[0m" +
+		"\u001b]8;;https://evil.example\u0007link\u001b]8;;\u0007" +
+		"\u001b_hidden\u001b\\\u0001\u0085\u202eend";
+	const result = textResult(input);
+	const component = renderTextResult(result, { expanded: true, isPartial: false }, plainTheme);
+
+	assert.deepEqual(component.render(80), ["safe redlink���end"]);
+	assert.equal(result.content[0]?.type === "text" ? result.content[0].text : undefined, input);
+	assert.deepEqual(
+		renderTextResult(
+			textResult("\u001b[31m".repeat(10_000)),
+			{ expanded: true, isPartial: false },
+			plainTheme,
+		).render(80),
+		[],
+	);
 });
 
 test("tool rendering preserves compact, progress, tab, line, and truncation behavior", () => {
