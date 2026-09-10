@@ -8,6 +8,7 @@ function menuOptions(overrides: Record<string, unknown> = {}) {
 		signal: new AbortController().signal,
 		isCurrent: () => true,
 		implementationOutcome: () => "The plan remains available until implementation ends.",
+		planThinkingLevel: undefined,
 		getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
 		implementHere: () => undefined,
 		implementFresh: () => undefined,
@@ -90,6 +91,40 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
 	}
 });
 
+test("fresh settings use the supplied plan thinking level on older Pi contexts", async () => {
+	let selectedRuntime: unknown;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: undefined,
+		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+		select: async (title: string) => {
+			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+			if (title.startsWith("Fresh implementation settings")) {
+				return "Start fresh implementation";
+			}
+			return undefined;
+		},
+	});
+	delete (context.ctx as Partial<{ thinkingLevel: unknown }>).thinkingLevel;
+
+	await showReadyPlanMenu(
+		context.ctx,
+		menuOptions({
+			planThinkingLevel: "high",
+			implementFresh: (runtime: unknown) => {
+				selectedRuntime = runtime;
+			},
+		}),
+	);
+
+	assert.deepEqual(selectedRuntime, {
+		model: { provider: "provider\u001b[31m-one", modelId: "model\u202e-one" },
+		thinkingLevel: "high",
+	});
+});
+
 test("fresh settings prioritize start and show the plan runtime defaults", async () => {
 	let screen = 0;
 	let settingsScreen = "";
@@ -113,7 +148,7 @@ test("fresh settings prioritize start and show the plan runtime defaults", async
 		},
 	});
 
-	await showReadyPlanMenu(context.ctx, menuOptions());
+	await showReadyPlanMenu(context.ctx, menuOptions({ planThinkingLevel: "medium" }));
 
 	const start = settingsScreen.indexOf("Start fresh implementation");
 	const model = settingsScreen.indexOf("Model");
@@ -154,7 +189,7 @@ test("fresh thinking choice mirrors the built-in thinking layout", async () => {
 		},
 	});
 
-	await showReadyPlanMenu(context.ctx, menuOptions());
+	await showReadyPlanMenu(context.ctx, menuOptions({ planThinkingLevel: "medium" }));
 
 	assert.match(thinkingScreen, /Same as plan/u);
 	assert.match(thinkingScreen, /off\s+No reasoning/u);
@@ -300,6 +335,7 @@ test("closing and reopening fresh settings resets its draft to the plan runtime"
 		},
 	});
 	const options = menuOptions({
+		planThinkingLevel: "medium",
 		implementFresh: (runtime: unknown) => {
 			selectedRuntime = runtime;
 		},

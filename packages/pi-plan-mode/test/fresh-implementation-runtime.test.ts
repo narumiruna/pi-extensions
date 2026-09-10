@@ -698,7 +698,7 @@ test("destination blocks a prompt until runtime intent consumption can persist",
 	);
 });
 
-test("destination drains asynchronous model application without applying stale thinking", async () => {
+test("destination drains asynchronous model application and preserves stale runtime intent", async () => {
 	let releaseModel!: () => void;
 	let markModelStarted!: () => void;
 	const modelStarted = new Promise<void>((resolve) => {
@@ -747,14 +747,18 @@ test("destination drains asynchronous model application without applying stale t
 	await Promise.all([pending, shutdown]);
 
 	assert.equal(mock.thinkingLevel, "low");
-	assert.equal(
+	assert.deepEqual(
 		(mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
 			?.pendingImplementationRuntime,
-		undefined,
+		{
+			version: 1,
+			model: { provider: TARGET.provider, modelId: TARGET.id },
+			thinkingLevel: "high",
+		},
 	);
 });
 
-test("destination shutdown does not wait for uncancellable authentication preflight", async () => {
+test("destination shutdown preserves intent during uncancellable authentication preflight", async () => {
 	let releaseAuth!: () => void;
 	let markAuthStarted!: () => void;
 	const authStarted = new Promise<void>((resolve) => {
@@ -795,6 +799,22 @@ test("destination shutdown does not wait for uncancellable authentication prefli
 
 	assert.equal(mock.setModels.length, 0);
 	assert.equal(mock.thinkingLevel, "low");
+	assert.deepEqual(
+		(mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
+			?.pendingImplementationRuntime,
+		{
+			version: 1,
+			model: { provider: TARGET.provider, modelId: TARGET.id },
+		},
+	);
+
+	await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+	assert.equal(mock.setModels.length, 1);
+	assert.equal(
+		(mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
+			?.pendingImplementationRuntime,
+		undefined,
+	);
 });
 
 test("destination consumes a thrown model application without retrying", async () => {

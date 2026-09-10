@@ -36,6 +36,7 @@ const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = 
 
 interface PlanMenuOptions extends MenuLifecycle {
 	statusText: string;
+	planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
 	hasReadyPlan: boolean;
 	implementationOutcome(): string;
 	getExportDestination: PlanExportDestinationProvider;
@@ -65,7 +66,11 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 		| "save"
 		| "stay"
 		| "exit";
-	const freshFlow = createFreshImplementationFlow(ctx, options.implementFresh);
+	const freshFlow = createFreshImplementationFlow(
+		ctx,
+		options.planThinkingLevel,
+		options.implementFresh,
+	);
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "main",
 		screens: {
@@ -159,6 +164,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 }
 
 interface ReadyPlanMenuOptions extends MenuLifecycle {
+	planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
 	implementationOutcome(): string;
 	getExportDestination: PlanExportDestinationProvider;
 	implementHere(): void | Promise<void>;
@@ -183,7 +189,11 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 		| "save"
 		| "stay"
 		| "exit";
-	const freshFlow = createFreshImplementationFlow(ctx, options.implementFresh);
+	const freshFlow = createFreshImplementationFlow(
+		ctx,
+		options.planThinkingLevel,
+		options.implementFresh,
+	);
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "ready",
 		screens: {
@@ -268,6 +278,7 @@ interface ModelChoice {
 
 function createFreshImplementationFlow(
 	ctx: ExtensionContext,
+	planThinkingLevel: PlanModeFixedThinkingLevel | undefined,
 	implementFresh: (
 		runtime: ImplementationRuntimeSelection,
 		signal: AbortSignal,
@@ -278,7 +289,6 @@ function createFreshImplementationFlow(
 	const planModelSummary = ctx.model
 		? `${safeModelMetadata(ctx.model.id, "unknown model")} [${safeModelMetadata(ctx.model.provider, "unknown provider")}]`
 		: undefined;
-	const planThinkingLevel = FIXED_THINKING_LEVELS.find((level) => level === ctx.thinkingLevel);
 	let selectedModel: ModelChoice | undefined;
 	let selectedThinkingLevel: PlanModeFixedThinkingLevel | undefined;
 	return {

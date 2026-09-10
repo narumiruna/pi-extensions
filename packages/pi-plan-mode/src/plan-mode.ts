@@ -190,6 +190,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		getState: () => state,
 		captureLifecycle: captureMenuLifecycle,
 		statusText: planStatusText,
+		// ExtensionContext.thinkingLevel was added after the supported Pi 0.80.6 floor.
+		// ExtensionAPI has exposed the same runtime value throughout that compatibility range.
+		getThinkingLevel: () => pi.getThinkingLevel(),
 		implementationOutcome,
 		getExportDestination: (ctx) => planExports.getDestination(ctx),
 		show: (ctx) => showStoredPlan(pi, ctx, state),
@@ -1585,23 +1588,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			.then(async (): Promise<ImplementationRuntimeApplicationResult> => {
 				if (!isCurrent()) return "stale";
 				const pendingState = state;
-				state = { ...state, pendingImplementationRuntime: undefined };
-				try {
-					persistState();
-				} catch (error: unknown) {
-					state = pendingState;
-					try {
-						persistState();
-					} catch {
-						// SessionManager mutates its in-memory branch before a disk append can fail.
-						// A best-effort rollback entry keeps that branch aligned with durable pending state.
-					}
-					notifyCurrent(
-						`Unable to apply fresh implementation settings because their one-shot state could not be consumed: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The implementation request was not sent; retry after session persistence is available.`,
-					);
-					return "blocked";
-				}
-				if (!isCurrent()) return "stale";
+				const previousThinkingLevel = pi.getThinkingLevel();
 
 				const applyThinking = () => {
 					if (!intent.thinkingLevel) return;
@@ -1681,7 +1668,32 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 				}
 				if (!isCurrent()) return "stale";
 				applyThinking();
-				return isCurrent() ? "ready" : "stale";
+				if (!isCurrent()) return "stale";
+
+				state = { ...state, pendingImplementationRuntime: undefined };
+				try {
+					persistState();
+				} catch (error: unknown) {
+					state = pendingState;
+					try {
+						if (pi.getThinkingLevel() !== previousThinkingLevel) {
+							pi.setThinkingLevel(previousThinkingLevel);
+						}
+					} catch {
+						// Keep the durable intent pending even if a runtime rollback is unavailable.
+					}
+					try {
+						persistState();
+					} catch {
+						// SessionManager mutates its in-memory branch before a disk append can fail.
+						// A best-effort rollback entry keeps that branch aligned with durable pending state.
+					}
+					notifyCurrent(
+						`Unable to apply fresh implementation settings because their one-shot state could not be consumed: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The implementation request was not sent; retry after session persistence is available.`,
+					);
+					return "blocked";
+				}
+				return "ready";
 			})
 			.finally(() => {
 				if (activeImplementationRuntimeApplication === application) {
