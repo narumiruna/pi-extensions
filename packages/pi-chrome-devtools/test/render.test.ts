@@ -112,10 +112,14 @@ test("tool rendering preserves compact, progress, tab, line, and truncation beha
 		),
 		"Running...",
 	);
-	assert.deepEqual(renderExpanded("first\tvalue\nsecond", 80).map(stripTerminalSequences), [
+	assert.deepEqual(renderExpanded("first\tvalue\r\nsecond", 80).map(stripTerminalSequences), [
 		"first   value",
 		"second",
 	]);
+	assert.equal(
+		stripTerminalSequences(renderExpanded("first\rsecond", 80)[0] ?? ""),
+		"first�second",
+	);
 	assert.equal(stripTerminalSequences(renderExpanded("abcdef", 3)[0] ?? ""), "abc");
 	assert.deepEqual(renderToolCall("evaluate")().render(0), [""]);
 });

@@ -6,7 +6,8 @@ const MAX_SANITIZER_INPUT_CODE_UNITS = 50_000;
 export function sanitizeChromeDevtoolsDisplay(value: string, maxCharacters = 50_000) {
 	const boundedInput = truncateCodeUnits(value, MAX_SANITIZER_INPUT_CODE_UNITS);
 	const safeTerminalInput = truncateAtIncompleteTerminalSequence(boundedInput);
-	const withoutBidi = stripVTControlCharacters(stripTerminalSequences(safeTerminalInput)).replace(
+	const normalizedLineEndings = stripTerminalSequences(safeTerminalInput).replace(/\r\n/g, "\n");
+	const withoutBidi = stripVTControlCharacters(normalizedLineEndings).replace(
 		/[\u202a-\u202e\u2066-\u2069]/gu,
 		"�",
 	);
