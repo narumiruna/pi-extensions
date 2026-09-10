@@ -4,11 +4,13 @@ import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/
 import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.js";
 import { createModeContractMessage } from "./mode-contract.js";
 import type { ImplementationPlanRetention } from "./settings.js";
-import type {
-	ImplementationRuntimeSelection,
-	PendingImplementationRuntime,
-	PlanCompletionSource,
-	PlanModeState,
+import {
+	type ImplementationRuntimeSelection,
+	isPendingImplementationModelIdentifier,
+	MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
+	type PendingImplementationRuntime,
+	type PlanCompletionSource,
+	type PlanModeState,
 } from "./state.js";
 
 type NewSessionOptions = Exclude<Parameters<ExtensionCommandContext["newSession"]>[0], undefined>;
@@ -202,16 +204,32 @@ async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplem
 	const requestedModel = request.runtime?.model;
 	let model = ctx.model;
 	if (requestedModel) {
-		try {
-			model = ctx.modelRegistry.find(requestedModel.provider, requestedModel.modelId);
-		} catch (error: unknown) {
+		if (
+			!isPendingImplementationModelIdentifier(requestedModel.provider) ||
+			!isPendingImplementationModelIdentifier(requestedModel.modelId)
+		) {
 			notifyCurrent(
 				ctx,
 				request,
-				`Unable to implement the plan: ${safeErrorDetail(error)}`,
-				"error",
+				`Unable to implement the plan: implementation model provider and ID must each contain 1-${MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH} characters. Choose another model and retry.`,
+				"warning",
 			);
 			return false;
+		}
+		const isCurrentModel =
+			ctx.model?.provider === requestedModel.provider && ctx.model.id === requestedModel.modelId;
+		if (!isCurrentModel) {
+			try {
+				model = ctx.modelRegistry.find(requestedModel.provider, requestedModel.modelId);
+			} catch (error: unknown) {
+				notifyCurrent(
+					ctx,
+					request,
+					`Unable to implement the plan: ${safeErrorDetail(error)}`,
+					"error",
+				);
+				return false;
+			}
 		}
 		if (!model) {
 			notifyCurrent(
@@ -264,7 +282,9 @@ function pendingRuntimeIntent(
 	if (!selection?.model && !selection?.thinkingLevel) return undefined;
 	return {
 		version: 1,
-		...(selection.model ? { model: { ...selection.model } } : {}),
+		...(selection.model
+			? { model: { provider: selection.model.provider, modelId: selection.model.modelId } }
+			: {}),
 		...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
 	};
 }

@@ -36,6 +36,8 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
 	const context = createMockContext({
 		mode: "rpc",
 		hasUI: true,
+		model: AVAILABLE_MODELS[1],
+		thinkingLevel: "low",
 		modelRegistry: {
 			getAvailable: () => {
 				availableReads += 1;
@@ -47,19 +49,14 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
 			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
 			if (title.startsWith("Fresh implementation settings")) {
 				freshVisits += 1;
-				if (freshVisits === 1)
-					return options.find((option) => option.startsWith("Implementation model"));
-				if (freshVisits === 2) {
-					assert.ok(options.some((option) => option.includes("provider-one/model-one")));
-					return options.find((option) => option.startsWith("Implementation thinking"));
-				}
-				assert.ok(options.some((option) => option.endsWith(": max")));
+				if (freshVisits === 1) return "Model";
+				if (freshVisits === 2) return "Thinking level";
 				return "Start fresh implementation";
 			}
 			if (title.startsWith("Implementation model")) {
-				return options.find((option) => option.includes("provider-one/model-one"));
+				return options.find((option) => option.includes("model-one [provider-one]"));
 			}
-			if (title.startsWith("Implementation thinking")) return "max";
+			if (title.startsWith("Implementation thinking level")) return "max";
 			return undefined;
 		},
 	});
@@ -81,17 +78,91 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
 	const rendered = dialogs.flatMap((dialog) => [dialog.title, ...dialog.options]).join("\n");
 	assert.equal(rendered.includes("\u001b"), false);
 	assert.equal(rendered.includes("\u202e"), false);
-	assert.match(rendered, /Friendly name/u);
 	const thinkingDialog = dialogs.find((dialog) =>
-		dialog.title.startsWith("Implementation thinking"),
+		dialog.title.startsWith("Implementation thinking level"),
 	);
 	assert.ok(thinkingDialog);
 	for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
 		assert.ok(
-			thinkingDialog.options.some((option) => option.startsWith(level)),
+			thinkingDialog.options.some((option) => option.includes(level)),
 			level,
 		);
 	}
+});
+
+test("fresh settings prioritize start and show same-as-plan defaults", async () => {
+	let screen = 0;
+	let settingsScreen = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
+		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 90);
+			screen += 1;
+			if (screen === 1) {
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else {
+				settingsScreen = harness.render().join("\n");
+				harness.handleInput("\u0003");
+			}
+			return harness.resultPromise;
+		},
+	});
+
+	await showReadyPlanMenu(context.ctx, menuOptions());
+
+	const start = settingsScreen.indexOf("Start fresh implementation");
+	const model = settingsScreen.indexOf("Model");
+	const thinking = settingsScreen.indexOf("Thinking level");
+	assert.ok(start >= 0 && start < model && model < thinking);
+	assert.match(settingsScreen, /→ Start fresh implementation/u);
+	assert.match(settingsScreen, /Model\s+Same as plan/u);
+	assert.match(settingsScreen, /Thinking level\s+Same as plan/u);
+});
+
+test("fresh thinking choice mirrors the built-in thinking layout", async () => {
+	let screen = 0;
+	let thinkingScreen = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
+		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 80);
+			screen += 1;
+			if (screen === 1) {
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else if (screen === 2) {
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else {
+				for (let index = 0; index < 3; index += 1) {
+					harness.handleInput("tui.select.down");
+				}
+				thinkingScreen = harness.render().join("\n");
+				harness.handleInput("\u0003");
+			}
+			return harness.resultPromise;
+		},
+	});
+
+	await showReadyPlanMenu(context.ctx, menuOptions());
+
+	assert.match(thinkingScreen, /Same as plan/u);
+	assert.match(thinkingScreen, /off\s+No reasoning/u);
+	assert.match(thinkingScreen, /minimal\s+Very brief reasoning \(~1k tokens\)/u);
+	assert.match(thinkingScreen, /→ low\s+Light reasoning \(~2k tokens\)/u);
+	assert.match(thinkingScreen, /✓ medium\s+Moderate reasoning \(~8k tokens\)/u);
+	assert.match(thinkingScreen, /high\s+Deep reasoning \(~16k tokens\)/u);
+	assert.match(thinkingScreen, /xhigh\s+Extra-high reasoning \(~32k tokens\)/u);
 });
 
 test("fresh model picker honors the nonempty session model scope", async () => {
@@ -113,13 +184,11 @@ test("fresh model picker honors the nonempty session model scope", async () => {
 			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
 			if (title.startsWith("Fresh implementation settings")) {
 				freshVisits += 1;
-				return freshVisits === 1
-					? options.find((option) => option.startsWith("Implementation model"))
-					: "Start fresh implementation";
+				return freshVisits === 1 ? "Model" : "Start fresh implementation";
 			}
 			if (title.startsWith("Implementation model")) {
 				modelOptions = options;
-				return options.find((option) => option.includes("provider-two/model-two"));
+				return options.find((option) => option.includes("model-two [provider-two]"));
 			}
 			return undefined;
 		},
@@ -135,9 +204,9 @@ test("fresh model picker honors the nonempty session model scope", async () => {
 	);
 
 	assert.equal(availableReads, 0);
-	assert.ok(modelOptions.some((option) => option.includes("provider-two/model-two")));
+	assert.ok(modelOptions.some((option) => option.includes("model-two [provider-two]")));
 	assert.equal(
-		modelOptions.some((option) => option.includes("provider-one/model-one")),
+		modelOptions.some((option) => option.includes("model-one [provider-one]")),
 		false,
 	);
 	assert.deepEqual(selectedRuntime, {
@@ -145,12 +214,35 @@ test("fresh model picker honors the nonempty session model scope", async () => {
 	});
 });
 
-test("fresh model choice is searchable in TUI mode", async () => {
+test("fresh model picker falls back when the scoped-model API is unavailable", async () => {
+	let availableReads = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		modelRegistry: {
+			getAvailable: () => {
+				availableReads += 1;
+				return AVAILABLE_MODELS;
+			},
+		},
+		select: async () => undefined,
+	});
+	delete (context.ctx as Partial<{ scopedModels: unknown }>).scopedModels;
+
+	await showReadyPlanMenu(context.ctx, menuOptions());
+
+	assert.equal(availableReads, 1);
+});
+
+test("fresh model choice mirrors the searchable built-in model layout in TUI mode", async () => {
 	let screen = 0;
+	let initialModelScreen = "";
 	let filteredModelScreen = "";
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
 		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
 		custom: async (factory: unknown) => {
 			const harness = createCustomSelectorHarness(factory, 80);
@@ -159,8 +251,10 @@ test("fresh model choice is searchable in TUI mode", async () => {
 				harness.handleInput("tui.select.down");
 				harness.handleInput("tui.select.confirm");
 			} else if (screen === 2) {
+				harness.handleInput("tui.select.down");
 				harness.handleInput("tui.select.confirm");
 			} else {
+				initialModelScreen = harness.render().join("\n");
 				harness.handleInput("beta");
 				filteredModelScreen = harness.render().join("\n");
 				harness.handleInput("\u0003");
@@ -171,58 +265,54 @@ test("fresh model choice is searchable in TUI mode", async () => {
 
 	await showReadyPlanMenu(context.ctx, menuOptions());
 
-	assert.match(filteredModelScreen, /provider-two\/model-two/u);
-	assert.match(filteredModelScreen, /Beta specialist/u);
-	assert.doesNotMatch(filteredModelScreen, /provider-one\/model-one/u);
+	assert.match(initialModelScreen, /→ ✓ model-one \[provider-one\] · default/u);
+	assert.match(initialModelScreen, /Model Name: Friendly name/u);
+	assert.match(filteredModelScreen, /model-two \[provider-two\]/u);
+	assert.match(filteredModelScreen, /Model Name: Beta specialist/u);
+	assert.doesNotMatch(filteredModelScreen, /model-one \[provider-one\]/u);
 });
 
-test("closing and reopening fresh settings resets its draft to destination defaults", async () => {
+test("closing and reopening fresh settings resets its draft to the plan runtime", async () => {
 	let invocation = 0;
-	let stage = 0;
-	const freshSnapshots: string[][] = [];
+	let mainVisits = 0;
+	let freshVisits = 0;
+	let selectedRuntime: unknown;
 	const context = createMockContext({
 		mode: "rpc",
 		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
 		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
 		select: async (title: string, options: string[]) => {
 			if (title.startsWith("Proposed plan ready")) {
-				if (stage === 0) {
-					stage = 1;
-					return "Start fresh and implement";
-				}
-				return undefined;
+				mainVisits += 1;
+				return invocation === 0 && mainVisits > 1 ? undefined : "Start fresh and implement";
 			}
 			if (title.startsWith("Fresh implementation settings")) {
-				freshSnapshots.push(options);
-				if (invocation === 0 && stage === 1) {
-					stage = 2;
-					return options.find((option) => option.startsWith("Implementation model"));
-				}
-				return undefined;
+				freshVisits += 1;
+				if (invocation === 0) return freshVisits === 1 ? "Model" : undefined;
+				return "Start fresh implementation";
 			}
 			if (title.startsWith("Implementation model")) {
-				return options.find((option) => option.includes("provider-two/model-two"));
+				return options.find((option) => option.includes("model-two [provider-two]"));
 			}
 			return undefined;
 		},
 	});
+	const options = menuOptions({
+		implementFresh: (runtime: unknown) => {
+			selectedRuntime = runtime;
+		},
+	});
 
-	await showReadyPlanMenu(context.ctx, menuOptions());
+	await showReadyPlanMenu(context.ctx, options);
 	invocation = 1;
-	stage = 0;
-	await showReadyPlanMenu(context.ctx, menuOptions());
+	mainVisits = 0;
+	freshVisits = 0;
+	await showReadyPlanMenu(context.ctx, options);
 
-	assert.ok(
-		freshSnapshots[1]?.some((option) =>
-			option.startsWith("Implementation model: provider-two/model-two"),
-		),
-	);
-	assert.ok(
-		freshSnapshots.at(-1)?.some((option) => option === "Implementation model: Destination default"),
-	);
-	assert.ok(
-		freshSnapshots
-			.at(-1)
-			?.some((option) => option === "Implementation thinking: Destination default"),
-	);
+	assert.deepEqual(selectedRuntime, {
+		model: { provider: "provider\u001b[31m-one", modelId: "model\u202e-one" },
+		thinkingLevel: "medium",
+	});
 });

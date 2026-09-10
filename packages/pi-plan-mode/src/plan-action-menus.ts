@@ -24,6 +24,16 @@ const FIXED_THINKING_LEVELS: readonly PlanModeFixedThinkingLevel[] = [
 	"max",
 ];
 
+const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = {
+	off: "No reasoning",
+	minimal: "Very brief reasoning (~1k tokens)",
+	low: "Light reasoning (~2k tokens)",
+	medium: "Moderate reasoning (~8k tokens)",
+	high: "Deep reasoning (~16k tokens)",
+	xhigh: "Extra-high reasoning (~32k tokens)",
+	max: "Maximum reasoning",
+};
+
 interface PlanMenuOptions extends MenuLifecycle {
 	statusText: string;
 	hasReadyPlan: boolean;
@@ -250,8 +260,10 @@ interface ModelChoice {
 	itemId: string;
 	model: ImplementationModelOverride;
 	label: string;
-	description?: string;
+	summary: string;
+	details?: readonly string[];
 	searchText: string;
+	isPlanModel: boolean;
 }
 
 function createFreshImplementationFlow(
@@ -262,6 +274,8 @@ function createFreshImplementationFlow(
 	) => void | Promise<void>,
 ) {
 	const models = snapshotAvailableModels(ctx);
+	const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
+	const planThinkingLevel = FIXED_THINKING_LEVELS.find((level) => level === ctx.thinkingLevel);
 	let selectedModel: ModelChoice | undefined;
 	let selectedThinkingLevel: PlanModeFixedThinkingLevel | undefined;
 	return {
@@ -271,75 +285,72 @@ function createFreshImplementationFlow(
 			lines: ["These choices apply once to the new implementation session."],
 			items: [
 				{
-					id: "implementation-model",
-					label: `Implementation model: ${selectedModel?.label ?? "Destination default"}`,
-					to: "models" as const,
-				},
-				{
-					id: "implementation-thinking",
-					label: `Implementation thinking: ${selectedThinkingLevel ?? "Destination default"}`,
-					to: "thinking" as const,
-				},
-				{
 					id: "start-fresh",
 					label: "Start fresh implementation",
 					description: "Create the linked session and begin implementation.",
 					action: "start-fresh" as const,
 					busyLabel: "Starting fresh implementation session…",
 				},
+				{
+					id: "implementation-model",
+					label: "Model",
+					description: selectedModel?.summary ?? "Same as plan",
+					to: "models" as const,
+				},
+				{
+					id: "implementation-thinking",
+					label: "Thinking level",
+					description: selectedThinkingLevel ?? "Same as plan",
+					to: "thinking" as const,
+				},
 			],
 		}),
 		modelScreen: () => ({
 			kind: "choice" as const,
 			title: "Implementation model",
-			lines: ["Choose a one-shot model override for the destination session."],
-			items: [
-				{
-					id: "destination-default",
-					label: "Destination default",
-					description: "Use Pi's normal model selection for the new session.",
-				},
-				...models.map((choice) => ({
-					id: choice.itemId,
-					label: choice.label,
-					description: choice.description,
-					searchText: choice.searchText,
-				})),
-			],
+			items: models.map((choice) => ({
+				id: choice.itemId,
+				label: choice.label,
+				details: choice.details,
+				searchText: choice.searchText,
+			})),
 			action: "select-model" as const,
-			currentItemId: selectedModel?.itemId ?? "destination-default",
-			initialItemId: selectedModel?.itemId ?? "destination-default",
+			initialItemId: selectedModel?.itemId ?? models.find((choice) => choice.isPlanModel)?.itemId,
 			enableSearch: true,
 			viewportSize: 10,
 		}),
 		thinkingScreen: () => ({
 			kind: "choice" as const,
-			title: "Implementation thinking",
-			lines: ["Choose a one-shot thinking override for the destination session."],
+			title: "Implementation thinking level",
 			items: [
 				{
-					id: "destination-default",
-					label: "Destination default",
-					description: "Use the destination model's normal thinking level.",
+					id: "same-as-plan",
+					label: "Same as plan",
 				},
-				...FIXED_THINKING_LEVELS.map((level) => ({ id: level, label: level })),
+				...FIXED_THINKING_LEVELS.map((level) => ({
+					id: level,
+					label: `${level === planThinkingLevel ? "✓ " : ""}${level}`,
+					description: THINKING_LEVEL_DESCRIPTIONS[level],
+				})),
 			],
 			action: "select-thinking" as const,
-			currentItemId: selectedThinkingLevel ?? "destination-default",
-			initialItemId: selectedThinkingLevel ?? "destination-default",
+			initialItemId: selectedThinkingLevel ?? "same-as-plan",
 			viewportSize: FIXED_THINKING_LEVELS.length + 1,
 		}),
 		selectModel(itemId: string) {
-			selectedModel = models.find((choice) => choice.itemId === itemId);
+			const choice = models.find((candidate) => candidate.itemId === itemId);
+			selectedModel = choice?.isPlanModel ? undefined : choice;
 		},
 		selectThinking(itemId: string) {
 			selectedThinkingLevel = FIXED_THINKING_LEVELS.find((level) => level === itemId);
 		},
 		start(signal: AbortSignal) {
+			const model = selectedModel?.model ?? planModel;
+			const thinkingLevel = selectedThinkingLevel ?? planThinkingLevel;
 			return implementFresh(
 				{
-					...(selectedModel ? { model: { ...selectedModel.model } } : {}),
-					...(selectedThinkingLevel ? { thinkingLevel: selectedThinkingLevel } : {}),
+					...(model ? { model: { ...model } } : {}),
+					...(thinkingLevel ? { thinkingLevel } : {}),
 				},
 				signal,
 			);
@@ -349,24 +360,31 @@ function createFreshImplementationFlow(
 
 function snapshotAvailableModels(ctx: ExtensionContext): ModelChoice[] {
 	const getAvailable = ctx.modelRegistry.getAvailable;
+	const scopedModels = ctx.scopedModels ?? [];
 	const models =
-		ctx.scopedModels.length > 0
-			? ctx.scopedModels.map((entry) => entry.model)
+		scopedModels.length > 0
+			? scopedModels.map((entry) => entry.model)
 			: typeof getAvailable === "function"
 				? getAvailable.call(ctx.modelRegistry)
 				: [];
-	return models.map((model, index) => {
-		const provider = safeModelMetadata(model.provider, "unknown provider");
-		const modelId = safeModelMetadata(model.id, "unknown model");
-		const name = safeModelMetadata(model.name, "");
-		return {
-			itemId: `model-${index}`,
-			model: { provider: model.provider, modelId: model.id },
-			label: `${provider}/${modelId}${name ? ` — ${name}` : ""}`,
-			...(name ? { description: name } : {}),
-			searchText: [provider, modelId, name].filter(Boolean).join(" "),
-		};
-	});
+	return models
+		.map((model, index) => {
+			const provider = safeModelMetadata(model.provider, "unknown provider");
+			const modelId = safeModelMetadata(model.id, "unknown model");
+			const name = safeModelMetadata(model.name, "");
+			const isPlanModel = ctx.model?.provider === model.provider && ctx.model.id === model.id;
+			const summary = `${modelId} [${provider}]`;
+			return {
+				itemId: `model-${index}`,
+				model: { provider: model.provider, modelId: model.id },
+				label: `${isPlanModel ? "✓ " : ""}${summary}${isPlanModel ? " · default" : ""}`,
+				summary,
+				...(name ? { details: [`Model Name: ${name}`] } : {}),
+				searchText: [provider, modelId, name].filter(Boolean).join(" "),
+				isPlanModel,
+			};
+		})
+		.sort((left, right) => Number(right.isPlanModel) - Number(left.isPlanModel));
 }
 
 function safeModelMetadata(value: unknown, fallback: string) {

@@ -25,9 +25,19 @@ export interface SavedPlan {
 	source: PlanCompletionSource;
 }
 
+export const MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH = 512;
+
 export interface ImplementationModelOverride {
 	provider: string;
 	modelId: string;
+}
+
+export function isPendingImplementationModelIdentifier(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.trim().length > 0 &&
+		value.length <= MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH
+	);
 }
 
 export interface ImplementationRuntimeSelection {
@@ -170,10 +180,13 @@ function normalizePendingImplementationRuntime(
 		) {
 			return undefined;
 		}
-		const provider = boundedIdentifier(value.model.provider);
-		const modelId = boundedIdentifier(value.model.modelId);
-		if (!provider || !modelId) return undefined;
-		model = { provider, modelId };
+		if (
+			!isPendingImplementationModelIdentifier(value.model.provider) ||
+			!isPendingImplementationModelIdentifier(value.model.modelId)
+		) {
+			return undefined;
+		}
+		model = { provider: value.model.provider, modelId: value.model.modelId };
 	}
 	const thinkingLevel =
 		value.thinkingLevel === undefined ? undefined : fixedThinkingLevel(value.thinkingLevel);
@@ -184,12 +197,6 @@ function normalizePendingImplementationRuntime(
 		...(model ? { model } : {}),
 		...(thinkingLevel ? { thinkingLevel } : {}),
 	};
-}
-
-function boundedIdentifier(value: unknown) {
-	return typeof value === "string" && value.trim().length > 0 && value.length <= 512
-		? value
-		: undefined;
 }
 
 function normalizeActiveImplementation(value: unknown): ActiveImplementationPlan | undefined {

@@ -154,13 +154,15 @@ The same flat menu shows **Implement here** and **Start fresh and implement**, e
 **Implement here**—and the compatibility route `/plan implement`—appends the Normal contract, lifts the Plan runtime policy, captures the reinjection setting, and starts implementation in the current session with its complete planning conversation and tool calls.
 **Start fresh and implement** opens a settings page before replacement.
 Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
-The model and thinking rows default independently to **Destination default**; the fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
+One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
+The model and thinking rows default independently to **Same as plan**, which carries the planning session's current model and thinking level into the fresh session; the fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Back navigation preserves this menu-local draft, while closing and reopening the menu resets both rows.
 The saved-plan menu keeps its direct fresh-session action without these optional rows.
 
 Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
 The destination consumes the one-shot choices before its first provider request, applies an explicit model first, and then applies explicit thinking.
-A model-only choice uses Pi's normal thinking default for that model; a thinking-only choice applies to the destination's normal model.
+Changing only the model keeps the planning thinking level; changing only the thinking level keeps the planning model.
 If Pi clamps an unsupported thinking level, the extension reports the effective level.
 If the chosen model disappears or loses authentication after source preflight, the destination reports the race, consumes the intent without retrying it later, and continues with its default model.
 The destination still loads its normal `AGENTS.md`, skills, project resources, and extensions.

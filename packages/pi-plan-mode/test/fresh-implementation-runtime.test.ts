@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { startFreshImplementationSession } from "../src/fresh-implementation.js";
 import planMode from "../src/plan-mode.js";
-import { restorePlanModeState } from "../src/state.js";
+import {
+	MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
+	restorePlanModeState,
+} from "../src/state.js";
 import { createMockContext, createMockPi } from "./support.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -44,6 +47,26 @@ test("pending implementation runtime state restores only strict bounded one-shot
 		thinkingLevel: "high",
 	});
 
+	const boundaryProvider = "p".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH);
+	const boundaryModelId = "m".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH);
+	const boundary = restorePlanModeState(
+		[
+			stateEntry({
+				enabled: false,
+				awaitingAction: false,
+				pendingImplementationRuntime: {
+					version: 1,
+					model: { provider: boundaryProvider, modelId: boundaryModelId },
+				},
+			}),
+		],
+		STATE_ENTRY_TYPE,
+	);
+	assert.deepEqual(boundary.pendingImplementationRuntime?.model, {
+		provider: boundaryProvider,
+		modelId: boundaryModelId,
+	});
+
 	const invalidValues = [
 		null,
 		{},
@@ -51,7 +74,13 @@ test("pending implementation runtime state restores only strict bounded one-shot
 		{ version: 1, thinkingLevel: "inherit" },
 		{ version: 1, thinkingLevel: "high", unknown: true },
 		{ version: 1, model: { provider: "", modelId: "model" } },
-		{ version: 1, model: { provider: "provider", modelId: "x".repeat(513) } },
+		{
+			version: 1,
+			model: {
+				provider: "provider",
+				modelId: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1),
+			},
+		},
 		{ version: 1, model: { provider: "provider", modelId: "model", name: "extra" } },
 	];
 	for (const pendingImplementationRuntime of invalidValues) {
@@ -212,6 +241,71 @@ test("missing or unauthenticated selected models reject before replacing the sou
 		assert.match(
 			context.notifications.at(-1)?.message ?? "",
 			/choose another model|configure authentication/iu,
+		);
+	}
+});
+
+test("unpersistable selected model identifiers reject before source replacement", async () => {
+	const invalidIdentifiers = [
+		{
+			name: "overlong provider",
+			field: "provider" as const,
+			value: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1),
+		},
+		{
+			name: "overlong model ID",
+			field: "modelId" as const,
+			value: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1),
+		},
+		{ name: "blank provider", field: "provider" as const, value: " " },
+		{ name: "blank model ID", field: "modelId" as const, value: " " },
+	];
+	for (const { name, field, value } of invalidIdentifiers) {
+		let findCalls = 0;
+		let authCalls = 0;
+		let newSessionCalls = 0;
+		const context = createMockContext({
+			mode: "rpc",
+			hasUI: true,
+			model: { provider: "planning-provider", id: "planning-model" },
+			modelRegistry: {
+				find: () => {
+					findCalls += 1;
+					return TARGET;
+				},
+				getApiKeyAndHeaders: async () => {
+					authCalls += 1;
+					return { ok: true as const };
+				},
+			},
+			newSession: async () => {
+				newSessionCalls += 1;
+				return { cancelled: false };
+			},
+		});
+		const model = {
+			provider: TARGET.provider,
+			modelId: TARGET.id,
+			[field]: value,
+		};
+
+		const result = await startFreshImplementationSession(context.ctx, {
+			plan: PLAN,
+			source: "plan_mode_complete",
+			retention: "keep",
+			stateEntryType: STATE_ENTRY_TYPE,
+			runtime: { model },
+			isCurrent: () => true,
+		});
+
+		assert.equal(result.kind, "rejected", name);
+		assert.equal(findCalls, 0, name);
+		assert.equal(authCalls, 0, name);
+		assert.equal(newSessionCalls, 0, name);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			new RegExp(`1-${MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH}`, "u"),
+			name,
 		);
 	}
 });
