@@ -37,6 +37,16 @@ export {
 export { defineMenu, resolveMenuScreen } from "./model.js";
 export { createMenuNavigator, type MenuNavigator } from "./navigator.js";
 export {
+	type ModelSelectorItem,
+	type RunModelSelectorOptions,
+	type RunModelSelectorResult,
+	type RunThinkingSelectorOptions,
+	type RunThinkingSelectorResult,
+	runModelSelector,
+	runThinkingSelector,
+	type ThinkingLevel,
+} from "./pi-selectors.js";
+export {
 	type QuestionnaireAnswer,
 	type QuestionnaireLabels,
 	type QuestionnaireOption,
@@ -81,4 +91,4 @@ export type {
 	SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 16;
+export const PI_EXTENSION_MENU_API_VERSION = 17;

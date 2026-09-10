@@ -7,6 +7,7 @@
 - [Bounded frames](#bounded-frames)
 - [Complete menu example](#-complete-menu-example)
 - [Standalone interactions](#standalone-tasks)
+- [Searchable default-aware selectors](#searchable-default-aware-selectors)
 - [Standard screens](#-standard-screens)
 - [Runtime and mode behavior](#-runtime-and-mode-behavior)
 - [Ownership boundary](#-ownership-boundary)
@@ -337,6 +338,56 @@ Pi's RPC editor API has no abort signal, so owner cancellation during an open ed
 Print and JSON return `unsupported`.
 Owner abort, stale state, external disposal, invalid options, and UI failures remain distinct typed results.
 The caller owns question-count and option-count policy, domain validation, side effects, result persistence, and mapping answer IDs back to domain objects.
+
+### Searchable default-aware selectors
+
+Use `runModelSelector()` and `runThinkingSelector()` for searchable selection flows that distinguish the active value from the saved default. The selectors use the callback-provided theme and effective keybindings, and return `saveDefault` when the user presses the configured save shortcut (`Ctrl+S` by default).
+
+```ts
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  runModelSelector,
+  runThinkingSelector,
+} from "@narumitw/pi-tui-kit";
+
+declare function saveDefaultModel(provider: string, modelId: string): Promise<void>;
+declare function saveDefaultThinking(level: string): Promise<void>;
+
+export async function chooseModel(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
+  const models = ctx.scopedModels.length
+    ? ctx.scopedModels.map(({ model }) => model)
+    : ctx.modelRegistry.getAvailable();
+  const result = await runModelSelector(ctx, {
+    models,
+    currentModel: ctx.model,
+    // Load this through the consumer's Pi settings owner when it wants a default marker.
+    defaultModel: undefined,
+  });
+  if (result.kind === "selected") await pi.setModel(result.model);
+  if (result.kind === "saveDefault") {
+    if (await pi.setModel(result.model)) {
+      await saveDefaultModel(result.model.provider, result.model.id);
+    }
+  }
+}
+
+export async function chooseThinking(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
+  const result = await runThinkingSelector(ctx, {
+    availableLevels: ctx.model ? getSupportedThinkingLevels(ctx.model) : ["off"],
+    currentLevel: pi.getThinkingLevel(),
+  });
+  if (result.kind === "selected") pi.setThinkingLevel(result.level);
+  if (result.kind === "saveDefault") {
+    pi.setThinkingLevel(result.level);
+    await saveDefaultThinking(result.level);
+  }
+}
+```
+
+The selectors deliberately return intent instead of writing Pi's `settings.json`. The consumer owns default persistence, ordered writes, failure reporting, and any rollback because it owns the relevant settings manager. A `saveDefault` result should normally apply the highlighted value to the current session as well as save it, matching Pi's built-in behavior.
+
+Both selectors are TUI-only and return `unsupported` in RPC, print, and JSON modes. The model selector renders the supplied snapshot and does not refresh provider catalogs or choose between all and scoped models; pass `ctx.scopedModels` when session scope applies, as shown above. Escape returns Back, while Ctrl+C remains a hard Close path.
 
 ### Custom interactions and display helpers
 
@@ -826,6 +877,7 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `runTask()` — runs typed abort-aware work with a cancellable TUI loader and direct non-TUI fallback.
 - `runConfirmation()` — preserves Confirmed, Back, Close, Stale, Unsupported, and Error for one standalone confirmation without owning the confirmed side effect.
 - `runLiveChoice()` — adapts live-preview choice to TUI and RPC while preserving typed selection, gating, shortcuts, and lifecycle outcomes.
+- `runModelSelector()` and `runThinkingSelector()` — provide searchable TUI selectors with current/default markers and typed save-default intent.
 - `runQuestionnaire()` — adapts choices, free-form answers, optional TUI notes, direct single-question submission, multi-question review, and sequential RPC.
 - `formatInteractionHints()` — formats sanitized, normalized, de-duplicated bindings and literal keys; `@narumitw/pi-tui-kit/interaction-hints` also exports it and its types.
 - `sanitizeTerminalDocument()` — normalizes and sanitizes untrusted multiline display text while retaining LF and tabs; `@narumitw/pi-tui-kit/terminal-document` also exports it.
@@ -839,7 +891,8 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — test-only subpath for `createTuiHarness()`, `createRpcHarness()`, strict scripts, and their types; the production root does not re-export it.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`16`).
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`17`).
+Version 17 adds searchable default-aware selectors while version-16 menu definitions remain valid.
 Version 16 adds the stateless bounded-frame helper while version-15 menu definitions remain valid.
 Version 15 adds opt-in review and browse-detail search plus public multiline terminal-document helpers while version-14 menu definitions remain valid.
 Version 14 adds the standalone `runQuestionnaire()` interaction while version-13 menu definitions remain valid.

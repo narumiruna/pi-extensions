@@ -271,6 +271,12 @@ function validDimension(value: number, name: string) {
 
 function keyData(key: TuiHarnessKey) {
 	switch (key) {
+		case "app.models.save":
+		case "app.thinking.save":
+			return "\u0013";
+		case "app.thinking.cycle":
+		case "tui.input.tab":
+			return "\t";
 		case "tui.select.up":
 			return "\u001b[A";
 		case "tui.select.down":
@@ -326,6 +332,13 @@ function testingKeybindings(override?: TuiHarnessOptions["keybindings"]) {
 		getKeys(binding: string): readonly string[] {
 			if (getKeys) return getKeys(binding as Parameters<HarnessKeybindings["getKeys"]>[0]);
 			switch (binding) {
+				case "app.models.save":
+				case "app.thinking.save":
+					return ["ctrl+s"];
+				case "app.thinking.cycle":
+					return ["shift+tab"];
+				case "tui.input.tab":
+					return ["tab"];
 				case "tui.select.up":
 					return ["up"];
 				case "tui.select.down":
@@ -348,6 +361,13 @@ function testingKeybindings(override?: TuiHarnessOptions["keybindings"]) {
 
 function bindingKey(binding: string) {
 	switch (binding) {
+		case "app.models.save":
+		case "app.thinking.save":
+			return Key.ctrl("s");
+		case "app.thinking.cycle":
+			return Key.shift("tab");
+		case "tui.input.tab":
+			return Key.tab;
 		case "tui.select.up":
 			return Key.up;
 		case "tui.select.down":

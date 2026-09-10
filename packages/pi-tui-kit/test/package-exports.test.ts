@@ -19,7 +19,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
 	const terminalDocument = await import(terminalDocumentSpecifier);
 	const terminalText = await import(terminalTextSpecifier);
 	const testing = await import(testingSpecifier);
-	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 16);
+	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 17);
 	assert.equal(typeof production.renderBoundedFrame, "function");
 	assert.equal(typeof production.sanitizeTerminalDocument, "function");
 	assert.equal(typeof production.hardWrapTerminalDocument, "function");
@@ -30,6 +30,8 @@ test("built package entrypoints resolve their documented exports", async (t) => 
 	assert.equal(typeof production.runConfirmation, "function");
 	assert.equal(typeof production.runCustomInteraction, "function");
 	assert.equal(typeof production.runLiveChoice, "function");
+	assert.equal(typeof production.runModelSelector, "function");
+	assert.equal(typeof production.runThinkingSelector, "function");
 	assert.equal(typeof production.runQuestionnaire, "function");
 	assert.equal("createTuiHarness" in production, false);
 	assert.equal("createRpcHarness" in production, false);
@@ -55,7 +57,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
 			`import { hardWrapTerminalDocument, sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";\n` +
 			`import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";\n` +
 			`import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";\n` +
-			`const version: 16 = PI_EXTENSION_MENU_API_VERSION;\n` +
+			`const version: 17 = PI_EXTENSION_MENU_API_VERSION;\n` +
 			`const frame: import("@narumitw/pi-tui-kit").BoundedFrameOptions = { width: 20, maxRows: 3, rule: "─", title: [], content: ["row"] };\n` +
 			`void (await import("@narumitw/pi-tui-kit")).renderBoundedFrame(frame);\n` +
 			`const keybindings: InteractionKeybindings<"confirm"> = { getKeys: () => ["return"] };\n` +

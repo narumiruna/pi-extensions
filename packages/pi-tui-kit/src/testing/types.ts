@@ -1,6 +1,10 @@
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 
 export type TuiHarnessKey =
+	| "app.models.save"
+	| "app.thinking.save"
+	| "app.thinking.cycle"
+	| "tui.input.tab"
 	| "tui.select.up"
 	| "tui.select.down"
 	| "tui.select.pageUp"
