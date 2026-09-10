@@ -156,7 +156,7 @@ The same flat menu shows **Implement here** and **Start fresh and implement**, e
 Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
 Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
 One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
-The model and thinking rows default independently to **Same as plan**, which carries the planning session's current model and thinking level into the fresh session; the fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+The model and thinking rows show the planning session's current values with **same as plan** by default and carry those values into the fresh session independently; the fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Back navigation preserves this menu-local draft, while closing and reopening the menu resets both rows.
 The saved-plan menu keeps its direct fresh-session action without these optional rows.
 

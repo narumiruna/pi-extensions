@@ -90,7 +90,7 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
 	}
 });
 
-test("fresh settings prioritize start and show same-as-plan defaults", async () => {
+test("fresh settings prioritize start and show the plan runtime defaults", async () => {
 	let screen = 0;
 	let settingsScreen = "";
 	const context = createMockContext({
@@ -120,8 +120,8 @@ test("fresh settings prioritize start and show same-as-plan defaults", async () 
 	const thinking = settingsScreen.indexOf("Thinking level");
 	assert.ok(start >= 0 && start < model && model < thinking);
 	assert.match(settingsScreen, /→ Start fresh implementation/u);
-	assert.match(settingsScreen, /Model\s+Same as plan/u);
-	assert.match(settingsScreen, /Thinking level\s+Same as plan/u);
+	assert.match(settingsScreen, /Model\s+model-one \[provider-one\] · same as plan/u);
+	assert.match(settingsScreen, /Thinking level\s+medium · same as plan/u);
 });
 
 test("fresh thinking choice mirrors the built-in thinking layout", async () => {

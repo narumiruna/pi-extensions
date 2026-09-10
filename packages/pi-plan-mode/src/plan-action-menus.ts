@@ -275,6 +275,9 @@ function createFreshImplementationFlow(
 ) {
 	const models = snapshotAvailableModels(ctx);
 	const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
+	const planModelSummary = ctx.model
+		? `${safeModelMetadata(ctx.model.id, "unknown model")} [${safeModelMetadata(ctx.model.provider, "unknown provider")}]`
+		: undefined;
 	const planThinkingLevel = FIXED_THINKING_LEVELS.find((level) => level === ctx.thinkingLevel);
 	let selectedModel: ModelChoice | undefined;
 	let selectedThinkingLevel: PlanModeFixedThinkingLevel | undefined;
@@ -294,13 +297,17 @@ function createFreshImplementationFlow(
 				{
 					id: "implementation-model",
 					label: "Model",
-					description: selectedModel?.summary ?? "Same as plan",
+					description:
+						selectedModel?.summary ??
+						(planModelSummary ? `${planModelSummary} · same as plan` : "Same as plan"),
 					to: "models" as const,
 				},
 				{
 					id: "implementation-thinking",
 					label: "Thinking level",
-					description: selectedThinkingLevel ?? "Same as plan",
+					description:
+						selectedThinkingLevel ??
+						(planThinkingLevel ? `${planThinkingLevel} · same as plan` : "Same as plan"),
 					to: "thinking" as const,
 				},
 			],
