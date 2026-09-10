@@ -1,4 +1,6 @@
 import type { AgentToolResult, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
+import { sanitizeChromeDevtoolsDisplay } from "./display.js";
 
 const STATUS_KEY = "chrome-devtools";
 interface StatusContext {
@@ -84,19 +86,16 @@ class PiTextComponent implements RenderComponent {
 	}
 
 	render(width: number) {
-		if (!this.text.trim()) return [];
-		return this.text
+		const sanitizedText = sanitizeChromeDevtoolsDisplay(this.text);
+		if (!sanitizedText.trim()) return [];
+		return sanitizedText
 			.replace(/\t/g, "   ")
 			.split(/\r?\n/)
 			.map((line) => {
-				const truncatedLine = truncateLine(line, Math.max(1, width));
+				const truncatedLine = truncateToWidth(line, Math.max(0, width), "");
 				return this.theme && this.color ? this.theme.fg(this.color, truncatedLine) : truncatedLine;
 			});
 	}
-}
-
-function truncateLine(line: string, maxWidth: number) {
-	return Array.from(line).slice(0, maxWidth).join("");
 }
 
 export async function withStatus<T>(
