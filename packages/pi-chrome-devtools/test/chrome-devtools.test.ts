@@ -735,11 +735,12 @@ test("removing WebMCP gateway availability aborts active page work", async () =>
 	});
 });
 
-test("status display sanitizes untrusted text and remains bounded", () => {
+test("status display neutralizes untrusted text and remains bounded", () => {
 	assert.equal(
 		sanitizeChromeDevtoolsDisplay("safe\u001b]8;;https://evil\u0007link\u001b]8;;\u0007"),
-		"safelink",
+		"safe�]8;;https://evil�link�]8;;�",
 	);
+	assert.equal(sanitizeChromeDevtoolsDisplay("before\u001b[2Aaftermore"), "before�[2Aaftermore");
 	assert.equal(sanitizeChromeDevtoolsDisplay("safe\u202eend"), "safe�end");
 	assert.equal(sanitizeChromeDevtoolsDisplay("\ud800safe\udfff"), "�safe�");
 	assert.equal(sanitizeChromeDevtoolsDisplay("12345", 4), "123…");
@@ -753,28 +754,14 @@ test("status display sanitizes untrusted text and remains bounded", () => {
 	assert.equal(beyondInputLimit.length, 50_000);
 	assert.ok(beyondInputLimit.startsWith("x".repeat(49_999)));
 	assert.ok(beyondInputLimit.endsWith("…"));
-	assert.equal(sanitizeChromeDevtoolsDisplay("\u001b[31m".repeat(10_001)), "…");
+	const hostileInput = sanitizeChromeDevtoolsDisplay("\u001b[31m".repeat(10_001));
+	assert.equal(hostileInput.length, 50_000);
+	assert.equal(hostileInput.includes("\u001b"), false);
+	assert.ok(hostileInput.endsWith("…"));
 
-	const removablePrefix = "\u001b[000m".repeat(8_333);
-	assert.equal(removablePrefix.length, 49_998);
-	assert.equal(sanitizeChromeDevtoolsDisplay(`${removablePrefix}👩‍💻x`), "…");
-	assert.equal(sanitizeChromeDevtoolsDisplay(`${removablePrefix}a\r\nx`), "a…");
-});
-
-test.each([
-	["Pi-recognized CSI final", "\u001b[31m"],
-	["lowest CSI final byte", "\u001b[@"],
-	["cursor CSI final", "\u001b[2A"],
-	["private CSI final", "\u001b[?25l"],
-	["intermediate CSI final", "\u001b[1 q"],
-	["highest CSI final byte", "\u001b[1~"],
-	["single-character escape", "\u001b7"],
-	["OSC with BEL", "\u001b]0;title\u0007"],
-	["OSC with ST", "\u001b]0;title\u001b\\"],
-	["APC with BEL", "\u001b_payload\u0007"],
-	["APC with ST", "\u001b_payload\u001b\\"],
-] as const)("status display strips %s without consuming following text", (_name, sequence) => {
-	assert.equal(sanitizeChromeDevtoolsDisplay(`before${sequence}aftermore`), "beforeaftermore");
+	const zeroWidthPrefix = "\u200b".repeat(49_998);
+	assert.equal(sanitizeChromeDevtoolsDisplay(`${zeroWidthPrefix}👩‍💻x`), `${zeroWidthPrefix}…`);
+	assert.equal(sanitizeChromeDevtoolsDisplay(`${zeroWidthPrefix}a\r\nx`), `${zeroWidthPrefix}a…`);
 });
 
 test("endpoint helpers normalize ports, hosts, and launch quoting", () => {

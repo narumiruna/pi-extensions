@@ -62,9 +62,15 @@ test("expanded output normalizes lone surrogates before measuring terminal width
 	assert.equal(stripTerminalSequences(renderExpanded("🙂", 2)[0] ?? ""), "🙂");
 });
 
-test("expanded output bounds incomplete terminal-sequence parsing", () => {
-	for (const introducer of ["\u001b[", "\u001b]", "\u001b_"]) {
-		assert.deepEqual(renderExpanded(introducer.repeat(16_000), 3), []);
+test("expanded output bounds control-only text without parsing terminal sequences", () => {
+	for (const [introducer, expected] of [
+		["\u001b[", "�[�"],
+		["\u001b]", "�]�"],
+		["\u001b_", "�_�"],
+	] as const) {
+		assert.deepEqual(renderExpanded(introducer.repeat(16_000), 3).map(stripTerminalSequences), [
+			expected,
+		]);
 	}
 });
 
@@ -81,12 +87,12 @@ test("expanded output bounds zero-width text by code units", () => {
 });
 
 test("expanded output preserves display boundaries at the sanitizer input cap", () => {
-	const removablePrefix = "\u001b[000m".repeat(8_333);
+	const zeroWidthPrefix = "\u200b".repeat(49_998);
 	for (const [suffix, expected] of [
-		["👩‍💻x", "…"],
-		["a\r\nx", "a…"],
+		["👩‍💻x", `${zeroWidthPrefix}…`],
+		["a\r\nx", `${zeroWidthPrefix}a…`],
 	] as const) {
-		const input = `${removablePrefix}${suffix}`;
+		const input = `${zeroWidthPrefix}${suffix}`;
 		const result = textResult(input);
 
 		assert.deepEqual(
@@ -106,16 +112,17 @@ test("expanded output sanitizes terminal controls before truncation", () => {
 	const result = textResult(input);
 	const component = renderTextResult(result, { expanded: true, isPartial: false }, plainTheme);
 
-	assert.deepEqual(component.render(80), ["safe redkeptlink���end"]);
+	assert.deepEqual(component.render(200), [
+		"safe�[31m red�[0m�[2Akept�]8;;https://evil.example�link�]8;;��_hidden�\\���end",
+	]);
 	assert.equal(result.content[0]?.type === "text" ? result.content[0].text : undefined, input);
-	assert.deepEqual(
-		renderTextResult(
-			textResult("\u001b[31m".repeat(10_000)),
-			{ expanded: true, isPartial: false },
-			plainTheme,
-		).render(80),
-		[],
-	);
+	const controlOnly = renderTextResult(
+		textResult("\u001b[31m".repeat(10_000)),
+		{ expanded: true, isPartial: false },
+		plainTheme,
+	).render(80);
+	assert.deepEqual(controlOnly.map(stripTerminalSequences), ["�[31m".repeat(16)]);
+	assert.ok(controlOnly.every((line) => visibleWidth(line) <= 80));
 });
 
 test("tool rendering preserves compact, progress, tab, line, and truncation behavior", () => {
