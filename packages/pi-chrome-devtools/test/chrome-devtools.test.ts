@@ -745,6 +745,7 @@ test("status display sanitizes untrusted text and remains bounded", () => {
 	assert.equal(sanitizeChromeDevtoolsDisplay("12345", 4), "123…");
 	assert.equal(sanitizeChromeDevtoolsDisplay("🙂x", 3), "🙂x");
 	assert.equal(sanitizeChromeDevtoolsDisplay("🙂xy", 2), "…");
+	assert.equal(sanitizeChromeDevtoolsDisplay("👩‍💻x", 4), "…");
 	const atInputLimit = sanitizeChromeDevtoolsDisplay("x".repeat(50_000));
 	assert.equal(atInputLimit.length, 50_000);
 	assert.equal(atInputLimit.endsWith("…"), false);
@@ -753,6 +754,27 @@ test("status display sanitizes untrusted text and remains bounded", () => {
 	assert.ok(beyondInputLimit.startsWith("x".repeat(49_999)));
 	assert.ok(beyondInputLimit.endsWith("…"));
 	assert.equal(sanitizeChromeDevtoolsDisplay("\u001b[31m".repeat(10_001)), "…");
+
+	const removablePrefix = "\u001b[000m".repeat(8_333);
+	assert.equal(removablePrefix.length, 49_998);
+	assert.equal(sanitizeChromeDevtoolsDisplay(`${removablePrefix}👩‍💻x`), "…");
+	assert.equal(sanitizeChromeDevtoolsDisplay(`${removablePrefix}a\r\nx`), "a…");
+});
+
+test.each([
+	["Pi-recognized CSI final", "\u001b[31m"],
+	["lowest CSI final byte", "\u001b[@"],
+	["cursor CSI final", "\u001b[2A"],
+	["private CSI final", "\u001b[?25l"],
+	["intermediate CSI final", "\u001b[1 q"],
+	["highest CSI final byte", "\u001b[1~"],
+	["single-character escape", "\u001b7"],
+	["OSC with BEL", "\u001b]0;title\u0007"],
+	["OSC with ST", "\u001b]0;title\u001b\\"],
+	["APC with BEL", "\u001b_payload\u0007"],
+	["APC with ST", "\u001b_payload\u001b\\"],
+] as const)("status display strips %s without consuming following text", (_name, sequence) => {
+	assert.equal(sanitizeChromeDevtoolsDisplay(`before${sequence}aftermore`), "beforeaftermore");
 });
 
 test("endpoint helpers normalize ports, hosts, and launch quoting", () => {

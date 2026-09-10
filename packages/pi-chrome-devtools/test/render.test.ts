@@ -80,15 +80,33 @@ test("expanded output bounds zero-width text by code units", () => {
 	assert.equal(result.content[0]?.type === "text" ? result.content[0].text : undefined, input);
 });
 
+test("expanded output preserves display boundaries at the sanitizer input cap", () => {
+	const removablePrefix = "\u001b[000m".repeat(8_333);
+	for (const [suffix, expected] of [
+		["👩‍💻x", "…"],
+		["a\r\nx", "a…"],
+	] as const) {
+		const input = `${removablePrefix}${suffix}`;
+		const result = textResult(input);
+
+		assert.deepEqual(
+			renderTextResult(result, { expanded: true, isPartial: false }, plainTheme).render(80),
+			[expected],
+		);
+		assert.equal(result.content[0]?.type === "text" ? result.content[0].text : undefined, input);
+	}
+});
+
 test("expanded output sanitizes terminal controls before truncation", () => {
 	const input =
 		"safe\u001b[31m red\u001b[0m" +
+		"\u001b[2Akept" +
 		"\u001b]8;;https://evil.example\u0007link\u001b]8;;\u0007" +
 		"\u001b_hidden\u001b\\\u0001\u0085\u202eend";
 	const result = textResult(input);
 	const component = renderTextResult(result, { expanded: true, isPartial: false }, plainTheme);
 
-	assert.deepEqual(component.render(80), ["safe redlink���end"]);
+	assert.deepEqual(component.render(80), ["safe redkeptlink���end"]);
 	assert.equal(result.content[0]?.type === "text" ? result.content[0].text : undefined, input);
 	assert.deepEqual(
 		renderTextResult(
