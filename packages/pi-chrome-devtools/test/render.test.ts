@@ -49,6 +49,19 @@ test.each([
 	assert.equal(stripTerminalSequences(lines[0] ?? ""), expected);
 });
 
+test("expanded output normalizes lone surrogates before measuring terminal width", () => {
+	const width = 3;
+	for (const surrogate of ["\ud800", "\udfff"]) {
+		const lines = renderExpanded(surrogate.repeat(100), width);
+		const terminalText = lines.map((line) => Buffer.from(line).toString()).join("\n");
+
+		assert.ok(lines.every((line) => visibleWidth(Buffer.from(line).toString()) <= width));
+		assert.equal(stripTerminalSequences(terminalText), "�".repeat(width));
+	}
+
+	assert.equal(stripTerminalSequences(renderExpanded("🙂", 2)[0] ?? ""), "🙂");
+});
+
 test("expanded output sanitizes terminal controls before truncation", () => {
 	const input =
 		"safe\u001b[31m red\u001b[0m" +

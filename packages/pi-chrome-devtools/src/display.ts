@@ -12,8 +12,13 @@ export function sanitizeChromeDevtoolsDisplay(value: string, maxCharacters = 50_
 			(codePoint >= 0 && codePoint <= 8) ||
 			(codePoint >= 11 && codePoint <= 31) ||
 			(codePoint >= 127 && codePoint <= 159);
-		return unsafeControl ? "�" : character;
+		const loneSurrogate = character.length === 1 && codePoint >= 0xd800 && codePoint <= 0xdfff;
+		return unsafeControl || loneSurrogate ? "�" : character;
 	}).join("");
 	if (sanitized.length <= maxCharacters) return sanitized;
-	return `${sanitized.slice(0, Math.max(0, maxCharacters - 1))}…`;
+
+	let truncated = sanitized.slice(0, Math.max(0, maxCharacters - 1));
+	const lastCodeUnit = truncated.charCodeAt(truncated.length - 1);
+	if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) truncated = truncated.slice(0, -1);
+	return `${truncated}…`;
 }

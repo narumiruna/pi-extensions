@@ -735,13 +735,16 @@ test("removing WebMCP gateway availability aborts active page work", async () =>
 	});
 });
 
-test("status display strips terminal controls and remains bounded", () => {
+test("status display sanitizes untrusted text and remains bounded", () => {
 	assert.equal(
 		sanitizeChromeDevtoolsDisplay("safe\u001b]8;;https://evil\u0007link\u001b]8;;\u0007"),
 		"safelink",
 	);
 	assert.equal(sanitizeChromeDevtoolsDisplay("safe\u202eend"), "safe�end");
+	assert.equal(sanitizeChromeDevtoolsDisplay("\ud800safe\udfff"), "�safe�");
 	assert.equal(sanitizeChromeDevtoolsDisplay("12345", 4), "123…");
+	assert.equal(sanitizeChromeDevtoolsDisplay("🙂x", 3), "🙂x");
+	assert.equal(sanitizeChromeDevtoolsDisplay("🙂xy", 2), "…");
 });
 
 test("endpoint helpers normalize ports, hosts, and launch quoting", () => {
