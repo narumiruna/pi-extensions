@@ -433,14 +433,10 @@ test("launch picker retains and sanitizes configured names pending registration"
 	rpc.assertConsumed();
 	const dialog = rpc.dialogs[0];
 	assert.ok(dialog);
-	assert.match(
-		dialog.title,
-		/Pending registration: late \[31m_tool, x+…, start-with-tools, \+1 more/u,
-	);
+	assert.match(dialog.title, /Pending registration: late_tool, x+…, start-with-tools, \+1 more/u);
 	assert.ok(
 		(dialog.options ?? []).some(
-			(option) =>
-				/late \[31m_tool.*Not registered yet/iu.test(option) && !option.includes("\u001b"),
+			(option) => /late_tool.*Not registered yet/iu.test(option) && !option.includes("\u001b"),
 		),
 	);
 	assert.equal(JSON.stringify(dialog).includes("\u001b"), false);

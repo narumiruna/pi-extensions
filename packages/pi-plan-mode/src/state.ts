@@ -25,6 +25,20 @@ export interface SavedPlan {
 	source: PlanCompletionSource;
 }
 
+export interface ImplementationModelOverride {
+	provider: string;
+	modelId: string;
+}
+
+export interface ImplementationRuntimeSelection {
+	model?: ImplementationModelOverride;
+	thinkingLevel?: PlanModeFixedThinkingLevel;
+}
+
+export interface PendingImplementationRuntime extends ImplementationRuntimeSelection {
+	version: 1;
+}
+
 export interface PlanModeWorkflowToolPolicy {
 	kind: "automatic" | "explicit";
 	desiredNames?: string[];
@@ -39,6 +53,7 @@ export interface PlanModeState {
 	awaitingAction: boolean;
 	savedPlan?: SavedPlan;
 	activeImplementation?: ActiveImplementationPlan;
+	pendingImplementationRuntime?: PendingImplementationRuntime;
 	selectedToolNames?: string[];
 	selectedToolKeys?: string[];
 	workflowToolPolicy?: PlanModeWorkflowToolPolicy;
@@ -82,6 +97,9 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 		: normalizeActiveImplementation(entry.data.activeImplementation);
 	const savedPlan =
 		enabled || activeImplementation ? undefined : normalizeSavedPlan(entry.data.savedPlan);
+	const pendingImplementationRuntime = enabled
+		? undefined
+		: normalizePendingImplementationRuntime(entry.data.pendingImplementationRuntime);
 	return {
 		enabled,
 		latestPlan,
@@ -92,6 +110,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 		awaitingAction: enabled && latestPlan !== undefined,
 		savedPlan,
 		activeImplementation,
+		pendingImplementationRuntime,
 		selectedToolNames: stringArray(entry.data.selectedToolNames),
 		selectedToolKeys: stringArray(entry.data.selectedToolKeys),
 		workflowToolPolicy: enabled
@@ -130,6 +149,47 @@ function normalizeSavedPlan(value: unknown): SavedPlan | undefined {
 	const normalized = normalizePlanModeCompletion({ plan: value.plan });
 	if (!source || !normalized.ok) return undefined;
 	return { plan: normalized.plan, source };
+}
+
+function normalizePendingImplementationRuntime(
+	value: unknown,
+): PendingImplementationRuntime | undefined {
+	if (!isRecord(value) || value.version !== 1) return undefined;
+	if (
+		Object.keys(value).some(
+			(key) => key !== "version" && key !== "model" && key !== "thinkingLevel",
+		)
+	) {
+		return undefined;
+	}
+	let model: ImplementationModelOverride | undefined;
+	if (value.model !== undefined) {
+		if (
+			!isRecord(value.model) ||
+			Object.keys(value.model).some((key) => key !== "provider" && key !== "modelId")
+		) {
+			return undefined;
+		}
+		const provider = boundedIdentifier(value.model.provider);
+		const modelId = boundedIdentifier(value.model.modelId);
+		if (!provider || !modelId) return undefined;
+		model = { provider, modelId };
+	}
+	const thinkingLevel =
+		value.thinkingLevel === undefined ? undefined : fixedThinkingLevel(value.thinkingLevel);
+	if (value.thinkingLevel !== undefined && !thinkingLevel) return undefined;
+	if (!model && !thinkingLevel) return undefined;
+	return {
+		version: 1,
+		...(model ? { model } : {}),
+		...(thinkingLevel ? { thinkingLevel } : {}),
+	};
+}
+
+function boundedIdentifier(value: unknown) {
+	return typeof value === "string" && value.trim().length > 0 && value.length <= 512
+		? value
+		: undefined;
 }
 
 function normalizeActiveImplementation(value: unknown): ActiveImplementationPlan | undefined {

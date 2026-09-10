@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { watch } from "node:fs";
 import { basename, dirname } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -82,6 +83,7 @@ import {
 	updatePlanModeSettings,
 } from "./settings.js";
 import {
+	type ImplementationRuntimeSelection,
 	type PlanCompletionSource,
 	type PlanModeState,
 	type PlanModeWorkflowToolPolicy,
@@ -109,6 +111,11 @@ interface ReadyPresentationIntent {
 interface PendingWorkflowToolPolicy {
 	generation: number;
 	mode: "resolve" | "revalidate";
+}
+interface ActiveImplementationRuntimeApplication {
+	sessionManager: ExtensionContext["sessionManager"];
+	completion: Promise<void>;
+	finish(): void;
 }
 type InteractiveUi = typeof import("./interactive-ui.js");
 
@@ -155,12 +162,32 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	let menuGeneration = 0;
 	let workflowGeneration = 0;
 	let refreshStateBeforeFirstAgentStart = false;
+	let activeImplementationRuntimeApplication: ActiveImplementationRuntimeApplication | undefined;
 	let menuController = new AbortController();
 	let settingsWatch: ReturnType<typeof watch> | undefined;
 	let settingsReloadTimer: ReturnType<typeof setTimeout> | undefined;
 	const implementationRetention = createImplementationRetentionCoordinator();
 	const finalizationRequest = createFinalizationRequestCoordinator();
 	const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
+	const beginImplementationRuntimeApplication = (
+		sessionManager: ExtensionContext["sessionManager"],
+	) => {
+		let resolveCompletion!: () => void;
+		const application: ActiveImplementationRuntimeApplication = {
+			sessionManager,
+			completion: new Promise<void>((resolve) => {
+				resolveCompletion = resolve;
+			}),
+			finish() {
+				if (activeImplementationRuntimeApplication === application) {
+					activeImplementationRuntimeApplication = undefined;
+				}
+				resolveCompletion();
+			},
+		};
+		activeImplementationRuntimeApplication = application;
+		return application.finish;
+	};
 	const planExports = createPlanExportController({
 		getState: () => state,
 		getSettings: () => settings,
@@ -515,6 +542,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		const shutdownSession = ctx.sessionManager;
+		const runtimeApplication =
+			activeImplementationRuntimeApplication?.sessionManager === shutdownSession
+				? activeImplementationRuntimeApplication
+				: undefined;
 		finalizationRequest.reset();
 		menuGeneration += 1;
 		menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
@@ -524,6 +555,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		workflowAllowedToolNames = undefined;
 		pendingWorkflowToolPolicy = undefined;
 		implementationRetention.reset();
+		if (runtimeApplication) await runtimeApplication.completion;
+		if (currentSession !== undefined && currentSession !== shutdownSession) {
+			workflowMutex.unbindSession(shutdownSession);
+			return;
+		}
 		await awaitPlanModeSettingsWrites(dependencies.settingsPath);
 		if (currentSession !== undefined && currentSession !== shutdownSession) {
 			workflowMutex.unbindSession(shutdownSession);
@@ -654,7 +690,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		return { messages: messages as typeof event.messages };
 	});
 
-	pi.on("before_agent_start", (_event, ctx) => {
+	pi.on("before_agent_start", async (_event, ctx) => {
 		if (refreshStateBeforeFirstAgentStart) {
 			refreshStateBeforeFirstAgentStart = false;
 			implementationRetention.reset();
@@ -665,6 +701,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			implementationRetention.restore(state.activeImplementation);
 			updateUi(ctx);
 		}
+		if (!(await applyPendingImplementationRuntime(ctx))) return;
 		if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
 		if (state.latestPlan || state.awaitingAction) {
 			readyPresentationIntent = undefined;
@@ -776,6 +813,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 				awaitingAction: false,
 				savedPlan: undefined,
 				activeImplementation: undefined,
+				pendingImplementationRuntime: undefined,
 				selectedToolNames: candidate.selectedToolNames,
 				selectedToolKeys: candidate.selectedToolKeys,
 			};
@@ -820,6 +858,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			awaitingAction: false,
 			savedPlan: undefined,
 			activeImplementation: undefined,
+			pendingImplementationRuntime: undefined,
 			workflowToolPolicy: undefined,
 			manualThinkingLevel: undefined,
 		};
@@ -839,7 +878,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			hasModeContractArtifact(branch) ||
 			restoredState.enabled ||
 			restoredState.savedPlan !== undefined ||
-			restoredState.activeImplementation !== undefined;
+			restoredState.activeImplementation !== undefined ||
+			restoredState.pendingImplementationRuntime !== undefined;
 	}
 
 	function publishModeContract(mode: PlanModeContract, ctx: ExtensionContext) {
@@ -971,6 +1011,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			awaitingAction: false,
 			savedPlan: { plan, source },
 			activeImplementation: undefined,
+			pendingImplementationRuntime: undefined,
 			workflowToolPolicy: undefined,
 			manualThinkingLevel: undefined,
 		};
@@ -982,12 +1023,17 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		ctx.ui.notify("Plan saved for later. Plan mode disabled.", "info");
 	}
 
-	async function startFreshImplementation(ctx: ExtensionContext, menuIsCurrent: () => boolean) {
+	async function startFreshImplementation(
+		ctx: ExtensionContext,
+		menuIsCurrent: () => boolean,
+		runtime?: ImplementationRuntimeSelection,
+	) {
 		await startFreshImplementationFromState(ctx, {
 			getState: () => state,
 			menuIsCurrent,
 			retention: configuredImplementationPlanRetention(settings),
 			stateEntryType: STATE_ENTRY_TYPE,
+			runtime,
 		});
 	}
 
@@ -1032,6 +1078,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			latestPlanSource: undefined,
 			awaitingAction: false,
 			savedPlan: undefined,
+			pendingImplementationRuntime: undefined,
 			activeImplementation: usesConversationHistory
 				? undefined
 				: {
@@ -1482,6 +1529,123 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		}
 	}
 
+	async function applyPendingImplementationRuntime(ctx: ExtensionContext) {
+		const intent = state.enabled ? undefined : state.pendingImplementationRuntime;
+		if (!intent) return true;
+		const session = ctx.sessionManager;
+		const generation = menuGeneration;
+		state = { ...state, pendingImplementationRuntime: undefined };
+		try {
+			persistState();
+		} catch (error: unknown) {
+			if (currentSession === session && generation === menuGeneration) {
+				ctx.ui.notify(
+					`Unable to apply fresh implementation settings because their one-shot state could not be consumed: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. Destination defaults will be used.`,
+					"warning",
+				);
+			}
+			return false;
+		}
+		const isCurrent = () =>
+			currentSession === session && generation === menuGeneration && !menuController.signal.aborted;
+		const applyThinking = () => {
+			if (!intent.thinkingLevel) return;
+			try {
+				pi.setThinkingLevel(intent.thinkingLevel);
+				const effectiveLevel = pi.getThinkingLevel();
+				if (isCurrent() && effectiveLevel !== intent.thinkingLevel) {
+					ctx.ui.notify(
+						`Implementation thinking ${intent.thinkingLevel} is unsupported by the destination model; Pi is using ${effectiveLevel}.`,
+						"warning",
+					);
+				}
+			} catch (error: unknown) {
+				if (isCurrent()) {
+					ctx.ui.notify(
+						`Implementation thinking ${intent.thinkingLevel} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default will continue.`,
+						"warning",
+					);
+				}
+			}
+		};
+		if (intent.model) {
+			let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+			let resolutionFailed = false;
+			try {
+				model = ctx.modelRegistry.find(intent.model.provider, intent.model.modelId);
+			} catch (error: unknown) {
+				if (isCurrent()) {
+					ctx.ui.notify(
+						`Implementation model ${terminalModelReference(intent.model)} could not be resolved: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
+						"warning",
+					);
+				}
+				resolutionFailed = true;
+				model = undefined;
+			}
+			if (!model && !resolutionFailed && isCurrent()) {
+				ctx.ui.notify(
+					`Implementation model ${terminalModelReference(intent.model)} is no longer available. The destination default model will continue.`,
+					"warning",
+				);
+			}
+			if (model) {
+				let authenticated = false;
+				try {
+					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+					if (!isCurrent()) return false;
+					if (auth.ok) authenticated = true;
+					else {
+						ctx.ui.notify(
+							`Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(auth.error)}. The destination default model will continue.`,
+							"warning",
+						);
+					}
+				} catch (error: unknown) {
+					if (isCurrent()) {
+						ctx.ui.notify(
+							`Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
+							"warning",
+						);
+					}
+				}
+				if (!isCurrent()) return false;
+				if (authenticated) {
+					let applied = false;
+					let applicationFailed = false;
+					const finishApplication = beginImplementationRuntimeApplication(session);
+					try {
+						try {
+							applied = await pi.setModel(model);
+						} catch (error: unknown) {
+							applicationFailed = true;
+							if (isCurrent()) {
+								ctx.ui.notify(
+									`Implementation model ${terminalModelReference(intent.model)} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
+									"warning",
+								);
+							}
+						}
+						if (currentSession !== session) return false;
+						if (isCurrent() && !applied && !applicationFailed) {
+							ctx.ui.notify(
+								`Implementation model ${terminalModelReference(intent.model)} could not be applied after authentication changed. The destination default model will continue.`,
+								"warning",
+							);
+						}
+						applyThinking();
+						return isCurrent();
+					} finally {
+						finishApplication();
+					}
+				}
+			}
+		}
+		if (!isCurrent()) return false;
+		applyThinking();
+		return isCurrent();
+	}
+
 	function applyPlanThinkingLevel() {
 		if (state.manualThinkingLevel) {
 			if (pi.getThinkingLevel() !== state.manualThinkingLevel) {
@@ -1705,11 +1869,21 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		return safe.length > 120 ? `${safe.slice(0, 119)}…` : safe;
 	}
 
+	function terminalModelReference(model: { provider: string; modelId: string }) {
+		const safe = safeTerminalText(`${model.provider}/${model.modelId}`) || "(unnamed model)";
+		return safe.length > 160 ? `${safe.slice(0, 159)}…` : safe;
+	}
+
 	function safeTerminalText(value: string) {
-		return [...value]
+		return [...stripVTControlCharacters(value)]
 			.map((character) => {
 				const codePoint = character.codePointAt(0) ?? 0;
-				return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
+				return codePoint <= 0x1f ||
+					(codePoint >= 0x7f && codePoint <= 0x9f) ||
+					(codePoint >= 0x202a && codePoint <= 0x202e) ||
+					(codePoint >= 0x2066 && codePoint <= 0x2069)
+					? " "
+					: character;
 			})
 			.join("")
 			.trim();

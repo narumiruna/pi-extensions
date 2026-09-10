@@ -1,6 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { defineMenu, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
+import type { PlanModeFixedThinkingLevel } from "./settings.js";
+import type { ImplementationModelOverride, ImplementationRuntimeSelection } from "./state.js";
 
 interface MenuLifecycle {
 	signal: AbortSignal;
@@ -12,6 +14,16 @@ const IMPLEMENTATION_CONTEXT_LINES = [
 	"Start fresh transfers only the approved plan to a new session.",
 ] as const;
 
+const FIXED_THINKING_LEVELS: readonly PlanModeFixedThinkingLevel[] = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+];
+
 interface PlanMenuOptions extends MenuLifecycle {
 	statusText: string;
 	hasReadyPlan: boolean;
@@ -20,7 +32,10 @@ interface PlanMenuOptions extends MenuLifecycle {
 	show(): void;
 	finalize(): void;
 	implementHere(): void | Promise<void>;
-	implementFresh(signal: AbortSignal): void | Promise<void>;
+	implementFresh(
+		runtime: ImplementationRuntimeSelection,
+		signal: AbortSignal,
+	): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
 	stay(): void;
@@ -28,16 +43,19 @@ interface PlanMenuOptions extends MenuLifecycle {
 }
 
 export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions) {
-	type Screen = "main" | "export";
+	type Screen = "main" | "fresh" | "models" | "thinking" | "export";
 	type Action =
 		| "show"
 		| "finalize"
 		| "implement-here"
-		| "implement-fresh"
+		| "select-model"
+		| "select-thinking"
+		| "start-fresh"
 		| "export"
 		| "save"
 		| "stay"
 		| "exit";
+	const freshFlow = createFreshImplementationFlow(ctx, options.implementFresh);
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "main",
 		screens: {
@@ -62,9 +80,8 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 							{
 								id: "implement-fresh",
 								label: "Start fresh and implement",
-								description: "Open a new linked session; transfer only the approved plan.",
-								action: "implement-fresh",
-								busyLabel: "Starting fresh implementation session…",
+								description: "Configure one-shot model and thinking choices first.",
+								to: "fresh",
 							},
 							{ id: "export", label: "Export plan…", to: "export" },
 							{ id: "save", label: "Save for later", action: "save" },
@@ -78,6 +95,9 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 						],
 				hint: "close",
 			}),
+			fresh: freshFlow.settingsScreen,
+			models: freshFlow.modelScreen,
+			thinking: freshFlow.thinkingScreen,
 			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
@@ -93,8 +113,16 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 				await options.implementHere();
 				return { kind: "close" };
 			},
-			"implement-fresh": async ({ signal }) => {
-				await options.implementFresh(signal);
+			"select-model": async ({ itemId }) => {
+				freshFlow.selectModel(itemId);
+				return { kind: "back" };
+			},
+			"select-thinking": async ({ itemId }) => {
+				freshFlow.selectThinking(itemId);
+				return { kind: "back" };
+			},
+			"start-fresh": async ({ signal }) => {
+				await freshFlow.start(signal);
 				return { kind: "close" };
 			},
 			export: async ({ value, signal }) =>
@@ -124,7 +152,10 @@ interface ReadyPlanMenuOptions extends MenuLifecycle {
 	implementationOutcome(): string;
 	getExportDestination: PlanExportDestinationProvider;
 	implementHere(): void | Promise<void>;
-	implementFresh(signal: AbortSignal): void | Promise<void>;
+	implementFresh(
+		runtime: ImplementationRuntimeSelection,
+		signal: AbortSignal,
+	): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
 	stay(): void;
@@ -132,8 +163,17 @@ interface ReadyPlanMenuOptions extends MenuLifecycle {
 }
 
 export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPlanMenuOptions) {
-	type Screen = "ready" | "export";
-	type Action = "implement-here" | "implement-fresh" | "export" | "save" | "stay" | "exit";
+	type Screen = "ready" | "fresh" | "models" | "thinking" | "export";
+	type Action =
+		| "implement-here"
+		| "select-model"
+		| "select-thinking"
+		| "start-fresh"
+		| "export"
+		| "save"
+		| "stay"
+		| "exit";
+	const freshFlow = createFreshImplementationFlow(ctx, options.implementFresh);
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "ready",
 		screens: {
@@ -151,9 +191,8 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 					{
 						id: "implement-fresh",
 						label: "Start fresh and implement",
-						description: "Open a new linked session; transfer only the approved plan.",
-						action: "implement-fresh",
-						busyLabel: "Starting fresh implementation session…",
+						description: "Configure one-shot model and thinking choices first.",
+						to: "fresh",
 					},
 					{ id: "export", label: "Export plan…", to: "export" },
 					{ id: "save", label: "Save for later", action: "save" },
@@ -162,6 +201,9 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 				],
 				hint: "close",
 			}),
+			fresh: freshFlow.settingsScreen,
+			models: freshFlow.modelScreen,
+			thinking: freshFlow.thinkingScreen,
 			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
@@ -169,8 +211,16 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 				await options.implementHere();
 				return { kind: "close" };
 			},
-			"implement-fresh": async ({ signal }) => {
-				await options.implementFresh(signal);
+			"select-model": async ({ itemId }) => {
+				freshFlow.selectModel(itemId);
+				return { kind: "back" };
+			},
+			"select-thinking": async ({ itemId }) => {
+				freshFlow.selectThinking(itemId);
+				return { kind: "back" };
+			},
+			"start-fresh": async ({ signal }) => {
+				await freshFlow.start(signal);
 				return { kind: "close" };
 			},
 			export: async ({ value, signal }) =>
@@ -194,4 +244,128 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 		signal: options.signal,
 		isCurrent: options.isCurrent,
 	});
+}
+
+interface ModelChoice {
+	itemId: string;
+	model: ImplementationModelOverride;
+	label: string;
+	description?: string;
+	searchText: string;
+}
+
+function createFreshImplementationFlow(
+	ctx: ExtensionContext,
+	implementFresh: (
+		runtime: ImplementationRuntimeSelection,
+		signal: AbortSignal,
+	) => void | Promise<void>,
+) {
+	const models = snapshotAvailableModels(ctx);
+	let selectedModel: ModelChoice | undefined;
+	let selectedThinkingLevel: PlanModeFixedThinkingLevel | undefined;
+	return {
+		settingsScreen: () => ({
+			kind: "actions" as const,
+			title: "Fresh implementation settings",
+			lines: ["These choices apply once to the new implementation session."],
+			items: [
+				{
+					id: "implementation-model",
+					label: `Implementation model: ${selectedModel?.label ?? "Destination default"}`,
+					to: "models" as const,
+				},
+				{
+					id: "implementation-thinking",
+					label: `Implementation thinking: ${selectedThinkingLevel ?? "Destination default"}`,
+					to: "thinking" as const,
+				},
+				{
+					id: "start-fresh",
+					label: "Start fresh implementation",
+					description: "Create the linked session and begin implementation.",
+					action: "start-fresh" as const,
+					busyLabel: "Starting fresh implementation session…",
+				},
+			],
+		}),
+		modelScreen: () => ({
+			kind: "choice" as const,
+			title: "Implementation model",
+			lines: ["Choose a one-shot model override for the destination session."],
+			items: [
+				{
+					id: "destination-default",
+					label: "Destination default",
+					description: "Use Pi's normal model selection for the new session.",
+				},
+				...models.map((choice) => ({
+					id: choice.itemId,
+					label: choice.label,
+					description: choice.description,
+					searchText: choice.searchText,
+				})),
+			],
+			action: "select-model" as const,
+			currentItemId: selectedModel?.itemId ?? "destination-default",
+			initialItemId: selectedModel?.itemId ?? "destination-default",
+			enableSearch: true,
+			viewportSize: 10,
+		}),
+		thinkingScreen: () => ({
+			kind: "choice" as const,
+			title: "Implementation thinking",
+			lines: ["Choose a one-shot thinking override for the destination session."],
+			items: [
+				{
+					id: "destination-default",
+					label: "Destination default",
+					description: "Use the destination model's normal thinking level.",
+				},
+				...FIXED_THINKING_LEVELS.map((level) => ({ id: level, label: level })),
+			],
+			action: "select-thinking" as const,
+			currentItemId: selectedThinkingLevel ?? "destination-default",
+			initialItemId: selectedThinkingLevel ?? "destination-default",
+			viewportSize: FIXED_THINKING_LEVELS.length + 1,
+		}),
+		selectModel(itemId: string) {
+			selectedModel = models.find((choice) => choice.itemId === itemId);
+		},
+		selectThinking(itemId: string) {
+			selectedThinkingLevel = FIXED_THINKING_LEVELS.find((level) => level === itemId);
+		},
+		start(signal: AbortSignal) {
+			return implementFresh(
+				{
+					...(selectedModel ? { model: { ...selectedModel.model } } : {}),
+					...(selectedThinkingLevel ? { thinkingLevel: selectedThinkingLevel } : {}),
+				},
+				signal,
+			);
+		},
+	};
+}
+
+function snapshotAvailableModels(ctx: ExtensionContext): ModelChoice[] {
+	const getAvailable = ctx.modelRegistry.getAvailable;
+	const available = typeof getAvailable === "function" ? getAvailable.call(ctx.modelRegistry) : [];
+	return available.map((model, index) => {
+		const provider = safeModelMetadata(model.provider, "unknown provider");
+		const modelId = safeModelMetadata(model.id, "unknown model");
+		const name = safeModelMetadata(model.name, "");
+		return {
+			itemId: `model-${index}`,
+			model: { provider: model.provider, modelId: model.id },
+			label: `${provider}/${modelId}${name ? ` — ${name}` : ""}`,
+			...(name ? { description: name } : {}),
+			searchText: [provider, modelId, name].filter(Boolean).join(" "),
+		};
+	});
+}
+
+function safeModelMetadata(value: unknown, fallback: string) {
+	if (typeof value !== "string") return fallback;
+	const safe = sanitizeTerminalText(value).trim() || fallback;
+	return [...safe].slice(0, 512).join("");
 }

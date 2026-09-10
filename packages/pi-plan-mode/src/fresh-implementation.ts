@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.js";
 import { createModeContractMessage } from "./mode-contract.js";
 import type { ImplementationPlanRetention } from "./settings.js";
-import type { PlanCompletionSource, PlanModeState } from "./state.js";
+import type {
+	ImplementationRuntimeSelection,
+	PendingImplementationRuntime,
+	PlanCompletionSource,
+	PlanModeState,
+} from "./state.js";
 
 type NewSessionOptions = Exclude<Parameters<ExtensionCommandContext["newSession"]>[0], undefined>;
 type ReplacementContext = Parameters<NonNullable<NewSessionOptions["withSession"]>>[0];
@@ -13,6 +19,7 @@ export interface FreshImplementationRequest {
 	source: PlanCompletionSource;
 	retention: ImplementationPlanRetention;
 	stateEntryType: string;
+	runtime?: ImplementationRuntimeSelection;
 	isCurrent(): boolean;
 }
 
@@ -21,6 +28,7 @@ interface FreshImplementationFromStateOptions {
 	menuIsCurrent(): boolean;
 	retention: ImplementationPlanRetention;
 	stateEntryType: string;
+	runtime?: ImplementationRuntimeSelection;
 }
 
 export type FreshImplementationResult =
@@ -78,6 +86,7 @@ export async function startFreshImplementationFromState(
 		source,
 		retention: options.retention,
 		stateEntryType: options.stateEntryType,
+		runtime: options.runtime,
 		isCurrent,
 	});
 }
@@ -92,23 +101,29 @@ export async function startFreshImplementationSession(
 
 	await ctx.waitForIdle();
 	if (!request.isCurrent()) return { kind: "stale" };
-	if (!(await preflightModel(ctx, request.isCurrent))) return { kind: "rejected" };
+	if (!(await preflightModel(ctx, request))) return { kind: "rejected" };
 	if (!request.isCurrent()) return { kind: "stale" };
 
 	const usesConversationHistory = request.retention === "clear-on-start";
-	const destinationState: PlanModeState | undefined = usesConversationHistory
+	const pendingImplementationRuntime = pendingRuntimeIntent(request.runtime);
+	const activeImplementation = usesConversationHistory
 		? undefined
 		: {
-				enabled: false,
-				awaitingAction: false,
-				activeImplementation: {
-					id: randomUUID(),
-					plan: request.plan,
-					source: request.source,
-					startedAt: Date.now(),
-					retention: request.retention,
-				},
+				id: randomUUID(),
+				plan: request.plan,
+				source: request.source,
+				startedAt: Date.now(),
+				retention: request.retention,
 			};
+	const destinationState: PlanModeState | undefined =
+		activeImplementation || pendingImplementationRuntime
+			? {
+					enabled: false,
+					awaitingAction: false,
+					...(activeImplementation ? { activeImplementation } : {}),
+					...(pendingImplementationRuntime ? { pendingImplementationRuntime } : {}),
+				}
+			: undefined;
 	const handoff = usesConversationHistory
 		? formatTransferredPlanPrompt(request.plan, true)
 		: formatImplementationHandoff(request.plan);
@@ -183,8 +198,26 @@ export async function startFreshImplementationSession(
 	return setupError || kickoffError ? { kind: "partial" } : { kind: "started" };
 }
 
-async function preflightModel(ctx: ExtensionCommandContext, isCurrent: () => boolean) {
-	const model = ctx.model;
+async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplementationRequest) {
+	const requestedModel = request.runtime?.model;
+	let model = ctx.model;
+	if (requestedModel) {
+		try {
+			model = ctx.modelRegistry.find(requestedModel.provider, requestedModel.modelId);
+		} catch (error: unknown) {
+			if (request.isCurrent()) {
+				ctx.ui.notify(`Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
+			}
+			return false;
+		}
+		if (!model) {
+			ctx.ui.notify(
+				`Unable to implement the plan: implementation model ${safeModelReference(requestedModel)} is no longer available. Choose another model and retry.`,
+				"warning",
+			);
+			return false;
+		}
+	}
 	if (!model) {
 		ctx.ui.notify("Unable to implement the plan: no model is selected.", "warning");
 		return false;
@@ -193,17 +226,37 @@ async function preflightModel(ctx: ExtensionCommandContext, isCurrent: () => boo
 	try {
 		auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	} catch (error: unknown) {
-		if (isCurrent()) {
+		if (request.isCurrent()) {
 			ctx.ui.notify(`Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
 		}
 		return false;
 	}
-	if (!isCurrent()) return false;
+	if (!request.isCurrent()) return false;
 	if (!auth.ok) {
-		ctx.ui.notify(`Unable to implement the plan: ${safeErrorDetail(auth.error)}`, "warning");
+		ctx.ui.notify(
+			requestedModel
+				? `Unable to implement the plan with ${safeModelReference(model)}: ${safeErrorDetail(auth.error)}. Choose another model or configure authentication, then retry.`
+				: `Unable to implement the plan: ${safeErrorDetail(auth.error)}`,
+			"warning",
+		);
 		return false;
 	}
 	return true;
+}
+
+function pendingRuntimeIntent(
+	selection: ImplementationRuntimeSelection | undefined,
+): PendingImplementationRuntime | undefined {
+	if (!selection?.model && !selection?.thinkingLevel) return undefined;
+	return {
+		version: 1,
+		...(selection.model ? { model: { ...selection.model } } : {}),
+		...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+	};
+}
+
+function safeModelReference(model: { provider: string; id?: string; modelId?: string }) {
+	return safeErrorDetail(`${model.provider}/${model.modelId ?? model.id ?? "unknown"}`);
 }
 
 function recoverSetupFailure(ctx: ReplacementContext, handoff: string, setupError: string) {
@@ -246,10 +299,15 @@ function isCommandContext(ctx: ExtensionContext): ctx is ExtensionCommandContext
 function safeErrorDetail(error: unknown) {
 	const detail = error instanceof Error ? error.message : String(error);
 	const normalized =
-		[...detail]
+		[...stripVTControlCharacters(detail)]
 			.map((character) => {
 				const codePoint = character.codePointAt(0) ?? 0;
-				return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
+				return codePoint <= 0x1f ||
+					(codePoint >= 0x7f && codePoint <= 0x9f) ||
+					(codePoint >= 0x202a && codePoint <= 0x202e) ||
+					(codePoint >= 0x2066 && codePoint <= 0x2069)
+					? " "
+					: character;
 			})
 			.join("")
 			.replace(/\s+/gu, " ")

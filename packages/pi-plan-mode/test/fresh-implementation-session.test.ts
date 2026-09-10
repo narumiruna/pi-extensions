@@ -195,8 +195,11 @@ test("fresh implementation creates a linked destination and hands off only throu
 			getBranch: () => [],
 			getEntries: () => [],
 		},
-		select: async (_title: string, options: string[]) =>
-			options.includes("Start fresh and implement") ? "Start fresh and implement" : undefined,
+		select: async (_title: string, options: string[]) => {
+			if (options.includes("Start fresh and implement")) return "Start fresh and implement";
+			if (options.includes("Start fresh implementation")) return "Start fresh implementation";
+			return undefined;
+		},
 		newSession: async (options: {
 			parentSession?: string;
 			setup?: (sessionManager: FreshSetupManager) => Promise<void>;
@@ -323,7 +326,11 @@ test("fresh menu work stops after source session shutdown while waiting for idle
 		hasUI: true,
 		model: { provider: "test-provider", id: "test-model" },
 		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
-		select: async () => "Start fresh and implement",
+		select: async (_title: string, options: string[]) => {
+			if (options.includes("Start fresh and implement")) return "Start fresh and implement";
+			if (options.includes("Start fresh implementation")) return "Start fresh implementation";
+			return undefined;
+		},
 		waitForIdle: async () => {
 			markWaiting();
 			await idleGate;
