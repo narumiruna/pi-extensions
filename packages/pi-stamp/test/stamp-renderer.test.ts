@@ -16,7 +16,7 @@ import {
 const USER_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 7, 123).getTime();
 const ASSISTANT_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 9, 456).getTime();
 
-test("isMessageStampData accepts exact message versions 1 through 5", () => {
+test("isMessageStampData accepts exact message versions 1 through 6", () => {
 	assert.equal(isMessageStampData({ version: 1, role: "user", timestamp: USER_TIMESTAMP }), true);
 	assert.equal(
 		isMessageStampData({ version: 2, role: "assistant", timestamp: ASSISTANT_TIMESTAMP }),
@@ -100,6 +100,27 @@ test("isMessageStampData accepts exact message versions 1 through 5", () => {
 		}),
 		true,
 	);
+	assert.equal(
+		isMessageStampData({
+			version: 6,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			metadata,
+			thinkingLevel: "high",
+			estimatedCost: 0.009,
+			costSinceUser: 0.039,
+		}),
+		true,
+	);
+	assert.equal(
+		isMessageStampData({
+			version: 6,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			costSinceUser: 0.03,
+		}),
+		true,
+	);
 	for (const value of [
 		{
 			version: 3,
@@ -165,6 +186,34 @@ test("isMessageStampData accepts exact message versions 1 through 5", () => {
 			timestamp: USER_TIMESTAMP,
 			metadata,
 			thinkingLevel: "high",
+			future: true,
+		},
+		{ version: 6, role: "assistant", timestamp: USER_TIMESTAMP },
+		{
+			version: 6,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			costSinceUser: -1,
+		},
+		{
+			version: 6,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			costSinceUser: 0.03,
+			estimatedCost: Number.NaN,
+		},
+		{
+			version: 6,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			costSinceUser: 0.01,
+			estimatedCost: 0.02,
+		},
+		{
+			version: 6,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			costSinceUser: 0.03,
 			future: true,
 		},
 	]) {
@@ -322,6 +371,49 @@ test("entry renderer expands exact timelines from only the observations each ver
 			for (const line of renderedComponent.render(width)) {
 				assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
 			}
+		}
+	}
+});
+
+test("version-6 rendering gates cost since user without requiring assistant metadata", () => {
+	let settings: StampSettings = {
+		...DEFAULT_STAMP_SETTINGS,
+		timeZone: "UTC",
+		showCostSinceUser: true,
+	};
+	const renderer = createStampEntryRenderer(() => settings);
+	const assistant = assistantMessage(Date.UTC(2026, 6, 30, 0, 1, 2));
+	const metadata = captureAssistantMetadata(assistant);
+	assert.ok(metadata);
+	const data = {
+		version: 6,
+		role: "assistant",
+		timestamp: assistant.timestamp,
+		metadata,
+		estimatedCost: 0.009,
+		costSinceUser: 0.039,
+	} as const;
+	const theme = { fg: (_color: string, text: string) => text } as never;
+	const component = renderer({ data } as never, { expanded: false }, theme);
+	assert.ok(component);
+	assert.deepEqual(
+		component.render(80).map((line) => line.trim()),
+		["00:01:02", "est $0.009 · since user $0.039"],
+	);
+
+	settings = { ...settings, assistantMetadata: "compact" };
+	assert.deepEqual(
+		component.render(80).map((line) => line.trim()),
+		["00:01:02", "test-model · 2 tok · est $0.009 · since user $0.039"],
+	);
+	settings = { ...settings, showCostSinceUser: false };
+	assert.deepEqual(
+		component.render(80).map((line) => line.trim()),
+		["00:01:02", "test-model · 2 tok · est $0"],
+	);
+	for (const width of [1, 4, 8, 12]) {
+		for (const line of component.render(width)) {
+			assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
 		}
 	}
 });
@@ -486,14 +578,14 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
 	}
 });
 
-test("Pi persists version-5 stamp entries across reopen without adding them to model context", (t) => {
+test("Pi persists version-6 stamp entries across reopen without adding them to model context", (t) => {
 	const sessionDir = mkdtempSync(`${os.tmpdir()}/pi-stamp-session-`);
 	t.onTestFinished(() => rmSync(sessionDir, { recursive: true, force: true }));
 	const session = SessionManager.create(process.cwd(), sessionDir);
 	const metadata = captureAssistantMetadata(assistantMessage(ASSISTANT_TIMESTAMP));
 	assert.ok(metadata);
 	const stampData = {
-		version: 5,
+		version: 6,
 		role: "assistant",
 		timestamp: USER_TIMESTAMP,
 		previousTimestamp: USER_TIMESTAMP - 1_000,
@@ -501,6 +593,8 @@ test("Pi persists version-5 stamp entries across reopen without adding them to m
 		firstContentAt: USER_TIMESTAMP + 800,
 		metadata,
 		thinkingLevel: "high",
+		estimatedCost: 0.009,
+		costSinceUser: 0.039,
 	} as const;
 
 	session.appendMessage(userMessage(USER_TIMESTAMP));

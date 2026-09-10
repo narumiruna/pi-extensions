@@ -45,6 +45,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 			showExactTimeline: false,
 			showThinkingLevel: false,
 			showCompactAbnormalOutcome: false,
+			showCostSinceUser: true,
 			toolStamps: true,
 			future: { retained: true },
 		}),
@@ -59,6 +60,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 				showExactTimeline: false,
 				showThinkingLevel: false,
 				showCompactAbnormalOutcome: false,
+				showCostSinceUser: true,
 				toolStamps: true,
 			},
 			sources: {
@@ -72,6 +74,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 				showExactTimeline: "user",
 				showThinkingLevel: "user",
 				showCompactAbnormalOutcome: "user",
+				showCostSinceUser: "user",
 				toolStamps: "user",
 			},
 		},
@@ -91,6 +94,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 		{ showExactTimeline: "yes" },
 		{ showThinkingLevel: "yes" },
 		{ showCompactAbnormalOutcome: "yes" },
+		{ showCostSinceUser: "yes" },
 		{ toolStamps: "yes" },
 	]) {
 		assert.equal(normalizeStampSettingsDocument(value), undefined);
@@ -111,6 +115,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 		"showExactTimeline",
 		"showThinkingLevel",
 		"showCompactAbnormalOutcome",
+		"showCostSinceUser",
 		"toolStamps",
 	] as const) {
 		for (const value of [false, true]) {
@@ -134,6 +139,7 @@ test("updates preserve unknown and omitted fields and publish private JSON atomi
 	await runtime.update({ showExactTimeline: false });
 	await runtime.update({ showThinkingLevel: false });
 	await runtime.update({ showCompactAbnormalOutcome: false });
+	await runtime.update({ showCostSinceUser: true });
 	await runtime.update({ toolStamps: true });
 
 	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
@@ -145,6 +151,7 @@ test("updates preserve unknown and omitted fields and publish private JSON atomi
 		showExactTimeline: false,
 		showThinkingLevel: false,
 		showCompactAbnormalOutcome: false,
+		showCostSinceUser: true,
 		toolStamps: true,
 	});
 	assert.deepEqual(runtime.get().settings, {
@@ -156,6 +163,7 @@ test("updates preserve unknown and omitted fields and publish private JSON atomi
 		showExactTimeline: false,
 		showThinkingLevel: false,
 		showCompactAbnormalOutcome: false,
+		showCostSinceUser: true,
 		toolStamps: true,
 	});
 	assert.equal(runtime.get().sources.responseTiming, "user");
@@ -163,6 +171,7 @@ test("updates preserve unknown and omitted fields and publish private JSON atomi
 	assert.equal(runtime.get().sources.showExactTimeline, "user");
 	assert.equal(runtime.get().sources.showThinkingLevel, "user");
 	assert.equal(runtime.get().sources.showCompactAbnormalOutcome, "user");
+	assert.equal(runtime.get().sources.showCostSinceUser, "user");
 	assert.equal(runtime.get().sources.toolStamps, "user");
 	if (process.platform !== "win32") {
 		assert.equal(statSync(settingsPath).mode & 0o777, 0o600);

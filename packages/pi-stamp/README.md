@@ -9,7 +9,7 @@ Optionally show response timing, assistant provenance and usage, or tool duratio
 
 - Shows each message's recorded creation time on a dim, right-aligned row.
 - Supports 12/24-hour clocks, seconds, automatic date context, locales, and time zones.
-- Optionally shows response latency, model and provider identity, effective Pi Thinking level, stop reason, tokens, and estimated cost.
+- Optionally shows response latency, model and provider identity, effective Pi Thinking level, stop reason, tokens, call cost, and cost since user.
 - Optionally records tool duration and success or error after each complete tool block.
 - Shows exact UTC ISO 8601 and Unix millisecond observation times only during transcript expansion.
 - Keeps sensitive response IDs and bounded diagnostics behind explicit opt-in and transcript expansion.
@@ -57,7 +57,7 @@ Run `/stamp` to open the presentation menu:
 
 ```text
 Stamp
-24-hour · seconds · Day changes · Invariant · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Tool stamps hidden
+24-hour · seconds · Day changes · Invariant · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Tool stamps hidden
 
 Settings
 Status
@@ -89,6 +89,7 @@ The `/stamp` Settings screen provides these controls:
 | `assistantMetadata` | `"off"`, `"compact"`, `"expanded"` | `"off"` | Captures and shows no assistant metadata, a compact model/Thinking-level/total/cost summary, or all supported provenance and usage fields. |
 | `showThinkingLevel` | boolean | `true` | Captures and shows Pi's effective turn Thinking level when assistant metadata is enabled. |
 | `showCompactAbnormalOutcome` | boolean | `true` | Shows `length`, `error`, and `aborted` stop reasons in compact assistant metadata. |
+| `showCostSinceUser` | boolean | `false` | Shows the cost since user and final call cost on a non-`toolUse` assistant response. |
 | `toolStamps` | boolean | `false` | Records and shows duration plus success/error for newly observed tools. |
 
 The compatibility defaults produce local `HH:mm:ss` for ordinary same-day messages.
@@ -115,6 +116,7 @@ This example shows 12-hour Taipei time without seconds, compact assistant metada
   "assistantMetadata": "compact",
   "showThinkingLevel": false,
   "showCompactAbnormalOutcome": false,
+  "showCostSinceUser": true,
   "toolStamps": true
 }
 ```
@@ -205,6 +207,23 @@ Provider support varies.
 Every optional field is shown only when present and valid on that finalized assistant message.
 The cost label says `est` because Pi's message value is an estimate based on the provider/model usage data available to Pi; the extension performs no price lookup.
 
+### Cost since user
+
+Cost since user is the cumulative estimated cost from the latest user message through the final response.
+With `showCostSinceUser: true`, each finalized assistant call and tool result contributes its separately reported `usage.cost.total` to that running total.
+A user message resets it, including a steering or queued follow-up user message.
+Tool-use calls, model-backed or paid tools that report usage, retries, automatic continuations, and model runs started by extensions all keep accumulating until another user message arrives.
+The next assistant response whose stop reason is not `toolUse` records and displays both its call cost and that total:
+
+```text
+claude-sonnet-4-6 · thinking high · 842 tok · est $0.009 · since user $0.039
+```
+
+Cost since user reads only the reported cost field and does not require `assistantMetadata` capture.
+When assistant metadata is off, the final stamp uses a separate cost-only row.
+Intermediate `toolUse` stamps continue to show their call cost only when assistant metadata is enabled.
+Missing or invalid reported costs are omitted rather than estimated, while valid reported zero costs still count toward the total.
+
 ## 🛠️ Tool timing
 
 With `toolStamps: true`, the extension observes `tool_execution_start` and `tool_execution_end`, pairs them by exact `toolCallId`, and appends entries in `turn_end.toolResults` source order:
@@ -239,6 +258,8 @@ Message entry compatibility is cumulative:
 - Version 4 assistant entries add a sanitized metadata snapshot when metadata capture is enabled.
   Timing remains optional so a valid metadata stamp survives a backwards timing clock.
 - Version 5 assistant entries add Pi's validated effective turn Thinking level when metadata capture is enabled and the runtime exposes it.
+- Version 6 assistant entries add the optional call cost and cost since user.
+  Full assistant metadata and Thinking level remain optional in this version.
 - Version 1 tool entries store only bounded association/timing/outcome data.
 
 Existing versions remain readable.
@@ -250,7 +271,7 @@ Messages and tools created before `pi-stamp` observed them are not backfilled be
 
 - Pi does not currently expose a public decorator for built-in message or tool rows, so stamps appear as separate transcript rows rather than inside the original bubble/block.
 - Another extension can append transcript entries at the same lifecycle boundary, so strict visual adjacency between independently loaded extensions is not guaranteed.
-- There are no arbitrary format strings, relative labels, provider-server latency, aggregates, raw diagnostics, or analytics dashboard.
+- There are no arbitrary format strings, relative labels, provider-server latency, token aggregates, raw diagnostics, or analytics dashboard.
 - Thinking level is Pi's effective turn setting and does not claim that a provider honored or reported the same reasoning behavior.
 - Token and cost values come only from Pi's message fields.
 

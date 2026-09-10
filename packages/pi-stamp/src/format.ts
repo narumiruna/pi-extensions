@@ -26,6 +26,7 @@ export interface StampSettings {
 	showExactTimeline: boolean;
 	showThinkingLevel: boolean;
 	showCompactAbnormalOutcome: boolean;
+	showCostSinceUser: boolean;
 	toolStamps: boolean;
 }
 
@@ -40,6 +41,7 @@ export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
 	showExactTimeline: true,
 	showThinkingLevel: true,
 	showCompactAbnormalOutcome: true,
+	showCostSinceUser: false,
 	toolStamps: false,
 });
 

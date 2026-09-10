@@ -157,6 +157,40 @@ test("assistant metadata formatting distinguishes compact, expanded, and explici
 	]);
 });
 
+test("assistant cost-since-user formatting works with or without full metadata", () => {
+	const metadata = captureAssistantMetadata(COMPLETE_MESSAGE);
+	assert.ok(metadata);
+	const costSinceUserData = { estimatedCost: 0.018, costSinceUser: 0.039 };
+	assert.deepEqual(
+		formatAssistantMetadataLines(metadata, "compact", false, undefined, true, costSinceUserData),
+		["requested-model → actual-model · 1,234 tok · est $0.018 · since user $0.039"],
+	);
+	assert.deepEqual(
+		formatAssistantMetadataLines(metadata, "expanded", false, undefined, true, costSinceUserData),
+		[
+			"api anthropic-messages · provider anthropic · requested requested-model · response actual-model · stop toolUse",
+			"tokens in 100 · out 200 · reasoning 50 · cache read 300 · cache write 400 · total 1,234 · est cost $0.018 · since user $0.039",
+		],
+	);
+	assert.deepEqual(
+		formatAssistantMetadataLines(undefined, "off", false, undefined, true, costSinceUserData),
+		["est $0.018 · since user $0.039"],
+	);
+	assert.deepEqual(
+		formatAssistantMetadataLines(undefined, "off", false, undefined, true, {
+			costSinceUser: 0.03,
+		}),
+		["since user $0.03"],
+	);
+	assert.deepEqual(
+		formatAssistantMetadataLines(metadata, "compact", false, undefined, true, {
+			estimatedCost: -1,
+			costSinceUser: 0.039,
+		}),
+		[],
+	);
+});
+
 test("assistant metadata formats effective Thinking level and only abnormal compact outcomes", () => {
 	for (const thinkingLevel of [
 		"off",
