@@ -735,16 +735,18 @@ test("removing WebMCP gateway availability aborts active page work", async () =>
 	});
 });
 
-test("status display sanitizes untrusted text and remains bounded", () => {
+test("status display neutralizes untrusted text and remains bounded", () => {
 	assert.equal(
 		sanitizeChromeDevtoolsDisplay("safe\u001b]8;;https://evil\u0007link\u001b]8;;\u0007"),
-		"safelink",
+		"safe�]8;;https://evil�link�]8;;�",
 	);
+	assert.equal(sanitizeChromeDevtoolsDisplay("before\u001b[2Aaftermore"), "before�[2Aaftermore");
 	assert.equal(sanitizeChromeDevtoolsDisplay("safe\u202eend"), "safe�end");
 	assert.equal(sanitizeChromeDevtoolsDisplay("\ud800safe\udfff"), "�safe�");
 	assert.equal(sanitizeChromeDevtoolsDisplay("12345", 4), "123…");
 	assert.equal(sanitizeChromeDevtoolsDisplay("🙂x", 3), "🙂x");
 	assert.equal(sanitizeChromeDevtoolsDisplay("🙂xy", 2), "…");
+	assert.equal(sanitizeChromeDevtoolsDisplay("👩‍💻x", 4), "…");
 	const atInputLimit = sanitizeChromeDevtoolsDisplay("x".repeat(50_000));
 	assert.equal(atInputLimit.length, 50_000);
 	assert.equal(atInputLimit.endsWith("…"), false);
@@ -752,7 +754,14 @@ test("status display sanitizes untrusted text and remains bounded", () => {
 	assert.equal(beyondInputLimit.length, 50_000);
 	assert.ok(beyondInputLimit.startsWith("x".repeat(49_999)));
 	assert.ok(beyondInputLimit.endsWith("…"));
-	assert.equal(sanitizeChromeDevtoolsDisplay("\u001b[31m".repeat(10_001)), "…");
+	const hostileInput = sanitizeChromeDevtoolsDisplay("\u001b[31m".repeat(10_001));
+	assert.equal(hostileInput.length, 50_000);
+	assert.equal(hostileInput.includes("\u001b"), false);
+	assert.ok(hostileInput.endsWith("…"));
+
+	const zeroWidthPrefix = "\u200b".repeat(49_998);
+	assert.equal(sanitizeChromeDevtoolsDisplay(`${zeroWidthPrefix}👩‍💻x`), `${zeroWidthPrefix}…`);
+	assert.equal(sanitizeChromeDevtoolsDisplay(`${zeroWidthPrefix}a\r\nx`), `${zeroWidthPrefix}a…`);
 });
 
 test("endpoint helpers normalize ports, hosts, and launch quoting", () => {
