@@ -262,7 +262,7 @@ test("custom Codex Responses providers compact and replay by API and exact model
 	);
 	assert.equal(
 		mock.commands.get("codex-compact")?.description,
-		"Compact now or configure Responses compaction",
+		"Compact now or configure Codex compaction",
 	);
 	const handler = mock.events.get("session_before_compact")?.[0];
 	assert.ok(handler);

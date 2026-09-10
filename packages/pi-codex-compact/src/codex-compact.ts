@@ -1,13 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Context, Model, Tool } from "@earendil-works/pi-ai";
 import {
-	buildContextEntries,
 	buildSessionContext,
 	convertToLlm,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type SessionBeforeCompactEvent,
-	sessionEntryToContextMessages,
 } from "@earendil-works/pi-coding-agent";
 import {
 	buildReplacementHistory,
@@ -18,6 +16,8 @@ import {
 	latestCheckpoint,
 	projectCheckpointContext,
 } from "./checkpoint.js";
+import { createExperimentalContextManager } from "./context-management.js";
+import { compactionKeptMessages } from "./context-window.js";
 import { resolveCompactionRoute, usesResponsesCompactionApi } from "./model-api.js";
 import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.js";
 import { requestRemoteCompaction } from "./remote.js";
@@ -42,18 +42,6 @@ function isCheckpointCompatible(
 	return (
 		usesResponsesCompactionApi(model) && model.api === details.api && model.id === details.modelId
 	);
-}
-
-function keptMessages(event: SessionBeforeCompactEvent): AgentMessage[] {
-	const leafId = event.branchEntries.at(-1)?.id ?? null;
-	const contextEntries = buildContextEntries(event.branchEntries, leafId);
-	const keptIndex = contextEntries.findIndex(
-		(entry) => entry.id === event.preparation.firstKeptEntryId,
-	);
-	if (keptIndex < 0) {
-		throw new Error("Pi compaction cut point is not present in the active context");
-	}
-	return contextEntries.slice(keptIndex).flatMap(sessionEntryToContextMessages);
 }
 
 function activeTools(pi: ExtensionAPI): Tool[] {
@@ -165,7 +153,7 @@ async function compactRemotely(
 			modelId: model.id,
 			protocol: route.protocol,
 			replacementHistory,
-			keptMessages: keptMessages(event),
+			keptMessages: compactionKeptMessages(event),
 		});
 		return {
 			compaction: {
@@ -193,11 +181,12 @@ export function createCodexCompactExtension(
 	return (pi) => {
 		const providerWarnings = new Set<string>();
 		const settingsRuntime = options.settingsRuntime ?? createCodexCompactSettingsRuntime();
+		const experimental = createExperimentalContextManager(pi, settingsRuntime);
 		let sessionController = new AbortController();
 		let generation = 0;
 
 		pi.registerCommand("codex-compact", {
-			description: "Compact now or configure Responses compaction",
+			description: "Compact now or configure Codex compaction",
 			handler: async (args, ctx) => {
 				if (args.trim()) throw new Error("Usage: /codex-compact");
 				const ownerGeneration = generation;
@@ -207,6 +196,8 @@ export function createCodexCompactExtension(
 				await showCodexCompactMenu(settingsRuntime, ctx, {
 					signal: controller.signal,
 					isCurrent: () => ownerGeneration === generation && !controller.signal.aborted,
+					isExperimentalActive: () => experimental.isEnabled(),
+					onSettingsChanged: () => experimental.applySettings(ctx),
 				});
 			},
 		});
@@ -223,13 +214,13 @@ export function createCodexCompactExtension(
 				state = await settingsRuntime.reload(sessionController.signal);
 			} catch (error) {
 				if (sessionController.signal.aborted || ownerGeneration !== generation) return;
+				state = settingsRuntime.get();
 				if (ctx.hasUI) {
 					ctx.ui.notify(
 						`Could not load pi-codex-compact.json; using defaults. ${terminalText(error instanceof Error ? error.message : String(error))}`,
 						"warning",
 					);
 				}
-				return;
 			}
 			if (
 				sessionController.signal.aborted ||
@@ -244,20 +235,28 @@ export function createCodexCompactExtension(
 					"warning",
 				);
 			}
+			experimental.startSession(ctx);
 		});
 
-		pi.on("session_before_compact", (event, ctx) =>
-			compactRemotely(
+		pi.on("session_before_compact", (event, ctx) => {
+			if (experimental.isRoutingExperimental()) {
+				return experimental.beforeCompact(event, ctx);
+			}
+			return compactRemotely(
 				pi,
 				event,
 				ctx,
 				settingsRuntime.get().settings,
 				sessionController.signal,
 				options.fetch,
-			),
-		);
+			);
+		});
 
 		pi.on("context", (event, ctx) => {
+			if (experimental.isRoutingExperimental()) {
+				const messages = experimental.projectContext(event.messages, ctx);
+				return messages ? { messages } : undefined;
+			}
 			if (!settingsRuntime.get().settings.enabled) return undefined;
 			const checkpoint = activeCheckpoint(ctx);
 			if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model)) return undefined;
@@ -270,7 +269,9 @@ export function createCodexCompactExtension(
 		});
 
 		pi.on("before_provider_request", (event, ctx) => {
-			if (!settingsRuntime.get().settings.enabled) return undefined;
+			if (experimental.isRoutingExperimental() || !settingsRuntime.get().settings.enabled) {
+				return undefined;
+			}
 			const checkpoint = activeCheckpoint(ctx);
 			if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model)) return undefined;
 			const marker = checkpointMarker(checkpoint.details.checkpointId);
@@ -279,7 +280,9 @@ export function createCodexCompactExtension(
 		});
 
 		pi.on("model_select", (event, ctx) => {
-			if (!settingsRuntime.get().settings.enabled) return;
+			if (experimental.isRoutingExperimental() || !settingsRuntime.get().settings.enabled) {
+				return;
+			}
 			const checkpoint = activeCheckpoint(ctx);
 			if (!checkpoint || isCheckpointCompatible(checkpoint.details, event.model)) return;
 			const key = `${ctx.sessionManager.getSessionId()}:${event.model.provider}:${event.model.id}`;
@@ -293,9 +296,18 @@ export function createCodexCompactExtension(
 			}
 		});
 
+		pi.on("session_tree", (_event, ctx) => experimental.onSessionTree(ctx));
+		pi.on("session_compact", (event, ctx) => experimental.onCompact(event, ctx));
+		pi.on("session_compact_failed", (event, ctx) => experimental.onCompactFailed(event, ctx));
+		pi.on("agent_start", (_event, ctx) => experimental.onAgentStart(ctx));
+		pi.on("agent_end", (event, ctx) => experimental.onAgentEnd(event, ctx));
+		pi.on("turn_start", (_event, ctx) => experimental.onTurnStart(ctx));
+		pi.on("agent_settled", (_event, ctx) => experimental.onAgentSettled(ctx));
+
 		pi.on("session_shutdown", async (_event, ctx) => {
 			generation += 1;
 			sessionController.abort();
+			experimental.shutdown();
 			providerWarnings.clear();
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			await settingsRuntime.flush();

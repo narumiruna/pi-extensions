@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
+import { createMockContext } from "../../../test/support.js";
 
 const packageRoot = resolve("packages/pi-codex-compact");
 const builderUrl = pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href;
@@ -193,8 +194,27 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
 		assert.equal(loaded.extensions.length, 1);
 		const extension = loaded.extensions[0];
 		assert.ok(extension?.commands.has("codex-compact"));
+		assert.deepEqual(
+			[...(extension?.tools.keys() ?? [])],
+			[
+				"codex_compact_start_new_context",
+				"codex_compact_get_context_remaining",
+				"codex_compact_recall_context",
+				"codex_compact_update_notes",
+			],
+		);
+		assert.deepEqual(
+			[...(extension?.tools.values() ?? [])].map((tool) => tool.sourceInfo.path),
+			Array.from({ length: 4 }, () => join(output, "index.ts")),
+		);
 		assert.ok(extension?.handlers.has("session_start"));
 		assert.ok(extension?.handlers.has("session_shutdown"));
+		const command = extension?.commands.get("codex-compact");
+		assert.ok(command);
+		await assert.rejects(
+			command.handler("", createMockContext({ mode: "print", hasUI: false }).ctx),
+			/requires TUI or RPC UI support/u,
+		);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

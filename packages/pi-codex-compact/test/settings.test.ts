@@ -39,6 +39,7 @@ test("normalizes defaults and bounded user settings", () => {
 			maxRetries: 0,
 		},
 	);
+	assert.equal(normalizeCodexCompactSettings({ experimentalContextManagement: "yes" }), undefined);
 	assert.equal(normalizeCodexCompactSettings({ protocol: "unknown" }), undefined);
 	assert.equal(normalizeCodexCompactSettings({ maxRetries: 3 }), undefined);
 	assert.equal(normalizeCodexCompactSettings({ requestTimeoutMs: 10 }), undefined);

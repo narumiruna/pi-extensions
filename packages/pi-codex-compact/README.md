@@ -1,9 +1,10 @@
-# 🗜️ pi-codex-compact — Use Codex Remote Compaction in Pi
+# 🗜️ pi-codex-compact — Use Codex Compaction Strategies in Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 Use Responses compaction in Pi through Remote Compaction V2 or the unary `responses/compact` API.
 The extension stores an opaque server-generated checkpoint and replays it in later compatible requests instead of generating a local plaintext summary.
+It also offers an explicitly enabled experimental Pi-native strategy for summary-free context rollover, branch-local recall, and notes.
 Pi still decides when compaction runs and keeps its normal `/compact`, threshold, overflow, and session-publication behavior.
 
 ## ✨ Features
@@ -16,6 +17,9 @@ Pi still decides when compaction runs and keeps its normal `/compact`, threshold
 - Supports repeated and cross-protocol compaction by carrying the previous checkpoint forward.
 - Falls back to Pi's native plaintext compaction on non-cancellation failures.
 - Provides `/codex-compact` for effective-route status, settings, and manual compaction.
+- Optionally enables experimental summary-free rollover with four focused context and memory tools.
+
+> **Experimental:** Context management is disabled by default and can lose working detail when the model does not save or recall it correctly. Review the [experimental context management guide](./docs/experimental-context-management.md) before enabling it.
 
 ## 📦 Install
 
@@ -57,6 +61,8 @@ After compaction, compatible requests replay the opaque checkpoint automatically
 With the default `auto` protocol, Codex Responses uses Remote V2 while OpenAI and Azure OpenAI Responses use unary `responses/compact`.
 When the active model uses another API, compaction remains entirely Pi-native.
 
+To try summary-free local rollover instead, read the [experimental context management guide](./docs/experimental-context-management.md), then enable `experimentalContextManagement` in the settings file or `/codex-compact` menu. The opt-in mode works locally with Pi session data and takes precedence over both remote protocols.
+
 ## 💬 Commands
 
 Run `/codex-compact` to inspect the effective compaction path, change settings, or request manual compaction in TUI mode.
@@ -66,6 +72,10 @@ Closing the menu with Escape or Ctrl+C does not compact the session.
 
 Manual compaction uses **Responses Remote V2**, **Responses Compact API**, or **Pi native**, as described in [Settings](#-settings).
 Pi's built-in `/compact` remains available and follows the same extension hook.
+
+## 🧰 Tools
+
+The experiment activates exactly four model tools: `codex_compact_start_new_context` changes windows, `codex_compact_get_context_remaining` inspects capacity, `codex_compact_recall_context` reads plaintext history or notes, and `codex_compact_update_notes` writes notes. They are absent from the active tool list by default. See the [experimental context management guide](./docs/experimental-context-management.md) for schemas, examples, limits, and lifecycle behavior.
 
 ## ⚙️ Settings
 
@@ -81,6 +91,7 @@ There is no environment-variable or project-level override.
 ```json
 {
   "enabled": true,
+  "experimentalContextManagement": false,
   "protocol": "auto",
   "requestTimeoutMs": 300000,
   "maxRetries": 2,
@@ -92,6 +103,7 @@ There is no environment-variable or project-level override.
 | Setting | Default | Accepted values | Behavior | Recommendation |
 | --- | ---: | --- | --- | --- |
 | `enabled` | `true` | Boolean | Attempt a supported remote compaction route. | Keep enabled unless diagnosing provider behavior. |
+| `experimentalContextManagement` | `false` | Boolean | Enable experimental summary-free local rollover and four context tools; this takes precedence over remote settings. | Keep disabled unless you accept the experimental storage, recall, and continuation limits. |
 | `protocol` | `"auto"` | `"auto"`, `"remote-v2"`, or `"responses-compact"` | Select by API or force one remote protocol. | Keep `auto`; force a route only when diagnosing a compatible backend. |
 | `requestTimeoutMs` | `300000` | Integer from 30,000 to 600,000 ms | Bound one extension-owned remote request. | Keep five minutes; increase only for a consistently slow connection. |
 | `maxRetries` | `2` | Integer from 0 to 2 | Retry transient provider transport failures before Pi fallback. | Keep two; use zero when diagnosing the first failure. |
@@ -117,7 +129,7 @@ This extension does **not** read `~/.codex/config.toml`.
 | `model_auto_compact_token_limit` | Not duplicated. Pi's own compaction threshold remains authoritative. |
 | `model_auto_compact_token_limit_scope` | Not supported; Pi extensions do not own Codex's compact-window lineage. |
 | `compact_prompt` / `experimental_compact_prompt_file` | Not used by either remote protocol, whose opaque checkpoint is generated by the server. |
-| `features.token_budget` | Not supported; token-budget context reset is a different experimental strategy. |
+| `features.token_budget` | Approximated only when `experimentalContextManagement` is explicitly enabled; Pi still owns thresholds and does not reproduce Codex's exact token-budget internals. |
 
 ## ✅ Requirements and compatibility
 
@@ -142,6 +154,8 @@ Switching providers can replay a checkpoint only when the API label and exact mo
 
 ## 🔄 How it works
 
+The default route works as follows:
+
 1. Pi prepares compaction and selects the recent message suffix it will retain.
 2. If an earlier compatible checkpoint is present, the extension identifies its boundary from the summary persisted on the active `CompactionEntry` and validates the retained suffix fingerprints.
 3. Remote V2 projects that checkpoint into a normal Responses SSE request and appends exactly one final `compaction_trigger`.
@@ -153,11 +167,15 @@ Switching providers can replay a checkpoint only when the API label and exact mo
 The persisted entry remains the summary identity source, so replay does not depend on the wording generated by the currently installed extension version.
 If persisted summary identity, fingerprints, model identity, payload shape, or marker count do not match exactly, the extension leaves Pi's visible fallback context unchanged instead of guessing.
 
+With experimental context management enabled, the extension produces a small window marker instead of a summary or remote request, fingerprints Pi's retained suffix, and hides only an exactly validated old-window prefix from later provider context. The four active tools start a new window, inspect remaining context, recall branch-local plaintext history or notes, and update notes. See the [design and operating guide](./docs/experimental-context-management.md) for diagrams, tool contracts, persistence, limits, and recovery.
+
 ## 🔒 Security and privacy
 
 Remote compaction sends the active conversation context and system prompt to the configured Responses backend; Remote V2 also sends active tool schemas.
 The Pi session stores the producing provider ID, encrypted compaction item, and bounded recent user-role Responses items.
 It does not store credentials, authorization headers, or request headers in checkpoint details.
+
+Experimental context management stores window metadata and notes as plaintext append-only Pi session entries. `codex_compact_recall_context` sends selected plaintext history or notes to the active model provider. It excludes extension custom-entry internals and opaque checkpoint bytes, bounds results, and removes terminal controls at the result boundary.
 
 | Boundary | Limit |
 | --- | ---: |
@@ -168,6 +186,8 @@ It does not store credentials, authorization headers, or request headers in chec
 | Settings file | 64 KiB |
 | Transport retries | At most 2 |
 | Request timeout | At most 10 minutes |
+| Experimental note mutation | 16 KiB UTF-8; 64 active notes and 256 KiB total |
+| Experimental recall result | 32 KiB, 1,000 lines, and 20 search matches per page |
 
 An individually oversized media item is dropped rather than making the session entry unbounded.
 The oldest fitting text item may be partially truncated to preserve newer context.
@@ -178,7 +198,10 @@ These hard byte ceilings are intentionally not configurable.
 - Codex Remote V2 remains an undocumented hosted contract and can change independently of Pi or this package; keep backups of important sessions.
 - Full older history depends on this extension, the checkpoint API label, the exact checkpoint model ID, and a provider route whose backend accepts the opaque item.
   Removing the extension exposes only the portability fallback marker and Pi-retained recent messages.
-- The package does not reproduce Codex core's context-window UUID/number lineage, previous-model compatibility fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
+- Remote compaction does not reproduce Codex core's context-window UUID/number lineage, previous-model compatibility fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
+- Experimental context management adds local UUID lineage but cannot reproduce Codex private history/notes services, account-plan gating, exact token-budget accounting, atomic same-turn continuation, request lineage, `comp_hash`, or cache-window identity.
+- Pi evaluates its internal pre-turn compaction threshold before the experiment's provider-facing context filter, so Pi-retained messages can reduce the effective budget and make context-remaining values approximate.
+- Enabling the experiment after remote compaction cannot recover assistant history stored only in an opaque checkpoint; the extension warns and recalls only plaintext Pi entries.
 - Pi's public `getAllTools()` metadata does not expose `constrainedSampling`; Remote V2 preserves active tool order, names, descriptions, and parameter schemas but cannot reproduce that optional field.
 - Remote failure falls back to Pi's plaintext summary, so a session can contain both remote opaque and native compaction entries over time.
 - Settings concurrency is coordinated only within one Pi process; separate processes rely on the final conflict check.
@@ -218,7 +241,13 @@ See the [Codex compaction mechanism notes](https://github.com/narumiruna/pi-exte
 packages/pi-codex-compact/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
-│   └── codex-compact.ts               # Compaction routing, replay, and fallback
+│   ├── codex-compact.ts               # Strategy integration and remote behavior
+│   ├── context-management.ts          # Experimental lifecycle and rollover
+│   ├── context-window.ts              # Window lineage and context projection
+│   ├── context-tools.ts               # Four experimental model tools
+│   ├── notes-state.ts                 # Branch-local note mutations
+│   └── recall-context.ts              # Bounded history and note recall
+├── docs/                              # Package-owned feature guidance
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── benchmark/                         # Repository-only benchmark and methodology
@@ -229,7 +258,7 @@ The generated runtime is built from `src/index.ts` and does not import back into
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, OpenAI Codex, Azure OpenAI, custom provider, proxy, Remote Compaction V2, Responses Compact API, opaque checkpoint, Responses API, context compaction.
+Pi extension, Pi coding agent, OpenAI Codex, Azure OpenAI, custom provider, proxy, Remote Compaction V2, Responses Compact API, opaque checkpoint, Responses API, context compaction, context management, context rollover, notes, history recall.
 
 ## 📄 License
 
