@@ -62,6 +62,23 @@ test("expanded output normalizes lone surrogates before measuring terminal width
 	assert.equal(stripTerminalSequences(renderExpanded("🙂", 2)[0] ?? ""), "🙂");
 });
 
+test("expanded output bounds incomplete terminal-sequence parsing", () => {
+	for (const introducer of ["\u001b[", "\u001b]", "\u001b_"]) {
+		assert.deepEqual(renderExpanded(introducer.repeat(16_000), 3), []);
+	}
+});
+
+test("expanded output bounds zero-width text by code units", () => {
+	const input = "\u200b".repeat(100_000);
+	const result = textResult(input);
+	const component = renderTextResult(result, { expanded: true, isPartial: false }, plainTheme);
+	const rendered = component.render(3)[0] ?? "";
+
+	assert.ok(rendered.length <= 50_000);
+	assert.ok(visibleWidth(rendered) <= 3);
+	assert.equal(result.content[0]?.type === "text" ? result.content[0].text : undefined, input);
+});
+
 test("expanded output sanitizes terminal controls before truncation", () => {
 	const input =
 		"safe\u001b[31m red\u001b[0m" +

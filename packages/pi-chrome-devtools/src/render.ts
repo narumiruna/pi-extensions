@@ -86,7 +86,7 @@ class PiTextComponent implements RenderComponent {
 	}
 
 	render(width: number) {
-		const sanitizedText = sanitizeChromeDevtoolsDisplay(this.text, Number.MAX_SAFE_INTEGER);
+		const sanitizedText = sanitizeChromeDevtoolsDisplay(this.text);
 		if (!sanitizedText.trim()) return [];
 		return sanitizedText
 			.replace(/\t/g, "   ")
