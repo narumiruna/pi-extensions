@@ -162,6 +162,8 @@ The saved-plan menu keeps its direct fresh-session action without these optional
 
 Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
 The destination consumes the one-shot choices before its first provider request, applies an explicit model first, and then applies explicit thinking.
+Concurrent prompts that arrive while those choices are being applied are queued as follow-ups behind the kickoff prompt.
+If durable consumption blocks the kickoff, the handoff reports a partial start and restores a conversation-history prompt to the editor instead of reporting success.
 Changing only the model keeps the planning thinking level; changing only the thinking level keeps the planning model.
 If Pi clamps an unsupported thinking level, the extension reports the effective level.
 If the chosen model disappears or loses authentication after source preflight, the destination reports the race, consumes the intent without retrying it later, and continues with its default model.

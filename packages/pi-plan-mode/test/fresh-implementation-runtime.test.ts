@@ -20,10 +20,11 @@ async function submitInput(
 	mock: ReturnType<typeof createMockPi>,
 	ctx: unknown,
 	text = "implement",
+	source: "extension" | "rpc" = "extension",
 ) {
 	const input = mock.events.get("input")?.[0];
 	assert.ok(input);
-	return Promise.resolve(input({ text, source: "extension" }, ctx));
+	return Promise.resolve(input({ text, source }, ctx));
 }
 
 test("pending implementation runtime state restores only strict bounded one-shot values", () => {
@@ -577,17 +578,25 @@ test("destination serializes concurrent prompts across the full runtime applicat
 		},
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-	const first = submitInput(mock, context.ctx);
+	const first = submitInput(mock, context.ctx, "implement", "rpc");
 	await modelStarted;
 	let secondSettled = false;
-	const second = submitInput(mock, context.ctx, "concurrent").then((result) => {
+	const second = submitInput(mock, context.ctx, "concurrent", "rpc").then((result) => {
 		secondSettled = true;
 		return result;
 	});
 	await Promise.resolve();
 	assert.equal(secondSettled, false);
 	releaseModel();
-	assert.deepEqual(await Promise.all([first, second]), [undefined, undefined]);
+	assert.deepEqual(await Promise.all([first, second]), [undefined, { action: "handled" }]);
+	assert.deepEqual(mock.sentUserMessages, []);
+	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.sentUserMessages, [
+		{
+			text: "concurrent",
+			options: { deliverAs: "followUp", expandPromptTemplates: true },
+		},
+	]);
 	assert.equal(mock.setModels.length, 1);
 	assert.equal(mock.thinkingLevel, "high");
 });
@@ -625,17 +634,24 @@ test("destination serializes a concurrent prompt while authentication is pending
 		},
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-	const first = submitInput(mock, context.ctx);
+	const first = submitInput(mock, context.ctx, "implement", "rpc");
 	await authStarted;
 	let secondSettled = false;
-	const second = submitInput(mock, context.ctx, "concurrent").then((result) => {
+	const second = submitInput(mock, context.ctx, "concurrent", "rpc").then((result) => {
 		secondSettled = true;
 		return result;
 	});
 	await Promise.resolve();
 	assert.equal(secondSettled, false);
 	releaseAuth();
-	assert.deepEqual(await Promise.all([first, second]), [undefined, undefined]);
+	assert.deepEqual(await Promise.all([first, second]), [undefined, { action: "handled" }]);
+	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.sentUserMessages, [
+		{
+			text: "concurrent",
+			options: { deliverAs: "followUp", expandPromptTemplates: true },
+		},
+	]);
 	assert.equal(mock.setModels.length, 1);
 });
 

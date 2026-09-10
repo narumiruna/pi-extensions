@@ -6,6 +6,8 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
+	InputEvent,
+	InputSource,
 } from "@earendil-works/pi-coding-agent";
 import { completePlanArguments } from "./command.js";
 import {
@@ -118,6 +120,11 @@ interface ActiveImplementationRuntimeApplication {
 	completion: Promise<ImplementationRuntimeApplicationResult>;
 	drainOnShutdown: boolean;
 }
+interface QueuedRuntimeAdmissionInput {
+	text: string;
+	images?: NonNullable<InputEvent["images"]>;
+	source: InputSource;
+}
 type InteractiveUi = typeof import("./interactive-ui.js");
 
 interface PlanModeDependencies {
@@ -164,6 +171,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	let workflowGeneration = 0;
 	let refreshStateBeforeFirstAgentStart = false;
 	let activeImplementationRuntimeApplication: ActiveImplementationRuntimeApplication | undefined;
+	let queuedRuntimeAdmissionInputs: QueuedRuntimeAdmissionInput[] = [];
 	let menuController = new AbortController();
 	let settingsWatch: ReturnType<typeof watch> | undefined;
 	let settingsReloadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -458,6 +466,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		workflowOwner = undefined;
 		workflowMutex.bindSession(ctx.sessionManager);
 		refreshStateBeforeFirstAgentStart = event.reason === "new";
+		queuedRuntimeAdmissionInputs = [];
 		menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
 		menuController = new AbortController();
 		readyPresentationIntent = undefined;
@@ -503,6 +512,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		menuController = new AbortController();
 		readyPresentationIntent = undefined;
 		latestCommandContext = undefined;
+		queuedRuntimeAdmissionInputs = [];
 		implementationRetention.reset();
 		const branch = ctx.sessionManager.getBranch();
 		const restoredState = restorePlanModeState(branch, STATE_ENTRY_TYPE);
@@ -539,6 +549,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		readyPresentationIntent = undefined;
 		latestCommandContext = undefined;
 		refreshStateBeforeFirstAgentStart = false;
+		queuedRuntimeAdmissionInputs = [];
 		workflowAllowedToolNames = undefined;
 		pendingWorkflowToolPolicy = undefined;
 		implementationRetention.reset();
@@ -677,10 +688,35 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		return { messages: messages as typeof event.messages };
 	});
 
-	pi.on("input", async (_event, ctx) => {
+	pi.on("input", async (event, ctx) => {
 		refreshStateForFirstPrompt(ctx);
+		const waitsForRuntimeApplication =
+			activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager;
 		const result = await applyPendingImplementationRuntime(ctx);
 		if (result !== "ready") return { action: "handled" };
+		if (waitsForRuntimeApplication) {
+			queuedRuntimeAdmissionInputs.push({
+				text: event.text,
+				...(event.images ? { images: [...event.images] } : {}),
+				source: event.source,
+			});
+			return { action: "handled" };
+		}
+	});
+
+	pi.on("agent_start", (_event, ctx) => {
+		if (currentSession !== ctx.sessionManager || queuedRuntimeAdmissionInputs.length === 0) return;
+		const queuedInputs = queuedRuntimeAdmissionInputs;
+		queuedRuntimeAdmissionInputs = [];
+		for (const queued of queuedInputs) {
+			const content = queued.images?.length
+				? [{ type: "text" as const, text: queued.text }, ...queued.images]
+				: queued.text;
+			pi.sendUserMessage(content, {
+				deliverAs: "followUp",
+				expandPromptTemplates: queued.source !== "extension",
+			});
+		}
 	});
 
 	pi.on("before_agent_start", (_event, ctx) => {

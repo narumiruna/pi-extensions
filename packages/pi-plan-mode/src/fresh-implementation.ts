@@ -11,6 +11,7 @@ import {
 	type PendingImplementationRuntime,
 	type PlanCompletionSource,
 	type PlanModeState,
+	restorePlanModeState,
 } from "./state.js";
 
 type NewSessionOptions = Exclude<Parameters<ExtensionCommandContext["newSession"]>[0], undefined>;
@@ -160,21 +161,31 @@ export async function startFreshImplementationSession(
 					recoverSetupFailure(replacementCtx, handoff, setupError);
 					return;
 				}
-				try {
-					await replacementCtx.sendUserMessage(handoff);
-				} catch (error: unknown) {
-					kickoffError = safeErrorDetail(error);
+				const reportKickoffFailure = (detail: string) => {
+					kickoffError = detail;
 					const recoveredInEditor =
 						usesConversationHistory && safeSetEditorText(replacementCtx, handoff);
 					safeNotify(
 						replacementCtx,
 						usesConversationHistory
 							? recoveredInEditor
-								? `Fresh session created, but implementation did not start: ${kickoffError}. The implementation request is in the editor; submit it or resume the parent planning session.`
-								: `Fresh session created, but implementation did not start: ${kickoffError}. The implementation request could not be restored to the editor; resume the parent planning session.`
-							: `Fresh session created, but implementation did not start: ${kickoffError}. Send a message to continue, use /plan exit to clear the active plan, or resume the parent planning session.`,
+								? `Fresh session created, but implementation did not start: ${detail}. The implementation request is in the editor; submit it or resume the parent planning session.`
+								: `Fresh session created, but implementation did not start: ${detail}. The implementation request could not be restored to the editor; resume the parent planning session.`
+							: `Fresh session created, but implementation did not start: ${detail}. Send a message to continue, use /plan exit to clear the active plan, or resume the parent planning session.`,
 						"error",
 					);
+				};
+				try {
+					await replacementCtx.sendUserMessage(handoff);
+				} catch (error: unknown) {
+					reportKickoffFailure(safeErrorDetail(error));
+					return;
+				}
+				if (
+					pendingImplementationRuntime &&
+					destinationRuntimeIsStillPending(replacementCtx, request.stateEntryType)
+				) {
+					reportKickoffFailure("fresh implementation settings could not be consumed");
 					return;
 				}
 				safeNotify(
@@ -291,6 +302,17 @@ function pendingRuntimeIntent(
 
 function safeModelReference(model: { provider: string; id?: string; modelId?: string }) {
 	return safeErrorDetail(`${model.provider}/${model.modelId ?? model.id ?? "unknown"}`);
+}
+
+function destinationRuntimeIsStillPending(ctx: ReplacementContext, stateEntryType: string) {
+	try {
+		return (
+			restorePlanModeState(ctx.sessionManager.getBranch(), stateEntryType)
+				.pendingImplementationRuntime !== undefined
+		);
+	} catch {
+		return false;
+	}
 }
 
 function recoverSetupFailure(ctx: ReplacementContext, handoff: string, setupError: string) {
