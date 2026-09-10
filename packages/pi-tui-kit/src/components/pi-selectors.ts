@@ -14,6 +14,9 @@ import { formatInteractionHints } from "../interaction-hints.js";
 import { sanitizeTerminalText } from "../terminal-text.js";
 import type { MenuCloseReason } from "../types.js";
 
+const BRACKETED_PASTE_START = "\u001b[200~";
+const BRACKETED_PASTE_END = "\u001b[201~";
+
 export interface PiSelectorRow<Value> {
 	value: Value;
 	primary: string;
@@ -31,8 +34,8 @@ export interface PiSelectorOptions<Value> {
 	initialValue?: Value;
 	initialSearchInput?: string;
 	viewportSize?: number;
-	saveBinding: "app.models.save" | "app.thinking.save";
-	savePriority: "beforeSelection" | "afterCancel";
+	saveBinding: "app.models.save";
+	cycleBinding?: "app.thinking.cycle";
 	filterSelection: "bestMatch" | "preserveValue";
 	valueEquals(left: Value, right: Value): boolean;
 	onComplete(
@@ -56,6 +59,8 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			? 0
 			: initialIndex(filtered, options.initialValue, options.valueEquals);
 	let disposed = false;
+	let pasteStartBuffer = "";
+	let pasteBuffer: string | undefined;
 
 	const select = (index: number, wrap: boolean) => {
 		if (filtered.length === 0) return;
@@ -81,6 +86,92 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 		if (!selected || disposed) return;
 		options.onComplete({ kind, value: selected.value });
 	};
+	const handleSearchInput = (data: string) => {
+		input.handleInput(data);
+		const sanitized = safe(input.getValue());
+		if (sanitized !== input.getValue()) input.setValue(sanitized);
+		refilter();
+	};
+	const saveDefault = (data: string) => {
+		if (!matchesBinding(options.keybindings, data, options.saveBinding)) return false;
+		completeSelected("saveDefault");
+		return true;
+	};
+	const handleNonPasteInput = (data: string) => {
+		if (matchesKey(data, Key.ctrl("c"))) {
+			options.onComplete({ kind: "closed", reason: "close" });
+			return;
+		}
+		if (saveDefault(data)) return;
+		if (options.keybindings.matches(data, "tui.select.confirm")) {
+			completeSelected("selected");
+			return;
+		}
+		if (options.keybindings.matches(data, "tui.select.cancel")) {
+			options.onComplete({ kind: "closed", reason: "back" });
+			return;
+		}
+		if (options.cycleBinding && matchesBinding(options.keybindings, data, options.cycleBinding)) {
+			select(selectedIndex + 1, true);
+			return;
+		}
+		if (options.keybindings.matches(data, "tui.select.up")) select(selectedIndex - 1, true);
+		else if (options.keybindings.matches(data, "tui.select.down")) {
+			select(selectedIndex + 1, true);
+		} else if (options.keybindings.matches(data, "tui.select.pageUp")) {
+			select(selectedIndex - normalizeViewportSize(options.viewportSize), false);
+		} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
+			select(selectedIndex + normalizeViewportSize(options.viewportSize), false);
+		} else handleSearchInput(data);
+	};
+	const isClaimedShortcut = (data: string) =>
+		matchesKey(data, Key.ctrl("c")) ||
+		matchesBinding(options.keybindings, data, options.saveBinding) ||
+		options.keybindings.matches(data, "tui.select.confirm") ||
+		options.keybindings.matches(data, "tui.select.cancel") ||
+		(options.cycleBinding
+			? matchesBinding(options.keybindings, data, options.cycleBinding)
+			: false) ||
+		options.keybindings.matches(data, "tui.select.up") ||
+		options.keybindings.matches(data, "tui.select.down") ||
+		options.keybindings.matches(data, "tui.select.pageUp") ||
+		options.keybindings.matches(data, "tui.select.pageDown");
+
+	function routeInput(data: string) {
+		if (pasteBuffer !== undefined) {
+			pasteBuffer += data;
+			flushPasteBuffer();
+			return;
+		}
+		const combined = pasteStartBuffer + data;
+		pasteStartBuffer = "";
+		const pasteStart = combined.indexOf(BRACKETED_PASTE_START);
+		if (pasteStart >= 0) {
+			if (pasteStart > 0) handleNonPasteInput(combined.slice(0, pasteStart));
+			if (disposed) return;
+			pasteBuffer = combined.slice(pasteStart + BRACKETED_PASTE_START.length);
+			flushPasteBuffer();
+			return;
+		}
+		const prefixLength = trailingMarkerPrefixLength(combined, BRACKETED_PASTE_START);
+		const outsidePaste = combined.slice(0, combined.length - prefixLength);
+		if (outsidePaste) handleNonPasteInput(outsidePaste);
+		if (disposed) return;
+		const prefix = combined.slice(combined.length - prefixLength);
+		if (prefix && isClaimedShortcut(prefix)) handleNonPasteInput(prefix);
+		else pasteStartBuffer = prefix;
+	}
+
+	function flushPasteBuffer() {
+		if (pasteBuffer === undefined) return;
+		const pasteEnd = pasteBuffer.indexOf(BRACKETED_PASTE_END);
+		if (pasteEnd < 0) return;
+		const pasted = pasteBuffer.slice(0, pasteEnd);
+		const remaining = pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
+		pasteBuffer = undefined;
+		handleSearchInput(`${BRACKETED_PASTE_START}${pasted}${BRACKETED_PASTE_END}`);
+		if (remaining && !disposed) routeInput(remaining);
+	}
 
 	return {
 		get focused() {
@@ -140,46 +231,12 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			input.invalidate();
 		},
 		handleInput(data: string) {
-			if (disposed) return;
-			const saveDefault = () => {
-				if (!matchesBinding(options.keybindings, data, options.saveBinding)) return false;
-				completeSelected("saveDefault");
-				return true;
-			};
-			if (options.savePriority === "beforeSelection" && saveDefault()) return;
-			if (options.keybindings.matches(data, "tui.select.confirm")) {
-				completeSelected("selected");
-				return;
-			}
-			if (
-				matchesKey(data, Key.ctrl("c")) ||
-				options.keybindings.matches(data, "tui.select.cancel")
-			) {
-				options.onComplete({
-					kind: "closed",
-					reason: matchesKey(data, Key.ctrl("c")) ? "close" : "back",
-				});
-				return;
-			}
-			if (options.savePriority === "afterCancel" && saveDefault()) return;
-			if (options.keybindings.matches(data, "tui.select.up")) select(selectedIndex - 1, true);
-			else if (options.keybindings.matches(data, "tui.select.down")) {
-				select(selectedIndex + 1, true);
-			} else if (options.keybindings.matches(data, "tui.select.pageUp")) {
-				select(selectedIndex - normalizeViewportSize(options.viewportSize), false);
-			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
-				select(selectedIndex + normalizeViewportSize(options.viewportSize), false);
-			} else if (matchesKey(data, Key.home)) select(0, false);
-			else if (matchesKey(data, Key.end)) select(filtered.length - 1, false);
-			else {
-				input.handleInput(data);
-				const sanitized = safe(input.getValue());
-				if (sanitized !== input.getValue()) input.setValue(sanitized);
-				refilter();
-			}
+			if (!disposed) routeInput(data);
 		},
 		dispose() {
 			disposed = true;
+			pasteStartBuffer = "";
+			pasteBuffer = undefined;
 		},
 	};
 }
@@ -234,18 +291,25 @@ function renderSearchInput(input: Input, width: number) {
 	return input.render(inputWidth).map((line) => truncateToWidth(`${prefix}${line}`, width, ""));
 }
 
-function selectorHint(
-	keybindings: KeybindingsManager,
-	saveBinding: "app.models.save" | "app.thinking.save",
-) {
+function selectorHint(keybindings: KeybindingsManager, saveBinding: "app.models.save") {
+	const saveKeys = getBindingKeys(keybindings, saveBinding);
+	const confirmKeys = getBindingKeys(keybindings, "tui.select.confirm");
 	return formatInteractionHints(
 		{
 			getKeys: (binding: string) => getBindingKeys(keybindings, binding),
 		},
 		[
-			{ bindings: ["tui.select.confirm"], label: "select" },
-			{ bindings: [saveBinding], label: "set as default" },
-			{ bindings: ["tui.select.cancel"], excludeKeys: ["ctrl+c"], label: "cancel" },
+			{
+				bindings: ["tui.select.confirm"],
+				excludeKeys: ["ctrl+c", ...saveKeys],
+				label: "select",
+			},
+			{ bindings: [saveBinding], excludeKeys: ["ctrl+c"], label: "set as default" },
+			{
+				bindings: ["tui.select.cancel"],
+				excludeKeys: ["ctrl+c", ...saveKeys, ...confirmKeys],
+				label: "cancel",
+			},
 		],
 	);
 }
@@ -264,4 +328,11 @@ function normalizeViewportSize(value: number | undefined) {
 
 function safe(value: string) {
 	return sanitizeTerminalText(value);
+}
+
+function trailingMarkerPrefixLength(value: string, marker: string) {
+	for (let length = Math.min(value.length, marker.length - 1); length > 0; length -= 1) {
+		if (value.endsWith(marker.slice(0, length))) return length;
+	}
+	return 0;
 }

@@ -2,7 +2,6 @@ import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-work
 
 export type TuiHarnessKey =
 	| "app.models.save"
-	| "app.thinking.save"
 	| "app.thinking.cycle"
 	| "tui.input.tab"
 	| "tui.select.up"

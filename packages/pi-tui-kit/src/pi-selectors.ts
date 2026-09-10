@@ -110,7 +110,6 @@ export async function runModelSelector<
 				initialSearchInput: options.initialSearchInput,
 				viewportSize: options.viewportSize,
 				saveBinding: "app.models.save",
-				savePriority: "afterCancel",
 				filterSelection: "bestMatch",
 				valueEquals: sameModel,
 				onComplete: complete,
@@ -154,18 +153,20 @@ export async function runThinkingSelector<Context extends MenuContext = Extensio
 		create: ({ tui, theme, keybindings, complete }) => {
 			validateViewportSize(options.viewportSize);
 			validateThinkingLevels(options.availableLevels, options.currentLevel);
-			const cycleHint = formatInteractionHints(
+			const getKeys = (binding: string) =>
+				(keybindings.getKeys as (keybinding: string) => readonly string[])(binding);
+			const cycleHint = formatInteractionHints({ getKeys }, [
 				{
-					getKeys: (binding: string) =>
-						(keybindings.getKeys as (keybinding: string) => readonly string[])(binding),
+					bindings: ["app.thinking.cycle"],
+					excludeKeys: [
+						"ctrl+c",
+						...getKeys("app.models.save"),
+						...getKeys("tui.select.confirm"),
+						...getKeys("tui.select.cancel"),
+					],
+					label: "cycle choice",
 				},
-				[
-					{
-						bindings: ["app.thinking.cycle"],
-						label: "cycles thinking levels in-session",
-					},
-				],
-			);
+			]);
 			return createPiSelector({
 				title: "Thinking Level",
 				context: cycleHint ? [cycleHint] : [],
@@ -173,8 +174,8 @@ export async function runThinkingSelector<Context extends MenuContext = Extensio
 				initialValue: options.currentLevel,
 				initialSearchInput: options.initialSearchInput,
 				viewportSize: options.viewportSize ?? options.availableLevels.length,
-				saveBinding: "app.thinking.save",
-				savePriority: "beforeSelection",
+				saveBinding: "app.models.save",
+				cycleBinding: "app.thinking.cycle",
 				filterSelection: "preserveValue",
 				valueEquals: (left, right) => left === right,
 				onComplete: complete,
@@ -242,7 +243,8 @@ function validateModelRows(models: readonly ModelSelectorItem[]) {
 	for (const model of models) {
 		const identity = `${model.provider}\0${model.id}`;
 		if (identities.has(identity)) {
-			throw new Error(`Model selector contains duplicate model ${model.provider}/${model.id}`);
+			const reference = `${sanitizeTerminalText(model.provider)}/${sanitizeTerminalText(model.id)}`;
+			throw new Error(`Model selector contains duplicate model ${reference}`);
 		}
 		identities.add(identity);
 	}
@@ -254,6 +256,6 @@ function validateThinkingLevels(levels: readonly ThinkingLevel[], current: Think
 		throw new Error("Thinking selector contains duplicate levels");
 	}
 	if (!levels.includes(current)) {
-		throw new Error(`Current thinking level ${current} is not available`);
+		throw new Error(`Current thinking level ${sanitizeTerminalText(current)} is not available`);
 	}
 }
