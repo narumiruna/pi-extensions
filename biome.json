@@ -20,6 +20,9 @@
 			"complexity": {
 				"noUselessTypeConstraint": "error"
 			},
+			"performance": {
+				"noReExportAll": "error"
+			},
 			"style": {
 				"useAsConstAssertion": "error",
 				"useConsistentArrayType": "error",
