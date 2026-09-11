@@ -113,8 +113,15 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 		input.handleInput(parseKey(data) === undefined ? safe(data) : data);
 		if (!disposed) refilter();
 	};
+	const matchesAction = (data: string, binding: string) =>
+		matchesSelectorBinding(
+			options.keybindings,
+			data,
+			binding,
+			usesDisambiguatedKeyProtocol(options.tui),
+		);
 	const saveDefault = (data: string) => {
-		if (!matchesBinding(options.keybindings, data, options.saveBinding)) return false;
+		if (!matchesAction(data, options.saveBinding)) return false;
 		completeSelected("saveDefault");
 		return true;
 	};
@@ -124,24 +131,24 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			return;
 		}
 		if (saveDefault(data)) return;
-		if (options.keybindings.matches(data, "tui.select.confirm")) {
+		if (matchesAction(data, "tui.select.confirm")) {
 			completeSelected("selected");
 			return;
 		}
-		if (options.keybindings.matches(data, "tui.select.cancel")) {
+		if (matchesAction(data, "tui.select.cancel")) {
 			options.onComplete({ kind: "closed", reason: "back" });
 			return;
 		}
-		if (options.cycleBinding && matchesBinding(options.keybindings, data, options.cycleBinding)) {
+		if (options.cycleBinding && matchesAction(data, options.cycleBinding)) {
 			select(selectedIndex + 1, true);
 			return;
 		}
-		if (options.keybindings.matches(data, "tui.select.up")) select(selectedIndex - 1, true);
-		else if (options.keybindings.matches(data, "tui.select.down")) {
+		if (matchesAction(data, "tui.select.up")) select(selectedIndex - 1, true);
+		else if (matchesAction(data, "tui.select.down")) {
 			select(selectedIndex + 1, true);
-		} else if (options.keybindings.matches(data, "tui.select.pageUp")) {
+		} else if (matchesAction(data, "tui.select.pageUp")) {
 			select(selectedIndex - normalizeViewportSize(options.viewportSize), false);
-		} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
+		} else if (matchesAction(data, "tui.select.pageDown")) {
 			select(selectedIndex + normalizeViewportSize(options.viewportSize), false);
 		} else handleSearchInput(data);
 	};
@@ -523,6 +530,20 @@ function usesDisambiguatedKeyProtocol(tui: TUI) {
 function keysOverlap(first: string, second: string, disambiguatedKeyProtocol: boolean) {
 	if (disambiguatedKeyProtocol) return first === second;
 	return inputsForKey(first).some((input) => matchesKey(input, second as KeyId));
+}
+
+function matchesSelectorBinding(
+	keybindings: KeybindingsManager,
+	data: string,
+	binding: string,
+	disambiguatedKeyProtocol: boolean,
+) {
+	if (!disambiguatedKeyProtocol) return matchesBinding(keybindings, data, binding);
+	const inputKey = canonicalKeyId(parseKey(data) ?? "");
+	return (
+		inputKey !== undefined &&
+		getBindingKeys(keybindings, binding).some((key) => canonicalKeyId(key) === inputKey)
+	);
 }
 
 function inputsForKey(key: string) {
