@@ -36,7 +36,8 @@
 			"./packages/pi-tool/src/index.ts",
 			"./packages/pi-tui-kit-showcase/src/index.ts",
 			"./packages/pi-usage/src/index.ts",
-			"./packages/pi-worktree/src/index.ts"
+			"./packages/pi-worktree/src/index.ts",
+			"./packages/pi-youcom/src/index.ts"
 		],
 		"skills": [
 			"./packages/pi-herdr/skills",

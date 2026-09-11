@@ -67,6 +67,7 @@ These extensions are part of my daily Pi setup:
 | --- | --- | --- |
 | [`pi-chrome-devtools`](./packages/pi-chrome-devtools) | Inspect tabs, navigate pages, evaluate JavaScript, and capture screenshots through Chrome DevTools Protocol. | `pi install npm:@narumitw/pi-chrome-devtools` |
 | [`pi-firecrawl`](./packages/pi-firecrawl) | Scrape pages, crawl websites, discover URLs, and search the web with Firecrawl. | `pi install npm:@narumitw/pi-firecrawl` |
+| [`pi-youcom`](./packages/pi-youcom) | Search the web with You.com, keylessly by default, and read pages with an API key. | `pi install npm:@narumitw/pi-youcom` |
 
 ### Task and workspace workflows
 
