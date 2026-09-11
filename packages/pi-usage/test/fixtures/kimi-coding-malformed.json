@@ -1,64 +1,64 @@
 {
-	"usage": {
-		"used": "-1",
-		"limit": "10.5",
-		"resetTime": "not-a-timestamp"
-	},
-	"limits": [
-		{
-			"name": "duplicate-a",
-			"window": {
-				"duration": 300,
-				"timeUnit": "TIME_UNIT_MINUTE"
-			},
-			"detail": {
-				"used": "1",
-				"limit": "100"
-			}
-		},
-		{
-			"name": "duplicate-b",
-			"window": {
-				"duration": 5,
-				"timeUnit": "TIME_UNIT_HOUR"
-			},
-			"detail": {
-				"used": "2",
-				"limit": "100"
-			}
-		},
-		{
-			"name": "unknown-window",
-			"window": {
-				"duration": 1,
-				"timeUnit": "TIME_UNIT_MONTH"
-			},
-			"detail": {
-				"used": "3",
-				"limit": "100"
-			}
-		},
-		{
-			"name": "Daily\u001b[31m\ncap",
-			"window": {
-				"duration": 24,
-				"timeUnit": "TIME_UNIT_HOUR"
-			},
-			"detail": {
-				"used": "5",
-				"limit": "100",
-				"resetTime": "invalid"
-			}
-		},
-		{
-			"name": "missing-used",
-			"window": {
-				"duration": 7,
-				"timeUnit": "TIME_UNIT_DAY"
-			},
-			"detail": {
-				"limit": "100"
-			}
-		}
-	]
+  "usage": {
+    "used": "-1",
+    "limit": "10.5",
+    "resetTime": "not-a-timestamp"
+  },
+  "limits": [
+    {
+      "name": "duplicate-a",
+      "window": {
+        "duration": 300,
+        "timeUnit": "TIME_UNIT_MINUTE"
+      },
+      "detail": {
+        "used": "1",
+        "limit": "100"
+      }
+    },
+    {
+      "name": "duplicate-b",
+      "window": {
+        "duration": 5,
+        "timeUnit": "TIME_UNIT_HOUR"
+      },
+      "detail": {
+        "used": "2",
+        "limit": "100"
+      }
+    },
+    {
+      "name": "unknown-window",
+      "window": {
+        "duration": 1,
+        "timeUnit": "TIME_UNIT_MONTH"
+      },
+      "detail": {
+        "used": "3",
+        "limit": "100"
+      }
+    },
+    {
+      "name": "Daily\u001b[31m\ncap",
+      "window": {
+        "duration": 24,
+        "timeUnit": "TIME_UNIT_HOUR"
+      },
+      "detail": {
+        "used": "5",
+        "limit": "100",
+        "resetTime": "invalid"
+      }
+    },
+    {
+      "name": "missing-used",
+      "window": {
+        "duration": 7,
+        "timeUnit": "TIME_UNIT_DAY"
+      },
+      "detail": {
+        "limit": "100"
+      }
+    }
+  ]
 }

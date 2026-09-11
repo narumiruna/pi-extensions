@@ -1,8 +1,8 @@
 {
-	"usage": {
-		"name": "Weekly limit",
-		"used": "40",
-		"limit": "1000",
-		"resetTime": "2030-01-07T00:00:00.000Z"
-	}
+  "usage": {
+    "name": "Weekly limit",
+    "used": "40",
+    "limit": "1000",
+    "resetTime": "2030-01-07T00:00:00.000Z"
+  }
 }

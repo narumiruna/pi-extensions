@@ -1,54 +1,54 @@
 {
-	"name": "@narumitw/pi-file-context",
-	"version": "0.54.2",
-	"description": "Pi extension for attaching file ranges and Git provenance as context.",
-	"type": "module",
-	"license": "MIT",
-	"private": false,
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi",
-		"file-explorer",
-		"git",
-		"context",
-		"quote"
-	],
-	"files": [
-		"src",
-		"dist",
-		"README.md",
-		"LICENSE"
-	],
-	"pi": {
-		"extensions": [
-			"./dist/index.ts"
-		]
-	},
-	"scripts": {
-		"build": "node scripts/build-runtime.mjs",
-		"check": "npm run build && biome check . && npm run typecheck",
-		"format": "biome check --write .",
-		"typecheck": "tsc --noEmit",
-		"prepack": "npm run build"
-	},
-	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.59.0"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.5.11",
-		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@earendil-works/pi-tui": "0.85.0",
-		"esbuild": "0.28.2",
-		"typescript": "7.0.2"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-file-context"
-	}
+  "name": "@narumitw/pi-file-context",
+  "version": "0.54.2",
+  "description": "Pi extension for attaching file ranges and Git provenance as context.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "file-explorer",
+    "git",
+    "context",
+    "quote"
+  ],
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "check": "npm run build && biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.59.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-tui": "0.85.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-file-context"
+  }
 }

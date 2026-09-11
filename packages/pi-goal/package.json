@@ -1,58 +1,58 @@
 {
-	"name": "@narumitw/pi-goal",
-	"version": "0.54.4",
-	"description": "Pi extension for autonomous single-objective /goal completion.",
-	"type": "module",
-	"license": "MIT",
-	"private": false,
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi",
-		"goal",
-		"automation"
-	],
-	"files": [
-		"src",
-		"dist",
-		"docs",
-		"README.md",
-		"LICENSE"
-	],
-	"pi": {
-		"extensions": [
-			"./dist/index.ts"
-		]
-	},
-	"scripts": {
-		"build": "node scripts/build-runtime.mjs",
-		"check": "npm run build && biome check . && npm run typecheck",
-		"format": "biome check --write .",
-		"test:runtime": "node ./test/goal-runtime-smoke.mjs",
-		"typecheck": "tsc --noEmit",
-		"prepack": "npm run build"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-ai": "*",
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
-		"typebox": "*"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.5.11",
-		"@earendil-works/pi-ai": "0.85.0",
-		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@earendil-works/pi-tui": "0.85.0",
-		"esbuild": "0.28.2",
-		"typebox": "1.3.25",
-		"typescript": "7.0.2"
-	},
-	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.59.0"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-goal"
-	}
+  "name": "@narumitw/pi-goal",
+  "version": "0.54.4",
+  "description": "Pi extension for autonomous single-objective /goal completion.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "goal",
+    "automation"
+  ],
+  "files": [
+    "src",
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "check": "npm run build && biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "test:runtime": "node ./test/goal-runtime-smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@earendil-works/pi-ai": "0.85.0",
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-tui": "0.85.0",
+    "esbuild": "0.28.2",
+    "typebox": "1.3.25",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.59.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-goal"
+  }
 }

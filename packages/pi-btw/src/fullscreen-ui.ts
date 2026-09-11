@@ -1,213 +1,203 @@
 import { spawn } from "node:child_process";
 import {
-	copyToClipboard as copyToHostClipboard,
-	type ExtensionCommandContext,
-	type KeybindingsManager,
-	type Theme,
+  copyToClipboard as copyToHostClipboard,
+  type ExtensionCommandContext,
+  type KeybindingsManager,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
-	type Component,
-	isKeyRelease,
-	isKittyProtocolActive,
-	Key,
-	type OverlayHandle,
-	parseKey,
-	type TUI,
-	TuiAltScreen,
-	type TuiInputListener,
-	type TuiInputListenerResult,
-	truncateToWidth,
+  type Component,
+  isKeyRelease,
+  isKittyProtocolActive,
+  Key,
+  type OverlayHandle,
+  parseKey,
+  type TUI,
+  TuiAltScreen,
+  type TuiInputListener,
+  type TuiInputListenerResult,
+  truncateToWidth,
 } from "@earendil-works/pi-tui";
-import {
-	type BtwKeybindingOverrides,
-	BtwPasteGuard,
-	resolveBtwShortcuts,
-	setBtwShortcuts,
-} from "./keybindings.js";
+import { type BtwKeybindingOverrides, BtwPasteGuard, resolveBtwShortcuts, setBtwShortcuts } from "./keybindings.js";
 import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
 
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
 type BtwCustomFactory<T> = (
-	tui: TUI,
-	theme: Theme,
-	keybindings: KeybindingsManager,
-	done: (result: T) => void,
+  tui: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  done: (result: T) => void,
 ) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>;
 
 type BtwFullscreenTui = TUI & {
-	flash?: (message: string, durationMs?: number) => void;
-	setLayoutRoot(component: Component | undefined): void;
-	addInputListenerBeforeAll?(listener: TuiInputListener): () => void;
-	addInputListenerBeforeViewport?(listener: TuiInputListener): () => void;
+  flash?: (message: string, durationMs?: number) => void;
+  setLayoutRoot(component: Component | undefined): void;
+  addInputListenerBeforeAll?(listener: TuiInputListener): () => void;
+  addInputListenerBeforeViewport?(listener: TuiInputListener): () => void;
 };
 
 export interface BtwFullscreenLayoutComponent extends Component {
-	getFullscreenLayout(): Component;
+  getFullscreenLayout(): Component;
 }
 
 export interface BtwFullscreenOptions {
-	keybindings?: BtwKeybindingOverrides;
-	copyOnSelect?: boolean;
+  keybindings?: BtwKeybindingOverrides;
+  copyOnSelect?: boolean;
 }
 
 export type BtwFullscreenTuiFactory = (
-	parent: TUI,
-	theme: Theme,
-	keybindings: KeybindingsManager,
-	options: BtwFullscreenOptions,
+  parent: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  options: BtwFullscreenOptions,
 ) => BtwFullscreenTui;
 
 export interface BtwFullscreenDependencies {
-	createTui?: BtwFullscreenTuiFactory;
-	openUrl?: (url: string) => void;
-	copyToClipboard?: (text: string) => Promise<void>;
-	manualSelectionCopySupported?: boolean;
+  createTui?: BtwFullscreenTuiFactory;
+  openUrl?: (url: string) => void;
+  copyToClipboard?: (text: string) => Promise<void>;
+  manualSelectionCopySupported?: boolean;
 }
 
 export type RunBtwFullscreen = <T>(
-	ctx: ExtensionCommandContext,
-	run: (ctx: ExtensionCommandContext) => Promise<T>,
-	options?: BtwFullscreenOptions,
+  ctx: ExtensionCommandContext,
+  run: (ctx: ExtensionCommandContext) => Promise<T>,
+  options?: BtwFullscreenOptions,
 ) => Promise<T>;
 
 type FullscreenOutcome<T> = { kind: "completed"; value: T } | { kind: "failed"; error: unknown };
 
 class FullscreenUiDisposedError extends Error {
-	constructor() {
-		super("The dedicated pi-btw UI was disposed.");
-		this.name = "FullscreenUiDisposedError";
-	}
+  constructor() {
+    super("The dedicated pi-btw UI was disposed.");
+    this.name = "FullscreenUiDisposedError";
+  }
 }
 
 export async function runBtwFullscreen<T>(
-	ctx: ExtensionCommandContext,
-	run: (ctx: ExtensionCommandContext) => Promise<T>,
-	options: BtwFullscreenOptions = {},
-	dependencies: BtwFullscreenDependencies = {},
+  ctx: ExtensionCommandContext,
+  run: (ctx: ExtensionCommandContext) => Promise<T>,
+  options: BtwFullscreenOptions = {},
+  dependencies: BtwFullscreenDependencies = {},
 ): Promise<T> {
-	const createTui =
-		dependencies.createTui ??
-		((
-			parent: TUI,
-			theme: Theme,
-			keybindings: KeybindingsManager,
-			fullscreenOptions: BtwFullscreenOptions,
-		) =>
-			createBtwFullscreenTui(
-				parent,
-				theme,
-				keybindings,
-				fullscreenOptions.copyOnSelect ?? true,
-				dependencies.manualSelectionCopySupported ?? hasManualSelectionCopyApi(),
-				dependencies.openUrl ?? openUrlInBrowser,
-				dependencies.copyToClipboard ?? copyToHostClipboard,
-			));
-	let liveEditorText = ctx.ui.getEditorText();
-	let restoreEditor = false;
-	let host: BtwFullscreenHost<T> | undefined;
-	const outcome = await ctx.ui.custom<FullscreenOutcome<T>>(
-		(parent, theme, keybindings, done) => {
-			host = new BtwFullscreenHost(
-				parent,
-				theme,
-				keybindings,
-				ctx,
-				run,
-				(value) => {
-					try {
-						liveEditorText = ctx.ui.getEditorText();
-						restoreEditor = true;
-					} catch {
-						// A replaced session owns a different editor and must not receive stale text.
-					}
-					done(value);
-				},
-				createTui,
-				options,
-			);
-			return host;
-		},
-		{
-			overlay: true,
-			onHandle: (handle) => host?.setParentOverlay(handle),
-		},
-	);
-	if (restoreEditor) {
-		try {
-			if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
-		} catch {
-			// A replaced session owns a different editor and must not receive stale restoration.
-		}
-	}
-	if (outcome.kind === "failed") throw outcome.error;
-	return outcome.value;
+  const createTui =
+    dependencies.createTui ??
+    ((parent: TUI, theme: Theme, keybindings: KeybindingsManager, fullscreenOptions: BtwFullscreenOptions) =>
+      createBtwFullscreenTui(
+        parent,
+        theme,
+        keybindings,
+        fullscreenOptions.copyOnSelect ?? true,
+        dependencies.manualSelectionCopySupported ?? hasManualSelectionCopyApi(),
+        dependencies.openUrl ?? openUrlInBrowser,
+        dependencies.copyToClipboard ?? copyToHostClipboard,
+      ));
+  let liveEditorText = ctx.ui.getEditorText();
+  let restoreEditor = false;
+  let host: BtwFullscreenHost<T> | undefined;
+  const outcome = await ctx.ui.custom<FullscreenOutcome<T>>(
+    (parent, theme, keybindings, done) => {
+      host = new BtwFullscreenHost(
+        parent,
+        theme,
+        keybindings,
+        ctx,
+        run,
+        (value) => {
+          try {
+            liveEditorText = ctx.ui.getEditorText();
+            restoreEditor = true;
+          } catch {
+            // A replaced session owns a different editor and must not receive stale text.
+          }
+          done(value);
+        },
+        createTui,
+        options,
+      );
+      return host;
+    },
+    {
+      overlay: true,
+      onHandle: (handle) => host?.setParentOverlay(handle),
+    },
+  );
+  if (restoreEditor) {
+    try {
+      if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
+    } catch {
+      // A replaced session owns a different editor and must not receive stale restoration.
+    }
+  }
+  if (outcome.kind === "failed") throw outcome.error;
+  return outcome.value;
 }
 
 type BtwInputListeners = {
-	beforeAll: Set<TuiInputListener>;
-	beforeViewport: Set<TuiInputListener>;
-	regular: Set<TuiInputListener>;
+  beforeAll: Set<TuiInputListener>;
+  beforeViewport: Set<TuiInputListener>;
+  regular: Set<TuiInputListener>;
 };
 
 const btwInputListeners = new WeakMap<BtwTuiAltScreen, BtwInputListeners>();
 
 function dispatchBtwInput(listeners: BtwInputListeners, data: string): TuiInputListenerResult {
-	let current = data;
-	for (const group of [listeners.beforeAll, listeners.beforeViewport, listeners.regular]) {
-		for (const listener of group) {
-			const result = listener(current);
-			if (result?.consume) return result;
-			if (result?.data !== undefined) current = result.data;
-		}
-	}
-	return current === data ? undefined : { data: current };
+  let current = data;
+  for (const group of [listeners.beforeAll, listeners.beforeViewport, listeners.regular]) {
+    for (const listener of group) {
+      const result = listener(current);
+      if (result?.consume) return result;
+      if (result?.data !== undefined) current = result.data;
+    }
+  }
+  return current === data ? undefined : { data: current };
 }
 
 class BtwTuiAltScreen extends TuiAltScreen {
-	hasFocusedOverlay(): boolean {
-		return this.isOverlayFocused();
-	}
+  hasFocusedOverlay(): boolean {
+    return this.isOverlayFocused();
+  }
 
-	override addInputListener(listener: TuiInputListener): () => void {
-		let listeners = btwInputListeners.get(this);
-		if (!listeners) {
-			const registeredListeners: BtwInputListeners = {
-				beforeAll: new Set(),
-				beforeViewport: new Set(),
-				regular: new Set(),
-			};
-			btwInputListeners.set(this, registeredListeners);
-			super.addInputListener((data) => dispatchBtwInput(registeredListeners, data));
-			listeners = registeredListeners;
-		}
-		listeners.regular.add(listener);
-		return () => listeners.regular.delete(listener);
-	}
+  override addInputListener(listener: TuiInputListener): () => void {
+    let listeners = btwInputListeners.get(this);
+    if (!listeners) {
+      const registeredListeners: BtwInputListeners = {
+        beforeAll: new Set(),
+        beforeViewport: new Set(),
+        regular: new Set(),
+      };
+      btwInputListeners.set(this, registeredListeners);
+      super.addInputListener((data) => dispatchBtwInput(registeredListeners, data));
+      listeners = registeredListeners;
+    }
+    listeners.regular.add(listener);
+    return () => listeners.regular.delete(listener);
+  }
 
-	addInputListenerBeforeAll(listener: TuiInputListener): () => void {
-		const listeners = btwInputListeners.get(this);
-		if (!listeners) return super.addInputListener(listener);
-		listeners.beforeAll.add(listener);
-		return () => listeners.beforeAll.delete(listener);
-	}
+  addInputListenerBeforeAll(listener: TuiInputListener): () => void {
+    const listeners = btwInputListeners.get(this);
+    if (!listeners) return super.addInputListener(listener);
+    listeners.beforeAll.add(listener);
+    return () => listeners.beforeAll.delete(listener);
+  }
 
-	addInputListenerBeforeViewport(listener: TuiInputListener): () => void {
-		const listeners = btwInputListeners.get(this);
-		if (!listeners) return super.addInputListener(listener);
-		listeners.beforeViewport.add(listener);
-		return () => listeners.beforeViewport.delete(listener);
-	}
+  addInputListenerBeforeViewport(listener: TuiInputListener): () => void {
+    const listeners = btwInputListeners.get(this);
+    if (!listeners) return super.addInputListener(listener);
+    listeners.beforeViewport.add(listener);
+    return () => listeners.beforeViewport.delete(listener);
+  }
 
-	override removeInputListener(listener: TuiInputListener): void {
-		const listeners = btwInputListeners.get(this);
-		if (!listeners) {
-			super.removeInputListener(listener);
-			return;
-		}
-		listeners.beforeAll.delete(listener);
-		listeners.beforeViewport.delete(listener);
-		listeners.regular.delete(listener);
-	}
+  override removeInputListener(listener: TuiInputListener): void {
+    const listeners = btwInputListeners.get(this);
+    if (!listeners) {
+      super.removeInputListener(listener);
+      return;
+    }
+    listeners.beforeAll.delete(listener);
+    listeners.beforeViewport.delete(listener);
+    listeners.regular.delete(listener);
+  }
 }
 
 const BRACKETED_PASTE_START = "\u001b[200~";
@@ -215,554 +205,535 @@ const BRACKETED_PASTE_END = "\u001b[201~";
 
 // TuiAltScreen evaluates these actions before bottom, so shared keys cannot jump to latest.
 const ALT_SCREEN_ACTIONS_BEFORE_BOTTOM = [
-	"tui.altScreen.search",
-	"tui.altScreen.searchNext",
-	"tui.altScreen.searchPrevious",
-	"tui.altScreen.searchClose",
-	"tui.altScreen.pageUp",
-	"tui.altScreen.pageDown",
-	"tui.altScreen.halfPageUp",
-	"tui.altScreen.halfPageDown",
-	"tui.altScreen.lineUp",
-	"tui.altScreen.lineDown",
-	"tui.altScreen.previousPrompt",
-	"tui.altScreen.nextPrompt",
-	"tui.altScreen.top",
+  "tui.altScreen.search",
+  "tui.altScreen.searchNext",
+  "tui.altScreen.searchPrevious",
+  "tui.altScreen.searchClose",
+  "tui.altScreen.pageUp",
+  "tui.altScreen.pageDown",
+  "tui.altScreen.halfPageUp",
+  "tui.altScreen.halfPageDown",
+  "tui.altScreen.lineUp",
+  "tui.altScreen.lineDown",
+  "tui.altScreen.previousPrompt",
+  "tui.altScreen.nextPrompt",
+  "tui.altScreen.top",
 ] as const;
 const KEY_MODIFIER_ORDER = ["shift", "ctrl", "alt", "super"] as const;
 const MATCHABLE_SPECIAL_KEYS = new Set([
-	"space",
-	"tab",
-	"enter",
-	"backspace",
-	"delete",
-	"insert",
-	"home",
-	"end",
-	"pageup",
-	"pagedown",
-	"up",
-	"down",
-	"left",
-	"right",
+  "space",
+  "tab",
+  "enter",
+  "backspace",
+  "delete",
+  "insert",
+  "home",
+  "end",
+  "pageup",
+  "pagedown",
+  "up",
+  "down",
+  "left",
+  "right",
 ]);
 const MATCHABLE_SYMBOL_KEYS = new Set("`-=[]\\;',./!@#$%^&*()_+|~{}:<>?");
 
 function normalizedKeyId(key: string): string {
-	const parts = key.toLowerCase().split("+");
-	const base = parts.at(-1);
-	if (!base) return "";
-	const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
-	const modifiers = KEY_MODIFIER_ORDER.filter((modifier) => parts.includes(modifier));
-	return [...modifiers, normalizedBase].join("+");
+  const parts = key.toLowerCase().split("+");
+  const base = parts.at(-1);
+  if (!base) return "";
+  const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
+  const modifiers = KEY_MODIFIER_ORDER.filter((modifier) => parts.includes(modifier));
+  return [...modifiers, normalizedBase].join("+");
 }
 
 function formatEffectiveKeyLabel(key: string): string {
-	const parts = key.split("+");
-	const base = parts.at(-1);
-	if (base === "pageup") parts[parts.length - 1] = "pageUp";
-	if (base === "pagedown") parts[parts.length - 1] = "pageDown";
-	return formatKeyLabel(parts.join("+"));
+  const parts = key.split("+");
+  const base = parts.at(-1);
+  if (base === "pageup") parts[parts.length - 1] = "pageUp";
+  if (base === "pagedown") parts[parts.length - 1] = "pageDown";
+  return formatKeyLabel(parts.join("+"));
 }
 
 function canMatchKeyInput(key: string): boolean {
-	const parts = key.split("+");
-	const base = parts.at(-1) ?? "";
-	const modifiers = parts.slice(0, -1);
-	if (base === "escape") return modifiers.length === 0;
-	if (base === "clear") {
-		return (
-			modifiers.length === 0 ||
-			(modifiers.length === 1 && (modifiers[0] === "shift" || modifiers[0] === "ctrl"))
-		);
-	}
-	if (/^f(?:[1-9]|1[0-2])$/u.test(base)) return modifiers.length === 0;
-	return (
-		MATCHABLE_SPECIAL_KEYS.has(base) ||
-		(base.length === 1 && (/^[a-z0-9]$/u.test(base) || MATCHABLE_SYMBOL_KEYS.has(base)))
-	);
+  const parts = key.split("+");
+  const base = parts.at(-1) ?? "";
+  const modifiers = parts.slice(0, -1);
+  if (base === "escape") return modifiers.length === 0;
+  if (base === "clear") {
+    return modifiers.length === 0 || (modifiers.length === 1 && (modifiers[0] === "shift" || modifiers[0] === "ctrl"));
+  }
+  if (/^f(?:[1-9]|1[0-2])$/u.test(base)) return modifiers.length === 0;
+  return (
+    MATCHABLE_SPECIAL_KEYS.has(base) ||
+    (base.length === 1 && (/^[a-z0-9]$/u.test(base) || MATCHABLE_SYMBOL_KEYS.has(base)))
+  );
 }
 
 function rawCtrlInput(base: string): string | undefined {
-	if (base.length !== 1) return undefined;
-	const rawBase = base === "-" ? "_" : base;
-	if (!"abcdefghijklmnopqrstuvwxyz[\\]_".includes(rawBase)) return undefined;
-	return String.fromCharCode(rawBase.charCodeAt(0) & 0x1f);
+  if (base.length !== 1) return undefined;
+  const rawBase = base === "-" ? "_" : base;
+  if (!"abcdefghijklmnopqrstuvwxyz[\\]_".includes(rawBase)) return undefined;
+  return String.fromCharCode(rawBase.charCodeAt(0) & 0x1f);
 }
 
 function legacyRawInput(key: string): string | undefined {
-	const parts = key.split("+");
-	const base = parts.at(-1) ?? "";
-	if (parts.length === 2 && parts[0] === "ctrl") return rawCtrlInput(base);
-	if (isKittyProtocolActive()) return undefined;
-	if (parts.length === 2 && parts[0] === "alt" && base.length === 1) return `\u001b${base}`;
-	if (parts.length === 3 && parts[0] === "ctrl" && parts[1] === "alt") {
-		const input = rawCtrlInput(base);
-		return input ? `\u001b${input}` : undefined;
-	}
-	return undefined;
+  const parts = key.split("+");
+  const base = parts.at(-1) ?? "";
+  if (parts.length === 2 && parts[0] === "ctrl") return rawCtrlInput(base);
+  if (isKittyProtocolActive()) return undefined;
+  if (parts.length === 2 && parts[0] === "alt" && base.length === 1) return `\u001b${base}`;
+  if (parts.length === 3 && parts[0] === "ctrl" && parts[1] === "alt") {
+    const input = rawCtrlInput(base);
+    return input ? `\u001b${input}` : undefined;
+  }
+  return undefined;
 }
 
 // Mirror matchesKey(), using parseKey() to canonicalize IDs that share legacy raw input.
 function keyInputIdentity(key: string): string {
-	const identity = normalizedKeyId(key);
-	const input = legacyRawInput(identity);
-	return input ? normalizedKeyId(parseKey(input) ?? identity) : identity;
+  const identity = normalizedKeyId(key);
+  const input = legacyRawInput(identity);
+  return input ? normalizedKeyId(parseKey(input) ?? identity) : identity;
 }
 
 function hasManualSelectionCopyApi(): boolean {
-	return (
-		typeof TuiAltScreen.prototype.hasActiveSelection === "function" &&
-		typeof TuiAltScreen.prototype.copyActiveSelectionToClipboard === "function"
-	);
+  return (
+    typeof TuiAltScreen.prototype.hasActiveSelection === "function" &&
+    typeof TuiAltScreen.prototype.copyActiveSelectionToClipboard === "function"
+  );
 }
 
 function createBtwFullscreenTui(
-	parent: TUI,
-	theme: Theme,
-	keybindings: KeybindingsManager,
-	copyOnSelect: boolean,
-	manualSelectionCopySupported: boolean,
-	openUrl: (url: string) => void,
-	copyToClipboard: (text: string) => Promise<void>,
+  parent: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  copyOnSelect: boolean,
+  manualSelectionCopySupported: boolean,
+  openUrl: (url: string) => void,
+  copyToClipboard: (text: string) => Promise<void>,
 ): BtwFullscreenTui {
-	if (!copyOnSelect && !manualSelectionCopySupported) {
-		throw new Error(
-			"Manual fullscreen selection copying is unavailable in this Pi version; update Pi or enable automatic selection copying.",
-		);
-	}
-	const styleSearchMatch = (text: string) =>
-		theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
-	const fullscreen = new BtwTuiAltScreen(
-		parent.terminal,
-		parent.getShowHardwareCursor(),
-		undefined,
-		{
-			mouse: true,
-			copyOnSelect,
-			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
-			scrollToEndIndicator: () => {
-				const unavailableKeyIdentities = new Set<string>([keyInputIdentity(Key.ctrl("c"))]);
-				for (const action of ALT_SCREEN_ACTIONS_BEFORE_BOTTOM) {
-					for (const actionKey of keybindings.getKeys(action)) {
-						unavailableKeyIdentities.add(keyInputIdentity(String(actionKey)));
-					}
-				}
-				if (!copyOnSelect) {
-					for (const copyKey of keybindings.getKeys("app.message.copy")) {
-						unavailableKeyIdentities.add(keyInputIdentity(String(copyKey)));
-					}
-				}
-				const key = keybindings
-					.getKeys("tui.altScreen.bottom")
-					.map((candidate) => keyInputIdentity(String(candidate)))
-					.find(
-						(identity) =>
-							identity &&
-							canMatchKeyInput(identity) &&
-							!unavailableKeyIdentities.has(identity) &&
-							formatEffectiveKeyLabel(identity),
-					);
-				const label = theme.fg("text", " ↓ Jump to latest message");
-				const shortcut = key ? theme.fg("muted", ` · ${formatEffectiveKeyLabel(key)}`) : "";
-				return theme.bg("selectedBg", `${label}${shortcut} `);
-			},
-			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
-			openUrl,
-			copySelection: async (text) => {
-				try {
-					await copyToClipboard(text);
-					return true;
-				} catch {
-					return false;
-				}
-			},
-		},
-	);
-	if (!copyOnSelect) {
-		let isInBracketedPaste = false;
-		fullscreen.addInputListenerBeforeViewport((data) => {
-			const wasInBracketedPaste = isInBracketedPaste;
-			const startsBracketedPaste = data.includes(BRACKETED_PASTE_START);
-			if (startsBracketedPaste) isInBracketedPaste = true;
-			if (isInBracketedPaste && data.includes(BRACKETED_PASTE_END)) {
-				isInBracketedPaste = false;
-			}
-			if (
-				wasInBracketedPaste ||
-				startsBracketedPaste ||
-				fullscreen.hasFocusedOverlay() ||
-				isKeyRelease(data) ||
-				!keybindings.matches(data, "app.message.copy")
-			) {
-				return undefined;
-			}
-			if (!fullscreen.hasActiveSelection()) {
-				fullscreen.flash("No selection to copy");
-				return { consume: true };
-			}
-			void fullscreen.copyActiveSelectionToClipboard().catch(() => fullscreen.flash("Copy failed"));
-			return { consume: true };
-		});
-	}
-	return fullscreen;
+  if (!copyOnSelect && !manualSelectionCopySupported) {
+    throw new Error(
+      "Manual fullscreen selection copying is unavailable in this Pi version; update Pi or enable automatic selection copying.",
+    );
+  }
+  const styleSearchMatch = (text: string) => theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
+  const fullscreen = new BtwTuiAltScreen(parent.terminal, parent.getShowHardwareCursor(), undefined, {
+    mouse: true,
+    copyOnSelect,
+    searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
+    scrollToEndIndicator: () => {
+      const unavailableKeyIdentities = new Set<string>([keyInputIdentity(Key.ctrl("c"))]);
+      for (const action of ALT_SCREEN_ACTIONS_BEFORE_BOTTOM) {
+        for (const actionKey of keybindings.getKeys(action)) {
+          unavailableKeyIdentities.add(keyInputIdentity(String(actionKey)));
+        }
+      }
+      if (!copyOnSelect) {
+        for (const copyKey of keybindings.getKeys("app.message.copy")) {
+          unavailableKeyIdentities.add(keyInputIdentity(String(copyKey)));
+        }
+      }
+      const key = keybindings
+        .getKeys("tui.altScreen.bottom")
+        .map((candidate) => keyInputIdentity(String(candidate)))
+        .find(
+          (identity) =>
+            identity &&
+            canMatchKeyInput(identity) &&
+            !unavailableKeyIdentities.has(identity) &&
+            formatEffectiveKeyLabel(identity),
+        );
+      const label = theme.fg("text", " ↓ Jump to latest message");
+      const shortcut = key ? theme.fg("muted", ` · ${formatEffectiveKeyLabel(key)}`) : "";
+      return theme.bg("selectedBg", `${label}${shortcut} `);
+    },
+    searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
+    openUrl,
+    copySelection: async (text) => {
+      try {
+        await copyToClipboard(text);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+  if (!copyOnSelect) {
+    let isInBracketedPaste = false;
+    fullscreen.addInputListenerBeforeViewport((data) => {
+      const wasInBracketedPaste = isInBracketedPaste;
+      const startsBracketedPaste = data.includes(BRACKETED_PASTE_START);
+      if (startsBracketedPaste) isInBracketedPaste = true;
+      if (isInBracketedPaste && data.includes(BRACKETED_PASTE_END)) {
+        isInBracketedPaste = false;
+      }
+      if (
+        wasInBracketedPaste ||
+        startsBracketedPaste ||
+        fullscreen.hasFocusedOverlay() ||
+        isKeyRelease(data) ||
+        !keybindings.matches(data, "app.message.copy")
+      ) {
+        return undefined;
+      }
+      if (!fullscreen.hasActiveSelection()) {
+        fullscreen.flash("No selection to copy");
+        return { consume: true };
+      }
+      void fullscreen.copyActiveSelectionToClipboard().catch(() => fullscreen.flash("Copy failed"));
+      return { consume: true };
+    });
+  }
+  return fullscreen;
 }
 
 // Pi does not export its browser opener, so mirror its shell-free launcher for this isolated TUI.
 function openUrlInBrowser(target: string): void {
-	const [command, args] =
-		process.platform === "darwin"
-			? ["open", [target]]
-			: process.platform === "win32"
-				? ["rundll32", ["url.dll,FileProtocolHandler", target]]
-				: ["xdg-open", [target]];
-	spawn(command, args, { stdio: "ignore", detached: true })
-		.on("error", () => {})
-		.unref();
+  const [command, args] =
+    process.platform === "darwin"
+      ? ["open", [target]]
+      : process.platform === "win32"
+        ? ["rundll32", ["url.dll,FileProtocolHandler", target]]
+        : ["xdg-open", [target]];
+  spawn(command, args, { stdio: "ignore", detached: true })
+    .on("error", () => {})
+    .unref();
 }
 
 class BtwFullscreenHost<T> implements Component {
-	private fullscreen: BtwFullscreenTui | undefined;
-	private parentOverlay: OverlayHandle | undefined;
-	private cancelActiveCustom: (() => void) | undefined;
-	private hardCancelActiveCustom: (() => void) | undefined;
-	private removeHardCancelListener: (() => void) | undefined;
-	private started = false;
-	private disposed = false;
-	private finished = false;
-	private parentStopped = false;
-	private parentRestoreAttempted = false;
-	private fullscreenCreated = false;
-	private fullscreenStopped = false;
-	private parentRestoreQueued = false;
-	private parentRestorePromise: Promise<void> | undefined;
-	private cleanupError: unknown;
+  private fullscreen: BtwFullscreenTui | undefined;
+  private parentOverlay: OverlayHandle | undefined;
+  private cancelActiveCustom: (() => void) | undefined;
+  private hardCancelActiveCustom: (() => void) | undefined;
+  private removeHardCancelListener: (() => void) | undefined;
+  private started = false;
+  private disposed = false;
+  private finished = false;
+  private parentStopped = false;
+  private parentRestoreAttempted = false;
+  private fullscreenCreated = false;
+  private fullscreenStopped = false;
+  private parentRestoreQueued = false;
+  private parentRestorePromise: Promise<void> | undefined;
+  private cleanupError: unknown;
 
-	constructor(
-		private readonly parent: TUI,
-		private readonly theme: Theme,
-		private readonly keybindings: KeybindingsManager,
-		private readonly ctx: ExtensionCommandContext,
-		private readonly run: (ctx: ExtensionCommandContext) => Promise<T>,
-		private readonly done: (outcome: FullscreenOutcome<T>) => void,
-		private readonly createTui: BtwFullscreenTuiFactory,
-		private readonly options: BtwFullscreenOptions,
-	) {
-		queueMicrotask(() => void this.start());
-	}
+  constructor(
+    private readonly parent: TUI,
+    private readonly theme: Theme,
+    private readonly keybindings: KeybindingsManager,
+    private readonly ctx: ExtensionCommandContext,
+    private readonly run: (ctx: ExtensionCommandContext) => Promise<T>,
+    private readonly done: (outcome: FullscreenOutcome<T>) => void,
+    private readonly createTui: BtwFullscreenTuiFactory,
+    private readonly options: BtwFullscreenOptions,
+  ) {
+    queueMicrotask(() => void this.start());
+  }
 
-	setParentOverlay(overlay: OverlayHandle): void {
-		this.parentOverlay = overlay;
-	}
+  setParentOverlay(overlay: OverlayHandle): void {
+    this.parentOverlay = overlay;
+  }
 
-	render(width: number): string[] {
-		return [truncateToWidth(this.theme.fg("muted", "Opening btw side thread…"), width)];
-	}
+  render(width: number): string[] {
+    return [truncateToWidth(this.theme.fg("muted", "Opening btw side thread…"), width)];
+  }
 
-	invalidate(): void {}
+  invalidate(): void {}
 
-	dispose(): void {
-		if (this.disposed || this.finished) return;
-		this.disposed = true;
-		this.cancelActiveCustom?.();
-	}
+  dispose(): void {
+    if (this.disposed || this.finished) return;
+    this.disposed = true;
+    this.cancelActiveCustom?.();
+  }
 
-	private async start(): Promise<void> {
-		if (this.started || this.finished) return;
-		this.started = true;
-		let outcome: FullscreenOutcome<T>;
-		try {
-			if (this.disposed) throw new FullscreenUiDisposedError();
-			this.parent.stop({ preserveScreen: true });
-			this.parentStopped = true;
-			if (this.disposed) throw new FullscreenUiDisposedError();
-			this.fullscreen = this.createTui(this.parent, this.theme, this.keybindings, this.options);
-			this.fullscreenCreated = true;
-			this.fullscreen.start();
-			const shortcuts = resolveBtwShortcuts(
-				this.options.keybindings,
-				this.keybindings,
-				this.options.copyOnSelect ?? true,
-			);
-			setBtwShortcuts(this.fullscreen, shortcuts);
-			// Negotiate before warning when possible: the first dispatched user input uses
-			// the current mode. Recheck each input, including later mode transitions.
-			let previousWarnings: readonly string[] = [];
-			const reportWarnings = () => {
-				const warnings = shortcuts.warnings;
-				for (const warning of warnings) {
-					if (previousWarnings.includes(warning)) continue;
-					try {
-						this.ctx.ui.notify(`Pi BTW: ${warning}`, "warning");
-					} catch {
-						/* A replaced context must not prevent terminal cleanup. */
-					}
-				}
-				previousWarnings = warnings;
-			};
-			const pasteGuard = new BtwPasteGuard();
-			// Waiting for the custom promise would leave follow-up keys bound to the side TUI.
-			const addHardCancelListener =
-				this.fullscreen.addInputListenerBeforeAll?.bind(this.fullscreen) ??
-				this.fullscreen.addInputListenerBeforeViewport?.bind(this.fullscreen) ??
-				this.fullscreen.addInputListener.bind(this.fullscreen);
-			this.removeHardCancelListener = addHardCancelListener((data) => {
-				reportWarnings();
-				if (pasteGuard.consume(data) || !shortcuts.matches(data, "exit")) return undefined;
-				this.disposed = true;
-				try {
-					this.hardCancelActiveCustom?.();
-				} finally {
-					// ProcessTerminal.stop() destroys its active input buffer. Keep cancellation
-					// synchronous, then drain input before the physical Windows terminal handoff.
-					// Pi has no public input injection, so do not replay bytes already coalesced
-					// behind the hard-cancel key.
-					this.queueParentRestore();
-				}
-				return { consume: true };
-			});
-			outcome = { kind: "completed", value: await this.run(this.createContext()) };
-		} catch (error) {
-			outcome = { kind: "failed", error };
-		}
+  private async start(): Promise<void> {
+    if (this.started || this.finished) return;
+    this.started = true;
+    let outcome: FullscreenOutcome<T>;
+    try {
+      if (this.disposed) throw new FullscreenUiDisposedError();
+      this.parent.stop({ preserveScreen: true });
+      this.parentStopped = true;
+      if (this.disposed) throw new FullscreenUiDisposedError();
+      this.fullscreen = this.createTui(this.parent, this.theme, this.keybindings, this.options);
+      this.fullscreenCreated = true;
+      this.fullscreen.start();
+      const shortcuts = resolveBtwShortcuts(
+        this.options.keybindings,
+        this.keybindings,
+        this.options.copyOnSelect ?? true,
+      );
+      setBtwShortcuts(this.fullscreen, shortcuts);
+      // Negotiate before warning when possible: the first dispatched user input uses
+      // the current mode. Recheck each input, including later mode transitions.
+      let previousWarnings: readonly string[] = [];
+      const reportWarnings = () => {
+        const warnings = shortcuts.warnings;
+        for (const warning of warnings) {
+          if (previousWarnings.includes(warning)) continue;
+          try {
+            this.ctx.ui.notify(`Pi BTW: ${warning}`, "warning");
+          } catch {
+            /* A replaced context must not prevent terminal cleanup. */
+          }
+        }
+        previousWarnings = warnings;
+      };
+      const pasteGuard = new BtwPasteGuard();
+      // Waiting for the custom promise would leave follow-up keys bound to the side TUI.
+      const addHardCancelListener =
+        this.fullscreen.addInputListenerBeforeAll?.bind(this.fullscreen) ??
+        this.fullscreen.addInputListenerBeforeViewport?.bind(this.fullscreen) ??
+        this.fullscreen.addInputListener.bind(this.fullscreen);
+      this.removeHardCancelListener = addHardCancelListener((data) => {
+        reportWarnings();
+        if (pasteGuard.consume(data) || !shortcuts.matches(data, "exit")) return undefined;
+        this.disposed = true;
+        try {
+          this.hardCancelActiveCustom?.();
+        } finally {
+          // ProcessTerminal.stop() destroys its active input buffer. Keep cancellation
+          // synchronous, then drain input before the physical Windows terminal handoff.
+          // Pi has no public input injection, so do not replay bytes already coalesced
+          // behind the hard-cancel key.
+          this.queueParentRestore();
+        }
+        return { consume: true };
+      });
+      outcome = { kind: "completed", value: await this.run(this.createContext()) };
+    } catch (error) {
+      outcome = { kind: "failed", error };
+    }
 
-		try {
-			this.cancelActiveCustom?.();
-		} catch (error) {
-			this.cleanupError ??= error;
-		}
-		if (this.parentRestorePromise) await this.parentRestorePromise;
-		else this.restoreParent();
-		if (this.cleanupError !== undefined) outcome = { kind: "failed", error: this.cleanupError };
-		this.finished = true;
-		this.done(outcome);
-	}
+    try {
+      this.cancelActiveCustom?.();
+    } catch (error) {
+      this.cleanupError ??= error;
+    }
+    if (this.parentRestorePromise) await this.parentRestorePromise;
+    else this.restoreParent();
+    if (this.cleanupError !== undefined) outcome = { kind: "failed", error: this.cleanupError };
+    this.finished = true;
+    this.done(outcome);
+  }
 
-	private queueParentRestore(): void {
-		if (this.parentRestoreQueued || this.parentRestoreAttempted) return;
-		this.parentRestoreQueued = true;
-		this.parentRestorePromise = Promise.resolve().then(async () => {
-			try {
-				await this.fullscreen?.terminal.drainInput?.();
-			} catch (error) {
-				this.cleanupError ??= error;
-			}
-			this.parentRestoreQueued = false;
-			this.restoreParent();
-		});
-	}
+  private queueParentRestore(): void {
+    if (this.parentRestoreQueued || this.parentRestoreAttempted) return;
+    this.parentRestoreQueued = true;
+    this.parentRestorePromise = Promise.resolve().then(async () => {
+      try {
+        await this.fullscreen?.terminal.drainInput?.();
+      } catch (error) {
+        this.cleanupError ??= error;
+      }
+      this.parentRestoreQueued = false;
+      this.restoreParent();
+    });
+  }
 
-	private restoreParent(): void {
-		const removeHardCancelListener = this.removeHardCancelListener;
-		this.removeHardCancelListener = undefined;
-		try {
-			removeHardCancelListener?.();
-		} catch (error) {
-			this.cleanupError ??= error;
-		}
-		if (this.fullscreenCreated && !this.fullscreenStopped) {
-			this.fullscreenStopped = true;
-			try {
-				this.fullscreen?.stop({ preserveScreen: true });
-			} catch (error) {
-				this.cleanupError ??= error;
-			}
-		}
-		if (!this.parentStopped || this.parentRestoreAttempted) return;
-		const parentOverlay = this.parentOverlay;
-		this.parentOverlay = undefined;
-		try {
-			parentOverlay?.setHidden(true);
-		} catch (error) {
-			this.cleanupError ??= error;
-		}
-		try {
-			this.parentRestoreAttempted = true;
-			this.parent.start();
-			this.parent.renderNow(false);
-		} catch (error) {
-			this.cleanupError ??= error;
-		}
-	}
+  private restoreParent(): void {
+    const removeHardCancelListener = this.removeHardCancelListener;
+    this.removeHardCancelListener = undefined;
+    try {
+      removeHardCancelListener?.();
+    } catch (error) {
+      this.cleanupError ??= error;
+    }
+    if (this.fullscreenCreated && !this.fullscreenStopped) {
+      this.fullscreenStopped = true;
+      try {
+        this.fullscreen?.stop({ preserveScreen: true });
+      } catch (error) {
+        this.cleanupError ??= error;
+      }
+    }
+    if (!this.parentStopped || this.parentRestoreAttempted) return;
+    const parentOverlay = this.parentOverlay;
+    this.parentOverlay = undefined;
+    try {
+      parentOverlay?.setHidden(true);
+    } catch (error) {
+      this.cleanupError ??= error;
+    }
+    try {
+      this.parentRestoreAttempted = true;
+      this.parent.start();
+      this.parent.renderNow(false);
+    } catch (error) {
+      this.cleanupError ??= error;
+    }
+  }
 
-	private createContext(): ExtensionCommandContext {
-		const ui = new Proxy(this.ctx.ui, {
-			get: (target, property) => {
-				if (property === "custom") {
-					return <Value>(factory: BtwCustomFactory<Value>, options?: BtwCustomOptions) =>
-						this.showCustom(factory, options);
-				}
-				if (property === "notify") {
-					return (
-						message: string,
-						level?: Parameters<ExtensionCommandContext["ui"]["notify"]>[1],
-					) => {
-						target.notify(message, level);
-						const display = sanitizeSingleLine(message);
-						if (display) this.fullscreen?.flash?.(display);
-					};
-				}
-				const value = Reflect.get(target, property, target) as unknown;
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		});
-		return new Proxy(this.ctx, {
-			get: (target, property) => (property === "ui" ? ui : Reflect.get(target, property, target)),
-		});
-	}
+  private createContext(): ExtensionCommandContext {
+    const ui = new Proxy(this.ctx.ui, {
+      get: (target, property) => {
+        if (property === "custom") {
+          return <Value>(factory: BtwCustomFactory<Value>, options?: BtwCustomOptions) =>
+            this.showCustom(factory, options);
+        }
+        if (property === "notify") {
+          return (message: string, level?: Parameters<ExtensionCommandContext["ui"]["notify"]>[1]) => {
+            target.notify(message, level);
+            const display = sanitizeSingleLine(message);
+            if (display) this.fullscreen?.flash?.(display);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return new Proxy(this.ctx, {
+      get: (target, property) => (property === "ui" ? ui : Reflect.get(target, property, target)),
+    });
+  }
 
-	private showCustom<Value>(
-		factory: BtwCustomFactory<Value>,
-		options?: BtwCustomOptions,
-	): Promise<Value> {
-		const fullscreen = this.fullscreen;
-		if (!fullscreen || this.disposed || this.finished) {
-			return Promise.reject(new FullscreenUiDisposedError());
-		}
-		if (this.cancelActiveCustom) {
-			return Promise.reject(new Error("pi-btw attempted to open overlapping custom UI."));
-		}
+  private showCustom<Value>(factory: BtwCustomFactory<Value>, options?: BtwCustomOptions): Promise<Value> {
+    const fullscreen = this.fullscreen;
+    if (!fullscreen || this.disposed || this.finished) {
+      return Promise.reject(new FullscreenUiDisposedError());
+    }
+    if (this.cancelActiveCustom) {
+      return Promise.reject(new Error("pi-btw attempted to open overlapping custom UI."));
+    }
 
-		return new Promise<Value>((resolve, reject) => {
-			let component: (Component & { dispose?(): void }) | undefined;
-			let overlay: OverlayHandle | undefined;
-			let mounted = false;
-			let layoutMounted = false;
-			let factorySettled = false;
-			let closed = false;
-			let promiseSettled = false;
-			let componentDisposed = false;
-			let pendingValue: Value | undefined;
-			let hasPendingValue = false;
+    return new Promise<Value>((resolve, reject) => {
+      let component: (Component & { dispose?(): void }) | undefined;
+      let overlay: OverlayHandle | undefined;
+      let mounted = false;
+      let layoutMounted = false;
+      let factorySettled = false;
+      let closed = false;
+      let promiseSettled = false;
+      let componentDisposed = false;
+      let pendingValue: Value | undefined;
+      let hasPendingValue = false;
 
-			const disposeComponent = () => {
-				if (!component || componentDisposed) return;
-				componentDisposed = true;
-				try {
-					component.dispose?.();
-				} catch {
-					// Cleanup must continue so terminal ownership is restored.
-				}
-			};
-			const unmount = () => {
-				let cleanupError: unknown;
-				try {
-					if (overlay) overlay.hide();
-					else if (mounted && layoutMounted) fullscreen.setLayoutRoot(undefined);
-					else if (mounted && component) fullscreen.removeChild(component);
-				} catch (error) {
-					cleanupError = error;
-				}
-				if (overlay || mounted) {
-					try {
-						fullscreen.setFocus(null);
-						fullscreen.requestRender();
-					} catch (error) {
-						cleanupError ??= error;
-					}
-				}
-				disposeComponent();
-				if (cleanupError !== undefined) throw cleanupError;
-			};
-			const complete = () => {
-				if (promiseSettled || !hasPendingValue) return;
-				promiseSettled = true;
-				this.cancelActiveCustom = undefined;
-				this.hardCancelActiveCustom = undefined;
-				if (!factorySettled) {
-					resolve(pendingValue as Value);
-					return;
-				}
-				try {
-					unmount();
-					resolve(pendingValue as Value);
-				} catch (error) {
-					reject(error);
-				}
-			};
-			const close = (value: Value) => {
-				if (closed || promiseSettled) return;
-				closed = true;
-				pendingValue = value;
-				hasPendingValue = true;
-				complete();
-			};
-			const fail = (error: unknown) => {
-				if (promiseSettled) return;
-				closed = true;
-				promiseSettled = true;
-				this.cancelActiveCustom = undefined;
-				this.hardCancelActiveCustom = undefined;
-				try {
-					unmount();
-					reject(error);
-				} catch (cleanupError) {
-					reject(cleanupError);
-				}
-			};
-			this.cancelActiveCustom = () => {
-				if (promiseSettled) return;
-				disposeComponent();
-				if (!promiseSettled) fail(new FullscreenUiDisposedError());
-			};
-			this.hardCancelActiveCustom = () => {
-				if (promiseSettled) return;
-				try {
-					component?.handleInput?.("\u0003");
-				} catch (error) {
-					fail(error);
-					return;
-				}
-				this.cancelActiveCustom?.();
-			};
+      const disposeComponent = () => {
+        if (!component || componentDisposed) return;
+        componentDisposed = true;
+        try {
+          component.dispose?.();
+        } catch {
+          // Cleanup must continue so terminal ownership is restored.
+        }
+      };
+      const unmount = () => {
+        let cleanupError: unknown;
+        try {
+          if (overlay) overlay.hide();
+          else if (mounted && layoutMounted) fullscreen.setLayoutRoot(undefined);
+          else if (mounted && component) fullscreen.removeChild(component);
+        } catch (error) {
+          cleanupError = error;
+        }
+        if (overlay || mounted) {
+          try {
+            fullscreen.setFocus(null);
+            fullscreen.requestRender();
+          } catch (error) {
+            cleanupError ??= error;
+          }
+        }
+        disposeComponent();
+        if (cleanupError !== undefined) throw cleanupError;
+      };
+      const complete = () => {
+        if (promiseSettled || !hasPendingValue) return;
+        promiseSettled = true;
+        this.cancelActiveCustom = undefined;
+        this.hardCancelActiveCustom = undefined;
+        if (!factorySettled) {
+          resolve(pendingValue as Value);
+          return;
+        }
+        try {
+          unmount();
+          resolve(pendingValue as Value);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      const close = (value: Value) => {
+        if (closed || promiseSettled) return;
+        closed = true;
+        pendingValue = value;
+        hasPendingValue = true;
+        complete();
+      };
+      const fail = (error: unknown) => {
+        if (promiseSettled) return;
+        closed = true;
+        promiseSettled = true;
+        this.cancelActiveCustom = undefined;
+        this.hardCancelActiveCustom = undefined;
+        try {
+          unmount();
+          reject(error);
+        } catch (cleanupError) {
+          reject(cleanupError);
+        }
+      };
+      this.cancelActiveCustom = () => {
+        if (promiseSettled) return;
+        disposeComponent();
+        if (!promiseSettled) fail(new FullscreenUiDisposedError());
+      };
+      this.hardCancelActiveCustom = () => {
+        if (promiseSettled) return;
+        try {
+          component?.handleInput?.("\u0003");
+        } catch (error) {
+          fail(error);
+          return;
+        }
+        this.cancelActiveCustom?.();
+      };
 
-			let created: ReturnType<BtwCustomFactory<Value>>;
-			try {
-				created = factory(fullscreen, this.theme, this.keybindings, close);
-			} catch (error) {
-				factorySettled = true;
-				fail(error);
-				return;
-			}
-			Promise.resolve(created)
-				.then((value) => {
-					component = value;
-					factorySettled = true;
-					if (promiseSettled) {
-						disposeComponent();
-						return;
-					}
-					if (closed) {
-						complete();
-						return;
-					}
-					if (options?.overlay) {
-						const overlayOptions =
-							typeof options.overlayOptions === "function"
-								? options.overlayOptions()
-								: options.overlayOptions;
-						overlay = fullscreen.showOverlay(component, overlayOptions);
-						options.onHandle?.(overlay);
-					} else {
-						fullscreen.clear();
-						mounted = true;
-						if (isFullscreenLayoutComponent(component)) {
-							layoutMounted = true;
-							fullscreen.setLayoutRoot(component.getFullscreenLayout());
-						} else {
-							fullscreen.addChild(component);
-						}
-						fullscreen.setFocus(component);
-						fullscreen.requestRender();
-					}
-				})
-				.catch(fail);
-		});
-	}
+      let created: ReturnType<BtwCustomFactory<Value>>;
+      try {
+        created = factory(fullscreen, this.theme, this.keybindings, close);
+      } catch (error) {
+        factorySettled = true;
+        fail(error);
+        return;
+      }
+      Promise.resolve(created)
+        .then((value) => {
+          component = value;
+          factorySettled = true;
+          if (promiseSettled) {
+            disposeComponent();
+            return;
+          }
+          if (closed) {
+            complete();
+            return;
+          }
+          if (options?.overlay) {
+            const overlayOptions =
+              typeof options.overlayOptions === "function" ? options.overlayOptions() : options.overlayOptions;
+            overlay = fullscreen.showOverlay(component, overlayOptions);
+            options.onHandle?.(overlay);
+          } else {
+            fullscreen.clear();
+            mounted = true;
+            if (isFullscreenLayoutComponent(component)) {
+              layoutMounted = true;
+              fullscreen.setLayoutRoot(component.getFullscreenLayout());
+            } else {
+              fullscreen.addChild(component);
+            }
+            fullscreen.setFocus(component);
+            fullscreen.requestRender();
+          }
+        })
+        .catch(fail);
+    });
+  }
 }
 
-function isFullscreenLayoutComponent(
-	component: Component,
-): component is BtwFullscreenLayoutComponent {
-	return "getFullscreenLayout" in component && typeof component.getFullscreenLayout === "function";
+function isFullscreenLayoutComponent(component: Component): component is BtwFullscreenLayoutComponent {
+  return "getFullscreenLayout" in component && typeof component.getFullscreenLayout === "function";
 }

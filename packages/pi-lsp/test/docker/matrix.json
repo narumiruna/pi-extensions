@@ -1,711 +1,711 @@
 {
-	"schemaVersion": 1,
-	"nixpkgsRevision": "e2587caef70cea85dd97d7daab492899902dbf5d",
-	"piVersion": "0.82.0",
-	"repeats": 3,
-	"timeoutMs": 30000,
-	"profiles": [
-		{
-			"name": "biome",
-			"nixPackages": ["biome"],
-			"packageVersion": "2.5.4",
-			"command": ["biome", "lsp-proxy"],
-			"versionCommand": ["biome", "--version"],
-			"extensions": [
-				".astro",
-				".css",
-				".cts",
-				".cjs",
-				".graphql",
-				".gql",
-				".html",
-				".js",
-				".json",
-				".jsonc",
-				".jsx",
-				".mjs",
-				".mts",
-				".svelte",
-				".ts",
-				".tsx",
-				".vue"
-			],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "src/main.ts",
-					"expected": "expected|syntax",
-					"files": { "src/main.ts": "const value: number = ;\n" }
-				},
-				"clean": {
-					"path": "src/main.ts",
-					"files": { "src/main.ts": "const value: number = 1;\nconsole.log(value);\n" }
-				}
-			}
-		},
-		{
-			"name": "ty",
-			"nixPackages": ["ty"],
-			"packageVersion": "0.0.61",
-			"command": ["ty", "server"],
-			"versionCommand": ["ty", "--version"],
-			"extensions": [".py", ".pyi"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "main.py",
-					"expected": "assign|int|str",
-					"files": {
-						"pyproject.toml": "[project]\nname = \"pi-lsp-probe\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
-						"main.py": "value: int = \"wrong\"\n"
-					}
-				},
-				"clean": {
-					"path": "main.py",
-					"files": {
-						"pyproject.toml": "[project]\nname = \"pi-lsp-probe\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
-						"main.py": "value: int = 1\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "ruff",
-			"nixPackages": ["ruff"],
-			"packageVersion": "0.15.22",
-			"command": ["ruff", "server"],
-			"versionCommand": ["ruff", "--version"],
-			"extensions": [".py", ".pyi"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "main.py",
-					"expected": "F401|unused|imported",
-					"files": {
-						"pyproject.toml": "[tool.ruff.lint]\nselect = [\"F\"]\n",
-						"main.py": "import os\n\nprint('probe')\n"
-					}
-				},
-				"clean": {
-					"path": "main.py",
-					"files": {
-						"pyproject.toml": "[tool.ruff.lint]\nselect = [\"F\"]\n",
-						"main.py": "print('probe')\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "rust-analyzer",
-			"nixPackages": ["rust-analyzer", "cargo"],
-			"packageVersion": "2026-06-15",
-			"command": ["rust-analyzer"],
-			"versionCommand": ["rust-analyzer", "--version"],
-			"extensions": [".rs"],
-			"policy": { "pullDiagnosticsGraceMs": 5000 },
-			"cases": {
-				"error": {
-					"path": "src/main.rs",
-					"expected": "expected expression",
-					"files": {
-						"Cargo.toml": "[package]\nname = \"pi_lsp_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-						"src/main.rs": "fn main() { let value = ; }\n"
-					}
-				},
-				"clean": {
-					"path": "src/main.rs",
-					"files": {
-						"Cargo.toml": "[package]\nname = \"pi_lsp_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-						"src/main.rs": "fn main() { let value = 1; println!(\"{value}\"); }\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "gopls",
-			"nixPackages": ["gopls", "go"],
-			"packageVersion": "0.23.0",
-			"command": ["gopls"],
-			"versionCommand": ["gopls", "version"],
-			"extensions": [".go"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "main.go",
-					"expected": "cannot use|string.*int",
-					"files": {
-						"go.mod": "module example.com/pi-lsp-probe\n\ngo 1.23\n",
-						"main.go": "package main\nfunc main() { var value int = \"wrong\"; _ = value }\n"
-					}
-				},
-				"clean": {
-					"path": "main.go",
-					"files": {
-						"go.mod": "module example.com/pi-lsp-probe\n\ngo 1.23\n",
-						"main.go": "package main\nfunc main() { var value int = 1; _ = value }\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "rubocop",
-			"nixPackages": ["rubyPackages.rubocop"],
-			"packageVersion": "1.80.2",
-			"command": ["rubocop", "--lsp"],
-			"versionCommand": ["rubocop", "--version"],
-			"extensions": [".rb", ".rake", ".gemspec", ".ru"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "main.rb",
-					"expected": "Layout|space|operator",
-					"files": {
-						".rubocop.yml": "AllCops:\n  NewCops: enable\nStyle/FrozenStringLiteralComment:\n  Enabled: false\n",
-						"main.rb": "value=1\nputs value\n"
-					}
-				},
-				"clean": {
-					"path": "main.rb",
-					"files": {
-						".rubocop.yml": "AllCops:\n  NewCops: enable\nStyle/FrozenStringLiteralComment:\n  Enabled: false\n",
-						"main.rb": "value = 1\nputs value\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "elixir-ls",
-			"nixPackages": ["beamPackages.elixir", "unzip", "gnused"],
-			"packageVersion": "0.31.1",
-			"setupCommand": "curl -fsSL https://github.com/elixir-lsp/elixir-ls/releases/download/v0.31.1/elixir-ls-v0.31.1.zip -o /tmp/elixir-ls.zip\necho 'bac08322ea3698157eb2373bb5b65e38c15df9dd41e1c06f142f874367fa472f  /tmp/elixir-ls.zip' | sha256sum -c -\nmkdir -p /opt/elixir-ls\nunzip -q /tmp/elixir-ls.zip -d /opt/elixir-ls\nln -s /opt/elixir-ls/language_server.sh /root/.nix-profile/bin/language_server.sh\nmkdir -p /etc/ssl/certs\ncert=$(find /nix/store -path '*nss-cacert*/etc/ssl/certs/ca-bundle.crt' | head -n 1)\ntest -n \"$cert\"\nln -s \"$cert\" /etc/ssl/certs/ca-certificates.crt\ncd /tmp\necho '' | elixir /opt/elixir-ls/quiet_install.exs >/dev/null\nrm /tmp/elixir-ls.zip\n",
-			"command": ["language_server.sh"],
-			"env": {
-				"SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
-				"ELIXIR_ERL_OPTIONS": "+fnu"
-			},
-			"extensions": [".ex", ".exs"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "lib/probe.ex",
-					"expected": "syntax|missing|unexpected",
-					"files": {
-						"mix.exs": "defmodule Probe.MixProject do\n  use Mix.Project\n  def project, do: [app: :probe, version: \"0.1.0\", elixir: \"~> 1.15\"]\nend\n",
-						"lib/probe.ex": "defmodule Probe do\n  def broken( do\nend\n"
-					}
-				},
-				"clean": {
-					"path": "lib/probe.ex",
-					"files": {
-						"mix.exs": "defmodule Probe.MixProject do\n  use Mix.Project\n  def project, do: [app: :probe, version: \"0.1.0\", elixir: \"~> 1.15\"]\nend\n",
-						"lib/probe.ex": "defmodule Probe do\n  def value, do: 1\nend\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "zls",
-			"nixPackages": ["zls", "zig"],
-			"packageVersion": "0.16.0",
-			"command": ["zls"],
-			"versionCommand": ["zls", "--version"],
-			"extensions": [".zig", ".zon"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "src/main.zig",
-					"expected": "expected|type|u8",
-					"files": {
-						"build.zig": "const std = @import(\"std\");\npub fn build(b: *std.Build) void { _ = b; }\n",
-						"src/main.zig": "pub fn main() void { const value = ; _ = value; }\n"
-					}
-				},
-				"clean": {
-					"path": "src/main.zig",
-					"files": {
-						"build.zig": "const std = @import(\"std\");\npub fn build(b: *std.Build) void { _ = b; }\n",
-						"src/main.zig": "pub fn main() void { const value: u8 = 1; _ = value; }\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "csharp",
-			"nixPackages": ["roslyn-ls", "dotnet-sdk_10"],
-			"packageVersion": "5.9.0-1.26319.6",
-			"setupCommand": "ln -s \"$(command -v Microsoft.CodeAnalysis.LanguageServer)\" /root/.nix-profile/bin/roslyn-language-server\n",
-			"command": ["roslyn-language-server", "--stdio", "--autoLoadProjects"],
-			"extensions": [".cs", ".csx"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "Program.cs",
-					"expected": "expression|CS1525|expected",
-					"files": {
-						"Probe.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>\n",
-						"Program.cs": "int value = ;\n_ = value;\n"
-					}
-				},
-				"clean": {
-					"path": "Program.cs",
-					"files": {
-						"Probe.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>\n",
-						"Program.cs": "int value = 1;\n_ = value;\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "fsharp",
-			"nixPackages": ["fsautocomplete", "dotnet-sdk_10"],
-			"packageVersion": "0.83.0",
-			"command": ["fsautocomplete"],
-			"versionCommand": ["fsautocomplete", "--version"],
-			"extensions": [".fs", ".fsi", ".fsx", ".fsscript"],
-			"initialization": { "AutomaticWorkspaceInit": true },
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "Program.fs",
-					"expected": "string.*int|type.*int|expected",
-					"files": {
-						"Probe.fsproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Program.fs\" /></ItemGroup></Project>\n",
-						"Program.fs": "let value: int = \"wrong\"\nprintfn \"%d\" value\n"
-					}
-				},
-				"clean": {
-					"path": "Program.fs",
-					"files": {
-						"Probe.fsproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Program.fs\" /></ItemGroup></Project>\n",
-						"Program.fs": "let value: int = 1\nprintfn \"%d\" value\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "sourcekit-lsp",
-			"nixPackages": [],
-			"dockerfile": "Dockerfile.swift",
-			"packageVersion": "6.1.3",
-			"command": ["sourcekit-lsp"],
-			"extensions": [".swift", ".mm"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "Sources/Probe/main.swift",
-					"expected": "convert|string.*int|cannot",
-					"files": {
-						"Package.swift": "// swift-tools-version: 5.10\nimport PackageDescription\nlet package = Package(name: \"Probe\", targets: [.executableTarget(name: \"Probe\")])\n",
-						"Sources/Probe/main.swift": "let value: Int = \"wrong\"\nprint(value)\n"
-					}
-				},
-				"clean": {
-					"path": "Sources/Probe/main.swift",
-					"files": {
-						"Package.swift": "// swift-tools-version: 5.10\nimport PackageDescription\nlet package = Package(name: \"Probe\", targets: [.executableTarget(name: \"Probe\")])\n",
-						"Sources/Probe/main.swift": "let value: Int = 1\nprint(value)\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "clangd",
-			"nixPackages": ["clang-tools"],
-			"packageVersion": "21.1.8",
-			"command": ["clangd", "--background-index", "--clang-tidy"],
-			"versionCommand": ["clangd", "--version"],
-			"extensions": [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "main.cpp",
-					"expected": "cannot initialize|incompatible|const char",
-					"files": {
-						"compile_flags.txt": "-std=c++20\n",
-						"main.cpp": "int main() { int value = \"wrong\"; return value; }\n"
-					}
-				},
-				"clean": {
-					"path": "main.cpp",
-					"files": {
-						"compile_flags.txt": "-std=c++20\n",
-						"main.cpp": "int main() { int value = 1; return value; }\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "jdtls",
-			"nixPackages": ["jdt-language-server", "jdk21"],
-			"packageVersion": "1.60.0",
-			"command": ["jdtls"],
-			"extensions": [".java"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "src/Main.java",
-					"expected": "type mismatch|convert|string.*int",
-					"files": {
-						".project": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><projectDescription><name>Probe</name><projects/><buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec><natures><nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>\n",
-						".classpath": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><classpath><classpathentry kind=\"src\" path=\"src\"/><classpathentry kind=\"con\" path=\"org.eclipse.jdt.launching.JRE_CONTAINER\"/><classpathentry kind=\"output\" path=\"bin\"/></classpath>\n",
-						"src/Main.java": "class Main { public static void main(String[] args) { int value = \"wrong\"; } }\n"
-					}
-				},
-				"clean": {
-					"path": "src/Main.java",
-					"files": {
-						".project": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><projectDescription><name>Probe</name><projects/><buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec><natures><nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>\n",
-						".classpath": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><classpath><classpathentry kind=\"src\" path=\"src\"/><classpathentry kind=\"con\" path=\"org.eclipse.jdt.launching.JRE_CONTAINER\"/><classpathentry kind=\"output\" path=\"bin\"/></classpath>\n",
-						"src/Main.java": "class Main { public static void main(String[] args) { int value = 1; System.out.println(value); } }\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "kotlin-lsp",
-			"nixPackages": ["gradle"],
-			"packageVersion": "262.8190.0",
-			"setupCommand": "cd /tmp\ncurl -fsSLO https://download-cdn.jetbrains.com/language-server/kotlin-server/262.8190.0/kotlin-server-262.8190.0.tar.gz\ncurl -fsSLO https://download-cdn.jetbrains.com/language-server/kotlin-server/262.8190.0/kotlin-server-262.8190.0.tar.gz.sha256\nsha256sum -c kotlin-server-262.8190.0.tar.gz.sha256\nmkdir -p /opt/kotlin-lsp\ntar -xzf kotlin-server-262.8190.0.tar.gz -C /opt/kotlin-lsp\nscript=$(find /opt/kotlin-lsp -type f -name kotlin-lsp.sh | head -n 1)\ntest -n \"$script\"\nchmod +x \"$script\"\ncat > /root/.nix-profile/bin/kotlin-lsp <<'EOF'\n#!/usr/bin/env bash\nroot=/opt/kotlin-lsp/kotlin-server-262.8190.0\nzlib=$(dirname \"$(find /nix/store -name libz.so.1 | head -n 1)\")\nstdlib=$(dirname \"$(find /nix/store -name libstdc++.so.6 | head -n 1)\")\nexport LD_LIBRARY_PATH=\"$root/jbr/lib/server:$root/jbr/lib:$zlib:$stdlib\"\nexec \"$root/kotlin-lsp.sh\" \"$@\"\nEOF\nchmod +x /root/.nix-profile/bin/kotlin-lsp\nmkdir -p /lib64\nloader=$(find /nix/store -path '*glibc-*/lib/ld-linux-x86-64.so.2' | head -n 1)\ntest -n \"$loader\"\nln -s \"$loader\" /lib64/ld-linux-x86-64.so.2\nrm kotlin-server-262.8190.0.tar.gz kotlin-server-262.8190.0.tar.gz.sha256\n",
-			"command": ["kotlin-lsp", "--stdio"],
-			"versionCommand": ["kotlin-lsp", "--version"],
-			"extensions": [".kt", ".kts"],
-			"policy": {},
-			"timeoutMs": 60000,
-			"cases": {
-				"error": {
-					"path": "src/main/kotlin/Main.kt",
-					"expected": "type mismatch|string.*int|initializer",
-					"files": {
-						"settings.gradle.kts": "rootProject.name = \"probe\"\n",
-						"build.gradle.kts": "plugins { kotlin(\"jvm\") version \"2.2.0\" }\nrepositories { mavenCentral() }\n",
-						"src/main/kotlin/Main.kt": "fun main() { val value: Int = \"wrong\"; println(value) }\n"
-					}
-				},
-				"clean": {
-					"path": "src/main/kotlin/Main.kt",
-					"files": {
-						"settings.gradle.kts": "rootProject.name = \"probe\"\n",
-						"build.gradle.kts": "plugins { kotlin(\"jvm\") version \"2.2.0\" }\nrepositories { mavenCentral() }\n",
-						"src/main/kotlin/Main.kt": "fun main() { val value = 1; println(value) }\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "yaml-language-server",
-			"nixPackages": ["yaml-language-server"],
-			"packageVersion": "1.24.0",
-			"command": ["yaml-language-server", "--stdio"],
-			"versionCommand": ["yaml-language-server", "--version"],
-			"extensions": [".yaml", ".yml"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "config.yaml",
-					"expected": "flow sequence|expected|syntax",
-					"files": { "config.yaml": "items: [one, two\n" }
-				},
-				"clean": { "path": "config.yaml", "files": { "config.yaml": "items: [one, two]\n" } }
-			}
-		},
-		{
-			"name": "lua-language-server",
-			"nixPackages": ["lua-language-server"],
-			"packageVersion": "3.18.2",
-			"command": ["lua-language-server"],
-			"versionCommand": ["lua-language-server", "--version"],
-			"extensions": [".lua"],
-			"policy": { "pushDiagnosticsGraceMs": 3000 },
-			"cases": {
-				"error": {
-					"path": "main.lua",
-					"expected": "expression|expected|syntax",
-					"files": { "main.lua": "local value = )\nprint(value)\n" }
-				},
-				"clean": { "path": "main.lua", "files": { "main.lua": "local value = 1\nprint(value)\n" } }
-			}
-		},
-		{
-			"name": "intelephense",
-			"nixPackages": [],
-			"packageVersion": "1.18.2",
-			"setupCommand": "npm install --global intelephense@1.18.2\nln -s \"$(npm prefix --global)/bin/intelephense\" /root/.nix-profile/bin/intelephense\n",
-			"command": ["intelephense", "--stdio"],
-			"extensions": [".php"],
-			"initialization": { "intelephense": { "telemetry": { "enabled": false } } },
-			"policy": { "diagnosticsSettleMs": 4000 },
-			"cases": {
-				"error": {
-					"path": "index.php",
-					"expected": "syntax|unexpected|expected",
-					"files": { "index.php": "<?php\nfunction probe( {\n" }
-				},
-				"clean": {
-					"path": "index.php",
-					"files": { "index.php": "<?php\nfunction probe(): int { return 1; }\n" }
-				}
-			}
-		},
-		{
-			"name": "prisma",
-			"nixPackages": ["prisma-language-server"],
-			"packageVersion": "31.1.0",
-			"command": ["prisma-language-server", "--stdio"],
-			"extensions": [".prisma"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "schema.prisma",
-					"expected": "type|invalid|unknown",
-					"files": {
-						"schema.prisma": "datasource db {\n  provider = \"sqlite\"\n}\nmodel User {\n  id NotAType @id\n}\n"
-					}
-				},
-				"clean": {
-					"path": "schema.prisma",
-					"files": {
-						"schema.prisma": "datasource db {\n  provider = \"sqlite\"\n}\nmodel User {\n  id Int @id\n}\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "dart",
-			"nixPackages": ["dart"],
-			"packageVersion": "3.11.4",
-			"command": ["dart", "language-server"],
-			"versionCommand": ["dart", "--version"],
-			"extensions": [".dart"],
-			"policy": { "pushDiagnosticsGraceMs": 2000 },
-			"cases": {
-				"error": {
-					"path": "lib/main.dart",
-					"expected": "string.*int|assign|invalid_assignment",
-					"files": {
-						"pubspec.yaml": "name: pi_lsp_probe\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
-						"lib/main.dart": "void main() { int value = 'wrong'; print(value); }\n"
-					}
-				},
-				"clean": {
-					"path": "lib/main.dart",
-					"files": {
-						"pubspec.yaml": "name: pi_lsp_probe\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
-						"lib/main.dart": "void main() { int value = 1; print(value); }\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "ocaml-lsp",
-			"nixPackages": ["binutils", "ocaml", "ocamlPackages.ocaml-lsp", "ocamlPackages.dune_3"],
-			"packageVersion": "1.26.0",
-			"command": ["ocamllsp"],
-			"versionCommand": ["ocamllsp", "--version"],
-			"prepareCommand": ["bash", "-lc", "dune build || test -d _build"],
-			"extensions": [".ml", ".mli"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "main.ml",
-					"expected": "string.*int|type.*int|expression",
-					"files": {
-						"dune-project": "(lang dune 3.0)\n(name probe)\n",
-						"dune": "(executable (name main))\n",
-						"main.ml": "let value : int = \"wrong\"\nlet () = print_int value\n"
-					}
-				},
-				"clean": {
-					"path": "main.ml",
-					"files": {
-						"dune-project": "(lang dune 3.0)\n(name probe)\n",
-						"dune": "(executable (name main))\n",
-						"main.ml": "let value : int = 1\nlet () = print_int value\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "bash-language-server",
-			"nixPackages": ["bash-language-server"],
-			"packageVersion": "5.6.0",
-			"command": ["bash-language-server", "start"],
-			"versionCommand": ["bash-language-server", "--version"],
-			"extensions": [".sh", ".bash"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "script.sh",
-					"expected": "syntax|unexpected|expected|end of file",
-					"files": { "script.sh": "#!/usr/bin/env bash\nif true; then\n  echo probe\n" }
-				},
-				"clean": {
-					"path": "script.sh",
-					"files": { "script.sh": "#!/usr/bin/env bash\nif true; then\n  echo probe\nfi\n" }
-				}
-			}
-		},
-		{
-			"name": "terraform-ls",
-			"nixPackages": ["terraform-ls"],
-			"packageVersion": "0.38.7",
-			"command": ["terraform-ls", "serve"],
-			"versionCommand": ["terraform-ls", "version"],
-			"extensions": [".tf", ".tfvars"],
-			"initialization": {
-				"experimentalFeatures": { "prefillRequiredFields": true }
-			},
-			"policy": { "pushDiagnosticsGraceMs": 2000 },
-			"cases": {
-				"error": {
-					"path": "main.tf",
-					"expected": "expression|expected|argument",
-					"files": { "main.tf": "terraform {\n  required_version =\n}\n" }
-				},
-				"clean": {
-					"path": "main.tf",
-					"files": { "main.tf": "terraform {\n  required_version = \">= 1.0\"\n}\n" }
-				}
-			}
-		},
-		{
-			"name": "texlab",
-			"nixPackages": ["texlab"],
-			"packageVersion": "5.26.0",
-			"command": ["texlab"],
-			"versionCommand": ["texlab", "--version"],
-			"extensions": [".tex", ".bib"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "main.tex",
-					"expected": "mismatched|unexpected|environment|missing",
-					"files": {
-						"main.tex": "\\documentclass{article}\n\\begin{document}\n\\begin{itemize}\n\\end{document}\n"
-					}
-				},
-				"clean": {
-					"path": "main.tex",
-					"files": {
-						"main.tex": "\\documentclass{article}\n\\begin{document}\nProbe\n\\end{document}\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "gleam",
-			"nixPackages": ["gleam"],
-			"packageVersion": "1.17.0",
-			"command": ["gleam", "lsp"],
-			"versionCommand": ["gleam", "--version"],
-			"extensions": [".gleam"],
-			"policy": { "pushDiagnosticsGraceMs": 2000 },
-			"cases": {
-				"error": {
-					"path": "src/probe.gleam",
-					"expected": "type|expected|Int|String",
-					"files": {
-						"gleam.toml": "name = \"probe\"\nversion = \"0.1.0\"\ntarget = \"erlang\"\n",
-						"src/probe.gleam": "pub fn value() -> Int {\n  \"wrong\"\n}\n"
-					}
-				},
-				"clean": {
-					"path": "src/probe.gleam",
-					"files": {
-						"gleam.toml": "name = \"probe\"\nversion = \"0.1.0\"\ntarget = \"erlang\"\n",
-						"src/probe.gleam": "pub fn value() -> Int {\n  1\n}\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "clojure-lsp",
-			"nixPackages": ["clojure-lsp", "jdk21"],
-			"packageVersion": "2026.02.20-16.08.58",
-			"command": ["clojure-lsp", "listen"],
-			"versionCommand": ["clojure-lsp", "--version"],
-			"extensions": [".clj", ".cljs", ".cljc", ".edn"],
-			"policy": {},
-			"timeoutMs": 60000,
-			"cases": {
-				"error": {
-					"path": "src/probe/core.clj",
-					"expected": "unmatched|EOF|delimiter|syntax",
-					"files": {
-						"deps.edn": "{:paths [\"src\"]}\n",
-						"src/probe/core.clj": "(ns probe.core)\n(defn value []\n  (+ 1 2)\n"
-					}
-				},
-				"clean": {
-					"path": "src/probe/core.clj",
-					"files": {
-						"deps.edn": "{:paths [\"src\"]}\n",
-						"src/probe/core.clj": "(ns probe.core)\n(defn value []\n  (+ 1 2))\n(value)\n"
-					}
-				}
-			}
-		},
-		{
-			"name": "nixd",
-			"nixPackages": ["nixd"],
-			"packageVersion": "2.9.1",
-			"command": ["nixd"],
-			"versionCommand": ["nixd", "--version"],
-			"extensions": [".nix"],
-			"policy": {},
-			"cases": {
-				"error": {
-					"path": "default.nix",
-					"expected": "unexpected|expected|syntax",
-					"files": { "default.nix": "{ broken = ; }\n" }
-				},
-				"clean": { "path": "default.nix", "files": { "default.nix": "{ value = 1; }\n" } }
-			}
-		},
-		{
-			"name": "tinymist",
-			"nixPackages": ["tinymist"],
-			"packageVersion": "0.15.2",
-			"command": ["tinymist"],
-			"versionCommand": ["tinymist", "--version"],
-			"extensions": [".typ", ".typc"],
-			"policy": { "pushDiagnosticsGraceMs": 2000 },
-			"cases": {
-				"error": {
-					"path": "main.typ",
-					"expected": "expected|syntax|expression",
-					"files": { "main.typ": "#let value =\n#value\n" }
-				},
-				"clean": { "path": "main.typ", "files": { "main.typ": "#let value = 1\n#value\n" } }
-			}
-		},
-		{
-			"name": "haskell-language-server",
-			"nixPackages": ["haskell-language-server", "ghc", "cabal-install"],
-			"packageVersion": "2.13.0.0",
-			"command": ["haskell-language-server-wrapper", "--lsp"],
-			"versionCommand": ["haskell-language-server-wrapper", "--version"],
-			"extensions": [".hs", ".lhs"],
-			"policy": { "pushDiagnosticsGraceMs": 3000 },
-			"timeoutMs": 60000,
-			"cases": {
-				"error": {
-					"path": "Main.hs",
-					"expected": "string.*int|type|Couldn't match",
-					"files": {
-						"cabal.project": "packages: .\n",
-						"probe.cabal": "cabal-version: 2.4\nname: probe\nversion: 0.1.0.0\nexecutable probe\n  main-is: Main.hs\n  build-depends: base >=4.14 && <5\n  default-language: Haskell2010\n",
-						"Main.hs": "module Main where\nvalue :: Int\nvalue = \"wrong\"\nmain :: IO ()\nmain = print value\n"
-					}
-				},
-				"clean": {
-					"path": "Main.hs",
-					"files": {
-						"cabal.project": "packages: .\n",
-						"probe.cabal": "cabal-version: 2.4\nname: probe\nversion: 0.1.0.0\nexecutable probe\n  main-is: Main.hs\n  build-depends: base >=4.14 && <5\n  default-language: Haskell2010\n",
-						"Main.hs": "module Main where\nvalue :: Int\nvalue = 1\nmain :: IO ()\nmain = print value\n"
-					}
-				}
-			}
-		}
-	]
+  "schemaVersion": 1,
+  "nixpkgsRevision": "e2587caef70cea85dd97d7daab492899902dbf5d",
+  "piVersion": "0.82.0",
+  "repeats": 3,
+  "timeoutMs": 30000,
+  "profiles": [
+    {
+      "name": "biome",
+      "nixPackages": ["biome"],
+      "packageVersion": "2.5.4",
+      "command": ["biome", "lsp-proxy"],
+      "versionCommand": ["biome", "--version"],
+      "extensions": [
+        ".astro",
+        ".css",
+        ".cts",
+        ".cjs",
+        ".graphql",
+        ".gql",
+        ".html",
+        ".js",
+        ".json",
+        ".jsonc",
+        ".jsx",
+        ".mjs",
+        ".mts",
+        ".svelte",
+        ".ts",
+        ".tsx",
+        ".vue"
+      ],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "src/main.ts",
+          "expected": "expected|syntax",
+          "files": { "src/main.ts": "const value: number = ;\n" }
+        },
+        "clean": {
+          "path": "src/main.ts",
+          "files": { "src/main.ts": "const value: number = 1;\nconsole.log(value);\n" }
+        }
+      }
+    },
+    {
+      "name": "ty",
+      "nixPackages": ["ty"],
+      "packageVersion": "0.0.61",
+      "command": ["ty", "server"],
+      "versionCommand": ["ty", "--version"],
+      "extensions": [".py", ".pyi"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "main.py",
+          "expected": "assign|int|str",
+          "files": {
+            "pyproject.toml": "[project]\nname = \"pi-lsp-probe\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
+            "main.py": "value: int = \"wrong\"\n"
+          }
+        },
+        "clean": {
+          "path": "main.py",
+          "files": {
+            "pyproject.toml": "[project]\nname = \"pi-lsp-probe\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
+            "main.py": "value: int = 1\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "ruff",
+      "nixPackages": ["ruff"],
+      "packageVersion": "0.15.22",
+      "command": ["ruff", "server"],
+      "versionCommand": ["ruff", "--version"],
+      "extensions": [".py", ".pyi"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "main.py",
+          "expected": "F401|unused|imported",
+          "files": {
+            "pyproject.toml": "[tool.ruff.lint]\nselect = [\"F\"]\n",
+            "main.py": "import os\n\nprint('probe')\n"
+          }
+        },
+        "clean": {
+          "path": "main.py",
+          "files": {
+            "pyproject.toml": "[tool.ruff.lint]\nselect = [\"F\"]\n",
+            "main.py": "print('probe')\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "rust-analyzer",
+      "nixPackages": ["rust-analyzer", "cargo"],
+      "packageVersion": "2026-06-15",
+      "command": ["rust-analyzer"],
+      "versionCommand": ["rust-analyzer", "--version"],
+      "extensions": [".rs"],
+      "policy": { "pullDiagnosticsGraceMs": 5000 },
+      "cases": {
+        "error": {
+          "path": "src/main.rs",
+          "expected": "expected expression",
+          "files": {
+            "Cargo.toml": "[package]\nname = \"pi_lsp_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            "src/main.rs": "fn main() { let value = ; }\n"
+          }
+        },
+        "clean": {
+          "path": "src/main.rs",
+          "files": {
+            "Cargo.toml": "[package]\nname = \"pi_lsp_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            "src/main.rs": "fn main() { let value = 1; println!(\"{value}\"); }\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "gopls",
+      "nixPackages": ["gopls", "go"],
+      "packageVersion": "0.23.0",
+      "command": ["gopls"],
+      "versionCommand": ["gopls", "version"],
+      "extensions": [".go"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "main.go",
+          "expected": "cannot use|string.*int",
+          "files": {
+            "go.mod": "module example.com/pi-lsp-probe\n\ngo 1.23\n",
+            "main.go": "package main\nfunc main() { var value int = \"wrong\"; _ = value }\n"
+          }
+        },
+        "clean": {
+          "path": "main.go",
+          "files": {
+            "go.mod": "module example.com/pi-lsp-probe\n\ngo 1.23\n",
+            "main.go": "package main\nfunc main() { var value int = 1; _ = value }\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "rubocop",
+      "nixPackages": ["rubyPackages.rubocop"],
+      "packageVersion": "1.80.2",
+      "command": ["rubocop", "--lsp"],
+      "versionCommand": ["rubocop", "--version"],
+      "extensions": [".rb", ".rake", ".gemspec", ".ru"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "main.rb",
+          "expected": "Layout|space|operator",
+          "files": {
+            ".rubocop.yml": "AllCops:\n  NewCops: enable\nStyle/FrozenStringLiteralComment:\n  Enabled: false\n",
+            "main.rb": "value=1\nputs value\n"
+          }
+        },
+        "clean": {
+          "path": "main.rb",
+          "files": {
+            ".rubocop.yml": "AllCops:\n  NewCops: enable\nStyle/FrozenStringLiteralComment:\n  Enabled: false\n",
+            "main.rb": "value = 1\nputs value\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "elixir-ls",
+      "nixPackages": ["beamPackages.elixir", "unzip", "gnused"],
+      "packageVersion": "0.31.1",
+      "setupCommand": "curl -fsSL https://github.com/elixir-lsp/elixir-ls/releases/download/v0.31.1/elixir-ls-v0.31.1.zip -o /tmp/elixir-ls.zip\necho 'bac08322ea3698157eb2373bb5b65e38c15df9dd41e1c06f142f874367fa472f  /tmp/elixir-ls.zip' | sha256sum -c -\nmkdir -p /opt/elixir-ls\nunzip -q /tmp/elixir-ls.zip -d /opt/elixir-ls\nln -s /opt/elixir-ls/language_server.sh /root/.nix-profile/bin/language_server.sh\nmkdir -p /etc/ssl/certs\ncert=$(find /nix/store -path '*nss-cacert*/etc/ssl/certs/ca-bundle.crt' | head -n 1)\ntest -n \"$cert\"\nln -s \"$cert\" /etc/ssl/certs/ca-certificates.crt\ncd /tmp\necho '' | elixir /opt/elixir-ls/quiet_install.exs >/dev/null\nrm /tmp/elixir-ls.zip\n",
+      "command": ["language_server.sh"],
+      "env": {
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+        "ELIXIR_ERL_OPTIONS": "+fnu"
+      },
+      "extensions": [".ex", ".exs"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "lib/probe.ex",
+          "expected": "syntax|missing|unexpected",
+          "files": {
+            "mix.exs": "defmodule Probe.MixProject do\n  use Mix.Project\n  def project, do: [app: :probe, version: \"0.1.0\", elixir: \"~> 1.15\"]\nend\n",
+            "lib/probe.ex": "defmodule Probe do\n  def broken( do\nend\n"
+          }
+        },
+        "clean": {
+          "path": "lib/probe.ex",
+          "files": {
+            "mix.exs": "defmodule Probe.MixProject do\n  use Mix.Project\n  def project, do: [app: :probe, version: \"0.1.0\", elixir: \"~> 1.15\"]\nend\n",
+            "lib/probe.ex": "defmodule Probe do\n  def value, do: 1\nend\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "zls",
+      "nixPackages": ["zls", "zig"],
+      "packageVersion": "0.16.0",
+      "command": ["zls"],
+      "versionCommand": ["zls", "--version"],
+      "extensions": [".zig", ".zon"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "src/main.zig",
+          "expected": "expected|type|u8",
+          "files": {
+            "build.zig": "const std = @import(\"std\");\npub fn build(b: *std.Build) void { _ = b; }\n",
+            "src/main.zig": "pub fn main() void { const value = ; _ = value; }\n"
+          }
+        },
+        "clean": {
+          "path": "src/main.zig",
+          "files": {
+            "build.zig": "const std = @import(\"std\");\npub fn build(b: *std.Build) void { _ = b; }\n",
+            "src/main.zig": "pub fn main() void { const value: u8 = 1; _ = value; }\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "csharp",
+      "nixPackages": ["roslyn-ls", "dotnet-sdk_10"],
+      "packageVersion": "5.9.0-1.26319.6",
+      "setupCommand": "ln -s \"$(command -v Microsoft.CodeAnalysis.LanguageServer)\" /root/.nix-profile/bin/roslyn-language-server\n",
+      "command": ["roslyn-language-server", "--stdio", "--autoLoadProjects"],
+      "extensions": [".cs", ".csx"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "Program.cs",
+          "expected": "expression|CS1525|expected",
+          "files": {
+            "Probe.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>\n",
+            "Program.cs": "int value = ;\n_ = value;\n"
+          }
+        },
+        "clean": {
+          "path": "Program.cs",
+          "files": {
+            "Probe.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>\n",
+            "Program.cs": "int value = 1;\n_ = value;\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "fsharp",
+      "nixPackages": ["fsautocomplete", "dotnet-sdk_10"],
+      "packageVersion": "0.83.0",
+      "command": ["fsautocomplete"],
+      "versionCommand": ["fsautocomplete", "--version"],
+      "extensions": [".fs", ".fsi", ".fsx", ".fsscript"],
+      "initialization": { "AutomaticWorkspaceInit": true },
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "Program.fs",
+          "expected": "string.*int|type.*int|expected",
+          "files": {
+            "Probe.fsproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Program.fs\" /></ItemGroup></Project>\n",
+            "Program.fs": "let value: int = \"wrong\"\nprintfn \"%d\" value\n"
+          }
+        },
+        "clean": {
+          "path": "Program.fs",
+          "files": {
+            "Probe.fsproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Program.fs\" /></ItemGroup></Project>\n",
+            "Program.fs": "let value: int = 1\nprintfn \"%d\" value\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "sourcekit-lsp",
+      "nixPackages": [],
+      "dockerfile": "Dockerfile.swift",
+      "packageVersion": "6.1.3",
+      "command": ["sourcekit-lsp"],
+      "extensions": [".swift", ".mm"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "Sources/Probe/main.swift",
+          "expected": "convert|string.*int|cannot",
+          "files": {
+            "Package.swift": "// swift-tools-version: 5.10\nimport PackageDescription\nlet package = Package(name: \"Probe\", targets: [.executableTarget(name: \"Probe\")])\n",
+            "Sources/Probe/main.swift": "let value: Int = \"wrong\"\nprint(value)\n"
+          }
+        },
+        "clean": {
+          "path": "Sources/Probe/main.swift",
+          "files": {
+            "Package.swift": "// swift-tools-version: 5.10\nimport PackageDescription\nlet package = Package(name: \"Probe\", targets: [.executableTarget(name: \"Probe\")])\n",
+            "Sources/Probe/main.swift": "let value: Int = 1\nprint(value)\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "clangd",
+      "nixPackages": ["clang-tools"],
+      "packageVersion": "21.1.8",
+      "command": ["clangd", "--background-index", "--clang-tidy"],
+      "versionCommand": ["clangd", "--version"],
+      "extensions": [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "main.cpp",
+          "expected": "cannot initialize|incompatible|const char",
+          "files": {
+            "compile_flags.txt": "-std=c++20\n",
+            "main.cpp": "int main() { int value = \"wrong\"; return value; }\n"
+          }
+        },
+        "clean": {
+          "path": "main.cpp",
+          "files": {
+            "compile_flags.txt": "-std=c++20\n",
+            "main.cpp": "int main() { int value = 1; return value; }\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "jdtls",
+      "nixPackages": ["jdt-language-server", "jdk21"],
+      "packageVersion": "1.60.0",
+      "command": ["jdtls"],
+      "extensions": [".java"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "src/Main.java",
+          "expected": "type mismatch|convert|string.*int",
+          "files": {
+            ".project": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><projectDescription><name>Probe</name><projects/><buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec><natures><nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>\n",
+            ".classpath": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><classpath><classpathentry kind=\"src\" path=\"src\"/><classpathentry kind=\"con\" path=\"org.eclipse.jdt.launching.JRE_CONTAINER\"/><classpathentry kind=\"output\" path=\"bin\"/></classpath>\n",
+            "src/Main.java": "class Main { public static void main(String[] args) { int value = \"wrong\"; } }\n"
+          }
+        },
+        "clean": {
+          "path": "src/Main.java",
+          "files": {
+            ".project": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><projectDescription><name>Probe</name><projects/><buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec><natures><nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>\n",
+            ".classpath": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><classpath><classpathentry kind=\"src\" path=\"src\"/><classpathentry kind=\"con\" path=\"org.eclipse.jdt.launching.JRE_CONTAINER\"/><classpathentry kind=\"output\" path=\"bin\"/></classpath>\n",
+            "src/Main.java": "class Main { public static void main(String[] args) { int value = 1; System.out.println(value); } }\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "kotlin-lsp",
+      "nixPackages": ["gradle"],
+      "packageVersion": "262.8190.0",
+      "setupCommand": "cd /tmp\ncurl -fsSLO https://download-cdn.jetbrains.com/language-server/kotlin-server/262.8190.0/kotlin-server-262.8190.0.tar.gz\ncurl -fsSLO https://download-cdn.jetbrains.com/language-server/kotlin-server/262.8190.0/kotlin-server-262.8190.0.tar.gz.sha256\nsha256sum -c kotlin-server-262.8190.0.tar.gz.sha256\nmkdir -p /opt/kotlin-lsp\ntar -xzf kotlin-server-262.8190.0.tar.gz -C /opt/kotlin-lsp\nscript=$(find /opt/kotlin-lsp -type f -name kotlin-lsp.sh | head -n 1)\ntest -n \"$script\"\nchmod +x \"$script\"\ncat > /root/.nix-profile/bin/kotlin-lsp <<'EOF'\n#!/usr/bin/env bash\nroot=/opt/kotlin-lsp/kotlin-server-262.8190.0\nzlib=$(dirname \"$(find /nix/store -name libz.so.1 | head -n 1)\")\nstdlib=$(dirname \"$(find /nix/store -name libstdc++.so.6 | head -n 1)\")\nexport LD_LIBRARY_PATH=\"$root/jbr/lib/server:$root/jbr/lib:$zlib:$stdlib\"\nexec \"$root/kotlin-lsp.sh\" \"$@\"\nEOF\nchmod +x /root/.nix-profile/bin/kotlin-lsp\nmkdir -p /lib64\nloader=$(find /nix/store -path '*glibc-*/lib/ld-linux-x86-64.so.2' | head -n 1)\ntest -n \"$loader\"\nln -s \"$loader\" /lib64/ld-linux-x86-64.so.2\nrm kotlin-server-262.8190.0.tar.gz kotlin-server-262.8190.0.tar.gz.sha256\n",
+      "command": ["kotlin-lsp", "--stdio"],
+      "versionCommand": ["kotlin-lsp", "--version"],
+      "extensions": [".kt", ".kts"],
+      "policy": {},
+      "timeoutMs": 60000,
+      "cases": {
+        "error": {
+          "path": "src/main/kotlin/Main.kt",
+          "expected": "type mismatch|string.*int|initializer",
+          "files": {
+            "settings.gradle.kts": "rootProject.name = \"probe\"\n",
+            "build.gradle.kts": "plugins { kotlin(\"jvm\") version \"2.2.0\" }\nrepositories { mavenCentral() }\n",
+            "src/main/kotlin/Main.kt": "fun main() { val value: Int = \"wrong\"; println(value) }\n"
+          }
+        },
+        "clean": {
+          "path": "src/main/kotlin/Main.kt",
+          "files": {
+            "settings.gradle.kts": "rootProject.name = \"probe\"\n",
+            "build.gradle.kts": "plugins { kotlin(\"jvm\") version \"2.2.0\" }\nrepositories { mavenCentral() }\n",
+            "src/main/kotlin/Main.kt": "fun main() { val value = 1; println(value) }\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "yaml-language-server",
+      "nixPackages": ["yaml-language-server"],
+      "packageVersion": "1.24.0",
+      "command": ["yaml-language-server", "--stdio"],
+      "versionCommand": ["yaml-language-server", "--version"],
+      "extensions": [".yaml", ".yml"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "config.yaml",
+          "expected": "flow sequence|expected|syntax",
+          "files": { "config.yaml": "items: [one, two\n" }
+        },
+        "clean": { "path": "config.yaml", "files": { "config.yaml": "items: [one, two]\n" } }
+      }
+    },
+    {
+      "name": "lua-language-server",
+      "nixPackages": ["lua-language-server"],
+      "packageVersion": "3.18.2",
+      "command": ["lua-language-server"],
+      "versionCommand": ["lua-language-server", "--version"],
+      "extensions": [".lua"],
+      "policy": { "pushDiagnosticsGraceMs": 3000 },
+      "cases": {
+        "error": {
+          "path": "main.lua",
+          "expected": "expression|expected|syntax",
+          "files": { "main.lua": "local value = )\nprint(value)\n" }
+        },
+        "clean": { "path": "main.lua", "files": { "main.lua": "local value = 1\nprint(value)\n" } }
+      }
+    },
+    {
+      "name": "intelephense",
+      "nixPackages": [],
+      "packageVersion": "1.18.2",
+      "setupCommand": "npm install --global intelephense@1.18.2\nln -s \"$(npm prefix --global)/bin/intelephense\" /root/.nix-profile/bin/intelephense\n",
+      "command": ["intelephense", "--stdio"],
+      "extensions": [".php"],
+      "initialization": { "intelephense": { "telemetry": { "enabled": false } } },
+      "policy": { "diagnosticsSettleMs": 4000 },
+      "cases": {
+        "error": {
+          "path": "index.php",
+          "expected": "syntax|unexpected|expected",
+          "files": { "index.php": "<?php\nfunction probe( {\n" }
+        },
+        "clean": {
+          "path": "index.php",
+          "files": { "index.php": "<?php\nfunction probe(): int { return 1; }\n" }
+        }
+      }
+    },
+    {
+      "name": "prisma",
+      "nixPackages": ["prisma-language-server"],
+      "packageVersion": "31.1.0",
+      "command": ["prisma-language-server", "--stdio"],
+      "extensions": [".prisma"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "schema.prisma",
+          "expected": "type|invalid|unknown",
+          "files": {
+            "schema.prisma": "datasource db {\n  provider = \"sqlite\"\n}\nmodel User {\n  id NotAType @id\n}\n"
+          }
+        },
+        "clean": {
+          "path": "schema.prisma",
+          "files": {
+            "schema.prisma": "datasource db {\n  provider = \"sqlite\"\n}\nmodel User {\n  id Int @id\n}\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "dart",
+      "nixPackages": ["dart"],
+      "packageVersion": "3.11.4",
+      "command": ["dart", "language-server"],
+      "versionCommand": ["dart", "--version"],
+      "extensions": [".dart"],
+      "policy": { "pushDiagnosticsGraceMs": 2000 },
+      "cases": {
+        "error": {
+          "path": "lib/main.dart",
+          "expected": "string.*int|assign|invalid_assignment",
+          "files": {
+            "pubspec.yaml": "name: pi_lsp_probe\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
+            "lib/main.dart": "void main() { int value = 'wrong'; print(value); }\n"
+          }
+        },
+        "clean": {
+          "path": "lib/main.dart",
+          "files": {
+            "pubspec.yaml": "name: pi_lsp_probe\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
+            "lib/main.dart": "void main() { int value = 1; print(value); }\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "ocaml-lsp",
+      "nixPackages": ["binutils", "ocaml", "ocamlPackages.ocaml-lsp", "ocamlPackages.dune_3"],
+      "packageVersion": "1.26.0",
+      "command": ["ocamllsp"],
+      "versionCommand": ["ocamllsp", "--version"],
+      "prepareCommand": ["bash", "-lc", "dune build || test -d _build"],
+      "extensions": [".ml", ".mli"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "main.ml",
+          "expected": "string.*int|type.*int|expression",
+          "files": {
+            "dune-project": "(lang dune 3.0)\n(name probe)\n",
+            "dune": "(executable (name main))\n",
+            "main.ml": "let value : int = \"wrong\"\nlet () = print_int value\n"
+          }
+        },
+        "clean": {
+          "path": "main.ml",
+          "files": {
+            "dune-project": "(lang dune 3.0)\n(name probe)\n",
+            "dune": "(executable (name main))\n",
+            "main.ml": "let value : int = 1\nlet () = print_int value\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "bash-language-server",
+      "nixPackages": ["bash-language-server"],
+      "packageVersion": "5.6.0",
+      "command": ["bash-language-server", "start"],
+      "versionCommand": ["bash-language-server", "--version"],
+      "extensions": [".sh", ".bash"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "script.sh",
+          "expected": "syntax|unexpected|expected|end of file",
+          "files": { "script.sh": "#!/usr/bin/env bash\nif true; then\n  echo probe\n" }
+        },
+        "clean": {
+          "path": "script.sh",
+          "files": { "script.sh": "#!/usr/bin/env bash\nif true; then\n  echo probe\nfi\n" }
+        }
+      }
+    },
+    {
+      "name": "terraform-ls",
+      "nixPackages": ["terraform-ls"],
+      "packageVersion": "0.38.7",
+      "command": ["terraform-ls", "serve"],
+      "versionCommand": ["terraform-ls", "version"],
+      "extensions": [".tf", ".tfvars"],
+      "initialization": {
+        "experimentalFeatures": { "prefillRequiredFields": true }
+      },
+      "policy": { "pushDiagnosticsGraceMs": 2000 },
+      "cases": {
+        "error": {
+          "path": "main.tf",
+          "expected": "expression|expected|argument",
+          "files": { "main.tf": "terraform {\n  required_version =\n}\n" }
+        },
+        "clean": {
+          "path": "main.tf",
+          "files": { "main.tf": "terraform {\n  required_version = \">= 1.0\"\n}\n" }
+        }
+      }
+    },
+    {
+      "name": "texlab",
+      "nixPackages": ["texlab"],
+      "packageVersion": "5.26.0",
+      "command": ["texlab"],
+      "versionCommand": ["texlab", "--version"],
+      "extensions": [".tex", ".bib"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "main.tex",
+          "expected": "mismatched|unexpected|environment|missing",
+          "files": {
+            "main.tex": "\\documentclass{article}\n\\begin{document}\n\\begin{itemize}\n\\end{document}\n"
+          }
+        },
+        "clean": {
+          "path": "main.tex",
+          "files": {
+            "main.tex": "\\documentclass{article}\n\\begin{document}\nProbe\n\\end{document}\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "gleam",
+      "nixPackages": ["gleam"],
+      "packageVersion": "1.17.0",
+      "command": ["gleam", "lsp"],
+      "versionCommand": ["gleam", "--version"],
+      "extensions": [".gleam"],
+      "policy": { "pushDiagnosticsGraceMs": 2000 },
+      "cases": {
+        "error": {
+          "path": "src/probe.gleam",
+          "expected": "type|expected|Int|String",
+          "files": {
+            "gleam.toml": "name = \"probe\"\nversion = \"0.1.0\"\ntarget = \"erlang\"\n",
+            "src/probe.gleam": "pub fn value() -> Int {\n  \"wrong\"\n}\n"
+          }
+        },
+        "clean": {
+          "path": "src/probe.gleam",
+          "files": {
+            "gleam.toml": "name = \"probe\"\nversion = \"0.1.0\"\ntarget = \"erlang\"\n",
+            "src/probe.gleam": "pub fn value() -> Int {\n  1\n}\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "clojure-lsp",
+      "nixPackages": ["clojure-lsp", "jdk21"],
+      "packageVersion": "2026.02.20-16.08.58",
+      "command": ["clojure-lsp", "listen"],
+      "versionCommand": ["clojure-lsp", "--version"],
+      "extensions": [".clj", ".cljs", ".cljc", ".edn"],
+      "policy": {},
+      "timeoutMs": 60000,
+      "cases": {
+        "error": {
+          "path": "src/probe/core.clj",
+          "expected": "unmatched|EOF|delimiter|syntax",
+          "files": {
+            "deps.edn": "{:paths [\"src\"]}\n",
+            "src/probe/core.clj": "(ns probe.core)\n(defn value []\n  (+ 1 2)\n"
+          }
+        },
+        "clean": {
+          "path": "src/probe/core.clj",
+          "files": {
+            "deps.edn": "{:paths [\"src\"]}\n",
+            "src/probe/core.clj": "(ns probe.core)\n(defn value []\n  (+ 1 2))\n(value)\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "nixd",
+      "nixPackages": ["nixd"],
+      "packageVersion": "2.9.1",
+      "command": ["nixd"],
+      "versionCommand": ["nixd", "--version"],
+      "extensions": [".nix"],
+      "policy": {},
+      "cases": {
+        "error": {
+          "path": "default.nix",
+          "expected": "unexpected|expected|syntax",
+          "files": { "default.nix": "{ broken = ; }\n" }
+        },
+        "clean": { "path": "default.nix", "files": { "default.nix": "{ value = 1; }\n" } }
+      }
+    },
+    {
+      "name": "tinymist",
+      "nixPackages": ["tinymist"],
+      "packageVersion": "0.15.2",
+      "command": ["tinymist"],
+      "versionCommand": ["tinymist", "--version"],
+      "extensions": [".typ", ".typc"],
+      "policy": { "pushDiagnosticsGraceMs": 2000 },
+      "cases": {
+        "error": {
+          "path": "main.typ",
+          "expected": "expected|syntax|expression",
+          "files": { "main.typ": "#let value =\n#value\n" }
+        },
+        "clean": { "path": "main.typ", "files": { "main.typ": "#let value = 1\n#value\n" } }
+      }
+    },
+    {
+      "name": "haskell-language-server",
+      "nixPackages": ["haskell-language-server", "ghc", "cabal-install"],
+      "packageVersion": "2.13.0.0",
+      "command": ["haskell-language-server-wrapper", "--lsp"],
+      "versionCommand": ["haskell-language-server-wrapper", "--version"],
+      "extensions": [".hs", ".lhs"],
+      "policy": { "pushDiagnosticsGraceMs": 3000 },
+      "timeoutMs": 60000,
+      "cases": {
+        "error": {
+          "path": "Main.hs",
+          "expected": "string.*int|type|Couldn't match",
+          "files": {
+            "cabal.project": "packages: .\n",
+            "probe.cabal": "cabal-version: 2.4\nname: probe\nversion: 0.1.0.0\nexecutable probe\n  main-is: Main.hs\n  build-depends: base >=4.14 && <5\n  default-language: Haskell2010\n",
+            "Main.hs": "module Main where\nvalue :: Int\nvalue = \"wrong\"\nmain :: IO ()\nmain = print value\n"
+          }
+        },
+        "clean": {
+          "path": "Main.hs",
+          "files": {
+            "cabal.project": "packages: .\n",
+            "probe.cabal": "cabal-version: 2.4\nname: probe\nversion: 0.1.0.0\nexecutable probe\n  main-is: Main.hs\n  build-depends: base >=4.14 && <5\n  default-language: Haskell2010\n",
+            "Main.hs": "module Main where\nvalue :: Int\nvalue = 1\nmain :: IO ()\nmain = print value\n"
+          }
+        }
+      }
+    }
+  ]
 }

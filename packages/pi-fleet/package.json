@@ -1,60 +1,60 @@
 {
-	"name": "@narumitw/pi-fleet",
-	"version": "0.3.6",
-	"description": "Pi extension for spawning and connecting local Pi sessions.",
-	"type": "module",
-	"license": "MIT",
-	"private": false,
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi",
-		"fleet",
-		"session",
-		"tmux",
-		"ghostty",
-		"zellij"
-	],
-	"files": [
-		"src",
-		"dist",
-		"README.md",
-		"LICENSE"
-	],
-	"pi": {
-		"extensions": [
-			"./dist/index.ts"
-		]
-	},
-	"scripts": {
-		"build": "node scripts/build-runtime.mjs",
-		"check": "npm run build && biome check . && npm run typecheck",
-		"format": "biome check --write .",
-		"typecheck": "tsc --noEmit",
-		"prepack": "npm run build"
-	},
-	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.59.0"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-ai": "*",
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
-		"typebox": "*"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.5.11",
-		"@earendil-works/pi-ai": "0.85.0",
-		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@earendil-works/pi-tui": "0.85.0",
-		"@types/node": "26.4.1",
-		"esbuild": "0.28.2",
-		"typebox": "1.3.25",
-		"typescript": "7.0.2"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-fleet"
-	}
+  "name": "@narumitw/pi-fleet",
+  "version": "0.3.6",
+  "description": "Pi extension for spawning and connecting local Pi sessions.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "fleet",
+    "session",
+    "tmux",
+    "ghostty",
+    "zellij"
+  ],
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "check": "npm run build && biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.59.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@earendil-works/pi-ai": "0.85.0",
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-tui": "0.85.0",
+    "@types/node": "26.4.1",
+    "esbuild": "0.28.2",
+    "typebox": "1.3.25",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-fleet"
+  }
 }

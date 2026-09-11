@@ -1,47 +1,47 @@
 {
-	"name": "@narumitw/pi-tui-kit-showcase",
-	"version": "0.0.0",
-	"description": "Private interactive showcase for Pi TUI Kit screens and interactions.",
-	"type": "module",
-	"license": "MIT",
-	"private": true,
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi",
-		"tui",
-		"showcase"
-	],
-	"files": [
-		"src",
-		"README.md",
-		"LICENSE"
-	],
-	"pi": {
-		"extensions": [
-			"./src/index.ts"
-		]
-	},
-	"scripts": {
-		"check": "biome check . && npm run typecheck",
-		"format": "biome check --write .",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.59.0"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.5.11",
-		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@narumitw/pi-tui-kit": "^0.59.0",
-		"typescript": "7.0.2"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-tui-kit-showcase"
-	}
+  "name": "@narumitw/pi-tui-kit-showcase",
+  "version": "0.0.0",
+  "description": "Private interactive showcase for Pi TUI Kit screens and interactions.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "tui",
+    "showcase"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.59.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@narumitw/pi-tui-kit": "^0.59.0",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-tui-kit-showcase"
+  }
 }

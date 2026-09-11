@@ -1,50 +1,50 @@
 {
-	"name": "@narumitw/pi-github-pr",
-	"version": "0.49.7",
-	"description": "Pi extension that shows GitHub pull request review, checks, and comment status.",
-	"type": "module",
-	"license": "MIT",
-	"private": false,
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi",
-		"github",
-		"pull-request",
-		"gh"
-	],
-	"peerDependencies": {
-		"@earendil-works/pi-tui": "*"
-	},
-	"files": [
-		"src",
-		"dist",
-		"README.md",
-		"LICENSE"
-	],
-	"pi": {
-		"extensions": [
-			"./dist/index.ts"
-		]
-	},
-	"scripts": {
-		"build": "node scripts/build-runtime.mjs",
-		"prepack": "npm run build",
-		"check": "npm run build && biome check .",
-		"format": "biome check --write .",
-		"typecheck": "tsc --noEmit"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.5.11",
-		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@earendil-works/pi-tui": "0.85.0",
-		"@types/node": "26.4.1",
-		"typescript": "7.0.2",
-		"esbuild": "0.28.2"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-github-pr"
-	}
+  "name": "@narumitw/pi-github-pr",
+  "version": "0.49.7",
+  "description": "Pi extension that shows GitHub pull request review, checks, and comment status.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "github",
+    "pull-request",
+    "gh"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-tui": "*"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "prepack": "npm run build",
+    "check": "npm run build && biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-tui": "0.85.0",
+    "@types/node": "26.4.1",
+    "typescript": "7.0.2",
+    "esbuild": "0.28.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-github-pr"
+  }
 }
