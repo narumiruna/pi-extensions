@@ -443,6 +443,7 @@ test("destination consumes and applies all runtime override classes exactly once
 			};
 			assert.equal(consumed.pendingImplementationRuntime, undefined, scenario.name);
 		}
+		await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
 		assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 		assert.deepEqual(order, scenario.expectedOrder, `${scenario.name} reapplied`);
 	}
@@ -494,6 +495,42 @@ test("destination applies restored runtime during resumed session startup", asyn
 	);
 });
 
+test("destination applies restored runtime during tree navigation", async () => {
+	const branch: Array<ReturnType<typeof stateEntry>> = [];
+	const mock = createMockPi({ thinkingLevel: "low" });
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		modelRegistry: {
+			find: (provider: string, id: string) =>
+				provider === TARGET.provider && id === TARGET.id ? TARGET : undefined,
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+	branch.push(
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: {
+				version: 1,
+				model: { provider: TARGET.provider, modelId: TARGET.id },
+				thinkingLevel: "high",
+			},
+		}),
+	);
+
+	await mock.events.get("session_tree")?.[0]?.({}, context.ctx);
+
+	assert.deepEqual(mock.setModels, [TARGET]);
+	assert.equal(mock.thinkingLevel, "high");
+	assert.equal(
+		(mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
+			?.pendingImplementationRuntime,
+		undefined,
+	);
+});
+
 test("destination warns on thinking clamping and consumes a model race failure without retry", async () => {
 	const branch = [
 		stateEntry({
@@ -525,6 +562,7 @@ test("destination warns on thinking clamping and consumes a model race failure w
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
 	assert.equal(await submitInput(mock, context.ctx), undefined);
+	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
 	assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 
 	assert.equal(setModelCalls, 1);
@@ -590,10 +628,18 @@ test("destination serializes concurrent prompts across the full runtime applicat
 	releaseModel();
 	assert.deepEqual(await Promise.all([first, second]), [undefined, { action: "handled" }]);
 	assert.deepEqual(mock.sentUserMessages, []);
+	assert.deepEqual(await submitInput(mock, context.ctx, "late", "rpc"), {
+		action: "handled",
+	});
+	assert.deepEqual(mock.sentUserMessages, []);
 	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
 	assert.deepEqual(mock.sentUserMessages, [
 		{
 			text: "concurrent",
+			options: { deliverAs: "followUp", expandPromptTemplates: true },
+		},
+		{
+			text: "late",
 			options: { deliverAs: "followUp", expandPromptTemplates: true },
 		},
 	]);
@@ -844,6 +890,7 @@ test("destination consumes a thrown model application without retrying", async (
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
 	assert.equal(await submitInput(mock, context.ctx), undefined);
+	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
 	assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 
 	assert.equal(calls, 1);

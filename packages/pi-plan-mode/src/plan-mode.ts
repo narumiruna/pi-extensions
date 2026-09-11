@@ -119,6 +119,7 @@ interface ActiveImplementationRuntimeApplication {
 	sessionManager: ExtensionContext["sessionManager"];
 	completion: Promise<ImplementationRuntimeApplicationResult>;
 	drainOnShutdown: boolean;
+	holdForAdmission: boolean;
 }
 interface QueuedRuntimeAdmissionInput {
 	text: string;
@@ -171,6 +172,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	let workflowGeneration = 0;
 	let refreshStateBeforeFirstAgentStart = false;
 	let activeImplementationRuntimeApplication: ActiveImplementationRuntimeApplication | undefined;
+	let pendingRuntimeAdmissionSession: object | undefined;
 	let queuedRuntimeAdmissionInputs: QueuedRuntimeAdmissionInput[] = [];
 	let menuController = new AbortController();
 	let settingsWatch: ReturnType<typeof watch> | undefined;
@@ -469,6 +471,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		workflowOwner = undefined;
 		workflowMutex.bindSession(ctx.sessionManager);
 		refreshStateBeforeFirstAgentStart = event.reason === "new";
+		pendingRuntimeAdmissionSession = undefined;
 		queuedRuntimeAdmissionInputs = [];
 		menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
 		menuController = new AbortController();
@@ -508,13 +511,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		return { cancel: true };
 	});
 
-	pi.on("session_tree", (_event, ctx) => {
+	pi.on("session_tree", async (_event, ctx) => {
 		advanceWorkflowGeneration();
 		menuGeneration += 1;
 		menuController.abort(new DOMException("Plan-mode tree branch changed", "AbortError"));
 		menuController = new AbortController();
 		readyPresentationIntent = undefined;
 		latestCommandContext = undefined;
+		pendingRuntimeAdmissionSession = undefined;
 		queuedRuntimeAdmissionInputs = [];
 		implementationRetention.reset();
 		const branch = ctx.sessionManager.getBranch();
@@ -524,6 +528,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		implementationRetention.restore(state.activeImplementation);
 		startPlanModeSettingsWatch(menuGeneration);
 		updateUi(ctx);
+		await applyPendingImplementationRuntime(ctx);
 	});
 
 	pi.on("thinking_level_select", (event) => {
@@ -552,6 +557,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		readyPresentationIntent = undefined;
 		latestCommandContext = undefined;
 		refreshStateBeforeFirstAgentStart = false;
+		pendingRuntimeAdmissionSession = undefined;
 		queuedRuntimeAdmissionInputs = [];
 		workflowAllowedToolNames = undefined;
 		pendingWorkflowToolPolicy = undefined;
@@ -693,11 +699,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
 	pi.on("input", async (event, ctx) => {
 		refreshStateForFirstPrompt(ctx);
-		const waitsForRuntimeApplication =
-			activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager;
-		const result = await applyPendingImplementationRuntime(ctx);
+		const waitsForRuntimeAdmission =
+			activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager ||
+			pendingRuntimeAdmissionSession === ctx.sessionManager;
+		const result = await applyPendingImplementationRuntime(ctx, true);
 		if (result !== "ready") return { action: "handled" };
-		if (waitsForRuntimeApplication) {
+		if (waitsForRuntimeAdmission) {
 			queuedRuntimeAdmissionInputs.push({
 				text: event.text,
 				...(event.images ? { images: [...event.images] } : {}),
@@ -708,7 +715,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	});
 
 	pi.on("agent_start", (_event, ctx) => {
-		if (currentSession !== ctx.sessionManager || queuedRuntimeAdmissionInputs.length === 0) return;
+		if (currentSession !== ctx.sessionManager) return;
+		if (pendingRuntimeAdmissionSession === ctx.sessionManager) {
+			pendingRuntimeAdmissionSession = undefined;
+		}
+		if (queuedRuntimeAdmissionInputs.length === 0) return;
 		const queuedInputs = queuedRuntimeAdmissionInputs;
 		queuedRuntimeAdmissionInputs = [];
 		for (const queued of queuedInputs) {
@@ -1565,10 +1576,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
 	async function applyPendingImplementationRuntime(
 		ctx: ExtensionContext,
+		holdForAdmission = false,
 	): Promise<ImplementationRuntimeApplicationResult> {
 		const session = ctx.sessionManager;
 		const activeApplication = activeImplementationRuntimeApplication;
-		if (activeApplication?.sessionManager === session) return activeApplication.completion;
+		if (activeApplication?.sessionManager === session) {
+			if (holdForAdmission) activeApplication.holdForAdmission = true;
+			return activeApplication.completion;
+		}
 
 		const intent = state.enabled ? undefined : state.pendingImplementationRuntime;
 		if (!intent) return "ready";
@@ -1693,6 +1708,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 					);
 					return "blocked";
 				}
+				if (application.holdForAdmission) pendingRuntimeAdmissionSession = session;
 				return "ready";
 			})
 			.finally(() => {
@@ -1700,7 +1716,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 					activeImplementationRuntimeApplication = undefined;
 				}
 			});
-		application = { sessionManager: session, completion, drainOnShutdown: false };
+		application = {
+			sessionManager: session,
+			completion,
+			drainOnShutdown: false,
+			holdForAdmission,
+		};
 		activeImplementationRuntimeApplication = application;
 		return completion;
 	}
