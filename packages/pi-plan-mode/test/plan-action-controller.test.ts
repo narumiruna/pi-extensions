@@ -40,6 +40,84 @@ test("stale Plan actions do not load interactive UI", async () => {
 	assert.equal(interactiveLoads, 0);
 });
 
+test("only ready-plan fresh actions survive normal menu disposal for deferred handoff", async () => {
+	const timings: string[] = [];
+	const currents: Array<() => boolean> = [];
+	const invokeFresh = async (
+		menuOptions: Record<string, unknown>,
+		kind: "saved" | "current" | "ready",
+	) => {
+		const controller = new AbortController();
+		if (kind === "saved") {
+			await (menuOptions.implementFresh as (signal: AbortSignal) => Promise<void>)(
+				controller.signal,
+			);
+		} else {
+			await (
+				menuOptions.implementFresh as (
+					runtime: Record<string, never>,
+					signal: AbortSignal,
+				) => Promise<void>
+			)({}, controller.signal);
+		}
+		controller.abort(new DOMException("Menu closed", "AbortError"));
+	};
+	const controller = createPlanActionController({
+		loadInteractiveUi: async () =>
+			({
+				showSavedPlanMenu: (_ctx: unknown, options: Record<string, unknown>) =>
+					invokeFresh(options, "saved"),
+				showPlanModeMenu: (_ctx: unknown, options: Record<string, unknown>) =>
+					invokeFresh(options, "current"),
+				showReadyPlanMenu: (_ctx: unknown, options: Record<string, unknown>) =>
+					invokeFresh(options, "ready"),
+			}) as never,
+		getState: () => ({
+			enabled: true,
+			awaitingAction: true,
+			latestPlan: "# Plan",
+			latestPlanSource: "plan_mode_complete",
+		}),
+		captureLifecycle: () => ({
+			signal: new AbortController().signal,
+			isCurrent: () => true,
+		}),
+		statusText: () => "ready",
+		getThinkingLevel: () => "medium",
+		getSettings: () => ({ thinkingLevel: "inherit" }),
+		implementationOutcome: () => "",
+		getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
+		show: () => undefined,
+		finalize: () => undefined,
+		implementHere: () => undefined,
+		implementFresh: (_ctx, isCurrent, _runtime, timing) => {
+			timings.push(timing);
+			currents.push(isCurrent);
+		},
+		exportPlan: async () => false,
+		settings: async () => false,
+		save: () => undefined,
+		stay: () => undefined,
+		exitReady: () => undefined,
+		clearSaved: () => undefined,
+	});
+	const context = createMockContext({
+		hasUI: true,
+		model: { provider: "planning-provider", id: "planning-model" },
+		modelRegistry: { getAvailable: () => [] },
+	});
+
+	await controller.showSaved(context.ctx);
+	await controller.showCurrent(context.ctx);
+	await controller.showReady(context.ctx);
+
+	assert.deepEqual(timings, ["immediate", "immediate", "after-settled"]);
+	assert.deepEqual(
+		currents.map((isCurrent) => isCurrent()),
+		[false, false, true],
+	);
+});
+
 test("saved-plan fresh actions use persistent defaults and fall back from missing models", async () => {
 	const target = { provider: "target-provider", id: "target-model" };
 	const scenarios = [
