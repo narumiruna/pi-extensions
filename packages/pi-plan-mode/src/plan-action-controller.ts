@@ -19,6 +19,8 @@ interface MenuLifecycle {
 	isCurrent(): boolean;
 }
 
+export type FreshImplementationTiming = "immediate" | "after-settled";
+
 interface PlanActionControllerOptions {
 	loadInteractiveUi(): Promise<InteractiveUi>;
 	getState(): PlanModeState;
@@ -34,7 +36,8 @@ interface PlanActionControllerOptions {
 	implementFresh(
 		ctx: ExtensionContext,
 		isCurrent: () => boolean,
-		runtime?: ImplementationRuntimeSelection,
+		runtime: ImplementationRuntimeSelection | undefined,
+		timing: FreshImplementationTiming,
 	): void | Promise<void>;
 	exportPlan(
 		ctx: ExtensionContext,
@@ -87,8 +90,16 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 		ctx: ExtensionContext,
 		lifecycle: MenuLifecycle,
 		signal: AbortSignal,
-		runtime?: ImplementationRuntimeSelection,
-	) => options.implementFresh(ctx, () => lifecycle.isCurrent() && !signal.aborted, runtime);
+		runtime: ImplementationRuntimeSelection | undefined,
+		timing: FreshImplementationTiming,
+	) => {
+		if (signal.aborted) return;
+		const isCurrent =
+			timing === "after-settled"
+				? lifecycle.isCurrent
+				: () => lifecycle.isCurrent() && !signal.aborted;
+		return options.implementFresh(ctx, isCurrent, runtime, timing);
+	};
 
 	return {
 		async showSaved(ctx: ExtensionContext) {
@@ -104,7 +115,8 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				isCurrent: lifecycle.isCurrent,
 				show: () => options.show(ctx),
 				implementHere: () => options.implementHere(ctx),
-				implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
+				implementFresh: (signal) =>
+					freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx), "immediate"),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
 				clear: () => options.clearSaved(ctx),
@@ -130,7 +142,8 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				show: () => options.show(ctx),
 				finalize: () => options.finalize(ctx),
 				implementHere: () => options.implementHere(ctx),
-				implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
+				implementFresh: (runtime, signal) =>
+					freshAction(ctx, lifecycle, signal, runtime, "immediate"),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
 				stay: () => options.stay(ctx),
@@ -149,7 +162,8 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				implementationOutcome: options.implementationOutcome,
 				getExportDestination: () => options.getExportDestination(ctx),
 				implementHere: () => options.implementHere(ctx),
-				implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
+				implementFresh: (runtime, signal) =>
+					freshAction(ctx, lifecycle, signal, runtime, "after-settled"),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
 				stay: () => undefined,
