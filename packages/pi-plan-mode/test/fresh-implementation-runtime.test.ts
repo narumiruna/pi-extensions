@@ -647,6 +647,109 @@ test("destination serializes concurrent prompts across the full runtime applicat
 	assert.equal(mock.thinkingLevel, "high");
 });
 
+test("destination preserves pre-admission prompts when shutdown interrupts runtime application", async () => {
+	let releaseModel!: () => void;
+	let markModelStarted!: () => void;
+	const modelStarted = new Promise<void>((resolve) => {
+		markModelStarted = resolve;
+	});
+	const modelGate = new Promise<void>((resolve) => {
+		releaseModel = resolve;
+	});
+	const branch = [
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: {
+				version: 1,
+				model: { provider: TARGET.provider, modelId: TARGET.id },
+			},
+		}),
+	];
+	const mock = createMockPi();
+	const setModel = mock.rawPi.setModel.bind(mock.rawPi);
+	mock.rawPi.setModel = async (model) => {
+		markModelStarted();
+		await modelGate;
+		return setModel(model);
+	};
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		modelRegistry: {
+			find: () => TARGET,
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+	const leading = submitInput(mock, context.ctx, "implement", "rpc");
+	await modelStarted;
+	const image = { type: "image" as const, data: "queued-image", mimeType: "image/png" };
+	const input = mock.events.get("input")?.[0];
+	assert.ok(input);
+	const follower = Promise.resolve(
+		input({ text: "queued prompt", images: [image], source: "rpc" }, context.ctx),
+	);
+	const shutdown = Promise.resolve(
+		mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx),
+	);
+
+	assert.deepEqual(mock.sentMessages, [
+		{
+			message: {
+				customType: "plan-mode-recovered-input",
+				content: [{ type: "text", text: "queued prompt" }, image],
+				display: true,
+				details: { source: "rpc" },
+			},
+			options: { triggerTurn: false },
+		},
+	]);
+	releaseModel();
+	assert.deepEqual(await Promise.all([leading, follower]), [
+		{ action: "handled" },
+		{ action: "handled" },
+	]);
+	await shutdown;
+	assert.deepEqual(mock.sentUserMessages, []);
+});
+
+test("destination blocks tree navigation until pre-admission prompts are admitted", async () => {
+	const branch = [
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: { version: 1, thinkingLevel: "high" },
+		}),
+	];
+	const mock = createMockPi({ thinkingLevel: "low" });
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		hasUI: true,
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+	assert.equal(await submitInput(mock, context.ctx, "implement", "rpc"), undefined);
+	assert.deepEqual(await submitInput(mock, context.ctx, "queued", "rpc"), {
+		action: "handled",
+	});
+
+	const result = await mock.events.get("session_before_tree")?.[0]?.(
+		{ preparation: { targetId: "older" } },
+		context.ctx,
+	);
+	assert.deepEqual(result, { cancel: true });
+	assert.match(context.notifications.at(-1)?.message ?? "", /queued prompts/u);
+
+	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.sentUserMessages, [
+		{
+			text: "queued",
+			options: { deliverAs: "followUp", expandPromptTemplates: true },
+		},
+	]);
+});
+
 test("destination serializes a concurrent prompt while authentication is pending", async () => {
 	let releaseAuth!: () => void;
 	let markAuthStarted!: () => void;

@@ -103,6 +103,7 @@ import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
+const RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
 const BLOCKED_MUTATING_TOOLS = new Set(["edit", "write", "update_plan"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 interface ReadyPresentationIntent {
@@ -122,6 +123,7 @@ interface ActiveImplementationRuntimeApplication {
 	holdForAdmission: boolean;
 }
 interface QueuedRuntimeAdmissionInput {
+	sessionManager: ExtensionContext["sessionManager"];
 	text: string;
 	images?: NonNullable<InputEvent["images"]>;
 	source: InputSource;
@@ -498,6 +500,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	});
 
 	pi.on("session_before_tree", (event, ctx) => {
+		if (hasQueuedRuntimeAdmissionInputs(ctx.sessionManager)) {
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					"Wait for fresh implementation startup to admit the queued prompts before changing branches.",
+					"warning",
+				);
+			}
+			return { cancel: true };
+		}
 		const target = ctx.sessionManager.getEntry(event.preparation.targetId);
 		if (target?.type !== "custom_message" || target.customType !== MODE_CONTRACT_MESSAGE_TYPE) {
 			return;
@@ -551,6 +562,18 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			activeImplementationRuntimeApplication.drainOnShutdown
 				? activeImplementationRuntimeApplication
 				: undefined;
+		const queuedInputs = takeQueuedRuntimeAdmissionInputs(shutdownSession);
+		for (const queued of queuedInputs) {
+			pi.sendMessage(
+				{
+					customType: RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE,
+					content: runtimeAdmissionInputContent(queued),
+					display: true,
+					details: { source: queued.source },
+				},
+				{ triggerTurn: false },
+			);
+		}
 		finalizationRequest.reset();
 		menuGeneration += 1;
 		menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
@@ -702,16 +725,21 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		const waitsForRuntimeAdmission =
 			activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager ||
 			pendingRuntimeAdmissionSession === ctx.sessionManager;
+		const queuedInput = waitsForRuntimeAdmission
+			? {
+					sessionManager: ctx.sessionManager,
+					text: event.text,
+					...(event.images ? { images: [...event.images] } : {}),
+					source: event.source,
+				}
+			: undefined;
+		if (queuedInput) queuedRuntimeAdmissionInputs.push(queuedInput);
 		const result = await applyPendingImplementationRuntime(ctx, true);
-		if (result !== "ready") return { action: "handled" };
-		if (waitsForRuntimeAdmission) {
-			queuedRuntimeAdmissionInputs.push({
-				text: event.text,
-				...(event.images ? { images: [...event.images] } : {}),
-				source: event.source,
-			});
+		if (result !== "ready") {
+			if (queuedInput) removeQueuedRuntimeAdmissionInput(queuedInput);
 			return { action: "handled" };
 		}
+		if (queuedInput) return { action: "handled" };
 	});
 
 	pi.on("agent_start", (_event, ctx) => {
@@ -719,14 +747,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (pendingRuntimeAdmissionSession === ctx.sessionManager) {
 			pendingRuntimeAdmissionSession = undefined;
 		}
-		if (queuedRuntimeAdmissionInputs.length === 0) return;
-		const queuedInputs = queuedRuntimeAdmissionInputs;
-		queuedRuntimeAdmissionInputs = [];
+		const queuedInputs = takeQueuedRuntimeAdmissionInputs(ctx.sessionManager);
 		for (const queued of queuedInputs) {
-			const content = queued.images?.length
-				? [{ type: "text" as const, text: queued.text }, ...queued.images]
-				: queued.text;
-			pi.sendUserMessage(content, {
+			pi.sendUserMessage(runtimeAdmissionInputContent(queued), {
 				deliverAs: "followUp",
 				expandPromptTemplates: queued.source !== "extension",
 			});
@@ -1560,6 +1583,32 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		} catch {
 			return [];
 		}
+	}
+
+	function hasQueuedRuntimeAdmissionInputs(sessionManager: ExtensionContext["sessionManager"]) {
+		return queuedRuntimeAdmissionInputs.some((queued) => queued.sessionManager === sessionManager);
+	}
+
+	function takeQueuedRuntimeAdmissionInputs(sessionManager: ExtensionContext["sessionManager"]) {
+		const matching: QueuedRuntimeAdmissionInput[] = [];
+		const remaining: QueuedRuntimeAdmissionInput[] = [];
+		for (const queued of queuedRuntimeAdmissionInputs) {
+			if (queued.sessionManager === sessionManager) matching.push(queued);
+			else remaining.push(queued);
+		}
+		queuedRuntimeAdmissionInputs = remaining;
+		return matching;
+	}
+
+	function removeQueuedRuntimeAdmissionInput(queuedInput: QueuedRuntimeAdmissionInput) {
+		const index = queuedRuntimeAdmissionInputs.indexOf(queuedInput);
+		if (index >= 0) queuedRuntimeAdmissionInputs.splice(index, 1);
+	}
+
+	function runtimeAdmissionInputContent(queued: QueuedRuntimeAdmissionInput) {
+		return queued.images?.length
+			? [{ type: "text" as const, text: queued.text }, ...queued.images]
+			: queued.text;
 	}
 
 	function refreshStateForFirstPrompt(ctx: ExtensionContext) {
