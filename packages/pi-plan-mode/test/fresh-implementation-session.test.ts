@@ -100,6 +100,7 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
 		await showReadyPlanMenu(context.ctx, {
 			signal: owner.signal,
 			isCurrent: () => !owner.signal.aborted,
+			planThinkingLevel: undefined,
 			implementationOutcome: () => "Plan reinjection: Until /plan exit\u001b]8;;unsafe\u0007.",
 			getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
 			implementHere: () => {
@@ -195,8 +196,11 @@ test("fresh implementation creates a linked destination and hands off only throu
 			getBranch: () => [],
 			getEntries: () => [],
 		},
-		select: async (_title: string, options: string[]) =>
-			options.includes("Start fresh and implement") ? "Start fresh and implement" : undefined,
+		select: async (_title: string, options: string[]) => {
+			if (options.includes("Start fresh and implement")) return "Start fresh and implement";
+			if (options.includes("Start fresh implementation")) return "Start fresh implementation";
+			return undefined;
+		},
 		newSession: async (options: {
 			parentSession?: string;
 			setup?: (sessionManager: FreshSetupManager) => Promise<void>;
@@ -323,7 +327,11 @@ test("fresh menu work stops after source session shutdown while waiting for idle
 		hasUI: true,
 		model: { provider: "test-provider", id: "test-model" },
 		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
-		select: async () => "Start fresh and implement",
+		select: async (_title: string, options: string[]) => {
+			if (options.includes("Start fresh and implement")) return "Start fresh and implement";
+			if (options.includes("Start fresh implementation")) return "Start fresh implementation";
+			return undefined;
+		},
 		waitForIdle: async () => {
 			markWaiting();
 			await idleGate;
@@ -445,6 +453,113 @@ test("conversation-history fresh kickoff skips active state and recovers in the 
 	assert.equal(replacement.editorText, formatTransferredPlanPrompt(PLAN, true));
 	assert.match(replacement.notifications.at(-1)?.message ?? "", /request is in the editor/i);
 	assert.doesNotMatch(replacement.notifications.at(-1)?.message ?? "", /active plan/i);
+});
+
+test("fresh handoff treats a handled runtime kickoff as partial and restores the prompt", async () => {
+	const destinationBranch: Array<ReturnType<typeof stateEntry>> = [];
+	const replacement = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		sessionManager: {
+			getBranch: () => destinationBranch,
+			getEntries: () => destinationBranch,
+		},
+	});
+	const source = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: { provider: "test-provider", id: "test-model" },
+		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
+		sessionManager: { getSessionFile: () => "/sessions/planning.jsonl" },
+		newSession: async (options: {
+			setup?: (sessionManager: FreshSetupManager) => Promise<void>;
+			withSession?: (ctx: unknown) => Promise<void>;
+		}) => {
+			await options.setup?.({
+				appendCustomEntry(_customType, data) {
+					destinationBranch.push(stateEntry(data as Record<string, unknown>));
+					return "destination-state";
+				},
+				appendCustomMessageEntry() {
+					return "destination-contract";
+				},
+			});
+			await options.withSession?.({
+				...(replacement.ctx as object),
+				sendUserMessage: async () => undefined,
+			});
+			return { cancelled: false };
+		},
+	});
+
+	const result = await startFreshImplementationSession(source.ctx, {
+		plan: PLAN,
+		source: "plan_mode_complete",
+		retention: "clear-on-start",
+		stateEntryType: STATE_ENTRY_TYPE,
+		runtime: { thinkingLevel: "high" },
+		isCurrent: () => true,
+	});
+
+	assert.equal(result.kind, "partial");
+	assert.equal(replacement.editorText, formatTransferredPlanPrompt(PLAN, true));
+	assert.match(replacement.notifications.at(-1)?.message ?? "", /could not be consumed/iu);
+	assert.match(replacement.notifications.at(-1)?.message ?? "", /request is in the editor/iu);
+	assert.equal(
+		replacement.notifications.some((notice) => /session started/iu.test(notice.message)),
+		false,
+	);
+});
+
+test("fresh handoff fails closed when runtime consumption cannot be inspected", async () => {
+	const replacement = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		sessionManager: {
+			getBranch() {
+				throw new Error("replacement context is stale");
+			},
+			getEntries: () => [],
+		},
+	});
+	const source = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: { provider: "test-provider", id: "test-model" },
+		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
+		sessionManager: { getSessionFile: () => "/sessions/planning.jsonl" },
+		newSession: async (options: {
+			setup?: (sessionManager: FreshSetupManager) => Promise<void>;
+			withSession?: (ctx: unknown) => Promise<void>;
+		}) => {
+			await options.setup?.({
+				appendCustomEntry: () => "destination-state",
+				appendCustomMessageEntry: () => "destination-contract",
+			});
+			await options.withSession?.({
+				...(replacement.ctx as object),
+				sendUserMessage: async () => undefined,
+			});
+			return { cancelled: false };
+		},
+	});
+
+	const result = await startFreshImplementationSession(source.ctx, {
+		plan: PLAN,
+		source: "plan_mode_complete",
+		retention: "clear-on-start",
+		stateEntryType: STATE_ENTRY_TYPE,
+		runtime: { thinkingLevel: "high" },
+		isCurrent: () => true,
+	});
+
+	assert.equal(result.kind, "partial");
+	assert.equal(replacement.editorText, formatTransferredPlanPrompt(PLAN, true));
+	assert.match(replacement.notifications.at(-1)?.message ?? "", /could not be verified/iu);
+	assert.equal(
+		replacement.notifications.some((notice) => /session started/iu.test(notice.message)),
+		false,
+	);
 });
 
 test("fresh success notification failures do not downgrade or duplicate kickoff", async () => {

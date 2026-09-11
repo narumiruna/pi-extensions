@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PlanExportDestination } from "./plan-export.js";
-import type { PlanModeState } from "./state.js";
+import type { PlanModeFixedThinkingLevel } from "./settings.js";
+import type { ImplementationRuntimeSelection, PlanModeState } from "./state.js";
 
 type InteractiveUi = typeof import("./interactive-ui.js");
 
@@ -14,12 +15,17 @@ interface PlanActionControllerOptions {
 	getState(): PlanModeState;
 	captureLifecycle(): MenuLifecycle;
 	statusText(): string;
+	getThinkingLevel(): PlanModeFixedThinkingLevel | undefined;
 	implementationOutcome(): string;
 	getExportDestination(ctx: ExtensionContext): PlanExportDestination;
 	show(ctx: ExtensionContext): void;
 	finalize(ctx: ExtensionContext): void;
 	implementHere(ctx: ExtensionContext): void | Promise<void>;
-	implementFresh(ctx: ExtensionContext, isCurrent: () => boolean): void | Promise<void>;
+	implementFresh(
+		ctx: ExtensionContext,
+		isCurrent: () => boolean,
+		runtime?: ImplementationRuntimeSelection,
+	): void | Promise<void>;
 	exportPlan(
 		ctx: ExtensionContext,
 		path: string,
@@ -34,8 +40,12 @@ interface PlanActionControllerOptions {
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {
-	const freshAction = (ctx: ExtensionContext, lifecycle: MenuLifecycle, signal: AbortSignal) =>
-		options.implementFresh(ctx, () => lifecycle.isCurrent() && !signal.aborted);
+	const freshAction = (
+		ctx: ExtensionContext,
+		lifecycle: MenuLifecycle,
+		signal: AbortSignal,
+		runtime?: ImplementationRuntimeSelection,
+	) => options.implementFresh(ctx, () => lifecycle.isCurrent() && !signal.aborted, runtime);
 
 	return {
 		async showSaved(ctx: ExtensionContext) {
@@ -68,6 +78,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			await ui.showPlanModeMenu(ctx, {
 				statusText: options.statusText(),
+				planThinkingLevel: options.getThinkingLevel(),
 				hasReadyPlan: options.getState().latestPlan !== undefined,
 				implementationOutcome: options.implementationOutcome,
 				getExportDestination: () => options.getExportDestination(ctx),
@@ -75,7 +86,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				show: () => options.show(ctx),
 				finalize: () => options.finalize(ctx),
 				implementHere: () => options.implementHere(ctx),
-				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
+				implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
 				stay: () => options.stay(ctx),
@@ -89,10 +100,11 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			await ui.showReadyPlanMenu(ctx, {
 				...lifecycle,
+				planThinkingLevel: options.getThinkingLevel(),
 				implementationOutcome: options.implementationOutcome,
 				getExportDestination: () => options.getExportDestination(ctx),
 				implementHere: () => options.implementHere(ctx),
-				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
+				implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				save: () => options.save(ctx),
 				stay: () => undefined,

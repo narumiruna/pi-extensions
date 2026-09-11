@@ -16,6 +16,7 @@ test("stale Plan actions do not load interactive UI", async () => {
 			isCurrent: () => false,
 		}),
 		statusText: () => "off",
+		getThinkingLevel: () => "medium",
 		implementationOutcome: () => "",
 		getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
 		show: () => undefined,
