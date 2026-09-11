@@ -4,6 +4,7 @@ import {
 	Input,
 	isKittyProtocolActive,
 	Key,
+	type KeyId,
 	matchesKey,
 	parseKey,
 	type TUI,
@@ -43,6 +44,7 @@ export interface PiSelectorOptions<Value> {
 	saveBinding: "app.models.save";
 	cycleBinding?: "app.thinking.cycle";
 	filterSelection: "bestMatch" | "preserveValue";
+	inlineDescriptions?: boolean;
 	prioritizeDefaultPrefix?: boolean;
 	valueEquals(left: Value, right: Value): boolean;
 	onComplete(
@@ -106,9 +108,10 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 		if (!selected || disposed) return;
 		options.onComplete({ kind, value: selected.value });
 	};
+	input.onSubmit = () => completeSelected("selected");
 	const handleSearchInput = (data: string) => {
 		input.handleInput(parseKey(data) === undefined ? safe(data) : data);
-		refilter();
+		if (!disposed) refilter();
 	};
 	const saveDefault = (data: string) => {
 		if (!matchesBinding(options.keybindings, data, options.saveBinding)) return false;
@@ -255,10 +258,22 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			);
 			const visible = filtered.slice(start, start + viewportSize);
 			const searchRows = renderSearchInput(input, safeWidth);
+			const descriptionColumnWidth = options.inlineDescriptions
+				? inlineDescriptionColumnWidth(visible)
+				: undefined;
 			const content = [
 				...searchRows,
 				"",
-				...visible.map((row, index) => renderRow(row, start + index, selectedIndex, options.theme)),
+				...visible.map((row, index) =>
+					renderRow(
+						row,
+						start + index,
+						selectedIndex,
+						options.theme,
+						safeWidth,
+						descriptionColumnWidth,
+					),
+				),
 			];
 			const selected = filtered[selectedIndex];
 			if (start > 0 || start + visible.length < filtered.length) {
@@ -266,7 +281,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			}
 			if (filtered.length === 0) {
 				content.push(options.theme.fg("muted", "  No matching options"));
-			} else if (selected?.description) {
+			} else if (!options.inlineDescriptions && selected?.description) {
 				content.push("", options.theme.fg("muted", `  ${safe(selected.description)}`));
 			}
 
@@ -370,6 +385,8 @@ function renderRow<Value>(
 	index: number,
 	selectedIndex: number,
 	theme: Theme,
+	width: number,
+	descriptionColumnWidth: number | undefined,
 ) {
 	const selected = index === selectedIndex;
 	const cursor = selected ? theme.fg("accent", "→ ") : "  ";
@@ -377,7 +394,37 @@ function renderRow<Value>(
 	const primary = selected ? theme.fg("accent", safe(row.primary)) : safe(row.primary);
 	const secondary = row.secondary ? ` ${theme.fg("muted", safe(row.secondary))}` : "";
 	const defaultBadge = row.default ? theme.fg("muted", " · default") : "";
-	return `${cursor}${current}${primary}${secondary}${defaultBadge}`;
+	const prefix = `${cursor}${current}`;
+	const primaryText = `${primary}${secondary}${defaultBadge}`;
+	if (descriptionColumnWidth !== undefined && row.description && width > 40) {
+		const effectiveColumnWidth = Math.max(
+			1,
+			Math.min(descriptionColumnWidth, width - visibleWidth(prefix) - 4),
+		);
+		const truncatedPrimary = truncateToWidth(
+			primaryText,
+			Math.max(1, effectiveColumnWidth - 2),
+			"",
+		);
+		const spacing = " ".repeat(Math.max(1, effectiveColumnWidth - visibleWidth(truncatedPrimary)));
+		const remainingWidth =
+			width - visibleWidth(prefix) - visibleWidth(truncatedPrimary) - spacing.length - 2;
+		if (remainingWidth > 10) {
+			const description = truncateToWidth(safe(row.description), remainingWidth, "");
+			return `${prefix}${truncatedPrimary}${theme.fg("muted", `${spacing}${description}`)}`;
+		}
+	}
+	return `${prefix}${primaryText}`;
+}
+
+function inlineDescriptionColumnWidth<Value>(rows: readonly PiSelectorRow<Value>[]) {
+	const widest = rows.reduce((width, row) => {
+		const primary = `${safe(row.primary)}${row.secondary ? ` ${safe(row.secondary)}` : ""}${
+			row.default ? " · default" : ""
+		}`;
+		return Math.max(width, visibleWidth(primary) + 2);
+	}, 0);
+	return Math.max(12, Math.min(widest, 32));
 }
 
 function renderSearchInput(input: Input, width: number) {
@@ -398,16 +445,14 @@ function selectorKeyPlan(
 	saveBinding: "app.models.save",
 	cycleBinding: "app.thinking.cycle" | undefined,
 ): SelectorKeyPlan {
-	const claimed = new Set([keyClaimIdentity("ctrl+c")]);
+	const claimed = ["ctrl+c"];
 	const claim = (binding: string | undefined) => {
 		const available: string[] = [];
 		if (!binding) return available;
 		for (const key of getBindingKeys(keybindings, binding)) {
 			const canonical = canonicalKeyId(key);
-			if (!canonical) continue;
-			const identity = keyClaimIdentity(canonical);
-			if (claimed.has(identity)) continue;
-			claimed.add(identity);
+			if (!canonical || claimed.some((other) => keysOverlap(canonical, other))) continue;
+			claimed.push(canonical);
 			available.push(canonical);
 		}
 		return available;
@@ -446,17 +491,24 @@ function canonicalKeyId(value: string): string | undefined {
 	return [...modifiers, base].join("+");
 }
 
-function keyClaimIdentity(canonical: string): string {
-	if (isKittyProtocolActive()) return canonical;
-	if (canonical === "ctrl+i") return "tab";
-	if (canonical === "ctrl+j" || canonical === "ctrl+m") return "enter";
-	if (canonical === "ctrl+[") return "escape";
-	if (canonical === "ctrl+_") return "ctrl+-";
-	if (canonical === "alt+b") return "alt+left";
-	if (canonical === "alt+f") return "alt+right";
-	if (canonical === "alt+p") return "alt+up";
-	if (canonical === "alt+n") return "alt+down";
-	return canonical;
+function keysOverlap(first: string, second: string) {
+	if (isKittyProtocolActive()) return first === second;
+	return inputsForKey(first).some((input) => matchesKey(input, second as KeyId));
+}
+
+function inputsForKey(key: string) {
+	const parts = key.split("+");
+	const base = parts.pop() ?? "";
+	const modifier = parts.reduce(
+		(mask, part) => mask | (KEY_MODIFIER_MASKS[part as keyof typeof KEY_MODIFIER_MASKS] ?? 0),
+		0,
+	);
+	const codepoint = KEY_CODEPOINTS[base] ?? (base.length === 1 ? base.charCodeAt(0) : undefined);
+	const candidates =
+		codepoint === undefined
+			? LEGACY_KEY_INPUTS
+			: [...LEGACY_KEY_INPUTS, `\u001b[${codepoint};${modifier + 1}u`];
+	return candidates.filter((input) => matchesKey(input, key as KeyId));
 }
 
 function isExecutableKey(base: string, modifiers: readonly string[]) {
@@ -471,6 +523,51 @@ function isExecutableKey(base: string, modifiers: readonly string[]) {
 	return true;
 }
 
+const KEY_MODIFIER_MASKS = { shift: 1, alt: 2, ctrl: 4, super: 8 } as const;
+const KEY_CODEPOINTS: Record<string, number> = {
+	escape: 27,
+	tab: 9,
+	enter: 13,
+	space: 32,
+	backspace: 127,
+	insert: 57425,
+	delete: 57426,
+	home: 57423,
+	end: 57424,
+	pageup: 57421,
+	pagedown: 57422,
+	left: 57417,
+	right: 57418,
+	up: 57419,
+	down: 57420,
+};
+const LEGACY_FUNCTION_INPUT_SUFFIXES = [
+	"OP",
+	"OQ",
+	"OR",
+	"OS",
+	"[15~",
+	"[17~",
+	"[18~",
+	"[19~",
+	"[20~",
+	"[21~",
+	"[23~",
+	"[24~",
+];
+// Probe every cross-identity legacy collision through Pi's live matcher. CSI-u,
+// keypad, lock-bit, shifted-letter, and modifyOtherKeys forms normalize to the
+// same key and modifiers, so one generated CSI-u identity covers those branches.
+const LEGACY_KEY_INPUTS = [
+	...Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)),
+	...Array.from({ length: 128 }, (_, code) => `\u001b${String.fromCharCode(code)}`),
+	"\u001b[Z",
+	"\u001bOM",
+	"\u001b[E",
+	"\u001b[e",
+	"\u001bOe",
+	...LEGACY_FUNCTION_INPUT_SUFFIXES.map((suffix) => `\u001b${suffix}`),
+];
 const KEY_BASES = new Set([
 	..."abcdefghijklmnopqrstuvwxyz0123456789`-=[]\\;',./!@#$%^&*()_|~{}:<>?",
 	"escape",
