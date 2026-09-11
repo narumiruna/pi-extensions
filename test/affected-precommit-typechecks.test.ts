@@ -211,9 +211,9 @@ test("the pre-commit hook delegates checks without narrowing the repository gate
 	);
 
 	assert.equal(hook, "./scripts/pre-commit.sh\n");
-	assert.match(preCommitScript, /biome migrate --write/u);
-	assert.match(preCommitScript, /biome format --write/u);
-	assert.match(preCommitScript, /biome check --write/u);
+	assert.equal(manifest.scripts.precommit, undefined);
+	assert.match(preCommitScript, /biome check --staged --no-errors-on-unmatched/u);
+	assert.doesNotMatch(preCommitScript, /--write/u);
 	assert.match(preCommitScript, /run-typechecks\.mjs --staged/u);
 	assert.doesNotMatch(manifest.scripts.typecheck, /--staged/u);
 });
