@@ -511,6 +511,57 @@ test("fresh handoff treats a handled runtime kickoff as partial and restores the
 	);
 });
 
+test("fresh handoff fails closed when runtime consumption cannot be inspected", async () => {
+	const replacement = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		sessionManager: {
+			getBranch() {
+				throw new Error("replacement context is stale");
+			},
+			getEntries: () => [],
+		},
+	});
+	const source = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: { provider: "test-provider", id: "test-model" },
+		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
+		sessionManager: { getSessionFile: () => "/sessions/planning.jsonl" },
+		newSession: async (options: {
+			setup?: (sessionManager: FreshSetupManager) => Promise<void>;
+			withSession?: (ctx: unknown) => Promise<void>;
+		}) => {
+			await options.setup?.({
+				appendCustomEntry: () => "destination-state",
+				appendCustomMessageEntry: () => "destination-contract",
+			});
+			await options.withSession?.({
+				...(replacement.ctx as object),
+				sendUserMessage: async () => undefined,
+			});
+			return { cancelled: false };
+		},
+	});
+
+	const result = await startFreshImplementationSession(source.ctx, {
+		plan: PLAN,
+		source: "plan_mode_complete",
+		retention: "clear-on-start",
+		stateEntryType: STATE_ENTRY_TYPE,
+		runtime: { thinkingLevel: "high" },
+		isCurrent: () => true,
+	});
+
+	assert.equal(result.kind, "partial");
+	assert.equal(replacement.editorText, formatTransferredPlanPrompt(PLAN, true));
+	assert.match(replacement.notifications.at(-1)?.message ?? "", /could not be verified/iu);
+	assert.equal(
+		replacement.notifications.some((notice) => /session started/iu.test(notice.message)),
+		false,
+	);
+});
+
 test("fresh success notification failures do not downgrade or duplicate kickoff", async () => {
 	let kickoffCalls = 0;
 	const replacement = createMockContext({ mode: "tui", hasUI: true });

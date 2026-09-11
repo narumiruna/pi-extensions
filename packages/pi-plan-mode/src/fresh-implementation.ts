@@ -181,12 +181,19 @@ export async function startFreshImplementationSession(
 					reportKickoffFailure(safeErrorDetail(error));
 					return;
 				}
-				if (
-					pendingImplementationRuntime &&
-					destinationRuntimeIsStillPending(replacementCtx, request.stateEntryType)
-				) {
-					reportKickoffFailure("fresh implementation settings could not be consumed");
-					return;
+				if (pendingImplementationRuntime) {
+					const runtimeStatus = destinationRuntimeConsumptionStatus(
+						replacementCtx,
+						request.stateEntryType,
+					);
+					if (runtimeStatus !== "consumed") {
+						reportKickoffFailure(
+							runtimeStatus === "pending"
+								? "fresh implementation settings could not be consumed"
+								: "fresh implementation settings could not be verified as consumed",
+						);
+						return;
+					}
 				}
 				safeNotify(
 					replacementCtx,
@@ -304,14 +311,17 @@ function safeModelReference(model: { provider: string; id?: string; modelId?: st
 	return safeErrorDetail(`${model.provider}/${model.modelId ?? model.id ?? "unknown"}`);
 }
 
-function destinationRuntimeIsStillPending(ctx: ReplacementContext, stateEntryType: string) {
+function destinationRuntimeConsumptionStatus(
+	ctx: ReplacementContext,
+	stateEntryType: string,
+): "consumed" | "pending" | "unavailable" {
 	try {
-		return (
-			restorePlanModeState(ctx.sessionManager.getBranch(), stateEntryType)
-				.pendingImplementationRuntime !== undefined
-		);
+		return restorePlanModeState(ctx.sessionManager.getBranch(), stateEntryType)
+			.pendingImplementationRuntime
+			? "pending"
+			: "consumed";
 	} catch {
-		return false;
+		return "unavailable";
 	}
 }
 

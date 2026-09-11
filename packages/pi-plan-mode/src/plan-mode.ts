@@ -500,10 +500,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	});
 
 	pi.on("session_before_tree", (event, ctx) => {
-		if (hasQueuedRuntimeAdmissionInputs(ctx.sessionManager)) {
+		if (runtimeAdmissionIsPending(ctx.sessionManager)) {
 			if (ctx.hasUI) {
 				ctx.ui.notify(
-					"Wait for fresh implementation startup to admit the queued prompts before changing branches.",
+					"Wait for fresh implementation startup to admit the pending prompts before changing branches.",
 					"warning",
 				);
 			}
@@ -736,7 +736,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (queuedInput) queuedRuntimeAdmissionInputs.push(queuedInput);
 		const result = await applyPendingImplementationRuntime(ctx, true);
 		if (result !== "ready") {
-			if (queuedInput) removeQueuedRuntimeAdmissionInput(queuedInput);
+			if (result === "stale" && queuedInput) removeQueuedRuntimeAdmissionInput(queuedInput);
 			return { action: "handled" };
 		}
 		if (queuedInput) return { action: "handled" };
@@ -1585,8 +1585,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		}
 	}
 
-	function hasQueuedRuntimeAdmissionInputs(sessionManager: ExtensionContext["sessionManager"]) {
-		return queuedRuntimeAdmissionInputs.some((queued) => queued.sessionManager === sessionManager);
+	function runtimeAdmissionIsPending(sessionManager: ExtensionContext["sessionManager"]) {
+		return (
+			activeImplementationRuntimeApplication?.sessionManager === sessionManager ||
+			pendingRuntimeAdmissionSession === sessionManager ||
+			queuedRuntimeAdmissionInputs.some((queued) => queued.sessionManager === sessionManager)
+		);
 	}
 
 	function takeQueuedRuntimeAdmissionInputs(sessionManager: ExtensionContext["sessionManager"]) {

@@ -126,7 +126,10 @@ test("fresh preflight re-resolves an explicit model and persists intent beside d
 				appendCustomMessageEntry(): string;
 				appendCustomEntry(customType: string, data: unknown): string;
 			}) => Promise<void>;
-			withSession?: (ctx: { sendUserMessage(message: string): Promise<void> }) => Promise<void>;
+			withSession?: (ctx: {
+				sessionManager: { getBranch(): unknown[] };
+				sendUserMessage(message: string): Promise<void>;
+			}) => Promise<void>;
 		}) => {
 			await options.setup?.({
 				appendCustomMessageEntry: () => "contract",
@@ -135,7 +138,10 @@ test("fresh preflight re-resolves an explicit model and persists intent beside d
 					return "state";
 				},
 			});
-			await options.withSession?.({ sendUserMessage: async () => undefined });
+			await options.withSession?.({
+				sessionManager: { getBranch: () => [] },
+				sendUserMessage: async () => undefined,
+			});
 			return { cancelled: false };
 		},
 	});
@@ -183,7 +189,10 @@ test("clear-on-start persists only temporary runtime intent when an override is 
 				appendCustomMessageEntry(): string;
 				appendCustomEntry(customType: string, data: unknown): string;
 			}) => Promise<void>;
-			withSession?: (ctx: { sendUserMessage(message: string): Promise<void> }) => Promise<void>;
+			withSession?: (ctx: {
+				sessionManager: { getBranch(): unknown[] };
+				sendUserMessage(message: string): Promise<void>;
+			}) => Promise<void>;
 		}) => {
 			await options.setup?.({
 				appendCustomMessageEntry: () => "contract",
@@ -192,7 +201,10 @@ test("clear-on-start persists only temporary runtime intent when an override is 
 					return "state";
 				},
 			});
-			await options.withSession?.({ sendUserMessage: async () => undefined });
+			await options.withSession?.({
+				sessionManager: { getBranch: () => [] },
+				sendUserMessage: async () => undefined,
+			});
 			return { cancelled: false };
 		},
 	});
@@ -714,40 +726,61 @@ test("destination preserves pre-admission prompts when shutdown interrupts runti
 	assert.deepEqual(mock.sentUserMessages, []);
 });
 
-test("destination blocks tree navigation until pre-admission prompts are admitted", async () => {
+test("destination blocks tree navigation during runtime application and admission", async () => {
+	let releaseModel!: () => void;
+	let markModelStarted!: () => void;
+	const modelStarted = new Promise<void>((resolve) => {
+		markModelStarted = resolve;
+	});
+	const modelGate = new Promise<void>((resolve) => {
+		releaseModel = resolve;
+	});
 	const branch = [
 		stateEntry({
 			enabled: false,
 			awaitingAction: false,
-			pendingImplementationRuntime: { version: 1, thinkingLevel: "high" },
+			pendingImplementationRuntime: {
+				version: 1,
+				model: { provider: TARGET.provider, modelId: TARGET.id },
+			},
 		}),
 	];
-	const mock = createMockPi({ thinkingLevel: "low" });
+	const mock = createMockPi();
+	const setModel = mock.rawPi.setModel.bind(mock.rawPi);
+	mock.rawPi.setModel = async (model) => {
+		markModelStarted();
+		await modelGate;
+		return setModel(model);
+	};
 	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
 	const context = createMockContext({
 		hasUI: true,
 		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		modelRegistry: {
+			find: () => TARGET,
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
 	});
 	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-	assert.equal(await submitInput(mock, context.ctx, "implement", "rpc"), undefined);
-	assert.deepEqual(await submitInput(mock, context.ctx, "queued", "rpc"), {
-		action: "handled",
-	});
+	const leading = submitInput(mock, context.ctx, "implement", "rpc");
+	await modelStarted;
+	const beforeTree = mock.events.get("session_before_tree")?.[0];
+	assert.ok(beforeTree);
 
-	const result = await mock.events.get("session_before_tree")?.[0]?.(
-		{ preparation: { targetId: "older" } },
-		context.ctx,
+	assert.deepEqual(
+		await beforeTree({ preparation: { targetId: "during-application" } }, context.ctx),
+		{ cancel: true },
 	);
-	assert.deepEqual(result, { cancel: true });
-	assert.match(context.notifications.at(-1)?.message ?? "", /queued prompts/u);
+	releaseModel();
+	assert.equal(await leading, undefined);
+	assert.deepEqual(
+		await beforeTree({ preparation: { targetId: "before-admission" } }, context.ctx),
+		{ cancel: true },
+	);
+	assert.match(context.notifications.at(-1)?.message ?? "", /pending prompts/u);
 
 	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
-	assert.deepEqual(mock.sentUserMessages, [
-		{
-			text: "queued",
-			options: { deliverAs: "followUp", expandPromptTemplates: true },
-		},
-	]);
+	assert.deepEqual(mock.sentUserMessages, []);
 });
 
 test("destination serializes a concurrent prompt while authentication is pending", async () => {
@@ -845,6 +878,73 @@ test("destination blocks a prompt until runtime intent consumption can persist",
 			?.pendingImplementationRuntime,
 		undefined,
 	);
+});
+
+test("destination retains concurrent prompts when runtime consumption is blocked", async () => {
+	let releaseModel!: () => void;
+	let markModelStarted!: () => void;
+	const modelStarted = new Promise<void>((resolve) => {
+		markModelStarted = resolve;
+	});
+	const modelGate = new Promise<void>((resolve) => {
+		releaseModel = resolve;
+	});
+	const branch = [
+		stateEntry({
+			enabled: false,
+			awaitingAction: false,
+			pendingImplementationRuntime: {
+				version: 1,
+				model: { provider: TARGET.provider, modelId: TARGET.id },
+			},
+		}),
+	];
+	const mock = createMockPi();
+	const setModel = mock.rawPi.setModel.bind(mock.rawPi);
+	let firstApplication = true;
+	mock.rawPi.setModel = async (model) => {
+		if (firstApplication) {
+			firstApplication = false;
+			markModelStarted();
+			await modelGate;
+		}
+		return setModel(model);
+	};
+	const appendEntry = mock.rawPi.appendEntry.bind(mock.rawPi);
+	let persistenceAvailable = false;
+	mock.rawPi.appendEntry = (customType, data) => {
+		if (!persistenceAvailable) throw new Error("disk unavailable");
+		appendEntry(customType, data);
+	};
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		modelRegistry: {
+			find: () => TARGET,
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+	const leading = submitInput(mock, context.ctx, "implement", "rpc");
+	await modelStarted;
+	const follower = submitInput(mock, context.ctx, "keep me", "rpc");
+	releaseModel();
+
+	assert.deepEqual(await Promise.all([leading, follower]), [
+		{ action: "handled" },
+		{ action: "handled" },
+	]);
+	assert.deepEqual(mock.sentUserMessages, []);
+
+	persistenceAvailable = true;
+	assert.equal(await submitInput(mock, context.ctx, "retry", "rpc"), undefined);
+	await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+	assert.deepEqual(mock.sentUserMessages, [
+		{
+			text: "keep me",
+			options: { deliverAs: "followUp", expandPromptTemplates: true },
+		},
+	]);
 });
 
 test("destination drains asynchronous model application and preserves stale runtime intent", async () => {
