@@ -46,6 +46,45 @@ Install only from sources you trust because Pi extensions run with Pi's permissi
 Run `/plan` to open the state-aware menu, then start Plan mode and ask the agent to inspect and design the change.
 Run `/plan <prompt>` when the first planning request is already known.
 
+## 🗺️ How it works
+
+Plan mode keeps exploration and implementation on opposite sides of an explicit review boundary:
+
+```mermaid
+flowchart LR
+    start["Start: /plan or /plan with a prompt"]
+    start --> explore["Explore safely: inspect and clarify"]
+    explore --> complete["Complete the plan with plan_mode_complete"]
+    complete --> review["Review the ready plan"]
+    review -->|Revise| explore
+    review -->|Implement here| current["Current session: planning context retained"]
+    review -->|Start fresh| fresh["Linked session: approved plan transferred"]
+    review -->|Save| saved["Saved for later"]
+    review -->|Export| exported["Markdown file"]
+```
+
+During planning, the agent can inspect the project and ask material questions, but Plan mode blocks editing tools and unsafe shell forms. Implementation starts only after the plan is complete and you choose a handoff:
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Pi
+    participant Plan as Plan mode
+    participant Work as Implementation
+
+    User->>Pi: Start planning
+    Pi->>Plan: Apply the read-only tool policy
+    Plan->>User: Ask material questions when needed
+    User-->>Plan: Answer or refine the request
+    Plan->>Pi: Submit the complete plan
+    Pi-->>User: Show the ready-plan review
+    alt Implement here
+        Pi->>Work: Restore Normal mode in the current session
+    else Start fresh and implement
+        Pi->>Work: Create a linked session with the approved plan
+    end
+```
+
 ## 💬 Commands
 
 | Command | Purpose |
