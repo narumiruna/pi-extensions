@@ -1,6 +1,12 @@
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, isFocusable, Key, matchesKey, type TUI } from "@earendil-works/pi-tui";
-import type { TuiHarness, TuiHarnessKey, TuiHarnessOptions, TuiHarnessResize } from "./types.js";
+import type {
+	TuiHarness,
+	TuiHarnessKey,
+	TuiHarnessMouseEvent,
+	TuiHarnessOptions,
+	TuiHarnessResize,
+} from "./types.js";
 
 interface HarnessComponent extends Component {
 	waitForPending?(): Promise<void>;
@@ -185,6 +191,29 @@ export function createTuiHarness(options: TuiHarnessOptions = {}): TuiHarness {
 		return session.open ? render() : lastFrame;
 	}
 
+	function mouse(event: TuiHarnessMouseEvent): readonly string[] {
+		const session = currentOpen();
+		if (!session?.component) return lastFrame;
+		if (lastFrame.length === 0) render();
+		const result = session.component.handleMouse?.({
+			type: event.type,
+			button: event.button ?? (event.type === "move" || event.type === "wheel" ? "none" : "left"),
+			x: event.x,
+			y: event.y,
+			screenX: event.x,
+			screenY: event.y,
+			width,
+			height: lastFrame.length,
+			shift: event.shift ?? false,
+			alt: event.alt ?? false,
+			ctrl: event.ctrl ?? false,
+			...(event.wheelDelta === undefined ? {} : { wheelDelta: event.wheelDelta }),
+			...(event.clickCount === undefined ? {} : { clickCount: event.clickCount }),
+		});
+		if (result?.focus && isFocusable(session.component)) session.component.focused = true;
+		return session.open ? render() : lastFrame;
+	}
+
 	return {
 		custom,
 		get openCount() {
@@ -222,6 +251,7 @@ export function createTuiHarness(options: TuiHarnessOptions = {}): TuiHarness {
 		press(key: TuiHarnessKey) {
 			return send(keyData(key));
 		},
+		mouse,
 		send,
 		type(text: string) {
 			return send(text);
@@ -271,6 +301,12 @@ function validDimension(value: number, name: string) {
 
 function keyData(key: TuiHarnessKey) {
 	switch (key) {
+		case "app.models.save":
+			return "\u0013";
+		case "app.thinking.cycle":
+			return "\u001b[Z";
+		case "tui.input.tab":
+			return "\t";
 		case "tui.select.up":
 			return "\u001b[A";
 		case "tui.select.down":
@@ -326,6 +362,12 @@ function testingKeybindings(override?: TuiHarnessOptions["keybindings"]) {
 		getKeys(binding: string): readonly string[] {
 			if (getKeys) return getKeys(binding as Parameters<HarnessKeybindings["getKeys"]>[0]);
 			switch (binding) {
+				case "app.models.save":
+					return ["ctrl+s"];
+				case "app.thinking.cycle":
+					return ["shift+tab"];
+				case "tui.input.tab":
+					return ["tab"];
 				case "tui.select.up":
 					return ["up"];
 				case "tui.select.down":
@@ -348,6 +390,12 @@ function testingKeybindings(override?: TuiHarnessOptions["keybindings"]) {
 
 function bindingKey(binding: string) {
 	switch (binding) {
+		case "app.models.save":
+			return Key.ctrl("s");
+		case "app.thinking.cycle":
+			return Key.shift("tab");
+		case "tui.input.tab":
+			return Key.tab;
 		case "tui.select.up":
 			return Key.up;
 		case "tui.select.down":

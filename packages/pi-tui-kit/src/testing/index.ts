@@ -6,6 +6,7 @@ export type {
 	RpcHarnessStep,
 	TuiHarness,
 	TuiHarnessKey,
+	TuiHarnessMouseEvent,
 	TuiHarnessOptions,
 	TuiHarnessResize,
 } from "./types.js";

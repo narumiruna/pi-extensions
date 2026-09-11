@@ -10,6 +10,7 @@ Consumers reuse its navigation, rendering, cancellation, and mode adaptation ins
 ## ✨ Features
 
 - Defines typed action, detail, browse, choice, settings, input, review, and multi-select screens.
+- Provides searchable default-aware selectors for model and thinking choices, with configurable save-default actions (Ctrl+S by default).
 - Adapts shared menu and interaction flows across Pi TUI and RPC modes.
 - Handles interaction navigation, cancellation, disposal, horizontal framing, and width-safe rendering.
 - Provides task, confirmation, questionnaire, live-choice, custom-interaction, terminal-document, terminal-text, interaction-hint, editor-status-widget, horizontal-rule, and testing helpers.
@@ -67,6 +68,8 @@ Pi TUI Kit and its consumers version independently through Changesets.
 Publish a new Kit API before raising a consumer's compatibility floor.
 Declare Kit in that consumer so local hoisting cannot hide an incompatible or missing published dependency.
 
+The default-aware selectors use an explicit API-admission exception for two convergent selection flows requested by the maintainer. Consumer migrations remain deferred, and each consumer retains default-setting persistence.
+
 Searchable review and browse-detail screens use an explicit pre-adoption API-admission exception.
 Review behavior converges in `pi-starship` configuration documents and `pi-recall` saved-message previews, while browse-detail behavior converges in `pi-tool` exact tool documents and `pi-analytics` detail catalogs.
 Those consumers cannot adopt the fields until this Kit minor is published, so this release keeps their compatibility floors unchanged and defers consumer migration.
@@ -98,6 +101,7 @@ These fields reveal dependencies deferred from import time to the first interact
 The [API reference](./docs/api.md) contains the complete examples and contracts:
 
 - [Menus and standalone interactions](./docs/api.md#-complete-menu-example) — typed actions, tasks, confirmations, live previews, questionnaires, and custom components.
+- [Default-aware selectors](./docs/api.md#searchable-default-aware-selectors) — searchable choices with current/default state and save-default shortcuts.
 - [Standard screens](./docs/api.md#-standard-screens) — actions, detail, browse, choice, settings, input, review, and multi-select.
 - [Runtime and modes](./docs/api.md#-runtime-and-mode-behavior) — TUI/RPC adaptation, result types, cancellation, and session ownership.
 - [Ownership boundary](./docs/api.md#-ownership-boundary) — what Kit owns and what each extension must keep local.
