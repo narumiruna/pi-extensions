@@ -57,6 +57,48 @@ test("non-interactive Plan routes do not load interactive UI", async () => {
 	assert.equal(interactiveLoads, 0);
 });
 
+test("/plan settings opens in TUI and RPC and rejects print and JSON modes", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	let interactiveLoads = 0;
+	const settingsModes: string[] = [];
+	planMode(mock.pi, {
+		readSettings: async () => ({ kind: "missing" as const }),
+		loadInteractiveUi: async () => {
+			interactiveLoads += 1;
+			return {
+				showPlanModeSettings: async (ctx: { mode: string }) => {
+					settingsModes.push(ctx.mode);
+					return { kind: "closed", reason: "close" } as const;
+				},
+			} as never;
+		},
+	});
+	const planCommand = mock.commands.get("plan");
+	assert.ok(planCommand);
+
+	for (const mode of ["tui", "rpc"] as const) {
+		const context = createMockContext({ mode, hasUI: true });
+		await planCommand.handler("settings", context.ctx);
+	}
+	for (const mode of ["print", "json"] as const) {
+		const context = createMockContext({ mode, hasUI: false });
+		await assert.rejects(
+			async () => planCommand.handler("settings", context.ctx),
+			/requires TUI or RPC/u,
+		);
+	}
+
+	assert.equal(interactiveLoads, 2);
+	assert.deepEqual(settingsModes, ["tui", "rpc"]);
+	assert.deepEqual(mock.rawPi.getActiveTools(), [
+		"read",
+		"bash",
+		"plan_mode_question",
+		"plan_mode_complete",
+	]);
+	assert.deepEqual(mock.entries, []);
+});
+
 test("stale Plan settings callbacks do not reload interactive UI", async () => {
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
 	let interactiveLoads = 0;
@@ -120,7 +162,18 @@ test("plan_mode_complete result renders the plan as Markdown", () => {
 test("completePlanArguments suggests management tokens only", () => {
 	assert.deepEqual(
 		completePlanArguments("")?.map((item) => item.label),
-		["start", "show", "finalize", "implement", "save", "export", "exit", "off", "tools"],
+		[
+			"start",
+			"show",
+			"finalize",
+			"implement",
+			"save",
+			"settings",
+			"export",
+			"exit",
+			"off",
+			"tools",
+		],
 	);
 	assert.deepEqual(
 		completePlanArguments("to")?.map((item) => item.value),

@@ -1,14 +1,28 @@
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { defineMenu, type RunMenuResult, runMenu } from "@narumitw/pi-tui-kit";
+import {
+	defineMenu,
+	type RunMenuResult,
+	runMenu,
+	sanitizeTerminalText,
+} from "@narumitw/pi-tui-kit";
 import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+import {
+	type AvailableImplementationModel,
+	findAvailableImplementationModel,
+	type ImplementationModelOverride,
+	snapshotAvailableImplementationModels,
+} from "./implementation-models.js";
 import { retentionLabel } from "./implementation-retention.js";
 import { planExportDestination } from "./plan-export.js";
 import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
 import {
+	configuredImplementationModel,
 	configuredImplementationPlanRetention,
+	configuredImplementationThinkingLevel,
 	configuredPlanExportPath,
 	configuredPlanModeToggleShortcut,
 	IMPLEMENTATION_PLAN_RETENTIONS,
+	IMPLEMENTATION_THINKING_LEVELS,
 	normalizeKeyId,
 	PLAN_MODE_THINKING_LEVELS,
 	type PlanModeSettings,
@@ -44,13 +58,16 @@ export interface PlanModeSettingsMenuOptions {
 	onSaved(settings: PlanModeSettings): void;
 }
 
-type Screen = "settings" | "tools" | "export" | "shortcut";
+type Screen = "settings" | "tools" | "implementation-model" | "export" | "shortcut";
 type Action =
 	| "set-thinking"
 	| "open-tools"
 	| "toggle-tool"
 	| "reset-tools"
 	| "set-retention"
+	| "open-implementation-model"
+	| "set-implementation-model"
+	| "set-implementation-thinking"
 	| "open-export"
 	| "set-export"
 	| "open-shortcut"
@@ -74,6 +91,13 @@ export async function showPlanModeSettings(
 		tools.map((tool, index) => [tool.name, `plan-settings-tool:${index}`]),
 	);
 	const toolsByItemId = new Map(tools.map((tool) => [toolItemIds.get(tool.name) as string, tool]));
+	const implementationModels = snapshotAvailableImplementationModels(ctx);
+	const modelItemIds = new Map(
+		implementationModels.map((model, index) => [model, `plan-settings-model:${index}`]),
+	);
+	const modelsByItemId = new Map(
+		implementationModels.map((model) => [modelItemIds.get(model) as string, model]),
+	);
 
 	const loadState = async (): Promise<SettingsMenuState> => {
 		const loaded = await readSettings(options.settingsPath);
@@ -131,6 +155,23 @@ export async function showPlanModeSettings(
 									action: "set-retention",
 								},
 								{
+									id: "defaultImplementationModel",
+									label: "Fresh model",
+									description: "Choose the default model for a fresh implementation session.",
+									currentValue: implementationModelValue(state.settings, implementationModels),
+									action: "open-implementation-model",
+								},
+								{
+									id: "defaultImplementationThinkingLevel",
+									label: "Fresh thinking",
+									description:
+										"Choose the default thinking level for a fresh implementation session.",
+									currentValue:
+										configuredImplementationThinkingLevel(state.settings) ?? "same as plan",
+									values: ["same as plan", ...IMPLEMENTATION_THINKING_LEVELS],
+									action: "set-implementation-thinking",
+								},
+								{
 									id: "defaultPlanExportPath",
 									label: "Export destination",
 									description: "Set the destination used when an export omits its path.",
@@ -170,6 +211,21 @@ export async function showPlanModeSettings(
 						action: "reset-tools",
 					},
 				],
+				hint: "back",
+			}),
+			"implementation-model": ({ state }) => ({
+				kind: "choice",
+				title: "Fresh implementation model",
+				lines: ["Same as plan is the default and fallback when a configured model is unavailable."],
+				items: implementationModelItems(implementationModels, modelItemIds),
+				action: "set-implementation-model",
+				initialItemId: implementationModelItemId(
+					configuredImplementationModel(state.settings),
+					implementationModels,
+					modelItemIds,
+				),
+				enableSearch: true,
+				viewportSize: 10,
 				hint: "back",
 			}),
 			export: ({ state }) => {
@@ -225,6 +281,52 @@ export async function showPlanModeSettings(
 					{ implementationPlanRetention },
 					signal,
 					`Plan reinjection: ${retentionLabel(implementationPlanRetention)}. Applies to the next Implement action.`,
+				);
+			},
+			"open-implementation-model": async () => ({
+				kind: "to",
+				screen: "implementation-model",
+			}),
+			"set-implementation-model": async ({ ctx: actionCtx, itemId, signal }) => {
+				const model = itemId ? modelsByItemId.get(itemId) : undefined;
+				if (itemId !== "same-as-plan" && !model) return { kind: "rejected" };
+				const defaultImplementationModel = model
+					? { provider: model.provider, modelId: model.id }
+					: null;
+				const result = await savePatch(
+					actionCtx,
+					{ defaultImplementationModel },
+					signal,
+					model
+						? `Fresh implementation model: ${safeModelReference({ provider: model.provider, modelId: model.id })}.`
+						: "Fresh implementation model: same as plan.",
+				);
+				return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+			},
+			"set-implementation-thinking": async ({ ctx: actionCtx, value, signal }) => {
+				if (value === "same as plan") {
+					return savePatch(
+						actionCtx,
+						{ defaultImplementationThinkingLevel: null },
+						signal,
+						"Fresh implementation thinking: same as plan.",
+					);
+				}
+				if (
+					!IMPLEMENTATION_THINKING_LEVELS.includes(
+						value as (typeof IMPLEMENTATION_THINKING_LEVELS)[number],
+					)
+				) {
+					return { kind: "rejected" };
+				}
+				return savePatch(
+					actionCtx,
+					{
+						defaultImplementationThinkingLevel:
+							value as PlanModeSettings["defaultImplementationThinkingLevel"],
+					},
+					signal,
+					`Fresh implementation thinking: ${value}.`,
 				);
 			},
 			"open-export": async () => ({ kind: "to", screen: "export" }),
@@ -347,6 +449,59 @@ function invalidScreen(settingsPath: string, state: SettingsMenuState) {
 
 function retentionFromLabel(value: string | undefined) {
 	return IMPLEMENTATION_PLAN_RETENTIONS.find((retention) => retentionLabel(retention) === value);
+}
+
+function implementationModelValue(
+	settings: PlanModeSettings,
+	models: readonly AvailableImplementationModel[],
+) {
+	const configured = configuredImplementationModel(settings);
+	if (!configured) return "same as plan";
+	return findAvailableImplementationModel(models, configured)
+		? safeModelReference(configured)
+		: `same as plan · ${safeModelReference(configured)} unavailable`;
+}
+
+function implementationModelItems(
+	models: readonly AvailableImplementationModel[],
+	itemIds: ReadonlyMap<AvailableImplementationModel, string>,
+) {
+	return [
+		{
+			id: "same-as-plan",
+			label: "Same as plan",
+			description: "Use the planning session model.",
+		},
+		...models.map((model) => {
+			const reference = safeModelReference({ provider: model.provider, modelId: model.id });
+			const name = safeModelMetadata(model.name, "");
+			return {
+				id: itemIds.get(model) as string,
+				label: reference,
+				...(name ? { details: [`Model Name: ${name}`] } : {}),
+				searchText: [reference, name].filter(Boolean).join(" "),
+			};
+		}),
+	];
+}
+
+function implementationModelItemId(
+	configured: ImplementationModelOverride | undefined,
+	models: readonly AvailableImplementationModel[],
+	itemIds: ReadonlyMap<AvailableImplementationModel, string>,
+) {
+	const model = findAvailableImplementationModel(models, configured);
+	return model ? itemIds.get(model) : "same-as-plan";
+}
+
+function safeModelReference(model: ImplementationModelOverride) {
+	return `${safeModelMetadata(model.modelId, "unknown model")} [${safeModelMetadata(model.provider, "unknown provider")}]`;
+}
+
+function safeModelMetadata(value: unknown, fallback: string) {
+	if (typeof value !== "string") return fallback;
+	const safe = sanitizeTerminalText(value).trim() || fallback;
+	return [...safe].slice(0, 512).join("");
 }
 
 function defaultToolsValue(configured: string[] | undefined) {

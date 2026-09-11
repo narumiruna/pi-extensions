@@ -279,7 +279,10 @@ test("saved plans can start fresh without consuming the source session state", a
 		select: async () => "Start fresh and implement",
 		newSession: async (options: {
 			setup?: (sessionManager: FreshSetupManager) => Promise<void>;
-			withSession?: (ctx: { sendUserMessage(message: string): Promise<void> }) => Promise<void>;
+			withSession?: (ctx: {
+				sessionManager: { getBranch(): unknown[] };
+				sendUserMessage(message: string): Promise<void>;
+			}) => Promise<void>;
 		}) => {
 			newSessionCalls += 1;
 			await options.setup?.({
@@ -292,6 +295,7 @@ test("saved plans can start fresh without consuming the source session state", a
 				},
 			});
 			await options.withSession?.({
+				sessionManager: { getBranch: () => [] },
 				sendUserMessage: async (message) => {
 					replacementMessage = message;
 				},
@@ -305,7 +309,15 @@ test("saved plans can start fresh without consuming the source session state", a
 	assert.equal(newSessionCalls, 1);
 	assert.equal(context.statuses.get("plan-mode"), "plan saved");
 	assert.equal(mock.entries.length, 0);
-	assert.equal(destinationState, undefined);
+	assert.deepEqual(destinationState, {
+		enabled: false,
+		awaitingAction: false,
+		pendingImplementationRuntime: {
+			version: 1,
+			model: { provider: "test-provider", modelId: "test-model" },
+			thinkingLevel: "off",
+		},
+	});
 	assert.match(replacementMessage, /Implement the plan in a fresh context/);
 	assert.match(replacementMessage, /Fresh implementation plan/);
 });

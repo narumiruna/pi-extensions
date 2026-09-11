@@ -159,6 +159,89 @@ test("fresh settings prioritize start and show the plan runtime defaults", async
 	assert.match(settingsScreen, /Thinking level\s+medium · same as plan/u);
 });
 
+test("fresh settings start from persistent model and thinking defaults", async () => {
+	let selectedRuntime: unknown;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
+		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+		select: async (title: string) => {
+			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+			if (title.startsWith("Fresh implementation settings")) {
+				return "Start fresh implementation";
+			}
+			return undefined;
+		},
+	});
+
+	await showReadyPlanMenu(
+		context.ctx,
+		menuOptions({
+			implementationDefaults: {
+				model: { provider: "provider-two", modelId: "model-two" },
+				thinkingLevel: "high",
+			},
+			implementFresh: (runtime: unknown) => {
+				selectedRuntime = runtime;
+			},
+		}),
+	);
+
+	assert.deepEqual(selectedRuntime, {
+		model: { provider: "provider-two", modelId: "model-two" },
+		thinkingLevel: "high",
+	});
+});
+
+test("unavailable persistent model defaults fall back to same as plan", async () => {
+	let availableReads = 0;
+	let selectedRuntime: unknown;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
+		modelRegistry: {
+			getAvailable: () => {
+				availableReads += 1;
+				return availableReads === 1 ? AVAILABLE_MODELS : [AVAILABLE_MODELS[0]];
+			},
+		},
+		select: async (title: string) => {
+			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+			if (title.startsWith("Fresh implementation settings")) {
+				return "Start fresh implementation";
+			}
+			return undefined;
+		},
+	});
+
+	await showReadyPlanMenu(
+		context.ctx,
+		menuOptions({
+			implementationDefaults: {
+				model: { provider: "provider-two", modelId: "model-two" },
+				thinkingLevel: "high",
+			},
+			implementFresh: (runtime: unknown) => {
+				selectedRuntime = runtime;
+			},
+		}),
+	);
+
+	assert.equal(availableReads, 2);
+	assert.deepEqual(selectedRuntime, {
+		model: {
+			provider: "provider\u001b[31m-one",
+			modelId: "model\u202e-one",
+		},
+		thinkingLevel: "high",
+	});
+	assert.match(context.notifications.at(-1)?.message ?? "", /unavailable.*same as plan/iu);
+});
+
 test("fresh thinking choice mirrors the built-in thinking layout", async () => {
 	let screen = 0;
 	let thinkingScreen = "";
