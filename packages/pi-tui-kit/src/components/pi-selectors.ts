@@ -258,9 +258,14 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			);
 			const visible = filtered.slice(start, start + viewportSize);
 			const searchRows = renderSearchInput(input, safeWidth);
-			const descriptionColumnWidth = options.inlineDescriptions
+			const requestedDescriptionColumnWidth = options.inlineDescriptions
 				? inlineDescriptionColumnWidth(visible)
 				: undefined;
+			const descriptionColumnWidth =
+				requestedDescriptionColumnWidth !== undefined &&
+				canRenderInlineDescriptions(safeWidth, requestedDescriptionColumnWidth)
+					? requestedDescriptionColumnWidth
+					: undefined;
 			const content = [
 				...searchRows,
 				"",
@@ -281,7 +286,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			}
 			if (filtered.length === 0) {
 				content.push(options.theme.fg("muted", "  No matching options"));
-			} else if (!options.inlineDescriptions && selected?.description) {
+			} else if (descriptionColumnWidth === undefined && selected?.description) {
 				content.push("", options.theme.fg("muted", `  ${safe(selected.description)}`));
 			}
 
@@ -427,6 +432,13 @@ function inlineDescriptionColumnWidth<Value>(rows: readonly PiSelectorRow<Value>
 	return Math.max(12, Math.min(widest, 32));
 }
 
+function canRenderInlineDescriptions(width: number, columnWidth: number) {
+	const prefixWidth = 4;
+	if (width <= 40) return false;
+	const effectiveColumnWidth = Math.max(1, Math.min(columnWidth, width - prefixWidth - 4));
+	return width - prefixWidth - effectiveColumnWidth - 2 > 10;
+}
+
 function renderSearchInput(input: Input, width: number) {
 	const prefix = "  ";
 	const inputWidth = Math.max(1, width - visibleWidth(prefix));
@@ -497,6 +509,9 @@ function keysOverlap(first: string, second: string) {
 }
 
 function inputsForKey(key: string) {
+	const cacheKey = `${isLocalWindowsTerminalSession() ? "windows" : "other"}:${key}`;
+	const cached = LEGACY_KEY_INPUT_CACHE.get(cacheKey);
+	if (cached) return cached;
 	const parts = key.split("+");
 	const base = parts.pop() ?? "";
 	const modifier = parts.reduce(
@@ -508,7 +523,18 @@ function inputsForKey(key: string) {
 		codepoint === undefined
 			? LEGACY_KEY_INPUTS
 			: [...LEGACY_KEY_INPUTS, `\u001b[${codepoint};${modifier + 1}u`];
-	return candidates.filter((input) => matchesKey(input, key as KeyId));
+	const inputs = candidates.filter((input) => matchesKey(input, key as KeyId));
+	LEGACY_KEY_INPUT_CACHE.set(cacheKey, inputs);
+	return inputs;
+}
+
+function isLocalWindowsTerminalSession() {
+	return (
+		Boolean(process.env.WT_SESSION) &&
+		!process.env.SSH_CONNECTION &&
+		!process.env.SSH_CLIENT &&
+		!process.env.SSH_TTY
+	);
 }
 
 function isExecutableKey(base: string, modifiers: readonly string[]) {
@@ -558,6 +584,7 @@ const LEGACY_FUNCTION_INPUT_SUFFIXES = [
 // Probe every cross-identity legacy collision through Pi's live matcher. CSI-u,
 // keypad, lock-bit, shifted-letter, and modifyOtherKeys forms normalize to the
 // same key and modifiers, so one generated CSI-u identity covers those branches.
+const LEGACY_KEY_INPUT_CACHE = new Map<string, readonly string[]>();
 const LEGACY_KEY_INPUTS = [
 	...Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)),
 	...Array.from({ length: 128 }, (_, code) => `\u001b${String.fromCharCode(code)}`),

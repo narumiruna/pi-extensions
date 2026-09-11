@@ -475,7 +475,9 @@ test("thinking selector renders every description beside its choice on wide term
 		currentLevel: "low",
 	});
 	await narrowTui.waitForOpen();
-	assert.ok(narrowTui.render().every((line) => visibleWidth(line) <= 30));
+	const narrowFrame = narrowTui.render().map(stripVTControlCharacters);
+	assert.ok(narrowFrame.some((line) => line.includes("Light reasoning")));
+	assert.ok(narrowFrame.every((line) => visibleWidth(line) <= 30));
 	narrowTui.press("ctrl+c");
 	assert.deepEqual(await narrowRunning, { kind: "closed", reason: "close" });
 });
