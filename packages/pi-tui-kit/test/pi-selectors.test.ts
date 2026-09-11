@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import {
 	getKeybindings,
+	isKittyProtocolActive,
 	KeybindingsManager,
 	matchesKey,
 	setKeybindings,
@@ -11,6 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { createPiSelector } from "../src/components/pi-selectors.js";
 import { runModelSelector, runThinkingSelector } from "../src/index.js";
 import { createTuiHarness } from "../src/testing/index.js";
 
@@ -380,6 +382,72 @@ test("selector hints follow Pi's live raw-backspace matcher overlap", async () =
 	} finally {
 		setKittyProtocolActive(false);
 		vi.unstubAllEnvs();
+	}
+});
+
+test("selector hints and dispatch preserve modifyOtherKeys-disambiguated actions", () => {
+	const previousKittyProtocol = isKittyProtocolActive();
+	try {
+		setKittyProtocolActive(false);
+		for (const keyPair of [
+			{
+				name: "Ctrl+H and Backspace",
+				saveKey: "ctrl+h",
+				confirmKey: "backspace",
+				saveData: "\x1b[27;5;104~",
+				confirmData: "\x7f",
+			},
+			{
+				name: "Ctrl+I and Tab",
+				saveKey: "ctrl+i",
+				confirmKey: "tab",
+				saveData: "\x1b[27;5;105~",
+				confirmData: "\t",
+			},
+		] as const) {
+			const keys = (binding: string): readonly string[] => {
+				if (binding === "app.models.save") return [keyPair.saveKey];
+				if (binding === "tui.select.confirm") return [keyPair.confirmKey];
+				if (binding === "tui.select.cancel") return ["escape"];
+				return [];
+			};
+			const keybindings = {
+				matches: (data: string, binding: string) =>
+					keys(binding).some((key) => matchesKey(data, key as never)),
+				getKeys: (binding: string) => [...keys(binding)],
+			} as never;
+			const tui = {
+				terminal: { rows: 20, modifyOtherKeysActive: true },
+				requestRender() {},
+			} as never;
+			const theme = { fg: (_role: string, text: string) => text } as never;
+
+			for (const action of [
+				{ data: keyPair.saveData, expectedKind: "saveDefault" },
+				{ data: keyPair.confirmData, expectedKind: "selected" },
+			] as const) {
+				let completed: { kind: string } | undefined;
+				const component = createPiSelector({
+					rows: [{ value: "model", primary: "model" }],
+					saveBinding: "app.models.save",
+					filterSelection: "bestMatch",
+					valueEquals: (left, right) => left === right,
+					onComplete: (result) => {
+						completed = result;
+					},
+					tui,
+					theme,
+					keybindings,
+				});
+				const frame = component.render(80).join("\n");
+				assert.ok(frame.includes(`${keyPair.saveKey} set as default`), keyPair.name);
+				assert.ok(frame.includes(`${keyPair.confirmKey} select`), keyPair.name);
+				component.handleInput(action.data);
+				assert.equal(completed?.kind, action.expectedKind, keyPair.name);
+			}
+		}
+	} finally {
+		setKittyProtocolActive(previousKittyProtocol);
 	}
 });
 
