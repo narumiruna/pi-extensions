@@ -111,6 +111,7 @@ export async function runModelSelector<
 				viewportSize: options.viewportSize,
 				saveBinding: "app.models.save",
 				filterSelection: "bestMatch",
+				prioritizeDefaultPrefix: true,
 				valueEquals: sameModel,
 				onComplete: complete,
 				tui,

@@ -32,6 +32,22 @@ test("model selector renders current and default models and returns Ctrl+S save-
 	assert.deepEqual(await running, { kind: "saveDefault", model: models[0] });
 });
 
+test("model selector keeps the saved default first for default-prefix searches", async () => {
+	const saved = { provider: "test", id: "alpha" };
+	const distractor = { provider: "test", id: "default-model" };
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runModelSelector(context.ctx, {
+		models: [distractor, saved],
+		defaultModel: saved,
+	});
+	await tui.waitForOpen();
+
+	tui.type("def");
+	tui.press("tui.select.confirm");
+	assert.deepEqual(await running, { kind: "selected", model: saved });
+});
+
 test("model selector fuzzy-searches sanitized model fields and selects the raw item", async () => {
 	const unsafe = {
 		provider: "vendor\u001b[31m",
@@ -56,6 +72,26 @@ test("model selector fuzzy-searches sanitized model fields and selects the raw i
 	);
 	tui.press("tui.select.confirm");
 	assert.deepEqual(await running, { kind: "selected", model: unsafe });
+});
+
+test("model selector preserves the query cursor while sanitizing inserted text", async () => {
+	const expected = { provider: "test", id: "abXYcd" };
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runModelSelector(context.ctx, {
+		models: [expected, { provider: "test", id: "other" }],
+		initialSearchInput: "abcd",
+	});
+	await tui.waitForOpen();
+
+	tui.press("home");
+	tui.send("\x1b[C");
+	tui.send("\x1b[C");
+	tui.send("X\u202e");
+	tui.type("Y");
+	assert.doesNotMatch(tui.render().join("\n"), /No matching options/u);
+	tui.press("tui.select.confirm");
+	assert.deepEqual(await running, { kind: "selected", model: expected });
 });
 
 test("model selector routes Home and End to query editing", async () => {
@@ -187,36 +223,71 @@ test("thinking selector named cycle key emits Shift+Tab", async () => {
 	assert.deepEqual(await running, { kind: "selected", level: "low" });
 });
 
-test("thinking selector keeps split bracketed paste ahead of remapped shortcuts", async () => {
-	const tui = createTuiHarness({
-		keybindings: {
-			matches: (data, binding) => {
-				if (String(binding) === "app.models.save") return data === "x";
-				if (binding === "tui.select.confirm") return data === "\r";
-				if (binding === "tui.select.cancel") return data === "\x1b" || data === "\x03";
-				return false;
+test("thinking selector keeps every split paste-start boundary ahead of shortcuts", async () => {
+	const pasteStart = "\x1b[200~";
+	for (let split = 1; split < pasteStart.length; split += 1) {
+		const tui = createTuiHarness({
+			keybindings: {
+				matches: (data, binding) => {
+					if (String(binding) === "app.models.save") return data === "x";
+					if (binding === "tui.select.confirm") return data === "\r";
+					if (binding === "tui.select.cancel") return data === "\x1b" || data === "\x03";
+					return false;
+				},
+				getKeys: (binding) => {
+					if (String(binding) === "app.models.save") return ["x"];
+					if (binding === "tui.select.confirm") return ["enter"];
+					if (binding === "tui.select.cancel") return ["escape", "ctrl+c"];
+					return [];
+				},
 			},
-			getKeys: (binding) => {
-				if (String(binding) === "app.models.save") return ["x"];
-				if (binding === "tui.select.confirm") return ["enter"];
-				if (binding === "tui.select.cancel") return ["escape", "ctrl+c"];
-				return [];
-			},
-		},
-	});
-	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
-	const running = runThinkingSelector(context.ctx, {
-		availableLevels: ["off", "low"],
-		currentLevel: "off",
-	});
-	await tui.waitForOpen();
+		});
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = runThinkingSelector(context.ctx, {
+			availableLevels: ["off", "low"],
+			currentLevel: "off",
+		});
+		await tui.waitForOpen();
 
-	tui.send("\x1b[20");
-	tui.send("0~");
-	tui.send("x");
-	assert.equal(tui.isOpen, true);
-	tui.send("\x1b[201~\x03");
-	assert.deepEqual(await running, { kind: "closed", reason: "close" });
+		tui.send(pasteStart.slice(0, split));
+		tui.send(`${pasteStart.slice(split)}x\x1b[201~`);
+		assert.equal(tui.isOpen, true);
+		assert.match(tui.render().join("\n"), /No matching options/u);
+		tui.press("ctrl+c");
+		assert.deepEqual(await running, { kind: "closed", reason: "close" });
+	}
+});
+
+test("selectors forward normalized mouse input and row selection", async () => {
+	const edited = { provider: "test", id: "abXcd" };
+	const inputTui = createTuiHarness();
+	const inputContext = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: inputTui.custom,
+	});
+	const inputRunning = runModelSelector(inputContext.ctx, {
+		models: [edited, { provider: "test", id: "other" }],
+		initialSearchInput: "abcd",
+	});
+	await inputTui.waitForOpen();
+	const inputRow = inputTui.render().findIndex((line) => line.includes("> "));
+	assert.notEqual(inputRow, -1);
+	inputTui.mouse({ type: "press", x: 6, y: inputRow });
+	inputTui.type("X");
+	inputTui.press("tui.select.confirm");
+	assert.deepEqual(await inputRunning, { kind: "selected", model: edited });
+
+	const rowTui = createTuiHarness();
+	const rowContext = createMockContext({ mode: "tui", hasUI: true, custom: rowTui.custom });
+	const rowRunning = runModelSelector(rowContext.ctx, { models });
+	await rowTui.waitForOpen();
+	let row = rowTui.render().findIndex((line) => line.includes("gemini-pro"));
+	assert.notEqual(row, -1);
+	rowTui.mouse({ type: "press", x: 4, y: row });
+	row = rowTui.render().findIndex((line) => line.includes("gemini-pro"));
+	rowTui.mouse({ type: "click", x: 4, y: row });
+	assert.deepEqual(await rowRunning, { kind: "selected", model: models[2] });
 });
 
 test("thinking selector sanitizes invalid current levels in consumer-visible errors", async () => {

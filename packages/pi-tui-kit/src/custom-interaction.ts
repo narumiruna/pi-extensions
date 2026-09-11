@@ -168,6 +168,12 @@ function wrapComponent(
 		...(component.handleInput
 			? { handleInput: (data: string) => component.handleInput?.(data) }
 			: {}),
+		...(component.handleMouse
+			? {
+					handleMouse: (event: Parameters<NonNullable<Component["handleMouse"]>>[0]) =>
+						component.handleMouse?.(event),
+				}
+			: {}),
 		...(component.waitForPending
 			? { waitForPending: () => component.waitForPending?.() ?? Promise.resolve() }
 			: {}),

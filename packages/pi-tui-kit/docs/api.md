@@ -836,7 +836,7 @@ const frame = tui.render();
 const result = await running;
 ```
 
-The TUI harness supports semantic Kit bindings, explicit raw input, Ctrl+C, Home, End, focus, and invalidation.
+The TUI harness supports semantic Kit bindings, explicit raw input, normalized mouse events, Ctrl+C, Home, End, focus, and invalidation.
 It also supports live dimension changes, render-request observations, pending-action draining, sequential screens, result observation, and external disposal.
 `done`, disposal, factory failure, and obsolete async openings settle exactly once; input after closure is inert.
 Supply optional callback-compatible theme/keybinding overrides only when a test needs them.

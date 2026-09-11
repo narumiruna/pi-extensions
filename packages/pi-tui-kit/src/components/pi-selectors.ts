@@ -4,11 +4,14 @@ import {
 	Input,
 	Key,
 	matchesKey,
+	parseKey,
 	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { renderBoundedFrame } from "../bounded-frame.js";
+import { renderBoundedFrameLayout } from "../bounded-frame.js";
 import { HorizontalRule } from "../horizontal-rule.js";
 import { formatInteractionHints } from "../interaction-hints.js";
 import { sanitizeTerminalText } from "../terminal-text.js";
@@ -16,6 +19,7 @@ import type { MenuCloseReason } from "../types.js";
 
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
+const INPUT_PREFIX_TIMEOUT_MS = 10;
 
 export interface PiSelectorRow<Value> {
 	value: Value;
@@ -37,6 +41,7 @@ export interface PiSelectorOptions<Value> {
 	saveBinding: "app.models.save";
 	cycleBinding?: "app.thinking.cycle";
 	filterSelection: "bestMatch" | "preserveValue";
+	prioritizeDefaultPrefix?: boolean;
 	valueEquals(left: Value, right: Value): boolean;
 	onComplete(
 		result:
@@ -53,7 +58,11 @@ export interface PiSelectorOptions<Value> {
 export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 	const input = new Input();
 	if (options.initialSearchInput) input.setValue(safe(options.initialSearchInput));
-	let filtered = filterRows(options.rows, input.getValue());
+	let filtered = filterRows(
+		options.rows,
+		input.getValue(),
+		options.prioritizeDefaultPrefix ?? false,
+	);
 	let selectedIndex =
 		options.filterSelection === "bestMatch" && input.getValue()
 			? 0
@@ -61,6 +70,15 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 	let disposed = false;
 	let pasteStartBuffer = "";
 	let pasteBuffer: string | undefined;
+	let pasteStartTimer: ReturnType<typeof setTimeout> | undefined;
+	let mousePressedIndex: number | undefined;
+	let mouseLayout:
+		| {
+				width: number;
+				inputFrameRow?: number;
+				itemByFrameRow: ReadonlyMap<number, number>;
+		  }
+		| undefined;
 
 	const select = (index: number, wrap: boolean) => {
 		if (filtered.length === 0) return;
@@ -71,7 +89,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 	};
 	const refilter = () => {
 		const previous = filtered[selectedIndex]?.value;
-		filtered = filterRows(options.rows, input.getValue());
+		filtered = filterRows(options.rows, input.getValue(), options.prioritizeDefaultPrefix ?? false);
 		if (options.filterSelection === "preserveValue" && previous !== undefined) {
 			const preserved = filtered.findIndex((row) => options.valueEquals(row.value, previous));
 			selectedIndex = Math.max(0, preserved);
@@ -87,9 +105,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 		options.onComplete({ kind, value: selected.value });
 	};
 	const handleSearchInput = (data: string) => {
-		input.handleInput(data);
-		const sanitized = safe(input.getValue());
-		if (sanitized !== input.getValue()) input.setValue(sanitized);
+		input.handleInput(parseKey(data) === undefined ? safe(data) : data);
 		refilter();
 	};
 	const saveDefault = (data: string) => {
@@ -124,20 +140,8 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 			select(selectedIndex + normalizeViewportSize(options.viewportSize), false);
 		} else handleSearchInput(data);
 	};
-	const isClaimedShortcut = (data: string) =>
-		matchesKey(data, Key.ctrl("c")) ||
-		matchesBinding(options.keybindings, data, options.saveBinding) ||
-		options.keybindings.matches(data, "tui.select.confirm") ||
-		options.keybindings.matches(data, "tui.select.cancel") ||
-		(options.cycleBinding
-			? matchesBinding(options.keybindings, data, options.cycleBinding)
-			: false) ||
-		options.keybindings.matches(data, "tui.select.up") ||
-		options.keybindings.matches(data, "tui.select.down") ||
-		options.keybindings.matches(data, "tui.select.pageUp") ||
-		options.keybindings.matches(data, "tui.select.pageDown");
-
 	function routeInput(data: string) {
+		clearPasteStartTimer();
 		if (pasteBuffer !== undefined) {
 			pasteBuffer += data;
 			flushPasteBuffer();
@@ -158,8 +162,21 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 		if (outsidePaste) handleNonPasteInput(outsidePaste);
 		if (disposed) return;
 		const prefix = combined.slice(combined.length - prefixLength);
-		if (prefix && isClaimedShortcut(prefix)) handleNonPasteInput(prefix);
-		else pasteStartBuffer = prefix;
+		if (prefix) {
+			pasteStartBuffer = prefix;
+			pasteStartTimer = setTimeout(() => {
+				pasteStartTimer = undefined;
+				const pending = pasteStartBuffer;
+				pasteStartBuffer = "";
+				if (!disposed && pending) handleNonPasteInput(pending);
+			}, INPUT_PREFIX_TIMEOUT_MS);
+		}
+	}
+
+	function clearPasteStartTimer() {
+		if (!pasteStartTimer) return;
+		clearTimeout(pasteStartTimer);
+		pasteStartTimer = undefined;
 	}
 
 	function flushPasteBuffer() {
@@ -169,8 +186,52 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 		const pasted = pasteBuffer.slice(0, pasteEnd);
 		const remaining = pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
 		pasteBuffer = undefined;
-		handleSearchInput(`${BRACKETED_PASTE_START}${pasted}${BRACKETED_PASTE_END}`);
+		input.handleInput(`${BRACKETED_PASTE_START}${safe(pasted)}${BRACKETED_PASTE_END}`);
+		refilter();
 		if (remaining && !disposed) routeInput(remaining);
+	}
+
+	function handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (disposed || !mouseLayout || event.width !== mouseLayout.width) return undefined;
+		if (event.y === mouseLayout.inputFrameRow) {
+			return input.handleMouse({
+				...event,
+				x: event.x - 2,
+				y: 0,
+				width: Math.max(1, event.width - 2),
+				height: 1,
+			});
+		}
+		const itemIndex = mouseLayout.itemByFrameRow.get(event.y);
+		if (itemIndex === undefined) return undefined;
+		if (event.type === "wheel" && event.wheelDelta) {
+			const next = Math.max(
+				0,
+				Math.min(filtered.length - 1, selectedIndex + (event.wheelDelta < 0 ? -1 : 1)),
+			);
+			const changed = next !== selectedIndex;
+			if (changed) select(next, false);
+			return { handled: true, render: changed };
+		}
+		if (event.type !== "move" && event.button !== "left") return undefined;
+		if (event.type === "move" || event.type === "press") {
+			if (event.type === "press") mousePressedIndex = itemIndex;
+			const changed = itemIndex !== selectedIndex;
+			if (changed) select(itemIndex, false);
+			return {
+				handled: true,
+				focus: event.type === "press",
+				...(event.type === "move" ? { render: changed } : {}),
+			};
+		}
+		if (event.type === "click") {
+			const clickedIndex = mousePressedIndex ?? itemIndex;
+			mousePressedIndex = undefined;
+			selectedIndex = clickedIndex;
+			completeSelected("selected");
+			return { handled: true };
+		}
+		return undefined;
 	}
 
 	return {
@@ -212,7 +273,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 				new HorizontalRule({
 					ruleStyle: (text) => options.theme.fg("borderMuted", text),
 				}).render(safeWidth)[0] ?? "";
-			return renderBoundedFrame({
+			const layout = renderBoundedFrameLayout({
 				width: safeWidth,
 				maxRows: Number.isFinite(options.tui.terminal.rows)
 					? Math.max(0, Math.floor(options.tui.terminal.rows))
@@ -226,17 +287,36 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 				priorityRows: [0, selectedContentIndex],
 				focusedRow: selectedContentIndex,
 			});
+			const frameRowByContent = new Map(
+				layout.contentRows.map(({ contentIndex, frameIndex }) => [contentIndex, frameIndex]),
+			);
+			mouseLayout = {
+				width: safeWidth,
+				inputFrameRow: frameRowByContent.get(0),
+				itemByFrameRow: new Map(
+					visible.flatMap((_, index) => {
+						const frameRow = frameRowByContent.get(searchRows.length + 1 + index);
+						return frameRow === undefined ? [] : [[frameRow, start + index] as const];
+					}),
+				),
+			};
+			return layout.lines;
 		},
 		invalidate() {
+			mouseLayout = undefined;
 			input.invalidate();
 		},
 		handleInput(data: string) {
 			if (!disposed) routeInput(data);
 		},
+		handleMouse,
 		dispose() {
 			disposed = true;
+			clearPasteStartTimer();
 			pasteStartBuffer = "";
 			pasteBuffer = undefined;
+			mousePressedIndex = undefined;
+			mouseLayout = undefined;
 		},
 	};
 }
@@ -244,17 +324,21 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 function filterRows<Value>(
 	rows: readonly PiSelectorRow<Value>[],
 	query: string,
+	prioritizeDefaultPrefix: boolean,
 ): PiSelectorRow<Value>[] {
 	const safeQuery = safe(query).trim();
 	if (!safeQuery) return [...rows];
-	return [
-		...fuzzyFilter([...rows], safeQuery, (row) =>
-			[row.primary, row.secondary, row.description, row.searchText]
-				.filter((value): value is string => Boolean(value))
-				.map(safe)
-				.join(" "),
-		),
-	];
+	const filtered = fuzzyFilter([...rows], safeQuery, (row) =>
+		[row.primary, row.secondary, row.description, row.searchText]
+			.filter((value): value is string => Boolean(value))
+			.map(safe)
+			.join(" "),
+	);
+	if (!prioritizeDefaultPrefix || !"default".startsWith(safeQuery.toLowerCase())) {
+		return filtered;
+	}
+	const defaults = rows.filter((row) => row.default);
+	return [...defaults, ...filtered.filter((row) => !row.default)];
 }
 
 function initialIndex<Value>(

@@ -19,21 +19,33 @@ export interface BoundedFrameOptions {
 	focusedRow?: number;
 }
 
+interface FrameRow {
+	line: string;
+	contentIndex?: number;
+}
+
 /** Frame terminal-formatted rows without owning input, persistence, or terminal reservations. */
 export function renderBoundedFrame(options: BoundedFrameOptions): string[] {
+	return renderBoundedFrameLayout(options).lines;
+}
+
+/** Internal layout metadata for components that route normalized pointer coordinates. */
+export function renderBoundedFrameLayout(options: BoundedFrameOptions) {
 	const width = dimension(options.width);
 	const maxRows = dimension(options.maxRows);
-	if (maxRows === 0) return [];
+	if (maxRows === 0) return { lines: [], contentRows: [] };
 	const { rule, title, content, hints = [], context = [], compactHint = "" } = options;
-	const full = [
-		rule,
-		...title,
-		...context,
-		...(content.length ? ["", ...content] : []),
-		...hints,
-		rule,
+	const full: FrameRow[] = [
+		{ line: rule },
+		...title.map((line) => ({ line })),
+		...context.map((line) => ({ line })),
+		...(content.length
+			? [{ line: "" }, ...content.map((line, contentIndex) => ({ line, contentIndex }))]
+			: []),
+		...hints.map((line) => ({ line })),
+		{ line: rule },
 	];
-	if (full.length <= maxRows) return full.map((line) => truncateToWidth(line, width, ""));
+	if (full.length <= maxRows) return finalizeLayout(full, width);
 
 	const framed = maxRows >= 5;
 	const available = maxRows - (framed ? 2 : 0);
@@ -48,7 +60,7 @@ export function renderBoundedFrame(options: BoundedFrameOptions): string[] {
 		? compactContent(
 				title,
 				context,
-				rows.map(({ line }) => line),
+				rows,
 				options.compactHints ?? hints,
 				compactHint,
 				available,
@@ -56,7 +68,16 @@ export function renderBoundedFrame(options: BoundedFrameOptions): string[] {
 				focused,
 			)
 		: compactStatic(title, context, compactHint, available);
-	return (framed ? [rule, ...body, rule] : body).map((line) => truncateToWidth(line, width, ""));
+	return finalizeLayout(framed ? [{ line: rule }, ...body, { line: rule }] : body, width);
+}
+
+function finalizeLayout(rows: readonly FrameRow[], width: number) {
+	return {
+		lines: rows.map(({ line }) => truncateToWidth(line, width, "")),
+		contentRows: rows.flatMap(({ contentIndex }, frameIndex) =>
+			contentIndex === undefined ? [] : [{ contentIndex, frameIndex }],
+		),
+	};
 }
 
 function dimension(value: number): number {
@@ -66,13 +87,13 @@ function dimension(value: number): number {
 function compactContent(
 	title: readonly string[],
 	context: readonly string[],
-	content: readonly string[],
+	content: readonly { line: string; index: number }[],
 	hints: readonly string[],
 	compactHint: string,
 	available: number,
 	priorities: readonly number[],
 	focused: number,
-): string[] {
+): FrameRow[] {
 	const hintBudget = compactHint && available > 1 ? 1 : 0;
 	const minimumContent = Math.min(available - hintBudget, Math.max(1, priorities.length));
 	let remaining = Math.max(0, available - hintBudget - minimumContent);
@@ -97,10 +118,15 @@ function compactContent(
 		indexes.add(index);
 	}
 	return [
-		...title.slice(0, titleBudget),
-		...context.slice(0, contextBudget),
-		...[...indexes].sort((left, right) => left - right).map((index) => content[index] ?? ""),
-		...(hintBudget ? (fullHints ? hints : [compactHint]) : []),
+		...title.slice(0, titleBudget).map((line) => ({ line })),
+		...context.slice(0, contextBudget).map((line) => ({ line })),
+		...[...indexes]
+			.sort((left, right) => left - right)
+			.map((index) => ({
+				line: content[index]?.line ?? "",
+				contentIndex: content[index]?.index,
+			})),
+		...(hintBudget ? (fullHints ? hints : [compactHint]).map((line) => ({ line })) : []),
 	];
 }
 
@@ -109,16 +135,18 @@ function compactStatic(
 	context: readonly string[],
 	compactHint: string,
 	available: number,
-): string[] {
-	if (available === 1) return [context[0] || compactHint || title[0] || ""];
+): FrameRow[] {
+	if (available === 1) return [{ line: context[0] || compactHint || title[0] || "" }];
 	const hintBudget = compactHint ? 1 : 0;
 	const minimumContext = context.length > 0 ? 1 : 0;
 	let remaining = Math.max(0, available - hintBudget - minimumContext);
 	const titleBudget = title.length > 0 && remaining > 0 ? 1 : 0;
 	remaining -= titleBudget;
 	return [
-		...title.slice(0, titleBudget),
-		...context.slice(0, Math.min(context.length, minimumContext + remaining)),
-		...(hintBudget ? [compactHint] : []),
+		...title.slice(0, titleBudget).map((line) => ({ line })),
+		...context
+			.slice(0, Math.min(context.length, minimumContext + remaining))
+			.map((line) => ({ line })),
+		...(hintBudget ? [{ line: compactHint }] : []),
 	];
 }

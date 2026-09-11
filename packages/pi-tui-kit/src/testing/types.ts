@@ -1,4 +1,5 @@
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 
 export type TuiHarnessKey =
 	| "app.models.save"
@@ -27,6 +28,18 @@ export interface TuiHarnessResize {
 	rows?: number;
 }
 
+export interface TuiHarnessMouseEvent {
+	type: TuiMouseEvent["type"];
+	x: number;
+	y: number;
+	button?: TuiMouseEvent["button"];
+	shift?: boolean;
+	alt?: boolean;
+	ctrl?: boolean;
+	wheelDelta?: number;
+	clickCount?: number;
+}
+
 export interface TuiHarness {
 	readonly custom: ExtensionContext["ui"]["custom"];
 	readonly openCount: number;
@@ -39,6 +52,7 @@ export interface TuiHarness {
 	waitForOpen(): Promise<number>;
 	render(width?: number): readonly string[];
 	press(key: TuiHarnessKey): readonly string[];
+	mouse(event: TuiHarnessMouseEvent): readonly string[];
 	send(data: string): readonly string[];
 	type(text: string): readonly string[];
 	resize(size: TuiHarnessResize): readonly string[];
