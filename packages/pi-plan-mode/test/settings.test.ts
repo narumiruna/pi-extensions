@@ -172,6 +172,17 @@ test("Plan-mode settings validate fresh implementation runtime defaults", () => 
 		modelId: "model",
 	});
 	assert.equal(configuredImplementationThinkingLevel(configured), "high");
+	const trimmed = normalizePlanModeSettings({
+		defaultImplementationModel: {
+			provider: "  provider  ",
+			modelId: `  ${"m".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH)}  `,
+		},
+	});
+	assert.ok(trimmed);
+	assert.deepEqual(configuredImplementationModel(trimmed), {
+		provider: "provider",
+		modelId: "m".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH),
+	});
 
 	const defaults = normalizePlanModeSettings({});
 	assert.ok(defaults);
@@ -299,12 +310,20 @@ test("Plan-mode settings patch implementation defaults, retention, and export fi
 		await updatePlanModeSettings(
 			{
 				implementationPlanRetention: "clear-after-first-run",
-				defaultImplementationModel: { provider: "provider", modelId: "model" },
+				defaultImplementationModel: { provider: "  provider  ", modelId: "  model  " },
 				defaultImplementationThinkingLevel: "high",
 				defaultPlanExportPath: "docs/PLAN.md",
 			},
 			{ settingsPath },
 		);
+		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+			thinkingLevel: "low",
+			future: { kept: true },
+			implementationPlanRetention: "clear-after-first-run",
+			defaultImplementationModel: { provider: "provider", modelId: "model" },
+			defaultImplementationThinkingLevel: "high",
+			defaultPlanExportPath: "docs/PLAN.md",
+		});
 		await updatePlanModeSettings(
 			{
 				defaultImplementationModel: null,

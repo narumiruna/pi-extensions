@@ -216,13 +216,19 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 function normalizeImplementationModel(value: unknown): ImplementationModelOverride | undefined {
 	if (
 		!isSettingsDocument(value) ||
-		Object.keys(value).some((key) => key !== "provider" && key !== "modelId") ||
-		!isPendingImplementationModelIdentifier(value.provider) ||
-		!isPendingImplementationModelIdentifier(value.modelId)
+		Object.keys(value).some((key) => key !== "provider" && key !== "modelId")
 	) {
 		return undefined;
 	}
-	return { provider: value.provider, modelId: value.modelId };
+	const provider = typeof value.provider === "string" ? value.provider.trim() : value.provider;
+	const modelId = typeof value.modelId === "string" ? value.modelId.trim() : value.modelId;
+	if (
+		!isPendingImplementationModelIdentifier(provider) ||
+		!isPendingImplementationModelIdentifier(modelId)
+	) {
+		return undefined;
+	}
+	return { provider, modelId };
 }
 
 function normalizeToolNames(value: unknown) {
@@ -349,7 +355,9 @@ export function updatePlanModeSettings(
 		}
 		if (patch.defaultImplementationModel === null) delete updated.defaultImplementationModel;
 		else if (patch.defaultImplementationModel !== undefined) {
-			updated.defaultImplementationModel = { ...patch.defaultImplementationModel };
+			const model = normalizeImplementationModel(patch.defaultImplementationModel);
+			if (!model) throw invalidSettingsError(settingsPath, "invalid implementation model");
+			updated.defaultImplementationModel = model;
 		}
 		if (patch.defaultImplementationThinkingLevel === null) {
 			delete updated.defaultImplementationThinkingLevel;

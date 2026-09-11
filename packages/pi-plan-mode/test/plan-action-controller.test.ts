@@ -42,7 +42,17 @@ test("stale Plan actions do not load interactive UI", async () => {
 
 test("saved-plan fresh actions use persistent defaults and fall back from missing models", async () => {
 	const target = { provider: "target-provider", id: "target-model" };
-	for (const modelAvailable of [true, false]) {
+	const scenarios = [
+		{ name: "available", availableModels: [target], scopedModels: undefined, usesTarget: true },
+		{ name: "missing", availableModels: [], scopedModels: undefined, usesTarget: false },
+		{
+			name: "stale scoped model",
+			availableModels: [],
+			scopedModels: [{ model: target }],
+			usesTarget: false,
+		},
+	];
+	for (const scenario of scenarios) {
 		let selectedRuntime: unknown;
 		const controller = createPlanActionController({
 			loadInteractiveUi: async () =>
@@ -90,20 +100,26 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
 		const context = createMockContext({
 			hasUI: true,
 			model: { provider: "planning-provider", id: "planning-model" },
-			modelRegistry: { getAvailable: () => (modelAvailable ? [target] : []) },
+			...(scenario.scopedModels ? { scopedModels: scenario.scopedModels } : {}),
+			modelRegistry: { getAvailable: () => scenario.availableModels },
 		});
 
 		await controller.showSaved(context.ctx);
 
-		assert.deepEqual(selectedRuntime, {
-			model: modelAvailable
-				? { provider: target.provider, modelId: target.id }
-				: { provider: "planning-provider", modelId: "planning-model" },
-			thinkingLevel: "high",
-		});
+		assert.deepEqual(
+			selectedRuntime,
+			{
+				model: scenario.usesTarget
+					? { provider: target.provider, modelId: target.id }
+					: { provider: "planning-provider", modelId: "planning-model" },
+				thinkingLevel: "high",
+			},
+			scenario.name,
+		);
 		assert.equal(
 			context.notifications.some((notice) => /unavailable/u.test(notice.message)),
-			!modelAvailable,
+			!scenario.usesTarget,
+			scenario.name,
 		);
 	}
 });

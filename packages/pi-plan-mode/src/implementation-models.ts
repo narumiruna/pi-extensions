@@ -24,10 +24,17 @@ export function isPendingImplementationModelIdentifier(value: unknown): value is
 export function snapshotAvailableImplementationModels(
 	ctx: ExtensionContext,
 ): AvailableImplementationModel[] {
-	const scopedModels = ctx.scopedModels ?? [];
-	if (scopedModels.length > 0) return scopedModels.map((entry) => entry.model);
 	const getAvailable = ctx.modelRegistry.getAvailable;
-	return typeof getAvailable === "function" ? getAvailable.call(ctx.modelRegistry) : [];
+	const availableModels =
+		typeof getAvailable === "function" ? getAvailable.call(ctx.modelRegistry) : [];
+	const scopedModels = ctx.scopedModels ?? [];
+	if (scopedModels.length === 0) return availableModels;
+	return scopedModels.flatMap((entry) => {
+		const availableModel = availableModels.find(
+			(model) => model.provider === entry.model.provider && model.id === entry.model.id,
+		);
+		return availableModel ? [availableModel] : [];
+	});
 }
 
 export function findAvailableImplementationModel(

@@ -256,21 +256,59 @@ test("fresh implementation creates a linked destination and hands off only throu
 });
 
 test("saved plans can start fresh without consuming the source session state", async () => {
+	const target = { provider: "test-provider", id: "test-model" };
 	const savedEntry = stateEntry({
 		enabled: false,
 		awaitingAction: false,
 		savedPlan: { plan: PLAN, source: "plan_mode_complete" },
 	});
-	const mock = createMockPi({ activeTools: ["read", "edit"] });
-	planMode(mock.pi, MISSING_SETTINGS);
+	const source = createMockPi({ activeTools: ["read", "edit"] });
+	planMode(source.pi, {
+		readSettings: async () => ({
+			kind: "loaded" as const,
+			settings: {
+				thinkingLevel: "inherit" as const,
+				defaultImplementationModel: {
+					provider: target.provider,
+					modelId: target.id,
+				},
+				defaultImplementationThinkingLevel: "high" as const,
+			},
+		}),
+	});
+	const destination = createMockPi({ thinkingLevel: "low" });
+	planMode(destination.pi, MISSING_SETTINGS);
+	const destinationSetupEntries: unknown[] = [];
+	const destinationBranch = () => [
+		...destinationSetupEntries,
+		...destination.entries.map((entry) => ({ type: "custom" as const, ...entry })),
+	];
+	const destinationContext = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: { provider: "destination-provider", id: "destination-model" },
+		modelRegistry: {
+			find: (provider: string, id: string) =>
+				provider === target.provider && id === target.id ? target : undefined,
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
+		sessionManager: {
+			getSessionFile: () => undefined,
+			getBranch: destinationBranch,
+			getEntries: destinationBranch,
+		},
+	});
 	let destinationState: unknown;
 	let replacementMessage = "";
 	let newSessionCalls = 0;
 	const context = createMockContext({
 		mode: "rpc",
 		hasUI: true,
-		model: { provider: "test-provider", id: "test-model" },
-		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
+		model: target,
+		modelRegistry: {
+			getAvailable: () => [target],
+			getApiKeyAndHeaders: async () => ({ ok: true as const }),
+		},
 		sessionManager: {
 			getSessionFile: () => "/sessions/saved-plan.jsonl",
 			getBranch: () => [savedEntry],
@@ -279,45 +317,65 @@ test("saved plans can start fresh without consuming the source session state", a
 		select: async () => "Start fresh and implement",
 		newSession: async (options: {
 			setup?: (sessionManager: FreshSetupManager) => Promise<void>;
-			withSession?: (ctx: {
-				sessionManager: { getBranch(): unknown[] };
-				sendUserMessage(message: string): Promise<void>;
-			}) => Promise<void>;
+			withSession?: (ctx: unknown) => Promise<void>;
 		}) => {
 			newSessionCalls += 1;
+			await destination.events.get("session_start")?.[0]?.(
+				{ reason: "new" },
+				destinationContext.ctx,
+			);
 			await options.setup?.({
-				appendCustomEntry(_customType, data) {
+				appendCustomEntry(customType, data) {
 					destinationState = data;
+					destinationSetupEntries.push({ type: "custom", customType, data });
 					return "destination-state";
 				},
-				appendCustomMessageEntry() {
+				appendCustomMessageEntry(customType, content, display, details) {
+					destinationSetupEntries.push({
+						type: "custom_message",
+						customType,
+						content,
+						display,
+						details,
+					});
 					return "destination-contract";
 				},
 			});
 			await options.withSession?.({
-				sessionManager: { getBranch: () => [] },
-				sendUserMessage: async (message) => {
+				...(destinationContext.ctx as object),
+				sendUserMessage: async (message: string) => {
 					replacementMessage = message;
+					await destination.events.get("input")?.[0]?.(
+						{ text: message, source: "extension" },
+						destinationContext.ctx,
+					);
 				},
 			});
 			return { cancelled: false };
 		},
 	});
-	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-	await mock.commands.get("plan")?.handler("", context.ctx);
+	await source.events.get("session_start")?.[0]?.({}, context.ctx);
+	await source.commands.get("plan")?.handler("", context.ctx);
 
 	assert.equal(newSessionCalls, 1);
 	assert.equal(context.statuses.get("plan-mode"), "plan saved");
-	assert.equal(mock.entries.length, 0);
+	assert.equal(source.entries.length, 0);
 	assert.deepEqual(destinationState, {
 		enabled: false,
 		awaitingAction: false,
 		pendingImplementationRuntime: {
 			version: 1,
-			model: { provider: "test-provider", modelId: "test-model" },
-			thinkingLevel: "off",
+			model: { provider: target.provider, modelId: target.id },
+			thinkingLevel: "high",
 		},
 	});
+	assert.deepEqual(destination.setModels, [target]);
+	assert.equal(destination.thinkingLevel, "high");
+	assert.equal(
+		(destination.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
+			?.pendingImplementationRuntime,
+		undefined,
+	);
 	assert.match(replacementMessage, /Implement the plan in a fresh context/);
 	assert.match(replacementMessage, /Fresh implementation plan/);
 });

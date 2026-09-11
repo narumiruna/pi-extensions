@@ -242,6 +242,53 @@ test("unavailable persistent model defaults fall back to same as plan", async ()
 	assert.match(context.notifications.at(-1)?.message ?? "", /unavailable.*same as plan/iu);
 });
 
+test("stale scoped persistent model defaults fall back to same as plan", async () => {
+	let availableReads = 0;
+	let selectedRuntime: unknown;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
+		scopedModels: [{ model: AVAILABLE_MODELS[1] }],
+		modelRegistry: {
+			getAvailable: () => {
+				availableReads += 1;
+				return [AVAILABLE_MODELS[0]];
+			},
+		},
+		select: async (title: string) => {
+			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+			if (title.startsWith("Fresh implementation settings")) {
+				return "Start fresh implementation";
+			}
+			return undefined;
+		},
+	});
+
+	await showReadyPlanMenu(
+		context.ctx,
+		menuOptions({
+			implementationDefaults: {
+				model: { provider: "provider-two", modelId: "model-two" },
+				thinkingLevel: "high",
+			},
+			implementFresh: (runtime: unknown) => {
+				selectedRuntime = runtime;
+			},
+		}),
+	);
+
+	assert.equal(availableReads, 1);
+	assert.deepEqual(selectedRuntime, {
+		model: {
+			provider: "provider\u001b[31m-one",
+			modelId: "model\u202e-one",
+		},
+		thinkingLevel: "high",
+	});
+});
+
 test("fresh thinking choice mirrors the built-in thinking layout", async () => {
 	let screen = 0;
 	let thinkingScreen = "";
@@ -321,7 +368,7 @@ test("fresh model picker honors the nonempty session model scope", async () => {
 		}),
 	);
 
-	assert.equal(availableReads, 0);
+	assert.equal(availableReads, 1);
 	assert.ok(modelOptions.some((option) => option.includes("model-two [provider-two]")));
 	assert.equal(
 		modelOptions.some((option) => option.includes("model-one [provider-one]")),
@@ -329,6 +376,58 @@ test("fresh model picker honors the nonempty session model scope", async () => {
 	);
 	assert.deepEqual(selectedRuntime, {
 		model: { provider: "provider-two", modelId: "model-two" },
+	});
+});
+
+test("fresh model picker keeps same as plan available outside the model scope", async () => {
+	let freshVisits = 0;
+	let modelOptions: string[] = [];
+	let selectedRuntime: unknown;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		model: AVAILABLE_MODELS[0],
+		thinkingLevel: "medium",
+		scopedModels: [{ model: AVAILABLE_MODELS[1] }],
+		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+		select: async (title: string, options: string[]) => {
+			if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+			if (title.startsWith("Fresh implementation settings")) {
+				freshVisits += 1;
+				return freshVisits === 1 ? "Model" : "Start fresh implementation";
+			}
+			if (title.startsWith("Implementation model")) {
+				modelOptions = options;
+				return options.find((option) => option.startsWith("Same as plan"));
+			}
+			return undefined;
+		},
+	});
+
+	await showReadyPlanMenu(
+		context.ctx,
+		menuOptions({
+			planThinkingLevel: "medium",
+			implementationDefaults: {
+				model: { provider: "provider-two", modelId: "model-two" },
+			},
+			implementFresh: (runtime: unknown) => {
+				selectedRuntime = runtime;
+			},
+		}),
+	);
+
+	assert.ok(modelOptions.some((option) => option.startsWith("Same as plan")));
+	assert.equal(
+		modelOptions.some((option) => option.includes("model-one [provider-one]")),
+		false,
+	);
+	assert.deepEqual(selectedRuntime, {
+		model: {
+			provider: "provider\u001b[31m-one",
+			modelId: "model\u202e-one",
+		},
+		thinkingLevel: "medium",
 	});
 });
 
@@ -355,6 +454,7 @@ test("fresh model picker falls back when the scoped-model API is unavailable", a
 test("fresh model choice mirrors the searchable built-in model layout in TUI mode", async () => {
 	let screen = 0;
 	let initialModelScreen = "";
+	let selectedModelScreen = "";
 	let filteredModelScreen = "";
 	const context = createMockContext({
 		mode: "tui",
@@ -373,6 +473,8 @@ test("fresh model choice mirrors the searchable built-in model layout in TUI mod
 				harness.handleInput("tui.select.confirm");
 			} else {
 				initialModelScreen = harness.render().join("\n");
+				harness.handleInput("tui.select.down");
+				selectedModelScreen = harness.render().join("\n");
 				harness.handleInput("beta");
 				filteredModelScreen = harness.render().join("\n");
 				harness.handleInput("\u0003");
@@ -383,8 +485,9 @@ test("fresh model choice mirrors the searchable built-in model layout in TUI mod
 
 	await showReadyPlanMenu(context.ctx, menuOptions());
 
-	assert.match(initialModelScreen, /→ ✓ model-one \[provider-one\] · default/u);
-	assert.match(initialModelScreen, /Model Name: Friendly name/u);
+	assert.match(initialModelScreen, /→ Same as plan/u);
+	assert.match(initialModelScreen, /✓ model-one \[provider-one\] · default/u);
+	assert.match(selectedModelScreen, /Model Name: Friendly name/u);
 	assert.match(filteredModelScreen, /model-two \[provider-two\]/u);
 	assert.match(filteredModelScreen, /Model Name: Beta specialist/u);
 	assert.doesNotMatch(filteredModelScreen, /model-one \[provider-one\]/u);

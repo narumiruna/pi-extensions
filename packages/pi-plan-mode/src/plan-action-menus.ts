@@ -343,14 +343,21 @@ function createFreshImplementationFlow(
 		modelScreen: () => ({
 			kind: "choice" as const,
 			title: "Implementation model",
-			items: models.map((choice) => ({
-				id: choice.itemId,
-				label: choice.label,
-				details: choice.details,
-				searchText: choice.searchText,
-			})),
+			items: [
+				{
+					id: "same-as-plan",
+					label: "Same as plan",
+					...(planModelSummary ? { description: planModelSummary } : {}),
+				},
+				...models.map((choice) => ({
+					id: choice.itemId,
+					label: choice.label,
+					details: choice.details,
+					searchText: choice.searchText,
+				})),
+			],
 			action: "select-model" as const,
-			initialItemId: selectedModel?.itemId ?? models.find((choice) => choice.isPlanModel)?.itemId,
+			initialItemId: selectedModel?.itemId ?? "same-as-plan",
 			enableSearch: true,
 			viewportSize: 10,
 		}),
@@ -374,7 +381,7 @@ function createFreshImplementationFlow(
 		}),
 		selectModel(itemId: string) {
 			const choice = models.find((candidate) => candidate.itemId === itemId);
-			selectedModel = choice?.isPlanModel ? undefined : choice;
+			selectedModel = itemId === "same-as-plan" || choice?.isPlanModel ? undefined : choice;
 			selectedModelUsesDefault = false;
 			unavailableDefaultActive = false;
 		},
