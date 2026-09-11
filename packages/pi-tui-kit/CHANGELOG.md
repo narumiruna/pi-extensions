@@ -1,5 +1,15 @@
 # @narumitw/pi-tui-kit
 
+## 0.62.0
+
+### Minor Changes
+
+- 6b1e009: Add searchable default-aware selectors with current/default markers and effective Ctrl+S save-default actions.
+
+### Patch Changes
+
+- 4485b49: Fix forwarded selector submissions, accurate shortcut hints across legacy and extended keyboard protocols, and thinking-level descriptions.
+
 ## 0.61.0
 
 ### Minor Changes
