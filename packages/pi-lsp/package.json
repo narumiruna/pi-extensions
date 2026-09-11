@@ -40,7 +40,6 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.13",
     "@earendil-works/pi-coding-agent": "0.85.0",
     "@types/node": "26.4.1",
     "esbuild": "0.28.2",
