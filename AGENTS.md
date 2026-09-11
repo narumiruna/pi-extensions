@@ -116,6 +116,7 @@
 - Record why any required smoke is impractical and what remains unverified.
 - Start subprocess timing deadlines only after a child readiness handshake, and synchronize concurrent HTTP tests on a server-observable response or callback instead of a fixed sleep.
 - Set `PI_CODING_AGENT_DIR` before importing an extension in lifecycle tests and use fresh imports for module-cached paths.
+- Disable `commit.gpgsign` only through command-scoped Git configuration when root tests cannot reach a signing agent.
 - Keep worktrees outside the repository because root Biome checks reject nested worktrees with another `biome.json`.
 - Stop after one clear external or entitlement failure in a live-provider smoke and fall back to deterministic tests unless the user asks to retry.
 
