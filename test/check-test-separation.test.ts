@@ -14,7 +14,7 @@ test("check and test remain separate CI gates", () => {
 	const checksMatch = /const checks = (\[[^\n]+\]);/u.exec(runChecks);
 	assert.ok(checksMatch, "run-checks must declare its task list");
 	assert.deepEqual(JSON.parse(checksMatch[1] ?? "[]"), [
-		"biome:check",
+		"check:biome",
 		"check:boundaries",
 		"typecheck",
 	]);

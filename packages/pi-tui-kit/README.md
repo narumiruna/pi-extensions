@@ -90,7 +90,7 @@ Repository maintainers can benchmark cold root and lightweight-subpath imports p
 
 ```bash
 npm run build --workspace @narumitw/pi-tui-kit
-node scripts/benchmark-tui-kit-runtime.mjs --runs 5
+npm run benchmark:tui-kit-runtime -- --runs 5
 ```
 
 The benchmark reports medians, median absolute deviations, resolved package URLs, syntax-color evidence, and graph-presence flags.
