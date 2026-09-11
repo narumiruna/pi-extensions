@@ -1,7 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createPiSelector, type PiSelectorRow } from "./components/pi-selectors.js";
 import { runCustomInteraction } from "./custom-interaction.js";
-import { formatInteractionHints } from "./interaction-hints.js";
 import { sanitizeTerminalText } from "./terminal-text.js";
 import type { MenuCloseReason, MenuContext } from "./types.js";
 
@@ -84,9 +83,7 @@ export async function runModelSelector<
 		primary: model.id,
 		secondary: `[${model.provider}]`,
 		description: model.name ? `Model Name: ${model.name}` : undefined,
-		searchText: [model.searchText, sameModel(model, options.defaultModel) ? "default" : undefined]
-			.filter((value): value is string => Boolean(value))
-			.join(" "),
+		searchText: modelSelectorSearchText(model, sameModel(model, options.defaultModel)),
 		current: sameModel(model, options.currentModel),
 		default: sameModel(model, options.defaultModel),
 	}));
@@ -154,23 +151,8 @@ export async function runThinkingSelector<Context extends MenuContext = Extensio
 		create: ({ tui, theme, keybindings, complete }) => {
 			validateViewportSize(options.viewportSize);
 			validateThinkingLevels(options.availableLevels, options.currentLevel);
-			const getKeys = (binding: string) =>
-				(keybindings.getKeys as (keybinding: string) => readonly string[])(binding);
-			const cycleHint = formatInteractionHints({ getKeys }, [
-				{
-					bindings: ["app.thinking.cycle"],
-					excludeKeys: [
-						"ctrl+c",
-						...getKeys("app.models.save"),
-						...getKeys("tui.select.confirm"),
-						...getKeys("tui.select.cancel"),
-					],
-					label: "cycle choice",
-				},
-			]);
 			return createPiSelector({
 				title: "Thinking Level",
-				context: cycleHint ? [cycleHint] : [],
 				rows,
 				initialValue: options.currentLevel,
 				initialSearchInput: options.initialSearchInput,
@@ -192,6 +174,20 @@ export async function runThinkingSelector<Context extends MenuContext = Extensio
 		return { kind: "saveDefault", level: result.value.value };
 	}
 	return result.value;
+}
+
+function modelSelectorSearchText(model: ModelSelectorItem, isDefault: boolean) {
+	return [
+		model.provider,
+		`${model.provider}/${model.id}`,
+		model.provider,
+		model.id,
+		model.name,
+		model.searchText,
+		isDefault ? "default" : undefined,
+	]
+		.filter((value): value is string => Boolean(value))
+		.join(" ");
 }
 
 function sortModels<Item extends ModelSelectorItem>(

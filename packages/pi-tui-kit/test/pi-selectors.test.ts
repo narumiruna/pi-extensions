@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripVTControlCharacters } from "node:util";
+import { matchesKey, setKittyProtocolActive, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { runModelSelector, runThinkingSelector } from "../src/index.js";
@@ -48,6 +49,21 @@ test("model selector keeps the saved default first for default-prefix searches",
 	assert.deepEqual(await running, { kind: "selected", model: saved });
 });
 
+test("model selector ranks a direct provider match before a proxy model ID", async () => {
+	const direct = { provider: "openai", id: "gpt-5" };
+	const proxy = { provider: "openrouter", id: "openai/gpt-5" };
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runModelSelector(context.ctx, {
+		models: [proxy, direct],
+		initialSearchInput: "openai/gpt-5",
+	});
+	await tui.waitForOpen();
+
+	tui.press("tui.select.confirm");
+	assert.deepEqual(await running, { kind: "selected", model: direct });
+});
+
 test("model selector fuzzy-searches sanitized model fields and selects the raw item", async () => {
 	const unsafe = {
 		provider: "vendor\u001b[31m",
@@ -92,6 +108,38 @@ test("model selector preserves the query cursor while sanitizing inserted text",
 	assert.doesNotMatch(tui.render().join("\n"), /No matching options/u);
 	tui.press("tui.select.confirm");
 	assert.deepEqual(await running, { kind: "selected", model: expected });
+});
+
+test("model selector preserves Input paste normalization before sanitizing", async () => {
+	for (const scenario of [
+		{ pasted: "foo\nbar", expectedQuery: "foobar", alternativeId: "foo bar" },
+		{ pasted: "foo\r\nbar", expectedQuery: "foobar", alternativeId: "foo bar" },
+		{ pasted: "foo\rbar", expectedQuery: "foobar", alternativeId: "foo bar" },
+		{ pasted: "foo\tbar", expectedQuery: "foo    bar", alternativeId: "foo bar" },
+		{ pasted: "foo\u202ebar", expectedQuery: "foobar", alternativeId: "foo bar" },
+	] as const) {
+		const expected = { provider: "test", id: scenario.expectedQuery };
+		const tui = createTuiHarness();
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = runModelSelector(context.ctx, {
+			models: [{ provider: "test", id: scenario.alternativeId }, expected],
+		});
+		await tui.waitForOpen();
+
+		tui.send(`\x1b[200~${scenario.pasted}\x1b[201~`);
+		const inputRow = tui
+			.render()
+			.map(stripVTControlCharacters)
+			.find((line) => line.includes("> "));
+		assert.ok(inputRow?.includes(`> ${scenario.expectedQuery}`));
+		if (scenario.pasted.includes("\t")) {
+			tui.press("ctrl+c");
+			assert.deepEqual(await running, { kind: "closed", reason: "close" });
+		} else {
+			tui.press("tui.select.confirm");
+			assert.deepEqual(await running, { kind: "selected", model: expected });
+		}
+	}
 });
 
 test("model selector routes Home and End to query editing", async () => {
@@ -147,6 +195,92 @@ test("model selector gives save-default priority except for hard Ctrl+C", async 
 		if (scenario.expected === "saveDefault") {
 			assert.deepEqual(result, { kind: "saveDefault", model: models[0] });
 		} else assert.deepEqual(result, { kind: "closed", reason: "close" });
+	}
+});
+
+test("selector hints honor semantic key collisions and usable fallbacks", async () => {
+	try {
+		for (const scenario of [
+			{
+				name: "modifier order",
+				kitty: true,
+				saveKeys: ["shift+ctrl+x"],
+				confirmKeys: ["ctrl+shift+x"],
+				data: "\x1b[120;6u",
+				expectedKind: "saveDefault",
+				shown: ["shift+ctrl+x set as default"],
+				hidden: ["shift+ctrl+x select"],
+			},
+			{
+				name: "matcher aliases",
+				kitty: false,
+				saveKeys: ["return"],
+				confirmKeys: ["enter"],
+				data: "\r",
+				expectedKind: "saveDefault",
+				shown: ["enter set as default"],
+				hidden: ["enter select"],
+			},
+			{
+				name: "invalid and hard-cancel fallbacks",
+				kitty: false,
+				saveKeys: ["not-a-key", "ctrl+c", "ctrl+s"],
+				confirmKeys: ["enter"],
+				data: "\x13",
+				expectedKind: "saveDefault",
+				shown: ["ctrl+s set as default", "enter select"],
+				hidden: ["not-a-key", "ctrl+c set as default"],
+			},
+			{
+				name: "legacy collision",
+				kitty: false,
+				saveKeys: ["ctrl+i"],
+				confirmKeys: ["tab"],
+				data: "\t",
+				expectedKind: "saveDefault",
+				shown: ["ctrl+i set as default"],
+				hidden: ["tab select"],
+			},
+			{
+				name: "Kitty disambiguation",
+				kitty: true,
+				saveKeys: ["ctrl+i"],
+				confirmKeys: ["tab"],
+				data: "\x1b[9u",
+				expectedKind: "selected",
+				shown: ["tab select", "ctrl+i set as default"],
+				hidden: [],
+			},
+		] as const) {
+			setKittyProtocolActive(scenario.kitty);
+			const keys = (binding: string): readonly string[] => {
+				if (binding === "app.models.save") return scenario.saveKeys;
+				if (binding === "tui.select.confirm") return scenario.confirmKeys;
+				if (binding === "tui.select.cancel") return ["escape"];
+				return [];
+			};
+			const tui = createTuiHarness({
+				keybindings: {
+					matches: (data, binding) =>
+						keys(String(binding)).some((key) => matchesKey(data, key as never)),
+					getKeys: (binding) => [...keys(String(binding))] as never,
+				},
+			});
+			const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+			const running = runModelSelector(context.ctx, { models: [models[0]] });
+			await tui.waitForOpen();
+			const frame = tui.render().join("\n");
+			for (const text of scenario.shown) {
+				assert.ok(frame.includes(text), `${scenario.name}: expected ${text}`);
+			}
+			for (const text of scenario.hidden) {
+				assert.equal(frame.includes(text), false, `${scenario.name}: hid ${text}`);
+			}
+			tui.send(scenario.data);
+			assert.equal((await running).kind, scenario.expectedKind, scenario.name);
+		}
+	} finally {
+		setKittyProtocolActive(false);
 	}
 });
 
@@ -256,6 +390,22 @@ test("thinking selector keeps every split paste-start boundary ahead of shortcut
 		tui.press("ctrl+c");
 		assert.deepEqual(await running, { kind: "closed", reason: "close" });
 	}
+});
+
+test("selectors reserve Pi-owned terminal rows", async () => {
+	const tui = createTuiHarness({ width: 30, rows: 6 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runModelSelector(context.ctx, {
+		models,
+		lines: ["Provider context"],
+	});
+	await tui.waitForOpen();
+
+	const frame = tui.render();
+	assert.equal(frame.length, 3);
+	assert.ok(frame.every((line) => visibleWidth(line) <= 30));
+	tui.press("ctrl+c");
+	assert.deepEqual(await running, { kind: "closed", reason: "close" });
 });
 
 test("selectors forward normalized mouse input and row selection", async () => {

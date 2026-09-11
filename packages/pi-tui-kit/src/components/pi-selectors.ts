@@ -2,6 +2,7 @@ import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent"
 import {
 	fuzzyFilter,
 	Input,
+	isKittyProtocolActive,
 	Key,
 	matchesKey,
 	parseKey,
@@ -16,6 +17,7 @@ import { HorizontalRule } from "../horizontal-rule.js";
 import { formatInteractionHints } from "../interaction-hints.js";
 import { sanitizeTerminalText } from "../terminal-text.js";
 import type { MenuCloseReason } from "../types.js";
+import { componentRows } from "./rendering.js";
 
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
@@ -186,7 +188,9 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 		const pasted = pasteBuffer.slice(0, pasteEnd);
 		const remaining = pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
 		pasteBuffer = undefined;
-		input.handleInput(`${BRACKETED_PASTE_START}${safe(pasted)}${BRACKETED_PASTE_END}`);
+		input.handleInput(
+			`${BRACKETED_PASTE_START}${normalizePastedInput(pasted)}${BRACKETED_PASTE_END}`,
+		);
 		refilter();
 		if (remaining && !disposed) routeInput(remaining);
 	}
@@ -266,7 +270,13 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 				content.push("", options.theme.fg("muted", `  ${safe(selected.description)}`));
 			}
 
-			const hint = selectorHint(options.keybindings, options.saveBinding);
+			const keyPlan = selectorKeyPlan(
+				options.keybindings,
+				options.saveBinding,
+				options.cycleBinding,
+			);
+			const hint = selectorHint(keyPlan);
+			const cycleHint = selectorCycleHint(keyPlan);
 			const listSelectedIndex = selectedIndex - start;
 			const selectedContentIndex = searchRows.length + 1 + listSelectedIndex;
 			const rule =
@@ -275,12 +285,13 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 				}).render(safeWidth)[0] ?? "";
 			const layout = renderBoundedFrameLayout({
 				width: safeWidth,
-				maxRows: Number.isFinite(options.tui.terminal.rows)
-					? Math.max(0, Math.floor(options.tui.terminal.rows))
-					: 0,
+				maxRows: componentRows(options.tui.terminal.rows),
 				rule,
 				title: options.title ? [safe(options.title)] : [],
-				context: (options.context ?? []).map((line) => safe(line)),
+				context: [
+					...(cycleHint ? [cycleHint] : []),
+					...(options.context ?? []).map((line) => safe(line)),
+				],
 				content,
 				hints: hint ? [options.theme.fg("dim", `  ${hint}`)] : [],
 				compactHint: hint ? options.theme.fg("dim", hint) : "",
@@ -329,7 +340,7 @@ function filterRows<Value>(
 	const safeQuery = safe(query).trim();
 	if (!safeQuery) return [...rows];
 	const filtered = fuzzyFilter([...rows], safeQuery, (row) =>
-		[row.primary, row.secondary, row.description, row.searchText]
+		[row.searchText, row.primary, row.secondary, row.description]
 			.filter((value): value is string => Boolean(value))
 			.map(safe)
 			.join(" "),
@@ -375,28 +386,111 @@ function renderSearchInput(input: Input, width: number) {
 	return input.render(inputWidth).map((line) => truncateToWidth(`${prefix}${line}`, width, ""));
 }
 
-function selectorHint(keybindings: KeybindingsManager, saveBinding: "app.models.save") {
-	const saveKeys = getBindingKeys(keybindings, saveBinding);
-	const confirmKeys = getBindingKeys(keybindings, "tui.select.confirm");
-	return formatInteractionHints(
-		{
-			getKeys: (binding: string) => getBindingKeys(keybindings, binding),
-		},
-		[
-			{
-				bindings: ["tui.select.confirm"],
-				excludeKeys: ["ctrl+c", ...saveKeys],
-				label: "select",
-			},
-			{ bindings: [saveBinding], excludeKeys: ["ctrl+c"], label: "set as default" },
-			{
-				bindings: ["tui.select.cancel"],
-				excludeKeys: ["ctrl+c", ...saveKeys, ...confirmKeys],
-				label: "cancel",
-			},
-		],
-	);
+interface SelectorKeyPlan {
+	save: readonly string[];
+	confirm: readonly string[];
+	cancel: readonly string[];
+	cycle: readonly string[];
 }
+
+function selectorKeyPlan(
+	keybindings: KeybindingsManager,
+	saveBinding: "app.models.save",
+	cycleBinding: "app.thinking.cycle" | undefined,
+): SelectorKeyPlan {
+	const claimed = new Set([keyClaimIdentity("ctrl+c")]);
+	const claim = (binding: string | undefined) => {
+		const available: string[] = [];
+		if (!binding) return available;
+		for (const key of getBindingKeys(keybindings, binding)) {
+			const canonical = canonicalKeyId(key);
+			if (!canonical) continue;
+			const identity = keyClaimIdentity(canonical);
+			if (claimed.has(identity)) continue;
+			claimed.add(identity);
+			available.push(canonical);
+		}
+		return available;
+	};
+	return {
+		save: claim(saveBinding),
+		confirm: claim("tui.select.confirm"),
+		cancel: claim("tui.select.cancel"),
+		cycle: claim(cycleBinding),
+	};
+}
+
+function selectorHint(plan: SelectorKeyPlan) {
+	return formatInteractionHints({ getKeys: () => [] }, [
+		{ keys: plan.confirm, label: "select" },
+		{ keys: plan.save, label: "set as default" },
+		{ keys: plan.cancel, label: "cancel" },
+	]);
+}
+
+function selectorCycleHint(plan: SelectorKeyPlan) {
+	return formatInteractionHints({ getKeys: () => [] }, [
+		{ keys: plan.cycle, label: "cycle choice" },
+	]);
+}
+
+function canonicalKeyId(value: string): string | undefined {
+	const parts = safe(value).toLowerCase().split("+");
+	const rawBase = parts.at(-1);
+	if (!rawBase) return undefined;
+	const base = rawBase === "esc" ? "escape" : rawBase === "return" ? "enter" : rawBase;
+	const modifiers = ["shift", "ctrl", "alt", "super"].filter((modifier) =>
+		parts.includes(modifier),
+	);
+	if (!isExecutableKey(base, modifiers)) return undefined;
+	return [...modifiers, base].join("+");
+}
+
+function keyClaimIdentity(canonical: string): string {
+	if (isKittyProtocolActive()) return canonical;
+	if (canonical === "ctrl+i") return "tab";
+	if (canonical === "ctrl+j" || canonical === "ctrl+m") return "enter";
+	if (canonical === "ctrl+[") return "escape";
+	if (canonical === "ctrl+_") return "ctrl+-";
+	if (canonical === "alt+b") return "alt+left";
+	if (canonical === "alt+f") return "alt+right";
+	if (canonical === "alt+p") return "alt+up";
+	if (canonical === "alt+n") return "alt+down";
+	return canonical;
+}
+
+function isExecutableKey(base: string, modifiers: readonly string[]) {
+	if (!KEY_BASES.has(base)) return false;
+	if (base === "escape" || /^f(?:[1-9]|1[0-2])$/u.test(base)) return modifiers.length === 0;
+	if (base === "clear") {
+		return (
+			modifiers.length === 0 ||
+			(modifiers.length === 1 && (modifiers[0] === "shift" || modifiers[0] === "ctrl"))
+		);
+	}
+	return true;
+}
+
+const KEY_BASES = new Set([
+	..."abcdefghijklmnopqrstuvwxyz0123456789`-=[]\\;',./!@#$%^&*()_|~{}:<>?",
+	"escape",
+	"enter",
+	"tab",
+	"space",
+	"backspace",
+	"delete",
+	"insert",
+	"clear",
+	"home",
+	"end",
+	"pageup",
+	"pagedown",
+	"up",
+	"down",
+	"left",
+	"right",
+	...Array.from({ length: 12 }, (_, index) => `f${index + 1}`),
+]);
 
 function matchesBinding(keybindings: KeybindingsManager, data: string, binding: string) {
 	return (keybindings.matches as (input: string, keybinding: string) => boolean)(data, binding);
@@ -412,6 +506,12 @@ function normalizeViewportSize(value: number | undefined) {
 
 function safe(value: string) {
 	return sanitizeTerminalText(value);
+}
+
+function normalizePastedInput(value: string) {
+	return safe(
+		value.replace(/\r\n/gu, "").replace(/\r/gu, "").replace(/\n/gu, "").replace(/\t/gu, "    "),
+	);
 }
 
 function trailingMarkerPrefixLength(value: string, marker: string) {
