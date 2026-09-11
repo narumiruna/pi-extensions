@@ -132,6 +132,7 @@ test("shared root inputs and removed workspaces fall back to all workspaces", ()
 		["package-lock.json"],
 		["tsconfig.json"],
 		["biome.json"],
+		["scripts/pre-commit.sh"],
 		["scripts/run-typechecks.mjs"],
 		["packages/removed/src/index.ts"],
 		["../outside.ts"],
@@ -199,11 +200,21 @@ test("staged file discovery tracks both rename paths and rejects unstaged manife
 	}
 });
 
-test("the pre-commit hook narrows typechecks without narrowing the repository gate", () => {
+test("the pre-commit hook delegates checks without narrowing the repository gate", () => {
 	const manifest = JSON.parse(readFileSync(path.join(repositoryRoot, "package.json"), "utf8")) as {
 		scripts: Record<string, string>;
 	};
-	assert.match(manifest.scripts.precommit, /run-typechecks\.mjs --staged/u);
+	const hook = readFileSync(path.join(repositoryRoot, ".husky", "pre-commit"), "utf8");
+	const preCommitScript = readFileSync(
+		path.join(repositoryRoot, "scripts", "pre-commit.sh"),
+		"utf8",
+	);
+
+	assert.equal(hook, "./scripts/pre-commit.sh\n");
+	assert.match(preCommitScript, /biome migrate --write/u);
+	assert.match(preCommitScript, /biome format --write/u);
+	assert.match(preCommitScript, /biome check --write/u);
+	assert.match(preCommitScript, /run-typechecks\.mjs --staged/u);
 	assert.doesNotMatch(manifest.scripts.typecheck, /--staged/u);
 });
 
