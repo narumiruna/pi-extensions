@@ -38,7 +38,7 @@ test("tool_execution_end pauses a goal before another turn when terminal tools d
 });
 
 test("tool_execution_end stops budget work, blocks stale tools, and releases the workflow", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	let aborts = 0;
 	const budgeted = await startGoalForTest(
 		{
@@ -93,7 +93,7 @@ test("tool_execution_end stops budget work, blocks stale tools, and releases the
 });
 
 test("rejected completion cannot revive a budget-limited goal", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -127,7 +127,7 @@ test("rejected completion cannot revive a budget-limited goal", async () => {
 });
 
 test("stale completion cannot revive a budget-limited goal", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -162,7 +162,7 @@ test("stale completion cannot revive a budget-limited goal", async () => {
 });
 
 test("budget exhaustion never queues or retries a follow-up wrap-up", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -198,7 +198,7 @@ test("budget exhaustion never queues or retries a follow-up wrap-up", async () =
 });
 
 test("budget wrap-up permission closes at agent_end and stale context is filtered", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -237,7 +237,7 @@ test("budget wrap-up permission closes at agent_end and stale context is filtere
 });
 
 test("budget stop preserves a pending transformed follow-up without resuming Goal work", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -277,7 +277,7 @@ test("budget stop preserves a pending transformed follow-up without resuming Goa
 });
 
 test("budget stop queues no custom work and remains stopped through agent_end", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -303,7 +303,7 @@ test("budget stop queues no custom work and remains stopped through agent_end", 
 });
 
 test("compaction cancels before retry when persisted usage has exhausted the budget", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -328,7 +328,7 @@ test("compaction cancels before retry when persisted usage has exhausted the bud
 });
 
 test("budget edits require an actual increase before rotating the stale id", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",
@@ -361,7 +361,7 @@ test("budget edits require an actual increase before rotating the stale id", asy
 });
 
 test("failed budget-increase edit delivery restores the limited goal and stale id", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 original objective",

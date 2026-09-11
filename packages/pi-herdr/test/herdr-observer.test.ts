@@ -107,7 +107,7 @@ test("publishes initial siblings and applies live status and exit events", async
 		async subscribe(_endpoint, request, signal, nextEvent) {
 			assert.equal(request.method, "events.subscribe");
 			assert.deepEqual(
-				(request.params.subscriptions as Array<Record<string, unknown>>).filter(
+				(request.params.subscriptions as Record<string, unknown>[]).filter(
 					(entry) => entry.type === "pane.agent_status_changed",
 				),
 				[

@@ -259,7 +259,7 @@ test("native PR refresh clears branch state, aborts stale work, and stops on foo
 	const stale = deferred<ExecResult>();
 	const fresh = deferred<ExecResult>();
 	const disposal = deferred<ExecResult>();
-	const prResults: Array<Promise<ExecResult>> = [
+	const prResults: Promise<ExecResult>[] = [
 		Promise.resolve(pullRequestResult(123)),
 		stale.promise,
 		fresh.promise,

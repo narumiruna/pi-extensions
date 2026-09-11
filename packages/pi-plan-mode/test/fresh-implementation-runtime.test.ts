@@ -508,7 +508,7 @@ test("destination applies restored runtime during resumed session startup", asyn
 });
 
 test("destination applies restored runtime during tree navigation", async () => {
-	const branch: Array<ReturnType<typeof stateEntry>> = [];
+	const branch: ReturnType<typeof stateEntry>[] = [];
 	const mock = createMockPi({ thinkingLevel: "low" });
 	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
 	const context = createMockContext({

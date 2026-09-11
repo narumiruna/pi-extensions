@@ -73,7 +73,7 @@ async function createContext(mode: ExtensionContext["mode"] = "tui") {
 	temporaryDirectories.push(cwd);
 	vi.stubEnv("PI_CODING_AGENT_DIR", cwd);
 	const widgets: WidgetRecord[] = [];
-	const notifications: Array<[string, string | undefined]> = [];
+	const notifications: [string, string | undefined][] = [];
 	const sessionManager = {} as ExtensionContext["sessionManager"];
 	const ctx = {
 		cwd,

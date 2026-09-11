@@ -74,9 +74,10 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
 	if (Object.hasOwn(value, "notifyOnFallback") && typeof value.notifyOnFallback !== "boolean") {
 		return undefined;
 	}
-	for (const [field, limits] of Object.entries(LIMITS) as Array<
-		[keyof typeof LIMITS, { minimum: number; maximum: number }]
-	>) {
+	for (const [field, limits] of Object.entries(LIMITS) as [
+		keyof typeof LIMITS,
+		{ minimum: number; maximum: number },
+	][]) {
 		if (
 			Object.hasOwn(value, field) &&
 			!validInteger(value[field], limits.minimum, limits.maximum)

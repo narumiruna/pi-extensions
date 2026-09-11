@@ -671,7 +671,7 @@ test("conversation-history fresh kickoff skips active state and recovers in the 
 });
 
 test("fresh handoff treats a handled runtime kickoff as partial and restores the prompt", async () => {
-	const destinationBranch: Array<ReturnType<typeof stateEntry>> = [];
+	const destinationBranch: ReturnType<typeof stateEntry>[] = [];
 	const replacement = createMockContext({
 		mode: "rpc",
 		hasUI: true,

@@ -105,7 +105,7 @@ function createContext(
 ) {
 	let entries = initialEntries;
 	const widgets: WidgetRecord[] = [];
-	const notifications: Array<[string, "info" | "warning" | "error" | undefined]> = [];
+	const notifications: [string, "info" | "warning" | "error" | undefined][] = [];
 	const sessionManager = {
 		getBranch: () => entries,
 	} as unknown as ExtensionContext["sessionManager"];

@@ -153,7 +153,7 @@ test("active and waiting Goals hold while paused and budget-limited Goals releas
 	active.mock.eventBus.emit(WORKFLOW_MUTEX_CHANNEL, pausedAttempt);
 	assert.equal(pausedAttempt.busy, false);
 
-	const budgetBranch: Array<Record<string, unknown>> = [];
+	const budgetBranch: Record<string, unknown>[] = [];
 	const budgetSession = { getBranch: () => budgetBranch, getEntries: () => budgetBranch };
 	const budget = await startGoalForTest({ sessionManager: budgetSession }, "--tokens 1 bounded");
 	budgetBranch.push(assistantUsageEntry({ totalTokens: 2 }));

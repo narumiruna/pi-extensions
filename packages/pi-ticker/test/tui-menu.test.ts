@@ -60,7 +60,7 @@ function context(
 	tui: ReturnType<typeof createTuiHarness>,
 	input: ExtensionCommandContext["ui"]["input"] = async () => undefined,
 ) {
-	const notifications: Array<[string, string | undefined]> = [];
+	const notifications: [string, string | undefined][] = [];
 	const ctx = {
 		mode: "tui",
 		hasUI: true,

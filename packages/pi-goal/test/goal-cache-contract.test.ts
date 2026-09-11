@@ -227,7 +227,7 @@ test("Goal activation appends its contract without changing the stable tool sche
 });
 
 test("goal_complete persists one real provider output before the inactive contract", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const allTools = [builtinTool("read"), builtinTool("bash")];
 	const mock = createMockPi({ activeTools: ["read", "bash"], allTools });
 	registerGoalWithSettingsPath(mock.pi, DEFAULT_SETTINGS_PATH);
@@ -312,7 +312,7 @@ test("goal_complete persists one real provider output before the inactive contra
 		userMessage(followUpPrompt),
 	]);
 	const payload = await serializeProviderRequest(followUp);
-	const providerInput = payload.input as Array<Record<string, unknown>>;
+	const providerInput = payload.input as Record<string, unknown>[];
 	const outputs = providerInput.filter(
 		(item) => item.type === "function_call_output" && item.call_id === toolCallId,
 	);
@@ -328,7 +328,7 @@ test("goal_complete persists one real provider output before the inactive contra
 });
 
 test("goal_blocked persists one real provider output before the inactive contract", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const allTools = [builtinTool("read"), builtinTool("bash")];
 	const mock = createMockPi({ activeTools: ["read", "bash"], allTools });
 	registerGoalWithSettingsPath(mock.pi, DEFAULT_SETTINGS_PATH);
@@ -418,7 +418,7 @@ test("goal_blocked persists one real provider output before the inactive contrac
 		userMessage(followUpPrompt),
 	]);
 	const payload = await serializeProviderRequest(followUp);
-	const providerInput = payload.input as Array<Record<string, unknown>>;
+	const providerInput = payload.input as Record<string, unknown>[];
 	const outputs = providerInput.filter(
 		(item) => item.type === "function_call_output" && item.call_id === toolCallId,
 	);
@@ -434,7 +434,7 @@ test("goal_blocked persists one real provider output before the inactive contrac
 });
 
 test("token-budgeted continuation and wait resume preserve the post-activation request prefix", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const allTools = [builtinTool("read"), builtinTool("bash")];
 	const mock = createMockPi({ activeTools: ["read", "bash"], allTools });
 	registerGoalWithSettingsPath(mock.pi, DEFAULT_SETTINGS_PATH);
@@ -543,7 +543,7 @@ test("token-budgeted continuation and wait resume preserve the post-activation r
 });
 
 test("Goal identity rotation and clearing preserve the full serialized history", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const allTools = [builtinTool("read"), builtinTool("bash")];
 	const mock = createMockPi({ activeTools: ["read", "bash"], allTools });
 	registerGoalWithSettingsPath(mock.pi, DEFAULT_SETTINGS_PATH);
@@ -655,7 +655,7 @@ test("failed Goal delivery persists no undelivered contract", async () => {
 		undefined,
 	);
 
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const edited = createMockPi({ activeTools: ["read", "bash"], allTools });
 	registerGoalWithSettingsPath(edited.pi, DEFAULT_SETTINGS_PATH);
 	const editedContext = createMockContext({
@@ -803,7 +803,7 @@ test("persisting a restored waiting Goal contract does not wake the Goal", async
 });
 
 test("compacted active Goal receives one cache-stable contract after summary messages", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const mock = createMockPi();
 	registerGoalWithSettingsPath(mock.pi, DEFAULT_SETTINGS_PATH);
 	const context = createMockContext({

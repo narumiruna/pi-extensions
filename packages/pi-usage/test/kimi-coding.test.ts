@@ -125,14 +125,14 @@ test("Kimi adapter omits malformed, duplicate, unknown, and unsafe window fields
 	assert.equal(rendered.includes(TERMINAL_ESCAPE), false);
 	assert.doesNotMatch(rendered, /unknown-window/u);
 
-	const oversized = fixture("daily") as { limits?: Array<Record<string, unknown>> };
+	const oversized = fixture("daily") as { limits?: Record<string, unknown>[] };
 	const first = oversized.limits?.[0];
 	if (first) first.name = `safe${"x".repeat(10_000)}\u001b[31m`;
 	const oversizedReport = normalizeKimiCodingUsagePayload(oversized, 800);
 	assert.ok((oversizedReport.buckets[0]?.label.length ?? 0) <= 80);
 	assert.equal((oversizedReport.buckets[0]?.label ?? "").includes(TERMINAL_ESCAPE), false);
 
-	const impossibleTimestamp = fixture("daily") as { limits?: Array<Record<string, unknown>> };
+	const impossibleTimestamp = fixture("daily") as { limits?: Record<string, unknown>[] };
 	const detail = impossibleTimestamp.limits?.[0]?.detail as Record<string, unknown> | undefined;
 	if (detail) detail.resetTime = "2030-02-30T00:00:00Z";
 	assert.equal(

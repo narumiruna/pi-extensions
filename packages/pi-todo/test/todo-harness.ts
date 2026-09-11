@@ -130,7 +130,7 @@ export function createContext(
 }
 
 export function identityTheme() {
-	const calls: Array<[string, string]> = [];
+	const calls: [string, string][] = [];
 	const theme = {
 		fg(role: string, text: string) {
 			calls.push(["fg", role]);

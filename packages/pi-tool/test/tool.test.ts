@@ -620,7 +620,7 @@ test("an empty catalog remains bounded and can close", async () => {
 });
 
 test("each command reads a fresh sorted catalog and active state", async () => {
-	const allTools: Array<(typeof configuredTools)[number]> = [configuredTools[0]];
+	const allTools: (typeof configuredTools)[number][] = [configuredTools[0]];
 	const mock = createMockPi({ allTools, activeTools: [] });
 	startToolExtension(mock.pi);
 	await mock.events.get("session_start")?.[0]?.({}, createMockContext({ hasUI: true }).ctx);

@@ -172,7 +172,7 @@ export interface GoalSettingsRuntimeSnapshot {
 	budgetWrapUp?: BudgetWrapUp;
 	guardAbortGoalId?: string;
 	staleGoalToolCallsBlocked: boolean;
-	cancelledContinuationMarkers: Array<[string, string]>;
+	cancelledContinuationMarkers: [string, string][];
 	terminalDetails?: GoalTerminalDetails;
 }
 

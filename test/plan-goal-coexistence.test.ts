@@ -92,7 +92,7 @@ async function emitLifecycle(
 function createFixture(
 	loadOrder: LoadOrder,
 	options: {
-		branch?: Array<Record<string, unknown>>;
+		branch?: Record<string, unknown>[];
 		goalRpc?: boolean;
 		planShortcut?: boolean;
 		capturePlanUi?: CapturedPlanUi;

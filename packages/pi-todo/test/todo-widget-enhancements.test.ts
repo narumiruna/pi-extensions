@@ -229,7 +229,7 @@ test("cancels completion timers on updates, clears, tree changes, and session re
 });
 
 test("returns actionable validation errors before schema validation and direct execution", async () => {
-	const cases: Array<[unknown, RegExp]> = [
+	const cases: [unknown, RegExp][] = [
 		[null, /input must be an object.*resubmit the complete todos array/iu],
 		[{}, /todos must be an array.*resubmit/iu],
 		[

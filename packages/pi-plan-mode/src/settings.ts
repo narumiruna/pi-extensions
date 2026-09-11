@@ -281,7 +281,7 @@ export function normalizeKeyId(value: unknown): KeyId | undefined {
 
 function normalizeSafeSubcommands(value: unknown): SafeSubcommands | undefined {
 	if (!isSettingsDocument(value)) return undefined;
-	const entries: Array<[string, string[]]> = [];
+	const entries: [string, string[]][] = [];
 	for (const [command, subcommands] of Object.entries(value)) {
 		const normalizedCommand = command.trim();
 		if (

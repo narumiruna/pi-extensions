@@ -299,7 +299,7 @@ test("language commands are required by active variables and parsed strictly", a
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-language-"));
 	try {
 		writeFileSync(join(root, "package.json"), "{}");
-		const calls: Array<[string, string[]]> = [];
+		const calls: [string, string[]][] = [];
 		const snapshot = await collectWorkspaceSnapshot({
 			cwd: root,
 			config: config("$nodejs", { nodejs: { format: "$symbol $version" } }),
