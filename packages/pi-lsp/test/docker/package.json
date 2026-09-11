@@ -1,9 +1,9 @@
 {
-	"name": "pi-lsp-docker-smoke",
-	"private": true,
-	"type": "module",
-	"dependencies": {
-		"@earendil-works/pi-coding-agent": "0.82.0",
-		"typebox": "1.3.3"
-	}
+  "name": "pi-lsp-docker-smoke",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.82.0",
+    "typebox": "1.3.3"
+  }
 }

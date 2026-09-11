@@ -1,44 +1,43 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
-	"vcs": {
-		"enabled": true,
-		"clientKind": "git",
-		"useIgnoreFile": true
-	},
-	"files": {
-		"includes": ["**", "!deprecated", "!package-lock.json"]
-	},
-	"formatter": {
-		"enabled": true,
-		"indentStyle": "tab",
-		"lineWidth": 100
-	},
-	"linter": {
-		"enabled": true,
-		"rules": {
-			"preset": "recommended",
-			"complexity": {
-				"noUselessTypeConstraint": "error"
-			},
-			"performance": {
-				"noReExportAll": "error"
-			},
-			"style": {
-				"useAsConstAssertion": "error",
-				"useConsistentArrayType": "error",
-				"useConst": "error",
-				"useShorthandFunctionType": "error",
-				"useSingleVarDeclarator": "error"
-			},
-			"suspicious": {
-				"noExtraNonNullAssertion": "error"
-			}
-		}
-	},
-	"javascript": {
-		"formatter": {
-			"quoteStyle": "double",
-			"semicolons": "always"
-		}
-	}
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["**", "!deprecated", "!package-lock.json"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "lineWidth": 120,
+    "indentWidth": 2
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "noUselessTypeConstraint": "error"
+      },
+      "performance": {
+        "noReExportAll": "error"
+      },
+      "style": {
+        "useAsConstAssertion": "error",
+        "useConsistentArrayType": "error",
+        "useConst": "error",
+        "useShorthandFunctionType": "error",
+        "useSingleVarDeclarator": "error"
+      },
+      "suspicious": {
+        "noExtraNonNullAssertion": "error"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always"
+    }
+  }
 }

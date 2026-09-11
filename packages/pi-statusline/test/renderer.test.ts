@@ -6,11 +6,11 @@ import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { powerlineExtensionSeparator, renderPowerlineStatusline } from "../src/powerline.js";
 import {
-	formatConfiguredSegment,
-	formatToolActivity,
-	type RuntimeState,
-	renderStatusline,
-	truncateModel,
+  formatConfiguredSegment,
+  formatToolActivity,
+  type RuntimeState,
+  renderStatusline,
+  truncateModel,
 } from "../src/render.js";
 import { createDefaultConfig, normalizeStatuslineConfig } from "../src/settings.js";
 import type { RenderItem, RenderSegment, SegmentName } from "../src/types.js";
@@ -19,727 +19,663 @@ const ESCAPE = String.fromCharCode(27);
 const ANSI_PATTERN = new RegExp(`${ESCAPE}\\[[0-9;]*m`, "gu");
 
 function plain(value: string): string {
-	return value.replace(ANSI_PATTERN, "");
+  return value.replace(ANSI_PATTERN, "");
 }
 
 function segment(name: SegmentName, text: string, block: RenderSegment["block"]): RenderSegment {
-	return { name, text, block, color: "accent" };
+  return { name, text, block, color: "accent" };
 }
 
 test("powerline renderer preserves configured segment order across repeated blocks", () => {
-	const config = createDefaultConfig();
-	const rendered = renderPowerlineStatusline(
-		300,
-		[
-			segment("model", "model", "header"),
-			segment("time", "time", "meter"),
-			segment("provider", "provider", "header"),
-		],
-		config,
-	);
-	assert.match(plain(rendered), /^░▒▓ model time provider$/u);
+  const config = createDefaultConfig();
+  const rendered = renderPowerlineStatusline(
+    300,
+    [segment("model", "model", "header"), segment("time", "time", "meter"), segment("provider", "provider", "header")],
+    config,
+  );
+  assert.match(plain(rendered), /^░▒▓ model time provider$/u);
 });
 
 test("Tokyo Night default retains the exact powerline colors", () => {
-	const rendered = renderPowerlineStatusline(
-		300,
-		[segment("model", "model", "header")],
-		createDefaultConfig(),
-	);
-	assert.equal(
-		rendered,
-		"\u001b[38;2;163;174;210m░▒▓\u001b[0m" +
-			"\u001b[38;2;9;12;12;48;2;163;174;210m model\u001b[0m" +
-			"\u001b[38;2;163;174;210m\u001b[0m",
-	);
+  const rendered = renderPowerlineStatusline(300, [segment("model", "model", "header")], createDefaultConfig());
+  assert.equal(
+    rendered,
+    "\u001b[38;2;163;174;210m░▒▓\u001b[0m" +
+      "\u001b[38;2;9;12;12;48;2;163;174;210m model\u001b[0m" +
+      "\u001b[38;2;163;174;210m\u001b[0m",
+  );
 });
 
 test("powerline colors fall back to ANSI-256 when true color is disabled", () => {
-	const rendered = renderPowerlineStatusline(
-		300,
-		[segment("model", "model", "header")],
-		createDefaultConfig(),
-		false,
-	);
-	assert.equal(rendered.includes("\u001b[38;2;"), false);
-	assert.equal(rendered.includes("\u001b[48;2;"), false);
-	assert.equal(rendered.includes("\u001b[38;5;146m"), true);
-	assert.equal(rendered.includes("\u001b[38;5;16;48;5;146m"), true);
-	assert.equal(plain(rendered), "░▒▓ model");
+  const rendered = renderPowerlineStatusline(300, [segment("model", "model", "header")], createDefaultConfig(), false);
+  assert.equal(rendered.includes("\u001b[38;2;"), false);
+  assert.equal(rendered.includes("\u001b[48;2;"), false);
+  assert.equal(rendered.includes("\u001b[38;5;146m"), true);
+  assert.equal(rendered.includes("\u001b[38;5;16;48;5;146m"), true);
+  assert.equal(plain(rendered), "░▒▓ model");
 });
 
 test("configured palette joins reordered time to an adjacent header block", () => {
-	const config = createDefaultConfig();
-	config.palettePreset = "custom";
-	config.palette.time = { fg: "#090c0c", bg: "#a3aed2" };
-	const rendered = renderPowerlineStatusline(
-		300,
-		[segment("time", "time", "meter"), segment("brand", "brand", "header")],
-		config,
-	);
-	assert.equal(plain(rendered), "░▒▓ time brand");
-	assert.equal((plain(rendered).match(//gu) ?? []).length, 1);
+  const config = createDefaultConfig();
+  config.palettePreset = "custom";
+  config.palette.time = { fg: "#090c0c", bg: "#a3aed2" };
+  const rendered = renderPowerlineStatusline(
+    300,
+    [segment("time", "time", "meter"), segment("brand", "brand", "header")],
+    config,
+  );
+  assert.equal(plain(rendered), "░▒▓ time brand");
+  assert.equal((plain(rendered).match(//gu) ?? []).length, 1);
 });
 
 test("partial custom palette leaves omitted colors unstyled", () => {
-	const config = normalizeStatuslineConfig({ palette: { time: { fg: "#ffffff" } } }).config;
-	const rendered = renderPowerlineStatusline(300, [segment("time", "time", "meter")], config);
-	assert.equal(rendered, `░▒▓${ESCAPE}[38;2;255;255;255m time${ESCAPE}[0m`);
+  const config = normalizeStatuslineConfig({ palette: { time: { fg: "#ffffff" } } }).config;
+  const rendered = renderPowerlineStatusline(300, [segment("time", "time", "meter")], config);
+  assert.equal(rendered, `░▒▓${ESCAPE}[38;2;255;255;255m time${ESCAPE}[0m`);
 });
 
 test("empty custom palette renders without ANSI color fallback", () => {
-	const config = normalizeStatuslineConfig({ palette: {} }).config;
-	const rendered = renderPowerlineStatusline(
-		300,
-		[segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
-		config,
-	);
-	assert.equal(rendered, "░▒▓ model cwd");
-	assert.equal(powerlineExtensionSeparator({} as Theme, "custom"), " • ");
+  const config = normalizeStatuslineConfig({ palette: {} }).config;
+  const rendered = renderPowerlineStatusline(
+    300,
+    [segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
+    config,
+  );
+  assert.equal(rendered, "░▒▓ model cwd");
+  assert.equal(powerlineExtensionSeparator({} as Theme, "custom"), " • ");
 });
 
 test("different final segment colors retain the powerline transition", () => {
-	const config = createDefaultConfig();
-	config.palettePreset = "custom";
-	config.palette.time = { ...config.palette.time, bg: "#123456" };
-	const rendered = renderPowerlineStatusline(
-		300,
-		[segment("time", "time", "meter"), segment("brand", "brand", "header")],
-		config,
-	);
-	assert.equal(plain(rendered), "░▒▓ time brand");
+  const config = createDefaultConfig();
+  config.palettePreset = "custom";
+  config.palette.time = { ...config.palette.time, bg: "#123456" };
+  const rendered = renderPowerlineStatusline(
+    300,
+    [segment("time", "time", "meter"), segment("brand", "brand", "header")],
+    config,
+  );
+  assert.equal(plain(rendered), "░▒▓ time brand");
 });
 
 test("line breaks render separated repeated markers as independent powerline rows", () => {
-	const config = createDefaultConfig();
-	const items: RenderItem[] = [
-		segment("model", "model", "header"),
-		{ name: "line_break" },
-		segment("cwd", "cwd", "directory"),
-		{ name: "line_break" },
-		segment("branch", "branch", "git"),
-	];
-	const rendered = renderPowerlineStatusline(300, items, config);
-	assert.deepEqual(plain(rendered).split("\n"), ["░▒▓ model", "░▒▓ cwd", "░▒▓ branch"]);
+  const config = createDefaultConfig();
+  const items: RenderItem[] = [
+    segment("model", "model", "header"),
+    { name: "line_break" },
+    segment("cwd", "cwd", "directory"),
+    { name: "line_break" },
+    segment("branch", "branch", "git"),
+  ];
+  const rendered = renderPowerlineStatusline(300, items, config);
+  assert.deepEqual(plain(rendered).split("\n"), ["░▒▓ model", "░▒▓ cwd", "░▒▓ branch"]);
 });
 
 test("idle contextual activity rows collapse while explicit empty rows remain", () => {
-	const config = createDefaultConfig();
-	config.segments = ["model", "line_break", "tools", "line_break", "context"];
-	const context = createMockContext({
-		model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 1000 },
-		getContextUsage: () => ({ percent: 42, contextWindow: 1000 }),
-	});
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => "main",
-		getExtensionStatuses: () => new Map<string, string>(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
-	const idle = plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
-	assert.deepEqual(idle.split("\n"), ["░▒▓ 🤖 sonnet-4", "░▒▓ 🪟 ctx 42.0%/1.0k"]);
+  const config = createDefaultConfig();
+  config.segments = ["model", "line_break", "tools", "line_break", "context"];
+  const context = createMockContext({
+    model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 1000 },
+    getContextUsage: () => ({ percent: 42, contextWindow: 1000 }),
+  });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => "main",
+    getExtensionStatuses: () => new Map<string, string>(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
+  const idle = plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
+  assert.deepEqual(idle.split("\n"), ["░▒▓ 🤖 sonnet-4", "░▒▓ 🪟 ctx 42.0%/1.0k"]);
 
-	runtime.isStreaming = true;
-	const streaming = plain(
-		renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime),
-	);
-	assert.deepEqual(streaming.split("\n"), [
-		"░▒▓ 🤖 sonnet-4",
-		"░▒▓ 💭 thinking",
-		"░▒▓ 🪟 ctx 42.0%/1.0k",
-	]);
+  runtime.isStreaming = true;
+  const streaming = plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
+  assert.deepEqual(streaming.split("\n"), ["░▒▓ 🤖 sonnet-4", "░▒▓ 💭 thinking", "░▒▓ 🪟 ctx 42.0%/1.0k"]);
 
-	config.segments = ["line_break", "model", "line_break"];
-	const explicitEmptyRows = plain(
-		renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime),
-	);
-	assert.deepEqual(explicitEmptyRows.split("\n"), ["", "░▒▓ 🤖 sonnet-4", ""]);
+  config.segments = ["line_break", "model", "line_break"];
+  const explicitEmptyRows = plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
+  assert.deepEqual(explicitEmptyRows.split("\n"), ["", "░▒▓ 🤖 sonnet-4", ""]);
 });
 
 test("UI prompt activity sanitizes and bounds titles with kind-only fallbacks", () => {
-	const runtime: RuntimeState = {
-		turnCount: 0,
-		activeTools: new Map([["read", 2]]),
-		isStreaming: true,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
-	const kinds = ["select", "confirm", "input", "editor", "custom"] as const;
-	for (const kind of kinds) {
-		runtime.uiPrompt = { kind };
-		assert.equal(formatToolActivity(runtime), `⌨ waiting for ${kind}`);
-	}
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map([["read", 2]]),
+    isStreaming: true,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
+  const kinds = ["select", "confirm", "input", "editor", "custom"] as const;
+  for (const kind of kinds) {
+    runtime.uiPrompt = { kind };
+    assert.equal(formatToolActivity(runtime), `⌨ waiting for ${kind}`);
+  }
 
-	runtime.uiPrompt = {
-		kind: "confirm",
-		title: `Deploy\n\x1b[31mproduction\x1b[0m\u202e ${"界".repeat(30)}`,
-	};
-	const titled = formatToolActivity(runtime) ?? "";
-	assert.equal(titled.includes("\n"), false);
-	assert.equal(titled.includes(ESCAPE), false);
-	assert.equal(titled.includes("\u202e"), false);
-	assert.match(titled, /^⌨ waiting for confirm · Deploy production/u);
-	assert.ok(visibleWidth(titled) <= visibleWidth("⌨ waiting for confirm · ") + 40);
-	assert.match(titled, /…$/u);
+  runtime.uiPrompt = {
+    kind: "confirm",
+    title: `Deploy\n\x1b[31mproduction\x1b[0m\u202e ${"界".repeat(30)}`,
+  };
+  const titled = formatToolActivity(runtime) ?? "";
+  assert.equal(titled.includes("\n"), false);
+  assert.equal(titled.includes(ESCAPE), false);
+  assert.equal(titled.includes("\u202e"), false);
+  assert.match(titled, /^⌨ waiting for confirm · Deploy production/u);
+  assert.ok(visibleWidth(titled) <= visibleWidth("⌨ waiting for confirm · ") + 40);
+  assert.match(titled, /…$/u);
 
-	runtime.uiPrompt = { kind: "custom", title: "\x1b[31m\u202e" };
-	assert.equal(formatToolActivity(runtime), "⌨ waiting for custom");
+  runtime.uiPrompt = { kind: "custom", title: "\x1b[31m\u202e" };
+  assert.equal(formatToolActivity(runtime), "⌨ waiting for custom");
 
-	runtime.uiPrompt = { kind: "input", title: `a${"\u0301".repeat(1_000)}` };
-	const zeroWidthTitle = (formatToolActivity(runtime) ?? "").replace("⌨ waiting for input · ", "");
-	assert.equal([...zeroWidthTitle].length, 256);
-	assert.match(zeroWidthTitle, /…$/u);
-	assert.ok(visibleWidth(zeroWidthTitle) <= 40);
+  runtime.uiPrompt = { kind: "input", title: `a${"\u0301".repeat(1_000)}` };
+  const zeroWidthTitle = (formatToolActivity(runtime) ?? "").replace("⌨ waiting for input · ", "");
+  assert.equal([...zeroWidthTitle].length, 256);
+  assert.match(zeroWidthTitle, /…$/u);
+  assert.ok(visibleWidth(zeroWidthTitle) <= 40);
 });
 
 test("cwd uses Starship repository and three-component directory defaults", () => {
-	const config = createDefaultConfig();
-	config.segments = ["cwd"];
-	const context = createMockContext({
-		cwd: "/home/alice/work/repository/src",
-	});
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => "main",
-		getExtensionStatuses: () => new Map<string, string>(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		homeDir: "/home/alice",
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		gitStatus: {
-			root: "/home/alice/work/repository",
-			ahead: 0,
-			behind: 0,
-			staged: 0,
-			modified: 0,
-			untracked: 0,
-			conflicts: 0,
-		},
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
+  const config = createDefaultConfig();
+  config.segments = ["cwd"];
+  const context = createMockContext({
+    cwd: "/home/alice/work/repository/src",
+  });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => "main",
+    getExtensionStatuses: () => new Map<string, string>(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    homeDir: "/home/alice",
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    gitStatus: {
+      root: "/home/alice/work/repository",
+      ahead: 0,
+      behind: 0,
+      staged: 0,
+      modified: 0,
+      untracked: 0,
+      conflicts: 0,
+    },
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
 
-	assert.equal(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
-		"░▒▓ 📁 repository/src",
-	);
+  assert.equal(
+    plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+    "░▒▓ 📁 repository/src",
+  );
 
-	runtime.gitStatus = undefined;
-	assert.equal(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
-		"░▒▓ 📁 work/repository/src",
-	);
+  runtime.gitStatus = undefined;
+  assert.equal(
+    plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+    "░▒▓ 📁 work/repository/src",
+  );
 
-	(context.ctx as { cwd: string }).cwd = "/home/alice";
-	runtime.gitStatus = {
-		root: "/home/alice/",
-		ahead: 0,
-		behind: 0,
-		staged: 0,
-		modified: 0,
-		untracked: 0,
-		conflicts: 0,
-	};
-	assert.equal(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
-		"░▒▓ 📁 ~",
-	);
+  (context.ctx as { cwd: string }).cwd = "/home/alice";
+  runtime.gitStatus = {
+    root: "/home/alice/",
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    modified: 0,
+    untracked: 0,
+    conflicts: 0,
+  };
+  assert.equal(plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)), "░▒▓ 📁 ~");
 });
 
 test("cwd preserves POSIX backslashes and strips terminal controls", { skip: sep !== "/" }, () => {
-	const config = createDefaultConfig();
-	config.segments = ["cwd"];
-	const context = createMockContext({ cwd: "/home/alice/team\\name/project" });
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => null,
-		getExtensionStatuses: () => new Map(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		homeDir: "/home/alice",
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
+  const config = createDefaultConfig();
+  config.segments = ["cwd"];
+  const context = createMockContext({ cwd: "/home/alice/team\\name/project" });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => null,
+    getExtensionStatuses: () => new Map(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    homeDir: "/home/alice",
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
 
-	assert.equal(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
-		"░▒▓ 📁 ~/team\\name/project",
-	);
-	(context.ctx as { cwd: string }).cwd =
-		"/home/alice/team\x1b]8;;https://evil.example\x07click\x1b]8;;\x07/repo\nline";
-	assert.equal(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
-		"░▒▓ 📁 ~/teamclick/repo line",
-	);
-	(context.ctx as { cwd: string }).cwd = "/home/alice/team/\x1bPhidden\x1b\\repo\u202e";
-	assert.equal(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
-		"░▒▓ 📁 ~/team/repo",
-	);
+  assert.equal(
+    plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+    "░▒▓ 📁 ~/team\\name/project",
+  );
+  (context.ctx as { cwd: string }).cwd = "/home/alice/team\x1b]8;;https://evil.example\x07click\x1b]8;;\x07/repo\nline";
+  assert.equal(
+    plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+    "░▒▓ 📁 ~/teamclick/repo line",
+  );
+  (context.ctx as { cwd: string }).cwd = "/home/alice/team/\x1bPhidden\x1b\\repo\u202e";
+  assert.equal(
+    plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+    "░▒▓ 📁 ~/team/repo",
+  );
 });
 
 test("model truncation supports all directions before prefixes and responsive fitting", () => {
-	const config = createDefaultConfig();
-	config.segments = ["model"];
-	config.segmentText.model.truncationLength = 6;
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => "main",
-		getExtensionStatuses: () => new Map<string, string>(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
-	const renderModel = (id: string) => {
-		const context = createMockContext({ model: { id, provider: "llama.cpp" } });
-		return plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
-	};
+  const config = createDefaultConfig();
+  config.segments = ["model"];
+  config.segmentText.model.truncationLength = 6;
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => "main",
+    getExtensionStatuses: () => new Map<string, string>(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
+  const renderModel = (id: string) => {
+    const context = createMockContext({ model: { id, provider: "llama.cpp" } });
+    return plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
+  };
 
-	config.segmentText.model.truncationDirection = "end";
-	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcdef…");
-	config.segmentText.model.truncationDirection = "start";
-	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 …jklmno");
-	config.segmentText.model.truncationDirection = "middle";
-	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abc…mno");
-	config.segmentText.model.truncationLength = 5;
-	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abc…no");
+  config.segmentText.model.truncationDirection = "end";
+  assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcdef…");
+  config.segmentText.model.truncationDirection = "start";
+  assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 …jklmno");
+  config.segmentText.model.truncationDirection = "middle";
+  assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abc…mno");
+  config.segmentText.model.truncationLength = 5;
+  assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abc…no");
 
-	config.segmentText.model.truncationLength = 6;
-	config.segmentText.model.truncationSymbol = "";
-	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcmno");
-	config.segmentText.model.truncationLength = 0;
-	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcdefghijklmno");
+  config.segmentText.model.truncationLength = 6;
+  config.segmentText.model.truncationSymbol = "";
+  assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcmno");
+  config.segmentText.model.truncationLength = 0;
+  assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcdefghijklmno");
 
-	config.segmentText.model.truncationLength = 6;
-	config.segmentText.model.truncationSymbol = "…";
-	config.segmentText.model.truncationDirection = "end";
-	assert.equal(renderModel("claude-sonnet-20241022"), "░▒▓ 🤖 sonnet");
-	assert.equal(renderModel("A👨‍👩‍👧‍👦BCDEFG"), "░▒▓ 🤖 A👨‍👩‍👧‍👦BCDE…");
+  config.segmentText.model.truncationLength = 6;
+  config.segmentText.model.truncationSymbol = "…";
+  config.segmentText.model.truncationDirection = "end";
+  assert.equal(renderModel("claude-sonnet-20241022"), "░▒▓ 🤖 sonnet");
+  assert.equal(renderModel("A👨‍👩‍👧‍👦BCDEFG"), "░▒▓ 🤖 A👨‍👩‍👧‍👦BCDE…");
 });
 
 test("model rendering strips terminal sequences from runtime IDs and truncation symbols", () => {
-	assert.equal(
-		truncateModel("safe\x1b]8;;https://evil.example\x07click\x1b]8;;\x07\nmodel", 0, "…", "end"),
-		"safeclick model",
-	);
-	assert.equal(truncateModel("a\u009d0;title\u009cb", 0, "…", "end"), "ab");
-	assert.equal(truncateModel("safe\x1bPpayload\x1b\\model\u202e", 0, "…", "end"), "safemodel");
-	assert.equal(truncateModel("abcdef", 3, "\x1b[31m!\x1b[0m", "end"), "abc!");
-	assert.equal(truncateModel("abcdef", 3, "\x1b_private\x1b\\!\u2066", "end"), "abc!");
+  assert.equal(
+    truncateModel("safe\x1b]8;;https://evil.example\x07click\x1b]8;;\x07\nmodel", 0, "…", "end"),
+    "safeclick model",
+  );
+  assert.equal(truncateModel("a\u009d0;title\u009cb", 0, "…", "end"), "ab");
+  assert.equal(truncateModel("safe\x1bPpayload\x1b\\model\u202e", 0, "…", "end"), "safemodel");
+  assert.equal(truncateModel("abcdef", 3, "\x1b[31m!\x1b[0m", "end"), "abc!");
+  assert.equal(truncateModel("abcdef", 3, "\x1b_private\x1b\\!\u2066", "end"), "abc!");
 });
 
 test("default model truncation retains useful llama.cpp path detail at standard width", () => {
-	const config = createDefaultConfig();
-	const id = "/home/willow/program/llama.cpp/models/Qwen3.6-35B-A3B-UDT-Q4_K_XL_MTP.gguf";
-	const model = { id, provider: "llama.cpp", contextWindow: 72_000 };
-	const context = createMockContext({
-		model,
-		getContextUsage: () => ({ percent: 25.4, contextWindow: 72_000 }),
-	});
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => "main",
-		getExtensionStatuses: () => new Map<string, string>(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
+  const config = createDefaultConfig();
+  const id = "/home/willow/program/llama.cpp/models/Qwen3.6-35B-A3B-UDT-Q4_K_XL_MTP.gguf";
+  const model = { id, provider: "llama.cpp", contextWindow: 72_000 };
+  const context = createMockContext({
+    model,
+    getContextUsage: () => ({ percent: 25.4, contextWindow: 72_000 }),
+  });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => "main",
+    getExtensionStatuses: () => new Map<string, string>(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
 
-	const rendered = plain(
-		renderStatusline(80, context.ctx, footerData, {} as Theme, config, runtime),
-	);
-	assert.match(rendered, /🤖 …Qwen3\.6-35B-A3B-UDT-Q4_K_XL_MTP\.gguf/u);
-	assert.match(rendered, /🌿 main/u);
-	assert.match(rendered, /ctx 25\.4%\/72k/u);
-	assert.ok(visibleWidth(rendered) <= 80);
-	assert.equal(model.id, id);
+  const rendered = plain(renderStatusline(80, context.ctx, footerData, {} as Theme, config, runtime));
+  assert.match(rendered, /🤖 …Qwen3\.6-35B-A3B-UDT-Q4_K_XL_MTP\.gguf/u);
+  assert.match(rendered, /🌿 main/u);
+  assert.match(rendered, /ctx 25\.4%\/72k/u);
+  assert.ok(visibleWidth(rendered) <= 80);
+  assert.equal(model.id, id);
 });
 
 test("responsive fitting keeps primary and active information ahead of decorative segments", () => {
-	const config = createDefaultConfig();
-	const items = [
-		segment("brand", "BRAND", "header"),
-		segment("provider", "PROVIDER", "header"),
-		segment("model", "MODEL", "header"),
-		segment("thinking", "THINKING", "header"),
-		segment("cwd", "WORKSPACE", "directory"),
-		segment("branch", "BRANCH", "git"),
-		segment("tools", "ACTIVE", "runtime"),
-		segment("context", "CONTEXT", "runtime"),
-		segment("tokens", "TOKENS", "runtime"),
-		segment("cache", "CACHE", "runtime"),
-		segment("cost", "COST", "meter"),
-		segment("time", "TIME", "meter"),
-		segment("turn", "TURN", "meter"),
-	];
+  const config = createDefaultConfig();
+  const items = [
+    segment("brand", "BRAND", "header"),
+    segment("provider", "PROVIDER", "header"),
+    segment("model", "MODEL", "header"),
+    segment("thinking", "THINKING", "header"),
+    segment("cwd", "WORKSPACE", "directory"),
+    segment("branch", "BRANCH", "git"),
+    segment("tools", "ACTIVE", "runtime"),
+    segment("context", "CONTEXT", "runtime"),
+    segment("tokens", "TOKENS", "runtime"),
+    segment("cache", "CACHE", "runtime"),
+    segment("cost", "COST", "meter"),
+    segment("time", "TIME", "meter"),
+    segment("turn", "TURN", "meter"),
+  ];
 
-	const normal = plain(renderPowerlineStatusline(60, items, config));
-	assert.ok(visibleWidth(normal) <= 60);
-	for (const value of ["MODEL", "WORKSPACE", "BRANCH", "ACTIVE", "CONTEXT"]) {
-		assert.match(normal, new RegExp(value, "u"));
-	}
-	assert.doesNotMatch(normal, /BRAND|PROVIDER|CACHE|TOKENS|TIME|TURN/u);
+  const normal = plain(renderPowerlineStatusline(60, items, config));
+  assert.ok(visibleWidth(normal) <= 60);
+  for (const value of ["MODEL", "WORKSPACE", "BRANCH", "ACTIVE", "CONTEXT"]) {
+    assert.match(normal, new RegExp(value, "u"));
+  }
+  assert.doesNotMatch(normal, /BRAND|PROVIDER|CACHE|TOKENS|TIME|TURN/u);
 
-	const narrow = plain(renderPowerlineStatusline(40, items, config));
-	assert.ok(visibleWidth(narrow) <= 40);
-	for (const value of ["MODEL", "BRANCH", "ACTIVE", "CONTEXT"]) {
-		assert.match(narrow, new RegExp(value, "u"));
-	}
-	assert.doesNotMatch(narrow, /BRAND|PROVIDER|THINKING|WORKSPACE|CACHE|TOKENS|COST|TIME|TURN/u);
+  const narrow = plain(renderPowerlineStatusline(40, items, config));
+  assert.ok(visibleWidth(narrow) <= 40);
+  for (const value of ["MODEL", "BRANCH", "ACTIVE", "CONTEXT"]) {
+    assert.match(narrow, new RegExp(value, "u"));
+  }
+  assert.doesNotMatch(narrow, /BRAND|PROVIDER|THINKING|WORKSPACE|CACHE|TOKENS|COST|TIME|TURN/u);
 });
 
 test("responsive fitting preserves explicit row boundaries and fits every rendered line", () => {
-	const config = createDefaultConfig();
-	const rendered = renderPowerlineStatusline(
-		15,
-		[
-			segment("brand", "DECORATION", "header"),
-			segment("context", "CONTEXT", "runtime"),
-			{ name: "line_break" },
-			segment("model", "MODEL", "header"),
-			segment("time", "CLOCK", "meter"),
-		],
-		config,
-	);
-	const lines = plain(rendered).split("\n");
-	assert.equal(lines.length, 2);
-	assert.match(lines[0] ?? "", /CONTEXT/u);
-	assert.doesNotMatch(lines[0] ?? "", /DECORATION/u);
-	assert.match(lines[1] ?? "", /MODEL/u);
-	assert.doesNotMatch(lines[1] ?? "", /CLOCK/u);
-	assert.ok(lines.every((line) => visibleWidth(line) <= 15));
+  const config = createDefaultConfig();
+  const rendered = renderPowerlineStatusline(
+    15,
+    [
+      segment("brand", "DECORATION", "header"),
+      segment("context", "CONTEXT", "runtime"),
+      { name: "line_break" },
+      segment("model", "MODEL", "header"),
+      segment("time", "CLOCK", "meter"),
+    ],
+    config,
+  );
+  const lines = plain(rendered).split("\n");
+  assert.equal(lines.length, 2);
+  assert.match(lines[0] ?? "", /CONTEXT/u);
+  assert.doesNotMatch(lines[0] ?? "", /DECORATION/u);
+  assert.match(lines[1] ?? "", /MODEL/u);
+  assert.doesNotMatch(lines[1] ?? "", /CLOCK/u);
+  assert.ok(lines.every((line) => visibleWidth(line) <= 15));
 });
 
 test("responsive fitting removes one oversized segment and preserves empty explicit rows", () => {
-	const config = createDefaultConfig();
-	const oversized = renderPowerlineStatusline(
-		8,
-		[segment("model", "A VERY LONG MODEL", "header")],
-		config,
-	);
-	assert.equal(oversized, "");
+  const config = createDefaultConfig();
+  const oversized = renderPowerlineStatusline(8, [segment("model", "A VERY LONG MODEL", "header")], config);
+  assert.equal(oversized, "");
 
-	const multiline = renderPowerlineStatusline(
-		20,
-		[{ name: "line_break" }, segment("model", "MODEL", "header"), { name: "line_break" }],
-		config,
-	);
-	const lines = multiline.split("\n");
-	assert.equal(lines.length, 3);
-	assert.equal(lines[0], "");
-	assert.equal(lines[2], "");
-	assert.ok(lines.every((line) => visibleWidth(line) <= 20));
+  const multiline = renderPowerlineStatusline(
+    20,
+    [{ name: "line_break" }, segment("model", "MODEL", "header"), { name: "line_break" }],
+    config,
+  );
+  const lines = multiline.split("\n");
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], "");
+  assert.equal(lines[2], "");
+  assert.ok(lines.every((line) => visibleWidth(line) <= 20));
 });
 
 test("density and separator configure text inside a contiguous block", () => {
-	const config = createDefaultConfig();
-	config.separator = "dot";
-	config.density = "compact";
-	assert.equal(
-		plain(
-			renderPowerlineStatusline(
-				300,
-				[segment("provider", "one", "header"), segment("model", "two", "header")],
-				config,
-			),
-		),
-		"░▒▓ one • two",
-	);
-	config.density = "cozy";
-	assert.equal(
-		plain(
-			renderPowerlineStatusline(
-				300,
-				[segment("provider", "one", "header"), segment("model", "two", "header")],
-				config,
-			),
-		),
-		"░▒▓  one  •  two ",
-	);
+  const config = createDefaultConfig();
+  config.separator = "dot";
+  config.density = "compact";
+  assert.equal(
+    plain(
+      renderPowerlineStatusline(300, [segment("provider", "one", "header"), segment("model", "two", "header")], config),
+    ),
+    "░▒▓ one • two",
+  );
+  config.density = "cozy";
+  assert.equal(
+    plain(
+      renderPowerlineStatusline(300, [segment("provider", "one", "header"), segment("model", "two", "header")], config),
+    ),
+    "░▒▓  one  •  two ",
+  );
 });
 
 test("all named palettes render deterministic distinct ANSI output", () => {
-	const outputs = new Set<string>();
-	for (const palette of [
-		"tokyo-night",
-		"ocean",
-		"sunset",
-		"forest",
-		"candy",
-		"neon",
-		"mono",
-	] as const) {
-		const config = createDefaultConfig();
-		config.palettePreset = palette;
-		config.palette.model = { fg: "#ffffff", bg: "#ffffff" };
-		const output = renderPowerlineStatusline(
-			300,
-			[segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
-			config,
-		);
-		assert.equal(plain(output), "░▒▓ model cwd");
-		outputs.add(output);
-	}
-	assert.equal(outputs.size, 7);
+  const outputs = new Set<string>();
+  for (const palette of ["tokyo-night", "ocean", "sunset", "forest", "candy", "neon", "mono"] as const) {
+    const config = createDefaultConfig();
+    config.palettePreset = palette;
+    config.palette.model = { fg: "#ffffff", bg: "#ffffff" };
+    const output = renderPowerlineStatusline(
+      300,
+      [segment("model", "model", "header"), segment("cwd", "cwd", "directory")],
+      config,
+    );
+    assert.equal(plain(output), "░▒▓ model cwd");
+    outputs.add(output);
+  }
+  assert.equal(outputs.size, 7);
 });
 
 test("named palettes use cohesive preset-specific background ramps", () => {
-	const expected = {
-		ocean: ["#7dcfff", "#4f9fba", "#2d6f88", "#23475b", "#182b3a"],
-		sunset: ["#ffcf70", "#f59e6f", "#dc718a", "#8f5b78", "#493447"],
-		forest: ["#a7c080", "#83c092", "#5f9f75", "#3f6f55", "#293f35"],
-		candy: ["#f5c2e7", "#cba6f7", "#89b4fa", "#745f9a", "#403a5c"],
-		neon: ["#39ff14", "#00f5ff", "#ff4fd8", "#7a2cf3", "#29134f"],
-		mono: ["#d4d4d4", "#a3a3a3", "#686868", "#404040", "#262626"],
-	} as const;
-	const samples = [
-		segment("model", "model", "header"),
-		segment("cwd", "cwd", "directory"),
-		segment("branch", "branch", "git"),
-		segment("tools", "tools", "runtime"),
-		segment("time", "time", "meter"),
-	];
+  const expected = {
+    ocean: ["#7dcfff", "#4f9fba", "#2d6f88", "#23475b", "#182b3a"],
+    sunset: ["#ffcf70", "#f59e6f", "#dc718a", "#8f5b78", "#493447"],
+    forest: ["#a7c080", "#83c092", "#5f9f75", "#3f6f55", "#293f35"],
+    candy: ["#f5c2e7", "#cba6f7", "#89b4fa", "#745f9a", "#403a5c"],
+    neon: ["#39ff14", "#00f5ff", "#ff4fd8", "#7a2cf3", "#29134f"],
+    mono: ["#d4d4d4", "#a3a3a3", "#686868", "#404040", "#262626"],
+  } as const;
+  const samples = [
+    segment("model", "model", "header"),
+    segment("cwd", "cwd", "directory"),
+    segment("branch", "branch", "git"),
+    segment("tools", "tools", "runtime"),
+    segment("time", "time", "meter"),
+  ];
 
-	for (const [palettePreset, colors] of Object.entries(expected)) {
-		const config = createDefaultConfig();
-		config.palettePreset = palettePreset as keyof typeof expected;
-		const actual = samples.map((item) =>
-			backgroundColor(renderPowerlineStatusline(80, [item], config)),
-		);
-		assert.deepEqual(actual, colors, palettePreset);
-	}
+  for (const [palettePreset, colors] of Object.entries(expected)) {
+    const config = createDefaultConfig();
+    config.palettePreset = palettePreset as keyof typeof expected;
+    const actual = samples.map((item) => backgroundColor(renderPowerlineStatusline(80, [item], config)));
+    assert.deepEqual(actual, colors, palettePreset);
+  }
 });
 
 test("named palette block text meets WCAG AA contrast", () => {
-	const samples = [
-		segment("model", "model", "header"),
-		segment("cwd", "cwd", "directory"),
-		segment("branch", "branch", "git"),
-		segment("tools", "tools", "runtime"),
-		segment("time", "time", "meter"),
-	];
+  const samples = [
+    segment("model", "model", "header"),
+    segment("cwd", "cwd", "directory"),
+    segment("branch", "branch", "git"),
+    segment("tools", "tools", "runtime"),
+    segment("time", "time", "meter"),
+  ];
 
-	for (const palettePreset of ["ocean", "sunset", "forest", "candy", "neon", "mono"] as const) {
-		const config = createDefaultConfig();
-		config.palettePreset = palettePreset;
-		for (const item of samples) {
-			const rendered = renderPowerlineStatusline(80, [item], config);
-			const colors = blockColors(rendered);
-			assert.ok(colors, `${palettePreset} ${item.block} colors`);
-			assert.ok(
-				contrastRatio(colors.fg, colors.bg) >= 4.5,
-				`${palettePreset} ${item.block} contrast`,
-			);
-		}
-	}
+  for (const palettePreset of ["ocean", "sunset", "forest", "candy", "neon", "mono"] as const) {
+    const config = createDefaultConfig();
+    config.palettePreset = palettePreset;
+    for (const item of samples) {
+      const rendered = renderPowerlineStatusline(80, [item], config);
+      const colors = blockColors(rendered);
+      assert.ok(colors, `${palettePreset} ${item.block} colors`);
+      assert.ok(contrastRatio(colors.fg, colors.bg) >= 4.5, `${palettePreset} ${item.block} contrast`);
+    }
+  }
 });
 
 function backgroundColor(rendered: string): string | undefined {
-	const match = /48;2;(\d+);(\d+);(\d+)/u.exec(rendered);
-	return match ? rgbMatchToHex(match.slice(1)) : undefined;
+  const match = /48;2;(\d+);(\d+);(\d+)/u.exec(rendered);
+  return match ? rgbMatchToHex(match.slice(1)) : undefined;
 }
 
 function blockColors(rendered: string): { fg: string; bg: string } | undefined {
-	const match = /38;2;(\d+);(\d+);(\d+);48;2;(\d+);(\d+);(\d+)/u.exec(rendered);
-	return match
-		? { fg: rgbMatchToHex(match.slice(1, 4)), bg: rgbMatchToHex(match.slice(4, 7)) }
-		: undefined;
+  const match = /38;2;(\d+);(\d+);(\d+);48;2;(\d+);(\d+);(\d+)/u.exec(rendered);
+  return match ? { fg: rgbMatchToHex(match.slice(1, 4)), bg: rgbMatchToHex(match.slice(4, 7)) } : undefined;
 }
 
 function rgbMatchToHex(components: string[]): string {
-	return `#${components
-		.map((component) => Number(component).toString(16).padStart(2, "0"))
-		.join("")}`;
+  return `#${components.map((component) => Number(component).toString(16).padStart(2, "0")).join("")}`;
 }
 
 function contrastRatio(left: string, right: string): number {
-	const luminances = [left, right].map(relativeLuminance);
-	const lighter = Math.max(...luminances);
-	const darker = Math.min(...luminances);
-	return (lighter + 0.05) / (darker + 0.05);
+  const luminances = [left, right].map(relativeLuminance);
+  const lighter = Math.max(...luminances);
+  const darker = Math.min(...luminances);
+  return (lighter + 0.05) / (darker + 0.05);
 }
 
 function relativeLuminance(hex: string): number {
-	const channels = hex
-		.slice(1)
-		.match(/../gu)
-		?.map((component) => Number.parseInt(component, 16) / 255)
-		.map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)) ?? [
-		0, 0, 0,
-	];
-	return 0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0);
+  const channels = hex
+    .slice(1)
+    .match(/../gu)
+    ?.map((component) => Number.parseInt(component, 16) / 255)
+    .map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)) ?? [0, 0, 0];
+  return 0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0);
 }
 
 test("usage segments match native cache, context-window, and subscription presentation", () => {
-	const config = createDefaultConfig();
-	config.segments = ["context", "cache", "tokens", "cost"];
-	const makeUsage = (
-		input: number,
-		output: number,
-		cacheRead: number,
-		cacheWrite: number,
-		cost: number,
-	) => ({
-		input,
-		output,
-		cacheRead,
-		cacheWrite,
-		totalTokens: input + output + cacheRead + cacheWrite,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-	});
-	const latest = {
-		type: "message",
-		message: { role: "assistant", usage: makeUsage(11_000, 287, 0, 0, 0.03) },
-	};
-	const entries = [
-		{
-			type: "message",
-			message: { role: "assistant", usage: makeUsage(700, 0, 4600, 1500, 0.025) },
-		},
-		{
-			type: "message",
-			message: { role: "toolResult", usage: makeUsage(100, 0, 0, 0, 0.005) },
-		},
-		{ type: "compaction", usage: makeUsage(100, 0, 0, 0, 0.005) },
-		{ type: "branch_summary", usage: makeUsage(100, 0, 0, 0, 0.005) },
-		latest,
-	];
-	const context = createMockContext({
-		model: { id: "gpt-5", provider: "openai", contextWindow: 272_000 },
-		modelRegistry: { isUsingOAuth: () => true },
-		getContextUsage: () => ({ percent: 2.4, tokens: 6528, contextWindow: 272_000 }),
-		sessionManager: { getEntries: () => entries, getBranch: () => [latest] },
-	});
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => null,
-		getExtensionStatuses: () => new Map(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
+  const config = createDefaultConfig();
+  config.segments = ["context", "cache", "tokens", "cost"];
+  const makeUsage = (input: number, output: number, cacheRead: number, cacheWrite: number, cost: number) => ({
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: input + output + cacheRead + cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+  });
+  const latest = {
+    type: "message",
+    message: { role: "assistant", usage: makeUsage(11_000, 287, 0, 0, 0.03) },
+  };
+  const entries = [
+    {
+      type: "message",
+      message: { role: "assistant", usage: makeUsage(700, 0, 4600, 1500, 0.025) },
+    },
+    {
+      type: "message",
+      message: { role: "toolResult", usage: makeUsage(100, 0, 0, 0, 0.005) },
+    },
+    { type: "compaction", usage: makeUsage(100, 0, 0, 0, 0.005) },
+    { type: "branch_summary", usage: makeUsage(100, 0, 0, 0, 0.005) },
+    latest,
+  ];
+  const context = createMockContext({
+    model: { id: "gpt-5", provider: "openai", contextWindow: 272_000 },
+    modelRegistry: { isUsingOAuth: () => true },
+    getContextUsage: () => ({ percent: 2.4, tokens: 6528, contextWindow: 272_000 }),
+    sessionManager: { getEntries: () => entries, getBranch: () => [latest] },
+  });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => null,
+    getExtensionStatuses: () => new Map(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
 
-	assert.match(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
-		/🪟 ctx 2\.4%\/272k 📦 R4\.6k W1\.5k CH0\.0% 🔢 ↑12k ↓287 💸 \$0\.070 \(sub\)/u,
-	);
+  assert.match(
+    plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+    /🪟 ctx 2\.4%\/272k 📦 R4\.6k W1\.5k CH0\.0% 🔢 ↑12k ↓287 💸 \$0\.070 \(sub\)/u,
+  );
 });
 
 test("empty cache activity collapses its configured row and context falls back to model window", () => {
-	const config = createDefaultConfig();
-	config.segments = ["model", "line_break", "cache", "line_break", "context"];
-	const context = createMockContext({
-		model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 200_000 },
-		modelRegistry: { isUsingOAuth: () => false },
-		getContextUsage: () => ({ percent: null, tokens: null, contextWindow: null }),
-	});
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => null,
-		getExtensionStatuses: () => new Map(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
+  const config = createDefaultConfig();
+  config.segments = ["model", "line_break", "cache", "line_break", "context"];
+  const context = createMockContext({
+    model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 200_000 },
+    modelRegistry: { isUsingOAuth: () => false },
+    getContextUsage: () => ({ percent: null, tokens: null, contextWindow: null }),
+  });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => null,
+    getExtensionStatuses: () => new Map(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
 
-	assert.deepEqual(
-		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)).split("\n"),
-		["░▒▓ 🤖 sonnet-4", "░▒▓ 🪟 ctx ?/200k"],
-	);
+  assert.deepEqual(plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)).split("\n"), [
+    "░▒▓ 🤖 sonnet-4",
+    "░▒▓ 🪟 ctx ?/200k",
+  ]);
 });
 
 test("Kimi subscription cost is marked while API-key cost is unchanged", () => {
-	const config = createDefaultConfig();
-	config.segments = ["cost"];
-	const footerData: ReadonlyFooterDataProvider = {
-		getGitBranch: () => null,
-		getExtensionStatuses: () => new Map(),
-		onBranchChange: () => () => undefined,
-		getAvailableProviderCount: () => 1,
-	};
-	const runtime: RuntimeState = {
-		turnCount: 0,
-		activeTools: new Map(),
-		isStreaming: false,
-		thinkingLevel: "off",
-		duplicateExtensions: [],
-		extensionStatusIconAliases: new Map(),
-	};
-	const usage = {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
-	};
-	const renderCost = (provider: string, oauth: boolean) => {
-		const context = createMockContext({
-			model: { id: "model", provider },
-			modelRegistry: { isUsingOAuth: () => oauth },
-			sessionManager: {
-				getEntries: () => [{ type: "message", message: { role: "assistant", usage } }],
-				getBranch: () => [],
-			},
-		});
-		return plain(renderStatusline(100, context.ctx, footerData, {} as Theme, config, runtime));
-	};
+  const config = createDefaultConfig();
+  config.segments = ["cost"];
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => null,
+    getExtensionStatuses: () => new Map(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
+  const usage = {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+  };
+  const renderCost = (provider: string, oauth: boolean) => {
+    const context = createMockContext({
+      model: { id: "model", provider },
+      modelRegistry: { isUsingOAuth: () => oauth },
+      sessionManager: {
+        getEntries: () => [{ type: "message", message: { role: "assistant", usage } }],
+        getBranch: () => [],
+      },
+    });
+    return plain(renderStatusline(100, context.ctx, footerData, {} as Theme, config, runtime));
+  };
 
-	assert.match(renderCost("kimi-coding", false), /\$0\.010 \(sub\)/u);
-	assert.doesNotMatch(renderCost("anthropic", false), /\(sub\)/u);
+  assert.match(renderCost("kimi-coding", false), /\$0\.010 \(sub\)/u);
+  assert.doesNotMatch(renderCost("anthropic", false), /\(sub\)/u);
 });
 
 test("segment presentation wraps canonical dynamic values with configured text", () => {
-	const config = createDefaultConfig();
-	assert.equal(formatConfiguredSegment("provider", "anthropic", config), "🔌 anthropic");
-	config.segmentText.provider = { prefix: "Provider[", suffix: "]" };
-	assert.equal(formatConfiguredSegment("provider", "anthropic", config), "Provider[anthropic]");
-	config.segmentText.cost = { prefix: "cost=", suffix: " USD" };
-	assert.equal(formatConfiguredSegment("cost", "1.25", config), "cost=1.25 USD");
+  const config = createDefaultConfig();
+  assert.equal(formatConfiguredSegment("provider", "anthropic", config), "🔌 anthropic");
+  config.segmentText.provider = { prefix: "Provider[", suffix: "]" };
+  assert.equal(formatConfiguredSegment("provider", "anthropic", config), "Provider[anthropic]");
+  config.segmentText.cost = { prefix: "cost=", suffix: " USD" };
+  assert.equal(formatConfiguredSegment("cost", "1.25", config), "cost=1.25 USD");
 });
 
 test("empty segment arrays render no powerline content", () => {
-	assert.equal(renderPowerlineStatusline(80, [], createDefaultConfig()), "");
+  assert.equal(renderPowerlineStatusline(80, [], createDefaultConfig()), "");
 });

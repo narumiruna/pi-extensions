@@ -1,11 +1,11 @@
 {
-	"config": {
-		"monthlyLimit": { "val": 2000 },
-		"used": { "val": 1234 },
-		"onDemandCap": {},
-		"onDemandUsed": { "val": -50 },
-		"prepaidBalance": {},
-		"billingPeriodStart": "2025-04-01T00:00:00Z",
-		"billingPeriodEnd": "2025-05-01T00:00:00Z"
-	}
+  "config": {
+    "monthlyLimit": { "val": 2000 },
+    "used": { "val": 1234 },
+    "onDemandCap": {},
+    "onDemandUsed": { "val": -50 },
+    "prepaidBalance": {},
+    "billingPeriodStart": "2025-04-01T00:00:00Z",
+    "billingPeriodEnd": "2025-05-01T00:00:00Z"
+  }
 }

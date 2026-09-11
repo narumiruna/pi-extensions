@@ -1,533 +1,499 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode, {
-	canSelectToolInPlanMode,
-	classifyPlanModeTool,
-	isSafeCommand,
-	withRequiredPlanModeTools,
+  canSelectToolInPlanMode,
+  classifyPlanModeTool,
+  isSafeCommand,
+  withRequiredPlanModeTools,
 } from "../src/plan-mode.js";
 import {
-	findBlockedCommandSegment,
-	findBlockedPowerShellCommandSegment,
-	isSafePowerShellCommand,
+  findBlockedCommandSegment,
+  findBlockedPowerShellCommandSegment,
+  isSafePowerShellCommand,
 } from "../src/tool-policy.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
 test("tool selection allows safe built-ins and non-built-ins only", () => {
-	type PlanTool = Parameters<typeof canSelectToolInPlanMode>[0];
-	assert.equal(canSelectToolInPlanMode(builtinTool("read") as PlanTool), true);
-	assert.equal(canSelectToolInPlanMode(builtinTool("powershell") as PlanTool), true);
-	assert.equal(canSelectToolInPlanMode(builtinTool("edit") as PlanTool), false);
-	assert.equal(canSelectToolInPlanMode(extensionTool("custom") as PlanTool), true);
-	assert.equal(canSelectToolInPlanMode(extensionTool("edit") as PlanTool), true);
-	assert.deepEqual(withRequiredPlanModeTools(["read", "plan_mode_question", "read"]), [
-		"read",
-		"plan_mode_question",
-		"plan_mode_complete",
-	]);
+  type PlanTool = Parameters<typeof canSelectToolInPlanMode>[0];
+  assert.equal(canSelectToolInPlanMode(builtinTool("read") as PlanTool), true);
+  assert.equal(canSelectToolInPlanMode(builtinTool("powershell") as PlanTool), true);
+  assert.equal(canSelectToolInPlanMode(builtinTool("edit") as PlanTool), false);
+  assert.equal(canSelectToolInPlanMode(extensionTool("custom") as PlanTool), true);
+  assert.equal(canSelectToolInPlanMode(extensionTool("edit") as PlanTool), true);
+  assert.deepEqual(withRequiredPlanModeTools(["read", "plan_mode_question", "read"]), [
+    "read",
+    "plan_mode_question",
+    "plan_mode_complete",
+  ]);
 });
 
 test("isSafeCommand permits read-only command lists and rejects shell mutation", () => {
-	for (const command of [
-		"git status --short && git diff --check",
-		"git branch --show-current",
-		"git remote get-url origin",
-		"rg -n 'plan' src | head -20",
-		"rg '*.ts' src",
-		"rg '$value' README.md",
-		"npm test -- --help",
-		"npm run typecheck",
-		"cargo test --no-run",
-		"sed -n '1,20p' file.ts",
-	]) {
-		assert.equal(isSafeCommand(command), true, command);
-	}
-	for (const command of [
-		"rm -rf build",
-		"npm install",
-		"echo $(rm file)",
-		"git log *",
-		"git log {--output=log.txt,HEAD}",
-		'rg "$value" README.md',
-		"cat file > copy",
-		"git status; touch file",
-		"cat file & touch file",
-		"find . -delete",
-		"find . -exec rm {} ;",
-		"sed -i 's/a/b/' file",
-		"sed -ni 's/a/b/' file",
-		"sed -n 'w output' input",
-		"sed -n 'e touch output' input",
-		"uniq input output",
-		"diff left right --output=diff.txt",
-		"sort --compress-program='touch output' input",
-		"sort -T /tmp input",
-		"git grep --open-files-in-pager='sh -c touch output' pattern",
-		"git grep -O'sh -c touch output' pattern",
-		"git grep -O 'sh -c touch output' pattern",
-		"git branch -D old",
-		"git branch --unset-upstream",
-		"git branch --set-upstream-to=origin/main",
-		"git remote add origin url",
-		"git remote set-head origin -a",
-		"git remote set-branches origin main",
-		"npm audit --fix",
-		"npm audit fix",
-		"env sh -c 'touch file'",
-		"date --set tomorrow",
-		"sort input -o output",
-		"sort -o/tmp/output input",
-		"tree -o output",
-		"find . -fprint output",
-		"find . -fprint0 output",
-		"fd pattern --exec touch file",
-		"fd pattern -x rm {}",
-		"rg pattern --pre 'touch file'",
-		"bat file --pager 'sh -c touch file'",
-		"git diff --ext-diff",
-		"git log --output=log.txt",
-		"git remote update",
-		"tsc --noEmit --incremental --tsBuildInfoFile info.tsbuildinfo",
-		"tsc --noEmit --generateTrace trace",
-		"go build ./cmd/app",
-		"cargo build",
-		"npm run build",
-		"awk 'BEGIN { system(\"touch file\") }'",
-		"rg x || (echo bad > file)",
-		"cat <<EOF",
-		"unknown-command --dry-run",
-		"",
-	]) {
-		assert.equal(isSafeCommand(command), false, command);
-	}
+  for (const command of [
+    "git status --short && git diff --check",
+    "git branch --show-current",
+    "git remote get-url origin",
+    "rg -n 'plan' src | head -20",
+    "rg '*.ts' src",
+    "rg '$value' README.md",
+    "npm test -- --help",
+    "npm run typecheck",
+    "cargo test --no-run",
+    "sed -n '1,20p' file.ts",
+  ]) {
+    assert.equal(isSafeCommand(command), true, command);
+  }
+  for (const command of [
+    "rm -rf build",
+    "npm install",
+    "echo $(rm file)",
+    "git log *",
+    "git log {--output=log.txt,HEAD}",
+    'rg "$value" README.md',
+    "cat file > copy",
+    "git status; touch file",
+    "cat file & touch file",
+    "find . -delete",
+    "find . -exec rm {} ;",
+    "sed -i 's/a/b/' file",
+    "sed -ni 's/a/b/' file",
+    "sed -n 'w output' input",
+    "sed -n 'e touch output' input",
+    "uniq input output",
+    "diff left right --output=diff.txt",
+    "sort --compress-program='touch output' input",
+    "sort -T /tmp input",
+    "git grep --open-files-in-pager='sh -c touch output' pattern",
+    "git grep -O'sh -c touch output' pattern",
+    "git grep -O 'sh -c touch output' pattern",
+    "git branch -D old",
+    "git branch --unset-upstream",
+    "git branch --set-upstream-to=origin/main",
+    "git remote add origin url",
+    "git remote set-head origin -a",
+    "git remote set-branches origin main",
+    "npm audit --fix",
+    "npm audit fix",
+    "env sh -c 'touch file'",
+    "date --set tomorrow",
+    "sort input -o output",
+    "sort -o/tmp/output input",
+    "tree -o output",
+    "find . -fprint output",
+    "find . -fprint0 output",
+    "fd pattern --exec touch file",
+    "fd pattern -x rm {}",
+    "rg pattern --pre 'touch file'",
+    "bat file --pager 'sh -c touch file'",
+    "git diff --ext-diff",
+    "git log --output=log.txt",
+    "git remote update",
+    "tsc --noEmit --incremental --tsBuildInfoFile info.tsbuildinfo",
+    "tsc --noEmit --generateTrace trace",
+    "go build ./cmd/app",
+    "cargo build",
+    "npm run build",
+    "awk 'BEGIN { system(\"touch file\") }'",
+    "rg x || (echo bad > file)",
+    "cat <<EOF",
+    "unknown-command --dry-run",
+    "",
+  ]) {
+    assert.equal(isSafeCommand(command), false, command);
+  }
 });
 
 test("Bash policy permits only conservative local system diagnostics", () => {
-	assert.equal(isSafeCommand("hostname"), true);
-	for (const command of ["hostname changed-host", "hostname -F hostname.txt"]) {
-		assert.equal(isSafeCommand(command), false, command);
-	}
+  assert.equal(isSafeCommand("hostname"), true);
+  for (const command of ["hostname changed-host", "hostname -F hostname.txt"]) {
+    assert.equal(isSafeCommand(command), false, command);
+  }
 
-	for (const command of [
-		"tasklist",
-		"tasklist /V /FO CSV /NH",
-		'tasklist /FI "STATUS eq running"',
-		"tasklist /M ntdll.dll /SVC",
-	]) {
-		assert.equal(isSafeCommand(command, {}, undefined, "win32"), true, command);
-	}
-	for (const command of [
-		"tasklist /S remote-host",
-		"tasklist /U account",
-		"tasklist /P secret",
-		"tasklist /FO HTML",
-		"tasklist /FI",
-		"tasklist /unknown",
-	]) {
-		assert.equal(isSafeCommand(command, {}, undefined, "win32"), false, command);
-	}
-	assert.equal(isSafeCommand("tasklist", {}, undefined, "linux"), false);
+  for (const command of [
+    "tasklist",
+    "tasklist /V /FO CSV /NH",
+    'tasklist /FI "STATUS eq running"',
+    "tasklist /M ntdll.dll /SVC",
+  ]) {
+    assert.equal(isSafeCommand(command, {}, undefined, "win32"), true, command);
+  }
+  for (const command of [
+    "tasklist /S remote-host",
+    "tasklist /U account",
+    "tasklist /P secret",
+    "tasklist /FO HTML",
+    "tasklist /FI",
+    "tasklist /unknown",
+  ]) {
+    assert.equal(isSafeCommand(command, {}, undefined, "win32"), false, command);
+  }
+  assert.equal(isSafeCommand("tasklist", {}, undefined, "linux"), false);
 });
 
 test("blocked command diagnostics identify the first rejected segment", () => {
-	const accepted = "git status --short && git diff --cached | head -20";
-	const singleBlocked = "touch output";
-	const compoundBlocked =
-		"git status --short && git reset --hard && git diff --cached | touch output";
-	const unsupportedSyntax = "  git status --short && cat file > copy  ";
+  const accepted = "git status --short && git diff --cached | head -20";
+  const singleBlocked = "touch output";
+  const compoundBlocked = "git status --short && git reset --hard && git diff --cached | touch output";
+  const unsupportedSyntax = "  git status --short && cat file > copy  ";
 
-	assert.equal(findBlockedCommandSegment(accepted), undefined);
-	assert.equal(findBlockedCommandSegment(singleBlocked), singleBlocked);
-	assert.equal(findBlockedCommandSegment(compoundBlocked), "git reset --hard");
-	assert.equal(findBlockedCommandSegment(unsupportedSyntax), unsupportedSyntax.trim());
-	assert.equal(findBlockedCommandSegment("   "), "(empty command)");
-	for (const command of [accepted, singleBlocked, compoundBlocked, unsupportedSyntax, "   "]) {
-		assert.equal(isSafeCommand(command), findBlockedCommandSegment(command) === undefined, command);
-	}
+  assert.equal(findBlockedCommandSegment(accepted), undefined);
+  assert.equal(findBlockedCommandSegment(singleBlocked), singleBlocked);
+  assert.equal(findBlockedCommandSegment(compoundBlocked), "git reset --hard");
+  assert.equal(findBlockedCommandSegment(unsupportedSyntax), unsupportedSyntax.trim());
+  assert.equal(findBlockedCommandSegment("   "), "(empty command)");
+  for (const command of [accepted, singleBlocked, compoundBlocked, unsupportedSyntax, "   "]) {
+    assert.equal(isSafeCommand(command), findBlockedCommandSegment(command) === undefined, command);
+  }
 });
 
 test("configured safe subcommands bypass the complete Bash and PowerShell policies", () => {
-	const safeSubcommands = { kubectl: ["apply"], "Invoke-Trusted": ["run"] };
-	for (const command of [
-		"kubectl apply -f deployment.yaml && rm -rf build",
-		"kubectl apply -f deployment.yaml > result.txt",
-		"kubectl apply $(cat generated-args)\nrm -rf build",
-		"  kubectl apply --dangerously-anything",
-	]) {
-		assert.equal(isSafeCommand(command, safeSubcommands), true, command);
-		assert.equal(findBlockedCommandSegment(command, safeSubcommands), undefined, command);
-	}
-	for (const command of [
-		"Invoke-Trusted run; Remove-Item -Recurse src",
-		"Invoke-Trusted run > result.txt",
-		"Invoke-Trusted run $(Remove-Item src)",
-	]) {
-		assert.equal(isSafePowerShellCommand(command, safeSubcommands), true, command);
-		assert.equal(findBlockedPowerShellCommandSegment(command, safeSubcommands), undefined, command);
-	}
+  const safeSubcommands = { kubectl: ["apply"], "Invoke-Trusted": ["run"] };
+  for (const command of [
+    "kubectl apply -f deployment.yaml && rm -rf build",
+    "kubectl apply -f deployment.yaml > result.txt",
+    "kubectl apply $(cat generated-args)\nrm -rf build",
+    "  kubectl apply --dangerously-anything",
+  ]) {
+    assert.equal(isSafeCommand(command, safeSubcommands), true, command);
+    assert.equal(findBlockedCommandSegment(command, safeSubcommands), undefined, command);
+  }
+  for (const command of [
+    "Invoke-Trusted run; Remove-Item -Recurse src",
+    "Invoke-Trusted run > result.txt",
+    "Invoke-Trusted run $(Remove-Item src)",
+  ]) {
+    assert.equal(isSafePowerShellCommand(command, safeSubcommands), true, command);
+    assert.equal(findBlockedPowerShellCommandSegment(command, safeSubcommands), undefined, command);
+  }
 
-	for (const command of [
-		"kubectl applies -f deployment.yaml",
-		"Kubectl apply -f deployment.yaml",
-		"git status && kubectl apply -f deployment.yaml",
-	]) {
-		assert.equal(isSafeCommand(command, safeSubcommands), false, command);
-	}
-	assert.equal(
-		isSafePowerShellCommand("Invoke-Trusted runner; Remove-Item src", safeSubcommands),
-		false,
-	);
+  for (const command of [
+    "kubectl applies -f deployment.yaml",
+    "Kubectl apply -f deployment.yaml",
+    "git status && kubectl apply -f deployment.yaml",
+  ]) {
+    assert.equal(isSafeCommand(command, safeSubcommands), false, command);
+  }
+  assert.equal(isSafePowerShellCommand("Invoke-Trusted runner; Remove-Item src", safeSubcommands), false);
 });
 
 test("PowerShell policy permits reviewed inspection commands", () => {
-	for (const command of [
-		"Get-ChildItem -Filter *.ts",
-		"Get-Content -LiteralPath 'README file.md'",
-		"gEt-LoCaTiOn",
-		"Get-Item Env:PI_MODEL",
-		"Get-Location",
-		"Resolve-Path .",
-		"Select-String -Path README.md -Pattern 'Plan mode'",
-		"Test-Path packages\\pi-plan-mode",
-		"Get-Content README.md | Select-String -Pattern Plan",
-		"Get-ChildItem packages; Measure-Object",
-		"Get-ChildItem | Sort-Object Name | Format-Table Name",
-		"Write-Output 'safe; Remove-Item README.md'",
-		"Write-Output '$env:PI_MODEL'",
-		"Write-Output 'status'; git status --short",
-		"git log -1 --oneline",
-	]) {
-		assert.equal(isSafePowerShellCommand(command), true, command);
-	}
+  for (const command of [
+    "Get-ChildItem -Filter *.ts",
+    "Get-Content -LiteralPath 'README file.md'",
+    "gEt-LoCaTiOn",
+    "Get-Item Env:PI_MODEL",
+    "Get-Location",
+    "Resolve-Path .",
+    "Select-String -Path README.md -Pattern 'Plan mode'",
+    "Test-Path packages\\pi-plan-mode",
+    "Get-Content README.md | Select-String -Pattern Plan",
+    "Get-ChildItem packages; Measure-Object",
+    "Get-ChildItem | Sort-Object Name | Format-Table Name",
+    "Write-Output 'safe; Remove-Item README.md'",
+    "Write-Output '$env:PI_MODEL'",
+    "Write-Output 'status'; git status --short",
+    "git log -1 --oneline",
+  ]) {
+    assert.equal(isSafePowerShellCommand(command), true, command);
+  }
 });
 
 test("PowerShell policy permits only conservative local process and service queries", () => {
-	for (const command of [
-		"Get-Process",
-		"Get-Process -Name pwsh",
-		"Get-Process -Id 123 -Module",
-		"Get-Process pwsh -IncludeUserName | Format-Table Name,Id",
-		"Get-Service",
-		"Get-Service -Name sshd -RequiredServices",
-		"Get-Service -DisplayName 'Windows Update'",
-		"Get-Service win* | Sort-Object DisplayName",
-	]) {
-		assert.equal(isSafePowerShellCommand(command), true, command);
-	}
-	for (const command of [
-		"Get-Process -ComputerName remote-host",
-		"Get-Process -CimSession remote-host",
-		"Get-Process -InputObject process",
-		"Get-Process -Name",
-		"Get-Process one two",
-		"Get-Service -ComputerName remote-host",
-		"Get-Service -CimSession remote-host",
-		"Get-Service -InputObject service",
-		"Get-Service -Name",
-		"Get-Process | Stop-Process",
-		"Get-Service | Stop-Service",
-		"gps pwsh",
-		"gsv sshd",
-	]) {
-		assert.equal(isSafePowerShellCommand(command), false, command);
-	}
+  for (const command of [
+    "Get-Process",
+    "Get-Process -Name pwsh",
+    "Get-Process -Id 123 -Module",
+    "Get-Process pwsh -IncludeUserName | Format-Table Name,Id",
+    "Get-Service",
+    "Get-Service -Name sshd -RequiredServices",
+    "Get-Service -DisplayName 'Windows Update'",
+    "Get-Service win* | Sort-Object DisplayName",
+  ]) {
+    assert.equal(isSafePowerShellCommand(command), true, command);
+  }
+  for (const command of [
+    "Get-Process -ComputerName remote-host",
+    "Get-Process -CimSession remote-host",
+    "Get-Process -InputObject process",
+    "Get-Process -Name",
+    "Get-Process one two",
+    "Get-Service -ComputerName remote-host",
+    "Get-Service -CimSession remote-host",
+    "Get-Service -InputObject service",
+    "Get-Service -Name",
+    "Get-Process | Stop-Process",
+    "Get-Service | Stop-Service",
+    "gps pwsh",
+    "gsv sshd",
+  ]) {
+    assert.equal(isSafePowerShellCommand(command), false, command);
+  }
 });
 
 test("PowerShell policy rejects mutation and dynamic execution syntax", () => {
-	for (const command of [
-		"Remove-Item README.md",
-		"Set-Content README.md changed",
-		"New-Item output.txt",
-		"Copy-Item source target",
-		"Invoke-Expression 'Get-ChildItem'",
-		"Start-Process git",
-		"Get-Content README.md > copy.md",
-		"Get-Content $env:PI_SESSION_FILE",
-		"Get-Content $(Get-Location)",
-		"Get-ChildItem | ForEach-Object { Remove-Item $_ }",
-		"& 'git' status",
-		"[System.IO.File]::Delete('README.md')",
-		'Get-Content `"README.md`"',
-		"git reset --hard",
-		"git status; Remove-Item README.md",
-		"Get-ChildItem && Remove-Item README.md",
-		"Get-ChildItem || Set-Content README.md changed",
-		"Get-Content README.md | Tee-Object copy.md",
-		"Test-Path README.md ? Get-Content README.md : Remove-Item README.md",
-		"Get-ChildItem ?? Remove-Item README.md",
-		"Get-ChildItem ! Remove-Item README.md",
-		"git --% status; Remove-Item README.md",
-		"Get-ChildItem # comment",
-		"npm test",
-		"node --version",
-		"cmd /c dir",
-		"powershell -Command Get-ChildItem",
-		"Get-Content README.md\nRemove-Item README.md",
-		"",
-	]) {
-		assert.equal(isSafePowerShellCommand(command), false, command);
-	}
+  for (const command of [
+    "Remove-Item README.md",
+    "Set-Content README.md changed",
+    "New-Item output.txt",
+    "Copy-Item source target",
+    "Invoke-Expression 'Get-ChildItem'",
+    "Start-Process git",
+    "Get-Content README.md > copy.md",
+    "Get-Content $env:PI_SESSION_FILE",
+    "Get-Content $(Get-Location)",
+    "Get-ChildItem | ForEach-Object { Remove-Item $_ }",
+    "& 'git' status",
+    "[System.IO.File]::Delete('README.md')",
+    'Get-Content `"README.md`"',
+    "git reset --hard",
+    "git status; Remove-Item README.md",
+    "Get-ChildItem && Remove-Item README.md",
+    "Get-ChildItem || Set-Content README.md changed",
+    "Get-Content README.md | Tee-Object copy.md",
+    "Test-Path README.md ? Get-Content README.md : Remove-Item README.md",
+    "Get-ChildItem ?? Remove-Item README.md",
+    "Get-ChildItem ! Remove-Item README.md",
+    "git --% status; Remove-Item README.md",
+    "Get-ChildItem # comment",
+    "npm test",
+    "node --version",
+    "cmd /c dir",
+    "powershell -Command Get-ChildItem",
+    "Get-Content README.md\nRemove-Item README.md",
+    "",
+  ]) {
+    assert.equal(isSafePowerShellCommand(command), false, command);
+  }
 });
 
 test("PowerShell policy rejects unsupported quote and statement syntax", () => {
-	for (let codePoint = 0x2018; codePoint <= 0x201e; codePoint += 1) {
-		const quote = String.fromCodePoint(codePoint);
-		const command = `Write-Output ${quote}safe${quote}`;
-		assert.equal(isSafePowerShellCommand(command), false, command);
-		assert.equal(findBlockedPowerShellCommandSegment(command), command);
-	}
+  for (let codePoint = 0x2018; codePoint <= 0x201e; codePoint += 1) {
+    const quote = String.fromCodePoint(codePoint);
+    const command = `Write-Output ${quote}safe${quote}`;
+    assert.equal(isSafePowerShellCommand(command), false, command);
+    assert.equal(findBlockedPowerShellCommandSegment(command), command);
+  }
 
-	for (const command of [
-		'Write-Output "safe\u201d; Remove-Item README.md \u201c"',
-		"Write-Output 'safe\u2019; Remove-Item README.md \u2018'",
-		"Write-Output one && Write-Output two",
-		"Write-Output one || Write-Output two",
-	]) {
-		assert.equal(isSafePowerShellCommand(command), false, command);
-		assert.equal(findBlockedPowerShellCommandSegment(command), command);
-	}
+  for (const command of [
+    'Write-Output "safe\u201d; Remove-Item README.md \u201c"',
+    "Write-Output 'safe\u2019; Remove-Item README.md \u2018'",
+    "Write-Output one && Write-Output two",
+    "Write-Output one || Write-Output two",
+  ]) {
+    assert.equal(isSafePowerShellCommand(command), false, command);
+    assert.equal(findBlockedPowerShellCommandSegment(command), command);
+  }
 });
 
 test("PowerShell diagnostics identify the first rejected segment", () => {
-	const accepted = "Get-ChildItem -Force; git status --short | Select-String modified";
-	const blocked = "Get-ChildItem; git status --short | Remove-Item README.md; Get-Location";
-	const unsupported = " Get-Content README.md > copy.md ";
+  const accepted = "Get-ChildItem -Force; git status --short | Select-String modified";
+  const blocked = "Get-ChildItem; git status --short | Remove-Item README.md; Get-Location";
+  const unsupported = " Get-Content README.md > copy.md ";
 
-	assert.equal(findBlockedPowerShellCommandSegment(accepted), undefined);
-	assert.equal(findBlockedPowerShellCommandSegment(blocked), "Remove-Item README.md");
-	assert.equal(findBlockedPowerShellCommandSegment(unsupported), unsupported.trim());
-	assert.equal(findBlockedPowerShellCommandSegment("   "), "(empty command)");
+  assert.equal(findBlockedPowerShellCommandSegment(accepted), undefined);
+  assert.equal(findBlockedPowerShellCommandSegment(blocked), "Remove-Item README.md");
+  assert.equal(findBlockedPowerShellCommandSegment(unsupported), unsupported.trim());
+  assert.equal(findBlockedPowerShellCommandSegment("   "), "(empty command)");
 });
 
 test("PowerShell policy fully trusts configured Git and gh subcommands", () => {
-	assert.equal(isSafePowerShellCommand("git rev-parse --show-toplevel"), false);
-	assert.equal(
-		isSafePowerShellCommand("git rev-parse --show-toplevel", { git: ["rev-parse"] }),
-		true,
-	);
-	assert.equal(isSafePowerShellCommand("gh issue view 973 --json number,title"), false);
-	assert.equal(
-		isSafePowerShellCommand("gh issue view 973 --json number,title", { gh: ["issue view"] }),
-		true,
-	);
-	assert.equal(
-		isSafePowerShellCommand("gh issue view 973; Remove-Item -Recurse src", {
-			gh: ["issue view"],
-		}),
-		true,
-	);
+  assert.equal(isSafePowerShellCommand("git rev-parse --show-toplevel"), false);
+  assert.equal(isSafePowerShellCommand("git rev-parse --show-toplevel", { git: ["rev-parse"] }), true);
+  assert.equal(isSafePowerShellCommand("gh issue view 973 --json number,title"), false);
+  assert.equal(isSafePowerShellCommand("gh issue view 973 --json number,title", { gh: ["issue view"] }), true);
+  assert.equal(
+    isSafePowerShellCommand("gh issue view 973; Remove-Item -Recurse src", {
+      gh: ["issue view"],
+    }),
+    true,
+  );
 });
 
 test("configured Git subcommands are additive, exact, and fully trusted", () => {
-	const cases = [
-		["rev-parse", "git rev-parse --show-toplevel"],
-		["blame", "git blame --no-textconv -- path/to/file"],
-		["describe", "git describe --always"],
-		["merge-base", "git merge-base HEAD origin/main"],
-		["ls-tree", "git ls-tree HEAD path/to/dir"],
-		["cat-file", "git cat-file -p HEAD"],
-	] as const;
+  const cases = [
+    ["rev-parse", "git rev-parse --show-toplevel"],
+    ["blame", "git blame --no-textconv -- path/to/file"],
+    ["describe", "git describe --always"],
+    ["merge-base", "git merge-base HEAD origin/main"],
+    ["ls-tree", "git ls-tree HEAD path/to/dir"],
+    ["cat-file", "git cat-file -p HEAD"],
+  ] as const;
 
-	for (const [subcommand, command] of cases) {
-		assert.equal(isSafeCommandWithPolicy(command), false, `default: ${command}`);
-		assert.equal(
-			isSafeCommandWithPolicy(command, { git: [subcommand] }),
-			true,
-			`configured: ${command}`,
-		);
-	}
-	assert.equal(
-		isSafeCommandWithPolicy("git rev-parse --show-toplevel | head -1", {
-			git: ["rev-parse"],
-		}),
-		true,
-	);
-	assert.equal(
-		isSafeCommandWithPolicy("git rev-parse --show-toplevel && git status --short", {
-			git: ["rev-parse"],
-		}),
-		true,
-	);
-	assert.equal(
-		isSafeCommandWithPolicy("git rev-parse --show-toplevel && git blame -- file", {
-			git: ["rev-parse"],
-		}),
-		true,
-	);
-	assert.equal(
-		isSafeCommandWithPolicy("git rev-parse --show-toplevel | touch output", {
-			git: ["rev-parse"],
-		}),
-		true,
-	);
-	assert.equal(
-		isSafeCommandWithPolicy("git rev-parser --show-toplevel", { git: ["rev-parse"] }),
-		false,
-	);
+  for (const [subcommand, command] of cases) {
+    assert.equal(isSafeCommandWithPolicy(command), false, `default: ${command}`);
+    assert.equal(isSafeCommandWithPolicy(command, { git: [subcommand] }), true, `configured: ${command}`);
+  }
+  assert.equal(
+    isSafeCommandWithPolicy("git rev-parse --show-toplevel | head -1", {
+      git: ["rev-parse"],
+    }),
+    true,
+  );
+  assert.equal(
+    isSafeCommandWithPolicy("git rev-parse --show-toplevel && git status --short", {
+      git: ["rev-parse"],
+    }),
+    true,
+  );
+  assert.equal(
+    isSafeCommandWithPolicy("git rev-parse --show-toplevel && git blame -- file", {
+      git: ["rev-parse"],
+    }),
+    true,
+  );
+  assert.equal(
+    isSafeCommandWithPolicy("git rev-parse --show-toplevel | touch output", {
+      git: ["rev-parse"],
+    }),
+    true,
+  );
+  assert.equal(isSafeCommandWithPolicy("git rev-parser --show-toplevel", { git: ["rev-parse"] }), false);
 });
 
 test("configured gh paths are exact and fully trusted", () => {
-	const cases = [
-		["pr view", "gh pr view 218 --json number,title,state"],
-		["pr list", "gh pr list --limit 20 --json=number,title"],
-		["issue view", "gh issue view 212 --comments --json number,title"],
-		["issue list", "gh issue list --state open --json number,title"],
-	] as const;
+  const cases = [
+    ["pr view", "gh pr view 218 --json number,title,state"],
+    ["pr list", "gh pr list --limit 20 --json=number,title"],
+    ["issue view", "gh issue view 212 --comments --json number,title"],
+    ["issue list", "gh issue list --state open --json number,title"],
+  ] as const;
 
-	for (const [path, command] of cases) {
-		assert.equal(isSafeCommandWithPolicy(command), false, `default: ${command}`);
-		assert.equal(isSafeCommandWithPolicy(command, { gh: [path] }), true, `configured: ${command}`);
-	}
-	const allGh = { gh: cases.map(([path]) => path) };
-	for (const command of [
-		"gh pr merge 218",
-		"gh pr close 218",
-		"gh issue edit 212 --title changed",
-		"gh alias list",
-		"gh --repo owner/repo pr view 218",
-		"gh pr --help view",
-	]) {
-		assert.equal(isSafeCommandWithPolicy(command, allGh), false, command);
-	}
-	for (const command of [
-		"gh pr view 218",
-		"gh pr list --limit 20",
-		"gh issue view 212 --web",
-		"gh issue list --state open",
-		"gh pr view 218 --web",
-		"gh pr view $PI_PLAN_GH_ARGUMENTS",
-		"gh pr view 218 > output",
-		"gh pr view 218 && gh pr merge 218",
-	]) {
-		assert.equal(isSafeCommandWithPolicy(command, allGh), true, command);
-	}
+  for (const [path, command] of cases) {
+    assert.equal(isSafeCommandWithPolicy(command), false, `default: ${command}`);
+    assert.equal(isSafeCommandWithPolicy(command, { gh: [path] }), true, `configured: ${command}`);
+  }
+  const allGh = { gh: cases.map(([path]) => path) };
+  for (const command of [
+    "gh pr merge 218",
+    "gh pr close 218",
+    "gh issue edit 212 --title changed",
+    "gh alias list",
+    "gh --repo owner/repo pr view 218",
+    "gh pr --help view",
+  ]) {
+    assert.equal(isSafeCommandWithPolicy(command, allGh), false, command);
+  }
+  for (const command of [
+    "gh pr view 218",
+    "gh pr list --limit 20",
+    "gh issue view 212 --web",
+    "gh issue list --state open",
+    "gh pr view 218 --web",
+    "gh pr view $PI_PLAN_GH_ARGUMENTS",
+    "gh pr view 218 > output",
+    "gh pr view 218 && gh pr merge 218",
+  ]) {
+    assert.equal(isSafeCommandWithPolicy(command, allGh), true, command);
+  }
 });
 
 test("arbitrary configured Git subcommands become full permissions", () => {
-	for (const command of [
-		"git cat-file --filters HEAD",
-		"git cat-file -p HEAD --output=copy",
-		"git blame --textconv -- path/to/file",
-		"git rev-parse $PI_PLAN_GIT_ARGUMENTS",
-		"git rev-parse HEAD && rm -rf build",
-	]) {
-		assert.equal(
-			isSafeCommandWithPolicy(command, { git: ["cat-file", "blame", "rev-parse"] }),
-			true,
-			command,
-		);
-	}
-	assert.equal(isSafeCommandWithPolicy("git checkout main"), false);
-	assert.equal(isSafeCommandWithPolicy("git checkout main", { git: ["checkout"] }), true);
-	assert.equal(isSafeCommandWithPolicy("git status > status.txt"), false);
-	assert.equal(isSafeCommandWithPolicy("git status > status.txt", { git: ["status"] }), true);
+  for (const command of [
+    "git cat-file --filters HEAD",
+    "git cat-file -p HEAD --output=copy",
+    "git blame --textconv -- path/to/file",
+    "git rev-parse $PI_PLAN_GIT_ARGUMENTS",
+    "git rev-parse HEAD && rm -rf build",
+  ]) {
+    assert.equal(isSafeCommandWithPolicy(command, { git: ["cat-file", "blame", "rev-parse"] }), true, command);
+  }
+  assert.equal(isSafeCommandWithPolicy("git checkout main"), false);
+  assert.equal(isSafeCommandWithPolicy("git checkout main", { git: ["checkout"] }), true);
+  assert.equal(isSafeCommandWithPolicy("git status > status.txt"), false);
+  assert.equal(isSafeCommandWithPolicy("git status > status.txt", { git: ["status"] }), true);
 });
 
 test("Git validators allow ordinary inspection while rejecting explicit helpers", () => {
-	for (const command of [
-		"git diff",
-		"git diff --cached",
-		"git diff --stat",
-		"git diff --no-ext-diff",
-		"git diff --no-textconv",
-		"git diff --check",
-		"git diff --no-ext-diff --no-textconv HEAD~1",
-		"git show HEAD",
-		"git show --stat --oneline HEAD",
-		"git show --no-textconv HEAD",
-		"git log -p -1",
-		"git log -p -1 HEAD -- path/to/file",
-		"git log -U3 -1",
-		"git log --binary -1",
-		"git log --patch-with-stat -1",
-		"git log -Ssecret -1",
-		"git log -Gsecret -1",
-		"git log --find-object=0123456789abcdef -1",
-		"git log -p --no-textconv -1",
-		"git remote show -n origin",
-		"printf 'cached diff:\\n' && git diff --cached | head -20",
-	]) {
-		assert.equal(isSafeCommandWithPolicy(command), true, command);
-	}
-	for (const command of [
-		"git diff --ext-diff",
-		"git show --textconv HEAD",
-		"git log --show-signature -1",
-		"git log --format=%G? -1",
-		"git log --output=history.txt -1",
-		"git status --help",
-		"git remote show origin",
-	]) {
-		assert.equal(isSafeCommandWithPolicy(command), false, command);
-	}
-	assert.equal(isSafeCommandWithPolicy("git blame -- path/to/file", { git: ["blame"] }), true);
-	assert.equal(
-		isSafeCommandWithPolicy("git blame --textconv -- path/to/file", { git: ["blame"] }),
-		true,
-	);
+  for (const command of [
+    "git diff",
+    "git diff --cached",
+    "git diff --stat",
+    "git diff --no-ext-diff",
+    "git diff --no-textconv",
+    "git diff --check",
+    "git diff --no-ext-diff --no-textconv HEAD~1",
+    "git show HEAD",
+    "git show --stat --oneline HEAD",
+    "git show --no-textconv HEAD",
+    "git log -p -1",
+    "git log -p -1 HEAD -- path/to/file",
+    "git log -U3 -1",
+    "git log --binary -1",
+    "git log --patch-with-stat -1",
+    "git log -Ssecret -1",
+    "git log -Gsecret -1",
+    "git log --find-object=0123456789abcdef -1",
+    "git log -p --no-textconv -1",
+    "git remote show -n origin",
+    "printf 'cached diff:\\n' && git diff --cached | head -20",
+  ]) {
+    assert.equal(isSafeCommandWithPolicy(command), true, command);
+  }
+  for (const command of [
+    "git diff --ext-diff",
+    "git show --textconv HEAD",
+    "git log --show-signature -1",
+    "git log --format=%G? -1",
+    "git log --output=history.txt -1",
+    "git status --help",
+    "git remote show origin",
+  ]) {
+    assert.equal(isSafeCommandWithPolicy(command), false, command);
+  }
+  assert.equal(isSafeCommandWithPolicy("git blame -- path/to/file", { git: ["blame"] }), true);
+  assert.equal(isSafeCommandWithPolicy("git blame --textconv -- path/to/file", { git: ["blame"] }), true);
 });
 
 test("tool policy classifies built-ins and extension tools consistently", () => {
-	type PlanTool = Parameters<typeof classifyPlanModeTool>[0];
-	assert.equal(classifyPlanModeTool(builtinTool("read") as PlanTool), "read-only");
-	assert.equal(classifyPlanModeTool(builtinTool("bash") as PlanTool), "limited");
-	assert.equal(classifyPlanModeTool(builtinTool("powershell") as PlanTool), "limited");
-	assert.equal(classifyPlanModeTool(builtinTool("write") as PlanTool), "blocked");
-	assert.equal(classifyPlanModeTool(extensionTool("custom") as PlanTool), "user-opt-in");
+  type PlanTool = Parameters<typeof classifyPlanModeTool>[0];
+  assert.equal(classifyPlanModeTool(builtinTool("read") as PlanTool), "read-only");
+  assert.equal(classifyPlanModeTool(builtinTool("bash") as PlanTool), "limited");
+  assert.equal(classifyPlanModeTool(builtinTool("powershell") as PlanTool), "limited");
+  assert.equal(classifyPlanModeTool(builtinTool("write") as PlanTool), "blocked");
+  assert.equal(classifyPlanModeTool(extensionTool("custom") as PlanTool), "user-opt-in");
 });
 
 type TestSafeSubcommands = Record<string, readonly string[] | undefined>;
 const isSafeCommandWithPolicy = isSafeCommand as unknown as (
-	command: string,
-	safeSubcommands?: TestSafeSubcommands,
+  command: string,
+  safeSubcommands?: TestSafeSubcommands,
 ) => boolean;
 
 test("active Plan mode blocks update_plan and blocked built-ins at the tool hook", async () => {
-	const mock = createMockPi({
-		activeTools: ["read", "bash", "update_plan", "danger"],
-		allTools: [
-			builtinTool("read"),
-			builtinTool("bash"),
-			builtinTool("danger"),
-			extensionTool("edit"),
-		],
-	});
-	planMode(mock.pi);
-	const context = createMockContext();
-	await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-	const hook = mock.events.get("tool_call")?.[0];
-	const inactiveHelper = await hook?.(
-		{ toolName: "plan_mode_complete", input: { plan: "# invalid" } },
-		context.ctx,
-	);
-	assert.deepEqual(inactiveHelper, {
-		block: true,
-		reason: "plan_mode_complete is only available while Plan mode is active.",
-	});
-	await mock.commands.get("plan")?.handler("start", context.ctx);
-	const blocked = await hook?.({ toolName: "update_plan", input: {} }, context.ctx);
-	const blockedBuiltin = await hook?.({ toolName: "danger", input: {} }, context.ctx);
-	const allowed = await hook?.({ toolName: "read", input: {} }, context.ctx);
-	const optedInExtension = await hook?.({ toolName: "edit", input: {} }, context.ctx);
-	assert.deepEqual(blocked, {
-		block: true,
-		reason:
-			"Plan mode blocks update_plan because it tracks execution progress rather than conversational planning.",
-	});
-	assert.deepEqual(blockedBuiltin, {
-		block: true,
-		reason:
-			"Plan mode blocks tool 'danger' because its built-in policy is blocked and settings cannot enable it.",
-	});
-	assert.equal(allowed, undefined);
-	assert.deepEqual(optedInExtension, {
-		block: true,
-		reason: "Plan mode blocks mutating tool 'edit'.",
-	});
+  const mock = createMockPi({
+    activeTools: ["read", "bash", "update_plan", "danger"],
+    allTools: [builtinTool("read"), builtinTool("bash"), builtinTool("danger"), extensionTool("edit")],
+  });
+  planMode(mock.pi);
+  const context = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const hook = mock.events.get("tool_call")?.[0];
+  const inactiveHelper = await hook?.({ toolName: "plan_mode_complete", input: { plan: "# invalid" } }, context.ctx);
+  assert.deepEqual(inactiveHelper, {
+    block: true,
+    reason: "plan_mode_complete is only available while Plan mode is active.",
+  });
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  const blocked = await hook?.({ toolName: "update_plan", input: {} }, context.ctx);
+  const blockedBuiltin = await hook?.({ toolName: "danger", input: {} }, context.ctx);
+  const allowed = await hook?.({ toolName: "read", input: {} }, context.ctx);
+  const optedInExtension = await hook?.({ toolName: "edit", input: {} }, context.ctx);
+  assert.deepEqual(blocked, {
+    block: true,
+    reason: "Plan mode blocks update_plan because it tracks execution progress rather than conversational planning.",
+  });
+  assert.deepEqual(blockedBuiltin, {
+    block: true,
+    reason: "Plan mode blocks tool 'danger' because its built-in policy is blocked and settings cannot enable it.",
+  });
+  assert.equal(allowed, undefined);
+  assert.deepEqual(optedInExtension, {
+    block: true,
+    reason: "Plan mode blocks mutating tool 'edit'.",
+  });
 
-	await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-	assert.deepEqual(await hook?.({ toolName: "read", input: {} }, context.ctx), {
-		block: true,
-		reason: "Plan mode blocks tool 'read' because workflow ownership is unavailable.",
-	});
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+  assert.deepEqual(await hook?.({ toolName: "read", input: {} }, context.ctx), {
+    block: true,
+    reason: "Plan mode blocks tool 'read' because workflow ownership is unavailable.",
+  });
 });

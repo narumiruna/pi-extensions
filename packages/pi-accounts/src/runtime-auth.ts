@@ -2,11 +2,7 @@
 // verification helpers share generation-checked fail-closed invariants that are reviewed together.
 import type { ModelAuth, OAuthCredential, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	type AccountProviderAdapter,
-	type AccountProviderId,
-	resolveProviderOAuth,
-} from "./oauth.js";
+import { type AccountProviderAdapter, type AccountProviderId, resolveProviderOAuth } from "./oauth.js";
 import { cloneOAuthCredential, parseCredentialRequest } from "./oauth-credential-source.js";
 
 export const RUNTIME_FAIL_CLOSED_API_KEY = "pi-accounts-auth-failed";
@@ -15,1052 +11,953 @@ const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const SHUTDOWN_CATALOG_REFRESH_TIMEOUT_MS = 3_000;
 
 type RuntimeAuthStorage = {
-	setRuntimeApiKey(provider: string, apiKey: string): void | Promise<void>;
-	removeRuntimeApiKey(provider: string): void | Promise<void>;
+  setRuntimeApiKey(provider: string, apiKey: string): void | Promise<void>;
+  removeRuntimeApiKey(provider: string): void | Promise<void>;
 };
 
 type RuntimeOverrideState = {
-	appliedApiKey?: string;
-	generation: number;
-	mayHaveOverride: boolean;
-	operationTail: Promise<void>;
+  appliedApiKey?: string;
+  generation: number;
+  mayHaveOverride: boolean;
+  operationTail: Promise<void>;
 };
 
 type RuntimeOverrideSnapshot = {
-	target: RuntimeAuthStorage & object;
-	state: RuntimeOverrideState;
-	generation: number;
+  target: RuntimeAuthStorage & object;
+  state: RuntimeOverrideState;
+  generation: number;
 };
 
 type RuntimeProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1];
 
 type ProviderAccountState = {
-	active?: string;
-	accounts: Record<string, OAuthCredential>;
+  active?: string;
+  accounts: Record<string, OAuthCredential>;
 };
 
 type PendingCredentialOffer = {
-	accountName: string;
-	credential: OAuthCredential;
-	operation: number;
-	session: object;
+  accountName: string;
+  credential: OAuthCredential;
+  operation: number;
+  session: object;
 };
 
 type ActiveCredentialOffer = {
-	credential: OAuthCredential;
-	session: object;
+  credential: OAuthCredential;
+  session: object;
 };
 
 export type RuntimeAccountStore = {
-	readProviderAsync(providerId: AccountProviderId): Promise<ProviderAccountState>;
-	updateProviderAsync(
-		providerId: AccountProviderId,
-		mutator: (state: ProviderAccountState) => Promise<ProviderAccountState>,
-	): Promise<ProviderAccountState>;
+  readProviderAsync(providerId: AccountProviderId): Promise<ProviderAccountState>;
+  updateProviderAsync(
+    providerId: AccountProviderId,
+    mutator: (state: ProviderAccountState) => Promise<ProviderAccountState>,
+  ): Promise<ProviderAccountState>;
 };
 
 export type EnsureActiveProviderAuthResult =
-	| { status: "inactive"; providerId: AccountProviderId }
-	| { status: "active"; providerId: AccountProviderId; accountName: string }
-	| { status: "error"; providerId: AccountProviderId; accountName: string; message: string };
+  | { status: "inactive"; providerId: AccountProviderId }
+  | { status: "active"; providerId: AccountProviderId; accountName: string }
+  | { status: "error"; providerId: AccountProviderId; accountName: string; message: string };
 
 export class RuntimeAuthCoordinator {
-	private readonly controller: RuntimeApiKeyController;
-	private readonly overlay: RuntimeProviderOverlay;
-	private availableModelIds: ReadonlySet<string> | undefined;
-	private refreshController = new AbortController();
-	private catalogAuthIdentity: string | undefined;
-	private pendingCredentialOffer: PendingCredentialOffer | undefined;
-	private activeCredentialOffer: ActiveCredentialOffer | undefined;
+  private readonly controller: RuntimeApiKeyController;
+  private readonly overlay: RuntimeProviderOverlay;
+  private availableModelIds: ReadonlySet<string> | undefined;
+  private refreshController = new AbortController();
+  private catalogAuthIdentity: string | undefined;
+  private pendingCredentialOffer: PendingCredentialOffer | undefined;
+  private activeCredentialOffer: ActiveCredentialOffer | undefined;
 
-	constructor(
-		_pi: ExtensionAPI,
-		readonly provider: AccountProviderAdapter,
-		private readonly failClosedApiKey = RUNTIME_FAIL_CLOSED_API_KEY,
-	) {
-		this.controller = new RuntimeApiKeyController(provider.id);
-		this.overlay = new RuntimeProviderOverlay(provider, failClosedApiKey);
-	}
+  constructor(
+    _pi: ExtensionAPI,
+    readonly provider: AccountProviderAdapter,
+    private readonly failClosedApiKey = RUNTIME_FAIL_CLOSED_API_KEY,
+  ) {
+    this.controller = new RuntimeApiKeyController(provider.id);
+    this.overlay = new RuntimeProviderOverlay(provider, failClosedApiKey);
+  }
 
-	async ensureActive(
-		ctx: ExtensionContext,
-		store: RuntimeAccountStore,
-		selectedAccount: string | null,
-		now = Date.now(),
-		ownerSignal?: AbortSignal,
-	): Promise<EnsureActiveProviderAuthResult> {
-		this.clearCredentialOffer();
-		const operation = this.overlay.beginOperation();
-		const runtimeOverride = this.controller.begin(ctx);
-		const operationSignal = this.beginRefreshOperation();
-		const refreshSignal = ownerSignal
-			? AbortSignal.any([operationSignal, ownerSignal])
-			: operationSignal;
-		let state: ProviderAccountState;
-		try {
-			refreshSignal.throwIfAborted();
-			state = await store.readProviderAsync(this.provider.id);
-			refreshSignal.throwIfAborted();
-		} catch (error) {
-			return this.failClosed(ctx, operation, runtimeOverride, selectedAccount ?? "unknown", error);
-		}
-		if (selectedAccount === null) {
-			this.availableModelIds = undefined;
-			try {
-				await this.restoreDefault(ctx, operation, refreshSignal);
-				return { status: "inactive", providerId: this.provider.id };
-			} catch (error) {
-				if (!this.overlay.isCurrent(operation)) {
-					return { status: "inactive", providerId: this.provider.id };
-				}
-				return this.failClosed(
-					ctx,
-					this.overlay.beginOperation(),
-					this.controller.begin(ctx),
-					"unknown",
-					error,
-				);
-			}
-		}
+  async ensureActive(
+    ctx: ExtensionContext,
+    store: RuntimeAccountStore,
+    selectedAccount: string | null,
+    now = Date.now(),
+    ownerSignal?: AbortSignal,
+  ): Promise<EnsureActiveProviderAuthResult> {
+    this.clearCredentialOffer();
+    const operation = this.overlay.beginOperation();
+    const runtimeOverride = this.controller.begin(ctx);
+    const operationSignal = this.beginRefreshOperation();
+    const refreshSignal = ownerSignal ? AbortSignal.any([operationSignal, ownerSignal]) : operationSignal;
+    let state: ProviderAccountState;
+    try {
+      refreshSignal.throwIfAborted();
+      state = await store.readProviderAsync(this.provider.id);
+      refreshSignal.throwIfAborted();
+    } catch (error) {
+      return this.failClosed(ctx, operation, runtimeOverride, selectedAccount ?? "unknown", error);
+    }
+    if (selectedAccount === null) {
+      this.availableModelIds = undefined;
+      try {
+        await this.restoreDefault(ctx, operation, refreshSignal);
+        return { status: "inactive", providerId: this.provider.id };
+      } catch (error) {
+        if (!this.overlay.isCurrent(operation)) {
+          return { status: "inactive", providerId: this.provider.id };
+        }
+        return this.failClosed(ctx, this.overlay.beginOperation(), this.controller.begin(ctx), "unknown", error);
+      }
+    }
 
-		const active = selectedAccount;
-		let credential = getOwnCredential(state.accounts, active);
-		if (!credential) {
-			if (!this.overlay.isCurrent(operation)) {
-				return { status: "inactive", providerId: this.provider.id };
-			}
-			return this.failClosed(
-				ctx,
-				operation,
-				runtimeOverride,
-				active,
-				new Error(`${this.provider.displayName} account "${active}" is no longer available.`),
-			);
-		}
+    const active = selectedAccount;
+    let credential = getOwnCredential(state.accounts, active);
+    if (!credential) {
+      if (!this.overlay.isCurrent(operation)) {
+        return { status: "inactive", providerId: this.provider.id };
+      }
+      return this.failClosed(
+        ctx,
+        operation,
+        runtimeOverride,
+        active,
+        new Error(`${this.provider.displayName} account "${active}" is no longer available.`),
+      );
+    }
 
-		if (credential.expires <= now + REFRESH_SKEW_MS) {
-			let refreshError: unknown;
-			let current = state;
-			try {
-				current = await store.updateProviderAsync(this.provider.id, async (latest) => {
-					const latestCredential = getOwnCredential(latest.accounts, active);
-					if (!latestCredential) return latest;
-					credential = latestCredential;
-					if (latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
-					try {
-						refreshSignal.throwIfAborted();
-						const refreshed = await resolveProviderOAuth(this.provider, ctx).refresh(
-							latestCredential,
-							refreshSignal,
-						);
-						refreshSignal.throwIfAborted();
-						credential = refreshed;
-						return {
-							...latest,
-							accounts: defineOwn(latest.accounts, active, refreshed),
-						};
-					} catch (error) {
-						refreshError = error;
-						return latest;
-					}
-				});
-			} catch (error) {
-				refreshError = error;
-				credential = getOwnCredential(current.accounts, active) ?? credential;
-			}
-			if (!getOwnCredential(current.accounts, active)) {
-				if (!this.overlay.isCurrent(operation)) {
-					return { status: "inactive", providerId: this.provider.id };
-				}
-				return this.failClosed(
-					ctx,
-					operation,
-					runtimeOverride,
-					active,
-					new Error(`${this.provider.displayName} account "${active}" is no longer available.`),
-				);
-			}
-			if (refreshError !== undefined) {
-				const selection = await this.selectedCredentialMatches(store, active, credential);
-				if (selection.error !== undefined) {
-					return this.failClosed(
-						ctx,
-						operation,
-						runtimeOverride,
-						active,
-						selection.error,
-						credential,
-					);
-				}
-				if (!selection.matches) {
-					if (!this.overlay.isCurrent(operation)) {
-						return { status: "inactive", providerId: this.provider.id };
-					}
-					return this.ensureActive(ctx, store, active, now, ownerSignal);
-				}
-				return this.failClosed(ctx, operation, runtimeOverride, active, refreshError, credential);
-			}
-		}
+    if (credential.expires <= now + REFRESH_SKEW_MS) {
+      let refreshError: unknown;
+      let current = state;
+      try {
+        current = await store.updateProviderAsync(this.provider.id, async (latest) => {
+          const latestCredential = getOwnCredential(latest.accounts, active);
+          if (!latestCredential) return latest;
+          credential = latestCredential;
+          if (latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
+          try {
+            refreshSignal.throwIfAborted();
+            const refreshed = await resolveProviderOAuth(this.provider, ctx).refresh(latestCredential, refreshSignal);
+            refreshSignal.throwIfAborted();
+            credential = refreshed;
+            return {
+              ...latest,
+              accounts: defineOwn(latest.accounts, active, refreshed),
+            };
+          } catch (error) {
+            refreshError = error;
+            return latest;
+          }
+        });
+      } catch (error) {
+        refreshError = error;
+        credential = getOwnCredential(current.accounts, active) ?? credential;
+      }
+      if (!getOwnCredential(current.accounts, active)) {
+        if (!this.overlay.isCurrent(operation)) {
+          return { status: "inactive", providerId: this.provider.id };
+        }
+        return this.failClosed(
+          ctx,
+          operation,
+          runtimeOverride,
+          active,
+          new Error(`${this.provider.displayName} account "${active}" is no longer available.`),
+        );
+      }
+      if (refreshError !== undefined) {
+        const selection = await this.selectedCredentialMatches(store, active, credential);
+        if (selection.error !== undefined) {
+          return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
+        }
+        if (!selection.matches) {
+          if (!this.overlay.isCurrent(operation)) {
+            return { status: "inactive", providerId: this.provider.id };
+          }
+          return this.ensureActive(ctx, store, active, now, ownerSignal);
+        }
+        return this.failClosed(ctx, operation, runtimeOverride, active, refreshError, credential);
+      }
+    }
 
-		let auth: ModelAuth;
-		let runtimeApiKey: string;
-		try {
-			auth = await resolveProviderOAuth(this.provider, ctx).toAuth(credential);
-			runtimeApiKey = validateModelAuth(auth, this.provider);
-		} catch (error) {
-			const selection = await this.selectedCredentialMatches(store, active, credential);
-			if (selection.error !== undefined) {
-				return this.failClosed(
-					ctx,
-					operation,
-					runtimeOverride,
-					active,
-					selection.error,
-					credential,
-				);
-			}
-			if (!selection.matches) {
-				if (!this.overlay.isCurrent(operation)) {
-					return { status: "inactive", providerId: this.provider.id };
-				}
-				return this.ensureActive(ctx, store, active, now, ownerSignal);
-			}
-			return this.failClosed(ctx, operation, runtimeOverride, active, error, credential);
-		}
+    let auth: ModelAuth;
+    let runtimeApiKey: string;
+    try {
+      auth = await resolveProviderOAuth(this.provider, ctx).toAuth(credential);
+      runtimeApiKey = validateModelAuth(auth, this.provider);
+    } catch (error) {
+      const selection = await this.selectedCredentialMatches(store, active, credential);
+      if (selection.error !== undefined) {
+        return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
+      }
+      if (!selection.matches) {
+        if (!this.overlay.isCurrent(operation)) {
+          return { status: "inactive", providerId: this.provider.id };
+        }
+        return this.ensureActive(ctx, store, active, now, ownerSignal);
+      }
+      return this.failClosed(ctx, operation, runtimeOverride, active, error, credential);
+    }
 
-		const selection = await this.selectedCredentialMatches(store, active, credential);
-		if (selection.error !== undefined) {
-			return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
-		}
-		if (!selection.matches) {
-			if (!this.overlay.isCurrent(operation)) {
-				return { status: "inactive", providerId: this.provider.id };
-			}
-			return this.ensureActive(ctx, store, active, now, ownerSignal);
-		}
+    const selection = await this.selectedCredentialMatches(store, active, credential);
+    if (selection.error !== undefined) {
+      return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
+    }
+    if (!selection.matches) {
+      if (!this.overlay.isCurrent(operation)) {
+        return { status: "inactive", providerId: this.provider.id };
+      }
+      return this.ensureActive(ctx, store, active, now, ownerSignal);
+    }
 
-		try {
-			refreshSignal.throwIfAborted();
-			let availableModelIds = readAvailableModelIds(credential);
-			if (!this.overlay.apply(ctx, operation, auth, availableModelIds)) {
-				return { status: "inactive", providerId: this.provider.id };
-			}
-			const applied = await this.controller.apply(ctx, runtimeOverride, runtimeApiKey);
-			if (applied === "stale") return { status: "inactive", providerId: this.provider.id };
-			if (applied === "unavailable") {
-				throw new Error(`Pi did not retain the runtime ${this.provider.displayName} credential.`);
-			}
-			refreshSignal.throwIfAborted();
-			const catalogModelIds = await this.refreshModelCatalog(
-				ctx,
-				refreshSignal,
-				`account:${credential.access}`,
-			);
-			if (catalogModelIds) availableModelIds = catalogModelIds;
-			await this.rebindRefreshedModel(ctx, operation);
-			if (!this.overlay.isCurrent(operation)) {
-				return { status: "inactive", providerId: this.provider.id };
-			}
-			const refreshedSelection = await this.selectedCredentialMatches(store, active, credential);
-			if (refreshedSelection.error !== undefined) {
-				throw refreshedSelection.error;
-			}
-			if (!refreshedSelection.matches) {
-				if (!this.overlay.isCurrent(operation)) {
-					return { status: "inactive", providerId: this.provider.id };
-				}
-				return this.ensureActive(ctx, store, active, now, ownerSignal);
-			}
-			refreshSignal.throwIfAborted();
-			await this.verifyOverlay(ctx, auth, availableModelIds);
-			refreshSignal.throwIfAborted();
-			if (!this.overlay.isCurrent(operation)) {
-				return { status: "inactive", providerId: this.provider.id };
-			}
-			const credentialClone = cloneOAuthCredential(credential);
-			if (!credentialClone) {
-				throw new Error(
-					`${this.provider.displayName} OAuth credential could not be cloned safely.`,
-				);
-			}
-			this.availableModelIds = availableModelIds ? new Set(availableModelIds) : undefined;
-			this.pendingCredentialOffer = {
-				accountName: active,
-				credential: credentialClone,
-				operation,
-				session: ctx.sessionManager,
-			};
-			return { status: "active", providerId: this.provider.id, accountName: active };
-		} catch (error) {
-			return this.failClosed(ctx, operation, runtimeOverride, active, error, credential);
-		}
-	}
+    try {
+      refreshSignal.throwIfAborted();
+      let availableModelIds = readAvailableModelIds(credential);
+      if (!this.overlay.apply(ctx, operation, auth, availableModelIds)) {
+        return { status: "inactive", providerId: this.provider.id };
+      }
+      const applied = await this.controller.apply(ctx, runtimeOverride, runtimeApiKey);
+      if (applied === "stale") return { status: "inactive", providerId: this.provider.id };
+      if (applied === "unavailable") {
+        throw new Error(`Pi did not retain the runtime ${this.provider.displayName} credential.`);
+      }
+      refreshSignal.throwIfAborted();
+      const catalogModelIds = await this.refreshModelCatalog(ctx, refreshSignal, `account:${credential.access}`);
+      if (catalogModelIds) availableModelIds = catalogModelIds;
+      await this.rebindRefreshedModel(ctx, operation);
+      if (!this.overlay.isCurrent(operation)) {
+        return { status: "inactive", providerId: this.provider.id };
+      }
+      const refreshedSelection = await this.selectedCredentialMatches(store, active, credential);
+      if (refreshedSelection.error !== undefined) {
+        throw refreshedSelection.error;
+      }
+      if (!refreshedSelection.matches) {
+        if (!this.overlay.isCurrent(operation)) {
+          return { status: "inactive", providerId: this.provider.id };
+        }
+        return this.ensureActive(ctx, store, active, now, ownerSignal);
+      }
+      refreshSignal.throwIfAborted();
+      await this.verifyOverlay(ctx, auth, availableModelIds);
+      refreshSignal.throwIfAborted();
+      if (!this.overlay.isCurrent(operation)) {
+        return { status: "inactive", providerId: this.provider.id };
+      }
+      const credentialClone = cloneOAuthCredential(credential);
+      if (!credentialClone) {
+        throw new Error(`${this.provider.displayName} OAuth credential could not be cloned safely.`);
+      }
+      this.availableModelIds = availableModelIds ? new Set(availableModelIds) : undefined;
+      this.pendingCredentialOffer = {
+        accountName: active,
+        credential: credentialClone,
+        operation,
+        session: ctx.sessionManager,
+      };
+      return { status: "active", providerId: this.provider.id, accountName: active };
+    } catch (error) {
+      return this.failClosed(ctx, operation, runtimeOverride, active, error, credential);
+    }
+  }
 
-	isModelAvailable(modelId: string): boolean {
-		return !this.availableModelIds || this.availableModelIds.has(modelId);
-	}
+  isModelAvailable(modelId: string): boolean {
+    return !this.availableModelIds || this.availableModelIds.has(modelId);
+  }
 
-	getAppliedAuthIdentity(ctx: ExtensionContext, result: EnsureActiveProviderAuthResult): string {
-		if (result.status === "inactive") return "default";
-		if (result.status === "error") return `error:${result.accountName}`;
-		const pending = this.pendingCredentialOffer;
-		if (
-			!pending ||
-			pending.session !== ctx.sessionManager ||
-			pending.accountName !== result.accountName ||
-			!this.overlay.isCurrent(pending.operation)
-		) {
-			throw new Error(
-				`${this.provider.displayName} could not identify the credential applied to this session.`,
-			);
-		}
-		return `${pending.accountName}:${pending.credential.access}`;
-	}
+  getAppliedAuthIdentity(ctx: ExtensionContext, result: EnsureActiveProviderAuthResult): string {
+    if (result.status === "inactive") return "default";
+    if (result.status === "error") return `error:${result.accountName}`;
+    const pending = this.pendingCredentialOffer;
+    if (
+      !pending ||
+      pending.session !== ctx.sessionManager ||
+      pending.accountName !== result.accountName ||
+      !this.overlay.isCurrent(pending.operation)
+    ) {
+      throw new Error(`${this.provider.displayName} could not identify the credential applied to this session.`);
+    }
+    return `${pending.accountName}:${pending.credential.access}`;
+  }
 
-	publishCredentialOffer(
-		ctx: ExtensionContext,
-		result: EnsureActiveProviderAuthResult,
-		activeIdentity: string,
-	): void {
-		this.activeCredentialOffer = undefined;
-		const pending = this.pendingCredentialOffer;
-		this.pendingCredentialOffer = undefined;
-		if (result.status !== "active" || !pending) return;
-		if (pending.session !== ctx.sessionManager || pending.accountName !== result.accountName)
-			return;
-		if (!this.overlay.isCurrent(pending.operation)) return;
-		if (activeIdentity !== `${pending.accountName}:${pending.credential.access}`) return;
-		const credential = cloneOAuthCredential(pending.credential);
-		if (!credential) return;
-		this.activeCredentialOffer = { credential, session: pending.session };
-	}
+  publishCredentialOffer(ctx: ExtensionContext, result: EnsureActiveProviderAuthResult, activeIdentity: string): void {
+    this.activeCredentialOffer = undefined;
+    const pending = this.pendingCredentialOffer;
+    this.pendingCredentialOffer = undefined;
+    if (result.status !== "active" || !pending) return;
+    if (pending.session !== ctx.sessionManager || pending.accountName !== result.accountName) return;
+    if (!this.overlay.isCurrent(pending.operation)) return;
+    if (activeIdentity !== `${pending.accountName}:${pending.credential.access}`) return;
+    const credential = cloneOAuthCredential(pending.credential);
+    if (!credential) return;
+    this.activeCredentialOffer = { credential, session: pending.session };
+  }
 
-	offerCredential(data: unknown): void {
-		const request = parseCredentialRequest(data);
-		const active = this.activeCredentialOffer;
-		if (!request || !active) return;
-		if (request.session !== active.session || request.provider !== this.provider.id) return;
-		const credential = cloneOAuthCredential(active.credential);
-		if (!credential) return;
-		try {
-			request.offer(credential);
-		} catch {
-			// Credential requests are advisory and must not interrupt runtime authentication.
-		}
-	}
+  offerCredential(data: unknown): void {
+    const request = parseCredentialRequest(data);
+    const active = this.activeCredentialOffer;
+    if (!request || !active) return;
+    if (request.session !== active.session || request.provider !== this.provider.id) return;
+    const credential = cloneOAuthCredential(active.credential);
+    if (!credential) return;
+    try {
+      request.offer(credential);
+    } catch {
+      // Credential requests are advisory and must not interrupt runtime authentication.
+    }
+  }
 
-	private clearCredentialOffer(): void {
-		this.pendingCredentialOffer = undefined;
-		this.activeCredentialOffer = undefined;
-	}
+  private clearCredentialOffer(): void {
+    this.pendingCredentialOffer = undefined;
+    this.activeCredentialOffer = undefined;
+  }
 
-	private beginRefreshOperation(): AbortSignal {
-		this.refreshController.abort(new DOMException("Account operation superseded", "AbortError"));
-		this.refreshController = new AbortController();
-		return this.refreshController.signal;
-	}
+  private beginRefreshOperation(): AbortSignal {
+    this.refreshController.abort(new DOMException("Account operation superseded", "AbortError"));
+    this.refreshController = new AbortController();
+    return this.refreshController.signal;
+  }
 
-	private async restoreDefault(
-		ctx: ExtensionContext,
-		operation: number,
-		signal: AbortSignal,
-	): Promise<void> {
-		signal.throwIfAborted();
-		await this.controller.clear(ctx);
-		signal.throwIfAborted();
-		if (this.catalogAuthIdentity !== undefined) {
-			await this.refreshModelCatalog(ctx, signal, "default");
-			await this.rebindRefreshedModel(ctx, operation);
-		}
-		if (!this.overlay.isCurrent(operation)) return;
-		this.overlay.remove(ctx, operation);
-	}
+  private async restoreDefault(ctx: ExtensionContext, operation: number, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    await this.controller.clear(ctx);
+    signal.throwIfAborted();
+    if (this.catalogAuthIdentity !== undefined) {
+      await this.refreshModelCatalog(ctx, signal, "default");
+      await this.rebindRefreshedModel(ctx, operation);
+    }
+    if (!this.overlay.isCurrent(operation)) return;
+    this.overlay.remove(ctx, operation);
+  }
 
-	private async refreshModelCatalog(
-		ctx: ExtensionContext,
-		signal: AbortSignal,
-		authIdentity: string,
-	): Promise<string[] | undefined> {
-		if (!this.provider.refreshModelCatalogAfterAuth) return undefined;
-		if (this.catalogAuthIdentity !== authIdentity) {
-			const result = await ctx.modelRegistry.refresh({
-				allowNetwork: true,
-				providers: [this.provider.id],
-				signal,
-			});
-			signal.throwIfAborted();
-			const error = result.errors.get(this.provider.id);
-			if (error) throw error;
-			if (result.aborted) {
-				throw new Error(`${this.provider.displayName} model catalog refresh was aborted.`);
-			}
-			this.catalogAuthIdentity = authIdentity;
-		}
-		return readProviderModels(ctx, this.provider.id).map((model) => model.id);
-	}
+  private async refreshModelCatalog(
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+    authIdentity: string,
+  ): Promise<string[] | undefined> {
+    if (!this.provider.refreshModelCatalogAfterAuth) return undefined;
+    if (this.catalogAuthIdentity !== authIdentity) {
+      const result = await ctx.modelRegistry.refresh({
+        allowNetwork: true,
+        providers: [this.provider.id],
+        signal,
+      });
+      signal.throwIfAborted();
+      const error = result.errors.get(this.provider.id);
+      if (error) throw error;
+      if (result.aborted) {
+        throw new Error(`${this.provider.displayName} model catalog refresh was aborted.`);
+      }
+      this.catalogAuthIdentity = authIdentity;
+    }
+    return readProviderModels(ctx, this.provider.id).map((model) => model.id);
+  }
 
-	private async rebindRefreshedModel(ctx: ExtensionContext, operation: number): Promise<void> {
-		if (!this.provider.refreshModelCatalogAfterAuth || ctx.model?.provider !== this.provider.id)
-			return;
-		const refreshed = ctx.modelRegistry.find(this.provider.id, ctx.model.id);
-		if (!refreshed) {
-			throw new Error(
-				`${this.provider.displayName} model ${ctx.model.id} is unavailable after catalog refresh.`,
-			);
-		}
-		if (sameModelDefinition(ctx.model, refreshed)) return;
-		if (!this.overlay.isCurrent(operation)) return;
-		// ExtensionContext has no session-scoped setModel action. Replace the live definition held by
-		// this context instead of using the factory-bound action, which can target another runner.
-		replaceModelDefinition(ctx.model, refreshed);
-	}
+  private async rebindRefreshedModel(ctx: ExtensionContext, operation: number): Promise<void> {
+    if (!this.provider.refreshModelCatalogAfterAuth || ctx.model?.provider !== this.provider.id) return;
+    const refreshed = ctx.modelRegistry.find(this.provider.id, ctx.model.id);
+    if (!refreshed) {
+      throw new Error(`${this.provider.displayName} model ${ctx.model.id} is unavailable after catalog refresh.`);
+    }
+    if (sameModelDefinition(ctx.model, refreshed)) return;
+    if (!this.overlay.isCurrent(operation)) return;
+    // ExtensionContext has no session-scoped setModel action. Replace the live definition held by
+    // this context instead of using the factory-bound action, which can target another runner.
+    replaceModelDefinition(ctx.model, refreshed);
+  }
 
-	async forceFailClosed(
-		ctx: ExtensionContext,
-		accountName: string,
-		error: unknown,
-		credential?: OAuthCredential,
-	): Promise<EnsureActiveProviderAuthResult> {
-		return this.failClosed(
-			ctx,
-			this.overlay.beginOperation(),
-			this.controller.begin(ctx),
-			accountName,
-			error,
-			credential,
-		);
-	}
+  async forceFailClosed(
+    ctx: ExtensionContext,
+    accountName: string,
+    error: unknown,
+    credential?: OAuthCredential,
+  ): Promise<EnsureActiveProviderAuthResult> {
+    return this.failClosed(
+      ctx,
+      this.overlay.beginOperation(),
+      this.controller.begin(ctx),
+      accountName,
+      error,
+      credential,
+    );
+  }
 
-	invalidate(ctx: ExtensionContext, resetCatalogIdentity = true): void {
-		this.clearCredentialOffer();
-		if (resetCatalogIdentity) this.catalogAuthIdentity = undefined;
-		this.overlay.beginOperation();
-		this.controller.invalidate(ctx);
-		this.refreshController.abort(new DOMException("Account refresh invalidated", "AbortError"));
-		this.refreshController = new AbortController();
-	}
+  invalidate(ctx: ExtensionContext, resetCatalogIdentity = true): void {
+    this.clearCredentialOffer();
+    if (resetCatalogIdentity) this.catalogAuthIdentity = undefined;
+    this.overlay.beginOperation();
+    this.controller.invalidate(ctx);
+    this.refreshController.abort(new DOMException("Account refresh invalidated", "AbortError"));
+    this.refreshController = new AbortController();
+  }
 
-	async clear(ctx: ExtensionContext, restoreDefaultCatalog = false): Promise<void> {
-		this.clearCredentialOffer();
-		const operation = this.overlay.beginOperation();
-		this.availableModelIds = undefined;
-		await this.controller.clear(ctx);
-		try {
-			if (restoreDefaultCatalog && this.catalogAuthIdentity !== undefined) {
-				await this.refreshModelCatalog(
-					ctx,
-					AbortSignal.any([
-						this.refreshController.signal,
-						AbortSignal.timeout(SHUTDOWN_CATALOG_REFRESH_TIMEOUT_MS),
-					]),
-					"default",
-				);
-			}
-		} finally {
-			this.overlay.remove(ctx, operation);
-			if (!restoreDefaultCatalog) this.catalogAuthIdentity = undefined;
-		}
-	}
+  async clear(ctx: ExtensionContext, restoreDefaultCatalog = false): Promise<void> {
+    this.clearCredentialOffer();
+    const operation = this.overlay.beginOperation();
+    this.availableModelIds = undefined;
+    await this.controller.clear(ctx);
+    try {
+      if (restoreDefaultCatalog && this.catalogAuthIdentity !== undefined) {
+        await this.refreshModelCatalog(
+          ctx,
+          AbortSignal.any([this.refreshController.signal, AbortSignal.timeout(SHUTDOWN_CATALOG_REFRESH_TIMEOUT_MS)]),
+          "default",
+        );
+      }
+    } finally {
+      this.overlay.remove(ctx, operation);
+      if (!restoreDefaultCatalog) this.catalogAuthIdentity = undefined;
+    }
+  }
 
-	private async failClosed(
-		ctx: ExtensionContext,
-		operation: number,
-		runtimeOverride: RuntimeOverrideSnapshot | undefined,
-		accountName: string,
-		error: unknown,
-		credential?: OAuthCredential,
-	): Promise<EnsureActiveProviderAuthResult> {
-		if (!this.overlay.isCurrent(operation)) {
-			return { status: "inactive", providerId: this.provider.id };
-		}
-		this.clearCredentialOffer();
-		let suffix = "";
-		try {
-			this.overlay.apply(
-				ctx,
-				operation,
-				{},
-				credential ? safelyReadAvailableModelIds(credential) : undefined,
-			);
-		} catch {
-			suffix = " Pi could not apply the fail-closed provider overlay.";
-		}
-		try {
-			const applied = await this.controller.apply(ctx, runtimeOverride, this.failClosedApiKey);
-			if (applied === "stale") return { status: "inactive", providerId: this.provider.id };
-			if (applied === "unavailable") suffix += " Pi did not accept the fail-closed credential.";
-		} catch {
-			suffix += " Pi could not apply the fail-closed credential; provider turns will be aborted.";
-		}
-		const availableModelIds = credential ? safelyReadAvailableModelIds(credential) : undefined;
-		this.availableModelIds = availableModelIds ? new Set(availableModelIds) : undefined;
-		return {
-			status: "error",
-			providerId: this.provider.id,
-			accountName,
-			message: `${credential ? redactCredentialError(error, credential) : redactTokenText(errorMessage(error))}${suffix}`,
-		};
-	}
+  private async failClosed(
+    ctx: ExtensionContext,
+    operation: number,
+    runtimeOverride: RuntimeOverrideSnapshot | undefined,
+    accountName: string,
+    error: unknown,
+    credential?: OAuthCredential,
+  ): Promise<EnsureActiveProviderAuthResult> {
+    if (!this.overlay.isCurrent(operation)) {
+      return { status: "inactive", providerId: this.provider.id };
+    }
+    this.clearCredentialOffer();
+    let suffix = "";
+    try {
+      this.overlay.apply(ctx, operation, {}, credential ? safelyReadAvailableModelIds(credential) : undefined);
+    } catch {
+      suffix = " Pi could not apply the fail-closed provider overlay.";
+    }
+    try {
+      const applied = await this.controller.apply(ctx, runtimeOverride, this.failClosedApiKey);
+      if (applied === "stale") return { status: "inactive", providerId: this.provider.id };
+      if (applied === "unavailable") suffix += " Pi did not accept the fail-closed credential.";
+    } catch {
+      suffix += " Pi could not apply the fail-closed credential; provider turns will be aborted.";
+    }
+    const availableModelIds = credential ? safelyReadAvailableModelIds(credential) : undefined;
+    this.availableModelIds = availableModelIds ? new Set(availableModelIds) : undefined;
+    return {
+      status: "error",
+      providerId: this.provider.id,
+      accountName,
+      message: `${credential ? redactCredentialError(error, credential) : redactTokenText(errorMessage(error))}${suffix}`,
+    };
+  }
 
-	private async selectedCredentialMatches(
-		store: RuntimeAccountStore,
-		accountName: string,
-		expected: OAuthCredential,
-	): Promise<{ matches: boolean; error?: unknown }> {
-		try {
-			const latest = await store.readProviderAsync(this.provider.id);
-			const current = getOwnCredential(latest.accounts, accountName);
-			return {
-				matches: current !== undefined && JSON.stringify(current) === JSON.stringify(expected),
-			};
-		} catch (error) {
-			return { matches: false, error };
-		}
-	}
+  private async selectedCredentialMatches(
+    store: RuntimeAccountStore,
+    accountName: string,
+    expected: OAuthCredential,
+  ): Promise<{ matches: boolean; error?: unknown }> {
+    try {
+      const latest = await store.readProviderAsync(this.provider.id);
+      const current = getOwnCredential(latest.accounts, accountName);
+      return {
+        matches: current !== undefined && JSON.stringify(current) === JSON.stringify(expected),
+      };
+    } catch (error) {
+      return { matches: false, error };
+    }
+  }
 
-	private async verifyOverlay(
-		ctx: ExtensionContext,
-		auth: ModelAuth,
-		availableModelIds?: readonly string[],
-	): Promise<void> {
-		const registered = getRegisteredProviderConfig(ctx, this.provider.id);
-		if (auth.baseUrl && registered?.baseUrl !== auth.baseUrl) {
-			throw new Error(`Pi did not retain the runtime ${this.provider.displayName} endpoint.`);
-		}
-		if (auth.headers) {
-			for (const [name, value] of Object.entries(auth.headers)) {
-				if (value !== null && readHeader(registered?.headers, name) !== value) {
-					throw new Error(`Pi did not retain the runtime ${this.provider.displayName} headers.`);
-				}
-				if (value === null && hasHeader(registered?.headers, name)) {
-					throw new Error(`Pi did not remove the runtime ${this.provider.displayName} header.`);
-				}
-			}
-		}
-		const modelId = availableModelIds?.[0] ?? firstProviderModelId(ctx, this.provider.id);
-		const model = modelId ? findProviderModel(ctx, this.provider.id, modelId) : undefined;
-		if (model && auth.baseUrl && model.baseUrl !== auth.baseUrl) {
-			throw new Error(`Pi did not apply the runtime ${this.provider.displayName} endpoint.`);
-		}
-		if (model && auth.headers) {
-			const resolved = await getApiKeyAndHeaders(ctx, model);
-			if (resolved?.ok === false) {
-				throw new Error(`Pi could not resolve the runtime ${this.provider.displayName} headers.`);
-			}
-			for (const [name, value] of Object.entries(auth.headers)) {
-				if (value !== null && readHeader(resolved?.headers, name) !== value) {
-					throw new Error(`Pi did not apply the runtime ${this.provider.displayName} headers.`);
-				}
-				if (value === null && hasHeader(resolved?.headers, name)) {
-					throw new Error(`Pi did not remove the runtime ${this.provider.displayName} header.`);
-				}
-			}
-		}
-	}
+  private async verifyOverlay(
+    ctx: ExtensionContext,
+    auth: ModelAuth,
+    availableModelIds?: readonly string[],
+  ): Promise<void> {
+    const registered = getRegisteredProviderConfig(ctx, this.provider.id);
+    if (auth.baseUrl && registered?.baseUrl !== auth.baseUrl) {
+      throw new Error(`Pi did not retain the runtime ${this.provider.displayName} endpoint.`);
+    }
+    if (auth.headers) {
+      for (const [name, value] of Object.entries(auth.headers)) {
+        if (value !== null && readHeader(registered?.headers, name) !== value) {
+          throw new Error(`Pi did not retain the runtime ${this.provider.displayName} headers.`);
+        }
+        if (value === null && hasHeader(registered?.headers, name)) {
+          throw new Error(`Pi did not remove the runtime ${this.provider.displayName} header.`);
+        }
+      }
+    }
+    const modelId = availableModelIds?.[0] ?? firstProviderModelId(ctx, this.provider.id);
+    const model = modelId ? findProviderModel(ctx, this.provider.id, modelId) : undefined;
+    if (model && auth.baseUrl && model.baseUrl !== auth.baseUrl) {
+      throw new Error(`Pi did not apply the runtime ${this.provider.displayName} endpoint.`);
+    }
+    if (model && auth.headers) {
+      const resolved = await getApiKeyAndHeaders(ctx, model);
+      if (resolved?.ok === false) {
+        throw new Error(`Pi could not resolve the runtime ${this.provider.displayName} headers.`);
+      }
+      for (const [name, value] of Object.entries(auth.headers)) {
+        if (value !== null && readHeader(resolved?.headers, name) !== value) {
+          throw new Error(`Pi did not apply the runtime ${this.provider.displayName} headers.`);
+        }
+        if (value === null && hasHeader(resolved?.headers, name)) {
+          throw new Error(`Pi did not remove the runtime ${this.provider.displayName} header.`);
+        }
+      }
+    }
+  }
 }
 
 class RuntimeProviderOverlay {
-	private generation = 0;
-	private owned = false;
-	private previous: RuntimeProviderConfig | undefined;
-	private applied: RuntimeProviderConfig | undefined;
-	private baseModels: NonNullable<RuntimeProviderConfig["models"]> | undefined;
+  private generation = 0;
+  private owned = false;
+  private previous: RuntimeProviderConfig | undefined;
+  private applied: RuntimeProviderConfig | undefined;
+  private baseModels: NonNullable<RuntimeProviderConfig["models"]> | undefined;
 
-	constructor(
-		private readonly provider: AccountProviderAdapter,
-		private readonly fallbackApiKey: string,
-	) {}
+  constructor(
+    private readonly provider: AccountProviderAdapter,
+    private readonly fallbackApiKey: string,
+  ) {}
 
-	beginOperation(): number {
-		this.generation += 1;
-		return this.generation;
-	}
+  beginOperation(): number {
+    this.generation += 1;
+    return this.generation;
+  }
 
-	isCurrent(generation: number): boolean {
-		return generation === this.generation;
-	}
+  isCurrent(generation: number): boolean {
+    return generation === this.generation;
+  }
 
-	apply(
-		ctx: ExtensionContext,
-		generation: number,
-		auth: ModelAuth,
-		availableModelIds?: readonly string[],
-	): boolean {
-		if (generation !== this.generation) return false;
-		const needsOverlay =
-			this.provider.requiresApiKeyBridge ||
-			auth.baseUrl !== undefined ||
-			(auth.headers !== undefined && Object.keys(auth.headers).length > 0) ||
-			availableModelIds !== undefined;
-		if (!needsOverlay) {
-			if (this.owned) this.remove(ctx, generation);
-			return true;
-		}
-		const current = getRegisteredProviderConfig(ctx, this.provider.id);
-		if (this.owned && !shallowConfigEqual(current, this.applied)) {
-			this.reset();
-			throw new Error(
-				`${this.provider.displayName} provider configuration changed while pi-accounts owned its auth overlay.`,
-			);
-		}
-		if (!this.owned) {
-			this.previous = current;
-			this.baseModels = readProviderModels(ctx, this.provider.id);
-		}
+  apply(ctx: ExtensionContext, generation: number, auth: ModelAuth, availableModelIds?: readonly string[]): boolean {
+    if (generation !== this.generation) return false;
+    const needsOverlay =
+      this.provider.requiresApiKeyBridge ||
+      auth.baseUrl !== undefined ||
+      (auth.headers !== undefined && Object.keys(auth.headers).length > 0) ||
+      availableModelIds !== undefined;
+    if (!needsOverlay) {
+      if (this.owned) this.remove(ctx, generation);
+      return true;
+    }
+    const current = getRegisteredProviderConfig(ctx, this.provider.id);
+    if (this.owned && !shallowConfigEqual(current, this.applied)) {
+      this.reset();
+      throw new Error(
+        `${this.provider.displayName} provider configuration changed while pi-accounts owned its auth overlay.`,
+      );
+    }
+    if (!this.owned) {
+      this.previous = current;
+      this.baseModels = readProviderModels(ctx, this.provider.id);
+    }
 
-		const next = this.buildConfig(auth, availableModelIds);
-		if (Object.keys(next).length === 0 && !this.owned) return true;
-		this.replaceConfig(ctx, this.owned ? this.applied : current, next);
-		this.owned = true;
-		this.applied = next;
-		return true;
-	}
+    const next = this.buildConfig(auth, availableModelIds);
+    if (Object.keys(next).length === 0 && !this.owned) return true;
+    this.replaceConfig(ctx, this.owned ? this.applied : current, next);
+    this.owned = true;
+    this.applied = next;
+    return true;
+  }
 
-	remove(ctx: ExtensionContext, generation: number): void {
-		if (generation !== this.generation || !this.owned) return;
-		const current = getRegisteredProviderConfig(ctx, this.provider.id);
-		if (!shallowConfigEqual(current, this.applied)) {
-			this.reset();
-			return;
-		}
-		ctx.modelRegistry.unregisterProvider(this.provider.id);
-		if (this.previous && Object.keys(this.previous).length > 0) {
-			ctx.modelRegistry.registerProvider(this.provider.id, this.previous);
-		}
-		this.reset();
-	}
+  remove(ctx: ExtensionContext, generation: number): void {
+    if (generation !== this.generation || !this.owned) return;
+    const current = getRegisteredProviderConfig(ctx, this.provider.id);
+    if (!shallowConfigEqual(current, this.applied)) {
+      this.reset();
+      return;
+    }
+    ctx.modelRegistry.unregisterProvider(this.provider.id);
+    if (this.previous && Object.keys(this.previous).length > 0) {
+      ctx.modelRegistry.registerProvider(this.provider.id, this.previous);
+    }
+    this.reset();
+  }
 
-	private buildConfig(
-		auth: ModelAuth,
-		availableModelIds?: readonly string[],
-	): RuntimeProviderConfig {
-		const next: RuntimeProviderConfig = { ...(this.previous ?? {}) };
-		if (this.provider.requiresApiKeyBridge) next.apiKey = this.fallbackApiKey;
-		if (auth.baseUrl) next.baseUrl = auth.baseUrl;
-		if (auth.headers) next.headers = mergeConfigHeaders(this.previous?.headers, auth.headers);
-		if (availableModelIds) {
-			const allowed = new Set(availableModelIds);
-			next.models = (this.baseModels ?? [])
-				.filter((model) => allowed.has(model.id))
-				.map((model) => (auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model));
-		}
-		return next;
-	}
+  private buildConfig(auth: ModelAuth, availableModelIds?: readonly string[]): RuntimeProviderConfig {
+    const next: RuntimeProviderConfig = { ...(this.previous ?? {}) };
+    if (this.provider.requiresApiKeyBridge) next.apiKey = this.fallbackApiKey;
+    if (auth.baseUrl) next.baseUrl = auth.baseUrl;
+    if (auth.headers) next.headers = mergeConfigHeaders(this.previous?.headers, auth.headers);
+    if (availableModelIds) {
+      const allowed = new Set(availableModelIds);
+      next.models = (this.baseModels ?? [])
+        .filter((model) => allowed.has(model.id))
+        .map((model) => (auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model));
+    }
+    return next;
+  }
 
-	private replaceConfig(
-		ctx: ExtensionContext,
-		fallback: RuntimeProviderConfig | undefined,
-		next: RuntimeProviderConfig,
-	): void {
-		ctx.modelRegistry.unregisterProvider(this.provider.id);
-		try {
-			if (Object.keys(next).length > 0) {
-				ctx.modelRegistry.registerProvider(this.provider.id, next);
-			}
-		} catch (error) {
-			if (fallback && Object.keys(fallback).length > 0) {
-				ctx.modelRegistry.registerProvider(this.provider.id, fallback);
-			}
-			throw error;
-		}
-	}
+  private replaceConfig(
+    ctx: ExtensionContext,
+    fallback: RuntimeProviderConfig | undefined,
+    next: RuntimeProviderConfig,
+  ): void {
+    ctx.modelRegistry.unregisterProvider(this.provider.id);
+    try {
+      if (Object.keys(next).length > 0) {
+        ctx.modelRegistry.registerProvider(this.provider.id, next);
+      }
+    } catch (error) {
+      if (fallback && Object.keys(fallback).length > 0) {
+        ctx.modelRegistry.registerProvider(this.provider.id, fallback);
+      }
+      throw error;
+    }
+  }
 
-	private reset(): void {
-		this.owned = false;
-		this.previous = undefined;
-		this.applied = undefined;
-		this.baseModels = undefined;
-	}
+  private reset(): void {
+    this.owned = false;
+    this.previous = undefined;
+    this.applied = undefined;
+    this.baseModels = undefined;
+  }
 }
 
 class RuntimeApiKeyController {
-	private readonly states = new WeakMap<object, RuntimeOverrideState>();
+  private readonly states = new WeakMap<object, RuntimeOverrideState>();
 
-	constructor(private readonly providerId: string) {}
+  constructor(private readonly providerId: string) {}
 
-	begin(ctx: ExtensionContext): RuntimeOverrideSnapshot | undefined {
-		const target = getRuntimeAuthStorage(ctx);
-		if (!target) return undefined;
-		const state = this.getState(target);
-		state.generation += 1;
-		return { target, state, generation: state.generation };
-	}
+  begin(ctx: ExtensionContext): RuntimeOverrideSnapshot | undefined {
+    const target = getRuntimeAuthStorage(ctx);
+    if (!target) return undefined;
+    const state = this.getState(target);
+    state.generation += 1;
+    return { target, state, generation: state.generation };
+  }
 
-	async apply(
-		ctx: ExtensionContext,
-		snapshot: RuntimeOverrideSnapshot | undefined,
-		apiKey: string,
-	): Promise<"applied" | "stale" | "unavailable"> {
-		if (!(await this.set(snapshot, apiKey))) return "stale";
-		const matches = await this.matches(ctx, apiKey);
-		if (matches !== false) return "applied";
-		if (!(await this.set(snapshot, apiKey, true))) return "stale";
-		return (await this.matches(ctx, apiKey)) === false ? "unavailable" : "applied";
-	}
+  async apply(
+    ctx: ExtensionContext,
+    snapshot: RuntimeOverrideSnapshot | undefined,
+    apiKey: string,
+  ): Promise<"applied" | "stale" | "unavailable"> {
+    if (!(await this.set(snapshot, apiKey))) return "stale";
+    const matches = await this.matches(ctx, apiKey);
+    if (matches !== false) return "applied";
+    if (!(await this.set(snapshot, apiKey, true))) return "stale";
+    return (await this.matches(ctx, apiKey)) === false ? "unavailable" : "applied";
+  }
 
-	invalidate(ctx: ExtensionContext): void {
-		const target = getRuntimeAuthStorage(ctx);
-		const state = target ? this.states.get(target) : undefined;
-		if (state) state.generation += 1;
-	}
+  invalidate(ctx: ExtensionContext): void {
+    const target = getRuntimeAuthStorage(ctx);
+    const state = target ? this.states.get(target) : undefined;
+    if (state) state.generation += 1;
+  }
 
-	async clear(ctx: ExtensionContext): Promise<void> {
-		const target = getRuntimeAuthStorage(ctx);
-		if (!target) return;
-		const state = this.states.get(target);
-		if (!state) return;
-		state.generation += 1;
-		await enqueueMutation(state, async () => {
-			if (!state.mayHaveOverride) return;
-			await target.removeRuntimeApiKey(this.providerId);
-			state.appliedApiKey = undefined;
-			state.mayHaveOverride = false;
-		});
-	}
+  async clear(ctx: ExtensionContext): Promise<void> {
+    const target = getRuntimeAuthStorage(ctx);
+    if (!target) return;
+    const state = this.states.get(target);
+    if (!state) return;
+    state.generation += 1;
+    await enqueueMutation(state, async () => {
+      if (!state.mayHaveOverride) return;
+      await target.removeRuntimeApiKey(this.providerId);
+      state.appliedApiKey = undefined;
+      state.mayHaveOverride = false;
+    });
+  }
 
-	private async matches(ctx: ExtensionContext, expected: string): Promise<boolean | undefined> {
-		const registry = ctx.modelRegistry as unknown as {
-			getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
-		};
-		if (typeof registry.getApiKeyForProvider !== "function") return undefined;
-		try {
-			return (await registry.getApiKeyForProvider(this.providerId)) === expected;
-		} catch {
-			return false;
-		}
-	}
+  private async matches(ctx: ExtensionContext, expected: string): Promise<boolean | undefined> {
+    const registry = ctx.modelRegistry as unknown as {
+      getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
+    };
+    if (typeof registry.getApiKeyForProvider !== "function") return undefined;
+    try {
+      return (await registry.getApiKeyForProvider(this.providerId)) === expected;
+    } catch {
+      return false;
+    }
+  }
 
-	private async set(
-		snapshot: RuntimeOverrideSnapshot | undefined,
-		apiKey: string,
-		force = false,
-	): Promise<boolean> {
-		if (!snapshot)
-			throw new Error("This Pi version does not expose runtime provider authentication.");
-		const { generation, state, target } = snapshot;
-		return enqueueMutation(state, async () => {
-			if (state.generation !== generation) return false;
-			if (!force && state.appliedApiKey === apiKey) return true;
-			state.appliedApiKey = undefined;
-			state.mayHaveOverride = true;
-			await target.setRuntimeApiKey(this.providerId, apiKey);
-			state.appliedApiKey = apiKey;
-			return state.generation === generation;
-		});
-	}
+  private async set(snapshot: RuntimeOverrideSnapshot | undefined, apiKey: string, force = false): Promise<boolean> {
+    if (!snapshot) throw new Error("This Pi version does not expose runtime provider authentication.");
+    const { generation, state, target } = snapshot;
+    return enqueueMutation(state, async () => {
+      if (state.generation !== generation) return false;
+      if (!force && state.appliedApiKey === apiKey) return true;
+      state.appliedApiKey = undefined;
+      state.mayHaveOverride = true;
+      await target.setRuntimeApiKey(this.providerId, apiKey);
+      state.appliedApiKey = apiKey;
+      return state.generation === generation;
+    });
+  }
 
-	private getState(target: object): RuntimeOverrideState {
-		let state = this.states.get(target);
-		if (!state) {
-			state = { generation: 0, mayHaveOverride: false, operationTail: Promise.resolve() };
-			this.states.set(target, state);
-		}
-		return state;
-	}
+  private getState(target: object): RuntimeOverrideState {
+    let state = this.states.get(target);
+    if (!state) {
+      state = { generation: 0, mayHaveOverride: false, operationTail: Promise.resolve() };
+      this.states.set(target, state);
+    }
+    return state;
+  }
 }
 
 function sameModelDefinition(left: unknown, right: unknown): boolean {
-	if (left === right) return true;
-	try {
-		return JSON.stringify(left) === JSON.stringify(right);
-	} catch {
-		return false;
-	}
+  if (left === right) return true;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
 }
 
 function replaceModelDefinition(target: object, source: object): void {
-	const writable = target as Record<string, unknown>;
-	for (const key of Object.keys(writable)) {
-		if (!Object.hasOwn(source, key)) delete writable[key];
-	}
-	Object.assign(writable, source);
-	if (!sameModelDefinition(writable, source)) {
-		throw new Error("Pi did not retain the refreshed model definition.");
-	}
+  const writable = target as Record<string, unknown>;
+  for (const key of Object.keys(writable)) {
+    if (!Object.hasOwn(source, key)) delete writable[key];
+  }
+  Object.assign(writable, source);
+  if (!sameModelDefinition(writable, source)) {
+    throw new Error("Pi did not retain the refreshed model definition.");
+  }
 }
 
-function readProviderModels(
-	ctx: ExtensionContext,
-	providerId: string,
-): NonNullable<RuntimeProviderConfig["models"]> {
-	const registry = ctx.modelRegistry as unknown as {
-		getAll?: () => readonly Record<string, unknown>[];
-	};
-	const models = typeof registry.getAll === "function" ? registry.getAll() : [];
-	return models
-		.filter((model) => model.provider === providerId && typeof model.id === "string")
-		.map((model) => ({
-			id: String(model.id),
-			name: typeof model.name === "string" ? model.name : String(model.id),
-			...(typeof model.api === "string" ? { api: model.api as never } : {}),
-			...(typeof model.baseUrl === "string" ? { baseUrl: model.baseUrl } : {}),
-			reasoning: model.reasoning === true,
-			...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap as never } : {}),
-			input: Array.isArray(model.input) ? (model.input as ("text" | "image")[]) : ["text"],
-			cost: (model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) as never,
-			contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : 0,
-			maxTokens: typeof model.maxTokens === "number" ? model.maxTokens : 0,
-			...(model.headers ? { headers: model.headers as Record<string, string> } : {}),
-			...(model.compat ? { compat: model.compat as never } : {}),
-		}));
+function readProviderModels(ctx: ExtensionContext, providerId: string): NonNullable<RuntimeProviderConfig["models"]> {
+  const registry = ctx.modelRegistry as unknown as {
+    getAll?: () => readonly Record<string, unknown>[];
+  };
+  const models = typeof registry.getAll === "function" ? registry.getAll() : [];
+  return models
+    .filter((model) => model.provider === providerId && typeof model.id === "string")
+    .map((model) => ({
+      id: String(model.id),
+      name: typeof model.name === "string" ? model.name : String(model.id),
+      ...(typeof model.api === "string" ? { api: model.api as never } : {}),
+      ...(typeof model.baseUrl === "string" ? { baseUrl: model.baseUrl } : {}),
+      reasoning: model.reasoning === true,
+      ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap as never } : {}),
+      input: Array.isArray(model.input) ? (model.input as ("text" | "image")[]) : ["text"],
+      cost: (model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) as never,
+      contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : 0,
+      maxTokens: typeof model.maxTokens === "number" ? model.maxTokens : 0,
+      ...(model.headers ? { headers: model.headers as Record<string, string> } : {}),
+      ...(model.compat ? { compat: model.compat as never } : {}),
+    }));
 }
 
 function readHeader(
-	headers: ProviderHeaders | Record<string, string> | undefined,
-	name: string,
+  headers: ProviderHeaders | Record<string, string> | undefined,
+  name: string,
 ): string | null | undefined {
-	const expected = name.toLowerCase();
-	for (const [candidate, value] of Object.entries(headers ?? {})) {
-		if (candidate.toLowerCase() === expected) return value;
-	}
-	return undefined;
+  const expected = name.toLowerCase();
+  for (const [candidate, value] of Object.entries(headers ?? {})) {
+    if (candidate.toLowerCase() === expected) return value;
+  }
+  return undefined;
 }
 
-function hasHeader(
-	headers: ProviderHeaders | Record<string, string> | undefined,
-	name: string,
-): boolean {
-	const expected = name.toLowerCase();
-	return Object.keys(headers ?? {}).some((candidate) => candidate.toLowerCase() === expected);
+function hasHeader(headers: ProviderHeaders | Record<string, string> | undefined, name: string): boolean {
+  const expected = name.toLowerCase();
+  return Object.keys(headers ?? {}).some((candidate) => candidate.toLowerCase() === expected);
 }
 
 function mergeConfigHeaders(
-	previous: Record<string, string> | undefined,
-	headers: Record<string, string | null>,
+  previous: Record<string, string> | undefined,
+  headers: Record<string, string | null>,
 ): Record<string, string> {
-	const result = { ...(previous ?? {}) };
-	for (const [name, value] of Object.entries(headers)) {
-		for (const existing of Object.keys(result)) {
-			if (existing.toLowerCase() === name.toLowerCase()) delete result[existing];
-		}
-		if (value !== null) result[name] = value;
-	}
-	return result;
+  const result = { ...(previous ?? {}) };
+  for (const [name, value] of Object.entries(headers)) {
+    for (const existing of Object.keys(result)) {
+      if (existing.toLowerCase() === name.toLowerCase()) delete result[existing];
+    }
+    if (value !== null) result[name] = value;
+  }
+  return result;
 }
 
 function validateModelAuth(auth: unknown, provider: AccountProviderAdapter): string {
-	const providerName = provider.displayName;
-	if (!isRecord(auth)) throw new Error(`${providerName} OAuth returned invalid request auth.`);
-	if (auth.baseUrl !== undefined) {
-		if (typeof auth.baseUrl !== "string") {
-			throw new Error(`${providerName} OAuth returned an invalid endpoint.`);
-		}
-		let endpoint: URL;
-		try {
-			endpoint = new URL(auth.baseUrl);
-		} catch {
-			throw new Error(`${providerName} OAuth returned an invalid endpoint.`);
-		}
-		if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) {
-			throw new Error(`${providerName} OAuth returned an unsafe endpoint.`);
-		}
-	}
-	if (auth.headers !== undefined) {
-		if (!isRecord(auth.headers)) {
-			throw new Error(`${providerName} OAuth returned invalid headers.`);
-		}
-		for (const [name, value] of Object.entries(auth.headers)) {
-			if (!name || /[\r\n]/.test(name) || (value !== null && typeof value !== "string")) {
-				throw new Error(`${providerName} OAuth returned invalid headers.`);
-			}
-			if (typeof value === "string" && /[\r\n]/.test(value)) {
-				throw new Error(`${providerName} OAuth returned invalid headers.`);
-			}
-		}
-	}
-	if (provider.runtimeAuthMode === "api-key") {
-		if (typeof auth.apiKey !== "string" || !auth.apiKey) {
-			throw new Error(`${providerName} OAuth returned no API key.`);
-		}
-		return auth.apiKey;
-	}
-	if (auth.apiKey !== undefined) {
-		throw new Error(`${providerName} OAuth returned unexpected API-key authentication.`);
-	}
-	const authorizationHeaders = isRecord(auth.headers)
-		? Object.entries(auth.headers).filter(([name]) => name.toLowerCase() === "authorization")
-		: [];
-	if (
-		authorizationHeaders.length !== 1 ||
-		typeof authorizationHeaders[0]?.[1] !== "string" ||
-		!/^Bearer\s+\S+$/u.test(authorizationHeaders[0][1])
-	) {
-		throw new Error(`${providerName} OAuth returned no valid Bearer authorization header.`);
-	}
-	return RUNTIME_HEADER_AUTH_SELECTOR;
+  const providerName = provider.displayName;
+  if (!isRecord(auth)) throw new Error(`${providerName} OAuth returned invalid request auth.`);
+  if (auth.baseUrl !== undefined) {
+    if (typeof auth.baseUrl !== "string") {
+      throw new Error(`${providerName} OAuth returned an invalid endpoint.`);
+    }
+    let endpoint: URL;
+    try {
+      endpoint = new URL(auth.baseUrl);
+    } catch {
+      throw new Error(`${providerName} OAuth returned an invalid endpoint.`);
+    }
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) {
+      throw new Error(`${providerName} OAuth returned an unsafe endpoint.`);
+    }
+  }
+  if (auth.headers !== undefined) {
+    if (!isRecord(auth.headers)) {
+      throw new Error(`${providerName} OAuth returned invalid headers.`);
+    }
+    for (const [name, value] of Object.entries(auth.headers)) {
+      if (!name || /[\r\n]/.test(name) || (value !== null && typeof value !== "string")) {
+        throw new Error(`${providerName} OAuth returned invalid headers.`);
+      }
+      if (typeof value === "string" && /[\r\n]/.test(value)) {
+        throw new Error(`${providerName} OAuth returned invalid headers.`);
+      }
+    }
+  }
+  if (provider.runtimeAuthMode === "api-key") {
+    if (typeof auth.apiKey !== "string" || !auth.apiKey) {
+      throw new Error(`${providerName} OAuth returned no API key.`);
+    }
+    return auth.apiKey;
+  }
+  if (auth.apiKey !== undefined) {
+    throw new Error(`${providerName} OAuth returned unexpected API-key authentication.`);
+  }
+  const authorizationHeaders = isRecord(auth.headers)
+    ? Object.entries(auth.headers).filter(([name]) => name.toLowerCase() === "authorization")
+    : [];
+  if (
+    authorizationHeaders.length !== 1 ||
+    typeof authorizationHeaders[0]?.[1] !== "string" ||
+    !/^Bearer\s+\S+$/u.test(authorizationHeaders[0][1])
+  ) {
+    throw new Error(`${providerName} OAuth returned no valid Bearer authorization header.`);
+  }
+  return RUNTIME_HEADER_AUTH_SELECTOR;
 }
 
 function readAvailableModelIds(credential: OAuthCredential): string[] | undefined {
-	if (!Object.hasOwn(credential, "availableModelIds")) return undefined;
-	const value = credential.availableModelIds;
-	if (
-		!Array.isArray(value) ||
-		value.length > 1_000 ||
-		!value.every((id) => typeof id === "string" && id.length > 0 && id.length <= 256)
-	) {
-		throw new Error("OAuth credential has invalid availableModelIds metadata.");
-	}
-	return [...new Set(value)];
+  if (!Object.hasOwn(credential, "availableModelIds")) return undefined;
+  const value = credential.availableModelIds;
+  if (
+    !Array.isArray(value) ||
+    value.length > 1_000 ||
+    !value.every((id) => typeof id === "string" && id.length > 0 && id.length <= 256)
+  ) {
+    throw new Error("OAuth credential has invalid availableModelIds metadata.");
+  }
+  return [...new Set(value)];
 }
 
 function safelyReadAvailableModelIds(credential: OAuthCredential): string[] | undefined {
-	try {
-		return readAvailableModelIds(credential);
-	} catch {
-		return undefined;
-	}
+  try {
+    return readAvailableModelIds(credential);
+  } catch {
+    return undefined;
+  }
 }
 
 function firstProviderModelId(ctx: ExtensionContext, providerId: string): string | undefined {
-	return readProviderModels(ctx, providerId)[0]?.id;
+  return readProviderModels(ctx, providerId)[0]?.id;
 }
 
 function findProviderModel(
-	ctx: ExtensionContext,
-	providerId: string,
-	modelId: string,
+  ctx: ExtensionContext,
+  providerId: string,
+  modelId: string,
 ): { provider: string; id: string; baseUrl?: string } | undefined {
-	const registry = ctx.modelRegistry as unknown as {
-		find?: (
-			provider: string,
-			id: string,
-		) => { provider: string; id: string; baseUrl?: string } | undefined;
-	};
-	return typeof registry.find === "function" ? registry.find(providerId, modelId) : undefined;
+  const registry = ctx.modelRegistry as unknown as {
+    find?: (provider: string, id: string) => { provider: string; id: string; baseUrl?: string } | undefined;
+  };
+  return typeof registry.find === "function" ? registry.find(providerId, modelId) : undefined;
 }
 
 async function getApiKeyAndHeaders(
-	ctx: ExtensionContext,
-	model: { provider: string; id: string; baseUrl?: string },
-): Promise<
-	| { ok: true; apiKey?: string; headers?: ProviderHeaders }
-	| { ok: false; error: string }
-	| undefined
-> {
-	const registry = ctx.modelRegistry as unknown as {
-		getApiKeyAndHeaders?: (
-			candidate: unknown,
-		) => Promise<
-			{ ok: true; apiKey?: string; headers?: ProviderHeaders } | { ok: false; error: string }
-		>;
-	};
-	return typeof registry.getApiKeyAndHeaders === "function"
-		? registry.getApiKeyAndHeaders(model)
-		: undefined;
+  ctx: ExtensionContext,
+  model: { provider: string; id: string; baseUrl?: string },
+): Promise<{ ok: true; apiKey?: string; headers?: ProviderHeaders } | { ok: false; error: string } | undefined> {
+  const registry = ctx.modelRegistry as unknown as {
+    getApiKeyAndHeaders?: (
+      candidate: unknown,
+    ) => Promise<{ ok: true; apiKey?: string; headers?: ProviderHeaders } | { ok: false; error: string }>;
+  };
+  return typeof registry.getApiKeyAndHeaders === "function" ? registry.getApiKeyAndHeaders(model) : undefined;
 }
 
 function defineOwn(
-	accounts: Record<string, OAuthCredential>,
-	name: string,
-	credential: OAuthCredential,
+  accounts: Record<string, OAuthCredential>,
+  name: string,
+  credential: OAuthCredential,
 ): Record<string, OAuthCredential> {
-	const next = Object.assign(Object.create(null), accounts) as Record<string, OAuthCredential>;
-	Object.defineProperty(next, name, {
-		configurable: true,
-		enumerable: true,
-		value: credential,
-		writable: true,
-	});
-	return next;
+  const next = Object.assign(Object.create(null), accounts) as Record<string, OAuthCredential>;
+  Object.defineProperty(next, name, {
+    configurable: true,
+    enumerable: true,
+    value: credential,
+    writable: true,
+  });
+  return next;
 }
 
-function getOwnCredential(
-	accounts: Record<string, OAuthCredential>,
-	name: string,
-): OAuthCredential | undefined {
-	return Object.hasOwn(accounts, name) ? accounts[name] : undefined;
+function getOwnCredential(accounts: Record<string, OAuthCredential>, name: string): OAuthCredential | undefined {
+  return Object.hasOwn(accounts, name) ? accounts[name] : undefined;
 }
 
-function getRegisteredProviderConfig(
-	ctx: ExtensionContext,
-	providerId: string,
-): RuntimeProviderConfig | undefined {
-	const registry = ctx.modelRegistry as unknown as {
-		getRegisteredProviderConfig?: (provider: string) => RuntimeProviderConfig | undefined;
-		registeredProviders?: Map<string, RuntimeProviderConfig>;
-	};
-	if (typeof registry.getRegisteredProviderConfig === "function") {
-		return registry.getRegisteredProviderConfig(providerId);
-	}
-	return registry.registeredProviders instanceof Map
-		? registry.registeredProviders.get(providerId)
-		: undefined;
+function getRegisteredProviderConfig(ctx: ExtensionContext, providerId: string): RuntimeProviderConfig | undefined {
+  const registry = ctx.modelRegistry as unknown as {
+    getRegisteredProviderConfig?: (provider: string) => RuntimeProviderConfig | undefined;
+    registeredProviders?: Map<string, RuntimeProviderConfig>;
+  };
+  if (typeof registry.getRegisteredProviderConfig === "function") {
+    return registry.getRegisteredProviderConfig(providerId);
+  }
+  return registry.registeredProviders instanceof Map ? registry.registeredProviders.get(providerId) : undefined;
 }
 
 function shallowConfigEqual(
-	left: RuntimeProviderConfig | undefined,
-	right: RuntimeProviderConfig | undefined,
+  left: RuntimeProviderConfig | undefined,
+  right: RuntimeProviderConfig | undefined,
 ): boolean {
-	if (left === right) return true;
-	if (!left || !right) return !left && !right;
-	const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-	for (const key of keys) {
-		if (
-			!Object.is(
-				(left as unknown as Record<string, unknown>)[key],
-				(right as unknown as Record<string, unknown>)[key],
-			)
-		)
-			return false;
-	}
-	return true;
+  if (left === right) return true;
+  if (!left || !right) return !left && !right;
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (
+      !Object.is((left as unknown as Record<string, unknown>)[key], (right as unknown as Record<string, unknown>)[key])
+    )
+      return false;
+  }
+  return true;
 }
 
 function enqueueMutation<T>(state: RuntimeOverrideState, mutate: () => Promise<T>): Promise<T> {
-	const operation = state.operationTail.then(mutate);
-	state.operationTail = operation.then(
-		() => undefined,
-		() => undefined,
-	);
-	return operation;
+  const operation = state.operationTail.then(mutate);
+  state.operationTail = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
 }
 
 function getRuntimeAuthStorage(ctx: ExtensionContext): (RuntimeAuthStorage & object) | undefined {
-	const registry = ctx.modelRegistry as unknown as { authStorage?: unknown; runtime?: unknown };
-	for (const candidate of [registry, registry.runtime, registry.authStorage]) {
-		if (isRuntimeAuthStorage(candidate)) return candidate;
-	}
-	return undefined;
+  const registry = ctx.modelRegistry as unknown as { authStorage?: unknown; runtime?: unknown };
+  for (const candidate of [registry, registry.runtime, registry.authStorage]) {
+    if (isRuntimeAuthStorage(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-	return !!value && typeof value === "object" && !Array.isArray(value);
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function isRuntimeAuthStorage(value: unknown): value is RuntimeAuthStorage & object {
-	return (
-		!!value &&
-		typeof value === "object" &&
-		"setRuntimeApiKey" in value &&
-		typeof value.setRuntimeApiKey === "function" &&
-		"removeRuntimeApiKey" in value &&
-		typeof value.removeRuntimeApiKey === "function"
-	);
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "setRuntimeApiKey" in value &&
+    typeof value.setRuntimeApiKey === "function" &&
+    "removeRuntimeApiKey" in value &&
+    typeof value.removeRuntimeApiKey === "function"
+  );
 }
 
 function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message : String(error);
 }
 
 function redactCredentialError(error: unknown, credential: OAuthCredential): string {
-	return redactTokenText(error instanceof Error ? error.message : String(error), [
-		credential.access,
-		credential.refresh,
-	]);
+  return redactTokenText(error instanceof Error ? error.message : String(error), [
+    credential.access,
+    credential.refresh,
+  ]);
 }
 
 export function redactTokenText(text: string, exactSecrets: readonly string[] = []): string {
-	const secrets = [...new Set(exactSecrets.filter(Boolean))].sort((a, b) => b.length - a.length);
-	const exact = secrets.length
-		? new RegExp(secrets.map((secret) => escapeRegExp(secret)).join("|"), "g")
-		: undefined;
-	return (exact ? text.replace(exact, "<redacted>") : text)
-		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <redacted>")
-		.replace(
-			/"(access|refresh|access_token|refresh_token|token)"\s*:\s*"[^"]+"/gi,
-			'"$1":"<redacted>"',
-		)
-		.replace(/\b(access|refresh)[_-][A-Za-z0-9._~+/=-]+/gi, "$1-<redacted>");
+  const secrets = [...new Set(exactSecrets.filter(Boolean))].sort((a, b) => b.length - a.length);
+  const exact = secrets.length ? new RegExp(secrets.map((secret) => escapeRegExp(secret)).join("|"), "g") : undefined;
+  return (exact ? text.replace(exact, "<redacted>") : text)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <redacted>")
+    .replace(/"(access|refresh|access_token|refresh_token|token)"\s*:\s*"[^"]+"/gi, '"$1":"<redacted>"')
+    .replace(/\b(access|refresh)[_-][A-Za-z0-9._~+/=-]+/gi, "$1-<redacted>");
 }
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

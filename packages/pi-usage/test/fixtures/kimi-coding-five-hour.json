@@ -1,16 +1,16 @@
 {
-	"limits": [
-		{
-			"name": "Five-hour limit",
-			"window": {
-				"duration": "300",
-				"timeUnit": "TIME_UNIT_MINUTE"
-			},
-			"detail": {
-				"used": "1",
-				"limit": "100",
-				"resetTime": "2030-01-01T05:00:00.000Z"
-			}
-		}
-	]
+  "limits": [
+    {
+      "name": "Five-hour limit",
+      "window": {
+        "duration": "300",
+        "timeUnit": "TIME_UNIT_MINUTE"
+      },
+      "detail": {
+        "used": "1",
+        "limit": "100",
+        "resetTime": "2030-01-01T05:00:00.000Z"
+      }
+    }
+  ]
 }

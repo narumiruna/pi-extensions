@@ -5,12 +5,12 @@ import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import type { AnySyncConfig } from "../src/settings/settings-types.js";
 
 export function createSyncBackend(config: AnySyncConfig): SyncBackend {
-	switch (config.backend.type) {
-		case "s3":
-			return new S3SyncBackend(config.backend);
-		case "webdav":
-			return new WebDavSyncBackend(config.backend);
-		case "git":
-			return new GitSyncBackend(config.backend);
-	}
+  switch (config.backend.type) {
+    case "s3":
+      return new S3SyncBackend(config.backend);
+    case "webdav":
+      return new WebDavSyncBackend(config.backend);
+    case "git":
+      return new GitSyncBackend(config.backend);
+  }
 }

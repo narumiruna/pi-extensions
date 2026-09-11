@@ -9,15 +9,15 @@ const testAgentDir = mkdtempSync(path.join(testRoot, "agent-"));
 process.env.PI_CODING_AGENT_DIR = testAgentDir;
 
 afterAll(() => {
-	process.env.PI_CODING_AGENT_DIR = testRoot;
-	rmSync(testAgentDir, { recursive: true, force: true });
+  process.env.PI_CODING_AGENT_DIR = testRoot;
+  rmSync(testAgentDir, { recursive: true, force: true });
 });
 
 beforeEach((context) => {
-	assertTestTimeoutWithinCap(context.task.timeout, context.task.fullTestName);
+  assertTestTimeoutWithinCap(context.task.timeout, context.task.fullTestName);
 });
 
 afterEach(() => {
-	vi.useRealTimers();
-	vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });

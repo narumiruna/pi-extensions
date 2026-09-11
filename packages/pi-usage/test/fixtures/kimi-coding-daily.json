@@ -1,16 +1,16 @@
 {
-	"limits": [
-		{
-			"name": "Daily cap",
-			"window": {
-				"duration": 1,
-				"timeUnit": "TIME_UNIT_DAY"
-			},
-			"detail": {
-				"used": 5,
-				"limit": 100,
-				"resetTime": "2030-01-02T00:00:00Z"
-			}
-		}
-	]
+  "limits": [
+    {
+      "name": "Daily cap",
+      "window": {
+        "duration": 1,
+        "timeUnit": "TIME_UNIT_DAY"
+      },
+      "detail": {
+        "used": 5,
+        "limit": 100,
+        "resetTime": "2030-01-02T00:00:00Z"
+      }
+    }
+  ]
 }

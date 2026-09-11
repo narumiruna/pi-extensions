@@ -1,9 +1,9 @@
 {
-	"extends": "../../tsconfig.json",
-	"compilerOptions": {
-		"noEmit": false,
-		"outDir": "../../node_modules/.cache/pi-chat-network-smoke",
-		"rootDir": "../.."
-	},
-	"include": ["src/external.d.ts", "scripts/**/*.ts"]
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "../../node_modules/.cache/pi-chat-network-smoke",
+    "rootDir": "../.."
+  },
+  "include": ["src/external.d.ts", "scripts/**/*.ts"]
 }

@@ -1,9 +1,9 @@
 {
-	"extends": "./tsconfig.json",
-	"compilerOptions": {
-		"noEmit": false,
-		"outDir": "node_modules/.cache/pi-extensions-test",
-		"rootDir": "."
-	},
-	"include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "test/**/*.ts"]
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "node_modules/.cache/pi-extensions-test",
+    "rootDir": "."
+  },
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "test/**/*.ts"]
 }

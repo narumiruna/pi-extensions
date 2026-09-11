@@ -1,54 +1,53 @@
 {
-	"name": "@narumitw/pi-tool",
-	"version": "0.3.1",
-	"description": "Browse configured Pi tools and optionally show the active tool set.",
-	"type": "module",
-	"license": "MIT",
-	"private": false,
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi",
-		"tools",
-		"tool-catalog",
-		"developer-tools"
-	],
-	"files": [
-		"src",
-		"dist",
-		"README.md",
-		"LICENSE"
-	],
-	"pi": {
-		"extensions": [
-			"./dist/index.ts"
-		]
-	},
-	"scripts": {
-		"build": "node scripts/build-runtime.mjs",
-		"prepack": "npm run build",
-		"check": "npm run build && biome check --vcs-use-ignore-file=false src scripts test package.json tsconfig.json README.md",
-		"format": "biome check --write --vcs-use-ignore-file=false src scripts test package.json tsconfig.json README.md",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.59.0"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.5.11",
-		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@earendil-works/pi-tui": "0.85.0",
-		"@types/node": "26.4.1",
-		"typescript": "7.0.2",
-		"esbuild": "0.28.2"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-tool"
-	}
+  "name": "@narumitw/pi-tool",
+  "version": "0.3.1",
+  "description": "Browse configured Pi tools and optionally show the active tool set.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "tools",
+    "tool-catalog",
+    "developer-tools"
+  ],
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "prepack": "npm run build",
+    "check": "npm run build && biome check --vcs-use-ignore-file=false src scripts test package.json tsconfig.json README.md",
+    "format": "biome check --write --vcs-use-ignore-file=false src scripts test package.json tsconfig.json README.md",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.59.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-tui": "0.85.0",
+    "@types/node": "26.4.1",
+    "typescript": "7.0.2",
+    "esbuild": "0.28.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-tool"
+  }
 }
