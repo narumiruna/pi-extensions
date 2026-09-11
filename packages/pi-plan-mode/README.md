@@ -58,7 +58,7 @@ flowchart LR
     complete --> review["Review the ready plan"]
     review -->|Revise| explore
     review -->|Implement here| current["Current session: planning context retained"]
-    review -->|Start fresh| fresh["Linked session: approved plan transferred"]
+    review -->|Start fresh| fresh["Fresh session: approved plan transferred"]
     review -->|Save| saved["Saved for later"]
     review -->|Export| exported["Markdown file"]
 ```
@@ -73,7 +73,7 @@ sequenceDiagram
     participant Work as Implementation
 
     User->>Pi: Start planning
-    Pi->>Plan: Apply the read-only tool policy
+    Pi->>Plan: Apply the configured Plan tool policy
     Plan->>User: Ask material questions when needed
     User-->>Plan: Answer or refine the request
     Plan->>Pi: Submit the complete plan
@@ -81,7 +81,7 @@ sequenceDiagram
     alt Implement here
         Pi->>Work: Restore Normal mode in the current session
     else Start fresh and implement
-        Pi->>Work: Create a linked session with the approved plan
+        Pi->>Work: Create a fresh session with the approved plan
     end
 ```
 
