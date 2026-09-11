@@ -55,7 +55,6 @@
 		"smoke:caffeinate-dbus": "node ./packages/pi-caffeinate/test/docker/run-docker.mjs",
 		"smoke:pi-fleet:ghostty": "cd packages/pi-fleet && tsc -p tsconfig.process-smoke.json && node ../../node_modules/.cache/pi-fleet-process/scripts/ghostty-smoke.js",
 		"check": "npm run build && node ./scripts/run-checks.mjs",
-		"precommit": "biome check --staged --no-errors-on-unmatched && node ./scripts/run-typechecks.mjs --staged",
 		"prepare": "node .husky/install.mjs",
 		"update:lock": "node ./scripts/run-dependency-update.mjs lock",
 		"update:verify": "node ./scripts/run-dependency-update.mjs verify",
