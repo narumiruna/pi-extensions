@@ -4,6 +4,10 @@ import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
+import {
+	type ImplementationModelOverride,
+	isPendingImplementationModelIdentifier,
+} from "./implementation-models.js";
 import type { SafeSubcommands } from "./tool-policy.js";
 
 export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
@@ -11,6 +15,15 @@ const LEGACY_PLAN_MODE_SETTINGS_FILE = "plan-mode.json";
 const MAX_SETTINGS_BYTES = 64 * 1024;
 export const PLAN_MODE_THINKING_LEVELS = [
 	"inherit",
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+export const IMPLEMENTATION_THINKING_LEVELS = [
 	"off",
 	"minimal",
 	"low",
@@ -83,11 +96,13 @@ const MAX_PLAN_EXPORT_PATH_LENGTH = 4096;
 
 export type PlanModeThinkingLevel = (typeof PLAN_MODE_THINKING_LEVELS)[number];
 export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS)[number];
-export type PlanModeFixedThinkingLevel = Exclude<PlanModeThinkingLevel, "inherit">;
+export type PlanModeFixedThinkingLevel = (typeof IMPLEMENTATION_THINKING_LEVELS)[number];
 export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
 	defaultPlanTools?: string[];
 	implementationPlanRetention?: ImplementationPlanRetention;
+	defaultImplementationModel?: ImplementationModelOverride;
+	defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel;
 	defaultPlanExportPath?: string;
 	safeSubcommands?: SafeSubcommands;
 	toggleShortcut?: KeyId;
@@ -96,6 +111,8 @@ export interface PlanModeSettingsPatch {
 	thinkingLevel?: PlanModeThinkingLevel;
 	defaultPlanTools?: readonly string[] | null;
 	implementationPlanRetention?: ImplementationPlanRetention;
+	defaultImplementationModel?: ImplementationModelOverride | null;
+	defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel | null;
 	defaultPlanExportPath?: string | null;
 	toggleShortcut?: KeyId | null;
 }
@@ -154,6 +171,28 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 		settings.implementationPlanRetention =
 			implementationPlanRetention as ImplementationPlanRetention;
 	}
+	if (Object.hasOwn(value, "defaultImplementationModel")) {
+		const defaultImplementationModel = normalizeImplementationModel(
+			Reflect.get(value, "defaultImplementationModel"),
+		);
+		if (!defaultImplementationModel) return undefined;
+		settings.defaultImplementationModel = defaultImplementationModel;
+	}
+	if (Object.hasOwn(value, "defaultImplementationThinkingLevel")) {
+		const defaultImplementationThinkingLevel = Reflect.get(
+			value,
+			"defaultImplementationThinkingLevel",
+		);
+		if (
+			!IMPLEMENTATION_THINKING_LEVELS.includes(
+				defaultImplementationThinkingLevel as PlanModeFixedThinkingLevel,
+			)
+		) {
+			return undefined;
+		}
+		settings.defaultImplementationThinkingLevel =
+			defaultImplementationThinkingLevel as PlanModeFixedThinkingLevel;
+	}
 	if (Object.hasOwn(value, "defaultPlanExportPath")) {
 		const defaultPlanExportPath = normalizePlanExportPath(
 			Reflect.get(value, "defaultPlanExportPath"),
@@ -172,6 +211,24 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 		settings.safeSubcommands = safeSubcommands;
 	}
 	return settings;
+}
+
+function normalizeImplementationModel(value: unknown): ImplementationModelOverride | undefined {
+	if (
+		!isSettingsDocument(value) ||
+		Object.keys(value).some((key) => key !== "provider" && key !== "modelId")
+	) {
+		return undefined;
+	}
+	const provider = typeof value.provider === "string" ? value.provider.trim() : value.provider;
+	const modelId = typeof value.modelId === "string" ? value.modelId.trim() : value.modelId;
+	if (
+		!isPendingImplementationModelIdentifier(provider) ||
+		!isPendingImplementationModelIdentifier(modelId)
+	) {
+		return undefined;
+	}
+	return { provider, modelId };
 }
 
 function normalizeToolNames(value: unknown) {
@@ -295,6 +352,17 @@ export function updatePlanModeSettings(
 		}
 		if (patch.implementationPlanRetention !== undefined) {
 			updated.implementationPlanRetention = patch.implementationPlanRetention;
+		}
+		if (patch.defaultImplementationModel === null) delete updated.defaultImplementationModel;
+		else if (patch.defaultImplementationModel !== undefined) {
+			const model = normalizeImplementationModel(patch.defaultImplementationModel);
+			if (!model) throw invalidSettingsError(settingsPath, "invalid implementation model");
+			updated.defaultImplementationModel = model;
+		}
+		if (patch.defaultImplementationThinkingLevel === null) {
+			delete updated.defaultImplementationThinkingLevel;
+		} else if (patch.defaultImplementationThinkingLevel !== undefined) {
+			updated.defaultImplementationThinkingLevel = patch.defaultImplementationThinkingLevel;
 		}
 		if (patch.defaultPlanExportPath === null) delete updated.defaultPlanExportPath;
 		else if (patch.defaultPlanExportPath !== undefined) {
@@ -476,6 +544,18 @@ export function configuredImplementationPlanRetention(
 	settings: PlanModeSettings,
 ): ImplementationPlanRetention {
 	return settings.implementationPlanRetention ?? "clear-on-start";
+}
+
+export function configuredImplementationModel(
+	settings: PlanModeSettings,
+): ImplementationModelOverride | undefined {
+	return settings.defaultImplementationModel;
+}
+
+export function configuredImplementationThinkingLevel(
+	settings: PlanModeSettings,
+): PlanModeFixedThinkingLevel | undefined {
+	return settings.defaultImplementationThinkingLevel;
 }
 
 export function configuredPlanExportPath(settings: PlanModeSettings) {

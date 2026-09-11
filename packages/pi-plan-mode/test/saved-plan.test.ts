@@ -573,7 +573,18 @@ test("session shutdown disposes a saved Plan menu without a late transition", as
 test("plan save autocomplete is public and saving fails closed without a ready plan", async () => {
 	assert.deepEqual(
 		completePlanArguments("")?.map((item) => item.value),
-		["start", "show", "finalize", "implement", "save", "export", "exit", "off", "tools"],
+		[
+			"start",
+			"show",
+			"finalize",
+			"implement",
+			"save",
+			"settings",
+			"export",
+			"exit",
+			"off",
+			"tools",
+		],
 	);
 	assert.deepEqual(
 		completePlanArguments("sa")?.map((item) => item.value),

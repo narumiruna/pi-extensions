@@ -10,6 +10,11 @@ import { builtinTool, createMockContext, extensionTool } from "../../../test/sup
 import type { PlanModeSettings } from "../src/settings.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
 
+const AVAILABLE_MODELS = [
+	{ provider: "provider-one", id: "model-one", name: "General model" },
+	{ provider: "provider-two", id: "model-two", name: "Specialist model" },
+];
+
 async function withSettingsMenu(
 	run: (fixture: {
 		settingsPath: string;
@@ -27,6 +32,7 @@ async function withSettingsMenu(
 		mode: "tui",
 		hasUI: true,
 		custom: tui.custom,
+		modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
 	});
 	const saved: PlanModeSettings[] = [];
 	try {
@@ -52,7 +58,7 @@ function menuOptions(
 	};
 }
 
-test("Plan settings show five flat workflow rows without materializing a missing file", async () => {
+test("Plan settings show seven flat workflow rows without materializing a missing file", async () => {
 	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
 		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
 		await tui.waitForOpen();
@@ -61,6 +67,8 @@ test("Plan settings show five flat workflow rows without materializing a missing
 		assert.match(frame, /Plan thinking\s+inherit/);
 		assert.match(frame, /Plan policy tools\s+Automatic safe built-ins/);
 		assert.match(frame, /Plan reinjection\s+Off — conversation history only/);
+		assert.match(frame, /Fresh model\s+same as plan/);
+		assert.match(frame, /Fresh thinking\s+same as plan/);
 		assert.match(frame, /Export destination\s+PLAN\.md/);
 		assert.match(frame, /Plan mode shortcut\s+none/);
 		assert.ok(tui.render(34).every((line) => visibleWidth(line) <= 34));
@@ -89,6 +97,90 @@ test("Plan settings save thinking immediately for the next workflow", async () =
 		assert.match(tui.render().join("\n"), /Plan thinking\s+off/);
 		tui.press("ctrl+c");
 		await running;
+	});
+});
+
+test("Fresh runtime defaults save a model and thinking level, then reset the model", async () => {
+	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+		await tui.waitForOpen();
+		for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Fresh implementation model/u);
+		assert.match(tui.render().join("\n"), /Same as plan/u);
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.deepEqual(saved.at(-1)?.defaultImplementationModel, {
+			provider: "provider-two",
+			modelId: "model-two",
+		});
+		assert.match(tui.render().join("\n"), /Fresh model\s+model-two \[provider-two\]/u);
+
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(saved.at(-1)?.defaultImplementationThinkingLevel, "off");
+		assert.match(tui.render().join("\n"), /Fresh thinking\s+off/u);
+		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+			defaultImplementationModel: { provider: "provider-two", modelId: "model-two" },
+			defaultImplementationThinkingLevel: "off",
+		});
+
+		tui.press("tui.select.up");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		tui.press("tui.select.up");
+		tui.press("tui.select.up");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(saved.at(-1)?.defaultImplementationModel, undefined);
+		assert.match(tui.render().join("\n"), /Fresh model\s+same as plan/u);
+		assert.equal(
+			Object.hasOwn(JSON.parse(await readFile(settingsPath, "utf8")), "defaultImplementationModel"),
+			false,
+		);
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
+test("Unavailable configured fresh models display a sanitized same-as-plan fallback", async () => {
+	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+		await writeFile(
+			settingsPath,
+			JSON.stringify({
+				defaultImplementationModel: {
+					provider: "missing\u001b[31m-provider",
+					modelId: "missing\u202e-model",
+				},
+			}),
+		);
+		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+		await tui.waitForOpen();
+		const frame = tui.render(160).join("\n");
+		assert.match(frame, /Fresh model\s+same as plan .* unavailable/u);
+		assert.match(frame, /missing-provider/u);
+		assert.equal(frame.includes("\u202e"), false);
+		assert.ok(tui.render(34).every((line) => visibleWidth(line) <= 34));
+		tui.press("ctrl+c");
+		await running;
+		assert.deepEqual(saved, []);
+		assert.equal(
+			(
+				JSON.parse(await readFile(settingsPath, "utf8")) as {
+					defaultImplementationModel: { modelId: string };
+				}
+			).defaultImplementationModel.modelId,
+			"missing\u202e-model",
+		);
 	});
 });
 
@@ -178,7 +270,7 @@ test("Plan reinjection cycles outcomes and export destination saves, previews, r
 		assert.equal(saved.at(-1)?.implementationPlanRetention, "clear-after-first-run");
 		assert.match(tui.render().join("\n"), /Plan reinjection\s+Through first implementation run/);
 
-		tui.press("tui.select.down");
+		for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForPending();
 		await tui.waitForOpen();
@@ -226,10 +318,7 @@ test("Plan mode shortcut can be set and reset in Settings", async () => {
 	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
 		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
 		await tui.waitForOpen();
-		tui.press("tui.select.down");
-		tui.press("tui.select.down");
-		tui.press("tui.select.down");
-		tui.press("tui.select.down");
+		for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForPending();
 		await tui.waitForOpen();
@@ -265,7 +354,7 @@ test("long export previews stay within narrow terminal widths", async () => {
 		await writeFile(settingsPath, JSON.stringify({ defaultPlanExportPath: longPath }));
 		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
 		await tui.waitForOpen();
-		for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
+		for (let index = 0; index < 5; index += 1) tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForPending();
 		await tui.waitForOpen();
@@ -339,6 +428,8 @@ test("RPC Settings changes retention and export destination with the same flat n
 					"Plan thinking (inherit)",
 					"Plan policy tools (Automatic safe built-ins)",
 					"Plan reinjection (Off — conversation history only)",
+					"Fresh model (same as plan)",
+					"Fresh thinking (same as plan)",
 					"Export destination (PLAN.md)",
 					"Plan mode shortcut (none)",
 					"Back",
@@ -351,6 +442,8 @@ test("RPC Settings changes retention and export destination with the same flat n
 					"Plan thinking (inherit)",
 					"Plan policy tools (Automatic safe built-ins)",
 					"Plan reinjection (Through first implementation run)",
+					"Fresh model (same as plan)",
+					"Fresh thinking (same as plan)",
 					"Export destination (PLAN.md)",
 					"Plan mode shortcut (none)",
 					"Back",
@@ -368,6 +461,8 @@ test("RPC Settings changes retention and export destination with the same flat n
 					"Plan thinking (inherit)",
 					"Plan policy tools (Automatic safe built-ins)",
 					"Plan reinjection (Through first implementation run)",
+					"Fresh model (same as plan)",
+					"Fresh thinking (same as plan)",
 					"Export destination (rpc/PLAN.md)",
 					"Plan mode shortcut (none)",
 					"Back",
@@ -394,6 +489,8 @@ test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight s
 				"Plan thinking (inherit)",
 				"Plan policy tools (Automatic safe built-ins)",
 				"Plan reinjection (Off — conversation history only)",
+				"Fresh model (same as plan)",
+				"Fresh thinking (same as plan)",
 				"Export destination (PLAN.md)",
 				"Plan mode shortcut (none)",
 				"Back",

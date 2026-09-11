@@ -1,8 +1,14 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import {
+	type AvailableImplementationModel,
+	findAvailableImplementationModel,
+	type ImplementationModelOverride,
+	snapshotAvailableImplementationModels,
+} from "./implementation-models.js";
 import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
-import type { PlanModeFixedThinkingLevel } from "./settings.js";
-import type { ImplementationModelOverride, ImplementationRuntimeSelection } from "./state.js";
+import { IMPLEMENTATION_THINKING_LEVELS, type PlanModeFixedThinkingLevel } from "./settings.js";
+import type { ImplementationRuntimeSelection } from "./state.js";
 
 interface MenuLifecycle {
 	signal: AbortSignal;
@@ -13,16 +19,6 @@ const IMPLEMENTATION_CONTEXT_LINES = [
 	"Implement here keeps this planning conversation.",
 	"Start fresh transfers only the approved plan to a new session.",
 ] as const;
-
-const FIXED_THINKING_LEVELS: readonly PlanModeFixedThinkingLevel[] = [
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-];
 
 const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = {
 	off: "No reasoning",
@@ -37,6 +33,7 @@ const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = 
 interface PlanMenuOptions extends MenuLifecycle {
 	statusText: string;
 	planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
+	implementationDefaults?: ImplementationRuntimeSelection;
 	hasReadyPlan: boolean;
 	implementationOutcome(): string;
 	getExportDestination: PlanExportDestinationProvider;
@@ -69,6 +66,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 	const freshFlow = createFreshImplementationFlow(
 		ctx,
 		options.planThinkingLevel,
+		options.implementationDefaults,
 		options.implementFresh,
 	);
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
@@ -165,6 +163,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 
 interface ReadyPlanMenuOptions extends MenuLifecycle {
 	planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
+	implementationDefaults?: ImplementationRuntimeSelection;
 	implementationOutcome(): string;
 	getExportDestination: PlanExportDestinationProvider;
 	implementHere(): void | Promise<void>;
@@ -192,6 +191,7 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 	const freshFlow = createFreshImplementationFlow(
 		ctx,
 		options.planThinkingLevel,
+		options.implementationDefaults,
 		options.implementFresh,
 	);
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
@@ -269,6 +269,7 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 interface ModelChoice {
 	itemId: string;
 	model: ImplementationModelOverride;
+	modelInfo: AvailableImplementationModel;
 	label: string;
 	summary: string;
 	details?: readonly string[];
@@ -279,6 +280,7 @@ interface ModelChoice {
 function createFreshImplementationFlow(
 	ctx: ExtensionContext,
 	planThinkingLevel: PlanModeFixedThinkingLevel | undefined,
+	implementationDefaults: ImplementationRuntimeSelection | undefined,
 	implementFresh: (
 		runtime: ImplementationRuntimeSelection,
 		signal: AbortSignal,
@@ -289,13 +291,29 @@ function createFreshImplementationFlow(
 	const planModelSummary = ctx.model
 		? `${safeModelMetadata(ctx.model.id, "unknown model")} [${safeModelMetadata(ctx.model.provider, "unknown provider")}]`
 		: undefined;
-	let selectedModel: ModelChoice | undefined;
-	let selectedThinkingLevel: PlanModeFixedThinkingLevel | undefined;
+	const configuredModel = implementationDefaults?.model;
+	const configuredAvailableModel = findAvailableImplementationModel(
+		models.map((choice) => choice.modelInfo),
+		configuredModel,
+	);
+	let unavailableDefaultActive = configuredModel !== undefined && !configuredAvailableModel;
+	let selectedModel = configuredAvailableModel
+		? models.find((choice) => choice.modelInfo === configuredAvailableModel)
+		: undefined;
+	let selectedModelUsesDefault = selectedModel !== undefined;
+	let selectedThinkingLevel = implementationDefaults?.thinkingLevel;
 	return {
 		settingsScreen: () => ({
 			kind: "actions" as const,
 			title: "Fresh implementation settings",
-			lines: ["These choices apply once to the new implementation session."],
+			lines: [
+				"These choices apply once to the new implementation session.",
+				...(unavailableDefaultActive && configuredModel
+					? [
+							`Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`,
+						]
+					: []),
+			],
 			items: [
 				{
 					id: "start-fresh",
@@ -325,14 +343,21 @@ function createFreshImplementationFlow(
 		modelScreen: () => ({
 			kind: "choice" as const,
 			title: "Implementation model",
-			items: models.map((choice) => ({
-				id: choice.itemId,
-				label: choice.label,
-				details: choice.details,
-				searchText: choice.searchText,
-			})),
+			items: [
+				{
+					id: "same-as-plan",
+					label: "Same as plan",
+					...(planModelSummary ? { description: planModelSummary } : {}),
+				},
+				...models.map((choice) => ({
+					id: choice.itemId,
+					label: choice.label,
+					details: choice.details,
+					searchText: choice.searchText,
+				})),
+			],
 			action: "select-model" as const,
-			initialItemId: selectedModel?.itemId ?? models.find((choice) => choice.isPlanModel)?.itemId,
+			initialItemId: selectedModel?.itemId ?? "same-as-plan",
 			enableSearch: true,
 			viewportSize: 10,
 		}),
@@ -344,7 +369,7 @@ function createFreshImplementationFlow(
 					id: "same-as-plan",
 					label: "Same as plan",
 				},
-				...FIXED_THINKING_LEVELS.map((level) => ({
+				...IMPLEMENTATION_THINKING_LEVELS.map((level) => ({
 					id: level,
 					label: `${level === planThinkingLevel ? "✓ " : ""}${level}`,
 					description: THINKING_LEVEL_DESCRIPTIONS[level],
@@ -352,16 +377,34 @@ function createFreshImplementationFlow(
 			],
 			action: "select-thinking" as const,
 			initialItemId: selectedThinkingLevel ?? "same-as-plan",
-			viewportSize: FIXED_THINKING_LEVELS.length + 1,
+			viewportSize: IMPLEMENTATION_THINKING_LEVELS.length + 1,
 		}),
 		selectModel(itemId: string) {
 			const choice = models.find((candidate) => candidate.itemId === itemId);
-			selectedModel = choice?.isPlanModel ? undefined : choice;
+			selectedModel = itemId === "same-as-plan" || choice?.isPlanModel ? undefined : choice;
+			selectedModelUsesDefault = false;
+			unavailableDefaultActive = false;
 		},
 		selectThinking(itemId: string) {
-			selectedThinkingLevel = FIXED_THINKING_LEVELS.find((level) => level === itemId);
+			selectedThinkingLevel = IMPLEMENTATION_THINKING_LEVELS.find((level) => level === itemId);
 		},
 		start(signal: AbortSignal) {
+			if (
+				selectedModelUsesDefault &&
+				selectedModel &&
+				!findAvailableImplementationModel(
+					snapshotAvailableImplementationModels(ctx),
+					selectedModel.model,
+				)
+			) {
+				selectedModel = undefined;
+				selectedModelUsesDefault = false;
+				unavailableDefaultActive = true;
+				ctx.ui.notify(
+					`Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`,
+					"warning",
+				);
+			}
 			const model = selectedModel?.model ?? planModel;
 			const thinkingLevel = selectedThinkingLevel ?? planThinkingLevel;
 			return implementFresh(
@@ -376,15 +419,7 @@ function createFreshImplementationFlow(
 }
 
 function snapshotAvailableModels(ctx: ExtensionContext): ModelChoice[] {
-	const getAvailable = ctx.modelRegistry.getAvailable;
-	const scopedModels = ctx.scopedModels ?? [];
-	const models =
-		scopedModels.length > 0
-			? scopedModels.map((entry) => entry.model)
-			: typeof getAvailable === "function"
-				? getAvailable.call(ctx.modelRegistry)
-				: [];
-	return models
+	return snapshotAvailableImplementationModels(ctx)
 		.map((model, index) => {
 			const provider = safeModelMetadata(model.provider, "unknown provider");
 			const modelId = safeModelMetadata(model.id, "unknown model");
@@ -394,6 +429,7 @@ function snapshotAvailableModels(ctx: ExtensionContext): ModelChoice[] {
 			return {
 				itemId: `model-${index}`,
 				model: { provider: model.provider, modelId: model.id },
+				modelInfo: model,
 				label: `${isPlanModel ? "✓ " : ""}${summary}${isPlanModel ? " · default" : ""}`,
 				summary,
 				...(name ? { details: [`Model Name: ${name}`] } : {}),
@@ -402,6 +438,11 @@ function snapshotAvailableModels(ctx: ExtensionContext): ModelChoice[] {
 			};
 		})
 		.sort((left, right) => Number(right.isPlanModel) - Number(left.isPlanModel));
+}
+
+function safeModelReference(model: ImplementationModelOverride | undefined) {
+	if (!model) return "configured model";
+	return `${safeModelMetadata(model.modelId, "unknown model")} [${safeModelMetadata(model.provider, "unknown provider")}]`;
 }
 
 function safeModelMetadata(value: unknown, fallback: string) {

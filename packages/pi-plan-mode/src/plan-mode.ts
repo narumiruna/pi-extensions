@@ -197,6 +197,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		// ExtensionContext.thinkingLevel was added after the supported Pi 0.80.6 floor.
 		// ExtensionAPI has exposed the same runtime value throughout that compatibility range.
 		getThinkingLevel: () => pi.getThinkingLevel(),
+		getSettings: () => settings,
 		implementationOutcome,
 		getExportDestination: (ctx) => planExports.getDestination(ctx),
 		show: (ctx) => showStoredPlan(pi, ctx, state),
@@ -318,6 +319,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			}
 			if (command === "save") {
 				savePlanForLater(ctx);
+				return;
+			}
+			if (command === "settings") {
+				if (!ctx.hasUI) {
+					throw new Error("/plan settings requires TUI or RPC mode and is unavailable here.");
+				}
+				const lifecycle = captureMenuLifecycle();
+				await showSettings(ctx, lifecycle.signal, lifecycle.isCurrent);
 				return;
 			}
 			const exportMatch = /^export(?:\s+([\s\S]+))?$/iu.exec(prompt);

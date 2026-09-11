@@ -4,11 +4,21 @@ import {
 	planFromCompletionDetails,
 } from "./completion-tool.js";
 import {
+	type ImplementationModelOverride,
+	isPendingImplementationModelIdentifier,
+} from "./implementation-models.js";
+import {
 	IMPLEMENTATION_PLAN_RETENTIONS,
 	type ImplementationPlanRetention,
 	PLAN_MODE_THINKING_LEVELS,
 	type PlanModeFixedThinkingLevel,
 } from "./settings.js";
+
+export type { ImplementationModelOverride } from "./implementation-models.js";
+export {
+	isPendingImplementationModelIdentifier,
+	MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
+} from "./implementation-models.js";
 
 export type PlanCompletionSource = typeof PLAN_MODE_COMPLETE_TOOL_NAME | "legacy_proposed_plan";
 
@@ -23,21 +33,6 @@ export interface ActiveImplementationPlan {
 export interface SavedPlan {
 	plan: string;
 	source: PlanCompletionSource;
-}
-
-export const MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH = 512;
-
-export interface ImplementationModelOverride {
-	provider: string;
-	modelId: string;
-}
-
-export function isPendingImplementationModelIdentifier(value: unknown): value is string {
-	return (
-		typeof value === "string" &&
-		value.trim().length > 0 &&
-		value.length <= MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH
-	);
 }
 
 export interface ImplementationRuntimeSelection {

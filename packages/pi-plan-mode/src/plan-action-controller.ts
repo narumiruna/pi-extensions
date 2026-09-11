@@ -1,6 +1,15 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	findAvailableImplementationModel,
+	snapshotAvailableImplementationModels,
+} from "./implementation-models.js";
 import type { PlanExportDestination } from "./plan-export.js";
-import type { PlanModeFixedThinkingLevel } from "./settings.js";
+import {
+	configuredImplementationModel,
+	configuredImplementationThinkingLevel,
+	type PlanModeFixedThinkingLevel,
+	type PlanModeSettings,
+} from "./settings.js";
 import type { ImplementationRuntimeSelection, PlanModeState } from "./state.js";
 
 type InteractiveUi = typeof import("./interactive-ui.js");
@@ -16,6 +25,7 @@ interface PlanActionControllerOptions {
 	captureLifecycle(): MenuLifecycle;
 	statusText(): string;
 	getThinkingLevel(): PlanModeFixedThinkingLevel | undefined;
+	getSettings(): PlanModeSettings;
 	implementationOutcome(): string;
 	getExportDestination(ctx: ExtensionContext): PlanExportDestination;
 	show(ctx: ExtensionContext): void;
@@ -40,6 +50,39 @@ interface PlanActionControllerOptions {
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {
+	const configuredDefaults = (): ImplementationRuntimeSelection => {
+		const settings = options.getSettings();
+		const model = configuredImplementationModel(settings);
+		const thinkingLevel = configuredImplementationThinkingLevel(settings);
+		return {
+			...(model ? { model: { ...model } } : {}),
+			...(thinkingLevel ? { thinkingLevel } : {}),
+		};
+	};
+	const effectiveDefaults = (ctx: ExtensionContext): ImplementationRuntimeSelection => {
+		const configured = configuredDefaults();
+		const availableModel = findAvailableImplementationModel(
+			snapshotAvailableImplementationModels(ctx),
+			configured.model,
+		);
+		if (configured.model && !availableModel) {
+			ctx.ui.notify(
+				"The configured fresh implementation model is unavailable; using the planning model.",
+				"warning",
+			);
+		}
+		const planModel = ctx.model
+			? { provider: ctx.model.provider, modelId: ctx.model.id }
+			: undefined;
+		const model = availableModel
+			? { provider: availableModel.provider, modelId: availableModel.id }
+			: planModel;
+		const thinkingLevel = configured.thinkingLevel ?? options.getThinkingLevel();
+		return {
+			...(model ? { model } : {}),
+			...(thinkingLevel ? { thinkingLevel } : {}),
+		};
+	};
 	const freshAction = (
 		ctx: ExtensionContext,
 		lifecycle: MenuLifecycle,
@@ -61,7 +104,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				isCurrent: lifecycle.isCurrent,
 				show: () => options.show(ctx),
 				implementHere: () => options.implementHere(ctx),
-				implementFresh: (signal) => freshAction(ctx, lifecycle, signal),
+				implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
 				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
 				settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
 				clear: () => options.clearSaved(ctx),
@@ -79,6 +122,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 			await ui.showPlanModeMenu(ctx, {
 				statusText: options.statusText(),
 				planThinkingLevel: options.getThinkingLevel(),
+				implementationDefaults: configuredDefaults(),
 				hasReadyPlan: options.getState().latestPlan !== undefined,
 				implementationOutcome: options.implementationOutcome,
 				getExportDestination: () => options.getExportDestination(ctx),
@@ -101,6 +145,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 			await ui.showReadyPlanMenu(ctx, {
 				...lifecycle,
 				planThinkingLevel: options.getThinkingLevel(),
+				implementationDefaults: configuredDefaults(),
 				implementationOutcome: options.implementationOutcome,
 				getExportDestination: () => options.getExportDestination(ctx),
 				implementHere: () => options.implementHere(ctx),
