@@ -190,13 +190,13 @@ test("unary compact expands a previous checkpoint without adding a trigger", asy
 
 	assert.ok(body);
 	assert.equal(
-		(body.input as Array<Record<string, unknown>>).some(
+		(body.input as Record<string, unknown>[]).some(
 			(item) => item.type === "compaction" && item.encrypted_content === "prior",
 		),
 		true,
 	);
 	assert.equal(
-		(body.input as Array<Record<string, unknown>>).some(
+		(body.input as Record<string, unknown>[]).some(
 			(item) =>
 				item.type === "compaction_trigger" || JSON.stringify(item).includes("checkpoint marker"),
 		),

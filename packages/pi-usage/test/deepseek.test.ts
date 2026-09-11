@@ -116,7 +116,7 @@ test("DeepSeek API balance reports provider availability without inventing quota
 });
 
 test("DeepSeek API balance rejects malformed, ambiguous, or hostile response fields", () => {
-	const invalid: Array<[DeepSeekBalancePayload, RegExp]> = [
+	const invalid: [DeepSeekBalancePayload, RegExp][] = [
 		[{}, /availability/iu],
 		[{ is_available: "yes", balance_infos: [] }, /availability/iu],
 		[{ is_available: true }, /no balance information/iu],

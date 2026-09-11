@@ -232,7 +232,7 @@ await smoke("two separate Node processes connect through a local DHT bootstrap",
 	const bootstrapArg = Buffer.from(JSON.stringify(testnet.bootstrap)).toString("base64url");
 	const fixturePath = fileURLToPath(new URL("./network-peer-fixture.js", import.meta.url));
 	const children: ChildProcess[] = [];
-	const messages = new Map<ChildProcess, Array<Record<string, unknown>>>();
+	const messages = new Map<ChildProcess, Record<string, unknown>[]>();
 	const errors = new Map<ChildProcess, string>();
 	const startChild = (index: number): ChildProcess => {
 		const child = fork(
@@ -385,7 +385,7 @@ async function waitFor(
 
 function childDetails(
 	children: readonly ChildProcess[],
-	messages: ReadonlyMap<ChildProcess, Array<Record<string, unknown>>>,
+	messages: ReadonlyMap<ChildProcess, Record<string, unknown>[]>,
 	errors: ReadonlyMap<ChildProcess, string>,
 ): string {
 	return children

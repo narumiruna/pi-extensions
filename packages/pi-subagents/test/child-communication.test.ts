@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 test("registers fixed send and wait schemas and returns bounded results", async () => {
-	const calls: Array<Record<string, unknown>> = [];
+	const calls: Record<string, unknown>[] = [];
 	const client: ChildCommunicationClient = {
 		async send(params, signal) {
 			calls.push({ type: "send", params, signal });

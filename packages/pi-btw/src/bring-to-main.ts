@@ -54,7 +54,7 @@ export type BtwTextRangeSelectorAction =
 
 export function getAnsweredTurns(
 	turns: readonly SideThreadTurn[],
-): Array<Extract<SideThreadTurn, { kind: "answered" }>> {
+): Extract<SideThreadTurn, { kind: "answered" }>[] {
 	return turns.filter(
 		(turn): turn is Extract<SideThreadTurn, { kind: "answered" }> => turn.kind === "answered",
 	);

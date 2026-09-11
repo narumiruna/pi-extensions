@@ -256,7 +256,7 @@ function markdownTableCellSources(lines: readonly string[]) {
 			continue;
 		}
 		const boundaries = markdownTableBoundaries(plainLines, index, tableStart);
-		const rows: Array<ReturnType<typeof markdownTableCells>> = [];
+		const rows: ReturnType<typeof markdownTableCells>[] = [];
 		while (index < plainLines.length && tableRowStarts[index] === tableStart) {
 			rows.push(markdownTableCells(plainLines[index] ?? "", index, boundaries));
 			index += 1;

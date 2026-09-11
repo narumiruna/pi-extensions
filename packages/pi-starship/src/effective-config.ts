@@ -59,7 +59,7 @@ function sortedRecord(values: Readonly<Record<string, string>>): Record<string, 
 	return Object.fromEntries(sortedEntries(values));
 }
 
-function sortedEntries<Value>(values: Readonly<Record<string, Value>>): Array<[string, Value]> {
+function sortedEntries<Value>(values: Readonly<Record<string, Value>>): [string, Value][] {
 	return Object.entries(values).sort(([left], [right]) =>
 		left < right ? -1 : left > right ? 1 : 0,
 	);

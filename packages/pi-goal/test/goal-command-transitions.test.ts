@@ -515,7 +515,7 @@ test("failed start delivery clears a new goal and restores a replaced stopped go
 	assert.match(freshContext.notifications.at(-1)?.message ?? "", /start delivery failed/i);
 
 	let activeReplacementAborts = 0;
-	const activeReplacementBranch: Array<Record<string, unknown>> = [];
+	const activeReplacementBranch: Record<string, unknown>[] = [];
 	const activeReplacement = await startGoalForTest({
 		abort: () => activeReplacementAborts++,
 		sessionManager: {

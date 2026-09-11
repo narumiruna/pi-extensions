@@ -671,7 +671,7 @@ test("blocked and usage-limited transitions preserve terminal reasons", async ()
 });
 
 test("budget exhaustion emits the budget-limited terminal state", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
 	registerGoal(mock);
 	const context = bindSession(

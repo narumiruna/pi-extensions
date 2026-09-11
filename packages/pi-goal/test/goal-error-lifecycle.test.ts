@@ -522,7 +522,7 @@ test("stale exhausted recovery cannot block a replacement goal", async () => {
 });
 
 test("an exhausted goal does not remain active for a retryable provider error", async () => {
-	const branch: Array<Record<string, unknown>> = [];
+	const branch: Record<string, unknown>[] = [];
 	const budgeted = await startGoalForTest(
 		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
 		"--tokens 10 finish",

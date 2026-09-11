@@ -186,7 +186,7 @@ export function restoreGoalForTest(
 
 export function restoreStoredGoalForTest(
 	sessionGoal: StoredGoal,
-	extraEntries: Array<Record<string, unknown>> = [],
+	extraEntries: Record<string, unknown>[] = [],
 	contextOverrides: Record<string, unknown> = {},
 	settingsPath?: string,
 ) {

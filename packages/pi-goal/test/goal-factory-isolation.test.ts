@@ -68,7 +68,7 @@ test("parent and child stable Goal tool envelopes stay isolated", async () => {
 });
 
 test("child session initialization does not erase or reroute the parent goal", async () => {
-	const rootBranch: Array<Record<string, unknown>> = [];
+	const rootBranch: Record<string, unknown>[] = [];
 	const root = createMockPi();
 	registerGoal(root.pi);
 	const rootContext = createMockContext({
@@ -214,7 +214,7 @@ test("independent goal instances keep completion local", async () => {
 });
 
 test("tool lifecycle persistence stays on the owning goal instance", async () => {
-	const rootBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 1 })];
+	const rootBranch: Record<string, unknown>[] = [assistantUsageEntry({ totalTokens: 1 })];
 	const root = createMockPi();
 	registerGoal(root.pi);
 	const rootContext = createMockContext({
@@ -223,7 +223,7 @@ test("tool lifecycle persistence stays on the owning goal instance", async () =>
 	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
 	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
 
-	const childBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 2 })];
+	const childBranch: Record<string, unknown>[] = [assistantUsageEntry({ totalTokens: 2 })];
 	const child = createMockPi();
 	registerGoal(child.pi);
 	const childContext = createMockContext({
@@ -307,7 +307,7 @@ test("goal_blocked ownership stays on the root instance after child start", asyn
 });
 
 test("pending continuation and stopped budget state survive later child startup", async () => {
-	const rootBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 0 })];
+	const rootBranch: Record<string, unknown>[] = [assistantUsageEntry({ totalTokens: 0 })];
 	const root = createMockPi();
 	registerGoal(root.pi);
 	const rootContext = createMockContext({

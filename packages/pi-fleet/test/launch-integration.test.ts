@@ -18,7 +18,7 @@ posixTest(
 		const canonicalChildCwd = await realpath(childCwd);
 		const fixturePath = compiledFixture("launch-child-fixture.js");
 		let child: ChildProcessWithoutNullStreams | undefined;
-		const childEvents: Array<Record<string, unknown>> = [];
+		const childEvents: Record<string, unknown>[] = [];
 		let buffer = "";
 		const mock = createMockPi();
 		const spawnChild = async (
@@ -140,7 +140,7 @@ posixTest(
 );
 
 async function waitForChildEvent(
-	events: Array<Record<string, unknown>>,
+	events: Record<string, unknown>[],
 	predicate: (event: Record<string, unknown>) => boolean,
 ) {
 	const deadline = Date.now() + 2_000;

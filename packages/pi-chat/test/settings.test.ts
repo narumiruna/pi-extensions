@@ -104,7 +104,7 @@ test("resume updates preserve nested unknown fields and explicit clearing remove
 		const updated = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
 		assert.deepEqual(updated.future, { keep: true });
 		assert.deepEqual(Reflect.get(updated.resume as object, "resumeFuture"), { keep: true });
-		const rooms = Reflect.get(updated.resume as object, "rooms") as Array<Record<string, unknown>>;
+		const rooms = Reflect.get(updated.resume as object, "rooms") as Record<string, unknown>[];
 		assert.equal(rooms[0]?.roomFuture, 1);
 		await updateChatSettings({ resume: null }, { settingsPath: path });
 		const cleared = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
@@ -160,7 +160,7 @@ test("v1 room ids and invites migrate in memory without side effects and preserv
 
 		await updateChatSettings({ resume: loaded.settings.resume }, { settingsPath: path });
 		const migrated = JSON.parse(await readFile(path, "utf8")) as {
-			resume: { rooms: Array<Record<string, unknown>>; resumeFuture: boolean };
+			resume: { rooms: Record<string, unknown>[]; resumeFuture: boolean };
 		};
 		assert.deepEqual(
 			migrated.resume.rooms.map(({ id, roomFuture }) => ({ id, roomFuture })),

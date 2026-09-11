@@ -217,7 +217,7 @@ test("issue 471: an active implementation plan is restored after compaction remo
 		{ role: "assistant", content: [{ type: "text", text: "Continuing after compaction." }] },
 	];
 	const transformed = (await contextHook({ messages: compactedMessages }, context.ctx)) as {
-		messages: Array<Record<string, unknown>>;
+		messages: Record<string, unknown>[];
 	};
 
 	assert.equal(transformed.messages.length, 4);
@@ -387,7 +387,7 @@ test("active context avoids exact handoff duplication and replaces stale injecte
 	const withHandoff = (await contextHook(
 		{ messages: [{ role: "user", content: "plan it" }, handoff] },
 		context.ctx,
-	)) as { messages: Array<Record<string, unknown>> };
+	)) as { messages: Record<string, unknown>[] };
 	assert.equal(
 		withHandoff.messages.filter(
 			(message) => message.customType === "plan-mode-implementation-context",
@@ -404,7 +404,7 @@ test("active context avoids exact handoff duplication and replaces stale injecte
 	const withStaleHandoff = (await contextHook(
 		{ messages: [staleHandoff, handoff, handoff] },
 		context.ctx,
-	)) as { messages: Array<Record<string, unknown>> };
+	)) as { messages: Record<string, unknown>[] };
 	assert.match(String(withStaleHandoff.messages[0]?.content), /CONTRACT v1: NORMAL/u);
 	assert.deepEqual(withStaleHandoff.messages.slice(1), [handoff]);
 
@@ -429,10 +429,10 @@ test("active context avoids exact handoff duplication and replaces stale injecte
 		toolResult,
 	];
 	const once = (await contextHook({ messages: compacted }, context.ctx)) as {
-		messages: Array<Record<string, unknown>>;
+		messages: Record<string, unknown>[];
 	};
 	const twice = (await contextHook({ messages: once.messages }, context.ctx)) as {
-		messages: Array<Record<string, unknown>>;
+		messages: Record<string, unknown>[];
 	};
 	for (const transformed of [once.messages, twice.messages]) {
 		assert.deepEqual(transformed[0], compacted[0]);
@@ -480,7 +480,7 @@ test("active plans can be shown and cleared through existing direct routes", asy
 			],
 		},
 		context.ctx,
-	)) as { messages: Array<Record<string, unknown>> };
+	)) as { messages: Record<string, unknown>[] };
 	assert.deepEqual(transformed.messages[0], { role: "compactionSummary", summary: "lossy" });
 	assert.match(String(transformed.messages[1]?.content), /CONTRACT v1: NORMAL/u);
 	assert.equal(transformed.messages.length, 2);
@@ -713,7 +713,7 @@ test("starting a new Plan-mode workflow supersedes the active implementation", a
 	const transformed = (await contextHook(
 		{ messages: [oldHandoff, { role: "user", content: "design a replacement" }] },
 		context.ctx,
-	)) as { messages: Array<Record<string, unknown>> };
+	)) as { messages: Record<string, unknown>[] };
 	assert.match(String(transformed.messages[0]?.content), /CONTRACT v1: PLAN/u);
 	assert.deepEqual(transformed.messages.slice(1), [
 		{ role: "user", content: "design a replacement" },
@@ -721,7 +721,7 @@ test("starting a new Plan-mode workflow supersedes the active implementation", a
 });
 
 test("a superseded session start cannot publish stale settings or UI state", async () => {
-	const settingsLoads: Array<ReturnType<typeof deferred<{ kind: "missing" }>>> = [];
+	const settingsLoads: ReturnType<typeof deferred<{ kind: "missing" }>>[] = [];
 	const mock = createMockPi({ activeTools: ["read", "edit"] });
 	planMode(mock.pi, {
 		readSettings: () => {
@@ -765,7 +765,7 @@ test("a superseded session start cannot publish stale settings or UI state", asy
 	const transformed = (await contextHook(
 		{ messages: [{ role: "branchSummary", summary: "current session" }] },
 		currentContext.ctx,
-	)) as { messages: Array<Record<string, unknown>> };
+	)) as { messages: Record<string, unknown>[] };
 	assert.deepEqual(transformed.messages, [{ role: "branchSummary", summary: "current session" }]);
 });
 
@@ -797,7 +797,7 @@ test("resume and shutdown retain branch-local implementation state while clearin
 	const transformed = (await contextHook(
 		{ messages: [{ role: "branchSummary", summary: "continued branch" }] },
 		context.ctx,
-	)) as { messages: Array<Record<string, unknown>> };
+	)) as { messages: Record<string, unknown>[] };
 	assert.match(String(transformed.messages[1]?.content), /CONTRACT v1: NORMAL/u);
 	assert.equal(transformed.messages[2]?.customType, "plan-mode-implementation-context");
 	assert.match(String(transformed.messages[2]?.content), /PLAN-PERSIST-TEST-42/);

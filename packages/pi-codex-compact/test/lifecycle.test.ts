@@ -92,7 +92,7 @@ function fakeProvider(
 					});
 					const payload = await options?.onPayload?.({ model: activeModel.id, input }, activeModel);
 					onPreparedPayload?.(payload);
-					const payloadInput = (payload as { input: Array<Record<string, unknown>> }).input;
+					const payloadInput = (payload as { input: Record<string, unknown>[] }).input;
 					assert.equal(
 						payloadInput.at(-1)?.type === "compaction_trigger",
 						protocol === "remote-v2",
@@ -350,7 +350,7 @@ test("custom Codex Responses providers compact and replay by API and exact model
 			},
 		},
 		replayContext,
-	)) as { input: Array<Record<string, unknown>> };
+	)) as { input: Record<string, unknown>[] };
 	assert.equal(rewritten.input.at(-2)?.type, "compaction");
 	assert.match(JSON.stringify(rewritten.input.at(-1)), /later/);
 

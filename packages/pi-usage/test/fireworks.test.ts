@@ -145,7 +145,7 @@ test("Fireworks billing summary accepts empty rated line items without inventing
 });
 
 test("Fireworks billing summary rejects malformed, ambiguous, or hostile payloads", () => {
-	const invalid: Array<[Record<string, unknown>, RegExp]> = [
+	const invalid: [Record<string, unknown>, RegExp][] = [
 		[{ lineItems: "nope" }, /lineItems was not an array/iu],
 		[{ lineItems: [null] }, /line item was not an object/iu],
 		[{ lineItems: [{ category: "x" }] }, /total cost.*money object/iu],
@@ -260,7 +260,7 @@ test("Fireworks account discovery normalizes and validates the documented listin
 		}),
 		["acme", "b.io"],
 	);
-	const invalid: Array<[Record<string, unknown>, RegExp]> = [
+	const invalid: [Record<string, unknown>, RegExp][] = [
 		[{}, /did not contain an accounts array/iu],
 		[{ accounts: "acme" }, /did not contain an accounts array/iu],
 		[{ accounts: [null] }, /row was not an object/iu],

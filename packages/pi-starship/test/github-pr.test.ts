@@ -105,7 +105,7 @@ test("github_pr exposes compact checks, review, and prioritized status", () => {
 		`123|\u001b]8;;https://github.com/o/r/pull/123\u0007#123\u001b]8;;\u0007|open|✓1 ×2 …1|R×|×2`,
 	);
 
-	const cases: Array<[Record<string, unknown>, string]> = [
+	const cases: [Record<string, unknown>, string][] = [
 		[
 			{
 				state: "MERGED",
@@ -145,7 +145,7 @@ test("github_pr exposes compact checks, review, and prioritized status", () => {
 });
 
 test("compact PR values omit zero check categories and cover bounded decisions", () => {
-	const checkCases: Array<[unknown[], string]> = [
+	const checkCases: [unknown[], string][] = [
 		[[{ status: "COMPLETED", conclusion: "SUCCESS" }], "✓1"],
 		[[{ status: "COMPLETED", conclusion: "FAILURE" }], "×1"],
 		[[{ status: "IN_PROGRESS", conclusion: null }], "…1"],
@@ -164,7 +164,7 @@ test("compact PR values omit zero check categories and cover bounded decisions",
 		assert.equal(buildGithubPrSnapshot(rawPr({ statusCheckRollup }), NOW)?.checks, expected);
 	}
 
-	const reviewCases: Array<[unknown, string]> = [
+	const reviewCases: [unknown, string][] = [
 		["APPROVED", "R✓"],
 		["CHANGES_REQUESTED", "R×"],
 		["REVIEW_REQUIRED", "R?"],
@@ -294,7 +294,7 @@ test("queryGithubPr executes one direct cancellable bounded gh query", async () 
 });
 
 test("no PR, missing gh or auth, timeout, malformed, and oversized output degrade empty", async () => {
-	const results: Array<unknown> = [
+	const results: unknown[] = [
 		{ stdout: "", stderr: "no pull requests found", code: 1, killed: false },
 		{ stdout: "", stderr: "run gh auth login", code: 1, killed: false },
 		{ stdout: "", stderr: "", code: 1, killed: true },

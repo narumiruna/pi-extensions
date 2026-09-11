@@ -151,7 +151,7 @@ test("assistant token accounting prefers totalTokens and uses a cache-inclusive 
 });
 
 test("goal token usage subtracts its baseline and clamps branch rewinds", async () => {
-	const branch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 100 })];
+	const branch: Record<string, unknown>[] = [assistantUsageEntry({ totalTokens: 100 })];
 	const tracked = await startGoalForTest({
 		sessionManager: { getBranch: () => branch, getEntries: () => branch },
 	});

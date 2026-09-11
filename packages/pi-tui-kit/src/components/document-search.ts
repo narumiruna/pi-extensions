@@ -476,12 +476,12 @@ export class DocumentSearchController implements Focusable {
 		);
 	}
 
-	private highlightMatches(): Array<[number, DocumentMatch]> {
+	private highlightMatches(): [number, DocumentMatch][] {
 		if (this.count > MAX_HIGHLIGHTED_MATCHES) {
 			const current = this.currentMatch();
 			return current ? [[this.currentIndex, current]] : [];
 		}
-		const matches: Array<[number, DocumentMatch]> = [];
+		const matches: [number, DocumentMatch][] = [];
 		for (let index = 0; index < this.count; index += 1) {
 			const match = this.matchAt(index);
 			if (match) matches.push([index, match]);
