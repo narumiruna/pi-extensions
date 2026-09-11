@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { matchesKey, setKittyProtocolActive, visibleWidth } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import {
+	getKeybindings,
+	KeybindingsManager,
+	matchesKey,
+	setKeybindings,
+	setKittyProtocolActive,
+	TUI_KEYBINDINGS,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
+import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { runModelSelector, runThinkingSelector } from "../src/index.js";
 import { createTuiHarness } from "../src/testing/index.js";
@@ -164,6 +172,33 @@ test("model selector routes Home and End to query editing", async () => {
 	assert.deepEqual(await running, { kind: "selected", model: alpha });
 });
 
+test("model selector completes remapped and newline Input submissions", async () => {
+	const previousKeybindings = getKeybindings();
+	try {
+		setKeybindings(
+			new KeybindingsManager(TUI_KEYBINDINGS, {
+				"tui.input.submit": "ctrl+q",
+			}),
+		);
+		for (const data of ["\x11", "\n"]) {
+			const tui = createTuiHarness({
+				keybindings: {
+					matches: (input, binding) => (binding === "tui.select.confirm" ? input === "x" : false),
+					getKeys: (binding) => (binding === "tui.select.confirm" ? ["x"] : []),
+				},
+			});
+			const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+			const running = runModelSelector(context.ctx, { models: [models[0]] });
+			await tui.waitForOpen();
+
+			tui.send(data);
+			assert.deepEqual(await running, { kind: "selected", model: models[0] });
+		}
+	} finally {
+		setKeybindings(previousKeybindings);
+	}
+});
+
 test("model selector gives save-default priority except for hard Ctrl+C", async () => {
 	for (const scenario of [
 		{ key: "enter", data: "\r", expected: "saveDefault", shadowedHint: "enter select" },
@@ -231,16 +266,30 @@ test("selector hints honor semantic key collisions and usable fallbacks", async 
 				shown: ["ctrl+s set as default", "enter select"],
 				hidden: ["not-a-key", "ctrl+c set as default"],
 			},
-			{
-				name: "legacy collision",
-				kitty: false,
-				saveKeys: ["ctrl+i"],
-				confirmKeys: ["tab"],
-				data: "\t",
-				expectedKind: "saveDefault",
-				shown: ["ctrl+i set as default"],
-				hidden: ["tab select"],
-			},
+			...(
+				[
+					["Ctrl+I / Tab", "ctrl+i", "tab", "\t"],
+					["Ctrl+J / Enter", "ctrl+j", "enter", "\n"],
+					["Ctrl+M / Enter", "ctrl+m", "enter", "\r"],
+					["Ctrl+[ / Escape", "ctrl+[", "escape", "\x1b"],
+					["Ctrl+- / Ctrl+_", "ctrl+-", "ctrl+_", "\x1f"],
+					["Alt+B / Alt+Left", "alt+b", "alt+left", "\x1bb"],
+					["Alt+F / Alt+Right", "alt+f", "alt+right", "\x1bf"],
+					["Alt+P / Alt+Up", "alt+p", "alt+up", "\x1bp"],
+					["Alt+N / Alt+Down", "alt+n", "alt+down", "\x1bn"],
+					["Ctrl+Alt+H / Alt+Backspace", "ctrl+alt+h", "alt+backspace", "\x1b\x08"],
+					["Ctrl+Alt+M / Alt+Enter", "ctrl+alt+m", "alt+enter", "\x1b\r"],
+				] as const
+			).map(([name, save, confirm, data]) => ({
+				name: `legacy ${name}`,
+				kitty: false as const,
+				saveKeys: [save],
+				confirmKeys: [confirm],
+				data,
+				expectedKind: "saveDefault" as const,
+				shown: [`${save} set as default`],
+				hidden: [`${confirm} select`],
+			})),
 			{
 				name: "Kitty disambiguation",
 				kitty: true,
@@ -281,6 +330,56 @@ test("selector hints honor semantic key collisions and usable fallbacks", async 
 		}
 	} finally {
 		setKittyProtocolActive(false);
+	}
+});
+
+test("selector hints follow Pi's live raw-backspace matcher overlap", async () => {
+	try {
+		setKittyProtocolActive(false);
+		for (const scenario of [
+			{
+				name: "legacy or remote terminal",
+				windowsTerminal: false,
+				data: "\x08",
+				expectedKind: "saveDefault",
+				showsConfirm: false,
+			},
+			{
+				name: "local Windows Terminal",
+				windowsTerminal: true,
+				data: "\x7f",
+				expectedKind: "selected",
+				showsConfirm: true,
+			},
+		] as const) {
+			vi.stubEnv("WT_SESSION", scenario.windowsTerminal ? "test" : "");
+			for (const name of ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]) vi.stubEnv(name, "");
+			const keys = (binding: string): readonly string[] => {
+				if (binding === "app.models.save") return ["ctrl+h"];
+				if (binding === "tui.select.confirm") return ["backspace"];
+				if (binding === "tui.select.cancel") return ["escape"];
+				return [];
+			};
+			const tui = createTuiHarness({
+				keybindings: {
+					matches: (data, binding) =>
+						keys(String(binding)).some((key) => matchesKey(data, key as never)),
+					getKeys: (binding) => [...keys(String(binding))] as never,
+				},
+			});
+			const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+			const running = runModelSelector(context.ctx, { models: [models[0]] });
+			await tui.waitForOpen();
+			const frame = tui.render().join("\n");
+			assert.ok(frame.includes("ctrl+h set as default"), scenario.name);
+			assert.equal(frame.includes("backspace select"), scenario.showsConfirm, scenario.name);
+
+			tui.send(scenario.data);
+			assert.equal((await running).kind, scenario.expectedKind, scenario.name);
+		}
+	} finally {
+		setKittyProtocolActive(false);
+		vi.unstubAllEnvs();
 	}
 });
 
@@ -341,6 +440,46 @@ test("thinking selector honors remapped cycle and save-default bindings", async 
 	tui.send("\x1bt");
 	tui.send("x");
 	assert.deepEqual(await running, { kind: "saveDefault", level: "high" });
+});
+
+test("thinking selector renders every description beside its choice on wide terminals", async () => {
+	const tui = createTuiHarness({ width: 100, rows: 30 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runThinkingSelector(context.ctx, {
+		availableLevels: ["off", "low", "high"],
+		currentLevel: "low",
+		defaultLevel: "off",
+	});
+	await tui.waitForOpen();
+	const frame = tui.render().map(stripVTControlCharacters);
+	for (const [level, description] of [
+		["off", "No reasoning"],
+		["low", "Light reasoning (~2k tokens)"],
+		["high", "Deep reasoning (~16k tokens)"],
+	] as const) {
+		const row = frame.find((line) => line.includes(level));
+		assert.ok(row?.includes(description), `${level} renders ${description}`);
+	}
+	assert.ok(frame.every((line) => visibleWidth(line) <= 100));
+	tui.press("ctrl+c");
+	assert.deepEqual(await running, { kind: "closed", reason: "close" });
+
+	const narrowTui = createTuiHarness({ width: 30, rows: 20 });
+	const narrowContext = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: narrowTui.custom,
+	});
+	const narrowRunning = runThinkingSelector(narrowContext.ctx, {
+		availableLevels: ["off", "low", "high"],
+		currentLevel: "low",
+	});
+	await narrowTui.waitForOpen();
+	const narrowFrame = narrowTui.render().map(stripVTControlCharacters);
+	assert.ok(narrowFrame.some((line) => line.includes("Light reasoning")));
+	assert.ok(narrowFrame.every((line) => visibleWidth(line) <= 30));
+	narrowTui.press("ctrl+c");
+	assert.deepEqual(await narrowRunning, { kind: "closed", reason: "close" });
 });
 
 test("thinking selector named cycle key emits Shift+Tab", async () => {

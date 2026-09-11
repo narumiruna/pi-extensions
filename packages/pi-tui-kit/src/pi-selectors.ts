@@ -160,6 +160,7 @@ export async function runThinkingSelector<Context extends MenuContext = Extensio
 				saveBinding: "app.models.save",
 				cycleBinding: "app.thinking.cycle",
 				filterSelection: "preserveValue",
+				inlineDescriptions: true,
 				valueEquals: (left, right) => left === right,
 				onComplete: complete,
 				tui,
