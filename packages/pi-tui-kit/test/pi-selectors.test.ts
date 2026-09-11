@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { createPiSelector } from "../src/components/pi-selectors.js";
 import { runModelSelector, runThinkingSelector } from "../src/index.js";
 import { createTuiHarness } from "../src/testing/index.js";
 
@@ -380,6 +381,50 @@ test("selector hints follow Pi's live raw-backspace matcher overlap", async () =
 	} finally {
 		setKittyProtocolActive(false);
 		vi.unstubAllEnvs();
+	}
+});
+
+test("selector hints preserve modifyOtherKeys-disambiguated actions", () => {
+	setKittyProtocolActive(false);
+	const keys = (binding: string): readonly string[] => {
+		if (binding === "app.models.save") return ["ctrl+h"];
+		if (binding === "tui.select.confirm") return ["backspace"];
+		if (binding === "tui.select.cancel") return ["escape"];
+		return [];
+	};
+	const keybindings = {
+		matches: (data: string, binding: string) =>
+			keys(binding).some((key) => matchesKey(data, key as never)),
+		getKeys: (binding: string) => [...keys(binding)],
+	} as never;
+	const tui = {
+		terminal: { rows: 20, modifyOtherKeysActive: true },
+		requestRender() {},
+	} as never;
+	const theme = { fg: (_role: string, text: string) => text } as never;
+
+	for (const scenario of [
+		{ data: "\x1b[27;5;104~", expectedKind: "saveDefault" },
+		{ data: "\x7f", expectedKind: "selected" },
+	] as const) {
+		let completed: { kind: string } | undefined;
+		const component = createPiSelector({
+			rows: [{ value: "model", primary: "model" }],
+			saveBinding: "app.models.save",
+			filterSelection: "bestMatch",
+			valueEquals: (left, right) => left === right,
+			onComplete: (result) => {
+				completed = result;
+			},
+			tui,
+			theme,
+			keybindings,
+		});
+		const frame = component.render(80).join("\n");
+		assert.ok(frame.includes("ctrl+h set as default"));
+		assert.ok(frame.includes("backspace select"));
+		component.handleInput(scenario.data);
+		assert.equal(completed?.kind, scenario.expectedKind);
 	}
 });
 

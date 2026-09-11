@@ -294,6 +294,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 				options.keybindings,
 				options.saveBinding,
 				options.cycleBinding,
+				usesDisambiguatedKeyProtocol(options.tui),
 			);
 			const hint = selectorHint(keyPlan);
 			const cycleHint = selectorCycleHint(keyPlan);
@@ -456,6 +457,7 @@ function selectorKeyPlan(
 	keybindings: KeybindingsManager,
 	saveBinding: "app.models.save",
 	cycleBinding: "app.thinking.cycle" | undefined,
+	disambiguatedKeyProtocol: boolean,
 ): SelectorKeyPlan {
 	const claimed = ["ctrl+c"];
 	const claim = (binding: string | undefined) => {
@@ -463,7 +465,11 @@ function selectorKeyPlan(
 		if (!binding) return available;
 		for (const key of getBindingKeys(keybindings, binding)) {
 			const canonical = canonicalKeyId(key);
-			if (!canonical || claimed.some((other) => keysOverlap(canonical, other))) continue;
+			if (
+				!canonical ||
+				claimed.some((other) => keysOverlap(canonical, other, disambiguatedKeyProtocol))
+			)
+				continue;
 			claimed.push(canonical);
 			available.push(canonical);
 		}
@@ -503,8 +509,19 @@ function canonicalKeyId(value: string): string | undefined {
 	return [...modifiers, base].join("+");
 }
 
-function keysOverlap(first: string, second: string) {
-	if (isKittyProtocolActive()) return first === second;
+function usesDisambiguatedKeyProtocol(tui: TUI) {
+	const terminal = tui.terminal as typeof tui.terminal & {
+		readonly modifyOtherKeysActive?: boolean;
+	};
+	return (
+		isKittyProtocolActive() ||
+		terminal.kittyProtocolActive ||
+		terminal.modifyOtherKeysActive === true
+	);
+}
+
+function keysOverlap(first: string, second: string, disambiguatedKeyProtocol: boolean) {
+	if (disambiguatedKeyProtocol) return first === second;
 	return inputsForKey(first).some((input) => matchesKey(input, second as KeyId));
 }
 
