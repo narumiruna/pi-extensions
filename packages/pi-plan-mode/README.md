@@ -52,12 +52,13 @@ Plan mode keeps exploration and implementation on opposite sides of an explicit 
 
 ```mermaid
 flowchart LR
-    start["Start<br/><code>/plan</code> or <code>/plan &lt;prompt&gt;</code>"] --> explore["Explore safely<br/>Inspect and clarify"]
-    explore --> complete["Complete the plan<br/><code>plan_mode_complete</code>"]
+    start["Start: /plan or /plan with a prompt"]
+    start --> explore["Explore safely: inspect and clarify"]
+    explore --> complete["Complete the plan with plan_mode_complete"]
     complete --> review["Review the ready plan"]
     review -->|Revise| explore
-    review -->|Implement here| current["Current session<br/>Planning context retained"]
-    review -->|Start fresh| fresh["Linked session<br/>Approved plan transferred"]
+    review -->|Implement here| current["Current session: planning context retained"]
+    review -->|Start fresh| fresh["Linked session: approved plan transferred"]
     review -->|Save| saved["Saved for later"]
     review -->|Export| exported["Markdown file"]
 ```
