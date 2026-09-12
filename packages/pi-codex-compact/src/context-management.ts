@@ -262,28 +262,39 @@ export function createExperimentalContextManager(
   const applySettings = (ctx: ExtensionContext) => {
     if (!isOwned(ctx)) return;
     const branch = ctx.sessionManager.getBranch();
+    const runIsActive = agentRunActive || ctx.signal !== undefined;
     if (!isConfigured()) {
       pending = undefined;
-      const branchIsActive = latestContextMode(branch) === "active";
-      if (branchIsActive) {
-        pi.sendMessage(deactivationMessage(), { triggerTurn: false });
-      }
       const inspection = inspectToolUnit();
-      const runIsActive = agentRunActive || ctx.signal !== undefined;
-      if (branchIsActive && runIsActive && toolsAvailable && inspection.complete) {
+      if (runIsActive && toolsAvailable && inspection.complete) {
         removeToolsAtSettlement = true;
         fallbackDeactivationPending = false;
         return;
+      }
+      const branchIsActive = latestContextMode(branch) === "active";
+      if (branchIsActive && !fallbackDeactivationPending) {
+        pi.sendMessage(deactivationMessage(), { triggerTurn: false });
       }
       removeToolsAtSettlement = false;
       fallbackDeactivationPending = branchIsActive && runIsActive;
       reconcileTools(false, ctx);
       return;
     }
-    const mustRestoreContract = removeToolsAtSettlement || fallbackDeactivationPending;
+    const contractAlreadyActiveOrQueued = removeToolsAtSettlement && !fallbackDeactivationPending;
+    const deactivationAlreadyPending = fallbackDeactivationPending;
+    const toolsWereAvailable = toolsAvailable;
     removeToolsAtSettlement = false;
     fallbackDeactivationPending = false;
-    if (!reconcileTools(true, ctx)) return;
+    if (!reconcileTools(true, ctx)) {
+      const contractMayBeActive =
+        latestContextMode(branch) === "active" ||
+        (runIsActive && (toolsWereAvailable || contractAlreadyActiveOrQueued));
+      if (contractMayBeActive && !deactivationAlreadyPending) {
+        pi.sendMessage(deactivationMessage(), { triggerTurn: false });
+      }
+      fallbackDeactivationPending = runIsActive && (contractMayBeActive || deactivationAlreadyPending);
+      return;
+    }
     let activeLineage: ContextLineage;
     try {
       activeLineage = ensureLineage(ctx);
@@ -299,7 +310,11 @@ export function createExperimentalContextManager(
       );
     }
     const messages = branch.flatMap(sessionEntryToContextMessages);
-    if (mustRestoreContract || latestContextMode(branch) !== "active" || !hasContextContract(messages, activeLineage)) {
+    if (
+      deactivationAlreadyPending ||
+      (!contractAlreadyActiveOrQueued &&
+        (latestContextMode(branch) !== "active" || !hasContextContract(messages, activeLineage)))
+    ) {
       pi.sendMessage(contractMessage(activeLineage), { triggerTurn: false });
     }
     warnEnabled(ctx);

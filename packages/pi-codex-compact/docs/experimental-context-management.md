@@ -208,10 +208,12 @@ stored only in that checkpoint. The extension warns once, keeps the checkpoint u
 recall only plaintext Pi entries and future notes. Start the experiment before remote compaction when
 complete local recall is important.
 
-Disabling the experiment removes the four tools, appends one deterministic hidden deactivation
-transition for the model, and stops future summary-free rollover without deleting entries. Existing Pi
-markers and retained messages remain readable. Re-enable the experiment to append a new activation
-transition and regain local recall tools.
+Disabling the experiment at idle appends one deterministic hidden deactivation transition and then
+removes the four tools. During an active run, the current contract and tools remain available through
+settlement; the extension then publishes deactivation before removing the tools. Re-enabling before
+settlement cancels that transition and removal. This stops future summary-free rollover without
+deleting entries, so existing Pi markers and retained messages remain readable. Re-enable after
+settlement to append a new activation transition and regain local recall tools.
 
 Local notes and plaintext history are independent of the selected provider and model. Context usage
 always reflects the currently selected model.

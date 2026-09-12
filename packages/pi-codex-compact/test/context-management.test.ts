@@ -452,7 +452,7 @@ test.each(["codex-first", "generic-first"] as const)(
   },
 );
 
-test("disabling during an active run delivers deactivation before removing tools", async () => {
+test("disabling during an active run publishes deactivation only when tools are removed", async () => {
   let selection = 0;
   const current = setup(true, undefined, {
     isIdle: () => false,
@@ -471,14 +471,21 @@ test("disabling during an active run delivers deactivation before removing tools
   await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
   const command = current.mock.commands.get("codex-compact");
   assert.ok(command);
+  const sentBeforeOptOut = current.mock.sentMessages.length;
   await command.handler("", current.current.ctx);
 
   assert.equal(current.runtime.get().settings.experimentalContextManagement, false);
-  assert.equal(
-    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
-    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
-  );
+  assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES]);
+  const contextHandler = current.mock.events.get("context")?.[0];
+  assert.ok(contextHandler);
+  assert.equal(
+    await contextHandler(
+      { type: "context", messages: current.entries.flatMap(sessionEntryToContextMessages) },
+      current.current.ctx,
+    ),
+    undefined,
+  );
   await assert.doesNotReject(() =>
     tool(current, "codex_compact_get_context_remaining").execute(
       "call-before-settlement",
@@ -490,6 +497,10 @@ test("disabling during an active run delivers deactivation before removing tools
   );
 
   await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+  assert.equal(
+    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
+    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
   await assert.rejects(
     tool(current, "codex_compact_get_context_remaining").execute(
@@ -503,7 +514,7 @@ test("disabling during an active run delivers deactivation before removing tools
   );
 });
 
-test("deferred opt-out republishes deactivation when compaction drops the queued transition", async () => {
+test("deferred opt-out publishes deactivation after an intervening compaction", async () => {
   let selection = 0;
   const current = setup(true, undefined, {
     isIdle: () => false,
@@ -522,8 +533,9 @@ test("deferred opt-out republishes deactivation when compaction drops the queued
   await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
   const command = current.mock.commands.get("codex-compact");
   assert.ok(command);
+  const sentBeforeOptOut = current.mock.sentMessages.length;
   await command.handler("", current.current.ctx);
-  persistLastSentCustomMessage(current);
+  assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
 
   const laterEntry: SessionEntry = {
     type: "message",
@@ -584,7 +596,7 @@ test("deferred opt-out republishes deactivation when compaction drops the queued
   const deactivations = current.mock.sentMessages.filter(
     (item) => (item.message as { customType?: string }).customType === CONTEXT_DEACTIVATION_MESSAGE_TYPE,
   );
-  assert.equal(deactivations.length, 2);
+  assert.equal(deactivations.length, 1);
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
   persistLastSentCustomMessage(current);
   const modelMessages = buildContextEntries(current.entries, current.entries.at(-1)?.id ?? null).flatMap(
@@ -637,7 +649,7 @@ test("deferred opt-out rejects a new rollover before settlement", async () => {
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
 });
 
-test("re-enabling before settlement restores the contract after queued deactivation", async () => {
+test("re-enabling before settlement cancels removal without adding a prefix transition", async () => {
   let selectedValue = "Off";
   let selection = 0;
   const current = setup(true, undefined, {
@@ -657,17 +669,66 @@ test("re-enabling before settlement restores the contract after queued deactivat
   await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
   const command = current.mock.commands.get("codex-compact");
   assert.ok(command);
+  const sentBeforeOptOut = current.mock.sentMessages.length;
   await command.handler("", current.current.ctx);
+  assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
 
   selectedValue = "On";
   selection = 0;
   await command.handler("", current.current.ctx);
-  assert.deepEqual(
-    current.mock.sentMessages.slice(-2).map((item) => (item.message as { customType?: string }).customType),
-    [CONTEXT_DEACTIVATION_MESSAGE_TYPE, CONTEXT_CONTRACT_MESSAGE_TYPE],
-  );
+  assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
   await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES]);
+});
+
+test("rapid mid-run enable then disable supersedes the queued activation", async () => {
+  let selectedValue = "On";
+  let selection = 0;
+  const current = setup(false, undefined, {
+    isIdle: () => false,
+    select: async (_title: string, options: string[]) => {
+      selection += 1;
+      if (selection === 1) return options.find((option) => option.startsWith("Settings"));
+      if (selection === 2) {
+        return options.find((option) => option.startsWith("Experimental context management"));
+      }
+      if (selection === 3) return options.find((option) => option === selectedValue);
+      return undefined;
+    },
+  });
+  await start(current);
+  await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
+  const command = current.mock.commands.get("codex-compact");
+  assert.ok(command);
+  await command.handler("", current.current.ctx);
+  assert.equal(
+    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
+    CONTEXT_CONTRACT_MESSAGE_TYPE,
+  );
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES]);
+
+  selectedValue = "Off";
+  selection = 0;
+  const sentBeforeOptOut = current.mock.sentMessages.length;
+  await command.handler("", current.current.ctx);
+  assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES]);
+
+  persistLastSentCustomMessage(current);
+  await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+  assert.equal(
+    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
+    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
+  persistLastSentCustomMessage(current);
+  const modelMessages = buildContextEntries(current.entries, current.entries.at(-1)?.id ?? null).flatMap(
+    sessionEntryToContextMessages,
+  );
+  assert.equal(
+    (modelMessages.at(-1) as Extract<AgentMessage, { role: "custom" }> | undefined)?.customType,
+    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
 });
 
 test("re-enabling after a post-deactivation compaction restores a tail activation", async () => {
@@ -721,12 +782,9 @@ test("re-enabling after a post-deactivation compaction restores a tail activatio
 
   const command = current.mock.commands.get("codex-compact");
   assert.ok(command);
+  const sentBeforeOptOut = current.mock.sentMessages.length;
   await command.handler("", current.current.ctx);
-  assert.equal(
-    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
-    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
-  );
-  persistLastSentCustomMessage(current);
+  assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
 
   const compactEntry = {
     type: "compaction",
@@ -747,6 +805,11 @@ test("re-enabling after a post-deactivation compaction restores a tail activatio
     current.current.ctx,
   );
   await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+  assert.equal(
+    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
+    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
+  persistLastSentCustomMessage(current);
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
 
   selectedValue = "On";
@@ -824,12 +887,10 @@ test("mid-run opt-out keeps experimental projection and compaction routing until
   await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
   const command = current.mock.commands.get("codex-compact");
   assert.ok(command);
+  const sentBeforeOptOut = current.mock.sentMessages.length;
   await command.handler("", current.current.ctx);
+  assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
 
-  const sentDeactivation = current.mock.sentMessages.at(-1)?.message as
-    | Omit<Extract<AgentMessage, { role: "custom" }>, "role" | "timestamp">
-    | undefined;
-  assert.equal(sentDeactivation?.customType, CONTEXT_DEACTIVATION_MESSAGE_TYPE);
   const summary: AgentMessage = {
     role: "compactionSummary",
     summary: contextContract(details),
@@ -841,18 +902,13 @@ test("mid-run opt-out keeps experimental projection and compaction routing until
     content: [{ type: "text", text: "new window tail" }],
     timestamp: 4,
   };
-  const deactivation = {
-    role: "custom",
-    ...sentDeactivation,
-    timestamp: 5,
-  } as AgentMessage;
   const contextHandler = current.mock.events.get("context")?.[0];
   assert.ok(contextHandler);
   const projected = (await contextHandler(
-    { type: "context", messages: [summary, kept, later, deactivation] },
+    { type: "context", messages: [summary, kept, later] },
     current.current.ctx,
   )) as { messages: AgentMessage[] } | undefined;
-  assert.deepEqual(projected?.messages, [summary, later, deactivation]);
+  assert.deepEqual(projected?.messages, [summary, later]);
 
   const before = current.mock.events.get("session_before_compact")?.[0];
   assert.ok(before);
@@ -879,6 +935,10 @@ test("mid-run opt-out keeps experimental projection and compaction routing until
   assert.equal(fetches, 0);
 
   await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+  assert.equal(
+    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
+    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
 });
 
@@ -1055,6 +1115,55 @@ test.each(["different description", "matching description"] as const)(
     assert.match(current.current.notifications[0]?.message ?? "", /could not activate/);
   },
 );
+
+test("resumed active contracts deactivate when the complete tool unit cannot activate", async () => {
+  const current = setup();
+  const lineage = createInitialContextState("11111111-1111-4111-8111-111111111111");
+  current.entries.push(
+    {
+      type: "custom",
+      customType: CONTEXT_STATE_ENTRY_TYPE,
+      data: lineage,
+      id: "persisted-state",
+      parentId: "user",
+      timestamp: "2026-01-01T00:00:01.000Z",
+    },
+    {
+      type: "message",
+      id: "persisted-contract",
+      parentId: "persisted-state",
+      timestamp: "2026-01-01T00:00:02.000Z",
+      message: {
+        role: "custom",
+        customType: CONTEXT_CONTRACT_MESSAGE_TYPE,
+        content: contextContract(lineage),
+        display: false,
+        timestamp: 2,
+      },
+    },
+  );
+  const getAllTools = current.mock.rawPi.getAllTools.bind(current.mock.rawPi);
+  current.mock.rawPi.getAllTools = () =>
+    getAllTools().map((toolInfo) => {
+      const tool = toolInfo as { name?: string; sourceInfo: { path: string } };
+      if (tool.name !== "codex_compact_start_new_context") return tool;
+      return {
+        ...tool,
+        sourceInfo: {
+          ...tool.sourceInfo,
+          path: resolve("packages/pi-codex-compact/src/context-tools.ts"),
+        },
+      };
+    });
+  current.mock.rawPi.setActiveTools(["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES]);
+
+  await start(current);
+  assert.equal(
+    (current.mock.sentMessages.at(-1)?.message as { customType?: string } | undefined)?.customType,
+    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read", "codex_compact_start_new_context"]);
+});
 
 test("tree navigation reloads branch lineage and releases old-branch rollover state", async () => {
   const current = setup();
