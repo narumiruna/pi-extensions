@@ -1,5 +1,15 @@
 # @narumitw/pi-tui-kit
 
+## 0.63.0
+
+### Minor Changes
+
+- 393783f: Add standard-screen mouse routing, compatible thinking-selector save bindings, bounded intraline diff emphasis, searchable live choices, editable input prefill, and a TUI-only masked secret interaction.
+
+### Patch Changes
+
+- 845bb04: Keep optimistic setting values stable when an older rejected save requests the same value as a newer queued change.
+
 ## 0.62.0
 
 ### Minor Changes
