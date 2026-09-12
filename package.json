@@ -16,6 +16,7 @@
       "./packages/pi-chat/src/index.ts",
       "./packages/pi-chrome-devtools/src/index.ts",
       "./packages/pi-codex-compact/src/index.ts",
+      "./packages/pi-dotenv/src/index.ts",
       "./packages/pi-file-context/src/index.ts",
       "./packages/pi-firecrawl/src/index.ts",
       "./packages/pi-fleet/src/index.ts",
