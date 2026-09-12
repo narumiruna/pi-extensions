@@ -15,6 +15,9 @@ const FIXED_POINT_UNITS_PER_CENT = 1_000_000;
  * Kimi Code 676e4d82240855044fe809fea89ce1dbe8e512cf defines `GET /coding/v1/usages`,
  * numeric-string plan rows, proto-style windows, and 1,000,000 fixed-point units per cent:
  * https://github.com/MoonshotAI/kimi-code/blob/676e4d82240855044fe809fea89ce1dbe8e512cf/packages/oauth/src/managed-usage.ts
+ * Live responses observed on 2026-09-12 omit both `used` and `remaining` on untouched rows and may report only
+ * `remaining` once usage starts, so a row with a positive `limit` and no counters means zero usage, and when only
+ * one counter is present the other is derived from `limit`. Counters that are present but malformed stay rejected.
  */
 export function normalizeKimiCodingUsagePayload(payload: KimiCodingUsagePayload, capturedAt: number): UsageReport {
   const root = asObject(payload);
@@ -74,15 +77,26 @@ export function normalizeKimiCodingUsagePayload(payload: KimiCodingUsagePayload,
 function parseUsageRow(value: unknown, windowMinutes: number, label: string): UsageBucket | undefined {
   const row = asObject(value);
   if (!row) return undefined;
-  const used = asNonnegativeInteger(row.used);
   const limit = asNonnegativeInteger(row.limit);
-  if (used === undefined || limit === undefined || limit === 0) return undefined;
+  if (limit === undefined || limit === 0) return undefined;
+  const usedRaw = asNonnegativeInteger(row.used);
+  const remainingRaw = asNonnegativeInteger(row.remaining);
+  // Counters that are present but malformed reject the row instead of silently inventing a count.
+  if (
+    (row.used !== undefined && usedRaw === undefined) ||
+    (row.remaining !== undefined && remainingRaw === undefined)
+  ) {
+    return undefined;
+  }
+  // Live responses omit both counters on untouched rows, so a bare `limit` means zero usage.
+  const used = usedRaw ?? (remainingRaw === undefined ? 0 : Math.max(0, limit - remainingRaw));
+  const remaining = remainingRaw ?? Math.max(0, limit - used);
   const resetsAt = asIsoEpochSeconds(row.resetTime);
   return {
     id: windowId(windowMinutes),
     label,
     used,
-    remaining: Math.max(0, limit - used),
+    remaining,
     limit,
     unit: "count",
     windowMinutes,

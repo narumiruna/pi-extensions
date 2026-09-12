@@ -48,7 +48,7 @@ function combinedPlanFixture(): KimiCodingUsagePayload {
 }
 
 test("Kimi fixtures are sanitized and contain no credential or account fields", () => {
-  for (const name of ["weekly", "five-hour", "daily", "malformed", "booster-wallet", "empty"]) {
+  for (const name of ["weekly", "five-hour", "daily", "malformed", "booster-wallet", "remaining-only", "empty"]) {
     const text = readFileSync(new URL(`./fixtures/kimi-coding-${name}.json`, import.meta.url), "utf8");
     assert.doesNotMatch(text, /authorization|access_token|refresh_token|api[_-]?key|email/iu);
   }
@@ -105,16 +105,26 @@ test("Kimi adapter normalizes weekly, five-hour, and daily numeric-string window
 
 test("Kimi adapter omits malformed, duplicate, unknown, and unsafe window fields", () => {
   const report = normalizeKimiCodingUsagePayload(fixture("malformed"), 700);
-  assert.equal(report.buckets.length, 1);
-  assert.deepEqual(report.buckets[0], {
-    id: "daily",
-    label: "Daily cap",
-    used: 5,
-    remaining: 95,
-    limit: 100,
-    unit: "count",
-    windowMinutes: 1_440,
-  });
+  assert.deepEqual(report.buckets, [
+    {
+      id: "daily",
+      label: "Daily cap",
+      used: 5,
+      remaining: 95,
+      limit: 100,
+      unit: "count",
+      windowMinutes: 1_440,
+    },
+    {
+      id: "weekly",
+      label: "limit-only",
+      used: 0,
+      remaining: 100,
+      limit: 100,
+      unit: "count",
+      windowMinutes: 10_080,
+    },
+  ]);
   assert.deepEqual(report.notes, ["Unsupported, malformed, or duplicate plan windows were unavailable."]);
   const rendered = formatUsageReport(report, "current");
   assert.equal(rendered.includes(TERMINAL_ESCAPE), false);
@@ -131,6 +141,56 @@ test("Kimi adapter omits malformed, duplicate, unknown, and unsafe window fields
   const detail = impossibleTimestamp.limits?.[0]?.detail as Record<string, unknown> | undefined;
   if (detail) detail.resetTime = "2030-02-30T00:00:00Z";
   assert.equal(normalizeKimiCodingUsagePayload(impossibleTimestamp, 850).buckets[0]?.resetsAt, undefined);
+});
+
+test("Kimi adapter derives missing counters from limit on remaining-only and untouched rows", () => {
+  const report = normalizeKimiCodingUsagePayload(fixture("remaining-only"), 550);
+  assert.deepEqual(report.buckets, [
+    {
+      id: "five-hour",
+      label: "5h window",
+      used: 2,
+      remaining: 98,
+      limit: 100,
+      unit: "count",
+      windowMinutes: 300,
+      resetsAt: 1_789_231_428,
+    },
+    {
+      id: "weekly",
+      label: "Weekly window",
+      used: 0,
+      remaining: 100,
+      limit: 100,
+      unit: "count",
+      windowMinutes: 10_080,
+      resetsAt: 1_789_821_828,
+    },
+  ]);
+  assert.equal(report.notes, undefined);
+  assert.equal(formatUsageStatusline(report), "kimi 98% 5h 100% wk");
+  assert.match(formatUsageReport(report, "current"), /0 of 100 used · 100% left/);
+
+  // The disabled booster wallet in the live response carries no balance amounts, so no metrics are invented.
+  assert.deepEqual(report.metrics, []);
+
+  // A row with a bare `limit` and no counters is untouched: zero used, everything remaining.
+  const untouched = normalizeKimiCodingUsagePayload(
+    { usage: { limit: "100", resetTime: "2026-09-19T12:43:48.701124Z" } },
+    0,
+  );
+  assert.deepEqual(untouched.buckets, [
+    {
+      id: "weekly",
+      label: "Weekly window",
+      used: 0,
+      remaining: 100,
+      limit: 100,
+      unit: "count",
+      windowMinutes: 10_080,
+      resetsAt: 1_789_821_828,
+    },
+  ]);
 });
 
 test("Kimi adapter keeps booster-wallet currency separate from plan counts", () => {
@@ -247,7 +307,7 @@ test("Kimi booster wallet preserves first-party minimum cents and unlimited mont
   assert.match(formatUsageReport(report, "current"), /Balance:\s+¥0\.00 of ¥0\.01/);
 });
 
-test("Kimi adapter rejects empty data and never invents missing counts or future units", () => {
+test("Kimi adapter rejects empty data, malformed counters, and future units", () => {
   assert.throws(() => normalizeKimiCodingUsagePayload(fixture("empty"), 0), /no displayable usage data/iu);
   assert.throws(
     () =>
@@ -264,7 +324,11 @@ test("Kimi adapter rejects empty data and never invents missing counts or future
       ),
     /no displayable usage data/iu,
   );
-  assert.throws(() => normalizeKimiCodingUsagePayload({ usage: { limit: "10" } }, 0), /no displayable usage data/iu);
+  // A counter that is present but malformed still rejects the row instead of silently inventing a count.
+  assert.throws(
+    () => normalizeKimiCodingUsagePayload({ usage: { limit: "10", used: "1,000" } }, 0),
+    /no displayable usage data/iu,
+  );
 });
 
 test("Kimi runtime auth accepts fresh OAuth and API-key bearers only at the official origin", async () => {

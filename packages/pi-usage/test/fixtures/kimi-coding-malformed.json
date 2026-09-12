@@ -51,7 +51,7 @@
       }
     },
     {
-      "name": "missing-used",
+      "name": "limit-only",
       "window": {
         "duration": 7,
         "timeUnit": "TIME_UNIT_DAY"
