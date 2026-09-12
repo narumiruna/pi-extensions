@@ -1564,6 +1564,8 @@ test("a completed rollover is not reused by another compaction before settlement
 
 test.each([
   { stopReason: "stop" as const, expectedContinuations: 0 },
+  { stopReason: "toolUse" as const, expectedContinuations: 0 },
+  { stopReason: "length" as const, expectedContinuations: 1 },
   { stopReason: "error" as const, expectedContinuations: 1 },
   { stopReason: "aborted" as const, expectedContinuations: 0 },
 ])(
@@ -1638,9 +1640,14 @@ test.each(["success", "failure"] as const)(
   },
 );
 
-test.each(["success", "failure"] as const)(
-  "an unsuccessful post-request turn sends a continuation after compaction %s",
-  async (outcome) => {
+test.each([
+  { stopReason: "error" as const, compactionOutcome: "success" as const },
+  { stopReason: "error" as const, compactionOutcome: "failure" as const },
+  { stopReason: "length" as const, compactionOutcome: "success" as const },
+  { stopReason: "length" as const, compactionOutcome: "failure" as const },
+])(
+  "an unsuccessful $stopReason turn sends a continuation after compaction $compactionOutcome",
+  async ({ stopReason, compactionOutcome }) => {
     const current = setup();
     await start(current);
     await tool(current, "codex_compact_start_new_context").execute(
@@ -1655,12 +1662,12 @@ test.each(["success", "failure"] as const)(
       current.current.ctx,
     );
     await current.mock.events.get("agent_end")?.[0](
-      { type: "agent_end", messages: [assistantMessage("error")] },
+      { type: "agent_end", messages: [assistantMessage(stopReason)] },
       current.current.ctx,
     );
     await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
     assert.ok(current.compactOptions);
-    if (outcome === "failure") {
+    if (compactionOutcome === "failure") {
       current.compactOptions.onError?.(new Error("mixed batch compaction failed"));
     } else {
       await completeRequestedCompaction(current);
@@ -1669,7 +1676,10 @@ test.each(["success", "failure"] as const)(
       (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
     );
     assert.equal(continuations.length, 1);
-    assert.match(JSON.stringify(continuations[0]), outcome === "success" ? /is now active/ : /rollover failed/);
+    assert.match(
+      JSON.stringify(continuations[0]),
+      compactionOutcome === "success" ? /is now active/ : /rollover failed/,
+    );
   },
 );
 

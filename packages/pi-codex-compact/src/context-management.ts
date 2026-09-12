@@ -494,7 +494,7 @@ export function createExperimentalContextManager(
         pending = undefined;
         return;
       }
-      if (request.turnStartedAfterRequest && stopReason !== undefined && stopReason !== "error") {
+      if (request.turnStartedAfterRequest && (stopReason === "stop" || stopReason === "toolUse")) {
         request.successfulTurnAfterRequest = true;
       }
     },
