@@ -93,6 +93,7 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | Package | Use it for | Install |
 | --- | --- | --- |
 | [`pi-accounts`](./packages/pi-accounts) | Switch named OpenAI Codex, Anthropic, GitHub Copilot, Kimi For Coding, OpenRouter, Radius, and xAI OAuth accounts with `/accounts`. | `pi install npm:@narumitw/pi-accounts` |
+| [`pi-dotenv`](./packages/pi-dotenv) | Load one explicit dotenv file early enough for provider credential discovery during normal Pi startup. | `pi install npm:@narumitw/pi-dotenv` |
 | [`pi-recall`](./packages/pi-recall) | Save selected text messages locally and preview or quote them across Pi sessions. | `pi install npm:@narumitw/pi-recall` |
 | [`pi-usage`](./packages/pi-usage) | View current-account Codex subscription limits or OpenRouter API-key spend limits with `/usage`. | `pi install npm:@narumitw/pi-usage` |
 | [`pi-sync`](./packages/pi-sync) | Sync allowlisted Pi settings and optional sessions through Cloudflare R2 or S3-compatible storage. | `pi install npm:@narumitw/pi-sync` |
