@@ -70,6 +70,7 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
     },
     thinking: { prefix: "🧠 ", suffix: "" },
     cwd: { prefix: "📁 ", suffix: "" },
+    session: { prefix: "🏷️ ", suffix: "" },
     branch: { prefix: "🌿 ", suffix: "" },
     tools: { prefix: "", suffix: "" },
     context: { prefix: "🪟 ctx ", suffix: "" },

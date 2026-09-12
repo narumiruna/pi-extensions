@@ -6,6 +6,7 @@ export const SEGMENT_NAMES = [
   "model",
   "thinking",
   "cwd",
+  "session",
   "branch",
   "tools",
   "context",

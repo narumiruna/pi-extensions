@@ -40,6 +40,7 @@ const SEGMENT_DESCRIPTIONS: Record<SegmentName, string> = {
   model: "Current model name",
   thinking: "Current thinking level",
   cwd: "Current working directory",
+  session: "Current session name (hidden until named)",
   branch: "Git branch, status, and linked pull request",
   tools: "Current tool and streaming activity",
   context: "Current context-window usage",

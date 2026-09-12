@@ -150,7 +150,7 @@ Closing the screen does not roll it back.
 Available data segments:
 
 ```text
-brand provider model thinking cwd branch tools context tokens cache cost time turn
+brand provider model thinking cwd session branch tools context tokens cache cost time turn
 ```
 
 Data segments must be unique.

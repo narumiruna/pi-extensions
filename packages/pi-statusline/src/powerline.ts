@@ -47,6 +47,7 @@ const SEGMENT_RETENTION_PRIORITY: Readonly<Record<RenderSegment["name"], number>
   branch: 100,
   tools: 90,
   cwd: 80,
+  session: 75,
   thinking: 70,
   cost: 60,
   provider: 50,

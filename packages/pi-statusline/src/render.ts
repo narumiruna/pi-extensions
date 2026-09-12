@@ -135,6 +135,10 @@ function buildSegment(
         "accent",
         "directory",
       );
+    case "session": {
+      const sessionName = sanitizeTerminalText(ctx.sessionManager.getSessionName() ?? "");
+      return sessionName ? segment(name, sessionName, config, "accent", "directory") : undefined;
+    }
     case "tools": {
       const activity = formatToolActivity(runtime);
       return activity ? segment(name, activity, config, "accent", "runtime") : undefined;

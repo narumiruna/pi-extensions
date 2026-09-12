@@ -235,6 +235,45 @@ test("cwd uses Starship repository and three-component directory defaults", () =
   assert.equal(plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)), "░▒▓ 📁 ~");
 });
 
+test("session segment shows the session name only when one is set", () => {
+  const config = createDefaultConfig();
+  config.segments = ["session"];
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => null,
+    getExtensionStatuses: () => new Map(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
+  const context = createMockContext({
+    sessionManager: {
+      getEntries: () => [],
+      getBranch: () => [],
+      getSessionName: () => undefined,
+    },
+  });
+
+  assert.equal(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime), "");
+
+  const sessionManager = (context.ctx as { sessionManager: { getSessionName: () => string | undefined } })
+    .sessionManager;
+  sessionManager.getSessionName = () => "Refactor auth module";
+  assert.equal(
+    plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+    "░▒▓ 🏷️ Refactor auth module",
+  );
+
+  sessionManager.getSessionName = () => "fix\x1b]8;;https://evil.example\x07click\x1b]8;;\x07";
+  assert.equal(plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)), "░▒▓ 🏷️ fixclick");
+});
+
 test("cwd preserves POSIX backslashes and strips terminal controls", { skip: sep !== "/" }, () => {
   const config = createDefaultConfig();
   config.segments = ["cwd"];
@@ -574,7 +613,7 @@ test("usage segments match native cache, context-window, and subscription presen
     model: { id: "gpt-5", provider: "openai", contextWindow: 272_000 },
     modelRegistry: { isUsingOAuth: () => true },
     getContextUsage: () => ({ percent: 2.4, tokens: 6528, contextWindow: 272_000 }),
-    sessionManager: { getEntries: () => entries, getBranch: () => [latest] },
+    sessionManager: { getEntries: () => entries, getBranch: () => [latest], getSessionName: () => undefined },
   });
   const footerData: ReadonlyFooterDataProvider = {
     getGitBranch: () => null,
@@ -658,6 +697,7 @@ test("Kimi subscription cost is marked while API-key cost is unchanged", () => {
       sessionManager: {
         getEntries: () => [{ type: "message", message: { role: "assistant", usage } }],
         getBranch: () => [],
+        getSessionName: () => undefined,
       },
     });
     return plain(renderStatusline(100, context.ctx, footerData, {} as Theme, config, runtime));
@@ -670,6 +710,7 @@ test("Kimi subscription cost is marked while API-key cost is unchanged", () => {
 test("segment presentation wraps canonical dynamic values with configured text", () => {
   const config = createDefaultConfig();
   assert.equal(formatConfiguredSegment("provider", "anthropic", config), "🔌 anthropic");
+  assert.equal(formatConfiguredSegment("session", "auth work", config), "🏷️ auth work");
   config.segmentText.provider = { prefix: "Provider[", suffix: "]" };
   assert.equal(formatConfiguredSegment("provider", "anthropic", config), "Provider[anthropic]");
   config.segmentText.cost = { prefix: "cost=", suffix: " USD" };

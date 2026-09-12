@@ -83,6 +83,7 @@ Selecting a level replaces only `segments` and preserves unrelated JSON fields.
 
 The `tools` segment takes no space while idle.
 `cache` takes no space when Pi has reported no cache reads or writes.
+`session` stays hidden until Pi names the session via `/name` and follows renames immediately.
 
 ## 💬 Commands
 
@@ -107,7 +108,7 @@ If it is too wide, pi-statusline removes the lowest-priority segment, recomputes
 Retention priority is highest to lowest:
 
 ```text
-context model branch tools cwd thinking cost provider cache tokens time turn brand
+context model branch tools cwd session thinking cost provider cache tokens time turn brand
 ```
 
 Explicit `line_break` entries remain row boundaries.
