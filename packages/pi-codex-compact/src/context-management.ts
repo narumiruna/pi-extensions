@@ -509,6 +509,9 @@ export function createExperimentalContextManager(
       if (removeToolsAtSettlement) {
         removeToolsAtSettlement = false;
         if (!isConfigured()) {
+          if (latestContextMode(ctx.sessionManager.getBranch()) !== "inactive") {
+            pi.sendMessage(deactivationMessage(), { triggerTurn: false });
+          }
           toolsAvailable = false;
           removeOwnedTools(inspectToolUnit().ownedNames);
         }

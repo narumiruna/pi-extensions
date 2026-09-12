@@ -73,7 +73,7 @@ Closing the menu with Escape or Ctrl+C does not compact the session.
 Manual compaction uses **Responses Remote V2**, **Responses Compact API**, or **Pi native**, as described in [Settings](#-settings).
 Pi's built-in `/compact` remains available and follows the same extension hook.
 
-## 🧰 Tools
+## 🛠️ Tools
 
 The experiment activates exactly four model tools: `codex_compact_start_new_context` changes windows, `codex_compact_get_context_remaining` inspects capacity, `codex_compact_recall_context` reads plaintext history or notes, and `codex_compact_update_notes` writes notes. They are absent from the active tool list by default. See the [experimental context management guide](./docs/experimental-context-management.md) for schemas, examples, limits, and lifecycle behavior.
 
@@ -188,6 +188,7 @@ Experimental context management stores window metadata and notes as plaintext ap
 | Request timeout | At most 10 minutes |
 | Experimental note mutation | 16 KiB UTF-8; 64 active notes and 256 KiB total |
 | Experimental recall result | 32 KiB, 1,000 lines, and 20 search matches per page |
+| Experimental history search | 4 MiB of indexed source text per request |
 
 An individually oversized media item is dropped rather than making the session entry unbounded.
 The oldest fitting text item may be partially truncated to preserve newer context.

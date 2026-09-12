@@ -503,6 +503,99 @@ test("disabling during an active run delivers deactivation before removing tools
   );
 });
 
+test("deferred opt-out republishes deactivation when compaction drops the queued transition", async () => {
+  let selection = 0;
+  const current = setup(true, undefined, {
+    isIdle: () => false,
+    select: async (_title: string, options: string[]) => {
+      selection += 1;
+      if (selection === 1) return options.find((option) => option.startsWith("Settings"));
+      if (selection === 2) {
+        return options.find((option) => option.startsWith("Experimental context management"));
+      }
+      if (selection === 3) return options.find((option) => option === "Off");
+      return undefined;
+    },
+  });
+  await start(current);
+  persistLastSentCustomMessage(current);
+  await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
+  const command = current.mock.commands.get("codex-compact");
+  assert.ok(command);
+  await command.handler("", current.current.ctx);
+  persistLastSentCustomMessage(current);
+
+  const laterEntry: SessionEntry = {
+    type: "message",
+    id: "after-deactivation",
+    parentId: current.entries.at(-1)?.id ?? null,
+    timestamp: "2026-01-01T00:00:03.000Z",
+    message: { role: "user", content: [{ type: "text", text: "large later turn" }], timestamp: 3 },
+  };
+  current.entries.push(laterEntry);
+  const before = current.mock.events.get("session_before_compact")?.[0];
+  assert.ok(before);
+  const prepared = (await before(
+    {
+      type: "session_before_compact",
+      preparation: {
+        firstKeptEntryId: laterEntry.id,
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+        tokensBefore: 90,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        settings: { enabled: true, reserveTokens: 10, keepRecentTokens: 10 },
+      },
+      branchEntries: current.entries,
+      reason: "threshold",
+      willRetry: false,
+      signal: new AbortController().signal,
+    },
+    current.current.ctx,
+  )) as {
+    compaction: {
+      summary: string;
+      firstKeptEntryId: string;
+      tokensBefore: number;
+      details: unknown;
+    };
+  };
+  const compactEntry = {
+    type: "compaction",
+    id: "drops-deactivation",
+    parentId: laterEntry.id,
+    timestamp: "2026-01-01T00:00:04.000Z",
+    ...prepared.compaction,
+  } as SessionEntry;
+  current.entries.push(compactEntry);
+  await current.mock.events.get("session_compact")?.[0](
+    {
+      type: "session_compact",
+      compactionEntry: compactEntry,
+      fromExtension: true,
+      reason: "threshold",
+      willRetry: false,
+    },
+    current.current.ctx,
+  );
+
+  await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+  const deactivations = current.mock.sentMessages.filter(
+    (item) => (item.message as { customType?: string }).customType === CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
+  assert.equal(deactivations.length, 2);
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
+  persistLastSentCustomMessage(current);
+  const modelMessages = buildContextEntries(current.entries, current.entries.at(-1)?.id ?? null).flatMap(
+    sessionEntryToContextMessages,
+  );
+  assert.equal(
+    (modelMessages.at(-1) as Extract<AgentMessage, { role: "custom" }> | undefined)?.customType,
+    CONTEXT_DEACTIVATION_MESSAGE_TYPE,
+  );
+});
+
 test("deferred opt-out rejects a new rollover before settlement", async () => {
   let selection = 0;
   const current = setup(true, undefined, {

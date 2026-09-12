@@ -15,6 +15,7 @@ export const MAX_RECALL_MATCHES = 20;
 const MAX_INDEXED_MESSAGE_CHARS = 256 * 1024;
 // Bound source work separately so removable terminal controls do not consume the visible index.
 const MAX_SCANNED_MESSAGE_CHARS = 4 * MAX_INDEXED_MESSAGE_CHARS;
+const MAX_HISTORY_SEARCH_SCAN_CHARS = 4 * MAX_SCANNED_MESSAGE_CHARS;
 const READ_CHUNK_BYTES = 12 * 1024;
 
 export type RecallSource = "history" | "notes";
@@ -108,6 +109,13 @@ function indexContent(content: unknown): unknown {
 }
 
 function messageIndexPayload(message: AgentMessage): unknown {
+  if (message.role === "toolResult" && message.toolName === "codex_compact_recall_context") {
+    return {
+      toolName: message.toolName,
+      toolCallId: message.toolCallId,
+      isError: message.isError,
+    };
+  }
   const payload = messagePayload(message);
   if (!isRecord(payload) || !Object.hasOwn(payload, "content")) return payload;
   return { ...payload, content: indexContent(payload.content) };
@@ -191,20 +199,39 @@ function preview(value: string): string {
   return characters.length > 240 ? `${characters.slice(0, 239).join("")}…` : compact;
 }
 
-function boundedPayloadText(value: unknown): string {
+interface SearchScanBudget {
+  remaining: number;
+  exceeded: boolean;
+}
+
+function boundedPayloadText(value: unknown, searchBudget?: SearchScanBudget): string {
   let scannedCharacters = 0;
   let text = "";
   const append = (value: string) => {
-    if (scannedCharacters >= MAX_SCANNED_MESSAGE_CHARS || text.length >= MAX_INDEXED_MESSAGE_CHARS) {
+    if (
+      scannedCharacters >= MAX_SCANNED_MESSAGE_CHARS ||
+      text.length >= MAX_INDEXED_MESSAGE_CHARS ||
+      searchBudget?.exceeded
+    ) {
       return;
     }
     const remainingScan = MAX_SCANNED_MESSAGE_CHARS - scannedCharacters;
-    const part = value.slice(0, remainingScan);
+    const allowedByMessage = Math.min(value.length, remainingScan);
+    const partLength = Math.min(allowedByMessage, searchBudget?.remaining ?? allowedByMessage);
+    const part = value.slice(0, partLength);
     scannedCharacters += part.length;
+    if (searchBudget) {
+      searchBudget.remaining -= part.length;
+      if (partLength < allowedByMessage) searchBudget.exceeded = true;
+    }
     text += displayText(part).slice(0, MAX_INDEXED_MESSAGE_CHARS - text.length);
   };
   const visit = (item: unknown) => {
-    if (scannedCharacters >= MAX_SCANNED_MESSAGE_CHARS || text.length >= MAX_INDEXED_MESSAGE_CHARS) {
+    if (
+      scannedCharacters >= MAX_SCANNED_MESSAGE_CHARS ||
+      text.length >= MAX_INDEXED_MESSAGE_CHARS ||
+      searchBudget?.exceeded
+    ) {
       return;
     }
     if (typeof item === "string") {
@@ -231,8 +258,8 @@ function boundedPayloadText(value: unknown): string {
   return text;
 }
 
-function boundedMessageText(message: AgentMessage): string {
-  return boundedPayloadText(messageIndexPayload(message));
+function boundedMessageText(message: AgentMessage, searchBudget?: SearchScanBudget): string {
+  return boundedPayloadText(messageIndexPayload(message), searchBudget);
 }
 
 function paged<T>(values: readonly T[], offset: number) {
@@ -334,7 +361,7 @@ export function recallContext(
     }
     if (input.action === "read") {
       const note = notes.find((candidate) => candidate.name === input.id);
-      if (!note) throw new Error(`Context note ${JSON.stringify(input.id)} was not found`);
+      if (!note) throw new Error(`Context note ${JSON.stringify(displayText(input.id ?? ""))} was not found`);
       const page = readChunk(displayText(note.content), offset);
       return {
         text: safeJson({ source: "notes", action: "read", id: note.name, ...page }),
@@ -369,7 +396,7 @@ export function recallContext(
   }
   if (input.action === "read") {
     const item = history.find((candidate) => candidate.id === input.id);
-    if (!item) throw new Error(`History item ${JSON.stringify(input.id)} was not found`);
+    if (!item) throw new Error(`History item ${JSON.stringify(displayText(input.id ?? ""))} was not found`);
     const content = serializeMessage(item.message);
     const page = readChunk(content, offset);
     return {
@@ -385,18 +412,24 @@ export function recallContext(
     };
   }
   const activeMessageId = activeToolCallMessageId(history, activeToolCallId);
-  const matches = searchPage(
-    history,
-    offset,
-    (item) => item.id !== activeMessageId && boundedMessageText(item.message).toLowerCase().includes(searchQuery),
-  );
+  const searchBudget: SearchScanBudget = { remaining: MAX_HISTORY_SEARCH_SCAN_CHARS, exceeded: false };
+  const indexedText = new Map<string, string>();
+  const matches = searchPage(history, offset, (item) => {
+    if (item.id === activeMessageId) return false;
+    const text = boundedMessageText(item.message, searchBudget);
+    if (searchBudget.exceeded) {
+      throw new Error("codex_compact_recall_context history search exceeded its scan limit");
+    }
+    indexedText.set(item.id, text);
+    return text.toLowerCase().includes(searchQuery);
+  });
   const page = {
     ...matches,
     items: matches.items.map((item) => ({
       id: item.id,
       ...(item.windowId ? { windowId: item.windowId } : {}),
       role: item.role,
-      preview: preview(boundedMessageText(item.message)),
+      preview: preview(indexedText.get(item.id) ?? ""),
     })),
   };
   return { text: safeJson({ source: "history", action: "search", ...page }), details: page };

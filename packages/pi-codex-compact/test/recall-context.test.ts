@@ -326,6 +326,33 @@ test("history search excludes completed recall call arguments", () => {
   assert.doesNotMatch(searched.text, /completed-recall/);
 });
 
+test("history search excludes completed recall tool results while exact reads remain available", () => {
+  const entries = branch();
+  entries.push(
+    historyEntry("completed-recall-result", {
+      role: "toolResult",
+      toolCallId: "completed-call",
+      toolName: "codex_compact_recall_context",
+      content: [{ type: "text", text: "synthetic repeated query" }],
+      isError: false,
+      timestamp: 4,
+    }),
+  );
+
+  const searched = recallContext(entries, {
+    source: "history",
+    action: "search",
+    query: "synthetic repeated query",
+  });
+  assert.deepEqual(searched.details.items, []);
+  const read = recallContext(entries, {
+    source: "history",
+    action: "read",
+    id: "completed-recall-result",
+  });
+  assert.match(read.text, /synthetic repeated query/);
+});
+
 test("completed recall calls do not consume history search cursors", () => {
   const entries = branch();
   for (let index = 0; index < 25; index += 1) {
@@ -364,6 +391,20 @@ test("completed recall calls do not consume history search cursors", () => {
     ["visible-20"],
   );
   assert.equal(searched.details.nextCursor, undefined);
+});
+
+test("bounds aggregate work across a history search", () => {
+  const entries = branch();
+  for (let index = 0; index < 5; index += 1) {
+    entries.push(
+      historyEntry(`large-${index}`, {
+        role: "user",
+        content: [{ type: "text", text: "x".repeat(1_100_000) }],
+        timestamp: index + 10,
+      }),
+    );
+  }
+  assert.throws(() => recallContext(entries, { source: "history", action: "search", query: "absent" }), /scan limit/);
 });
 
 test("serializes full history content only for the selected read item", () => {
@@ -413,6 +454,19 @@ test("ignores note identifiers that would change at the display boundary", () =>
   const listed = recallContext(entries, { source: "notes", action: "list" });
   assert.doesNotMatch(listed.text, /unsafe/);
   assert.throws(() => recallContext(entries, { source: "notes", action: "read", id: "unsafe\u001b[31m" }), /not found/);
+});
+
+test.each(["notes", "history"] as const)("sanitizes unknown %s identifiers in errors", (source) => {
+  const unsafeId = "unknown\u009b";
+  assert.throws(
+    () => recallContext(branch(), { source, action: "read", id: unsafeId }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message.includes("\u009b"), false);
+      assert.match(error.message, /unknown/);
+      return true;
+    },
+  );
 });
 
 test("paginates long history reads below the response ceiling", () => {
