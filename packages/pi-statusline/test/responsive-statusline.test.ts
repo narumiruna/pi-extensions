@@ -11,134 +11,124 @@ const suiteAgentDir = mkdtempSync(join(tmpdir(), "pi-statusline-responsive-"));
 const previousSuiteAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = suiteAgentDir;
 afterAll(() => {
-	if (previousSuiteAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-	else process.env.PI_CODING_AGENT_DIR = previousSuiteAgentDir;
-	rmSync(suiteAgentDir, { recursive: true, force: true });
+  if (previousSuiteAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousSuiteAgentDir;
+  rmSync(suiteAgentDir, { recursive: true, force: true });
 });
 
 async function emit(
-	events: ReadonlyMap<string, Array<(...args: unknown[]) => unknown>>,
-	name: string,
-	...args: unknown[]
+  events: ReadonlyMap<string, Array<(...args: unknown[]) => unknown>>,
+  name: string,
+  ...args: unknown[]
 ) {
-	for (const handler of events.get(name) ?? []) await handler(...args);
+  for (const handler of events.get(name) ?? []) await handler(...args);
 }
 
 type FooterFactory = (
-	tui: { requestRender(): void },
-	theme: { fg(color: string, text: string): string; bold(text: string): string },
-	footerData: {
-		getGitBranch(): string | null;
-		getExtensionStatuses(): ReadonlyMap<string, string>;
-		onBranchChange(callback: () => void): () => void;
-	},
+  tui: { requestRender(): void },
+  theme: { fg(color: string, text: string): string; bold(text: string): string },
+  footerData: {
+    getGitBranch(): string | null;
+    getExtensionStatuses(): ReadonlyMap<string, string>;
+    onBranchChange(callback: () => void): () => void;
+  },
 ) => { render(width: number): string[]; dispose(): void };
 
 function createFooter(factory: FooterFactory, branch: string | null = null) {
-	return factory(
-		{ requestRender() {} },
-		{ fg: (_color, text) => text, bold: (text) => text },
-		{
-			getGitBranch: () => branch,
-			getExtensionStatuses: () => new Map(),
-			onBranchChange: () => () => undefined,
-		},
-	);
+  return factory(
+    { requestRender() {} },
+    { fg: (_color, text) => text, bold: (text) => text },
+    {
+      getGitBranch: () => branch,
+      getExtensionStatuses: () => new Map(),
+      onBranchChange: () => () => undefined,
+    },
+  );
 }
 
 test("balanced footer fits common widths and keeps context visible at narrow widths", async () => {
-	const mock = createMockPi();
-	statusline(mock.pi);
-	const context = createMockContext({
-		mode: "tui",
-		cwd: "/workspace/pi-extensions",
-		model: { id: "claude-sonnet-4", provider: "anthropic" },
-	});
-	await emit(mock.events, "session_start", {}, context.ctx);
-	const footer = createFooter(context.footer as FooterFactory, "main");
-	try {
-		for (const width of [24, 40, 80, 120]) {
-			const lines = footer.render(width);
-			assert.ok(lines.length > 0);
-			assert.ok(
-				lines.every((line) => visibleWidth(line) <= width),
-				`width ${width}`,
-			);
-			assert.match(lines[0] ?? "", /ctx/u, `context at width ${width}`);
-		}
-		const wide = footer.render(120)[0] ?? "";
-		assert.match(wide, /sonnet-4/u);
-		assert.match(wide, /pi-extensions/u);
-		assert.match(wide, /main/u);
-		assert.match(wide, /🕒/u);
-		assert.doesNotMatch(wide, /💸/u);
-		assert.doesNotMatch(wide, /💤|✅/u);
-	} finally {
-		footer.dispose();
-	}
+  const mock = createMockPi();
+  statusline(mock.pi);
+  const context = createMockContext({
+    mode: "tui",
+    cwd: "/workspace/pi-extensions",
+    model: { id: "claude-sonnet-4", provider: "anthropic" },
+  });
+  await emit(mock.events, "session_start", {}, context.ctx);
+  const footer = createFooter(context.footer as FooterFactory, "main");
+  try {
+    for (const width of [24, 40, 80, 120]) {
+      const lines = footer.render(width);
+      assert.ok(lines.length > 0);
+      assert.ok(
+        lines.every((line) => visibleWidth(line) <= width),
+        `width ${width}`,
+      );
+      assert.match(lines[0] ?? "", /ctx/u, `context at width ${width}`);
+    }
+    const wide = footer.render(120)[0] ?? "";
+    assert.match(wide, /sonnet-4/u);
+    assert.match(wide, /pi-extensions/u);
+    assert.match(wide, /main/u);
+    assert.match(wide, /🕒/u);
+    assert.doesNotMatch(wide, /💸/u);
+    assert.doesNotMatch(wide, /💤|✅/u);
+  } finally {
+    footer.dispose();
+  }
 });
 
 test("statusline activity appears only while streaming or tools are active and resets between sessions", async () => {
-	const mock = createMockPi();
-	statusline(mock.pi);
-	const context = createMockContext({ mode: "tui" });
-	await emit(mock.events, "session_start", {}, context.ctx);
-	const footer = createFooter(context.footer as FooterFactory);
-	try {
-		assert.doesNotMatch(footer.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
-		await emit(mock.events, "agent_start", {}, context.ctx);
-		assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
-		await emit(mock.events, "tool_execution_start", { toolName: "read" }, context.ctx);
-		await emit(mock.events, "tool_execution_start", { toolName: "read" }, context.ctx);
-		assert.match(footer.render(200)[0] ?? "", /⚙️ read×2/u);
-		await emit(
-			mock.events,
-			"ui_prompt_start",
-			{ kind: "confirm", title: "Deploy production?" },
-			context.ctx,
-		);
-		assert.match(footer.render(200)[0] ?? "", /⌨ waiting for confirm · Deploy production\?/u);
-		await emit(mock.events, "ui_prompt_end", { kind: "confirm" }, context.ctx);
-		assert.match(footer.render(200)[0] ?? "", /⚙️ read×2/u);
-		await emit(mock.events, "tool_execution_end", { toolName: "read" }, context.ctx);
-		await emit(mock.events, "tool_execution_end", { toolName: "read" }, context.ctx);
-		assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
-		await emit(mock.events, "ui_prompt_start", { kind: "custom" }, context.ctx);
-		assert.match(footer.render(200)[0] ?? "", /⌨ waiting for custom/u);
-		await emit(mock.events, "ui_prompt_end", { kind: "custom" }, context.ctx);
-		assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
-		await emit(mock.events, "agent_end", {}, context.ctx);
-		assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
-		await emit(mock.events, "agent_settled", {}, context.ctx);
-		assert.doesNotMatch(footer.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
+  const mock = createMockPi();
+  statusline(mock.pi);
+  const context = createMockContext({ mode: "tui" });
+  await emit(mock.events, "session_start", {}, context.ctx);
+  const footer = createFooter(context.footer as FooterFactory);
+  try {
+    assert.doesNotMatch(footer.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
+    await emit(mock.events, "agent_start", {}, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
+    await emit(mock.events, "tool_execution_start", { toolName: "read" }, context.ctx);
+    await emit(mock.events, "tool_execution_start", { toolName: "read" }, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /⚙️ read×2/u);
+    await emit(mock.events, "ui_prompt_start", { kind: "confirm", title: "Deploy production?" }, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /⌨ waiting for confirm · Deploy production\?/u);
+    await emit(mock.events, "ui_prompt_end", { kind: "confirm" }, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /⚙️ read×2/u);
+    await emit(mock.events, "tool_execution_end", { toolName: "read" }, context.ctx);
+    await emit(mock.events, "tool_execution_end", { toolName: "read" }, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
+    await emit(mock.events, "ui_prompt_start", { kind: "custom" }, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /⌨ waiting for custom/u);
+    await emit(mock.events, "ui_prompt_end", { kind: "custom" }, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
+    await emit(mock.events, "agent_end", {}, context.ctx);
+    assert.match(footer.render(200)[0] ?? "", /💭 thinking/u);
+    await emit(mock.events, "agent_settled", {}, context.ctx);
+    assert.doesNotMatch(footer.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
 
-		await emit(mock.events, "tool_execution_start", { toolName: "write" }, context.ctx);
-		await emit(mock.events, "session_shutdown", {}, context.ctx);
-		const replacement = createMockContext({ mode: "tui" });
-		await emit(mock.events, "session_start", {}, replacement.ctx);
-		const replacementFooter = createFooter(replacement.footer as FooterFactory);
-		try {
-			assert.doesNotMatch(replacementFooter.render(200)[0] ?? "", /write|💤|✅|⚙|💭/u);
-			await emit(mock.events, "agent_start", {}, replacement.ctx);
-			await emit(
-				mock.events,
-				"ui_prompt_start",
-				{ kind: "input", title: "Current prompt" },
-				replacement.ctx,
-			);
-			await emit(mock.events, "session_shutdown", {}, context.ctx);
-			await emit(mock.events, "agent_end", {}, context.ctx);
-			await emit(mock.events, "agent_settled", {}, context.ctx);
-			await emit(mock.events, "ui_prompt_end", { kind: "input" }, context.ctx);
-			assert.match(replacementFooter.render(200)[0] ?? "", /waiting for input · Current prompt/u);
-			await emit(mock.events, "ui_prompt_end", { kind: "input" }, replacement.ctx);
-			assert.match(replacementFooter.render(200)[0] ?? "", /💭 thinking/u);
-			await emit(mock.events, "agent_settled", {}, replacement.ctx);
-			assert.doesNotMatch(replacementFooter.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
-		} finally {
-			replacementFooter.dispose();
-		}
-	} finally {
-		footer.dispose();
-	}
+    await emit(mock.events, "tool_execution_start", { toolName: "write" }, context.ctx);
+    await emit(mock.events, "session_shutdown", {}, context.ctx);
+    const replacement = createMockContext({ mode: "tui" });
+    await emit(mock.events, "session_start", {}, replacement.ctx);
+    const replacementFooter = createFooter(replacement.footer as FooterFactory);
+    try {
+      assert.doesNotMatch(replacementFooter.render(200)[0] ?? "", /write|💤|✅|⚙|💭/u);
+      await emit(mock.events, "agent_start", {}, replacement.ctx);
+      await emit(mock.events, "ui_prompt_start", { kind: "input", title: "Current prompt" }, replacement.ctx);
+      await emit(mock.events, "session_shutdown", {}, context.ctx);
+      await emit(mock.events, "agent_end", {}, context.ctx);
+      await emit(mock.events, "agent_settled", {}, context.ctx);
+      await emit(mock.events, "ui_prompt_end", { kind: "input" }, context.ctx);
+      assert.match(replacementFooter.render(200)[0] ?? "", /waiting for input · Current prompt/u);
+      await emit(mock.events, "ui_prompt_end", { kind: "input" }, replacement.ctx);
+      assert.match(replacementFooter.render(200)[0] ?? "", /💭 thinking/u);
+      await emit(mock.events, "agent_settled", {}, replacement.ctx);
+      assert.doesNotMatch(replacementFooter.render(200)[0] ?? "", /💤|✅|⚙|💭/u);
+    } finally {
+      replacementFooter.dispose();
+    }
+  } finally {
+    footer.dispose();
+  }
 });

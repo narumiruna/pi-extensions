@@ -1,53 +1,52 @@
 {
-	"name": "@narumitw/pi-caffeinate",
-	"version": "0.49.7",
-	"description": "Pi extension that keeps the computer awake while the agent is running.",
-	"type": "module",
-	"license": "MIT",
-	"private": false,
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi",
-		"caffeinate",
-		"awake",
-		"sleep"
-	],
-	"files": [
-		"src",
-		"dist",
-		"README.md",
-		"LICENSE"
-	],
-	"pi": {
-		"extensions": [
-			"./dist/index.ts"
-		]
-	},
-	"scripts": {
-		"build": "node scripts/build-runtime.mjs",
-		"check": "npm run build && biome check . && npm run typecheck",
-		"format": "biome check --write .",
-		"prepack": "npm run build",
-		"typecheck": "tsc --noEmit"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.5.11",
-		"@earendil-works/pi-coding-agent": "0.85.0",
-		"@types/node": "26.4.1",
-		"esbuild": "0.28.2",
-		"typescript": "7.0.2"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-caffeinate"
-	},
-	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.59.0",
-		"dbus-native": "^0.15.2"
-	}
+  "name": "@narumitw/pi-caffeinate",
+  "version": "0.49.7",
+  "description": "Pi extension that keeps the computer awake while the agent is running.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "caffeinate",
+    "awake",
+    "sleep"
+  ],
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "check": "npm run build && biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@types/node": "26.4.1",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-caffeinate"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.59.0",
+    "dbus-native": "^0.15.2"
+  }
 }

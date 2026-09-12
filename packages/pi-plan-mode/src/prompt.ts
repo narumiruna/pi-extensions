@@ -1,7 +1,7 @@
 const PLAN_CONTEXT_MARKER = "[CODEX-LIKE PLAN MODE ACTIVE]";
 
 export function buildPlanModePrompt() {
-	return `${PLAN_CONTEXT_MARKER}
+  return `${PLAN_CONTEXT_MARKER}
 # Plan Mode (Conversational)
 
 You are in Plan Mode, a Codex-like collaboration mode for producing a decision-complete implementation plan. Chat your way to the plan before finalizing it. A final plan must leave no implementation decisions unresolved.

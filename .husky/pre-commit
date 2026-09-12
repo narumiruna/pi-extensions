@@ -1,1 +1,1 @@
-npm run precommit
+./scripts/pre-commit.sh

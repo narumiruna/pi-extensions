@@ -1,5 +1,11 @@
 # @narumitw/pi-stamp
 
+## 0.51.0
+
+### Minor Changes
+
+- c798497: Add an optional since-user cost total to final assistant stamps.
+
 ## 0.50.1
 
 ### Patch Changes

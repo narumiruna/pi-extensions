@@ -29,16 +29,8 @@ jobs:
           node-version: 26
           cache: npm
 
-      - name: Install dependencies with latest Pi packages
-        run: |
-          expected_version="$(npm view @earendil-works/pi-coding-agent@latest version --prefer-online)"
-          node scripts/set-pi-version.mjs "$expected_version"
-          npm install --no-save --prefer-online
-          installed_version="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")"
-          cli_version="$(node_modules/.bin/pi --version)"
-          printf 'Expected Pi: %s\nInstalled Pi: %s\nPi CLI: %s\n' "$expected_version" "$installed_version" "$cli_version"
-          test "$installed_version" = "$expected_version"
-          test "$cli_version" = "$expected_version"
+      - name: Install dependencies
+        run: npm install --no-save
 
       - name: Run checks
         run: npm run check

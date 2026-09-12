@@ -11,6 +11,6 @@ const require = createRequire(import.meta.url);
 const typescriptRoot = dirname(require.resolve("typescript/package.json"));
 rmSync(join(packageRoot, "dist"), { recursive: true, force: true });
 execFileSync(process.execPath, [join(typescriptRoot, "bin", "tsc"), "-p", "tsconfig.build.json"], {
-	cwd: packageRoot,
-	stdio: "inherit",
+  cwd: packageRoot,
+  stdio: "inherit",
 });

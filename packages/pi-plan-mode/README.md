@@ -11,6 +11,7 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 - Uses structured questions for important ambiguity and explicit completion for a decision-ready plan.
 - Reviews the complete plan before implementation, export, save, further planning, or discard.
 - Implements in the planning session or a fresh linked session with the approved plan.
+- Configures persistent or one-shot destination model and thinking choices for fresh implementation.
 - Restores Plan state and one saved plan across resume and compaction.
 - Configures the Plan tool allowlist, reviewed shell commands, user-trusted subcommands, export path, plan reinjection, shortcut, and thinking level.
 - Publishes statusline state and cooperates anonymously with Workflow Mutex Protocol v1 participants.
@@ -45,6 +46,45 @@ Install only from sources you trust because Pi extensions run with Pi's permissi
 Run `/plan` to open the state-aware menu, then start Plan mode and ask the agent to inspect and design the change.
 Run `/plan <prompt>` when the first planning request is already known.
 
+## 🗺️ How it works
+
+Plan mode keeps exploration and implementation on opposite sides of an explicit review boundary:
+
+```mermaid
+flowchart LR
+    start["Start: /plan or /plan with a prompt"]
+    start --> explore["Explore safely: inspect and clarify"]
+    explore --> complete["Complete the plan with plan_mode_complete"]
+    complete --> review["Review the ready plan"]
+    review -->|Revise| explore
+    review -->|Implement here| current["Current session: planning context retained"]
+    review -->|Start fresh| fresh["Fresh session: approved plan transferred"]
+    review -->|Save| saved["Saved for later"]
+    review -->|Export| exported["Markdown file"]
+```
+
+During planning, the agent can inspect the project and ask material questions, but Plan mode blocks editing tools and unsafe shell forms. Implementation starts only after the plan is complete and you choose a handoff:
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Pi
+    participant Plan as Plan mode
+    participant Work as Implementation
+
+    User->>Pi: Start planning
+    Pi->>Plan: Apply the configured Plan tool policy
+    Plan->>User: Ask material questions when needed
+    User-->>Plan: Answer or refine the request
+    Plan->>Pi: Submit the complete plan
+    Pi-->>User: Show the ready-plan review
+    alt Implement here
+        Pi->>Work: Restore Normal mode in the current session
+    else Start fresh and implement
+        Pi->>Work: Create a fresh session with the approved plan
+    end
+```
+
 ## 💬 Commands
 
 | Command | Purpose |
@@ -57,11 +97,12 @@ Run `/plan <prompt>` when the first planning request is already known.
 | `/plan finalize` | Ask the active planner to finish or ask one remaining material question. |
 | `/plan implement` | Implement a completed or saved plan in this session, without a selector. |
 | `/plan save` | Save a ready plan in this Pi session and leave Plan mode. |
+| `/plan settings` | Open the same Plan Settings screen available from the menus. |
 | `/plan export [path]` | Write a ready, saved, or active implementation plan to Markdown. |
 | `/plan exit` (alias: `off`) | Leave Plan mode and discard its ready plan, or clear a saved/active plan. |
 
 All routes support TUI and RPC.
-Print and JSON modes reject the menu and `tools`; stored-plan display and implementation have [additional mode restrictions](#-planning-and-implementation).
+Print and JSON modes reject the menu, `tools`, and `settings`; stored-plan display and implementation have [additional mode restrictions](#-planning-and-implementation).
 Exact subcommand words select routes; other text is a planning prompt, so `/plan start a migration` sends a prompt rather than rejecting trailing text.
 There is no startup flag.
 
@@ -151,7 +192,23 @@ Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and 
 After completion, `/plan` opens the ready actions when interactive UI is available.
 The same flat menu shows **Implement here** and **Start fresh and implement**, explains which conversation context each choice uses, and previews the selected **Plan reinjection** policy.
 **Implement here**—and the compatibility route `/plan implement`—appends the Normal contract, lifts the Plan runtime policy, captures the reinjection setting, and starts implementation in the current session with its complete planning conversation and tool calls.
-**Start fresh and implement** waits for the source session to become idle, verifies the selected model and authentication, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
+**Start fresh and implement** opens a settings page before replacement.
+Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
+Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
+One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
+The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** and carry it into the fresh session independently.
+The fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+Back navigation preserves this menu-local draft, while closing and reopening the menu restores both persistent defaults.
+If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** without deleting the stored preference.
+The saved-plan menu keeps its direct fresh-session action without optional rows and applies the same persistent defaults and fallback.
+
+Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
+The destination consumes the one-shot choices before its first provider request, applies an explicit model first, and then applies explicit thinking.
+Concurrent prompts that arrive while those choices are being applied are queued as follow-ups behind the kickoff prompt.
+If durable consumption blocks the kickoff, the handoff reports a partial start and restores a conversation-history prompt to the editor instead of reporting success.
+Changing only the model keeps the planning thinking level; changing only the thinking level keeps the planning model.
+If Pi clamps an unsupported thinking level, the extension reports the effective level.
+If the chosen model disappears or loses authentication after source preflight, the destination reports the race, consumes the intent without retrying it later, and continues with its default model.
 The destination still loads its normal `AGENTS.md`, skills, project resources, and extensions.
 Choosing **Export plan…** asks for a destination, writes the plan, appends the Normal contract, restores inherited thinking, and leaves Plan mode without starting a model turn or changing active tools.
 Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
@@ -162,6 +219,8 @@ Resume it later to inspect or hand off the ready/saved plan again; this delibera
 In-memory sessions create an unlinked fresh session because no parent file exists.
 Escape, Ctrl+C, menu disposal, source replacement/shutdown, model/auth failure, or cancellation by another extension before replacement leaves the source plan unchanged.
 Under **Off — conversation history only**, the destination receives the complete plan in its initial user prompt and does not persist active-plan state.
+When a one-shot runtime choice exists, only that temporary non-model state is persisted and it is removed before the first request.
+If that removal cannot be persisted, the request is not sent and can be retried after session persistence is available.
 If that kickoff fails, the complete request remains in the destination editor and the source remains resumable.
 Under either guaranteed-plan policy, the destination persists active-plan state before kickoff.
 If guaranteed-plan persistence fails, the complete request is placed in the destination editor and the source remains resumable.
@@ -282,18 +341,23 @@ Guaranteed coexistence with Goal requires `@narumitw/pi-goal` `0.53.0` or newer 
 
 ## ⚙️ Settings
 
-Open **Settings** from an inactive `/plan` menu, or edit `<getAgentDir()>/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`).
+Run `/plan settings`, open **Settings** from an inactive `/plan` menu, or edit `<getAgentDir()>/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`).
 The optional file is read at session start and watched for changes; only an explicit save creates it.
 
 ```json
 {
   "thinkingLevel": "inherit",
   "implementationPlanRetention": "clear-on-start",
+  "defaultImplementationModel": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-5"
+  },
+  "defaultImplementationThinkingLevel": "high",
   "defaultPlanExportPath": "PLAN.md"
 }
 ```
 
-By default, Plan mode inherits thinking, allows active safe built-ins, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
+By default, Plan mode inherits thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
 The shortcut is disabled unless configured.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.

@@ -1,5 +1,14 @@
 # @narumitw/pi-chrome-devtools
 
+## 0.53.2
+
+### Patch Changes
+
+- 961f004: Keep expanded tool output bounded for wide, malformed, or zero-width Unicode text and sanitize untrusted terminal controls without blocking rendering.
+- Updated dependencies [4485b49]
+- Updated dependencies [6b1e009]
+  - @narumitw/pi-tui-kit@0.62.0
+
 ## 0.53.1
 
 ### Patch Changes
