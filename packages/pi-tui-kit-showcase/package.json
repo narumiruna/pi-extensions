@@ -34,7 +34,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "@narumitw/pi-tui-kit": "^0.59.0",
     "typescript": "7.0.2"
   },
