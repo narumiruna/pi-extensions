@@ -4,6 +4,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { type Focusable, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import { formatDocumentLines } from "../src/components/document-formatting.js";
 import { createMenuScreenComponent } from "../src/components/index.js";
 import { defineMenu, type ReviewScreen, runMenu } from "../src/index.js";
 import { createTuiHarness } from "../src/testing/index.js";
@@ -602,6 +603,24 @@ test("diff review applies intraline emphasis only to one-for-one replacement pai
     true,
   );
   assert.doesNotMatch(oversized.component.render(120).join("\n"), /⟦/u);
+});
+
+test("intraline diff preserves and emphasizes whitespace-only replacements", () => {
+  const lines = formatDocumentLines("-a b\n+a  b", { kind: "diff" }, 80, {
+    fg: (role, text) => `${role}:${text}`,
+    bold: (text) => text,
+    inverse: (text) => `⟦${text}⟧`,
+  });
+  assert.deepEqual(lines, ["toolDiffRemoved:-a⟦ ⟧b", "toolDiffAdded:+a⟦  ⟧b"]);
+});
+
+test("diff tab expansion includes changed and context prefixes in the tab column", () => {
+  const lines = formatDocumentLines("-\told\n+\tnew\n \tcontext", { kind: "diff" }, 80, {
+    fg: (role, text) => `${role}:${text}`,
+    bold: (text) => text,
+    inverse: (text) => `⟦${text}⟧`,
+  });
+  assert.deepEqual(lines, ["toolDiffRemoved:-   ⟦old⟧", "toolDiffAdded:+   ⟦new⟧", "toolDiffContext:    context"]);
 });
 
 test("intraline diff remains width-safe, searchable, and sanitized with tabs and wide graphemes", () => {

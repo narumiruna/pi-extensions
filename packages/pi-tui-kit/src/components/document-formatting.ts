@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import * as PiTui from "@earendil-works/pi-tui";
-import { diffWords } from "diff";
+import { diffWordsWithSpace } from "diff";
 import { hardWrapTerminalDocument } from "../terminal-document.js";
 import type { ReviewFormat } from "../types.js";
 import { sanitizeDocumentText } from "./document-sanitization.js";
@@ -214,9 +214,11 @@ function formatDiffDocument(content: string, width: number, theme: DocumentTheme
         const addedLine = added[0];
         if (removedLine && addedLine) {
           remainingIntralineCodeUnits -= pairCodeUnits;
-          const paired = pairedDiffParts(expandDiffTabs(removedLine.content), expandDiffTabs(addedLine.content));
-          append(renderStyledDiffLine(removedLine.prefix, paired.removed, width, "toolDiffRemoved", theme));
-          append(renderStyledDiffLine(addedLine.prefix, paired.added, width, "toolDiffAdded", theme));
+          const expandedRemoved = expandChangedDiffLine(removedLine);
+          const expandedAdded = expandChangedDiffLine(addedLine);
+          const paired = pairedDiffParts(expandedRemoved.content, expandedAdded.content);
+          append(renderStyledDiffLine(expandedRemoved.prefix, paired.removed, width, "toolDiffRemoved", theme));
+          append(renderStyledDiffLine(expandedAdded.prefix, paired.added, width, "toolDiffAdded", theme));
         }
       } else {
         for (const line of removed) append(renderPlainDiffLine(line, width, "toolDiffRemoved", theme));
@@ -240,11 +242,11 @@ function formatDiffDocument(content: string, width: number, theme: DocumentTheme
 function parseChangedDiffLine(line: string): ParsedChangedDiffLine | undefined {
   const marker = line[0];
   if ((marker !== "+" && marker !== "-") || line.startsWith("+++") || line.startsWith("---")) return undefined;
-  const numbered = /^([+-])(\s*\d*)\s(.*)$/u.exec(line);
+  const numbered = /^([+-])(\s*\d*\s+)(.*)$/u.exec(line);
   if (numbered) {
     return {
       marker,
-      prefix: `${marker}${numbered[2] ?? ""} `,
+      prefix: `${marker}${numbered[2] ?? ""}`,
       content: numbered[3] ?? "",
     };
   }
@@ -257,33 +259,36 @@ function renderPlainDiffLine(
   role: "toolDiffAdded" | "toolDiffRemoved",
   theme: DocumentTheme,
 ) {
-  return renderStyledDiffLine(
-    line.prefix,
-    [{ text: expandDiffTabs(line.content), changed: false }],
-    width,
-    role,
-    theme,
-  );
+  const expanded = expandChangedDiffLine(line);
+  return renderStyledDiffLine(expanded.prefix, [{ text: expanded.content, changed: false }], width, role, theme);
+}
+
+function expandChangedDiffLine(line: ParsedChangedDiffLine) {
+  const prefix = expandDiffTabs(line.prefix);
+  return {
+    prefix,
+    content: expandDiffTabs(line.content, PiTui.visibleWidth(prefix)),
+  };
 }
 
 function pairedDiffParts(oldContent: string, newContent: string) {
   const removed: StyledDiffPart[] = [];
   const added: StyledDiffPart[] = [];
-  let firstRemoved = true;
-  let firstAdded = true;
-  for (const part of diffWords(oldContent, newContent)) {
+  for (const part of diffWordsWithSpace(oldContent, newContent)) {
     if (part.removed) {
-      appendChangedDiffPart(removed, part.value, firstRemoved);
-      firstRemoved = false;
+      appendChangedDiffPart(removed, part.value, hasOnlyLeadingWhitespace(removed));
     } else if (part.added) {
-      appendChangedDiffPart(added, part.value, firstAdded);
-      firstAdded = false;
+      appendChangedDiffPart(added, part.value, hasOnlyLeadingWhitespace(added));
     } else {
       appendStyledDiffPart(removed, part.value, false);
       appendStyledDiffPart(added, part.value, false);
     }
   }
   return { removed, added };
+}
+
+function hasOnlyLeadingWhitespace(parts: readonly StyledDiffPart[]) {
+  return parts.every((part) => !/\S/u.test(part.text));
 }
 
 function appendChangedDiffPart(target: StyledDiffPart[], value: string, stripLeadingWhitespace: boolean) {
@@ -341,8 +346,8 @@ function renderStyledDiffLine(
   );
 }
 
-function expandDiffTabs(line: string) {
-  let column = 0;
+function expandDiffTabs(line: string, initialColumn = 0) {
+  let column = Math.max(0, initialColumn);
   let output = "";
   for (const { segment } of diffGraphemeSegmenter.segment(line)) {
     if (segment === "\t") {

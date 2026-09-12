@@ -158,6 +158,7 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
       });
       return result ? { ...result, focus: true } : undefined;
     }
+    if (this.editorKind) return undefined;
     const mappedOption = this.optionByFrameRow.get(event.y);
     if (mappedOption === undefined) return undefined;
     const option = event.type === "click" ? (this.mousePressedOption ?? mappedOption) : mappedOption;
