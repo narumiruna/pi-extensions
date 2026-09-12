@@ -4,6 +4,7 @@ import {
   Key,
   matchesKey,
   type TuiMouseEventResult,
+  visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "../terminal-text.js";
@@ -22,10 +23,7 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
   options: InputOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
   const input = new Input();
-  if (options.screen.initialValue !== undefined) {
-    const initialValue = sanitizeInputInitialValue(options.screen.initialValue);
-    handleSearchInput(input, `\u001b[200~${initialValue}\u001b[201~`);
-  }
+  if (options.screen.initialValue !== undefined) initializeInputValue(input, options.screen.initialValue);
   let pending = Promise.resolve();
   let submitting = false;
   let closing = false;
@@ -139,6 +137,29 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
     },
   };
   return component;
+}
+
+function initializeInputValue(input: Input, value: string) {
+  const initializer = new Input();
+  handleSearchInput(initializer, `\u001b[200~${sanitizeInputInitialValue(value)}\u001b[201~`);
+  const initialized = initializer.getValue();
+  input.setValue(initialized);
+
+  // Input.setValue() preserves its cursor, so use its public mouse contract to place a fresh cursor at the end.
+  const x = visibleWidth(initialized) + 2;
+  input.handleMouse({
+    type: "press",
+    button: "left",
+    x,
+    y: 0,
+    screenX: x,
+    screenY: 0,
+    width: x + 1,
+    height: 1,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
 }
 
 function sanitizeInputInitialValue(value: string) {

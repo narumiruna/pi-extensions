@@ -623,6 +623,31 @@ test("intraline diff includes leading numeric source tokens", () => {
   assert.deepEqual(lines, ["toolDiffRemoved:-⟦123⟧ apples", "toolDiffAdded:+⟦456⟧ apples"]);
 });
 
+test("diff parsing distinguishes file headers from changed source with triple markers", () => {
+  const theme = {
+    fg: (role: string, text: string) => `${role}:${text}`,
+    bold: (text: string) => text,
+    inverse: (text: string) => `⟦${text}⟧`,
+  };
+  const structured = formatDocumentLines(
+    "--- a/file\n+++ b/file\n@@ -1 +1 @@\n--- old\n+++ new",
+    { kind: "diff" },
+    80,
+    theme,
+  );
+  assert.deepEqual(structured.slice(0, 3), [
+    "toolDiffContext:--- a/file",
+    "toolDiffContext:+++ b/file",
+    "accent:@@ -1 +1 @@",
+  ]);
+  assert.match(structured[3] ?? "", /^toolDiffRemoved:-.*⟦/u);
+  assert.match(structured[4] ?? "", /^toolDiffAdded:\+.*⟦/u);
+
+  const fragment = formatDocumentLines("---old\n+++new", { kind: "diff" }, 80, theme);
+  assert.match(fragment[0] ?? "", /^toolDiffRemoved:-.*⟦/u);
+  assert.match(fragment[1] ?? "", /^toolDiffAdded:\+.*⟦/u);
+});
+
 test("diff tab expansion includes changed and context prefixes in the tab column", () => {
   const lines = formatDocumentLines("-\told\n+\tnew\n \tcontext", { kind: "diff" }, 80, {
     fg: (role, text) => `${role}:${text}`,

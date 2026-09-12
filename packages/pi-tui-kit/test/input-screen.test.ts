@@ -133,6 +133,27 @@ test("input prefill starts at cursor end and rejection preserves subsequent edit
   assert.deepEqual(submissions, ["123", "1234"]);
 });
 
+test("input prefill stays outside undo history while later edits remain undoable", async () => {
+  const submissions: string[] = [];
+  const harness = inputComponentHarness({
+    screen: { ...inputScreen, initialValue: "12" },
+    onInputSubmit: async ({ value }) => {
+      submissions.push(value);
+      return false;
+    },
+  });
+
+  harness.component.handleInput("\u001f");
+  harness.component.handleInput("\r");
+  await harness.component.waitForPending();
+  harness.component.handleInput("3");
+  harness.component.handleInput("\u001f");
+  harness.component.handleInput("\r");
+  await harness.component.waitForPending();
+
+  assert.deepEqual(submissions, ["12", "12"]);
+});
+
 test("input prefill preserves single-line paste rules and disarms embedded paste markers", async () => {
   let submitted = "";
   const harness = inputComponentHarness({

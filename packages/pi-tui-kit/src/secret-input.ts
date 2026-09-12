@@ -156,7 +156,8 @@ class MaskedInput implements Focusable {
   private pasting = false;
   private renderedStart = 0;
   private renderedCount = 0;
-  private lastAction: "type-word" | null = null;
+  private lastAction: "kill" | "type-word" | "yank" | null = null;
+  private killRing: string[] = [];
   private undoStack: Array<{ value: string[]; cursor: number }> = [];
 
   constructor(private readonly keybindings: KeybindingsManager) {}
@@ -219,6 +220,22 @@ class MaskedInput implements Focusable {
       this.deleteWordForward();
       return;
     }
+    if (this.keybindings.matches(data, "tui.editor.deleteToLineStart")) {
+      this.deleteToLineStart();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.deleteToLineEnd")) {
+      this.deleteToLineEnd();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.yank")) {
+      this.yank();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.yankPop")) {
+      this.yankPop();
+      return;
+    }
     if (this.keybindings.matches(data, "tui.editor.cursorLeft")) {
       this.lastAction = null;
       this.cursor = Math.max(0, this.cursor - 1);
@@ -245,23 +262,6 @@ class MaskedInput implements Focusable {
     }
     if (this.keybindings.matches(data, "tui.editor.cursorWordRight")) {
       this.moveWordForward();
-      return;
-    }
-    if (this.keybindings.matches(data, "tui.editor.deleteToLineStart")) {
-      if (this.cursor > 0) {
-        this.pushUndo();
-        this.value.splice(0, this.cursor);
-        this.cursor = 0;
-        this.lastAction = null;
-      }
-      return;
-    }
-    if (this.keybindings.matches(data, "tui.editor.deleteToLineEnd")) {
-      if (this.cursor < this.value.length) {
-        this.pushUndo();
-        this.value.splice(this.cursor);
-        this.lastAction = null;
-      }
       return;
     }
     const printable = decodeKittyPrintable(data) ?? data;
@@ -310,7 +310,9 @@ class MaskedInput implements Focusable {
   clear() {
     this.value.fill("");
     for (const snapshot of this.undoStack) snapshot.value.fill("");
+    this.killRing.fill("");
     this.value = [];
+    this.killRing = [];
     this.undoStack = [];
     this.paste = "";
     this.cursor = 0;
@@ -321,26 +323,85 @@ class MaskedInput implements Focusable {
   }
 
   private insert(value: string) {
-    const graphemes = [...secretGraphemeSegmenter.segment(value)].map(({ segment }) => segment);
+    const graphemes = secretGraphemes(value);
     this.value.splice(this.cursor, 0, ...graphemes);
     this.cursor += graphemes.length;
   }
 
   private deleteWordBackward() {
     if (this.cursor === 0) return;
+    const wasKill = this.lastAction === "kill";
     this.pushUndo();
     const end = this.cursor;
     this.moveWordBackward();
+    const deleted = this.value.slice(this.cursor, end).join("");
     this.value.splice(this.cursor, end - this.cursor);
+    this.pushKill(deleted, true, wasKill);
+    this.lastAction = "kill";
   }
 
   private deleteWordForward() {
     if (this.cursor >= this.value.length) return;
+    const wasKill = this.lastAction === "kill";
     this.pushUndo();
     const start = this.cursor;
     this.moveWordForward();
+    const deleted = this.value.slice(start, this.cursor).join("");
     this.value.splice(start, this.cursor - start);
     this.cursor = start;
+    this.pushKill(deleted, false, wasKill);
+    this.lastAction = "kill";
+  }
+
+  private deleteToLineStart() {
+    if (this.cursor === 0) return;
+    const wasKill = this.lastAction === "kill";
+    this.pushUndo();
+    const deleted = this.value.slice(0, this.cursor).join("");
+    this.value.splice(0, this.cursor);
+    this.cursor = 0;
+    this.pushKill(deleted, true, wasKill);
+    this.lastAction = "kill";
+  }
+
+  private deleteToLineEnd() {
+    if (this.cursor >= this.value.length) return;
+    const wasKill = this.lastAction === "kill";
+    this.pushUndo();
+    const deleted = this.value.slice(this.cursor).join("");
+    this.value.splice(this.cursor);
+    this.pushKill(deleted, false, wasKill);
+    this.lastAction = "kill";
+  }
+
+  private yank() {
+    const text = this.killRing.at(-1);
+    if (!text) return;
+    this.pushUndo();
+    this.insert(text);
+    this.lastAction = "yank";
+  }
+
+  private yankPop() {
+    if (this.lastAction !== "yank" || this.killRing.length <= 1) return;
+    this.pushUndo();
+    const previousLength = secretGraphemes(this.killRing.at(-1) ?? "").length;
+    const start = Math.max(0, this.cursor - previousLength);
+    this.value.splice(start, this.cursor - start);
+    this.cursor = start;
+    const latest = this.killRing.pop();
+    if (latest !== undefined) this.killRing.unshift(latest);
+    this.insert(this.killRing.at(-1) ?? "");
+    this.lastAction = "yank";
+  }
+
+  private pushKill(text: string, prepend: boolean, accumulate: boolean) {
+    if (!text) return;
+    const latest = this.killRing.length - 1;
+    if (accumulate && latest >= 0) {
+      const previous = this.killRing[latest] ?? "";
+      this.killRing[latest] = prepend ? text + previous : previous + text;
+    } else this.killRing.push(text);
   }
 
   private moveWordBackward() {
@@ -376,6 +437,7 @@ class MaskedInput implements Focusable {
 }
 
 const secretGraphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const secretGraphemes = (value: string) => [...secretGraphemeSegmenter.segment(value)].map(({ segment }) => segment);
 const secretWordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
 const SECRET_WORD_PUNCTUATION = new Set("(){}[]<>.,;:'\"!?+-=*/\\|&%^$#@~`");
 

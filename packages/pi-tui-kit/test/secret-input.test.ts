@@ -174,6 +174,59 @@ test("secret input preserves remapped undo across typing, paste, and deletion", 
   }
 });
 
+test("secret input preserves remapped kill, yank, and yank-pop bindings", async () => {
+  const mapping: Record<string, string> = {
+    "tui.input.submit": "S",
+    "tui.select.cancel": "Q",
+    "tui.editor.cursorLineStart": "H",
+    "tui.editor.deleteWordBackward": "W",
+    "tui.editor.deleteWordForward": "D",
+    "tui.editor.deleteToLineStart": "A",
+    "tui.editor.deleteToLineEnd": "E",
+    "tui.editor.yank": "Y",
+    "tui.editor.yankPop": "P",
+  };
+  const keybindings = {
+    matches: (data: string, binding: string) => mapping[binding] === data,
+    getKeys: (binding: string): KeyId[] => {
+      const key = mapping[binding];
+      return key ? [key as KeyId] : [];
+    },
+  };
+  const cases = [
+    { initial: "alpha", inputs: ["A", "Y"], expected: "alpha" },
+    { initial: "alpha", inputs: ["H", "E", "Y"], expected: "alpha" },
+    { initial: "alpha beta", inputs: ["W", "Y"], expected: "alpha beta" },
+    { initial: "alpha beta", inputs: ["H", "D", "Y"], expected: "alpha beta" },
+    { initial: "alpha beta gamma", inputs: ["W", "W", "Y"], expected: "alpha beta gamma" },
+    { initial: "alpha beta gamma", inputs: ["H", "D", "D", "Y"], expected: "alpha beta gamma" },
+  ];
+
+  for (const example of cases) {
+    const tui = createTuiHarness({ keybindings });
+    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+    const pending = runSecretInput(context.ctx, { title: "Yank editing" });
+    await tui.waitForOpen();
+    tui.type(example.initial);
+    for (const input of example.inputs) tui.send(input);
+    tui.send("S");
+    assert.deepEqual(await pending, { kind: "submitted", value: example.expected });
+  }
+
+  const tui = createTuiHarness({ keybindings });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const pending = runSecretInput(context.ctx, { title: "Yank pop" });
+  await tui.waitForOpen();
+  tui.type("alpha beta");
+  tui.send("W");
+  tui.type("gamma");
+  tui.send("W");
+  tui.send("Y");
+  tui.send("P");
+  tui.send("S");
+  assert.deepEqual(await pending, { kind: "submitted", value: "alpha beta" });
+});
+
 test("secret input reports unsupported modes without opening a plaintext dialog", async () => {
   let inputCalls = 0;
   const unsupportedModes: unknown[] = [];

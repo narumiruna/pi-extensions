@@ -177,6 +177,7 @@ interface ParsedChangedDiffLine {
 
 function formatDiffDocument(content: string, width: number, theme: DocumentTheme) {
   const sourceLines = sanitizeDocumentText(content).split("\n");
+  const fileHeaderLines = findDiffFileHeaderLines(sourceLines);
   const lines: string[] = [];
   const softWrapAfter: boolean[] = [];
   let remainingIntralineCodeUnits = MAX_INTRALINE_DOCUMENT_CODE_UNITS;
@@ -187,18 +188,18 @@ function formatDiffDocument(content: string, width: number, theme: DocumentTheme
 
   for (let index = 0; index < sourceLines.length; ) {
     const source = sourceLines[index] ?? "";
-    const parsed = parseChangedDiffLine(source);
+    const parsed = fileHeaderLines.has(index) ? undefined : parseChangedDiffLine(source);
     if (parsed?.marker === "-") {
       const removed: ParsedChangedDiffLine[] = [];
       while (index < sourceLines.length) {
-        const candidate = parseChangedDiffLine(sourceLines[index] ?? "");
+        const candidate = fileHeaderLines.has(index) ? undefined : parseChangedDiffLine(sourceLines[index] ?? "");
         if (candidate?.marker !== "-") break;
         removed.push(candidate);
         index += 1;
       }
       const added: ParsedChangedDiffLine[] = [];
       while (index < sourceLines.length) {
-        const candidate = parseChangedDiffLine(sourceLines[index] ?? "");
+        const candidate = fileHeaderLines.has(index) ? undefined : parseChangedDiffLine(sourceLines[index] ?? "");
         if (candidate?.marker !== "+") break;
         added.push(candidate);
         index += 1;
@@ -239,9 +240,59 @@ function formatDiffDocument(content: string, width: number, theme: DocumentTheme
   return { lines, softWrapAfter };
 }
 
+function findDiffFileHeaderLines(lines: readonly string[]) {
+  const headers = new Set<number>();
+  let hunk: { old: number; added: number } | undefined;
+  let filePreamble = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (line.startsWith("diff --git ")) {
+      hunk = undefined;
+      filePreamble = true;
+      continue;
+    }
+    const nextHunk = parseDiffHunkHeader(line);
+    if (nextHunk) {
+      hunk = nextHunk;
+      filePreamble = false;
+      continue;
+    }
+    if (hunk) {
+      if (line.startsWith(" ")) {
+        hunk.old -= 1;
+        hunk.added -= 1;
+      } else if (line.startsWith("-")) hunk.old -= 1;
+      else if (line.startsWith("+")) hunk.added -= 1;
+      else if (!line.startsWith("\\")) hunk = undefined;
+      if (hunk && hunk.old <= 0 && hunk.added <= 0) hunk = undefined;
+      continue;
+    }
+    if (
+      line.startsWith("---") &&
+      lines[index + 1]?.startsWith("+++") &&
+      (filePreamble || lines[index + 2]?.startsWith("@@"))
+    ) {
+      headers.add(index);
+      headers.add(index + 1);
+      index += 1;
+      filePreamble = false;
+    }
+  }
+  return headers;
+}
+
+function parseDiffHunkHeader(line: string) {
+  const match = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/u.exec(line);
+  if (!match) return undefined;
+  return {
+    old: Number(match[1] ?? 1),
+    added: Number(match[2] ?? 1),
+  };
+}
+
 function parseChangedDiffLine(line: string): ParsedChangedDiffLine | undefined {
   const marker = line[0];
-  if ((marker !== "+" && marker !== "-") || line.startsWith("+++") || line.startsWith("---")) return undefined;
+  if (marker !== "+" && marker !== "-") return undefined;
   const indented = /^([+-])(\s+)(.*)$/u.exec(line);
   if (indented) {
     return {
