@@ -821,6 +821,54 @@ test("settings changes serialize, roll back rejection, and drain before Back", a
   assert.match(harness.component.render(80).join("\n"), /On/);
 });
 
+test("settings ignore stale rejection after a value cycles back to a newer request", async () => {
+  let releaseFirst: (() => void) | undefined;
+  let releaseSecond: (() => void) | undefined;
+  let markSecondStarted: (() => void) | undefined;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const secondGate = new Promise<void>((resolve) => {
+    releaseSecond = resolve;
+  });
+  const secondStarted = new Promise<void>((resolve) => {
+    markSecondStarted = resolve;
+  });
+  let calls = 0;
+  const setting = settingsScreen.items[0];
+  assert.ok(setting);
+  const harness = componentHarness(
+    {
+      ...settingsScreen,
+      items: [setting],
+    },
+    {
+      plainTheme: true,
+      onSettingChange: async () => {
+        calls += 1;
+        if (calls === 1) await firstGate;
+        if (calls === 2) {
+          markSecondStarted?.();
+          await secondGate;
+        }
+        return false;
+      },
+    },
+  );
+
+  harness.component.handleInput("l");
+  harness.component.handleInput("l");
+  harness.component.handleInput("l");
+  releaseFirst?.();
+  await secondStarted;
+  assert.match(harness.component.render(80).join("\n"), /On/);
+
+  releaseSecond?.();
+  await harness.component.waitForPending();
+  assert.equal(calls, 3);
+  assert.match(harness.component.render(80).join("\n"), /Off/);
+});
+
 test("accepted setting transitions fire only after pending state is settled", async () => {
   const harness = componentHarness(settingsScreen, {
     onSettingChange: async () => ({ accepted: true, transition: { kind: "close" } }),
