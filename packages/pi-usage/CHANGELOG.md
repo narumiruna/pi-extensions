@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.60.8
+
+### Patch Changes
+
+- 721ec0a: Accept Kimi Coding usage responses that omit `used`/`remaining` counters when the quota is untouched, deriving missing counters from `limit` instead of reporting usage as unavailable.
+
 ## 0.60.7
 
 ### Patch Changes
