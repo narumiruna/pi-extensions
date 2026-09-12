@@ -1219,6 +1219,7 @@ test("codex_compact_start_new_context compacts after settlement and continues ex
     current.current.ctx,
   );
   assert.equal(started.terminate, true);
+  assert.match(started.content[0].text, /unless a later successful turn already continued the work/);
   const settled = current.mock.events.get("agent_settled")?.[0];
   assert.ok(settled);
   await settled({ type: "agent_settled" }, current.current.ctx);

@@ -59,13 +59,16 @@ Request one fresh context window after the current agent run settles:
 
 The tool schedules one rollover and asks Pi to stop after the tool batch. Sibling tool calls may still
 finish before the agent becomes idle. Pi stops only when every result in a mixed batch requests
-termination; if another model turn runs first, the extension still compacts after settlement but does
-not send a duplicate hidden continuation. If Pi already starts automatic compaction, that compaction
-consumes the request; otherwise the extension calls `ctx.compact()` at `agent_settled`.
+termination. If another model turn runs first, the extension still compacts after settlement. A
+successful post-request turn suppresses the duplicate hidden next turn; a turn ending in an error or
+output-length cutoff remains eligible for one. If Pi already starts automatic compaction, that
+compaction consumes the request; otherwise the extension calls `ctx.compact()` at `agent_settled`.
 
-After success, one hidden next-turn message asks the model to continue. Failure keeps the old context
-and reports one warning. This is a next-turn approximation, not Codex's atomic same-turn transition.
-Save important information with `codex_compact_update_notes` before requesting a new context.
+Successful compaction moves to the new window and sends a hidden next-turn message asking the model
+to continue. Failed compaction keeps the old context, reports one warning, and sends a hidden failure
+continuation. Either next turn is suppressed when a successful post-request turn already continued
+the work. This is a next-turn approximation, not Codex's atomic same-turn transition. Save important
+information with `codex_compact_update_notes` before requesting a new context.
 
 ### `codex_compact_get_context_remaining`
 

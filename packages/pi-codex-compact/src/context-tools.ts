@@ -85,7 +85,7 @@ export function registerExperimentalContextTools(pi: ExtensionAPI, runtime: Cont
             requestId: requested.requestId,
             currentWindowId: requested.currentWindowId,
             message:
-              "The current run will end before rollover. A hidden continuation starts after compaction succeeds.",
+              "The current run will end before rollover. A hidden continuation follows the compaction attempt unless a later successful turn already continued the work.",
           },
           { ...requested, status: "scheduled" },
         ),
