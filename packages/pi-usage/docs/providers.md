@@ -54,7 +54,8 @@ The extension queries the fixed usage endpoint only when both the selected model
 Custom and proxy origins fail before network access, redirects are rejected, and the credential is never sent to an override from Kimi Code's environment-specific development path.
 
 Plan buckets remain integer request counts and are rendered with their source-defined windows.
-Unknown units, duplicate windows, missing counts, invalid timestamps, and malformed rows remain unavailable rather than receiving guessed semantics.
+Live responses omit both `used` and `remaining` on untouched rows and may report only `remaining` once usage starts, so a row with a positive `limit` and no counters means zero usage, and when only one counter is present the other is derived from `limit`.
+Counters that are present but malformed, unknown units, duplicate windows, invalid timestamps, and malformed rows remain unavailable rather than receiving guessed semantics.
 Booster-wallet `amount` and `amountLeft` values use Kimi's first-party conversion of 1,000,000 fixed-point units per cent, while monthly values already arrive in cents.
 Wallet values retain their currency and stay separate from plan requests and percentages in reports and the statusline.
 Wallet fields remain unavailable unless the response supplies one consistent currency; missing monthly values are omitted, and an enabled zero cap is shown as zero.

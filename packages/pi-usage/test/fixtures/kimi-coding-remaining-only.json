@@ -1,0 +1,76 @@
+{
+  "user": {
+    "userId": "<uid>",
+    "region": "REGION_CN",
+    "membership": {
+      "level": "LEVEL_INTERMEDIATE"
+    },
+    "businessId": ""
+  },
+  "usage": {
+    "limit": "100",
+    "remaining": "100",
+    "resetTime": "2026-09-19T12:43:48.701124Z"
+  },
+  "limits": [
+    {
+      "window": {
+        "duration": 300,
+        "timeUnit": "TIME_UNIT_MINUTE"
+      },
+      "detail": {
+        "limit": "100",
+        "used": "2",
+        "remaining": "98",
+        "resetTime": "2026-09-12T16:43:48.701124Z"
+      }
+    }
+  ],
+  "parallel": {
+    "limit": "20"
+  },
+  "totalQuota": {},
+  "subType": "TYPE_PURCHASE",
+  "boosterWallet": {
+    "id": "<uuid>",
+    "userId": "<uid>",
+    "balance": {
+      "id": "<uuid>",
+      "feature": "FEATURE_OMNI",
+      "type": "BOOSTER",
+      "unit": "UNIT_CURRENCY",
+      "periodStart": "2026-07-13T08:00:04.688184Z",
+      "periodEnd": "2126-07-13T08:00:05.688184Z",
+      "subscriptionId": "<uuid>",
+      "userId": "<uid>",
+      "createTime": "2026-07-13T08:00:05.688184Z",
+      "updateTime": "2026-07-13T08:00:05.688184Z"
+    },
+    "status": "STATUS_DISABLED",
+    "allowTopup": true,
+    "topupLimit": {
+      "currency": "CNY",
+      "priceInCents": "300000"
+    },
+    "autoRefillCharge": {
+      "currency": "CNY",
+      "priceInCents": "0"
+    },
+    "autoRefillThreshold": {
+      "currency": "CNY",
+      "priceInCents": "0"
+    },
+    "monthlyChargeLimit": {
+      "currency": "CNY",
+      "priceInCents": "10000"
+    },
+    "monthlyUsed": {
+      "currency": "CNY",
+      "priceInCents": "0"
+    },
+    "createdAt": "2026-07-13T08:00:05.688184Z",
+    "updatedAt": "2026-09-04T14:21:59.493659Z"
+  },
+  "domain": "DOMAIN_NEXUS",
+  "version": "GOODS_VERSION_V1"
+}
