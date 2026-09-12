@@ -5,6 +5,8 @@ import {
   Input,
   Key,
   matchesKey,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
@@ -74,6 +76,17 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
   let view: BrowseView = "list";
   let focused = false;
   let disposed = false;
+  let mousePressedIndex: number | undefined;
+  let mouseLayout:
+    | {
+        view: BrowseView;
+        width: number;
+        inputFrameRow?: number;
+        itemByFrameRow?: ReadonlyMap<number, number>;
+        documentStartRow?: number;
+        documentEndRow?: number;
+      }
+    | undefined;
   const detailLineCache = createDocumentLineCache(options.theme, Boolean(options.screen.enableDetailSearch));
   const selected = () => filteredItems[selectedIndex];
   const syncFocus = () => {
@@ -102,6 +115,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
   const move = (delta: number) => setSelectedIndex(selectedIndex + delta, true, true);
   const page = (delta: number) => setSelectedIndex(selectedIndex + delta * Math.max(1, listViewportRows), false, true);
   const applyFilter = () => {
+    mousePressedIndex = undefined;
     const previouslySelectedId = selected()?.item.id;
     filteredItems = fuzzyFilter(allItems, searchInput.getValue(), (candidate) =>
       [candidate.label, candidate.statusText, candidate.description, candidate.searchText].filter(Boolean).join(" "),
@@ -117,6 +131,18 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
     const nextIndex = restoreIndex >= 0 ? restoreIndex : previousIndex >= 0 ? previousIndex : 0;
     if (restoreIndex >= 0) restoreItemId = undefined;
     setSelectedIndex(nextIndex, false, false);
+  };
+  const openDetail = () => {
+    if (!selected()) return;
+    view = "detail";
+    detailScrollOffset = 0;
+    lastDetailLines = [];
+    lastDetailSoftWrapAfter = [];
+    lastDetailIgnoreLeadingWhitespace = [];
+    lastDetailSearchSources = [];
+    detailSearch?.close();
+    mousePressedIndex = undefined;
+    syncFocus();
   };
   const component: MenuScreenComponent & Focusable = {
     get focused() {
@@ -179,6 +205,15 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
               ]
             : []),
         ];
+        const frameOffset = availableRows >= MIN_FRAMED_ROWS ? 1 : 0;
+        const documentStartRow = frameOffset + layout.titleRows + layout.searchRows;
+        mouseLayout = {
+          view,
+          width: safeWidth,
+          inputFrameRow: layout.searchRows ? frameOffset + layout.titleRows : undefined,
+          documentStartRow,
+          documentEndRow: documentStartRow + layout.contentRows,
+        };
         return boundedFrame(lines, safeWidth, availableRows, options.theme);
       }
 
@@ -207,15 +242,30 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
           ? [options.theme.fg("dim", browseHint(options.keybindings, options.screen.hint ?? "back"))]
           : []),
       ];
+      const frameOffset = availableRows >= MIN_FRAMED_ROWS ? 1 : 0;
+      const itemStartRow = frameOffset + layout.titleRows + layout.contextRows + layout.searchRows;
+      mouseLayout = {
+        view,
+        width: safeWidth,
+        inputFrameRow: layout.searchRows ? frameOffset + layout.titleRows + layout.contextRows : undefined,
+        itemByFrameRow: new Map(
+          Array.from({ length: Math.min(layout.itemRows, filteredItems.length) }, (_, offset) => [
+            itemStartRow + offset,
+            viewportStart + offset,
+          ]),
+        ),
+      };
       return boundedFrame(lines, safeWidth, availableRows, options.theme);
     },
     invalidate() {
+      mouseLayout = undefined;
       detailLineCache.invalidate();
       searchInput.invalidate();
       detailSearch?.invalidate();
     },
     handleInput(data) {
       if (disposed) return;
+      mousePressedIndex = undefined;
       if (view === "detail" && detailSearch?.active) {
         const routed = detailSearch.routeInput(
           data,
@@ -293,31 +343,88 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
       else if (matchesKey(data, Key.end)) {
         setSelectedIndex(filteredItems.length - 1, false, true);
       } else if (options.keybindings.matches(data, "tui.select.confirm")) {
-        if (selected()) {
-          view = "detail";
-          detailScrollOffset = 0;
-          lastDetailLines = [];
-          lastDetailSoftWrapAfter = [];
-          lastDetailIgnoreLeadingWhitespace = [];
-          lastDetailSearchSources = [];
-          detailSearch?.close();
-          syncFocus();
-        }
+        openDetail();
       } else if (searchInputVisible) {
         handleSearchInput(searchInput, data);
         applyFilter();
       }
       options.tui.requestRender();
     },
+    handleMouse(event) {
+      if (disposed || !mouseLayout || event.width !== mouseLayout.width) return undefined;
+      if (mouseLayout.view === "detail") return handleDetailMouse(event);
+      return handleListMouse(event);
+    },
     async waitForPending() {},
     dispose() {
       if (disposed) return;
       disposed = true;
+      mousePressedIndex = undefined;
+      mouseLayout = undefined;
       searchInput.focused = false;
       detailSearch?.dispose();
       options.onDispose?.();
     },
   };
+  function handleListMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (mouseLayout?.view !== "list") return undefined;
+    if (event.y === mouseLayout.inputFrameRow) {
+      const inputWidth = Math.max(1, mouseLayout.width - 8);
+      if (event.x < 8 || event.x >= 8 + inputWidth) return undefined;
+      return searchInput.handleMouse({ ...event, x: event.x - 8, y: 0, width: inputWidth, height: 1 });
+    }
+    const mappedIndex = mouseLayout.itemByFrameRow?.get(event.y);
+    if (mappedIndex === undefined) return undefined;
+    const itemIndex = event.type === "click" ? (mousePressedIndex ?? mappedIndex) : mappedIndex;
+    if (itemIndex < 0 || itemIndex >= filteredItems.length) return undefined;
+    if (event.type === "wheel" && event.wheelDelta) {
+      const next = Math.max(0, Math.min(filteredItems.length - 1, selectedIndex + (event.wheelDelta < 0 ? -1 : 1)));
+      const changed = next !== selectedIndex;
+      if (changed) setSelectedIndex(next, false, true);
+      return { handled: true, render: changed };
+    }
+    if (event.type === "move") return { handled: true };
+    if (event.button !== "left") return undefined;
+    if (event.type === "press") {
+      mousePressedIndex = itemIndex;
+      const changed = itemIndex !== selectedIndex;
+      if (changed) setSelectedIndex(itemIndex, false, true);
+      return { handled: true, focus: true, render: changed };
+    }
+    if (event.type === "click") {
+      mousePressedIndex = undefined;
+      if (itemIndex !== selectedIndex) setSelectedIndex(itemIndex, false, true);
+      openDetail();
+      options.tui.requestRender();
+      return { handled: true, render: true };
+    }
+    return undefined;
+  }
+
+  function handleDetailMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (mouseLayout?.view !== "detail") return undefined;
+    if (detailSearch?.active && event.y === mouseLayout.inputFrameRow) {
+      const inputWidth = Math.max(1, mouseLayout.width - 6);
+      if (event.x < 6 || event.x >= 6 + inputWidth) return undefined;
+      return detailSearch.input.handleMouse({ ...event, x: event.x - 6, y: 0, width: inputWidth, height: 1 });
+    }
+    if (
+      event.type !== "wheel" ||
+      !event.wheelDelta ||
+      mouseLayout.documentStartRow === undefined ||
+      mouseLayout.documentEndRow === undefined ||
+      event.y < mouseLayout.documentStartRow ||
+      event.y >= mouseLayout.documentEndRow
+    ) {
+      return undefined;
+    }
+    const previous = detailScrollOffset;
+    detailScrollOffset = clamp(detailScrollOffset + (event.wheelDelta < 0 ? -1 : 1), 0, detailMaximumScroll);
+    const changed = previous !== detailScrollOffset;
+    if (changed) options.tui.requestRender();
+    return { handled: true, render: changed };
+  }
+
   return component;
 }
 

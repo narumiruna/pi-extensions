@@ -291,6 +291,7 @@ function validDimension(value: number, name: string) {
 function keyData(key: TuiHarnessKey) {
   switch (key) {
     case "app.models.save":
+    case "app.thinking.save":
       return "\u0013";
     case "app.thinking.cycle":
       return "\u001b[Z";
@@ -339,6 +340,7 @@ function testingTheme(override?: TuiHarnessOptions["theme"]) {
 function testingKeybindings(override?: TuiHarnessOptions["keybindings"]) {
   const matches = override?.matches.bind(override);
   const getKeys = override?.getKeys.bind(override);
+  const getDefinition = override?.getDefinition?.bind(override);
   return {
     matches(data: string, binding: string) {
       if (matches) return matches(data, binding as Parameters<HarnessKeybindings["matches"]>[1]);
@@ -373,6 +375,10 @@ function testingKeybindings(override?: TuiHarnessOptions["keybindings"]) {
         default:
           return [];
       }
+    },
+    getDefinition(binding: string) {
+      if (getDefinition) return getDefinition(binding);
+      return binding === "app.thinking.save" ? undefined : { defaultKeys: [] };
     },
   } as unknown as KeybindingsManager;
 }

@@ -558,9 +558,70 @@ test("review formats code and diffs through theme-aware display paths", () => {
     true,
   );
   const rendered = diff.component.render(80).join("\n");
-  assert.match(rendered, /toolDiffRemoved:-old/);
-  assert.match(rendered, /toolDiffAdded:\+new/);
+  assert.match(rendered, /toolDiffRemoved:-⟦old⟧/);
+  assert.match(rendered, /toolDiffAdded:\+⟦new⟧/);
   assert.match(rendered, /accent:@@ header/);
+});
+
+test("diff review applies intraline emphasis only to one-for-one replacement pairs", () => {
+  const paired = reviewComponentHarness(
+    {
+      ...reviewScreen,
+      content: "-  const old = '你🙂';\n+  const new = '你🙃';",
+      format: { kind: "diff" },
+      confirm: undefined,
+      viewportSize: 20,
+    },
+    true,
+  );
+  const emphasized = paired.component.render(120).join("\n");
+  assert.match(emphasized, /toolDiffRemoved:- {2}const ⟦old⟧/u);
+  assert.match(emphasized, /toolDiffAdded:\+ {2}const ⟦new⟧/u);
+  assert.doesNotMatch(emphasized, /⟦ {2}const/u);
+
+  const grouped = reviewComponentHarness(
+    {
+      ...reviewScreen,
+      content: "-old one\n-old two\n+new one\n+new two",
+      format: { kind: "diff" },
+      confirm: undefined,
+      viewportSize: 20,
+    },
+    true,
+  );
+  assert.doesNotMatch(grouped.component.render(120).join("\n"), /⟦/u);
+
+  const oversized = reviewComponentHarness(
+    {
+      ...reviewScreen,
+      content: `-${"a".repeat(10_001)}\n+${"b".repeat(10_001)}`,
+      format: { kind: "diff" },
+      confirm: undefined,
+      viewportSize: 20,
+    },
+    true,
+  );
+  assert.doesNotMatch(oversized.component.render(120).join("\n"), /⟦/u);
+});
+
+test("intraline diff remains width-safe, searchable, and sanitized with tabs and wide graphemes", () => {
+  const harness = reviewComponentHarness({
+    ...reviewScreen,
+    content: "-12 before\t你🙂 unsafe\u001b]8;;https://unsafe.example\u0007old\n+12 before\t你🙃 safe-new",
+    format: { kind: "diff" },
+    confirm: undefined,
+    enableSearch: true,
+    viewportSize: 20,
+  });
+  for (const width of [1, 2, 8, 16, 40]) {
+    const lines = harness.component.render(width);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    assert.equal(lines.join("\n").includes("unsafe.example"), false);
+  }
+  harness.component.render(80);
+  harness.component.handleInput(" ");
+  harness.component.handleInput("safe-new");
+  assert.match(plainRender(harness.component, 80), /1\/1/u);
 });
 
 test("code review uses the injected theme for inferred syntax tokens and safe fallback", () => {
@@ -994,6 +1055,41 @@ test("review dispatches Escape when it is remapped to next search match", () => 
   assert.match(plainRender(harness.component, 40), /2\/2/u);
 });
 
+test("review mouse edits active search and wheels only over passive document rows", () => {
+  const harness = reviewComponentHarness(
+    {
+      ...reviewScreen,
+      content: ["needle", ...Array.from({ length: 12 }, (_, index) => `row ${index + 1}`)].join("\n"),
+      enableSearch: true,
+      viewportSize: "adaptive",
+    },
+    false,
+    9,
+  );
+  harness.component.handleInput(" ");
+  harness.component.handleInput("nedle");
+  let frame = plainLines(harness.component, 40);
+  const searchRow = frame.findIndex((line) => line.includes("Find:"));
+  assert.notEqual(searchRow, -1);
+  reviewMouse(harness.component, frame, { type: "press", x: 9, y: searchRow }, 40);
+  harness.component.handleInput("e");
+  frame = plainLines(harness.component, 40);
+  assert.match(frame.join("\n"), /Find:.*needle.*1\/1/u);
+
+  const documentRow = frame.findIndex((line) => line.includes("needle") && !line.includes("Find:"));
+  assert.notEqual(documentRow, -1);
+  reviewMouse(harness.component, frame, { type: "move", x: 2, y: documentRow }, 40);
+  assert.deepEqual(harness.events, []);
+  reviewMouse(harness.component, frame, { type: "wheel", x: 2, y: documentRow, wheelDelta: 1 }, 40);
+  assert.doesNotMatch(plainRender(harness.component, 40), /^needle$/mu);
+
+  frame = plainLines(harness.component, 40);
+  const hintRow = frame.findIndex((line) => line.includes("close search"));
+  reviewMouse(harness.component, frame, { type: "press", x: 2, y: hintRow }, 40);
+  reviewMouse(harness.component, frame, { type: "click", x: 2, y: hintRow }, 40);
+  assert.deepEqual(harness.events, []);
+});
+
 test("search-disabled review keeps its prior component and disposal behavior", () => {
   const harness = reviewComponentHarness(reviewScreen);
   assert.equal("focused" in harness.component, false);
@@ -1023,6 +1119,7 @@ function reviewComponentHarness(
         return themed ? `${color}:${text}` : text;
       },
       bold: (text: string) => text,
+      inverse: (text: string) => (themed ? `⟦${text}⟧` : text),
     },
     keybindings,
     onEvent: (event) => events.push(event),
@@ -1034,6 +1131,28 @@ function reviewComponentHarness(
       terminal.rows = rows;
     },
   };
+}
+
+function reviewMouse(
+  component: ReturnType<typeof reviewComponentHarness>["component"],
+  frame: readonly string[],
+  event: { type: "move" | "press" | "click" | "wheel"; x: number; y: number; wheelDelta?: number },
+  width: number,
+) {
+  return component.handleMouse?.({
+    type: event.type,
+    button: event.type === "move" || event.type === "wheel" ? "none" : "left",
+    x: event.x,
+    y: event.y,
+    screenX: event.x,
+    screenY: event.y,
+    width,
+    height: frame.length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+    ...(event.wheelDelta === undefined ? {} : { wheelDelta: event.wheelDelta }),
+  });
 }
 
 function plainLines(component: { render(width: number): string[] }, width: number) {

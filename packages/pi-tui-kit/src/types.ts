@@ -146,6 +146,8 @@ export interface InputScreen<ActionId extends string> {
   title: string;
   lines?: readonly string[];
   placeholder?: string;
+  /** Initial TUI draft; the cursor starts at the end. RPC dialogs cannot prefill this value. */
+  initialValue?: string;
   action: ActionId;
   hint?: "back" | "close";
 }

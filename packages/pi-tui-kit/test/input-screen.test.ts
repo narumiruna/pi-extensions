@@ -112,6 +112,96 @@ test("input screen drains a pending submit before Back and distinguishes Ctrl+C 
   assert.deepEqual(close.events, [{ kind: "close" }]);
 });
 
+test("input prefill starts at cursor end and rejection preserves subsequent edits", async () => {
+  const submissions: string[] = [];
+  const harness = inputComponentHarness({
+    screen: { ...inputScreen, initialValue: "12" },
+    onInputSubmit: async ({ value }) => {
+      submissions.push(value);
+      return false;
+    },
+  });
+  harness.component.handleInput("3");
+  harness.component.handleInput("\u007f");
+  harness.component.handleInput("3");
+  assert.match(stripVTControlCharacters(harness.component.render(40).join("\n")), /> 123/u);
+  harness.component.handleInput("\r");
+  await harness.component.waitForPending();
+  harness.component.handleInput("4");
+  harness.component.handleInput("\r");
+  await harness.component.waitForPending();
+  assert.deepEqual(submissions, ["123", "1234"]);
+});
+
+test("input prefill preserves single-line paste rules and disarms embedded paste markers", async () => {
+  let submitted = "";
+  const harness = inputComponentHarness({
+    screen: { ...inputScreen, initialValue: "a\tb\r\nc\u001b[201~d\u0007" },
+    onInputSubmit: async ({ value }) => {
+      submitted = value;
+      return false;
+    },
+  });
+  harness.component.handleInput("\r");
+  await harness.component.waitForPending();
+  assert.equal(submitted, "a    bc [201~d ");
+});
+
+test("input screen routes mouse cursor positioning through the framed input row", async () => {
+  let submitted = "";
+  const harness = inputComponentHarness({
+    onInputSubmit: async ({ value }) => {
+      submitted = value;
+      return false;
+    },
+  });
+  harness.component.handleInput("124");
+  let frame = harness.component.render(40);
+  const inputRow = frame.map(stripVTControlCharacters).findIndex((line) => line.includes("> 124"));
+  assert.notEqual(inputRow, -1);
+  harness.component.handleMouse?.({
+    type: "press",
+    button: "left",
+    x: 3,
+    y: inputRow,
+    screenX: 3,
+    screenY: inputRow,
+    width: 40,
+    height: frame.length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
+  harness.component.handleInput("X");
+  frame = harness.component.render(40);
+  assert.match(stripVTControlCharacters(frame.join("\n")), /> 1X24/u);
+  harness.component.handleInput("\r");
+  await harness.component.waitForPending();
+  assert.equal(submitted, "1X24");
+});
+
+test("RPC input documents prefill omission by requesting a fresh value with the original placeholder", async () => {
+  let requestedPlaceholder = "";
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    input: async (_title: string, placeholder: string) => {
+      requestedPlaceholder = placeholder;
+      return "typed replacement";
+    },
+  });
+  const menu = defineMenu<undefined, ScreenId, ActionId>({
+    start: "input",
+    screens: { input: () => ({ ...inputScreen, initialValue: "prefilled TUI draft" }) },
+    actions: { submit: async () => ({ kind: "close" }) },
+  });
+  assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
+    kind: "closed",
+    reason: "close",
+  });
+  assert.equal(requestedPlaceholder, inputScreen.placeholder);
+});
+
 test("RPC input retries a rejected value, preserves raw payload, and never opens custom TUI", async () => {
   const responses = [" bad ", " 42 "];
   const values: string[] = [];
@@ -270,11 +360,12 @@ function inputComponentHarness(
     }) => Promise<boolean | { accepted: boolean; transition: MenuTransition<ScreenId> }>;
     onTransition?: (transition: MenuTransition<ScreenId>) => void;
     rows?: number;
+    screen?: InputScreen<ActionId>;
   } = {},
 ) {
   const events: Array<{ kind: "back" | "close" } | { kind: "activate"; itemId: string }> = [];
   const component = createMenuScreenComponent<ScreenId, ActionId>({
-    screen: inputScreen,
+    screen: overrides.screen ?? inputScreen,
     tui: { terminal: { rows: overrides.rows ?? 24 }, requestRender() {} },
     theme: {
       fg: (_color: string, text: string) => text,

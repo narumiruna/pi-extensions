@@ -9,11 +9,12 @@ Consumers reuse its navigation, rendering, cancellation, and mode adaptation ins
 
 ## ✨ Features
 
-- Defines typed action, detail, browse, choice, settings, input, review, and multi-select screens.
+- Defines typed action, detail, browse, choice, settings, input, review, and multi-select screens with keyboard and mouse routing.
 - Provides searchable default-aware selectors for model and thinking choices, with configurable save-default actions (Ctrl+S by default).
-- Adapts shared menu and interaction flows across Pi TUI and RPC modes.
+- Adds opt-in live-choice search, editable input prefill, one-for-one intraline diff emphasis, and masked TUI secret entry.
+- Adapts shared menu and interaction flows across Pi TUI and RPC modes without using plaintext fallback for secrets.
 - Handles interaction navigation, cancellation, disposal, horizontal framing, and width-safe rendering.
-- Provides task, confirmation, questionnaire, live-choice, custom-interaction, terminal-document, terminal-text, interaction-hint, editor-status-widget, horizontal-rule, and testing helpers.
+- Provides task, confirmation, questionnaire, live-choice, secret-input, custom-interaction, terminal-document, terminal-text, interaction-hint, editor-status-widget, horizontal-rule, and testing helpers.
 - Publishes built ESM and TypeScript declarations for independently installable extensions.
 
 ## 📦 Install
@@ -74,6 +75,11 @@ Searchable review and browse-detail screens use an explicit pre-adoption API-adm
 Review behavior converges in `pi-starship` configuration documents and `pi-recall` saved-message previews, while browse-detail behavior converges in `pi-tool` exact tool documents and `pi-analytics` detail catalogs.
 Those consumers cannot adopt the fields until this Kit minor is published, so this release keeps their compatibility floors unchanged and defers consumer migration.
 
+Masked secret entry uses the same pre-adoption exception for Sync's required credentials and Langfuse's optional blank-to-keep key flow.
+The shared API owns only a masked TUI draft and typed lifecycle result; credential validation, storage, and setup policy remain consumer-owned.
+RPC has no masked input field, so `runSecretInput()` returns `unsupported` without opening `ctx.ui.input()`.
+This release leaves both consumers unchanged until the Kit API is published, and a later Langfuse migration must explicitly resolve its existing plaintext RPC setup behavior.
+
 ## ⚡ Runtime performance
 
 The production JavaScript imports Pi TUI at runtime and keeps Pi Coding Agent imports type-only.
@@ -100,7 +106,7 @@ These fields reveal dependencies deferred from import time to the first interact
 
 The [API reference](./docs/api.md) contains the complete examples and contracts:
 
-- [Menus and standalone interactions](./docs/api.md#-complete-menu-example) — typed actions, tasks, confirmations, live previews, questionnaires, and custom components.
+- [Menus and standalone interactions](./docs/api.md#-complete-menu-example) — typed actions, tasks, confirmations, live previews, masked secrets, questionnaires, and custom components.
 - [Default-aware selectors](./docs/api.md#searchable-default-aware-selectors) — searchable choices with current/default state and save-default shortcuts.
 - [Standard screens](./docs/api.md#-standard-screens) — actions, detail, browse, choice, settings, input, review, and multi-select.
 - [Runtime and modes](./docs/api.md#-runtime-and-mode-behavior) — TUI/RPC adaptation, result types, cancellation, and session ownership.

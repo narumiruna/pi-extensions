@@ -468,24 +468,27 @@ test("model selector sanitizes duplicate identities in consumer-visible errors",
   assert.equal(reported.message, "Model selector contains duplicate model anthropic/claude");
 });
 
-test("thinking selector honors remapped cycle and save-default bindings", async () => {
+test("thinking selector honors remapped cycle and thinking-specific save bindings", async () => {
   const tui = createTuiHarness({
     keybindings: {
       matches: (data, binding) => {
         if (String(binding) === "app.thinking.cycle") return data === "\x1bt";
-        if (String(binding) === "app.models.save") return data === "x";
+        if (String(binding) === "app.thinking.save") return data === "x";
+        if (String(binding) === "app.models.save") return data === "\x13";
         if (binding === "tui.select.down") return data === "j";
         if (binding === "tui.select.cancel") return data === "q";
         return data === "\r" && binding === "tui.select.confirm";
       },
       getKeys: (binding) => {
-        if (String(binding) === "app.models.save") return ["x"];
+        if (String(binding) === "app.thinking.save") return ["x"];
+        if (String(binding) === "app.models.save") return ["ctrl+s"];
         if (String(binding) === "app.thinking.cycle") return ["alt+t"];
         if (binding === "tui.select.down") return ["j"];
         if (binding === "tui.select.cancel") return ["q"];
         if (binding === "tui.select.confirm") return ["enter"];
         return [];
       },
+      getDefinition: (binding) => (binding === "app.thinking.save" ? { defaultKeys: "ctrl+s" } : undefined),
     },
   });
   const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
@@ -498,10 +501,27 @@ test("thinking selector honors remapped cycle and save-default bindings", async 
   const frame = tui.render();
   assert.ok(frame.some((line) => line.includes("alt+t cycle choice")));
   assert.ok(frame.some((line) => line.includes("x set as default")));
+  assert.equal(
+    frame.some((line) => line.includes("ctrl+s set as default")),
+    false,
+  );
 
   tui.send("\x1bt");
   tui.send("x");
   assert.deepEqual(await running, { kind: "saveDefault", level: "high" });
+});
+
+test("thinking selector falls back to the legacy model-save binding on Pi 0.85.0", async () => {
+  const tui = createTuiHarness();
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runThinkingSelector(context.ctx, {
+    availableLevels: ["off", "high"],
+    currentLevel: "off",
+  });
+  await tui.waitForOpen();
+  assert.match(tui.render().join("\n"), /ctrl\+s set as default/u);
+  tui.press("app.models.save");
+  assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
 });
 
 test("thinking selector renders every description beside its choice on wide terminals", async () => {
@@ -639,6 +659,67 @@ test("selectors forward normalized mouse input and row selection", async () => {
   row = rowTui.render().findIndex((line) => line.includes("gemini-pro"));
   rowTui.mouse({ type: "click", x: 4, y: row });
   assert.deepEqual(await rowRunning, { kind: "selected", model: models[2] });
+});
+
+test("selector mouse hover is passive while press, click, wheel, filtering, and resize keep stable targets", async () => {
+  const tui = createTuiHarness({ width: 80, rows: 20 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runModelSelector(context.ctx, { models, viewportSize: 2 });
+  await tui.waitForOpen();
+
+  let frame = tui.render();
+  let targetRow = frame.findIndex((line) => line.includes("gemini-pro"));
+  assert.notEqual(targetRow, -1);
+  tui.mouse({ type: "move", x: 4, y: targetRow });
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ {3}claude-sonnet/u);
+
+  tui.mouse({ type: "wheel", x: 4, y: targetRow, wheelDelta: 1 });
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ {3}gemini-pro/u);
+
+  tui.type("goo");
+  frame = tui.resize({ width: 48, rows: 12 });
+  targetRow = frame.findIndex((line) => line.includes("gemini-pro"));
+  assert.notEqual(targetRow, -1);
+  tui.mouse({ type: "press", x: 4, y: targetRow });
+  targetRow = tui.render().findIndex((line) => line.includes("gemini-pro"));
+  tui.mouse({ type: "click", x: 4, y: targetRow });
+  assert.deepEqual(await running, { kind: "selected", model: models[2] });
+});
+
+test("empty selector rows ignore mouse events", () => {
+  const component = createPiSelector({
+    rows: [],
+    saveBinding: "app.models.save",
+    filterSelection: "bestMatch",
+    valueEquals: (left: string, right: string) => left === right,
+    onComplete() {
+      assert.fail("empty selector must not complete");
+    },
+    tui: { terminal: { rows: 20 }, requestRender() {} } as never,
+    theme: { fg: (_role: string, text: string) => text } as never,
+    keybindings: {
+      matches: () => false,
+      getKeys: () => [],
+    } as never,
+  });
+  const frame = component.render(40);
+  assert.equal(
+    component.handleMouse({
+      type: "press",
+      button: "left",
+      x: 2,
+      y: frame.findIndex((line) => line.includes("No matching options")),
+      screenX: 2,
+      screenY: 2,
+      width: 40,
+      height: frame.length,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    }),
+    undefined,
+  );
+  component.dispose();
 });
 
 test("thinking selector sanitizes invalid current levels in consumer-visible errors", async () => {

@@ -1,7 +1,14 @@
-import { type Focusable, Input, Key, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  type Focusable,
+  Input,
+  Key,
+  matchesKey,
+  type TuiMouseEventResult,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { MenuScreen } from "../types.js";
 import type { MenuChangeResponse, MenuScreenComponent, MenuScreenComponentOptions } from "./contracts.js";
-import { handleSearchInput, renderFrame, safeMenuText } from "./rendering.js";
+import { handleSearchInput, renderFrameLayout, safeMenuText } from "./rendering.js";
 
 export type InputOptions<ScreenId extends string, ActionId extends string> = MenuScreenComponentOptions<
   ScreenId,
@@ -14,10 +21,15 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
   options: InputOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
   const input = new Input();
+  if (options.screen.initialValue !== undefined) {
+    const initialValue = options.screen.initialValue.replaceAll("\u001b", " ");
+    handleSearchInput(input, `\u001b[200~${initialValue}\u001b[201~`);
+  }
   let pending = Promise.resolve();
   let submitting = false;
   let closing = false;
   let disposed = false;
+  let mouseLayout: { width: number; inputFrameRow?: number } | undefined;
 
   const closeAfterPending = (kind: "back" | "close") => {
     if (closing || disposed) return;
@@ -72,7 +84,7 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
           : []),
         ...(submitting ? [options.theme.fg("dim", "Saving…")] : []),
       ];
-      return renderFrame(
+      const frame = renderFrameLayout(
         options.screen.title,
         options.screen.lines ?? [],
         content,
@@ -85,8 +97,14 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
           priorityTailRows: submitting ? 1 : 0,
         },
       );
+      mouseLayout = {
+        width: safeWidth,
+        inputFrameRow: frame.contentRows.find(({ contentIndex }) => contentIndex === 0)?.frameIndex,
+      };
+      return frame.lines;
     },
     invalidate() {
+      mouseLayout = undefined;
       input.invalidate();
     },
     handleInput(data) {
@@ -98,10 +116,24 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
       else if (!submitting) handleSearchInput(input, data);
       options.tui.requestRender();
     },
+    handleMouse(event): TuiMouseEventResult | undefined {
+      if (
+        disposed ||
+        closing ||
+        submitting ||
+        !mouseLayout ||
+        event.width !== mouseLayout.width ||
+        event.y !== mouseLayout.inputFrameRow
+      ) {
+        return undefined;
+      }
+      return input.handleMouse({ ...event, y: 0, width: mouseLayout.width, height: 1 });
+    },
     waitForPending: () => pending,
     dispose() {
       if (disposed) return;
       disposed = true;
+      mouseLayout = undefined;
       options.onDispose?.();
     },
   };
