@@ -41,12 +41,13 @@ function splitLines(items: RenderItem[]): RenderSegment[][] {
   return lines;
 }
 
-const SEGMENT_RETENTION_PRIORITY: Readonly<Record<RenderSegment["name"], number>> = {
+export const SEGMENT_RETENTION_PRIORITY: Readonly<Record<RenderSegment["name"], number>> = {
   context: 120,
   model: 110,
   branch: 100,
   tools: 90,
   cwd: 80,
+  session: 75,
   thinking: 70,
   cost: 60,
   provider: 50,
@@ -57,7 +58,7 @@ const SEGMENT_RETENTION_PRIORITY: Readonly<Record<RenderSegment["name"], number>
   brand: 10,
 };
 
-function fitPowerlineSegments(
+export function fitPowerlineSegments(
   segments: readonly RenderSegment[],
   width: number,
   config: Pick<StatuslineConfig, "palettePreset" | "palette" | "density" | "separator">,

@@ -229,7 +229,7 @@ test("statusline renders max thinking in the Tokyo Night footer", async () => {
   }
 });
 
-test("balanced default renders the model without a separate provider segment", async () => {
+test("balanced default renders provider and model in the flush-right column", async () => {
   const mock = createMockPi();
   statusline(mock.pi);
   const context = createMockContext({
@@ -263,8 +263,9 @@ test("balanced default renders the model without a separate provider segment", a
   );
 
   const line = footer.render(200)[0] ?? "";
-  assert.doesNotMatch(line, /🔌 anthropic/);
+  assert.match(line, /🔌 anthropic/);
   assert.match(line, /🤖 sonnet-4/);
+  assert.match(line, /🔌 anthropic 🤖 sonnet-4[^░▒▓]*$/u);
   footer.dispose();
 });
 

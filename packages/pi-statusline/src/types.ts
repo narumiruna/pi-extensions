@@ -6,6 +6,7 @@ export const SEGMENT_NAMES = [
   "model",
   "thinking",
   "cwd",
+  "session",
   "branch",
   "tools",
   "context",
@@ -61,6 +62,7 @@ export interface StatuslineConfig {
   density: Density;
   separator: SeparatorName;
   segments: ConfigSegmentName[];
+  rightSegments: ConfigSegmentName[];
   segmentText: Record<SegmentName, SegmentTextConfig> & { model: ModelSegmentTextConfig };
   extensionStatusIcons: Record<string, string>;
 }

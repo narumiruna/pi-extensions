@@ -278,6 +278,8 @@ export default function statusline(pi: ExtensionAPI) {
 
   pi.on("model_select", () => refresh());
 
+  pi.on("session_info_changed", () => refresh());
+
   pi.on("thinking_level_select", (event) => {
     runtime.thinkingLevel = event.level;
     refresh();
