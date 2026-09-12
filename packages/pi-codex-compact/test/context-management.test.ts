@@ -81,7 +81,7 @@ function messageEntry(): SessionEntry {
   };
 }
 
-function abortedAssistantMessage(): AgentMessage {
+function assistantMessage(stopReason: "stop" | "length" | "toolUse" | "error" | "aborted"): AgentMessage {
   return {
     role: "assistant",
     content: [],
@@ -96,9 +96,13 @@ function abortedAssistantMessage(): AgentMessage {
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: "aborted",
+    stopReason,
     timestamp: 2,
   };
+}
+
+function abortedAssistantMessage(): AgentMessage {
+  return assistantMessage("aborted");
 }
 
 function setup(enabled = true, fetch?: typeof globalThis.fetch, contextOverrides: Record<string, unknown> = {}) {
@@ -273,6 +277,11 @@ async function emitAutomaticCompaction(
   return { result, compactEntry };
 }
 
+async function completeRequestedCompaction(current: ReturnType<typeof setup>) {
+  const { result } = await emitAutomaticCompaction(current);
+  current.compactOptions?.onComplete?.(result.compaction);
+}
+
 test("opt-in activates exactly four context tools after unrelated tools", async () => {
   const current = setup();
   await start(current);
@@ -286,6 +295,73 @@ test("opt-in activates exactly four context tools after unrelated tools", async 
     assert.equal(tool(current, name).promptGuidelines, undefined);
   }
   assert.match(current.current.notifications[0]?.message ?? "", /Experimental context management/);
+});
+
+test("startup activation fails closed when initial lineage persistence fails", async () => {
+  const current = setup();
+  current.mock.rawPi.appendEntry = () => {
+    throw new Error("initial lineage write failed");
+  };
+
+  await assert.rejects(() => start(current), /initial lineage write failed/);
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
+  assert.equal(current.mock.sentMessages.length, 0);
+  await assert.rejects(
+    tool(current, "codex_compact_get_context_remaining").execute(
+      "call-after-failure",
+      {},
+      undefined,
+      undefined,
+      current.current.ctx,
+    ),
+    /disabled/,
+  );
+});
+
+test("a failed initial lineage write is retried after menu rollback", async () => {
+  let selection = 0;
+  const current = setup(false, undefined, {
+    select: async (_title: string, options: string[]) => {
+      selection += 1;
+      if (selection === 1) return options.find((option) => option.startsWith("Settings"));
+      if (selection === 2) {
+        return options.find((option) => option.startsWith("Experimental context management"));
+      }
+      if (selection === 3) return options.find((option) => option === "On");
+      return undefined;
+    },
+  });
+  const appendEntry = current.mock.rawPi.appendEntry;
+  const attemptedWindowIds: string[] = [];
+  current.mock.rawPi.appendEntry = (customType, data) => {
+    if (customType === CONTEXT_STATE_ENTRY_TYPE) {
+      attemptedWindowIds.push((data as { currentWindowId: string }).currentWindowId);
+    }
+    if (attemptedWindowIds.length === 1) throw new Error("transient lineage write failure");
+    appendEntry(customType, data);
+  };
+  await start(current);
+  const command = current.mock.commands.get("codex-compact");
+  assert.ok(command);
+
+  await command.handler("", current.current.ctx);
+  assert.equal(current.runtime.get().settings.experimentalContextManagement, false);
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
+  assert.equal(
+    current.entries.filter((entry) => entry.type === "custom" && entry.customType === CONTEXT_STATE_ENTRY_TYPE).length,
+    0,
+  );
+
+  selection = 0;
+  await command.handler("", current.current.ctx);
+  assert.equal(attemptedWindowIds.length, 2);
+  assert.notEqual(attemptedWindowIds[0], attemptedWindowIds[1]);
+  assert.equal(current.runtime.get().settings.experimentalContextManagement, true);
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES]);
+  assert.equal(
+    current.entries.filter((entry) => entry.type === "custom" && entry.customType === CONTEXT_STATE_ENTRY_TYPE).length,
+    1,
+  );
 });
 
 test("a synthesized context contract stays at the durable conversation tail", async () => {
@@ -1486,31 +1562,42 @@ test("a completed rollover is not reused by another compaction before settlement
   );
 });
 
-test("a post-compaction Pi turn suppresses the fallback continuation", async () => {
-  const current = setup();
-  await start(current);
-  await tool(current, "codex_compact_start_new_context").execute(
-    "start",
-    {},
-    undefined,
-    undefined,
-    current.current.ctx,
-  );
-  await emitAutomaticCompaction(current);
-  await current.mock.events.get("turn_start")?.[0](
-    { type: "turn_start", turnIndex: 1, timestamp: Date.now() },
-    current.current.ctx,
-  );
-  await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
-  assert.equal(
-    current.mock.sentMessages.filter((item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn)
-      .length,
-    0,
-  );
-});
+test.each([
+  { stopReason: "stop" as const, expectedContinuations: 0 },
+  { stopReason: "error" as const, expectedContinuations: 1 },
+  { stopReason: "aborted" as const, expectedContinuations: 0 },
+])(
+  "a post-compaction Pi turn ending with $stopReason sends $expectedContinuations fallback continuations",
+  async ({ stopReason, expectedContinuations }) => {
+    const current = setup();
+    await start(current);
+    await tool(current, "codex_compact_start_new_context").execute(
+      "start",
+      {},
+      undefined,
+      undefined,
+      current.current.ctx,
+    );
+    await emitAutomaticCompaction(current);
+    await current.mock.events.get("turn_start")?.[0](
+      { type: "turn_start", turnIndex: 1, timestamp: Date.now() },
+      current.current.ctx,
+    );
+    await current.mock.events.get("agent_end")?.[0](
+      { type: "agent_end", messages: [assistantMessage(stopReason)] },
+      current.current.ctx,
+    );
+    await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+    assert.equal(
+      current.mock.sentMessages.filter((item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn)
+        .length,
+      expectedContinuations,
+    );
+  },
+);
 
 test.each(["success", "failure"] as const)(
-  "a turn started after a rollover request suppresses the %s fallback continuation",
+  "a successful turn after a rollover request suppresses the %s fallback continuation",
   async (outcome) => {
     const current = setup();
     await start(current);
@@ -1525,33 +1612,16 @@ test.each(["success", "failure"] as const)(
       { type: "turn_start", turnIndex: 1, timestamp: Date.now() },
       current.current.ctx,
     );
+    await current.mock.events.get("agent_end")?.[0](
+      { type: "agent_end", messages: [assistantMessage("stop")] },
+      current.current.ctx,
+    );
     await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
     assert.ok(current.compactOptions);
     if (outcome === "failure") {
       current.compactOptions.onError?.(new Error("mixed batch compaction failed"));
     } else {
-      const before = current.mock.events.get("session_before_compact")?.[0];
-      assert.ok(before);
-      const result = (await before(
-        {
-          type: "session_before_compact",
-          preparation: {
-            firstKeptEntryId: "user",
-            messagesToSummarize: [],
-            turnPrefixMessages: [],
-            isSplitTurn: false,
-            tokensBefore: 90,
-            fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-            settings: { enabled: true, reserveTokens: 10, keepRecentTokens: 10 },
-          },
-          branchEntries: current.entries,
-          reason: "manual",
-          willRetry: false,
-          signal: new AbortController().signal,
-        },
-        current.current.ctx,
-      )) as { compaction: { details: unknown } };
-      current.compactOptions.onComplete?.(result.compaction);
+      await completeRequestedCompaction(current);
     }
     assert.equal(
       current.mock.sentMessages.filter((item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn)
@@ -1565,6 +1635,41 @@ test.each(["success", "failure"] as const)(
       undefined,
       current.current.ctx,
     );
+  },
+);
+
+test.each(["success", "failure"] as const)(
+  "an unsuccessful post-request turn sends a continuation after compaction %s",
+  async (outcome) => {
+    const current = setup();
+    await start(current);
+    await tool(current, "codex_compact_start_new_context").execute(
+      "start",
+      {},
+      undefined,
+      undefined,
+      current.current.ctx,
+    );
+    await current.mock.events.get("turn_start")?.[0](
+      { type: "turn_start", turnIndex: 1, timestamp: Date.now() },
+      current.current.ctx,
+    );
+    await current.mock.events.get("agent_end")?.[0](
+      { type: "agent_end", messages: [assistantMessage("error")] },
+      current.current.ctx,
+    );
+    await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+    assert.ok(current.compactOptions);
+    if (outcome === "failure") {
+      current.compactOptions.onError?.(new Error("mixed batch compaction failed"));
+    } else {
+      await completeRequestedCompaction(current);
+    }
+    const continuations = current.mock.sentMessages.filter(
+      (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
+    );
+    assert.equal(continuations.length, 1);
+    assert.match(JSON.stringify(continuations[0]), outcome === "success" ? /is now active/ : /rollover failed/);
   },
 );
 

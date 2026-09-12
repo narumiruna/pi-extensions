@@ -50,6 +50,7 @@ type PendingRollover = {
   generation: number;
   status: "requested" | "compacting" | "completed" | "failed";
   turnStartedAfterRequest: boolean;
+  successfulTurnAfterRequest: boolean;
   reason?: string;
   errorMessage?: string;
 };
@@ -102,12 +103,12 @@ interface CompactFailedEvent {
   aborted: boolean;
 }
 
-function latestAssistantWasAborted(messages: readonly AgentMessage[]): boolean {
+function latestAssistantStopReason(messages: readonly AgentMessage[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.role === "assistant") return message.stopReason === "aborted";
+    if (message.role === "assistant") return message.stopReason;
   }
-  return false;
+  return undefined;
 }
 
 export interface ExperimentalContextManager {
@@ -238,11 +239,14 @@ export function createExperimentalContextManager(
   };
 
   const ensureLineage = (ctx: ExtensionContext): ContextLineage => {
-    lineage ??= loadContextLineage(ctx.sessionManager.getBranch());
-    if (lineage) return lineage;
+    const persisted = lineage ?? loadContextLineage(ctx.sessionManager.getBranch());
+    if (persisted) {
+      lineage = persisted;
+      return persisted;
+    }
     const state = createInitialContextState();
-    lineage = state;
     pi.appendEntry(CONTEXT_STATE_ENTRY_TYPE, state);
+    lineage = state;
     return state;
   };
 
@@ -280,7 +284,13 @@ export function createExperimentalContextManager(
     removeToolsAtSettlement = false;
     fallbackDeactivationPending = false;
     if (!reconcileTools(true, ctx)) return;
-    const activeLineage = ensureLineage(ctx);
+    let activeLineage: ContextLineage;
+    try {
+      activeLineage = ensureLineage(ctx);
+    } catch (error) {
+      reconcileTools(false, ctx);
+      throw error;
+    }
     if (!warnedOpaque && !activeExperimentalCompaction(branch) && latestCheckpoint(branch) && ctx.hasUI) {
       warnedOpaque = true;
       ctx.ui.notify(
@@ -309,6 +319,7 @@ export function createExperimentalContextManager(
       generation,
       status: "requested",
       turnStartedAfterRequest: false,
+      successfulTurnAfterRequest: false,
       ...(input.reason ? { reason: input.reason } : {}),
     };
     return { requestId: pending.requestId, currentWindowId: activeLineage.currentWindowId };
@@ -360,7 +371,7 @@ export function createExperimentalContextManager(
           failed: true,
         },
       },
-      request.turnStartedAfterRequest
+      request.successfulTurnAfterRequest
         ? { triggerTurn: false }
         : ctx.isIdle()
           ? { triggerTurn: true }
@@ -477,8 +488,15 @@ export function createExperimentalContextManager(
     },
     onAgentEnd(event, ctx) {
       const request = pending;
-      if (request?.status !== "requested" || !isOwned(ctx, request)) return;
-      if (ctx.signal?.aborted || latestAssistantWasAborted(event.messages)) pending = undefined;
+      if (!request || !isOwned(ctx, request)) return;
+      const stopReason = latestAssistantStopReason(event.messages);
+      if (ctx.signal?.aborted || stopReason === "aborted") {
+        pending = undefined;
+        return;
+      }
+      if (request.turnStartedAfterRequest && stopReason !== undefined && stopReason !== "error") {
+        request.successfulTurnAfterRequest = true;
+      }
     },
     onTurnStart(ctx) {
       const request = pending;
@@ -498,7 +516,7 @@ export function createExperimentalContextManager(
       const request = pending;
       if (!request || !isOwned(ctx, request)) return;
       if (request.status === "completed") {
-        if (request.turnStartedAfterRequest) pending = undefined;
+        if (request.successfulTurnAfterRequest) pending = undefined;
         else continueAfterRollover(ctx, request);
         return;
       }
@@ -525,7 +543,7 @@ export function createExperimentalContextManager(
             return;
           }
           lineage = details;
-          if (request.turnStartedAfterRequest) pending = undefined;
+          if (request.successfulTurnAfterRequest) pending = undefined;
           else continueAfterRollover(ctx, request);
         },
         onError: (error) => failRollover(ctx, request, error.message),
