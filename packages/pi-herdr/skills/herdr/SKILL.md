@@ -20,3 +20,13 @@ herdr --skill
 If the environment check or command fails, report the error and stop.
 Read the returned skill completely and follow it as the authoritative operating instructions for the installed Herdr version.
 Run it again only after compaction removes those instructions or when the user explicitly asks to refresh them.
+
+Apply this cleanup policy in addition to those version-specific instructions:
+
+- Track every pane that you create for the current task.
+- Treat `idle` and `done` as ready states, not proof that a pane is disposable.
+- After collecting the result and deciding that no follow-up is needed, inspect an agent again and close its pane with `herdr pane close <pane-id>` only when the agent is still `idle` or `done`; closing the pane also ends that agent.
+- Close an ordinary command pane only after its command has finished and the shell is available again.
+- Never close the calling pane, a pre-existing pane, or a pane created by the user or another agent.
+- Never close an agent in `working`, `blocked`, or `unknown`; leave it open and report why cleanup was deferred.
+- Before the final response, make a cleanup pass over panes you created so completed background work does not remain open.
