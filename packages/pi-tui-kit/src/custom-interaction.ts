@@ -51,6 +51,7 @@ export async function runCustomInteraction<Value, Context extends MenuContext = 
     } catch (error) {
       return reportInteractionError(ctx, options, error);
     }
+    if (!isCurrent(options) || options.signal?.aborted) return { kind: "stale" };
     return { kind: "unsupported", mode: ctx.mode };
   }
 

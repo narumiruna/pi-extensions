@@ -9,6 +9,8 @@ import {
   matchesKey,
   sliceByColumn,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -47,6 +49,12 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
   private message: string | undefined;
   private finished = false;
   private _focused = false;
+  private localOptionRows = new Map<number, number>();
+  private optionByFrameRow = new Map<number, number>();
+  private localEditorRegion: { start: number; end: number; width: number } | undefined;
+  private editorRegion: { start: number; end: number; width: number; xOffset: number } | undefined;
+  private mousePressedOption: number | undefined;
+  private renderedWidth = 0;
 
   constructor(options: QuestionnaireComponentOptions<QuestionId>) {
     this.options = options;
@@ -83,12 +91,26 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
+    this.renderedWidth = safeWidth;
     const padding = safeWidth > 1 ? " " : "";
     const contentWidth = Math.max(1, safeWidth - visibleWidth(padding));
     const border = this.border.render(safeWidth)[0] ?? "";
+    this.localOptionRows = new Map();
+    this.localEditorRegion = undefined;
     const lines = [border, "", ...this.renderHeader(contentWidth), ""];
+    const bodyStart = lines.length;
     if (this.isReviewPage()) lines.push(...this.renderReview(contentWidth));
     else lines.push(...this.renderQuestion(contentWidth));
+    this.optionByFrameRow = new Map([...this.localOptionRows].map(([row, option]) => [bodyStart + row, option]));
+    const localEditorRegion = this.renderedLocalEditorRegion();
+    this.editorRegion = localEditorRegion
+      ? {
+          start: bodyStart + localEditorRegion.start,
+          end: bodyStart + localEditorRegion.end,
+          width: localEditorRegion.width,
+          xOffset: visibleWidth(padding),
+        }
+      : undefined;
     if (this.message) {
       lines.push(...hardWrap(this.options.theme.fg("warning", this.message), contentWidth));
     }
@@ -101,6 +123,7 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
 
   handleInput(data: string): void {
     if (this.finished) return;
+    this.mousePressedOption = undefined;
     if (!this.options.isCurrent()) {
       this.finish({ kind: "closed", reason: "back" });
       return;
@@ -118,7 +141,51 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
     this.options.tui.requestRender();
   }
 
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.finished || event.width !== this.renderedWidth) return undefined;
+    if (!this.options.isCurrent()) {
+      this.finish({ kind: "closed", reason: "back" });
+      return { handled: true };
+    }
+    const editorRegion = this.editorRegion;
+    if (this.editorKind && editorRegion && event.y >= editorRegion.start && event.y < editorRegion.end) {
+      const result = this.editor.handleMouse({
+        ...event,
+        x: event.x - editorRegion.xOffset,
+        y: event.y - editorRegion.start,
+        width: editorRegion.width,
+        height: editorRegion.end - editorRegion.start,
+      });
+      return result ? { ...result, focus: true } : undefined;
+    }
+    if (this.editorKind) return undefined;
+    const mappedOption = this.optionByFrameRow.get(event.y);
+    if (mappedOption === undefined) return undefined;
+    const option = event.type === "click" ? (this.mousePressedOption ?? mappedOption) : mappedOption;
+    const question = this.options.questions[this.page];
+    const optionCount = (question?.options.length ?? 0) + Number(this.options.allowCustomAnswer);
+    if (option < 0 || option >= optionCount) return undefined;
+    if (event.type === "move") return { handled: true };
+    if (event.button !== "left") return undefined;
+    if (event.type === "press") {
+      this.mousePressedOption = option;
+      const changed = this.selectedOptions[this.page] !== option;
+      this.selectedOptions[this.page] = option;
+      if (changed) this.options.tui.requestRender();
+      return { handled: true, focus: true, render: changed };
+    }
+    if (event.type === "click") {
+      this.mousePressedOption = undefined;
+      this.selectedOptions[this.page] = option;
+      this.submitPage();
+      this.options.tui.requestRender();
+      return { handled: true, render: true };
+    }
+    return undefined;
+  }
+
   invalidate(): void {
+    this.clearMouseLayout();
     this.border.invalidate();
     this.editor.invalidate();
   }
@@ -126,6 +193,7 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
   dispose(): void {
     if (this.finished) return;
     this.finished = true;
+    this.clearMouseLayout();
     this.editor.focused = false;
   }
 
@@ -276,9 +344,19 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
         : `${this.options.theme.fg("text", label)}${
             chosen ? this.options.theme.fg("success", " ✓") : ""
           }${description ? this.options.theme.fg("muted", description) : ""}`;
-      lines.push(...hardWrapWithIndent(line, width, visibleWidth(`${cursor} ${index + 1}. `)));
+      const rendered = hardWrapWithIndent(line, width, visibleWidth(`${cursor} ${index + 1}. `));
+      const start = lines.length;
+      lines.push(...rendered);
+      for (let row = start; row < start + rendered.length; row += 1) this.localOptionRows.set(row, index);
     });
-    if (this.options.allowCustomAnswer) lines.push(...this.renderCustomOption(question));
+    if (this.options.allowCustomAnswer) {
+      const custom = this.renderCustomOption(question);
+      const start = lines.length;
+      lines.push(...custom);
+      for (let row = start; row < start + custom.length; row += 1) {
+        this.localOptionRows.set(row, question.options.length);
+      }
+    }
     const answer = this.answers[this.page];
     if (answer?.wasCustom) {
       lines.push(...labeledRaw(this.options.labels.answer, answer.answer, width, this.options.theme));
@@ -295,8 +373,11 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
             this.editorKind === "answer" ? this.options.labels.customAnswer : this.options.labels.optionalNote,
           ),
         ),
-        ...this.editor.render(width),
       );
+      const editorLines = this.editor.render(width);
+      const start = lines.length;
+      lines.push(...editorLines);
+      this.localEditorRegion = { start, end: start + editorLines.length, width };
     }
     return lines;
   }
@@ -461,8 +542,22 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
   private finish(value: QuestionnaireInteractionValue<QuestionId>): void {
     if (this.finished) return;
     this.finished = true;
+    this.clearMouseLayout();
     this.editor.focused = false;
     this.options.onDone(value);
+  }
+
+  private renderedLocalEditorRegion(): { start: number; end: number; width: number } | undefined {
+    return this.localEditorRegion;
+  }
+
+  private clearMouseLayout(): void {
+    this.renderedWidth = 0;
+    this.mousePressedOption = undefined;
+    this.localOptionRows.clear();
+    this.optionByFrameRow.clear();
+    this.localEditorRegion = undefined;
+    this.editorRegion = undefined;
   }
 }
 
@@ -514,6 +609,10 @@ class RawPreservingEditor implements Focusable {
       return;
     }
     this.editor.handleInput(data);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.editor.handleMouse(event);
   }
 
   render(width: number): string[] {

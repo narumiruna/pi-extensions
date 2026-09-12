@@ -630,6 +630,58 @@ test("browse preserves manual detail scrolling while search is active", () => {
   assert.match(scrolled.join("\n"), /row 1/u);
 });
 
+test("browse mouse routes search editing, stable row activation, and list wheel selection", () => {
+  const harness = componentHarness(browseScreen(), { rows: 14, selectedItemId: "model-raw" });
+  let frame = plainRender(harness.component, 48);
+  const searchRow = frame.findIndex((line) => line.includes("Search:"));
+  assert.notEqual(searchRow, -1);
+  harness.component.handleInput("Mdel");
+  frame = plainRender(harness.component, 48);
+  mouse(harness.component, frame, { type: "press", x: 11, y: searchRow }, 48);
+  harness.component.handleInput("o");
+  frame = plainRender(harness.component, 48);
+  assert.match(frame.join("\n"), /Model.*\[Showing\]/u);
+
+  let itemRow = frame.findIndex((line) => line.includes("› Model"));
+  mouse(harness.component, frame, { type: "press", x: 3, y: itemRow }, 48);
+  frame = plainRender(harness.component, 48);
+  itemRow = frame.findIndex((line) => line.includes("› Model"));
+  mouse(harness.component, frame, { type: "click", x: 3, y: itemRow }, 48);
+  assert.match(plainRender(harness.component, 48).join("\n"), /Preview: claude/u);
+
+  const wheelHarness = componentHarness(browseScreen(), { rows: 14, selectedItemId: "model-raw" });
+  frame = plainRender(wheelHarness.component, 48);
+  itemRow = frame.findIndex((line) => line.includes("› Model"));
+  mouse(wheelHarness.component, frame, { type: "wheel", x: 3, y: itemRow, wheelDelta: 1 }, 48);
+  assert.equal(wheelHarness.selectionChanges.at(-1), "git-raw");
+});
+
+test("browse detail mouse wheel scrolls only over document rows", () => {
+  const screen: MenuScreen<ScreenId, ActionId> = {
+    kind: "browse",
+    title: "Long document",
+    items: [
+      {
+        id: "long",
+        label: "Long",
+        detailDocument: { content: Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n") },
+      },
+    ],
+    enableDetailSearch: true,
+  };
+  const harness = componentHarness(screen, { rows: 9 });
+  harness.component.render(32);
+  harness.component.handleInput("y");
+  let frame = plainRender(harness.component, 32);
+  const documentRow = frame.findIndex((line) => line.includes("line 1"));
+  assert.notEqual(documentRow, -1);
+  mouse(harness.component, frame, { type: "move", x: 2, y: documentRow }, 32);
+  assert.match(plainRender(harness.component, 32).join("\n"), /line 1/u);
+  mouse(harness.component, frame, { type: "wheel", x: 2, y: documentRow, wheelDelta: 1 }, 32);
+  frame = plainRender(harness.component, 32);
+  assert.doesNotMatch(frame.join("\n"), /line 1/u);
+});
+
 test("browse searches exact detail documents and resets on exit", () => {
   const screen: MenuScreen<ScreenId, ActionId> = {
     kind: "browse",
@@ -665,6 +717,28 @@ test("browse searches exact detail documents and resets on exit", () => {
 
 function plainRender(component: MenuScreenComponent, width: number) {
   return component.render(width).map((line) => stripVTControlCharacters(line));
+}
+
+function mouse(
+  component: MenuScreenComponent,
+  frame: readonly string[],
+  event: { type: "move" | "press" | "click" | "wheel"; x: number; y: number; wheelDelta?: number },
+  width: number,
+) {
+  return component.handleMouse?.({
+    type: event.type,
+    button: event.type === "move" || event.type === "wheel" ? "none" : "left",
+    x: event.x,
+    y: event.y,
+    screenX: event.x,
+    screenY: event.y,
+    width,
+    height: frame.length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+    ...(event.wheelDelta === undefined ? {} : { wheelDelta: event.wheelDelta }),
+  });
 }
 
 function componentHarness(

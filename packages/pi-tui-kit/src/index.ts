@@ -56,6 +56,11 @@ export {
   runQuestionnaire,
 } from "./questionnaire.js";
 export { type RunMenuOptions, type RunMenuResult, runMenu } from "./runtime.js";
+export {
+  type RunSecretInputOptions,
+  type RunSecretInputResult,
+  runSecretInput,
+} from "./secret-input.js";
 export { type RunTaskOptions, type RunTaskResult, runTask } from "./task.js";
 export {
   hardWrapTerminalDocument,
@@ -91,4 +96,4 @@ export type {
   SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 17;
+export const PI_EXTENSION_MENU_API_VERSION = 18;

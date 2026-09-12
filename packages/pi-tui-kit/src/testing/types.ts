@@ -3,6 +3,7 @@ import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 
 export type TuiHarnessKey =
   | "app.models.save"
+  | "app.thinking.save"
   | "app.thinking.cycle"
   | "tui.input.tab"
   | "tui.select.up"
@@ -20,7 +21,9 @@ export interface TuiHarnessOptions {
   width?: number;
   rows?: number;
   theme?: Pick<Theme, "fg" | "bold">;
-  keybindings?: Pick<KeybindingsManager, "matches" | "getKeys">;
+  keybindings?: Pick<KeybindingsManager, "matches" | "getKeys"> & {
+    getDefinition?(binding: string): unknown;
+  };
 }
 
 export interface TuiHarnessResize {

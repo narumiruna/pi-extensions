@@ -1,5 +1,13 @@
 import { stripVTControlCharacters } from "node:util";
-import { type Focusable, Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  type Focusable,
+  Key,
+  matchesKey,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+  truncateToWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { MenuScreen, ReviewScreen } from "../types.js";
 import type { MenuKeybindings, MenuScreenComponent, MenuScreenComponentOptions } from "./contracts.js";
 import {
@@ -41,6 +49,14 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
   let lastSoftWrapAfter: readonly boolean[] = [];
   let lastIgnoreLeadingWhitespace: readonly boolean[] = [];
   let lastSearchSources: DocumentPresentation["searchSources"] = [];
+  let mouseLayout:
+    | {
+        width: number;
+        searchFrameRow?: number;
+        documentStartRow: number;
+        documentEndRow: number;
+      }
+    | undefined;
   const documentLineCache = createDocumentLineCache(options.theme, Boolean(options.screen.enableSearch));
   const search = options.screen.enableSearch ? new DocumentSearchController() : undefined;
   const searchActivationAvailable = Boolean(
@@ -110,9 +126,16 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
       scrollOffset = frame.scrollOffset;
       lastMaximumScroll = frame.maximumScroll;
       lastViewportSize = frame.viewportSize;
+      mouseLayout = {
+        width: safeWidth,
+        searchFrameRow: frame.searchFrameRow,
+        documentStartRow: frame.documentStartRow,
+        documentEndRow: frame.documentEndRow,
+      };
       return frame.lines;
     },
     invalidate() {
+      mouseLayout = undefined;
       documentLineCache.invalidate();
       search?.invalidate();
     },
@@ -180,10 +203,20 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
         options.tui.requestRender();
       }
     },
+    handleMouse(event) {
+      if (disposed || !mouseLayout || event.width !== mouseLayout.width) return undefined;
+      if (search?.active && event.y === mouseLayout.searchFrameRow) {
+        const inputWidth = Math.max(1, mouseLayout.width - 6);
+        if (event.x < 6 || event.x >= 6 + inputWidth) return undefined;
+        return search.input.handleMouse({ ...event, x: event.x - 6, y: 0, width: inputWidth, height: 1 });
+      }
+      return routeDocumentWheel(event);
+    },
     async waitForPending() {},
     dispose() {
       if (disposed) return;
       disposed = true;
+      mouseLayout = undefined;
       search?.dispose();
       options.onDispose?.();
     },
@@ -198,6 +231,21 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
       enumerable: true,
     });
   }
+  function routeDocumentWheel(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (
+      !mouseLayout ||
+      event.type !== "wheel" ||
+      !event.wheelDelta ||
+      event.y < mouseLayout.documentStartRow ||
+      event.y >= mouseLayout.documentEndRow
+    ) {
+      return undefined;
+    }
+    const previous = scrollOffset;
+    moveTo(scrollOffset + (event.wheelDelta < 0 ? -1 : 1));
+    return { handled: true, render: previous !== scrollOffset };
+  }
+
   return component;
 }
 
@@ -220,6 +268,9 @@ interface AdaptiveReviewFrame {
   scrollOffset: number;
   maximumScroll: number;
   viewportSize: number;
+  searchFrameRow?: number;
+  documentStartRow: number;
+  documentEndRow: number;
 }
 
 interface AdaptiveReviewChrome {
@@ -314,8 +365,19 @@ function renderAdaptiveReviewFrame<ActionId extends string>(
         renderHorizontalRule(options.width, options.theme),
       ]
     : contentLines;
+  const frameOffset = framed ? 1 : 0;
+  const searchFrameRow = options.searchLine === undefined ? undefined : frameOffset + chrome.header.length;
+  const documentStartRow = frameOffset + chrome.header.length + searchRows + Number(chrome.separator);
 
-  return { lines, scrollOffset, maximumScroll, viewportSize: chrome.viewportSize };
+  return {
+    lines,
+    scrollOffset,
+    maximumScroll,
+    viewportSize: chrome.viewportSize,
+    searchFrameRow,
+    documentStartRow,
+    documentEndRow: documentStartRow + visible.length,
+  };
 }
 
 function allocateEmptyReviewChrome(

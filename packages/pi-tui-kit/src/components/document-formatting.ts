@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import * as PiTui from "@earendil-works/pi-tui";
+import { diffWordsWithSpace } from "diff";
 import { hardWrapTerminalDocument } from "../terminal-document.js";
 import type { ReviewFormat } from "../types.js";
 import { sanitizeDocumentText } from "./document-sanitization.js";
@@ -11,8 +12,11 @@ import { getLanguageFromPath, highlightCode } from "./syntax-highlighting.js";
 export const RPC_DOCUMENT_LINE_WIDTH = 120;
 export const RPC_DOCUMENT_PAGE_SIZE = 8;
 const MAX_MARKDOWN_REFERENCE_CELLS = 100_000;
+const MAX_INTRALINE_PAIR_CODE_UNITS = 4_096;
+const MAX_INTRALINE_DOCUMENT_CODE_UNITS = 20_000;
 
-type DocumentTheme = Pick<Theme, "fg" | "bold"> & Partial<Pick<Theme, "italic" | "underline" | "strikethrough">>;
+type DocumentTheme = Pick<Theme, "fg" | "bold"> &
+  Partial<Pick<Theme, "inverse" | "italic" | "underline" | "strikethrough">>;
 
 export function createDocumentLineCache(theme: DocumentTheme, includeSearchMetadata = false) {
   let cached:
@@ -131,26 +135,26 @@ export function formatDocumentPresentation(
       searchSources: markdownTableSearchSources(lines, referenceLines, boundaryLines),
     };
   }
-  const segments = documentSegments(content, width);
-  let lines: string[];
-  if (resolvedFormat.kind === "code") {
-    const language =
-      resolvedFormat.language ?? (resolvedFormat.filePath ? getLanguageFromPath(resolvedFormat.filePath) : undefined);
-    lines = segments.map(({ text }) => highlightCode(text, language, theme));
-  } else if (resolvedFormat.kind === "diff") {
-    lines = segments.map(({ source, text }) => {
-      if (source.startsWith("@@")) return theme.fg("accent", text);
-      if (source.startsWith("+") && !source.startsWith("+++")) {
-        return theme.fg("toolDiffAdded", text);
-      }
-      if (source.startsWith("-") && !source.startsWith("---")) {
-        return theme.fg("toolDiffRemoved", text);
-      }
-      return theme.fg("toolDiffContext", text);
-    });
-  } else {
-    lines = segments.map(({ text }) => theme.fg("text", text));
+  if (resolvedFormat.kind === "diff") {
+    const diff = formatDiffDocument(content, width, theme);
+    return {
+      lines: diff.lines,
+      searchLines: diff.lines,
+      softWrapAfter: diff.softWrapAfter,
+      ignoreLeadingWhitespace: diff.lines.map(() => false),
+      searchSources: [],
+    };
   }
+  const segments = documentSegments(content, width);
+  const lines =
+    resolvedFormat.kind === "code"
+      ? segments.map(({ text }) => {
+          const language =
+            resolvedFormat.language ??
+            (resolvedFormat.filePath ? getLanguageFromPath(resolvedFormat.filePath) : undefined);
+          return highlightCode(text, language, theme);
+        })
+      : segments.map(({ text }) => theme.fg("text", text));
   return {
     lines,
     searchLines: lines,
@@ -159,6 +163,257 @@ export function formatDocumentPresentation(
     searchSources: [],
   };
 }
+
+interface StyledDiffPart {
+  text: string;
+  changed: boolean;
+}
+
+interface ParsedChangedDiffLine {
+  marker: "+" | "-";
+  prefix: string;
+  content: string;
+}
+
+function formatDiffDocument(content: string, width: number, theme: DocumentTheme) {
+  const sourceLines = sanitizeDocumentText(content).split("\n");
+  const fileHeaderLines = findDiffFileHeaderLines(sourceLines);
+  const lines: string[] = [];
+  const softWrapAfter: boolean[] = [];
+  let remainingIntralineCodeUnits = MAX_INTRALINE_DOCUMENT_CODE_UNITS;
+  const append = (rendered: readonly string[]) => {
+    lines.push(...rendered);
+    softWrapAfter.push(...rendered.map((_, index) => index < rendered.length - 1));
+  };
+
+  for (let index = 0; index < sourceLines.length; ) {
+    const source = sourceLines[index] ?? "";
+    const parsed = fileHeaderLines.has(index) ? undefined : parseChangedDiffLine(source);
+    if (parsed?.marker === "-") {
+      const removed: ParsedChangedDiffLine[] = [];
+      while (index < sourceLines.length) {
+        const candidate = fileHeaderLines.has(index) ? undefined : parseChangedDiffLine(sourceLines[index] ?? "");
+        if (candidate?.marker !== "-") break;
+        removed.push(candidate);
+        index += 1;
+      }
+      const added: ParsedChangedDiffLine[] = [];
+      while (index < sourceLines.length) {
+        const candidate = fileHeaderLines.has(index) ? undefined : parseChangedDiffLine(sourceLines[index] ?? "");
+        if (candidate?.marker !== "+") break;
+        added.push(candidate);
+        index += 1;
+      }
+      const pairCodeUnits = (removed[0]?.content.length ?? 0) + (added[0]?.content.length ?? 0);
+      if (
+        removed.length === 1 &&
+        added.length === 1 &&
+        pairCodeUnits <= MAX_INTRALINE_PAIR_CODE_UNITS &&
+        pairCodeUnits <= remainingIntralineCodeUnits
+      ) {
+        const removedLine = removed[0];
+        const addedLine = added[0];
+        if (removedLine && addedLine) {
+          remainingIntralineCodeUnits -= pairCodeUnits;
+          const expandedRemoved = expandChangedDiffLine(removedLine);
+          const expandedAdded = expandChangedDiffLine(addedLine);
+          const paired = pairedDiffParts(expandedRemoved.content, expandedAdded.content);
+          append(renderStyledDiffLine(expandedRemoved.prefix, paired.removed, width, "toolDiffRemoved", theme));
+          append(renderStyledDiffLine(expandedAdded.prefix, paired.added, width, "toolDiffAdded", theme));
+        }
+      } else {
+        for (const line of removed) append(renderPlainDiffLine(line, width, "toolDiffRemoved", theme));
+        for (const line of added) append(renderPlainDiffLine(line, width, "toolDiffAdded", theme));
+      }
+      continue;
+    }
+    if (parsed?.marker === "+") {
+      append(renderPlainDiffLine(parsed, width, "toolDiffAdded", theme));
+      index += 1;
+      continue;
+    }
+    const role = source.startsWith("@@") ? "accent" : "toolDiffContext";
+    append(renderStyledDiffLine("", [{ text: expandDiffTabs(source), changed: false }], width, role, theme));
+    index += 1;
+  }
+
+  return { lines, softWrapAfter };
+}
+
+function findDiffFileHeaderLines(lines: readonly string[]) {
+  const headers = new Set<number>();
+  let hunk: { old: number; added: number } | undefined;
+  let filePreamble = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (line.startsWith("diff --git ")) {
+      hunk = undefined;
+      filePreamble = true;
+      continue;
+    }
+    const nextHunk = parseDiffHunkHeader(line);
+    if (nextHunk) {
+      hunk = nextHunk;
+      filePreamble = false;
+      continue;
+    }
+    if (hunk) {
+      if (line.startsWith(" ")) {
+        hunk.old -= 1;
+        hunk.added -= 1;
+      } else if (line.startsWith("-")) hunk.old -= 1;
+      else if (line.startsWith("+")) hunk.added -= 1;
+      else if (!line.startsWith("\\")) hunk = undefined;
+      if (hunk && hunk.old <= 0 && hunk.added <= 0) hunk = undefined;
+      continue;
+    }
+    if (
+      line.startsWith("---") &&
+      lines[index + 1]?.startsWith("+++") &&
+      (filePreamble || lines[index + 2]?.startsWith("@@"))
+    ) {
+      headers.add(index);
+      headers.add(index + 1);
+      index += 1;
+      filePreamble = false;
+    }
+  }
+  return headers;
+}
+
+function parseDiffHunkHeader(line: string) {
+  const match = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/u.exec(line);
+  if (!match) return undefined;
+  return {
+    old: Number(match[1] ?? 1),
+    added: Number(match[2] ?? 1),
+  };
+}
+
+function parseChangedDiffLine(line: string): ParsedChangedDiffLine | undefined {
+  const marker = line[0];
+  if (marker !== "+" && marker !== "-") return undefined;
+  const indented = /^([+-])(\s+)(.*)$/u.exec(line);
+  if (indented) {
+    return {
+      marker,
+      prefix: `${marker}${indented[2] ?? ""}`,
+      content: indented[3] ?? "",
+    };
+  }
+  return { marker, prefix: marker, content: line.slice(1) };
+}
+
+function renderPlainDiffLine(
+  line: ParsedChangedDiffLine,
+  width: number,
+  role: "toolDiffAdded" | "toolDiffRemoved",
+  theme: DocumentTheme,
+) {
+  const expanded = expandChangedDiffLine(line);
+  return renderStyledDiffLine(expanded.prefix, [{ text: expanded.content, changed: false }], width, role, theme);
+}
+
+function expandChangedDiffLine(line: ParsedChangedDiffLine) {
+  const prefix = expandDiffTabs(line.prefix);
+  return {
+    prefix,
+    content: expandDiffTabs(line.content, PiTui.visibleWidth(prefix)),
+  };
+}
+
+function pairedDiffParts(oldContent: string, newContent: string) {
+  const removed: StyledDiffPart[] = [];
+  const added: StyledDiffPart[] = [];
+  for (const part of diffWordsWithSpace(oldContent, newContent)) {
+    if (part.removed) {
+      appendChangedDiffPart(removed, part.value, hasOnlyLeadingWhitespace(removed));
+    } else if (part.added) {
+      appendChangedDiffPart(added, part.value, hasOnlyLeadingWhitespace(added));
+    } else {
+      appendStyledDiffPart(removed, part.value, false);
+      appendStyledDiffPart(added, part.value, false);
+    }
+  }
+  return { removed, added };
+}
+
+function hasOnlyLeadingWhitespace(parts: readonly StyledDiffPart[]) {
+  return parts.every((part) => !/\S/u.test(part.text));
+}
+
+function appendChangedDiffPart(target: StyledDiffPart[], value: string, stripLeadingWhitespace: boolean) {
+  if (!stripLeadingWhitespace) {
+    appendStyledDiffPart(target, value, true);
+    return;
+  }
+  const leadingWhitespace = /^\s*/u.exec(value)?.[0] ?? "";
+  appendStyledDiffPart(target, leadingWhitespace, false);
+  appendStyledDiffPart(target, value.slice(leadingWhitespace.length), true);
+}
+
+function appendStyledDiffPart(target: StyledDiffPart[], text: string, changed: boolean) {
+  if (!text) return;
+  const previous = target.at(-1);
+  if (previous?.changed === changed) previous.text += text;
+  else target.push({ text, changed });
+}
+
+function renderStyledDiffLine(
+  prefix: string,
+  content: readonly StyledDiffPart[],
+  width: number,
+  role: "accent" | "toolDiffAdded" | "toolDiffContext" | "toolDiffRemoved",
+  theme: DocumentTheme,
+) {
+  const safeWidth = Math.max(1, Math.floor(width));
+  const rows: StyledDiffPart[][] = [];
+  let row: StyledDiffPart[] = [];
+  let rowWidth = 0;
+  const flush = () => {
+    rows.push(row);
+    row = [];
+    rowWidth = 0;
+  };
+  for (const part of [{ text: prefix, changed: false }, ...content]) {
+    for (const { segment } of diffGraphemeSegmenter.segment(part.text)) {
+      const segmentWidth = PiTui.visibleWidth(segment);
+      if (segmentWidth > safeWidth) {
+        if (row.length > 0) flush();
+        rows.push([{ text: "?".repeat(safeWidth), changed: part.changed }]);
+        continue;
+      }
+      if (rowWidth + segmentWidth > safeWidth && row.length > 0) flush();
+      appendStyledDiffPart(row, segment, part.changed);
+      rowWidth += segmentWidth;
+    }
+  }
+  if (row.length > 0 || rows.length === 0) flush();
+  return rows.map((parts) =>
+    theme.fg(
+      role,
+      parts.map((part) => (part.changed && theme.inverse ? theme.inverse(part.text) : part.text)).join(""),
+    ),
+  );
+}
+
+function expandDiffTabs(line: string, initialColumn = 0) {
+  let column = Math.max(0, initialColumn);
+  let output = "";
+  for (const { segment } of diffGraphemeSegmenter.segment(line)) {
+    if (segment === "\t") {
+      const count = 4 - (column % 4);
+      output += " ".repeat(count);
+      column += count;
+    } else {
+      output += segment;
+      column += PiTui.visibleWidth(segment);
+    }
+  }
+  return output;
+}
+
+const diffGraphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function markdownSearchLines(lines: readonly string[]) {
   const plainLines = lines.map((line) => PiTui.stripTerminalSequences(line).trimEnd());

@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { type Focusable, Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import { createMenuScreenComponent, safeMenuText } from "./components/index.js";
 import { runCustomInteraction } from "./custom-interaction.js";
 import { formatInteractionHints } from "./interaction-hints.js";
@@ -12,6 +12,8 @@ export interface LiveChoiceItem<ItemId extends string = string> {
   label: string;
   description?: string;
   details?: readonly string[];
+  /** Additional non-rendered text used by optional TUI fuzzy search. */
+  searchText?: string;
   disabled?: boolean;
   disabledReason?: string;
   confirmationDisabled?: boolean;
@@ -44,6 +46,8 @@ export interface RunLiveChoiceOptions<
   currentItemId?: Item["id"];
   initialItemId?: Item["id"];
   viewportSize?: number;
+  /** Enables TUI-only fuzzy filtering; RPC preserves its deterministic unfiltered list. */
+  enableSearch?: boolean;
   hint?: MenuCloseReason;
   navigationLabel?: string;
   confirmLabel?: string;
@@ -104,7 +108,7 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
     onError: (currentCtx, error) => reportLiveChoiceError(currentCtx, options, error),
     create: ({ tui, theme, keybindings, signal, complete }) => {
       let focusedItemId = selectedItemId;
-      const shortcuts = availableShortcuts(options.shortcuts, keybindings);
+      const shortcuts = options.enableSearch ? [] : availableShortcuts(options.shortcuts, keybindings);
       const previews = createPreviewQueue(ctx, options, signal, () => complete({ kind: "previewFailed" }));
       const component = createMenuScreenComponent<"liveChoice", "select">({
         screen: {
@@ -115,6 +119,7 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
           action: "select",
           currentItemId: options.currentItemId,
           viewportSize: options.viewportSize,
+          enableSearch: options.enableSearch,
           hint: options.hint ?? "back",
         },
         selectedItemId,
@@ -140,7 +145,14 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
       const initialItem = findItem(options.items, focusedItemId);
       if (initialItem) previews.enqueue(initialItem);
 
+      const focusable = component as typeof component & Partial<Focusable>;
       return {
+        get focused() {
+          return focusable.focused ?? false;
+        },
+        set focused(value: boolean) {
+          if ("focused" in focusable) focusable.focused = value;
+        },
         render: (width) => component.render(width),
         invalidate: () => component.invalidate(),
         handleInput(data) {
@@ -158,6 +170,9 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
             return;
           }
           component.handleInput(data);
+        },
+        handleMouse(event) {
+          return component.handleMouse?.(event);
         },
         async waitForPending() {
           await component.waitForPending();

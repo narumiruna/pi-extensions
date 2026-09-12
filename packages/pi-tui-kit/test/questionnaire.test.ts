@@ -356,6 +356,98 @@ test("runQuestionnaire gives configured standard actions priority over additive 
   assert.deepEqual(await running, { kind: "closed", reason: "back" });
 });
 
+test("runQuestionnaire forwards passive hover and stable option mouse clicks through the outer wrapper", async () => {
+  const { tui, running } = tuiRun();
+  await tui.waitForOpen();
+  let frame = tui.render();
+  let row = frame.findIndex((line) => line.includes("2. Broad"));
+  assert.notEqual(row, -1);
+  tui.mouse({ type: "move", x: 4, y: row });
+  assert.match(tui.render().join("\n"), /→ 1\. Small/u);
+  tui.mouse({ type: "press", x: 4, y: row });
+  frame = tui.render();
+  row = frame.findIndex((line) => line.includes("2. Broad"));
+  tui.mouse({ type: "click", x: 4, y: row });
+  assert.match(tui.render().join("\n"), /\[Tests\]/u);
+  tui.press("ctrl+c");
+  assert.deepEqual(await running, { kind: "closed", reason: "close" });
+});
+
+test("runQuestionnaire keeps answer and note editors authoritative over option mouse rows", async () => {
+  const custom = tuiRun();
+  await custom.tui.waitForOpen();
+  custom.tui.setFocused(true);
+  custom.tui.press("tui.select.down");
+  custom.tui.press("tui.select.down");
+  custom.tui.press("tui.select.confirm");
+  custom.tui.type("custom draft");
+  let frame = custom.tui.render();
+  let optionRow = frame.findIndex((line) => line.includes("1. Small"));
+  assert.notEqual(optionRow, -1);
+  custom.tui.mouse({ type: "press", x: 4, y: optionRow });
+  frame = custom.tui.render();
+  optionRow = frame.findIndex((line) => line.includes("1. Small"));
+  custom.tui.mouse({ type: "click", x: 4, y: optionRow });
+  assert.match(custom.tui.render().join("\n"), /\[Scope\].*Custom answer.*custom draft/su);
+  custom.tui.press("tui.input.submit");
+  custom.tui.press("tui.select.confirm");
+  custom.tui.press("tui.select.confirm");
+  assert.deepEqual(await custom.running, {
+    kind: "submitted",
+    answers: [
+      { questionId: "scope", answer: "custom draft", wasCustom: true },
+      { questionId: "tests", answer: "Focused", wasCustom: false, optionIndex: 1 },
+    ],
+  });
+
+  const note = tuiRun();
+  await note.tui.waitForOpen();
+  note.tui.setFocused(true);
+  note.tui.type("n");
+  note.tui.type("note draft");
+  frame = note.tui.render();
+  optionRow = frame.findIndex((line) => line.includes("2. Broad"));
+  assert.notEqual(optionRow, -1);
+  note.tui.mouse({ type: "press", x: 4, y: optionRow });
+  frame = note.tui.render();
+  optionRow = frame.findIndex((line) => line.includes("2. Broad"));
+  note.tui.mouse({ type: "click", x: 4, y: optionRow });
+  assert.match(note.tui.render().join("\n"), /\[(?:✓ )?Scope\].*Optional note.*note draft/su);
+  note.tui.press("tui.input.submit");
+  note.tui.press("tui.select.confirm");
+  note.tui.press("tui.select.confirm");
+  note.tui.press("tui.select.confirm");
+  assert.deepEqual(await note.running, {
+    kind: "submitted",
+    answers: [
+      { questionId: "scope", answer: "Small", wasCustom: false, optionIndex: 1, note: "note draft" },
+      { questionId: "tests", answer: "Focused", wasCustom: false, optionIndex: 1 },
+    ],
+  });
+});
+
+test("runQuestionnaire forwards Editor mouse positioning without changing raw draft semantics", async () => {
+  const { tui, running } = tuiRun([questions[0]]);
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.press("tui.select.down");
+  tui.press("tui.select.down");
+  tui.press("tui.select.confirm");
+  tui.type("ac");
+  const frame = tui.render();
+  const editorRow = frame
+    .map(stripVTControlCharacters)
+    .findIndex((line) => line.includes("ac") && !line.includes("Custom answer"));
+  assert.notEqual(editorRow, -1);
+  tui.mouse({ type: "click", x: 2, y: editorRow });
+  tui.type("b");
+  tui.press("tui.input.submit");
+  assert.deepEqual(await running, {
+    kind: "submitted",
+    answers: [{ questionId: "scope", answer: "abc", wasCustom: true }],
+  });
+});
+
 test("runQuestionnaire distinguishes Back, Close, owner abort, disposal, and stale owners", async () => {
   async function drive(exit: "tui.select.cancel" | "ctrl+c") {
     const { tui, running } = tuiRun([questions[0]]);

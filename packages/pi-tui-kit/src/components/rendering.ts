@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { type Input, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { renderBoundedFrame } from "../bounded-frame.js";
+import { renderBoundedFrameLayout } from "../bounded-frame.js";
 import { HorizontalRule } from "../horizontal-rule.js";
 import { formatInteractionHints } from "../interaction-hints.js";
 import { replaceTerminalControls, safeMenuText } from "../text.js";
@@ -49,6 +49,18 @@ export function renderFrame<ScreenId extends string, ActionId extends string>(
   options: MenuScreenComponentOptions<ScreenId, ActionId>,
   layout: FrameLayoutOptions = {},
 ): string[] {
+  return renderFrameLayout(title, lines, content, destination, width, options, layout).lines;
+}
+
+export function renderFrameLayout<ScreenId extends string, ActionId extends string>(
+  title: string,
+  lines: readonly string[],
+  content: readonly string[],
+  destination: "back" | "close",
+  width: number,
+  options: MenuScreenComponentOptions<ScreenId, ActionId>,
+  layout: FrameLayoutOptions = {},
+) {
   const safeWidth = Math.max(1, width);
   const rule = renderHorizontalRule(safeWidth, options.theme);
   const confirmAction = layout.confirmAction ?? "select";
@@ -85,7 +97,7 @@ export function renderFrame<ScreenId extends string, ActionId extends string>(
     .filter(({ line }) => stripVTControlCharacters(line).trim().length > 0);
   const compactRows = compactContent.map(({ line }) => line);
   const priorities = priorityRowIndexes(compactRows, layout.pinnedContentRows ?? 0, layout.priorityTailRows ?? 0);
-  return renderBoundedFrame({
+  return renderBoundedFrameLayout({
     width: safeWidth,
     maxRows: componentRows(options.tui.terminal.rows),
     rule,

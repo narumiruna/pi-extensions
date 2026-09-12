@@ -1322,6 +1322,92 @@ test("multi-select search is opt-in and default rendering remains unchanged", ()
   assert.doesNotMatch(before.join("\n"), /Type to search/);
 });
 
+test("mouse routes stable action and choice rows while hover and disabled rows stay passive", () => {
+  const actions = componentHarness(actionScreen, { plainTheme: true, selectedItemId: "run" });
+  let frame = plainRender(actions.component, 80);
+  let row = frame.findIndex((line) => line.includes("Open details"));
+  assert.notEqual(row, -1);
+  dispatchMouse(actions.component, frame, { type: "move", row });
+  assert.match(plainRender(actions.component, 80).join("\n"), /→ Run operation/u);
+  dispatchMouse(actions.component, frame, { type: "press", row });
+  frame = plainRender(actions.component, 80);
+  dispatchMouse(actions.component, frame, { type: "click", row: 0 });
+  assert.deepEqual(actions.events, []);
+  dispatchMouse(actions.component, frame, { type: "click", row });
+  assert.deepEqual(actions.events, [{ kind: "activate", itemId: "detail" }]);
+
+  const disabled = componentHarness(choiceScreen, { plainTheme: true, selectedItemId: "verbose" });
+  frame = plainRender(disabled.component, 80);
+  row = frame.findIndex((line) => line.includes("Verbose"));
+  assert.notEqual(row, -1);
+  dispatchMouse(disabled.component, frame, { type: "press", row });
+  frame = plainRender(disabled.component, 80);
+  row = frame.findIndex((line) => line.includes("Verbose"));
+  dispatchMouse(disabled.component, frame, { type: "click", row });
+  assert.deepEqual(disabled.events, []);
+  assert.match(plainRender(disabled.component, 80).join("\n"), /Unavailable here/u);
+});
+
+test("mouse wheels list selection and rejected settings clicks restore committed state", async () => {
+  const actions = componentHarness(actionScreen, { plainTheme: true, selectedItemId: "run" });
+  let frame = plainRender(actions.component, 80);
+  const row = frame.findIndex((line) => line.includes("Run operation"));
+  assert.notEqual(row, -1);
+  dispatchMouse(actions.component, frame, { type: "wheel", row, wheelDelta: 1 });
+  assert.match(plainRender(actions.component, 80).join("\n"), /→ Open details/u);
+
+  const settings = componentHarness(settingsScreen, {
+    plainTheme: true,
+    onSettingChange: async () => false,
+  });
+  frame = plainRender(settings.component, 80);
+  let settingRow = frame.findIndex((line) => line.includes("Automatic start"));
+  assert.notEqual(settingRow, -1);
+  dispatchMouse(settings.component, frame, { type: "press", row: settingRow });
+  frame = plainRender(settings.component, 80);
+  settingRow = frame.findIndex((line) => line.includes("Automatic start"));
+  dispatchMouse(settings.component, frame, { type: "click", row: settingRow });
+  assert.match(plainRender(settings.component, 80).join("\n"), /Automatic start\s+On/u);
+  await settings.component.waitForPending();
+  assert.match(plainRender(settings.component, 80).join("\n"), /Automatic start\s+Off/u);
+});
+
+test("mouse clicks a filtered multi-select row and action clicks settle only once", async () => {
+  const filtered = componentHarness(
+    {
+      ...multiSelectScreen,
+      enableSearch: true,
+    },
+    {
+      plainTheme: true,
+      keybindings: inputFriendlyKeybindings,
+      onMultiSelectChange: async () => true,
+    },
+  );
+  filtered.component.handleInput("two");
+  let frame = plainRender(filtered.component, 80);
+  let row = frame.findIndex((line) => line.includes("tool_two"));
+  assert.notEqual(row, -1);
+  dispatchMouse(filtered.component, frame, { type: "press", row });
+  frame = plainRender(filtered.component, 80);
+  row = frame.findIndex((line) => line.includes("tool_two"));
+  dispatchMouse(filtered.component, frame, { type: "click", row });
+  await filtered.component.waitForPending();
+  assert.match(plainRender(filtered.component, 80).join("\n"), /› \[x\] tool_two/u);
+
+  const action = componentHarness(
+    { ...multiSelectScreen, items: [], actions: [{ id: "all", label: "Enable all", action: "run" }] },
+    { plainTheme: true },
+  );
+  frame = plainRender(action.component, 80);
+  row = frame.findIndex((line) => line.includes("Enable all"));
+  dispatchMouse(action.component, frame, { type: "press", row });
+  dispatchMouse(action.component, frame, { type: "click", row });
+  dispatchMouse(action.component, frame, { type: "click", row });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(action.events, [{ kind: "activate", itemId: "all" }]);
+});
+
 function largeMultiSelectScreen(): MenuScreen<ScreenId, ActionId> {
   return {
     kind: "multiSelect",
@@ -1356,6 +1442,28 @@ function largeSettingsScreen(): MenuScreen<ScreenId, ActionId> {
 
 function plainRender(component: MenuScreenComponent, width: number) {
   return component.render(width).map((line) => stripVTControlCharacters(line));
+}
+
+function dispatchMouse(
+  component: MenuScreenComponent,
+  frame: readonly string[],
+  options: { type: "move" | "press" | "click" | "wheel"; row: number; wheelDelta?: number },
+  width = 80,
+) {
+  return component.handleMouse?.({
+    type: options.type,
+    button: options.type === "move" || options.type === "wheel" ? "none" : "left",
+    x: 4,
+    y: options.row,
+    screenX: 4,
+    screenY: options.row,
+    width,
+    height: frame.length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+    ...(options.wheelDelta === undefined ? {} : { wheelDelta: options.wheelDelta }),
+  });
 }
 
 function componentHarness(

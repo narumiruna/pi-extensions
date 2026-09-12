@@ -8,6 +8,8 @@ import {
   matchesKey,
   type SelectItem,
   SelectList,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
@@ -29,6 +31,7 @@ import {
   actionMenuUnavailableDescription,
   handleSearchInput,
   renderFrame,
+  renderFrameLayout,
   safeMenuText,
 } from "./rendering.js";
 import { createReviewComponent, type ReviewOptions } from "./review.js";
@@ -45,6 +48,9 @@ export type {
 export { prepareMenuScreenRendering } from "./mermaid.js";
 export { actionMenuDialogLabel, safeMenuText } from "./rendering.js";
 export { reviewDialogPages } from "./review.js";
+
+const BRACKETED_PASTE_START = "\u001b[200~";
+const BRACKETED_PASTE_END = "\u001b[201~";
 
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
   options: MenuScreenComponentOptions<ScreenId, ActionId>,
@@ -209,6 +215,10 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
   );
   let restoreItemId: string | undefined;
   let disposed = false;
+  let searchPasteActive = false;
+  let searchPasteEndPrefix = "";
+  let mousePressedIndex: number | undefined;
+  let mouseLayout: ListMouseLayout | undefined;
   let list = createList();
 
   function pageSize() {
@@ -241,6 +251,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
   const move = (delta: number) => setSelectedIndex(selectedIndex + delta, true, true);
   const applyFilter = () => {
     if (!options.screen.enableSearch) return;
+    mousePressedIndex = undefined;
     const previouslySelectedId = selected()?.id;
     filteredItems = fuzzyFilter(allItems, searchInput.getValue(), (candidate) => candidate.searchText);
     if (filteredItems.length === 0) {
@@ -260,7 +271,75 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
   };
   const activate = () => {
     const item = selected();
-    if (item && !item.disabled) options.onEvent({ kind: "activate", itemId: item.id });
+    if (!item || item.disabled) return false;
+    options.onEvent({ kind: "activate", itemId: item.id });
+    return true;
+  };
+  const applySearchInput = (data: string) => {
+    handleSearchInput(searchInput, data);
+    options.onSearchQueryChange?.(searchInput.getValue());
+    applyFilter();
+  };
+  const dispatchNonPasteInput = (data: string) => {
+    if (matchesKey(data, Key.ctrl("c"))) {
+      options.onEvent({ kind: "close" });
+      return true;
+    }
+    if (options.keybindings.matches(data, "tui.select.cancel")) {
+      options.onEvent({ kind: options.screen.hint ?? "back" });
+      return true;
+    }
+    if (options.keybindings.matches(data, "tui.select.up")) move(-1);
+    else if (options.keybindings.matches(data, "tui.select.down")) move(1);
+    else if (options.keybindings.matches(data, "tui.select.pageUp")) {
+      setSelectedIndex(selectedIndex - Math.max(1, pageSize()), false, true);
+    } else if (options.keybindings.matches(data, "tui.select.pageDown")) {
+      setSelectedIndex(selectedIndex + Math.max(1, pageSize()), false, true);
+    } else if (matchesKey(data, Key.home)) setSelectedIndex(0, false, true);
+    else if (matchesKey(data, Key.end)) {
+      setSelectedIndex(filteredItems.length - 1, false, true);
+    } else if (
+      options.keybindings.matches(data, "tui.select.confirm") ||
+      (!options.screen.enableSearch && data === " ")
+    ) {
+      return activate();
+    } else if (options.screen.enableSearch) applySearchInput(data);
+    return false;
+  };
+  const dispatchInput = (data: string) => {
+    let remaining = data;
+    while (remaining) {
+      if (!options.screen.enableSearch) {
+        dispatchNonPasteInput(remaining);
+        return;
+      }
+      if (searchPasteActive) {
+        const prefix = searchPasteEndPrefix;
+        const combined = prefix + remaining;
+        const end = combined.indexOf(BRACKETED_PASTE_END);
+        const consumed = end < 0 ? remaining.length : Math.max(0, end + BRACKETED_PASTE_END.length - prefix.length);
+        const pasteChunk = remaining.slice(0, consumed);
+        if (pasteChunk) applySearchInput(pasteChunk);
+        if (end < 0) {
+          const prefixLength = trailingMarkerPrefixLength(combined, BRACKETED_PASTE_END);
+          searchPasteEndPrefix = prefixLength > 0 ? combined.slice(-prefixLength) : "";
+          return;
+        }
+        searchPasteActive = false;
+        searchPasteEndPrefix = "";
+        remaining = remaining.slice(consumed);
+        continue;
+      }
+      const start = remaining.indexOf(BRACKETED_PASTE_START);
+      if (start < 0) {
+        dispatchNonPasteInput(remaining);
+        return;
+      }
+      if (start > 0 && dispatchNonPasteInput(remaining.slice(0, start))) return;
+      searchPasteActive = true;
+      searchPasteEndPrefix = "";
+      remaining = remaining.slice(start);
+    }
   };
   const component: MenuScreenComponent & Partial<Focusable> = {
     render(width) {
@@ -285,7 +364,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
             ...(filteredItems.length > 0 ? [options.theme.fg("dim", "Type to search")] : []),
           ]
         : choices;
-      return renderFrame(
+      const frame = renderFrameLayout(
         options.screen.title,
         options.screen.lines ?? [],
         search,
@@ -300,41 +379,50 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
           priorityTailRows: detailRows.length + (options.screen.enableSearch ? 1 : 0),
         },
       );
+      const listContentStart = options.screen.enableSearch ? 2 : 0;
+      const visibleCount = Math.min(filteredItems.length, options.screen.viewportSize ?? 10);
+      const viewportStart = listWindowStart(selectedIndex, filteredItems.length, visibleCount);
+      mouseLayout = {
+        width: safeWidth,
+        inputFrameRow: options.screen.enableSearch ? frameRowForContent(frame, 0) : undefined,
+        itemByFrameRow: itemRowsForFrame(frame, listContentStart, viewportStart, visibleCount),
+      };
+      return frame.lines;
     },
     invalidate() {
+      mouseLayout = undefined;
       list.invalidate();
       if (options.screen.enableSearch) searchInput.invalidate();
     },
     handleInput(data) {
       if (disposed) return;
-      if (matchesKey(data, Key.ctrl("c"))) options.onEvent({ kind: "close" });
-      else if (options.keybindings.matches(data, "tui.select.cancel")) {
-        options.onEvent({ kind: options.screen.hint ?? "back" });
-      } else if (options.keybindings.matches(data, "tui.select.up")) move(-1);
-      else if (options.keybindings.matches(data, "tui.select.down")) move(1);
-      else if (options.keybindings.matches(data, "tui.select.pageUp")) {
-        setSelectedIndex(selectedIndex - Math.max(1, pageSize()), false, true);
-      } else if (options.keybindings.matches(data, "tui.select.pageDown")) {
-        setSelectedIndex(selectedIndex + Math.max(1, pageSize()), false, true);
-      } else if (matchesKey(data, Key.home)) setSelectedIndex(0, false, true);
-      else if (matchesKey(data, Key.end)) {
-        setSelectedIndex(filteredItems.length - 1, false, true);
-      } else if (
-        options.keybindings.matches(data, "tui.select.confirm") ||
-        (!options.screen.enableSearch && data === " ")
-      ) {
-        activate();
-      } else if (options.screen.enableSearch) {
-        handleSearchInput(searchInput, data);
-        options.onSearchQueryChange?.(searchInput.getValue());
-        applyFilter();
-      }
+      mousePressedIndex = undefined;
+      dispatchInput(data);
       options.tui.requestRender();
+    },
+    handleMouse(event) {
+      if (disposed) return undefined;
+      const inputResult = routeInputMouse(searchInput, event, mouseLayout, options.screen.enableSearch ? 8 : 0);
+      if (inputResult) return inputResult;
+      return routeListMouse(event, mouseLayout, {
+        selectedIndex,
+        itemCount: filteredItems.length,
+        onSelect: (index) => setSelectedIndex(index, false, true),
+        onActivate: activate,
+        getPressedIndex: () => mousePressedIndex,
+        setPressedIndex: (index) => {
+          mousePressedIndex = index;
+        },
+      });
     },
     async waitForPending() {},
     dispose() {
       if (disposed) return;
       disposed = true;
+      searchPasteActive = false;
+      searchPasteEndPrefix = "";
+      mousePressedIndex = undefined;
+      mouseLayout = undefined;
       options.onDispose?.();
     },
   };
@@ -347,6 +435,13 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
     });
   }
   return component;
+}
+
+function trailingMarkerPrefixLength(value: string, marker: string) {
+  for (let length = Math.min(value.length, marker.length - 1); length > 0; length -= 1) {
+    if (marker.startsWith(value.slice(-length))) return length;
+  }
+  return 0;
 }
 
 function safeChoiceText(value: unknown): string {
@@ -380,6 +475,8 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
   let pending = Promise.resolve();
   let disposed = false;
   let closing = false;
+  let mousePressedIndex: number | undefined;
+  let mouseLayout: ListMouseLayout | undefined;
   const selectedItem = () => filteredItems[selectedIndex]?.item;
   const closeAfterPending = (kind: "back" | "close") => {
     if (closing || disposed) return;
@@ -395,6 +492,7 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
     if (item) options.onSelectionChange?.(item.id);
   };
   const applyFilter = () => {
+    mousePressedIndex = undefined;
     filteredItems = fuzzyFilter(searchableItems, searchInput.getValue(), (candidate) => candidate.label);
     selectedIndex = 0;
     const item = selectedItem();
@@ -457,19 +555,36 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
         options,
       );
       const content = [...searchInput.render(safeWidth), "", ...settingsRows.lines, ""];
-      return renderFrame(options.screen.title, options.screen.lines ?? [], content, "back", safeWidth, options, {
-        compactOverflowText: filteredItems.length > 1 ? `  (${selectedIndex + 1}/${filteredItems.length})` : undefined,
-        confirmAction: "change",
-        hint: settingsHint(options.keybindings),
-        pinnedContentRows: 1,
-        priorityTailRows: settingsRows.priorityTailRows,
-      });
+      const frame = renderFrameLayout(
+        options.screen.title,
+        options.screen.lines ?? [],
+        content,
+        "back",
+        safeWidth,
+        options,
+        {
+          compactOverflowText:
+            filteredItems.length > 1 ? `  (${selectedIndex + 1}/${filteredItems.length})` : undefined,
+          confirmAction: "change",
+          hint: settingsHint(options.keybindings),
+          pinnedContentRows: 1,
+          priorityTailRows: settingsRows.priorityTailRows,
+        },
+      );
+      mouseLayout = {
+        width: safeWidth,
+        inputFrameRow: frameRowForContent(frame, 0),
+        itemByFrameRow: itemRowsForFrame(frame, 2, settingsRows.viewportStart, settingsRows.visibleCount),
+      };
+      return frame.lines;
     },
     invalidate() {
+      mouseLayout = undefined;
       searchInput.invalidate();
     },
     handleInput(data) {
       if (disposed || closing) return;
+      mousePressedIndex = undefined;
       if (matchesKey(data, Key.ctrl("c"))) closeAfterPending("close");
       else if (options.keybindings.matches(data, "tui.select.cancel")) {
         closeAfterPending("back");
@@ -488,10 +603,27 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
       }
       options.tui.requestRender();
     },
+    handleMouse(event) {
+      if (disposed || closing) return undefined;
+      const inputResult = routeInputMouse(searchInput, event, mouseLayout, 0);
+      if (inputResult) return inputResult;
+      return routeListMouse(event, mouseLayout, {
+        selectedIndex,
+        itemCount: filteredItems.length,
+        onSelect: select,
+        onActivate: activate,
+        getPressedIndex: () => mousePressedIndex,
+        setPressedIndex: (index) => {
+          mousePressedIndex = index;
+        },
+      });
+    },
     waitForPending: () => pending,
     dispose() {
       if (disposed) return;
       disposed = true;
+      mousePressedIndex = undefined;
+      mouseLayout = undefined;
       options.onDispose?.();
     },
   };
@@ -505,12 +637,22 @@ function renderSettingsRows<ScreenId extends string, ActionId extends string>(
   displayed: ReadonlyMap<string, string>,
   width: number,
   options: SettingsOptions<ScreenId, ActionId>,
-): { lines: string[]; priorityTailRows: number } {
+): { lines: string[]; priorityTailRows: number; viewportStart: number; visibleCount: number } {
   if (allItems.length === 0) {
-    return { lines: [options.theme.fg("dim", "  No settings available")], priorityTailRows: 1 };
+    return {
+      lines: [options.theme.fg("dim", "  No settings available")],
+      priorityTailRows: 1,
+      viewportStart: 0,
+      visibleCount: 0,
+    };
   }
   if (filteredItems.length === 0) {
-    return { lines: [options.theme.fg("dim", "  No matching settings")], priorityTailRows: 1 };
+    return {
+      lines: [options.theme.fg("dim", "  No matching settings")],
+      priorityTailRows: 1,
+      viewportStart: 0,
+      visibleCount: 0,
+    };
   }
 
   const maxVisible = Math.min(filteredItems.length, 10);
@@ -556,7 +698,7 @@ function renderSettingsRows<ScreenId extends string, ActionId extends string>(
       priorityTailRows += 1;
     }
   }
-  return { lines, priorityTailRows };
+  return { lines, priorityTailRows, viewportStart: startIndex, visibleCount: endIndex - startIndex };
 }
 
 function settingsHint(keybindings: MenuKeybindings) {
@@ -584,6 +726,93 @@ function displayHintKey(key: string) {
   return safeMenuText(key);
 }
 
+interface ListMouseLayout {
+  width: number;
+  inputFrameRow?: number;
+  itemByFrameRow: ReadonlyMap<number, number>;
+}
+
+interface FrameContentLayout {
+  contentRows: readonly { contentIndex: number; frameIndex: number }[];
+}
+
+interface ListMouseActions {
+  selectedIndex: number;
+  itemCount: number;
+  onSelect(index: number): void;
+  onActivate(): void;
+  getPressedIndex(): number | undefined;
+  setPressedIndex(index: number | undefined): void;
+}
+
+function frameRowForContent(frame: FrameContentLayout, contentIndex: number) {
+  return frame.contentRows.find((row) => row.contentIndex === contentIndex)?.frameIndex;
+}
+
+function itemRowsForFrame(
+  frame: FrameContentLayout,
+  contentStart: number,
+  viewportStart: number,
+  visibleCount: number,
+) {
+  return new Map(
+    Array.from({ length: visibleCount }, (_, offset) => {
+      const frameRow = frameRowForContent(frame, contentStart + offset);
+      return frameRow === undefined ? undefined : ([frameRow, viewportStart + offset] as const);
+    }).filter((entry): entry is readonly [number, number] => entry !== undefined),
+  );
+}
+
+function listWindowStart(selectedIndex: number, itemCount: number, viewportSize: number) {
+  if (itemCount <= viewportSize) return 0;
+  return Math.max(0, Math.min(selectedIndex - Math.floor(viewportSize / 2), itemCount - viewportSize));
+}
+
+function routeInputMouse(
+  input: Input,
+  event: TuiMouseEvent,
+  layout: ListMouseLayout | undefined,
+  xOffset: number,
+): TuiMouseEventResult | undefined {
+  if (!layout || event.width !== layout.width || event.y !== layout.inputFrameRow) return undefined;
+  const inputWidth = Math.max(1, layout.width - xOffset);
+  if (event.x < xOffset || event.x >= xOffset + inputWidth) return undefined;
+  return input.handleMouse({ ...event, x: event.x - xOffset, y: 0, width: inputWidth, height: 1 });
+}
+
+function routeListMouse(
+  event: TuiMouseEvent,
+  layout: ListMouseLayout | undefined,
+  actions: ListMouseActions,
+): TuiMouseEventResult | undefined {
+  if (!layout || event.width !== layout.width || actions.itemCount === 0) return undefined;
+  const mappedIndex = layout.itemByFrameRow.get(event.y);
+  if (mappedIndex === undefined) return undefined;
+  const itemIndex = event.type === "click" ? (actions.getPressedIndex() ?? mappedIndex) : mappedIndex;
+  if (itemIndex < 0 || itemIndex >= actions.itemCount) return undefined;
+  if (event.type === "wheel" && event.wheelDelta) {
+    const next = Math.max(0, Math.min(actions.itemCount - 1, actions.selectedIndex + (event.wheelDelta < 0 ? -1 : 1)));
+    const changed = next !== actions.selectedIndex;
+    if (changed) actions.onSelect(next);
+    return { handled: true, render: changed };
+  }
+  if (event.type === "move") return { handled: true };
+  if (event.button !== "left") return undefined;
+  if (event.type === "press") {
+    actions.setPressedIndex(itemIndex);
+    const changed = itemIndex !== actions.selectedIndex;
+    if (changed) actions.onSelect(itemIndex);
+    return { handled: true, focus: true, render: changed };
+  }
+  if (event.type === "click") {
+    actions.setPressedIndex(undefined);
+    if (itemIndex !== actions.selectedIndex) actions.onSelect(itemIndex);
+    actions.onActivate();
+    return { handled: true };
+  }
+  return undefined;
+}
+
 function commonListComponent<ScreenId extends string, ActionId extends string>(
   options: MenuScreenComponentOptions<ScreenId, ActionId>,
   list: SelectList,
@@ -599,6 +828,8 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
   );
   let selectedIndex = initialIndex;
   let disposed = false;
+  let mousePressedIndex: number | undefined;
+  let mouseLayout: ListMouseLayout | undefined;
   const select = (index: number, wrap: boolean) => {
     if (items.length === 0) return;
     selectedIndex = wrap ? (index + items.length) % items.length : Math.max(0, Math.min(index, items.length - 1));
@@ -615,16 +846,29 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
         wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(detail)), safeWidth),
       );
       const content = [...list.render(safeWidth), ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
-      return renderFrame(options.screen.title, lines, content, destination, width, options, {
+      const frame = renderFrameLayout(options.screen.title, lines, content, destination, width, options, {
         compactOverflowText: items.length > 1 ? `  (${selectedIndex + 1}/${items.length})` : undefined,
         priorityTailRows: detailRows.length,
       });
+      const visibleCount = Math.min(items.length, 10);
+      mouseLayout = {
+        width: safeWidth,
+        itemByFrameRow: itemRowsForFrame(
+          frame,
+          0,
+          listWindowStart(selectedIndex, items.length, visibleCount),
+          visibleCount,
+        ),
+      };
+      return frame.lines;
     },
     invalidate() {
+      mouseLayout = undefined;
       list.invalidate();
     },
     handleInput(data) {
       if (disposed) return;
+      mousePressedIndex = undefined;
       if (matchesKey(data, Key.ctrl("c"))) {
         options.onEvent({ kind: "close" });
         return;
@@ -648,10 +892,28 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
       }
       options.tui.requestRender();
     },
+    handleMouse(event) {
+      if (disposed) return undefined;
+      return routeListMouse(event, mouseLayout, {
+        selectedIndex,
+        itemCount: items.length,
+        onSelect: (index) => select(index, false),
+        onActivate: () => {
+          const itemId = items[selectedIndex]?.value;
+          if (itemId) onActivate(itemId);
+        },
+        getPressedIndex: () => mousePressedIndex,
+        setPressedIndex: (index) => {
+          mousePressedIndex = index;
+        },
+      });
+    },
     async waitForPending() {},
     dispose() {
       if (disposed) return;
       disposed = true;
+      mousePressedIndex = undefined;
+      mouseLayout = undefined;
       options.onDispose?.();
     },
   };

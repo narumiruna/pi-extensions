@@ -290,11 +290,43 @@ Completion, Back, Close, owner cancellation, external disposal, and errors abort
 The callback must honor that signal.
 The caller still owns its preview snapshot, rollback, persistence, confirmation, and final apply policy.
 
+Set `enableSearch: true` to reuse the standard choice screen's TUI-only fuzzy filtering.
+Each item can provide non-rendered `searchText`; TUI searches sanitized labels, descriptions, and that explicit metadata while preserving raw IDs, current markers, initial selection, disabled rows, and empty results.
+Search owns printable input and paste, so additive custom shortcuts are omitted while it is enabled; configured navigation, confirmation, cancellation, Home, End, and Ctrl+C retain priority.
+Filtering participates in the same coalesced preview queue, and disposal or owner cancellation still aborts and drains preview work.
+
 RPC deliberately degrades to a signal-aware ordinary selector.
-It never runs live previews or custom shortcuts.
+It ignores `enableSearch` and `searchText`, keeps the deterministic unfiltered list, and never runs live previews or custom shortcuts.
 Disabled and confirmation-disabled rows remain explanatory and inert, and cancellation follows the requested Back or Close hint.
 Print and JSON return `unsupported`.
 Results distinguish `selected`, `shortcut`, `closed`, `stale`, `unsupported`, and `error`.
+
+### Masked secret input
+
+Use `runSecretInput()` only for one secret whose domain validation and persistence remain consumer-owned:
+
+```ts
+import { runSecretInput } from "@narumitw/pi-tui-kit";
+
+const result = await runSecretInput(ctx, {
+  title: "WebDAV password",
+  required: true,
+  signal: currentSessionSignal(),
+  isCurrent: () => generation === currentGeneration(),
+});
+
+if (result.kind === "submitted") await saveCredential(result.value);
+```
+
+TUI renders one masked, horizontally scrolling draft and supports callback-provided submit, cancel, cursor, deletion, kill/yank, undo, and line-editing bindings, bracketed paste, Kitty printable input, IME focus, and mouse cursor placement.
+`required` defaults to `true`; required-empty and pasted-control validation retries in the same component without exposing the value.
+Back and Ctrl+C return distinct `closed` reasons, while owner abort, stale ownership, external disposal, unsupported modes, and failures retain typed results.
+Completion and every exit clear the component's internal references, but the API does not promise secure erasure from the JavaScript runtime.
+It never writes history, status, error details, settings, or credential storage.
+
+Pi RPC has no masked-input field.
+`runSecretInput()` therefore returns `unsupported` in RPC, print, and JSON modes and never falls back to plaintext `ctx.ui.input()`.
+A consumer that already offers plaintext RPC entry must keep that behavior outside this API until its users explicitly accept a documented migration or provide a safe manual configuration path.
 
 ### Questionnaires
 
@@ -468,6 +500,9 @@ const result = await runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
 - **`multiSelect`** — optimistic toggles with restored cursor, serialized saves, rollback, row descriptions, optional fuzzy search and bulk actions, and a bounded viewport.
 
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed content after invalidation, and bound rendered output to the supplied terminal width.
+Interactive rows use the latest rendered geometry: hover is passive, left press moves selection, a matching click activates, and wheel events navigate or scroll the targeted list or document.
+Disabled rows and passive details never activate, embedded Input and Editor rows receive translated mouse coordinates, and disposal clears stale pressed targets.
+The testing harness covers normalized component events only; a human-operated terminal smoke must verify Pi's fullscreen mouse listener and terminal protocol.
 At normal terminal heights, every screen renders a themed full-width horizontal rule above and below its content.
 Height-adaptive browse and review screens omit the rules only when preserving them would remove critical content at constrained heights.
 Escape follows the screen's Back/Close hint; `Ctrl+C` closes the menu.
@@ -551,6 +586,7 @@ Use `details` for legacy prose lines.
 The Kit normalizes their whitespace and prepends available status and description text.
 Use `detailDocument` for a complete body such as JSON, source code, a diff, or Markdown.
 Text, code, and diff formats preserve indentation, expand tabs to four-column stops, hard-wrap by terminal cells, and strip terminal plus bidirectional display controls.
+Diff formatting adds inverse word-level emphasis only when one removed line is followed by exactly one added line; ambiguous multi-line groups, pairs above 4,096 combined code units, and work beyond a 20,000-code-unit document budget retain line-level color without intraline work.
 Markdown format applies the same safety boundary but then renders semantic Markdown rather than preserving exact source whitespace.
 When both fields are present, `detailDocument` is the complete body and takes precedence over `details`, status, and description inside the detail body.
 The item label still names the detail, while status and description remain available in list presentation.
@@ -605,8 +641,10 @@ The Kit owns this adapter because Pi's public `SettingsList` does not expose res
 
 Input screens submit through the existing action `value`.
 Validation, normalization, persistence, and product copy remain extension-owned.
-Rejection keeps the TUI draft available for correction.
-RPC reopens its signal-aware input dialog.
+Set `initialValue` for editable TUI content with the cursor at its end; `placeholder` remains non-editable guidance shown only for an empty draft.
+Rejection keeps the TUI draft and later edits available for correction.
+Pi's RPC input protocol has no prefill field, so RPC deliberately ignores `initialValue`, preserves the original placeholder, and reopens a fresh signal-aware input dialog after rejection.
+Print and JSON retain `runMenu()`'s existing explicit `unsupported` result.
 
 ```ts
 const inputScreen = {
@@ -614,6 +652,7 @@ const inputScreen = {
   title: "Maximum image count",
   lines: ["Current: 20"],
   placeholder: "Enter a positive integer",
+  initialValue: "20",
   action: "setMaximum" as const,
 };
 ```
@@ -792,6 +831,7 @@ The library owns:
 - stale-continuation checks around asynchronous work;
 - input draft/pending behavior and shared exact-document formatting, scrolling, and RPC pagination;
 - read-only browse search, legacy or exact detail disclosure, cursor restoration, and RPC pagination;
+- generic masked-secret TUI editing, validation, cancellation, disposal, and unsupported-mode routing;
 - TUI/RPC adaptation and unsupported-mode routing.
 
 The consuming extension still owns:
@@ -800,7 +840,7 @@ The consuming extension still owns:
 - transactional persistence and preservation of unknown settings fields;
 - confirmations and product-specific copy;
 - session generation and shutdown policy supplied through `isCurrent()`;
-- preview snapshots, rollback and persistence, multi-line editors, secret inputs, multi-field forms, or other specialized custom TUI.
+- preview snapshots, rollback and persistence, credential validation or storage, authentication/setup policy, multi-line editors, multi-field forms, or other specialized custom TUI.
 
 Keep specialized UI local rather than adding package hooks that expose Pi TUI internals.
 
@@ -840,6 +880,15 @@ The TUI harness supports semantic Kit bindings, explicit raw input, normalized m
 It also supports live dimension changes, render-request observations, pending-action draining, sequential screens, result observation, and external disposal.
 `done`, disposal, factory failure, and obsolete async openings settle exactly once; input after closure is inert.
 Supply optional callback-compatible theme/keybinding overrides only when a test needs them.
+These normalized events do not prove Pi's fullscreen listener, terminal mouse protocol, or theme reload behavior.
+After building the package, a human can load `test/fixtures/interaction-smoke.ts` with:
+
+```bash
+pi --no-extensions --no-skills -e ./packages/pi-tui-kit/test/fixtures/interaction-smoke.ts
+```
+
+Run `/kit-capabilities-smoke`, `/kit-selector-smoke`, and `/kit-secret-smoke`, then verify remapped keys, mouse presses and clicks, wheel navigation, narrow resizes, and `/reload` theme behavior in a real terminal.
+Do not automate this interactive smoke through a non-interactive subprocess.
 
 Use strict scripts for RPC:
 
@@ -879,6 +928,7 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `runLiveChoice()` — adapts live-preview choice to TUI and RPC while preserving typed selection, gating, shortcuts, and lifecycle outcomes.
 - `runModelSelector()` and `runThinkingSelector()` — provide searchable TUI selectors with current/default markers and typed save-default intent.
 - `runQuestionnaire()` — adapts choices, free-form answers, optional TUI notes, direct single-question submission, multi-question review, and sequential RPC.
+- `runSecretInput()` — collects one masked TUI secret with typed cancellation and lifecycle outcomes and explicit unsupported results elsewhere.
 - `formatInteractionHints()` — formats sanitized, normalized, de-duplicated bindings and literal keys; `@narumitw/pi-tui-kit/interaction-hints` also exports it and its types.
 - `sanitizeTerminalDocument()` — normalizes and sanitizes untrusted multiline display text while retaining LF and tabs; `@narumitw/pi-tui-kit/terminal-document` also exports it.
 - `hardWrapTerminalDocument()` — sanitizes, expands tabs, and hard-wraps exact multiline display text by terminal cells; `@narumitw/pi-tui-kit/terminal-document` also exports it.
@@ -891,7 +941,8 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — test-only subpath for `createTuiHarness()`, `createRpcHarness()`, strict scripts, and their types; the production root does not re-export it.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`17`).
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`18`).
+Version 18 adds standard-screen mouse routing, intraline diff emphasis, searchable live choices, input prefill, and masked secret input while version-17 definitions remain valid.
 Version 17 adds searchable default-aware selectors while version-16 menu definitions remain valid.
 Version 16 adds the stateless bounded-frame helper while version-15 menu definitions remain valid.
 Version 15 adds opt-in review and browse-detail search plus public multiline terminal-document helpers while version-14 menu definitions remain valid.

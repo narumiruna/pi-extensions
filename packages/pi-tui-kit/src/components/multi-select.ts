@@ -4,6 +4,8 @@ import {
   Input,
   Key,
   matchesKey,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   truncateToWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -13,7 +15,7 @@ import {
   actionMenuItemPresentation,
   actionMenuUnavailableDescription,
   handleSearchInput,
-  renderFrame,
+  renderFrameLayout,
   safeMenuText,
 } from "./rendering.js";
 
@@ -49,6 +51,14 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
   let pending = Promise.resolve();
   let closing = false;
   let disposed = false;
+  let mousePressedIndex: number | undefined;
+  let mouseLayout:
+    | {
+        width: number;
+        inputFrameRow?: number;
+        itemByFrameRow: ReadonlyMap<number, number>;
+      }
+    | undefined;
   const selectedRow = () => rows[selectedIndex];
   const closeAfterPending = (kind: "back" | "close") => {
     if (closing || disposed) return;
@@ -75,6 +85,7 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
   };
   const applyFilter = () => {
     if (!options.screen.enableSearch) return;
+    mousePressedIndex = undefined;
     const previouslySelectedId = selectedRow()?.item.id;
     const filteredRows = fuzzyFilter(searchableRows, searchInput.getValue(), (candidate) => candidate.text).map(
       (candidate) => candidate.row,
@@ -187,6 +198,8 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
       );
       if (descriptionRows.length > 0) rowContent.push("", ...descriptionRows);
       const hasMatchingItems = rows.some((candidate) => candidate.kind === "toggle");
+      const searchEmptyStateRows =
+        options.screen.enableSearch && (options.screen.items.length === 0 || !hasMatchingItems) ? 1 : 0;
       const content = options.screen.enableSearch
         ? [
             ...searchInput.render(safeWidth),
@@ -200,7 +213,7 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
             ...(hasMatchingItems ? [options.theme.fg("dim", "Type to search")] : []),
           ]
         : rowContent;
-      return renderFrame(
+      const frame = renderFrameLayout(
         options.screen.title,
         options.screen.lines ?? [],
         content,
@@ -214,12 +227,30 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
           priorityTailRows: descriptionRows.length + (options.screen.enableSearch && hasMatchingItems ? 1 : 0),
         },
       );
+      const rowContentStart = options.screen.enableSearch ? 2 + searchEmptyStateRows : 0;
+      mouseLayout = {
+        width: safeWidth,
+        inputFrameRow: options.screen.enableSearch
+          ? frame.contentRows.find(({ contentIndex }) => contentIndex === 0)?.frameIndex
+          : undefined,
+        itemByFrameRow: new Map(
+          visibleRows.flatMap((_, offset) => {
+            const frameRow = frame.contentRows.find(
+              ({ contentIndex }) => contentIndex === rowContentStart + offset,
+            )?.frameIndex;
+            return frameRow === undefined ? [] : [[frameRow, viewportStart + offset] as const];
+          }),
+        ),
+      };
+      return frame.lines;
     },
     invalidate() {
+      mouseLayout = undefined;
       if (options.screen.enableSearch) searchInput.invalidate();
     },
     handleInput(data) {
       if (disposed || closing) return;
+      mousePressedIndex = undefined;
       if (matchesKey(data, Key.ctrl("c"))) closeAfterPending("close");
       else if (options.keybindings.matches(data, "tui.select.cancel")) {
         closeAfterPending(options.screen.hint ?? "back");
@@ -237,10 +268,19 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
       }
       options.tui.requestRender();
     },
+    handleMouse(event) {
+      if (disposed || closing || !mouseLayout || event.width !== mouseLayout.width) return undefined;
+      if (options.screen.enableSearch && event.y === mouseLayout.inputFrameRow) {
+        return searchInput.handleMouse({ ...event, y: 0, width: mouseLayout.width, height: 1 });
+      }
+      return routeRowsMouse(event);
+    },
     waitForPending: () => pending,
     dispose() {
       if (disposed) return;
       disposed = true;
+      mousePressedIndex = undefined;
+      mouseLayout = undefined;
       options.onDispose?.();
     },
   };
@@ -252,5 +292,34 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
       },
     });
   }
+  function routeRowsMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (!mouseLayout || rows.length === 0) return undefined;
+    const mappedIndex = mouseLayout.itemByFrameRow.get(event.y);
+    if (mappedIndex === undefined) return undefined;
+    const itemIndex = event.type === "click" ? (mousePressedIndex ?? mappedIndex) : mappedIndex;
+    if (itemIndex < 0 || itemIndex >= rows.length) return undefined;
+    if (event.type === "wheel" && event.wheelDelta) {
+      const next = Math.max(0, Math.min(rows.length - 1, selectedIndex + (event.wheelDelta < 0 ? -1 : 1)));
+      const changed = next !== selectedIndex;
+      if (changed) selectIndex(next);
+      return { handled: true, render: changed };
+    }
+    if (event.type === "move") return { handled: true };
+    if (event.button !== "left") return undefined;
+    if (event.type === "press") {
+      mousePressedIndex = itemIndex;
+      const changed = itemIndex !== selectedIndex;
+      if (changed) selectIndex(itemIndex);
+      return { handled: true, focus: true, render: changed };
+    }
+    if (event.type === "click") {
+      mousePressedIndex = undefined;
+      if (itemIndex !== selectedIndex) selectIndex(itemIndex);
+      activate();
+      return { handled: true };
+    }
+    return undefined;
+  }
+
   return component;
 }

@@ -70,6 +70,27 @@ test("runCustomInteraction preserves focus and input on the wrapped component", 
   assert.deepEqual(await running, { kind: "completed", value: "done" });
 });
 
+test("runCustomInteraction forwards normalized mouse events through the outer component", async () => {
+  const observed: Array<{ type: string; x: number; y: number }> = [];
+  const tui = createTuiHarness({ width: 30, rows: 10 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runCustomInteraction<string>(context.ctx, {
+    create: ({ complete }) => ({
+      render: () => ["click"],
+      invalidate() {},
+      handleMouse(event) {
+        observed.push({ type: event.type, x: event.x, y: event.y });
+        complete("clicked");
+        return { handled: true, focus: true };
+      },
+    }),
+  });
+  await tui.waitForOpen();
+  tui.mouse({ type: "press", x: 3, y: 0 });
+  assert.deepEqual(await running, { kind: "completed", value: "clicked" });
+  assert.deepEqual(observed, [{ type: "press", x: 3, y: 0 }]);
+});
+
 test("runCustomInteraction returns stale after owner abort and drains the disposed component", async () => {
   const owner = new AbortController();
   let releasePending: () => void = () => undefined;
@@ -233,6 +254,31 @@ test("runCustomInteraction rejects unsupported modes without opening custom UI",
   assert.deepEqual(result, { kind: "unsupported", mode: "rpc" });
   assert.equal(unsupportedMode, "rpc");
   assert.equal(customCalls, 0);
+});
+
+test("runCustomInteraction revalidates ownership after unsupported-mode callbacks", async () => {
+  const owner = new AbortController();
+  let reportStarted: () => void = () => undefined;
+  let releaseReport: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    reportStarted = resolve;
+  });
+  const reportGate = new Promise<void>((resolve) => {
+    releaseReport = resolve;
+  });
+  const context = createMockContext({ mode: "rpc", hasUI: true });
+  const running = runCustomInteraction(context.ctx, {
+    signal: owner.signal,
+    create: () => ({ render: () => [], invalidate() {} }),
+    onUnsupportedMode: async () => {
+      reportStarted();
+      await reportGate;
+    },
+  });
+  await started;
+  owner.abort(new DOMException("Session replaced", "AbortError"));
+  releaseReport();
+  assert.deepEqual(await running, { kind: "stale" });
 });
 
 test("runCustomInteraction reports current UI failures but suppresses stale failures", async () => {

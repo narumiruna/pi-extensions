@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { runLiveChoice } from "../src/index.js";
@@ -217,6 +217,123 @@ test("runLiveChoice previews initial and cursor choices and dispatches enabled s
     itemId: "full",
   });
   assert.deepEqual(previews, ["blocked", "full"]);
+});
+
+test("runLiveChoice forwards passive hover and stable mouse activation through its wrapper", async () => {
+  const previews: string[] = [];
+  const tui = createTuiHarness({ width: 40, rows: 20 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runLiveChoice(context.ctx, {
+    title: "Preset",
+    items: choices,
+    initialItemId: "minimal",
+    onSelectionChange: ({ item }) => {
+      previews.push(item.id);
+    },
+  });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  let frame = tui.render();
+  let row = frame.map(stripVTControlCharacters).findIndex((line) => line.includes("Full"));
+  assert.notEqual(row, -1);
+  tui.mouse({ type: "move", x: 3, y: row });
+  assert.deepEqual(previews, ["minimal"]);
+  tui.mouse({ type: "press", x: 3, y: row });
+  await tui.waitForPending();
+  frame = tui.render();
+  row = frame.map(stripVTControlCharacters).findIndex((line) => line.includes("Full"));
+  tui.mouse({ type: "click", x: 3, y: row });
+  assert.deepEqual(await running, { kind: "selected", itemId: "full" });
+  assert.deepEqual(previews, ["minimal", "full"]);
+});
+
+test("runLiveChoice opt-in search preserves editing, raw identity, and preview selection", async () => {
+  const previews: string[] = [];
+  const tui = createTuiHarness({ width: 48, rows: 16 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runLiveChoice(context.ctx, {
+    title: "Search presets",
+    items: choices.map((item) => (item.id === "full" ? { ...item, searchText: "maximal alias" } : item)),
+    initialItemId: "minimal",
+    enableSearch: true,
+    shortcuts: [{ id: "customize", keys: ["e"], label: "customize" }],
+    onSelectionChange: ({ item }) => {
+      previews.push(item.id);
+    },
+  });
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  assert.equal(tui.render().join("\n").includes(CURSOR_MARKER), true);
+  assert.doesNotMatch(tui.render().join("\n"), /customize/u);
+
+  tui.type("e");
+  assert.equal(tui.isOpen, true);
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /Search:.*e/u);
+  tui.send("\u0015");
+  tui.send("\u001b[200~maximal alias\u0007\u001b[201~");
+  await tui.waitForPending();
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /[→›] Full/u);
+  tui.send("\u0015");
+  tui.type("zzz");
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /No matching choices/u);
+  for (let index = 0; index < 3; index += 1) tui.send("\u007f");
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /[→›] Minimal/u);
+  tui.type("maximal alias");
+  tui.press("tui.select.confirm");
+  assert.deepEqual(await running, { kind: "selected", itemId: "full" });
+  assert.ok(previews.includes("full"));
+});
+
+test("Live Choice search routes chunked paste before shortcuts and re-dispatches trailing input", async () => {
+  const tui = createTuiHarness({ width: 48, rows: 16 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runLiveChoice(context.ctx, {
+    title: "Search presets",
+    items: choices.map((item) => (item.id === "full" ? { ...item, searchText: "maximal alias" } : item)),
+    enableSearch: true,
+  });
+  await tui.waitForOpen();
+
+  tui.send("\u001b[200~maximal alias");
+  tui.send("\u0003");
+  tui.send("\r");
+  assert.equal(tui.isOpen, true);
+  tui.send("\u001b[20");
+  assert.equal(tui.isOpen, true);
+  tui.send("1~\r");
+
+  assert.deepEqual(await running, { kind: "selected", itemId: "full" });
+});
+
+test("search filtering coalesces previews and drains them on cancellation", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started: string[] = [];
+  let previewSignal: AbortSignal | undefined;
+  const tui = createTuiHarness();
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runLiveChoice(context.ctx, {
+    title: "Search presets",
+    items: choices,
+    initialItemId: "minimal",
+    enableSearch: true,
+    onSelectionChange: async ({ item, signal }) => {
+      started.push(item.id);
+      previewSignal = signal;
+      await gate;
+    },
+  });
+  await tui.waitForOpen();
+  tui.type("everything");
+  tui.send("\u0015");
+  tui.type("small");
+  tui.press("tui.select.cancel");
+  assert.equal(previewSignal?.aborted, true);
+  release();
+  assert.deepEqual(await running, { kind: "closed", reason: "back" });
+  assert.deepEqual(started, ["minimal"]);
 });
 
 test("runLiveChoice omits shortcuts that conflict with remapped standard controls", async () => {
@@ -443,6 +560,7 @@ test("runLiveChoice degrades RPC to ordinary selection without preview or shortc
     title: "Preset",
     items: choices,
     currentItemId: "minimal",
+    enableSearch: true,
     shortcuts: [{ id: "customize", keys: ["e"], label: "customize" }],
     onSelectionChange: () => {
       previews += 1;

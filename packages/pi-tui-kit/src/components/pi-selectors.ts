@@ -41,7 +41,9 @@ export interface PiSelectorOptions<Value> {
   initialValue?: Value;
   initialSearchInput?: string;
   viewportSize?: number;
-  saveBinding: "app.models.save";
+  saveBinding: "app.models.save" | "app.thinking.save";
+  /** Older Pi releases used this action before defining the requested binding. */
+  legacySaveBinding?: "app.models.save";
   cycleBinding?: "app.thinking.cycle";
   filterSelection: "bestMatch" | "preserveValue";
   inlineDescriptions?: boolean;
@@ -72,6 +74,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
   let pasteBuffer: string | undefined;
   let pasteStartTimer: ReturnType<typeof setTimeout> | undefined;
   let mousePressedIndex: number | undefined;
+  const saveBinding = resolveSelectorBinding(options.keybindings, options.saveBinding, options.legacySaveBinding);
   let mouseLayout:
     | {
         width: number;
@@ -88,6 +91,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
     options.tui.requestRender();
   };
   const refilter = () => {
+    mousePressedIndex = undefined;
     const previous = filtered[selectedIndex]?.value;
     filtered = filterRows(options.rows, input.getValue(), options.prioritizeDefaultPrefix ?? false);
     if (options.filterSelection === "preserveValue" && previous !== undefined) {
@@ -112,7 +116,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
   const matchesAction = (data: string, binding: string) =>
     matchesSelectorBinding(options.keybindings, data, binding, usesDisambiguatedKeyProtocol(options.tui));
   const saveDefault = (data: string) => {
-    if (!matchesAction(data, options.saveBinding)) return false;
+    if (!matchesAction(data, saveBinding)) return false;
     completeSelected("saveDefault");
     return true;
   };
@@ -214,15 +218,12 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
       return { handled: true, render: changed };
     }
     if (event.type !== "move" && event.button !== "left") return undefined;
-    if (event.type === "move" || event.type === "press") {
-      if (event.type === "press") mousePressedIndex = itemIndex;
+    if (event.type === "move") return { handled: true };
+    if (event.type === "press") {
+      mousePressedIndex = itemIndex;
       const changed = itemIndex !== selectedIndex;
       if (changed) select(itemIndex, false);
-      return {
-        handled: true,
-        focus: event.type === "press",
-        ...(event.type === "move" ? { render: changed } : {}),
-      };
+      return { handled: true, focus: true, render: changed };
     }
     if (event.type === "click") {
       const clickedIndex = mousePressedIndex ?? itemIndex;
@@ -275,7 +276,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
 
       const keyPlan = selectorKeyPlan(
         options.keybindings,
-        options.saveBinding,
+        saveBinding,
         options.cycleBinding,
         usesDisambiguatedKeyProtocol(options.tui),
       );
@@ -427,7 +428,7 @@ interface SelectorKeyPlan {
 
 function selectorKeyPlan(
   keybindings: KeybindingsManager,
-  saveBinding: "app.models.save",
+  saveBinding: "app.models.save" | "app.thinking.save",
   cycleBinding: "app.thinking.cycle" | undefined,
   disambiguatedKeyProtocol: boolean,
 ): SelectorKeyPlan {
@@ -595,6 +596,24 @@ const KEY_BASES = new Set([
   "right",
   ...Array.from({ length: 12 }, (_, index) => `f${index + 1}`),
 ]);
+
+function resolveSelectorBinding(
+  keybindings: KeybindingsManager,
+  binding: "app.models.save" | "app.thinking.save",
+  fallback: "app.models.save" | undefined,
+) {
+  if (!fallback || bindingDefinitionExists(keybindings, binding)) return binding;
+  return fallback;
+}
+
+function bindingDefinitionExists(keybindings: KeybindingsManager, binding: string) {
+  const compatible = keybindings as unknown as {
+    getDefinition?(keybinding: string): unknown;
+    getKeys(keybinding: string): readonly string[];
+  };
+  if (compatible.getDefinition) return compatible.getDefinition(binding) !== undefined;
+  return compatible.getKeys(binding).length > 0;
+}
 
 function matchesBinding(keybindings: KeybindingsManager, data: string, binding: string) {
   return (keybindings.matches as (input: string, keybinding: string) => boolean)(data, binding);
