@@ -59,8 +59,8 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.0",
-    "@earendil-works/pi-tui": "0.85.0",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
     "typescript": "7.0.2"
   },
   "repository": {
@@ -69,7 +69,7 @@
     "directory": "packages/pi-tui-kit"
   },
   "dependencies": {
-    "diff": "8.0.4",
+    "diff": "9.0.0",
     "grok-mermaid": "0.2.3",
     "highlight.js": "11.12.0"
   }
