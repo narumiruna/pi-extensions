@@ -1,5 +1,13 @@
 # @narumitw/pi-starship
 
+## 0.55.2
+
+### Patch Changes
+
+- d365daa: Publish the updated YAML runtime dependency range.
+- Updated dependencies [d365daa]
+  - @narumitw/pi-tui-kit@0.63.1
+
 ## 0.55.1
 
 ### Patch Changes
