@@ -20,3 +20,15 @@ herdr --skill
 If the environment check or command fails, report the error and stop.
 Read the returned skill completely and follow it as the authoritative operating instructions for the installed Herdr version.
 Run it again only after compaction removes those instructions or when the user explicitly asks to refresh them.
+
+Apply this cleanup policy in addition to those version-specific instructions:
+
+- Maintain an in-context cleanup ledger with each pane ID you create, its intended lifetime, and every stable pane-generation, terminal, and shell identity that Herdr exposes; for an agent pane, also record the assigned agent and stable agent-session or occupant-process identity.
+- Mark a pane as retained only when the user explicitly asks it to remain open after the task for later inspection or use, or when its continued existence is itself part of the requested result, and never close a retained pane automatically.
+- For a temporary pane, collect the required output, decide that no follow-up is needed, and attempt cleanup as soon as its work is no longer needed.
+- Automatically close a pane only through an operation documented by the loaded instructions that atomically checks the recorded pane and occupant identity together with an acceptable live state at mutation time.
+- For an agent pane, the atomic guard must match the assigned agent and every recorded stable identity and require `idle` or `done`; for a returned shell, it must match the recorded pane-generation, terminal, and shell identities and require no replacement occupant or foreground process.
+- A separate state read followed by an unconditional close is unsafe; if the installed Herdr version provides no suitable guarded close, leave the pane open and report that limitation.
+- Keep unresolved temporary entries after cancellation or interruption while the current model context survives, retry guarded cleanup at the next recovery boundary before further Herdr work, and sweep them again before the final response.
+- Never close the calling pane, a pre-existing pane, or a pane created by the user or another agent.
+- If guarded closure fails, keep the ledger entry and report the pane ID and reason.

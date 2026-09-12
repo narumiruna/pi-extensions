@@ -56,6 +56,13 @@ rm -rf ~/.agents/skills/herdr
 
 Run `/reload` or restart Pi after changing the installed resources.
 
+## 🧠 Skills
+
+The bundled `herdr` skill loads version-matched operating guidance after an explicit Herdr request.
+It treats panes created for background work as temporary and attempts to close them after collecting the required output.
+Ask Pi explicitly to keep a pane open after the task when you want to inspect or use it later.
+Automatic cleanup runs only when the installed Herdr guidance provides a conditional close that atomically confirms the recorded pane ownership and acceptable agent or shell state; otherwise Pi leaves the pane open and reports the limitation.
+
 ## 💬 Commands
 
 `/herdr` opens a menu to toggle the agent widget and view status or help, inspired by `/tool`.
@@ -166,6 +173,7 @@ Command recipes, approval handling, and other operating safety rules come from t
 - Integration requires a running compatible Herdr session and valid injected environment variables.
 - Model control requires an installed Herdr CLI that supports `herdr --skill`.
 - Socket failures are intentionally silent after the bounded retry.
+- Skill cleanup tracking exists only in the active model context, so compaction, session replacement, `/reload`, or shutdown can leave temporary panes open.
 - The package does not install, start, update, or configure Herdr itself.
 
 ## 🗂️ Package layout
