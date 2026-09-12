@@ -481,6 +481,49 @@ test("serializes full history content only for the selected read item", () => {
   assert.equal(serializations, 1);
 });
 
+test("rejects oversized history reads before materializing the complete payload", () => {
+  const entries = branch();
+  entries.push(
+    historyEntry("oversized-read", {
+      role: "toolResult",
+      toolCallId: "oversized-call",
+      toolName: "screenshot",
+      content: [{ type: "image", data: "a".repeat(4_200_000), mimeType: "image/png" }],
+      isError: false,
+      timestamp: 2,
+    }),
+  );
+
+  assert.throws(
+    () => recallContext(entries, { source: "history", action: "read", id: "oversized-read" }),
+    /history read exceeded its scan limit/,
+  );
+});
+
+test("rejects deeply nested history reads with a bounded failure", () => {
+  let nested: unknown = "deep value";
+  for (let index = 0; index < 20_000; index += 1) nested = [nested];
+  const entries = branch();
+  entries.push(
+    historyEntry(
+      "deep-read",
+      assistantMessage([
+        {
+          type: "toolCall",
+          id: "deep-read-call",
+          name: "foreign_tool",
+          arguments: nested,
+        },
+      ]),
+    ),
+  );
+
+  assert.throws(
+    () => recallContext(entries, { source: "history", action: "read", id: "deep-read" }),
+    /history read exceeded its scan limit/,
+  );
+});
+
 test("ignores note identifiers that would change at the display boundary", () => {
   const entries = branch();
   entries.push({

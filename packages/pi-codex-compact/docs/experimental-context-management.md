@@ -66,9 +66,12 @@ compaction consumes the request; otherwise the extension calls `ctx.compact()` a
 
 Successful compaction moves to the new window and sends a hidden next-turn message asking the model
 to continue. Failed compaction keeps the old context, reports one warning, and sends a hidden failure
-continuation. Either next turn is suppressed when a successful post-request turn already continued
-the work. This is a next-turn approximation, not Codex's atomic same-turn transition. Save important
-information with `codex_compact_update_notes` before requesting a new context.
+continuation. Losing any context tool before compaction also fails the pending rollover and falls back
+to Pi-native compaction; losing a tool after completion preserves the success continuation but reports
+that local recall is unavailable. Either next turn is suppressed when a successful post-request turn
+already continued the work. This is a next-turn approximation, not Codex's atomic same-turn
+transition. Save important information with `codex_compact_update_notes` before requesting a new
+context.
 
 ### `codex_compact_get_context_remaining`
 
@@ -194,6 +197,7 @@ Limits are fixed to keep session growth and tool responses bounded:
 | Active notes | 64 names and 256 KiB total |
 | Recall query | 512 characters |
 | Recall search page | 20 matches |
+| History read scan | 4,194,304 scan units per selected item |
 | History search scan | 4,194,304 scan units across indexed characters and visited values per request |
 | Recall response | 32 KiB and 1,000 lines |
 

@@ -16,6 +16,8 @@ const MAX_INDEXED_MESSAGE_CHARS = 256 * 1024;
 // Bound source work separately so empty structures and removable terminal controls cannot bypass the limit.
 const MAX_SCANNED_MESSAGE_UNITS = 4 * MAX_INDEXED_MESSAGE_CHARS;
 const MAX_HISTORY_SEARCH_SCAN_UNITS = 4 * MAX_SCANNED_MESSAGE_UNITS;
+const MAX_HISTORY_READ_SCAN_UNITS = MAX_HISTORY_SEARCH_SCAN_UNITS;
+const MAX_HISTORY_READ_DEPTH = 512;
 const READ_CHUNK_BYTES = 12 * 1024;
 
 export type RecallSource = "history" | "notes";
@@ -71,7 +73,25 @@ function messagePayload(message: AgentMessage): unknown {
 }
 
 function serializeMessage(message: AgentMessage): string {
-  const serialized = JSON.stringify(messagePayload(message));
+  let remainingUnits = MAX_HISTORY_READ_SCAN_UNITS;
+  const depths = new WeakMap<object, number>();
+  const serialized = JSON.stringify(
+    messagePayload(message),
+    function boundedReplacer(this: unknown, key, value: unknown) {
+      const holderDepth = typeof this === "object" && this !== null ? depths.get(this) : undefined;
+      const depth = key === "" && holderDepth === undefined ? 0 : (holderDepth ?? -1) + 1;
+      const units = 1 + key.length + (typeof value === "string" ? value.length : 0);
+      if (depth > MAX_HISTORY_READ_DEPTH || units > remainingUnits) {
+        throw new Error("codex_compact_recall_context history read exceeded its scan limit");
+      }
+      remainingUnits -= units;
+      if (typeof value === "object" && value !== null) depths.set(value, depth);
+      return value;
+    },
+  );
+  if (serialized === undefined) {
+    throw new Error("codex_compact_recall_context selected history payload is not serializable");
+  }
   return JSON.stringify(sanitizeJsonValue(JSON.parse(serialized)));
 }
 

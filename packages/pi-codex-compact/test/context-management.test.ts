@@ -1086,6 +1086,98 @@ test.each(["context", "compaction"] as const)(
   },
 );
 
+test.each(["context", "compaction"] as const)(
+  "an incomplete tool unit preserves a pending rollover failure at the %s boundary",
+  async (boundary) => {
+    const current = setup();
+    await start(current);
+    persistLastSentCustomMessage(current);
+    await tool(current, "codex_compact_start_new_context").execute(
+      "pending-rollover",
+      {},
+      undefined,
+      undefined,
+      current.current.ctx,
+    );
+    current.mock.rawPi.setActiveTools(["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES.slice(0, -1)]);
+
+    if (boundary === "context") {
+      const handler = current.mock.events.get("context")?.[0];
+      assert.ok(handler);
+      await handler(
+        { type: "context", messages: current.entries.flatMap(sessionEntryToContextMessages) },
+        current.current.ctx,
+      );
+    } else {
+      const handler = current.mock.events.get("session_before_compact")?.[0];
+      assert.ok(handler);
+      assert.equal(
+        await handler(
+          {
+            type: "session_before_compact",
+            preparation: {
+              firstKeptEntryId: "user",
+              messagesToSummarize: [],
+              turnPrefixMessages: [],
+              isSplitTurn: false,
+              tokensBefore: 90,
+              fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+              settings: { enabled: true, reserveTokens: 10, keepRecentTokens: 10 },
+            },
+            branchEntries: current.entries,
+            reason: "threshold",
+            willRetry: false,
+            signal: new AbortController().signal,
+          },
+          current.current.ctx,
+        ),
+        undefined,
+      );
+    }
+
+    const settled = current.mock.events.get("agent_settled")?.[0];
+    assert.ok(settled);
+    await settled({ type: "agent_settled" }, current.current.ctx);
+    await settled({ type: "agent_settled" }, current.current.ctx);
+    const continuations = current.mock.sentMessages.filter(
+      (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
+    );
+    assert.equal(continuations.length, 1);
+    assert.match(JSON.stringify(continuations[0]), /rollover failed.*tool unit/is);
+  },
+);
+
+test("tool-unit loss after compaction preserves an accurate successful continuation", async () => {
+  const current = setup();
+  await start(current);
+  persistLastSentCustomMessage(current);
+  await tool(current, "codex_compact_start_new_context").execute(
+    "pending-rollover",
+    {},
+    undefined,
+    undefined,
+    current.current.ctx,
+  );
+  await emitAutomaticCompaction(current);
+  current.mock.rawPi.setActiveTools(["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES.slice(0, -1)]);
+  const context = current.mock.events.get("context")?.[0];
+  assert.ok(context);
+  await context(
+    { type: "context", messages: current.entries.flatMap(sessionEntryToContextMessages) },
+    current.current.ctx,
+  );
+
+  const settled = current.mock.events.get("agent_settled")?.[0];
+  assert.ok(settled);
+  await settled({ type: "agent_settled" }, current.current.ctx);
+  const continuations = current.mock.sentMessages.filter(
+    (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
+  );
+  assert.equal(continuations.length, 1);
+  assert.match(JSON.stringify(continuations[0]), /is now active.*tools became unavailable/is);
+  assert.doesNotMatch(JSON.stringify(continuations[0]), /Use codex_compact_recall_context/);
+});
+
 test.each(["different description", "matching description"] as const)(
   "a foreign-source collision with a %s prevents activation without disabling it",
   async (description) => {

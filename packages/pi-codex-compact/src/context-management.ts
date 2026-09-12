@@ -230,7 +230,10 @@ export function createExperimentalContextManager(
       pi.sendMessage(deactivationMessage(), { triggerTurn: false });
     }
     fallbackDeactivationPending = branchIsActive;
-    pending = undefined;
+    if (pending?.status === "requested" || pending?.status === "compacting") {
+      pending.status = "failed";
+      pending.errorMessage = "Experimental context management tool unit became incomplete during rollover.";
+    }
     removeToolsAtSettlement = false;
     toolsAvailable = false;
     removeOwnedTools(inspection.ownedNames);
@@ -345,6 +348,7 @@ export function createExperimentalContextManager(
   const continueAfterRollover = (ctx: ExtensionContext, request: PendingRollover) => {
     if (!isOwned(ctx, request) || request.status !== "completed") return;
     const current = lineage;
+    const contextToolsAvailable = isEnabled();
     pending = undefined;
     if (!current) return;
     pi.sendMessage(
@@ -353,7 +357,9 @@ export function createExperimentalContextManager(
         content: [
           `Context window ${current.currentWindowId} is now active.`,
           request.reason ? `Rollover reason: ${request.reason}` : undefined,
-          "Continue the interrupted task. Use codex_compact_recall_context for older details and do not assume an automatic summary exists.",
+          contextToolsAvailable
+            ? "Continue the interrupted task. Use codex_compact_recall_context for older details and do not assume an automatic summary exists."
+            : "Continue the interrupted task. The experimental context tools became unavailable; do not assume an automatic summary or local recall is available.",
         ]
           .filter((line): line is string => Boolean(line))
           .join("\n"),
@@ -377,7 +383,7 @@ export function createExperimentalContextManager(
     pi.sendMessage(
       {
         customType: CONTINUATION_MESSAGE_TYPE,
-        content: `The requested context rollover failed and the previous context remains active. ${safeMessage}`,
+        content: `The requested experimental context rollover failed. Continue with Pi's active fallback context. ${safeMessage}`,
         display: false,
         details: {
           kind: CONTEXT_DETAILS_KIND,
