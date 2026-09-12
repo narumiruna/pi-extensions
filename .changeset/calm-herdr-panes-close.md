@@ -1,5 +1,5 @@
 ---
-"@narumitw/pi-herdr": patch
+"@narumitw/pi-herdr": minor
 ---
 
-Close no-longer-needed task-owned Herdr panes promptly after their results are collected and their live state is safe.
+Add guarded automatic cleanup guidance for temporary task-owned Herdr panes, with explicit retention and safe fallback behavior.
