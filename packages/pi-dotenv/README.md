@@ -66,13 +66,18 @@ Use `--env-file=<path>` when a path begins with `-`; the last occurrence before 
 --env-file <path>  Load missing environment variables from a dotenv file
 ```
 
-The flag is supported by normal interactive, print, JSON, and RPC startup, as well as `--help` and `--list-models` paths that load extensions.
-A missing or unreadable file fails extension loading without printing its contents or parsed values.
+The flag is supported by normal interactive, print, JSON, and RPC startup.
+A valid, readable file also affects `--help` and `--list-models` paths that load extensions, but current Pi metadata paths can exit without reporting extension-load diagnostics, so do not use them to validate the file.
+Normal startup reports a missing or unreadable file as an extension-load failure without printing its contents or parsed values.
 
 Loading is process-wide and lasts until Pi exits.
 `/reload` reads the selected file again but does not replace values already loaded into the process, so restart Pi after changing a value.
 
 ## ⏱️ Startup timing
+
+These limits apply when the runtime passes `--env-file` to Pi unchanged.
+Some Node.js versions process this option themselves before Pi starts; on those launches, Node's dotenv parser and earlier timing apply, and pi-dotenv preserves the values Node already loaded.
+Use a pre-launch tool when behavior must be consistent across runtimes.
 
 Current Pi help lists 42 provider or cloud variables and 6 Pi configuration variables.
 Pi's environment-variable documentation lists another 11 process configuration variables omitted from help.
