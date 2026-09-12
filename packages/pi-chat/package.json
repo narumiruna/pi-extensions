@@ -34,7 +34,7 @@
   "dependencies": {
     "@narumitw/pi-tui-kit": "^0.59.0",
     "hyperdht": "6.33.2",
-    "hyperswarm": "4.17.0",
+    "hyperswarm": "4.17.1",
     "sodium-universal": "5.0.1"
   },
   "peerDependencies": {
