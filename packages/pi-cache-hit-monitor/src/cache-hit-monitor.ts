@@ -180,7 +180,7 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
 
 export function renderCacheMonitor(view: CacheMonitorView, theme: Theme, width: number): string[] {
   const renderWidth = Math.max(0, width);
-  if (renderWidth === 0) return formatMonitorLines(view).map(() => "");
+  if (renderWidth === 0) return ["", ...formatMonitorLines(view).map(() => "")];
   const divider = theme.fg("borderMuted", "─".repeat(renderWidth));
   const rendered = formatMonitorLines(view).flatMap((line) => {
     const styled = styleLine(line, theme);
