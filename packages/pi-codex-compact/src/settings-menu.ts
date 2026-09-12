@@ -86,16 +86,14 @@ async function updateExperimental(
     );
     return { kind: "rejected" as const };
   }
-  if (signal.aborted) return { kind: "rejected" as const };
-
   try {
+    // A completed update is committed even if menu cancellation races with this continuation.
     await onSettingsChanged?.();
   } catch (error) {
-    if (signal.aborted) return { kind: "rejected" as const };
     let rollbackError: unknown;
     try {
       await runtime.update({ experimentalContextManagement: previous });
-      if (!signal.aborted) await onSettingsChanged?.();
+      await onSettingsChanged?.();
     } catch (recoveryError) {
       rollbackError = recoveryError;
     }

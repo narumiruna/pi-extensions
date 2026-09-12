@@ -197,13 +197,14 @@ Limits are fixed to keep session growth and tool responses bounded:
 | Active notes | 64 names and 256 KiB total |
 | Recall query | 512 characters |
 | Recall search page | 20 matches |
+| History branch traversal | 100,000 entry visits per request |
 | History read scan | 4,194,304 scan units per selected item |
 | History search scan | 4,194,304 scan units across indexed characters and visited values per request |
 | Recall response | 32 KiB and 1,000 lines |
 
-Long reads and additional list or search matches use cursors. A history search that reaches the scan
-limit fails instead of synchronously scanning the rest of an unusually large branch. Malformed or
-unsupported persisted versions are ignored individually.
+Long reads and additional list or search matches use cursors. History actions fail explicitly when
+an applicable entry-visit, read-scan, search-scan, or response limit is reached instead of continuing
+unbounded work. Malformed or unsupported persisted versions are ignored individually.
 
 ## Compatibility transitions
 

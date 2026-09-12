@@ -8,7 +8,7 @@ import {
   createInitialContextState,
 } from "../src/context-window.js";
 import { NOTES_ENTRY_TYPE } from "../src/notes-state.js";
-import { recallContext } from "../src/recall-context.js";
+import { MAX_HISTORY_BRANCH_ENTRY_VISITS, recallContext } from "../src/recall-context.js";
 
 const windowId = "11111111-1111-4111-8111-111111111111";
 
@@ -131,6 +131,58 @@ test("excludes hidden shell executions from every recall action", () => {
 
   const read = recallContext(entries, { source: "history", action: "read", id: "visible-shell" });
   assert.match(read.text, /visible-output/);
+});
+
+test("history list stops branch traversal after one page", () => {
+  const entries = branch();
+  for (let index = 0; index < 25; index += 1) {
+    entries.push(
+      historyEntry(`page-${index}`, {
+        role: "user",
+        content: [{ type: "text", text: `page item ${index}` }],
+        timestamp: index + 10,
+      }),
+    );
+  }
+  let visits = 0;
+  const branchView = new Proxy(entries, {
+    get(target, property, receiver) {
+      if (property !== Symbol.iterator) return Reflect.get(target, property, receiver);
+      return function* iterate() {
+        for (const entry of target) {
+          visits += 1;
+          if (visits > 40) throw new Error("history list traversed beyond its first page");
+          yield entry;
+        }
+      };
+    },
+  });
+
+  const listed = recallContext(branchView, { source: "history", action: "list" });
+  assert.equal((listed.details.items as unknown[]).length, 20);
+  assert.equal(listed.details.nextCursor, "20");
+  assert.ok(visits <= 40);
+});
+
+test("bounds branch traversal for every history action", () => {
+  const entries = Array<SessionEntry>(MAX_HISTORY_BRANCH_ENTRY_VISITS + 1).fill({
+    type: "custom",
+    customType: "unrelated-empty-state",
+    data: {},
+    id: "ignored",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  });
+  entries[0] = branch()[1];
+  const inputs: Parameters<typeof recallContext>[1][] = [
+    { source: "history", action: "list" },
+    { source: "history", action: "read", id: "absent" },
+    { source: "history", action: "search", query: "absent" },
+  ];
+
+  for (const input of inputs) {
+    assert.throws(() => recallContext(entries, input), /history branch traversal exceeded its entry limit/);
+  }
 });
 
 test("does not attribute history to context details without their canonical summary", () => {

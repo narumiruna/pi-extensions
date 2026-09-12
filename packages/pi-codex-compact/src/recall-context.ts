@@ -1,17 +1,13 @@
 import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type SessionEntry, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import {
-  CONTEXT_STATE_ENTRY_TYPE,
-  loadContextLineage,
-  parseContextState,
-  parseExperimentalCompaction,
-} from "./context-window.js";
+import { CONTEXT_STATE_ENTRY_TYPE, parseContextState, parseExperimentalCompaction } from "./context-window.js";
 import { sortedNotes } from "./notes-state.js";
 
 export const MAX_RECALL_QUERY_LENGTH = 512;
 export const MAX_RECALL_RESULT_BYTES = 32 * 1024;
 export const MAX_RECALL_MATCHES = 20;
+export const MAX_HISTORY_BRANCH_ENTRY_VISITS = 100_000;
 const MAX_INDEXED_MESSAGE_CHARS = 256 * 1024;
 // Bound source work separately so empty structures and removable terminal controls cannot bypass the limit.
 const MAX_SCANNED_MESSAGE_UNITS = 4 * MAX_INDEXED_MESSAGE_CHARS;
@@ -36,6 +32,17 @@ interface HistoryMessageItem {
   windowId?: string;
   role: string;
   message: AgentMessage;
+}
+
+interface HistoryTraversalBudget {
+  remainingVisits: number;
+}
+
+function visitHistoryEntry(budget: HistoryTraversalBudget): void {
+  if (budget.remainingVisits <= 0) {
+    throw new Error("codex_compact_recall_context history branch traversal exceeded its entry limit");
+  }
+  budget.remainingVisits -= 1;
 }
 
 function parseCursor(cursor: string | undefined): number {
@@ -141,8 +148,9 @@ function messageIndexPayload(message: AgentMessage): unknown {
   return { ...payload, content: indexContent(payload.content) };
 }
 
-function firstWindowId(entries: readonly SessionEntry[]): string | undefined {
+function firstWindowId(entries: readonly SessionEntry[], budget: HistoryTraversalBudget): string | undefined {
   for (const entry of entries) {
+    visitHistoryEntry(budget);
     if (entry.type === "custom" && entry.customType === CONTEXT_STATE_ENTRY_TYPE) {
       const state = parseContextState(entry.data);
       if (state) return state.firstWindowId;
@@ -152,17 +160,20 @@ function firstWindowId(entries: readonly SessionEntry[]): string | undefined {
       if (details) return details.firstWindowId;
     }
   }
-  return loadContextLineage(entries)?.firstWindowId;
+  return undefined;
 }
 
 function isExcludedFromModelContext(message: AgentMessage): boolean {
   return message.role === "bashExecution" && message.excludeFromContext === true;
 }
 
-function historyMessageItems(entries: readonly SessionEntry[]): HistoryMessageItem[] {
-  const items: HistoryMessageItem[] = [];
-  let windowId = firstWindowId(entries);
+function* historyMessageItems(
+  entries: readonly SessionEntry[],
+  budget: HistoryTraversalBudget,
+): Generator<HistoryMessageItem> {
+  let windowId = firstWindowId(entries, budget);
   for (const entry of entries) {
+    visitHistoryEntry(budget);
     if (entry.type === "compaction") {
       const details = parseExperimentalCompaction(entry);
       if (details) windowId = details.currentWindowId;
@@ -171,32 +182,22 @@ function historyMessageItems(entries: readonly SessionEntry[]): HistoryMessageIt
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
       if (isExcludedFromModelContext(message)) continue;
-      items.push({
+      yield {
         id: messages.length === 1 ? entry.id : `${entry.id}:${index}`,
         ...(windowId ? { windowId } : {}),
         role: message.role,
         message,
-      });
+      };
     }
   }
-  return items;
 }
 
-function activeToolCallMessageId(
-  history: readonly HistoryMessageItem[],
-  toolCallId: string | undefined,
-): string | undefined {
-  if (!toolCallId) return undefined;
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const item = history[index];
-    if (
-      item.message.role === "assistant" &&
-      item.message.content.some((block) => block.type === "toolCall" && block.id === toolCallId)
-    ) {
-      return item.id;
-    }
-  }
-  return undefined;
+function isActiveToolCallMessage(message: AgentMessage, toolCallId: string | undefined): boolean {
+  return (
+    toolCallId !== undefined &&
+    message.role === "assistant" &&
+    message.content.some((block) => block.type === "toolCall" && block.id === toolCallId)
+  );
 }
 
 function displayText(value: string): string {
@@ -323,7 +324,7 @@ function paged<T>(values: readonly T[], offset: number) {
   };
 }
 
-function searchPage<T>(values: readonly T[], offset: number, matches: (value: T) => boolean) {
+function searchPage<T>(values: Iterable<T>, offset: number, matches: (value: T) => boolean) {
   const items: T[] = [];
   let matchIndex = 0;
   for (const value of values) {
@@ -432,9 +433,9 @@ export function recallContext(
     return { text: safeJson({ source: "notes", action: "search", ...page }), details: page };
   }
 
-  const history = historyMessageItems(entries);
+  const history = historyMessageItems(entries, { remainingVisits: MAX_HISTORY_BRANCH_ENTRY_VISITS });
   if (input.action === "list") {
-    const selected = paged(history, offset);
+    const selected = searchPage(history, offset, () => true);
     const page = {
       ...selected,
       items: selected.items.map((item) => ({
@@ -447,7 +448,12 @@ export function recallContext(
     return { text: safeJson({ source: "history", action: "list", ...page }), details: page };
   }
   if (input.action === "read") {
-    const item = history.find((candidate) => candidate.id === input.id);
+    let item: HistoryMessageItem | undefined;
+    for (const candidate of history) {
+      if (candidate.id !== input.id) continue;
+      item = candidate;
+      break;
+    }
     if (!item) throw new Error(`History item ${JSON.stringify(displayText(input.id ?? ""))} was not found`);
     const content = serializeMessage(item.message);
     const page = readChunk(content, offset);
@@ -463,11 +469,10 @@ export function recallContext(
       details: { source: "history", id: item.id, ...page },
     };
   }
-  const activeMessageId = activeToolCallMessageId(history, activeToolCallId);
   const searchBudget: SearchScanBudget = { remainingUnits: MAX_HISTORY_SEARCH_SCAN_UNITS, exceeded: false };
   const indexedText = new Map<string, string>();
   const matches = searchPage(history, offset, (item) => {
-    if (item.id === activeMessageId) return false;
+    if (isActiveToolCallMessage(item.message, activeToolCallId)) return false;
     const text = boundedMessageText(item.message, searchBudget);
     if (searchBudget.exceeded) {
       throw new Error("codex_compact_recall_context history search exceeded its scan limit");

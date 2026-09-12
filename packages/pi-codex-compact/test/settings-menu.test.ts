@@ -255,9 +255,12 @@ test("experimental runtime failures restore the persisted, displayed, and effect
   assert.match(notifications[0]?.message ?? "", /previous setting was restored/i);
 });
 
-test.each(["set-enabled", "set-experimental"] as const)(
-  "stale %s saves do not notify or apply through a disposed menu",
-  async (actionName) => {
+test.each([
+  { actionName: "set-enabled" as const, expectedSettingsChanges: 0 },
+  { actionName: "set-experimental" as const, expectedSettingsChanges: 1 },
+])(
+  "a committed $actionName save reconciles required runtime state after menu disposal",
+  async ({ actionName, expectedSettingsChanges }) => {
     const memory = memoryRuntime();
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => {
@@ -288,10 +291,41 @@ test.each(["set-enabled", "set-experimental"] as const)(
     controller.abort();
     release();
     assert.deepEqual(await pending, { kind: "rejected" });
-    assert.equal(settingsChanges, 0);
+    assert.equal(settingsChanges, expectedSettingsChanges);
+    assert.equal(runtime.get().settings.experimentalContextManagement, actionName === "set-experimental");
     assert.deepEqual(notifications, []);
   },
 );
+
+test("cancellation during failed experimental reconciliation still restores prior state", async () => {
+  const memory = memoryRuntime();
+  const controller = new AbortController();
+  const applied: boolean[] = [];
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onSettingsChanged: () => {
+      applied.push(memory.runtime.get().settings.experimentalContextManagement);
+      if (applied.length === 1) {
+        controller.abort();
+        throw new Error("activation failed during cancellation");
+      }
+    },
+  });
+  const { ctx, notifications } = createMockContext({ mode: "tui" });
+
+  const result = await menu.actions["set-experimental"]({
+    ctx,
+    state: memory.runtime.get(),
+    signal: controller.signal,
+    itemId: "experimentalContextManagement",
+    value: "On",
+  });
+
+  assert.deepEqual(result, { kind: "rejected" });
+  assert.deepEqual(memory.patches, [{ experimentalContextManagement: true }, { experimentalContextManagement: false }]);
+  assert.deepEqual(applied, [true, false]);
+  assert.equal(memory.runtime.get().settings.experimentalContextManagement, false);
+  assert.deepEqual(notifications, []);
+});
 
 test("TUI manual action compacts once after close and reports core errors", async () => {
   const memory = memoryRuntime();
