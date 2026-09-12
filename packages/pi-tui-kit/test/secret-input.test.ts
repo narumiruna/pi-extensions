@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type KeyId, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { runSecretInput } from "../src/index.js";
@@ -40,7 +40,7 @@ test("secret input masks plaintext, preserves paste payload, and supports mouse 
   assert.deepEqual(await mousePending, { kind: "submitted", value: "abc" });
 });
 
-test("secret input retries required and control-character validation in one component", async () => {
+test("secret input retries required and chunked pasted-control validation in one component", async () => {
   const mapping: Record<string, string> = {
     "tui.input.submit": "\r",
     "tui.select.cancel": "\u001b",
@@ -60,8 +60,10 @@ test("secret input retries required and control-character validation in one comp
   tui.press("tui.input.submit");
   assert.equal(tui.isOpen, true);
   assert.match(notifications[0]?.message ?? "", /required/u);
-  tui.send("\u001b[200~value\u0007\u001b[201~");
-  tui.press("tui.input.submit");
+  tui.send("\u001b[200~value");
+  tui.send("\u0003");
+  assert.equal(tui.isOpen, true);
+  tui.send("\u001b[201~\r");
   assert.equal(tui.isOpen, true);
   assert.match(notifications.at(-1)?.message ?? "", /control characters/u);
   tui.send("\u007f");
@@ -89,9 +91,43 @@ test("secret input supports optional empty values and hard cancellation with rem
   const cancelContext = createMockContext({ mode: "tui", hasUI: true, custom: cancelTui.custom });
   const cancelled = runSecretInput(cancelContext.ctx, { title: "Secret" });
   await cancelTui.waitForOpen();
-  cancelTui.send("\u001b[200~unfinished paste");
+  cancelTui.type("private");
   cancelTui.press("ctrl+c");
   assert.deepEqual(await cancelled, { kind: "closed", reason: "close" });
+});
+
+test("secret input preserves remapped word movement and deletion bindings", async () => {
+  const mapping: Record<string, string> = {
+    "tui.input.submit": "s",
+    "tui.select.cancel": "q",
+    "tui.editor.cursorWordLeft": "L",
+    "tui.editor.cursorWordRight": "R",
+    "tui.editor.deleteWordBackward": "B",
+    "tui.editor.deleteWordForward": "D",
+  };
+  const keybindings = {
+    matches: (data: string, binding: string) => mapping[binding] === data,
+    getKeys: (binding: string): KeyId[] => {
+      const key = mapping[binding];
+      return key ? [key as KeyId] : [];
+    },
+  };
+  const cases = [
+    { initial: "alpha beta", inputs: ["L", "D"], expected: "alpha " },
+    { initial: "alpha gamma delta", inputs: ["L", "B"], expected: "alpha delta" },
+    { initial: "alpha beta,gamma", inputs: ["L", "L", "R", "X"], expected: "alpha beta,Xgamma" },
+  ];
+
+  for (const example of cases) {
+    const tui = createTuiHarness({ keybindings });
+    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+    const pending = runSecretInput(context.ctx, { title: "Word editing" });
+    await tui.waitForOpen();
+    tui.type(example.initial);
+    for (const input of example.inputs) tui.send(input);
+    tui.send("s");
+    assert.deepEqual(await pending, { kind: "submitted", value: example.expected });
+  }
 });
 
 test("secret input reports unsupported modes without opening a plaintext dialog", async () => {

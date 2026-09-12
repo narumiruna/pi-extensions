@@ -147,6 +147,26 @@ test("input prefill preserves single-line paste rules and disarms embedded paste
   assert.equal(submitted, "a    bc [201~d ");
 });
 
+test("input prefill sanitizes bidirectional and Unicode line-separator controls", async () => {
+  let submitted = "";
+  const harness = inputComponentHarness({
+    screen: { ...inputScreen, initialValue: "abc\u202eDEF\u2028tail\u2066x\u2029end" },
+    onInputSubmit: async ({ value }) => {
+      submitted = value;
+      return false;
+    },
+  });
+  const rendered = harness.component.render(40).join("\n");
+  assert.equal(rendered.includes("\u202e"), false);
+  assert.equal(rendered.includes("\u2066"), false);
+  assert.equal(rendered.includes("\u2028"), false);
+  assert.equal(rendered.includes("\u2029"), false);
+  assert.match(stripVTControlCharacters(rendered), /> abcDEF tailx end/u);
+  harness.component.handleInput("\r");
+  await harness.component.waitForPending();
+  assert.equal(submitted, "abcDEF tailx end");
+});
+
 test("input screen routes mouse cursor positioning through the framed input row", async () => {
   let submitted = "";
   const harness = inputComponentHarness({

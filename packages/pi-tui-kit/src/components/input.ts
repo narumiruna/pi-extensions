@@ -6,6 +6,7 @@ import {
   type TuiMouseEventResult,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "../terminal-text.js";
 import type { MenuScreen } from "../types.js";
 import type { MenuChangeResponse, MenuScreenComponent, MenuScreenComponentOptions } from "./contracts.js";
 import { handleSearchInput, renderFrameLayout, safeMenuText } from "./rendering.js";
@@ -22,7 +23,7 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
 ): MenuScreenComponent {
   const input = new Input();
   if (options.screen.initialValue !== undefined) {
-    const initialValue = options.screen.initialValue.replaceAll("\u001b", " ");
+    const initialValue = sanitizeInputInitialValue(options.screen.initialValue);
     handleSearchInput(input, `\u001b[200~${initialValue}\u001b[201~`);
   }
   let pending = Promise.resolve();
@@ -138,4 +139,13 @@ export function createInputComponent<ScreenId extends string, ActionId extends s
     },
   };
   return component;
+}
+
+function sanitizeInputInitialValue(value: string) {
+  return Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint === 0x1b) return " ";
+    if (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)) return character;
+    return sanitizeTerminalText(character);
+  }).join("");
 }

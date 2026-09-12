@@ -69,6 +69,30 @@ export async function runSecretInput<Context extends MenuContext = ExtensionComm
         hint.setText(theme.fg("dim", `${interactionHint} • Input is hidden`));
       };
       const cancel = (reason: MenuCloseReason) => complete({ kind: "closed", reason });
+      const dispatchInput = (initialData: string) => {
+        let data: string | undefined = initialData;
+        while (data) {
+          if (input.isPasting || data.includes("\u001b[200~")) {
+            data = input.handleInput(data);
+            continue;
+          }
+          if (matchesKey(data, Key.ctrl("c"))) cancel("close");
+          else if (keybindings.matches(data, "tui.select.cancel")) cancel("back");
+          else if (keybindings.matches(data, "tui.input.submit")) {
+            const value = input.getValue();
+            if (options.required !== false && value.length === 0) {
+              ui.notify(`${title} is required. Enter a value, or cancel.`, "warning");
+            } else if (hasControlCharacter(value)) {
+              ui.notify(
+                `${title} contains control characters. Remove them or re-enter the value, then continue.`,
+                "warning",
+              );
+            } else complete({ kind: "submitted", value });
+          } else input.handleInput(data);
+          data = undefined;
+        }
+        tui.requestRender();
+      };
       applyTheme();
       return {
         get focused() {
@@ -94,23 +118,7 @@ export async function runSecretInput<Context extends MenuContext = ExtensionComm
           input.invalidate();
           hint.invalidate();
         },
-        handleInput(data: string) {
-          if (matchesKey(data, Key.ctrl("c"))) cancel("close");
-          else if (input.isPasting || data.includes("\u001b[200~")) input.handleInput(data);
-          else if (keybindings.matches(data, "tui.select.cancel")) cancel("back");
-          else if (keybindings.matches(data, "tui.input.submit")) {
-            const value = input.getValue();
-            if (options.required !== false && value.length === 0) {
-              ui.notify(`${title} is required. Enter a value, or cancel.`, "warning");
-            } else if (hasControlCharacter(value)) {
-              ui.notify(
-                `${title} contains control characters. Remove them or re-enter the value, then continue.`,
-                "warning",
-              );
-            } else complete({ kind: "submitted", value });
-          } else input.handleInput(data);
-          tui.requestRender();
-        },
+        handleInput: dispatchInput,
         handleMouse(event: TuiMouseEvent) {
           if (event.width !== renderedWidth || event.y !== inputRow) return undefined;
           return input.handleMouse({ ...event, y: 0, width: renderedWidth, height: 1 });
@@ -169,8 +177,7 @@ class MaskedInput implements Focusable {
       const remaining = this.paste.slice(end + 6);
       this.paste = "";
       this.pasting = false;
-      if (remaining) this.handleInput(remaining);
-      return;
+      return remaining || undefined;
     }
     if (this.keybindings.matches(data, "tui.editor.deleteCharBackward")) {
       if (this.cursor > 0) this.value.splice(--this.cursor, 1);
@@ -178,6 +185,14 @@ class MaskedInput implements Focusable {
     }
     if (this.keybindings.matches(data, "tui.editor.deleteCharForward")) {
       if (this.cursor < this.value.length) this.value.splice(this.cursor, 1);
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.deleteWordBackward")) {
+      this.deleteWordBackward();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.deleteWordForward")) {
+      this.deleteWordForward();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLeft")) {
@@ -194,6 +209,14 @@ class MaskedInput implements Focusable {
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLineEnd")) {
       this.cursor = this.value.length;
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.cursorWordLeft")) {
+      this.moveWordBackward();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.cursorWordRight")) {
+      this.moveWordForward();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.deleteToLineStart")) {
@@ -258,9 +281,108 @@ class MaskedInput implements Focusable {
     this.value.splice(this.cursor, 0, ...graphemes);
     this.cursor += graphemes.length;
   }
+
+  private deleteWordBackward() {
+    const end = this.cursor;
+    this.moveWordBackward();
+    this.value.splice(this.cursor, end - this.cursor);
+  }
+
+  private deleteWordForward() {
+    const start = this.cursor;
+    this.moveWordForward();
+    this.value.splice(start, this.cursor - start);
+    this.cursor = start;
+  }
+
+  private moveWordBackward() {
+    const target = findSecretWordBackward(this.getValue(), this.cursorCodeUnits());
+    this.cursor = graphemeIndexAtCodeUnit(this.value, target);
+  }
+
+  private moveWordForward() {
+    const target = findSecretWordForward(this.getValue(), this.cursorCodeUnits());
+    this.cursor = graphemeIndexAtCodeUnit(this.value, target);
+  }
+
+  private cursorCodeUnits() {
+    return this.value.slice(0, this.cursor).join("").length;
+  }
 }
 
 const secretGraphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const secretWordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+const SECRET_WORD_PUNCTUATION = new Set("(){}[]<>.,;:'\"!?+-=*/\\|&%^$#@~`");
+
+function findSecretWordBackward(value: string, cursor: number) {
+  if (cursor <= 0) return 0;
+  const segments = [...secretWordSegmenter.segment(value.slice(0, cursor))];
+  let target = cursor;
+  while (segments.length > 0 && isSecretWhitespace(segments.at(-1)?.segment ?? "")) {
+    target -= segments.pop()?.segment.length ?? 0;
+  }
+  const last = segments.at(-1);
+  if (!last) return target;
+  if (last.isWordLike) {
+    const punctuationEnd = lastSecretPunctuationEnd(last.segment);
+    target -= punctuationEnd === undefined ? last.segment.length : last.segment.length - punctuationEnd;
+    return target;
+  }
+  while (segments.length > 0) {
+    const segment = segments.at(-1);
+    if (!segment || segment.isWordLike || isSecretWhitespace(segment.segment)) break;
+    target -= segments.pop()?.segment.length ?? 0;
+  }
+  return target;
+}
+
+function findSecretWordForward(value: string, cursor: number) {
+  if (cursor >= value.length) return value.length;
+  const segments = [...secretWordSegmenter.segment(value.slice(cursor))];
+  let target = cursor;
+  while (segments.length > 0 && isSecretWhitespace(segments[0]?.segment ?? "")) {
+    target += segments.shift()?.segment.length ?? 0;
+  }
+  const first = segments[0];
+  if (!first) return target;
+  if (first.isWordLike) {
+    target += firstSecretPunctuationIndex(first.segment) ?? first.segment.length;
+    return target;
+  }
+  while (segments.length > 0) {
+    const segment = segments[0];
+    if (!segment || segment.isWordLike || isSecretWhitespace(segment.segment)) break;
+    target += segments.shift()?.segment.length ?? 0;
+  }
+  return target;
+}
+
+function graphemeIndexAtCodeUnit(graphemes: readonly string[], target: number) {
+  let codeUnits = 0;
+  for (const [index, grapheme] of graphemes.entries()) {
+    if (codeUnits >= target) return index;
+    codeUnits += grapheme.length;
+  }
+  return graphemes.length;
+}
+
+function isSecretWhitespace(value: string) {
+  return /\s/u.test(value);
+}
+
+function firstSecretPunctuationIndex(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    if (SECRET_WORD_PUNCTUATION.has(value[index] ?? "")) return index;
+  }
+  return undefined;
+}
+
+function lastSecretPunctuationEnd(value: string) {
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    if (SECRET_WORD_PUNCTUATION.has(value[index] ?? "")) return index + 1;
+  }
+  return undefined;
+}
 
 function hasControlCharacter(value: string) {
   return [...value].some((character) => {
