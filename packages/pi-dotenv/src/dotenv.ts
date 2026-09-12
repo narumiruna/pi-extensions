@@ -27,8 +27,9 @@ export function loadEnvFile(
     throw new Error(`Could not read the file passed to ${ENV_FILE_OPTION}`);
   }
 
+  const text = content.startsWith("\uFEFF") ? content.slice(1) : content;
   const parsed = Object.fromEntries(
-    Object.entries(parseEnv(content)).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    Object.entries(parseEnv(text)).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
   const env = options.env ?? process.env;
   for (const [name, value] of Object.entries(parsed)) {

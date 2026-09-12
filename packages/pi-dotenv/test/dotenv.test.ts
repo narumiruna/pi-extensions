@@ -98,6 +98,20 @@ test("loads parsed values atomically while preserving the existing environment",
   });
 });
 
+test("strips a UTF-8 BOM from the first variable name", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "bom.env");
+    await writeFile(path, "\uFEFFOPENAI_API_KEY=sk-dummy\nSECOND=yes\n");
+    const env: NodeJS.ProcessEnv = {};
+
+    const parsed = loadEnvFile(path, { env });
+
+    assert.deepEqual(parsed, { OPENAI_API_KEY: "sk-dummy", SECOND: "yes" });
+    assert.equal(env.OPENAI_API_KEY, "sk-dummy");
+    assert.equal(env["\uFEFFOPENAI_API_KEY"], undefined);
+  });
+});
+
 test("resolves relative paths from the supplied working directory", async () => {
   await withTempDir(async (root) => {
     await writeFile(join(root, ".env.local"), "PI_DOTENV_RELATIVE=loaded\n");
