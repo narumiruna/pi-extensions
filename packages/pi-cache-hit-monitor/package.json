@@ -1,0 +1,50 @@
+{
+  "name": "@narumitw/pi-cache-hit-monitor",
+  "version": "0.0.0",
+  "description": "Pi extension that shows live prompt-cache reuse and cost diagnostics above the editor.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "prompt-cache",
+    "cache-hit-rate",
+    "observability",
+    "widget",
+    "tui"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.85.0",
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-tui": "0.85.0",
+    "@types/node": "26.4.1",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-cache-hit-monitor"
+  }
+}

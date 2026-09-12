@@ -10,7 +10,7 @@ import {
   createCacheSample,
   formatMonitorLines,
   sanitizeDisplayLabel,
-} from "./metrics.js";
+} from "../src/metrics.js";
 
 const RATES: ModelCostRates = {
   input: 10,

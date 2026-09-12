@@ -4,8 +4,8 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@earen
 import type { Component } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import cacheHitMonitor, { COMMAND_NAME, renderCacheMonitor, WIDGET_KEY } from "./index.js";
-import { createCacheMonitorView, createCacheSample } from "./metrics.js";
+import cacheHitMonitor, { COMMAND_NAME, renderCacheMonitor, WIDGET_KEY } from "../src/index.js";
+import { createCacheMonitorView, createCacheSample, formatMonitorLines } from "../src/metrics.js";
 
 const RATES: ModelCostRates = { input: 10, output: 20, cacheRead: 1, cacheWrite: 20 };
 const MODEL: Model<Api> = {
@@ -338,10 +338,14 @@ test("renders every line within narrow widths and strips unsafe model text", () 
     MODEL,
   );
   assert.ok(sample);
-  const lines = renderCacheMonitor(createCacheMonitorView([sample]), THEME, 32);
+  const view = createCacheMonitorView([sample]);
+  const lines = renderCacheMonitor(view, THEME, 32);
   const plain = lines.map(stripTerminalSequences);
+  const zeroWidthLines = renderCacheMonitor(view, THEME, 0);
 
   assert.ok(lines.every((line) => visibleWidth(line) <= 32));
+  assert.equal(zeroWidthLines.length, formatMonitorLines(view).length + 1);
+  assert.ok(zeroWidthLines.every((line) => line === ""));
   assert.match(plain.join("\n"), /provider\/model unsafe/);
   assert.ok(
     plain.every((line) =>

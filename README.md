@@ -103,6 +103,7 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | Package | Use it for | Install |
 | --- | --- | --- |
 | [`pi-analytics`](./packages/pi-analytics) | Review private, content-free local metrics for model calls, skills, tools, response cycles, and observed provider reliability through `/analytics`. | `pi install npm:@narumitw/pi-analytics` |
+| [`pi-cache-hit-monitor`](./packages/pi-cache-hit-monitor) | Show live prompt-cache reuse, token, and estimated cost diagnostics above the editor. | `pi install npm:@narumitw/pi-cache-hit-monitor` |
 | [`pi-github-pr`](./packages/pi-github-pr) | Show current-branch pull request checks, reviews, and comment counts through the authenticated `gh` CLI. | `pi install npm:@narumitw/pi-github-pr` |
 | [`pi-langfuse`](./packages/pi-langfuse) | Send agent runs, generations, token usage, costs, and tool activity to Langfuse. | `pi install npm:@narumitw/pi-langfuse` |
 | [`pi-stamp`](./packages/pi-stamp) | Show configurable timestamps with opt-in assistant metadata, response timing, and tool timing in the TUI transcript. | `pi install npm:@narumitw/pi-stamp` |
