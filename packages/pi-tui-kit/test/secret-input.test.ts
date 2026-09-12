@@ -130,6 +130,50 @@ test("secret input preserves remapped word movement and deletion bindings", asyn
   }
 });
 
+test("secret input preserves remapped undo across typing, paste, and deletion", async () => {
+  const mapping: Record<string, string> = {
+    "tui.input.submit": "S",
+    "tui.select.cancel": "Q",
+    "tui.editor.undo": "U",
+    "tui.editor.deleteCharBackward": "B",
+    "tui.editor.deleteCharForward": "F",
+    "tui.editor.deleteWordBackward": "W",
+    "tui.editor.deleteWordForward": "D",
+    "tui.editor.cursorLeft": "L",
+    "tui.editor.cursorLineStart": "H",
+    "tui.editor.deleteToLineStart": "A",
+    "tui.editor.deleteToLineEnd": "E",
+  };
+  const keybindings = {
+    matches: (data: string, binding: string) => mapping[binding] === data,
+    getKeys: (binding: string): KeyId[] => {
+      const key = mapping[binding];
+      return key ? [key as KeyId] : [];
+    },
+  };
+  const cases = [
+    { initial: "alpha", inputs: ["U"], expected: "" },
+    { initial: "alpha", inputs: ["\u001b[200~ beta\u001b[201~", "U"], expected: "alpha" },
+    { initial: "alpha", inputs: ["B", "U"], expected: "alpha" },
+    { initial: "alpha", inputs: ["L", "F", "U"], expected: "alpha" },
+    { initial: "alpha beta", inputs: ["W", "U"], expected: "alpha beta" },
+    { initial: "alpha beta", inputs: ["H", "D", "U"], expected: "alpha beta" },
+    { initial: "alpha", inputs: ["A", "U"], expected: "alpha" },
+    { initial: "alpha", inputs: ["H", "E", "U"], expected: "alpha" },
+  ];
+
+  for (const example of cases) {
+    const tui = createTuiHarness({ keybindings });
+    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+    const pending = runSecretInput(context.ctx, { title: "Undo editing", required: false });
+    await tui.waitForOpen();
+    tui.type(example.initial);
+    for (const input of example.inputs) tui.send(input);
+    tui.send("S");
+    assert.deepEqual(await pending, { kind: "submitted", value: example.expected });
+  }
+});
+
 test("secret input reports unsupported modes without opening a plaintext dialog", async () => {
   let inputCalls = 0;
   const unsupportedModes: unknown[] = [];
@@ -152,6 +196,22 @@ test("secret input reports unsupported modes without opening a plaintext dialog"
   );
   assert.deepEqual(unsupportedModes, ["rpc"]);
   assert.equal(inputCalls, 0);
+});
+
+test("secret input revalidates isCurrent ownership before input and mouse dispatch", async () => {
+  for (const dispatch of ["input", "mouse"] as const) {
+    let current = true;
+    const tui = createTuiHarness();
+    const { ctx, notifications } = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+    const pending = runSecretInput(ctx, { title: "Stale secret", isCurrent: () => current });
+    await tui.waitForOpen();
+    current = false;
+    if (dispatch === "input") tui.press("tui.input.submit");
+    else tui.mouse({ type: "press", x: 2, y: 0 });
+    assert.deepEqual(await pending, { kind: "stale" });
+    assert.equal(tui.isOpen, false);
+    assert.deepEqual(notifications, []);
+  }
 });
 
 test("secret input returns stale on owner abort or external disposal and clears owned state", async () => {

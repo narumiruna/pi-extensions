@@ -318,7 +318,7 @@ const result = await runSecretInput(ctx, {
 if (result.kind === "submitted") await saveCredential(result.value);
 ```
 
-TUI renders one masked, horizontally scrolling draft and supports callback-provided submit, cancel, cursor, deletion, and line-editing bindings, bracketed paste, Kitty printable input, IME focus, and mouse cursor placement.
+TUI renders one masked, horizontally scrolling draft and supports callback-provided submit, cancel, cursor, deletion, undo, and line-editing bindings, bracketed paste, Kitty printable input, IME focus, and mouse cursor placement.
 `required` defaults to `true`; required-empty and pasted-control validation retries in the same component without exposing the value.
 Back and Ctrl+C return distinct `closed` reasons, while owner abort, stale ownership, external disposal, unsupported modes, and failures retain typed results.
 Completion and every exit clear the component's internal references, but the API does not promise secure erasure from the JavaScript runtime.

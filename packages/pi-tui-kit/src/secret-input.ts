@@ -69,7 +69,14 @@ export async function runSecretInput<Context extends MenuContext = ExtensionComm
         hint.setText(theme.fg("dim", `${interactionHint} • Input is hidden`));
       };
       const cancel = (reason: MenuCloseReason) => complete({ kind: "closed", reason });
+      const retainOwnership = () => {
+        if (options.isCurrent?.() ?? true) return true;
+        // complete() performs the authoritative owner check and converts this value to stale.
+        complete({ kind: "closed", reason: "back" });
+        return false;
+      };
       const dispatchInput = (initialData: string) => {
+        if (!retainOwnership()) return;
         let data: string | undefined = initialData;
         while (data) {
           if (input.isPasting || data.includes("\u001b[200~")) {
@@ -120,6 +127,7 @@ export async function runSecretInput<Context extends MenuContext = ExtensionComm
         },
         handleInput: dispatchInput,
         handleMouse(event: TuiMouseEvent) {
+          if (!retainOwnership()) return { handled: true };
           if (event.width !== renderedWidth || event.y !== inputRow) return undefined;
           return input.handleMouse({ ...event, y: 0, width: renderedWidth, height: 1 });
         },
@@ -148,6 +156,8 @@ class MaskedInput implements Focusable {
   private pasting = false;
   private renderedStart = 0;
   private renderedCount = 0;
+  private lastAction: "type-word" | null = null;
+  private undoStack: Array<{ value: string[]; cursor: number }> = [];
 
   constructor(private readonly keybindings: KeybindingsManager) {}
 
@@ -173,18 +183,32 @@ class MaskedInput implements Focusable {
         .slice(0, end)
         .replace(/[\r\n]/gu, "")
         .replace(/\t/gu, "    ");
+      this.lastAction = null;
+      this.pushUndo();
       this.insert(pasted);
       const remaining = this.paste.slice(end + 6);
       this.paste = "";
       this.pasting = false;
       return remaining || undefined;
     }
+    if (this.keybindings.matches(data, "tui.editor.undo")) {
+      this.undo();
+      return;
+    }
     if (this.keybindings.matches(data, "tui.editor.deleteCharBackward")) {
-      if (this.cursor > 0) this.value.splice(--this.cursor, 1);
+      this.lastAction = null;
+      if (this.cursor > 0) {
+        this.pushUndo();
+        this.value.splice(--this.cursor, 1);
+      }
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.deleteCharForward")) {
-      if (this.cursor < this.value.length) this.value.splice(this.cursor, 1);
+      this.lastAction = null;
+      if (this.cursor < this.value.length) {
+        this.pushUndo();
+        this.value.splice(this.cursor, 1);
+      }
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.deleteWordBackward")) {
@@ -196,18 +220,22 @@ class MaskedInput implements Focusable {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLeft")) {
+      this.lastAction = null;
       this.cursor = Math.max(0, this.cursor - 1);
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorRight")) {
+      this.lastAction = null;
       this.cursor = Math.min(this.value.length, this.cursor + 1);
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLineStart")) {
+      this.lastAction = null;
       this.cursor = 0;
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLineEnd")) {
+      this.lastAction = null;
       this.cursor = this.value.length;
       return;
     }
@@ -220,22 +248,35 @@ class MaskedInput implements Focusable {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.deleteToLineStart")) {
-      this.value.splice(0, this.cursor);
-      this.cursor = 0;
+      if (this.cursor > 0) {
+        this.pushUndo();
+        this.value.splice(0, this.cursor);
+        this.cursor = 0;
+        this.lastAction = null;
+      }
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.deleteToLineEnd")) {
-      this.value.splice(this.cursor);
+      if (this.cursor < this.value.length) {
+        this.pushUndo();
+        this.value.splice(this.cursor);
+        this.lastAction = null;
+      }
       return;
     }
     const printable = decodeKittyPrintable(data) ?? data;
-    if (!hasControlCharacter(printable)) this.insert(printable);
+    if (!hasControlCharacter(printable) && printable.length > 0) {
+      if (isSecretWhitespace(printable) || this.lastAction !== "type-word") this.pushUndo();
+      this.lastAction = "type-word";
+      this.insert(printable);
+    }
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (event.type !== "press" || event.button !== "left") return undefined;
     const target = this.renderedStart + Math.max(0, Math.min(this.renderedCount, event.x - 2));
     this.cursor = Math.max(0, Math.min(this.value.length, target));
+    this.lastAction = null;
     return { handled: true, focus: true };
   }
 
@@ -268,12 +309,15 @@ class MaskedInput implements Focusable {
 
   clear() {
     this.value.fill("");
+    for (const snapshot of this.undoStack) snapshot.value.fill("");
     this.value = [];
+    this.undoStack = [];
     this.paste = "";
     this.cursor = 0;
     this.pasting = false;
     this.renderedStart = 0;
     this.renderedCount = 0;
+    this.lastAction = null;
   }
 
   private insert(value: string) {
@@ -283,12 +327,16 @@ class MaskedInput implements Focusable {
   }
 
   private deleteWordBackward() {
+    if (this.cursor === 0) return;
+    this.pushUndo();
     const end = this.cursor;
     this.moveWordBackward();
     this.value.splice(this.cursor, end - this.cursor);
   }
 
   private deleteWordForward() {
+    if (this.cursor >= this.value.length) return;
+    this.pushUndo();
     const start = this.cursor;
     this.moveWordForward();
     this.value.splice(start, this.cursor - start);
@@ -296,13 +344,30 @@ class MaskedInput implements Focusable {
   }
 
   private moveWordBackward() {
+    if (this.cursor === 0) return;
+    this.lastAction = null;
     const target = findSecretWordBackward(this.getValue(), this.cursorCodeUnits());
     this.cursor = graphemeIndexAtCodeUnit(this.value, target);
   }
 
   private moveWordForward() {
+    if (this.cursor >= this.value.length) return;
+    this.lastAction = null;
     const target = findSecretWordForward(this.getValue(), this.cursorCodeUnits());
     this.cursor = graphemeIndexAtCodeUnit(this.value, target);
+  }
+
+  private pushUndo() {
+    this.undoStack.push({ value: [...this.value], cursor: this.cursor });
+  }
+
+  private undo() {
+    const snapshot = this.undoStack.pop();
+    if (!snapshot) return;
+    this.value.fill("");
+    this.value = snapshot.value;
+    this.cursor = snapshot.cursor;
+    this.lastAction = null;
   }
 
   private cursorCodeUnits() {
