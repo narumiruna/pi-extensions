@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
+  buildSessionContext,
   type CompactionEntry,
   type SessionBeforeCompactEvent,
   type SessionEntry,
@@ -14,7 +15,7 @@ import {
   CONTEXT_DETAILS_KIND,
   CONTEXT_STATE_ENTRY_TYPE,
   CONTEXT_VERSION,
-  compactionKeptMessages,
+  compactionRetainedContext,
   contextContract,
   contextDeactivation,
   createExperimentalContextDetails,
@@ -90,6 +91,7 @@ test("creates and reconstructs versioned context lineage", () => {
   };
   assert.deepEqual(loadContextLineage([customState(state), compaction]), details);
   assert.deepEqual(activeExperimentalCompaction([customState(state), compaction])?.details, details);
+  assert.equal(parseExperimentalContextDetails({ ...details, retryResponseFingerprint: "bad" }), undefined);
 });
 
 test("rejects malformed and unsupported context details", () => {
@@ -230,7 +232,7 @@ test("projects only an exactly fingerprinted retained prefix", () => {
 });
 
 test.each(["error", "length"] as const)(
-  "excludes a retried overflow %s response from retained fingerprints",
+  "excludes a retried overflow %s response immediately and after reconstruction",
   (stopReason) => {
     const user = message("kept", 1);
     const failed: AgentMessage = {
@@ -282,13 +284,16 @@ test.each(["error", "length"] as const)(
       willRetry: true,
       signal: new AbortController().signal,
     };
-    const kept = compactionKeptMessages(event);
-    assert.deepEqual(kept, [user]);
-    assert.deepEqual(compactionKeptMessages({ ...event, willRetry: false }), [user, failed]);
+    const retained = compactionRetainedContext(event);
+    assert.deepEqual(retained.keptMessages, [user]);
+    assert.match(retained.retryResponseFingerprint ?? "", /^[a-f0-9]{64}$/);
+    assert.deepEqual(compactionRetainedContext({ ...event, willRetry: false }), {
+      keptMessages: [user, failed],
+    });
 
     const details = createExperimentalContextDetails({
       lineage: createInitialContextState(first),
-      keptMessages: kept,
+      ...retained,
       reason: "overflow",
       windowId: second,
     });
@@ -298,12 +303,33 @@ test.each(["error", "length"] as const)(
       tokensBefore: 100,
       timestamp: 3,
     };
-    const entry = {
+    const entry: CompactionEntry<typeof details> = {
       type: "compaction",
+      id: "retry-compaction",
+      parentId: "failed",
+      timestamp: new Date(3).toISOString(),
       summary: contextContract(details),
-    } as CompactionEntry<typeof details>;
+      firstKeptEntryId: "user",
+      tokensBefore: 100,
+      details,
+    };
     const next = message("retried response", 4);
     assert.deepEqual(projectExperimentalContext([summary, user, next], entry, details), [summary, next]);
+    const reconstructedMessages = buildSessionContext(
+      [
+        ...entries,
+        entry,
+        {
+          type: "message",
+          id: "retry",
+          parentId: entry.id,
+          timestamp: new Date(4).toISOString(),
+          message: next,
+        },
+      ],
+      "retry",
+    ).messages;
+    assert.deepEqual(projectExperimentalContext(reconstructedMessages, entry, details), [summary, next]);
   },
 );
 

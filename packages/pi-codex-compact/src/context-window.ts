@@ -29,6 +29,7 @@ export interface ExperimentalContextDetails extends ContextLineage {
   reason: SessionBeforeCompactEvent["reason"];
   requestId?: string;
   keptMessageFingerprints: string[];
+  retryResponseFingerprint?: string;
   createdAt: string;
 }
 
@@ -89,6 +90,8 @@ export function parseExperimentalContextDetails(value: unknown): ExperimentalCon
     !value.keptMessageFingerprints.every(
       (fingerprint) => typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint),
     ) ||
+    (value.retryResponseFingerprint !== undefined &&
+      (typeof value.retryResponseFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.retryResponseFingerprint))) ||
     typeof value.createdAt !== "string" ||
     value.createdAt.length > 64
   ) {
@@ -101,6 +104,9 @@ export function parseExperimentalContextDetails(value: unknown): ExperimentalCon
     reason: value.reason,
     ...(typeof value.requestId === "string" ? { requestId: value.requestId } : {}),
     keptMessageFingerprints: [...value.keptMessageFingerprints],
+    ...(typeof value.retryResponseFingerprint === "string"
+      ? { retryResponseFingerprint: value.retryResponseFingerprint }
+      : {}),
     createdAt: value.createdAt,
   };
 }
@@ -215,7 +221,10 @@ export function reconcileContextContract(messages: readonly AgentMessage[], line
   return [...messages, createContextContractMessage(lineage)];
 }
 
-export function compactionKeptMessages(event: SessionBeforeCompactEvent): AgentMessage[] {
+export function compactionRetainedContext(event: SessionBeforeCompactEvent): {
+  keptMessages: AgentMessage[];
+  retryResponseFingerprint?: string;
+} {
   const leafId = event.branchEntries.at(-1)?.id ?? null;
   const contextEntries = buildContextEntries(event.branchEntries, leafId);
   const keptIndex = contextEntries.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
@@ -229,14 +238,18 @@ export function compactionKeptMessages(event: SessionBeforeCompactEvent): AgentM
     lastMessage?.role === "assistant" &&
     (lastMessage.stopReason === "error" || lastMessage.stopReason === "length")
   ) {
-    return keptMessages.slice(0, -1);
+    return {
+      keptMessages: keptMessages.slice(0, -1),
+      retryResponseFingerprint: fingerprintMessage(lastMessage),
+    };
   }
-  return keptMessages;
+  return { keptMessages };
 }
 
 export function createExperimentalContextDetails(input: {
   lineage: ContextLineage;
   keptMessages: readonly AgentMessage[];
+  retryResponseFingerprint?: string;
   reason: SessionBeforeCompactEvent["reason"];
   requestId?: string;
   windowId?: string;
@@ -252,6 +265,7 @@ export function createExperimentalContextDetails(input: {
     reason: input.reason,
     ...(input.requestId ? { requestId: input.requestId } : {}),
     keptMessageFingerprints: input.keptMessages.map(fingerprintMessage),
+    ...(input.retryResponseFingerprint ? { retryResponseFingerprint: input.retryResponseFingerprint } : {}),
     createdAt: input.createdAt ?? new Date().toISOString(),
   };
   const parsed = parseExperimentalContextDetails(details);
@@ -297,6 +311,13 @@ export function projectExperimentalContext(
     return undefined;
   }
   while (messageIndex < messages.length && isOlderCompactionSummary(messages[messageIndex], timestamp)) {
+    messageIndex += 1;
+  }
+  if (
+    details.retryResponseFingerprint &&
+    messageIndex < messages.length &&
+    fingerprintMessage(messages[messageIndex]) === details.retryResponseFingerprint
+  ) {
     messageIndex += 1;
   }
   return [...messages.slice(0, summaryIndex + 1), ...messages.slice(messageIndex)];

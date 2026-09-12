@@ -25,7 +25,7 @@ import {
   CONTEXT_STATE_ENTRY_TYPE,
   CONTEXT_VERSION,
   type ContextLineage,
-  compactionKeptMessages,
+  compactionRetainedContext,
   contextContract,
   contextDeactivation,
   createExperimentalContextDetails,
@@ -439,7 +439,7 @@ export function createExperimentalContextManager(
       if (pending && !request) pending = undefined;
       const details = createExperimentalContextDetails({
         lineage: activeLineage,
-        keptMessages: compactionKeptMessages(event),
+        ...compactionRetainedContext(event),
         reason: event.reason,
         ...(request ? { requestId: request.requestId, windowId: request.nextWindowId } : {}),
       });

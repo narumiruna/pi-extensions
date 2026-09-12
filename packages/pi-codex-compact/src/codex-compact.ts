@@ -17,7 +17,7 @@ import {
   projectCheckpointContext,
 } from "./checkpoint.js";
 import { createExperimentalContextManager } from "./context-management.js";
-import { compactionKeptMessages } from "./context-window.js";
+import { compactionRetainedContext } from "./context-window.js";
 import { resolveCompactionRoute, usesResponsesCompactionApi } from "./model-api.js";
 import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.js";
 import { requestRemoteCompaction } from "./remote.js";
@@ -141,7 +141,7 @@ async function compactRemotely(
       modelId: model.id,
       protocol: route.protocol,
       replacementHistory,
-      keptMessages: compactionKeptMessages(event),
+      ...compactionRetainedContext(event),
     });
     return {
       compaction: {
