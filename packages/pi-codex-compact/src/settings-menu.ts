@@ -9,6 +9,7 @@ type Screen = "main" | "settings" | "invalid";
 type Action =
   | "compact-now"
   | "set-enabled"
+  | "set-experimental"
   | "set-protocol"
   | "set-timeout"
   | "set-retries"
@@ -18,6 +19,8 @@ type Action =
 export interface SettingsMenuOwner {
   signal: AbortSignal;
   isCurrent(): boolean;
+  isExperimentalActive?(): boolean;
+  onSettingsChanged?(): void | Promise<void>;
 }
 
 interface CompactMenuStatus {
@@ -53,7 +56,7 @@ async function update(
   try {
     await runtime.update(patch, signal);
     if (signal.aborted) return { kind: "rejected" as const };
-    ctx.ui.notify("Responses compaction settings saved.", "info");
+    ctx.ui.notify("Codex compaction settings saved.", "info");
     return { kind: "stay" as const };
   } catch (error) {
     if (signal.aborted) return { kind: "rejected" as const };
@@ -65,21 +68,69 @@ async function update(
   }
 }
 
+async function updateExperimental(
+  runtime: CodexCompactSettingsRuntime,
+  ctx: ExtensionCommandContext,
+  enabled: boolean,
+  signal: AbortSignal,
+  onSettingsChanged?: () => void | Promise<void>,
+) {
+  const previous = runtime.get().settings.experimentalContextManagement;
+  try {
+    await runtime.update({ experimentalContextManagement: enabled }, signal);
+  } catch (error) {
+    if (signal.aborted) return { kind: "rejected" as const };
+    ctx.ui.notify(
+      `Could not save pi-codex-compact.json: ${safeText(error instanceof Error ? error.message : String(error))}`,
+      "error",
+    );
+    return { kind: "rejected" as const };
+  }
+  try {
+    // A completed update is committed even if menu cancellation races with this continuation.
+    await onSettingsChanged?.();
+  } catch (error) {
+    let rollbackError: unknown;
+    try {
+      await runtime.update({ experimentalContextManagement: previous });
+      await onSettingsChanged?.();
+    } catch (recoveryError) {
+      rollbackError = recoveryError;
+    }
+    if (signal.aborted) return { kind: "rejected" as const };
+    const failure = safeText(error instanceof Error ? error.message : String(error));
+    const recovery = rollbackError
+      ? ` The previous setting could not be fully restored: ${safeText(rollbackError instanceof Error ? rollbackError.message : String(rollbackError))}`
+      : " The previous setting was restored.";
+    ctx.ui.notify(`Could not apply experimental context management: ${failure}.${recovery}`, "error");
+    return { kind: "rejected" as const };
+  }
+  if (signal.aborted) return { kind: "rejected" as const };
+  ctx.ui.notify("Codex compaction settings saved.", "info");
+  return { kind: "stay" as const };
+}
+
 export function createCodexCompactMenu(
   runtime: CodexCompactSettingsRuntime,
-  options: { onCompactRequested?: () => void; status?: CompactMenuStatus } = {},
+  options: {
+    onCompactRequested?: () => void;
+    onSettingsChanged?: () => void | Promise<void>;
+    isExperimentalActive?: () => boolean;
+    status?: CompactMenuStatus;
+  } = {},
 ): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
   return {
     start: "main",
     screens: {
       main: ({ state }) => ({
         kind: "actions",
-        title: "Responses Compaction",
+        title: "Codex Compaction",
         lines: [
+          `Experimental context management: ${state.settings.experimentalContextManagement ? "On" : "Off"}`,
           `Remote compaction: ${state.settings.enabled ? "On" : "Off"}`,
           `Protocol setting: ${protocolLabel(state.settings.protocol)}`,
           `Active model: ${safeText(options.status?.model ?? "none")}`,
-          `Compact route: ${safeText(compactRoute(state, options.status))}`,
+          `Compact route: ${safeText(compactRoute(state, options.status, options.isExperimentalActive?.() ?? false))}`,
         ],
         items: [
           {
@@ -102,9 +153,18 @@ export function createCodexCompactMenu(
       }),
       settings: ({ state }) => ({
         kind: "settings",
-        title: "Responses Compaction Settings",
+        title: "Codex Compaction Settings",
         lines: [`User settings · ${safeText(state.path)}`],
         items: [
+          {
+            id: "experimentalContextManagement",
+            label: "Experimental context management",
+            description:
+              "Use summary-free local rollover and four memory tools. Experimental; remote settings are dormant while enabled.",
+            currentValue: state.settings.experimentalContextManagement ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "set-experimental",
+          },
           {
             id: "enabled",
             label: "Remote compaction",
@@ -172,6 +232,8 @@ export function createCodexCompactMenu(
         return { kind: "close" };
       },
       "set-enabled": ({ ctx, value, signal }) => update(runtime, ctx, { enabled: value === "On" }, signal),
+      "set-experimental": ({ ctx, value, signal }) =>
+        updateExperimental(runtime, ctx, value === "On", signal, options.onSettingsChanged),
       "set-protocol": ({ ctx, value, signal }) =>
         update(
           runtime,
@@ -214,6 +276,8 @@ export async function showCodexCompactMenu(
       onCompactRequested: () => {
         compactRequested = true;
       },
+      onSettingsChanged: owner.onSettingsChanged,
+      isExperimentalActive: owner.isExperimentalActive,
       status: compactMenuStatus(ctx),
     }),
     {
@@ -240,7 +304,19 @@ export function compactMenuStatus(ctx: ExtensionCommandContext): CompactMenuStat
   };
 }
 
-function compactRoute(state: Readonly<CodexCompactSettingsState>, status: CompactMenuStatus | undefined): string {
+function compactRoute(
+  state: Readonly<CodexCompactSettingsState>,
+  status: CompactMenuStatus | undefined,
+  experimentalActive: boolean,
+): string {
+  if (experimentalActive) {
+    return state.settings.experimentalContextManagement
+      ? "Experimental summary-free rollover"
+      : "Experimental summary-free rollover (deactivation pending)";
+  }
+  if (state.settings.experimentalContextManagement) {
+    return "Pi native (experimental context tools are unavailable)";
+  }
   const route = resolveCompactionRouteForApi(status?.api, state.settings);
   if (route.kind === "native") return `Pi native (${route.reason})`;
   return route.protocol === "remote-v2" ? "Responses Remote V2" : "Responses Compact API";
