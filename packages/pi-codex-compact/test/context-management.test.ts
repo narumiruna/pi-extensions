@@ -253,7 +253,7 @@ async function emitAutomaticCompaction(
   };
   const compactEntry = {
     type: "compaction",
-    id: "automatic-helper",
+    id: `automatic-helper-${current.entries.length}`,
     parentId: current.entries.at(-1)?.id ?? null,
     timestamp: "2026-01-01T00:00:03.000Z",
     ...result.compaction,
@@ -1799,7 +1799,66 @@ test("automatic compaction consumes a pending request before settlement", async 
   );
 });
 
-test("a completed rollover is not reused by another compaction before settlement", async () => {
+test.each([
+  { stopReason: "stop" as const, expectedContinuations: 0 },
+  { stopReason: "toolUse" as const, expectedContinuations: 0 },
+  { stopReason: "length" as const, expectedContinuations: 1 },
+  { stopReason: "error" as const, expectedContinuations: 1 },
+])(
+  "a completed rollover survives a later compaction after a $stopReason turn",
+  async ({ stopReason, expectedContinuations }) => {
+    const current = setup();
+    await start(current);
+    await tool(current, "codex_compact_start_new_context").execute(
+      "start",
+      {},
+      undefined,
+      undefined,
+      current.current.ctx,
+    );
+    const first = await emitAutomaticCompaction(current);
+    const firstDetails = first.result.compaction.details as {
+      requestId?: string;
+      currentWindowId: string;
+    };
+    assert.ok(firstDetails.requestId);
+
+    await current.mock.events.get("turn_start")?.[0](
+      { type: "turn_start", turnIndex: 1, timestamp: Date.now() },
+      current.current.ctx,
+    );
+    await current.mock.events.get("agent_end")?.[0](
+      { type: "agent_end", messages: [assistantMessage(stopReason)] },
+      current.current.ctx,
+    );
+
+    const second = await emitAutomaticCompaction(current);
+    const secondDetails = second.result.compaction.details as {
+      requestId?: string;
+      previousWindowId: string;
+      currentWindowId: string;
+    };
+    assert.equal(secondDetails.requestId, undefined);
+    assert.equal(secondDetails.previousWindowId, firstDetails.currentWindowId);
+    assert.notEqual(secondDetails.currentWindowId, secondDetails.previousWindowId);
+
+    await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+    const continuations = current.mock.sentMessages.filter(
+      (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
+    );
+    assert.equal(continuations.length, expectedContinuations);
+    if (expectedContinuations > 0) {
+      const continuation = continuations[0];
+      assert.ok(continuation);
+      assert.equal(
+        (continuation.message as { details?: { currentWindowId?: string } }).details?.currentWindowId,
+        secondDetails.currentWindowId,
+      );
+    }
+  },
+);
+
+test("a failed rollover survives a later compaction until settlement", async () => {
   const current = setup();
   await start(current);
   await tool(current, "codex_compact_start_new_context").execute(
@@ -1809,52 +1868,17 @@ test("a completed rollover is not reused by another compaction before settlement
     undefined,
     current.current.ctx,
   );
-  const first = await emitAutomaticCompaction(current);
-  const firstDetails = first.result.compaction.details as {
-    requestId?: string;
-    previousWindowId: string;
-    currentWindowId: string;
-  };
-  assert.ok(firstDetails.requestId);
+  await emitAutomaticCompaction(current, null);
 
-  const before = current.mock.events.get("session_before_compact")?.[0];
-  assert.ok(before);
-  const second = (await before(
-    {
-      type: "session_before_compact",
-      preparation: {
-        firstKeptEntryId: "user",
-        messagesToSummarize: [],
-        turnPrefixMessages: [],
-        isSplitTurn: false,
-        tokensBefore: 90,
-        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-        settings: { enabled: true, reserveTokens: 10, keepRecentTokens: 10 },
-      },
-      branchEntries: current.entries,
-      reason: "threshold",
-      willRetry: false,
-      signal: new AbortController().signal,
-    },
-    current.current.ctx,
-  )) as {
-    compaction: {
-      details: {
-        requestId?: string;
-        previousWindowId: string;
-        currentWindowId: string;
-      };
-    };
-  };
-  assert.equal(second.compaction.details.requestId, undefined);
-  assert.equal(second.compaction.details.previousWindowId, firstDetails.currentWindowId);
-  assert.notEqual(second.compaction.details.currentWindowId, second.compaction.details.previousWindowId);
+  const later = await emitAutomaticCompaction(current);
+  assert.equal((later.result.compaction.details as { requestId?: string }).requestId, undefined);
   await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
-  assert.equal(
-    current.mock.sentMessages.filter((item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn)
-      .length,
-    0,
+
+  const continuations = current.mock.sentMessages.filter(
+    (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
   );
+  assert.equal(continuations.length, 1);
+  assert.match(JSON.stringify(continuations[0]), /rollover failed/);
 });
 
 test.each([

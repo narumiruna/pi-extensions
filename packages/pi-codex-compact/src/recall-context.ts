@@ -155,6 +155,10 @@ function firstWindowId(entries: readonly SessionEntry[]): string | undefined {
   return loadContextLineage(entries)?.firstWindowId;
 }
 
+function isExcludedFromModelContext(message: AgentMessage): boolean {
+  return message.role === "bashExecution" && message.excludeFromContext === true;
+}
+
 function historyMessageItems(entries: readonly SessionEntry[]): HistoryMessageItem[] {
   const items: HistoryMessageItem[] = [];
   let windowId = firstWindowId(entries);
@@ -166,6 +170,7 @@ function historyMessageItems(entries: readonly SessionEntry[]): HistoryMessageIt
     const messages = sessionEntryToContextMessages(entry);
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
+      if (isExcludedFromModelContext(message)) continue;
       items.push({
         id: messages.length === 1 ? entry.id : `${entry.id}:${index}`,
         ...(windowId ? { windowId } : {}),

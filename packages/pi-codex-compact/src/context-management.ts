@@ -436,7 +436,7 @@ export function createExperimentalContextManager(
       if (!isEnabled()) return undefined;
       const activeLineage = ensureLineage(ctx);
       const request = pending?.status === "requested" || pending?.status === "compacting" ? pending : undefined;
-      if (pending && !request) pending = undefined;
+      // Completed and failed requests still owe their terminal outcome at the idle boundary.
       const details = createExperimentalContextDetails({
         lineage: activeLineage,
         ...compactionRetainedContext(event),

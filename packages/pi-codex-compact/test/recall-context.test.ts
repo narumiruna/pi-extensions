@@ -89,6 +89,50 @@ test("lists and searches model-visible history without custom-entry payloads", (
   assert.equal(searched.text.includes("\u001b"), false);
 });
 
+test("excludes hidden shell executions from every recall action", () => {
+  const entries = branch();
+  entries.push(
+    historyEntry("hidden-shell", {
+      role: "bashExecution",
+      command: "printf hidden-command",
+      output: "hidden-output",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      excludeFromContext: true,
+      timestamp: 2,
+    }),
+    historyEntry("visible-shell", {
+      role: "bashExecution",
+      command: "printf visible-command",
+      output: "visible-output",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 3,
+    }),
+  );
+
+  const listed = recallContext(entries, { source: "history", action: "list" });
+  assert.doesNotMatch(listed.text, /hidden-shell|hidden-command|hidden-output/);
+  assert.match(listed.text, /visible-shell/);
+  assert.match(listed.text, /visible-command/);
+
+  const searched = recallContext(entries, {
+    source: "history",
+    action: "search",
+    query: "hidden-output",
+  });
+  assert.deepEqual(searched.details.items, []);
+  assert.throws(
+    () => recallContext(entries, { source: "history", action: "read", id: "hidden-shell" }),
+    /History item "hidden-shell" was not found/,
+  );
+
+  const read = recallContext(entries, { source: "history", action: "read", id: "visible-shell" });
+  assert.match(read.text, /visible-output/);
+});
+
 test("does not attribute history to context details without their canonical summary", () => {
   const details = createExperimentalContextDetails({
     lineage: createInitialContextState(windowId),
