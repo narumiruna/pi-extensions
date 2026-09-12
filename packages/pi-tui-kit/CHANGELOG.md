@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.63.1
+
+### Patch Changes
+
+- d365daa: Publish and document Diff 9 as the runtime dependency used for text comparisons.
+
 ## 0.63.0
 
 ### Minor Changes

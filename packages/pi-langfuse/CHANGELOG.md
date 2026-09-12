@@ -1,5 +1,13 @@
 # @narumitw/pi-langfuse
 
+## 0.50.6
+
+### Patch Changes
+
+- d365daa: Publish the updated Langfuse tracing and OpenTelemetry runtime dependency ranges.
+- Updated dependencies [d365daa]
+  - @narumitw/pi-tui-kit@0.63.1
+
 ## 0.50.5
 
 ### Patch Changes
