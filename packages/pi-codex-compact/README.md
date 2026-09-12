@@ -188,7 +188,7 @@ Experimental context management stores window metadata and notes as plaintext ap
 | Request timeout | At most 10 minutes |
 | Experimental note mutation | 16 KiB UTF-8; 64 active notes and 256 KiB total |
 | Experimental recall result | 32 KiB, 1,000 lines, and 20 search matches per page |
-| Experimental history search | 4 MiB of indexed source text per request |
+| Experimental history search | 4,194,304 scan units across indexed characters and visited values per request |
 
 An individually oversized media item is dropped rather than making the session entry unbounded.
 The oldest fitting text item may be partially truncated to preserve newer context.

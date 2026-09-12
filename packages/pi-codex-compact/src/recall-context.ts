@@ -13,9 +13,9 @@ export const MAX_RECALL_QUERY_LENGTH = 512;
 export const MAX_RECALL_RESULT_BYTES = 32 * 1024;
 export const MAX_RECALL_MATCHES = 20;
 const MAX_INDEXED_MESSAGE_CHARS = 256 * 1024;
-// Bound source work separately so removable terminal controls do not consume the visible index.
-const MAX_SCANNED_MESSAGE_CHARS = 4 * MAX_INDEXED_MESSAGE_CHARS;
-const MAX_HISTORY_SEARCH_SCAN_CHARS = 4 * MAX_SCANNED_MESSAGE_CHARS;
+// Bound source work separately so empty structures and removable terminal controls cannot bypass the limit.
+const MAX_SCANNED_MESSAGE_UNITS = 4 * MAX_INDEXED_MESSAGE_CHARS;
+const MAX_HISTORY_SEARCH_SCAN_UNITS = 4 * MAX_SCANNED_MESSAGE_UNITS;
 const READ_CHUNK_BYTES = 12 * 1024;
 
 export type RecallSource = "history" | "notes";
@@ -200,61 +200,88 @@ function preview(value: string): string {
 }
 
 interface SearchScanBudget {
-  remaining: number;
+  remainingUnits: number;
   exceeded: boolean;
 }
 
+type PayloadFrame =
+  | { kind: "value"; value: unknown }
+  | { kind: "array"; value: unknown[]; index: number }
+  | { kind: "object"; entries: Iterator<[string, unknown]> }
+  | { kind: "text"; value: string };
+
+function* ownEntries(value: object): Generator<[string, unknown]> {
+  for (const key in value) {
+    if (Object.hasOwn(value, key)) yield [key, (value as Record<string, unknown>)[key]];
+  }
+}
+
 function boundedPayloadText(value: unknown, searchBudget?: SearchScanBudget): string {
-  let scannedCharacters = 0;
+  let scannedUnits = 0;
   let text = "";
-  const append = (value: string) => {
-    if (
-      scannedCharacters >= MAX_SCANNED_MESSAGE_CHARS ||
-      text.length >= MAX_INDEXED_MESSAGE_CHARS ||
-      searchBudget?.exceeded
-    ) {
-      return;
-    }
-    const remainingScan = MAX_SCANNED_MESSAGE_CHARS - scannedCharacters;
-    const allowedByMessage = Math.min(value.length, remainingScan);
-    const partLength = Math.min(allowedByMessage, searchBudget?.remaining ?? allowedByMessage);
-    const part = value.slice(0, partLength);
-    scannedCharacters += part.length;
+  const consume = (requestedUnits: number): number => {
+    const allowedByMessage = Math.min(requestedUnits, MAX_SCANNED_MESSAGE_UNITS - scannedUnits);
+    const consumedUnits = Math.min(allowedByMessage, searchBudget?.remainingUnits ?? allowedByMessage);
+    scannedUnits += consumedUnits;
     if (searchBudget) {
-      searchBudget.remaining -= part.length;
-      if (partLength < allowedByMessage) searchBudget.exceeded = true;
+      searchBudget.remainingUnits -= consumedUnits;
+      if (consumedUnits < allowedByMessage) searchBudget.exceeded = true;
     }
+    return consumedUnits;
+  };
+  const append = (value: string) => {
+    const part = value.slice(0, consume(value.length));
     text += displayText(part).slice(0, MAX_INDEXED_MESSAGE_CHARS - text.length);
   };
-  const visit = (item: unknown) => {
-    if (
-      scannedCharacters >= MAX_SCANNED_MESSAGE_CHARS ||
-      text.length >= MAX_INDEXED_MESSAGE_CHARS ||
-      searchBudget?.exceeded
-    ) {
-      return;
+  const frames: PayloadFrame[] = [{ kind: "value", value }];
+  while (
+    frames.length > 0 &&
+    scannedUnits < MAX_SCANNED_MESSAGE_UNITS &&
+    text.length < MAX_INDEXED_MESSAGE_CHARS &&
+    !searchBudget?.exceeded
+  ) {
+    const frame = frames.pop();
+    if (!frame) break;
+    if (frame.kind === "text") {
+      append(frame.value);
+      continue;
     }
+    if (frame.kind === "array") {
+      if (frame.index < frame.value.length) {
+        frames.push(
+          { kind: "array", value: frame.value, index: frame.index + 1 },
+          { kind: "value", value: frame.value[frame.index] },
+        );
+      }
+      continue;
+    }
+    if (frame.kind === "object") {
+      const next = frame.entries.next();
+      if (!next.done) {
+        const [key, item] = next.value;
+        frames.push(
+          frame,
+          { kind: "text", value: "\n" },
+          { kind: "value", value: item },
+          { kind: "text", value: `${key} ` },
+        );
+      }
+      continue;
+    }
+    if (consume(1) < 1) continue;
+    const item = frame.value;
     if (typeof item === "string") {
       append(item);
-      return;
-    }
-    if (typeof item !== "object" || item === null) {
+    } else if (typeof item !== "object" || item === null) {
       if (item !== undefined && typeof item !== "function" && typeof item !== "symbol") {
         append(String(item));
       }
-      return;
+    } else if (Array.isArray(item)) {
+      frames.push({ kind: "array", value: item, index: 0 });
+    } else {
+      frames.push({ kind: "object", entries: ownEntries(item) });
     }
-    if (Array.isArray(item)) {
-      for (const value of item) visit(value);
-      return;
-    }
-    for (const [key, value] of Object.entries(item)) {
-      append(`${key} `);
-      visit(value);
-      append("\n");
-    }
-  };
-  visit(value);
+  }
   return text;
 }
 
@@ -412,7 +439,7 @@ export function recallContext(
     };
   }
   const activeMessageId = activeToolCallMessageId(history, activeToolCallId);
-  const searchBudget: SearchScanBudget = { remaining: MAX_HISTORY_SEARCH_SCAN_CHARS, exceeded: false };
+  const searchBudget: SearchScanBudget = { remainingUnits: MAX_HISTORY_SEARCH_SCAN_UNITS, exceeded: false };
   const indexedText = new Map<string, string>();
   const matches = searchPage(history, offset, (item) => {
     if (item.id === activeMessageId) return false;

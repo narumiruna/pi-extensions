@@ -407,6 +407,51 @@ test("bounds aggregate work across a history search", () => {
   assert.throws(() => recallContext(entries, { source: "history", action: "search", query: "absent" }), /scan limit/);
 });
 
+test("charges structural nodes to the aggregate history-search budget", () => {
+  const entries = branch();
+  for (let index = 0; index < 5; index += 1) {
+    entries.push(
+      historyEntry(
+        `large-structure-${index}`,
+        assistantMessage([
+          {
+            type: "toolCall",
+            id: `large-structure-call-${index}`,
+            name: "foreign_tool",
+            arguments: { values: Array(900_000).fill(index === 4 ? {} : "") },
+          },
+        ]),
+      ),
+    );
+  }
+  assert.throws(() => recallContext(entries, { source: "history", action: "search", query: "absent" }), /scan limit/);
+});
+
+test("indexes deeply nested structures without recursive traversal", () => {
+  let nested: unknown = "deep value";
+  for (let index = 0; index < 20_000; index += 1) nested = [nested];
+  const entries = branch();
+  entries.push(
+    historyEntry(
+      "deep-structure",
+      assistantMessage([
+        {
+          type: "toolCall",
+          id: "deep-structure-call",
+          name: "foreign_tool",
+          arguments: nested,
+        },
+      ]),
+    ),
+  );
+
+  const searched = recallContext(entries, { source: "history", action: "search", query: "deep value" });
+  assert.deepEqual(
+    (searched.details.items as Array<{ id: string }>).map((item) => item.id),
+    ["deep-structure"],
+  );
+});
+
 test("serializes full history content only for the selected read item", () => {
   const entries = branch();
   const user = entries[0];

@@ -194,7 +194,7 @@ Limits are fixed to keep session growth and tool responses bounded:
 | Active notes | 64 names and 256 KiB total |
 | Recall query | 512 characters |
 | Recall search page | 20 matches |
-| History search scan | 4 MiB of indexed source text per request |
+| History search scan | 4,194,304 scan units across indexed characters and visited values per request |
 | Recall response | 32 KiB and 1,000 lines |
 
 Long reads and additional list or search matches use cursors. A history search that reaches the scan
