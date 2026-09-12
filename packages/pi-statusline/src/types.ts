@@ -62,6 +62,7 @@ export interface StatuslineConfig {
   density: Density;
   separator: SeparatorName;
   segments: ConfigSegmentName[];
+  rightSegments: ConfigSegmentName[];
   segmentText: Record<SegmentName, SegmentTextConfig> & { model: ModelSegmentTextConfig };
   extensionStatusIcons: Record<string, string>;
 }

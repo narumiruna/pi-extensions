@@ -29,6 +29,7 @@ import {
   type PalettePreset,
   SEGMENT_NAMES,
   type SegmentName,
+  type StatuslineConfig,
 } from "./types.js";
 
 const EDIT_SETTINGS_LABEL = "Edit settings JSON";
@@ -139,7 +140,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
             },
             {
               id: "information",
-              label: `Information (${inferInformationProfile(config.segments)})`,
+              label: `Information (${inferInformationProfile(config)})`,
               to: "information",
             },
             { id: "advanced", label: "Advanced", to: "advanced" },
@@ -150,17 +151,21 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
         };
       },
       information: () => {
-        const current = inferInformationProfile(options.getLoaded().config.segments);
+        const current = inferInformationProfile(options.getLoaded().config);
+        const items = INFORMATION_PROFILE_NAMES.map((profile) => {
+          const layout = INFORMATION_PROFILES[profile];
+          return {
+            id: profile,
+            label: `${profile[0]?.toUpperCase() ?? ""}${profile.slice(1)}`,
+            description: `${layout.left.length + layout.right.length} segments`,
+            details: [`Left: ${layout.left.join(" · ") || "none"}`, `Right: ${layout.right.join(" · ") || "none"}`],
+          };
+        });
         return {
           kind: "choice",
           title: "Information level",
           lines: [`Current profile: ${current}`],
-          items: INFORMATION_PROFILE_NAMES.map((profile) => ({
-            id: profile,
-            label: `${profile[0]?.toUpperCase() ?? ""}${profile.slice(1)}`,
-            description: `${INFORMATION_PROFILES[profile].length} segments`,
-            details: [`Segments: ${INFORMATION_PROFILES[profile].join(" · ")}`],
-          })),
+          items,
           action: "setInformation",
           currentItemId: current,
           initialItemId: current === "custom" ? "balanced" : current,
@@ -169,7 +174,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
       },
       advanced: () => {
         const config = options.getLoaded().config;
-        const visibleSegmentCount = config.segments.filter(
+        const visibleSegmentCount = [...config.segments, ...config.rightSegments].filter(
           (segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME,
         ).length;
         return {
@@ -319,7 +324,7 @@ function applyInformationProfile(
   try {
     const change = informationProfileDocument(current, selection);
     const loaded = applySegmentsDocumentChange(change, ctx, options);
-    ctx.ui.notify(`Information level applied: ${inferInformationProfile(loaded.config.segments)}.`, "info");
+    ctx.ui.notify(`Information level applied: ${inferInformationProfile(loaded.config)}.`, "info");
   } catch (error) {
     ctx.ui.notify(`Information level was not saved: ${formatError(error)}`, "error");
   }
@@ -354,22 +359,26 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
       const name = names[selectedIndex];
       if (!name) return;
       moveMode = false;
-      commit(name, segmentsDocument(current, name, !current.config.segments.includes(name)));
+      commit(name, segmentsDocument(current, name, !isSegmentShown(current.config, name)));
     };
 
     const toggleLineBreakAfterSelected = () => {
       const name = names[selectedIndex];
       if (!name) return;
       moveMode = false;
-      const segmentIndex = current.config.segments.indexOf(name);
+      const column = segmentColumn(current.config, name);
+      if (!column) {
+        feedback = `Show ${name} before adding a line break.`;
+        return;
+      }
+      const list = current.config[column];
+      const segmentIndex = list.indexOf(name);
       if (segmentIndex < 0) {
         feedback = `Show ${name} before adding a line break.`;
         return;
       }
-      const hasLineBreak = current.config.segments[segmentIndex + 1] === LINE_BREAK_SEGMENT_NAME;
-      const hasFollowingSegment = current.config.segments
-        .slice(segmentIndex + 1)
-        .some((segment) => segment !== LINE_BREAK_SEGMENT_NAME);
+      const hasLineBreak = list[segmentIndex + 1] === LINE_BREAK_SEGMENT_NAME;
+      const hasFollowingSegment = list.slice(segmentIndex + 1).some((segment) => segment !== LINE_BREAK_SEGMENT_NAME);
       if (!hasLineBreak && !hasFollowingSegment) {
         feedback = `Add another visible segment after ${name} before adding a line break.`;
         return;
@@ -398,7 +407,7 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
     const enterMoveMode = () => {
       const name = names[selectedIndex];
       if (!name) return;
-      if (!current.config.segments.includes(name)) {
+      if (!isSegmentShown(current.config, name)) {
         feedback = `Show ${name} before moving it.`;
         return;
       }
@@ -415,7 +424,7 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
       const safeWidth = Math.max(1, width);
       const visibleNames = visibleSegmentNames(current);
       const visible = new Set(visibleNames);
-      const placements = segmentPlacements(current.config.segments);
+      const placements = segmentPlacements(current.config);
       const viewportSize = safeWidth < 30 ? NARROW_SEGMENT_VIEWPORT_SIZE : SEGMENT_VIEWPORT_SIZE;
       const startIndex = Math.max(
         0,
@@ -436,9 +445,11 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
         const isSelected = index === selectedIndex;
         const prefix = isSelected ? "→ " : "  ";
         const placement = placements.get(name);
-        const lineBreakLabel = hasLineBreakAfter(current.config.segments, name) ? " · break after" : "";
+        const column = placement?.column ?? segmentColumn(current.config, name) ?? "segments";
+        const rightLabel = column === "rightSegments" ? " · right" : "";
+        const lineBreakLabel = hasLineBreakAfter(current.config[column], name) ? " · break after" : "";
         const row = placement
-          ? `${prefix}${`${placement.order}.`.padStart(3)} row ${placement.row} · ${name.padEnd(8)} · visible${lineBreakLabel}`
+          ? `${prefix}${`${placement.order}.`.padStart(3)} row ${placement.row} · ${name.padEnd(8)} · visible${rightLabel}${lineBreakLabel}`
           : `${prefix}  · ${name.padEnd(8)} · hidden`;
         const truncated = truncateToWidth(row, safeWidth);
         if (isSelected) lines.push(theme.fg("accent", truncated));
@@ -587,7 +598,8 @@ function informationProfileDocument(
   profile: InformationProfileName,
 ): { nextDocument: string; previousDocument: string } {
   const { parsed, rawDocument: previousDocument } = editableSettings(current, "changing information level");
-  parsed.segments = [...INFORMATION_PROFILES[profile]];
+  parsed.segments = [...INFORMATION_PROFILES[profile].left];
+  parsed.rightSegments = [...INFORMATION_PROFILES[profile].right];
   return {
     nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
     previousDocument,
@@ -595,7 +607,9 @@ function informationProfileDocument(
 }
 
 function visibleSegmentNames(current: LoadedStatuslineSettings): SegmentName[] {
-  return current.config.segments.filter((segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME);
+  return [...current.config.segments, ...current.config.rightSegments].filter(
+    (segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME,
+  );
 }
 
 function segmentMenuOrder(current: LoadedStatuslineSettings): SegmentName[] {
@@ -609,18 +623,32 @@ function hasLineBreakAfter(segments: readonly ConfigSegmentName[], name: Segment
   return index >= 0 && segments[index + 1] === LINE_BREAK_SEGMENT_NAME;
 }
 
-function segmentPlacements(segments: readonly ConfigSegmentName[]): Map<SegmentName, { order: number; row: number }> {
-  const placements = new Map<SegmentName, { order: number; row: number }>();
+function segmentPlacements(
+  config: StatuslineConfig,
+): Map<SegmentName, { order: number; row: number; column: "segments" | "rightSegments" }> {
+  const placements = new Map<SegmentName, { order: number; row: number; column: "segments" | "rightSegments" }>();
   let order = 0;
-  let row = 1;
-  for (const segment of segments) {
-    if (segment === LINE_BREAK_SEGMENT_NAME) {
-      row += 1;
-      continue;
+  for (const column of ["segments", "rightSegments"] as const) {
+    let row = 1;
+    for (const segment of config[column]) {
+      if (segment === LINE_BREAK_SEGMENT_NAME) {
+        row += 1;
+        continue;
+      }
+      placements.set(segment, { order: ++order, row, column });
     }
-    placements.set(segment, { order: ++order, row });
   }
   return placements;
+}
+
+function isSegmentShown(config: StatuslineConfig, name: SegmentName): boolean {
+  return segmentColumn(config, name) !== undefined;
+}
+
+function segmentColumn(config: StatuslineConfig, name: SegmentName): "segments" | "rightSegments" | undefined {
+  if (config.segments.includes(name)) return "segments";
+  if (config.rightSegments.includes(name)) return "rightSegments";
+  return undefined;
 }
 
 function segmentControlHints(
@@ -681,10 +709,15 @@ function segmentsDocument(
   shouldShow: boolean,
 ): { nextDocument: string; previousDocument: string } {
   const { parsed, rawDocument: previousDocument } = editableSettings(current, "changing segments");
-  const segments = shouldShow
-    ? [...current.config.segments, ...(current.config.segments.includes(name) ? [] : [name])]
-    : current.config.segments.filter((segment) => segment !== name);
-  parsed.segments = normalizeLineBreaks(segments);
+  const column = segmentColumn(current.config, name) ?? "segments";
+  const segments = [...current.config[column]];
+  const index = segments.indexOf(name);
+  if (shouldShow) {
+    if (index < 0) segments.push(name);
+  } else if (index >= 0) {
+    segments.splice(index, 1);
+  }
+  parsed[column] = normalizeLineBreaks(segments);
   return {
     nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
     previousDocument,
@@ -696,14 +729,15 @@ function lineBreakAfterDocument(
   name: SegmentName,
 ): { nextDocument: string; previousDocument: string } {
   const { parsed, rawDocument: previousDocument } = editableSettings(current, "changing line breaks");
-  const segments = [...current.config.segments];
+  const column = segmentColumn(current.config, name) ?? "segments";
+  const segments = [...current.config[column]];
   const segmentIndex = segments.indexOf(name);
   if (segments[segmentIndex + 1] === LINE_BREAK_SEGMENT_NAME) {
     segments.splice(segmentIndex + 1, 1);
   } else {
     segments.splice(segmentIndex + 1, 0, LINE_BREAK_SEGMENT_NAME);
   }
-  parsed.segments = segments;
+  parsed[column] = segments;
   return {
     nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
     previousDocument,
@@ -715,21 +749,22 @@ function reorderedSegmentsDocument(
   name: SegmentName,
   direction: -1 | 1,
 ): { nextDocument: string; previousDocument: string } | undefined {
-  const dataIndexes = current.config.segments.flatMap((segment, index) =>
-    segment === LINE_BREAK_SEGMENT_NAME ? [] : [index],
-  );
-  const currentDataIndex = dataIndexes.findIndex((index) => current.config.segments[index] === name);
+  const column = segmentColumn(current.config, name);
+  if (!column) return undefined;
+  const columnSegments = current.config[column];
+  const dataIndexes = columnSegments.flatMap((segment, index) => (segment === LINE_BREAK_SEGMENT_NAME ? [] : [index]));
+  const currentDataIndex = dataIndexes.findIndex((index) => columnSegments[index] === name);
   const targetDataIndex = currentDataIndex + direction;
   if (currentDataIndex < 0 || targetDataIndex < 0 || targetDataIndex >= dataIndexes.length) {
     return undefined;
   }
   const { parsed, rawDocument: previousDocument } = editableSettings(current, "reordering segments");
-  const segments = [...current.config.segments];
+  const segments = [...columnSegments];
   const currentIndex = dataIndexes[currentDataIndex];
   const targetIndex = dataIndexes[targetDataIndex];
   if (currentIndex === undefined || targetIndex === undefined) return undefined;
   [segments[currentIndex], segments[targetIndex]] = [segments[targetIndex], segments[currentIndex]];
-  parsed.segments = segments;
+  parsed[column] = segments;
   return {
     nextDocument: `${JSON.stringify(parsed, null, "\t")}\n`,
     previousDocument,
@@ -829,8 +864,9 @@ function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOpti
       `palette preset: ${loaded.config.palettePreset}`,
       `density: ${loaded.config.density}`,
       `separator: ${loaded.config.separator}`,
-      `information: ${inferInformationProfile(loaded.config.segments)}`,
+      `information: ${inferInformationProfile(loaded.config)}`,
       `segments: ${loaded.config.segments.join(", ") || "none"}`,
+      `rightSegments: ${loaded.config.rightSegments.join(", ") || "none"}`,
       diagnostics ? `warnings: ${diagnostics}` : "warnings: none",
     ].join("\n"),
     loaded.diagnostics.length > 0 ? "warning" : "info",
@@ -846,13 +882,13 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
       "/statusline status — show source, path, information level, and warnings",
       "/statusline help — show this help",
       "Menu actions: Appearance, Information, Advanced, Status, Help.",
-      "Information levels: minimal, balanced, detailed; any other segment array is custom.",
+      "Information levels: minimal, balanced, detailed; any other segments or rightSegments arrays are custom.",
       "Advanced actions: Custom layout, Edit settings JSON, Back.",
       `Settings: ${settingsPath}`,
-      "Fields: palettePreset, palette, density, separator, segments, segmentText, extensionStatusIcons",
+      "Fields: palettePreset, palette, density, separator, segments, rightSegments, segmentText, extensionStatusIcons",
       "Named presets ignore but preserve palette; custom uses its per-segment fg/bg colors.",
       "Responsive rows retain context, model, location, and active work before decorative data.",
-      "Custom layout can show, hide, reorder, or split data segments across rows.",
+      "Custom layout can show, hide, reorder, or split data segments across rows and columns.",
       "Press M for move mode, Alt+Up/Alt+Down for quick move, and B for a line break.",
       "Line breaks (line_break) may repeat when separated by data segments, but cannot be consecutive.",
       "segmentText supports prefix and suffix strings around Pi-owned dynamic values.",

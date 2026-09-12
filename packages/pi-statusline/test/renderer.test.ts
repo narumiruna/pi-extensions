@@ -26,8 +26,15 @@ function segment(name: SegmentName, text: string, block: RenderSegment["block"])
   return { name, text, block, color: "accent" };
 }
 
-test("powerline renderer preserves configured segment order across repeated blocks", () => {
+/** Single-column test configuration: defaults carry a right column, so most tests clear it. */
+function createTestConfig() {
   const config = createDefaultConfig();
+  config.rightSegments = [];
+  return config;
+}
+
+test("powerline renderer preserves configured segment order across repeated blocks", () => {
+  const config = createTestConfig();
   const rendered = renderPowerlineStatusline(
     300,
     [segment("model", "model", "header"), segment("time", "time", "meter"), segment("provider", "provider", "header")],
@@ -56,7 +63,7 @@ test("powerline colors fall back to ANSI-256 when true color is disabled", () =>
 });
 
 test("configured palette joins reordered time to an adjacent header block", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.palettePreset = "custom";
   config.palette.time = { fg: "#090c0c", bg: "#a3aed2" };
   const rendered = renderPowerlineStatusline(
@@ -86,7 +93,7 @@ test("empty custom palette renders without ANSI color fallback", () => {
 });
 
 test("different final segment colors retain the powerline transition", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.palettePreset = "custom";
   config.palette.time = { ...config.palette.time, bg: "#123456" };
   const rendered = renderPowerlineStatusline(
@@ -98,7 +105,7 @@ test("different final segment colors retain the powerline transition", () => {
 });
 
 test("line breaks render separated repeated markers as independent powerline rows", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   const items: RenderItem[] = [
     segment("model", "model", "header"),
     { name: "line_break" },
@@ -111,7 +118,7 @@ test("line breaks render separated repeated markers as independent powerline row
 });
 
 test("idle contextual activity rows collapse while explicit empty rows remain", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["model", "line_break", "tools", "line_break", "context"];
   const context = createMockContext({
     model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 1000 },
@@ -180,8 +187,55 @@ test("UI prompt activity sanitizes and bounds titles with kind-only fallbacks", 
   assert.ok(visibleWidth(zeroWidthTitle) <= 40);
 });
 
+test("rightSegments renders a flush-right column beside padded left segments", () => {
+  const config = createTestConfig();
+  config.segments = ["cwd"];
+  config.rightSegments = ["branch", "session"];
+  const context = createMockContext({
+    cwd: "/home/alice/repo",
+    sessionManager: {
+      getEntries: () => [],
+      getBranch: () => [],
+      getSessionName: () => "auth work",
+    },
+  });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => "main",
+    getExtensionStatuses: () => new Map(),
+    onBranchChange: () => () => undefined,
+    getAvailableProviderCount: () => 1,
+  };
+  const runtime: RuntimeState = {
+    homeDir: "/home/alice",
+    turnCount: 0,
+    activeTools: new Map(),
+    isStreaming: false,
+    thinkingLevel: "off",
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
+
+  const wide = plain(renderStatusline(60, context.ctx, footerData, {} as Theme, config, runtime));
+  assert.match(wide, /📁 ~\/repo/u);
+  assert.match(wide, /🏷️ auth work/u);
+  assert.equal(visibleWidth(wide), 60);
+
+  // At a narrow width the right column keeps its high-priority segments flush right
+  // while the left column is trimmed first.
+  const narrow = plain(renderStatusline(24, context.ctx, footerData, {} as Theme, config, runtime));
+  assert.doesNotMatch(narrow, /📁 ~\/repo/u);
+  assert.match(narrow, /🌿 main/u);
+  assert.ok(visibleWidth(narrow) <= 24);
+
+  // An unnamed session hides the session segment without leaving a placeholder.
+  (context.ctx.sessionManager as { getSessionName: () => string | undefined }).getSessionName = () => undefined;
+  const unnamed = plain(renderStatusline(60, context.ctx, footerData, {} as Theme, config, runtime));
+  assert.doesNotMatch(unnamed, /auth work/u);
+  assert.match(unnamed, /🌿 main/u);
+});
+
 test("cwd uses Starship repository and three-component directory defaults", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["cwd"];
   const context = createMockContext({
     cwd: "/home/alice/work/repository/src",
@@ -236,7 +290,7 @@ test("cwd uses Starship repository and three-component directory defaults", () =
 });
 
 test("session segment shows the session name only when one is set", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["session"];
   const footerData: ReadonlyFooterDataProvider = {
     getGitBranch: () => null,
@@ -275,7 +329,7 @@ test("session segment shows the session name only when one is set", () => {
 });
 
 test("cwd preserves POSIX backslashes and strips terminal controls", { skip: sep !== "/" }, () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["cwd"];
   const context = createMockContext({ cwd: "/home/alice/team\\name/project" });
   const footerData: ReadonlyFooterDataProvider = {
@@ -311,7 +365,7 @@ test("cwd preserves POSIX backslashes and strips terminal controls", { skip: sep
 });
 
 test("model truncation supports all directions before prefixes and responsive fitting", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["model"];
   config.segmentText.model.truncationLength = 6;
   const footerData: ReadonlyFooterDataProvider = {
@@ -367,7 +421,8 @@ test("model rendering strips terminal sequences from runtime IDs and truncation 
 });
 
 test("default model truncation retains useful llama.cpp path detail at standard width", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
+  config.rightSegments = ["model"];
   const id = "/home/willow/program/llama.cpp/models/Qwen3.6-35B-A3B-UDT-Q4_K_XL_MTP.gguf";
   const model = { id, provider: "llama.cpp", contextWindow: 72_000 };
   const context = createMockContext({
@@ -398,7 +453,7 @@ test("default model truncation retains useful llama.cpp path detail at standard 
 });
 
 test("responsive fitting keeps primary and active information ahead of decorative segments", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   const items = [
     segment("brand", "BRAND", "header"),
     segment("provider", "PROVIDER", "header"),
@@ -431,7 +486,7 @@ test("responsive fitting keeps primary and active information ahead of decorativ
 });
 
 test("responsive fitting preserves explicit row boundaries and fits every rendered line", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   const rendered = renderPowerlineStatusline(
     15,
     [
@@ -453,7 +508,7 @@ test("responsive fitting preserves explicit row boundaries and fits every render
 });
 
 test("responsive fitting removes one oversized segment and preserves empty explicit rows", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   const oversized = renderPowerlineStatusline(8, [segment("model", "A VERY LONG MODEL", "header")], config);
   assert.equal(oversized, "");
 
@@ -470,7 +525,7 @@ test("responsive fitting removes one oversized segment and preserves empty expli
 });
 
 test("density and separator configure text inside a contiguous block", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.separator = "dot";
   config.density = "compact";
   assert.equal(
@@ -491,7 +546,7 @@ test("density and separator configure text inside a contiguous block", () => {
 test("all named palettes render deterministic distinct ANSI output", () => {
   const outputs = new Set<string>();
   for (const palette of ["tokyo-night", "ocean", "sunset", "forest", "candy", "neon", "mono"] as const) {
-    const config = createDefaultConfig();
+    const config = createTestConfig();
     config.palettePreset = palette;
     config.palette.model = { fg: "#ffffff", bg: "#ffffff" };
     const output = renderPowerlineStatusline(
@@ -523,7 +578,7 @@ test("named palettes use cohesive preset-specific background ramps", () => {
   ];
 
   for (const [palettePreset, colors] of Object.entries(expected)) {
-    const config = createDefaultConfig();
+    const config = createTestConfig();
     config.palettePreset = palettePreset as keyof typeof expected;
     const actual = samples.map((item) => backgroundColor(renderPowerlineStatusline(80, [item], config)));
     assert.deepEqual(actual, colors, palettePreset);
@@ -540,7 +595,7 @@ test("named palette block text meets WCAG AA contrast", () => {
   ];
 
   for (const palettePreset of ["ocean", "sunset", "forest", "candy", "neon", "mono"] as const) {
-    const config = createDefaultConfig();
+    const config = createTestConfig();
     config.palettePreset = palettePreset;
     for (const item of samples) {
       const rendered = renderPowerlineStatusline(80, [item], config);
@@ -582,7 +637,7 @@ function relativeLuminance(hex: string): number {
 }
 
 test("usage segments match native cache, context-window, and subscription presentation", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["context", "cache", "tokens", "cost"];
   const makeUsage = (input: number, output: number, cacheRead: number, cacheWrite: number, cost: number) => ({
     input,
@@ -637,7 +692,7 @@ test("usage segments match native cache, context-window, and subscription presen
 });
 
 test("empty cache activity collapses its configured row and context falls back to model window", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["model", "line_break", "cache", "line_break", "context"];
   const context = createMockContext({
     model: { id: "claude-sonnet-4", provider: "anthropic", contextWindow: 200_000 },
@@ -666,7 +721,7 @@ test("empty cache activity collapses its configured row and context falls back t
 });
 
 test("Kimi subscription cost is marked while API-key cost is unchanged", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   config.segments = ["cost"];
   const footerData: ReadonlyFooterDataProvider = {
     getGitBranch: () => null,
@@ -708,7 +763,7 @@ test("Kimi subscription cost is marked while API-key cost is unchanged", () => {
 });
 
 test("segment presentation wraps canonical dynamic values with configured text", () => {
-  const config = createDefaultConfig();
+  const config = createTestConfig();
   assert.equal(formatConfiguredSegment("provider", "anthropic", config), "🔌 anthropic");
   assert.equal(formatConfiguredSegment("session", "auth work", config), "🏷️ auth work");
   config.segmentText.provider = { prefix: "Provider[", suffix: "]" };

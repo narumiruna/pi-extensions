@@ -33,7 +33,8 @@ If both files exist, `pi-statusline.json` wins.
 | `palette` | Per-segment `fg`/`bg` `#RRGGBB` colors | Define colors used by `custom` |
 | `density` | `compact`, `cozy` | Control horizontal padding |
 | `separator` | `none`, `dot`, `bar`, `powerline`, `round` | Separate adjacent segments in one color block |
-| `segments` | Ordered unique segment names and `line_break` | Control visibility, order, and rows |
+| `segments` | Ordered unique segment names and `line_break` | Control visibility, order, and rows of the left column |
+| `rightSegments` | Ordered unique segment names and `line_break` | Control the flush-right column |
 | `segmentText` | Per-segment `prefix` and `suffix`; model truncation fields | Format Pi-owned dynamic values |
 | `extensionStatusIcons` | Raw status key or `namespace:*` to icon string | Customize extension status icons |
 
@@ -153,19 +154,23 @@ Available data segments:
 brand provider model thinking cwd session branch tools context tokens cache cost time turn
 ```
 
-Data segments must be unique.
-`line_break` may repeat when data segments separate occurrences, but consecutive breaks are invalid.
+Data segments must be unique across `segments` and `rightSegments`.
+In each column, `line_break` may repeat when data segments separate occurrences, but consecutive breaks are invalid.
 It has no `segmentText` entry.
 The menu cleans up leading, trailing, and newly consecutive breaks after visibility changes.
 Manually authored leading/trailing breaks represent empty rows.
+Rows pair up by index across the two columns; a column with fewer rows leaves the remaining lines to the other.
+When a row is too wide, the left column fits into the width left by the right column first, then each column drops its own lowest-priority segments.
+Use the `· right` marker in the layout menu to identify right-column segments.
 
 ```json
 {
-  "segments": ["model", "line_break", "cwd", "branch", "context"]
+  "segments": ["thinking", "cwd", "branch", "context"],
+  "rightSegments": ["session", "model"]
 }
 ```
 
-An empty `segments` array hides the main powerline while extension statuses can still render.
+Empty column arrays hide that column while the other and extension statuses still render.
 
 ## 🔌 Extension statuses and icons
 

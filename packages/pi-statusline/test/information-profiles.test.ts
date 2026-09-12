@@ -3,28 +3,47 @@ import { test } from "vitest";
 import { INFORMATION_PROFILES, inferInformationProfile } from "../src/information-profiles.js";
 
 test("information profiles expose curated segment sets in deterministic order", () => {
-  assert.deepEqual(INFORMATION_PROFILES.minimal, ["model", "cwd", "branch", "context"]);
-  assert.deepEqual(INFORMATION_PROFILES.balanced, ["model", "thinking", "cwd", "branch", "tools", "context", "time"]);
-  assert.deepEqual(INFORMATION_PROFILES.detailed, [
-    "provider",
-    "model",
-    "thinking",
-    "cwd",
-    "branch",
-    "tools",
-    "context",
-    "tokens",
-    "cache",
-    "cost",
-    "time",
-  ]);
+  assert.deepEqual(INFORMATION_PROFILES.minimal, { left: ["cwd", "branch", "context"], right: ["model"] });
+  assert.deepEqual(INFORMATION_PROFILES.balanced, {
+    left: ["thinking", "cwd", "branch", "tools", "context", "time"],
+    right: ["session", "provider", "model"],
+  });
+  assert.deepEqual(INFORMATION_PROFILES.detailed, {
+    left: ["thinking", "cwd", "branch", "tools", "context", "tokens", "cache", "cost", "time"],
+    right: ["session", "provider", "model"],
+  });
 });
 
 test("information profile inference recognizes exact profiles and reports custom layouts", () => {
-  assert.equal(inferInformationProfile(INFORMATION_PROFILES.minimal), "minimal");
-  assert.equal(inferInformationProfile(INFORMATION_PROFILES.balanced), "balanced");
-  assert.equal(inferInformationProfile(INFORMATION_PROFILES.detailed), "detailed");
-  assert.equal(inferInformationProfile(["model", "context"]), "custom");
-  assert.equal(inferInformationProfile(["context", "model", "cwd", "branch"]), "custom");
-  assert.equal(inferInformationProfile(["model", "line_break", "cwd", "branch", "context"]), "custom");
+  assert.equal(
+    inferInformationProfile({
+      segments: INFORMATION_PROFILES.minimal.left,
+      rightSegments: INFORMATION_PROFILES.minimal.right,
+    }),
+    "minimal",
+  );
+  assert.equal(
+    inferInformationProfile({
+      segments: INFORMATION_PROFILES.balanced.left,
+      rightSegments: INFORMATION_PROFILES.balanced.right,
+    }),
+    "balanced",
+  );
+  assert.equal(
+    inferInformationProfile({
+      segments: INFORMATION_PROFILES.detailed.left,
+      rightSegments: INFORMATION_PROFILES.detailed.right,
+    }),
+    "detailed",
+  );
+  assert.equal(inferInformationProfile({ segments: ["cwd", "context"], rightSegments: ["model"] }), "custom");
+  assert.equal(inferInformationProfile({ segments: ["context", "cwd", "branch"], rightSegments: ["model"] }), "custom");
+  assert.equal(
+    inferInformationProfile({ segments: ["cwd", "line_break", "branch", "context"], rightSegments: ["model"] }),
+    "custom",
+  );
+  assert.equal(
+    inferInformationProfile({ segments: INFORMATION_PROFILES.minimal.left, rightSegments: ["provider", "model"] }),
+    "custom",
+  );
 });

@@ -7,7 +7,7 @@ Add a Powerline-style footer that works without setup and keeps important Pi, wo
 A representative uncolored layout:
 
 ```text
-░▒▓ 🤖 sonnet-4 🧠 high 📁 pi-extensions 🌿 main ~2 🪟 ctx 42.0%/200k 🕒 16:42
+░▒▓ 🧠 high 📁 pi-extensions 🌿 main ~2🧿 ctx 42.0%/200k 🕒 16:42     🏷️ openai-pr 🔌 openai 🤖 sonnet-4 
 ```
 
 ## ✨ Features
@@ -74,12 +74,12 @@ Help
 
 Selecting a level replaces only `segments` and preserves unrelated JSON fields.
 
-| Level | Included segments |
-| --- | --- |
-| **Minimal** | `model cwd branch context` |
-| **Balanced** (default) | `model thinking cwd branch tools context time` |
-| **Detailed** | `provider model thinking cwd branch tools context tokens cache cost time` |
-| **Custom** | Any other segment order, including explicit line breaks |
+| Level | Left column segments | Right column segments |
+| --- | --- | --- |
+| **Minimal** | `cwd branch context` | `model` |
+| **Balanced** (default) | `thinking cwd branch tools context time` | `session provider model` |
+| **Detailed** | `thinking cwd branch tools context tokens cache cost time` | `session provider model` |
+| **Custom** | Any other order in either column, including explicit line breaks | |
 
 The `tools` segment takes no space while idle.
 `cache` takes no space when Pi has reported no cache reads or writes.
@@ -103,9 +103,9 @@ Palette previews save on Enter and revert on Escape, but layout changes save imm
 
 ### Responsive fitting
 
-Each row keeps its configured segment order.
-If it is too wide, pi-statusline removes the lowest-priority segment, recomputes the powerline transitions, and repeats until the row fits.
-Retention priority is highest to lowest:
+Each row keeps its configured segment order in both columns.
+The right column renders flush against the right edge; when the row is too wide, the left column fits into the remaining width first, then each column removes its own lowest-priority segment and recomputes the powerline transitions until the row fits.
+Retention priority is highest to lowest within each column:
 
 ```text
 context model branch tools cwd session thinking cost provider cache tokens time turn brand
@@ -152,7 +152,8 @@ A minimal customization selects a palette and a few segments:
 ```json
 {
   "palettePreset": "ocean",
-  "segments": ["model", "cwd", "branch", "context"]
+  "segments": ["cwd", "branch", "context"],
+  "rightSegments": ["model"]
 }
 ```
 
@@ -171,7 +172,7 @@ Read the [configuration reference](./docs/configuration.md) for all settings, pa
 
 - The footer needs Powerline glyphs and emoji for its intended appearance.
 - Pi does not arbitrate footer ownership, so another footer extension can replace pi-statusline.
-- Custom layouts support ordered segments and line breaks, not a variable or format language.
+- Custom segments support ordered segments, line breaks, and a second flush-right column, but not a variable or format language.
 
 ## 🛠️ Troubleshooting
 
