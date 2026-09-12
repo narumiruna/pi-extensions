@@ -79,7 +79,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
-    "@changesets/cli": "3.0.1",
+    "@changesets/cli": "3.0.2",
     "@earendil-works/pi-agent-core": "0.85.1",
     "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-coding-agent": "0.85.0",
