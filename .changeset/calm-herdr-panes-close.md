@@ -2,4 +2,4 @@
 "@narumitw/pi-herdr": patch
 ---
 
-Close completed task-owned Herdr panes proactively after their results are collected.
+Close no-longer-needed task-owned Herdr panes promptly after their results are collected and their live state is safe.

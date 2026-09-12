@@ -23,10 +23,10 @@ Run it again only after compaction removes those instructions or when the user e
 
 Apply this cleanup policy in addition to those version-specific instructions:
 
-- Track every pane that you create for the current task.
-- Treat `idle` and `done` as ready states, not proof that a pane is disposable.
-- After collecting the result and deciding that no follow-up is needed, inspect an agent again and close its pane with `herdr pane close <pane-id>` only when the agent is still `idle` or `done`; closing the pane also ends that agent.
-- Close an ordinary command pane only after its command has finished and the shell is available again.
-- Never close the calling pane, a pre-existing pane, or a pane created by the user or another agent.
-- Never close an agent in `working`, `blocked`, or `unknown`; leave it open and report why cleanup was deferred.
-- Before the final response, make a cleanup pass over panes you created so completed background work does not remain open.
+- Record the ID of every pane that you create for the current task; discovering a pane later is not proof that you own it.
+- Clean up each owned pane as soon as its work is no longer needed, and sweep owned panes again before the final response.
+- Immediately before closing a pane, read its live pane and agent state again instead of relying on an earlier result.
+- For an agent pane, first collect the required output and decide that no follow-up is needed, then close it with `herdr pane close <pane-id>` only when the agent is `idle` or `done`; closing the pane also ends that agent.
+- If an owned agent has already exited, or an ordinary command has finished, close the pane only after it has returned to an available shell.
+- Never close the calling pane, a pre-existing pane, a pane created by the user or another agent, an agent in `working`, `blocked`, or `unknown`, or a pane with another foreground process.
+- If safe cleanup cannot be confirmed or the close fails, leave the pane open and report the pane ID and reason.
