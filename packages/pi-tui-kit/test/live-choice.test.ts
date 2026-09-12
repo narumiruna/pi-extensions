@@ -284,6 +284,27 @@ test("runLiveChoice opt-in search preserves editing, raw identity, and preview s
   assert.ok(previews.includes("full"));
 });
 
+test("Live Choice search routes chunked paste before shortcuts and re-dispatches trailing input", async () => {
+  const tui = createTuiHarness({ width: 48, rows: 16 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runLiveChoice(context.ctx, {
+    title: "Search presets",
+    items: choices.map((item) => (item.id === "full" ? { ...item, searchText: "maximal alias" } : item)),
+    enableSearch: true,
+  });
+  await tui.waitForOpen();
+
+  tui.send("\u001b[200~maximal alias");
+  tui.send("\u0003");
+  tui.send("\r");
+  assert.equal(tui.isOpen, true);
+  tui.send("\u001b[20");
+  assert.equal(tui.isOpen, true);
+  tui.send("1~\r");
+
+  assert.deepEqual(await running, { kind: "selected", itemId: "full" });
+});
+
 test("search filtering coalesces previews and drains them on cancellation", async () => {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {

@@ -614,6 +614,15 @@ test("intraline diff preserves and emphasizes whitespace-only replacements", () 
   assert.deepEqual(lines, ["toolDiffRemoved:-a⟦ ⟧b", "toolDiffAdded:+a⟦  ⟧b"]);
 });
 
+test("intraline diff includes leading numeric source tokens", () => {
+  const lines = formatDocumentLines("-123 apples\n+456 apples", { kind: "diff" }, 80, {
+    fg: (role, text) => `${role}:${text}`,
+    bold: (text) => text,
+    inverse: (text) => `⟦${text}⟧`,
+  });
+  assert.deepEqual(lines, ["toolDiffRemoved:-⟦123⟧ apples", "toolDiffAdded:+⟦456⟧ apples"]);
+});
+
 test("diff tab expansion includes changed and context prefixes in the tab column", () => {
   const lines = formatDocumentLines("-\told\n+\tnew\n \tcontext", { kind: "diff" }, 80, {
     fg: (role, text) => `${role}:${text}`,

@@ -49,6 +49,9 @@ export { prepareMenuScreenRendering } from "./mermaid.js";
 export { actionMenuDialogLabel, safeMenuText } from "./rendering.js";
 export { reviewDialogPages } from "./review.js";
 
+const BRACKETED_PASTE_START = "\u001b[200~";
+const BRACKETED_PASTE_END = "\u001b[201~";
+
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
   options: MenuScreenComponentOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
@@ -212,6 +215,8 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
   );
   let restoreItemId: string | undefined;
   let disposed = false;
+  let searchPasteActive = false;
+  let searchPasteEndPrefix = "";
   let mousePressedIndex: number | undefined;
   let mouseLayout: ListMouseLayout | undefined;
   let list = createList();
@@ -266,7 +271,75 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
   };
   const activate = () => {
     const item = selected();
-    if (item && !item.disabled) options.onEvent({ kind: "activate", itemId: item.id });
+    if (!item || item.disabled) return false;
+    options.onEvent({ kind: "activate", itemId: item.id });
+    return true;
+  };
+  const applySearchInput = (data: string) => {
+    handleSearchInput(searchInput, data);
+    options.onSearchQueryChange?.(searchInput.getValue());
+    applyFilter();
+  };
+  const dispatchNonPasteInput = (data: string) => {
+    if (matchesKey(data, Key.ctrl("c"))) {
+      options.onEvent({ kind: "close" });
+      return true;
+    }
+    if (options.keybindings.matches(data, "tui.select.cancel")) {
+      options.onEvent({ kind: options.screen.hint ?? "back" });
+      return true;
+    }
+    if (options.keybindings.matches(data, "tui.select.up")) move(-1);
+    else if (options.keybindings.matches(data, "tui.select.down")) move(1);
+    else if (options.keybindings.matches(data, "tui.select.pageUp")) {
+      setSelectedIndex(selectedIndex - Math.max(1, pageSize()), false, true);
+    } else if (options.keybindings.matches(data, "tui.select.pageDown")) {
+      setSelectedIndex(selectedIndex + Math.max(1, pageSize()), false, true);
+    } else if (matchesKey(data, Key.home)) setSelectedIndex(0, false, true);
+    else if (matchesKey(data, Key.end)) {
+      setSelectedIndex(filteredItems.length - 1, false, true);
+    } else if (
+      options.keybindings.matches(data, "tui.select.confirm") ||
+      (!options.screen.enableSearch && data === " ")
+    ) {
+      return activate();
+    } else if (options.screen.enableSearch) applySearchInput(data);
+    return false;
+  };
+  const dispatchInput = (data: string) => {
+    let remaining = data;
+    while (remaining) {
+      if (!options.screen.enableSearch) {
+        dispatchNonPasteInput(remaining);
+        return;
+      }
+      if (searchPasteActive) {
+        const prefix = searchPasteEndPrefix;
+        const combined = prefix + remaining;
+        const end = combined.indexOf(BRACKETED_PASTE_END);
+        const consumed = end < 0 ? remaining.length : Math.max(0, end + BRACKETED_PASTE_END.length - prefix.length);
+        const pasteChunk = remaining.slice(0, consumed);
+        if (pasteChunk) applySearchInput(pasteChunk);
+        if (end < 0) {
+          const prefixLength = trailingMarkerPrefixLength(combined, BRACKETED_PASTE_END);
+          searchPasteEndPrefix = prefixLength > 0 ? combined.slice(-prefixLength) : "";
+          return;
+        }
+        searchPasteActive = false;
+        searchPasteEndPrefix = "";
+        remaining = remaining.slice(consumed);
+        continue;
+      }
+      const start = remaining.indexOf(BRACKETED_PASTE_START);
+      if (start < 0) {
+        dispatchNonPasteInput(remaining);
+        return;
+      }
+      if (start > 0 && dispatchNonPasteInput(remaining.slice(0, start))) return;
+      searchPasteActive = true;
+      searchPasteEndPrefix = "";
+      remaining = remaining.slice(start);
+    }
   };
   const component: MenuScreenComponent & Partial<Focusable> = {
     render(width) {
@@ -324,28 +397,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
     handleInput(data) {
       if (disposed) return;
       mousePressedIndex = undefined;
-      if (matchesKey(data, Key.ctrl("c"))) options.onEvent({ kind: "close" });
-      else if (options.keybindings.matches(data, "tui.select.cancel")) {
-        options.onEvent({ kind: options.screen.hint ?? "back" });
-      } else if (options.keybindings.matches(data, "tui.select.up")) move(-1);
-      else if (options.keybindings.matches(data, "tui.select.down")) move(1);
-      else if (options.keybindings.matches(data, "tui.select.pageUp")) {
-        setSelectedIndex(selectedIndex - Math.max(1, pageSize()), false, true);
-      } else if (options.keybindings.matches(data, "tui.select.pageDown")) {
-        setSelectedIndex(selectedIndex + Math.max(1, pageSize()), false, true);
-      } else if (matchesKey(data, Key.home)) setSelectedIndex(0, false, true);
-      else if (matchesKey(data, Key.end)) {
-        setSelectedIndex(filteredItems.length - 1, false, true);
-      } else if (
-        options.keybindings.matches(data, "tui.select.confirm") ||
-        (!options.screen.enableSearch && data === " ")
-      ) {
-        activate();
-      } else if (options.screen.enableSearch) {
-        handleSearchInput(searchInput, data);
-        options.onSearchQueryChange?.(searchInput.getValue());
-        applyFilter();
-      }
+      dispatchInput(data);
       options.tui.requestRender();
     },
     handleMouse(event) {
@@ -367,6 +419,8 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
     dispose() {
       if (disposed) return;
       disposed = true;
+      searchPasteActive = false;
+      searchPasteEndPrefix = "";
       mousePressedIndex = undefined;
       mouseLayout = undefined;
       options.onDispose?.();
@@ -381,6 +435,13 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
     });
   }
   return component;
+}
+
+function trailingMarkerPrefixLength(value: string, marker: string) {
+  for (let length = Math.min(value.length, marker.length - 1); length > 0; length -= 1) {
+    if (marker.startsWith(value.slice(-length))) return length;
+  }
+  return 0;
 }
 
 function safeChoiceText(value: unknown): string {

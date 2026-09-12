@@ -242,12 +242,12 @@ function formatDiffDocument(content: string, width: number, theme: DocumentTheme
 function parseChangedDiffLine(line: string): ParsedChangedDiffLine | undefined {
   const marker = line[0];
   if ((marker !== "+" && marker !== "-") || line.startsWith("+++") || line.startsWith("---")) return undefined;
-  const numbered = /^([+-])(\s*\d*\s+)(.*)$/u.exec(line);
-  if (numbered) {
+  const indented = /^([+-])(\s+)(.*)$/u.exec(line);
+  if (indented) {
     return {
       marker,
-      prefix: `${marker}${numbered[2] ?? ""}`,
-      content: numbered[3] ?? "",
+      prefix: `${marker}${indented[2] ?? ""}`,
+      content: indented[3] ?? "",
     };
   }
   return { marker, prefix: marker, content: line.slice(1) };
