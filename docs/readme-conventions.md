@@ -27,11 +27,13 @@ Use these exact labels when the subject applies:
 - `## ✨ Features` for a concise capability overview.
 - `## 📦 Install` for persistent installation, temporary execution, and local-checkout instructions that apply to the package.
 - `## 🚀 Quick start` for the shortest successful first use.
-- `## 💬 Commands` for user-facing slash commands.
-- `## 🛠️ Tools` for tools registered for the model.
-- `## ⚙️ Settings` for configuration entry points, minimal examples, essential defaults or safety behavior, and links to detailed guidance.
-- `## 🔒 Security and privacy` for permissions, credentials, external data, or other material trust boundaries.
-- `## 🚧 Limitations` for known unsupported behavior and important constraints.
+- `## 🧭 How it works` (**optional**) for a short, simple explanation of the package or extension workflow, optionally with an easy-to-understand Mermaid diagram.
+- `## 💬 Commands` (**optional**) for user-facing slash commands.
+- `## 🛠️ Tools` (**optional**) for tools registered for the model.
+- `## 🧠 Skills` (**optional**) for skills bundled with the package, when to use them, and how to access them.
+- `## ⚙️ Settings` (**optional**) for configuration entry points, minimal examples, essential defaults or safety behavior, and links to detailed guidance.
+- `## 🔒 Security and privacy` (**optional**) for permissions, credentials, external data, or other material trust boundaries.
+- `## 🚧 Limitations` (**optional**) for known unsupported behavior and important constraints.
 - `## 🗂️ Package layout` for the package's maintained source and publication structure.
 - `## 🔎 Keywords` for a short searchable summary.
 - `## 📄 License` for the license name and a link to the package license.
@@ -42,7 +44,8 @@ For example, `Model and thinking level` may remain separate after the general Qu
 
 ## Applicability
 
-Commands, Tools, Settings, Security and privacy, and Limitations are conditional sections.
+How it works, Commands, Tools, Skills, Settings, Security and privacy, and Limitations are optional or conditional sections.
+Add How it works only when a short explanation helps users understand the package or extension.
 Do not add an empty section or claim an interface that the package does not provide.
 A passive extension may omit Commands and Tools.
 A package with no user-owned settings may omit Settings.
@@ -66,8 +69,8 @@ Treat model IDs, paths, session text, and pasted text shown in examples as untru
 Use stable absolute GitHub and npm links when referring to another package in this monorepo.
 Describe borrowed syntax as inspired by another project unless compatibility is guaranteed.
 
-Detailed user guidance may live in linked package-owned documentation or a package-owned skill bundled with the package.
-Identify the authoritative source and explain how to access it instead of duplicating the complete reference.
+Long or detailed guidance that would make any README section hard to scan should live under `packages/<package>/docs/` or in a package-owned skill bundled with the package.
+Link the authoritative source and explain how to access it instead of duplicating the complete reference.
 Keep implementation rationale, component ownership, and internal lifecycle mechanics in developer documentation or code comments unless they explain a user-visible constraint.
 Do not create extra documents for short explanations that already fit naturally in the README.
 
@@ -81,7 +84,9 @@ Use these boundaries without adding sections that do not apply:
 | Features | Distinct user-facing capabilities that help readers choose the package. | Command inventories, configuration fields, implementation details, or guarantees repeated verbatim elsewhere. |
 | Install | Applicable persistent, temporary, and local-checkout commands, with required prerequisites and trust warnings. | Full usage tutorials or repeated setup instructions for each install method. |
 | Quick start | One shortest successful path after installation, including required setup and the expected result. | Repeating Install, showing every alternative, or touring the entire menu. |
+| How it works | A short explanation of the package or extension workflow in simple words, with an optional easy-to-understand Mermaid diagram. | Long explanations, implementation internals, or large diagrams. |
 | Tools | Registered tool names or concise groups, their purpose, and important prerequisites or side effects. | Complete parameter schemas and tool-result examples for every variant; link a detailed catalog when needed. |
+| Skills | Bundled skill names, when to use them, how to access them, and material invocation limits. | Complete skill instructions or reference content; link the package-owned skill or detailed guidance instead. |
 | Security and privacy | Permissions, credentials, data access, storage, external destinations, and controls needed for informed use. | Internal security mechanisms that do not change a user's decision or required precautions. |
 | Limitations | Material unsupported behavior, compatibility constraints, and practical workarounds. | Every defensive check, hypothetical failure, or a second copy of security guidance. |
 | Package-specific sections | Distinct concepts and operational or recovery guidance users need beyond the common sections. | Moving an exhaustive menu tour or internal lifecycle specification under a new heading just to shorten Commands. |
