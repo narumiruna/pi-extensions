@@ -7,6 +7,8 @@ export const MAX_NOTE_NAME_LENGTH = 128;
 export const MAX_NOTE_MUTATION_BYTES = 16 * 1024;
 export const MAX_NOTE_COUNT = 64;
 export const MAX_NOTES_BYTES = 256 * 1024;
+export const MAX_NOTE_BRANCH_ENTRY_VISITS = 100_000;
+export const MAX_NOTE_REPLAY_SCAN_UNITS = 4 * 1024 * 1024;
 
 export type NoteAction = "write" | "append";
 
@@ -52,6 +54,7 @@ export function parseNoteMutation(value: unknown): NoteMutation | undefined {
     !validNoteName(value.note) ||
     typeof value.content !== "string" ||
     value.content.length === 0 ||
+    value.content.length > MAX_NOTE_MUTATION_BYTES ||
     bytes(value.content) > MAX_NOTE_MUTATION_BYTES
   ) {
     return undefined;
@@ -66,17 +69,41 @@ export function parseNoteMutation(value: unknown): NoteMutation | undefined {
 
 export function loadNotes(entries: readonly SessionEntry[]): Map<string, string> {
   const notes = new Map<string, string>();
+  const noteContentBytes = new Map<string, number>();
+  let totalBytes = 0;
+  let remainingEntries = MAX_NOTE_BRANCH_ENTRY_VISITS;
+  let remainingScanUnits = MAX_NOTE_REPLAY_SCAN_UNITS;
   for (const entry of entries) {
-    if (entry.type !== "custom" || entry.customType !== NOTES_ENTRY_TYPE) continue;
-    const mutation = parseNoteMutation(entry.data);
-    if (!mutation) continue;
-    const previous = notes.get(mutation.note);
-    const next = mutation.action === "append" ? `${previous ?? ""}${mutation.content}` : mutation.content;
-    notes.set(mutation.note, next);
-    if (notes.size > MAX_NOTE_COUNT || totalNotesBytes(notes) > MAX_NOTES_BYTES) {
-      if (previous === undefined) notes.delete(mutation.note);
-      else notes.set(mutation.note, previous);
+    if (remainingEntries <= 0) {
+      throw new Error("codex_compact notes branch traversal exceeded its entry limit");
     }
+    remainingEntries -= 1;
+    if (entry.type !== "custom" || entry.customType !== NOTES_ENTRY_TYPE) continue;
+    const data = entry.data;
+    const scanUnits =
+      1 +
+      (isRecord(data) && typeof data.note === "string" ? data.note.length : 0) +
+      (isRecord(data) && typeof data.content === "string" ? data.content.length : 0);
+    if (scanUnits > remainingScanUnits) {
+      throw new Error("codex_compact notes replay exceeded its scan limit");
+    }
+    remainingScanUnits -= scanUnits;
+    const mutation = parseNoteMutation(data);
+    if (!mutation) continue;
+
+    const previous = notes.get(mutation.note);
+    const previousContentBytes = noteContentBytes.get(mutation.note) ?? 0;
+    const nameBytes = bytes(mutation.note);
+    const mutationContentBytes = bytes(mutation.content);
+    const nextContentBytes =
+      mutation.action === "append" ? previousContentBytes + mutationContentBytes : mutationContentBytes;
+    const nextTotalBytes =
+      totalBytes - (previous === undefined ? 0 : nameBytes + previousContentBytes) + nameBytes + nextContentBytes;
+    if ((previous === undefined && notes.size >= MAX_NOTE_COUNT) || nextTotalBytes > MAX_NOTES_BYTES) continue;
+
+    notes.set(mutation.note, mutation.action === "append" ? `${previous ?? ""}${mutation.content}` : mutation.content);
+    noteContentBytes.set(mutation.note, nextContentBytes);
+    totalBytes = nextTotalBytes;
   }
   return notes;
 }

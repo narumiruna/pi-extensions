@@ -195,6 +195,7 @@ Limits are fixed to keep session growth and tool responses bounded:
 | Note name | 128 characters with no terminal controls |
 | One note mutation | 16 KiB UTF-8 |
 | Active notes | 64 names and 256 KiB total |
+| Notes branch replay | 100,000 entry visits and 4,194,304 scan units per request |
 | Recall query | 512 characters |
 | Recall search page | 20 matches |
 | History branch traversal | 100,000 entry visits per request |
@@ -215,9 +216,12 @@ complete local recall is important.
 
 Disabling the experiment at idle appends one deterministic hidden deactivation transition and then
 removes the four tools. During an active run, the current contract and tools remain available through
-settlement; the extension then publishes deactivation before removing the tools. Re-enabling before
-settlement cancels that transition and removal. This stops future summary-free rollover without
-deleting entries, so existing Pi markers and retained messages remain readable. Re-enable after
+settlement; the extension then publishes deactivation before removing the tools. An accepted but
+unfinished rollover reports a failure continuation at that boundary instead of being discarded, while
+a rollover that already completed retains its success continuation and reports that context tools are
+unavailable. Re-enabling before settlement cancels the pending tool-removal transition and leaves an
+accepted rollover scheduled. This stops future summary-free rollover without deleting entries, so
+existing Pi markers and retained messages remain readable. Re-enable after
 settlement to append a new activation transition and regain local recall tools.
 
 Local notes and plaintext history are independent of the selected provider and model. Context usage

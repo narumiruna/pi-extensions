@@ -4,8 +4,10 @@ import { test } from "vitest";
 import {
   createNoteMutation,
   loadNotes,
+  MAX_NOTE_BRANCH_ENTRY_VISITS,
   MAX_NOTE_COUNT,
   MAX_NOTE_MUTATION_BYTES,
+  MAX_NOTE_REPLAY_SCAN_UNITS,
   NOTES_ENTRY_TYPE,
   parseNoteMutation,
 } from "../src/notes-state.js";
@@ -92,4 +94,32 @@ test("branch reconstruction follows only supplied entries", () => {
   const right = entry("right", { version: 1, action: "append", note: "branch", content: "-right" }, "base");
   assert.equal(loadNotes([base, left]).get("branch"), "base-left");
   assert.equal(loadNotes([base, right]).get("branch"), "base-right");
+});
+
+test("bounds note reconstruction by branch entries and replay work", () => {
+  const unrelated = Array<SessionEntry>(MAX_NOTE_BRANCH_ENTRY_VISITS + 1).fill({
+    type: "custom",
+    customType: "unrelated-state",
+    data: {},
+    id: "unrelated",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  });
+  assert.throws(() => loadNotes(unrelated), /notes branch traversal exceeded its entry limit/);
+  assert.throws(
+    () => createNoteMutation(unrelated, { action: "write", note: "bounded", content: "value" }),
+    /notes branch traversal exceeded its entry limit/,
+  );
+
+  const content = "x".repeat(MAX_NOTE_MUTATION_BYTES);
+  const mutationCount = Math.ceil(MAX_NOTE_REPLAY_SCAN_UNITS / content.length) + 1;
+  const mutations = Array.from({ length: mutationCount }, (_, index) =>
+    entry(String(index), {
+      version: 1,
+      action: index === 0 ? "write" : "append",
+      note: "bounded",
+      content,
+    }),
+  );
+  assert.throws(() => loadNotes(mutations), /notes replay exceeded its scan limit/);
 });

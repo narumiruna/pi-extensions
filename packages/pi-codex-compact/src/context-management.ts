@@ -267,7 +267,6 @@ export function createExperimentalContextManager(
     const branch = ctx.sessionManager.getBranch();
     const runIsActive = agentRunActive || ctx.signal !== undefined;
     if (!isConfigured()) {
-      pending = undefined;
       const inspection = inspectToolUnit();
       if (runIsActive && toolsAvailable && inspection.complete) {
         removeToolsAtSettlement = true;
@@ -539,6 +538,10 @@ export function createExperimentalContextManager(
       }
       const request = pending;
       if (!request || !isOwned(ctx, request)) return;
+      if (!isConfigured() && (request.status === "requested" || request.status === "compacting")) {
+        request.status = "failed";
+        request.errorMessage = "Experimental context management was disabled before rollover completed.";
+      }
       if (request.status === "completed") {
         if (request.successfulTurnAfterRequest) pending = undefined;
         else continueAfterRollover(ctx, request);

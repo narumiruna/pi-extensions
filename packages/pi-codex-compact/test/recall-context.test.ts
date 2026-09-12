@@ -7,7 +7,7 @@ import {
   createExperimentalContextDetails,
   createInitialContextState,
 } from "../src/context-window.js";
-import { NOTES_ENTRY_TYPE } from "../src/notes-state.js";
+import { MAX_NOTE_BRANCH_ENTRY_VISITS, NOTES_ENTRY_TYPE } from "../src/notes-state.js";
 import { MAX_HISTORY_BRANCH_ENTRY_VISITS, recallContext } from "../src/recall-context.js";
 
 const windowId = "11111111-1111-4111-8111-111111111111";
@@ -182,6 +182,26 @@ test("bounds branch traversal for every history action", () => {
 
   for (const input of inputs) {
     assert.throws(() => recallContext(entries, input), /history branch traversal exceeded its entry limit/);
+  }
+});
+
+test("bounds branch traversal for every notes recall action", () => {
+  const entries = Array<SessionEntry>(MAX_NOTE_BRANCH_ENTRY_VISITS + 1).fill({
+    type: "custom",
+    customType: "unrelated-empty-state",
+    data: {},
+    id: "ignored",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  });
+  const inputs: Parameters<typeof recallContext>[1][] = [
+    { source: "notes", action: "list" },
+    { source: "notes", action: "read", id: "absent" },
+    { source: "notes", action: "search", query: "absent" },
+  ];
+
+  for (const input of inputs) {
+    assert.throws(() => recallContext(entries, input), /notes branch traversal exceeded its entry limit/);
   }
 });
 

@@ -649,7 +649,98 @@ test("deferred opt-out rejects a new rollover before settlement", async () => {
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
 });
 
-test("re-enabling before settlement cancels removal without adding a prefix transition", async () => {
+test("opt-out after an accepted rollover preserves a failure continuation through settlement", async () => {
+  let selection = 0;
+  const current = setup(true, undefined, {
+    isIdle: () => false,
+    select: async (_title: string, options: string[]) => {
+      selection += 1;
+      if (selection === 1) return options.find((option) => option.startsWith("Settings"));
+      if (selection === 2) {
+        return options.find((option) => option.startsWith("Experimental context management"));
+      }
+      if (selection === 3) return options.find((option) => option === "Off");
+      return undefined;
+    },
+  });
+  await start(current);
+  persistLastSentCustomMessage(current);
+  await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
+  await tool(current, "codex_compact_start_new_context").execute(
+    "accepted-before-opt-out",
+    {},
+    undefined,
+    undefined,
+    current.current.ctx,
+  );
+
+  const command = current.mock.commands.get("codex-compact");
+  assert.ok(command);
+  await command.handler("", current.current.ctx);
+  assert.equal(current.runtime.get().settings.experimentalContextManagement, false);
+  assert.equal(current.compactOptions, undefined);
+  assert.equal(
+    current.mock.sentMessages.filter((item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn)
+      .length,
+    0,
+  );
+
+  const settled = current.mock.events.get("agent_settled")?.[0];
+  assert.ok(settled);
+  await settled({ type: "agent_settled" }, current.current.ctx);
+  await settled({ type: "agent_settled" }, current.current.ctx);
+  assert.equal(current.compactOptions, undefined);
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
+  const continuations = current.mock.sentMessages.filter(
+    (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
+  );
+  assert.equal(continuations.length, 1);
+  assert.match(JSON.stringify(continuations[0]), /rollover failed.*disabled before rollover completed/is);
+});
+
+test("opt-out preserves a completed rollover continuation through settlement", async () => {
+  let selection = 0;
+  const current = setup(true, undefined, {
+    isIdle: () => false,
+    select: async (_title: string, options: string[]) => {
+      selection += 1;
+      if (selection === 1) return options.find((option) => option.startsWith("Settings"));
+      if (selection === 2) {
+        return options.find((option) => option.startsWith("Experimental context management"));
+      }
+      if (selection === 3) return options.find((option) => option === "Off");
+      return undefined;
+    },
+  });
+  await start(current);
+  persistLastSentCustomMessage(current);
+  await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
+  await tool(current, "codex_compact_start_new_context").execute(
+    "completed-before-opt-out",
+    {},
+    undefined,
+    undefined,
+    current.current.ctx,
+  );
+  await emitAutomaticCompaction(current);
+
+  const command = current.mock.commands.get("codex-compact");
+  assert.ok(command);
+  await command.handler("", current.current.ctx);
+  const settled = current.mock.events.get("agent_settled")?.[0];
+  assert.ok(settled);
+  await settled({ type: "agent_settled" }, current.current.ctx);
+  await settled({ type: "agent_settled" }, current.current.ctx);
+
+  assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read"]);
+  const continuations = current.mock.sentMessages.filter(
+    (item) => (item.options as { triggerTurn?: boolean } | undefined)?.triggerTurn,
+  );
+  assert.equal(continuations.length, 1);
+  assert.match(JSON.stringify(continuations[0]), /is now active.*context tools became unavailable/is);
+});
+
+test("re-enabling before settlement preserves an accepted rollover without a prefix transition", async () => {
   let selectedValue = "Off";
   let selection = 0;
   const current = setup(true, undefined, {
@@ -667,6 +758,13 @@ test("re-enabling before settlement cancels removal without adding a prefix tran
   await start(current);
   persistLastSentCustomMessage(current);
   await current.mock.events.get("agent_start")?.[0]({ type: "agent_start" }, current.current.ctx);
+  await tool(current, "codex_compact_start_new_context").execute(
+    "accepted-before-re-enable",
+    {},
+    undefined,
+    undefined,
+    current.current.ctx,
+  );
   const command = current.mock.commands.get("codex-compact");
   assert.ok(command);
   const sentBeforeOptOut = current.mock.sentMessages.length;
@@ -678,6 +776,7 @@ test("re-enabling before settlement cancels removal without adding a prefix tran
   await command.handler("", current.current.ctx);
   assert.equal(current.mock.sentMessages.length, sentBeforeOptOut);
   await current.mock.events.get("agent_settled")?.[0]({ type: "agent_settled" }, current.current.ctx);
+  assert.ok(current.compactOptions);
   assert.deepEqual(current.mock.rawPi.getActiveTools(), ["read", ...EXPERIMENTAL_CONTEXT_TOOL_NAMES]);
 });
 

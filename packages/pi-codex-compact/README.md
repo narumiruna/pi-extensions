@@ -187,6 +187,7 @@ Experimental context management stores window metadata and notes as plaintext ap
 | Transport retries | At most 2 |
 | Request timeout | At most 10 minutes |
 | Experimental note mutation | 16 KiB UTF-8; 64 active notes and 256 KiB total |
+| Experimental notes branch replay | 100,000 entry visits and 4,194,304 scan units per request |
 | Experimental recall result | 32 KiB, 1,000 lines, and 20 search matches per page |
 | Experimental history branch traversal | 100,000 entry visits per request |
 | Experimental history read | 4,194,304 scan units per selected item |
