@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseEnv } from "node:util";
 import { type ExtensionAPI, parseArgs } from "@earendil-works/pi-coding-agent";
-import { parse } from "dotenv";
 
 const ENV_FILE_FLAG = "env-file";
 const ENV_FILE_OPTION = `--${ENV_FILE_FLAG}`;
@@ -27,7 +27,9 @@ export function loadEnvFile(
     throw new Error(`Could not read the file passed to ${ENV_FILE_OPTION}`);
   }
 
-  const parsed = parse(content);
+  const parsed = Object.fromEntries(
+    Object.entries(parseEnv(content)).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
   const env = options.env ?? process.env;
   for (const [name, value] of Object.entries(parsed)) {
     if (env[name] === undefined) env[name] = value;
