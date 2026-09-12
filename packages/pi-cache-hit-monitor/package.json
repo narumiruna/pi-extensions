@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-cache-hit-monitor",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Pi extension that shows live prompt-cache reuse and cost diagnostics above the editor.",
   "type": "module",
   "license": "MIT",

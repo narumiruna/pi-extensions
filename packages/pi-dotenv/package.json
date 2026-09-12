@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-dotenv",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Pi extension that loads an explicit dotenv file during startup.",
   "type": "module",
   "license": "MIT",
