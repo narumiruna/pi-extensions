@@ -372,7 +372,7 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
   let filteredItems = searchableItems;
   const committed = new Map(options.screen.items.map((item) => [item.id, item.currentValue]));
   const displayed = new Map(committed);
-  const latestRequested = new Map<string, string>();
+  const revisions = new Map<string, number>();
   let selectedIndex = Math.max(
     0,
     filteredItems.findIndex(({ item }) => item.id === options.selectedItemId),
@@ -409,7 +409,8 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
     const currentIndex = values.indexOf(currentValue);
     const value = values[(currentIndex + 1) % values.length] ?? currentValue;
     displayed.set(item.id, value);
-    latestRequested.set(item.id, value);
+    const revision = (revisions.get(item.id) ?? 0) + 1;
+    revisions.set(item.id, revision);
     const operation = pending.then(async () => {
       if (disposed) return;
       const previousValue = committed.get(item.id) ?? item.currentValue;
@@ -427,7 +428,7 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
       if (disposed) return;
       const accepted = typeof response === "boolean" ? response : response.accepted;
       if (accepted) committed.set(item.id, value);
-      else if (latestRequested.get(item.id) === value) displayed.set(item.id, previousValue);
+      else if (revisions.get(item.id) === revision) displayed.set(item.id, previousValue);
       options.tui.requestRender();
       if (accepted && typeof response !== "boolean") {
         closing = true;
