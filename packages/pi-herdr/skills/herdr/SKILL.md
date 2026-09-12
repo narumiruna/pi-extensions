@@ -23,10 +23,13 @@ Run it again only after compaction removes those instructions or when the user e
 
 Apply this cleanup policy in addition to those version-specific instructions:
 
-- Record the ID of every pane that you create for the current task; discovering a pane later is not proof that you own it.
-- Clean up each owned pane as soon as its work is no longer needed, and sweep owned panes again before the final response.
-- Immediately before closing a pane, read its live pane and agent state again instead of relying on an earlier result.
-- For an agent pane, first collect the required output and decide that no follow-up is needed, then close it with `herdr pane close <pane-id>` only when the agent is `idle` or `done`; closing the pane also ends that agent.
-- If an owned agent has already exited, or an ordinary command has finished, close the pane only after it has returned to an available shell.
-- Never close the calling pane, a pre-existing pane, a pane created by the user or another agent, an agent in `working`, `blocked`, or `unknown`, or a pane with another foreground process.
-- If safe cleanup cannot be confirmed or the close fails, leave the pane open and report the pane ID and reason.
+- Maintain a cleanup ledger for the Herdr session with each pane ID you create, its intended lifetime, and, for an agent pane, the assigned agent identity plus the strongest stable session or process identity that Herdr exposes.
+- Mark a pane as retained when the user asks to keep, inspect, or use it later, or when its continued existence is part of the requested result, and never close a retained pane automatically.
+- For a temporary pane, collect the required output, decide that no follow-up is needed, and clean it up as soon as its work is no longer needed.
+- Immediately before cleanup, use the loaded version-specific instructions to read live state and confirm that the pane is still the recorded resource instead of relying on an earlier result or status alone.
+- Clean up an agent pane only when its current agent and every recorded stable identity match the ledger and its state is `idle` or `done`; if identity changed or cannot be confirmed, leave the pane open.
+- If the recorded agent has exited, or an ordinary command has finished, clean up the pane only after it has returned to an available shell with no replacement occupant or foreground process.
+- Use the pane-closing operation documented by the loaded instructions; do not assume command syntax that they do not provide.
+- Keep unresolved temporary entries after cancellation or interruption, retry safe cleanup at the next recovery boundary before further Herdr work, and sweep them again before the final response.
+- Never close the calling pane, a pre-existing pane, or a pane created by the user or another agent.
+- If safe cleanup cannot be confirmed or closure fails, keep the ledger entry and report the pane ID and reason.
