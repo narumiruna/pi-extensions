@@ -26,6 +26,7 @@ export interface CodexCheckpointDetails {
   protocol: RemoteCompactionProtocol;
   replacementHistory: JsonObject[];
   keptMessageFingerprints: string[];
+  retryResponseFingerprint?: string;
   createdAt: string;
 }
 
@@ -116,6 +117,8 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
     !value.keptMessageFingerprints.every(
       (fingerprint) => typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint),
     ) ||
+    (value.retryResponseFingerprint !== undefined &&
+      (typeof value.retryResponseFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.retryResponseFingerprint))) ||
     serializedBytes(value.replacementHistory) > REPLACEMENT_BYTE_BUDGET
   ) {
     return undefined;
@@ -136,6 +139,9 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
     protocol: isVersionOne ? "remote-v2" : (value.protocol as RemoteCompactionProtocol),
     replacementHistory: structuredClone(value.replacementHistory),
     keptMessageFingerprints: [...value.keptMessageFingerprints],
+    ...(typeof value.retryResponseFingerprint === "string"
+      ? { retryResponseFingerprint: value.retryResponseFingerprint }
+      : {}),
     createdAt: value.createdAt,
   };
 }
@@ -191,6 +197,13 @@ export function projectCheckpointContext(
     return undefined;
   }
   while (messageIndex < messages.length && isOlderCompactionSummary(messages[messageIndex], timestamp)) {
+    messageIndex += 1;
+  }
+  if (
+    details.retryResponseFingerprint &&
+    messageIndex < messages.length &&
+    fingerprintMessage(messages[messageIndex]) === details.retryResponseFingerprint
+  ) {
     messageIndex += 1;
   }
   return [
@@ -277,6 +290,7 @@ export function createCheckpointDetails(input: {
   protocol: RemoteCompactionProtocol;
   replacementHistory: JsonObject[];
   keptMessages: readonly AgentMessage[];
+  retryResponseFingerprint?: string;
   checkpointId?: string;
   createdAt?: string;
 }): CodexCheckpointDetails {
@@ -290,6 +304,7 @@ export function createCheckpointDetails(input: {
     protocol: input.protocol,
     replacementHistory: structuredClone(input.replacementHistory),
     keptMessageFingerprints: input.keptMessages.map(fingerprintMessage),
+    ...(input.retryResponseFingerprint ? { retryResponseFingerprint: input.retryResponseFingerprint } : {}),
     createdAt: input.createdAt ?? new Date().toISOString(),
   };
   const parsed = parseCheckpointDetails(details);

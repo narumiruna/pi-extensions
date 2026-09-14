@@ -23,7 +23,12 @@ function rawUser(text: string) {
 
 const opaque = { type: "compaction", encrypted_content: "opaque" };
 
-function checkpoint(kept: AgentMessage[] = [user("kept", 2)], id = "checkpoint-123", provider = "openai-codex") {
+function checkpoint(
+  kept: AgentMessage[] = [user("kept", 2)],
+  id = "checkpoint-123",
+  provider = "openai-codex",
+  retryResponseFingerprint?: string,
+) {
   return createCheckpointDetails({
     provider,
     api: "openai-codex-responses",
@@ -31,6 +36,7 @@ function checkpoint(kept: AgentMessage[] = [user("kept", 2)], id = "checkpoint-1
     protocol: "remote-v2",
     replacementHistory: [rawUser("old"), opaque],
     keptMessages: kept,
+    ...(retryResponseFingerprint ? { retryResponseFingerprint } : {}),
     checkpointId: id,
     createdAt: "2026-01-01T00:00:00.000Z",
   });
@@ -142,6 +148,7 @@ test("validates versioned details and rejects malformed or unbounded persisted d
   assert.equal(parseCheckpointDetails({ ...details, modelId: "x".repeat(513) }), undefined);
   assert.equal(parseCheckpointDetails({ ...details, replacementHistory: [] }), undefined);
   assert.equal(parseCheckpointDetails({ ...details, keptMessageFingerprints: ["bad"] }), undefined);
+  assert.equal(parseCheckpointDetails({ ...details, retryResponseFingerprint: "bad" }), undefined);
   const cyclic: Record<string, unknown> = { ...details };
   cyclic.self = cyclic;
   assert.equal(parseCheckpointDetails(cyclic), undefined);
@@ -174,6 +181,51 @@ test("projects the persisted summary without regenerating version-dependent pros
   }
   assert.equal(project([kept, after], details), undefined);
 });
+
+test.each(["error", "length"] as const)(
+  "remote projection excludes a retried overflow %s response immediately and after reconstruction",
+  (stopReason) => {
+    const kept = user("kept", 2);
+    const failed: AgentMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "incomplete response" }],
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      model: "gpt-5.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason,
+      timestamp: 3,
+    };
+    const details = checkpoint([kept], "checkpoint-retry", "openai-codex", fingerprintMessage(failed));
+    const summary = compactionSummary(fallbackSummary(details.checkpointId), 4);
+    const retry = user("successful retry", 5);
+
+    const immediate = project([summary, kept, retry], details);
+    const reconstructedMessages = buildSessionContext(
+      [
+        messageEntry("kept", null, kept),
+        messageEntry("failed", "kept", failed),
+        compactionEntry("retry-compaction", "failed", "kept", details, new Date(4).toISOString()),
+        messageEntry("retry", "retry-compaction", retry),
+      ],
+      "retry",
+    ).messages;
+    const reconstructed = project(reconstructedMessages, details);
+    assert.deepEqual(reconstructed, immediate);
+    assert.deepEqual(immediate?.at(-1), retry);
+    assert.doesNotMatch(JSON.stringify(reconstructed), /incomplete response/);
+
+    const unrelated = { ...failed, timestamp: 6 };
+    assert.deepEqual(project([summary, kept, unrelated, retry], details)?.slice(-2), [unrelated, retry]);
+  },
+);
 
 test("projects resumed repeated compaction when Pi interleaves an older summary", () => {
   const firstKept = user("first kept", 1);

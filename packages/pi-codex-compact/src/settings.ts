@@ -10,6 +10,7 @@ export const MAX_SETTINGS_BYTES = 64 * 1024;
 
 export interface CodexCompactSettings {
   enabled: boolean;
+  experimentalContextManagement: boolean;
   protocol: RemoteCompactionProtocolSetting;
   requestTimeoutMs: number;
   maxRetries: number;
@@ -19,6 +20,7 @@ export interface CodexCompactSettings {
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Object.freeze({
   enabled: true,
+  experimentalContextManagement: false,
   protocol: "auto",
   requestTimeoutMs: 300_000,
   maxRetries: 2,
@@ -59,6 +61,12 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
   if (!isRecord(value)) return undefined;
   if (Object.hasOwn(value, "enabled") && typeof value.enabled !== "boolean") return undefined;
   if (
+    Object.hasOwn(value, "experimentalContextManagement") &&
+    typeof value.experimentalContextManagement !== "boolean"
+  ) {
+    return undefined;
+  }
+  if (
     Object.hasOwn(value, "protocol") &&
     value.protocol !== "auto" &&
     value.protocol !== "remote-v2" &&
@@ -79,6 +87,10 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
   }
   return {
     enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CODEX_COMPACT_SETTINGS.enabled,
+    experimentalContextManagement:
+      typeof value.experimentalContextManagement === "boolean"
+        ? value.experimentalContextManagement
+        : DEFAULT_CODEX_COMPACT_SETTINGS.experimentalContextManagement,
     protocol:
       value.protocol === "remote-v2" || value.protocol === "responses-compact"
         ? value.protocol

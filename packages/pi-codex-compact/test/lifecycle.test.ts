@@ -249,7 +249,7 @@ test("custom Codex Responses providers compact and replay by API and exact model
   let forwardedHeaders: OpenAICodexResponsesOptions["headers"];
   const runtime = settingsRuntime();
   createCodexCompactExtension({ settingsRuntime: runtime, fetch: async () => sseResponse() })(mock.pi);
-  assert.equal(mock.commands.get("codex-compact")?.description, "Compact now or configure Responses compaction");
+  assert.equal(mock.commands.get("codex-compact")?.description, "Compact now or configure Codex compaction");
   const handler = mock.events.get("session_before_compact")?.[0];
   assert.ok(handler);
   const entries = branch();
@@ -405,16 +405,23 @@ test("manual, threshold, and overflow compaction preserve Pi preparation boundar
       fetch: async () => sseResponse(),
     })(mock.pi);
     const handler = mock.events.get("session_before_compact")?.[0];
+    const branchEntries = branch();
+    if (reason === "overflow") {
+      const terminal = branchEntries.at(-1);
+      if (terminal?.type === "message" && terminal.message.role === "assistant") {
+        terminal.message.stopReason = "length";
+      }
+    }
     const { ctx } = createMockContext({
       model,
       getSystemPrompt: () => "system",
-      sessionManager: { getSessionId: () => "session", getBranch: () => branch() },
+      sessionManager: { getSessionId: () => "session", getBranch: () => branchEntries },
       modelRegistry: {
         getApiKeyAndHeaders: async () => ({ ok: true }),
         getProvider: () => fakeProvider(),
       },
     });
-    const compactEvent = event(new AbortController().signal, branch(), reason, willRetry);
+    const compactEvent = event(new AbortController().signal, branchEntries, reason, willRetry);
     if (reason === "overflow") {
       compactEvent.preparation.isSplitTurn = true;
       compactEvent.preparation.turnPrefixMessages = [
@@ -422,10 +429,13 @@ test("manual, threshold, and overflow compaction preserve Pi preparation boundar
       ];
     }
     const result = (await handler?.(compactEvent, ctx)) as {
-      compaction: { firstKeptEntryId: string; tokensBefore: number };
+      compaction: { firstKeptEntryId: string; tokensBefore: number; details: unknown };
     };
     assert.equal(result.compaction.firstKeptEntryId, compactEvent.preparation.firstKeptEntryId);
     assert.equal(result.compaction.tokensBefore, compactEvent.preparation.tokensBefore);
+    const details = parseCheckpointDetails(result.compaction.details);
+    assert.ok(details);
+    assert.equal(details.retryResponseFingerprint !== undefined, willRetry);
   }
 });
 

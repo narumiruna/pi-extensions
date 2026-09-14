@@ -80,6 +80,56 @@ test("root menu makes manual compaction primary and exposes its effective route"
   assert.equal(disabled.kind, "actions");
   if (disabled.kind !== "actions") assert.fail("Expected disabled actions screen");
   assert.match(disabled.lines?.join("\n") ?? "", /Pi native \(remote compaction is disabled\)/);
+  const experimentalState = {
+    ...current.runtime.get(),
+    settings: {
+      ...current.runtime.get().settings,
+      experimentalContextManagement: true,
+    },
+  };
+  const experimental = resolveMenuScreen(
+    createCodexCompactMenu(current.runtime, {
+      isExperimentalActive: () => true,
+      status: { model: "openai-codex/gpt-5.6", api: "openai-codex-responses" },
+    }),
+    "main",
+    experimentalState,
+  );
+  assert.equal(experimental.kind, "actions");
+  if (experimental.kind !== "actions") assert.fail("Expected experimental actions screen");
+  assert.match(experimental.lines?.join("\n") ?? "", /Experimental summary-free rollover/);
+  const unavailableExperimental = resolveMenuScreen(
+    createCodexCompactMenu(current.runtime, {
+      isExperimentalActive: () => false,
+      status: { model: "openai-codex/gpt-5.6", api: "openai-codex-responses" },
+    }),
+    "main",
+    experimentalState,
+  );
+  assert.equal(unavailableExperimental.kind, "actions");
+  if (unavailableExperimental.kind !== "actions") {
+    assert.fail("Expected unavailable experimental actions screen");
+  }
+  assert.match(
+    unavailableExperimental.lines?.join("\n") ?? "",
+    /Pi native \(experimental context tools are unavailable\)/,
+  );
+  const pendingDeactivation = resolveMenuScreen(
+    createCodexCompactMenu(current.runtime, {
+      isExperimentalActive: () => true,
+      status: { model: "openai-codex/gpt-5.6", api: "openai-codex-responses" },
+    }),
+    "main",
+    current.runtime.get(),
+  );
+  assert.equal(pendingDeactivation.kind, "actions");
+  if (pendingDeactivation.kind !== "actions") {
+    assert.fail("Expected pending-deactivation actions screen");
+  }
+  assert.match(
+    pendingDeactivation.lines?.join("\n") ?? "",
+    /Experimental summary-free rollover \(deactivation pending\)/,
+  );
   const openAI = resolveMenuScreen(
     createCodexCompactMenu(current.runtime, { status: openAIStatus }),
     "main",
@@ -99,6 +149,7 @@ test("settings screen exposes bounded controls and invalid files remain repairab
   assert.deepEqual(
     screen.items.map((item) => [item.id, item.currentValue]),
     [
+      ["experimentalContextManagement", "Off"],
       ["enabled", "On"],
       ["protocol", "Auto"],
       ["requestTimeoutMs", "5 min"],
@@ -138,9 +189,14 @@ test("manual action closes the menu and records one explicit request", async () 
   assert.equal(requests, 1);
 });
 
-test("menu actions persist exact setting patches", async () => {
+test("menu actions persist exact setting patches and apply experimental mode immediately", async () => {
   const memory = memoryRuntime();
-  const menu = createCodexCompactMenu(memory.runtime);
+  let settingsChanges = 0;
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onSettingsChanged: () => {
+      settingsChanges += 1;
+    },
+  });
   const { ctx } = createMockContext({ mode: "tui" });
   const action = (value: string) => ({
     ctx,
@@ -149,13 +205,16 @@ test("menu actions persist exact setting patches", async () => {
     itemId: "setting",
     value,
   });
+  await menu.actions["set-experimental"](action("On"));
   await menu.actions["set-enabled"](action("Off"));
   await menu.actions["set-protocol"](action("Responses Compact"));
   await menu.actions["set-timeout"](action("10 min"));
   await menu.actions["set-retries"](action("1"));
   await menu.actions["set-retention"](action("96K tokens"));
   await menu.actions["set-notify"](action("Off"));
+  assert.equal(settingsChanges, 1);
   assert.deepEqual(memory.patches, [
+    { experimentalContextManagement: true },
     { enabled: false },
     { protocol: "responses-compact" },
     { requestTimeoutMs: 600_000 },
@@ -165,32 +224,106 @@ test("menu actions persist exact setting patches", async () => {
   ]);
 });
 
-test("stale settings saves do not notify through a disposed menu", async () => {
+test("experimental runtime failures restore the persisted, displayed, and effective value", async () => {
   const memory = memoryRuntime();
-  let release!: () => void;
-  const blocked = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const runtime: CodexCompactSettingsRuntime = {
-    ...memory.runtime,
-    async update(patch) {
-      await blocked;
-      return memory.runtime.update(patch);
+  const applied: boolean[] = [];
+  let effective = false;
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onSettingsChanged: async () => {
+      effective = memory.runtime.get().settings.experimentalContextManagement;
+      applied.push(effective);
+      if (applied.length === 1) throw new Error("initial context entry failed");
     },
-  };
-  const menu = createCodexCompactMenu(runtime);
-  const controller = new AbortController();
-  const { ctx, notifications } = createMockContext({ mode: "tui" });
-  const pending = menu.actions["set-enabled"]({
-    ctx,
-    state: runtime.get(),
-    signal: controller.signal,
-    itemId: "enabled",
-    value: "Off",
   });
-  controller.abort();
-  release();
-  assert.deepEqual(await pending, { kind: "rejected" });
+  const { ctx, notifications } = createMockContext({ mode: "tui" });
+  const result = await menu.actions["set-experimental"]({
+    ctx,
+    state: memory.runtime.get(),
+    signal: new AbortController().signal,
+    itemId: "experimentalContextManagement",
+    value: "On",
+  });
+
+  assert.deepEqual(result, { kind: "rejected" });
+  assert.deepEqual(memory.patches, [{ experimentalContextManagement: true }, { experimentalContextManagement: false }]);
+  assert.deepEqual(applied, [true, false]);
+  assert.equal(memory.runtime.get().settings.experimentalContextManagement, false);
+  assert.equal(effective, false);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0]?.level, "error");
+  assert.match(notifications[0]?.message ?? "", /initial context entry failed/);
+  assert.match(notifications[0]?.message ?? "", /previous setting was restored/i);
+});
+
+test.each([
+  { actionName: "set-enabled" as const, expectedSettingsChanges: 0 },
+  { actionName: "set-experimental" as const, expectedSettingsChanges: 1 },
+])(
+  "a committed $actionName save reconciles required runtime state after menu disposal",
+  async ({ actionName, expectedSettingsChanges }) => {
+    const memory = memoryRuntime();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime: CodexCompactSettingsRuntime = {
+      ...memory.runtime,
+      async update(patch) {
+        await blocked;
+        return memory.runtime.update(patch);
+      },
+    };
+    let settingsChanges = 0;
+    const menu = createCodexCompactMenu(runtime, {
+      onSettingsChanged: () => {
+        settingsChanges += 1;
+      },
+    });
+    const controller = new AbortController();
+    const { ctx, notifications } = createMockContext({ mode: "tui" });
+    const pending = menu.actions[actionName]({
+      ctx,
+      state: runtime.get(),
+      signal: controller.signal,
+      itemId: actionName,
+      value: actionName === "set-enabled" ? "Off" : "On",
+    });
+    controller.abort();
+    release();
+    assert.deepEqual(await pending, { kind: "rejected" });
+    assert.equal(settingsChanges, expectedSettingsChanges);
+    assert.equal(runtime.get().settings.experimentalContextManagement, actionName === "set-experimental");
+    assert.deepEqual(notifications, []);
+  },
+);
+
+test("cancellation during failed experimental reconciliation still restores prior state", async () => {
+  const memory = memoryRuntime();
+  const controller = new AbortController();
+  const applied: boolean[] = [];
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onSettingsChanged: () => {
+      applied.push(memory.runtime.get().settings.experimentalContextManagement);
+      if (applied.length === 1) {
+        controller.abort();
+        throw new Error("activation failed during cancellation");
+      }
+    },
+  });
+  const { ctx, notifications } = createMockContext({ mode: "tui" });
+
+  const result = await menu.actions["set-experimental"]({
+    ctx,
+    state: memory.runtime.get(),
+    signal: controller.signal,
+    itemId: "experimentalContextManagement",
+    value: "On",
+  });
+
+  assert.deepEqual(result, { kind: "rejected" });
+  assert.deepEqual(memory.patches, [{ experimentalContextManagement: true }, { experimentalContextManagement: false }]);
+  assert.deepEqual(applied, [true, false]);
+  assert.equal(memory.runtime.get().settings.experimentalContextManagement, false);
   assert.deepEqual(notifications, []);
 });
 
