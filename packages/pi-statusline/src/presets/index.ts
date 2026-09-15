@@ -33,6 +33,7 @@ const SEGMENT_BLOCKS: Record<SegmentName, PowerlineBlockName> = {
   model: "header",
   thinking: "header",
   cwd: "directory",
+  session: "directory",
   branch: "git",
   tools: "runtime",
   context: "runtime",

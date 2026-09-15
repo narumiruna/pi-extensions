@@ -11,11 +11,11 @@ import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { formatDirectoryPath } from "./directory.js";
 import { type ExtensionStatusRuntime, formatExtensionStatuses, wrapExtensionStatusline } from "./extension-status.js";
 import { formatGitBranchValue, type GitStatusSummary } from "./git-status.js";
-import { renderPowerlineStatusline } from "./powerline.js";
+import { fitPowerlineSegments, SEGMENT_RETENTION_PRIORITY } from "./powerline.js";
 import {
+  type ConfigSegmentName,
   LINE_BREAK_SEGMENT_NAME,
   type PowerlineBlockName,
-  type RenderItem,
   type RenderSegment,
   type SegmentName,
   type StatuslineConfig,
@@ -36,6 +36,8 @@ export interface RuntimeState extends ExtensionStatusRuntime {
 }
 const GITHUB_PR_KEY = "github-pr";
 const GITHUB_PR_STATUS_KEYS = new Set([GITHUB_PR_KEY]);
+const COLUMN_GAP = 1;
+
 export function renderStatusline(
   width: number,
   ctx: ExtensionContext,
@@ -48,10 +50,91 @@ export function renderStatusline(
   if (width <= 0) return "";
 
   const usageSummary = summarizeFooterUsage(ctx.sessionManager.getEntries());
+  const leftRows = buildColumnRows(config.segments, ctx, footerData, config, runtime, usageSummary);
+  const rightRows = buildColumnRows(config.rightSegments, ctx, footerData, config, runtime, usageSummary);
+  const rowCount = Math.max(leftRows.length, rightRows.length);
+  const lines: string[] = [];
+
+  for (let row = 0; row < rowCount; row += 1) {
+    const rightSegments = rightRows[row] ?? [];
+    const leftSegments = leftRows[row] ?? [];
+    const [fittedLeft, fittedRight] = fitColumnsRow(leftSegments, rightSegments, width, config, trueColor);
+    const rightLine = fitPowerlineSegments(fittedRight, width, config, trueColor);
+    const rightWidth = visibleWidth(rightLine);
+    const leftLine = fitPowerlineSegments(
+      fittedLeft,
+      rightLine ? Math.max(width - rightWidth - COLUMN_GAP, 0) : width,
+      config,
+      trueColor,
+    );
+    if (!leftLine && !rightLine) {
+      lines.push("");
+      continue;
+    }
+    const leftWidth = visibleWidth(leftLine);
+    const padWidth = rightLine ? Math.max(width - leftWidth - rightWidth, leftLine ? COLUMN_GAP : 0) : 0;
+    lines.push(`${leftLine}${" ".repeat(padWidth)}${rightLine}`);
+  }
+
+  return lines.join("\n");
+}
+
+// Drops the globally lowest-priority segment across both columns until both natural
+// widths plus the column gap fit within one row.
+function fitColumnsRow(
+  left: RenderSegment[],
+  right: RenderSegment[],
+  width: number,
+  config: StatuslineConfig,
+  trueColor: boolean,
+): [RenderSegment[], RenderSegment[]] {
+  const columnLeft = [...left];
+  const columnRight = [...right];
+  const columns: ["left" | "right", RenderSegment[]][] = [
+    ["left", columnLeft],
+    ["right", columnRight],
+  ];
+  const naturalWidth = (segments: RenderSegment[]) =>
+    segments.length === 0
+      ? 0
+      : visibleWidth(fitPowerlineSegments(segments, Number.MAX_SAFE_INTEGER, config, trueColor));
+
+  for (;;) {
+    const leftWidth = naturalWidth(columnLeft);
+    const rightWidth = naturalWidth(columnRight);
+    const gap = leftWidth > 0 && rightWidth > 0 ? COLUMN_GAP : 0;
+    if (leftWidth + rightWidth + gap <= width) return [columnLeft, columnRight];
+
+    let target: "left" | "right" | undefined;
+    let removalIndex = -1;
+    let removalPriority = Number.POSITIVE_INFINITY;
+    for (const [key, segments] of columns) {
+      for (const [index, segment] of segments.entries()) {
+        const priority = SEGMENT_RETENTION_PRIORITY[segment.name];
+        if (priority < removalPriority) {
+          removalPriority = priority;
+          removalIndex = index;
+          target = key;
+        }
+      }
+    }
+    if (target === undefined || removalIndex < 0) return [columnLeft, columnRight];
+    (target === "left" ? columnLeft : columnRight).splice(removalIndex, 1);
+  }
+}
+
+function buildColumnRows(
+  names: readonly ConfigSegmentName[],
+  ctx: ExtensionContext,
+  footerData: ReadonlyFooterDataProvider,
+  config: StatuslineConfig,
+  runtime: RuntimeState,
+  usageSummary: FooterUsageSummary,
+): RenderSegment[][] {
   const rows: Array<{ configuredSegments: number; segments: RenderSegment[] }> = [
     { configuredSegments: 0, segments: [] },
   ];
-  for (const name of config.segments) {
+  for (const name of names) {
     if (name === LINE_BREAK_SEGMENT_NAME) {
       rows.push({ configuredSegments: 0, segments: [] });
       continue;
@@ -63,15 +146,7 @@ export function renderStatusline(
     const rendered = buildSegment(name, ctx, footerData, config, runtime, usageSummary);
     if (rendered && rendered.text.length > 0) row.segments.push(rendered);
   }
-
-  const segments: RenderItem[] = [];
-  const renderedRows = rows.filter((row) => row.configuredSegments === 0 || row.segments.length > 0);
-  for (const [index, row] of renderedRows.entries()) {
-    if (index > 0) segments.push({ name: LINE_BREAK_SEGMENT_NAME });
-    segments.push(...row.segments);
-  }
-
-  return renderPowerlineStatusline(width, segments, config, trueColor);
+  return rows.filter((row) => row.configuredSegments === 0 || row.segments.length > 0).map((row) => row.segments);
 }
 
 export function renderExtensionStatusline(
@@ -135,6 +210,10 @@ function buildSegment(
         "accent",
         "directory",
       );
+    case "session": {
+      const sessionName = sanitizeTerminalText(ctx.sessionManager.getSessionName() ?? "");
+      return sessionName ? segment(name, sessionName, config, "accent", "directory") : undefined;
+    }
     case "tools": {
       const activity = formatToolActivity(runtime);
       return activity ? segment(name, activity, config, "accent", "runtime") : undefined;

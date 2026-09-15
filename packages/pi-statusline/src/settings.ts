@@ -50,7 +50,8 @@ const LEGACY_STATUS_ICON_KEYS = {
   "unknown-error-retry": "retry",
 } as const;
 
-const DEFAULT_SEGMENTS: SegmentName[] = [...INFORMATION_PROFILES.balanced];
+const DEFAULT_SEGMENTS: SegmentName[] = [...INFORMATION_PROFILES.balanced.left];
+const DEFAULT_RIGHT_SEGMENTS: SegmentName[] = [...INFORMATION_PROFILES.balanced.right];
 
 export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
   palettePreset: "tokyo-night",
@@ -58,6 +59,7 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
   density: "compact",
   separator: "none",
   segments: DEFAULT_SEGMENTS,
+  rightSegments: DEFAULT_RIGHT_SEGMENTS,
   segmentText: {
     brand: { prefix: "", suffix: "" },
     provider: { prefix: "🔌 ", suffix: "" },
@@ -70,6 +72,7 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
     },
     thinking: { prefix: "🧠 ", suffix: "" },
     cwd: { prefix: "📁 ", suffix: "" },
+    session: { prefix: "🏷️ ", suffix: "" },
     branch: { prefix: "🌿 ", suffix: "" },
     tools: { prefix: "", suffix: "" },
     context: { prefix: "🪟 ctx ", suffix: "" },
@@ -87,6 +90,7 @@ const DEFAULT_STATUSLINE_DOCUMENT_CONFIG = {
   density: DEFAULT_STATUSLINE_CONFIG.density,
   separator: DEFAULT_STATUSLINE_CONFIG.separator,
   segments: DEFAULT_SEGMENTS,
+  rightSegments: DEFAULT_RIGHT_SEGMENTS,
   segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
   extensionStatusIcons: DEFAULT_DOCUMENT_EXTENSION_STATUS_ICONS,
 } satisfies Omit<StatuslineConfig, "palette">;
@@ -144,6 +148,7 @@ export function normalizeStatuslineConfig(value: unknown): {
     "density",
     "separator",
     "segments",
+    "rightSegments",
     "segmentText",
     "extensionStatusIcons",
   ]);
@@ -159,35 +164,23 @@ export function normalizeStatuslineConfig(value: unknown): {
   normalizeEnum(value, "density", DENSITIES, config, diagnostics);
   normalizeEnum(value, "separator", SEPARATOR_NAMES, config, diagnostics);
 
-  if (value.segments !== undefined) {
-    if (!Array.isArray(value.segments)) {
-      diagnostics.push(invalidDiagnostic("segments", "Expected an array of segment names"));
-    } else {
-      const segments: ConfigSegmentName[] = [];
-      const seen = new Set<SegmentName>();
-      for (const [index, item] of value.segments.entries()) {
-        const path = `segments[${index}]`;
-        if (typeof item !== "string" || !isConfigSegmentName(item)) {
-          diagnostics.push(invalidDiagnostic(path, "Unknown or non-string segment name"));
-          continue;
-        }
-        if (item === LINE_BREAK_SEGMENT_NAME) {
-          if (segments.at(-1) === LINE_BREAK_SEGMENT_NAME) {
-            diagnostics.push(invalidDiagnostic(path, "Consecutive line_break segments are not allowed"));
-            continue;
-          }
-          segments.push(item);
-          continue;
-        }
-        if (seen.has(item)) {
-          diagnostics.push(invalidDiagnostic(path, `Duplicate segment ${JSON.stringify(item)}`));
-          continue;
-        }
-        seen.add(item);
-        segments.push(item);
-      }
-      config.segments = segments;
-    }
+  const explicitLeft = value.segments !== undefined;
+  const explicitRight = value.rightSegments !== undefined;
+  const left = [...parseColumn(value, "segments", diagnostics)];
+  const right = [...parseColumn(value, "rightSegments", diagnostics)];
+  const rightNames = new Set(right.filter(isSegmentName));
+  // An explicit column is the user's full intent: writing segments without rightSegments
+  // keeps the right column empty, while writing only rightSegments prunes default left
+  // duplicates so the built-in layout never repeats a segment across columns.
+  if (explicitLeft && !explicitRight) {
+    config.segments = left;
+    config.rightSegments = [];
+  } else if (!explicitLeft && explicitRight) {
+    config.segments = left.filter((segment) => segment === LINE_BREAK_SEGMENT_NAME || !rightNames.has(segment));
+    config.rightSegments = right;
+  } else {
+    config.segments = left;
+    config.rightSegments = right;
   }
 
   if (value.segmentText !== undefined) {
@@ -424,6 +417,55 @@ export function normalizeStatuslineSettings(value: unknown): StatuslineConfig {
   return normalizeStatuslineConfig(value).config;
 }
 
+function parseColumn(
+  value: Record<string, unknown>,
+  column: "segments" | "rightSegments",
+  diagnostics: StatuslineConfigDiagnostic[],
+): ConfigSegmentName[] {
+  const raw = value[column];
+  if (raw === undefined) {
+    return column === "segments" ? [...DEFAULT_SEGMENTS] : [...DEFAULT_RIGHT_SEGMENTS];
+  }
+  const parsed: ConfigSegmentName[] = [];
+  if (!Array.isArray(raw)) {
+    diagnostics.push(invalidDiagnostic(column, "Expected an array of segment names"));
+    return column === "segments" ? [...DEFAULT_SEGMENTS] : [...DEFAULT_RIGHT_SEGMENTS];
+  }
+  const other = value[column === "segments" ? "rightSegments" : "segments"];
+  const otherNames = new Set(
+    Array.isArray(other)
+      ? other.filter((segment): segment is SegmentName => typeof segment === "string" && isSegmentName(segment))
+      : [],
+  );
+  const seen = new Set<SegmentName>();
+  for (const [index, item] of raw.entries()) {
+    const path = `${column}[${index}]`;
+    if (typeof item !== "string" || !isConfigSegmentName(item)) {
+      diagnostics.push(invalidDiagnostic(path, "Unknown or non-string segment name"));
+      continue;
+    }
+    if (item === LINE_BREAK_SEGMENT_NAME) {
+      if (parsed.at(-1) === LINE_BREAK_SEGMENT_NAME) {
+        diagnostics.push(invalidDiagnostic(path, "Consecutive line_break segments are not allowed"));
+        continue;
+      }
+      parsed.push(item);
+      continue;
+    }
+    if (otherNames.has(item)) {
+      diagnostics.push(invalidDiagnostic(path, `Segment ${JSON.stringify(item)} already shown in the other column`));
+      continue;
+    }
+    if (seen.has(item)) {
+      diagnostics.push(invalidDiagnostic(path, `Duplicate segment ${JSON.stringify(item)}`));
+      continue;
+    }
+    seen.add(item);
+    parsed.push(item);
+  }
+  return parsed;
+}
+
 function normalizePalette(value: unknown, config: StatuslineConfig, diagnostics: StatuslineConfigDiagnostic[]) {
   if (value === undefined) return;
   if (typeof value === "string") {
@@ -546,6 +588,7 @@ function cloneConfig(config: StatuslineConfig): StatuslineConfig {
     ...config,
     palette: cloneSegmentPalette(config.palette),
     segments: [...config.segments],
+    rightSegments: [...config.rightSegments],
     segmentText: Object.fromEntries(
       SEGMENT_NAMES.map((name) => [name, { ...config.segmentText[name] }]),
     ) as StatuslineConfig["segmentText"],
