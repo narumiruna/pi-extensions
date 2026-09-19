@@ -9,15 +9,35 @@ import {
 } from "@langfuse/tracing";
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import type { LangfuseConfig } from "./config.js";
+import { DEFAULT_BASE_URL, type LangfuseConfig } from "./config.js";
+import {
+  type CreateLangfuseRuntimeOptions,
+  createLangfuseRuntimeFromBackend,
+  getLangfuseRuntimeInternal,
+  type LangfuseRuntime,
+  type LangfuseRuntimeInternal,
+} from "./runtime-core.js";
 import type { Observation, ObservationAttributes, ObservationType, TraceBackend } from "./tracing.js";
 
-const RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
+export type {
+  CreateLangfuseRuntimeOptions,
+  LangfuseRuntime,
+  LangfuseRuntimeConfig,
+} from "./runtime-core.js";
+
+const RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v2");
+
+interface ResolvedRuntimeConfig {
+  publicKey: string;
+  secretKey: string;
+  baseUrl: string;
+  environment?: string;
+  release?: string;
+}
 
 interface SharedRuntime {
   fingerprint: string;
-  backend: ProductionTraceBackend;
-  shutdown: boolean;
+  runtime: LangfuseRuntimeInternal;
 }
 
 type GlobalWithRuntime = typeof globalThis & {
@@ -25,13 +45,17 @@ type GlobalWithRuntime = typeof globalThis & {
 };
 
 export interface RuntimeFactories {
-  createProcessor(config: LangfuseConfig): SpanProcessor;
+  createProcessor(config: ResolvedRuntimeConfig): SpanProcessor;
   createProvider(processor: SpanProcessor): NodeTracerProvider;
   selectProvider(provider: NodeTracerProvider): void;
 }
 
 class ProductionObservation implements Observation {
-  constructor(readonly native: LangfuseObservation) {}
+  readonly traceId: string;
+
+  constructor(readonly native: LangfuseObservation) {
+    this.traceId = native.traceId;
+  }
 
   update(attributes: ObservationAttributes): Observation {
     const { sessionId, userId, ...observationAttributes } = attributes;
@@ -100,37 +124,51 @@ class ProductionTraceBackend implements TraceBackend {
   }
 }
 
+export async function createLangfuseRuntime(options: CreateLangfuseRuntimeOptions = {}): Promise<LangfuseRuntime> {
+  return createSharedRuntime(resolveLangfuseRuntimeConfig(options), defaultFactories);
+}
+
 export async function createProductionBackend(
   config: LangfuseConfig,
   factoryOverrides: Partial<RuntimeFactories> = {},
 ): Promise<TraceBackend> {
+  const runtime = await createSharedRuntime(resolveLangfuseRuntimeConfig({ config, env: false }), {
+    ...defaultFactories,
+    ...factoryOverrides,
+  });
+  return getLangfuseRuntimeInternal(runtime).backend;
+}
+
+async function createSharedRuntime(
+  config: ResolvedRuntimeConfig,
+  factories: RuntimeFactories,
+): Promise<LangfuseRuntime> {
   const globalRuntime = globalThis as GlobalWithRuntime;
   const fingerprint = configFingerprint(config);
   const existing = globalRuntime[RUNTIME_KEY];
   if (existing) {
-    const runtime = await existing;
-    if (runtime.shutdown) {
-      throw new Error("Langfuse tracing was already shut down; restart Pi to enable it again.");
+    const shared = await existing;
+    if (shared.runtime.closed) {
+      throw new Error("Langfuse tracing was already shut down; restart the process to enable it again.");
     }
-    if (runtime.fingerprint !== fingerprint) {
-      throw new Error("Langfuse configuration changed; restart Pi to apply the new credentials.");
+    if (shared.fingerprint !== fingerprint) {
+      throw new Error("Langfuse configuration changed; restart the process to apply the new credentials.");
     }
-    return runtime.backend;
+    return shared.runtime;
   }
 
-  const factories = { ...defaultFactories, ...factoryOverrides };
   const initializing = initializeRuntime(config, fingerprint, factories);
   globalRuntime[RUNTIME_KEY] = initializing;
   try {
-    return (await initializing).backend;
+    return (await initializing).runtime;
   } catch (error) {
-    delete globalRuntime[RUNTIME_KEY];
+    if (globalRuntime[RUNTIME_KEY] === initializing) delete globalRuntime[RUNTIME_KEY];
     throw error;
   }
 }
 
 async function initializeRuntime(
-  config: LangfuseConfig,
+  config: ResolvedRuntimeConfig,
   fingerprint: string,
   factories: RuntimeFactories,
 ): Promise<SharedRuntime> {
@@ -143,15 +181,10 @@ async function initializeRuntime(
     await (provider?.shutdown() ?? processor.shutdown()).catch(() => undefined);
     throw error;
   }
-  const backend = new ProductionTraceBackend(provider, processor);
-  const runtime: SharedRuntime = { fingerprint, backend, shutdown: false };
-  const originalShutdown = backend.shutdown.bind(backend);
-  backend.shutdown = async () => {
-    if (runtime.shutdown) return;
-    runtime.shutdown = true;
-    await originalShutdown();
-  };
-  return runtime;
+  const runtime = getLangfuseRuntimeInternal(
+    createLangfuseRuntimeFromBackend(new ProductionTraceBackend(provider, processor)),
+  );
+  return { fingerprint, runtime };
 }
 
 const defaultFactories: RuntimeFactories = {
@@ -173,6 +206,67 @@ const defaultFactories: RuntimeFactories = {
   createProvider: (processor) => new NodeTracerProvider({ spanProcessors: [processor] }),
   selectProvider: setLangfuseTracerProvider,
 };
+
+export function resolveLangfuseRuntimeConfig(options: CreateLangfuseRuntimeOptions): ResolvedRuntimeConfig {
+  const env = options.env === false ? undefined : (options.env ?? process.env);
+  const publicKey = requiredSetting("publicKey", options.config?.publicKey, env?.LANGFUSE_PUBLIC_KEY);
+  const secretKey = requiredSetting("secretKey", options.config?.secretKey, env?.LANGFUSE_SECRET_KEY);
+  const explicitBaseUrl = options.config?.baseUrl;
+  if (explicitBaseUrl !== undefined && !normalizeString(explicitBaseUrl)) {
+    throw new Error("Langfuse baseUrl must be a non-empty string.");
+  }
+  const rawBaseUrl = selectedSetting(explicitBaseUrl, env?.LANGFUSE_BASE_URL) ?? DEFAULT_BASE_URL;
+  const baseUrl = normalizeBaseUrl(rawBaseUrl);
+  if (!baseUrl) {
+    throw new Error("Langfuse baseUrl must use HTTP or HTTPS without credentials, a query, or a fragment.");
+  }
+  const environment = optionalSetting("environment", options.config?.environment, env?.LANGFUSE_TRACING_ENVIRONMENT);
+  if (environment && (environment.length > 40 || !/^(?!langfuse)[a-z0-9_-]+$/u.test(environment))) {
+    throw new Error(
+      "Langfuse environment must be at most 40 lowercase letters, numbers, hyphens, or underscores and must not start with langfuse.",
+    );
+  }
+  const release = optionalSetting("release", options.config?.release, env?.LANGFUSE_RELEASE);
+  return { publicKey, secretKey, baseUrl, ...(environment ? { environment } : {}), ...(release ? { release } : {}) };
+}
+
+function requiredSetting(name: string, explicit: string | undefined, environment: string | undefined): string {
+  const value = selectedSetting(explicit, environment);
+  if (!value) throw new Error(`Langfuse ${name} is required.`);
+  return value;
+}
+
+function optionalSetting(
+  name: string,
+  explicit: string | undefined,
+  environment: string | undefined,
+): string | undefined {
+  const selected = explicit !== undefined ? explicit : environment;
+  if (selected === undefined) return undefined;
+  const value = normalizeString(selected);
+  if (!value) throw new Error(`Langfuse ${name} must be a non-empty string.`);
+  return value;
+}
+
+function selectedSetting(explicit: string | undefined, environment: string | undefined): string | undefined {
+  if (explicit !== undefined) return normalizeString(explicit);
+  return normalizeString(environment);
+}
+
+function normalizeBaseUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    if (url.username || url.password || url.search || url.hash) return undefined;
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
 
 function applySessionId(observation: LangfuseObservation, sessionId: string | undefined): void {
   if (sessionId !== undefined) {
@@ -227,7 +321,7 @@ function startChild(
   });
 }
 
-function configFingerprint(config: LangfuseConfig): string {
+function configFingerprint(config: ResolvedRuntimeConfig): string {
   return createHash("sha256")
     .update(
       `${config.publicKey}\0${config.secretKey}\0${config.baseUrl}\0${config.environment ?? ""}\0${config.release ?? ""}`,
