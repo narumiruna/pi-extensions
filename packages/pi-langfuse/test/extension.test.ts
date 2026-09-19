@@ -713,6 +713,45 @@ test("stale owned runtime initialization is released after shutdown or replaceme
   }
 });
 
+test("session shutdown reports stale owned runtime cleanup failures", async () => {
+  const backend = new FakeBackend();
+  backend.shutdown = async () => {
+    backend.shutdowns += 1;
+    throw new Error("owned backend shutdown failed");
+  };
+  const backendReady = deferred<FakeBackend>();
+  const initializationStarted = deferred<void>();
+  const mock = createMockPi();
+  createLangfuseExtension({
+    loadConfig: async () => ({
+      ok: true,
+      config: {
+        publicKey: "pk",
+        secretKey: "sk",
+        baseUrl: "https://example.test",
+        captureContent: false,
+      },
+      path: "/config.json",
+      warnings: [],
+    }),
+    createBackend: async () => {
+      initializationStarted.resolve();
+      return backendReady.promise;
+    },
+  })(mock.pi);
+  const { ctx, notifications } = createMockContext();
+
+  const pendingStart = Promise.resolve(mock.events.get("session_start")?.[0]?.({}, ctx));
+  const startFailure = assert.rejects(pendingStart, /owned backend shutdown failed/u);
+  await initializationStarted.promise;
+  const pendingShutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx));
+  backendReady.resolve(backend);
+  await Promise.all([startFailure, pendingShutdown]);
+
+  assert.equal(backend.shutdowns, 1);
+  assert.match(notifications.at(-1)?.message ?? "", /Langfuse shutdown export failed: owned backend shutdown failed/u);
+});
+
 test("session shutdown is idempotent and reports initialization failures", async () => {
   const backend = new FakeBackend();
   const mock = createMockPi();

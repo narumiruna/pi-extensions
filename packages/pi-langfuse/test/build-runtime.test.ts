@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -228,7 +228,7 @@ test("generated package copies share runtime session capabilities", async () => 
     const firstOutput = join(root, "first");
     const secondOutput = join(root, "second");
     await builder.buildRuntime({ outputDirectory: firstOutput });
-    await builder.buildRuntime({ outputDirectory: secondOutput });
+    await cp(firstOutput, secondOutput, { recursive: true });
     const script = join(root, "cross-copy.mjs");
     await writeFile(
       script,

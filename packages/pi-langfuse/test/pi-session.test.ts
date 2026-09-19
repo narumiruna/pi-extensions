@@ -250,7 +250,7 @@ test("runtime shutdown wins a race with asynchronous trace initialization", asyn
   assert.equal(backend.shutdowns, 1);
 });
 
-test("disposing during asynchronous session initialization leaves the shared runtime open", async () => {
+test("disposing during asynchronous session initialization joins cleanup and leaves the shared runtime open", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);
   const start = deferred<{ runtime: typeof runtime }>();
@@ -261,14 +261,84 @@ test("disposing during asynchronous session initialization leaves the shared run
   controller.extension(mock.pi);
   const { ctx } = createMockContext();
 
-  const pending = mock.events.get("session_start")?.[0]?.({}, ctx);
-  await controller.dispose();
-  start.resolve({ runtime });
-  await pending;
+  const pendingStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+  const pendingDispose = controller.dispose();
+  let disposeSettled = false;
+  void pendingDispose.then(() => {
+    disposeSettled = true;
+  });
+  await Promise.resolve();
+  assert.equal(disposeSettled, false);
 
+  start.resolve({ runtime });
+  await Promise.all([pendingStart, pendingDispose]);
+
+  assert.equal(disposeSettled, true);
   assert.equal(controller.active, false);
   assert.equal(runtime.closed, false);
   assert.equal(backend.shutdowns, 0);
   await runtime.shutdown();
   assert.equal(backend.shutdowns, 1);
+});
+
+test("session shutdown reports stale initialization cleanup failures", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const cleanupError = new Error("stale cleanup failed");
+  const start = deferred<{
+    runtime: typeof runtime;
+    releaseIfStale: () => Promise<void>;
+  }>();
+  const shutdownErrors: unknown[] = [];
+  const controller = createPiLangfuseSessionController({
+    resolveSession: async () => start.promise,
+    onShutdownError: (error) => shutdownErrors.push(error),
+  });
+  const mock = createMockPi();
+  controller.extension(mock.pi);
+  const { ctx } = createMockContext();
+
+  const pendingStart = Promise.resolve(mock.events.get("session_start")?.[0]?.({}, ctx));
+  const startFailure = assert.rejects(pendingStart, /stale cleanup failed/u);
+  const pendingShutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx));
+  start.resolve({
+    runtime,
+    releaseIfStale: async () => {
+      throw cleanupError;
+    },
+  });
+  await Promise.all([startFailure, pendingShutdown]);
+
+  assert.deepEqual(shutdownErrors, [cleanupError]);
+  await runtime.shutdown();
+});
+
+test("controller disposal reports stale initialization cleanup failures", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const cleanupError = new Error("dispose cleanup failed");
+  const start = deferred<{
+    runtime: typeof runtime;
+    releaseIfStale: () => Promise<void>;
+  }>();
+  const controller = createPiLangfuseSessionController({
+    resolveSession: async () => start.promise,
+  });
+  const mock = createMockPi();
+  controller.extension(mock.pi);
+  const { ctx } = createMockContext();
+
+  const pendingStart = Promise.resolve(mock.events.get("session_start")?.[0]?.({}, ctx));
+  const startFailure = assert.rejects(pendingStart, /dispose cleanup failed/u);
+  const pendingDispose = controller.dispose();
+  const disposeFailure = assert.rejects(pendingDispose, /dispose cleanup failed/u);
+  start.resolve({
+    runtime,
+    releaseIfStale: async () => {
+      throw cleanupError;
+    },
+  });
+  await Promise.all([startFailure, disposeFailure]);
+
+  await runtime.shutdown();
 });

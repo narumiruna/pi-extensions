@@ -41,11 +41,13 @@ interface PiLangfuseSessionControllerOptions {
 
 type Registration = object;
 
+type InitializationResult = { ok: true } | { ok: false; error: unknown };
+
 interface PendingInitialization {
   current: boolean;
   reason?: string;
-  completion: Promise<void>;
-  complete(): void;
+  completion: Promise<InitializationResult>;
+  complete(result: InitializationResult): void;
 }
 
 interface ActiveBinding {
@@ -77,6 +79,7 @@ export function createPiLangfuseSessionController(
   let binding: ActiveBinding | undefined;
   let ownerRegistration: Registration | undefined;
   let pendingInitialization: PendingInitialization | undefined;
+  let disposePromise: Promise<void> | undefined;
   let disposed = false;
   let sessionGeneration = 0;
   let requestId: string | undefined;
@@ -91,13 +94,20 @@ export function createPiLangfuseSessionController(
     setRequestId(value) {
       requestId = normalizeOptionalString(value);
     },
-    async dispose() {
-      if (disposed) return;
+    dispose() {
+      if (disposePromise) return disposePromise;
       disposed = true;
+      const initialization = pendingInitialization;
       invalidatePendingInitialization("disposed");
       ownerRegistration = undefined;
       sessionGeneration += 1;
       closeBinding(binding, "Pi Langfuse session controller was disposed.", lastSnapshot);
+      disposePromise = initialization
+        ? initialization.completion.then((result) => {
+            if (!result.ok) throw result.error;
+          })
+        : Promise.resolve();
+      return disposePromise;
     },
     get active() {
       return binding !== undefined;
@@ -129,8 +139,8 @@ export function createPiLangfuseSessionController(
   }
 
   function createPendingInitialization(): PendingInitialization {
-    let complete!: () => void;
-    const completion = new Promise<void>((resolve) => {
+    let complete!: (result: InitializationResult) => void;
+    const completion = new Promise<InitializationResult>((resolve) => {
       complete = resolve;
     });
     return { current: true, completion, complete };
@@ -203,10 +213,14 @@ export function createPiLangfuseSessionController(
       ownerRegistration = registration;
       const initialization = createPendingInitialization();
       pendingInitialization = initialization;
+      let result: InitializationResult = { ok: true };
       try {
         await initializeSession(registration, initialization, ctx);
+      } catch (error) {
+        result = { ok: false, error };
+        throw error;
       } finally {
-        initialization.complete();
+        initialization.complete(result);
         if (pendingInitialization === initialization) pendingInitialization = undefined;
       }
     });
@@ -369,8 +383,9 @@ export function createPiLangfuseSessionController(
       }
 
       try {
-        await initialization?.completion;
+        const initializationResult = await initialization?.completion;
         if (disposed || generation !== sessionGeneration) return;
+        if (initializationResult && !initializationResult.ok) throw initializationResult.error;
         if (beforeDisposeFailure) throw beforeDisposeFailure.error;
         if (runtime) {
           if (event.reason === "quit" && options.shutdownRuntimeOnQuit) await runtime.shutdown();
