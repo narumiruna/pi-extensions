@@ -696,10 +696,18 @@ test("stale owned runtime initialization is released after shutdown or replaceme
 
     const pendingStart = mock.events.get("session_start")?.[0]?.({}, ctx);
     await initializationStarted.promise;
-    const pendingShutdown = mock.events.get("session_shutdown")?.[0]?.({ reason }, ctx);
+    const pendingShutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason }, ctx));
+    let shutdownSettled = false;
+    void pendingShutdown.then(() => {
+      shutdownSettled = true;
+    });
+    await Promise.resolve();
+    assert.equal(shutdownSettled, false, reason);
+
     backendReady.resolve(backend);
     await Promise.all([pendingStart, pendingShutdown]);
 
+    assert.equal(shutdownSettled, true, reason);
     assert.equal(backend.flushes, 1, reason);
     assert.equal(backend.shutdowns, 1, reason);
   }

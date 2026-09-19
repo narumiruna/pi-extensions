@@ -44,6 +44,8 @@ type Registration = object;
 interface PendingInitialization {
   current: boolean;
   reason?: string;
+  completion: Promise<void>;
+  complete(): void;
 }
 
 interface ActiveBinding {
@@ -126,6 +128,63 @@ export function createPiLangfuseSessionController(
     pendingInitialization = undefined;
   }
 
+  function createPendingInitialization(): PendingInitialization {
+    let complete!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    return { current: true, completion, complete };
+  }
+
+  async function initializeSession(
+    registration: Registration,
+    initialization: PendingInitialization,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    const generation = ++sessionGeneration;
+    closeBinding(binding, "Pi session was replaced before shutdown completed.", lastSnapshot);
+    lastSnapshot = contextSnapshot(ctx);
+    nextAttemptReason = undefined;
+    options.onSessionStart?.();
+
+    const isCurrent = () =>
+      !disposed && initialization.current && ownerRegistration === registration && generation === sessionGeneration;
+    let resolved: ResolvedSession | undefined;
+    try {
+      resolved = await options.resolveSession(ctx, isCurrent);
+    } catch (error) {
+      if (isCurrent()) options.onInitializationError?.(error, ctx);
+      return;
+    }
+    if (!isCurrent()) {
+      await resolved?.releaseIfStale?.(initialization.reason ?? "replaced");
+      return;
+    }
+    if (!resolved) {
+      options.onSessionUnavailable?.();
+      return;
+    }
+
+    try {
+      const internal = getLangfuseRuntimeInternal(resolved.runtime);
+      const recorderOptions = createRecorderOptions(ctx, resolved.options);
+      const recorder = new TraceRecorder(internal.backend, recorderOptions);
+      const nextBinding = {} as ActiveBinding;
+      const releaseRuntime = internal.registerSession((statusMessage) => {
+        closeBinding(nextBinding, statusMessage, lastSnapshot);
+      });
+      Object.assign(nextBinding, { registration, recorder, runtime: resolved.runtime, releaseRuntime });
+      if (!isCurrent()) {
+        releaseRuntime();
+        return;
+      }
+      binding = nextBinding;
+      options.onSessionReady?.(resolved);
+    } catch (error) {
+      if (isCurrent()) options.onInitializationError?.(error, ctx);
+    }
+  }
+
   function registerHooks(pi: ExtensionAPI): void {
     const registration: Registration = {};
     const activeRecorder = () => activeRecorderFor(registration);
@@ -142,57 +201,13 @@ export function createPiLangfuseSessionController(
 
       invalidatePendingInitialization("replaced");
       ownerRegistration = registration;
-      const initialization: PendingInitialization = { current: true };
+      const initialization = createPendingInitialization();
       pendingInitialization = initialization;
-      const generation = ++sessionGeneration;
-      closeBinding(binding, "Pi session was replaced before shutdown completed.", lastSnapshot);
-      lastSnapshot = contextSnapshot(ctx);
-      nextAttemptReason = undefined;
-      options.onSessionStart?.();
-
-      const isCurrent = () =>
-        !disposed && initialization.current && ownerRegistration === registration && generation === sessionGeneration;
-      let resolved: ResolvedSession | undefined;
       try {
-        resolved = await options.resolveSession(ctx, isCurrent);
-      } catch (error) {
-        if (isCurrent()) {
-          pendingInitialization = undefined;
-          options.onInitializationError?.(error, ctx);
-        }
-        return;
-      }
-      if (!isCurrent()) {
-        await resolved?.releaseIfStale?.(initialization.reason ?? "replaced");
-        return;
-      }
-      if (!resolved) {
-        pendingInitialization = undefined;
-        options.onSessionUnavailable?.();
-        return;
-      }
-
-      try {
-        const internal = getLangfuseRuntimeInternal(resolved.runtime);
-        const recorderOptions = createRecorderOptions(ctx, resolved.options);
-        const recorder = new TraceRecorder(internal.backend, recorderOptions);
-        const nextBinding = {} as ActiveBinding;
-        const releaseRuntime = internal.registerSession((statusMessage) => {
-          closeBinding(nextBinding, statusMessage, lastSnapshot);
-        });
-        Object.assign(nextBinding, { registration, recorder, runtime: resolved.runtime, releaseRuntime });
-        if (!isCurrent()) {
-          releaseRuntime();
-          return;
-        }
-        pendingInitialization = undefined;
-        binding = nextBinding;
-        options.onSessionReady?.(resolved);
-      } catch (error) {
-        if (isCurrent()) {
-          pendingInitialization = undefined;
-          options.onInitializationError?.(error, ctx);
-        }
+        await initializeSession(registration, initialization, ctx);
+      } finally {
+        initialization.complete();
+        if (pendingInitialization === initialization) pendingInitialization = undefined;
       }
     });
 
@@ -330,6 +345,7 @@ export function createPiLangfuseSessionController(
 
     pi.on("session_shutdown", async (event, ctx) => {
       if (ownerRegistration !== registration) return;
+      const initialization = pendingInitialization;
       invalidatePendingInitialization(event.reason);
       ownerRegistration = undefined;
       const generation = ++sessionGeneration;
@@ -345,9 +361,17 @@ export function createPiLangfuseSessionController(
         lastSnapshot,
       );
 
+      let beforeDisposeFailure: { error: unknown } | undefined;
       try {
         await options.beforeSessionDispose?.();
+      } catch (error) {
+        beforeDisposeFailure = { error };
+      }
+
+      try {
+        await initialization?.completion;
         if (disposed || generation !== sessionGeneration) return;
+        if (beforeDisposeFailure) throw beforeDisposeFailure.error;
         if (runtime) {
           if (event.reason === "quit" && options.shutdownRuntimeOnQuit) await runtime.shutdown();
           else if (options.flushOnReplacement) await runtime.flush();
