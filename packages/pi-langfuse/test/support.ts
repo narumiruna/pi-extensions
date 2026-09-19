@@ -1,6 +1,7 @@
 import type { Observation, ObservationAttributes, ObservationType, TraceBackend } from "../src/tracing.js";
 
 export class FakeObservation implements Observation {
+  readonly traceId: string;
   readonly updates: ObservationAttributes[] = [];
   readonly traceUpdates: ObservationAttributes[] = [];
   ended = false;
@@ -12,7 +13,10 @@ export class FakeObservation implements Observation {
     readonly attributes: ObservationAttributes,
     readonly type: ObservationType,
     readonly parent?: Observation,
-  ) {}
+    traceId?: string,
+  ) {
+    this.traceId = traceId ?? parent?.traceId ?? crypto.randomUUID().replaceAll("-", "");
+  }
 
   update(attributes: ObservationAttributes) {
     this.updates.push(attributes);

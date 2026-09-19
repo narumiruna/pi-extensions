@@ -132,6 +132,44 @@ test("/langfuse does not apply a pending menu choice after the session changes",
   assert.equal(secondBackend.flushes, 0);
 });
 
+test("/langfuse does not apply a pending menu choice after session shutdown", async () => {
+  const backend = new FakeBackend();
+  let choose: ((choice: string) => void) | undefined;
+  const mock = createMockPi();
+  createLangfuseExtension({
+    loadConfig: async () => ({
+      ok: true,
+      config: {
+        publicKey: "pk",
+        secretKey: "sk",
+        baseUrl: "https://example.test",
+        captureContent: true,
+      },
+      path: "/private/pi-langfuse.json",
+      warnings: [],
+    }),
+    createBackend: async () => backend,
+  })(mock.pi);
+  const { ctx } = createMockContext({
+    hasUI: true,
+    select: async () =>
+      new Promise<string>((resolve) => {
+        choose = resolve;
+      }),
+  });
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  const pending = mock.commands.get("langfuse")?.handler("", ctx) as Promise<void>;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx);
+  assert.ok(choose);
+  choose("Flush completed traces for this session");
+  await pending;
+
+  assert.equal(backend.flushes, 1);
+  assert.equal(backend.shutdowns, 1);
+});
+
 test("/langfuse redacts configured keys from flush failures", async () => {
   const backend = new FakeBackend();
   backend.forceFlush = async () => {

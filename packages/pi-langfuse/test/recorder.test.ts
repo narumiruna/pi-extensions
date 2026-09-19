@@ -43,7 +43,7 @@ test("TraceRecorder uses the agent as the root trace observation", async () => {
     isError: false,
   });
   recorder.settle();
-  await recorder.flush();
+  await backend.forceFlush();
 
   assert.equal(backend.observations.length, 3);
   const [agent, generation, tool] = backend.observations;
@@ -153,6 +153,11 @@ test("TraceRecorder replaces all captured values when content capture is disable
     cwd: "/workspace",
     mode: "tui",
     captureContent: false,
+    metadata: {
+      tenant: "tenant-a",
+      nested: { value: "available without content capture" },
+      "pi.mode": "cannot override",
+    },
   });
   recorder.beginAgent({
     prompt: "private prompt",
@@ -171,6 +176,11 @@ test("TraceRecorder replaces all captured values when content capture is disable
     if (observation.name === "pi.agent") {
       assert.equal(observation.attributes.metadata?.["pi.git.commit"], "abcdef012345");
       assert.equal(observation.attributes.metadata?.["pi.git.detached"], true);
+      assert.equal(observation.attributes.metadata?.tenant, "tenant-a");
+      assert.deepEqual(observation.attributes.metadata?.nested, {
+        value: "available without content capture",
+      });
+      assert.equal(observation.attributes.metadata?.["pi.mode"], "tui");
     }
     for (const update of observation.updates) {
       if (update.output !== undefined) {

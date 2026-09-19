@@ -4,6 +4,14 @@
   "description": "Pi extension that traces LLM generations and tool activity to Langfuse.",
   "type": "module",
   "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "private": false,
   "keywords": [
     "pi-package",

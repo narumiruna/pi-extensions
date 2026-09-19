@@ -3,14 +3,52 @@ import { context as otelContext, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { test } from "vitest";
-import { createProductionBackend, maskSecrets } from "../src/runtime.js";
+import {
+  createLangfuseRuntime,
+  createProductionBackend,
+  maskSecrets,
+  resolveLangfuseRuntimeConfig,
+} from "../src/runtime.js";
+import { createLangfuseRuntimeFromBackend } from "../src/runtime-core.js";
 import { TraceRecorder } from "../src/tracing.js";
+import { FakeBackend } from "./support.js";
 
 test("maskSecrets redacts Langfuse credentials in nested exported data", () => {
   assert.deepEqual(maskSecrets({ text: "keys sk-lf-secret and pk-lf-public" }, ["custom-secret"]), {
     text: "keys [LANGFUSE_KEY_REDACTED] and [LANGFUSE_KEY_REDACTED]",
   });
   assert.equal(maskSecrets("prefix custom-secret suffix", ["custom-secret"]), "prefix [LANGFUSE_KEY_REDACTED] suffix");
+});
+
+test("public runtime settings prefer injected config, support standard environment, and allow env opt-out", () => {
+  assert.deepEqual(
+    resolveLangfuseRuntimeConfig({
+      config: { publicKey: " explicit-pk ", baseUrl: "https://explicit.example/", release: "v2" },
+      env: {
+        LANGFUSE_PUBLIC_KEY: "env-pk",
+        LANGFUSE_SECRET_KEY: "env-sk",
+        LANGFUSE_BASE_URL: "https://env.example",
+        LANGFUSE_TRACING_ENVIRONMENT: "test_env",
+        LANGFUSE_RELEASE: "v1",
+      },
+    }),
+    {
+      publicKey: "explicit-pk",
+      secretKey: "env-sk",
+      baseUrl: "https://explicit.example",
+      environment: "test_env",
+      release: "v2",
+    },
+  );
+  assert.throws(() => resolveLangfuseRuntimeConfig({ config: {}, env: false }), /publicKey is required/i);
+  assert.throws(
+    () =>
+      resolveLangfuseRuntimeConfig({
+        config: { publicKey: "pk", secretKey: "sk", baseUrl: "   " },
+        env: false,
+      }),
+    /baseUrl must be a non-empty string/i,
+  );
 });
 
 test("maskSecrets safely handles circular exporter data", () => {
@@ -21,6 +59,29 @@ test("maskSecrets safely handles circular exporter data", () => {
     secret: "[LANGFUSE_KEY_REDACTED]",
     self: "[circular]",
   });
+});
+
+test("runtime flush serialization recovers after failure and shutdown remains idempotent", async () => {
+  const backend = new FakeBackend();
+  let fail = true;
+  backend.forceFlush = async () => {
+    backend.flushes += 1;
+    if (fail) {
+      fail = false;
+      throw new Error("injected flush failure");
+    }
+  };
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+
+  await assert.rejects(runtime.flush(), /injected flush failure/);
+  await runtime.flush();
+  await runtime.shutdown();
+  await runtime.shutdown();
+
+  assert.equal(backend.flushes, 3);
+  assert.equal(backend.shutdowns, 1);
+  assert.equal(runtime.closed, true);
+  await assert.rejects(runtime.flush(), /closed|shutting down/i);
 });
 
 test("isolated runtime preserves the global provider and exports native observation hierarchy", async () => {
@@ -53,7 +114,16 @@ test("isolated runtime preserves the global provider and exports native observat
     },
   });
   assert.equal(await createProductionBackend(config), backend);
+  const [runtime, concurrentRuntime] = await Promise.all([
+    createLangfuseRuntime({ config, env: false }),
+    createLangfuseRuntime({ config, env: false }),
+  ]);
+  assert.equal(concurrentRuntime, runtime);
   assert.equal(providers, 1);
+  await assert.rejects(
+    createLangfuseRuntime({ config: { ...config, release: "changed" }, env: false }),
+    /configuration changed/i,
+  );
   await assert.rejects(createProductionBackend({ ...config, release: "changed" }), /configuration changed/i);
   assert.equal(trace.getTracerProvider(), globalProvider);
 
@@ -117,7 +187,7 @@ test("isolated runtime preserves the global provider and exports native observat
   });
   recorder.finishAttempt({ role: "assistant", content: "world", stopReason: "stop" });
   recorder.settle();
-  await recorder.flush();
+  await backend.forceFlush();
 
   const spans = exporter.getFinishedSpans();
   assert.deepEqual(spans.map((span) => span.attributes["langfuse.observation.type"]).sort(), [
@@ -181,7 +251,7 @@ test("isolated runtime preserves the global provider and exports native observat
   const withoutUserSpan = exporter.getFinishedSpans().find((span) => span.name === "without-user");
   assert.equal("user.id" in (withoutUserSpan?.attributes ?? {}), false);
 
-  await backend.shutdown();
-  await backend.shutdown();
+  await runtime.shutdown();
+  await runtime.shutdown();
   await existingGlobalProvider.shutdown();
 });

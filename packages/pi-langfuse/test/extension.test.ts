@@ -60,7 +60,18 @@ test("resolveGitMetadata handles detached HEADs and omits unavailable repositori
   assert.equal(failed, undefined);
 });
 
-test("session start suggests the /langfuse setup action when the config file is missing", async () => {
+test("session start ignores ambient Langfuse credentials and suggests setup when the config file is missing", async (t) => {
+  const previousPublicKey = process.env.LANGFUSE_PUBLIC_KEY;
+  const previousSecretKey = process.env.LANGFUSE_SECRET_KEY;
+  process.env.LANGFUSE_PUBLIC_KEY = "pk-ambient-must-not-enable-default-extension";
+  process.env.LANGFUSE_SECRET_KEY = "sk-ambient-must-not-enable-default-extension";
+  t.onTestFinished(() => {
+    if (previousPublicKey === undefined) delete process.env.LANGFUSE_PUBLIC_KEY;
+    else process.env.LANGFUSE_PUBLIC_KEY = previousPublicKey;
+    if (previousSecretKey === undefined) delete process.env.LANGFUSE_SECRET_KEY;
+    else process.env.LANGFUSE_SECRET_KEY = previousSecretKey;
+  });
+  let backendCreations = 0;
   const mock = createMockPi();
   createLangfuseExtension({
     loadConfig: async () => ({
@@ -69,12 +80,17 @@ test("session start suggests the /langfuse setup action when the config file is 
       warnings: [],
       reason: "Configuration file not found: /config/pi-langfuse.json",
     }),
+    createBackend: async () => {
+      backendCreations += 1;
+      return new FakeBackend();
+    },
   })(mock.pi);
   const { ctx, notifications } = createMockContext();
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
 
   assert.match(notifications.at(-1)?.message ?? "", /run \/langfuse and choose set up langfuse/i);
+  assert.equal(backendCreations, 0);
 });
 
 test("pi-langfuse registers lifecycle hooks and exports completed traces", async () => {
@@ -583,6 +599,11 @@ test("pi-langfuse records active compactions without summaries and closes incomp
   const incomplete = backend.observations.filter(({ name }) => name === "pi.compaction").at(-1);
   assert.equal(incomplete?.updates.at(-1)?.level, "WARNING");
   assert.equal(incomplete?.endCalls, 1);
+
+  await mock.events.get("before_agent_start")?.[0]?.({ prompt: "new run", images: [], systemPrompt: "system" }, ctx);
+  await mock.events.get("agent_start")?.[0]?.({}, ctx);
+  const newRunAttempt = backend.observations.filter(({ name }) => name === "pi.attempt").at(-1);
+  assert.equal(newRunAttempt?.attributes.metadata?.["pi.attempt.reason"], undefined);
 });
 
 test("reload and session replacement close every active observation once before flushing", async () => {

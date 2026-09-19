@@ -11,7 +11,8 @@ Export Pi agent runs, model generations, retries, tools, compaction, usage, and 
 - Captures final tool inputs and outputs, progress timing, duration, failures, and structural compaction events.
 - Adds session, context, Git branch, commit, and aggregate counters as searchable metadata.
 - Supports metadata-only tracing when content capture is disabled.
-- Reads credentials only from a private local settings file and redacts them from exported data.
+- Keeps the default extension's credentials in a private local settings file and redacts them from exported data.
+- Supports multiple concurrent Pi sessions through one process-owned runtime without sharing session trace state.
 - Batches exports without delaying normal completion and isolates its OpenTelemetry provider from other extensions.
 
 ## 📦 Install
@@ -42,6 +43,74 @@ Review this extension and its data-export behavior before installing it.
 
 Run `/langfuse`, choose **Set up Langfuse for this Pi agent directory**, enter your credentials, and restart Pi.
 New agent runs are then traced with the saved content-capture and metadata settings.
+
+## 🧩 Host application embedding
+
+A host that manages multiple Pi sessions can share one process-level runtime and create one tracing controller for each session:
+
+```ts
+import { DefaultResourceLoader, createAgentSession } from "@earendil-works/pi-coding-agent";
+import {
+  createLangfuseRuntime,
+  createPiLangfuseSession,
+} from "@narumitw/pi-langfuse";
+
+const runtime = await createLangfuseRuntime({
+  config: { environment: "production" },
+  // publicKey, secretKey, baseUrl, and release may come from standard Langfuse env vars.
+});
+
+const tracing = createPiLangfuseSession(runtime, {
+  traceName: "support-agent",
+  sessionId: hostSessionId,
+  userId: accountId,
+  tags: ["support"],
+  metadata: { tenant: tenantId },
+  captureContent: false,
+  onTraceId: (traceId) => correlateTrace(hostSessionId, traceId),
+});
+
+const resourceLoader = new DefaultResourceLoader({
+  ...hostResourceOptions,
+  noExtensions: true, // Keep auto-discovered extensions out of this controlled host session.
+  extensionFactories: [{ name: "langfuse", factory: tracing.extension }],
+});
+await resourceLoader.reload();
+const { session } = await createAgentSession({
+  ...hostSessionOptions,
+  resourceLoader,
+});
+await session.bindExtensions({});
+
+tracing.setRequestId(incomingRequestId); // Applies to the next root trace only.
+await session.prompt(userPrompt);
+
+// When this session ends:
+await tracing.dispose();
+session.dispose();
+
+// Once, after every hosted session has been disposed:
+await runtime.shutdown();
+```
+
+Create the runtime once per process, create a separate controller per Pi `AgentSession`, and explicitly dispose the controller because `AgentSession.dispose()` does not emit Pi's `session_shutdown` event.
+Controller disposal ends only that session's open observations; it never flushes or shuts down the shared exporter.
+`runtime.shutdown()` rejects new work, disposes any remaining controllers, flushes, and shuts down the provider once.
+Both operations are idempotent.
+
+Do not also auto-load this package's default extension into a session that uses `tracing.extension`, or that session will be traced twice.
+One process supports one active Langfuse credential/endpoint combination; creating a conflicting runtime fails and requires a process restart rather than replacing the active provider.
+
+Host runtime fields resolve independently in this order: `config`, the supplied `env` object (or `process.env`), then defaults.
+The supported names are `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT`, and `LANGFUSE_RELEASE`.
+Pass `env: false` to disable environment access.
+The default extension always uses its validated `pi-langfuse.json` with `env: false`, so its existing settings behavior does not change.
+
+`setRequestId()` snapshots `pi.request.id` when the next root trace starts; changing or clearing it never rewrites an active trace.
+`traceName` changes only the Langfuse trace name; schema-v2 observation names and hierarchy stay unchanged.
+`onTraceId` runs once after each root is created, including automatic-continuation roots, and callback errors are intentionally ignored so host code cannot corrupt tracing cleanup.
+Custom metadata is sanitized, bounded, and exported even when `captureContent` is `false`; package-owned `pi.*` fields cannot be overridden.
+Treat custom metadata, tags, session IDs, user IDs, request IDs, and trace names as exported data.
 
 ## ⚙️ Settings
 
@@ -224,9 +293,13 @@ Compaction summaries, tool partial results, opaque continuation signatures, auth
 ```text
 packages/pi-langfuse/
 ├── src/                               # Authoritative implementation and helpers
-│   ├── index.ts                       # Thin Pi entrypoint
-│   └── langfuse.ts                    # Tracing lifecycle and command
-├── dist/                              # Generated Jiti runtime
+│   ├── index.ts                       # Thin default and public entrypoint
+│   ├── langfuse.ts                    # Default settings and command adapter
+│   ├── pi-session.ts                  # Per-session Pi lifecycle controller
+│   ├── runtime-core.ts                # Process-runtime ownership
+│   ├── runtime.ts                     # Lazy production Langfuse runtime
+│   └── tracing.ts                     # Schema-v2 observation recorder
+├── dist/                              # Generated Node, declaration, and Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
 └── test/                              # Behavior and lifecycle coverage
 ```
