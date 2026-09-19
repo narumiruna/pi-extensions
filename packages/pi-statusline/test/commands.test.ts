@@ -447,7 +447,7 @@ test("segment menu toggles displayed segments and preserves JSON fields and layo
       "Status",
       "Help",
     ]);
-    assert.deepEqual(selections[1]?.choices, ["Custom layout (2/13 shown)", "Edit settings JSON", "Back"]);
+    assert.deepEqual(selections[1]?.choices, ["Custom layout (2/14 shown)", "Edit settings JSON", "Back"]);
     assert.match(initialScreen, /Statusline segments/u);
     assert.match(initialScreen.split("\n").find((line) => line.includes("brand")) ?? "", /hidden/u);
     assert.match(initialScreen.split("\n").find((line) => line.includes("model")) ?? "", /visible/u);
@@ -1234,7 +1234,7 @@ test("custom selection materializes the active legacy preset without losing unkn
     const saved = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(saved.palettePreset, "custom");
     assert.equal(saved.future, true);
-    assert.equal(Object.keys(saved.palette).length, 13);
+    assert.equal(Object.keys(saved.palette).length, 14);
     assert.equal(saved.palette.model.bg, "#a7c080");
     assert.equal(saved.palette.cwd.bg, "#83c092");
     assert.equal(saved.palette.branch.bg, "#5f9f75");
