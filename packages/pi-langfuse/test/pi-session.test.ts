@@ -132,7 +132,7 @@ test("one controller does not let another active Pi session steal its recorder",
   await runtime.shutdown();
 });
 
-test("setRequestId applies to future traces and onTraceId failures do not break tracing", async () => {
+test("setRequestId applies only to the next trace and onTraceId failures do not break tracing", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);
   let callbackCalls = 0;
@@ -152,7 +152,6 @@ test("setRequestId applies to future traces and onTraceId failures do not break 
   session.setRequestId("request-2");
   await mock.events.get("agent_settled")?.[0]?.({}, ctx);
   await mock.events.get("before_agent_start")?.[0]?.({ prompt: "two", images: [], systemPrompt: "system" }, ctx);
-  session.setRequestId(undefined);
   await mock.events.get("agent_settled")?.[0]?.({}, ctx);
   await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
 
@@ -163,6 +162,68 @@ test("setRequestId applies to future traces and onTraceId failures do not break 
   assert.equal(agents[2]?.attributes.metadata?.["pi.request.id"], undefined);
   assert.deepEqual(agents[2]?.attributes.input, { prompt: "[automatic continuation]" });
   assert.equal(callbackCalls, 3);
+
+  await session.dispose();
+  await runtime.shutdown();
+});
+
+test("setRequestId preserves a reentrant value for the following trace", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  let callbackCalls = 0;
+  let session!: ReturnType<typeof createPiLangfuseSession>;
+  session = createPiLangfuseSession(runtime, {
+    onTraceId: () => {
+      callbackCalls += 1;
+      if (callbackCalls === 1) session.setRequestId("request-same");
+    },
+  });
+  const mock = createMockPi();
+  session.extension(mock.pi);
+  const { ctx } = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+  session.setRequestId("request-same");
+  for (const prompt of ["one", "two", "three"]) {
+    await mock.events.get("before_agent_start")?.[0]?.({ prompt, images: [], systemPrompt: "system" }, ctx);
+    await mock.events.get("agent_settled")?.[0]?.({}, ctx);
+  }
+
+  const agents = backend.observations.filter(({ name }) => name === "pi.agent");
+  assert.equal(agents[0]?.attributes.metadata?.["pi.request.id"], "request-same");
+  assert.equal(agents[1]?.attributes.metadata?.["pi.request.id"], "request-same");
+  assert.equal(agents[2]?.attributes.metadata?.["pi.request.id"], undefined);
+
+  await session.dispose();
+  await runtime.shutdown();
+});
+
+test("host trace identifiers and tags redact embedded base64 data URIs", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const unsafe = "prefix data:text/plain;base64,c2VjcmV0 suffix";
+  const redacted = "prefix [base64 data URI omitted] suffix";
+  const session = createPiLangfuseSession(runtime, {
+    traceName: unsafe,
+    sessionId: unsafe,
+    userId: unsafe,
+    tags: [unsafe],
+    captureContent: false,
+  });
+  const mock = createMockPi();
+  session.extension(mock.pi);
+  const { ctx } = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+  session.setRequestId(unsafe);
+  await mock.events.get("before_agent_start")?.[0]?.({ prompt: "private", images: [], systemPrompt: "system" }, ctx);
+
+  const agent = backend.observations.find(({ name }) => name === "pi.agent");
+  assert.equal(agent?.attributes.sessionId, redacted);
+  assert.equal(agent?.attributes.userId, redacted);
+  assert.equal(agent?.attributes.metadata?.["pi.request.id"], redacted);
+  assert.equal(agent?.traceUpdates[0]?.name, redacted);
+  assert.deepEqual(agent?.traceUpdates[0]?.tags, ["pi", redacted]);
 
   await session.dispose();
   await runtime.shutdown();

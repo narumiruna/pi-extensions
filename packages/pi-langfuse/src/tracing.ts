@@ -772,11 +772,13 @@ function normalizeTraceName(value: string | undefined): string {
 
 function traceTags(customTags: readonly string[] | undefined, gitTag: string | undefined): string[] {
   const tags = ["pi", ...(gitTag ? [gitTag] : []), ...(customTags ?? [])];
-  return [
-    ...new Set(
-      tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0).map((tag) => tag.trim()),
-    ),
-  ];
+  return [...new Set(tags.map(sanitizeTraceTag).filter((tag): tag is string => tag !== undefined))];
+}
+
+function sanitizeTraceTag(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const sanitized = sanitizeTraceValue(value.trim());
+  return typeof sanitized === "string" && sanitized.trim() ? sanitized.trim() : undefined;
 }
 
 function customTraceMetadata(metadata: Readonly<Record<string, unknown>> | undefined): Record<string, unknown> {

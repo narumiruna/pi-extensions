@@ -1,7 +1,13 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { resolveGitMetadata } from "./git.js";
 import { getLangfuseRuntimeInternal, type LangfuseRuntime } from "./runtime-core.js";
-import { type ContextSnapshot, type GitMetadata, TraceRecorder, type TraceRecorderOptions } from "./tracing.js";
+import {
+  type ContextSnapshot,
+  type GitMetadata,
+  sanitizeTraceValue,
+  TraceRecorder,
+  type TraceRecorderOptions,
+} from "./tracing.js";
 
 export interface PiLangfuseSessionOptions {
   traceName?: string;
@@ -83,6 +89,7 @@ export function createPiLangfuseSessionController(
   let disposed = false;
   let sessionGeneration = 0;
   let requestId: string | undefined;
+  let requestIdRevision = 0;
   let nextAttemptReason: string | undefined;
   let lastSnapshot: ContextSnapshot | undefined;
 
@@ -93,6 +100,7 @@ export function createPiLangfuseSessionController(
     },
     setRequestId(value) {
       requestId = normalizeOptionalString(value);
+      requestIdRevision += 1;
     },
     dispose() {
       if (disposePromise) return disposePromise;
@@ -235,13 +243,15 @@ export function createPiLangfuseSessionController(
       ).catch(() => undefined);
       if (ownerRegistration !== registration || binding !== active || active.runtime.closed) return;
       lastSnapshot = contextSnapshot(ctx);
-      active.recorder.beginAgent({
-        prompt: event.prompt,
-        images: event.images,
-        model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
-        git,
-        snapshot: lastSnapshot,
-        ...(requestId ? { requestId } : {}),
+      startRootTrace((nextRequestId) => {
+        active.recorder.beginAgent({
+          prompt: event.prompt,
+          images: event.images,
+          model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
+          git,
+          snapshot: lastSnapshot,
+          ...(nextRequestId ? { requestId: nextRequestId } : {}),
+        });
       });
     });
 
@@ -256,7 +266,7 @@ export function createPiLangfuseSessionController(
       const recorder = activeRecorder();
       if (!recorder) return;
       lastSnapshot = contextSnapshot(ctx);
-      ensureActiveRun(recorder, ctx, requestId);
+      ensureActiveRun(recorder, ctx, startRootTrace);
       recorder.beginTurn(event.turnIndex);
     });
 
@@ -264,7 +274,7 @@ export function createPiLangfuseSessionController(
       const recorder = activeRecorder();
       if (!recorder) return;
       lastSnapshot = contextSnapshot(ctx);
-      ensureActiveRun(recorder, ctx, requestId);
+      ensureActiveRun(recorder, ctx, startRootTrace);
       recorder.beginGeneration({
         payload: event.payload,
         payloadStage: "before_provider_request",
@@ -397,6 +407,13 @@ export function createPiLangfuseSessionController(
     });
   }
 
+  function startRootTrace(start: (nextRequestId: string | undefined) => void): void {
+    const revision = requestIdRevision;
+    const nextRequestId = requestId;
+    start(nextRequestId);
+    if (requestIdRevision === revision) requestId = undefined;
+  }
+
   function activeRecorderFor(registration: Registration): TraceRecorder | undefined {
     return ownerRegistration === registration && binding?.registration === registration && !binding.runtime.closed
       ? binding.recorder
@@ -428,13 +445,19 @@ function snapshotSessionOptions(options: PiLangfuseSessionOptions): PiLangfuseSe
   };
 }
 
-function ensureActiveRun(recorder: TraceRecorder, ctx: ExtensionContext, requestId: string | undefined): void {
+function ensureActiveRun(
+  recorder: TraceRecorder,
+  ctx: ExtensionContext,
+  startRootTrace: (start: (nextRequestId: string | undefined) => void) => void,
+): void {
   if (!recorder.hasActiveTrace()) {
-    recorder.beginAgent({
-      prompt: "[automatic continuation]",
-      model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
-      snapshot: contextSnapshot(ctx),
-      ...(requestId ? { requestId } : {}),
+    startRootTrace((nextRequestId) => {
+      recorder.beginAgent({
+        prompt: "[automatic continuation]",
+        model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
+        snapshot: contextSnapshot(ctx),
+        ...(nextRequestId ? { requestId: nextRequestId } : {}),
+      });
     });
   }
   if (!recorder.hasActiveAttempt()) recorder.beginAttempt();
@@ -464,5 +487,7 @@ function isRealOutputDelta(event: { type: string; delta?: unknown }): boolean {
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const sanitized = sanitizeTraceValue(value.trim());
+  return typeof sanitized === "string" && sanitized.trim() ? sanitized.trim() : undefined;
 }
