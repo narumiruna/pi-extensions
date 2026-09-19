@@ -39,7 +39,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
-    "@types/node": "26.4.1",
+    "@types/node": "26.6.1",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },
