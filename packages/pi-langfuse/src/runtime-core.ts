@@ -26,7 +26,7 @@ export interface LangfuseRuntimeInternal extends LangfuseRuntime {
   registerSession(disposer: RuntimeSessionDisposer): () => void;
 }
 
-const runtimeInternals = new WeakMap<LangfuseRuntime, LangfuseRuntimeInternal>();
+const RUNTIME_INTERNAL_KEY = Symbol.for("@narumitw/pi-langfuse/runtime-internal/v2");
 
 class ManagedLangfuseRuntime implements LangfuseRuntimeInternal {
   private state: "open" | "closing" | "closed" = "open";
@@ -96,8 +96,10 @@ class ManagedLangfuseRuntime implements LangfuseRuntimeInternal {
 }
 
 export function getLangfuseRuntimeInternal(runtime: LangfuseRuntime): LangfuseRuntimeInternal {
-  const internal = runtimeInternals.get(runtime);
-  if (!internal) throw new Error("Langfuse runtime was not created by this package instance.");
+  const internal = (runtime as LangfuseRuntime & { [key: symbol]: LangfuseRuntimeInternal | undefined })[
+    RUNTIME_INTERNAL_KEY
+  ];
+  if (!internal) throw new Error("Langfuse runtime was not created by @narumitw/pi-langfuse.");
   return internal;
 }
 
@@ -106,6 +108,6 @@ export function createLangfuseRuntimeFromBackend(backend: TraceBackend): Langfus
 }
 
 export function registerLangfuseRuntime(runtime: LangfuseRuntimeInternal): LangfuseRuntimeInternal {
-  runtimeInternals.set(runtime, runtime);
+  Object.defineProperty(runtime, RUNTIME_INTERNAL_KEY, { value: runtime });
   return runtime;
 }

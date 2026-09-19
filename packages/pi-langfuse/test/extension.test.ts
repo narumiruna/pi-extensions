@@ -4,6 +4,14 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createLangfuseExtension, resolveGitMetadata } from "../src/langfuse.js";
 import { FakeBackend } from "./support.js";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 test("resolveGitMetadata captures branch and commit with bounded non-shell commands", async () => {
   const calls: Array<{ command: string; args: string[]; cwd?: string; timeout?: number }> = [];
   const metadata = await resolveGitMetadata(async (command, args, options) => {
@@ -658,6 +666,42 @@ test("reload and session replacement close every active observation once before 
     assert.equal(backend.observations.find(({ name }) => name === "pi.llm")?.updates.at(-1)?.level, "WARNING", reason);
     assert.equal(backend.flushes, 1, reason);
     assert.equal(backend.shutdowns, 0, reason);
+  }
+});
+
+test("stale owned runtime initialization is released after shutdown or replacement", async () => {
+  for (const reason of ["quit", "reload"] as const) {
+    const backend = new FakeBackend();
+    const backendReady = deferred<FakeBackend>();
+    const initializationStarted = deferred<void>();
+    const mock = createMockPi();
+    createLangfuseExtension({
+      loadConfig: async () => ({
+        ok: true,
+        config: {
+          publicKey: "pk",
+          secretKey: "sk",
+          baseUrl: "https://example.test",
+          captureContent: false,
+        },
+        path: "/config.json",
+        warnings: [],
+      }),
+      createBackend: async () => {
+        initializationStarted.resolve();
+        return backendReady.promise;
+      },
+    })(mock.pi);
+    const { ctx } = createMockContext();
+
+    const pendingStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+    await initializationStarted.promise;
+    const pendingShutdown = mock.events.get("session_shutdown")?.[0]?.({ reason }, ctx);
+    backendReady.resolve(backend);
+    await Promise.all([pendingStart, pendingShutdown]);
+
+    assert.equal(backend.flushes, 1, reason);
+    assert.equal(backend.shutdowns, 1, reason);
   }
 });
 

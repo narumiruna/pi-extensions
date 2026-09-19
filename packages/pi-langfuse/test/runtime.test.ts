@@ -61,6 +61,23 @@ test("maskSecrets safely handles circular exporter data", () => {
   });
 });
 
+test("legacy process runtime prevents an incompatible second provider", async () => {
+  const legacyKey = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
+  const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
+  globals[legacyKey] = Promise.resolve({});
+  try {
+    await assert.rejects(
+      createLangfuseRuntime({
+        config: { publicKey: "pk-legacy", secretKey: "sk-legacy", baseUrl: "https://example.test" },
+        env: false,
+      }),
+      /older Langfuse runtime is already loaded.*restart/i,
+    );
+  } finally {
+    delete globals[legacyKey];
+  }
+});
+
 test("runtime flush serialization recovers after failure and shutdown remains idempotent", async () => {
   const backend = new FakeBackend();
   let fail = true;
@@ -133,6 +150,7 @@ test("isolated runtime preserves the global provider and exports native observat
     cwd: "/workspace",
     mode: "tui",
     captureContent: true,
+    metadata: { nested: { value: "preserved" }, items: ["a", "b"] },
   });
   const ambient = trace.getTracer("ambient").startSpan("ambient");
   otelContext.with(trace.setSpan(otelContext.active(), ambient), () => {
@@ -227,6 +245,10 @@ test("isolated runtime preserves the global provider and exports native observat
   );
   assert.equal(agent?.attributes["langfuse.observation.metadata.pi.cwd"], "/workspace");
   assert.equal(agent?.attributes["langfuse.trace.metadata.pi.cwd"], "/workspace");
+  assert.equal(agent?.attributes["langfuse.observation.metadata.nested"], JSON.stringify({ value: "preserved" }));
+  assert.equal(agent?.attributes["langfuse.trace.metadata.nested"], JSON.stringify({ value: "preserved" }));
+  assert.equal(agent?.attributes["langfuse.observation.metadata.items"], JSON.stringify(["a", "b"]));
+  assert.equal(agent?.attributes["langfuse.trace.metadata.items"], JSON.stringify(["a", "b"]));
   assert.equal(agent?.attributes["langfuse.observation.metadata.pi.trace.outcome"], "success");
   assert.equal(agent?.attributes["langfuse.trace.metadata.pi.trace.outcome"], "success");
   assert.equal(attempt?.attributes["langfuse.observation.metadata.pi.attempt.reason"], "post_compaction");

@@ -77,14 +77,20 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
 
         hasStoredConfig = true;
         loadingConfig = result.config;
-        const runtime = dependencies.createBackend
-          ? createLangfuseRuntimeFromBackend(await dependencies.createBackend(result.config))
+        const createBackend = dependencies.createBackend;
+        const ownsRuntime = createBackend !== undefined;
+        const runtime = createBackend
+          ? createLangfuseRuntimeFromBackend(await createBackend(result.config))
           : await (await import("./runtime.js")).createLangfuseRuntime({ config: result.config, env: false });
-        if (!isCurrent()) return undefined;
-        activeConfig = result.config;
-        loadingConfig = undefined;
+        if (isCurrent()) {
+          activeConfig = result.config;
+          loadingConfig = undefined;
+        }
         return {
           runtime,
+          releaseIfStale: async (reason) => {
+            if (ownsRuntime || reason === "quit") await runtime.shutdown();
+          },
           options: {
             ...(result.config.userId ? { userId: result.config.userId } : {}),
             captureContent: result.config.captureContent,

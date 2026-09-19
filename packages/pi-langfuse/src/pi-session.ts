@@ -22,6 +22,7 @@ export interface PiLangfuseSession {
 interface ResolvedSession {
   runtime: LangfuseRuntime;
   options?: PiLangfuseSessionOptions;
+  releaseIfStale?(reason: string): Promise<void>;
 }
 
 interface PiLangfuseSessionControllerOptions {
@@ -38,7 +39,15 @@ interface PiLangfuseSessionControllerOptions {
   shutdownRuntimeOnQuit?: boolean;
 }
 
+type Registration = object;
+
+interface PendingInitialization {
+  current: boolean;
+  reason?: string;
+}
+
 interface ActiveBinding {
+  registration: Registration;
   recorder: TraceRecorder;
   runtime: LangfuseRuntime;
   releaseRuntime: () => void;
@@ -64,7 +73,8 @@ export function createPiLangfuseSessionController(
   options: PiLangfuseSessionControllerOptions,
 ): PiLangfuseSessionController {
   let binding: ActiveBinding | undefined;
-  let bound = false;
+  let ownerRegistration: Registration | undefined;
+  let pendingInitialization: PendingInitialization | undefined;
   let disposed = false;
   let sessionGeneration = 0;
   let requestId: string | undefined;
@@ -73,8 +83,7 @@ export function createPiLangfuseSessionController(
 
   const controller: PiLangfuseSessionController = {
     extension(pi) {
-      if (bound) throw new Error("A Pi Langfuse session controller can only be bound once.");
-      bound = true;
+      if (disposed) throw new Error("A disposed Pi Langfuse session controller cannot be bound.");
       registerHooks(pi);
     },
     setRequestId(value) {
@@ -83,6 +92,8 @@ export function createPiLangfuseSessionController(
     async dispose() {
       if (disposed) return;
       disposed = true;
+      invalidatePendingInitialization("disposed");
+      ownerRegistration = undefined;
       sessionGeneration += 1;
       closeBinding(binding, "Pi Langfuse session controller was disposed.", lastSnapshot);
     },
@@ -108,25 +119,55 @@ export function createPiLangfuseSessionController(
     if (wasCurrent) nextAttemptReason = undefined;
   }
 
+  function invalidatePendingInitialization(reason: string): void {
+    if (!pendingInitialization) return;
+    pendingInitialization.current = false;
+    pendingInitialization.reason = reason;
+    pendingInitialization = undefined;
+  }
+
   function registerHooks(pi: ExtensionAPI): void {
+    const registration: Registration = {};
+    const activeRecorder = () => activeRecorderFor(registration);
+
     pi.on("session_start", async (_event, ctx) => {
+      if (disposed) return;
+      if (ownerRegistration && ownerRegistration !== registration) {
+        options.onInitializationError?.(
+          new Error("A Pi Langfuse session controller cannot manage multiple active Pi sessions."),
+          ctx,
+        );
+        return;
+      }
+
+      invalidatePendingInitialization("replaced");
+      ownerRegistration = registration;
+      const initialization: PendingInitialization = { current: true };
+      pendingInitialization = initialization;
       const generation = ++sessionGeneration;
       closeBinding(binding, "Pi session was replaced before shutdown completed.", lastSnapshot);
       lastSnapshot = contextSnapshot(ctx);
       nextAttemptReason = undefined;
       options.onSessionStart?.();
-      if (disposed) return;
 
-      const isCurrent = () => !disposed && generation === sessionGeneration;
+      const isCurrent = () =>
+        !disposed && initialization.current && ownerRegistration === registration && generation === sessionGeneration;
       let resolved: ResolvedSession | undefined;
       try {
         resolved = await options.resolveSession(ctx, isCurrent);
       } catch (error) {
-        if (isCurrent()) options.onInitializationError?.(error, ctx);
+        if (isCurrent()) {
+          pendingInitialization = undefined;
+          options.onInitializationError?.(error, ctx);
+        }
         return;
       }
-      if (!isCurrent()) return;
+      if (!isCurrent()) {
+        await resolved?.releaseIfStale?.(initialization.reason ?? "replaced");
+        return;
+      }
       if (!resolved) {
+        pendingInitialization = undefined;
         options.onSessionUnavailable?.();
         return;
       }
@@ -139,27 +180,31 @@ export function createPiLangfuseSessionController(
         const releaseRuntime = internal.registerSession((statusMessage) => {
           closeBinding(nextBinding, statusMessage, lastSnapshot);
         });
-        Object.assign(nextBinding, { recorder, runtime: resolved.runtime, releaseRuntime });
+        Object.assign(nextBinding, { registration, recorder, runtime: resolved.runtime, releaseRuntime });
         if (!isCurrent()) {
           releaseRuntime();
           return;
         }
+        pendingInitialization = undefined;
         binding = nextBinding;
         options.onSessionReady?.(resolved);
       } catch (error) {
-        if (isCurrent()) options.onInitializationError?.(error, ctx);
+        if (isCurrent()) {
+          pendingInitialization = undefined;
+          options.onInitializationError?.(error, ctx);
+        }
       }
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
-      nextAttemptReason = undefined;
-      const active = binding;
+      const active = ownerRegistration === registration ? binding : undefined;
       if (!active || active.runtime.closed) return;
+      nextAttemptReason = undefined;
       const git = await (options.resolveGitMetadata
         ? options.resolveGitMetadata(pi, ctx.cwd)
         : resolveGitMetadata((command, args, execOptions) => pi.exec(command, args, execOptions), ctx.cwd)
       ).catch(() => undefined);
-      if (binding !== active || active.runtime.closed) return;
+      if (ownerRegistration !== registration || binding !== active || active.runtime.closed) return;
       lastSnapshot = contextSnapshot(ctx);
       active.recorder.beginAgent({
         prompt: event.prompt,
@@ -284,9 +329,12 @@ export function createPiLangfuseSessionController(
     });
 
     pi.on("session_shutdown", async (event, ctx) => {
+      if (ownerRegistration !== registration) return;
+      invalidatePendingInitialization(event.reason);
+      ownerRegistration = undefined;
       const generation = ++sessionGeneration;
       options.onSessionShutdown?.();
-      const active = binding;
+      const active = binding?.registration === registration ? binding : undefined;
       const runtime = active?.runtime;
       lastSnapshot = active ? contextSnapshot(ctx) : lastSnapshot;
       closeBinding(
@@ -310,8 +358,10 @@ export function createPiLangfuseSessionController(
     });
   }
 
-  function activeRecorder(): TraceRecorder | undefined {
-    return binding && !binding.runtime.closed ? binding.recorder : undefined;
+  function activeRecorderFor(registration: Registration): TraceRecorder | undefined {
+    return ownerRegistration === registration && binding?.registration === registration && !binding.runtime.closed
+      ? binding.recorder
+      : undefined;
   }
 
   return controller;

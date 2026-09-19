@@ -80,6 +80,58 @@ test("two Pi sessions share one runtime without sharing lifecycle state", async 
   assert.equal(backend.shutdowns, 1);
 });
 
+test("one controller follows its Pi session across extension reloads", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const session = createPiLangfuseSession(runtime);
+  const first = createMockPi();
+  const second = createMockPi();
+  const { ctx } = createMockContext();
+
+  session.extension(first.pi);
+  await first.events.get("session_start")?.[0]?.({}, ctx);
+  await first.events.get("before_agent_start")?.[0]?.({ prompt: "before reload", images: [] }, ctx);
+  await first.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
+
+  session.extension(second.pi);
+  await second.events.get("session_start")?.[0]?.({}, ctx);
+  await second.events.get("before_agent_start")?.[0]?.({ prompt: "after reload", images: [] }, ctx);
+
+  const agents = backend.observations.filter(({ name }) => name === "pi.agent");
+  assert.equal(agents.length, 2);
+  assert.equal(agents[0]?.ended, true);
+  assert.equal(agents[1]?.ended, false);
+  assert.equal(runtime.closed, false);
+
+  await session.dispose();
+  await runtime.shutdown();
+});
+
+test("one controller does not let another active Pi session steal its recorder", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const session = createPiLangfuseSession(runtime);
+  const first = createMockPi();
+  const second = createMockPi();
+  const firstContext = createMockContext({ cwd: "/first" }).ctx;
+  const secondContext = createMockContext({ cwd: "/second" }).ctx;
+
+  session.extension(first.pi);
+  session.extension(second.pi);
+  await first.events.get("session_start")?.[0]?.({}, firstContext);
+  await first.events.get("before_agent_start")?.[0]?.({ prompt: "first", images: [] }, firstContext);
+  await second.events.get("session_start")?.[0]?.({}, secondContext);
+  await second.events.get("before_agent_start")?.[0]?.({ prompt: "second", images: [] }, secondContext);
+
+  const agents = backend.observations.filter(({ name }) => name === "pi.agent");
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0]?.attributes.metadata?.["pi.cwd"], "/first");
+  assert.equal(agents[0]?.ended, false);
+
+  await session.dispose();
+  await runtime.shutdown();
+});
+
 test("setRequestId applies to future traces and onTraceId failures do not break tracing", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);

@@ -94,12 +94,14 @@ await runtime.shutdown();
 ```
 
 Create the runtime once per process, create a separate controller per Pi `AgentSession`, and explicitly dispose the controller because `AgentSession.dispose()` does not emit Pi's `session_shutdown` event.
+The controller's extension factory may be reused when that session's resource loader reloads, but it must not be attached to another active `AgentSession`.
 Controller disposal ends only that session's open observations; it never flushes or shuts down the shared exporter.
 `runtime.shutdown()` rejects new work, disposes any remaining controllers, flushes, and shuts down the provider once.
 Both operations are idempotent.
 
 Do not also auto-load this package's default extension into a session that uses `tracing.extension`, or that session will be traced twice.
 One process supports one active Langfuse credential/endpoint combination; creating a conflicting runtime fails and requires a process restart rather than replacing the active provider.
+Restart the process before switching from a package version that uses an older runtime protocol so two providers cannot initialize concurrently.
 
 Host runtime fields resolve independently in this order: `config`, the supplied `env` object (or `process.env`), then defaults.
 The supported names are `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT`, and `LANGFUSE_RELEASE`.

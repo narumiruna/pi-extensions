@@ -26,6 +26,7 @@ export type {
 } from "./runtime-core.js";
 
 const RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v2");
+const LEGACY_RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
 
 interface ResolvedRuntimeConfig {
   publicKey: string;
@@ -42,6 +43,7 @@ interface SharedRuntime {
 
 type GlobalWithRuntime = typeof globalThis & {
   [RUNTIME_KEY]?: Promise<SharedRuntime>;
+  [LEGACY_RUNTIME_KEY]?: unknown;
 };
 
 export interface RuntimeFactories {
@@ -82,7 +84,10 @@ class ProductionObservation implements Observation {
       this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.VERSION, version);
     }
     for (const [key, value] of Object.entries(metadata ?? {})) {
-      this.native.otelSpan.setAttribute(`${LangfuseOtelSpanAttributes.TRACE_METADATA}.${key}`, String(value));
+      const serialized = serializeMetadataValue(value);
+      if (serialized !== undefined) {
+        this.native.otelSpan.setAttribute(`${LangfuseOtelSpanAttributes.TRACE_METADATA}.${key}`, serialized);
+      }
     }
     return this;
   }
@@ -144,6 +149,9 @@ async function createSharedRuntime(
   factories: RuntimeFactories,
 ): Promise<LangfuseRuntime> {
   const globalRuntime = globalThis as GlobalWithRuntime;
+  if (globalRuntime[LEGACY_RUNTIME_KEY] !== undefined) {
+    throw new Error("An older Langfuse runtime is already loaded; restart the process before enabling this version.");
+  }
   const fingerprint = configFingerprint(config);
   const existing = globalRuntime[RUNTIME_KEY];
   if (existing) {
@@ -266,6 +274,10 @@ function normalizeBaseUrl(value: string): string | undefined {
 
 function normalizeString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function serializeMetadataValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 function applySessionId(observation: LangfuseObservation, sessionId: string | undefined): void {

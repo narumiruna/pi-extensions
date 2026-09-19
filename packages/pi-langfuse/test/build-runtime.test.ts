@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
@@ -10,6 +12,7 @@ import { createMockContext } from "../../../test/support.js";
 const packageRoot = resolve("packages/pi-langfuse");
 const builderUrl = pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href;
 const forbiddenEagerInputs: readonly string[] = ["src/runtime.ts"];
+const execFileAsync = promisify(execFile);
 
 type BuildMetadata = {
   outputs?: Record<
@@ -172,6 +175,87 @@ test("generated JavaScript root exposes the host API without eagerly loading pro
     assert.equal(typeof module.createPiLangfuseSession, "function");
     await assert.rejects(module.createLangfuseRuntime({ env: false }), /publicKey is required/u);
     assert.match(await readFile(join(output, "index.d.ts"), "utf8"), /createPiLangfuseSession/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("generated host controller remains registered across resource reloads", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+  const agentDir = join(root, "agent");
+  const output = join(root, "dist");
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  try {
+    await builder.buildRuntime({ outputDirectory: output });
+    await mkdir(agentDir, { recursive: true });
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    const module = await import(`${pathToFileURL(join(output, "index.js")).href}?test=${crypto.randomUUID()}`);
+    const tracing = module.createPiLangfuseSession({
+      closed: false,
+      flush: async () => undefined,
+      shutdown: async () => undefined,
+    });
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir,
+      settingsManager: SettingsManager.inMemory({}),
+      extensionFactories: [{ name: "langfuse", factory: tracing.extension }],
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+
+    for (let reload = 0; reload < 2; reload += 1) {
+      await loader.reload();
+      const loaded = loader.getExtensions();
+      assert.deepEqual(loaded.errors, []);
+      assert.equal(loaded.extensions.length, 1);
+    }
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("generated package copies share runtime session capabilities", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+  try {
+    const firstOutput = join(root, "first");
+    const secondOutput = join(root, "second");
+    await builder.buildRuntime({ outputDirectory: firstOutput });
+    await builder.buildRuntime({ outputDirectory: secondOutput });
+    const script = join(root, "cross-copy.mjs");
+    await writeFile(
+      script,
+      `const first = await import(${JSON.stringify(pathToFileURL(join(firstOutput, "index.js")).href)});
+const second = await import(${JSON.stringify(pathToFileURL(join(secondOutput, "index.js")).href)});
+const options = { config: { publicKey: "pk-copy", secretKey: "sk-copy", baseUrl: "https://example.test" }, env: false };
+const firstRuntime = await first.createLangfuseRuntime(options);
+const secondRuntime = await second.createLangfuseRuntime(options);
+const tracing = second.createPiLangfuseSession(secondRuntime, { sessionId: "copy-session" });
+const handlers = new Map();
+tracing.extension({ on: (event, handler) => handlers.set(event, handler) });
+await handlers.get("session_start")({}, {
+  cwd: "/workspace",
+  mode: "rpc",
+  sessionManager: { getSessionId: () => "pi-session", getLeafId: () => undefined },
+  getContextUsage: () => undefined,
+});
+await tracing.flush();
+console.log(JSON.stringify({ sameRuntime: firstRuntime === secondRuntime, active: tracing.active }));
+await tracing.dispose();
+await firstRuntime.shutdown();
+`,
+      "utf8",
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [script], { cwd: packageRoot, timeout: 4_000 });
+    assert.deepEqual(JSON.parse(stdout), { sameRuntime: true, active: true });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
