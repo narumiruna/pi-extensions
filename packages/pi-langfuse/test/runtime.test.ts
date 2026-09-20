@@ -150,7 +150,11 @@ test("isolated runtime preserves the global provider and exports native observat
     cwd: "/workspace",
     mode: "tui",
     captureContent: true,
-    metadata: { nested: { value: "preserved" }, items: ["a", "b"] },
+    metadata: {
+      nested: { value: "preserved" },
+      items: ["a", "b"],
+      "custom.data:text/plain;base64,c2VjcmV0": "redacted-key",
+    },
   });
   const ambient = trace.getTracer("ambient").startSpan("ambient");
   otelContext.with(trace.setSpan(otelContext.active(), ambient), () => {
@@ -249,6 +253,12 @@ test("isolated runtime preserves the global provider and exports native observat
   assert.equal(agent?.attributes["langfuse.trace.metadata.nested"], JSON.stringify({ value: "preserved" }));
   assert.equal(agent?.attributes["langfuse.observation.metadata.items"], JSON.stringify(["a", "b"]));
   assert.equal(agent?.attributes["langfuse.trace.metadata.items"], JSON.stringify(["a", "b"]));
+  assert.equal(agent?.attributes["langfuse.observation.metadata.custom.[base64 data URI omitted]"], "redacted-key");
+  assert.equal(agent?.attributes["langfuse.trace.metadata.custom.[base64 data URI omitted]"], "redacted-key");
+  assert.equal(
+    Object.keys(agent?.attributes ?? {}).some((key) => key.includes("c2VjcmV0")),
+    false,
+  );
   assert.equal(agent?.attributes["langfuse.observation.metadata.pi.trace.outcome"], "success");
   assert.equal(agent?.attributes["langfuse.trace.metadata.pi.trace.outcome"], "success");
   assert.equal(attempt?.attributes["langfuse.observation.metadata.pi.attempt.reason"], "post_compaction");
