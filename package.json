@@ -92,6 +92,7 @@
     "@earendil-works/pi-tui": "0.86.0",
     "@types/node": "^26.6.2",
     "concurrently": "^10.0.5",
+    "esbuild": "0.28.2",
     "husky": "9.1.7",
     "npm-check-updates": "23.1.0",
     "semver": "7.8.5",
