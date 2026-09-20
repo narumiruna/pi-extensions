@@ -4,8 +4,8 @@ import type {
   Context,
   Message,
   Model,
+  ModelsSimpleStreamOptions,
   ProviderHeaders,
-  SimpleStreamOptions,
   UserMessage,
 } from "@earendil-works/pi-ai";
 
@@ -22,7 +22,7 @@ export interface SideQuestionAuth {
 export type CompleteSimpleFunction = <TApi extends Api>(
   model: Model<TApi>,
   context: Context,
-  options?: SimpleStreamOptions,
+  options?: ModelsSimpleStreamOptions,
 ) => Promise<AssistantMessage>;
 
 export type SideThreadTurn =
@@ -72,7 +72,7 @@ export interface CompleteSideThreadTurnOptions {
   model: Model<Api>;
   question: string;
   thinkingLevel: BtwThinkingLevel;
-  auth: SideQuestionAuth;
+  auth?: SideQuestionAuth;
   signal?: AbortSignal;
   completeSimple: CompleteSimpleFunction;
   sessionId?: string;
@@ -125,7 +125,7 @@ export interface CompleteSideQuestionOptions {
   question: string;
   conversationContext: string;
   thinkingLevel: BtwThinkingLevel;
-  auth: SideQuestionAuth;
+  auth?: SideQuestionAuth;
   signal?: AbortSignal;
   completeSimple: CompleteSimpleFunction;
   sessionId?: string;
@@ -194,11 +194,10 @@ function createUserMessage(text: string): UserMessage {
   };
 }
 
-// Minimal session-headers fork of Pi core provider-attribution
-// (pinned to @earendil-works/pi-coding-agent@0.85.0 src/core/provider-attribution.ts:getSessionHeaders).
+// Minimal session-header mirror of Pi core provider attribution.
 // Core does not export this helper and extensions have no SettingsManager, so only session
 // headers are mirrored here. Default attribution headers are intentionally out of scope.
-// Keep semantics bug-compatible with core: case-sensitive Object.assign, explicit auth
+// Keep semantics bug-compatible with core: case-sensitive Object.assign, explicit request
 // headers win on exact-case match.
 const OPENCODE_HOST = "opencode.ai";
 
@@ -239,16 +238,19 @@ interface BuildSideThreadStreamOptions {
 }
 
 function buildStreamOptions(
-  auth: SideQuestionAuth,
+  auth: SideQuestionAuth | undefined,
   { thinkingLevel, signal, model, sessionId }: BuildSideThreadStreamOptions,
-): SimpleStreamOptions {
+): ModelsSimpleStreamOptions {
   const sessionHeaders = model ? getOpencodeSessionHeaders(model, sessionId) : undefined;
-  const options: SimpleStreamOptions = {
-    apiKey: auth.apiKey,
-    headers: mergeSessionHeaders(auth.headers, sessionHeaders),
-    env: auth.env,
+  const options: ModelsSimpleStreamOptions = {
+    apiKey: auth?.apiKey,
+    headers: auth?.headers,
+    env: auth?.env,
     signal,
   };
+  if (sessionHeaders) {
+    options.transformHeaders = (headers) => mergeSessionHeaders(headers, sessionHeaders) ?? {};
+  }
   if (thinkingLevel !== "off") options.reasoning = thinkingLevel;
   return options;
 }
