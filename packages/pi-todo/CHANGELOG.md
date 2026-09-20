@@ -1,5 +1,11 @@
 # @narumitw/pi-todo
 
+## 0.3.4
+
+### Patch Changes
+
+- fb1a121: Announce the move to `@narumitw/pi-progress` in the package documentation and supported UI modes while keeping the existing todo tool and session behavior unchanged.
+
 ## 0.3.3
 
 ### Patch Changes
