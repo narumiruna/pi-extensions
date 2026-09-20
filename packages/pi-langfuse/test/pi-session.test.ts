@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createPiLangfuseSession, createPiLangfuseSessionController } from "../src/pi-session.js";
 import { createLangfuseRuntimeFromBackend } from "../src/runtime-core.js";
@@ -91,7 +91,13 @@ test("provider-only cache warming hooks never create Langfuse generations", asyn
   await mock.events.get("before_agent_start")?.[0]?.({ prompt: "run", images: [] }, ctx);
   await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
 
-  await mock.events.get("before_provider_request")?.[0]?.({ payload: { request: 1 } }, ctx);
+  const requestStartedAt = 1_234_567;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(requestStartedAt);
+  try {
+    await mock.events.get("before_provider_request")?.[0]?.({ payload: { request: 1 } }, ctx);
+  } finally {
+    clock.mockRestore();
+  }
   await mock.events.get("after_provider_response")?.[0]?.({ status: 429, headers: { "retry-after": "0" } }, ctx);
   await mock.events.get("after_provider_response")?.[0]?.({ status: 200, headers: {} }, ctx);
   const firstAssistant = {
@@ -105,6 +111,8 @@ test("provider-only cache warming hooks never create Langfuse generations", asyn
   await mock.events.get("message_start")?.[0]?.({ message: firstAssistant }, ctx);
   await mock.events.get("message_end")?.[0]?.({ message: firstAssistant }, ctx);
   await mock.events.get("turn_end")?.[0]?.({ turnIndex: 0, message: firstAssistant, toolResults: [] }, ctx);
+  const firstGeneration = backend.observations.find(({ name }) => name === "pi.llm");
+  assert.equal(firstGeneration?.startTime?.getTime(), requestStartedAt);
   assert.equal(backend.observations.filter(({ name }) => name === "pi.llm").length, 1);
 
   await mock.events.get("before_provider_request")?.[0]?.({ payload: { cacheWarm: true } }, ctx);

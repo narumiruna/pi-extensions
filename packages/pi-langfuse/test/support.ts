@@ -13,6 +13,7 @@ export class FakeObservation implements Observation {
     readonly attributes: ObservationAttributes,
     readonly type: ObservationType,
     readonly parent?: Observation,
+    readonly startTime?: Date,
     traceId?: string,
   ) {
     this.traceId = traceId ?? parent?.traceId ?? crypto.randomUUID().replaceAll("-", "");
@@ -41,8 +42,12 @@ export class FakeBackend implements TraceBackend {
   flushes = 0;
   shutdowns = 0;
 
-  start(name: string, attributes: ObservationAttributes, options: { asType: ObservationType; parent?: Observation }) {
-    const observation = new FakeObservation(name, attributes, options.asType, options.parent);
+  start(
+    name: string,
+    attributes: ObservationAttributes,
+    options: { asType: ObservationType; parent?: Observation; startTime?: Date },
+  ) {
+    const observation = new FakeObservation(name, attributes, options.asType, options.parent, options.startTime);
     this.observations.push(observation);
     return observation;
   }

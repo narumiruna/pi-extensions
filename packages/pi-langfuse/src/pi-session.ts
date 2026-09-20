@@ -57,6 +57,7 @@ interface PendingInitialization {
 }
 
 interface PendingProviderGeneration {
+  startedAt: number;
   payload: unknown;
   model?: { provider: string; id: string; api: string };
   thinkingLevel?: string;
@@ -318,6 +319,7 @@ export function createPiLangfuseSessionController(
       if (!activeRecorder()) return;
       lastSnapshot = contextSnapshot(ctx);
       pendingProviderGeneration = {
+        startedAt: Date.now(),
         payload: event.payload,
         model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
         thinkingLevel: pi.getThinkingLevel(),
@@ -465,6 +467,7 @@ export function createPiLangfuseSessionController(
     pendingProviderGeneration = undefined;
     ensureActiveRun(recorder, ctx, startRootTrace);
     recorder.beginGeneration({
+      startedAt: pending.startedAt,
       payload: pending.payload,
       payloadStage: "before_provider_request",
       model: pending.model,
