@@ -7,6 +7,7 @@ import {
   COMPLETION_SUMMARY_MS,
   renderTodoWidget,
   TODO_DETAILS_VERSION,
+  TODO_MIGRATION_NOTICE,
   TOOL_NAME,
   type Todo,
   validateTodoArguments,
@@ -332,8 +333,10 @@ test("loads display settings, warns safely, and ignores stale async loads", asyn
   await vi.waitFor(() => assert.ok(resolveFirst));
   const current = createContext();
   await staleHarness.emit("session_start", current.ctx);
+  assert.deepEqual(current.notifications, [{ message: TODO_MIGRATION_NOTICE, type: "warning" }]);
   resolveFirst?.(loadedSettings({ showProgress: true }));
   await firstStart;
+  assert.deepEqual(previous.notifications, [], "a stale settings continuation must not publish a migration notice");
   await setTodos(staleHarness, current.ctx, [{ step: "current", status: "pending" }]);
   assert.equal(current.widgets.at(-1)?.content?.(current.tui, theme).render(40)[1], "Todo");
 
@@ -348,8 +351,14 @@ test("loads display settings, warns safely, and ignores stale async loads", asyn
   for (const mode of ["tui", "rpc", "print", "json"] as const) {
     const context = createContext({ mode });
     await invalidHarness.emit("session_start", context.ctx);
-    assert.equal(context.notifications.length, mode === "tui" || mode === "rpc" ? 1 : 0);
-    assert.equal(context.notifications[0]?.message.includes(String.fromCharCode(0x1b)) ?? false, false);
+    assert.deepEqual(
+      context.notifications.map((notification) => notification.type),
+      mode === "tui" || mode === "rpc" ? ["warning", "warning"] : [],
+    );
+    if (mode === "tui" || mode === "rpc") {
+      assert.equal(context.notifications[0]?.message, TODO_MIGRATION_NOTICE);
+      assert.equal(context.notifications[1]?.message.includes(String.fromCharCode(0x1b)) ?? false, false);
+    }
     await invalidHarness.emit("session_shutdown", context.ctx);
   }
 });

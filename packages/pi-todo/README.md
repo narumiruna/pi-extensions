@@ -7,6 +7,10 @@
 Pi Todo gives the model a focused list for tracking multi-step work above Pi's editor.
 The list follows the active session branch, adapts to terminal space, and disappears when no tracked work remains or the session ends.
 
+> [!WARNING]
+> `pi-todo` is moving to [`@narumitw/pi-progress`](https://www.npmjs.com/package/@narumitw/pi-progress).
+> Keep using `pi-todo` until the replacement is available, then follow the migration steps below.
+
 ## ✨ Features
 
 - Registers one `update_todo_list` tool for meaningful multi-step work.
@@ -43,6 +47,27 @@ pi --no-extensions -e ./packages/pi-todo
 
 The package declares `dist/index.ts`, so an unbuilt local checkout must run the build before Pi loads the package directory.
 Pi extensions run with the user's permissions, so install only trusted code.
+
+## 🔄 Migrate to pi-progress
+
+First confirm that the replacement has been published:
+
+```bash
+npm view @narumitw/pi-progress version
+```
+
+If that command returns `404`, keep `pi-todo` installed and wait for the replacement release.
+Once it reports a version, exit any running Pi process and migrate in this order:
+
+```bash
+pi remove npm:@narumitw/pi-todo
+pi install npm:@narumitw/pi-progress
+```
+
+Restart Pi after installation.
+Do not install both packages because they manage the same session progress through separate tools and widgets.
+The replacement restores valid progress from existing `update_todo_list` and legacy `todo_widget` session results, and reads `pi-todo.json` as a read-only fallback when `pi-progress.json` is absent.
+The migration does not rewrite session files or the legacy settings file, so reinstalling `pi-todo` remains the rollback path.
 
 ## 🚀 Quick start
 

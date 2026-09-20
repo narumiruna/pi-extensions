@@ -1,7 +1,7 @@
 {
   "name": "@narumitw/pi-todo",
   "version": "0.3.2",
-  "description": "Pi extension that gives coding agents a persistent session todo widget.",
+  "description": "Pi session progress extension moving to @narumitw/pi-progress.",
   "type": "module",
   "license": "MIT",
   "private": false,

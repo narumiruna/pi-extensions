@@ -20,6 +20,8 @@ export const MAX_TODOS = 50;
 export const MAX_TODO_STEP_LENGTH = 300;
 export const MAX_TODO_REASON_LENGTH = 200;
 export const COMPLETION_SUMMARY_MS = 3_000;
+export const TODO_MIGRATION_NOTICE =
+  "pi-todo is moving to pi-progress. Before migrating, confirm availability with `npm view @narumitw/pi-progress version`, then run `pi remove npm:@narumitw/pi-todo && pi install npm:@narumitw/pi-progress` and restart Pi. Do not install both packages.";
 
 const TODO_RESTORED_BOUNDARY_VERSION = 1;
 const PREVIOUS_TODO_CONTEXT_VERSION = 2;
@@ -261,6 +263,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
       return;
     }
     settings = cloneSettings(loaded.settings);
+    if (ctx.hasUI) ctx.ui.notify(TODO_MIGRATION_NOTICE, "warning");
     if (loaded.kind === "invalid" && ctx.hasUI) {
       ctx.ui.notify(
         sanitizeTodoText(`Invalid pi-todo settings at ${loaded.path}; using defaults. ${loaded.issue}`),

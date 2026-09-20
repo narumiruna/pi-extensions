@@ -9,6 +9,7 @@ import {
   TODO_CONTEXT_MESSAGE_TYPE,
   TODO_CONTEXT_VERSION,
   TODO_DETAILS_VERSION,
+  TODO_MIGRATION_NOTICE,
   TODO_RESTORED_BOUNDARY_ENTRY_TYPE,
   TOOL_NAME,
   type Todo,
@@ -72,6 +73,33 @@ test("registers the todos-by-step schema and concise maintenance guidance", () =
     minLength: 1,
     maxLength: 200,
   });
+});
+
+test("announces the package migration only through supported UI modes", async () => {
+  for (const mode of ["tui", "rpc", "print", "json"] as const) {
+    const harness = createHarness();
+    const current = createContext({ mode });
+
+    await harness.emit("session_start", current.ctx);
+
+    assert.deepEqual(
+      current.notifications,
+      mode === "tui" || mode === "rpc" ? [{ message: TODO_MIGRATION_NOTICE, type: "warning" }] : [],
+    );
+    assert.equal(harness.tool.name, TOOL_NAME);
+
+    const replacement = createContext({ mode });
+    await harness.emit("session_start", replacement.ctx);
+    assert.deepEqual(
+      replacement.notifications,
+      mode === "tui" || mode === "rpc" ? [{ message: TODO_MIGRATION_NOTICE, type: "warning" }] : [],
+    );
+
+    await harness.emit("session_shutdown", current.ctx);
+    assert.equal(current.notifications.length, mode === "tui" || mode === "rpc" ? 1 : 0);
+    assert.equal(replacement.notifications.length, mode === "tui" || mode === "rpc" ? 1 : 0);
+    await harness.emit("session_shutdown", replacement.ctx);
+  }
 });
 
 test("restores todo state after a leading system and summary boundary", () => {
