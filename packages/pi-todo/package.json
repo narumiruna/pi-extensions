@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-todo",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Pi session progress extension moving to @narumitw/pi-progress.",
   "type": "module",
   "license": "MIT",
