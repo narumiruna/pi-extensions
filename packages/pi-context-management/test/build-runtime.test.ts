@@ -3,5 +3,5 @@ import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-co
 registerRuntimeBuilderContract({
   packageId: "pi-context-management",
   forbiddenEagerInputs: ["src/settings-menu.ts"],
-  forbiddenEagerExternal: "@narumitw/pi-tui-kit",
+  forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
 });

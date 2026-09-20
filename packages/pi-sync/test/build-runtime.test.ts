@@ -1,43 +1,37 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
+import { type BuildMetadata, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
 import { v3WebDavSettings } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
 
-const packageRoot = resolve("packages/pi-sync");
-const builderUrl = pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href;
-
-type BuildMetadata = {
-  inputs?: Record<string, { imports: Array<{ path: string; kind: string; external?: boolean }> }>;
-  outputs?: Record<
-    string,
-    {
-      entryPoint?: string;
-      imports?: Array<{ external?: boolean; kind?: string; path: string }>;
-      inputs?: Record<string, unknown>;
-    }
-  >;
-};
-
-type RuntimeBuilder = {
-  buildRuntime(options?: {
-    outputDirectory?: string;
-    validateOutput?: (outputDirectory: string) => Promise<void>;
-  }): Promise<BuildMetadata>;
-  validateGeneratedFiles(outputDirectory: string): Promise<void>;
-  validateEagerGraph(metadata: BuildMetadata): {
-    eagerInputs: Set<string>;
-    eagerOutputs: Set<string>;
-  };
-};
-
-async function loadBuilder(): Promise<RuntimeBuilder> {
-  return (await import(`${builderUrl}?test=${crypto.randomUUID()}`)) as RuntimeBuilder;
-}
+const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
+  packageId: "pi-sync",
+  forbiddenEagerInputs: [
+    "src/sync/setup-switch.ts",
+    "src/sync/sync-operations.ts",
+    "src/sync/sync-queries.ts",
+    "src/sync/sync-inspection.ts",
+    "src/sync/sync-mutations.ts",
+    "src/ui/manager-ui.ts",
+    "src/ui/setup/setup-wizard.ts",
+    "src/ui/setup/setup-switcher.ts",
+    "src/ui/setup/setup-actions.ts",
+    "src/ui/setup/s3-ui.ts",
+    "src/ui/setup/setup-location-ui.ts",
+    "src/ui/manager-result-dispatcher.ts",
+    "src/ui/file-selection.ts",
+    "src/ui/remote-selection-ui.ts",
+    "src/backends/s3/s3-backend.ts",
+    "src/backends/webdav/webdav-backend.ts",
+    "src/backends/git/git-backend.ts",
+  ],
+  forbiddenEagerExternals: ["@narumitw/pi-tui-kit", "fast-xml-parser"],
+  includeDynamicExternals: true,
+});
 
 test("generated runtime preserves every first-use import boundary", async () => {
   const builder = await loadBuilder();
@@ -249,45 +243,6 @@ test("generated Jiti runtime starts a lazy background check and accepts foregrou
   }
 });
 
-test("failed generated-output validation preserves the previous runtime", async () => {
-  const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-sync-build-test-"));
-  try {
-    const output = join(root, "dist");
-    await mkdir(output, { recursive: true });
-    await writeFile(join(output, "previous.ts"), "previous", "utf8");
-    await assert.rejects(
-      builder.buildRuntime({
-        outputDirectory: output,
-        validateOutput: async () => {
-          throw new Error("injected validation failure");
-        },
-      }),
-      /injected validation failure/u,
-    );
-    assert.deepEqual(await listFiles(output), ["previous.ts"]);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-test("repeated runtime builds are deterministic and remove stale chunks", async () => {
-  const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-sync-build-test-"));
-  const output = join(root, "dist");
-  try {
-    await builder.buildRuntime({ outputDirectory: output });
-    const files = await listFiles(output);
-    const first = await Promise.all(files.map((file) => readFile(join(output, file), "utf8")));
-    await writeFile(join(output, "chunks/stale.ts"), "stale");
-    await builder.buildRuntime({ outputDirectory: output });
-    assert.deepEqual(await listFiles(output), files);
-    assert.deepEqual(await Promise.all(files.map((file) => readFile(join(output, file), "utf8"))), first);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
 test("failed runtime publication restores the previous output", async () => {
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-sync-build-test-"));
@@ -308,39 +263,6 @@ test("failed runtime publication restores the previous output", async () => {
     );
     assert.deepEqual(await listFiles(root), ["dist/previous.ts"]);
     assert.equal(await readFile(join(output, "previous.ts"), "utf8"), "previous");
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-test("generated validation resolves static and dynamic imports to exact emitted targets", async () => {
-  const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-sync-build-test-"));
-  const banner = [
-    "// @generated by scripts/build-runtime.mjs; do not edit.",
-    "// @ts-nocheck -- generated JavaScript uses a .ts extension for Pi's Jiti loader.",
-  ].join("\n");
-  try {
-    await mkdir(join(root, "chunks"));
-    await writeFile(join(root, "chunks/valid.ts"), `${banner}\nexport const value = 1;`);
-    await writeFile(join(root, "chunks/valid.ts.map"), "{}");
-    await writeFile(join(root, "index.ts.map"), "{}");
-    for (const statement of [
-      'export { value } from "./chunks/valid.ts";',
-      'export const load = () => import("./chunks/valid.ts");',
-    ]) {
-      await writeFile(join(root, "index.ts"), `${banner}\n${statement}`);
-      await builder.validateGeneratedFiles(root);
-    }
-    for (const specifier of ["./chunks/missing.ts", "./chunks/valid", "./chunks/valid.js", "../outside.ts"]) {
-      for (const statement of [
-        `export { value } from "${specifier}";`,
-        `export const load = () => import("${specifier}");`,
-      ]) {
-        await writeFile(join(root, "index.ts"), `${banner}\n${statement}`);
-        await assert.rejects(builder.validateGeneratedFiles(root), /no exact runtime target/u);
-      }
-    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }
