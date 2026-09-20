@@ -19,7 +19,7 @@ export async function buildRuntime({ outputDirectory = distDirectory, validateOu
   const resolvedOutputDirectory = resolve(outputDirectory);
   await assertSafeOutputDirectory(resolvedOutputDirectory);
   await mkdir(dirname(resolvedOutputDirectory), { recursive: true });
-  const stagingDirectory = await mkdtemp(join(dirname(resolvedOutputDirectory), ".pi-todo-dist-"));
+  const stagingDirectory = await mkdtemp(join(dirname(resolvedOutputDirectory), ".pi-progress-dist-"));
 
   try {
     const result = await build({
@@ -134,7 +134,7 @@ async function assertSafeOutputDirectory(outputDirectory) {
   const relativeOutput = relative(packageRoot, outputDirectory);
   const firstSegment = relativeOutput.split(sep)[0];
   const isDefaultOutput = relativeOutput === "dist";
-  const isTestOutput = firstSegment?.startsWith(".pi-todo-build-test-");
+  const isTestOutput = firstSegment?.startsWith(".pi-progress-build-test-");
   if (
     relativeOutput === "" ||
     relativeOutput === ".." ||

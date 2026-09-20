@@ -1,27 +1,28 @@
 import { constants } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export const TODO_SETTINGS_FILE = "pi-todo.json";
-export const MAX_TODO_SETTINGS_BYTES = 64 * 1024;
-export const TODO_DISPLAY_MODES = ["adaptive", "expanded", "collapsed"] as const;
+export const PROGRESS_SETTINGS_FILE = "pi-progress.json";
+export const LEGACY_TODO_SETTINGS_FILE = "pi-todo.json";
+export const MAX_PROGRESS_SETTINGS_BYTES = 64 * 1024;
+export const PROGRESS_DISPLAY_MODES = ["adaptive", "expanded", "collapsed"] as const;
 
-export type TodoDisplayMode = (typeof TODO_DISPLAY_MODES)[number];
+export type ProgressDisplayMode = (typeof PROGRESS_DISPLAY_MODES)[number];
 
-export interface TodoWidgetSettings {
+export interface ProgressWidgetSettings {
   enabled: boolean;
-  displayMode: TodoDisplayMode;
+  displayMode: ProgressDisplayMode;
   showCompleted: boolean;
   maxVisibleItems: number | null;
   showProgress: boolean;
 }
 
-export interface TodoSettings {
-  widget: TodoWidgetSettings;
+export interface ProgressSettings {
+  widget: ProgressWidgetSettings;
 }
 
-export const DEFAULT_TODO_SETTINGS: Readonly<TodoSettings> = Object.freeze({
+export const DEFAULT_PROGRESS_SETTINGS: Readonly<ProgressSettings> = Object.freeze({
   widget: Object.freeze({
     enabled: true,
     displayMode: "adaptive",
@@ -31,36 +32,34 @@ export const DEFAULT_TODO_SETTINGS: Readonly<TodoSettings> = Object.freeze({
   }),
 });
 
-export type TodoSettingsLoadResult =
-  | { kind: "missing"; path: string; settings: TodoSettings }
-  | { kind: "loaded"; path: string; settings: TodoSettings }
-  | { kind: "invalid"; path: string; settings: TodoSettings; issue: string };
+export type ProgressSettingsLoadResult =
+  | { kind: "missing"; path: string; settings: ProgressSettings }
+  | { kind: "loaded"; path: string; settings: ProgressSettings }
+  | { kind: "invalid"; path: string; settings: ProgressSettings; issue: string };
 
-export function todoSettingsPath(): string {
-  return join(getAgentDir(), TODO_SETTINGS_FILE);
+export function progressSettingsPath(): string {
+  return join(getAgentDir(), PROGRESS_SETTINGS_FILE);
 }
 
-export function normalizeTodoSettings(value: unknown): TodoSettings | undefined {
+export function normalizeProgressSettings(value: unknown): ProgressSettings | undefined {
   if (!isRecord(value)) return undefined;
   const widgetValue = Object.hasOwn(value, "widget") ? value.widget : undefined;
   if (widgetValue !== undefined && !isRecord(widgetValue)) return undefined;
   const widget = widgetValue ?? {};
 
-  const enabled = booleanSetting(widget, "enabled", DEFAULT_TODO_SETTINGS.widget.enabled);
-  const showCompleted = booleanSetting(widget, "showCompleted", DEFAULT_TODO_SETTINGS.widget.showCompleted);
-  const showProgress = booleanSetting(widget, "showProgress", DEFAULT_TODO_SETTINGS.widget.showProgress);
-  if (enabled === undefined || showCompleted === undefined || showProgress === undefined) {
-    return undefined;
-  }
+  const enabled = booleanSetting(widget, "enabled", DEFAULT_PROGRESS_SETTINGS.widget.enabled);
+  const showCompleted = booleanSetting(widget, "showCompleted", DEFAULT_PROGRESS_SETTINGS.widget.showCompleted);
+  const showProgress = booleanSetting(widget, "showProgress", DEFAULT_PROGRESS_SETTINGS.widget.showProgress);
+  if (enabled === undefined || showCompleted === undefined || showProgress === undefined) return undefined;
 
   const displayMode = Object.hasOwn(widget, "displayMode")
     ? widget.displayMode
-    : DEFAULT_TODO_SETTINGS.widget.displayMode;
-  if (!TODO_DISPLAY_MODES.includes(displayMode as TodoDisplayMode)) return undefined;
+    : DEFAULT_PROGRESS_SETTINGS.widget.displayMode;
+  if (!PROGRESS_DISPLAY_MODES.includes(displayMode as ProgressDisplayMode)) return undefined;
 
   const maxVisibleItems = Object.hasOwn(widget, "maxVisibleItems")
     ? widget.maxVisibleItems
-    : DEFAULT_TODO_SETTINGS.widget.maxVisibleItems;
+    : DEFAULT_PROGRESS_SETTINGS.widget.maxVisibleItems;
   if (
     maxVisibleItems !== null &&
     (typeof maxVisibleItems !== "number" ||
@@ -74,7 +73,7 @@ export function normalizeTodoSettings(value: unknown): TodoSettings | undefined 
   return {
     widget: {
       enabled,
-      displayMode: displayMode as TodoDisplayMode,
+      displayMode: displayMode as ProgressDisplayMode,
       showCompleted,
       maxVisibleItems,
       showProgress,
@@ -82,10 +81,21 @@ export function normalizeTodoSettings(value: unknown): TodoSettings | undefined 
   };
 }
 
-export async function loadTodoSettings(
-  path = todoSettingsPath(),
+export async function loadProgressSettings(
+  canonicalPath = progressSettingsPath(),
   signal?: AbortSignal,
-): Promise<TodoSettingsLoadResult> {
+): Promise<ProgressSettingsLoadResult> {
+  const canonical = await loadSettingsFile(canonicalPath, signal);
+  throwIfAborted(signal);
+  if (canonical.kind !== "missing") return canonical;
+
+  const legacyPath = join(dirname(canonicalPath), LEGACY_TODO_SETTINGS_FILE);
+  const legacy = await loadSettingsFile(legacyPath, signal);
+  throwIfAborted(signal);
+  return legacy.kind === "missing" ? canonical : legacy;
+}
+
+async function loadSettingsFile(path: string, signal?: AbortSignal): Promise<ProgressSettingsLoadResult> {
   throwIfAborted(signal);
   let handle: FileHandle;
   try {
@@ -95,23 +105,18 @@ export async function loadTodoSettings(
     if (isNodeError(error) && error.code === "ENOENT") {
       return { kind: "missing", path, settings: cloneDefaultSettings() };
     }
-    return {
-      kind: "invalid",
-      path,
-      settings: cloneDefaultSettings(),
-      issue: safeReadIssue(error),
-    };
+    return invalidResult(path, safeReadIssue(error));
   }
 
   try {
     const stats = await handle.stat();
     throwIfAborted(signal);
     if (!stats.isFile()) return invalidResult(path, "settings path is not a regular file");
-    if (stats.size > MAX_TODO_SETTINGS_BYTES) {
-      return invalidResult(path, `settings file exceeds ${MAX_TODO_SETTINGS_BYTES} bytes`);
+    if (stats.size > MAX_PROGRESS_SETTINGS_BYTES) {
+      return invalidResult(path, `settings file exceeds ${MAX_PROGRESS_SETTINGS_BYTES} bytes`);
     }
 
-    const buffer = Buffer.alloc(MAX_TODO_SETTINGS_BYTES + 1);
+    const buffer = Buffer.alloc(MAX_PROGRESS_SETTINGS_BYTES + 1);
     let offset = 0;
     while (offset < buffer.byteLength) {
       throwIfAborted(signal);
@@ -120,8 +125,8 @@ export async function loadTodoSettings(
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    if (offset > MAX_TODO_SETTINGS_BYTES) {
-      return invalidResult(path, `settings file exceeds ${MAX_TODO_SETTINGS_BYTES} bytes`);
+    if (offset > MAX_PROGRESS_SETTINGS_BYTES) {
+      return invalidResult(path, `settings file exceeds ${MAX_PROGRESS_SETTINGS_BYTES} bytes`);
     }
 
     let text: string;
@@ -137,7 +142,7 @@ export async function loadTodoSettings(
     } catch {
       return invalidResult(path, "invalid JSON");
     }
-    const settings = normalizeTodoSettings(parsed);
+    const settings = normalizeProgressSettings(parsed);
     return settings ? { kind: "loaded", path, settings } : invalidResult(path, "invalid settings shape or values");
   } catch (error) {
     throwIfAborted(signal);
@@ -152,11 +157,11 @@ function booleanSetting(record: Record<string, unknown>, key: string, fallback: 
   return typeof value === "boolean" ? value : undefined;
 }
 
-function cloneDefaultSettings(): TodoSettings {
-  return { widget: { ...DEFAULT_TODO_SETTINGS.widget } };
+function cloneDefaultSettings(): ProgressSettings {
+  return { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } };
 }
 
-function invalidResult(path: string, issue: string): TodoSettingsLoadResult {
+function invalidResult(path: string, issue: string): ProgressSettingsLoadResult {
   return { kind: "invalid", path, settings: cloneDefaultSettings(), issue };
 }
 

@@ -8,8 +8,8 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { DEFAULT_TODO_SETTINGS, type TodoSettings, type TodoSettingsLoadResult } from "../src/settings.js";
-import todoWidgetExtension, { TOOL_NAME, type Todo, type TodoDetails } from "../src/todo-widget.js";
+import progressWidgetExtension, { type ProgressDetails, type ProgressStep, TOOL_NAME } from "../src/progress-widget.js";
+import { DEFAULT_PROGRESS_SETTINGS, type ProgressSettings, type ProgressSettingsLoadResult } from "../src/settings.js";
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
 type WidgetFactory = (tui: TUI, theme: Theme) => Component;
@@ -21,56 +21,59 @@ export interface RegisteredTool {
   promptSnippet: string;
   promptGuidelines: string[];
   parameters: unknown;
-  prepareArguments(args: unknown): { todos: Todo[] };
+  prepareArguments(args: unknown): { steps: ProgressStep[] };
   execute(
     toolCallId: string,
     params: unknown,
     signal: AbortSignal | undefined,
     onUpdate: undefined,
     ctx: ExtensionContext,
-  ): Promise<{ content: Array<{ type: string; text: string }>; details: TodoDetails }>;
+  ): Promise<{ content: Array<{ type: string; text: string }>; details: ProgressDetails }>;
 }
 
-export function defaultSettingsResult(): TodoSettingsLoadResult {
+export function defaultSettingsResult(): ProgressSettingsLoadResult {
   return {
     kind: "missing",
-    path: "/tmp/pi-todo.json",
-    settings: { widget: { ...DEFAULT_TODO_SETTINGS.widget } },
+    path: "/tmp/pi-progress.json",
+    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } },
   };
 }
 
-export function loadedSettings(widget: Partial<TodoSettings["widget"]>): TodoSettingsLoadResult {
+export function loadedSettings(widget: Partial<ProgressSettings["widget"]>): ProgressSettingsLoadResult {
   return {
     kind: "loaded",
-    path: "/tmp/pi-todo.json",
-    settings: { widget: { ...DEFAULT_TODO_SETTINGS.widget, ...widget } },
+    path: "/tmp/pi-progress.json",
+    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget, ...widget } },
   };
 }
 
 export function createHarness(
-  options: { loadSettings?: (path?: string, signal?: AbortSignal) => Promise<TodoSettingsLoadResult> } = {},
+  options: { loadSettings?: (path?: string, signal?: AbortSignal) => Promise<ProgressSettingsLoadResult> } = {},
 ) {
   const handlers = new Map<string, Handler[]>();
   const entries: Array<{ customType: string; data: unknown }> = [];
-  let tool: RegisteredTool | undefined;
+  const tools: RegisteredTool[] = [];
   const pi = {
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
     registerTool(definition: RegisteredTool) {
-      tool = definition;
+      tools.push(definition);
     },
     appendEntry(customType: string, data: unknown) {
       entries.push({ customType, data: structuredClone(data) });
     },
   } as unknown as ExtensionAPI;
-  todoWidgetExtension(pi, {
+  progressWidgetExtension(pi, {
     loadSettings: options.loadSettings ?? (async () => defaultSettingsResult()),
   });
 
   return {
     entries,
+    tools,
     get tool(): RegisteredTool {
+      assert.equal(tools.length, 1);
+      const tool = tools[0];
       assert.ok(tool);
       return tool;
     },
@@ -139,14 +142,15 @@ export function identityTheme() {
   return { calls, theme };
 }
 
-export function todoToolResultMessage(
+export function progressToolResultMessage(
   details: unknown,
   toolName = TOOL_NAME,
   isError = false,
+  toolCallId = "progress-call",
 ): ContextEvent["messages"][number] {
   return {
     role: "toolResult",
-    toolCallId: "todo-call",
+    toolCallId,
     toolName,
     content: [{ type: "text", text: "updated" }],
     details: details === undefined ? undefined : toJsonValue(details),
@@ -155,19 +159,20 @@ export function todoToolResultMessage(
   };
 }
 
-export function todoToolCallMessage(
-  todos: unknown,
+export function progressToolCallMessage(
+  value: unknown,
   toolName = TOOL_NAME,
-  argumentName: "todos" | "items" = "todos",
+  argumentName: "steps" | "todos" | "items" = "steps",
+  toolCallId = "progress-call",
 ): ContextEvent["messages"][number] {
   return {
     role: "assistant",
     content: [
       {
         type: "toolCall",
-        id: "todo-call",
+        id: toolCallId,
         name: toolName,
-        arguments: { [argumentName]: toJsonValue(todos) },
+        arguments: { [argumentName]: toJsonValue(value) },
       },
     ],
     api: "openai-responses",
@@ -197,7 +202,7 @@ function toJsonValue(value: unknown): JsonValue {
     }
     return result;
   }
-  throw new TypeError("Todo test fixture must be JSON-compatible");
+  throw new TypeError("Progress test fixture must be JSON-compatible");
 }
 
 export function toolResultEntry(
@@ -205,13 +210,14 @@ export function toolResultEntry(
   toolName = TOOL_NAME,
   id = "tool-result",
   parentId: string | null = null,
+  isError = false,
 ): SessionEntry {
   return {
     type: "message",
     id,
     parentId,
     timestamp: new Date(0).toISOString(),
-    message: todoToolResultMessage(details, toolName),
+    message: progressToolResultMessage(details, toolName, isError, id),
   } as SessionEntry;
 }
 
@@ -226,6 +232,10 @@ export function customEntry(customType: string, data: unknown, id: string, paren
   } as SessionEntry;
 }
 
-export async function setTodos(harness: ReturnType<typeof createHarness>, ctx: ExtensionContext, todos: Todo[]) {
-  return harness.tool.execute("todo-call", { todos }, undefined, undefined, ctx);
+export async function setProgress(
+  harness: ReturnType<typeof createHarness>,
+  ctx: ExtensionContext,
+  steps: ProgressStep[],
+) {
+  return harness.tool.execute("progress-call", { steps }, undefined, undefined, ctx);
 }

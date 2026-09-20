@@ -1,4 +1,6 @@
-# @narumitw/pi-todo
+# @narumitw/pi-progress
+
+This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
 ## 0.3.4
 
