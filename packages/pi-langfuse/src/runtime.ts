@@ -56,12 +56,15 @@ export interface RuntimeFactories {
 class ProductionObservation implements Observation {
   readonly traceId: string;
 
-  constructor(readonly native: LangfuseObservation) {
+  constructor(
+    readonly native: LangfuseObservation,
+    private readonly secrets: readonly string[],
+  ) {
     this.traceId = native.traceId;
   }
 
   update(attributes: ObservationAttributes): Observation {
-    const { sessionId, userId, ...observationAttributes } = attributes;
+    const { sessionId, userId, ...observationAttributes } = maskObservationAttributes(attributes, this.secrets);
     this.native.updateOtelSpanAttributes(observationAttributes as LangfuseObservationAttributes);
     applySessionId(this.native, sessionId);
     applyUserId(this.native, userId);
@@ -69,7 +72,10 @@ class ProductionObservation implements Observation {
   }
 
   updateTrace(attributes: ObservationAttributes): Observation {
-    const { input, output, metadata, name, sessionId, userId, tags, version } = attributes;
+    const { input, output, metadata, name, sessionId, userId, tags, version } = maskObservationAttributes(
+      attributes,
+      this.secrets,
+    );
     if (input !== undefined || output !== undefined) {
       this.native.setTraceIO({ input, output });
     }
@@ -103,6 +109,7 @@ class ProductionTraceBackend implements TraceBackend {
   constructor(
     private readonly provider: NodeTracerProvider,
     private readonly processor: SpanProcessor,
+    private readonly secrets: readonly string[],
   ) {}
 
   start(
@@ -110,15 +117,16 @@ class ProductionTraceBackend implements TraceBackend {
     attributes: ObservationAttributes,
     options: { asType: ObservationType; parent?: Observation },
   ): Observation {
-    const { sessionId, userId, ...observationAttributes } = attributes;
+    const maskedName = maskSecretString(name, this.secrets);
+    const { sessionId, userId, ...observationAttributes } = maskObservationAttributes(attributes, this.secrets);
     const parent = options.parent;
     const native =
       parent instanceof ProductionObservation
-        ? startChild(parent.native, name, observationAttributes, options.asType)
-        : startRoot(name, observationAttributes, options.asType);
+        ? startChild(parent.native, maskedName, observationAttributes, options.asType)
+        : startRoot(maskedName, observationAttributes, options.asType);
     applySessionId(native, sessionId);
     applyUserId(native, userId);
-    return new ProductionObservation(native);
+    return new ProductionObservation(native, this.secrets);
   }
 
   async forceFlush(): Promise<void> {
@@ -195,7 +203,9 @@ async function initializeRuntime(
     throw error;
   }
   const runtime = getLangfuseRuntimeInternal(
-    createLangfuseRuntimeFromBackend(new ProductionTraceBackend(provider, processor)),
+    createLangfuseRuntimeFromBackend(
+      new ProductionTraceBackend(provider, processor, [config.publicKey, config.secretKey]),
+    ),
   );
   return { fingerprint, runtime, shutdown: true };
 }
@@ -285,6 +295,37 @@ function serializeMetadataValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+function maskObservationAttributes(
+  attributes: ObservationAttributes,
+  secrets: readonly string[],
+): ObservationAttributes {
+  return {
+    ...attributes,
+    ...(attributes.metadata ? { metadata: maskSecrets(attributes.metadata, secrets) as Record<string, unknown> } : {}),
+    ...(attributes.name ? { name: maskSecretString(attributes.name, secrets) } : {}),
+    ...(attributes.sessionId ? { sessionId: maskSecretString(attributes.sessionId, secrets) } : {}),
+    ...(attributes.userId ? { userId: maskSecretString(attributes.userId, secrets) } : {}),
+    ...(attributes.tags ? { tags: attributes.tags.map((tag) => maskSecretString(tag, secrets)) } : {}),
+    ...(attributes.statusMessage ? { statusMessage: maskSecretString(attributes.statusMessage, secrets) } : {}),
+    ...(attributes.model ? { model: maskSecretString(attributes.model, secrets) } : {}),
+    ...(attributes.version ? { version: maskSecretString(attributes.version, secrets) } : {}),
+    ...(attributes.modelParameters
+      ? {
+          modelParameters: Object.fromEntries(
+            Object.entries(attributes.modelParameters).map(([key, value]) => [
+              maskSecretString(key, secrets),
+              typeof value === "string" ? maskSecretString(value, secrets) : value,
+            ]),
+          ),
+        }
+      : {}),
+  };
+}
+
+function maskSecretString(value: string, secrets: readonly string[]): string {
+  return maskSecrets(value, secrets) as string;
+}
+
 function applySessionId(observation: LangfuseObservation, sessionId: string | undefined): void {
   if (sessionId !== undefined) {
     observation.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, sessionId);
@@ -367,7 +408,10 @@ function maskSecretValue(data: unknown, secrets: readonly string[], active: Weak
       return data.map((item) => maskSecretValue(item, secrets, active));
     }
     return Object.fromEntries(
-      Object.entries(data).map(([key, value]) => [key, maskSecretValue(value, secrets, active)]),
+      Object.entries(data).map(([key, value]) => [
+        maskSecretString(key, secrets),
+        maskSecretValue(value, secrets, active),
+      ]),
     );
   } finally {
     active.delete(data);

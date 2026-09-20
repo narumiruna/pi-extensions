@@ -18,6 +18,9 @@ test("maskSecrets redacts Langfuse credentials in nested exported data", () => {
     text: "keys [LANGFUSE_KEY_REDACTED] and [LANGFUSE_KEY_REDACTED]",
   });
   assert.equal(maskSecrets("prefix custom-secret suffix", ["custom-secret"]), "prefix [LANGFUSE_KEY_REDACTED] suffix");
+  assert.deepEqual(maskSecrets({ "key.custom-secret": "value custom-secret" }, ["custom-secret"]), {
+    "key.[LANGFUSE_KEY_REDACTED]": "value [LANGFUSE_KEY_REDACTED]",
+  });
 });
 
 test("public runtime settings prefer injected config, support standard environment, and allow env opt-out", () => {
@@ -185,6 +188,7 @@ test("isolated runtime preserves the global provider and exports native observat
       nested: { value: "preserved" },
       items: ["a", "b"],
       "custom.data:text/plain;base64,c2VjcmV0": "redacted-key",
+      [`credential.${config.publicKey}`]: { secret: config.secretKey },
     },
   });
   const ambient = trace.getTracer("ambient").startSpan("ambient");
@@ -287,7 +291,17 @@ test("isolated runtime preserves the global provider and exports native observat
   assert.equal(agent?.attributes["langfuse.observation.metadata.custom.[base64 data URI omitted]"], "redacted-key");
   assert.equal(agent?.attributes["langfuse.trace.metadata.custom.[base64 data URI omitted]"], "redacted-key");
   assert.equal(
-    Object.keys(agent?.attributes ?? {}).some((key) => key.includes("c2VjcmV0")),
+    agent?.attributes["langfuse.observation.metadata.credential.[LANGFUSE_KEY_REDACTED]"],
+    JSON.stringify({ secret: "[LANGFUSE_KEY_REDACTED]" }),
+  );
+  assert.equal(
+    agent?.attributes["langfuse.trace.metadata.credential.[LANGFUSE_KEY_REDACTED]"],
+    JSON.stringify({ secret: "[LANGFUSE_KEY_REDACTED]" }),
+  );
+  assert.equal(
+    JSON.stringify(agent?.attributes ?? {}).includes("c2VjcmV0") ||
+      JSON.stringify(agent?.attributes ?? {}).includes(config.publicKey) ||
+      JSON.stringify(agent?.attributes ?? {}).includes(config.secretKey),
     false,
   );
   assert.equal(agent?.attributes["langfuse.observation.metadata.pi.trace.outcome"], "success");
