@@ -275,6 +275,26 @@ for (const runner of runners) {
   });
 }
 
+for (const transition of ["stale", "abort"] as const) {
+  test(`questionnaire validation reports an already-rejected callback before queued ${transition}`, async () => {
+    const { ctx, notifications } = failureContext("rpc", new Error("unused"));
+    const owner = new AbortController();
+    let current = true;
+    const running = runQuestionnaire(ctx, {
+      questions: [],
+      signal: owner.signal,
+      isCurrent: () => current,
+      onError: () => Promise.reject(new Error("reporter unavailable")),
+    });
+    queueMicrotask(() => {
+      if (transition === "stale") current = false;
+      else owner.abort();
+    });
+    assert.deepEqual(await running, { kind: "stale" });
+    assert.deepEqual(notifications, [["Questionnaire failed: Questionnaire requires at least one question", "error"]]);
+  });
+}
+
 for (const transition of ["cancel", "dispose", "owner abort"] as const) {
   test(`task execution ${transition} while reporting retains its distinct result`, async () => {
     const tui = createTuiHarness();
