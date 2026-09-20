@@ -34,6 +34,7 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
   return function langfuse(pi: ExtensionAPI) {
     let activeConfig: LangfuseConfig | undefined;
     let loadingConfig: LangfuseConfig | undefined;
+    let runtimeConfigForShutdown: LangfuseConfig | undefined;
     let shutdownConfig: LangfuseConfig | undefined;
     let configPath: string | undefined;
     let initializationError: string | undefined;
@@ -59,7 +60,7 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
       onSessionShutdown() {
         sessionGeneration += 1;
         menuController.abort(new DOMException("Langfuse session shut down", "AbortError"));
-        shutdownConfig = activeConfig;
+        shutdownConfig = activeConfig ?? runtimeConfigForShutdown;
         activeConfig = undefined;
       },
       async resolveSession(ctx, isCurrent) {
@@ -82,6 +83,7 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
         const runtime = createBackend
           ? createLangfuseRuntimeFromBackend(await createBackend(result.config))
           : await (await import("./runtime.js")).createLangfuseRuntime({ config: result.config, env: false });
+        if (isCurrent() || !runtimeConfigForShutdown) runtimeConfigForShutdown = result.config;
         if (isCurrent()) {
           activeConfig = result.config;
           loadingConfig = undefined;

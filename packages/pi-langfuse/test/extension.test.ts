@@ -669,6 +669,53 @@ test("reload and session replacement close every active observation once before 
   }
 });
 
+test("final shutdown redacts retained runtime credentials after replacement configuration becomes unavailable", async () => {
+  const backend = new FakeBackend();
+  backend.shutdown = async () => {
+    backend.shutdowns += 1;
+    throw new Error("provider rejected pk-retained-secret and sk-retained-secret");
+  };
+  let loadCalls = 0;
+  const mock = createMockPi();
+  createLangfuseExtension({
+    loadConfig: async () => {
+      loadCalls += 1;
+      if (loadCalls === 1) {
+        return {
+          ok: true,
+          config: {
+            publicKey: "pk-retained-secret",
+            secretKey: "sk-retained-secret",
+            baseUrl: "https://example.test",
+            captureContent: false,
+          },
+          path: "/config.json",
+          warnings: [],
+        };
+      }
+      return {
+        ok: false,
+        path: "/config.json",
+        warnings: [],
+        reason: "Configuration file not found: /config.json",
+      };
+    },
+    createBackend: async () => backend,
+  })(mock.pi);
+  const { ctx, notifications } = createMockContext();
+
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx);
+
+  const shutdownMessage = notifications.at(-1)?.message ?? "";
+  assert.equal(backend.flushes, 2);
+  assert.equal(backend.shutdowns, 1);
+  assert.match(shutdownMessage, /Langfuse shutdown export failed.*LANGFUSE_KEY_REDACTED/u);
+  assert.doesNotMatch(shutdownMessage, /pk-retained-secret|sk-retained-secret/u);
+});
+
 test("stale owned runtime initialization is released after shutdown or replacement", async () => {
   for (const reason of ["quit", "reload"] as const) {
     const backend = new FakeBackend();
