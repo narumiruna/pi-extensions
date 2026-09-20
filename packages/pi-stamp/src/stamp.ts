@@ -437,6 +437,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
   let finalizedAssistantTiming: FinalizedAssistantTiming | undefined;
   let activeThinkingLevel: StampThinkingLevel | undefined;
   let costSinceUser = emptyCostSinceUserAccumulator();
+  let nextUsageEntryIndex = 0;
   const activeToolTimings = new Map<string, ToolTimingObservation>();
   const pendingUserStamps: Array<{ role: "user"; timestamp: number }> = [];
 
@@ -626,6 +627,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     const branch = ctx.sessionManager.getBranch();
     lastStampTimestamp = lastStampTimestampFromBranch(branch);
     costSinceUser = costSinceUserFromBranch(branch);
+    nextUsageEntryIndex = branch.length;
     try {
       const state = await settingsRuntime.reload(controller.signal);
       if (controller.signal.aborted || currentGeneration !== generation || controller !== sessionController) {
@@ -713,10 +715,12 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     if (isValidTimestamp(firstContentAt)) activeAssistantTiming.firstContentAt = firstContentAt;
   });
 
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     if (!tuiSessionActive) return;
     if (event.message.role === "user") {
       costSinceUser = emptyCostSinceUserAccumulator();
+      // Pi appends the user entry after this hook, so start at the current branch tail.
+      nextUsageEntryIndex = ctx.sessionManager.getBranch().length;
       if (isValidTimestamp(event.message.timestamp)) {
         pendingUserStamps.push({ role: "user", timestamp: event.message.timestamp });
       }
@@ -744,13 +748,15 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     activeAssistantTiming = undefined;
   });
 
-  pi.on("turn_end", (event) => {
+  pi.on("turn_end", (event, ctx) => {
     const timing = finalizedAssistantTiming;
     const thinkingLevel = activeThinkingLevel;
     activeAssistantTiming = undefined;
     finalizedAssistantTiming = undefined;
     activeThinkingLevel = undefined;
     if (tuiSessionActive && event.message.role === "assistant") {
+      const branch = ctx.sessionManager.getBranch();
+      nextUsageEntryIndex = addNewUsageCosts(branch, nextUsageEntryIndex, costSinceUser);
       const estimatedCost = captureReportedCost(event.message);
       addReportedCostSinceUser(costSinceUser, estimatedCost);
       for (const toolResult of event.toolResults) {
@@ -792,6 +798,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     tuiSessionActive = false;
     lastStampTimestamp = undefined;
     costSinceUser = emptyCostSinceUserAccumulator();
+    nextUsageEntryIndex = 0;
     await settingsRuntime.flush();
   });
 }
@@ -824,12 +831,32 @@ function costSinceUserFromBranch(entries: readonly unknown[]): CostSinceUserAccu
   const accumulator = emptyCostSinceUserAccumulator();
   for (let index = costSinceUserStart; index < entries.length; index += 1) {
     const entry = entries[index];
-    if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+    if (!isRecord(entry)) continue;
+    if (entry.type === "usage") {
+      addReportedCostSinceUser(accumulator, captureReportedCost(entry));
+      continue;
+    }
+    if (entry.type !== "message" || !isRecord(entry.message)) continue;
     if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
       addReportedCostSinceUser(accumulator, captureReportedCost(entry.message));
     }
   }
   return accumulator;
+}
+
+function addNewUsageCosts(
+  entries: readonly unknown[],
+  nextIndex: number,
+  accumulator: CostSinceUserAccumulator,
+): number {
+  const start = Math.min(nextIndex, entries.length);
+  for (let index = start; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (isRecord(entry) && entry.type === "usage") {
+      addReportedCostSinceUser(accumulator, captureReportedCost(entry));
+    }
+  }
+  return entries.length;
 }
 
 function lastStampTimestampFromBranch(entries: readonly unknown[]): number | undefined {

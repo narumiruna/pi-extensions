@@ -37,7 +37,7 @@ export function summarizeFooterUsage(entries: readonly SessionEntry[]): FooterUs
       totals.latestCacheHitRate = promptTokens > 0 ? (cacheRead / promptTokens) * 100 : undefined;
     } else if (entry.type === "message" && entry.message.role === "toolResult") {
       usage = entry.message.usage;
-    } else if (entry.type === "compaction" || entry.type === "branch_summary") {
+    } else if (entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "usage") {
       usage = entry.usage;
     }
     if (!usage) continue;

@@ -31,6 +31,13 @@ test("footer usage includes every usage-bearing session entry and uses the lates
     entry({ type: "compaction", usage: usage(2, 1, 0, 2, 0.03) }),
     entry({ type: "branch_summary", usage: usage(1, 1, 1, 0, 0.04) }),
     entry({
+      type: "usage",
+      kind: "cache_warm",
+      provider: "anthropic",
+      model: "claude",
+      usage: usage(4, 1, 6, 1, 0.05),
+    }),
+    entry({
       type: "message",
       message: { role: "assistant", usage: usage(80, 4, 20, 0, 0.01) },
     }),
@@ -40,15 +47,15 @@ test("footer usage includes every usage-bearing session entry and uses the lates
   assert.deepEqual(
     { ...result, cost: undefined },
     {
-      input: 96,
-      output: 9,
-      cacheRead: 55,
-      cacheWrite: 8,
+      input: 100,
+      output: 10,
+      cacheRead: 61,
+      cacheWrite: 9,
       cost: undefined,
       latestCacheHitRate: 20,
     },
   );
-  assert.ok(Math.abs(result.cost - 0.2) < Number.EPSILON);
+  assert.ok(Math.abs(result.cost - 0.25) < Number.EPSILON);
 });
 
 test("a latest zero-prompt assistant clears the rate without clearing cumulative cache totals", () => {

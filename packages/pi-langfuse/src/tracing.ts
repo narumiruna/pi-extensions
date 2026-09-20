@@ -57,7 +57,7 @@ export interface TraceBackend {
   start(
     name: string,
     attributes: ObservationAttributes,
-    options: { asType: ObservationType; parent?: Observation },
+    options: { asType: ObservationType; parent?: Observation; startTime?: Date },
   ): Observation;
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
@@ -110,6 +110,7 @@ interface AttemptInput {
 }
 
 interface GenerationInput {
+  startedAt?: number;
   payload?: unknown;
   payloadStage?: "before_provider_request";
   model?: ModelDescriptor;
@@ -245,7 +246,7 @@ export class TraceRecorder {
   private startObservation(
     name: string,
     attributes: ObservationAttributes,
-    options: { asType: ObservationType; parent?: Observation },
+    options: { asType: ObservationType; parent?: Observation; startTime?: Date },
   ): Observation {
     const { sessionId, userId } = this.context;
     return this.backend.start(name, { ...attributes, sessionId, ...(userId ? { userId } : {}) }, options);
@@ -405,7 +406,11 @@ export class TraceRecorder {
         ...(Object.keys(requestMetadata).length > 0 ? { metadata: requestMetadata } : {}),
         version: TRACE_SCHEMA_VERSION,
       },
-      { asType: "generation", parent: this.turn ?? this.attempt ?? this.root },
+      {
+        asType: "generation",
+        parent: this.turn ?? this.attempt ?? this.root,
+        ...(input.startedAt === undefined ? {} : { startTime: new Date(input.startedAt) }),
+      },
     );
     this.generation = {
       observation,

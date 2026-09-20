@@ -159,6 +159,25 @@ test("firecrawl keeps Azure Responses eager when compat enables tool search", as
   });
 });
 
+test("firecrawl keeps Fireworks Messages eager despite native catalog capability", async () => {
+  await withTempAgentDir(async () => {
+    const firecrawlModule = await importFreshFirecrawl();
+    const model = {
+      api: "anthropic-messages",
+      provider: "fireworks",
+      id: "accounts/fireworks/models/deepseek-v4",
+      compat: { supportsToolReferences: true },
+    };
+    const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+    const ctx = createMockContext({ model }).ctx;
+    firecrawlModule.default(mock.pi);
+
+    await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+    assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, ...CAPABILITY_TOOLS]);
+  });
+});
+
 test("firecrawl keeps uppercase Anthropic model IDs eager", async () => {
   await withTempAgentDir(async () => {
     const firecrawlModule = await importFreshFirecrawl();

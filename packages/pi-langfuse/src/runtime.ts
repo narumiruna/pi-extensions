@@ -115,15 +115,15 @@ class ProductionTraceBackend implements TraceBackend {
   start(
     name: string,
     attributes: ObservationAttributes,
-    options: { asType: ObservationType; parent?: Observation },
+    options: { asType: ObservationType; parent?: Observation; startTime?: Date },
   ): Observation {
     const maskedName = maskSecretString(name, this.secrets);
     const { sessionId, userId, ...observationAttributes } = maskObservationAttributes(attributes, this.secrets);
     const parent = options.parent;
     const native =
       parent instanceof ProductionObservation
-        ? startChild(parent.native, maskedName, observationAttributes, options.asType)
-        : startRoot(maskedName, observationAttributes, options.asType);
+        ? startChild(parent.native, maskedName, observationAttributes, options.asType, options.startTime)
+        : startRoot(maskedName, observationAttributes, options.asType, options.startTime);
     applySessionId(native, sessionId);
     applyUserId(native, userId);
     return new ProductionObservation(native, this.secrets);
@@ -338,19 +338,25 @@ function applyUserId(observation: LangfuseObservation, userId: string | undefine
   }
 }
 
-function startRoot(name: string, attributes: ObservationAttributes, type: ObservationType): LangfuseObservation {
+function startRoot(
+  name: string,
+  attributes: ObservationAttributes,
+  type: ObservationType,
+  startTime?: Date,
+): LangfuseObservation {
   if (type === "agent") {
-    return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "agent" });
+    return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "agent", startTime });
   }
   if (type === "generation") {
     return startObservation(name, attributes as LangfuseObservationAttributes, {
       asType: "generation",
+      startTime,
     });
   }
   if (type === "tool") {
-    return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool" });
+    return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool", startTime });
   }
-  return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "span" });
+  return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "span", startTime });
 }
 
 function startChild(
@@ -358,25 +364,47 @@ function startChild(
   name: string,
   attributes: ObservationAttributes,
   type: ObservationType,
+  startTime?: Date,
 ): LangfuseObservation {
-  if (type === "agent") {
-    return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
-      asType: "agent",
+  if (startTime) {
+    const parentSpanContext = parent.otelSpan.spanContext();
+    if (type === "agent") {
+      return startObservation(name, attributes as LangfuseObservationAttributes, {
+        asType: "agent",
+        parentSpanContext,
+        startTime,
+      });
+    }
+    if (type === "generation") {
+      return startObservation(name, attributes as LangfuseObservationAttributes, {
+        asType: "generation",
+        parentSpanContext,
+        startTime,
+      });
+    }
+    if (type === "tool") {
+      return startObservation(name, attributes as LangfuseObservationAttributes, {
+        asType: "tool",
+        parentSpanContext,
+        startTime,
+      });
+    }
+    return startObservation(name, attributes as LangfuseObservationAttributes, {
+      asType: "span",
+      parentSpanContext,
+      startTime,
     });
+  }
+  if (type === "agent") {
+    return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "agent" });
   }
   if (type === "generation") {
-    return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
-      asType: "generation",
-    });
+    return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "generation" });
   }
   if (type === "tool") {
-    return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
-      asType: "tool",
-    });
+    return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool" });
   }
-  return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
-    asType: "span",
-  });
+  return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "span" });
 }
 
 function configFingerprint(config: ResolvedRuntimeConfig): string {

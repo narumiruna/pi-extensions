@@ -137,6 +137,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
     "before_agent_start",
     "before_provider_request",
     "message_end",
+    "message_start",
     "message_update",
     "session_before_compact",
     "session_compact",
@@ -305,6 +306,7 @@ test("pi-langfuse reconciles the finalized assistant message from agent_end", as
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await mock.events.get("before_agent_start")?.[0]?.({ prompt: "retry", images: [], systemPrompt: "system" }, ctx);
   await mock.events.get("before_provider_request")?.[0]?.({ payload: { model: "test" } }, ctx);
+  await mock.events.get("message_start")?.[0]?.({ message: { role: "assistant" } }, ctx);
   const finalized = {
     role: "assistant",
     content: [{ type: "text", text: "retryable error added by a later transformer" }],
@@ -638,6 +640,7 @@ test("reload and session replacement close every active observation once before 
     await mock.events.get("agent_start")?.[0]?.({}, ctx);
     await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
     await mock.events.get("before_provider_request")?.[0]?.({ payload: { model: "test" } }, ctx);
+    await mock.events.get("message_start")?.[0]?.({ message: { role: "assistant" } }, ctx);
     await mock.events.get("tool_execution_start")?.[0]?.(
       { toolCallId: reason, toolName: "read", args: { path: "file" } },
       ctx,
@@ -824,6 +827,7 @@ test("session shutdown is idempotent and reports initialization failures", async
   await mock.events.get("agent_start")?.[0]?.({}, ctx);
   await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
   await mock.events.get("before_provider_request")?.[0]?.({ payload: { model: "test" } }, ctx);
+  await mock.events.get("message_start")?.[0]?.({ message: { role: "assistant" } }, ctx);
   await mock.events.get("tool_execution_start")?.[0]?.(
     { toolCallId: "open", toolName: "read", args: { path: "file" } },
     ctx,

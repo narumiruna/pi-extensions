@@ -227,6 +227,9 @@ The request snapshot is the payload visible to this handler, not a guaranteed fi
 A later extension can still replace it.
 Final assistant content is reconciled from `turn_end` and `agent_end` after message transformation.
 A recovered sequence such as `429 -> 200` remains queryable in HTTP metadata but is not an error; the final assistant outcome decides generation severity.
+A provider request becomes a `pi.llm` generation only when Pi emits an assistant lifecycle event.
+Cache-warming requests emit provider hooks without that lifecycle, so they are excluded instead of becoming orphaned or interrupted ordinary generations.
+Dedicated cache-warm observations are deferred until Pi exposes a deterministic request-kind and completion signal.
 
 ### Tool and compaction fields
 

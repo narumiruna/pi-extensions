@@ -56,6 +56,14 @@ interface PendingInitialization {
   complete(result: InitializationResult): void;
 }
 
+interface PendingProviderGeneration {
+  startedAt: number;
+  payload: unknown;
+  model?: { provider: string; id: string; api: string };
+  thinkingLevel?: string;
+  responses: Array<{ status: number; headers: Record<string, string> }>;
+}
+
 interface ActiveBinding {
   registration: Registration;
   recorder: TraceRecorder;
@@ -94,6 +102,7 @@ export function createPiLangfuseSessionController(
   let requestIdRevision = 0;
   let nextAttemptReason: string | undefined;
   let lastSnapshot: ContextSnapshot | undefined;
+  let pendingProviderGeneration: PendingProviderGeneration | undefined;
 
   const controller: PiLangfuseSessionController = {
     extension(pi) {
@@ -131,7 +140,10 @@ export function createPiLangfuseSessionController(
   function closeBinding(target: ActiveBinding | undefined, statusMessage: string, snapshot?: ContextSnapshot): void {
     if (!target) return;
     const wasCurrent = binding === target;
-    if (wasCurrent) binding = undefined;
+    if (wasCurrent) {
+      binding = undefined;
+      pendingProviderGeneration = undefined;
+    }
     target.releaseRuntime();
     target.recorder.dispose(statusMessage, snapshot);
     if (wasCurrent) nextAttemptReason = undefined;
@@ -237,6 +249,7 @@ export function createPiLangfuseSessionController(
 
     pi.on("session_start", async (_event, ctx) => {
       if (disposed) return;
+      pendingProviderGeneration = undefined;
       if (ownerRegistration && ownerRegistration !== registration) {
         options.onInitializationError?.(
           new Error("A Pi Langfuse session controller cannot manage multiple active Pi sessions."),
@@ -263,6 +276,9 @@ export function createPiLangfuseSessionController(
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
+      // Cache warming emits provider hooks without assistant lifecycle events. Unclaimed
+      // metadata is discarded at the next real run rather than classified by timing.
+      pendingProviderGeneration = undefined;
       const active = ownerRegistration === registration ? binding : undefined;
       if (!active || active.runtime.closed) return;
       nextAttemptReason = undefined;
@@ -300,33 +316,43 @@ export function createPiLangfuseSessionController(
     });
 
     pi.on("before_provider_request", (event, ctx) => {
-      const recorder = activeRecorder();
-      if (!recorder) return;
+      if (!activeRecorder()) return;
       lastSnapshot = contextSnapshot(ctx);
-      ensureActiveRun(recorder, ctx, startRootTrace);
-      recorder.beginGeneration({
+      pendingProviderGeneration = {
+        startedAt: Date.now(),
         payload: event.payload,
-        payloadStage: "before_provider_request",
         model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
         thinkingLevel: pi.getThinkingLevel(),
-      });
+        responses: [],
+      };
     });
 
     pi.on("after_provider_response", (event) => {
-      activeRecorder()?.recordProviderResponse(event.status, event.headers);
+      pendingProviderGeneration?.responses.push({ status: event.status, headers: event.headers });
     });
 
-    pi.on("message_update", (event) => {
-      if (isRealOutputDelta(event.assistantMessageEvent)) activeRecorder()?.markGenerationFirstOutput();
+    pi.on("message_start", (event, ctx) => {
+      if (event.message.role === "assistant") claimPendingProviderGeneration(ctx, activeRecorder());
     });
 
-    pi.on("message_end", (event) => {
-      if (event.message.role === "assistant") activeRecorder()?.markGenerationEnd();
+    pi.on("message_update", (event, ctx) => {
+      if (!isRealOutputDelta(event.assistantMessageEvent)) return;
+      const recorder = activeRecorder();
+      claimPendingProviderGeneration(ctx, recorder);
+      recorder?.markGenerationFirstOutput();
+    });
+
+    pi.on("message_end", (event, ctx) => {
+      if (event.message.role !== "assistant") return;
+      const recorder = activeRecorder();
+      claimPendingProviderGeneration(ctx, recorder);
+      recorder?.markGenerationEnd();
     });
 
     pi.on("turn_end", (event, ctx) => {
       const recorder = activeRecorder();
       if (!recorder) return;
+      if (event.message.role === "assistant") claimPendingProviderGeneration(ctx, recorder);
       lastSnapshot = contextSnapshot(ctx);
       if (event.message.role === "assistant") recorder.finishAssistant(event.message);
       recorder.finishTurn(event.turnIndex, {
@@ -393,6 +419,7 @@ export function createPiLangfuseSessionController(
       if (!recorder) return;
       lastSnapshot = contextSnapshot(ctx);
       recorder.settle(lastSnapshot);
+      pendingProviderGeneration = undefined;
       nextAttemptReason = undefined;
     });
 
@@ -432,6 +459,21 @@ export function createPiLangfuseSessionController(
         if (!disposed && generation === sessionGeneration) options.onShutdownError?.(error, ctx);
       }
     });
+  }
+
+  function claimPendingProviderGeneration(ctx: ExtensionContext, recorder: TraceRecorder | undefined): void {
+    const pending = pendingProviderGeneration;
+    if (!pending || !recorder) return;
+    pendingProviderGeneration = undefined;
+    ensureActiveRun(recorder, ctx, startRootTrace);
+    recorder.beginGeneration({
+      startedAt: pending.startedAt,
+      payload: pending.payload,
+      payloadStage: "before_provider_request",
+      model: pending.model,
+      thinkingLevel: pending.thinkingLevel,
+    });
+    for (const response of pending.responses) recorder.recordProviderResponse(response.status, response.headers);
   }
 
   function startRootTrace(start: (nextRequestId: string | undefined) => void): void {

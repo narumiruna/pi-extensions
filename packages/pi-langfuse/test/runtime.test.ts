@@ -199,6 +199,7 @@ test("isolated runtime preserves the global provider and exports native observat
   recorder.beginAttempt({ reason: "post_compaction" });
   recorder.beginTurn(0);
   recorder.beginGeneration({
+    startedAt: 500,
     payload: { messages: [{ role: "user", content: "hello" }] },
     payloadStage: "before_provider_request",
     model: { provider: "openai", id: "requested-model", api: "openai-responses" },
@@ -272,6 +273,7 @@ test("isolated runtime preserves the global provider and exports native observat
     assert.equal(child.parentSpanContext?.spanId, turn?.spanContext().spanId);
   }
   assert.equal(generation?.attributes["langfuse.version"], "2");
+  assert.deepEqual(generation?.startTime, [0, 500_000_000]);
   assert.equal(generation?.attributes["langfuse.observation.model.name"], "response-model");
   assert.equal(
     generation?.attributes["langfuse.observation.model.parameters"],

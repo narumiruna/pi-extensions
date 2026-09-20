@@ -94,6 +94,7 @@ async function settleOneRun(mock: ReturnType<typeof createMockPi>, ctx: unknown,
   await emit(mock, "before_agent_start", { prompt, systemPromptOptions: { skills: [] } }, ctx);
   await emit(mock, "agent_start", {}, ctx);
   await emit(mock, "before_provider_request", { payload: {} }, ctx);
+  await emit(mock, "message_start", { message: { role: "assistant" } }, ctx);
   await emit(mock, "message_end", { message: { role: "assistant", stopReason: "stop" } }, ctx);
   await emit(mock, "agent_settled", {}, ctx);
 }
@@ -132,6 +133,7 @@ test("factory registers lifecycle hooks without constructing or opening storage"
     "before_provider_request",
     "input",
     "message_end",
+    "message_start",
     "session_shutdown",
     "session_start",
     "tool_execution_end",
@@ -184,6 +186,57 @@ test("a settled response is written once with the current session signal", async
   assert.equal(store.runs.length, 1);
   assert.equal(store.runs[0]?.outcome, "success");
   assert.equal(store.signals[0]?.aborted, false);
+});
+
+test("cache warming provider hooks never become ordinary generations", async () => {
+  const store = new FakeStore();
+  const mock = createMockPi();
+  createAnalyticsExtension({ createStore: () => store })(mock.pi);
+  const started = lifecycleContext();
+  await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+  await emit(mock, "before_agent_start", { prompt: "run", systemPromptOptions: { skills: [] } }, started.ctx);
+  await emit(mock, "agent_start", {}, started.ctx);
+
+  await emit(mock, "before_provider_request", { payload: { request: 1 } }, started.ctx);
+  await emit(mock, "after_provider_response", { status: 429 }, started.ctx);
+  await emit(mock, "after_provider_response", { status: 200 }, started.ctx);
+  await emit(mock, "message_start", { message: { role: "assistant" } }, started.ctx);
+  await emit(mock, "message_end", { message: { role: "assistant", stopReason: "toolUse" } }, started.ctx);
+
+  await emit(mock, "before_provider_request", { payload: { cacheWarm: true } }, started.ctx);
+  await emit(mock, "after_provider_response", { status: 200 }, started.ctx);
+  await emit(mock, "before_provider_request", { payload: { request: 2 } }, started.ctx);
+  await emit(mock, "after_provider_response", { status: 200 }, started.ctx);
+  await emit(mock, "message_start", { message: { role: "assistant" } }, started.ctx);
+  await emit(mock, "message_end", { message: { role: "assistant", stopReason: "stop" } }, started.ctx);
+  await emit(mock, "agent_settled", {}, started.ctx);
+
+  assert.equal(store.runs.length, 1);
+  assert.deepEqual(
+    store.runs[0]?.generations.map(({ outcome, responses }) => [outcome, responses.map(({ status }) => status)]),
+    [
+      ["tool_use", [429, 200]],
+      ["stop", [200]],
+    ],
+  );
+
+  await emit(mock, "before_provider_request", { payload: { idleWarm: true } }, started.ctx);
+  await emit(mock, "after_provider_response", { status: 200 }, started.ctx);
+  await emit(mock, "agent_settled", {}, started.ctx);
+  assert.equal(store.runs.length, 1);
+
+  await emit(mock, "before_agent_start", { prompt: "cancel", systemPromptOptions: { skills: [] } }, started.ctx);
+  await emit(mock, "agent_start", {}, started.ctx);
+  await emit(mock, "before_provider_request", { payload: { request: "cancel" } }, started.ctx);
+  await emit(mock, "after_provider_response", { status: 499 }, started.ctx);
+  await emit(mock, "message_start", { message: { role: "assistant" } }, started.ctx);
+  await emit(mock, "message_end", { message: { role: "assistant", stopReason: "aborted" } }, started.ctx);
+  await emit(mock, "agent_settled", {}, started.ctx);
+  assert.equal(store.runs.length, 2);
+  assert.deepEqual(
+    store.runs[1]?.generations.map(({ outcome, responses }) => [outcome, responses.map(({ status }) => status)]),
+    [["aborted", [499]]],
+  );
 });
 
 test("a delayed skill read cannot attach to a later response cycle", async () => {

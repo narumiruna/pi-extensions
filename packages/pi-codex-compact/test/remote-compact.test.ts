@@ -65,8 +65,8 @@ function apiKey(api: ResponsesCompactionApi): string {
 function modelFor(api: ResponsesCompactionApi): Model<ResponsesCompactionApi> {
   const fixture = PROVIDER_MODULES[api];
   return {
-    id: "gpt-5.4",
-    name: "GPT-5.4 fixture",
+    id: "gpt-5.5",
+    name: "GPT-5.5 fixture",
     api,
     provider: fixture.provider,
     baseUrl: fixture.baseUrl,

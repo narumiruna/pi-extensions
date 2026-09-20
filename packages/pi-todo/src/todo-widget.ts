@@ -322,7 +322,9 @@ export function reconcileTodoContext(
   const summaryBoundary = leadingSummaryBoundary(withoutExisting);
   const currentContent =
     todos.length > 0 && !hasModelVisibleTodoState(withoutExisting, todos) ? todoContextContent(todos) : undefined;
-  const content = summaryBoundary > 0 ? (restoredBoundaryContent ?? currentContent) : undefined;
+  const content = hasLeadingSummary(withoutExisting, summaryBoundary)
+    ? (restoredBoundaryContent ?? currentContent)
+    : undefined;
   if (
     content !== undefined &&
     existing.length === 1 &&
@@ -550,18 +552,24 @@ function hasTodoContextVersion(message: TodoContextMessage): boolean {
 }
 
 function leadingSummaryEpoch(messages: ContextEvent["messages"]): string | undefined {
+  const summaryStart = messages[0]?.role === "system" ? 1 : 0;
   const boundary = leadingSummaryBoundary(messages);
-  return boundary === 0 ? undefined : JSON.stringify(messages.slice(0, boundary));
+  return boundary === summaryStart ? undefined : JSON.stringify(messages.slice(summaryStart, boundary));
 }
 
 function leadingSummaryBoundary(messages: ContextEvent["messages"]): number {
-  let index = 0;
+  let index = messages[0]?.role === "system" ? 1 : 0;
   while (index < messages.length) {
     const role = messages[index]?.role;
     if (role !== "compactionSummary" && role !== "branchSummary") break;
     index += 1;
   }
   return index;
+}
+
+function hasLeadingSummary(messages: ContextEvent["messages"], boundary: number): boolean {
+  const summaryStart = messages[0]?.role === "system" ? 1 : 0;
+  return boundary > summaryStart;
 }
 
 function reconstructTodos(entries: readonly SessionEntry[]): Todo[] {

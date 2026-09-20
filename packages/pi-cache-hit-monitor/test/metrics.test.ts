@@ -210,7 +210,7 @@ test("marks a session premium unknown when any nonzero miss lacks pricing", () =
   assert.equal(aggregate.estimatedMissPremium, null);
 });
 
-test("reconstructs cache epochs and includes summarization usage in session totals", () => {
+test("reconstructs cache epochs and includes summary and cache-warm usage in session totals", () => {
   const summaryMessage = assistant(100, 900, 0);
   const entries = [
     messageEntry(assistant(200, 800, 0)),
@@ -226,12 +226,21 @@ test("reconstructs cache epochs and includes summarization usage in session tota
       parentId: null,
       usage: summaryMessage.usage,
     },
+    {
+      type: "usage",
+      id: "cache-warm",
+      parentId: null,
+      kind: "cache_warm",
+      provider: "test-provider",
+      model: "test-model",
+      usage: summaryMessage.usage,
+    },
     messageEntry(assistant(900, 100, 0, { timestamp: 2_000 })),
   ] as SessionEntry[];
   const restored = collectCacheSamples(entries, () => MODEL);
 
   assert.equal(restored.currentEpoch, 2);
-  assert.equal(restored.summaryRecords.length, 2);
+  assert.equal(restored.summaryRecords.length, 3);
   assert.deepEqual(
     restored.samples.map(({ epoch, hitRatePercent }) => [epoch, hitRatePercent]),
     [
@@ -244,11 +253,11 @@ test("reconstructs cache epochs and includes summarization usage in session tota
     summaryRecords: restored.summaryRecords,
   });
   assert.equal(view.comparison, null);
-  assert.equal(view.session.requestCount, 4);
-  assert.equal(view.session.input, 1_300);
-  assert.equal(view.session.cacheRead, 2_700);
-  assert.ok(Math.abs((view.session.promptCost ?? 0) - 0.0157) < 0.000_000_1);
-  assert.ok(Math.abs((view.session.estimatedSavings ?? 0) - 0.0243) < 0.000_000_1);
+  assert.equal(view.session.requestCount, 5);
+  assert.equal(view.session.input, 1_400);
+  assert.equal(view.session.cacheRead, 3_600);
+  assert.ok(Math.abs((view.session.promptCost ?? 0) - 0.0176) < 0.000_000_1);
+  assert.ok(Math.abs((view.session.estimatedSavings ?? 0) - 0.0324) < 0.000_000_1);
 });
 
 test("retains summary usage when cache accounting is unavailable", () => {
@@ -283,7 +292,7 @@ test("retains summary usage when cache accounting is unavailable", () => {
   const rendered = formatMonitorLines(view)
     .map(({ text }) => text)
     .join("\n");
-  assert.match(rendered, /summary usage only/);
+  assert.match(rendered, /aggregate usage only/);
   assert.match(rendered, /Session {2}2 req.*hit n\/a.*uncached 2k.*cost \$0\.020.*saved ~n\/a/);
 });
 
@@ -324,7 +333,7 @@ test("renders session totals when a branch contains only summary usage", () => {
     createCacheMonitorView([], undefined, { summaryRecords: restored.summaryRecords }),
   ).map(({ text }) => text);
 
-  assert.match(lines[0] ?? "", /summary usage only/);
+  assert.match(lines[0] ?? "", /aggregate usage only/);
   assert.match(lines[1] ?? "", /Session {2}1 req.*hit 90\.0%.*read 900.*uncached 100/);
   assert.match(lines[2] ?? "", /Latest request metrics are unavailable/);
 });

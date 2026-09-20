@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import {
   buildContextEntries,
   DefaultResourceLoader,
@@ -225,11 +226,25 @@ function persistToolResult(
       toolCallId: id,
       toolName: "context_management_start_new_context",
       content: result.content as never,
-      details: result.details,
+      details: result.details === undefined ? undefined : toJsonValue(result.details),
       isError: false,
       timestamp: setupResult.entries.length,
     },
   });
+}
+
+function toJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(toJsonValue);
+  if (typeof value === "object") {
+    const result: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (item !== undefined) result[key] = toJsonValue(item);
+    }
+    return result;
+  }
+  throw new TypeError("Context-management test fixture must be JSON-compatible");
 }
 
 function tool(setupResult: ReturnType<typeof setup>, name: string) {

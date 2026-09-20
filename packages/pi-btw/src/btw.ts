@@ -78,14 +78,10 @@ interface LoadBtwThinkingLevelOptions {
 
 type BtwModelRegistry = Pick<ExtensionCommandContext["modelRegistry"], "find" | "getApiKeyAndHeaders">;
 
-type BtwProviderRegistry = Pick<ExtensionCommandContext["modelRegistry"], "getProvider">;
+type BtwCompletionRegistry = Pick<ExtensionCommandContext["modelRegistry"], "streamSimple">;
 
-export function createModelRegistryCompleteSimple(modelRegistry: BtwProviderRegistry): CompleteSimpleFunction {
-  return async (model, context, options) => {
-    const provider = modelRegistry.getProvider(model.provider);
-    if (!provider) throw new Error(`No provider registered for model provider: ${model.provider}`);
-    return provider.streamSimple(model, context, options).result();
-  };
+export function createModelRegistryCompleteSimple(modelRegistry: BtwCompletionRegistry): CompleteSimpleFunction {
+  return async (model, context, options) => modelRegistry.streamSimple(model, context, options).result();
 }
 
 interface ResolveBtwModelOptions {

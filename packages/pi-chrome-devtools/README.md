@@ -96,6 +96,7 @@ Loaded capability tools remain active for the rest of the session unless the use
 Pi uses native deferred tool references on compatible Anthropic models, native additional-tools or tool-search loading on compatible OpenAI and Codex Responses models, and native Kimi loading on compatible OpenAI Chat Completions models.
 Kimi-compatible models declare `compat.deferredToolsMode: "kimi"` in Pi's model metadata.
 `azure-openai-responses` remains eager because Pi's Azure adapter does not implement native deferred tool-search serialization.
+Fireworks Messages models also remain eager because their native protocol requires the canonical `ToolSearch` or `tool_search` loader name, while this independently installable package keeps the collision-safe `chrome_devtools_load` name.
 
 When the selected model/provider lacks native deferred support, the extension activates every capability allowed by settings before the next model request instead of using Pi's cache-invalidating lazy-loading fallback.
 After a session enters eager exposure, it stays eager across later model switches to avoid removing tool definitions within that session.

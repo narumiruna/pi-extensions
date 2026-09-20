@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createPiLangfuseSession, createPiLangfuseSessionController } from "../src/pi-session.js";
 import { createLangfuseRuntimeFromBackend } from "../src/runtime-core.js";
@@ -78,6 +78,79 @@ test("two Pi sessions share one runtime without sharing lifecycle state", async 
   assert.equal(backend.shutdowns, 1);
   await runtime.shutdown();
   assert.equal(backend.shutdowns, 1);
+});
+
+test("provider-only cache warming hooks never create Langfuse generations", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const session = createPiLangfuseSession(runtime);
+  const mock = createMockPi();
+  session.extension(mock.pi);
+  const { ctx } = createMockContext({ model: { provider: "anthropic", id: "claude" } });
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await mock.events.get("before_agent_start")?.[0]?.({ prompt: "run", images: [] }, ctx);
+  await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 1 }, ctx);
+
+  const requestStartedAt = 1_234_567;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(requestStartedAt);
+  try {
+    await mock.events.get("before_provider_request")?.[0]?.({ payload: { request: 1 } }, ctx);
+  } finally {
+    clock.mockRestore();
+  }
+  await mock.events.get("after_provider_response")?.[0]?.({ status: 429, headers: { "retry-after": "0" } }, ctx);
+  await mock.events.get("after_provider_response")?.[0]?.({ status: 200, headers: {} }, ctx);
+  const firstAssistant = {
+    role: "assistant",
+    content: [{ type: "text", text: "tool" }],
+    provider: "anthropic",
+    model: "claude",
+    usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0 },
+    stopReason: "toolUse",
+  };
+  await mock.events.get("message_start")?.[0]?.({ message: firstAssistant }, ctx);
+  await mock.events.get("message_end")?.[0]?.({ message: firstAssistant }, ctx);
+  await mock.events.get("turn_end")?.[0]?.({ turnIndex: 0, message: firstAssistant, toolResults: [] }, ctx);
+  const firstGeneration = backend.observations.find(({ name }) => name === "pi.llm");
+  assert.equal(firstGeneration?.startTime?.getTime(), requestStartedAt);
+  assert.equal(backend.observations.filter(({ name }) => name === "pi.llm").length, 1);
+
+  await mock.events.get("before_provider_request")?.[0]?.({ payload: { cacheWarm: true } }, ctx);
+  await mock.events.get("after_provider_response")?.[0]?.({ status: 200, headers: {} }, ctx);
+  assert.equal(backend.observations.filter(({ name }) => name === "pi.llm").length, 1);
+
+  await mock.events.get("turn_start")?.[0]?.({ turnIndex: 1, timestamp: 2 }, ctx);
+  await mock.events.get("before_provider_request")?.[0]?.({ payload: { request: 2 } }, ctx);
+  await mock.events.get("after_provider_response")?.[0]?.({ status: 200, headers: {} }, ctx);
+  const finalAssistant = { ...firstAssistant, content: [{ type: "text", text: "done" }], stopReason: "stop" };
+  await mock.events.get("message_start")?.[0]?.({ message: finalAssistant }, ctx);
+  await mock.events.get("message_end")?.[0]?.({ message: finalAssistant }, ctx);
+  await mock.events.get("turn_end")?.[0]?.({ turnIndex: 1, message: finalAssistant, toolResults: [] }, ctx);
+  const generations = backend.observations.filter(({ name }) => name === "pi.llm");
+  assert.equal(generations.length, 2);
+  assert.deepEqual(generations[0]?.updates.at(-1)?.metadata?.["http.response.status_codes"], [429, 200]);
+  assert.deepEqual(generations[1]?.updates.at(-1)?.metadata?.["http.response.status_codes"], [200]);
+
+  await mock.events.get("agent_settled")?.[0]?.({}, ctx);
+  await mock.events.get("before_provider_request")?.[0]?.({ payload: { idleWarm: true } }, ctx);
+  await mock.events.get("after_provider_response")?.[0]?.({ status: 200, headers: {} }, ctx);
+  assert.equal(backend.observations.filter(({ name }) => name === "pi.llm").length, 2);
+
+  await mock.events.get("before_agent_start")?.[0]?.({ prompt: "cancel", images: [] }, ctx);
+  await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0, timestamp: 3 }, ctx);
+  await mock.events.get("before_provider_request")?.[0]?.({ payload: { request: "cancel" } }, ctx);
+  await mock.events.get("after_provider_response")?.[0]?.({ status: 499, headers: {} }, ctx);
+  const abortedAssistant = { ...firstAssistant, content: [], stopReason: "aborted" };
+  await mock.events.get("message_start")?.[0]?.({ message: abortedAssistant }, ctx);
+  await mock.events.get("message_end")?.[0]?.({ message: abortedAssistant }, ctx);
+  await mock.events.get("turn_end")?.[0]?.({ turnIndex: 0, message: abortedAssistant, toolResults: [] }, ctx);
+  const afterCancellation = backend.observations.filter(({ name }) => name === "pi.llm");
+  assert.equal(afterCancellation.length, 3);
+  assert.deepEqual(afterCancellation[2]?.updates.at(-1)?.metadata?.["http.response.status_codes"], [499]);
+  assert.equal(afterCancellation[2]?.updates.at(-1)?.level, "WARNING");
+
+  await session.dispose();
+  await runtime.shutdown();
 });
 
 test("one controller follows its Pi session across extension reloads", async () => {

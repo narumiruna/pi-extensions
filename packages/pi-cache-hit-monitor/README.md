@@ -9,8 +9,8 @@ The widget starts hidden in every session.
 
 - Previews provider-reported cache usage while an assistant response streams.
 - Compares each request with the previous request in the current cache prefix epoch.
-- Reports weighted active-branch totals, including compaction and branch-summary usage.
-- Restores metrics after session start, compaction, and tree navigation.
+- Reports weighted active-branch totals, including compaction, branch-summary, and confirmed cache-warming usage.
+- Restores metrics after session start, compaction, tree navigation, and settled agent work.
 - Keeps provider and model labels terminal-safe and every widget line within the available width.
 - Adds no tools, messages, system instructions, or provider payload changes.
 
@@ -62,14 +62,17 @@ It accepts no arguments, supports TUI and RPC modes, and rejects print and JSON 
 - `Session` reports weighted active-branch totals and does not average request percentages.
 - `Trend` shows the latest eight request hit rates from oldest to newest.
 
-Session totals include provider usage reported by compaction and branch-summary calls.
-When summary usage omits cache accounting, the request count, tokens, and prompt cost remain included while hit rate and savings stay unavailable.
+Session totals include provider usage reported by compaction and branch-summary calls and persisted `cache_warm` usage entries.
+Cache warming contributes to aggregate counts, tokens, and cost but never becomes a conversational sample or request-to-request comparison.
+When aggregate usage omits cache accounting, the request count, tokens, and prompt cost remain included while hit rate and savings stay unavailable.
 
 ## 🔄 Runtime behavior
 
 While visible, the widget updates from `message_update` as soon as the provider reports usage and finalizes on `message_end`.
 Cache comparisons reset across compaction and branch-summary boundaries because those events create a new cache prefix epoch, while session totals continue to include usage records visible on the active branch.
-The extension rebuilds state after session start, compaction, and tree navigation, clears its widget during session replacement and shutdown, and ignores events from stale sessions.
+The extension rebuilds state after session start, compaction, tree navigation, and `agent_settled`, and also reconciles the branch whenever the widget is shown.
+An idle warm that completes while the widget is already visible appears at the next deterministic lifecycle event or after hiding and showing the widget; Pi does not expose a public warm-completion event.
+The extension clears its widget during session replacement and shutdown and ignores events from stale sessions.
 
 ## 🔒 Security and privacy
 
@@ -84,6 +87,7 @@ No collected metric is sent to the model by this extension.
 - `re-billed` compares token counts and cannot prove which exact serialized prefix bytes the provider cached.
 - Cost values use reported usage costs with Pi's effective model tiers and cache-write retention pricing as component fallbacks; subscription billing can differ.
 - Cache writes are included in the hit-rate denominator but are not labeled as uncached input.
+- Pi exposes a mutable cache-warming decision hook but no final decision plus completion identity, so the widget reports only confirmed persisted usage and does not guess which extension decision caused it.
 
 ## 🗂️ Package layout
 

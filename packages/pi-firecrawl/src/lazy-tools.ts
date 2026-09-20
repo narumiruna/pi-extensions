@@ -105,6 +105,9 @@ export function firecrawlToolExposureMode(pi: ExtensionAPI) {
 export function supportsNativeDeferredToolLoading(model: ExtensionContext["model"]): boolean {
   if (!model) return false;
   if (model.api === "anthropic-messages") {
+    // Fireworks Messages requires the canonical ToolSearch/tool_search loader name.
+    // firecrawl_load remains package-specific so independently installed loaders cannot collide.
+    if (model.provider === "fireworks") return false;
     const configured = compatBoolean(model.compat, "supportsToolReferences");
     if (configured !== undefined) return configured;
     if (model.provider !== "anthropic" || model.id.includes("haiku")) return false;

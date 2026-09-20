@@ -30,12 +30,17 @@ test("reconciliation leaves an effective retained contract byte-for-byte unchang
   assert.deepEqual(latestModeContract(messages), { index: 1, mode: "plan" });
 });
 
-test("reconciliation inserts one deterministic fallback after leading summaries", () => {
-  const messages = [{ role: "compactionSummary", summary: "Earlier planning" }, user("retained tail")];
+test("reconciliation inserts one deterministic fallback after a leading system and summaries", () => {
+  const messages = [
+    { role: "system", content: "Current instructions", timestamp: 0 },
+    { role: "compactionSummary", summary: "Earlier planning" },
+    user("retained tail"),
+  ];
   const once = reconcileModeContract(messages, "plan");
   assert.equal(once[0], messages[0]);
-  assert.equal(latestModeContract(once)?.index, 1);
-  assert.equal((once[1] as { timestamp?: number }).timestamp, 0);
+  assert.equal(once[1], messages[1]);
+  assert.equal(latestModeContract(once)?.index, 2);
+  assert.equal((once[2] as { timestamp?: number }).timestamp, 0);
   assert.deepEqual(reconcileModeContract(once, "plan"), once);
 });
 

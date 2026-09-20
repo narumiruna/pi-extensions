@@ -3,6 +3,7 @@ import type { ContextEvent, SessionEntry } from "@earendil-works/pi-coding-agent
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import {
+  reconcileTodoContext,
   renderTodoWidget,
   sanitizeTodoStep,
   TODO_CONTEXT_MESSAGE_TYPE,
@@ -71,6 +72,23 @@ test("registers the todos-by-step schema and concise maintenance guidance", () =
     minLength: 1,
     maxLength: 200,
   });
+});
+
+test("restores todo state after a leading system and summary boundary", () => {
+  const todos: Todo[] = [{ step: "continue", status: "in_progress" }];
+  const messages = [
+    { role: "system", content: "Current instructions", timestamp: 0 },
+    { role: "compactionSummary", summary: "Earlier work", tokensBefore: 10, timestamp: 0 },
+    { role: "user", content: [{ type: "text", text: "continue" }], timestamp: 0 },
+  ] as ContextEvent["messages"];
+
+  const restored = reconcileTodoContext(messages, todos);
+  assert.equal(restored[0], messages[0]);
+  assert.equal(restored[1], messages[1]);
+  assert.equal(restored[2]?.role, "custom");
+  assert.equal(restored[2]?.role === "custom" ? restored[2].customType : undefined, TODO_CONTEXT_MESSAGE_TYPE);
+  assert.equal(restored[3], messages[2]);
+  assert.equal(reconcileTodoContext(restored, todos), restored);
 });
 
 test("restores missing todo state and retains its summary boundary", async () => {
