@@ -1,5 +1,15 @@
 # @narumitw/pi-langfuse
 
+## 0.51.0
+
+### Minor Changes
+
+- 2e1031d: Add public process-level Langfuse runtime and per-session Pi tracing controller APIs for safely tracing multiple concurrent sessions in one host process.
+
+### Patch Changes
+
+- 67a3049: Adapt provider, transcript, usage, deferred-tool, and telemetry behavior to Pi's current runtime contracts, including accurate cache-warming accounting and exclusion from ordinary generation traces.
+
 ## 0.50.6
 
 ### Patch Changes

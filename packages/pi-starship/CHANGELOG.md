@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.56.2
+
+### Patch Changes
+
+- 67a3049: Adapt provider, transcript, usage, deferred-tool, and telemetry behavior to Pi's current runtime contracts, including accurate cache-warming accounting and exclusion from ordinary generation traces.
+
 ## 0.56.1
 
 ### Patch Changes

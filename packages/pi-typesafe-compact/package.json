@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-typesafe-compact",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeSafe JEV-guided selective history compaction for Pi.",
   "type": "module",
   "license": "MIT",
