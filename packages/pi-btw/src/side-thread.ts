@@ -197,27 +197,15 @@ function createUserMessage(text: string): UserMessage {
 // Minimal session-header mirror of Pi core provider attribution.
 // Core does not export this helper and extensions have no SettingsManager, so only session
 // headers are mirrored here. Default attribution headers are intentionally out of scope.
-// Keep semantics bug-compatible with core: case-sensitive Object.assign, explicit request
-// headers win on exact-case match.
-const OPENCODE_HOST = "opencode.ai";
-
-function matchesOpencodeHost(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false;
-  try {
-    return new URL(baseUrl).hostname === OPENCODE_HOST;
-  } catch {
-    return false;
-  }
-}
-
+// Request-time auth can replace a custom provider's base URL after these options are built,
+// so only canonical provider IDs are safe attribution signals. Keep merge semantics
+// bug-compatible with core: case-sensitive Object.assign, explicit request headers win on
+// exact-case match.
 function getOpencodeSessionHeaders(
-  model: Pick<Model<Api>, "provider" | "baseUrl">,
+  model: Pick<Model<Api>, "provider">,
   sessionId?: string,
 ): ProviderHeaders | undefined {
-  if (!sessionId) return undefined;
-  if (model.provider !== "opencode" && model.provider !== "opencode-go" && !matchesOpencodeHost(model.baseUrl)) {
-    return undefined;
-  }
+  if (!sessionId || (model.provider !== "opencode" && model.provider !== "opencode-go")) return undefined;
   return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
 }
 
@@ -233,7 +221,7 @@ function mergeSessionHeaders(
 interface BuildSideThreadStreamOptions {
   thinkingLevel: BtwThinkingLevel;
   signal?: AbortSignal;
-  model?: Pick<Model<Api>, "provider" | "baseUrl">;
+  model?: Pick<Model<Api>, "provider">;
   sessionId?: string;
 }
 

@@ -2930,7 +2930,7 @@ test("side thread forwards Pi session headers to OpenCode Zen for parity", async
   assert.equal(headers["x-opencode-client"], "pi");
 });
 
-test("side thread forwards Pi session headers to custom opencode.ai hosts", async () => {
+test("side thread does not infer OpenCode attribution from a custom model's pre-auth URL", async () => {
   const thread = createSideThread("context");
   let capturedOptions: SimpleStreamOptions | undefined;
   const model = {
@@ -2942,7 +2942,7 @@ test("side thread forwards Pi session headers to custom opencode.ai hosts", asyn
     thread,
     question: "Q",
     model,
-    auth: { apiKey: "key" },
+    auth: { apiKey: "key", headers: { "x-test": "yes" } },
     thinkingLevel: "off",
     sessionId: "s",
     completeSimple: async (_model, _context, options) => {
@@ -2951,8 +2951,7 @@ test("side thread forwards Pi session headers to custom opencode.ai hosts", asyn
     },
   });
   const headers = await applyHeaderTransform(capturedOptions);
-  assert.equal(headers["x-opencode-session"], "s");
-  assert.equal(headers["x-opencode-client"], "pi");
+  assert.deepEqual(headers, { "x-test": "yes" });
 });
 
 test("side thread leaves other providers untouched", async () => {
