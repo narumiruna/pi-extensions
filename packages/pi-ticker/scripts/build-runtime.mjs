@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -32,6 +32,7 @@ export async function buildRuntime({ outputDirectory = distDirectory, validateOu
       format: "esm",
       legalComments: "none",
       metafile: true,
+      outExtension: { ".js": ".ts" },
       outdir: stagingDirectory,
       packages: "external",
       platform: "node",
@@ -41,7 +42,6 @@ export async function buildRuntime({ outputDirectory = distDirectory, validateOu
       write: true,
     });
     validateEagerGraph(result.metafile);
-    await prepareGeneratedRuntime(stagingDirectory);
     await validateOutput(stagingDirectory);
     await publishRuntime(stagingDirectory, resolvedOutputDirectory);
     return result.metafile;
@@ -96,9 +96,9 @@ export function validateEagerGraph(metadata) {
 
 export async function validateGeneratedFiles(outputDirectory) {
   const files = await listFiles(outputDirectory);
-  const runtimeFiles = files.filter((path) => path.endsWith(".ts") || path.endsWith(".js"));
-  if (files.some((path) => path.startsWith("chunks/") && path.endsWith(".ts"))) {
-    throw new Error("Generated runtime retains a TypeScript chunk");
+  const runtimeFiles = files.filter((path) => path.endsWith(".ts"));
+  if (files.some((path) => path.endsWith(".js"))) {
+    throw new Error("Generated runtime retains a .js file");
   }
   if (!runtimeFiles.includes("index.ts")) throw new Error("Generated runtime is missing index.ts");
   if (FORBIDDEN_EAGER_INPUTS.length > 0 && !runtimeFiles.some((path) => path.startsWith("chunks/"))) {
@@ -110,14 +110,14 @@ export async function validateGeneratedFiles(outputDirectory) {
     if (!source.startsWith(GENERATED_BANNER)) {
       throw new Error(`Generated marker is missing from ${runtimePath}`);
     }
-    if (/["']\.\.?\/[^"']+\.ts["']/u.test(source)) {
-      throw new Error(`Generated runtime retains a .ts import specifier in ${runtimePath}`);
+    if (/["']\.\.?\/[^"']+\.js["']/u.test(source)) {
+      throw new Error(`Generated runtime retains a .js import specifier in ${runtimePath}`);
     }
     if (/["']\.\.?\/[^"']*src\//u.test(source)) {
       throw new Error(`Generated runtime imports authoritative source from ${runtimePath}`);
     }
     for (const specifier of generatedRelativeImports(source)) {
-      if (!specifier.endsWith(".js")) {
+      if (!specifier.endsWith(".ts")) {
         throw new Error(`Generated runtime import has an unsupported extension: ${runtimePath} -> ${specifier}`);
       }
       const targetPath = join(dirname(runtimePath), specifier).replaceAll("\\", "/");
@@ -173,19 +173,6 @@ function collectEagerOutputs(outputs, entryPath) {
     }
   }
   return eager;
-}
-
-async function prepareGeneratedRuntime(outputDirectory) {
-  const jsEntryPath = join(outputDirectory, "index.js");
-  const tsEntryPath = join(outputDirectory, "index.ts");
-  const jsMapPath = join(outputDirectory, "index.js.map");
-  const tsMapPath = join(outputDirectory, "index.ts.map");
-  const source = await readFile(jsEntryPath, "utf8");
-  const rewritten = source.replace("sourceMappingURL=index.js.map", "sourceMappingURL=index.ts.map");
-  if (rewritten === source) throw new Error("Generated entry source map reference is missing");
-  await writeFile(jsEntryPath, rewritten, "utf8");
-  await rename(jsMapPath, tsMapPath);
-  await rename(jsEntryPath, tsEntryPath);
 }
 
 export async function publishRuntime(stagingDirectory, outputDirectory, { renamePath = rename } = {}) {

@@ -31,13 +31,14 @@ Try the published package without installing:
 pi -e npm:@narumitw/pi-context-management
 ```
 
-Try a local checkout from the repository root:
+Build and try a local checkout from the repository root:
 
 ```bash
+npm --workspace @narumitw/pi-context-management run build
 pi -e ./packages/pi-context-management
 ```
 
-The package loads its TypeScript source directly and does not require a build step.
+An unbuilt local checkout has no generated entrypoint and cannot be loaded by package directory.
 Do not load a global npm installation and the local workspace at the same time.
 Pi extensions run with your user permissions; review third-party extension source before installing it.
 
@@ -132,12 +133,14 @@ The extension does not read provider credentials or request headers and makes no
 ```text
 packages/pi-context-management/
 ├── src/                    # Authoritative extension, tools, state, settings, and UI
-│   └── index.ts            # Thin Pi entrypoint
+│   └── index.ts            # Thin repository entrypoint
+├── dist/                   # Generated TypeScript runtime loaded by Pi
+├── scripts/                # Deterministic runtime builder
 ├── docs/                   # Detailed operating guide
 └── test/                   # Lifecycle, persistence, loader, and real-runtime coverage
 ```
 
-The published entrypoint is `src/index.ts` and the package has no generated runtime.
+The published package loads `dist/index.ts`; `src/index.ts` remains the authoritative repository entrypoint.
 
 ## 🔎 Keywords
 

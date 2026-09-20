@@ -7,14 +7,14 @@ import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { CONTEXT_MANAGEMENT_TOOL_NAMES } from "../src/context-tools.js";
 
-test("source entrypoint loads through Pi's Jiti resource loader", async () => {
+test("generated entrypoint loads through Pi's Jiti resource loader and exercises the lazy menu boundary", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-context-management-loader-"));
   const agentDir = join(root, "agent");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    const entrypoint = resolve("packages/pi-context-management/src/index.ts");
+    const entrypoint = resolve("packages/pi-context-management/dist/index.ts");
     const loader = new DefaultResourceLoader({
       cwd: root,
       agentDir,

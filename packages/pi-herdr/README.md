@@ -30,11 +30,14 @@ Try from npm without installing permanently:
 pi -e npm:@narumitw/pi-herdr
 ```
 
-Load a local checkout from the repository root:
+Build and load a local checkout from the repository root:
 
 ```bash
+npm --workspace @narumitw/pi-herdr run build
 pi --no-extensions -e ./packages/pi-herdr
 ```
+
+An unbuilt local checkout has no generated entrypoint and cannot be loaded by package directory.
 
 Pi extensions and skills run with your user permissions.
 Install only trusted packages, and review the source and bundled instructions before loading this package.
@@ -181,8 +184,10 @@ Command recipes, approval handling, and other operating safety rules come from t
 ```text
 packages/pi-herdr/
 ├── src/                               # Authoritative implementation and helpers
-│   ├── index.ts                       # Thin Pi entrypoint
+│   ├── index.ts                       # Thin repository entrypoint
 │   └── herdr-agent-state.ts           # Herdr lifecycle integration
+├── dist/                              # Generated TypeScript runtime loaded by Pi
+├── scripts/                           # Deterministic runtime builder
 ├── skills/herdr/                      # Published bootstrap for CLI-owned guidance
 └── test/                              # Behavior and lifecycle coverage
 ```
