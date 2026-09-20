@@ -21,7 +21,7 @@ export const MAX_TODO_STEP_LENGTH = 300;
 export const MAX_TODO_REASON_LENGTH = 200;
 export const COMPLETION_SUMMARY_MS = 3_000;
 export const TODO_MIGRATION_NOTICE =
-  "pi-todo is moving to pi-progress. Confirm availability with `npm view @narumitw/pi-progress version`, then migrate in the same installation scope. User: `pi remove npm:@narumitw/pi-todo && pi install npm:@narumitw/pi-progress`. Project: `pi remove npm:@narumitw/pi-todo -l && pi install npm:@narumitw/pi-progress -l`. Restart Pi; do not install both packages.";
+  "pi-todo is moving to pi-progress. Confirm availability with `npm view @narumitw/pi-progress version`. Persistent user settings: run `pi remove npm:@narumitw/pi-todo`; then `pi install npm:@narumitw/pi-progress`. Persistent project settings: run `pi remove npm:@narumitw/pi-todo -l`; then `pi install npm:@narumitw/pi-progress -l`. Temporary or local `-e` load: switch its source instead; do not run `pi remove`. Restart Pi; do not load both packages.";
 
 const TODO_RESTORED_BOUNDARY_VERSION = 1;
 const PREVIOUS_TODO_CONTEXT_VERSION = 2;

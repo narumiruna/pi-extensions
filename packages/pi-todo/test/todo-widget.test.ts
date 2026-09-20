@@ -76,10 +76,18 @@ test("registers the todos-by-step schema and concise maintenance guidance", () =
 });
 
 test("announces the package migration only through supported UI modes", async () => {
-  assert.ok(TODO_MIGRATION_NOTICE.includes("pi remove npm:@narumitw/pi-todo && pi install npm:@narumitw/pi-progress"));
   assert.ok(
-    TODO_MIGRATION_NOTICE.includes("pi remove npm:@narumitw/pi-todo -l && pi install npm:@narumitw/pi-progress -l"),
+    TODO_MIGRATION_NOTICE.includes(
+      "run `pi remove npm:@narumitw/pi-todo`; then `pi install npm:@narumitw/pi-progress`",
+    ),
   );
+  assert.ok(
+    TODO_MIGRATION_NOTICE.includes(
+      "run `pi remove npm:@narumitw/pi-todo -l`; then `pi install npm:@narumitw/pi-progress -l`",
+    ),
+  );
+  assert.ok(TODO_MIGRATION_NOTICE.includes("Temporary or local `-e` load: switch its source instead"));
+  assert.equal(TODO_MIGRATION_NOTICE.includes("&&"), false);
 
   for (const mode of ["tui", "rpc", "print", "json"] as const) {
     const harness = createHarness();

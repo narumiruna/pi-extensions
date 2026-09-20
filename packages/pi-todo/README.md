@@ -48,36 +48,6 @@ pi --no-extensions -e ./packages/pi-todo
 The package declares `dist/index.ts`, so an unbuilt local checkout must run the build before Pi loads the package directory.
 Pi extensions run with the user's permissions, so install only trusted code.
 
-## 🔄 Migrate to pi-progress
-
-First confirm that the replacement has been published:
-
-```bash
-npm view @narumitw/pi-progress version
-```
-
-If that command returns `404`, keep `pi-todo` installed and wait for the replacement release.
-Once it reports a version, exit any running Pi process and migrate in the same scope where `pi-todo` is installed.
-For a user installation, run:
-
-```bash
-pi remove npm:@narumitw/pi-todo
-pi install npm:@narumitw/pi-progress
-```
-
-For a project installation originally created with `pi install -l`, run these commands from that project:
-
-```bash
-pi remove npm:@narumitw/pi-todo -l
-pi install npm:@narumitw/pi-progress -l
-```
-
-If the package is configured in both scopes, migrate each scope separately.
-Restart Pi after installation.
-Do not install both package names in the same effective configuration because they manage the same session progress through separate tools and widgets.
-The replacement restores valid progress from existing `update_todo_list` and legacy `todo_widget` session results, and reads `pi-todo.json` as a read-only fallback when `pi-progress.json` is absent.
-The migration does not rewrite session files or the legacy settings file, so reinstalling `pi-todo` remains the rollback path.
-
 ## 🚀 Quick start
 
 Ask Pi to perform work with multiple meaningful steps.
@@ -176,6 +146,44 @@ Terminal escape sequences, control characters, and bidirectional display control
 - Branch reconstruction uses only successful, valid, versioned `update_todo_list` or legacy `todo_widget` tool results on the active branch.
 - Adaptive sizing uses terminal height rather than the exact remaining editor viewport, so it applies a conservative row budget.
 - The widget has no independent scrolling.
+
+## 🔄 Migrate to pi-progress
+
+First confirm that the replacement has been published:
+
+```bash
+npm view @narumitw/pi-progress version
+```
+
+If that command returns `404`, keep `pi-todo` installed and wait for the replacement release.
+Once it reports a version, exit any running Pi process and migrate persistent installations in the same scope where `pi-todo` is installed.
+For a user installation, run these commands in order:
+
+```bash
+pi remove npm:@narumitw/pi-todo
+pi install npm:@narumitw/pi-progress
+```
+
+For a project installation originally created with `pi install -l`, run these commands from that project:
+
+```bash
+pi remove npm:@narumitw/pi-todo -l
+pi install npm:@narumitw/pi-progress -l
+```
+
+If the package is configured in both scopes, migrate each scope separately.
+For a temporary npm load, do not run `pi remove`; switch the `-e` source instead:
+
+```bash
+pi -e npm:@narumitw/pi-progress
+```
+
+For a local-checkout load, update the checkout first and replace the old `-e` source with the replacement's documented local path.
+Restart Pi after migration.
+Do not load both package names in the same effective configuration because they manage the same session progress through separate tools and widgets.
+This `pi-todo` release does not implement or verify the replacement's compatibility with existing sessions or `pi-todo.json`; review the published `pi-progress` release notes before migrating if either matters.
+The notice does not rewrite session or settings files.
+To roll back, remove `pi-progress` from the same persistent scope or restore the previous temporary/local `-e` source, then use `pi-todo` again.
 
 ## 🗂️ Package layout
 
