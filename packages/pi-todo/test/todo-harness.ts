@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import type {
   ContextEvent,
   ExtensionAPI,
@@ -148,7 +149,7 @@ export function todoToolResultMessage(
     toolCallId: "todo-call",
     toolName,
     content: [{ type: "text", text: "updated" }],
-    details,
+    details: details === undefined ? undefined : toJsonValue(details),
     isError,
     timestamp: 0,
   };
@@ -166,7 +167,7 @@ export function todoToolCallMessage(
         type: "toolCall",
         id: "todo-call",
         name: toolName,
-        arguments: { [argumentName]: todos },
+        arguments: { [argumentName]: toJsonValue(todos) },
       },
     ],
     api: "openai-responses",
@@ -183,6 +184,20 @@ export function todoToolCallMessage(
     stopReason: "toolUse",
     timestamp: 0,
   };
+}
+
+function toJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(toJsonValue);
+  if (typeof value === "object") {
+    const result: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (item !== undefined) result[key] = toJsonValue(item);
+    }
+    return result;
+  }
+  throw new TypeError("Todo test fixture must be JSON-compatible");
 }
 
 export function toolResultEntry(

@@ -503,6 +503,14 @@ test("session resume rebuilds cost since user from assistant and tool-result usa
         { type: "message", message: resumedUser },
         { type: "message", message: firstToolUse },
         { type: "message", message: firstToolResult },
+        {
+          type: "usage",
+          id: "warm-resumed",
+          kind: "cache_warm",
+          provider: "anthropic",
+          model: "claude",
+          usage: assistantMessage(ASSISTANT_TIMESTAMP + 750, "stop", 0.005).usage,
+        },
         { type: "message", message: secondToolUse },
       ],
     },
@@ -514,7 +522,44 @@ test("session resume rebuilds cost since user from assistant and tool-result usa
   const finalStamp = messageStampDataAt(mock);
   assert.equal(finalStamp.version, 6);
   if (finalStamp.version !== 6) assert.fail("Expected a version-6 cost stamp");
-  assert.ok(Math.abs(finalStamp.costSinceUser - 0.045) < 1e-12);
+  assert.ok(Math.abs(finalStamp.costSinceUser - 0.05) < 1e-12);
+});
+
+test("live finalization includes newly persisted cache-warm usage once", async () => {
+  const mock = createMockPi();
+  stamp(mock.pi, { settingsRuntime: settingsRuntimeWith({ showCostSinceUser: true }) });
+  const branch: Record<string, unknown>[] = [{ type: "message", message: userMessage(USER_TIMESTAMP) }];
+  const { ctx } = createMockContext({
+    mode: "tui",
+    sessionManager: {
+      getSessionId: () => "test-session",
+      getSessionName: () => undefined,
+      getEntries: () => branch,
+      getBranch: () => branch,
+    },
+  });
+  await emit(mock, "session_start", { reason: "startup" }, ctx);
+  branch.push({
+    type: "usage",
+    id: "warm-live",
+    kind: "cache_warm",
+    provider: "anthropic",
+    model: "claude",
+    usage: assistantMessage(ASSISTANT_TIMESTAMP, "stop", 0.005).usage,
+  });
+
+  const final = assistantMessage(ASSISTANT_TIMESTAMP + 1_000, "stop", 0.009);
+  await emit(mock, "turn_end", { message: final, toolResults: [], turnIndex: 0 }, ctx);
+  const finalStamp = messageStampDataAt(mock);
+  assert.equal(finalStamp.version, 6);
+  if (finalStamp.version !== 6) assert.fail("Expected a version-6 cost stamp");
+  assert.ok(Math.abs(finalStamp.costSinceUser - 0.014) < 1e-12);
+
+  await emit(mock, "turn_end", { message: final, toolResults: [], turnIndex: 1 }, ctx);
+  const repeatedStamp = messageStampDataAt(mock, 1);
+  assert.equal(repeatedStamp.version, 6);
+  if (repeatedStamp.version !== 6) assert.fail("Expected a version-6 cost stamp");
+  assert.ok(Math.abs(repeatedStamp.costSinceUser - 0.023) < 1e-12);
 });
 
 test("assistant tool and error turns receive one stamp without stamping tool results", async () => {

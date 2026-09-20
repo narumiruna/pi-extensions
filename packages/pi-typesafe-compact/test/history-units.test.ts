@@ -146,6 +146,21 @@ test("history sources, custom content, images, summaries, and prior retained uni
   assert.doesNotMatch(units[1]?.content ?? "", /abcd/u);
 });
 
+test("system prompt and tool declaration messages stay outside selectable history", () => {
+  const system = {
+    role: "system",
+    content: "system prompt",
+    sections: { rules: "latest rules" },
+    toolsAdded: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
+    timestamp: 1,
+  } as AgentMessage;
+  const units = combineHistoryUnits([], [system, { role: "user", content: "keep the user request", timestamp: 2 }], []);
+  assert.deepEqual(
+    units.map(({ kind, content }) => [kind, content]),
+    [["user-text", "keep the user request"]],
+  );
+});
+
 test("bash units match Pi context conversion and exclude private shell messages", () => {
   assert.deepEqual(buildHistoryUnits([bashExecution({ excludeFromContext: true })], "history"), []);
 

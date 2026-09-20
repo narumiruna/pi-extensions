@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import {
   type Api,
-  type Context,
   createAssistantMessageEventStream,
+  getCurrentTools,
   type Model,
   type OpenAICodexResponsesOptions,
   type Provider,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
@@ -65,7 +66,7 @@ function fakeProvider(
   providerModel: Model<Api> = model,
   onPreparedPayload?: (payload: unknown) => void,
   protocol: "remote-v2" | "responses-compact" = "remote-v2",
-  onContext?: (context: Context) => void,
+  onContext?: (context: TranscriptContext) => void,
 ): Provider {
   return {
     id: providerModel.provider,
@@ -455,7 +456,7 @@ test("remote requests preserve ordered active tool fields exposed by Pi", async 
       },
     ],
   });
-  let observed: Context | undefined;
+  let observed: TranscriptContext | undefined;
   createCodexCompactExtension({
     settingsRuntime: settingsRuntime(),
     fetch: async () => sseResponse(),
@@ -475,7 +476,7 @@ test("remote requests preserve ordered active tool fields exposed by Pi", async 
   });
 
   await handler?.(event(), ctx);
-  assert.deepEqual(observed?.tools, [
+  assert.deepEqual(observed ? getCurrentTools(observed.messages) : undefined, [
     {
       name: "second",
       description: "second tool",

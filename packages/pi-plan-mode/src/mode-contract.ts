@@ -75,7 +75,7 @@ function findLatestContractArtifactIndex(messages: readonly unknown[]) {
 }
 
 function leadingSummaryBoundary(messages: readonly unknown[]) {
-  let index = 0;
+  let index = unwrapMessage(messages[0]).role === "system" ? 1 : 0;
   while (index < messages.length) {
     const role = unwrapMessage(messages[index]).role;
     if (role !== "compactionSummary" && role !== "branchSummary") break;

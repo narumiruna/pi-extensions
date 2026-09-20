@@ -6,8 +6,8 @@ import { registerCodexFastMode } from "../src/codex-fast-runtime.js";
 import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
 
 const codexModel = {
-  id: "gpt-5.4",
-  name: "GPT-5.4",
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
   api: "openai-codex-responses",
   provider: "openai-codex",
   baseUrl: "https://chatgpt.com/backend-api",
@@ -174,11 +174,11 @@ test("provider payload captures the toggle state when its hook begins", async ()
   const hook = mock.events.get("before_provider_request")?.[0];
   assert.ok(hook);
   const current = context();
-  const before = await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
+  const before = await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
   await mock.commands.get("fast")?.handler("", current.ctx);
-  const after = await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
-  assert.deepEqual(before, { model: "gpt-5.4", service_tier: "default" });
-  assert.deepEqual(after, { model: "gpt-5.4", service_tier: "priority" });
+  const after = await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
+  assert.deepEqual(before, { model: "gpt-5.6-sol", service_tier: "default" });
+  assert.deepEqual(after, { model: "gpt-5.6-sol", service_tier: "priority" });
 });
 
 test("cost correction follows the captured request tier across a later toggle", async () => {
@@ -191,7 +191,7 @@ test("cost correction follows the captured request tier across a later toggle", 
   assert.ok(messageEnd);
   const current = context();
   await mock.commands.get("fast")?.handler("", current.ctx);
-  await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
+  await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
   await mock.commands.get("fast")?.handler("", current.ctx);
   const usage = {
     input: 100,
@@ -212,7 +212,7 @@ test("cost correction follows the captured request tier across a later toggle", 
       message: {
         role: "assistant",
         provider: "openai-codex",
-        model: "gpt-5.4",
+        model: "gpt-5.6-sol",
         usage,
       },
     },
@@ -225,7 +225,7 @@ test("cost correction follows the captured request tier across a later toggle", 
         message: {
           role: "assistant",
           provider: "openai-codex",
-          model: "gpt-5.4",
+          model: "gpt-5.6-sol",
           usage,
         },
       },
@@ -245,7 +245,7 @@ test("an already-correct cost still consumes its request marker", async () => {
   assert.ok(hook);
   assert.ok(messageEnd);
   const current = context();
-  await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
+  await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
   const usage = {
     input: 100,
     output: 20,
@@ -264,7 +264,7 @@ test("an already-correct cost still consumes its request marker", async () => {
     {
       role: "assistant",
       provider: "openai-codex",
-      model: "gpt-5.4",
+      model: "gpt-5.6-sol",
       usage,
     },
     codexModel as never,

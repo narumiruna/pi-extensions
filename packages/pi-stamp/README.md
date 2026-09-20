@@ -210,7 +210,7 @@ The cost label says `est` because Pi's message value is an estimate based on the
 ### Cost since user
 
 Cost since user is the cumulative estimated cost from the latest user message through the final response.
-With `showCostSinceUser: true`, each finalized assistant call and tool result contributes its separately reported `usage.cost.total` to that running total.
+With `showCostSinceUser: true`, each finalized assistant call, tool result, and persisted cache-warming usage entry contributes its separately reported `usage.cost.total` to that running total.
 A user message resets it, including a steering or queued follow-up user message.
 Tool-use calls, model-backed or paid tools that report usage, retries, automatic continuations, and model runs started by extensions all keep accumulating until another user message arrives.
 The next assistant response whose stop reason is not `toolUse` records and displays both its call cost and that total:

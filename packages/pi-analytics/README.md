@@ -72,8 +72,9 @@ The dashboard includes finalized cycles and omits active work.
 A **response cycle** starts when Pi begins agent work and normally ends at `agent_settled`.
 Retries, overflow-compaction recovery, tool follow-ups, and queued continuations before settlement remain in that cycle.
 
-An **LLM call** is one logical provider generation.
+An **LLM call** is one logical provider generation confirmed by an assistant-message lifecycle.
 A provider can make several HTTP attempts within it, so `429 → 429 → 200` counts as one LLM call, three observed HTTP responses, two provider errors, and one recovered generation.
+Pi cache-warming requests emit provider hooks without an assistant lifecycle; they are excluded from ordinary LLM-call and reliability counts rather than being reported as interrupted generations.
 
 ### Skills
 
@@ -169,6 +170,7 @@ Never copy or remove only the main DB while an old process may still own its WAL
 - Large all-time histories require scanning the active JSONL generation when the dashboard opens.
 - Prometheus, JSON/CSV export, cloud sync, browser dashboards, token/cost reporting, and project attribution are not included.
 - Statistics cover only events visible through Pi's public extension API.
+- Dedicated cache-warming observations require an upstream request-kind and completion signal; persisted warming token and cost totals are not imported into analytics.
 
 ## 🗂️ Package layout
 

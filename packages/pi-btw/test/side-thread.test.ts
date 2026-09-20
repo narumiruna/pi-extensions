@@ -705,7 +705,7 @@ test("bring-to-main scope menu propagates Ctrl+C as a side-thread close", async 
   assert.deepEqual(result, { kind: "closed" });
 });
 
-test("side-thread sends custom APIs through Pi core's effective provider", async () => {
+test("side-thread sends custom APIs through Pi core's authenticated model registry", async () => {
   initTheme("dark");
   const model = {
     provider: "synthetic-provider",
@@ -717,7 +717,6 @@ test("side-thread sends custom APIs through Pi core's effective provider", async
     model,
     auth: { apiKey: "synthetic-key", headers: { "x-test": "yes" } },
   };
-  const providerReads: string[] = [];
   const streamCalls: Array<{
     model: Model<Api>;
     context: Context;
@@ -744,14 +743,9 @@ test("side-thread sends custom APIs through Pi core's effective provider", async
       },
     },
     modelRegistry: {
-      getProvider(provider: string) {
-        providerReads.push(provider);
-        return {
-          streamSimple(capturedModel: Model<Api>, context: Context, options?: SimpleStreamOptions) {
-            streamCalls.push({ model: capturedModel, context, options });
-            return { result: async () => response("scoped answer") } as never;
-          },
-        };
+      streamSimple(capturedModel: Model<Api>, context: Context, options?: SimpleStreamOptions) {
+        streamCalls.push({ model: capturedModel, context, options });
+        return { result: async () => response("scoped answer") } as never;
       },
     },
     sessionManager: { getBranch: () => [] },
@@ -766,7 +760,6 @@ test("side-thread sends custom APIs through Pi core's effective provider", async
     }),
     { kind: "closed" },
   );
-  assert.deepEqual(providerReads, ["synthetic-provider"]);
   assert.equal(streamCalls.length, 1);
   assert.equal(streamCalls[0]?.model, model);
   assert.equal(streamCalls[0]?.options?.apiKey, "synthetic-key");

@@ -134,7 +134,7 @@ If the last remaining segment is itself wider than the row, that row renders emp
 - `context` renders one-decimal current usage and the model window, such as `2.4%/272k`.
   After compaction it can temporarily render `?/272k` until the next valid assistant response.
 - `tokens`, `cache`, and `cost` total every usage-bearing session entry, matching Pi's native footer.
-  This includes assistant messages, nested-LLM tool results, compactions, and branch summaries, including abandoned branches retained in the session.
+  This includes assistant messages, nested-LLM tool results, compactions, branch summaries, and persisted cache-warming usage, including abandoned branches retained in the session.
 - Cache tokens are `R<read>`, `W<write>`, and `CH<rate>`.
   `R` and `W` are cumulative; `CH` uses only the latest assistant prompt: `cacheRead / (input + cacheRead + cacheWrite) * 100`.
 - Subscription-backed OAuth models and `kimi-coding` append `(sub)` to cost.

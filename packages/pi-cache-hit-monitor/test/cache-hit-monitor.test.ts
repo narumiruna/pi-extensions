@@ -253,6 +253,31 @@ test("restores active-branch history and resets comparison at the compaction bou
   assert.match(rendered, /re-billed\s+400/);
 });
 
+test("reconciles confirmed idle cache-warm usage at a settled boundary", async () => {
+  const harness = createHarness();
+  const current = createContext();
+  await harness.emit("session_start", {}, current.ctx);
+  await harness.command("", current.ctx);
+
+  const warm = assistant(100, 900);
+  current.setEntries([
+    {
+      type: "usage",
+      id: "warm-1",
+      parentId: null,
+      kind: "cache_warm",
+      provider: "test-provider",
+      model: "test-model",
+      usage: warm.usage,
+    } as SessionEntry,
+  ]);
+  await harness.emit("agent_settled", {}, current.ctx);
+
+  const rendered = renderWidget(current.widgets.at(-1), 120)?.join("\n") ?? "";
+  assert.match(rendered, /aggregate usage only/);
+  assert.match(rendered, /Session {2}1 req.*hit 90\.0%/);
+});
+
 test("renders restored totals for a summary-only branch", async () => {
   const summary = assistant(100, 900);
   const harness = createHarness();
@@ -268,7 +293,7 @@ test("renders restored totals for a summary-only branch", async () => {
   await harness.command("", current.ctx);
 
   const rendered = renderWidget(current.widgets.at(-1), 120)?.join("\n") ?? "";
-  assert.match(rendered, /summary usage only/);
+  assert.match(rendered, /aggregate usage only/);
   assert.match(rendered, /Session {2}1 req.*hit 90\.0%/);
 });
 
@@ -287,7 +312,7 @@ test("renders restored summary totals when cache accounting is unavailable", asy
   await harness.command("", current.ctx);
 
   const rendered = renderWidget(current.widgets.at(-1), 120)?.join("\n") ?? "";
-  assert.match(rendered, /summary usage only/);
+  assert.match(rendered, /aggregate usage only/);
   assert.match(rendered, /Session {2}1 req.*hit n\/a.*uncached 1k.*cost \$0\.010.*saved ~n\/a/);
 });
 

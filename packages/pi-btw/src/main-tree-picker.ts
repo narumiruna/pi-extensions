@@ -255,6 +255,14 @@ function sanitizeEntryForDisplay(entry: SessionEntry): SessionEntry {
         ...entry,
         name: entry.name === undefined ? undefined : sanitizeSingleLine(entry.name),
       };
+    case "usage":
+      return {
+        ...entry,
+        kind: sanitizeSingleLine(entry.kind),
+        provider: sanitizeSingleLine(entry.provider),
+        model: sanitizeSingleLine(entry.model),
+        note: entry.note === undefined ? undefined : sanitizeSingleLine(entry.note),
+      };
   }
 }
 

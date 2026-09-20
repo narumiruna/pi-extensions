@@ -104,6 +104,27 @@ test("tree display strips terminal controls while copy keeps the raw selected te
     } as unknown as SessionTreeNode,
     {
       entry: {
+        type: "usage",
+        id: "usage",
+        parentId: "root",
+        timestamp: "2026-01-01T00:00:02.000Z",
+        kind: "cache_warm\u001b[31m",
+        provider: "unsafe\u001b]0;title\u0007",
+        model: "model\u009b2J",
+        note: "warm\u001b[2J",
+        usage: {
+          input: 1,
+          output: 0,
+          cacheRead: 1,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+      children: [],
+    } as unknown as SessionTreeNode,
+    {
+      entry: {
         type: "model_change",
         id: "model",
         parentId: "root",

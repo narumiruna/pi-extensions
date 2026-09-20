@@ -102,8 +102,10 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
       }
 
       visible = !visible;
-      if (visible) publish(ctx);
-      else clearWidget(ctx);
+      if (visible) {
+        restore(ctx);
+        publish(ctx);
+      } else clearWidget(ctx);
       ctx.ui.notify(`Cache hit monitor ${visible ? "shown" : "hidden"}.`, "info");
     },
   });
@@ -162,6 +164,14 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
 
   pi.on("session_tree", (_event, ctx) => {
     if (!ownsSession(ctx)) return;
+    restore(ctx);
+    publish(ctx);
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    // Pi exposes persisted cache-warm usage but no public warm-completion event.
+    // Reconcile only at deterministic lifecycle boundaries instead of guessing from hook timing.
     restore(ctx);
     publish(ctx);
   });

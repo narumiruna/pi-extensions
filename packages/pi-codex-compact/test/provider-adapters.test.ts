@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import type { Api, AssistantMessageEventStream, Model, Provider, Usage } from "@earendil-works/pi-ai";
+import {
+  type Api,
+  type AssistantMessageEventStream,
+  type Model,
+  normalizeContext,
+  type Provider,
+  type Usage,
+} from "@earendil-works/pi-ai";
 import { describe, test } from "vitest";
 
 const PROVIDER_MODULES = {
@@ -67,8 +74,8 @@ function apiKey(api: SupportedApi): string {
 function modelFor(api: SupportedApi): Model<Api> {
   const fixture = PROVIDER_MODULES[api];
   return {
-    id: "gpt-5.4",
-    name: "GPT-5.4 fixture",
+    id: "gpt-5.5",
+    name: "GPT-5.5 fixture",
     api,
     provider: fixture.provider,
     baseUrl: fixture.baseUrl,
@@ -95,7 +102,7 @@ function responseObject(output: unknown[]) {
     object: "response",
     created_at: 1,
     status: "completed",
-    model: "gpt-5.4",
+    model: "gpt-5.5",
     output,
     parallel_tool_calls: true,
     tool_choice: "auto",
@@ -163,11 +170,11 @@ for (const api of Object.keys(PROVIDER_MODULES) as SupportedApi[]) {
       let fetches = 0;
       const stream = provider.stream(
         model,
-        {
+        normalizeContext({
           systemPrompt: "system",
           messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
           tools: [],
-        },
+        }),
         {
           apiKey: apiKey(api),
           transport: "sse",
@@ -206,11 +213,11 @@ for (const api of Object.keys(PROVIDER_MODULES) as SupportedApi[]) {
       let compactHeaders: Headers | undefined;
       const stream = provider.stream(
         model,
-        {
+        normalizeContext({
           systemPrompt: "system",
           messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
           tools: [],
-        },
+        }),
         {
           apiKey: apiKey(api),
           transport: "sse",
@@ -255,7 +262,7 @@ for (const api of Object.keys(PROVIDER_MODULES) as SupportedApi[]) {
       const provider = await providerFor(api);
       const model = modelFor(api);
       let fetches = 0;
-      const stream = provider.stream(model, context(), {
+      const stream = provider.stream(model, normalizeContext(context()), {
         apiKey: apiKey(api),
         transport: "sse",
         cacheRetention: "none",
@@ -282,7 +289,7 @@ for (const api of Object.keys(PROVIDER_MODULES) as SupportedApi[]) {
       const controller = new AbortController();
       controller.abort();
       let fetches = 0;
-      const stream = provider.stream(model, context(), {
+      const stream = provider.stream(model, normalizeContext(context()), {
         apiKey: apiKey(api),
         transport: "sse",
         cacheRetention: "none",

@@ -5,8 +5,8 @@ import { resolveCompactionRoute } from "../src/model-api.js";
 
 function model(api: Api, provider = "custom"): Model<Api> {
   return {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
+    id: "gpt-5.5",
+    name: "GPT-5.5",
     api,
     provider,
     baseUrl: "https://example.test/v1",

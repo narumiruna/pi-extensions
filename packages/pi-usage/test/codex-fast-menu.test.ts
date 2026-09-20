@@ -5,8 +5,8 @@ import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.j
 import usageExtension from "../src/usage.js";
 
 const codexModel = {
-  id: "gpt-5.4",
-  name: "GPT-5.4",
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
   api: "openai-codex-responses",
   provider: "openai-codex",
   baseUrl: "https://chatgpt.com/backend-api",

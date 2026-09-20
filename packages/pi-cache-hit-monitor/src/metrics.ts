@@ -101,6 +101,14 @@ export function collectCacheSamples(
       currentEpoch += 1;
       continue;
     }
+    if (entry.type === "usage") {
+      const usageCalculation = calculateCacheUsage(entry.usage, {
+        costModel: resolveCostModel(entry.provider, entry.model),
+        retainUnknownCacheAccounting: true,
+      });
+      if (usageCalculation) summaryRecords.push(usageCalculation.record);
+      continue;
+    }
     if (entry.type !== "message" || entry.message.role !== "assistant") continue;
     const sample = createCacheSample(
       entry.message,
@@ -293,7 +301,7 @@ export function formatMonitorLines(view: CacheMonitorView): MonitorLine[] {
   if (!view.latest) {
     if (view.session.requestCount > 0) {
       return [
-        { role: "title", text: "Prompt cache · summary usage only" },
+        { role: "title", text: "Prompt cache · aggregate usage only" },
         formatSessionLine(view.session),
         {
           role: "dim",

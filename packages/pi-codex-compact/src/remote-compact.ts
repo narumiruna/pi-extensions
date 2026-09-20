@@ -1,4 +1,4 @@
-import type { Usage } from "@earendil-works/pi-ai";
+import { normalizeContext, type Usage } from "@earendil-works/pi-ai";
 import type { ResponsesCompactionProfile } from "./model-api.js";
 import {
   CodexCompactionProtocolError,
@@ -234,7 +234,7 @@ export async function requestResponsesCompact(request: RemoteCompactionRequest):
     }
   };
 
-  const stream = request.provider.stream(request.model, request.context, {
+  const stream = request.provider.stream(request.model, normalizeContext(request.context), {
     apiKey: request.apiKey,
     headers: request.headers,
     env: request.env,

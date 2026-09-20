@@ -137,6 +137,8 @@ function contentDrafts(
 
 function draftsForMessage(message: AgentMessage): UnitDraft[] {
   switch (message.role) {
+    case "system":
+      return [];
     case "user":
       return contentDrafts("user", message.content);
     case "assistant":

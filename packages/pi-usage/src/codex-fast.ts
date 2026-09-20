@@ -5,7 +5,6 @@ export const CODEX_FAST_SERVICE_TIER = "priority";
 export const CODEX_STANDARD_SERVICE_TIER = "default";
 
 export const CODEX_FAST_MODEL_IDS: ReadonlySet<string> = new Set([
-  "gpt-5.4",
   "gpt-5.5",
   "gpt-5.6-luna",
   "gpt-5.6-sol",

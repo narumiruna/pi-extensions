@@ -437,6 +437,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
   let finalizedAssistantTiming: FinalizedAssistantTiming | undefined;
   let activeThinkingLevel: StampThinkingLevel | undefined;
   let costSinceUser = emptyCostSinceUserAccumulator();
+  const countedUsageEntryIds = new Set<string>();
   const activeToolTimings = new Map<string, ToolTimingObservation>();
   const pendingUserStamps: Array<{ role: "user"; timestamp: number }> = [];
 
@@ -626,6 +627,8 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     const branch = ctx.sessionManager.getBranch();
     lastStampTimestamp = lastStampTimestampFromBranch(branch);
     costSinceUser = costSinceUserFromBranch(branch);
+    countedUsageEntryIds.clear();
+    collectUsageEntryIdsSinceLatestUser(branch, countedUsageEntryIds);
     try {
       const state = await settingsRuntime.reload(controller.signal);
       if (controller.signal.aborted || currentGeneration !== generation || controller !== sessionController) {
@@ -717,6 +720,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     if (!tuiSessionActive) return;
     if (event.message.role === "user") {
       costSinceUser = emptyCostSinceUserAccumulator();
+      countedUsageEntryIds.clear();
       if (isValidTimestamp(event.message.timestamp)) {
         pendingUserStamps.push({ role: "user", timestamp: event.message.timestamp });
       }
@@ -744,13 +748,14 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     activeAssistantTiming = undefined;
   });
 
-  pi.on("turn_end", (event) => {
+  pi.on("turn_end", (event, ctx) => {
     const timing = finalizedAssistantTiming;
     const thinkingLevel = activeThinkingLevel;
     activeAssistantTiming = undefined;
     finalizedAssistantTiming = undefined;
     activeThinkingLevel = undefined;
     if (tuiSessionActive && event.message.role === "assistant") {
+      addNewUsageCostsSinceLatestUser(ctx.sessionManager.getBranch(), countedUsageEntryIds, costSinceUser);
       const estimatedCost = captureReportedCost(event.message);
       addReportedCostSinceUser(costSinceUser, estimatedCost);
       for (const toolResult of event.toolResults) {
@@ -792,6 +797,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     tuiSessionActive = false;
     lastStampTimestamp = undefined;
     costSinceUser = emptyCostSinceUserAccumulator();
+    countedUsageEntryIds.clear();
     await settingsRuntime.flush();
   });
 }
@@ -824,12 +830,55 @@ function costSinceUserFromBranch(entries: readonly unknown[]): CostSinceUserAccu
   const accumulator = emptyCostSinceUserAccumulator();
   for (let index = costSinceUserStart; index < entries.length; index += 1) {
     const entry = entries[index];
-    if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+    if (!isRecord(entry)) continue;
+    if (entry.type === "usage") {
+      addReportedCostSinceUser(accumulator, captureReportedCost(entry));
+      continue;
+    }
+    if (entry.type !== "message" || !isRecord(entry.message)) continue;
     if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
       addReportedCostSinceUser(accumulator, captureReportedCost(entry.message));
     }
   }
   return accumulator;
+}
+
+function collectUsageEntryIdsSinceLatestUser(entries: readonly unknown[], destination: Set<string>): void {
+  let start = 0;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (isRecord(entry) && entry.type === "message" && isRecord(entry.message) && entry.message.role === "user") {
+      start = index + 1;
+      break;
+    }
+  }
+  for (let index = start; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (isRecord(entry) && entry.type === "usage" && typeof entry.id === "string") destination.add(entry.id);
+  }
+}
+
+function addNewUsageCostsSinceLatestUser(
+  entries: readonly unknown[],
+  countedIds: Set<string>,
+  accumulator: CostSinceUserAccumulator,
+): void {
+  let start = 0;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (isRecord(entry) && entry.type === "message" && isRecord(entry.message) && entry.message.role === "user") {
+      start = index + 1;
+      break;
+    }
+  }
+  for (let index = start; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!isRecord(entry) || entry.type !== "usage" || typeof entry.id !== "string" || countedIds.has(entry.id)) {
+      continue;
+    }
+    countedIds.add(entry.id);
+    addReportedCostSinceUser(accumulator, captureReportedCost(entry));
+  }
 }
 
 function lastStampTimestampFromBranch(entries: readonly unknown[]): number | undefined {

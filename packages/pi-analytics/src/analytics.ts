@@ -9,6 +9,13 @@ import type { AnalyticsSnapshot, TimeRange } from "./storage/queries.js";
 import { AnalyticsStore } from "./storage/store.js";
 import type { ModelIdentity, SettledRun, TriggerSource } from "./types.js";
 
+interface PendingProviderGeneration {
+  id: string;
+  startedAtMs: number;
+  model?: ModelIdentity;
+  responses: Array<{ status: number; occurredAtMs: number }>;
+}
+
 const STORAGE_DIRECTORY = "pi-analytics";
 
 export interface AnalyticsStorePort {
@@ -49,6 +56,7 @@ export function createAnalyticsExtension(
     let writeFailureActive = false;
     let pendingTriggerSource: TriggerSource = "unknown";
     let pendingAttemptWithoutRun = false;
+    let pendingProviderGeneration: PendingProviderGeneration | undefined;
 
     pi.registerCommand("analytics", {
       description: "Open local Pi usage analytics",
@@ -86,6 +94,7 @@ export function createAnalyticsExtension(
       writeFailureActive = false;
       pendingTriggerSource = "unknown";
       pendingAttemptWithoutRun = false;
+      pendingProviderGeneration = undefined;
       const storageRoot = path.join(deps.getAgentDir(), STORAGE_DIRECTORY);
       try {
         store = deps.createStore(storageRoot);
@@ -112,6 +121,9 @@ export function createAnalyticsExtension(
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
+      // A cache warm has provider hooks but no assistant lifecycle. Drop any unclaimed
+      // warm metadata when the next real agent run begins instead of classifying by timing.
+      pendingProviderGeneration = undefined;
       const generation = sessionGeneration;
       const tracker = skillTracker;
       const activeCollector = collector;
@@ -153,20 +165,25 @@ export function createAnalyticsExtension(
     pi.on("turn_start", (_event, ctx) => ensureRun(ctx, "extension"));
 
     pi.on("before_provider_request", (_event, ctx) => {
-      ensureRun(ctx, "extension");
-      collector.beginGeneration({
+      pendingProviderGeneration = {
         id: deps.createId(),
-        now: deps.now(),
+        startedAtMs: deps.now(),
         model: modelIdentity(ctx, pi),
-      });
+        responses: [],
+      };
     });
 
     pi.on("after_provider_response", (event) => {
-      collector.recordProviderResponse({ status: event.status, now: deps.now() });
+      pendingProviderGeneration?.responses.push({ status: event.status, occurredAtMs: deps.now() });
     });
 
-    pi.on("message_end", (event) => {
+    pi.on("message_start", (event, ctx) => {
+      if (event.message.role === "assistant") claimPendingProviderGeneration(ctx);
+    });
+
+    pi.on("message_end", (event, ctx) => {
       if (event.message.role !== "assistant") return;
+      claimPendingProviderGeneration(ctx);
       collector.finishGeneration({
         now: deps.now(),
         stopReason: event.message.stopReason,
@@ -222,6 +239,7 @@ export function createAnalyticsExtension(
       const owner = sessionController;
       const run = collector.settle(deps.now());
       pendingAttemptWithoutRun = false;
+      pendingProviderGeneration = undefined;
       pendingTriggerSource = "unknown";
       skillTracker?.clearPending();
       if (run) await persistRun(run, ctx, generation, owner.signal);
@@ -234,6 +252,7 @@ export function createAnalyticsExtension(
       skillTracker?.clearPending();
       skillTracker = undefined;
       store = undefined;
+      pendingProviderGeneration = undefined;
       collector.interrupt(deps.now());
       const closing = activeStore ? [closeResult(activeStore), ...retiredCloseTasks] : [...retiredCloseTasks];
       const results = await Promise.all(closing);
@@ -253,6 +272,21 @@ export function createAnalyticsExtension(
         return true;
       } catch {
         return false;
+      }
+    }
+
+    function claimPendingProviderGeneration(ctx: ExtensionContext): void {
+      const pending = pendingProviderGeneration;
+      if (!pending) return;
+      pendingProviderGeneration = undefined;
+      ensureRun(ctx, "extension");
+      collector.beginGeneration({
+        id: pending.id,
+        now: pending.startedAtMs,
+        model: pending.model,
+      });
+      for (const response of pending.responses) {
+        collector.recordProviderResponse({ status: response.status, now: response.occurredAtMs });
       }
     }
 
