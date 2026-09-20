@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { SourceMap } from "node:module";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
@@ -11,6 +12,24 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
   matchExternalSubpaths: false,
   includeDynamicExternals: true,
+});
+
+test("generated statusline registration maps back to its source", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-statusline-build-test-"));
+  try {
+    const output = join(root, "dist");
+    await builder.buildRuntime({ outputDirectory: output });
+    const entrySource = await readFile(join(output, "index.ts"), "utf8");
+    const generatedLine = entrySource.split("\n").findIndex((line) => line.includes('pi.registerCommand("statusline"'));
+    assert.notEqual(generatedLine, -1);
+    const sourceMap = new SourceMap(JSON.parse(await readFile(join(output, "index.ts.map"), "utf8")));
+    const mapped = sourceMap.findEntry(generatedLine, 0);
+    assert.ok("originalSource" in mapped, "expected generated entry to map to source");
+    assert.match(mapped.originalSource ?? "", /src\/statusline\.ts$/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {

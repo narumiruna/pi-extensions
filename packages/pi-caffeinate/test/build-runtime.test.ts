@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
@@ -9,6 +9,20 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-caffeinate",
   forbiddenEagerInputs: [],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit", "dbus-native"],
+});
+
+test("generated D-Bus loading remains a first-use import", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-caffeinate-build-test-"));
+  try {
+    const output = join(root, "dist");
+    await builder.buildRuntime({ outputDirectory: output });
+    const entrySource = await readFile(join(output, "index.ts"), "utf8");
+    assert.match(entrySource, /await import\("dbus-native"\)/u);
+    assert.doesNotMatch(entrySource, /^import .* from "dbus-native";/mu);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {

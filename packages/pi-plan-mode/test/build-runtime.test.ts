@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
+import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
@@ -18,6 +19,37 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
     "src/settings-menu.ts",
   ],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
+});
+
+test("generated interactive UI stays loadable with a lazy external questionnaire", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
+  try {
+    const output = join(root, "dist");
+    const metadata = await builder.buildRuntime({ outputDirectory: output });
+    const interactiveUiPath = (await listFiles(output)).find((path) =>
+      /^chunks\/interactive-ui-[A-Z0-9]+\.ts$/u.test(path),
+    );
+    assert.ok(interactiveUiPath, "generated runtime must include its lazy interactive UI chunk");
+    const interactiveUi = await import(
+      `${pathToFileURL(join(output, interactiveUiPath)).href}?test=${crypto.randomUUID()}`
+    );
+    assert.equal(typeof interactiveUi.showReadyPlanMenu, "function");
+    const kitImports = Object.values(metadata.outputs ?? {})
+      .flatMap((chunk) => chunk.imports ?? [])
+      .filter((imported) => imported.path === "@narumitw/pi-tui-kit");
+    assert.ok(kitImports.length > 0, "generated runtime must import Pi TUI Kit");
+    assert.ok(
+      kitImports.every((imported) => imported.external),
+      "Pi TUI Kit must remain external",
+    );
+    assert.ok(
+      kitImports.some((imported) => imported.kind === "dynamic-import"),
+      "the questionnaire runner must remain a first-use import",
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {

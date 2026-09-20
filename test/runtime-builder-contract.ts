@@ -161,7 +161,13 @@ export function registerRuntimeBuilderContract(options: RuntimeBuilderContractOp
         assert.ok(files.includes(`${runtimePath}.map`));
       }
       await builder.validateGeneratedFiles(first);
-      for (const output of Object.values(metadata.outputs ?? {})) {
+      const outputs = metadata.outputs ?? {};
+      const externalImports = Object.values(outputs)
+        .flatMap((output) => output.imports ?? [])
+        .filter((imported) => !Object.hasOwn(outputs, imported.path));
+      assert.ok(externalImports.length > 0, "generated extension must retain external package imports");
+      for (const imported of externalImports) assert.equal(imported.external, true, imported.path);
+      for (const output of Object.values(outputs)) {
         for (const input of Object.keys(output.inputs ?? {})) assert.equal(input.includes("node_modules/"), false);
       }
       assert.deepEqual((await readdir(root)).sort(), ["first", "second"]);

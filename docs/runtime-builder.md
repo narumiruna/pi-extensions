@@ -2,6 +2,8 @@
 
 `scripts/runtime-builder.mjs` owns repository build policy; package wrappers own entrypoints, banners, temporary-directory prefixes, eager boundaries, and focused validators. It is not a published runtime dependency. Generated packages continue to load without this repository tooling.
 
+The root manifest declares the shared builder's exact `esbuild` devDependency and the lockfile records it at the root. Workspace declarations alone are insufficient: Node resolves the root module's imports from `scripts/`, so builds and prepack must not depend on npm hoisting workspace dependencies.
+
 ## Scope and verification
 
 The applicable guide is `docs/extension-conventions.md`, especially **Build-backed Jiti runtimes** and **Documentation and verification**.
@@ -13,7 +15,7 @@ The applicable guide is `docs/extension-conventions.md`, especially **Build-back
 | Package loading | Preserve standalone entrypoints, registration, lazy activation and lifecycle | Existing package-local generated-entry tests and package-directory Pi smokes |
 | Repository tooling | Keep package-specific policy local; no published builder dependency | Diff and manifest review; root builds, boundaries, typechecks and tests |
 
-No runtime source, settings, commands, UI, model-visible prefix, dependency, or publication metadata changes are intended. Existing lifecycle and cancellation tests remain local. No Changeset is needed for output-equivalent repository tooling.
+No runtime source, settings, commands, UI, model-visible prefix, published dependency, or publication metadata changes are intended; the shared build tool requires a root devDependency. Existing lifecycle and cancellation tests remain local. No Changeset is needed for output-equivalent repository tooling.
 
 ## Variation audit
 
@@ -61,7 +63,7 @@ Baseline: `130ded9e`, clean worktree, all workspace builds successful, 29 builde
 
 All 28 migrated runtimes (250 generated files) match the baseline byte-for-byte, including maps, parsed imports, normalized output metafiles, eager inputs and externals. Comparisons passed after groups of 8, 7, 8 and 5 migrations and after the final build; Langfuse output also remains unchanged. The sorted `[package, path, SHA-256]` inventory digest is `5911d3cfbb4f6a1b0eb0c3ccc91a563d2004d064bfbed02c3bff1f7a809fa78d`.
 
-Verification passed:
+Initial migration verification passed:
 
 - `npx vitest run test/runtime-builder.test.ts packages/*/test/build-runtime.test.ts`: 30 files, 204 tests, unchanged 5,000 ms limit.
 - `npm run typecheck`, `npm run check`, and plain `npm test`: 445 files, 5,147 tests.
@@ -69,6 +71,10 @@ Verification passed:
 - `npm pack --workspace <name> --dry-run --json` for all 28 migrated packages: generated entries, every generated file and licenses present; build scripts excluded.
 - Package-local Jiti tests cover simple analytics loading; lazy stamp, ticker and sync flows; subagents' separate credential-backed child entry; and starship's specialized resolution validator. Existing source-graph, session replacement and shutdown tests remain local.
 
-Semantic review covered all wrapper variations, exact imports, peer externalization, deferred boundaries, stale-output removal, destructive paths, symlink aliases, cleanup and restoration. Thirty-four retained package-specific test ASTs are unchanged; source-map and bridge tests retain their specialized assertions without generic duplication. Runtime source, manifests, dependencies, settings, commands, UI and prompt behavior are unchanged.
+Semantic review covered all wrapper variations, exact imports, peer externalization, deferred boundaries, stale-output removal, destructive paths, symlink aliases, cleanup and restoration. Thirty-four retained package-specific test ASTs are unchanged. An assertion-level follow-up audit also recovered specialized checks embedded in removed generic tests: btw's abort-aware markdown import, caffeinate's lazy D-Bus import, plan-mode's generated interactive UI and external questionnaire, and statusline's source mapping remain package-local. Generic external-import assertions run through the shared contract for every wrapper. Runtime source, package manifests, published dependencies, settings, commands, UI and prompt behavior are unchanged.
+
+Review follow-up verification passed: 30 focused files / 209 tests; `npm run typecheck`, `npm run check`, and plain `npm test` (445 files / 5,152 tests); and 28 isolated Pi package-directory smokes. All 250 generated files remain byte-identical to the pre-review output. The checks retain the 5,000 ms test timeout.
+
+An isolated workspace fixture using the actual analytics source and build wrapper reproduced `ERR_MODULE_NOT_FOUND` for root build and prepack under `npm install --install-strategy=nested`; the original package-local builder passed with that same installation. Adding the root declaration made both shared-builder commands pass. The manifest/lock regression test also failed before the fix and passed afterward. `npm install` changed only the root lockfile declaration and reported no vulnerabilities.
 
 The parser and ownership checks deliberately close validation gaps without changing generated output. No release, visibility change or live-provider request is required. Checks ran on Linux; Windows/macOS behavior, simultaneous writers and crash durability were not newly verified. The latter two remain outside the builder contract.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
@@ -9,6 +9,21 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-btw",
   forbiddenEagerInputs: [],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
+});
+
+test("generated markdown loading remains lazy and abort-aware", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-btw-build-test-"));
+  try {
+    const output = join(root, "dist");
+    await builder.buildRuntime({ outputDirectory: output });
+    const entrySource = await readFile(join(output, "index.ts"), "utf8");
+    assert.match(entrySource, /@narumitw\/pi-tui-kit\/markdown/u);
+    assert.match(entrySource, /settleUnlessAborted\(\s*import\(MERMAID_MARKDOWN_MODULE\)/u);
+    assert.doesNotMatch(entrySource, /from ["']@narumitw\/pi-tui-kit\/markdown["']/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
