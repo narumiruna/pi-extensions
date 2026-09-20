@@ -2,6 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createMultiSelectComponent } from "./components/multi-select.js";
 import { safeMenuText } from "./components/rendering.js";
 import { runCustomInteraction } from "./custom-interaction.js";
+import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import type { MenuCloseReason, MenuContext, MultiSelectScreen } from "./types.js";
 
 type ExtensionMode = MenuContext["mode"];
@@ -226,22 +227,10 @@ async function reportMultiSelectError<Item extends MultiSelectItem, Context exte
   options: RunMultiSelectOptions<Item, Context>,
   error: unknown,
 ): Promise<void> {
-  let reported = false;
-  if (options.onError) {
-    try {
-      await options.onError(ctx, error);
-      reported = true;
-    } catch {
-      // Fall through to Pi's notifier when a custom reporter is unavailable.
-    }
-  }
+  const reporting = callErrorReporter(ctx, options, error);
+  const reported = reporting && (await reporting);
   if (reported || !ctx.hasUI || !isCurrent(options) || options.signal?.aborted) return;
-  const message = error instanceof Error ? error.message : String(error);
-  try {
-    uiFor(ctx).notify(`Multi-select failed: ${safeMenuText(message)}`, "error");
-  } catch {
-    // Error reporting must not change the typed result.
-  }
+  notifyInteractionError(ctx, error, "Multi-select failed: ", safeMenuText);
 }
 
 function isCurrent<Item extends MultiSelectItem, Context extends MenuContext>(

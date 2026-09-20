@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { safeMenuText } from "./components/rendering.js";
+import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import type { MenuContext } from "./types.js";
 
 type ExtensionMode = MenuContext["mode"];
@@ -182,22 +183,10 @@ async function reportInteractionError<Value, Context extends MenuContext>(
   error: unknown,
 ): Promise<RunCustomInteractionResult<Value>> {
   if (!isCurrent(options) || options.signal?.aborted) return { kind: "stale" };
-  let reported = false;
-  if (options.onError) {
-    try {
-      await options.onError(ctx, error);
-      reported = true;
-    } catch {
-      // Fall through to Pi's notifier when a custom reporter is unavailable.
-    }
-  }
+  const reporting = callErrorReporter(ctx, options, error);
+  const reported = reporting && (await reporting);
   if (!reported && ctx.hasUI) {
-    const message = error instanceof Error ? error.message : String(error);
-    try {
-      uiFor(ctx).notify(`Custom interaction failed: ${safeMenuText(message)}`, "error");
-    } catch {
-      // Error reporting must not change the typed result.
-    }
+    notifyInteractionError(ctx, error, "Custom interaction failed: ", safeMenuText);
   }
   if (!isCurrent(options) || options.signal?.aborted) return { kind: "stale" };
   return { kind: "error", error };

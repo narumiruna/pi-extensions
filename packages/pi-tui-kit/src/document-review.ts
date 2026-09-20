@@ -3,6 +3,7 @@ import { prepareMenuScreenRendering } from "./components/mermaid.js";
 import { safeMenuText } from "./components/rendering.js";
 import { createReviewComponent, reviewDialogPages } from "./components/review.js";
 import { runCustomInteraction } from "./custom-interaction.js";
+import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import {
   MAX_REVIEW_VIEWPORT_SIZE,
   type MenuCloseReason,
@@ -216,22 +217,10 @@ async function reportDocumentReviewError<Context extends MenuContext>(
   options: RunDocumentReviewOptions<Context>,
   error: unknown,
 ): Promise<void> {
-  let reported = false;
-  if (options.onError) {
-    try {
-      await options.onError(ctx, error);
-      reported = true;
-    } catch {
-      // Fall through to Pi's notifier when a custom reporter is unavailable.
-    }
-  }
+  const reporting = callErrorReporter(ctx, options, error);
+  const reported = reporting && (await reporting);
   if (reported || !ctx.hasUI || !isCurrent(options) || options.signal?.aborted) return;
-  const message = error instanceof Error ? error.message : String(error);
-  try {
-    uiFor(ctx).notify(`Document review failed: ${safeMenuText(message)}`, "error");
-  } catch {
-    // Error reporting must not change the typed result.
-  }
+  notifyInteractionError(ctx, error, "Document review failed: ", safeMenuText);
 }
 
 function isCurrent<Context extends MenuContext>(options: RunDocumentReviewOptions<Context>): boolean {
