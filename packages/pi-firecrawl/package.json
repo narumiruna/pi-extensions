@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-firecrawl",
-  "version": "0.50.4",
+  "version": "0.50.5",
   "description": "Pi extension that exposes Firecrawl web scraping and crawling tools.",
   "type": "module",
   "license": "MIT",

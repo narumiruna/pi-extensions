@@ -1,5 +1,11 @@
 # @narumitw/pi-chrome-devtools
 
+## 0.53.4
+
+### Patch Changes
+
+- 8abd5b7: Keep generated extension runtime graphs inside Pi's Jiti-loaded TypeScript path to avoid duplicate peer-runtime evaluation during startup. Add measured generated runtimes for Context Management, Herdr, and TypeSafe Search.
+
 ## 0.53.3
 
 ### Patch Changes
