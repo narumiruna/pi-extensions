@@ -86,6 +86,7 @@ export function createPiLangfuseSessionController(
   let runtimeForShutdown: LangfuseRuntime | undefined;
   let ownerRegistration: Registration | undefined;
   let pendingInitialization: PendingInitialization | undefined;
+  const outstandingInitializations = new Set<PendingInitialization>();
   let disposePromise: Promise<void> | undefined;
   let disposed = false;
   let sessionGeneration = 0;
@@ -106,17 +107,12 @@ export function createPiLangfuseSessionController(
     dispose() {
       if (disposePromise) return disposePromise;
       disposed = true;
-      const initialization = pendingInitialization;
-      invalidatePendingInitialization("disposed");
+      const initializations = invalidateAllInitializations("disposed");
       ownerRegistration = undefined;
       sessionGeneration += 1;
       closeBinding(binding, "Pi Langfuse session controller was disposed.", lastSnapshot);
       runtimeForShutdown = undefined;
-      disposePromise = initialization
-        ? initialization.completion.then((result) => {
-            if (!result.ok) throw result.error;
-          })
-        : Promise.resolve();
+      disposePromise = joinInitializations(initializations);
       return disposePromise;
     },
     get active() {
@@ -148,12 +144,31 @@ export function createPiLangfuseSessionController(
     pendingInitialization = undefined;
   }
 
+  function invalidateAllInitializations(reason: string): PendingInitialization[] {
+    const initializations = [...outstandingInitializations];
+    for (const initialization of initializations) {
+      initialization.current = false;
+      initialization.reason = reason;
+    }
+    pendingInitialization = undefined;
+    return initializations;
+  }
+
   function createPendingInitialization(): PendingInitialization {
     let complete!: (result: InitializationResult) => void;
     const completion = new Promise<InitializationResult>((resolve) => {
       complete = resolve;
     });
-    return { current: true, completion, complete };
+    const initialization = { current: true, completion, complete };
+    outstandingInitializations.add(initialization);
+    return initialization;
+  }
+
+  async function joinInitializations(initializations: readonly PendingInitialization[]): Promise<void> {
+    const results = await Promise.all(initializations.map(({ completion }) => completion));
+    const errors = results.flatMap((result) => (result.ok ? [] : [result.error]));
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Pi Langfuse session initialization cleanup failed.");
   }
 
   async function initializeSession(
@@ -242,6 +257,7 @@ export function createPiLangfuseSessionController(
         throw error;
       } finally {
         initialization.complete(result);
+        outstandingInitializations.delete(initialization);
         if (pendingInitialization === initialization) pendingInitialization = undefined;
       }
     });
@@ -382,8 +398,7 @@ export function createPiLangfuseSessionController(
 
     pi.on("session_shutdown", async (event, ctx) => {
       if (ownerRegistration !== registration) return;
-      const initialization = pendingInitialization;
-      invalidatePendingInitialization(event.reason);
+      const initializations = invalidateAllInitializations(event.reason);
       ownerRegistration = undefined;
       const generation = ++sessionGeneration;
       options.onSessionShutdown?.();
@@ -406,9 +421,8 @@ export function createPiLangfuseSessionController(
       }
 
       try {
-        const initializationResult = await initialization?.completion;
+        await joinInitializations(initializations);
         if (disposed || generation !== sessionGeneration) return;
-        if (initializationResult && !initializationResult.ok) throw initializationResult.error;
         if (beforeDisposeFailure) throw beforeDisposeFailure.error;
         if (runtime) {
           if (event.reason === "quit" && options.shutdownRuntimeOnQuit) await runtime.shutdown();

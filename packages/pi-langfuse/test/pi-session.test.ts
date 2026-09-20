@@ -376,6 +376,52 @@ test("final quit retains a shared runtime created by never-bound stale initializ
   assert.equal(backend.shutdowns, 1);
 });
 
+test("final quit joins every superseded initialization before returning", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const firstStart = deferred<{ runtime: typeof runtime; releaseIfStale: (reason: string) => Promise<void> }>();
+  const initializationStarted = deferred<void>();
+  const staleReasons: string[] = [];
+  let resolveCalls = 0;
+  const controller = createPiLangfuseSessionController({
+    resolveSession: async () => {
+      resolveCalls += 1;
+      if (resolveCalls > 1) return undefined;
+      initializationStarted.resolve();
+      return firstStart.promise;
+    },
+    shutdownRuntimeOnQuit: true,
+  });
+  const mock = createMockPi();
+  controller.extension(mock.pi);
+  const { ctx } = createMockContext();
+
+  const pendingFirstStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+  await initializationStarted.promise;
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  const pendingShutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx));
+  let shutdownSettled = false;
+  void pendingShutdown.then(() => {
+    shutdownSettled = true;
+  });
+  await Promise.resolve();
+  assert.equal(shutdownSettled, false);
+
+  firstStart.resolve({
+    runtime,
+    releaseIfStale: async (reason) => {
+      staleReasons.push(reason);
+      if (reason === "quit") await runtime.shutdown();
+    },
+  });
+  await Promise.all([pendingFirstStart, pendingShutdown]);
+
+  assert.deepEqual(staleReasons, ["quit"]);
+  assert.equal(shutdownSettled, true);
+  assert.equal(runtime.closed, true);
+  assert.equal(backend.shutdowns, 1);
+});
+
 test("runtime shutdown wins a race with asynchronous trace initialization", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);
