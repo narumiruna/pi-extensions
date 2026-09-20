@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
+import { createMockContext } from "../../../test/support.js";
 
 const packageRoot = resolve("packages/pi-goal");
 const builderUrl = pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href;
@@ -175,6 +176,10 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.ok(extension?.commands.has("goal"));
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("session_shutdown"));
+
+    const context = createMockContext({ cwd: root, mode: "tui", hasUI: true });
+    await extension?.commands.get("goal")?.handler("", context.ctx);
+    assert.deepEqual(context.notifications, []);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
