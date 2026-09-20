@@ -57,15 +57,24 @@ npm view @narumitw/pi-progress version
 ```
 
 If that command returns `404`, keep `pi-todo` installed and wait for the replacement release.
-Once it reports a version, exit any running Pi process and migrate in this order:
+Once it reports a version, exit any running Pi process and migrate in the same scope where `pi-todo` is installed.
+For a user installation, run:
 
 ```bash
 pi remove npm:@narumitw/pi-todo
 pi install npm:@narumitw/pi-progress
 ```
 
+For a project installation originally created with `pi install -l`, run these commands from that project:
+
+```bash
+pi remove npm:@narumitw/pi-todo -l
+pi install npm:@narumitw/pi-progress -l
+```
+
+If the package is configured in both scopes, migrate each scope separately.
 Restart Pi after installation.
-Do not install both packages because they manage the same session progress through separate tools and widgets.
+Do not install both package names in the same effective configuration because they manage the same session progress through separate tools and widgets.
 The replacement restores valid progress from existing `update_todo_list` and legacy `todo_widget` session results, and reads `pi-todo.json` as a read-only fallback when `pi-progress.json` is absent.
 The migration does not rewrite session files or the legacy settings file, so reinstalling `pi-todo` remains the rollback path.
 
