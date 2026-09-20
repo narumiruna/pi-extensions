@@ -29,11 +29,14 @@ Try it without installing permanently:
 pi -e npm:@narumitw/pi-typesafe-search
 ```
 
-Try this package locally from the repository root:
+Build and try this package locally from the repository root:
 
 ```bash
+npm --workspace @narumitw/pi-typesafe-search run build
 pi -e ./packages/pi-typesafe-search
 ```
+
+An unbuilt local checkout has no generated entrypoint and cannot be loaded by package directory.
 
 pi-typesafe-search requires the Node.js runtime supported by the current Pi release and its built-in SQLite FTS5 support.
 Pi extensions run with the Pi process's user permissions, so install only trusted packages.
@@ -191,13 +194,15 @@ packages/pi-typesafe-search/
 │   ├── retrieval.ts           # Multi-query FTS and RRF candidates
 │   ├── jev-client.ts          # Batched TypeSafe Noul judgments
 │   └── search.ts              # Search pipeline and result policy
+├── dist/                      # Generated TypeScript runtime loaded by Pi
+├── scripts/                   # Deterministic runtime builder
 ├── test/                      # Storage, retrieval, lifecycle, and failure tests
 ├── package.json
 ├── README.md
 └── LICENSE
 ```
 
-The package publishes its TypeScript source entrypoint for Pi's Jiti runtime and needs no build step.
+The published package loads `dist/index.ts`; `src/index.ts` remains the authoritative repository entrypoint.
 
 ## 🔎 Keywords
 

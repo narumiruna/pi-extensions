@@ -2,7 +2,7 @@
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -37,6 +37,7 @@ export async function buildRuntime({ outputDirectory = distDirectory, validateOu
       format: "esm",
       legalComments: "none",
       metafile: true,
+      outExtension: { ".js": ".ts" },
       outdir: stagingDirectory,
       packages: "external",
       platform: "node",
@@ -46,7 +47,23 @@ export async function buildRuntime({ outputDirectory = distDirectory, validateOu
       write: true,
     });
     validateEagerGraph(result.metafile);
-    await prepareGeneratedRuntime(stagingDirectory);
+    await build({
+      absWorkingDir: packageRoot,
+      banner: { js: GENERATED_BANNER },
+      bundle: true,
+      chunkNames: "library-chunks/[name]-[hash]",
+      entryNames: "index",
+      entryPoints: ["src/index.ts"],
+      format: "esm",
+      legalComments: "none",
+      outdir: stagingDirectory,
+      packages: "external",
+      platform: "node",
+      sourcemap: true,
+      splitting: true,
+      target: "es2022",
+      write: true,
+    });
     await generateDeclarations(stagingDirectory);
     await validateOutput(stagingDirectory);
     await publishRuntime(stagingDirectory, resolvedOutputDirectory);
@@ -104,13 +121,9 @@ export function validateEagerGraph(metadata) {
 
 export async function validateGeneratedFiles(outputDirectory) {
   const files = await listFiles(outputDirectory);
-  const runtimeFiles = files.filter(
-    (path) => path.endsWith(".js") || (path.endsWith(".ts") && !path.endsWith(".d.ts")),
-  );
+  const runtimeFiles = files.filter((path) => path.endsWith(".ts") && !path.endsWith(".d.ts"));
+  const libraryFiles = files.filter((path) => path.endsWith(".js"));
   const declarationFiles = files.filter((path) => path.endsWith(".d.ts"));
-  if (files.some((path) => path.startsWith("chunks/") && path.endsWith(".ts"))) {
-    throw new Error("Generated runtime retains a TypeScript chunk");
-  }
   for (const required of ["index.js", "index.js.map", "index.ts", "index.ts.map", "index.d.ts"]) {
     if (!files.includes(required)) throw new Error(`Generated runtime is missing ${required}`);
   }
@@ -118,27 +131,8 @@ export async function validateGeneratedFiles(outputDirectory) {
     throw new Error("Generated runtime has no lazy chunks");
   }
 
-  for (const runtimePath of runtimeFiles) {
-    const source = await readFile(join(outputDirectory, runtimePath), "utf8");
-    if (!source.startsWith(GENERATED_BANNER)) {
-      throw new Error(`Generated marker is missing from ${runtimePath}`);
-    }
-    if (/["']\.\.?\/[^"']+\.ts["']/u.test(source)) {
-      throw new Error(`Generated runtime retains a .ts import specifier in ${runtimePath}`);
-    }
-    if (/["']\.\.?\/[^"']*src\//u.test(source)) {
-      throw new Error(`Generated runtime imports authoritative source from ${runtimePath}`);
-    }
-    for (const match of source.matchAll(/["'](\.\.?\/[^"']+\.js)["']/gu)) {
-      const targetPath = join(dirname(runtimePath), match[1]).replaceAll("\\", "/");
-      if (!files.includes(targetPath)) {
-        throw new Error(`Generated runtime import is missing: ${runtimePath} -> ${match[1]}`);
-      }
-    }
-    if (!files.includes(`${runtimePath}.map`)) {
-      throw new Error(`Source map is missing for ${runtimePath}`);
-    }
-  }
+  await validateRuntimeGraph(outputDirectory, files, runtimeFiles, ".ts");
+  await validateRuntimeGraph(outputDirectory, files, libraryFiles, ".js");
 
   for (const declarationPath of declarationFiles) {
     const source = await readFile(join(outputDirectory, declarationPath), "utf8");
@@ -147,6 +141,32 @@ export async function validateGeneratedFiles(outputDirectory) {
       if (!files.includes(targetPath)) {
         throw new Error(`Generated declaration import is missing: ${declarationPath} -> ${match[1]}.js`);
       }
+    }
+  }
+}
+
+async function validateRuntimeGraph(outputDirectory, files, runtimeFiles, extension) {
+  const unexpectedExtension = extension === ".ts" ? ".js" : ".ts";
+  for (const runtimePath of runtimeFiles) {
+    const source = await readFile(join(outputDirectory, runtimePath), "utf8");
+    if (!source.startsWith(GENERATED_BANNER)) {
+      throw new Error(`Generated marker is missing from ${runtimePath}`);
+    }
+    if (new RegExp(`["']\\.\\.?\\/[^"']+\\${unexpectedExtension}["']`, "u").test(source)) {
+      throw new Error(`Generated ${extension} graph imports ${unexpectedExtension} from ${runtimePath}`);
+    }
+    if (/["']\.\.?\/[^"']*src\//u.test(source)) {
+      throw new Error(`Generated runtime imports authoritative source from ${runtimePath}`);
+    }
+    const importPattern = new RegExp(`["'](\\.\\.?\\/[^"']+\\${extension})["']`, "gu");
+    for (const match of source.matchAll(importPattern)) {
+      const targetPath = join(dirname(runtimePath), match[1]).replaceAll("\\", "/");
+      if (!files.includes(targetPath)) {
+        throw new Error(`Generated runtime import is missing: ${runtimePath} -> ${match[1]}`);
+      }
+    }
+    if (!files.includes(`${runtimePath}.map`)) {
+      throw new Error(`Source map is missing for ${runtimePath}`);
     }
   }
 }
@@ -187,18 +207,6 @@ function collectEagerOutputs(outputs, entryPath) {
     }
   }
   return eager;
-}
-
-async function prepareGeneratedRuntime(outputDirectory) {
-  const jsEntryPath = join(outputDirectory, "index.js");
-  const tsEntryPath = join(outputDirectory, "index.ts");
-  const jsMapPath = join(outputDirectory, "index.js.map");
-  const tsMapPath = join(outputDirectory, "index.ts.map");
-  const source = await readFile(jsEntryPath, "utf8");
-  const rewritten = source.replace("sourceMappingURL=index.js.map", "sourceMappingURL=index.ts.map");
-  if (rewritten === source) throw new Error("Generated entry source map reference is missing");
-  await writeFile(tsEntryPath, rewritten, "utf8");
-  await copyFile(jsMapPath, tsMapPath);
 }
 
 async function generateDeclarations(outputDirectory) {
