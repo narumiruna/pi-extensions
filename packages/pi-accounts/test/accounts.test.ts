@@ -1638,6 +1638,74 @@ test("first use reuses the pending background provider activation", async () => 
   await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
 });
 
+test("settled provider startup does not override later recovery while another provider is pending", async () => {
+  const store = new AccountStore(new InMemoryAccountStorageBackend());
+  await store.write({
+    version: 1,
+    providers: {
+      anthropic: { active: "work", accounts: { work: credential("old") } },
+      openrouter: { active: "work", accounts: { work: credential("later") } },
+    },
+  });
+  let anthropicConversions = 0;
+  const anthropic = fakeProvider("anthropic");
+  anthropic.oauth.toAuth = async (current) => {
+    anthropicConversions += 1;
+    if (anthropicConversions === 1) throw new Error("startup conversion failed");
+    return { apiKey: current.access };
+  };
+  let markLaterStarted!: () => void;
+  const laterStarted = new Promise<void>((resolve) => {
+    markLaterStarted = resolve;
+  });
+  let releaseLater!: () => void;
+  const laterReleased = new Promise<void>((resolve) => {
+    releaseLater = resolve;
+  });
+  let laterCompleted = false;
+  const later = fakeProvider("openrouter");
+  later.oauth.toAuth = async (current) => {
+    markLaterStarted();
+    await laterReleased;
+    laterCompleted = true;
+    return { apiKey: current.access };
+  };
+  const mock = createMockPi();
+  accountsExtension(mock.pi, { store, providers: [anthropic, later] });
+  const { keys, registry } = runtimeHarness(mock);
+  let aborts = 0;
+  const { ctx } = createMockContext({
+    abort: () => {
+      aborts += 1;
+    },
+    model: { provider: "anthropic", id: "claude" },
+    modelRegistry: registry,
+  });
+
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await laterStarted;
+  assert.equal(anthropicConversions, 1);
+  assert.equal(keys.get("anthropic"), FAIL_CLOSED_API_KEY);
+
+  await mock.events.get("model_select")?.[0]?.({ model: { provider: "anthropic", id: "claude" } }, ctx);
+  assert.equal(anthropicConversions, 2);
+  assert.equal(keys.get("anthropic"), "access-old");
+  await store.updateProvider("anthropic", (state) => ({
+    ...state,
+    accounts: { work: credential("new") },
+  }));
+
+  await mock.events.get("before_agent_start")?.[0]?.({}, ctx);
+  await mock.events.get("turn_start")?.[0]?.({}, ctx);
+  assert.equal(anthropicConversions, 3);
+  assert.equal(keys.get("anthropic"), "access-new");
+  assert.equal(aborts, 0);
+
+  releaseLater();
+  await waitForTest(() => laterCompleted);
+  await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+});
+
 test("shutdown aborts blocked startup initialization and a later session starts cleanly", async () => {
   const store = new AccountStore(new InMemoryAccountStorageBackend());
   await store.write({

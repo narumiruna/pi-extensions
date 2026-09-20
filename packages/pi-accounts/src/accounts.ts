@@ -78,9 +78,9 @@ type SessionSelectionOwner = {
   appliedIdentities: Map<AccountProviderId, string>;
   abortProviders: Set<AccountProviderId>;
   syncTasks: Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>;
-  startupComplete: boolean;
   startupTask: Promise<void>;
   startupTasks: Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>;
+  startupCompletedProviders: Set<AccountProviderId>;
 };
 
 type SyncProvider = (
@@ -168,8 +168,8 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       previous.appliedIdentities.clear();
       previous.abortProviders.clear();
       previous.syncTasks.clear();
-      previous.startupComplete = true;
       previous.startupTasks.clear();
+      previous.startupCompletedProviders.clear();
       for (const coordinator of previous.coordinators.values()) coordinator.invalidate(ctx);
     }
     const controller = new AbortController();
@@ -188,9 +188,9 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       appliedIdentities: new Map(),
       abortProviders: new Set(),
       syncTasks: new Map(),
-      startupComplete: true,
       startupTask: Promise.resolve(),
       startupTasks: new Map(),
+      startupCompletedProviders: new Set(),
     };
     sessionOwners.set(ctx.sessionManager, owner);
     owner.ready = initializeOwner(owner, ctx);
@@ -289,9 +289,17 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     ctx: ExtensionContext,
     owner: SessionSelectionOwner,
   ): Promise<EnsureActiveProviderAuthResult> => {
+    if (owner.startupCompletedProviders.has(providerId)) {
+      return Promise.resolve(owner.results.get(providerId) ?? staleResult(providerId));
+    }
     const existing = owner.startupTasks.get(providerId);
     if (existing) return existing;
-    const task = syncProvider(providerId, ctx, owner);
+    let task!: Promise<EnsureActiveProviderAuthResult>;
+    task = syncProvider(providerId, ctx, owner).finally(() => {
+      if (!isOwnerCurrent(owner) || owner.startupTasks.get(providerId) !== task) return;
+      owner.startupTasks.delete(providerId);
+      owner.startupCompletedProviders.add(providerId);
+    });
     owner.startupTasks.set(providerId, task);
     return task;
   };
@@ -313,12 +321,11 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
 
   const waitForStartupProvider = async (providerId: AccountProviderId, owner: SessionSelectionOwner): Promise<void> => {
     await owner.ready;
-    if (!isOwnerCurrent(owner) || owner.startupComplete) return;
+    if (!isOwnerCurrent(owner) || owner.startupCompletedProviders.has(providerId)) return;
     await startupProvider(providerId, owner.context, owner);
   };
 
   const startBackgroundSync = (ctx: ExtensionContext, owner: SessionSelectionOwner): void => {
-    owner.startupComplete = false;
     owner.startupTask = (async () => {
       try {
         await owner.ready;
@@ -331,9 +338,6 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
         } catch {
           // Detached startup must stay handled if the UI disappears during replacement or reload.
         }
-      } finally {
-        owner.startupComplete = true;
-        owner.startupTasks.clear();
       }
     })();
   };
@@ -388,7 +392,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     const providerId = toProviderId(ctx.model?.provider);
     if (!providerId) return;
     try {
-      const result = owner.startupComplete
+      const result = owner.startupCompletedProviders.has(providerId)
         ? await syncProvider(providerId, ctx, owner)
         : await startupProvider(providerId, ctx, owner);
       if (!isOwnerCurrent(owner)) return;
@@ -428,8 +432,8 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     owner.appliedIdentities.clear();
     owner.abortProviders.clear();
     owner.syncTasks.clear();
-    owner.startupComplete = true;
     owner.startupTasks.clear();
+    owner.startupCompletedProviders.clear();
     await Promise.allSettled(
       [...owner.coordinators.values()].map(async (coordinator) => {
         coordinator.invalidate(ctx, false);
