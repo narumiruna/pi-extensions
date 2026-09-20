@@ -17,6 +17,7 @@ Each Pi session keeps its own selection for every provider, and choosing `defaul
 - Restores session selections after resume or reload while allowing concurrent sessions to use different accounts.
 - Applies provider-specific credentials, endpoints, headers, and model availability through Pi's built-in providers.
 - Refreshes rotating credentials and verifies the effective authentication before reporting success.
+- Starts sessions without waiting for routine account selection or provider activation, while gating each provider's first use on verified authentication.
 - Offers only the verified active OAuth credential to compatible in-process consumers.
 - Writes credentials atomically to a private local file and fails closed for only the affected provider when activation fails.
 - Imports legacy `pi-codex-accounts.json` data while retaining the source file for rollback.
@@ -58,6 +59,9 @@ The package declares `dist/index.ts`, so an unbuilt local checkout must be built
 Run `/accounts` in TUI or RPC mode.
 Log in to save a named account, then choose **Set default account → provider → account** to use it when starting a new Pi session.
 Use **Switch … account** to change only the current session.
+
+Routine account selection and provider activation continue in the background after Pi starts.
+The first prompt, model switch, or `/accounts` operation that needs a provider waits for its current selection and authentication to finish; activation failures still fail that provider closed before a request is sent.
 
 ## 🔌 Supported providers
 
@@ -122,7 +126,8 @@ A malformed matching selection entry fails managed providers closed until `/acco
 The extension implements the versioned `oauth:credential-source:v1` protocol for compatible current-account consumers such as usage reporters.
 It offers a fresh in-memory clone only after the named OAuth credential has produced and verified active runtime authentication for the exact Pi session.
 Pending, default, stale, failed, replaced, reloaded, and shut-down states offer nothing.
-The protocol does not persist or log the offer, which contains neither the account name nor extension identity.
+Compatible consumers can use the extension-neutral `oauth:credential-readiness:v1` protocol to await the required session-owned activation before requesting an offer.
+The protocols do not persist or log the offer, which contains neither the account name nor extension identity.
 Consumers must match its access token and provider metadata against freshly resolved runtime authentication.
 Without a compatible consumer, account activation works unchanged and no credential is requested.
 

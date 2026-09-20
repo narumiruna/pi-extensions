@@ -2,6 +2,7 @@ import type { OAuthCredential } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
 
 export const OAUTH_CREDENTIAL_SOURCE_CHANNEL = "oauth:credential-source:v1";
+export const OAUTH_CREDENTIAL_READINESS_CHANNEL = "oauth:credential-readiness:v1";
 
 export type StoredCredentialReader = (providerId: string) => unknown;
 
@@ -9,13 +10,19 @@ export type OAuthCredentialCandidates =
   | { ok: true; candidates: readonly OAuthCredential[]; offeredCount?: number }
   | { ok: false };
 
-export type OAuthCredentialCandidateReader = (ctx: ExtensionContext, providerId: string) => OAuthCredentialCandidates;
+export type OAuthCredentialCandidateReader = {
+  (ctx: ExtensionContext, providerId: string): OAuthCredentialCandidates | Promise<OAuthCredentialCandidates>;
+  waitUntilReady?(ctx: ExtensionContext, providerId: string): Promise<boolean>;
+};
 
 export function createOAuthCredentialCandidateReader(
   pi: ExtensionAPI,
   credentialReader: StoredCredentialReader = readStoredCredential,
 ): OAuthCredentialCandidateReader {
-  return (ctx, providerId) => collectOAuthCredentialCandidates(pi, ctx, providerId, credentialReader);
+  const reader: OAuthCredentialCandidateReader = (ctx, providerId) =>
+    collectOAuthCredentialCandidates(pi, ctx, providerId, credentialReader);
+  reader.waitUntilReady = (ctx, providerId) => waitForOAuthCredentialSources(pi, ctx, providerId);
+  return reader;
 }
 
 export function collectOAuthCredentialCandidates(
@@ -50,6 +57,36 @@ export function collectOAuthCredentialCandidates(
     // A malformed or unavailable standalone credential is equivalent to no fallback.
   }
   return { ok: true, candidates, offeredCount };
+}
+
+async function waitForOAuthCredentialSources(
+  pi: Pick<ExtensionAPI, "events">,
+  ctx: ExtensionContext,
+  providerId: string,
+): Promise<boolean> {
+  const pending: Promise<unknown>[] = [];
+  let collecting = true;
+  const request = Object.freeze({
+    session: ctx.sessionManager,
+    provider: providerId,
+    waitUntil(value: unknown) {
+      if (!collecting || !(value instanceof Promise)) return;
+      pending.push(value);
+    },
+  });
+  try {
+    pi.events.emit(OAUTH_CREDENTIAL_READINESS_CHANNEL, request);
+  } catch {
+    return false;
+  } finally {
+    collecting = false;
+  }
+  try {
+    await Promise.all(pending);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function fallbackOAuthCredentialCandidates(
