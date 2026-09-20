@@ -1,5 +1,11 @@
 # @narumitw/pi-btw
 
+## 0.60.3
+
+### Patch Changes
+
+- 34b57b2: Route side-thread requests through Pi's authenticated `modelRegistry.streamSimple()` path so extension-registered providers, OAuth endpoint overrides, headers, and environment credentials are resolved by Pi at request time.
+
 ## 0.60.2
 
 ### Patch Changes
