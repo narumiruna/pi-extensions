@@ -140,7 +140,7 @@ export async function validateGeneratedFiles(outputDirectory) {
       // package is reported as a load error rather than a parse warning.
       throw new Error(`Generated runtime resolves a package at call time in ${runtimePath}`);
     }
-    for (const match of source.matchAll(/["'](\.\.?\/[^"']+\.js)["']/gu)) {
+    for (const match of source.matchAll(/["'](\.\.?\/[^"']+\.ts)["']/gu)) {
       const targetPath = join(dirname(runtimePath), match[1]).replaceAll("\\", "/");
       if (!files.includes(targetPath)) {
         throw new Error(`Generated runtime import is missing: ${runtimePath} -> ${match[1]}`);

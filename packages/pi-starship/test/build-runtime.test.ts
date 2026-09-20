@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
@@ -190,6 +190,39 @@ test("runtime builds are deterministic, mapped, external, and remove stale chunk
     const mapped = sourceMap.findEntry(generatedLine, 0);
     assert.ok("originalSource" in mapped, "expected generated entry to map to source");
     assert.match(mapped.originalSource ?? "", /src\/pi-starship\.ts$/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("generated import validation rejects a missing TypeScript target", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-starship-build-test-"));
+  try {
+    const output = join(root, "dist");
+    await builder.buildRuntime({ outputDirectory: output });
+    const files = await listFiles(output);
+    let missingEdge: { sourcePath: string; specifier: string; targetPath: string } | undefined;
+    for (const sourcePath of files.filter((path) => path.endsWith(".ts"))) {
+      const source = await readFile(join(output, sourcePath), "utf8");
+      const match = source.match(/["'](\.\.?\/[^"']+\.ts)["']/u);
+      if (!match?.[1]) continue;
+      missingEdge = {
+        sourcePath,
+        specifier: match[1],
+        targetPath: join(dirname(sourcePath), match[1]).replaceAll("\\", "/"),
+      };
+      break;
+    }
+    assert.ok(missingEdge, "generated runtime must contain a relative TypeScript import");
+    const { sourcePath, specifier, targetPath } = missingEdge;
+    await rm(join(output, targetPath));
+    await rm(join(output, `${targetPath}.map`));
+    await assert.rejects(builder.validateGeneratedFiles(output), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, `Generated runtime import is missing: ${sourcePath} -> ${specifier}`);
+      return true;
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
