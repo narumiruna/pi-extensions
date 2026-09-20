@@ -159,7 +159,14 @@ async function reportTaskError<Value, Context extends MenuContext>(
   error: unknown,
 ) {
   const reporting = callErrorReporter(ctx, options, error);
-  if (reporting && (await reporting)) return;
+  if (reporting) {
+    try {
+      await reporting.completion;
+      return;
+    } catch {
+      // Fall through to Pi's notifier when the custom reporter rejects.
+    }
+  }
   if (!ctx.hasUI) return;
   notifyInteractionError(ctx, error, "Task failed: ", safeMenuText);
 }

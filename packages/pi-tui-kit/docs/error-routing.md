@@ -2,6 +2,8 @@
 
 `src/interaction-error.ts` shares reporting mechanics, not lifecycle policy or public API. Its callback and notification phases stay separate so runners can check mutable ownership after awaiting `onError`, before notifying, and before constructing their result. Do not pass lifecycle predicates into the reporter.
 
+The invocation phase returns the callback's original completion value without a promise wrapper. Each runner awaits that value and catches asynchronous rejection locally. Chaining `.then()` or using an async forwarding helper adds a microtask turn: owner invalidation queued just after callback settlement can then suppress a previously eligible notification or change `error` to `stale`. Keep the local await and rejection catch even though they repeat.
+
 ## Compatibility matrix
 
 All seven runners call `onError(ctx, originalError)` only after their local pre-report checks. They await a provided callback, suppress fallback when it succeeds, and use the original error when it throws synchronously or rejects. Without a callback, notification does not introduce an await. A missing UI suppresses notification, not the callback. Pi's `notify()` is synchronous (`void`); a thrown notification is suppressed. Sanitization applies only to display text, never to the callback argument or typed error payload.
@@ -26,4 +28,4 @@ The five dialog runners guard error reporting before and after its await. In TUI
 
 ## Verification
 
-The baseline seven interaction suites passed 93 tests before extraction. `test/interaction-error.test.ts` covers shared reporting mechanics, and `test/interaction-error-routing.test.ts` locks the matrix through public runners. The original interaction suites cover Back/Close, remapped keys, non-interactive modes, rendering, editor/paste behavior, aborts, disposal, and pending-work draining. The human-operated terminal smoke remains documented in [the API reference](api.md#-supported-testing-entrypoint).
+The baseline seven interaction suites passed 93 tests before extraction. `test/interaction-error.test.ts` covers shared reporting mechanics, and `test/interaction-error-routing.test.ts` locks the matrix through public runners, including ownership or UI changes queued immediately after reporter settlement. The original interaction suites cover Back/Close, remapped keys, non-interactive modes, rendering, editor/paste behavior, aborts, disposal, and pending-work draining. The human-operated terminal smoke remains documented in [the API reference](api.md#-supported-testing-entrypoint).

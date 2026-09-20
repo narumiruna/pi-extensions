@@ -1,18 +1,18 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { MenuContext } from "./types.js";
 
-/** Reporting mechanics only; callers retain all lifecycle checks and typed results. */
+/**
+ * Invoke without wrapping the completion: callers must await the original value and
+ * catch its rejection locally to preserve their lifecycle checks' microtask ordering.
+ */
 export function callErrorReporter<Context extends MenuContext>(
   ctx: Context,
   options: { onError?(ctx: Context, error: unknown): void | Promise<void> },
   error: unknown,
-): false | Promise<boolean> {
+): false | { completion: void | Promise<void> } {
   if (!options.onError) return false;
   try {
-    return Promise.resolve(options.onError(ctx, error)).then(
-      () => true,
-      () => false,
-    );
+    return { completion: options.onError(ctx, error) };
   } catch {
     // Keep synchronous reporter failures synchronous, just like an absent reporter.
     return false;

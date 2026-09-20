@@ -136,6 +136,52 @@ for (const runner of runners) {
       }
     }
 
+    for (const transition of ["stale", "abort", "no UI"] as const) {
+      for (const outcome of ["resolve", "reject"] as const) {
+        test(`${transition} queued after reporter ${outcome} preserves the original await boundary`, async () => {
+          const error = new Error("original");
+          const { ctx, fail, notifications } = failureContext("rpc", error);
+          const started = deferred();
+          let resolve!: () => void;
+          let reject!: (error: Error) => void;
+          const completion = new Promise<void>((done, fail) => {
+            resolve = done;
+            reject = fail;
+          });
+          const owner = new AbortController();
+          let current = true;
+          const running = runner.run(
+            ctx,
+            {
+              signal: owner.signal,
+              isCurrent: () => current,
+              onError: () => {
+                started.resolve();
+                return completion;
+              },
+            },
+            fail,
+          );
+          await started.promise;
+          if (outcome === "resolve") resolve();
+          else reject(new Error("reporter unavailable"));
+          queueMicrotask(() => {
+            if (transition === "stale") current = false;
+            if (transition === "abort") owner.abort();
+            if (transition === "no UI") ctx.hasUI = false;
+          });
+          // Custom interaction constructs its result immediately after the callback await;
+          // the other runners await their local reporting function before constructing it.
+          const expected =
+            runner.name === "custom interaction" || transition === "no UI"
+              ? { kind: "error", error }
+              : { kind: "stale" };
+          assert.deepEqual(await running, expected);
+          assert.deepEqual(notifications, outcome === "reject" ? [[`${runner.prefix}original`, "error"]] : []);
+        });
+      }
+    }
+
     test("a throwing notifier cannot replace the typed error", async () => {
       const error = new Error("original");
       const { ctx, fail } = failureContext("rpc", error);

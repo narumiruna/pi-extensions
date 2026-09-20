@@ -24,27 +24,36 @@ for (const outcome of ["absent", "success", "resolved", "throw", "rejected"] as 
     };
     const reporting = callErrorReporter(ctx, options, error);
     assert.deepEqual(calls, outcome === "absent" ? [] : [[options, ctx, error]]);
-    if (outcome === "absent" || outcome === "throw") assert.equal(reporting, false);
-    assert.equal(await reporting, outcome === "success" || outcome === "resolved");
+    if (outcome === "absent" || outcome === "throw") {
+      assert.equal(reporting, false);
+    } else {
+      assert.ok(reporting);
+      if (outcome === "rejected") {
+        await assert.rejects(async () => reporting.completion, /reporter failed/u);
+      } else {
+        assert.equal(await reporting.completion, undefined);
+      }
+    }
   });
 }
 
-test("error reporter waits for the custom reporter to settle", async () => {
+test("error reporter returns the original pending completion without chaining a promise", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   const reporting = callErrorReporter(ctx, { onError: () => gate }, "failure");
-  assert.notEqual(reporting, false);
+  assert.ok(reporting);
+  assert.equal(reporting.completion, gate);
   let settled = false;
-  const waiting = Promise.resolve(reporting).then((reported) => {
+  const waiting = Promise.resolve(reporting.completion).then(() => {
     settled = true;
-    return reported;
   });
   await Promise.resolve();
   assert.equal(settled, false);
   release();
-  assert.equal(await waiting, true);
+  await waiting;
+  assert.equal(settled, true);
 });
 
 const hostile = "  bad\x1b[31m\x1b]0;title\x07\n\ttext\x00\x9b2J\u202e  ";

@@ -515,7 +515,15 @@ async function reportLiveChoiceError<
   Context extends MenuContext,
 >(ctx: Context, options: RunLiveChoiceOptions<Item, ShortcutId, Context>, error: unknown) {
   const reporting = callErrorReporter(ctx, options, error);
-  const reported = reporting && (await reporting);
+  let reported = false;
+  if (reporting) {
+    try {
+      await reporting.completion;
+      reported = true;
+    } catch {
+      // Fall through to Pi's notifier when the custom reporter rejects.
+    }
+  }
   if (reported || !ctx.hasUI || !isCurrent(options) || options.signal?.aborted) return;
   notifyInteractionError(ctx, error, "Live choice failed: ", safeMenuText);
 }

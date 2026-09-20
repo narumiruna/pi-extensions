@@ -184,7 +184,15 @@ async function reportInteractionError<Value, Context extends MenuContext>(
 ): Promise<RunCustomInteractionResult<Value>> {
   if (!isCurrent(options) || options.signal?.aborted) return { kind: "stale" };
   const reporting = callErrorReporter(ctx, options, error);
-  const reported = reporting && (await reporting);
+  let reported = false;
+  if (reporting) {
+    try {
+      await reporting.completion;
+      reported = true;
+    } catch {
+      // Fall through to Pi's notifier when the custom reporter rejects.
+    }
+  }
   if (!reported && ctx.hasUI) {
     notifyInteractionError(ctx, error, "Custom interaction failed: ", safeMenuText);
   }
