@@ -83,6 +83,7 @@ export function createPiLangfuseSessionController(
   options: PiLangfuseSessionControllerOptions,
 ): PiLangfuseSessionController {
   let binding: ActiveBinding | undefined;
+  let runtimeForShutdown: LangfuseRuntime | undefined;
   let ownerRegistration: Registration | undefined;
   let pendingInitialization: PendingInitialization | undefined;
   let disposePromise: Promise<void> | undefined;
@@ -110,6 +111,7 @@ export function createPiLangfuseSessionController(
       ownerRegistration = undefined;
       sessionGeneration += 1;
       closeBinding(binding, "Pi Langfuse session controller was disposed.", lastSnapshot);
+      runtimeForShutdown = undefined;
       disposePromise = initialization
         ? initialization.completion.then((result) => {
             if (!result.ok) throw result.error;
@@ -197,6 +199,7 @@ export function createPiLangfuseSessionController(
         return;
       }
       binding = nextBinding;
+      if (options.shutdownRuntimeOnQuit) runtimeForShutdown = resolved.runtime;
       options.onSessionReady?.(resolved);
     } catch (error) {
       if (isCurrent()) options.onInitializationError?.(error, ctx);
@@ -375,7 +378,7 @@ export function createPiLangfuseSessionController(
       const generation = ++sessionGeneration;
       options.onSessionShutdown?.();
       const active = binding?.registration === registration ? binding : undefined;
-      const runtime = active?.runtime;
+      const runtime = active?.runtime ?? runtimeForShutdown;
       lastSnapshot = active ? contextSnapshot(ctx) : lastSnapshot;
       closeBinding(
         active,

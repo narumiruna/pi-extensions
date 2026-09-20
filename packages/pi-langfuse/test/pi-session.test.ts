@@ -285,6 +285,45 @@ test("stale session shutdown does not flush or close a replacement session", asy
   await runtime.shutdown();
 });
 
+test("final quit shuts down a retained runtime after a replacement session cannot bind", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  let resolveCalls = 0;
+  const shutdownErrors: unknown[] = [];
+  backend.forceFlush = async () => {
+    backend.flushes += 1;
+    if (backend.flushes === 1) throw new Error("replacement flush failed");
+  };
+  const controller = createPiLangfuseSessionController({
+    resolveSession: async () => {
+      resolveCalls += 1;
+      return resolveCalls === 1 ? { runtime } : undefined;
+    },
+    onShutdownError: (error) => shutdownErrors.push(error),
+    flushOnReplacement: true,
+    shutdownRuntimeOnQuit: true,
+  });
+  const mock = createMockPi();
+  controller.extension(mock.pi);
+  const { ctx } = createMockContext();
+
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
+  assert.deepEqual(
+    shutdownErrors.map((error) => (error instanceof Error ? error.message : String(error))),
+    ["replacement flush failed"],
+  );
+  assert.equal(backend.shutdowns, 0);
+
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  assert.equal(controller.active, false);
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx);
+
+  assert.equal(runtime.closed, true);
+  assert.equal(backend.flushes, 2);
+  assert.equal(backend.shutdowns, 1);
+});
+
 test("runtime shutdown wins a race with asynchronous trace initialization", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);
