@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-herdr",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Herdr agent-state integration and operating skill for Pi.",
   "type": "module",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-fleet",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Pi extension for spawning and connecting local Pi sessions.",
   "type": "module",
   "license": "MIT",

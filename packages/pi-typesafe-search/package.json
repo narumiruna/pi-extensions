@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-typesafe-search",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi extension for SQLite FTS5 search with TypeSafe Jev semantic reranking.",
   "type": "module",
   "license": "MIT",
