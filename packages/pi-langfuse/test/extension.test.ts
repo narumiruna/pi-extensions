@@ -764,7 +764,7 @@ test("session shutdown reports stale owned runtime cleanup failures", async () =
   const backend = new FakeBackend();
   backend.shutdown = async () => {
     backend.shutdowns += 1;
-    throw new Error("owned backend shutdown failed");
+    throw new Error("owned backend shutdown failed for pk-stale-private and sk-stale-private");
   };
   const backendReady = deferred<FakeBackend>();
   const initializationStarted = deferred<void>();
@@ -773,8 +773,8 @@ test("session shutdown reports stale owned runtime cleanup failures", async () =
     loadConfig: async () => ({
       ok: true,
       config: {
-        publicKey: "pk",
-        secretKey: "sk",
+        publicKey: "pk-stale-private",
+        secretKey: "sk-stale-private",
         baseUrl: "https://example.test",
         captureContent: false,
       },
@@ -796,7 +796,9 @@ test("session shutdown reports stale owned runtime cleanup failures", async () =
   await Promise.all([startFailure, pendingShutdown]);
 
   assert.equal(backend.shutdowns, 1);
-  assert.match(notifications.at(-1)?.message ?? "", /Langfuse shutdown export failed: owned backend shutdown failed/u);
+  const message = notifications.at(-1)?.message ?? "";
+  assert.match(message, /Langfuse shutdown export failed: owned backend shutdown failed.*LANGFUSE_KEY_REDACTED/u);
+  assert.doesNotMatch(message, /pk-stale-private|sk-stale-private/u);
 });
 
 test("session shutdown is idempotent and reports initialization failures", async () => {

@@ -60,7 +60,7 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
       onSessionShutdown() {
         sessionGeneration += 1;
         menuController.abort(new DOMException("Langfuse session shut down", "AbortError"));
-        shutdownConfig = activeConfig ?? runtimeConfigForShutdown;
+        shutdownConfig = activeConfig ?? runtimeConfigForShutdown ?? loadingConfig;
         activeConfig = undefined;
       },
       async resolveSession(ctx, isCurrent) {
