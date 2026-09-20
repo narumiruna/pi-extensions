@@ -16,7 +16,12 @@ import {
   loginWithOAuthUI,
   SUPPORTED_PROVIDER_IDS,
 } from "./oauth.js";
-import { parseCredentialRequest, registerOAuthCredentialSource } from "./oauth-credential-source.js";
+import {
+  parseCredentialReadinessRequest,
+  parseCredentialRequest,
+  registerOAuthCredentialReadiness,
+  registerOAuthCredentialSource,
+} from "./oauth-credential-source.js";
 import {
   type EnsureActiveProviderAuthResult,
   RUNTIME_FAIL_CLOSED_API_KEY,
@@ -60,6 +65,7 @@ type SessionEntryWriter = {
 };
 
 type SessionSelectionOwner = {
+  context: ExtensionContext;
   sessionManager: ExtensionContext["sessionManager"] & SessionEntryWriter;
   sessionId: string;
   selections: ProviderAccountSelections;
@@ -72,6 +78,10 @@ type SessionSelectionOwner = {
   appliedIdentities: Map<AccountProviderId, string>;
   abortProviders: Set<AccountProviderId>;
   syncTasks: Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>;
+  pendingSyncTasks: Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>;
+  startupTask: Promise<void>;
+  startupTasks: Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>;
+  startupCompletedProviders: Set<AccountProviderId>;
 };
 
 type SyncProvider = (
@@ -132,7 +142,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       return;
     }
     try {
-      const data = await store.readAsync();
+      const data = await store.readAsync(owner.signal);
       if (!isOwnerCurrent(owner)) return;
       for (const provider of missingProviders) {
         selections = setAccountSelection(selections, provider.id, data.providers[provider.id]?.active ?? null);
@@ -159,10 +169,14 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       previous.appliedIdentities.clear();
       previous.abortProviders.clear();
       previous.syncTasks.clear();
+      previous.pendingSyncTasks.clear();
+      previous.startupTasks.clear();
+      previous.startupCompletedProviders.clear();
       for (const coordinator of previous.coordinators.values()) coordinator.invalidate(ctx);
     }
     const controller = new AbortController();
     const owner: SessionSelectionOwner = {
+      context: ctx,
       // Pi exposes this as read-only to extensions, but the runtime context contains the concrete
       // session manager. Factory-bound pi.appendEntry() cannot target concurrent session owners.
       sessionManager: ctx.sessionManager as ExtensionContext["sessionManager"] & SessionEntryWriter,
@@ -176,6 +190,10 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       appliedIdentities: new Map(),
       abortProviders: new Set(),
       syncTasks: new Map(),
+      pendingSyncTasks: new Map(),
+      startupTask: Promise.resolve(),
+      startupTasks: new Map(),
+      startupCompletedProviders: new Set(),
     };
     sessionOwners.set(ctx.sessionManager, owner);
     owner.ready = initializeOwner(owner, ctx);
@@ -246,7 +264,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
         latest = owner.syncTasks.get(providerId);
         if (!isOwnerCurrent(owner)) return latest && latest !== task ? latest : staleResult(providerId);
         if (latest && latest !== task) return latest;
-        const credential = await selectedCredential(store, providerId, result);
+        const credential = await selectedCredential(store, providerId, result, signal);
         latest = owner.syncTasks.get(providerId);
         if (!isOwnerCurrent(owner)) return latest && latest !== task ? latest : staleResult(providerId);
         if (latest && latest !== task) return latest;
@@ -266,13 +284,39 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       return result;
     })();
     owner.syncTasks.set(providerId, task);
+    owner.pendingSyncTasks.set(providerId, task);
+    const clearPending = () => {
+      if (!isOwnerCurrent(owner) || owner.pendingSyncTasks.get(providerId) !== task) return;
+      owner.pendingSyncTasks.delete(providerId);
+    };
+    void task.then(clearPending, clearPending);
+    return task;
+  };
+
+  const startupProvider = (
+    providerId: AccountProviderId,
+    ctx: ExtensionContext,
+    owner: SessionSelectionOwner,
+  ): Promise<EnsureActiveProviderAuthResult> => {
+    if (owner.startupCompletedProviders.has(providerId)) {
+      return Promise.resolve(owner.results.get(providerId) ?? staleResult(providerId));
+    }
+    const existing = owner.startupTasks.get(providerId);
+    if (existing) return existing;
+    let task!: Promise<EnsureActiveProviderAuthResult>;
+    task = syncProvider(providerId, ctx, owner).finally(() => {
+      if (!isOwnerCurrent(owner) || owner.startupTasks.get(providerId) !== task) return;
+      owner.startupTasks.delete(providerId);
+      owner.startupCompletedProviders.add(providerId);
+    });
+    owner.startupTasks.set(providerId, task);
     return task;
   };
 
   const syncAll = async (ctx: ExtensionContext, owner: SessionSelectionOwner): Promise<void> => {
     for (const provider of providers) {
       if (!isOwnerCurrent(owner)) return;
-      const result = await syncProvider(provider.id, ctx, owner);
+      const result = await startupProvider(provider.id, ctx, owner);
       if (!isOwnerCurrent(owner)) return;
       if (result.status === "error") {
         ctx.ui.notify(
@@ -284,6 +328,70 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     if (isOwnerCurrent(owner)) updateStatus(ctx, owner.results);
   };
 
+  const waitForCurrentProvider = async (providerId: AccountProviderId, owner: SessionSelectionOwner): Promise<void> => {
+    await owner.ready;
+    if (!isOwnerCurrent(owner)) return;
+    let pending = owner.pendingSyncTasks.get(providerId);
+    if (!pending) {
+      pending = owner.startupCompletedProviders.has(providerId)
+        ? syncProvider(providerId, owner.context, owner)
+        : startupProvider(providerId, owner.context, owner);
+    }
+    while (true) {
+      let rejected = false;
+      let failure: unknown;
+      try {
+        await pending;
+      } catch (error) {
+        rejected = true;
+        failure = error;
+      }
+      if (!isOwnerCurrent(owner)) return;
+      const latest = owner.syncTasks.get(providerId);
+      if (latest && latest !== pending) {
+        pending = latest;
+        continue;
+      }
+      if (rejected) throw failure;
+      return;
+    }
+  };
+
+  const startBackgroundSync = (ctx: ExtensionContext, owner: SessionSelectionOwner): void => {
+    owner.startupTask = (async () => {
+      try {
+        await owner.ready;
+        if (!isOwnerCurrent(owner)) return;
+        await syncAll(ctx, owner);
+      } catch (error) {
+        if (!isOwnerCurrent(owner)) return;
+        try {
+          ctx.ui.notify(`Account startup activation failed: ${redactTokenText(errorMessage(error))}`, "error");
+        } catch {
+          // Detached startup must stay handled if the UI disappears during replacement or reload.
+        }
+      }
+    })();
+  };
+
+  registerOAuthCredentialReadiness(pi, [
+    {
+      waitForCredential(data) {
+        const request = parseCredentialReadinessRequest(data);
+        if (!request) return;
+        const owner = sessionOwners.get(request.session as ExtensionContext["sessionManager"]);
+        const providerId = toProviderId(request.provider);
+        if (!owner || !providerId) return;
+        const pending = waitForCurrentProvider(providerId, owner);
+        try {
+          request.waitUntil(pending);
+        } catch {
+          void pending.catch(() => undefined);
+        }
+      },
+    },
+  ]);
+
   pi.registerCommand(
     "accounts",
     createAccountCommand(store, adapters, syncProvider, persistSelection, ensureSessionOwner, (owner) => ({
@@ -292,14 +400,13 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     })),
   );
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     const owner = startSessionOwner(ctx);
     if (migrationNotice) {
       ctx.ui.notify(migrationNotice, "warning");
       migrationNotice = undefined;
     }
-    await owner.ready;
-    if (isOwnerCurrent(owner)) await syncAll(ctx, owner);
+    startBackgroundSync(ctx, owner);
   });
 
   pi.on("model_select", async (event, ctx) => {
@@ -317,7 +424,9 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     const providerId = toProviderId(ctx.model?.provider);
     if (!providerId) return;
     try {
-      const result = await syncProvider(providerId, ctx, owner);
+      const result = owner.startupCompletedProviders.has(providerId)
+        ? await syncProvider(providerId, ctx, owner)
+        : await startupProvider(providerId, ctx, owner);
       if (!isOwnerCurrent(owner)) return;
       const coordinator = owner.coordinators.get(providerId);
       if (result.status === "error") owner.abortProviders.add(providerId);
@@ -355,6 +464,9 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     owner.appliedIdentities.clear();
     owner.abortProviders.clear();
     owner.syncTasks.clear();
+    owner.pendingSyncTasks.clear();
+    owner.startupTasks.clear();
+    owner.startupCompletedProviders.clear();
     await Promise.allSettled(
       [...owner.coordinators.values()].map(async (coordinator) => {
         coordinator.invalidate(ctx, false);
@@ -644,10 +756,11 @@ async function selectedCredential(
   store: AccountStore,
   providerId: AccountProviderId,
   result: EnsureActiveProviderAuthResult,
+  signal?: AbortSignal,
 ): Promise<StoredOAuthCredential | undefined> {
   if (result.status === "inactive") return undefined;
   try {
-    const state = await store.readProviderAsync(providerId);
+    const state = await store.readProviderAsync(providerId, signal);
     return getOwnCredential(state.accounts, result.accountName);
   } catch {
     return undefined;

@@ -343,6 +343,13 @@ export async function resolveUsageAuth(
 
   const model = candidateModels(ctx, adapter.id).find((candidate) => hasOfficialOrigin(candidate, adapter.id));
   if (!model) return undefined;
+  if (
+    ["github-copilot", "xai"].includes(adapter.id) &&
+    candidateReader?.waitUntilReady &&
+    !(await candidateReader.waitUntilReady(ctx, adapter.id))
+  ) {
+    throw new Error(`${adapter.displayName} OAuth credential readiness failed closed.`);
+  }
   // SAFETY: Pi exposes the required auth methods at runtime, and checks below narrow them before use.
   const registry = ctx.modelRegistry as unknown as UsageAuthRegistry;
   const provider = registry.getProvider?.(adapter.id);
@@ -416,7 +423,7 @@ export async function resolveUsageAuth(
   };
   if (adapter.id === "github-copilot") {
     const offered = candidateReader
-      ? candidateReader(ctx, adapter.id)
+      ? await candidateReader(ctx, adapter.id)
       : fallbackOAuthCredentialCandidates(adapter.id, credentialReader);
     if (!offered.ok) {
       throw new Error("GitHub Copilot OAuth credential discovery failed closed.");
@@ -425,7 +432,7 @@ export async function resolveUsageAuth(
   }
   if (adapter.id === "xai") {
     const offered = candidateReader
-      ? candidateReader(ctx, adapter.id)
+      ? await candidateReader(ctx, adapter.id)
       : fallbackOAuthCredentialCandidates(adapter.id, credentialReader);
     if (!offered.ok) throw new Error("xAI OAuth credential discovery failed closed.");
     return finalize(resolveXaiUsageAuth(auth, model, salt, offered.candidates));

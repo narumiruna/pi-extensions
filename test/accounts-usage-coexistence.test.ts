@@ -122,12 +122,13 @@ async function createStore() {
   return store;
 }
 
-function registerAccounts(mock: ReturnType<typeof createMockPi>, store: AccountStore) {
+function registerAccounts(
+  mock: ReturnType<typeof createMockPi>,
+  store: AccountStore,
+  providers: AccountProviderAdapter[] = [provider("openai-codex"), provider("anthropic"), provider("github-copilot")],
+) {
   const sessionStartIndex = mock.events.get("session_start")?.length ?? 0;
-  accountsExtension(mock.pi, {
-    store,
-    providers: [provider("openai-codex"), provider("anthropic"), provider("github-copilot")],
-  });
+  accountsExtension(mock.pi, { store, providers });
   return {
     sessionStart: mock.events.get("session_start")?.[sessionStartIndex],
   };
@@ -140,6 +141,11 @@ function registerUsage(mock: ReturnType<typeof createMockPi>): void {
       access: "unrelated-default-runtime",
     }),
   });
+}
+
+async function settle(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function installUsageFetch(requests: Array<{ url: string; authorization: string | null }>): void {
@@ -210,10 +216,75 @@ test.each(["accounts-first", "usage-first"] as const)(
 
     keys.set("github-copilot", "runtime-with-no-matching-oauth");
     await mock.commands.get("usage")?.handler("", ctx);
+    assert.equal(keys.get("github-copilot"), "runtime-second");
     assert.equal(requests.length, 2);
-    assert.match(titles.at(-1) ?? "", /Authentication unavailable/iu);
+    assert.match(titles.at(-1) ?? "", /named-account/iu);
   },
 );
+
+test("usage-first model selection waits for the latest account activation", async () => {
+  const requests: Array<{ url: string; authorization: string | null }> = [];
+  installUsageFetch(requests);
+  const store = await createStore();
+  const mock = createMockPi();
+  registerUsage(mock);
+
+  let blockNextConversion = false;
+  let markConversionStarted!: () => void;
+  const conversionStarted = new Promise<void>((resolve) => {
+    markConversionStarted = resolve;
+  });
+  let releaseConversion!: () => void;
+  const conversionReleased = new Promise<void>((resolve) => {
+    releaseConversion = resolve;
+  });
+  const copilot = provider("github-copilot");
+  copilot.oauth.toAuth = async (current) => {
+    if (blockNextConversion) {
+      blockNextConversion = false;
+      markConversionStarted();
+      await conversionReleased;
+    }
+    return { apiKey: current.access };
+  };
+  registerAccounts(mock, store, [provider("openai-codex"), provider("anthropic"), copilot]);
+
+  const { registry } = runtimeRegistry(mock);
+  const { ctx } = createMockContext({
+    hasUI: true,
+    mode: "rpc",
+    model: copilotModel,
+    modelRegistry: registry,
+    sessionManager: SessionManager.inMemory(),
+    select: async () => "Close",
+  });
+  for (const handler of mock.events.get("session_start") ?? []) await handler({}, ctx);
+  await mock.commands.get("usage")?.handler("", ctx);
+  assert.equal(requests.at(-1)?.authorization, "Bearer github-first");
+  requests.length = 0;
+
+  await store.updateProvider("github-copilot", (state) => ({
+    ...state,
+    accounts: { ...state.accounts, first: credential("second") },
+  }));
+  blockNextConversion = true;
+  const selection = (async () => {
+    for (const handler of mock.events.get("model_select") ?? []) {
+      await handler({ model: copilotModel }, ctx);
+    }
+  })();
+
+  await conversionStarted;
+  await settle();
+  assert.equal(requests.length, 0);
+
+  releaseConversion();
+  await selection;
+  for (let attempt = 0; attempt < 20 && requests.length === 0; attempt += 1) await settle();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.authorization, "Bearer github-second");
+  for (const handler of mock.events.get("session_shutdown") ?? []) await handler({}, ctx);
+});
 
 test("built generated entries complete a representative named-account usage boundary", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-accounts-usage-generated-"));

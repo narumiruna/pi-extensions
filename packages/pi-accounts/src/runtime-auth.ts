@@ -48,10 +48,11 @@ type ActiveCredentialOffer = {
 };
 
 export type RuntimeAccountStore = {
-  readProviderAsync(providerId: AccountProviderId): Promise<ProviderAccountState>;
+  readProviderAsync(providerId: AccountProviderId, signal?: AbortSignal): Promise<ProviderAccountState>;
   updateProviderAsync(
     providerId: AccountProviderId,
     mutator: (state: ProviderAccountState) => Promise<ProviderAccountState>,
+    signal?: AbortSignal,
   ): Promise<ProviderAccountState>;
 };
 
@@ -93,7 +94,7 @@ export class RuntimeAuthCoordinator {
     let state: ProviderAccountState;
     try {
       refreshSignal.throwIfAborted();
-      state = await store.readProviderAsync(this.provider.id);
+      state = await store.readProviderAsync(this.provider.id, refreshSignal);
       refreshSignal.throwIfAborted();
     } catch (error) {
       return this.failClosed(ctx, operation, runtimeOverride, selectedAccount ?? "unknown", error);
@@ -130,25 +131,29 @@ export class RuntimeAuthCoordinator {
       let refreshError: unknown;
       let current = state;
       try {
-        current = await store.updateProviderAsync(this.provider.id, async (latest) => {
-          const latestCredential = getOwnCredential(latest.accounts, active);
-          if (!latestCredential) return latest;
-          credential = latestCredential;
-          if (latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
-          try {
-            refreshSignal.throwIfAborted();
-            const refreshed = await resolveProviderOAuth(this.provider, ctx).refresh(latestCredential, refreshSignal);
-            refreshSignal.throwIfAborted();
-            credential = refreshed;
-            return {
-              ...latest,
-              accounts: defineOwn(latest.accounts, active, refreshed),
-            };
-          } catch (error) {
-            refreshError = error;
-            return latest;
-          }
-        });
+        current = await store.updateProviderAsync(
+          this.provider.id,
+          async (latest) => {
+            const latestCredential = getOwnCredential(latest.accounts, active);
+            if (!latestCredential) return latest;
+            credential = latestCredential;
+            if (latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
+            try {
+              refreshSignal.throwIfAborted();
+              const refreshed = await resolveProviderOAuth(this.provider, ctx).refresh(latestCredential, refreshSignal);
+              refreshSignal.throwIfAborted();
+              credential = refreshed;
+              return {
+                ...latest,
+                accounts: defineOwn(latest.accounts, active, refreshed),
+              };
+            } catch (error) {
+              refreshError = error;
+              return latest;
+            }
+          },
+          refreshSignal,
+        );
       } catch (error) {
         refreshError = error;
         credential = getOwnCredential(current.accounts, active) ?? credential;
@@ -166,7 +171,7 @@ export class RuntimeAuthCoordinator {
         );
       }
       if (refreshError !== undefined) {
-        const selection = await this.selectedCredentialMatches(store, active, credential);
+        const selection = await this.selectedCredentialMatches(store, active, credential, refreshSignal);
         if (selection.error !== undefined) {
           return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
         }
@@ -186,7 +191,7 @@ export class RuntimeAuthCoordinator {
       auth = await resolveProviderOAuth(this.provider, ctx).toAuth(credential);
       runtimeApiKey = validateModelAuth(auth, this.provider);
     } catch (error) {
-      const selection = await this.selectedCredentialMatches(store, active, credential);
+      const selection = await this.selectedCredentialMatches(store, active, credential, refreshSignal);
       if (selection.error !== undefined) {
         return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
       }
@@ -199,7 +204,7 @@ export class RuntimeAuthCoordinator {
       return this.failClosed(ctx, operation, runtimeOverride, active, error, credential);
     }
 
-    const selection = await this.selectedCredentialMatches(store, active, credential);
+    const selection = await this.selectedCredentialMatches(store, active, credential, refreshSignal);
     if (selection.error !== undefined) {
       return this.failClosed(ctx, operation, runtimeOverride, active, selection.error, credential);
     }
@@ -228,7 +233,7 @@ export class RuntimeAuthCoordinator {
       if (!this.overlay.isCurrent(operation)) {
         return { status: "inactive", providerId: this.provider.id };
       }
-      const refreshedSelection = await this.selectedCredentialMatches(store, active, credential);
+      const refreshedSelection = await this.selectedCredentialMatches(store, active, credential, refreshSignal);
       if (refreshedSelection.error !== undefined) {
         throw refreshedSelection.error;
       }
@@ -449,9 +454,10 @@ export class RuntimeAuthCoordinator {
     store: RuntimeAccountStore,
     accountName: string,
     expected: OAuthCredential,
+    signal?: AbortSignal,
   ): Promise<{ matches: boolean; error?: unknown }> {
     try {
-      const latest = await store.readProviderAsync(this.provider.id);
+      const latest = await store.readProviderAsync(this.provider.id, signal);
       const current = getOwnCredential(latest.accounts, accountName);
       return {
         matches: current !== undefined && JSON.stringify(current) === JSON.stringify(expected),

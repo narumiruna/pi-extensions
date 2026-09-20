@@ -65,6 +65,34 @@ test("account reads follow queued default writes and recover after a failed writ
   assert.equal((await store.readProviderAsync("anthropic")).active, undefined);
 });
 
+test("aborting a queued store operation releases later operations after the active operation", async () => {
+  const store = new AccountStore(new InMemoryAccountStorageBackend());
+  let markFirstEntered!: () => void;
+  const firstEntered = new Promise<void>((resolve) => {
+    markFirstEntered = resolve;
+  });
+  let releaseFirst!: () => void;
+  const firstReleased = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const first = store.updateProviderAsync("anthropic", async () => {
+    markFirstEntered();
+    await firstReleased;
+    return { active: "first", accounts: {} };
+  });
+  await firstEntered;
+
+  const controller = new AbortController();
+  const aborted = store.readAsync(controller.signal);
+  const later = store.updateProvider("anthropic", (state) => ({ ...state, active: "later" }));
+  controller.abort(new DOMException("test cancellation", "AbortError"));
+  await assert.rejects(aborted, (error: unknown) => error instanceof DOMException && error.name === "AbortError");
+
+  releaseFirst();
+  await Promise.all([first, later]);
+  assert.equal((await store.readProviderAsync("anthropic")).active, "later");
+});
+
 test("default saves reject invalid existing documents without replacing them", async () => {
   for (const raw of ["", "  ", "{", "[]", '{"version":1,"providers":{"anthropic":{"active":42,"accounts":{}}}}']) {
     const backend = new InMemoryAccountStorageBackend();
@@ -349,6 +377,47 @@ test("missing account reads wait for an in-progress first write", async () => {
 
     assert.equal(settledWhileWriteHeld, false);
     assert.equal(await read, "published");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("async account reads abort while waiting for another file-lock owner", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-accounts-store-abort-lock-"));
+  const file = join(dir, ACCOUNTS_FILE);
+  try {
+    const owner = new FileAccountStorageBackend(file);
+    let markOwnerEntered!: () => void;
+    const ownerEntered = new Promise<void>((resolve) => {
+      markOwnerEntered = resolve;
+    });
+    let releaseOwner!: () => void;
+    const ownerReleased = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    const held = owner.withLockAsync(async () => {
+      markOwnerEntered();
+      await ownerReleased;
+      return { result: undefined, next: "owned" };
+    });
+    await ownerEntered;
+
+    const waiter = new FileAccountStorageBackend(file);
+    const controller = new AbortController();
+    let readerEntered = false;
+    const read = waiter.readAsync(async () => {
+      readerEntered = true;
+      return "read";
+    }, controller.signal);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort(new DOMException("test cancellation", "AbortError"));
+    await assert.rejects(read, (error: unknown) => error instanceof DOMException && error.name === "AbortError");
+    assert.equal(readerEntered, false);
+
+    releaseOwner();
+    await held;
+    await waiter.withLockAsync(async () => ({ result: undefined, next: "later" }));
+    assert.equal(await waiter.readAsync(async (current) => current), "later");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

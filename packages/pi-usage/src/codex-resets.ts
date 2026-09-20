@@ -101,11 +101,18 @@ export async function resolveCodexResetAuth(
   const expectedModel = `${model.provider}/${model.id}`;
   const adapter = adapterForProvider("openai-codex");
   if (!adapter) throw new Error("OpenAI Codex usage support is unavailable.");
+  if (candidateReader?.waitUntilReady && !(await candidateReader.waitUntilReady(ctx, "openai-codex"))) {
+    throw new Error("OpenAI Codex OAuth credential readiness failed closed.");
+  }
   const auth = await resolveUsageAuth(ctx, adapter, salt, credentialReader);
   if (`${ctx.model?.provider}/${ctx.model?.id}` !== expectedModel) {
     throw new Error("The current model changed while resolving Codex reset authentication.");
   }
   if (!auth) throw new Error("No runtime credential is configured for OpenAI Codex.");
+  const offered = candidateReader
+    ? await candidateReader(ctx, "openai-codex")
+    : fallbackOAuthCredentialCandidates("openai-codex", credentialReader);
+  if (!offered.ok) throw new Error("OpenAI Codex OAuth credential discovery failed closed.");
 
   const resolvedAccess = bearerToken(headerValue(auth.headers, "Authorization")) ?? auth.apiKey;
   if (!resolvedAccess) throw new Error("OpenAI Codex OAuth credentials were incomplete.");
@@ -113,10 +120,6 @@ export async function resolveCodexResetAuth(
   if (!resolvedAccountId) {
     throw new Error("The active OpenAI Codex access token did not contain a valid account ID.");
   }
-  const offered = candidateReader
-    ? candidateReader(ctx, "openai-codex")
-    : fallbackOAuthCredentialCandidates("openai-codex", credentialReader);
-  if (!offered.ok) throw new Error("OpenAI Codex OAuth credential discovery failed closed.");
   const { accountId, storedAccess } = selectCodexResetCredential(
     offered.candidates,
     resolvedAccess,

@@ -46,8 +46,8 @@ export class AccountStore {
     return this.backend.read((current) => parseAccountsData(current));
   }
 
-  async readAsync(): Promise<AccountsData> {
-    return this.serialized(() => this.backend.readAsync(async (current) => parseAccountsData(current)));
+  async readAsync(signal?: AbortSignal): Promise<AccountsData> {
+    return this.serialized(() => this.backend.readAsync(async (current) => parseAccountsData(current), signal), signal);
   }
 
   async write(data: AccountsData): Promise<void> {
@@ -58,17 +58,22 @@ export class AccountStore {
     return this.updateAsync(async (data) => mutator(data));
   }
 
-  async updateAsync(mutator: (data: AccountsData) => Promise<AccountsData>): Promise<AccountsData> {
-    return this.serialized(async () =>
-      this.backend.withLockAsync(async (current) => {
-        const next = await mutator(parseAccountsData(current));
-        return { result: normalizeAccountsData(next), next: stringifyAccountsData(next) };
-      }),
+  async updateAsync(
+    mutator: (data: AccountsData) => Promise<AccountsData>,
+    signal?: AbortSignal,
+  ): Promise<AccountsData> {
+    return this.serialized(
+      async () =>
+        this.backend.withLockAsync(async (current) => {
+          const next = await mutator(parseAccountsData(current));
+          return { result: normalizeAccountsData(next), next: stringifyAccountsData(next) };
+        }, signal),
+      signal,
     );
   }
 
-  async readProviderAsync(providerId: AccountProviderId): Promise<ProviderAccountsData> {
-    const data = await this.readAsync();
+  async readProviderAsync(providerId: AccountProviderId, signal?: AbortSignal): Promise<ProviderAccountsData> {
+    const data = await this.readAsync(signal);
     return cloneProviderState(data.providers[providerId]);
   }
 
@@ -82,6 +87,7 @@ export class AccountStore {
   async updateProviderAsync(
     providerId: AccountProviderId,
     mutator: (state: ProviderAccountsData) => Promise<ProviderAccountsData>,
+    signal?: AbortSignal,
   ): Promise<ProviderAccountsData> {
     let updated = emptyProviderState();
     await this.updateAsync(async (data) => {
@@ -90,7 +96,7 @@ export class AccountStore {
         ...data,
         providers: defineOwn(data.providers, providerId, updated),
       };
-    });
+    }, signal);
     return updated;
   }
 
@@ -98,19 +104,49 @@ export class AccountStore {
     await this.serialized(async () => this.backend.withLockAsync(async () => ({ result: undefined, next: raw })));
   }
 
-  private async serialized<T>(operation: () => Promise<T>): Promise<T> {
+  private async serialized<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const previous = this.operationTail;
     let release: () => void = () => undefined;
-    this.operationTail = new Promise<void>((resolve) => {
+    const slot = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await previous;
+    this.operationTail = previous.then(() => slot);
+    let entered = false;
     try {
+      await waitForTurn(previous, signal);
+      entered = true;
+      signal?.throwIfAborted();
       return await operation();
     } finally {
-      release();
+      if (entered) release();
+      else void previous.then(release, release);
     }
   }
+}
+
+function waitForTurn(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return previous;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      action();
+    };
+    const abort = () =>
+      settle(() =>
+        reject(
+          signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError"),
+        ),
+      );
+    signal.addEventListener("abort", abort, { once: true });
+    previous.then(
+      () => settle(resolve),
+      (error) => settle(() => reject(error)),
+    );
+  });
 }
 
 export function parseAccountName(input: string): { ok: true; name: string } | { ok: false; error: string } {

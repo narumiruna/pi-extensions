@@ -28,6 +28,9 @@ import lockfile from "proper-lockfile";
 const PRIVATE_FILE_WRITE_OPTIONS = { encoding: "utf8", mode: 0o600 } as const;
 const DEFAULT_SYNC_LOCK_TIMEOUT_MS = 200;
 const SYNC_LOCK_RETRY_INTERVAL_MS = 20;
+const ASYNC_LOCK_RETRIES = 10;
+const ASYNC_LOCK_MIN_TIMEOUT_MS = 100;
+const ASYNC_LOCK_MAX_TIMEOUT_MS = 10_000;
 const syncSleepState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 type LockfileFsAdapter = {
@@ -80,9 +83,12 @@ export type StorageLockResult<T> = {
 
 export interface AccountStorageBackend {
   read<T>(reader: (current: string | undefined) => T): T;
-  readAsync<T>(reader: (current: string | undefined) => Promise<T>): Promise<T>;
+  readAsync<T>(reader: (current: string | undefined) => Promise<T>, signal?: AbortSignal): Promise<T>;
   withLock<T>(mutator: (current: string | undefined) => StorageLockResult<T>): T;
-  withLockAsync<T>(mutator: (current: string | undefined) => Promise<StorageLockResult<T>>): Promise<T>;
+  withLockAsync<T>(
+    mutator: (current: string | undefined) => Promise<StorageLockResult<T>>,
+    signal?: AbortSignal,
+  ): Promise<T>;
 }
 
 export class FileAccountStorageBackend implements AccountStorageBackend {
@@ -102,8 +108,13 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
     }
   }
 
-  async readAsync<T>(reader: (current: string | undefined) => Promise<T>): Promise<T> {
-    if (!this.fileOrLockExistsForRead()) return reader(undefined);
+  async readAsync<T>(reader: (current: string | undefined) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    if (!this.fileOrLockExistsForRead()) {
+      const result = await reader(undefined);
+      signal?.throwIfAborted();
+      return result;
+    }
     let release: (() => Promise<void>) | undefined;
     let compromisedError: Error | undefined;
     const throwIfCompromised = () => {
@@ -113,10 +124,12 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
     try {
       release = await this.acquireLockAsync((error) => {
         compromisedError = error;
-      });
+      }, signal);
       throwIfCompromised();
+      signal?.throwIfAborted();
       const result = await reader(readPrivateRegularFileIfExists(this.filePath));
       throwIfCompromised();
+      signal?.throwIfAborted();
       return result;
     } finally {
       if (release) await release().catch(() => undefined);
@@ -136,7 +149,11 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
     }
   }
 
-  async withLockAsync<T>(mutator: (current: string | undefined) => Promise<StorageLockResult<T>>): Promise<T> {
+  async withLockAsync<T>(
+    mutator: (current: string | undefined) => Promise<StorageLockResult<T>>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    signal?.throwIfAborted();
     this.ensureParentDirectory();
     let release: (() => Promise<void>) | undefined;
     let compromisedError: Error | undefined;
@@ -147,12 +164,15 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
     try {
       release = await this.acquireLockAsync((error) => {
         compromisedError = error;
-      });
+      }, signal);
       throwIfCompromised();
+      signal?.throwIfAborted();
       const { result, next } = await mutator(readPrivateRegularFileIfExists(this.filePath));
       throwIfCompromised();
+      signal?.throwIfAborted();
       if (next !== undefined) this.writePrivate(next);
       throwIfCompromised();
+      signal?.throwIfAborted();
       return result;
     } finally {
       if (release) {
@@ -178,20 +198,27 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
     chmodSync(parent, 0o700);
   }
 
-  private acquireLockAsync(onCompromised: (error: Error) => void) {
-    return lockfile.lock(this.filePath, {
-      fs: LOCKFILE_FS_ADAPTER,
-      realpath: false,
-      retries: {
-        retries: 10,
-        factor: 2,
-        minTimeout: 100,
-        maxTimeout: 10_000,
-        randomize: true,
-      },
-      stale: 30_000,
-      onCompromised,
-    });
+  private async acquireLockAsync(onCompromised: (error: Error) => void, signal?: AbortSignal) {
+    let delayMs = ASYNC_LOCK_MIN_TIMEOUT_MS;
+    for (let attempt = 0; ; attempt += 1) {
+      signal?.throwIfAborted();
+      try {
+        const release = await lockfile.lock(this.filePath, {
+          fs: LOCKFILE_FS_ADAPTER,
+          realpath: false,
+          stale: 30_000,
+          onCompromised,
+        });
+        if (!signal?.aborted) return release;
+        await release().catch(() => undefined);
+        signal.throwIfAborted();
+      } catch (error) {
+        if (!isLockHeldError(error) || attempt >= ASYNC_LOCK_RETRIES) throw error;
+        const randomizedDelay = delayMs * (1 + Math.random());
+        await abortableDelay(Math.min(randomizedDelay, ASYNC_LOCK_MAX_TIMEOUT_MS), signal);
+        delayMs = Math.min(delayMs * 2, ASYNC_LOCK_MAX_TIMEOUT_MS);
+      }
+    }
   }
 
   private acquireLockSyncWithRetry(): () => void {
@@ -267,8 +294,11 @@ export class InMemoryAccountStorageBackend implements AccountStorageBackend {
     return reader(this.value);
   }
 
-  readAsync<T>(reader: (current: string | undefined) => Promise<T>): Promise<T> {
-    return reader(this.value);
+  async readAsync<T>(reader: (current: string | undefined) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    const result = await reader(this.value);
+    signal?.throwIfAborted();
+    return result;
   }
 
   withLock<T>(mutator: (current: string | undefined) => StorageLockResult<T>): T {
@@ -277,11 +307,38 @@ export class InMemoryAccountStorageBackend implements AccountStorageBackend {
     return result;
   }
 
-  async withLockAsync<T>(mutator: (current: string | undefined) => Promise<StorageLockResult<T>>): Promise<T> {
+  async withLockAsync<T>(
+    mutator: (current: string | undefined) => Promise<StorageLockResult<T>>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    signal?.throwIfAborted();
     const { result, next } = await mutator(this.value);
+    signal?.throwIfAborted();
     if (next !== undefined) this.value = next;
     return result;
   }
+}
+
+function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, delayMs));
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(
+        signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError"),
+      );
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function isLockHeldError(error: unknown): error is NodeJS.ErrnoException {
+  return isNodeError(error) && error.code === "ELOCKED";
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
