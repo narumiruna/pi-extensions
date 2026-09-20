@@ -229,6 +229,19 @@ test("host trace identifiers and tags redact embedded base64 data URIs", async (
   await runtime.shutdown();
 });
 
+test("host session rejects user IDs above the Langfuse limit", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+
+  assert.throws(
+    () => createPiLangfuseSession(runtime, { userId: "u".repeat(201) }),
+    /userId must be at most 200 characters/u,
+  );
+  const maximum = createPiLangfuseSession(runtime, { userId: "u".repeat(200) });
+  await maximum.dispose();
+  await runtime.shutdown();
+});
+
 test("onTraceId can dispose its own session after the root is initialized", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);
@@ -321,6 +334,45 @@ test("final quit shuts down a retained runtime after a replacement session canno
 
   assert.equal(runtime.closed, true);
   assert.equal(backend.flushes, 2);
+  assert.equal(backend.shutdowns, 1);
+});
+
+test("final quit retains a shared runtime created by never-bound stale initialization", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const firstStart = deferred<{ runtime: typeof runtime; releaseIfStale: (reason: string) => Promise<void> }>();
+  const initializationStarted = deferred<void>();
+  const staleReasons: string[] = [];
+  let resolveCalls = 0;
+  const controller = createPiLangfuseSessionController({
+    resolveSession: async () => {
+      resolveCalls += 1;
+      if (resolveCalls > 1) return undefined;
+      initializationStarted.resolve();
+      return firstStart.promise;
+    },
+    shutdownRuntimeOnQuit: true,
+  });
+  const mock = createMockPi();
+  controller.extension(mock.pi);
+  const { ctx } = createMockContext();
+
+  const pendingFirstStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+  await initializationStarted.promise;
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  firstStart.resolve({
+    runtime,
+    releaseIfStale: async (reason) => {
+      staleReasons.push(reason);
+    },
+  });
+  await pendingFirstStart;
+
+  assert.deepEqual(staleReasons, ["replaced"]);
+  assert.equal(controller.active, false);
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx);
+  assert.equal(runtime.closed, true);
+  assert.equal(backend.flushes, 1);
   assert.equal(backend.shutdowns, 1);
 });
 

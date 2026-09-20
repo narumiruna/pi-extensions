@@ -39,6 +39,7 @@ interface ResolvedRuntimeConfig {
 interface SharedRuntime {
   fingerprint: string;
   runtime: LangfuseRuntimeInternal;
+  shutdown: true;
 }
 
 type GlobalWithRuntime = typeof globalThis & {
@@ -149,12 +150,14 @@ async function createSharedRuntime(
   factories: RuntimeFactories,
 ): Promise<LangfuseRuntime> {
   const globalRuntime = globalThis as GlobalWithRuntime;
-  if (globalRuntime[LEGACY_RUNTIME_KEY] !== undefined) {
-    throw new Error("An older Langfuse runtime is already loaded; restart the process before enabling this version.");
-  }
   const fingerprint = configFingerprint(config);
   const existing = globalRuntime[RUNTIME_KEY];
+  const legacyRuntime = globalRuntime[LEGACY_RUNTIME_KEY];
+  if (legacyRuntime !== undefined && legacyRuntime !== existing) {
+    throw new Error("An older Langfuse runtime is already loaded; restart the process before enabling this version.");
+  }
   if (existing) {
+    if (legacyRuntime === undefined) globalRuntime[LEGACY_RUNTIME_KEY] = existing;
     const shared = await existing;
     if (shared.runtime.closed) {
       throw new Error("Langfuse tracing was already shut down; restart the process to enable it again.");
@@ -167,10 +170,12 @@ async function createSharedRuntime(
 
   const initializing = initializeRuntime(config, fingerprint, factories);
   globalRuntime[RUNTIME_KEY] = initializing;
+  globalRuntime[LEGACY_RUNTIME_KEY] = initializing;
   try {
     return (await initializing).runtime;
   } catch (error) {
     if (globalRuntime[RUNTIME_KEY] === initializing) delete globalRuntime[RUNTIME_KEY];
+    if (globalRuntime[LEGACY_RUNTIME_KEY] === initializing) delete globalRuntime[LEGACY_RUNTIME_KEY];
     throw error;
   }
 }
@@ -192,7 +197,7 @@ async function initializeRuntime(
   const runtime = getLangfuseRuntimeInternal(
     createLangfuseRuntimeFromBackend(new ProductionTraceBackend(provider, processor)),
   );
-  return { fingerprint, runtime };
+  return { fingerprint, runtime, shutdown: true };
 }
 
 const defaultFactories: RuntimeFactories = {

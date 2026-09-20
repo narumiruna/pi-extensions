@@ -78,6 +78,37 @@ test("legacy process runtime prevents an incompatible second provider", async ()
   }
 });
 
+test("v2 runtime reserves the legacy slot against reverse-order provider initialization", async () => {
+  const runtimeKey = Symbol.for("@narumitw/pi-langfuse/runtime/v2");
+  const legacyKey = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
+  const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
+  const processor = new SimpleSpanProcessor(new InMemorySpanExporter());
+  const provider = new NodeTracerProvider({ spanProcessors: [processor] });
+  const config = {
+    publicKey: "pk-reverse-order",
+    secretKey: "sk-reverse-order",
+    baseUrl: "https://example.test",
+    captureContent: false,
+  };
+
+  let backend: Awaited<ReturnType<typeof createProductionBackend>> | undefined;
+  try {
+    backend = await createProductionBackend(config, {
+      createProcessor: () => processor,
+      createProvider: () => provider,
+      selectProvider: () => undefined,
+    });
+    const legacySlot = (await globals[legacyKey]) as { shutdown?: boolean };
+
+    assert.equal(legacySlot.shutdown, true);
+    assert.equal(globals[legacyKey], globals[runtimeKey]);
+  } finally {
+    if (backend) await backend.shutdown().catch(() => undefined);
+    delete globals[runtimeKey];
+    delete globals[legacyKey];
+  }
+});
+
 test("runtime flush serialization recovers after failure and shutdown remains idempotent", async () => {
   const backend = new FakeBackend();
   let fail = true;

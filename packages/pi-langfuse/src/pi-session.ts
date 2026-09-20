@@ -177,7 +177,17 @@ export function createPiLangfuseSessionController(
       return;
     }
     if (!isCurrent()) {
-      await resolved?.releaseIfStale?.(initialization.reason ?? "replaced");
+      const reason = initialization.reason ?? "replaced";
+      if (
+        resolved &&
+        options.shutdownRuntimeOnQuit &&
+        reason !== "quit" &&
+        reason !== "disposed" &&
+        (!runtimeForShutdown || runtimeForShutdown.closed)
+      ) {
+        runtimeForShutdown = resolved.runtime;
+      }
+      await resolved?.releaseIfStale?.(reason);
       return;
     }
     if (!resolved) {
@@ -427,9 +437,10 @@ export function createPiLangfuseSessionController(
 }
 
 function createRecorderOptions(ctx: ExtensionContext, options: PiLangfuseSessionOptions = {}): TraceRecorderOptions {
+  const userId = normalizeUserId(options.userId);
   return {
     sessionId: normalizeOptionalString(options.sessionId) ?? ctx.sessionManager.getSessionId(),
-    ...(normalizeOptionalString(options.userId) ? { userId: normalizeOptionalString(options.userId) } : {}),
+    ...(userId ? { userId } : {}),
     cwd: ctx.cwd,
     mode: ctx.mode,
     captureContent: options.captureContent ?? true,
@@ -441,6 +452,7 @@ function createRecorderOptions(ctx: ExtensionContext, options: PiLangfuseSession
 }
 
 function snapshotSessionOptions(options: PiLangfuseSessionOptions): PiLangfuseSessionOptions {
+  normalizeUserId(options.userId);
   return {
     ...options,
     ...(options.tags ? { tags: [...options.tags] } : {}),
@@ -487,6 +499,12 @@ function isRealOutputDelta(event: { type: string; delta?: unknown }): boolean {
     typeof event.delta === "string" &&
     event.delta.length > 0
   );
+}
+
+function normalizeUserId(value: unknown): string | undefined {
+  const userId = normalizeOptionalString(value);
+  if (userId && userId.length > 200) throw new Error("Langfuse userId must be at most 200 characters.");
+  return userId;
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
