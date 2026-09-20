@@ -165,6 +165,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.ok(extension?.handlers.has("session_shutdown"));
 
     const widgets: Array<{ key: string; content: unknown }> = [];
+    const notifications: Array<{ message: string; type: string | undefined }> = [];
     const sessionManager = { getBranch: () => [] };
     const ctx = {
       mode: "tui",
@@ -174,10 +175,16 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
         setWidget(key: string, content: unknown) {
           widgets.push({ key, content });
         },
+        notify(message: string, type?: string) {
+          notifications.push({ message, type });
+        },
       },
     } as unknown as ExtensionContext;
     await emit(extension.handlers, "session_start", ctx);
     assert.deepEqual(widgets.at(-1), { key: "todo", content: undefined });
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0]?.message ?? "", /pi-todo is moving to pi-progress/u);
+    assert.equal(notifications[0]?.type, "warning");
 
     const tool = extension.tools.get("update_todo_list");
     assert.ok(tool);

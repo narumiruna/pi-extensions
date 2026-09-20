@@ -7,6 +7,10 @@
 Pi Todo gives the model a focused list for tracking multi-step work above Pi's editor.
 The list follows the active session branch, adapts to terminal space, and disappears when no tracked work remains or the session ends.
 
+> [!WARNING]
+> `pi-todo` is moving to [`@narumitw/pi-progress`](https://www.npmjs.com/package/@narumitw/pi-progress).
+> Keep using `pi-todo` until the replacement is available, then follow the migration steps below.
+
 ## ✨ Features
 
 - Registers one `update_todo_list` tool for meaningful multi-step work.
@@ -142,6 +146,44 @@ Terminal escape sequences, control characters, and bidirectional display control
 - Branch reconstruction uses only successful, valid, versioned `update_todo_list` or legacy `todo_widget` tool results on the active branch.
 - Adaptive sizing uses terminal height rather than the exact remaining editor viewport, so it applies a conservative row budget.
 - The widget has no independent scrolling.
+
+## 🔄 Migrate to pi-progress
+
+First confirm that the replacement has been published:
+
+```bash
+npm view @narumitw/pi-progress version
+```
+
+If that command returns `404`, keep `pi-todo` installed and wait for the replacement release.
+Once it reports a version, exit any running Pi process and migrate persistent installations in the same scope where `pi-todo` is installed.
+For a user installation, run these commands in order:
+
+```bash
+pi remove npm:@narumitw/pi-todo
+pi install npm:@narumitw/pi-progress
+```
+
+For a project installation originally created with `pi install -l`, run these commands from that project:
+
+```bash
+pi remove npm:@narumitw/pi-todo -l
+pi install npm:@narumitw/pi-progress -l
+```
+
+If the package is configured in both scopes, migrate each scope separately.
+For a temporary npm load, do not run `pi remove`; switch the `-e` source instead:
+
+```bash
+pi -e npm:@narumitw/pi-progress
+```
+
+For a local-checkout load, update the checkout first and replace the old `-e` source with the replacement's documented local path.
+Restart Pi after migration.
+Do not load both package names in the same effective configuration because they manage the same session progress through separate tools and widgets.
+This `pi-todo` release does not implement or verify the replacement's compatibility with existing sessions or `pi-todo.json`; review the published `pi-progress` release notes before migrating if either matters.
+The notice does not rewrite session or settings files.
+To roll back, remove `pi-progress` from the same persistent scope or restore the previous temporary/local `-e` source, then use `pi-todo` again.
 
 ## 🗂️ Package layout
 
