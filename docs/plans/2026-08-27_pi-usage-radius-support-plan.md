@@ -37,7 +37,7 @@ Pi 0.86.0 does not resolve the credential-origin blocker:
 
 Consequently, provider ID `radius`, model `baseUrl`, auth source, and the official model catalog do not prove that a resolved bearer was issued by `https://radius.pi.dev`. A custom gateway can use the same provider ID and return an unrelated inference origin. Sending that bearer to the official billing endpoint could disclose a custom-gateway credential.
 
-The repository still pins Pi 0.85.1 in its manifests. Raising it to 0.86.0 alone would not unblock this support and should happen separately from any future Radius adapter implementation.
+The repository's current Pi dependency floor is defined by the root [`package.json`](../../package.json), [`packages/pi-usage/package.json`](../../packages/pi-usage/package.json), and [`package-lock.json`](../../package-lock.json). Raising that floor to the assessed release alone would not unblock this support and should happen separately from any future Radius adapter implementation.
 
 Authoritative evidence to revalidate before implementation:
 
