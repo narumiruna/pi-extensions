@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { safeMenuText } from "./components/rendering.js";
 import { runCustomInteraction } from "./custom-interaction.js";
+import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import type { MenuCloseReason, MenuContext } from "./types.js";
 
 type ExtensionMode = MenuContext["mode"];
@@ -143,22 +144,18 @@ async function reportConfirmationError<Context extends MenuContext>(
   options: RunConfirmationOptions<Context>,
   error: unknown,
 ): Promise<void> {
+  const reporting = callErrorReporter(ctx, options, error);
   let reported = false;
-  if (options.onError) {
+  if (reporting) {
     try {
-      await options.onError(ctx, error);
+      await reporting.completion;
       reported = true;
     } catch {
-      // Fall through to Pi's notifier when a custom reporter is unavailable.
+      // Fall through to Pi's notifier when the custom reporter rejects.
     }
   }
   if (reported || !ctx.hasUI || !isCurrent(options) || options.signal?.aborted) return;
-  const message = error instanceof Error ? error.message : String(error);
-  try {
-    uiFor(ctx).notify(`Confirmation failed: ${safeMenuText(message)}`, "error");
-  } catch {
-    // Error reporting must not change the typed result.
-  }
+  notifyInteractionError(ctx, error, "Confirmation failed: ", safeMenuText);
 }
 
 function isCurrent<Context extends MenuContext>(options: RunConfirmationOptions<Context>) {

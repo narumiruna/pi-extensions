@@ -2,6 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type Focusable, Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import { safeMenuText } from "./components/rendering.js";
 import { runCustomInteraction } from "./custom-interaction.js";
+import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import { formatInteractionHints } from "./interaction-hints.js";
 import type { MenuCloseReason, MenuContext } from "./types.js";
 
@@ -513,22 +514,18 @@ async function reportLiveChoiceError<
   ShortcutId extends string,
   Context extends MenuContext,
 >(ctx: Context, options: RunLiveChoiceOptions<Item, ShortcutId, Context>, error: unknown) {
+  const reporting = callErrorReporter(ctx, options, error);
   let reported = false;
-  if (options.onError) {
+  if (reporting) {
     try {
-      await options.onError(ctx, error);
+      await reporting.completion;
       reported = true;
     } catch {
-      // Fall through to Pi's notifier when a custom reporter is unavailable.
+      // Fall through to Pi's notifier when the custom reporter rejects.
     }
   }
   if (reported || !ctx.hasUI || !isCurrent(options) || options.signal?.aborted) return;
-  const message = error instanceof Error ? error.message : String(error);
-  try {
-    uiFor(ctx).notify(`Live choice failed: ${safeMenuText(message)}`, "error");
-  } catch {
-    // Error reporting must not change the typed result.
-  }
+  notifyInteractionError(ctx, error, "Live choice failed: ", safeMenuText);
 }
 
 function isCurrent<Item extends LiveChoiceItem, ShortcutId extends string, Context extends MenuContext>(

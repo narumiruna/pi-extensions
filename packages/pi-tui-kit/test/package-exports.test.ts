@@ -56,6 +56,10 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   assert.equal(typeof production.runSecretInput, "function");
   assert.equal("createTuiHarness" in production, false);
   assert.equal("createRpcHarness" in production, false);
+  assert.equal("callErrorReporter" in production, false);
+  assert.equal("notifyInteractionError" in production, false);
+  const internalReporterSpecifier = "@narumitw/pi-tui-kit/interaction-error";
+  await assert.rejects(import(internalReporterSpecifier), /interaction-error.*not exported/u);
   assert.deepEqual(Object.keys(confirmation), ["runConfirmation"]);
   assert.deepEqual(Object.keys(customInteraction), ["runCustomInteraction"]);
   assert.deepEqual(Object.keys(documentReview), ["runDocumentReview"]);

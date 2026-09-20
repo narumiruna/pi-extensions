@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { safeMenuText } from "./components/rendering.js";
 import { TaskLoader } from "./components/task-loader.js";
+import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import type { MenuContext } from "./types.js";
 
 export type RunTaskResult<Value> =
@@ -157,21 +158,17 @@ async function reportTaskError<Value, Context extends MenuContext>(
   options: RunTaskOptions<Value, Context>,
   error: unknown,
 ) {
-  if (options.onError) {
+  const reporting = callErrorReporter(ctx, options, error);
+  if (reporting) {
     try {
-      await options.onError(ctx, error);
+      await reporting.completion;
       return;
     } catch {
-      // Fall through to Pi's notifier when the custom reporter is unavailable.
+      // Fall through to Pi's notifier when the custom reporter rejects.
     }
   }
   if (!ctx.hasUI) return;
-  const message = error instanceof Error ? error.message : String(error);
-  try {
-    uiFor(ctx).notify(`Task failed: ${safeMenuText(message)}`, "error");
-  } catch {
-    // Error reporting must not change the typed task result.
-  }
+  notifyInteractionError(ctx, error, "Task failed: ", safeMenuText);
 }
 
 function isCurrent<Value, Context extends MenuContext>(options: RunTaskOptions<Value, Context>) {

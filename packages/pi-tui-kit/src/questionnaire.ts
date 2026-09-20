@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runCustomInteraction } from "./custom-interaction.js";
+import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import { sanitizeTerminalText } from "./terminal-text.js";
 import type { MenuCloseReason, MenuContext } from "./types.js";
 
@@ -293,22 +294,18 @@ async function reportQuestionnaireError<QuestionId extends string, Context exten
   options: RunQuestionnaireOptions<QuestionId, Context>,
   error: unknown,
 ): Promise<void> {
+  const reporting = callErrorReporter(ctx, options, error);
   let reported = false;
-  if (options.onError) {
+  if (reporting) {
     try {
-      await options.onError(ctx, error);
+      await reporting.completion;
       reported = true;
     } catch {
-      // Fall through to Pi's notifier when a custom reporter is unavailable.
+      // Fall through to Pi's notifier when the custom reporter rejects.
     }
   }
   if (reported || !ctx.hasUI || !isCurrent(options) || options.signal?.aborted) return;
-  const message = error instanceof Error ? error.message : String(error);
-  try {
-    uiFor(ctx).notify(`Questionnaire failed: ${sanitizeTerminalText(message)}`, "error");
-  } catch {
-    // Error reporting must not change the typed result.
-  }
+  notifyInteractionError(ctx, error, "Questionnaire failed: ", sanitizeTerminalText);
 }
 
 function isCurrent<QuestionId extends string, Context extends MenuContext>(
