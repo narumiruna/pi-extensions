@@ -2,29 +2,29 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
-import { DEFAULT_TODO_SETTINGS, type TodoWidgetSettings } from "./settings.js";
-import type { Todo } from "./todo-widget.js";
+import type { ProgressStep } from "./progress-state.js";
+import { DEFAULT_PROGRESS_SETTINGS, type ProgressWidgetSettings } from "./settings.js";
 
-export interface RenderTodoWidgetOptions {
-  settings?: Readonly<TodoWidgetSettings>;
+export interface RenderProgressWidgetOptions {
+  settings?: Readonly<ProgressWidgetSettings>;
   terminalRows?: number;
 }
 
-interface RenderedTodo {
-  todo: Todo;
+interface RenderedProgressStep {
+  step: ProgressStep;
   lines: string[];
 }
 
-export function renderTodoWidget(
-  todos: readonly Todo[],
+export function renderProgressWidget(
+  steps: readonly ProgressStep[],
   theme: Theme,
   width: number,
-  options: RenderTodoWidgetOptions = {},
+  options: RenderProgressWidgetOptions = {},
 ): string[] {
   const renderWidth = Math.max(0, width);
-  const settings = options.settings ?? DEFAULT_TODO_SETTINGS.widget;
-  const header = renderHeader(todos, theme, renderWidth, settings.showProgress);
-  const rendered = todos.map((todo) => ({ todo, lines: renderTodo(todo, theme, renderWidth) }));
+  const settings = options.settings ?? DEFAULT_PROGRESS_SETTINGS.widget;
+  const header = renderHeader(steps, theme, renderWidth, settings.showProgress);
+  const rendered = steps.map((step) => ({ step, lines: renderStep(step, theme, renderWidth) }));
 
   let lines: string[];
   switch (settings.displayMode) {
@@ -39,7 +39,7 @@ export function renderTodoWidget(
       const rowBudget = widgetRowBudget(options.terminalRows);
       const eligibleItems = settings.showCompleted
         ? rendered.length
-        : rendered.filter(({ todo }) => todo.status !== "completed").length;
+        : rendered.filter(({ step }) => step.status !== "completed").length;
       const itemCapHidesWork = settings.maxVisibleItems !== null && eligibleItems > settings.maxVisibleItems;
       lines =
         expanded.length <= rowBudget && !itemCapHidesWork
@@ -55,12 +55,12 @@ export function renderTodoWidget(
 export function renderCompletionSummary(total: number, theme: Theme, width: number): string[] {
   return new EditorStatusWidget({
     theme,
-    renderBody: () => [theme.fg("success", `✓ ${total}/${total} tasks completed`)],
+    renderBody: () => [theme.fg("success", `✓ ${total}/${total} steps completed`)],
   }).render(width);
 }
 
-export function sanitizeTodoText(value: string): string {
-  // Document sanitization preserves Todo's control-to-space policy; whitespace is local.
+export function sanitizeProgressText(value: string): string {
+  // Document sanitization preserves Progress's control-to-space policy; whitespace is local.
   return sanitizeTerminalDocument(value).replace(/\s+/gu, " ").trim();
 }
 
@@ -70,37 +70,38 @@ export function widgetRowBudget(terminalRows?: number): number {
   return Math.max(4, Math.min(12, Math.floor(rows / 3)));
 }
 
-function renderHeader(todos: readonly Todo[], theme: Theme, width: number, showProgress: boolean): string[] {
-  const completed = todos.filter((todo) => todo.status === "completed").length;
-  // Keep both heading rows inside Todo's existing adaptive budget.
+function renderHeader(steps: readonly ProgressStep[], theme: Theme, width: number, showProgress: boolean): string[] {
+  const completed = steps.filter((step) => step.status === "completed").length;
   return new EditorStatusWidget({
     theme,
-    renderBody: () => [theme.fg("muted", showProgress ? `Todo · ${completed}/${todos.length} complete` : "Todo")],
+    renderBody: () => [
+      theme.fg("muted", showProgress ? `Progress · ${completed}/${steps.length} complete` : "Progress"),
+    ],
   }).render(width);
 }
 
-function renderTodo(todo: Todo, theme: Theme, width: number): string[] {
-  const step = sanitizeTodoText(todo.step) || "(text hidden after sanitization)";
+function renderStep(step: ProgressStep, theme: Theme, width: number): string[] {
+  const text = sanitizeProgressText(step.text) || "(text hidden after sanitization)";
   let prefix: string;
   let styledText: string;
-  switch (todo.status) {
+  switch (step.status) {
     case "completed":
       prefix = theme.fg("success", "✓ ");
-      styledText = theme.fg("muted", theme.strikethrough(step));
+      styledText = theme.fg("muted", theme.strikethrough(text));
       break;
     case "in_progress":
       prefix = theme.fg("accent", "▶ ");
-      styledText = theme.fg("accent", theme.bold(step));
+      styledText = theme.fg("accent", theme.bold(text));
       break;
     case "blocked": {
       prefix = theme.fg("warning", "⚠ ");
-      const reason = sanitizeTodoText(todo.reason ?? "") || "(reason hidden after sanitization)";
-      styledText = `${theme.fg("warning", step)}${reason ? theme.fg("muted", ` — ${reason}`) : ""}`;
+      const reason = sanitizeProgressText(step.reason ?? "") || "(reason hidden after sanitization)";
+      styledText = `${theme.fg("warning", text)}${reason ? theme.fg("muted", ` — ${reason}`) : ""}`;
       break;
     }
     case "pending":
       prefix = theme.fg("dim", "○ ");
-      styledText = theme.fg("text", step);
+      styledText = theme.fg("text", text);
       break;
   }
 
@@ -111,12 +112,12 @@ function renderTodo(todo: Todo, theme: Theme, width: number): string[] {
 
 function renderExpanded(
   header: readonly string[],
-  rendered: readonly RenderedTodo[],
-  settings: Readonly<TodoWidgetSettings>,
+  rendered: readonly RenderedProgressStep[],
+  settings: Readonly<ProgressWidgetSettings>,
   theme: Theme,
   width: number,
 ): string[] {
-  const candidates = settings.showCompleted ? rendered : rendered.filter(({ todo }) => todo.status !== "completed");
+  const candidates = settings.showCompleted ? rendered : rendered.filter(({ step }) => step.status !== "completed");
   const visible = candidates.slice(0, settings.maxVisibleItems ?? candidates.length);
   const hidden = candidates.length - visible.length;
   const lines = [...header, ...visible.flatMap((item) => item.lines)];
@@ -126,19 +127,19 @@ function renderExpanded(
 
 function renderCollapsed(
   header: readonly string[],
-  rendered: readonly RenderedTodo[],
-  settings: Readonly<TodoWidgetSettings>,
+  rendered: readonly RenderedProgressStep[],
+  settings: Readonly<ProgressWidgetSettings>,
   theme: Theme,
   width: number,
   rowBudget: number,
 ): string[] {
   const prioritized = [
-    ...rendered.filter(({ todo }) => todo.status === "in_progress"),
-    ...rendered.filter(({ todo }) => todo.status === "blocked"),
-    ...rendered.filter(({ todo }) => todo.status === "pending"),
+    ...rendered.filter(({ step }) => step.status === "in_progress"),
+    ...rendered.filter(({ step }) => step.status === "blocked"),
+    ...rendered.filter(({ step }) => step.status === "pending"),
   ];
   const itemLimit = Math.min(settings.maxVisibleItems ?? prioritized.length, prioritized.length);
-  const completed = rendered.filter(({ todo }) => todo.status === "completed").length;
+  const completed = rendered.filter(({ step }) => step.status === "completed").length;
   const bodyBudget = Math.max(0, rowBudget - header.length);
   const selected: string[] = [];
   let selectedItems = 0;
@@ -167,7 +168,7 @@ function renderCollapsed(
   const footerParts: string[] = [];
   if (settings.showCompleted && completed > 0) footerParts.push(`✓ ${completed} completed`);
   if (hidden > 0) footerParts.push(`… ${hidden} more`);
-  if (clippedItem) footerParts.push("item truncated");
+  if (clippedItem) footerParts.push("step truncated");
   if (footerParts.length > 0 && selected.length < bodyBudget) {
     selected.push(theme.fg("dim", footerParts.join(" · ")));
   }

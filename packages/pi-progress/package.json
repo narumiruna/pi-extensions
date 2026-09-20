@@ -1,7 +1,7 @@
 {
-  "name": "@narumitw/pi-todo",
+  "name": "@narumitw/pi-progress",
   "version": "0.3.4",
-  "description": "Pi session progress extension moving to @narumitw/pi-progress.",
+  "description": "Pi extension for branch-aware multi-step session progress.",
   "type": "module",
   "license": "MIT",
   "private": false,
@@ -9,8 +9,8 @@
     "pi-package",
     "pi-extension",
     "pi",
-    "todo",
-    "task-list",
+    "progress",
+    "task-progress",
     "coding-agent"
   ],
   "files": [
@@ -52,6 +52,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/narumiruna/pi-extensions",
-    "directory": "packages/pi-todo"
+    "directory": "packages/pi-progress"
   }
 }

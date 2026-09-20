@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, type ExtensionContext, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 
-const packageRoot = resolve("packages/pi-todo");
+const packageRoot = resolve("packages/pi-progress");
 const builderUrl = pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href;
 
 type BuildMetadata = {
@@ -52,7 +52,12 @@ function validMetadata(): BuildMetadata {
             external: true,
           },
         ],
-        inputs: { "src/index.ts": {}, "src/todo-widget.ts": {} },
+        inputs: {
+          "src/index.ts": {},
+          "src/progress-widget.ts": {},
+          "src/progress-state.ts": {},
+          "src/progress-renderer.ts": {},
+        },
       },
     },
   };
@@ -71,8 +76,8 @@ test("eager graph validation rejects bundled packages", async () => {
 
 test("runtime build rejects destructive output paths and symlink escapes", async () => {
   const builder = await loadBuilder();
-  const outside = await mkdtemp(join(tmpdir(), "pi-todo-build-outside-"));
-  const linkedParent = join(packageRoot, `.pi-todo-build-test-link-${crypto.randomUUID()}`);
+  const outside = await mkdtemp(join(tmpdir(), "pi-progress-build-outside-"));
+  const linkedParent = join(packageRoot, `.pi-progress-build-test-link-${crypto.randomUUID()}`);
   try {
     await assert.rejects(
       builder.buildRuntime({ outputDirectory: packageRoot }),
@@ -95,7 +100,7 @@ test("runtime build rejects destructive output paths and symlink escapes", async
 
 test("runtime builds are deterministic, mapped, external, and remove stale output", async () => {
   const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-todo-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-progress-build-test-"));
   try {
     const first = join(root, "first");
     const second = join(root, "second");
@@ -138,7 +143,7 @@ test("runtime builds are deterministic, mapped, external, and remove stale outpu
 
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-todo-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-progress-build-test-"));
   const agentDir = join(root, "agent");
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -157,7 +162,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.deepEqual(loaded.errors, []);
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
-    assert.ok(extension?.tools.has("update_todo_list"));
+    assert.deepEqual([...(extension?.tools.keys() ?? [])], ["update_progress"]);
     assert.equal(extension?.commands.size, 0);
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("context"));
@@ -181,24 +186,29 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       },
     } as unknown as ExtensionContext;
     await emit(extension.handlers, "session_start", ctx);
-    assert.deepEqual(widgets.at(-1), { key: "todo", content: undefined });
-    assert.equal(notifications.length, 1);
-    assert.match(notifications[0]?.message ?? "", /pi-todo is moving to pi-progress/u);
-    assert.equal(notifications[0]?.type, "warning");
+    assert.deepEqual(widgets.at(-1), { key: "progress", content: undefined });
+    assert.deepEqual(notifications, []);
 
-    const tool = extension.tools.get("update_todo_list");
+    const tool = extension.tools.get("update_progress");
     assert.ok(tool);
-    await tool.definition.execute(
-      "generated-todo",
-      { todos: [{ step: "Verify generated runtime", status: "in_progress" }] },
+    const updated = await tool.definition.execute(
+      "generated-progress",
+      { steps: [{ text: "Verify generated runtime", status: "in_progress" }] },
       undefined,
       undefined,
       ctx,
     );
+    assert.deepEqual(updated.details, {
+      version: 4,
+      steps: [{ text: "Verify generated runtime", status: "in_progress" }],
+    });
     assert.equal(typeof widgets.at(-1)?.content, "function");
+    const cleared = await tool.definition.execute("generated-progress-clear", { steps: [] }, undefined, undefined, ctx);
+    assert.deepEqual(cleared.details, { version: 4, steps: [] });
+    assert.deepEqual(widgets.at(-1), { key: "progress", content: undefined });
 
     await emit(extension.handlers, "session_shutdown", ctx);
-    assert.deepEqual(widgets.at(-1), { key: "todo", content: undefined });
+    assert.deepEqual(widgets.at(-1), { key: "progress", content: undefined });
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -208,7 +218,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
 
 test("failed validation and publication preserve the previous runtime", async () => {
   const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-todo-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-progress-build-test-"));
   try {
     const output = join(root, "dist");
     await mkdir(output, { recursive: true });

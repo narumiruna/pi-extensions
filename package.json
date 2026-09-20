@@ -36,7 +36,7 @@
       "./packages/pi-subagents/src/index.ts",
       "./packages/pi-sync/src/index.ts",
       "./packages/pi-ticker/src/index.ts",
-      "./packages/pi-todo/src/index.ts",
+      "./packages/pi-progress/src/index.ts",
       "./packages/pi-tool/src/index.ts",
       "./packages/pi-tui-kit-showcase/src/index.ts",
       "./packages/pi-typesafe/src/index.ts",
