@@ -75,7 +75,10 @@ type BtwModelRegistry = Pick<ExtensionCommandContext["modelRegistry"], "find" | 
 type BtwCompletionRegistry = Pick<ExtensionCommandContext["modelRegistry"], "streamSimple">;
 
 export function createModelRegistryCompleteSimple(modelRegistry: BtwCompletionRegistry): CompleteSimpleFunction {
-  return async (model, context, options) => modelRegistry.streamSimple(model, context, options).result();
+  const completeSimple: CompleteSimpleFunction = async (model, context, options) =>
+    modelRegistry.streamSimple(model, context, options).result();
+  completeSimple.appliesRequestHeaderTransforms = true;
+  return completeSimple;
 }
 
 interface ResolveBtwModelOptions {

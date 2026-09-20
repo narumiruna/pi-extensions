@@ -19,11 +19,15 @@ export interface SideQuestionAuth {
   env?: Record<string, string>;
 }
 
-export type CompleteSimpleFunction = <TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  options?: ModelsSimpleStreamOptions,
-) => Promise<AssistantMessage>;
+export interface CompleteSimpleFunction {
+  <TApi extends Api>(
+    model: Model<TApi>,
+    context: Context,
+    options?: ModelsSimpleStreamOptions,
+  ): Promise<AssistantMessage>;
+  /** True when the callback applies Models-only header transforms after request-time authentication. */
+  appliesRequestHeaderTransforms?: boolean;
+}
 
 export type SideThreadTurn =
   | {
@@ -98,7 +102,11 @@ export async function completeSideThreadTurn({
     const response = await completeSimple(
       model,
       { systemPrompt: SYSTEM_PROMPT, messages: buildSideThreadMessages(thread, question) },
-      buildStreamOptions(auth, { thinkingLevel, signal, model, sessionId }),
+      buildStreamOptions(
+        auth,
+        { thinkingLevel, signal, model, sessionId },
+        completeSimple.appliesRequestHeaderTransforms === true,
+      ),
     );
     if (signal?.aborted || response?.stopReason === "aborted") return { kind: "aborted" };
     if (!isAssistantMessage(response)) {
@@ -147,7 +155,11 @@ export async function completeSideQuestion({
       systemPrompt: SYSTEM_PROMPT,
       messages: [createUserMessage(buildUserPrompt(question, conversationContext))],
     },
-    buildStreamOptions(auth, { thinkingLevel, signal, model, sessionId }),
+    buildStreamOptions(
+      auth,
+      { thinkingLevel, signal, model, sessionId },
+      completeSimple.appliesRequestHeaderTransforms === true,
+    ),
   );
 }
 
@@ -228,15 +240,16 @@ interface BuildSideThreadStreamOptions {
 function buildStreamOptions(
   auth: SideQuestionAuth | undefined,
   { thinkingLevel, signal, model, sessionId }: BuildSideThreadStreamOptions,
+  applyRequestHeaderTransforms: boolean,
 ): ModelsSimpleStreamOptions {
   const sessionHeaders = model ? getOpencodeSessionHeaders(model, sessionId) : undefined;
   const options: ModelsSimpleStreamOptions = {
     apiKey: auth?.apiKey,
-    headers: auth?.headers,
+    headers: applyRequestHeaderTransforms ? auth?.headers : mergeSessionHeaders(auth?.headers, sessionHeaders),
     env: auth?.env,
     signal,
   };
-  if (sessionHeaders) {
+  if (applyRequestHeaderTransforms && sessionHeaders) {
     options.transformHeaders = (headers) => mergeSessionHeaders(headers, sessionHeaders) ?? {};
   }
   if (thinkingLevel !== "off") options.reasoning = thinkingLevel;
