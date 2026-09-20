@@ -3,5 +3,6 @@ import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-co
 registerRuntimeBuilderContract({
   packageId: "pi-herdr",
   forbiddenEagerInputs: ["src/herdr-menu.ts"],
-  forbiddenEagerExternal: "@narumitw/pi-tui-kit",
+  forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
+  allowedEagerExternals: ["@narumitw/pi-tui-kit/editor-status-widget", "@narumitw/pi-tui-kit/terminal-text"],
 });
