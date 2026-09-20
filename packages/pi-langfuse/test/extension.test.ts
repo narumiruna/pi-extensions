@@ -4,6 +4,14 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createLangfuseExtension, resolveGitMetadata } from "../src/langfuse.js";
 import { FakeBackend } from "./support.js";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 test("resolveGitMetadata captures branch and commit with bounded non-shell commands", async () => {
   const calls: Array<{ command: string; args: string[]; cwd?: string; timeout?: number }> = [];
   const metadata = await resolveGitMetadata(async (command, args, options) => {
@@ -60,7 +68,18 @@ test("resolveGitMetadata handles detached HEADs and omits unavailable repositori
   assert.equal(failed, undefined);
 });
 
-test("session start suggests the /langfuse setup action when the config file is missing", async () => {
+test("session start ignores ambient Langfuse credentials and suggests setup when the config file is missing", async (t) => {
+  const previousPublicKey = process.env.LANGFUSE_PUBLIC_KEY;
+  const previousSecretKey = process.env.LANGFUSE_SECRET_KEY;
+  process.env.LANGFUSE_PUBLIC_KEY = "pk-ambient-must-not-enable-default-extension";
+  process.env.LANGFUSE_SECRET_KEY = "sk-ambient-must-not-enable-default-extension";
+  t.onTestFinished(() => {
+    if (previousPublicKey === undefined) delete process.env.LANGFUSE_PUBLIC_KEY;
+    else process.env.LANGFUSE_PUBLIC_KEY = previousPublicKey;
+    if (previousSecretKey === undefined) delete process.env.LANGFUSE_SECRET_KEY;
+    else process.env.LANGFUSE_SECRET_KEY = previousSecretKey;
+  });
+  let backendCreations = 0;
   const mock = createMockPi();
   createLangfuseExtension({
     loadConfig: async () => ({
@@ -69,12 +88,17 @@ test("session start suggests the /langfuse setup action when the config file is 
       warnings: [],
       reason: "Configuration file not found: /config/pi-langfuse.json",
     }),
+    createBackend: async () => {
+      backendCreations += 1;
+      return new FakeBackend();
+    },
   })(mock.pi);
   const { ctx, notifications } = createMockContext();
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
 
   assert.match(notifications.at(-1)?.message ?? "", /run \/langfuse and choose set up langfuse/i);
+  assert.equal(backendCreations, 0);
 });
 
 test("pi-langfuse registers lifecycle hooks and exports completed traces", async () => {
@@ -583,6 +607,11 @@ test("pi-langfuse records active compactions without summaries and closes incomp
   const incomplete = backend.observations.filter(({ name }) => name === "pi.compaction").at(-1);
   assert.equal(incomplete?.updates.at(-1)?.level, "WARNING");
   assert.equal(incomplete?.endCalls, 1);
+
+  await mock.events.get("before_agent_start")?.[0]?.({ prompt: "new run", images: [], systemPrompt: "system" }, ctx);
+  await mock.events.get("agent_start")?.[0]?.({}, ctx);
+  const newRunAttempt = backend.observations.filter(({ name }) => name === "pi.attempt").at(-1);
+  assert.equal(newRunAttempt?.attributes.metadata?.["pi.attempt.reason"], undefined);
 });
 
 test("reload and session replacement close every active observation once before flushing", async () => {
@@ -638,6 +667,138 @@ test("reload and session replacement close every active observation once before 
     assert.equal(backend.flushes, 1, reason);
     assert.equal(backend.shutdowns, 0, reason);
   }
+});
+
+test("final shutdown redacts retained runtime credentials after replacement configuration becomes unavailable", async () => {
+  const backend = new FakeBackend();
+  backend.shutdown = async () => {
+    backend.shutdowns += 1;
+    throw new Error("provider rejected pk-retained-secret and sk-retained-secret");
+  };
+  let loadCalls = 0;
+  const mock = createMockPi();
+  createLangfuseExtension({
+    loadConfig: async () => {
+      loadCalls += 1;
+      if (loadCalls === 1) {
+        return {
+          ok: true,
+          config: {
+            publicKey: "pk-retained-secret",
+            secretKey: "sk-retained-secret",
+            baseUrl: "https://example.test",
+            captureContent: false,
+          },
+          path: "/config.json",
+          warnings: [],
+        };
+      }
+      return {
+        ok: false,
+        path: "/config.json",
+        warnings: [],
+        reason: "Configuration file not found: /config.json",
+      };
+    },
+    createBackend: async () => backend,
+  })(mock.pi);
+  const { ctx, notifications } = createMockContext();
+
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx);
+
+  const shutdownMessage = notifications.at(-1)?.message ?? "";
+  assert.equal(backend.flushes, 2);
+  assert.equal(backend.shutdowns, 1);
+  assert.match(shutdownMessage, /Langfuse shutdown export failed.*LANGFUSE_KEY_REDACTED/u);
+  assert.doesNotMatch(shutdownMessage, /pk-retained-secret|sk-retained-secret/u);
+});
+
+test("stale owned runtime initialization is released after shutdown or replacement", async () => {
+  for (const reason of ["quit", "reload"] as const) {
+    const backend = new FakeBackend();
+    const backendReady = deferred<FakeBackend>();
+    const initializationStarted = deferred<void>();
+    const mock = createMockPi();
+    createLangfuseExtension({
+      loadConfig: async () => ({
+        ok: true,
+        config: {
+          publicKey: "pk",
+          secretKey: "sk",
+          baseUrl: "https://example.test",
+          captureContent: false,
+        },
+        path: "/config.json",
+        warnings: [],
+      }),
+      createBackend: async () => {
+        initializationStarted.resolve();
+        return backendReady.promise;
+      },
+    })(mock.pi);
+    const { ctx } = createMockContext();
+
+    const pendingStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+    await initializationStarted.promise;
+    const pendingShutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason }, ctx));
+    let shutdownSettled = false;
+    void pendingShutdown.then(() => {
+      shutdownSettled = true;
+    });
+    await Promise.resolve();
+    assert.equal(shutdownSettled, false, reason);
+
+    backendReady.resolve(backend);
+    await Promise.all([pendingStart, pendingShutdown]);
+
+    assert.equal(shutdownSettled, true, reason);
+    assert.equal(backend.flushes, 1, reason);
+    assert.equal(backend.shutdowns, 1, reason);
+  }
+});
+
+test("session shutdown reports stale owned runtime cleanup failures", async () => {
+  const backend = new FakeBackend();
+  backend.shutdown = async () => {
+    backend.shutdowns += 1;
+    throw new Error("owned backend shutdown failed for pk-stale-private and sk-stale-private");
+  };
+  const backendReady = deferred<FakeBackend>();
+  const initializationStarted = deferred<void>();
+  const mock = createMockPi();
+  createLangfuseExtension({
+    loadConfig: async () => ({
+      ok: true,
+      config: {
+        publicKey: "pk-stale-private",
+        secretKey: "sk-stale-private",
+        baseUrl: "https://example.test",
+        captureContent: false,
+      },
+      path: "/config.json",
+      warnings: [],
+    }),
+    createBackend: async () => {
+      initializationStarted.resolve();
+      return backendReady.promise;
+    },
+  })(mock.pi);
+  const { ctx, notifications } = createMockContext();
+
+  const pendingStart = Promise.resolve(mock.events.get("session_start")?.[0]?.({}, ctx));
+  const startFailure = assert.rejects(pendingStart, /owned backend shutdown failed/u);
+  await initializationStarted.promise;
+  const pendingShutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx));
+  backendReady.resolve(backend);
+  await Promise.all([startFailure, pendingShutdown]);
+
+  assert.equal(backend.shutdowns, 1);
+  const message = notifications.at(-1)?.message ?? "";
+  assert.match(message, /Langfuse shutdown export failed: owned backend shutdown failed.*LANGFUSE_KEY_REDACTED/u);
+  assert.doesNotMatch(message, /pk-stale-private|sk-stale-private/u);
 });
 
 test("session shutdown is idempotent and reports initialization failures", async () => {

@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_BASE_URL,
   type LangfuseConfig,
@@ -8,7 +8,11 @@ import {
   normalizeLangfuseConfig,
   writeLangfuseConfig,
 } from "./config.js";
-import { type ContextSnapshot, type GitMetadata, type TraceBackend, TraceRecorder } from "./tracing.js";
+import { createPiLangfuseSessionController, type PiLangfuseSessionController } from "./pi-session.js";
+import { createLangfuseRuntimeFromBackend } from "./runtime-core.js";
+import type { GitMetadata, TraceBackend } from "./tracing.js";
+
+export { resolveGitMetadata } from "./git.js";
 
 interface ExtensionDependencies {
   loadConfig(path?: string): Promise<LangfuseConfigResult>;
@@ -25,19 +29,13 @@ const HELP_ACTION = "Show setup and privacy help";
 export function createLangfuseExtension(dependencies: Partial<ExtensionDependencies> = {}): (pi: ExtensionAPI) => void {
   const loadConfig = dependencies.loadConfig ?? loadLangfuseConfig;
   const writeConfig = dependencies.writeConfig ?? writeLangfuseConfig;
-  const createBackend =
-    dependencies.createBackend ??
-    (async (config) => {
-      const { createProductionBackend } = await import("./runtime.js");
-      return createProductionBackend(config);
-    });
+  const resolveInjectedGitMetadata = dependencies.resolveGitMetadata;
 
   return function langfuse(pi: ExtensionAPI) {
-    const resolveGit =
-      dependencies.resolveGitMetadata ??
-      ((cwd: string) => resolveGitMetadata((command, args, options) => pi.exec(command, args, options), cwd));
-    let recorder: TraceRecorder | undefined;
     let activeConfig: LangfuseConfig | undefined;
+    let loadingConfig: LangfuseConfig | undefined;
+    let runtimeConfigForShutdown: LangfuseConfig | undefined;
+    let shutdownConfig: LangfuseConfig | undefined;
     let configPath: string | undefined;
     let initializationError: string | undefined;
     let hasStoredConfig = false;
@@ -45,7 +43,80 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
     let sessionGeneration = 0;
     let menuController = new AbortController();
     let configWriteQueue = Promise.resolve();
-    let nextAttemptReason: string | undefined;
+
+    const tracing: PiLangfuseSessionController = createPiLangfuseSessionController({
+      onSessionStart() {
+        sessionGeneration += 1;
+        menuController.abort(new DOMException("Langfuse session replaced", "AbortError"));
+        menuController = new AbortController();
+        activeConfig = undefined;
+        loadingConfig = undefined;
+        shutdownConfig = undefined;
+        configPath = undefined;
+        initializationError = undefined;
+        hasStoredConfig = false;
+        configurationNotice = undefined;
+      },
+      onSessionShutdown() {
+        sessionGeneration += 1;
+        menuController.abort(new DOMException("Langfuse session shut down", "AbortError"));
+        shutdownConfig = activeConfig ?? runtimeConfigForShutdown ?? loadingConfig;
+        activeConfig = undefined;
+      },
+      async resolveSession(ctx, isCurrent) {
+        await configWriteQueue;
+        if (!isCurrent()) return undefined;
+        const result = await loadConfig();
+        if (!isCurrent()) return undefined;
+        configPath = result.path;
+        for (const warning of result.warnings) ctx.ui.notify(warning, "warning");
+        if (!result.ok) {
+          initializationError = formatConfigError(result);
+          ctx.ui.notify(initializationError, "warning");
+          return undefined;
+        }
+
+        hasStoredConfig = true;
+        loadingConfig = result.config;
+        const createBackend = dependencies.createBackend;
+        const ownsRuntime = createBackend !== undefined;
+        const runtime = createBackend
+          ? createLangfuseRuntimeFromBackend(await createBackend(result.config))
+          : await (await import("./runtime.js")).createLangfuseRuntime({ config: result.config, env: false });
+        if (isCurrent() || !runtimeConfigForShutdown) runtimeConfigForShutdown = result.config;
+        if (isCurrent()) {
+          activeConfig = result.config;
+          loadingConfig = undefined;
+        }
+        return {
+          runtime,
+          releaseIfStale: async (reason) => {
+            if (ownsRuntime || reason === "quit") await runtime.shutdown();
+          },
+          options: {
+            ...(result.config.userId ? { userId: result.config.userId } : {}),
+            captureContent: result.config.captureContent,
+          },
+        };
+      },
+      ...(resolveInjectedGitMetadata
+        ? { resolveGitMetadata: (_pi: ExtensionAPI, cwd: string) => resolveInjectedGitMetadata(cwd) }
+        : {}),
+      onInitializationError(error, ctx) {
+        const config = loadingConfig;
+        loadingConfig = undefined;
+        initializationError = `Langfuse tracing could not start: ${formatError(error, config)}`;
+        ctx.ui.notify(initializationError, "warning");
+      },
+      beforeSessionDispose: async () => {
+        await configWriteQueue;
+      },
+      onShutdownError(error, ctx) {
+        ctx.ui.notify(`Langfuse shutdown export failed: ${formatError(error, shutdownConfig)}`, "error");
+      },
+      flushOnReplacement: true,
+      shutdownRuntimeOnQuit: true,
+    });
 
     async function showLangfuseMenu(ctx: ExtensionCommandContext) {
       if (!ctx.hasUI) {
@@ -69,7 +140,7 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
               .split("\n")
               .slice(1),
             items: [
-              ...(recorder ? [{ id: "flush", label: FLUSH_ACTION, action: "flush" as const }] : []),
+              ...(tracing.active ? [{ id: "flush", label: FLUSH_ACTION, action: "flush" as const }] : []),
               {
                 id: "configure",
                 label: hasStoredConfig ? UPDATE_ACTION : SET_UP_ACTION,
@@ -82,14 +153,13 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
         },
         actions: {
           flush: async () => {
-            const menuRecorder = recorder;
             const menuConfig = activeConfig;
-            if (!menuRecorder) {
+            if (!tracing.active) {
               ctx.ui.notify("Langfuse tracing is not enabled for this session.", "warning");
               return { kind: "close" };
             }
             try {
-              await menuRecorder.flush();
+              await tracing.flush();
               if (menuGeneration !== sessionGeneration) return { kind: "close" };
               ctx.ui.notify("Langfuse traces flushed for this session.", "info");
             } catch (error) {
@@ -146,282 +216,8 @@ export function createLangfuseExtension(dependencies: Partial<ExtensionDependenc
       handler: async (_args, ctx) => showLangfuseMenu(ctx),
     });
 
-    pi.on("session_start", async (_event, ctx) => {
-      const generation = ++sessionGeneration;
-      menuController.abort(new DOMException("Langfuse session replaced", "AbortError"));
-      menuController = new AbortController();
-      recorder = undefined;
-      activeConfig = undefined;
-      configPath = undefined;
-      initializationError = undefined;
-      hasStoredConfig = false;
-      configurationNotice = undefined;
-      nextAttemptReason = undefined;
-
-      await configWriteQueue;
-      if (generation !== sessionGeneration) return;
-      const result = await loadConfig();
-      if (generation !== sessionGeneration) return;
-      configPath = result.path;
-      for (const warning of result.warnings) ctx.ui.notify(warning, "warning");
-      if (!result.ok) {
-        initializationError = formatConfigError(result);
-        ctx.ui.notify(initializationError, "warning");
-        return;
-      }
-
-      hasStoredConfig = true;
-      try {
-        const backend = await createBackend(result.config);
-        if (generation !== sessionGeneration) {
-          await backend.shutdown().catch(() => undefined);
-          return;
-        }
-        activeConfig = result.config;
-        recorder = new TraceRecorder(backend, {
-          sessionId: ctx.sessionManager.getSessionId(),
-          ...(result.config.userId ? { userId: result.config.userId } : {}),
-          cwd: ctx.cwd,
-          mode: ctx.mode,
-          captureContent: result.config.captureContent,
-        });
-      } catch (error) {
-        if (generation !== sessionGeneration) return;
-        initializationError = `Langfuse tracing could not start: ${formatError(error, result.config)}`;
-        ctx.ui.notify(initializationError, "warning");
-      }
-    });
-
-    pi.on("before_agent_start", async (event, ctx) => {
-      nextAttemptReason = undefined;
-      const activeRecorder = recorder;
-      if (!activeRecorder) return;
-      const git = await resolveGit(ctx.cwd).catch(() => undefined);
-      if (recorder !== activeRecorder) return;
-      activeRecorder.beginAgent({
-        prompt: event.prompt,
-        images: event.images,
-        model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
-        git,
-        snapshot: contextSnapshot(ctx),
-      });
-    });
-
-    pi.on("agent_start", () => {
-      if (!recorder) return;
-      recorder.beginAttempt(nextAttemptReason ? { reason: nextAttemptReason } : undefined);
-      nextAttemptReason = undefined;
-    });
-
-    pi.on("turn_start", (event, ctx) => {
-      if (!recorder) return;
-      ensureActiveRun(recorder, ctx);
-      recorder.beginTurn(event.turnIndex);
-    });
-
-    pi.on("before_provider_request", (event, ctx) => {
-      if (!recorder) return;
-      ensureActiveRun(recorder, ctx);
-      recorder.beginGeneration({
-        payload: event.payload,
-        payloadStage: "before_provider_request",
-        model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
-        thinkingLevel: pi.getThinkingLevel(),
-      });
-    });
-
-    pi.on("after_provider_response", (event) => {
-      recorder?.recordProviderResponse(event.status, event.headers);
-    });
-
-    pi.on("message_update", (event) => {
-      if (isRealOutputDelta(event.assistantMessageEvent)) recorder?.markGenerationFirstOutput();
-    });
-
-    pi.on("message_end", (event) => {
-      if (event.message.role === "assistant") recorder?.markGenerationEnd();
-    });
-
-    pi.on("turn_end", (event) => {
-      if (event.message.role === "assistant") recorder?.finishAssistant(event.message);
-      recorder?.finishTurn(event.turnIndex, {
-        message: event.message,
-        toolResultCount: event.toolResults.length,
-      });
-    });
-
-    pi.on("tool_execution_start", (event) => {
-      recorder?.beginTool(event.toolCallId, event.toolName, event.args);
-    });
-
-    pi.on("tool_execution_update", (event) => {
-      recorder?.recordToolProgress(event.toolCallId);
-    });
-
-    pi.on("tool_result", (event) => {
-      recorder?.recordToolInput(event.toolCallId, event.input);
-    });
-
-    pi.on("tool_execution_end", (event) => {
-      recorder?.finishTool(event.toolCallId, {
-        content: event.result.content,
-        details: event.result.details,
-        isError: event.isError,
-      });
-    });
-
-    pi.on("agent_end", (event) => {
-      const message = findLastAssistant(event.messages);
-      recorder?.finishAttempt(message);
-    });
-
-    pi.on("session_before_compact", (event) => {
-      recorder?.beginCompaction({
-        reason: event.reason,
-        willRetry: event.willRetry,
-        tokensBefore: event.preparation.tokensBefore,
-        messagesToSummarize: event.preparation.messagesToSummarize.length,
-        turnPrefixMessages: event.preparation.turnPrefixMessages.length,
-        branchEntries: event.branchEntries.length,
-        isSplitTurn: event.preparation.isSplitTurn,
-      });
-    });
-
-    pi.on("session_compact", (event) => {
-      const entry = event.compactionEntry as typeof event.compactionEntry & {
-        usage?: Parameters<TraceRecorder["finishCompaction"]>[0]["usage"];
-      };
-      recorder?.finishCompaction({
-        reason: event.reason,
-        willRetry: event.willRetry,
-        fromExtension: event.fromExtension,
-        tokensBefore: entry.tokensBefore,
-        details: entry.details,
-        usage: entry.usage,
-      });
-      if (event.willRetry && recorder?.hasActiveTrace()) nextAttemptReason = "post_compaction";
-    });
-
-    pi.on("agent_settled", (_event, ctx) => {
-      recorder?.settle(contextSnapshot(ctx));
-      nextAttemptReason = undefined;
-    });
-
-    pi.on("session_shutdown", async (event, ctx) => {
-      const generation = ++sessionGeneration;
-      menuController.abort(new DOMException("Langfuse session shut down", "AbortError"));
-      const activeRecorder = recorder;
-      const shutdownConfig = activeConfig;
-      const pendingConfigWrite = configWriteQueue;
-      const shutdownSnapshot = activeRecorder ? contextSnapshot(ctx) : undefined;
-      recorder = undefined;
-      activeConfig = undefined;
-      await pendingConfigWrite;
-      if (!activeRecorder) return;
-      try {
-        if (event.reason === "quit") await activeRecorder.shutdown(shutdownSnapshot);
-        else {
-          activeRecorder.interrupt(`Pi session ended before settlement (${event.reason}).`, shutdownSnapshot);
-          await activeRecorder.flush();
-        }
-      } catch (error) {
-        if (generation !== sessionGeneration) return;
-        ctx.ui.notify(`Langfuse shutdown export failed: ${formatError(error, shutdownConfig)}`, "error");
-      }
-    });
+    tracing.extension(pi);
   };
-}
-
-function ensureActiveRun(recorder: TraceRecorder, ctx: ExtensionContext): void {
-  if (!recorder.hasActiveTrace()) {
-    recorder.beginAgent({
-      prompt: "[automatic continuation]",
-      model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
-      snapshot: contextSnapshot(ctx),
-    });
-  }
-  if (!recorder.hasActiveAttempt()) recorder.beginAttempt();
-}
-
-function contextSnapshot(ctx: ExtensionContext): ContextSnapshot {
-  return {
-    leafId: typeof ctx.sessionManager.getLeafId === "function" ? ctx.sessionManager.getLeafId() : undefined,
-    contextUsage: ctx.getContextUsage(),
-  };
-}
-
-function findLastAssistant<T extends { role?: string }>(messages: readonly T[]): T | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "assistant") return message;
-  }
-  return undefined;
-}
-
-function isRealOutputDelta(event: { type: string; delta?: unknown }): boolean {
-  return (
-    (event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta") &&
-    typeof event.delta === "string" &&
-    event.delta.length > 0
-  );
-}
-
-const GIT_LOOKUP_TIMEOUT_MS = 1_000;
-const MAX_GIT_BRANCH_LENGTH = 256;
-
-type GitExecutor = ExtensionAPI["exec"];
-
-export async function resolveGitMetadata(exec: GitExecutor, cwd: string): Promise<GitMetadata | undefined> {
-  const [branchResult, commit] = await Promise.all([resolveGitBranch(exec, cwd), resolveGitCommit(exec, cwd)]);
-  if (!branchResult.resolved) return undefined;
-  if (branchResult.branch) {
-    return {
-      branch: branchResult.branch,
-      ...(commit ? { commit } : {}),
-      detached: false,
-    };
-  }
-  return commit ? { commit, detached: true } : undefined;
-}
-
-async function resolveGitBranch(exec: GitExecutor, cwd: string): Promise<{ resolved: boolean; branch?: string }> {
-  try {
-    const result = await exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
-      cwd,
-      timeout: GIT_LOOKUP_TIMEOUT_MS,
-    });
-    if (result.killed) return { resolved: false };
-    if (result.code === 1) return { resolved: true };
-    if (result.code !== 0) return { resolved: false };
-    const branch = normalizeGitBranch(result.stdout);
-    return branch ? { resolved: true, branch } : { resolved: false };
-  } catch {
-    return { resolved: false };
-  }
-}
-
-async function resolveGitCommit(exec: GitExecutor, cwd: string): Promise<string | undefined> {
-  try {
-    const result = await exec("git", ["rev-parse", "--verify", "--short=12", "HEAD"], {
-      cwd,
-      timeout: GIT_LOOKUP_TIMEOUT_MS,
-    });
-    if (result.code !== 0 || result.killed) return undefined;
-    const commit = result.stdout.trim();
-    return /^[0-9a-f]{4,64}$/iu.test(commit) ? commit.toLowerCase() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeGitBranch(value: string): string | undefined {
-  const branch = value.trim();
-  if (!branch || branch.length > MAX_GIT_BRANCH_LENGTH) return undefined;
-  for (const character of branch) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code <= 31 || code === 127) return undefined;
-  }
-  return branch;
 }
 
 async function promptForConfig(

@@ -19,9 +19,7 @@ function sanitize(value: unknown, active: WeakSet<object>, depth: number, budget
     return consume(value, budget);
   }
   if (typeof value === "string") {
-    const bounded = truncateString(value, Math.min(MAX_STRING_LENGTH, budget.remaining));
-    const redacted = bounded.replace(BASE64_DATA_URI, BASE64_DATA_URI_OMITTED);
-    return consume(redacted, budget);
+    return consume(sanitizeString(value, Math.min(MAX_STRING_LENGTH, budget.remaining)), budget);
   }
   if (typeof value === "bigint") return consume(value.toString(), budget);
   if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") {
@@ -72,12 +70,13 @@ function sanitize(value: unknown, active: WeakSet<object>, depth: number, budget
           omitted = true;
           break;
         }
-        budget.remaining -= keyBytes + 4;
+        const sanitizedKey = sanitizeString(key, keyBudget);
+        budget.remaining -= byteLength(sanitizedKey) + 4;
         const property = readProperty(record, key);
         if (redactData && key === "data") {
-          output[key] = consume("[base64 omitted]", budget);
-        } else if (!property.ok) output[key] = consume("[unreadable property]", budget);
-        else output[key] = sanitize(property.value, active, depth + 1, budget);
+          output[sanitizedKey] = consume("[base64 omitted]", budget);
+        } else if (!property.ok) output[sanitizedKey] = consume("[unreadable property]", budget);
+        else output[sanitizedKey] = sanitize(property.value, active, depth + 1, budget);
         processed += 1;
       }
     } catch {
@@ -113,6 +112,10 @@ function consume<T>(value: T, budget: { remaining: number }): T | string {
   }
   budget.remaining -= size;
   return value;
+}
+
+function sanitizeString(value: string, maxBytes: number): string {
+  return truncateString(value, maxBytes).replace(BASE64_DATA_URI, BASE64_DATA_URI_OMITTED);
 }
 
 function truncateString(value: string, maxBytes: number): string {

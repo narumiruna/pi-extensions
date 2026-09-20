@@ -37,6 +37,22 @@ test("sanitizeTraceValue globally bounds adversarial values in UTF-8 bytes", () 
   );
 });
 
+test("sanitizeTraceValue redacts embedded base64 data URIs from object keys at every depth", () => {
+  const unsafeKey = "key data:text/plain;base64,c2VjcmV0 suffix";
+  const redactedKey = "key [base64 data URI omitted] suffix";
+
+  assert.deepEqual(
+    sanitizeTraceValue({
+      [unsafeKey]: "top-level",
+      nested: { [unsafeKey]: "nested" },
+    }),
+    {
+      [redactedKey]: "top-level",
+      nested: { [redactedKey]: "nested" },
+    },
+  );
+});
+
 test("sanitizeTraceValue bounds string work before redaction and UTF-8 sizing", () => {
   const originalByteLength = Buffer.byteLength;
   const originalReplace = RegExp.prototype[Symbol.replace];
