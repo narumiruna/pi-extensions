@@ -66,10 +66,9 @@ flowchart LR
     F -- no, after summary --> H[Insert one canonical hidden progress message]
 
     I[Historical branch entries] --> J{Recognized tool and version?}
-    J -- update_todo_list v2/v3 --> K[Migrate todos[].step]
-    J -- todo_widget v1 --> L[Migrate items[].text]
+    J -- update_todo_list v1/v2/v3 --> K[Migrate versioned Todo state]
+    J -- todo_widget v1/v2 --> K
     K --> C
-    L --> C
 
     M[pi-progress.json] --> N[Settings loader]
     O[pi-todo.json] -->|only when canonical is absent| N
