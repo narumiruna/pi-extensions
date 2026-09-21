@@ -395,6 +395,47 @@ test("workspace gives printable input priority over colliding screen shortcuts",
   assert.equal(fake.stats.disposals, 1);
 });
 
+test("workspace gives default page navigation to the focused multiline editor", async (t) => {
+  const previousKeybindings = getKeybindings();
+  t.onTestFinished(() => setKeybindings(previousKeybindings));
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS);
+  setKeybindings(keybindings);
+
+  const { agentDir, storage } = await fixture();
+  const fake = createFakeChild();
+  const tui = createTuiHarness({ width: 100, rows: 24, keybindings });
+  const running = openNotesWorkspace({
+    ctx: workspaceContext(tui).ctx,
+    agentDir,
+    storage,
+    notePath: "current.md",
+    thinkingLevel: "off",
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
+  });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  tui.setFocused(true);
+
+  for (let index = 0; index < 30; index += 1) {
+    tui.type(`line ${index}`);
+    if (index < 29) tui.send("\u001b\r");
+  }
+  tui.press("tui.select.pageUp");
+  tui.type("X");
+  tui.press("tui.input.submit");
+  await tui.waitForPending();
+
+  const [prompt] = fake.stats.prompts;
+  assert.ok(prompt?.includes("X"));
+  assert.equal(prompt?.endsWith("X"), false, "PageUp must move the draft cursor before insertion");
+  tui.press("ctrl+c");
+  await running;
+  assert.equal(fake.stats.aborts, 1);
+  assert.equal(fake.stats.disposals, 1);
+});
+
 test("workspace gives configured submit priority over a colliding pane-switch key", async (t) => {
   const previousKeybindings = getKeybindings();
   t.onTestFinished(() => setKeybindings(previousKeybindings));

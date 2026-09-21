@@ -26,7 +26,7 @@ import type { NoteSnapshot, NotesStorage } from "./storage.js";
 type CreateChildSession = typeof createNotesChildSession;
 type Pane = "chat" | "preview";
 
-// Tab and page actions remain workspace navigation unless another focused-editor action shares their input.
+// Tab remains workspace navigation unless another focused-editor action shares its input.
 const EDITOR_PRIORITY_ACTIONS = [
   "tui.editor.cursorUp",
   "tui.editor.cursorDown",
@@ -40,6 +40,8 @@ const EDITOR_PRIORITY_ACTIONS = [
   "tui.editor.cursorLineEnd",
   "tui.editor.jumpForward",
   "tui.editor.jumpBackward",
+  "tui.editor.pageUp",
+  "tui.editor.pageDown",
   "tui.editor.deleteCharBackward",
   "tui.editor.deleteCharForward",
   "tui.editor.deleteWordBackward",
@@ -563,7 +565,7 @@ export class NotesWorkspace {
   }
 
   private hintText(): string {
-    return "Submit sends · Switch-pane action changes Chat/Preview · Page actions scroll · Cancel closes · Ctrl+C hard-cancels";
+    return "Submit sends · Switch-pane action changes Chat/Preview · Page scrolls Preview · Wheel scrolls panes · Cancel closes · Ctrl+C hard-cancels";
   }
 
   private handlePaste(data: string): boolean {
