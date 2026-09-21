@@ -96,6 +96,8 @@ export class NotesWorkspace {
   private disposed = false;
   private finished = false;
   private generation = 0;
+  private promptTask: Promise<unknown> | undefined;
+  private promptPreflightPending = false;
   private stopPromise: Promise<void> | undefined;
   private _focused = false;
   private inPaste = false;
@@ -202,7 +204,17 @@ export class NotesWorkspace {
   }
 
   async waitForPending(): Promise<void> {
-    await Promise.allSettled([...this.pending]);
+    const pending = [...this.pending];
+    // Pi prompt preflight has no cancellation parameter; do not let an uncooperative auth check block teardown.
+    if (
+      this.promptPreflightPending &&
+      this.promptTask &&
+      (this.disposed || this.finished || this.options.signal.aborted)
+    ) {
+      const promptIndex = pending.indexOf(this.promptTask);
+      if (promptIndex >= 0) pending.splice(promptIndex, 1);
+    }
+    await Promise.allSettled(pending);
     await this.stopPromise;
   }
 
@@ -264,10 +276,13 @@ export class NotesWorkspace {
     this.editor.disableSubmit = true;
     this.status = "Sending…";
     this.error = undefined;
-    const task = session
+    this.promptPreflightPending = true;
+    let task!: Promise<void>;
+    task = session
       .prompt(text, {
         expandPromptTemplates: false,
         preflightResult: (accepted) => {
+          if (this.promptTask === task) this.promptPreflightPending = false;
           if (!this.isCurrent(generation)) return;
           if (!accepted) {
             const currentDraft = this.editor.getExpandedText();
@@ -293,10 +308,15 @@ export class NotesWorkspace {
         this.error = safeErrorMessage(error);
       })
       .finally(() => {
+        if (this.promptTask === task) {
+          this.promptTask = undefined;
+          this.promptPreflightPending = false;
+        }
         if (!this.isCurrent(generation)) return;
         this.editor.disableSubmit = false;
         this.tui.requestRender();
       });
+    this.promptTask = task;
     this.track(task);
     this.tui.requestRender();
   }

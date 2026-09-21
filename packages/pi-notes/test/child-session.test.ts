@@ -292,6 +292,43 @@ test("child creation observes cancellation before runtime or session side effect
   assert.deepEqual(await readdirRecursive(storage.paths.sessions), []);
 });
 
+test("workspace cancellation interrupts embedded prompt authentication", async () => {
+  const { agentDir, storage } = await fixture();
+  const { runtime, model } = await fauxRuntime();
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
+  let signalAuthStarted!: () => void;
+  const authStarted = new Promise<void>((resolve) => {
+    signalAuthStarted = resolve;
+  });
+  runtime.hasConfiguredAuth = () => false;
+  runtime.checkAuth = async (_providerId, options) => {
+    receivedSignal = options?.signal;
+    signalAuthStarted();
+    return await new Promise<never>(() => {});
+  };
+  const child = await createNotesChildSession(
+    {
+      agentDir,
+      storage,
+      notePath: "current.md",
+      parentModel: model,
+      thinkingLevel: "off",
+      signal: controller.signal,
+    },
+    { createModelRuntime: async () => runtime },
+  );
+  try {
+    const prompt = child.session.prompt("Wait for authentication.", { expandPromptTemplates: false });
+    await authStarted;
+    controller.abort(new DOMException("workspace closed", "AbortError"));
+    await assert.rejects(prompt, /workspace closed/iu);
+    assert.equal(receivedSignal?.aborted, true);
+  } finally {
+    child.session.dispose();
+  }
+});
+
 test("provider failures remain in the isolated child and do not modify either note", async () => {
   const { agentDir, storage } = await fixture();
   const { runtime, faux, model } = await fauxRuntime();

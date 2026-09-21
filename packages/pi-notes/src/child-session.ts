@@ -90,10 +90,11 @@ export async function createNotesChildSession(
   }
 
   const tools = createCurrentNoteTools(options.storage, options.notePath, options.onNoteChanged);
+  const sessionModelRuntime = options.signal ? withCancellableAuth(modelRuntime, options.signal) : modelRuntime;
   const result = await createAgentSession({
     cwd: options.storage.paths.notes,
     agentDir: options.agentDir,
-    modelRuntime,
+    modelRuntime: sessionModelRuntime,
     model,
     thinkingLevel: options.thinkingLevel,
     tools: [...CHILD_TOOL_NAMES],
@@ -275,6 +276,45 @@ async function selectNoteSessionManager(
         }
       : {}),
   };
+}
+
+function withCancellableAuth(modelRuntime: ModelRuntime, lifetime: AbortSignal): ModelRuntime {
+  // AgentSession.prompt does not forward caller cancellation to its authentication check.
+  const checkAuth: ModelRuntime["checkAuth"] = (providerId, options) => {
+    const signal = options?.signal ? AbortSignal.any([lifetime, options.signal]) : lifetime;
+    throwIfAborted(signal);
+    return settleOnAbort(modelRuntime.checkAuth(providerId, { ...options, signal }), signal);
+  };
+  return new Proxy(modelRuntime, {
+    get(target, property) {
+      if (property === "checkAuth") return checkAuth;
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function settleOnAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", abort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        if (signal.aborted) reject(abortReason(signal));
+        else resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new DOMException("Operation aborted", "AbortError");
 }
 
 function notifyNoteChanged(callback: ((snapshot: NoteSnapshot) => void) | undefined, note: NoteSnapshot): void {
