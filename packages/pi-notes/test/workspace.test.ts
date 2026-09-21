@@ -290,6 +290,48 @@ test("workspace preserves remapped editing, newline, paste, streaming, preview r
   assert.equal(fake.stats.disposals, 1);
 });
 
+test("workspace gives editor actions priority over colliding cancel bindings", async (t) => {
+  const previousKeybindings = getKeybindings();
+  t.onTestFinished(() => setKeybindings(previousKeybindings));
+  const bindings = {
+    "tui.select.cancel": ["backspace", "enter", "alt+enter"],
+    "tui.input.newLine": "alt+enter",
+  } satisfies KeybindingsConfig;
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
+  setKeybindings(keybindings);
+
+  const { agentDir, storage } = await fixture();
+  const fake = createFakeChild();
+  const tui = createTuiHarness({ width: 100, rows: 24, keybindings });
+  const running = openNotesWorkspace({
+    ctx: workspaceContext(tui).ctx,
+    agentDir,
+    storage,
+    notePath: "current.md",
+    thinkingLevel: "off",
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
+  });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  tui.setFocused(true);
+
+  tui.type("wrongx");
+  tui.send("\u007f");
+  tui.send("\u001b\r");
+  tui.type("second");
+  tui.send("\r");
+  await tui.waitForPending();
+
+  assert.deepEqual(fake.stats.prompts, ["wrong\nsecond"]);
+  assert.equal(tui.isOpen, true, "editor collisions must not close the workspace");
+  tui.press("ctrl+c");
+  await running;
+  assert.equal(fake.stats.aborts, 1);
+  assert.equal(fake.stats.disposals, 1);
+});
+
 test("workspace preserves a new draft while accepted prompt preflight is pending", async () => {
   const { agentDir, storage } = await fixture();
   let releasePreflight!: () => void;

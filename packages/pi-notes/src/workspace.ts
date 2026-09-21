@@ -172,7 +172,7 @@ export class NotesWorkspace {
       this.close();
       return;
     }
-    if (this.keybindings.matches(data, "tui.select.cancel")) {
+    if (this.keybindings.matches(data, "tui.select.cancel") && !this.editorOwnsCancelCollision(data)) {
       this.close();
       return;
     }
@@ -464,6 +464,15 @@ export class NotesWorkspace {
       }
     }
     return lines;
+  }
+
+  private editorOwnsCancelCollision(data: string): boolean {
+    return (
+      this.pane === "chat" &&
+      (this.keybindings.matches(data, "tui.editor.deleteCharBackward") ||
+        this.keybindings.matches(data, "tui.input.newLine") ||
+        this.keybindings.matches(data, "tui.input.submit"))
+    );
   }
 
   private scroll(direction: -1 | 1): void {
