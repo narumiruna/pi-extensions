@@ -294,7 +294,7 @@ test("workspace gives editor actions priority over colliding cancel bindings", a
   const previousKeybindings = getKeybindings();
   t.onTestFinished(() => setKeybindings(previousKeybindings));
   const bindings = {
-    "tui.select.cancel": ["backspace", "enter", "alt+enter"],
+    "tui.select.cancel": ["backspace", "shift+backspace", "enter", "alt+enter"],
     "tui.input.newLine": "alt+enter",
   } satisfies KeybindingsConfig;
   const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
@@ -317,8 +317,9 @@ test("workspace gives editor actions priority over colliding cancel bindings", a
   await tui.waitForPending();
   tui.setFocused(true);
 
-  tui.type("wrongx");
+  tui.type("wrongxy");
   tui.send("\u007f");
+  tui.send("\u001b[127;2u");
   tui.send("\u001b\r");
   tui.type("second");
   tui.send("\r");

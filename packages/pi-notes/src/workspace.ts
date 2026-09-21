@@ -478,6 +478,7 @@ export class NotesWorkspace {
     return (
       this.pane === "chat" &&
       (this.keybindings.matches(data, "tui.editor.deleteCharBackward") ||
+        matchesKey(data, "shift+backspace") ||
         this.keybindings.matches(data, "tui.input.newLine") ||
         this.keybindings.matches(data, "tui.input.submit"))
     );
