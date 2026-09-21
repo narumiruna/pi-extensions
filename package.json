@@ -28,6 +28,7 @@
       "./packages/pi-typesafe-search/src/index.ts",
       "./packages/pi-langfuse/src/index.ts",
       "./packages/pi-lsp/src/index.ts",
+      "./packages/pi-notes/src/index.ts",
       "./packages/pi-plan-mode/src/index.ts",
       "./packages/pi-recall/src/index.ts",
       "./packages/pi-stamp/src/index.ts",
