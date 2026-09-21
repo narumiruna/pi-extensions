@@ -2,10 +2,14 @@ import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earend
 import {
   Editor,
   type EditorTheme,
+  getKeybindings,
   Key,
   Markdown,
   matchesKey,
+  setKeybindings,
   type TUI,
+  TUI_KEYBINDINGS,
+  KeybindingsManager as TuiKeybindingsManager,
   type TuiMouseEvent,
   type TuiMouseEventResult,
   truncateToWidth,
@@ -172,7 +176,11 @@ export class NotesWorkspace {
       this.close();
       return;
     }
-    if (this.keybindings.matches(data, "tui.select.cancel") && !this.editorOwnsCancelCollision(data)) {
+    if (this.editorOwnsWorkspaceCollision(data)) {
+      this.handlePriorityEditorInput(data);
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.cancel")) {
       this.close();
       return;
     }
@@ -466,13 +474,31 @@ export class NotesWorkspace {
     return lines;
   }
 
-  private editorOwnsCancelCollision(data: string): boolean {
+  private editorOwnsWorkspaceCollision(data: string): boolean {
     return (
       this.pane === "chat" &&
       (this.keybindings.matches(data, "tui.editor.deleteCharBackward") ||
         this.keybindings.matches(data, "tui.input.newLine") ||
         this.keybindings.matches(data, "tui.input.submit"))
     );
+  }
+
+  private handlePriorityEditorInput(data: string): void {
+    if (!this.keybindings.matches(data, "tui.input.tab")) {
+      this.editor.handleInput(data);
+      this.tui.requestRender();
+      return;
+    }
+    const current = getKeybindings();
+    const bindings = current.getResolvedBindings();
+    bindings["tui.input.tab"] = [];
+    setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS, bindings));
+    try {
+      this.editor.handleInput(data);
+    } finally {
+      setKeybindings(current);
+    }
+    this.tui.requestRender();
   }
 
   private scroll(direction: -1 | 1): void {

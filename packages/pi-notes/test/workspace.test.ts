@@ -332,6 +332,48 @@ test("workspace gives editor actions priority over colliding cancel bindings", a
   assert.equal(fake.stats.disposals, 1);
 });
 
+test("workspace gives configured submit priority over a colliding pane-switch key", async (t) => {
+  const previousKeybindings = getKeybindings();
+  t.onTestFinished(() => setKeybindings(previousKeybindings));
+  const bindings = {
+    "tui.input.submit": "tab",
+    "tui.input.tab": ["tab", "ctrl+q"],
+    "tui.select.cancel": "ctrl+x",
+  } satisfies KeybindingsConfig;
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
+  setKeybindings(keybindings);
+
+  const { agentDir, storage } = await fixture();
+  const fake = createFakeChild();
+  const tui = createTuiHarness({ width: 60, rows: 18, keybindings });
+  const running = openNotesWorkspace({
+    ctx: workspaceContext(tui).ctx,
+    agentDir,
+    storage,
+    notePath: "current.md",
+    thinkingLevel: "off",
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
+  });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  tui.setFocused(true);
+
+  tui.type("submit with tab");
+  tui.send("\t");
+  await tui.waitForPending();
+
+  assert.deepEqual(fake.stats.prompts, ["submit with tab"]);
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /Chat · Ready/u);
+  tui.send("\u0011");
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /Preview ·/u);
+  tui.press("ctrl+c");
+  await running;
+  assert.equal(fake.stats.aborts, 1);
+  assert.equal(fake.stats.disposals, 1);
+});
+
 test("workspace preserves a new draft while accepted prompt preflight is pending", async () => {
   const { agentDir, storage } = await fixture();
   let releasePreflight!: () => void;
