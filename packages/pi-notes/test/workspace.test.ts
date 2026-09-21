@@ -44,7 +44,13 @@ interface FakePromptOptions {
   preflightResult?(accepted: boolean): void;
 }
 
-function createFakeChild(options: { messages?: unknown[]; onPrompt?(text: string): Promise<void> } = {}) {
+function createFakeChild(
+  options: {
+    messages?: unknown[];
+    onPreflight?(text: string): boolean | Promise<boolean>;
+    onPrompt?(text: string): Promise<void>;
+  } = {},
+) {
   const listeners = new Set<(event: FakeEvent) => void>();
   const messages = options.messages ?? [];
   const state: { streamingMessage?: unknown } = {};
@@ -65,7 +71,9 @@ function createFakeChild(options: { messages?: unknown[]; onPrompt?(text: string
     },
     async prompt(text: string, promptOptions?: FakePromptOptions) {
       stats.prompts.push(text);
-      promptOptions?.preflightResult?.(true);
+      const accepted = (await options.onPreflight?.(text)) ?? true;
+      promptOptions?.preflightResult?.(accepted);
+      if (!accepted) throw new Error("prompt preflight rejected");
       streaming = true;
       messages.push({ role: "user", content: text });
       state.streamingMessage = { role: "assistant", content: [{ type: "text", text: "Streaming response" }] };
@@ -254,6 +262,97 @@ test("workspace preserves remapped editing, newline, paste, streaming, preview r
   await running;
   assert.equal(fake.stats.aborts, 1);
   assert.equal(fake.stats.disposals, 1);
+});
+
+test("workspace preserves a new draft while accepted prompt preflight is pending", async () => {
+  const { agentDir, storage } = await fixture();
+  let releasePreflight!: () => void;
+  let signalPreflightStarted!: () => void;
+  const preflightStarted = new Promise<void>((resolve) => {
+    signalPreflightStarted = resolve;
+  });
+  const preflightRelease = new Promise<void>((resolve) => {
+    releasePreflight = resolve;
+  });
+  const fake = createFakeChild({
+    onPreflight: async () => {
+      signalPreflightStarted();
+      await preflightRelease;
+      return true;
+    },
+  });
+  const tui = createTuiHarness({ width: 100, rows: 24 });
+  const running = openNotesWorkspace({
+    ctx: workspaceContext(tui).ctx,
+    agentDir,
+    storage,
+    notePath: "current.md",
+    thinkingLevel: "off",
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    dependencies: { createChildSession: async () => fake.child },
+  });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  tui.setFocused(true);
+
+  tui.type("submitted message");
+  tui.press("tui.input.submit");
+  await preflightStarted;
+  tui.type("new draft");
+  releasePreflight();
+  await tui.waitForPending();
+
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /new draft/u);
+  tui.press("tui.select.cancel");
+  await running;
+});
+
+test("workspace restores a rejected prompt before a draft typed during preflight", async () => {
+  const { agentDir, storage } = await fixture();
+  let releasePreflight!: () => void;
+  let signalPreflightStarted!: () => void;
+  const preflightStarted = new Promise<void>((resolve) => {
+    signalPreflightStarted = resolve;
+  });
+  const preflightRelease = new Promise<void>((resolve) => {
+    releasePreflight = resolve;
+  });
+  const fake = createFakeChild({
+    onPreflight: async () => {
+      signalPreflightStarted();
+      await preflightRelease;
+      return false;
+    },
+  });
+  const tui = createTuiHarness({ width: 100, rows: 24 });
+  const running = openNotesWorkspace({
+    ctx: workspaceContext(tui).ctx,
+    agentDir,
+    storage,
+    notePath: "current.md",
+    thinkingLevel: "off",
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    dependencies: { createChildSession: async () => fake.child },
+  });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  tui.setFocused(true);
+
+  tui.type("rejected message");
+  tui.press("tui.input.submit");
+  await preflightStarted;
+  tui.type("newer draft");
+  releasePreflight();
+  await tui.waitForPending();
+
+  const frame = stripVTControlCharacters(tui.render().join("\n"));
+  assert.match(frame, /rejected message/u);
+  assert.match(frame, /newer draft/u);
+  assert.match(frame, /prompt preflight rejected/u);
+  tui.press("tui.select.cancel");
+  await running;
 });
 
 test("workspace disposes a child that arrives after component disposal", async () => {

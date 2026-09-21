@@ -268,8 +268,13 @@ export class NotesWorkspace {
       .prompt(text, {
         expandPromptTemplates: false,
         preflightResult: (accepted) => {
-          if (!accepted || !this.isCurrent(generation)) return;
-          this.editor.setText("");
+          if (!this.isCurrent(generation)) return;
+          if (!accepted) {
+            const currentDraft = this.editor.getExpandedText();
+            this.editor.setText(currentDraft ? `${text}\n\n${currentDraft}` : text);
+            this.tui.requestRender();
+            return;
+          }
           this.status = "Agent is working…";
           this.followTranscript = true;
           this.tui.requestRender();

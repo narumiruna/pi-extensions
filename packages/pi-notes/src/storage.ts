@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Dir, constants as fsConstants } from "node:fs";
-import { link, lstat, mkdir, open, opendir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
@@ -108,16 +108,13 @@ export class NotesStorage {
     const root = await canonicalDirectory(this.paths.notes, options.signal);
     const target = resolve(root, ...normalized.split("/"));
     assertContained(root, target);
-    await ensureSafeParent(root, dirname(target), options.signal);
-    throwIfAborted(options.signal);
-    try {
-      await lstat(target);
-      throw new Error(`Note already exists: ${normalized}`);
-    } catch (error) {
-      if (!isNodeError(error, "ENOENT")) throw error;
-    }
-    await atomicCreate(root, target, content, options.signal, this.beforePublish);
-    return snapshot(normalized, content);
+    return withFileMutationQueue(target, async () => {
+      await ensureSafeParent(root, dirname(target), options.signal);
+      throwIfAborted(options.signal);
+      await assertMissingNote(target, normalized, options.signal);
+      await atomicCreate(root, target, normalized, content, options.signal, this.beforePublish);
+      return snapshot(normalized, content);
+    });
   }
 
   async editNote(
@@ -381,26 +378,35 @@ async function readBoundedMarkdown(path: string, label: string, signal?: AbortSi
 async function atomicCreate(
   rootPath: string,
   targetPath: string,
+  relativePath: string,
   content: string,
   signal?: AbortSignal,
   beforePublish?: NotesStorageOptions["beforePublish"],
 ): Promise<void> {
   const temporaryPath = temporaryName(targetPath);
-  let published = false;
   try {
     await writeTemporary(temporaryPath, content, 0o600, signal);
     throwIfAborted(signal);
     await beforePublish?.(targetPath, temporaryPath);
     throwIfAborted(signal);
     await revalidateCanonicalParent(rootPath, targetPath, signal);
-    throwIfAborted(signal);
-    await link(temporaryPath, targetPath);
-    published = true;
-  } finally {
-    await unlink(temporaryPath).catch((error: unknown) => {
-      if (!isNodeError(error, "ENOENT") && !published) throw error;
-    });
+    await assertMissingNote(targetPath, relativePath, signal);
+    await rename(temporaryPath, targetPath);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
+    throw error;
   }
+}
+
+async function assertMissingNote(targetPath: string, relativePath: string, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  try {
+    await lstat(targetPath);
+    throw new Error(`Note already exists: ${relativePath}`);
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) throw error;
+  }
+  throwIfAborted(signal);
 }
 
 async function atomicReplace(

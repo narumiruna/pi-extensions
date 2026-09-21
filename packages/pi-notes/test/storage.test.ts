@@ -154,6 +154,38 @@ test("safe creation supports Blank and refuses overwrite, traversal, absolute, n
   await assert.rejects(readFile(join(outside, "escape.md")), /ENOENT/u);
 });
 
+test("same-process concurrent creation publishes once without overwriting the winner", async () => {
+  const { storage } = await fixture();
+  await writeFile(join(storage.paths.templates, "first.md"), "first", "utf8");
+  await writeFile(join(storage.paths.templates, "second.md"), "second", "utf8");
+
+  const results = await Promise.allSettled([
+    storage.createNote("nested/race.md", { templatePath: "first.md" }),
+    storage.createNote("nested/race.md", { templatePath: "second.md" }),
+  ]);
+
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
+  assert.match((await storage.readNote("nested/race.md")).content, /^(first|second)$/u);
+});
+
+test("creation rechecks the destination before rename without overwriting an external file", async () => {
+  const base = await fixture();
+  const racing = new NotesStorage(base.agentDir, {
+    beforePublish: async (targetPath) => {
+      await writeFile(targetPath, "external", "utf8");
+    },
+  });
+  await racing.initialize();
+
+  await assert.rejects(racing.createNote("race.md"), /already exists/iu);
+  assert.equal(await readFile(join(racing.paths.notes, "race.md"), "utf8"), "external");
+  assert.equal(
+    (await readdir(racing.paths.notes)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+});
+
 test("note edits require current revisions and unique exact text", async () => {
   const { storage } = await fixture();
   await writeFile(join(storage.paths.notes, "edit.md"), "one two one\n", "utf8");
