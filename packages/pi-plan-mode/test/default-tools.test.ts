@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
+import * as settingsModule from "../src/settings.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
 const HELPERS = ["plan_mode_question", "plan_mode_complete"];
@@ -58,16 +59,32 @@ test("watched retired visibility is ignored while remaining settings still reloa
   await withAgentDir(async (agentDir) => {
     const settingsPath = join(agentDir, "pi-plan-mode.json");
     await writeFile(settingsPath, '{"toolVisibility":"always"}\n');
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+    let reloaded = false;
+    const readSettings = settingsModule.readPlanModeSettings;
+    const readSpy = vi.spyOn(settingsModule, "readPlanModeSettings").mockImplementation(async (path) => {
+      const result = await readSettings(path);
+      reloaded = result.kind === "loaded" && result.settings.thinkingLevel === "high";
+      return result;
+    });
     planMode(mock.pi, { settingsPath });
-    const context = createMockContext({ isIdle: () => false });
-    await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+    const context = createMockContext();
+    try {
+      await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+      await writeFile(
+        settingsPath,
+        '{"toolVisibility":"after-first-plan","toggleShortcut":"ctrl+shift+p","thinkingLevel":"high"}\n',
+      );
+      await waitForCondition(() => reloaded);
+      await mock.commands.get("plan")?.handler("start", context.ctx);
 
-    await writeFile(settingsPath, '{"toolVisibility":"after-first-plan","toggleShortcut":"ctrl+shift+p"}\n');
-    await waitForCondition(() => mock.shortcuts.has("ctrl+shift+p"));
-
-    assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...HELPERS]);
-    await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+      assert.equal(mock.thinkingLevel, "high");
+      assert.equal(mock.shortcuts.size, 0, "shortcut changes remain pending until runtime reload");
+      assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...HELPERS]);
+    } finally {
+      await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+      readSpy.mockRestore();
+    }
   });
 });
 

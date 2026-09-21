@@ -45,6 +45,7 @@ export interface PlanModeSettingsMenuOptions {
   isCurrent(): boolean;
   settingsPath?: string;
   legacySettingsPath?: string;
+  startupToggleShortcut?: PlanModeSettings["toggleShortcut"];
   readSettings?: (settingsPath?: string) => Promise<PlanModeSettingsLoadResult>;
   updateSettings?: (patch: PlanModeSettingsPatch, options?: UpdatePlanModeSettingsOptions) => Promise<PlanModeSettings>;
   onSaved(settings: PlanModeSettings): void;
@@ -159,7 +160,8 @@ export async function showPlanModeSettings(
                 {
                   id: "toggleShortcut",
                   label: "Plan mode shortcut",
-                  description: "Set the global shortcut used to toggle Plan mode.",
+                  description:
+                    "Saved TUI shortcut. Changes require /reload or restarting Pi; the current binding stays unchanged.",
                   currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
                   action: "open-shortcut",
                 },
@@ -222,9 +224,10 @@ export async function showPlanModeSettings(
         title: "Plan mode shortcut",
         lines: [
           `Configured: ${configuredPlanModeToggleShortcut(state.settings) ?? "none"}`,
-          "Use Pi key identifiers.",
-          "Submit an empty value to clear the shortcut.",
-          "When unset, Plan mode has no global shortcut.",
+          `Loaded at startup: ${safeTerminalText(options.startupToggleShortcut ?? "none")}`,
+          "TUI only. Use Pi key identifiers; Pi may reject conflicting shortcuts.",
+          "Submit an empty value to remove the saved shortcut.",
+          "Run /reload or restart Pi to apply changes; the current binding stays unchanged until then.",
         ],
         placeholder: configuredPlanModeToggleShortcut(state.settings) ?? "",
         action: "set-shortcut",
@@ -322,8 +325,8 @@ export async function showPlanModeSettings(
           { toggleShortcut },
           signal,
           toggleShortcut
-            ? `Plan mode shortcut: ${safeTerminalText(toggleShortcut)}.`
-            : "Plan mode shortcut cleared (no global shortcut).",
+            ? `Plan mode shortcut saved: ${safeTerminalText(toggleShortcut)}. Run /reload or restart Pi to apply; the current binding is unchanged.`
+            : "Plan mode shortcut removal saved. Run /reload or restart Pi to apply; the current binding is unchanged.",
         );
         return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
