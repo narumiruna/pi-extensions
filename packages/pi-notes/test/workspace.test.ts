@@ -294,8 +294,17 @@ test("workspace gives editor actions priority over colliding cancel bindings", a
   const previousKeybindings = getKeybindings();
   t.onTestFinished(() => setKeybindings(previousKeybindings));
   const bindings = {
-    "tui.select.cancel": ["backspace", "shift+backspace", "enter", "alt+enter"],
-    "tui.input.newLine": "alt+enter",
+    "tui.select.cancel": [
+      "backspace",
+      "shift+backspace",
+      "shift+delete",
+      "shift+space",
+      "enter",
+      "alt+enter",
+      "shift+enter",
+      "ctrl+j",
+    ],
+    "tui.input.newLine": "ctrl+n",
   } satisfies KeybindingsConfig;
   const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
   setKeybindings(keybindings);
@@ -320,12 +329,21 @@ test("workspace gives editor actions priority over colliding cancel bindings", a
   tui.type("wrongxy");
   tui.send("\u007f");
   tui.send("\u001b[127;2u");
+  tui.send("\u001b[32;2u");
+  tui.type("x");
+  tui.send("\u001b[D");
+  tui.send("\u001b[3;2~");
+  tui.send("\u007f");
   tui.send("\u001b\r");
   tui.type("second");
+  tui.send("\u001b[13;2~");
+  tui.type("third");
+  tui.send("\n");
+  tui.type("fourth");
   tui.send("\r");
   await tui.waitForPending();
 
-  assert.deepEqual(fake.stats.prompts, ["wrong\nsecond"]);
+  assert.deepEqual(fake.stats.prompts, ["wrong\nsecond\nthird\nfourth"]);
   assert.equal(tui.isOpen, true, "editor collisions must not close the workspace");
   tui.press("ctrl+c");
   await running;

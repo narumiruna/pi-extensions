@@ -25,6 +25,33 @@ import type { NoteSnapshot, NotesStorage } from "./storage.js";
 type CreateChildSession = typeof createNotesChildSession;
 type Pane = "chat" | "preview";
 
+// Tab and page actions remain workspace navigation unless another focused-editor action shares their input.
+const EDITOR_PRIORITY_ACTIONS = [
+  "tui.editor.cursorUp",
+  "tui.editor.cursorDown",
+  "tui.editor.historyPrevious",
+  "tui.editor.historyNext",
+  "tui.editor.cursorLeft",
+  "tui.editor.cursorRight",
+  "tui.editor.cursorWordLeft",
+  "tui.editor.cursorWordRight",
+  "tui.editor.cursorLineStart",
+  "tui.editor.cursorLineEnd",
+  "tui.editor.jumpForward",
+  "tui.editor.jumpBackward",
+  "tui.editor.deleteCharBackward",
+  "tui.editor.deleteCharForward",
+  "tui.editor.deleteWordBackward",
+  "tui.editor.deleteWordForward",
+  "tui.editor.deleteToLineStart",
+  "tui.editor.deleteToLineEnd",
+  "tui.editor.yank",
+  "tui.editor.yankPop",
+  "tui.editor.undo",
+  "tui.input.newLine",
+  "tui.input.submit",
+] as const;
+
 export interface NotesWorkspaceDependencies {
   createChildSession?: CreateChildSession;
   runInteraction?: typeof runFullscreenInteraction;
@@ -477,10 +504,11 @@ export class NotesWorkspace {
   private editorOwnsWorkspaceCollision(data: string): boolean {
     return (
       this.pane === "chat" &&
-      (this.keybindings.matches(data, "tui.editor.deleteCharBackward") ||
+      (EDITOR_PRIORITY_ACTIONS.some((action) => this.keybindings.matches(data, action)) ||
         matchesKey(data, "shift+backspace") ||
-        this.keybindings.matches(data, "tui.input.newLine") ||
-        this.keybindings.matches(data, "tui.input.submit"))
+        matchesKey(data, "shift+delete") ||
+        matchesKey(data, "shift+space") ||
+        isEditorNewLineAlias(data))
     );
   }
 
@@ -593,6 +621,17 @@ export class NotesWorkspace {
     );
     return promise;
   }
+}
+
+function isEditorNewLineAlias(data: string): boolean {
+  // Mirror Pi Editor's unconditional compatibility inputs so workspace shortcuts cannot preempt them.
+  return (
+    (data.charCodeAt(0) === 10 && data.length > 1) ||
+    data === "\u001b\r" ||
+    data === "\u001b[13;2~" ||
+    (data.length > 1 && data.includes("\u001b") && data.includes("\r")) ||
+    (data === "\n" && data.length === 1)
+  );
 }
 
 function transcriptSection(message: unknown): { role: string; text: string } | undefined {
