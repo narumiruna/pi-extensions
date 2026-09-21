@@ -351,6 +351,50 @@ test("workspace gives editor actions priority over colliding cancel bindings", a
   assert.equal(fake.stats.disposals, 1);
 });
 
+test("workspace gives printable input priority over colliding screen shortcuts", async (t) => {
+  const previousKeybindings = getKeybindings();
+  t.onTestFinished(() => setKeybindings(previousKeybindings));
+  const bindings = {
+    "tui.select.cancel": "x",
+    "tui.select.pageDown": "y",
+    "tui.select.pageUp": "shift+x",
+  } satisfies KeybindingsConfig;
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
+  setKeybindings(keybindings);
+
+  const { agentDir, storage } = await fixture();
+  const fake = createFakeChild();
+  const tui = createTuiHarness({ width: 100, rows: 24, keybindings });
+  const running = openNotesWorkspace({
+    ctx: workspaceContext(tui).ctx,
+    agentDir,
+    storage,
+    notePath: "current.md",
+    thinkingLevel: "off",
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
+  });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  tui.setFocused(true);
+
+  tui.send("x");
+  tui.send("y");
+  tui.send("\u001b[120u");
+  tui.send("\u001b[121u");
+  tui.send("\u001b[27;2;88~");
+  tui.send("\r");
+  await tui.waitForPending();
+
+  assert.deepEqual(fake.stats.prompts, ["xyxyX"]);
+  assert.equal(tui.isOpen, true, "printable collisions must not close or scroll the workspace");
+  tui.press("ctrl+c");
+  await running;
+  assert.equal(fake.stats.aborts, 1);
+  assert.equal(fake.stats.disposals, 1);
+});
+
 test("workspace gives configured submit priority over a colliding pane-switch key", async (t) => {
   const previousKeybindings = getKeybindings();
   t.onTestFinished(() => setKeybindings(previousKeybindings));

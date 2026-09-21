@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
+  decodeKittyPrintable,
   Editor,
   type EditorTheme,
   getKeybindings,
@@ -508,7 +509,8 @@ export class NotesWorkspace {
         matchesKey(data, "shift+backspace") ||
         matchesKey(data, "shift+delete") ||
         matchesKey(data, "shift+space") ||
-        isEditorNewLineAlias(data))
+        isEditorNewLineAlias(data) ||
+        isEditorPrintableInput(data))
     );
   }
 
@@ -632,6 +634,24 @@ function isEditorNewLineAlias(data: string): boolean {
     (data.length > 1 && data.includes("\u001b") && data.includes("\r")) ||
     (data === "\n" && data.length === 1)
   );
+}
+
+function isEditorPrintableInput(data: string): boolean {
+  // Pi's root export exposes the Kitty decoder; mirror Editor's xterm modifyOtherKeys fallback.
+  if (decodeKittyPrintable(data) !== undefined || data.charCodeAt(0) >= 32) return true;
+  const modifyOtherKeysPrefix = "\u001b[27;";
+  if (!data.startsWith(modifyOtherKeysPrefix)) return false;
+  const match = data.slice(modifyOtherKeysPrefix.length).match(/^(\d+);(\d+)~$/u);
+  if (!match) return false;
+  const modifier = (Number.parseInt(match[1] ?? "", 10) - 1) & ~(64 | 128);
+  const codepoint = Number.parseInt(match[2] ?? "", 10);
+  if ((modifier & ~1) !== 0 || !Number.isFinite(codepoint) || codepoint < 32) return false;
+  try {
+    String.fromCodePoint(codepoint);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function transcriptSection(message: unknown): { role: string; text: string } | undefined {
