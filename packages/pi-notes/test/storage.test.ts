@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { afterEach, test } from "vitest";
 import {
   MAX_DISCOVERED_FILES,
@@ -167,6 +168,35 @@ test("same-process concurrent creation publishes once without overwriting the wi
   assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
   assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
   assert.match((await storage.readNote("nested/race.md")).content, /^(first|second)$/u);
+});
+
+test("concurrent differently cased destination aliases serialize before publication", async () => {
+  let activePublications = 0;
+  let maximumActivePublications = 0;
+  const { storage } = await fixture({
+    beforePublish: async () => {
+      activePublications += 1;
+      maximumActivePublications = Math.max(maximumActivePublications, activePublications);
+      try {
+        for (let turn = 0; turn < 50; turn += 1) await waitForImmediate();
+      } finally {
+        activePublications -= 1;
+      }
+    },
+  });
+  await writeFile(join(storage.paths.templates, "first.md"), "first", "utf8");
+  await writeFile(join(storage.paths.templates, "second.md"), "second", "utf8");
+
+  const results = await Promise.allSettled([
+    storage.createNote("Case.md", { templatePath: "first.md" }),
+    storage.createNote("case.md", { templatePath: "second.md" }),
+  ]);
+
+  assert.equal(maximumActivePublications, 1);
+  assert.ok(results.some(({ status }) => status === "fulfilled"));
+  for (const result of results) {
+    if (result.status === "rejected") assert.match(String(result.reason), /already exists/iu);
+  }
 });
 
 test("concurrent creation revalidates a shared parent directory after mkdir races", async () => {

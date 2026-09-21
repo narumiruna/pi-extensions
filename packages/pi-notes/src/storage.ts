@@ -108,7 +108,8 @@ export class NotesStorage {
     const root = await canonicalDirectory(this.paths.notes, options.signal);
     const target = resolve(root, ...normalized.split("/"));
     assertContained(root, target);
-    return withFileMutationQueue(target, async () => {
+    // One canonical root key serializes destination aliases on case-insensitive filesystems.
+    return withFileMutationQueue(root, async () => {
       await ensureSafeParent(root, dirname(target), options.signal);
       throwIfAborted(options.signal);
       await assertMissingNote(target, normalized, options.signal);
