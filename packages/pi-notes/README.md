@@ -1,8 +1,8 @@
 # 📝 Pi Notes — Global Agent-Assisted Markdown Notes
 
-[![private](https://img.shields.io/badge/npm-private-lightgrey)](./package.json) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-notes)](https://www.npmjs.com/package/@narumitw/pi-notes) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-notes` is a private Pi extension for browsing and editing user-owned Markdown notes across projects, folders, and worktrees. Each note opens in a focused workspace with an isolated embedded agent and a live Markdown preview.
+`@narumitw/pi-notes` is a Pi extension for browsing and editing user-owned Markdown notes across projects, folders, and worktrees. Each note opens in a focused workspace with an isolated embedded agent and a live Markdown preview.
 
 ## ✨ Features
 
@@ -15,7 +15,19 @@
 
 ## 📦 Install
 
-This package is private and is not published to npm. From this repository, install dependencies, build Pi TUI Kit, and load the local package:
+Install the extension permanently:
+
+```bash
+pi install npm:@narumitw/pi-notes
+```
+
+Try it without installing permanently:
+
+```bash
+pi -e npm:@narumitw/pi-notes
+```
+
+From this repository, install dependencies, build Pi TUI Kit, and load the local package:
 
 ```bash
 npm install

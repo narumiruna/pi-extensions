@@ -1,10 +1,10 @@
 {
   "name": "@narumitw/pi-notes",
   "version": "0.0.0",
-  "description": "Private Pi extension for managing global Markdown notes with an isolated embedded agent.",
+  "description": "Pi extension for managing global Markdown notes with an isolated embedded agent.",
   "type": "module",
   "license": "MIT",
-  "private": true,
+  "private": false,
   "keywords": [
     "pi-package",
     "pi-extension",
