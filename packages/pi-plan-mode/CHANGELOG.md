@@ -1,5 +1,13 @@
 # @narumitw/pi-plan-mode
 
+## 0.58.3
+
+### Patch Changes
+
+- 26e8801: Make Plan-mode shortcut changes explicitly take effect after `/reload` or restarting Pi. Keep startup shortcut registrations stable, remove ineffective live rebinding, and show the configured and startup-loaded values with reload guidance in Settings. Other settings retain their existing reload behavior.
+- Updated dependencies [e6db042]
+  - @narumitw/pi-tui-kit@0.65.1
+
 ## 0.58.2
 
 ### Patch Changes

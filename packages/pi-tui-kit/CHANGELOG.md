@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.65.1
+
+### Patch Changes
+
+- e6db042: Share internal standalone-interaction error reporting while preserving the original callback await timing, runner-owned lifecycle checks, typed outcomes, notification labels, and sanitizers.
+
 ## 0.65.0
 
 ### Minor Changes
