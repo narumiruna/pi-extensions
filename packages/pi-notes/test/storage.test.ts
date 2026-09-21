@@ -169,6 +169,18 @@ test("same-process concurrent creation publishes once without overwriting the wi
   assert.match((await storage.readNote("nested/race.md")).content, /^(first|second)$/u);
 });
 
+test("concurrent creation revalidates a shared parent directory after mkdir races", async () => {
+  const { storage } = await fixture();
+  const paths = Array.from({ length: 20 }, (_, index) => `shared/note-${index}.md`);
+
+  await Promise.all(paths.map((relativePath) => storage.createNote(relativePath)));
+
+  assert.deepEqual(
+    (await storage.discoverNotes()).entries.map(({ relativePath }) => relativePath),
+    paths.sort(),
+  );
+});
+
 test("creation rechecks the destination before rename without overwriting an external file", async () => {
   const base = await fixture();
   const racing = new NotesStorage(base.agentDir, {

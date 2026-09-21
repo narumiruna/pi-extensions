@@ -347,15 +347,20 @@ async function ensureSafeParent(root: string, targetParent: string, signal?: Abo
     current = join(current, segment);
     throwIfAborted(signal);
     try {
-      const info = await lstat(current);
-      throwIfAborted(signal);
-      if (info.isSymbolicLink()) throw new Error(`Parent directory is a symbolic link: ${current}`);
-      if (!info.isDirectory()) throw new Error(`Parent path is not a directory: ${current}`);
+      await lstat(current);
     } catch (error) {
       if (!isNodeError(error, "ENOENT")) throw error;
-      await mkdir(current, { mode: 0o700 });
-      throwIfAborted(signal);
+      try {
+        await mkdir(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (!isNodeError(mkdirError, "EEXIST")) throw mkdirError;
+      }
     }
+    throwIfAborted(signal);
+    const info = await lstat(current);
+    throwIfAborted(signal);
+    if (info.isSymbolicLink()) throw new Error(`Parent directory is a symbolic link: ${current}`);
+    if (!info.isDirectory()) throw new Error(`Parent path is not a directory: ${current}`);
     const canonical = await realpath(current);
     throwIfAborted(signal);
     assertContained(root, canonical);
