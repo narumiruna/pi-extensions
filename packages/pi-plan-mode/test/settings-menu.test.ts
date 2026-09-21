@@ -3,7 +3,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
@@ -23,10 +23,11 @@ async function withSettingsMenu(
     notifications: ReturnType<typeof createMockContext>["notifications"];
     saved: PlanModeSettings[];
   }) => Promise<void>,
+  tuiOptions: Parameters<typeof createTuiHarness>[0] = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-menu-"));
   const settingsPath = join(directory, "pi-plan-mode.json");
-  const tui = createTuiHarness({ width: 72, rows: 24 });
+  const tui = createTuiHarness({ width: 72, rows: 24, ...tuiOptions });
   const context = createMockContext({
     cwd: directory,
     mode: "tui",
@@ -299,14 +300,16 @@ test("Plan reinjection cycles outcomes and export destination saves, previews, r
   });
 });
 
-test("Plan mode shortcut can be set and reset in Settings", async () => {
-  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+test("Plan mode shortcut saves and resets with explicit reload guidance", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, notifications, saved }) => {
     const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
     await tui.waitForOpen();
     for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForPending();
     await tui.waitForOpen();
+    assert.match(tui.render().join("\n"), /Loaded at startup: none/);
+    assert.match(tui.render().join("\n"), /\/reload/);
     tui.type("ctrl+shift+p");
     tui.press("tui.input.submit");
     await tui.waitForPending();
@@ -317,10 +320,14 @@ test("Plan mode shortcut can be set and reset in Settings", async () => {
     };
     assert.equal(writtenShortcut.toggleShortcut, "ctrl+shift+p");
     assert.match(tui.render().join("\n"), /Plan mode shortcut\s+ctrl\+shift\+p/);
+    assert.match(notifications.at(-1)?.message ?? "", /saved.*\/reload/i);
 
     tui.press("tui.select.confirm");
     await tui.waitForPending();
     await tui.waitForOpen();
+    const pending = tui.render().join("\n");
+    assert.match(pending, /Configured: ctrl\+shift\+p/);
+    assert.match(pending, /Loaded at startup: none/);
     tui.press("tui.input.submit");
     await tui.waitForPending();
     await tui.waitForOpen();
@@ -328,9 +335,84 @@ test("Plan mode shortcut can be set and reset in Settings", async () => {
     const resetFile = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
     assert.equal(Object.hasOwn(resetFile, "toggleShortcut"), false);
     assert.match(tui.render().join("\n"), /Plan mode shortcut\s+none/);
+    assert.match(notifications.at(-1)?.message ?? "", /saved.*\/reload/i);
+    assert.doesNotMatch(notifications.at(-1)?.message ?? "", /no global shortcut/i);
     tui.press("ctrl+c");
     await running;
   });
+});
+
+test("shortcut input preserves paste, editing, failure, and remapped cancellation", async () => {
+  await withSettingsMenu(
+    async ({ settingsPath, tui, ctx, notifications, saved }) => {
+      const original = '{"toggleShortcut":"ctrl+alt+p"}\n';
+      await writeFile(settingsPath, original);
+      const running = showPlanModeSettings(
+        ctx,
+        menuOptions(settingsPath, saved, {
+          startupToggleShortcut: "ctrl+alt+p",
+          updateSettings: async () => {
+            throw new Error("disk full");
+          },
+        }),
+      );
+      await tui.waitForOpen();
+      for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      assert.match(tui.render().join("\n"), /Loaded at startup: ctrl\+alt\+p/);
+      assert.ok(tui.render(26).every((line) => visibleWidth(line) <= 26));
+      tui.resize({ width: 72 });
+      tui.send("\u001b[200~ctrl+alt+x\u001b[201~");
+      tui.send("\u007f");
+      tui.type("y");
+      assert.match(tui.render().join("\n"), /ctrl\+alt\+y/);
+      tui.press("tui.input.submit");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      assert.match(notifications.at(-1)?.message ?? "", /Could not save.*previous value remains/);
+      assert.ok(notifications.every(({ message }) => !/shortcut.*saved/i.test(message)));
+      assert.deepEqual(saved, []);
+      assert.equal(await readFile(settingsPath, "utf8"), original);
+      tui.send("\u001bq");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      assert.match(tui.render().join("\n"), /Plan mode shortcut\s+ctrl\+alt\+p/);
+      tui.press("ctrl+c");
+      await running;
+    },
+    {
+      keybindings: new KeybindingsManager(TUI_KEYBINDINGS, {
+        "tui.select.cancel": "alt+q",
+      }),
+    },
+  );
+});
+
+test("RPC shortcut saves and clears explain that TUI bindings require reload", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-shortcut-rpc-"));
+  const settingsPath = join(directory, "pi-plan-mode.json");
+  try {
+    const rpc = createRpcHarness([
+      { kind: "select", response: "Plan mode shortcut (none)" },
+      { kind: "input", response: "ctrl+alt+p" },
+      { kind: "select", response: "Plan mode shortcut (ctrl+alt+p)" },
+      { kind: "input", response: "" },
+      { kind: "select", response: undefined },
+    ]);
+    const context = createMockContext({ mode: "rpc", hasUI: true, ...rpc.ui });
+    const saved: PlanModeSettings[] = [];
+    await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
+    rpc.assertConsumed();
+    assert.equal(saved[0]?.toggleShortcut, "ctrl+alt+p");
+    assert.equal(saved[1]?.toggleShortcut, undefined);
+    const successes = context.notifications.filter(({ level }) => level === "info");
+    assert.equal(successes.length, 2);
+    assert.ok(successes.every(({ message }) => /saved.*\/reload.*current binding is unchanged/i.test(message)));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("long export previews stay within narrow terminal widths", async () => {

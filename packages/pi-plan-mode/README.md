@@ -358,7 +358,8 @@ The optional file is read at session start and watched for changes; only an expl
 ```
 
 By default, Plan mode inherits thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
-The shortcut is disabled unless configured.
+The shortcut is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
+Until then, the current shortcut binding stays unchanged.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
 

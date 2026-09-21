@@ -117,10 +117,15 @@ Long previews wrap or truncate to the available terminal width without changing 
 
 ### Toggle shortcut
 
-`toggleShortcut` controls the global Plan-mode keybinding used by the TUI shortcut.
-Omit this setting to keep the shortcut disabled.
-Set `toggleShortcut` to the key string you want.
-Avoid values that conflict with editor shortcuts.
+`toggleShortcut` configures the Plan-mode toggle in TUI mode; it is disabled by default.
+Set it to a Pi key identifier, or omit it to disable the shortcut on the next load.
+Enabling, changing, or removing the shortcut requires `/reload` or restarting Pi, whether saved through Settings or edited in JSON.
+The current binding stays unchanged until then; Settings shows the configured value separately from the value loaded at startup.
+Pi snapshots shortcut registrations when binding the editor, so Plan mode registers once per extension runtime rather than attempting live rebinding.
+Other settings retain their existing watched reload behavior, and `/plan` commands are unchanged.
+
+Avoid conflicts with Pi or other extension shortcuts; the startup value is a registration preference, not a guarantee that Pi accepts it or the terminal sends that key combination.
+Tree navigation and compaction do not apply pending shortcut changes.
 
 ### Safe shell subcommands
 

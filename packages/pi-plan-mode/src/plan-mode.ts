@@ -171,8 +171,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   const explicitPlanModeSettingsPath = dependencies.settingsPath;
   let state: PlanModeState = { enabled: false, awaitingAction: false };
   let settings: PlanModeSettings = { thinkingLevel: "inherit" };
-  let toggleShortcut: ReturnType<typeof configuredPlanModeToggleShortcut>;
-  const clearPlanModeShortcutHandler = () => {};
+  let startupToggleShortcut: ReturnType<typeof configuredPlanModeToggleShortcut>;
+  let shortcutInitialized = false;
   let workflowAllowedToolNames: string[] | undefined;
   let pendingWorkflowToolPolicy: PendingWorkflowToolPolicy | undefined;
   let publishedContractMode: PlanModeContract | undefined;
@@ -389,24 +389,19 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     },
   });
 
-  const applyPlanModeShortcut = (nextShortcut: ReturnType<typeof configuredPlanModeToggleShortcut>) => {
-    if (toggleShortcut && toggleShortcut !== nextShortcut) {
-      pi.registerShortcut(toggleShortcut, {
-        handler: clearPlanModeShortcutHandler,
+  const initializePlanModeShortcut = () => {
+    if (shortcutInitialized) return;
+    // Pi snapshots registrations when binding the editor. Keep even an unset shortcut stable
+    // for this runtime; settings saves and file watches take effect after /reload or restart.
+    const shortcut = configuredPlanModeToggleShortcut(settings);
+    if (shortcut) {
+      pi.registerShortcut(shortcut, {
+        description: "Toggle Plan mode",
+        handler: (ctx) => togglePlanMode(ctx),
       });
     }
-    if (!nextShortcut) {
-      toggleShortcut = undefined;
-      return;
-    }
-    if (toggleShortcut === nextShortcut) return;
-    pi.registerShortcut(nextShortcut, {
-      description: "Toggle Plan mode",
-      handler: (ctx) => {
-        togglePlanMode(ctx);
-      },
-    });
-    toggleShortcut = nextShortcut;
+    startupToggleShortcut = shortcut;
+    shortcutInitialized = true;
   };
 
   const readPlanModeRuntimeSettings = async () => {
@@ -426,7 +421,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       loadedSettings.kind === "loaded"
         ? loadedSettings.settings
         : ({ thinkingLevel: "inherit" } satisfies PlanModeSettings);
-    applyPlanModeShortcut(configuredPlanModeToggleShortcut(settings));
     if (!ctx || !showWarnings) return loadedSettings;
     if (loadedSettings.kind === "invalid") {
       ctx.ui.notify(`pi-plan-mode settings ignored: ${loadedSettings.reason}`, "warning");
@@ -503,6 +497,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     state = { enabled: false, awaitingAction: false };
     await applyPlanModeSettings(generation, ctx, true);
     if (generation !== menuGeneration || menuController.signal.aborted) return;
+    initializePlanModeShortcut();
     startPlanModeSettingsWatch(generation);
     if (!installRestoredState(restoredState, ctx)) return;
     implementationRetention.restore(state.activeImplementation);
@@ -1418,10 +1413,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       isCurrent,
       settingsPath: dependencies.settingsPath,
       updateSettings: dependencies.updateSettings ?? updatePlanModeSettings,
+      startupToggleShortcut,
       onSaved: (saved) => {
         if (!isCurrent()) return;
         settings = saved;
-        applyPlanModeShortcut(configuredPlanModeToggleShortcut(saved));
       },
       ...(dependencies.readSettings
         ? { readSettings: async () => dependencies.readSettings?.() ?? { kind: "missing" } }
