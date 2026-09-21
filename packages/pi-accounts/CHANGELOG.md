@@ -1,5 +1,13 @@
 # @narumitw/pi-accounts
 
+## 0.52.2
+
+### Patch Changes
+
+- 751a296: Start Pi sessions without waiting for account-file locks or provider activation, while preserving fail-closed authentication by gating each provider's first use, allowing compatible usage queries to await pending activation, and cancelling stale startup work.
+- Updated dependencies [e6db042]
+  - @narumitw/pi-tui-kit@0.65.1
+
 ## 0.52.1
 
 ### Patch Changes
