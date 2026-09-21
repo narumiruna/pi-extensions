@@ -6,14 +6,16 @@ import {
   Markdown,
   matchesKey,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { runCustomInteraction } from "@narumitw/pi-tui-kit/custom-interaction";
 import { hardWrapTerminalDocument, sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { createNotesChildSession, type NotesChildSession } from "./child-session.js";
 import { MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_MESSAGES, WIDE_WORKSPACE_COLUMNS } from "./constants.js";
+import { runFullscreenInteraction } from "./fullscreen.js";
 import type { NoteSnapshot, NotesStorage } from "./storage.js";
 
 type CreateChildSession = typeof createNotesChildSession;
@@ -21,6 +23,7 @@ type Pane = "chat" | "preview";
 
 export interface NotesWorkspaceDependencies {
   createChildSession?: CreateChildSession;
+  runInteraction?: typeof runFullscreenInteraction;
 }
 
 export interface OpenNotesWorkspaceOptions {
@@ -35,7 +38,8 @@ export interface OpenNotesWorkspaceOptions {
 }
 
 export async function openNotesWorkspace(options: OpenNotesWorkspaceOptions): Promise<void> {
-  const interaction = await runCustomInteraction<"closed">(options.ctx, {
+  const runInteraction = options.dependencies?.runInteraction ?? runFullscreenInteraction;
+  const interaction = await runInteraction<"closed">(options.ctx, {
     signal: options.signal,
     isCurrent: options.isCurrent,
     create: ({ tui, theme, keybindings, signal, complete }) =>
@@ -99,6 +103,9 @@ export class NotesWorkspace {
   private promptTask: Promise<unknown> | undefined;
   private promptPreflightPending = false;
   private stopPromise: Promise<void> | undefined;
+  private editorMouseBounds:
+    | { x: number; y: number; width: number; visibleHeight: number; lineOffset: number; fullHeight: number }
+    | undefined;
   private _focused = false;
   private inPaste = false;
 
@@ -143,7 +150,8 @@ export class NotesWorkspace {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
-    const availableRows = Math.max(1, this.tui.terminal.rows - 4);
+    const availableRows = Math.max(1, this.tui.terminal.rows - (this.tui.mode === "fullscreen" ? 0 : 4));
+    this.editorMouseBounds = undefined;
     const title = truncateToWidth(
       this.theme.fg("accent", this.theme.bold(`Pi Notes · ${sanitizeTerminalText(this.options.notePath)}`)),
       safeWidth,
@@ -185,6 +193,35 @@ export class NotesWorkspace {
     if (this.pane !== "chat") return;
     this.editor.handleInput(data);
     this.tui.requestRender();
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.disposed || this.finished) return undefined;
+    if (event.type === "wheel") {
+      const lines = Math.trunc(event.wheelDelta ?? 0);
+      if (lines === 0) return { handled: true, render: false };
+      this.scrollPane(this.paneAt(event.x, event.width), lines);
+      return { handled: true };
+    }
+    const bounds = this.editorMouseBounds;
+    if (
+      !bounds ||
+      event.x < bounds.x ||
+      event.x >= bounds.x + bounds.width ||
+      event.y < bounds.y ||
+      event.y >= bounds.y + bounds.visibleHeight
+    ) {
+      return undefined;
+    }
+    this.pane = "chat";
+    this.editor.focused = this._focused;
+    return this.editor.handleMouse({
+      ...event,
+      x: event.x - bounds.x,
+      y: event.y - bounds.y + bounds.lineOffset,
+      width: bounds.width,
+      height: bounds.fullHeight,
+    });
   }
 
   invalidate(): void {
@@ -325,7 +362,7 @@ export class NotesWorkspace {
     const separator = " │ ";
     const leftWidth = Math.max(1, Math.floor((width - visibleWidth(separator)) * 0.52));
     const rightWidth = Math.max(1, width - leftWidth - visibleWidth(separator));
-    const left = this.renderChat(leftWidth, rows);
+    const left = this.renderChat(leftWidth, rows, 0, 1);
     const right = this.renderPreview(rightWidth, rows);
     const lines: string[] = [];
     for (let index = 0; index < rows; index += 1) {
@@ -337,10 +374,10 @@ export class NotesWorkspace {
   }
 
   private renderNarrow(width: number, rows: number): string[] {
-    return this.pane === "chat" ? this.renderChat(width, rows) : this.renderPreview(width, rows);
+    return this.pane === "chat" ? this.renderChat(width, rows, 0, 1) : this.renderPreview(width, rows);
   }
 
-  private renderChat(width: number, rows: number): string[] {
+  private renderChat(width: number, rows: number, originX: number, originY: number): string[] {
     const editorLines = this.editor.render(width);
     const header = truncateToWidth(
       this.theme.fg(this.pane === "chat" ? "accent" : "muted", `Chat · ${this.status}`),
@@ -358,7 +395,22 @@ export class NotesWorkspace {
     if (this.followTranscript) this.transcriptScroll = this.maxTranscriptScroll();
     this.transcriptScroll = clamp(this.transcriptScroll, 0, this.maxTranscriptScroll());
     const visible = transcript.slice(this.transcriptScroll, this.transcriptScroll + viewportRows);
-    return [header, ...visible, ...errorLines, ...editorLines].slice(-rows);
+    const content = [header, ...visible, ...errorLines, ...editorLines];
+    const firstVisibleRow = Math.max(0, content.length - rows);
+    const editorStartRow = content.length - editorLines.length;
+    const firstVisibleEditorRow = Math.max(firstVisibleRow, editorStartRow);
+    const visibleEditorHeight = Math.max(0, content.length - firstVisibleEditorRow);
+    if (visibleEditorHeight > 0) {
+      this.editorMouseBounds = {
+        x: originX,
+        y: originY + firstVisibleEditorRow - firstVisibleRow,
+        width,
+        visibleHeight: visibleEditorHeight,
+        lineOffset: firstVisibleEditorRow - editorStartRow,
+        fullHeight: editorLines.length,
+      };
+    }
+    return content.slice(firstVisibleRow);
   }
 
   private renderPreview(width: number, rows: number): string[] {
@@ -415,21 +467,25 @@ export class NotesWorkspace {
   }
 
   private scroll(direction: -1 | 1): void {
-    if (this.pane === "preview") {
-      this.previewScroll = clamp(
-        this.previewScroll + direction * Math.max(1, this.previewRows - 1),
-        0,
-        this.maxPreviewScroll(),
-      );
+    const rows = this.pane === "preview" ? this.previewRows : this.transcriptRows;
+    this.scrollPane(this.pane, direction * Math.max(1, rows - 1));
+  }
+
+  private scrollPane(pane: Pane, lines: number): void {
+    if (pane === "preview") {
+      this.previewScroll = clamp(this.previewScroll + lines, 0, this.maxPreviewScroll());
     } else {
-      this.transcriptScroll = clamp(
-        this.transcriptScroll + direction * Math.max(1, this.transcriptRows - 1),
-        0,
-        this.maxTranscriptScroll(),
-      );
+      this.transcriptScroll = clamp(this.transcriptScroll + lines, 0, this.maxTranscriptScroll());
       this.followTranscript = this.transcriptScroll === this.maxTranscriptScroll();
     }
     this.tui.requestRender();
+  }
+
+  private paneAt(x: number, width: number): Pane {
+    if (width < WIDE_WORKSPACE_COLUMNS) return this.pane;
+    const separatorWidth = visibleWidth(" │ ");
+    const leftWidth = Math.max(1, Math.floor((width - separatorWidth) * 0.52));
+    return x < leftWidth + Math.floor(separatorWidth / 2) ? "chat" : "preview";
   }
 
   private maxTranscriptScroll(): number {

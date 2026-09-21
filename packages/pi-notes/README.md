@@ -8,7 +8,7 @@
 
 - Keeps every managed item as an equal Markdown note without built-in note types.
 - Discovers notes and user-managed templates dynamically under Pi's configured agent directory.
-- Shows a responsive split Chat/Preview workspace on wide terminals and tabs on narrow terminals.
+- Shows a fullscreen split Chat/Preview workspace on wide terminals and fullscreen tabs on narrow terminals.
 - Gives the embedded agent only pathless tools for the currently open note.
 - Persists a separate child conversation for each normalized note path without replacing the parent Pi session.
 - Creates and updates notes with traversal, symlink, stale-revision, and same-process race checks.
@@ -60,7 +60,7 @@ flowchart LR
     C --> S[Per-note child history]
 ```
 
-Opening a note temporarily gives terminal input to the notes workspace. Closing it aborts child work, disposes the child session, and returns to the unchanged parent conversation and editor.
+Opening a note temporarily switches the terminal to a dedicated fullscreen workspace. On wide terminals, the mouse wheel scrolls the Chat or Preview pane under the pointer; on narrow terminals, it scrolls the active pane. Closing the workspace aborts child work, disposes the child session, and restores the unchanged parent conversation and editor.
 
 All data is below `getAgentDir()`, which honors `PI_CODING_AGENT_DIR`:
 

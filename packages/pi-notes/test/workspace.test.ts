@@ -12,6 +12,7 @@ import {
   TUI_KEYBINDINGS,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { runCustomInteraction } from "@narumitw/pi-tui-kit/custom-interaction";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
@@ -114,6 +115,17 @@ function workspaceContext(tui: ReturnType<typeof createTuiHarness>, editorText =
   });
 }
 
+function widePaneText(lines: readonly string[]): { chat: string; preview: string } {
+  const panes = lines
+    .slice(1, -1)
+    .map((line) => stripVTControlCharacters(line).split(" │ "))
+    .filter((columns) => columns.length === 2);
+  return {
+    chat: panes.map(([chat]) => chat).join("\n"),
+    preview: panes.map(([, preview]) => preview).join("\n"),
+  };
+}
+
 test("workspace renders bounded wide and narrow layouts, sanitizes text, and hard-cancels cleanly", async () => {
   const { agentDir, storage } = await fixture(
     `# Heading\n\nUnsafe \u001b]52;c;QQ==\u0007 preview\n${"line\n".repeat(30)}`,
@@ -121,7 +133,10 @@ test("workspace renders bounded wide and narrow layouts, sanitizes text, and har
   const fake = createFakeChild({
     messages: [
       { role: "user", content: "Earlier question" },
-      { role: "assistant", content: [{ type: "text", text: "Unsafe \u001b[31m answer" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Unsafe \u001b[31m answer\n${"chat line\n".repeat(40)}` }],
+      },
     ],
   });
   const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "ctrl+x" });
@@ -136,7 +151,7 @@ test("workspace renders bounded wide and narrow layouts, sanitizes text, and har
     thinkingLevel: "off",
     signal: controller.signal,
     isCurrent: () => true,
-    dependencies: { createChildSession: async () => fake.child },
+    dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
   });
   await tui.waitForOpen();
   await tui.waitForPending();
@@ -150,12 +165,22 @@ test("workspace renders bounded wide and narrow layouts, sanitizes text, and har
   assert.ok(wide.every((line) => visibleWidth(line) <= 120));
   assert.equal(wide.join("\n").includes(CURSOR_MARKER), true, "chat editor receives focus");
 
+  const beforeChatWheel = widePaneText(wide);
+  const afterChatWheel = widePaneText(tui.mouse({ type: "wheel", x: 2, y: 5, wheelDelta: -3 }));
+  assert.notEqual(afterChatWheel.chat, beforeChatWheel.chat, "wheel over Chat scrolls its transcript");
+  assert.equal(afterChatWheel.preview, beforeChatWheel.preview, "Chat wheel leaves Preview fixed");
+  const afterPreviewWheel = widePaneText(tui.mouse({ type: "wheel", x: 110, y: 5, wheelDelta: 3 }));
+  assert.equal(afterPreviewWheel.chat, afterChatWheel.chat, "Preview wheel leaves Chat fixed");
+  assert.notEqual(afterPreviewWheel.preview, afterChatWheel.preview, "wheel over Preview scrolls the note");
+
   const narrowChat = tui.resize({ width: 60, rows: 16 });
   assert.match(stripVTControlCharacters(narrowChat.join("\n")), /Chat · Ready/u);
   tui.press("tui.input.tab");
   const narrowPreview = tui.render();
   assert.match(stripVTControlCharacters(narrowPreview.join("\n")), /Preview ·/u);
   assert.equal(narrowPreview.join("\n").includes(CURSOR_MARKER), false, "read-only preview has no cursor");
+  const narrowAfterWheel = tui.mouse({ type: "wheel", x: 2, y: 5, wheelDelta: -3 });
+  assert.notEqual(narrowAfterWheel.join("\n"), narrowPreview.join("\n"), "narrow view scrolls its active pane");
   tui.press("tui.select.pageDown");
   for (const size of [
     { width: 24, rows: 8 },
@@ -224,6 +249,7 @@ test("workspace preserves remapped editing, newline, paste, streaming, preview r
     signal: new AbortController().signal,
     isCurrent: () => true,
     dependencies: {
+      runInteraction: runCustomInteraction,
       createChildSession: async (options) => {
         noteChanged = options.onNoteChanged;
         return fake.child;
@@ -290,7 +316,7 @@ test("workspace preserves a new draft while accepted prompt preflight is pending
     thinkingLevel: "off",
     signal: new AbortController().signal,
     isCurrent: () => true,
-    dependencies: { createChildSession: async () => fake.child },
+    dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
   });
   await tui.waitForOpen();
   await tui.waitForPending();
@@ -331,7 +357,7 @@ for (const cancellation of ["hard-cancel", "upstream cancellation"] as const) {
       thinkingLevel: "off",
       signal: controller.signal,
       isCurrent: () => true,
-      dependencies: { createChildSession: async () => fake.child },
+      dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
     });
     await tui.waitForOpen();
     await tui.waitForPending();
@@ -375,7 +401,7 @@ test("workspace restores a rejected prompt before a draft typed during preflight
     thinkingLevel: "off",
     signal: new AbortController().signal,
     isCurrent: () => true,
-    dependencies: { createChildSession: async () => fake.child },
+    dependencies: { createChildSession: async () => fake.child, runInteraction: runCustomInteraction },
   });
   await tui.waitForOpen();
   await tui.waitForPending();
@@ -418,6 +444,7 @@ test("workspace disposes a child that arrives after component disposal", async (
     signal: new AbortController().signal,
     isCurrent: () => true,
     dependencies: {
+      runInteraction: runCustomInteraction,
       createChildSession: async () => {
         signalFactoryStarted();
         await childRelease;
@@ -446,6 +473,7 @@ test("workspace reports child startup failure without losing a working close pat
     signal: new AbortController().signal,
     isCurrent: () => true,
     dependencies: {
+      runInteraction: runCustomInteraction,
       createChildSession: async () => {
         throw new Error("selected model is unavailable");
       },
