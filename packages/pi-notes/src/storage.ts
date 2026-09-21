@@ -127,8 +127,10 @@ export class NotesStorage {
   ): Promise<NoteSnapshot> {
     if (!oldText) throw new Error("oldText must not be empty; use replace_current_note for a full replacement");
     const normalized = normalizeExistingMarkdownPath(relativePath);
-    const queuePath = resolve(this.paths.notes, ...normalized.split("/"));
-    return withFileMutationQueue(queuePath, async () => {
+    const root = await canonicalDirectory(this.paths.notes, signal);
+    const target = resolve(root, ...normalized.split("/"));
+    assertContained(root, target);
+    return withFileMutationQueue(root, async () => {
       throwIfAborted(signal);
       const current = await this.readNote(normalized, signal);
       assertRevision(current, expectedRevision);
@@ -139,7 +141,7 @@ export class NotesStorage {
       }
       const content = `${current.content.slice(0, index)}${newText}${current.content.slice(index + oldText.length)}`;
       validateMarkdownContent(content, "Note");
-      await atomicReplace(this.paths.notes, queuePath, content, current.revision, signal, this.beforePublish);
+      await atomicReplace(root, target, content, current.revision, signal, this.beforePublish);
       return snapshot(normalized, content);
     });
   }
@@ -152,12 +154,14 @@ export class NotesStorage {
   ): Promise<NoteSnapshot> {
     const normalized = normalizeExistingMarkdownPath(relativePath);
     validateMarkdownContent(content, "Note");
-    const queuePath = resolve(this.paths.notes, ...normalized.split("/"));
-    return withFileMutationQueue(queuePath, async () => {
+    const root = await canonicalDirectory(this.paths.notes, signal);
+    const target = resolve(root, ...normalized.split("/"));
+    assertContained(root, target);
+    return withFileMutationQueue(root, async () => {
       throwIfAborted(signal);
       const current = await this.readNote(normalized, signal);
       assertRevision(current, expectedRevision);
-      await atomicReplace(this.paths.notes, queuePath, content, current.revision, signal, this.beforePublish);
+      await atomicReplace(root, target, content, current.revision, signal, this.beforePublish);
       return snapshot(normalized, content);
     });
   }

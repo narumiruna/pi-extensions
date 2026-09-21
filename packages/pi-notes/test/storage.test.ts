@@ -239,6 +239,35 @@ test("note edits require current revisions and unique exact text", async () => {
   assert.equal((await storage.readNote("edit.md")).content, "one TWO one\n");
 });
 
+test("all existing-note mutations share the canonical root queue before publication", async () => {
+  let activePublications = 0;
+  let maximumActivePublications = 0;
+  const { storage } = await fixture({
+    beforePublish: async () => {
+      activePublications += 1;
+      maximumActivePublications = Math.max(maximumActivePublications, activePublications);
+      try {
+        for (let turn = 0; turn < 50; turn += 1) await waitForImmediate();
+      } finally {
+        activePublications -= 1;
+      }
+    },
+  });
+  await writeFile(join(storage.paths.notes, "first.md"), "first", "utf8");
+  await writeFile(join(storage.paths.notes, "second.md"), "second", "utf8");
+  const first = await storage.readNote("first.md");
+  const second = await storage.readNote("second.md");
+
+  await Promise.all([
+    storage.editNote("first.md", first.revision, "first", "edited"),
+    storage.replaceNote("second.md", second.revision, "replaced"),
+  ]);
+
+  assert.equal(maximumActivePublications, 1);
+  assert.equal((await storage.readNote("first.md")).content, "edited");
+  assert.equal((await storage.readNote("second.md")).content, "replaced");
+});
+
 test("same-process concurrent writes serialize and only one stale revision publishes", async () => {
   const { storage } = await fixture();
   await writeFile(join(storage.paths.notes, "race.md"), "base", "utf8");
