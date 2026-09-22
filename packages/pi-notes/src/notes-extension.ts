@@ -94,7 +94,14 @@ export function createNotesExtension(
         if (selected.kind === "closed") return;
 
         if (selected.kind === "pastePath") {
-          const absolutePath = await storage.resolveCanonicalNotePath(selected.notePath, signal);
+          let absolutePath: string;
+          try {
+            absolutePath = await storage.resolveCanonicalNotePath(selected.notePath, signal);
+          } catch (error) {
+            if (!isOwned()) return;
+            safeNotify(ctx, `Pi Notes failed to resolve the selected note: ${safeErrorMessage(error)}`, "error");
+            continue;
+          }
           if (!isOwned()) return;
           if (sanitizeTerminalText(absolutePath) !== absolutePath) {
             safeNotify(ctx, "Pi Notes cannot paste a path that contains terminal or direction controls.", "error");
@@ -105,7 +112,14 @@ export function createNotesExtension(
         }
 
         if (selected.kind === "editTemplate") {
-          const template = await storage.readTemplate(selected.templatePath, signal);
+          let template: TemplateSnapshot;
+          try {
+            template = await storage.readTemplate(selected.templatePath, signal);
+          } catch (error) {
+            if (!isOwned()) return;
+            safeNotify(ctx, `Pi Notes failed to read the selected template: ${safeErrorMessage(error)}`, "error");
+            continue;
+          }
           if (!isOwned()) return;
           const content = await deps.editTemplate(ctx, template, { signal, isCurrent });
           if (!isOwned()) return;
@@ -178,7 +192,7 @@ function safeNotify(ctx: ExtensionContext, message: string, level: "info" | "war
 }
 
 function safeErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return sanitizeTerminalText(error instanceof Error ? error.message : String(error)).slice(0, 500);
 }
 
 function rejectCommand(ctx: ExtensionContext, message: string): void {

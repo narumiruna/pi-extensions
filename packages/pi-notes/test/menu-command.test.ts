@@ -190,32 +190,60 @@ test("path-paste cancellation is inert", async () => {
   assert.equal(workspaceCalls, 0);
 });
 
-test("path paste re-resolves the selected note and rejects a file removed before insertion", async () => {
-  const { agentDir, storage } = await fixture();
-  const notePath = join(storage.paths.notes, "open.md");
-  await writeFile(notePath, "# Open\n", "utf8");
-  const mock = createMockPi();
-  createNotesExtension({
-    getAgentDir: () => agentDir,
-    createStorage: () => storage,
-    showManager: showNotesManager,
-  })(mock.pi);
-  let selections = 0;
-  const context = createMockContext({
-    mode: "tui",
-    hasUI: true,
-    editorText: "parent draft",
-    select: async () => {
-      selections += 1;
-      if (selections === 1) return "Paste a note path…";
-      await rm(notePath);
-      return "open.md";
-    },
-  });
+test("stale unsafe note and template selections report safely and reopen the manager", async () => {
+  for (const selectionKind of ["pastePath", "editTemplate"] as const) {
+    const { agentDir, storage } = await fixture();
+    const unsafePath = "unsafe\u001b]52;c;QQ==\u0007\u001b[31m\u202e.md";
+    const selectedPath = join(
+      selectionKind === "pastePath" ? storage.paths.notes : storage.paths.templates,
+      unsafePath,
+    );
+    await writeFile(selectedPath, "# Removed\n", "utf8");
+    const mock = createMockPi();
+    let managerCalls = 0;
+    let editorCalls = 0;
+    let thinkingReads = 0;
+    let workspaceCalls = 0;
+    mock.rawPi.getThinkingLevel = () => {
+      thinkingReads += 1;
+      return "off";
+    };
+    createNotesExtension({
+      getAgentDir: () => agentDir,
+      createStorage: () => storage,
+      showManager: async () => {
+        managerCalls += 1;
+        if (managerCalls > 1) return { kind: "closed" };
+        await rm(selectedPath);
+        return selectionKind === "pastePath"
+          ? { kind: "pastePath", notePath: unsafePath }
+          : { kind: "editTemplate", templatePath: unsafePath };
+      },
+      editTemplate: async () => {
+        editorCalls += 1;
+        return undefined;
+      },
+      openWorkspace: async () => {
+        workspaceCalls += 1;
+      },
+    })(mock.pi);
+    const context = createMockContext({ mode: "tui", hasUI: true, editorText: "parent draft" });
 
-  await assert.rejects(Promise.resolve(mock.commands.get("notes")?.handler("", context.ctx)), /ENOENT|no such/iu);
-  assert.deepEqual(context.pastedEditorTexts, []);
-  assert.equal(context.editorText, "parent draft");
+    await mock.commands.get("notes")?.handler("", context.ctx);
+
+    assert.equal(managerCalls, 2);
+    assert.equal(editorCalls, 0);
+    assert.equal(thinkingReads, 0);
+    assert.equal(workspaceCalls, 0);
+    assert.deepEqual(context.pastedEditorTexts, []);
+    assert.equal(context.editorText, "parent draft");
+    assert.equal(context.notifications.length, 1);
+    assert.equal(context.notifications[0]?.level, "error");
+    assert.match(context.notifications[0]?.message ?? "", /failed to (resolve|read)/iu);
+    for (const control of ["\u001b", "\u0007", "\u202e"]) {
+      assert.equal((context.notifications[0]?.message ?? "").includes(control), false);
+    }
+  }
 });
 
 test("path paste rejects terminal-control paths without changing the parent draft", async () => {
