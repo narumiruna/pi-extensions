@@ -218,14 +218,19 @@ test("bracketed paste is forwarded verbatim without interpreting mouse-shaped te
   assert.deepEqual(mainInput.inputs, chunks);
 });
 
-test("narrow terminals synchronously return input focus to the visible side pane", async () => {
-  const { component, focus, mainInput, side, terminal } = split("right-pane");
+test("rendering a narrow terminal synchronously returns focus to the visible side pane", async () => {
+  const { component, focus, mainInput, overlay, side, terminal } = split("right-pane");
   component.handleTerminalInput(mouse(0, 10));
   await Promise.resolve();
   assert.equal(focus.current, mainInput);
 
   terminal.columns = MIN_BTW_SPLIT_COLUMNS - 1;
-  assert.equal(component.handleTerminalInput("x"), false);
+  overlay.focused = true;
+  component.render(terminal.columns);
+  assert.equal(focus.current, mainInput);
+
+  overlay.focused = false;
+  component.render(terminal.columns);
   assert.equal(focus.current, side);
   focus.current?.handleInput?.("x");
   assert.deepEqual(side.inputs, ["x"]);

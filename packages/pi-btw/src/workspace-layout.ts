@@ -123,8 +123,8 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     const main = this.mainPane.getLayout();
     this.layoutRoot =
       options.layout === "left-pane"
-        ? new ResponsivePaneRow(side, separator, main, 0)
-        : new ResponsivePaneRow(main, separator, side, 2);
+        ? new ResponsivePaneRow(side, separator, main, 0, (width) => this.handleViewportWidth(width))
+        : new ResponsivePaneRow(main, separator, side, 2, (width) => this.handleViewportWidth(width));
   }
 
   getFullscreenLayout(): Component {
@@ -150,6 +150,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   render(width: number): string[] {
     if (width <= 0) return [];
     const safeWidth = Math.max(1, width);
+    this.handleViewportWidth(safeWidth);
     if (safeWidth < MIN_BTW_SPLIT_COLUMNS) {
       return this.options.sideComponent.render(safeWidth).map((line) => truncateToWidth(line, safeWidth));
     }
@@ -206,6 +207,18 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     return Math.max(1, Math.floor(this.options.terminalColumns()));
   }
 
+  private handleViewportWidth(width: number): void {
+    if (
+      this.disposed ||
+      width >= MIN_BTW_SPLIT_COLUMNS ||
+      this.activePane === "side" ||
+      this.options.hasFocusedOverlay()
+    ) {
+      return;
+    }
+    this.activatePane("side");
+  }
+
   private activatePane(pane: BtwActivePane): void {
     if (this.disposed) return;
     this.activePane = pane;
@@ -229,6 +242,7 @@ class ResponsivePaneRow extends HStack {
     separator: Component,
     right: Component,
     private readonly sideIndex: 0 | 2,
+    private readonly onViewportWidth: (width: number) => void,
   ) {
     super([
       { component: left, basis: 1, grow: 0, shrink: 0, minSize: 1 },
@@ -251,6 +265,7 @@ class ResponsivePaneRow extends HStack {
 
   private resize(width: number): void {
     const safeWidth = Math.max(1, Math.floor(width));
+    this.onViewportWidth(safeWidth);
     if (safeWidth < MIN_BTW_SPLIT_COLUMNS) {
       for (const [index, entry] of this.entries.entries()) {
         entry.basis = index === this.sideIndex ? safeWidth : 1;

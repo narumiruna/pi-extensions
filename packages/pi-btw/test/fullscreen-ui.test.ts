@@ -261,7 +261,7 @@ async function waitForCondition(condition: () => boolean, message: string): Prom
 }
 
 class InputHandoffTerminal implements Terminal {
-  readonly columns = 80;
+  columns = 80;
   readonly rows = 12;
   readonly kittyProtocolActive = false;
   readonly lifecycle: Array<"start" | "stop"> = [];
@@ -820,6 +820,50 @@ test.each(["left-pane", "right-pane"] as const)(
     }
   },
 );
+
+test.each([
+  ["left-pane", 70],
+  ["right-pane", 10],
+] as const)("resizing the %s workspace returns focus to its visible side pane", async (layout, mainColumn) => {
+  const harness = createInputHandoffHarness();
+  const side = new SideInput();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    { layout },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+
+    harness.terminal.send(`\u001b[<0;${mainColumn};5M`);
+    await Promise.resolve();
+    assert.equal(harness.mainInput.focused, true);
+    assert.equal(side.focused, false);
+
+    harness.terminal.columns = 79;
+    sideTui.renderNow(true);
+    assert.equal(harness.mainInput.focused, false);
+    assert.equal(side.focused, true);
+
+    closeSide();
+    assert.equal(await running, "closed");
+  } finally {
+    closeSide?.();
+    await running.catch(() => {});
+    harness.parent.stop();
+  }
+});
 
 test.each([
   ["left-pane", 70],
