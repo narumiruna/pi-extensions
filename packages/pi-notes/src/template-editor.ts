@@ -18,6 +18,7 @@ import type { TemplateSnapshot } from "./storage.js";
 
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
+const PASTE_TAIL_SETTLE_MS = 50;
 
 interface TemplateEditorOwnership {
   signal: AbortSignal;
@@ -64,6 +65,10 @@ class TemplateEditor implements Component, Focusable {
   private readonly onDone: (value: string | undefined) => void;
   private editorStartRow = 1;
   private editorRows = 0;
+  private deferredPasteInputs: string[] = [];
+  private pasteTailTimer: ReturnType<typeof setTimeout> | undefined;
+  private pendingPasteWork: Promise<void> | undefined;
+  private resolvePendingPasteWork: (() => void) | undefined;
   private finished = false;
   private _focused = false;
 
@@ -119,14 +124,47 @@ class TemplateEditor implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.finished) return;
-    if (
-      this.editor.isPasting ||
-      this.editor.isPasteBurstGuarded ||
-      data.includes(BRACKETED_PASTE_START) ||
-      data.includes(BRACKETED_PASTE_END)
-    ) {
-      this.editor.handleInput(data);
+    if (this.editor.hasPendingPaste) {
+      this.handlePendingPasteInput(data);
+      return;
+    }
+    this.dispatchInput(data);
+  }
+
+  async waitForPending(): Promise<void> {
+    for (;;) {
+      const pending = this.pendingPasteWork;
+      if (!pending) return;
+      await pending;
+    }
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.y < this.editorStartRow || event.y >= this.editorStartRow + this.editorRows) {
+      return { handled: true, focus: true };
+    }
+    return this.editor.handleMouse({
+      ...event,
+      y: event.y - this.editorStartRow,
+      height: Math.max(1, this.editorRows),
+    });
+  }
+
+  invalidate(): void {
+    this.editor.invalidate();
+  }
+
+  dispose(): void {
+    this.finished = true;
+    this.cancelPendingPasteWork();
+    this.editor.dispose();
+  }
+
+  private dispatchInput(data: string): void {
+    if (this.editor.isPasting || data.includes(BRACKETED_PASTE_START) || data.includes(BRACKETED_PASTE_END)) {
+      const remaining = this.editor.handleInput(data);
       this.tui.requestRender();
+      if (remaining) this.handleInput(remaining);
       return;
     }
     if (matchesKey(data, Key.ctrl("c")) || this.keybindings.matches(data, "tui.select.cancel")) {
@@ -151,29 +189,65 @@ class TemplateEditor implements Component, Focusable {
     this.tui.requestRender();
   }
 
-  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.y < this.editorStartRow || event.y >= this.editorStartRow + this.editorRows) {
-      return { handled: true, focus: true };
+  private handlePendingPasteInput(data: string): void {
+    if (data.includes(BRACKETED_PASTE_START)) {
+      this.flushPendingPasteInputs();
+      if (!this.finished) this.dispatchInput(data);
+      return;
     }
-    return this.editor.handleMouse({
-      ...event,
-      y: event.y - this.editorStartRow,
-      height: Math.max(1, this.editorRows),
-    });
+    if (data.includes(BRACKETED_PASTE_END)) {
+      const resolve = this.detachPendingPasteWork();
+      this.deferredPasteInputs = [];
+      this.editor.rejectPendingPaste();
+      this.tui.requestRender();
+      resolve?.();
+      return;
+    }
+    this.deferredPasteInputs.push(data);
+    this.armPasteTailTimer();
   }
 
-  invalidate(): void {
-    this.editor.invalidate();
+  private armPasteTailTimer(): void {
+    if (!this.pendingPasteWork) {
+      this.pendingPasteWork = new Promise<void>((resolve) => {
+        this.resolvePendingPasteWork = resolve;
+      });
+    }
+    if (this.pasteTailTimer) clearTimeout(this.pasteTailTimer);
+    this.pasteTailTimer = setTimeout(() => this.flushPendingPasteInputs(), PASTE_TAIL_SETTLE_MS);
   }
 
-  dispose(): void {
-    this.finished = true;
-    this.editor.dispose();
+  private flushPendingPasteInputs(): void {
+    const resolve = this.detachPendingPasteWork();
+    const inputs = this.deferredPasteInputs;
+    this.deferredPasteInputs = [];
+    this.editor.commitPendingPaste();
+    for (const input of inputs) {
+      if (this.finished) break;
+      this.dispatchInput(input);
+    }
+    resolve?.();
+  }
+
+  private cancelPendingPasteWork(): void {
+    const resolve = this.detachPendingPasteWork();
+    this.deferredPasteInputs = [];
+    resolve?.();
+  }
+
+  private detachPendingPasteWork(): (() => void) | undefined {
+    if (this.pasteTailTimer) clearTimeout(this.pasteTailTimer);
+    this.pasteTailTimer = undefined;
+    const resolve = this.resolvePendingPasteWork;
+    this.resolvePendingPasteWork = undefined;
+    this.pendingPasteWork = undefined;
+    return resolve;
   }
 
   private finish(value: string | undefined): void {
     if (this.finished) return;
     this.finished = true;
+    this.cancelPendingPasteWork();
     this.editor.dispose();
     this.onDone(value);
   }
@@ -189,18 +263,18 @@ class TemplateEditor implements Component, Focusable {
 }
 
 class RawPreservingEditor implements Focusable {
-  private readonly editor: Editor;
+  private editor: Editor;
   private readonly rawByMarker = new Map<string, string>();
   private markerCodePoint = 0xe000;
   private pasteBuffer: string | undefined;
   private pasteSnapshot: string | undefined;
   private pasteError: string | undefined;
-  private pasteBurstGuarded = false;
-  private pasteBurstGeneration = 0;
 
-  constructor(tui: TUI, theme: EditorTheme) {
-    this.editor = new Editor(tui, theme, { paddingX: 0 });
-    this.editor.disableSubmit = true;
+  constructor(
+    private readonly tui: TUI,
+    private readonly theme: EditorTheme,
+  ) {
+    this.editor = this.createEditor();
   }
 
   get focused(): boolean {
@@ -215,15 +289,14 @@ class RawPreservingEditor implements Focusable {
     return this.pasteBuffer !== undefined;
   }
 
-  get isPasteBurstGuarded(): boolean {
-    return this.pasteBurstGuarded;
+  get hasPendingPaste(): boolean {
+    return this.pasteSnapshot !== undefined;
   }
 
-  handleInput(data: string): void {
+  handleInput(data: string): string | undefined {
     if (this.pasteBuffer !== undefined) {
       this.pasteBuffer += data;
-      this.flushPasteBuffer();
-      return;
+      return this.flushPasteBuffer();
     }
     const pasteStart = data.indexOf(BRACKETED_PASTE_START);
     if (pasteStart >= 0) {
@@ -231,12 +304,11 @@ class RawPreservingEditor implements Focusable {
       this.pasteSnapshot = this.getExpandedText();
       this.pasteError = undefined;
       this.pasteBuffer = data.slice(pasteStart + BRACKETED_PASTE_START.length);
-      this.flushPasteBuffer();
-      return;
+      return this.flushPasteBuffer();
     }
     if (data.includes(BRACKETED_PASTE_END) && this.pasteSnapshot !== undefined) {
-      this.rejectAmbiguousPaste();
-      return;
+      this.rejectPendingPaste();
+      return undefined;
     }
     this.pasteError = undefined;
     if (
@@ -244,9 +316,10 @@ class RawPreservingEditor implements Focusable {
       [...data].some((character) => isUnsafeEditorCharacter(character) || this.rawByMarker.has(character))
     ) {
       this.editor.handleInput(this.encode(data));
-      return;
+      return undefined;
     }
     this.editor.handleInput(data);
+    return undefined;
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -269,8 +342,6 @@ class RawPreservingEditor implements Focusable {
     this.pasteBuffer = undefined;
     this.pasteSnapshot = undefined;
     this.pasteError = undefined;
-    this.pasteBurstGuarded = false;
-    this.pasteBurstGeneration += 1;
     this.editor.setText(this.encode(value));
   }
 
@@ -297,52 +368,54 @@ class RawPreservingEditor implements Focusable {
     this.editor.handleInput("\u001b\r");
   }
 
-  dispose(): void {
-    this.editor.focused = false;
-    this.pasteBuffer = undefined;
+  commitPendingPaste(): void {
     this.pasteSnapshot = undefined;
-    this.pasteBurstGuarded = false;
-    this.pasteBurstGeneration += 1;
   }
 
-  private flushPasteBuffer(): void {
-    if (this.pasteBuffer === undefined) return;
-    const pasteEnd = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
-    if (pasteEnd < 0) return;
-    if (this.pasteBuffer.includes(BRACKETED_PASTE_END, pasteEnd + BRACKETED_PASTE_END.length)) {
-      this.rejectAmbiguousPaste();
-      return;
-    }
-    const raw = this.pasteBuffer.slice(0, pasteEnd);
-    const remaining = this.pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
-    this.pasteBuffer = undefined;
-    this.editor.handleInput(`${BRACKETED_PASTE_START}${this.encode(raw)}${BRACKETED_PASTE_END}`);
-    this.armPasteBurstGuard();
-    if (remaining) this.handleInput(remaining);
-  }
-
-  private armPasteBurstGuard(): void {
-    this.pasteBurstGuarded = true;
-    const generation = ++this.pasteBurstGeneration;
-    queueMicrotask(() => {
-      if (generation === this.pasteBurstGeneration) this.pasteBurstGuarded = false;
-    });
-  }
-
-  private rejectAmbiguousPaste(): void {
+  rejectPendingPaste(): void {
     const snapshot = this.pasteSnapshot;
     if (snapshot === undefined) return;
     this.restorePasteSnapshot(snapshot);
     this.pasteError = "Paste rejected because it contains an ambiguous bracketed-paste terminator.";
   }
 
+  dispose(): void {
+    this.editor.focused = false;
+    this.pasteBuffer = undefined;
+    this.pasteSnapshot = undefined;
+  }
+
+  private flushPasteBuffer(): string | undefined {
+    if (this.pasteBuffer === undefined) return undefined;
+    const pasteEnd = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
+    if (pasteEnd < 0) return undefined;
+    if (this.pasteBuffer.includes(BRACKETED_PASTE_END, pasteEnd + BRACKETED_PASTE_END.length)) {
+      this.rejectPendingPaste();
+      return undefined;
+    }
+    const raw = this.pasteBuffer.slice(0, pasteEnd);
+    const remaining = this.pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
+    this.pasteBuffer = undefined;
+    this.editor.handleInput(`${BRACKETED_PASTE_START}${this.encode(raw)}${BRACKETED_PASTE_END}`);
+    return remaining || undefined;
+  }
+
   private restorePasteSnapshot(value: string): void {
+    const focused = this.editor.focused;
+    this.rawByMarker.clear();
+    this.markerCodePoint = 0xe000;
     this.pasteBuffer = undefined;
     this.pasteSnapshot = undefined;
     this.pasteError = undefined;
-    this.pasteBurstGuarded = false;
-    this.pasteBurstGeneration += 1;
+    this.editor = this.createEditor();
+    this.editor.focused = focused;
     this.editor.setText(this.encode(value));
+  }
+
+  private createEditor(): Editor {
+    const editor = new Editor(this.tui, this.theme, { paddingX: 0 });
+    editor.disableSubmit = true;
+    return editor;
   }
 
   private encode(value: string): string {

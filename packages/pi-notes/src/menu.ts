@@ -7,8 +7,8 @@ interface NotesMenuState {
   templates: DiscoveryResult;
 }
 
-type NotesScreen = "notes" | "templates" | "path" | "pastePath" | "manageTemplates";
-type NotesAction = "chooseNote" | "chooseTemplate" | "createNote" | "pastePath" | "editTemplate";
+type NotesScreen = "notes" | "openNote" | "templates" | "path" | "pastePath" | "manageTemplates";
+type NotesAction = "chooseRoute" | "chooseNote" | "chooseTemplate" | "createNote" | "pastePath" | "editTemplate";
 
 export type NotesManagerResult =
   | { kind: "open"; notePath: string }
@@ -37,6 +37,12 @@ export function createNotesMenu(storage: NotesStorage) {
         lines: discoveryLines(state.notes, "note"),
         items: [
           {
+            id: "open",
+            label: "Open a note…",
+            description: "Choose an existing Markdown note.",
+            searchText: "open browse existing note",
+          },
+          {
             id: "create",
             label: "Create a note…",
             description: "Start blank or copy a user template.",
@@ -54,17 +60,25 @@ export function createNotesMenu(storage: NotesStorage) {
             description: "Edit existing Markdown templates.",
             searchText: "manage edit templates",
           },
-          ...state.notes.entries.map((note, index) => ({
-            id: `note:${index}`,
-            label: note.displayPath,
-            description: `${note.size} bytes`,
-            searchText: note.displayPath,
-          })),
         ],
+        action: "chooseRoute",
+        viewportSize: 12,
+        hint: "close",
+      }),
+      openNote: ({ state }) => ({
+        kind: "choice",
+        title: "Open a note",
+        lines: discoveryLines(state.notes, "note"),
+        items: state.notes.entries.map((note, index) => ({
+          id: `note:${index}`,
+          label: note.displayPath,
+          description: `${note.size} bytes`,
+          searchText: note.displayPath,
+        })),
         action: "chooseNote",
         enableSearch: state.notes.entries.length > 8,
         viewportSize: 12,
-        hint: "close",
+        hint: "back",
       }),
       templates: ({ state }) => ({
         kind: "choice",
@@ -131,10 +145,14 @@ export function createNotesMenu(storage: NotesStorage) {
       }),
     },
     actions: {
-      chooseNote: ({ state, itemId }) => {
+      chooseRoute: ({ itemId }) => {
+        if (itemId === "open") return { kind: "to", screen: "openNote" };
         if (itemId === "create") return { kind: "to", screen: "templates" };
         if (itemId === "paste-path") return { kind: "to", screen: "pastePath" };
         if (itemId === "manage-templates") return { kind: "to", screen: "manageTemplates" };
+        return { kind: "rejected", error: new Error("The selected notes action is no longer available") };
+      },
+      chooseNote: ({ state, itemId }) => {
         const note = indexedEntry(state.notes.entries, itemId, "note:");
         if (!note) return { kind: "rejected", error: new Error("The selected note is no longer available") };
         result = { kind: "open", notePath: note.relativePath };

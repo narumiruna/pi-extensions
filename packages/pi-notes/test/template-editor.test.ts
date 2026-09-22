@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import {
   getKeybindings,
@@ -78,7 +79,7 @@ test("template editor preserves hidden raw content and boundary whitespace while
   assert.equal(await editing, `${content}x${streamed}${pasted}`);
 });
 
-test("template editor rejects ambiguous literal paste terminators without changing content", async () => {
+test("template editor rejects ambiguous literal paste terminators across later input callbacks", async () => {
   const start = "\u001b[200~";
   const end = "\u001b[201~";
   for (const inputs of [
@@ -95,18 +96,21 @@ test("template editor rejects ambiguous literal paste terminators without changi
 
     await tui.waitForOpen();
     tui.setFocused(true);
-    for (const input of inputs) tui.send(input);
+    for (const input of inputs) {
+      tui.send(input);
+      await nextEventLoopTurn();
+      assert.equal(tui.isOpen, true);
+    }
     const frame = tui.render().join("\n");
     assert.equal(frame.includes(end), false);
     assert.match(stripVTControlCharacters(frame), /Paste rejected.*ambiguous/iu);
-    assert.equal(tui.isOpen, true);
     tui.press("tui.input.submit");
 
     assert.equal(await editing, "before ");
   }
 });
 
-test("template editor undo after paste rejection cannot expose private markers", async () => {
+test("template editor undo after paste rejection cannot restore rejected content or private markers", async () => {
   const content = "before \u001b]0;title\u0007 ";
   const start = "\u001b[200~";
   const end = "\u001b[201~";
@@ -120,12 +124,15 @@ test("template editor undo after paste rejection cannot expose private markers",
   await tui.waitForOpen();
   tui.setFocused(true);
   tui.send(`${start}a${end}b${end}`);
+  tui.type("x");
+  tui.send("\u001f");
   tui.send("\u001f");
   const frame = tui.render().join("\n");
   assert.equal(frame.includes("\ue000"), false);
+  assert.equal(stripVTControlCharacters(frame).includes("before a"), false);
   tui.press("tui.input.submit");
 
-  assert.equal(await editing, content);
+  assert.equal(await editing, "");
 });
 
 test("template editor honors configured submit and newline keys while Ctrl+C remains a hard cancel", async (t) => {
@@ -174,6 +181,8 @@ test("template editor settles when ownership aborts or its host disposes it", as
     });
 
     await tui.waitForOpen();
+    tui.send("\u001b[200~pending\u001b[201~");
+    tui.press("tui.input.submit");
     if (boundary === "abort") controller.abort(new DOMException("session replaced", "AbortError"));
     else tui.dispose();
 

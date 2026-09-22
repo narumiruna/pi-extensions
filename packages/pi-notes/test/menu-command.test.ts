@@ -51,16 +51,17 @@ test("manager rescans templates while navigating, copies one exactly, and opens 
   assert.equal(choices.length, 0);
 });
 
-test("manager opens an existing note in one selection", async () => {
+test("manager keeps note names off the first level and opens one from its own screen", async () => {
   const { storage } = await fixture();
   await writeFile(join(storage.paths.notes, "open.md"), "# Open", "utf8");
-  let selections = 0;
+  const choices = ["Open a note…", "open.md"];
+  const renders: string[] = [];
   const context = createMockContext({
     mode: "tui",
     hasUI: true,
-    select: async () => {
-      selections += 1;
-      return "open.md";
+    select: async (title: string) => {
+      renders.push(title);
+      return choices.shift();
     },
   });
 
@@ -71,7 +72,11 @@ test("manager opens an existing note in one selection", async () => {
     }),
     { kind: "open", notePath: "open.md" },
   );
-  assert.equal(selections, 1);
+  assert.equal(renders.length, 2);
+  assert.match(renders[0] ?? "", /Pi Notes · 1 note/u);
+  assert.equal((renders[0] ?? "").includes("open.md"), false);
+  assert.match(renders[1] ?? "", /Open a note/u);
+  assert.equal((renders[1] ?? "").includes("open.md"), true);
 });
 
 test("manager shows an empty template manager and returns without selecting a template", async () => {
