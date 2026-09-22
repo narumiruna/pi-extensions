@@ -5,16 +5,23 @@ import {
   HStack,
   isFocusable,
   ScrollView,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { BtwPasteGuard } from "./keybindings.js";
-import type { BtwLayout } from "./settings.js";
+import {
+  type BtwLayout,
+  DEFAULT_BTW_SIDE_PANE_RATIO,
+  MAX_BTW_SIDE_PANE_RATIO,
+  MIN_BTW_SIDE_PANE_RATIO,
+} from "./settings.js";
 
 export const MIN_BTW_SPLIT_COLUMNS = 80;
 const PANE_DIVIDER_COLUMNS = 1;
 // biome-ignore lint/complexity/useRegexLiterals: the constructor keeps a raw ESC control character out of source.
-const SGR_MOUSE_PATTERN = new RegExp("^\\u001b\\[<(\\d+);(\\d+);\\d+[Mm]$");
+const SGR_MOUSE_PRESS_PATTERN = new RegExp("^\\u001b\\[<(\\d+);(\\d+);\\d+M$");
 type BtwActivePane = "side" | "main";
 
 export interface BtwFullscreenLayoutComponent extends Component {
@@ -95,6 +102,8 @@ export interface BtwSplitPaneOptions {
   setFocus(component: Component): void;
   setViewportTarget(scrollView: ScrollView | undefined): void;
   requestRender(): void;
+  sidePaneRatio?: number;
+  persistSidePaneRatio?(ratio: number): Promise<void>;
 }
 
 export class BtwSplitPane implements BtwFullscreenLayoutComponent {
@@ -103,10 +112,18 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   private readonly layoutRoot: HStack;
   private readonly viewportRouter: PaneViewportRouter;
   private activePane: BtwActivePane = "side";
+  private sidePaneRatio: number;
+  private persistedSidePaneRatio: number;
+  private dividerDragStartRatio: number | undefined;
   private focusGeneration = 0;
+  private ratioSaveGeneration = 0;
+  private confirmedRatioSaveGeneration = 0;
+  private failedRatioSaveGenerationDuringDrag: number | undefined;
   private disposed = false;
 
   constructor(private readonly options: BtwSplitPaneOptions) {
+    this.sidePaneRatio = clampSidePaneRatio(options.sidePaneRatio ?? DEFAULT_BTW_SIDE_PANE_RATIO);
+    this.persistedSidePaneRatio = this.sidePaneRatio;
     this.mainPane = new MainThreadPane(options.mainThread, options.mainLayout, options.theme, options.terminalRows);
     this.viewportRouter = new PaneViewportRouter(
       options.sideScrollView ?? findPrimaryScrollView(options.sideLayout),
@@ -117,14 +134,29 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     const separator: Component = {
       render: (width) =>
         Array.from({ length: Math.max(1, options.terminalRows()) }, () => truncateToWidth(this.renderDivider(), width)),
+      handleMouse: (event) => this.handleDividerMouse(event),
       invalidate() {},
     };
     const side = options.sideLayout;
     const main = this.mainPane.getLayout();
     this.layoutRoot =
       options.layout === "left-pane"
-        ? new ResponsivePaneRow(side, separator, main, 0, (width) => this.handleViewportWidth(width))
-        : new ResponsivePaneRow(main, separator, side, 2, (width) => this.handleViewportWidth(width));
+        ? new ResponsivePaneRow(
+            side,
+            separator,
+            main,
+            0,
+            () => this.sidePaneRatio,
+            (width) => this.handleViewportWidth(width),
+          )
+        : new ResponsivePaneRow(
+            main,
+            separator,
+            side,
+            2,
+            () => this.sidePaneRatio,
+            (width) => this.handleViewportWidth(width),
+          );
   }
 
   getFullscreenLayout(): Component {
@@ -142,7 +174,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
       return true;
     }
     if (width < MIN_BTW_SPLIT_COLUMNS) return false;
-    const pane = paneForMouseClick(data, width, this.options.layout);
+    const pane = paneForMouseClick(data, width, this.options.layout, this.sidePaneRatio);
     if (pane) this.queuePaneFocus(pane);
     return false;
   }
@@ -155,10 +187,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
       return this.options.sideComponent.render(safeWidth).map((line) => truncateToWidth(line, safeWidth));
     }
 
-    const leftWidth = Math.max(1, Math.floor((safeWidth - PANE_DIVIDER_COLUMNS) / 2));
-    const rightWidth = Math.max(1, safeWidth - leftWidth - PANE_DIVIDER_COLUMNS);
-    const sideWidth = this.options.layout === "left-pane" ? leftWidth : rightWidth;
-    const mainWidth = this.options.layout === "left-pane" ? rightWidth : leftWidth;
+    const { sideWidth, mainWidth } = paneWidths(safeWidth, this.options.layout, this.sidePaneRatio);
     const sideLines = this.options.sideComponent.render(sideWidth);
     const mainLines = this.mainPane.render(mainWidth);
     const rows = Math.max(1, this.options.terminalRows());
@@ -184,11 +213,105 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     if (this.disposed) return;
     this.disposed = true;
     this.focusGeneration += 1;
+    this.dividerDragStartRatio = undefined;
+    this.failedRatioSaveGenerationDuringDrag = undefined;
     this.viewportRouter.dispose();
   }
 
   private renderDivider(): string {
     return this.options.theme.fg("borderMuted", "│");
+  }
+
+  private handleDividerMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.disposed) return undefined;
+    if (this.options.hasFocusedOverlay()) {
+      return { handled: true, render: this.cancelDividerDrag() };
+    }
+    if (event.type === "press" && event.button === "left") {
+      if (this.terminalColumns() < MIN_BTW_SPLIT_COLUMNS) return undefined;
+      this.focusGeneration += 1;
+      this.dividerDragStartRatio = this.sidePaneRatio;
+      return { handled: true, capture: true, render: false };
+    }
+    if (this.dividerDragStartRatio === undefined) return undefined;
+    if (event.type === "drag") {
+      const changed = this.updateSidePaneRatio(event.screenX);
+      return { handled: true, render: changed };
+    }
+    if (event.type === "release") {
+      const changed = this.updateSidePaneRatio(event.screenX);
+      const startRatio = this.dividerDragStartRatio;
+      const failedDuringDrag = this.failedRatioSaveGenerationDuringDrag === this.ratioSaveGeneration;
+      this.dividerDragStartRatio = undefined;
+      this.failedRatioSaveGenerationDuringDrag = undefined;
+      if (failedDuringDrag && this.sidePaneRatio === this.persistedSidePaneRatio) {
+        return { handled: true, render: changed };
+      }
+      if (this.sidePaneRatio !== startRatio) {
+        this.persistCurrentSidePaneRatio();
+        return { handled: true, render: changed };
+      }
+      const restored = failedDuringDrag && this.restorePersistedSidePaneRatio();
+      return { handled: true, render: changed || restored };
+    }
+    return { handled: true, render: false };
+  }
+
+  private updateSidePaneRatio(dividerColumn: number): boolean {
+    const width = this.terminalColumns();
+    if (width < MIN_BTW_SPLIT_COLUMNS) return false;
+    const contentWidth = width - PANE_DIVIDER_COLUMNS;
+    const leftWidth = clamp(Math.floor(dividerColumn), 1, contentWidth - 1);
+    const sideWidth = this.options.layout === "left-pane" ? leftWidth : contentWidth - leftWidth;
+    const ratio = clampSidePaneRatio(roundPaneRatio(sideWidth / contentWidth));
+    if (ratio === this.sidePaneRatio) return false;
+    this.sidePaneRatio = ratio;
+    return true;
+  }
+
+  private cancelDividerDrag(): boolean {
+    const startRatio = this.dividerDragStartRatio;
+    if (startRatio === undefined) return false;
+    const failedDuringDrag = this.failedRatioSaveGenerationDuringDrag === this.ratioSaveGeneration;
+    this.dividerDragStartRatio = undefined;
+    this.failedRatioSaveGenerationDuringDrag = undefined;
+    return this.setSidePaneRatio(failedDuringDrag ? this.persistedSidePaneRatio : startRatio);
+  }
+
+  private persistCurrentSidePaneRatio(): void {
+    const persist = this.options.persistSidePaneRatio;
+    const ratio = this.sidePaneRatio;
+    if (!persist) {
+      this.persistedSidePaneRatio = ratio;
+      return;
+    }
+    this.failedRatioSaveGenerationDuringDrag = undefined;
+    const saveGeneration = ++this.ratioSaveGeneration;
+    void Promise.resolve()
+      .then(() => persist(ratio))
+      .then(() => {
+        if (saveGeneration <= this.confirmedRatioSaveGeneration) return;
+        this.confirmedRatioSaveGeneration = saveGeneration;
+        this.persistedSidePaneRatio = ratio;
+      })
+      .catch(() => {
+        if (this.disposed || saveGeneration !== this.ratioSaveGeneration) return;
+        const dragActive = this.dividerDragStartRatio !== undefined;
+        const changed = this.restorePersistedSidePaneRatio();
+        if (dragActive) this.failedRatioSaveGenerationDuringDrag = saveGeneration;
+        if (changed) this.options.requestRender();
+      });
+  }
+
+  private restorePersistedSidePaneRatio(): boolean {
+    return this.setSidePaneRatio(this.persistedSidePaneRatio);
+  }
+
+  private setSidePaneRatio(ratio: number): boolean {
+    if (ratio === this.sidePaneRatio) return false;
+    this.sidePaneRatio = ratio;
+    this.layoutRoot.invalidate();
+    return true;
   }
 
   private queuePaneFocus(pane: BtwActivePane): void {
@@ -230,7 +353,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   }
 }
 
-// HStack has no percentage basis, so refresh exact half-width bases from its
+// HStack has no percentage basis, so refresh exact ratio-based widths from its
 // viewport callback before each layout pass and let the side pane fill narrow views.
 class ResponsivePaneRow extends HStack {
   constructor(
@@ -238,6 +361,7 @@ class ResponsivePaneRow extends HStack {
     separator: Component,
     right: Component,
     private readonly sideIndex: 0 | 2,
+    private readonly sidePaneRatio: () => number,
     private readonly onViewportWidth: (width: number) => void,
   ) {
     super([
@@ -268,8 +392,8 @@ class ResponsivePaneRow extends HStack {
       }
       return;
     }
-    const leftWidth = Math.max(1, Math.floor((safeWidth - PANE_DIVIDER_COLUMNS) / 2));
-    const rightWidth = Math.max(1, safeWidth - leftWidth - PANE_DIVIDER_COLUMNS);
+    const layout = this.sideIndex === 0 ? "left-pane" : "right-pane";
+    const { leftWidth, rightWidth } = paneWidths(safeWidth, layout, this.sidePaneRatio());
     const left = this.entries[0];
     const separator = this.entries[1];
     const right = this.entries[2];
@@ -383,18 +507,46 @@ function paneForMouseClick(
   data: string,
   terminalColumns: number,
   layout: Exclude<BtwLayout, "fullscreen">,
+  sidePaneRatio: number,
 ): BtwActivePane | undefined {
-  const match = SGR_MOUSE_PATTERN.exec(data);
+  const match = SGR_MOUSE_PRESS_PATTERN.exec(data);
   if (!match) return undefined;
   const button = Number.parseInt(match[1] ?? "", 10);
   if ((button & 32) !== 0 || (button & 64) !== 0 || (button & 3) !== 0) return undefined;
   const column = Number.parseInt(match[2] ?? "", 10) - 1;
   if (!Number.isFinite(column) || column < 0 || column >= terminalColumns) return undefined;
-  const leftWidth = Math.max(1, Math.floor((terminalColumns - PANE_DIVIDER_COLUMNS) / 2));
+  const { leftWidth } = paneWidths(terminalColumns, layout, sidePaneRatio);
   if (column >= leftWidth && column < leftWidth + PANE_DIVIDER_COLUMNS) return undefined;
   const clickedLeft = column < leftWidth;
   if (layout === "left-pane") return clickedLeft ? "side" : "main";
   return clickedLeft ? "main" : "side";
+}
+
+function paneWidths(width: number, layout: Exclude<BtwLayout, "fullscreen">, sidePaneRatio: number) {
+  const contentWidth = Math.max(2, width - PANE_DIVIDER_COLUMNS);
+  const sideWidth = clamp(
+    Math.round(contentWidth * clampSidePaneRatio(sidePaneRatio)),
+    1,
+    Math.max(1, contentWidth - 1),
+  );
+  const mainWidth = Math.max(1, contentWidth - sideWidth);
+  const leftWidth = layout === "left-pane" ? sideWidth : mainWidth;
+  const rightWidth = layout === "left-pane" ? mainWidth : sideWidth;
+  return { leftWidth, rightWidth, sideWidth, mainWidth };
+}
+
+function clampSidePaneRatio(ratio: number): number {
+  return Number.isFinite(ratio)
+    ? clamp(ratio, MIN_BTW_SIDE_PANE_RATIO, MAX_BTW_SIDE_PANE_RATIO)
+    : DEFAULT_BTW_SIDE_PANE_RATIO;
+}
+
+function roundPaneRatio(ratio: number): number {
+  return Math.round(ratio * 10_000) / 10_000;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function hasInput(component: Component | null): component is Component {

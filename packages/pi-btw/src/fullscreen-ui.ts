@@ -50,6 +50,8 @@ export interface BtwFullscreenOptions {
   keybindings?: BtwKeybindingOverrides;
   copyOnSelect?: boolean;
   layout?: BtwLayout;
+  sidePaneRatio?: number;
+  persistSidePaneRatio?(ratio: number, signal: AbortSignal): Promise<void>;
   subscribeMainThreadUpdates?: BtwMainThreadUpdateSubscription;
 }
 
@@ -437,6 +439,10 @@ class BtwFullscreenHost<T> implements Component {
   private mainThreadRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly mainThreadInput: BtwMainThreadInput;
   private readonly lifetimeController = new AbortController();
+  private readonly pendingSidePaneWrites = new Set<Promise<void>>();
+  private sidePaneRatio: number | undefined;
+  private sidePaneWriteGeneration = 0;
+  private confirmedSidePaneWriteGeneration = 0;
 
   constructor(
     private readonly parent: TUI,
@@ -457,6 +463,7 @@ class BtwFullscreenHost<T> implements Component {
       },
       () => this.fullscreen?.requestRender(),
     );
+    this.sidePaneRatio = options.sidePaneRatio;
     queueMicrotask(() => void this.start());
   }
 
@@ -534,8 +541,11 @@ class BtwFullscreenHost<T> implements Component {
         }
         return { consume: true };
       });
-      outcome = { kind: "completed", value: await this.run(this.createContext()) };
+      const value = await this.run(this.createContext());
+      await this.waitForSidePaneWrites();
+      outcome = { kind: "completed", value };
     } catch (error) {
+      await this.waitForSidePaneWrites();
       outcome = { kind: "failed", error };
     }
 
@@ -791,7 +801,7 @@ class BtwFullscreenHost<T> implements Component {
         return;
       }
       Promise.resolve(created)
-        .then((value) => {
+        .then(async (value) => {
           component = value;
           factorySettled = true;
           if (promiseSettled) {
@@ -802,6 +812,22 @@ class BtwFullscreenHost<T> implements Component {
             complete();
             return;
           }
+          const workspaceLayout = this.options.layout ?? "fullscreen";
+          if (!options?.overlay && workspaceLayout !== "fullscreen") {
+            await this.waitForSidePaneWrites();
+            if (promiseSettled) {
+              disposeComponent();
+              return;
+            }
+            if (closed) {
+              complete();
+              return;
+            }
+            if (this.disposed || this.finished || this.fullscreen !== fullscreen) {
+              fail(new FullscreenUiDisposedError());
+              return;
+            }
+          }
           if (options?.overlay) {
             const overlayOptions =
               typeof options.overlayOptions === "function" ? options.overlayOptions() : options.overlayOptions;
@@ -810,7 +836,6 @@ class BtwFullscreenHost<T> implements Component {
           } else {
             fullscreen.clear();
             mounted = true;
-            const workspaceLayout = this.options.layout ?? "fullscreen";
             if (workspaceLayout !== "fullscreen") {
               layoutMounted = true;
               const sideLayout = isFullscreenLayoutComponent(component) ? component.getFullscreenLayout() : component;
@@ -829,6 +854,10 @@ class BtwFullscreenHost<T> implements Component {
                 setFocus: (target) => fullscreen.setFocus(target),
                 setViewportTarget: (target) => fullscreen.setViewportTarget?.(target),
                 requestRender: () => fullscreen.requestRender(),
+                sidePaneRatio: this.sidePaneRatio,
+                ...(this.options.persistSidePaneRatio
+                  ? { persistSidePaneRatio: (ratio: number) => this.persistSidePaneRatio(ratio) }
+                  : {}),
               });
               const addPaneFocusListener =
                 fullscreen.addInputListenerBeforeViewport?.bind(fullscreen) ??
@@ -851,6 +880,52 @@ class BtwFullscreenHost<T> implements Component {
         .catch(fail);
     });
   }
+
+  private persistSidePaneRatio(ratio: number): Promise<void> {
+    const persist = this.options.persistSidePaneRatio;
+    if (!persist) {
+      this.sidePaneRatio = ratio;
+      return Promise.resolve();
+    }
+    const writeGeneration = ++this.sidePaneWriteGeneration;
+    let task!: Promise<void>;
+    task = Promise.resolve()
+      .then(() => persist(ratio, this.lifetimeController.signal))
+      .then(() => {
+        if (this.lifetimeController.signal.aborted || writeGeneration <= this.confirmedSidePaneWriteGeneration) {
+          return;
+        }
+        this.confirmedSidePaneWriteGeneration = writeGeneration;
+        this.sidePaneRatio = ratio;
+      })
+      .catch((error: unknown) => {
+        if (!this.lifetimeController.signal.aborted) {
+          const message = sanitizeSingleLine(
+            `Pi BTW pane width was not saved; the previous value remains active: ${formatError(error)}`,
+          );
+          try {
+            this.ctx.ui.notify(message, "error");
+          } catch {
+            // A replaced command context must not prevent rollback or cleanup.
+          }
+          this.fullscreen?.flash?.(message);
+        }
+        throw error;
+      })
+      .finally(() => this.pendingSidePaneWrites.delete(task));
+    this.pendingSidePaneWrites.add(task);
+    return task;
+  }
+
+  private async waitForSidePaneWrites(): Promise<void> {
+    while (this.pendingSidePaneWrites.size > 0) {
+      await Promise.allSettled([...this.pendingSidePaneWrites]);
+    }
+  }
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function getFocusedComponent(tui: TUI): Component | null {

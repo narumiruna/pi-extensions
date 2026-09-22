@@ -21,6 +21,8 @@ The dedicated workspace keeps answers above the editor and identifies itself wit
 The default **Fullscreen** layout gives the side thread the complete workspace.
 **Side thread left** and **Side thread right** place it beside Pi's native, live main-thread rendering; terminals narrower than 80 columns show only the side thread.
 A single muted divider separates the panes; click either pane to move keyboard focus to it.
+Drag the divider with the primary mouse button to resize the side thread between 20% and 80% of the workspace.
+Releasing the button saves that side-thread ratio for either pane placement; a failed save restores the last saved width and reports the error.
 Pi's search and keyboard viewport controls apply to the active pane.
 The mouse wheel scrolls the pane under the pointer without moving keyboard focus, and a narrow terminal returns focus to the visible side thread.
 A branch selected through **Start from main thread tree…** supplies side-model context but does not replace the active main thread shown in the other pane.

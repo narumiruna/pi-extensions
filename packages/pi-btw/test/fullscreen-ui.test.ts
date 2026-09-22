@@ -364,8 +364,10 @@ class MainInput implements Component, Focusable {
 class SideInput implements Component, Focusable {
   focused = false;
   readonly inputs: string[] = [];
+  readonly widths: number[] = [];
 
-  render(): string[] {
+  render(width: number): string[] {
+    this.widths.push(width);
     return Array.from({ length: 12 }, () => "side thread");
   }
 
@@ -443,6 +445,7 @@ function createInputHandoffHarness(
   parent.start();
   if (options.fullscreenParent) parent.renderNow(true);
 
+  const notifications: string[] = [];
   const ctx = {
     sessionManager: {
       getBranch: () => [
@@ -495,9 +498,12 @@ function createInputHandoffHarness(
       setEditorText: (value: string) => {
         mainInput.text = value;
       },
+      notify(message: string) {
+        notifications.push(message);
+      },
     },
   } as never;
-  return { ctx, mainInput, mainScrollView, parent, terminal };
+  return { ctx, mainInput, mainScrollView, notifications, parent, terminal };
 }
 
 function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings()) {
@@ -782,6 +788,376 @@ test.each([
     }
   },
 );
+
+test.each([
+  ["left-pane", 41, 25],
+  ["right-pane", 40, 56],
+] as const)(
+  "dragging the %s divider updates both panes, saves once on release, and waits for durability",
+  async (layout, startColumn, targetColumn) => {
+    const harness = createInputHandoffHarness();
+    const side = new SideInput();
+    let sideTui: TUI | undefined;
+    let closeSide: (() => void) | undefined;
+    let releaseSave!: () => void;
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const savedRatios: number[] = [];
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+          sideTui = tui;
+          closeSide = () => done("closed");
+          return side;
+        }),
+      {
+        layout,
+        sidePaneRatio: 0.5,
+        persistSidePaneRatio: async (ratio, signal) => {
+          savedRatios.push(ratio);
+          assert.equal(signal.aborted, false);
+          markSaveStarted();
+          await saveGate;
+        },
+      },
+    );
+
+    try {
+      await flushAsyncWork();
+      assert.ok(sideTui);
+      assert.ok(closeSide);
+      sideTui.renderNow(true);
+
+      harness.terminal.send(`\u001b[<0;${startColumn};5M`);
+      harness.terminal.send(`\u001b[<32;${targetColumn};5M`);
+      harness.terminal.send(`\u001b[<0;${targetColumn};5m`);
+      await saveStarted;
+      sideTui.renderNow(true);
+
+      assert.equal(side.widths.at(-1), 24);
+      assert.equal(side.focused, true, "dragging the divider must not move keyboard focus");
+      assert.deepEqual(savedRatios, [0.3038]);
+
+      let settled = false;
+      void running.finally(() => {
+        settled = true;
+      });
+      closeSide();
+      await Promise.resolve();
+      assert.equal(settled, false, "fullscreen completion must await the pending settings write");
+
+      releaseSave();
+      assert.equal(await running, "closed");
+      assert.equal(settled, true);
+    } finally {
+      releaseSave?.();
+      closeSide?.();
+      await running.catch(() => undefined);
+      harness.parent.stop();
+    }
+  },
+);
+
+test("a divider release at a new column preserves side-pane keyboard focus", async () => {
+  const harness = createInputHandoffHarness();
+  const side = new SideInput();
+  const savedRatios: number[] = [];
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    {
+      layout: "left-pane",
+      sidePaneRatio: 0.5,
+      persistSidePaneRatio: async (ratio) => {
+        savedRatios.push(ratio);
+      },
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;41;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;50;5m");
+    await flushAsyncWork();
+    sideTui.renderNow(true);
+
+    assert.equal(side.widths.at(-1), 49);
+    assert.equal(side.focused, true);
+    assert.equal(harness.mainInput.focused, false);
+    assert.deepEqual(savedRatios, [0.6203]);
+
+    closeSide();
+    assert.equal(await running, "closed");
+  } finally {
+    closeSide?.();
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
+
+test("a saved divider ratio carries into the next split pane", async () => {
+  const harness = createInputHandoffHarness();
+  const firstSide = new SideInput();
+  const secondSide = new SideInput();
+  let sideTui: TUI | undefined;
+  let closeFirst: (() => void) | undefined;
+  let closeSecond: (() => void) | undefined;
+  let releaseSave!: () => void;
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve;
+  });
+  const saveGate = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  const running = runBtwFullscreen(
+    harness.ctx,
+    async (ctx) => {
+      await ctx.ui.custom<"first closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeFirst = () => done("first closed");
+        return firstSide;
+      });
+      return ctx.ui.custom<"second closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSecond = () => done("second closed");
+        return secondSide;
+      });
+    },
+    {
+      layout: "left-pane",
+      sidePaneRatio: 0.5,
+      persistSidePaneRatio: async (_ratio, signal) => {
+        assert.equal(signal.aborted, false);
+        markSaveStarted();
+        await saveGate;
+      },
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeFirst);
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;41;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;25;5m");
+    await saveStarted;
+
+    closeFirst();
+    await flushAsyncWork();
+    assert.ok(closeSecond);
+    assert.deepEqual(secondSide.widths, [], "the next split must wait for the current ratio write");
+
+    releaseSave();
+    await waitForCondition(() => secondSide.widths.length > 0, "the next split pane did not mount");
+    assert.equal(secondSide.widths.at(-1), 24);
+
+    closeSecond();
+    assert.equal(await running, "second closed");
+  } finally {
+    releaseSave?.();
+    closeFirst?.();
+    closeSecond?.();
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
+
+test("a failed divider save restores the last confirmed ratio and reports a sanitized error", async () => {
+  const harness = createInputHandoffHarness();
+  const side = new SideInput();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    {
+      layout: "left-pane",
+      sidePaneRatio: 0.6,
+      persistSidePaneRatio: async () => {
+        throw new Error("disk full\u001b]52;c;mock-terminal-payload\u0007");
+      },
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;48;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;25;5m");
+    await flushAsyncWork();
+    sideTui.renderNow(true);
+
+    assert.equal(side.widths.at(-1), 47);
+    assert.equal(harness.notifications.length, 1);
+    assert.match(harness.notifications[0] ?? "", /pane width was not saved.*previous value.*disk full/i);
+    assert.equal(
+      [...(harness.notifications[0] ?? "")].some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 31 || (code >= 127 && code <= 159);
+      }),
+      false,
+    );
+
+    closeSide();
+    assert.equal(await running, "closed");
+  } finally {
+    closeSide?.();
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
+
+test("a failed divider save still rolls back when a later press does not move", async () => {
+  const harness = createInputHandoffHarness();
+  const side = new SideInput();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  let rejectSave!: (error: Error) => void;
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve;
+  });
+  let saveAttempts = 0;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    {
+      layout: "left-pane",
+      sidePaneRatio: 0.6,
+      persistSidePaneRatio: () => {
+        saveAttempts += 1;
+        markSaveStarted();
+        return new Promise<void>((_resolve, reject) => {
+          rejectSave = reject;
+        });
+      },
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;48;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;25;5m");
+    await saveStarted;
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;25;5M");
+    rejectSave(new Error("disk full"));
+    await flushAsyncWork();
+    harness.terminal.send("\u001b[<0;25;5m");
+    await flushAsyncWork();
+    sideTui.renderNow(true);
+
+    assert.equal(side.widths.at(-1), 47);
+    assert.equal(saveAttempts, 1);
+
+    closeSide();
+    assert.equal(await running, "closed");
+  } finally {
+    closeSide?.();
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
+
+test("hard cancellation aborts a pending divider save without reporting a persistence failure", async () => {
+  const harness = createInputHandoffHarness();
+  let sideTui: TUI | undefined;
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve;
+  });
+  let saveAborted = false;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        const side = new SideInput();
+        const handleInput = side.handleInput.bind(side);
+        side.handleInput = (data: string) => {
+          handleInput(data);
+          if (data === "\u0003") done("closed");
+        };
+        return side;
+      }),
+    {
+      layout: "left-pane",
+      persistSidePaneRatio: (_ratio, signal) =>
+        new Promise<void>((_resolve, reject) => {
+          markSaveStarted();
+          signal.addEventListener(
+            "abort",
+            () => {
+              saveAborted = true;
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        }),
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    sideTui.renderNow(true);
+    harness.terminal.send("\u001b[<0;41;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;25;5m");
+    await saveStarted;
+
+    harness.terminal.send("\u0003");
+
+    assert.equal(await running, "closed");
+    assert.equal(saveAborted, true);
+    assert.deepEqual(harness.notifications, []);
+  } finally {
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
 
 test.each(["left-pane", "right-pane"] as const)(
   "fullscreen main-thread layout is constrained inside the %s workspace pane",

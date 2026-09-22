@@ -10,7 +10,7 @@ Only context you explicitly bring back is loaded into the main editor.
 - Starts a side thread immediately with `/btw <question>` or opens the manager with `/btw`.
 - Uses any persisted main-session branch as context without switching branches.
 - Supports scrollable answers, transcript search, a clickable jump-to-latest control, follow-up questions, queued steering, and in-memory resume.
-- Offers fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view and click-to-focus input.
+- Offers fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view, click-to-focus input, and a draggable remembered divider.
 - Renders supported Mermaid fences as width-safe, themed Unicode diagrams without a browser or network request.
 - Keeps side questions and answers out of the main conversation by default.
 - Brings back the latest answer, a question suffix, an exact range, or the complete thread only when requested.
@@ -79,7 +79,8 @@ The normal location is `~/.pi/agent/pi-btw.json`.
   "thinkingLevel": "low",
   "rememberThinkingLevelChanges": true,
   "fullscreenCopyOnSelect": true,
-  "layout": "left-pane"
+  "layout": "left-pane",
+  "sidePaneRatio": 0.5
 }
 ```
 
@@ -116,6 +117,9 @@ Pi-btw does not inherit Pi core's setting of the same name because Pi's public e
 Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
 The pane names identify the side thread's position; the other pane reuses Pi's native main-thread rendering at pane width and stays current while BTW is open.
 A single muted divider separates the panes; click either pane to move keyboard focus to it.
+Drag the divider with the primary mouse button to resize both panes.
+The side-thread share is limited to 20–80% and saved as `sidePaneRatio` when the button is released, independent of whether the side thread is on the left or right.
+If the save fails, the workspace restores the last saved ratio and reports the error.
 Pi's search and keyboard viewport controls apply to the active pane.
 The mouse wheel scrolls the pane under the pointer without moving keyboard focus, and both panes continue redrawing while either pane is active.
 If you selected context from the main-thread tree, the main pane still shows the active main thread while the side model receives the selected branch.
@@ -161,9 +165,9 @@ An explicitly unbound Pi thinking action stays unbound. Remove an override field
 ### Persistence
 
 Reading a missing settings file has no side effects.
-Pi-btw creates it only after a Settings change or a remembered shortcut change.
+Pi-btw creates it only after a Settings change, a remembered shortcut change, or a divider drag.
 Within one Pi process, saves run in order and publish atomically through a same-directory temporary file and rename.
-Saves preserve `model` and unknown fields.
+Saves preserve other recognized settings and unknown fields.
 Malformed or invalid files block saves and remain unchanged.
 Files must be valid UTF-8 and no larger than 64 KiB.
 Separate Pi processes and external editors are outside the in-process ordering boundary.
