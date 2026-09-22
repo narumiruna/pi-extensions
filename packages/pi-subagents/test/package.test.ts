@@ -42,6 +42,12 @@ test("repository example skill documents every minimal-runtime operating respons
     /select only from `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`/i,
     /smallest sufficient tool set/i,
     /`bash` and `powershell` as unrestricted command execution/i,
+    /Attach `skills`.*progressive disclosure/is,
+    /Attaching a skill does not inject its complete body.*add `read` or `bash`/is,
+    /Attach `extensions`.*trust.*executable code/is,
+    /extension tool list.*not a sandbox/is,
+    /never pass npm, Git, URL/is,
+    /missing tool.*fails the job without a model request/is,
     /inherits the main agent's effective provider and model/i,
     /omit `thinkingLevel` to follow the main agent/i,
     /self-contained tasks/i,
@@ -71,5 +77,23 @@ test("repository example skill documents every minimal-runtime operating respons
     "nested subagents",
   ]) {
     assert.match(skill, new RegExp(nonGoal, "i"));
+  }
+});
+
+test("published documentation defines attachment behavior and its security boundary", () => {
+  const documents = [
+    readFileSync(path.join(packageDirectory, "README.md"), "utf8"),
+    readFileSync(path.join(packageDirectory, "docs", "tools.md"), "utf8"),
+  ];
+  for (const document of documents) {
+    assert.match(document, /`skills`/u);
+    assert.match(document, /`extensions`/u);
+    assert.match(document, /progressive disclosure/iu);
+    assert.match(document, /local path/iu);
+    assert.match(document, /project.*untrusted|untrusted.*project/iu);
+    assert.match(document, /not (?:an? )?(?:operating-system )?sandbox/iu);
+    assert.match(document, /process-local runtime API key/iu);
+    assert.match(document, /before.*(?:task|submitting).*model|before.*model request/isu);
+    assert.doesNotMatch(document, /skillCount|extensionCount/u);
   }
 });

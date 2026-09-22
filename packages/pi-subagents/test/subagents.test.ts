@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -60,7 +61,7 @@ afterEach(async () => {
 });
 
 test("registers five fixed main-agent tools with stable schemas and explicit limits", async () => {
-  const { mock, context } = await setup();
+  const { mock, context } = await setup({ runChild: waitForCancellation });
   assert.ok(mock.messageRenderers.has("pi-subagents-completion"));
   const tools = mock.tools as unknown as RegisteredTool[];
   assert.deepEqual(
@@ -69,6 +70,15 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   );
   assert.equal(tools[0]?.parameters.properties?.task?.maxLength, 50 * 1024);
   assert.equal(tools[0]?.parameters.properties?.tools?.maxItems, 64);
+  assert.equal(tools[0]?.parameters.properties?.skills?.maxItems, 16);
+  assert.equal(tools[0]?.parameters.properties?.extensions?.maxItems, 16);
+  const extensionItem = (
+    tools[0]?.parameters.properties?.extensions as {
+      items?: { properties?: Record<string, { maxLength?: number; maxItems?: number }> };
+    }
+  )?.items;
+  assert.equal(extensionItem?.properties?.path?.maxLength, 4_096);
+  assert.equal(extensionItem?.properties?.tools?.maxItems, 64);
   assert.deepEqual((tools[0]?.parameters.properties?.tools as { items?: { enum?: string[] } })?.items?.enum, [
     "read",
     "bash",
@@ -108,7 +118,7 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
     assert.deepEqual(preparedMalformed, malformedAlias);
     assert.equal(Check(candidate?.parameters, preparedMalformed), false);
   }
-  assert.match(tools[0]?.description ?? "", /task defines.*selected tools define/is);
+  assert.match(tools[0]?.description ?? "", /task defines.*skills or extensions define/is);
   for (const candidate of tools) {
     assert.doesNotMatch(
       JSON.stringify({
@@ -139,11 +149,14 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   const definitions = JSON.stringify(
     tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
   );
+  const spawned = await spawnJob(mock, context, "Keep definitions stable");
+  await Promise.resolve();
   await tool(mock, "subagent_inspect").execute("inspect", {}, undefined, undefined, context.ctx);
   assert.equal(
     JSON.stringify(tools.map(({ name, description, parameters }) => ({ name, description, parameters }))),
     definitions,
   );
+  await cancelJob(mock, context, String(spawned.details.jobId));
 });
 
 test("completion renderer follows Pi's tool-output expansion state", async () => {
@@ -208,7 +221,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
       },
     },
     { thinkingLevel: "medium" },
-    { thinkingLevel: "high" },
+    { thinkingLevel: "high", isProjectTrusted: () => true },
   );
   const inherited = await tool(mock, "subagent_spawn").execute(
     "inherited",
@@ -222,6 +235,13 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
     {
       task: "Implement one thing",
       tools: ["read", "edit", "read", "write"],
+      skills: ["packages/pi-subagents/skills/using-pi-subagents"],
+      extensions: [
+        {
+          path: "packages/pi-subagents/src/index.ts",
+          tools: ["custom_review", "custom_review"],
+        },
+      ],
       thinkingLevel: "low",
     },
     undefined,
@@ -232,15 +252,30 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
   assert.equal(explicit.details.state, "queued");
   await Promise.resolve();
   assert.deepEqual(
-    requests.map(({ tools, model, thinkingLevel }) => ({ tools, model, thinkingLevel })),
+    requests.map(({ tools, skills, extensions, model, thinkingLevel }) => ({
+      tools,
+      skills,
+      extensions,
+      model,
+      thinkingLevel,
+    })),
     [
       {
         tools: ["read", "grep", "find", "ls"],
+        skills: [],
+        extensions: [],
         model: "test-provider/test-model",
         thinkingLevel: "high",
       },
       {
         tools: ["read", "edit", "write"],
+        skills: [path.resolve("packages/pi-subagents/skills/using-pi-subagents")],
+        extensions: [
+          {
+            path: path.resolve("packages/pi-subagents/src/index.ts"),
+            tools: ["custom_review"],
+          },
+        ],
         model: "test-provider/test-model",
         thinkingLevel: "low",
       },
@@ -251,11 +286,27 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
     assert.ok(request.communication.port > 0);
     assert.match(request.communication.token, /^[a-f0-9]{64}$/u);
   }
+  const inspected = await tool(mock, "subagent_inspect").execute(
+    "inspect-attachments",
+    {},
+    undefined,
+    undefined,
+    context.ctx,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(inspected.details),
+    /skills|extensions|using-pi-subagents|index\.ts|custom_review/iu,
+  );
   release();
   await Promise.all([
     waitFor(mock, context, String(inherited.details.jobId)),
     waitFor(mock, context, String(explicit.details.jobId)),
   ]);
+  const completions = mock.sentMessages.filter(
+    (entry) => (entry.message as { customType?: string }).customType === "pi-subagents-completion",
+  );
+  assert.equal(completions.length, 2);
+  assert.doesNotMatch(JSON.stringify(completions), /skills|extensions|using-pi-subagents|index\.ts|custom_review/iu);
 });
 
 test("shows active job timing, timeout, and selected tools above the editor", async () => {
@@ -268,10 +319,19 @@ test("shows active job timing, timeout, and selected tools above the editor", as
   });
   const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
   let now = 0;
-  const { mock, context } = await setup({ now: () => now, runChild: waitForCancellation }, {}, { mode: "tui" });
+  const { mock, context } = await setup(
+    { now: () => now, runChild: waitForCancellation },
+    {},
+    { mode: "tui", isProjectTrusted: () => true },
+  );
   const first = await tool(mock, "subagent_spawn").execute(
     "first",
-    { task: "First", tools: ["read", "edit"], timeout: 120 },
+    {
+      task: "First",
+      tools: ["read", "edit"],
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: ["custom_review"] }],
+      timeout: 120,
+    },
     undefined,
     undefined,
     context.ctx,
@@ -287,7 +347,7 @@ test("shows active job timing, timeout, and selected tools above the editor", as
   assert.equal(lines[1], "Subagents · 2 active");
   assert.match(
     lines[2] ?? "",
-    new RegExp(`^▶ ${String(first.details.jobId)} · running · 1m 5s / 2m · tools: read, edit$`, "u"),
+    new RegExp(`^▶ ${String(first.details.jobId)} · running · 1m 5s / 2m · tools: read, edit, custom_review$`, "u"),
   );
   assert.match(
     lines[3] ?? "",
@@ -357,6 +417,16 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
     { task: "extension tool", tools: ["subagent_spawn"] },
     { task: "bad thinking", thinkingLevel: "turbo" },
     { task: "bad timeout", timeout: 0 },
+    { task: "remote skill", skills: ["https://example.com/skill"] },
+    { task: "missing extension", extensions: [{ path: "/definitely/missing/extension.ts", tools: [] }] },
+    {
+      task: "malformed extension tool",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: ["bad,name"] }],
+    },
+    {
+      task: "untrusted project extension",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+    },
   ]) {
     await assert.rejects(() => spawn.execute("invalid", params, undefined, undefined, context.ctx));
   }
@@ -376,6 +446,108 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
   await assert.rejects(
     () => spawn.execute("cancelled", { task: "cancelled" }, controller.signal, undefined, context.ctx),
     (error: Error) => error.name === "AbortError",
+  );
+  assert.equal(launches, 0);
+});
+
+test("allows an attached extension to recreate a parent-registered provider", async () => {
+  let request!: ChildRequest;
+  const { mock, context } = await setup(
+    {
+      runChild: async (candidate) => {
+        request = candidate;
+        return completed("done");
+      },
+    },
+    {},
+    {
+      isProjectTrusted: () => true,
+      modelRegistry: {
+        getProviderAuthStatus: () => ({ configured: true, source: "stored" as const }),
+        getRegisteredProviderIds: () => ["test-provider"],
+      },
+    },
+  );
+  const spawned = await tool(mock, "subagent_spawn").execute(
+    "attached-provider",
+    {
+      task: "Use the attached provider",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+    },
+    undefined,
+    undefined,
+    context.ctx,
+  );
+  await waitFor(mock, context, String(spawned.details.jobId));
+  assert.equal(request.model, "test-provider/test-model");
+  assert.equal(request.extensions.length, 1);
+});
+
+test("surfaces child startup failure when an attachment does not recreate its provider", async () => {
+  const { mock, context } = await setup(
+    {
+      runChild: async () => ({
+        state: "failed",
+        error: "Unknown provider: test-provider",
+        limitations: [],
+        truncated: false,
+      }),
+    },
+    {},
+    {
+      isProjectTrusted: () => true,
+      modelRegistry: {
+        getProviderAuthStatus: () => ({ configured: true, source: "stored" as const }),
+        getRegisteredProviderIds: () => ["test-provider"],
+      },
+    },
+  );
+  const spawned = await tool(mock, "subagent_spawn").execute(
+    "missing-attached-provider",
+    {
+      task: "Try the attached provider",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+    },
+    undefined,
+    undefined,
+    context.ctx,
+  );
+  const waited = await waitFor(mock, context, String(spawned.details.jobId));
+  assert.equal(waited.details.state, "failed");
+  assert.match(String(waited.details.error), /unknown provider: test-provider/i);
+});
+
+test("rejects runtime-only provider credentials even when an extension is attached", async () => {
+  let launches = 0;
+  const { mock, context } = await setup(
+    {
+      runChild: async () => {
+        launches++;
+        return completed("unexpected");
+      },
+    },
+    {},
+    {
+      isProjectTrusted: () => true,
+      modelRegistry: {
+        getProviderAuthStatus: () => ({ configured: true, source: "runtime" as const }),
+        getRegisteredProviderIds: () => ["test-provider"],
+      },
+    },
+  );
+  await assert.rejects(
+    () =>
+      tool(mock, "subagent_spawn").execute(
+        "runtime-provider",
+        {
+          task: "Must not launch",
+          extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+        },
+        undefined,
+        undefined,
+        context.ctx,
+      ),
+    /process-local runtime API key/i,
   );
   assert.equal(launches, 0);
 });

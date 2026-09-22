@@ -4,8 +4,16 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
-import { BROKER_CREDENTIAL_FD, brokerCredentialEnvironment, serializeBrokerCredentials } from "./broker-credentials.js";
+import {
+  BROKER_CREDENTIAL_FD,
+  CHILD_READINESS_FD,
+  CHILD_READINESS_FD_ENV,
+  childBootstrapEnvironment,
+  MAX_READINESS_FRAME_BYTES,
+  serializeChildBootstrap,
+} from "./broker-credentials.js";
 import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
+import { sanitizeTerminalText } from "./message-broker.js";
 import type { ChildControl, ChildRequest, ChildResult } from "./types.js";
 
 const CORE_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
@@ -86,14 +94,18 @@ export function buildPiArgs(request: ChildRequest): string[] {
     "--no-prompt-templates",
     "-e",
     childCommunicationBridgePath(),
+  ];
+  for (const extension of request.extensions) args.push("-e", extension.path);
+  if (requiresReadinessAttestation(request)) args.push("-e", childReadinessProbePath());
+  for (const skill of request.skills) args.push("--skill", skill);
+  args.push(
     "--model",
     request.model,
     "--thinking",
     request.thinkingLevel,
     request.projectTrusted ? "--approve" : "--no-approve",
-  ];
-  const tools = [...new Set([...request.tools, ...CHILD_COMMUNICATION_TOOL_NAMES])];
-  args.push("--tools", tools.join(","));
+  );
+  args.push("--tools", selectedChildTools(request).join(","));
   return args;
 }
 
@@ -101,11 +113,31 @@ export function childCommunicationBridgePath(): string {
   return fileURLToPath(new URL("./child-communication-bridge.ts", import.meta.url));
 }
 
+export function childReadinessProbePath(): string {
+  return fileURLToPath(new URL("./child-readiness-probe.ts", import.meta.url));
+}
+
+function requiresReadinessAttestation(request: ChildRequest): boolean {
+  return request.extensions.some((extension) => extension.tools.length > 0);
+}
+
+function selectedChildTools(request: ChildRequest): string[] {
+  return [
+    ...new Set([
+      ...request.tools,
+      ...CHILD_COMMUNICATION_TOOL_NAMES,
+      ...request.extensions.flatMap((extension) => extension.tools),
+    ]),
+  ];
+}
+
 async function executeProcess(
   invocation: { command: string; args: string[] },
   request: ChildRequest,
 ): Promise<ChildResult> {
   const timeoutMs = resolveTimeoutMs(request.timeout);
+  const expectedTools = selectedChildTools(request);
+  const expectReadiness = requiresReadinessAttestation(request);
   let latestOutput = "";
   let terminalOutput: string | undefined;
   let terminalStopReason: "stop" | "length" | undefined;
@@ -217,6 +249,9 @@ async function executeProcess(
     let timedOut = false;
     let completed = false;
     let ready = false;
+    let attachmentReady = !expectReadiness;
+    let promptStarted = false;
+    let readinessPipe: import("node:stream").Readable | undefined;
     let deadline: NodeJS.Timeout | undefined;
     let forceClose: NodeJS.Timeout | undefined;
     let escalation: NodeJS.Timeout | undefined;
@@ -232,6 +267,8 @@ async function executeProcess(
         if (forceClose) clearTimeout(forceClose);
         if (escalation) clearTimeout(escalation);
         request.signal.removeEventListener("abort", onAbort);
+        readinessPipe?.removeAllListeners();
+        readinessPipe?.destroy();
         rejectPendingCommands(new Error("Subagent RPC process closed."));
         resolve({ code, cancelled, timedOut, completed, launchError });
       };
@@ -257,6 +294,7 @@ async function executeProcess(
         process.stdin?.destroy();
         process.stdout?.destroy();
         process.stderr?.destroy();
+        readinessPipe?.destroy();
         finish(code);
       }, KILL_GRACE_MS * 2);
       forceClose.unref();
@@ -274,16 +312,18 @@ async function executeProcess(
     onAgentSettled = completeNormally;
 
     try {
+      const environment: NodeJS.ProcessEnv = {
+        ...globalThis.process.env,
+        ...childBootstrapEnvironment(expectReadiness),
+        PI_SUBAGENT_DEPTH: String((Number.parseInt(globalThis.process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) + 1),
+      };
+      if (!expectReadiness) delete environment[CHILD_READINESS_FD_ENV];
       process = spawn(invocation.command, invocation.args, {
         cwd: request.cwd,
         detached: globalThis.process.platform !== "win32",
         shell: false,
-        stdio: ["pipe", "pipe", "pipe", "pipe"],
-        env: {
-          ...globalThis.process.env,
-          ...brokerCredentialEnvironment(),
-          PI_SUBAGENT_DEPTH: String((Number.parseInt(globalThis.process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) + 1),
-        },
+        stdio: expectReadiness ? ["pipe", "pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
+        env: environment,
       });
     } catch (error) {
       finish(1, error instanceof Error ? error.message : String(error));
@@ -339,11 +379,9 @@ async function executeProcess(
       });
     };
 
-    request.signal.addEventListener("abort", onAbort, { once: true });
-    if (request.signal.aborted) onAbort();
-    process.once("spawn", () => {
-      spawned = true;
-      if (settled || cancelled) return;
+    const startPrompt = () => {
+      if (!spawned || !attachmentReady || promptStarted || settled || cancelled || terminating) return;
+      promptStarted = true;
       void sendCommand(
         { type: "prompt", message: `Task: ${request.task}` },
         () => {
@@ -374,7 +412,65 @@ async function executeProcess(
         errorMessage = truncateText(error instanceof Error ? error.message : String(error), MAX_ERROR_BYTES).text;
         terminate(1);
       });
+    };
+    const failReadiness = (message: string) => {
+      if (settled || terminating || attachmentReady) return;
+      errorMessage = truncateText(message, MAX_ERROR_BYTES).text;
+      terminate(1);
+    };
+
+    request.signal.addEventListener("abort", onAbort, { once: true });
+    if (request.signal.aborted) onAbort();
+    process.once("spawn", () => {
+      spawned = true;
+      startPrompt();
     });
+    if (expectReadiness) {
+      const candidate = process.stdio[CHILD_READINESS_FD];
+      if (!candidate || !("on" in candidate)) {
+        errorMessage = "Subagent readiness pipe is unavailable.";
+        terminate(1);
+      } else {
+        readinessPipe = candidate as import("node:stream").Readable;
+        let buffer = Buffer.alloc(0);
+        let readinessSettled = false;
+        readinessPipe.on("data", (chunk: Buffer | string) => {
+          if (readinessSettled || terminating) return;
+          buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+          if (buffer.byteLength > MAX_READINESS_FRAME_BYTES) {
+            readinessSettled = true;
+            failReadiness("Subagent readiness frame exceeded its size limit.");
+          }
+        });
+        readinessPipe.once("end", () => {
+          if (readinessSettled || terminating) return;
+          readinessSettled = true;
+          let frame: { ok: true } | { ok: false; error: string };
+          try {
+            frame = parseReadinessFrame(buffer);
+          } catch (error) {
+            failReadiness(error instanceof Error ? error.message : String(error));
+            return;
+          }
+          if (!frame.ok) {
+            failReadiness(frame.error);
+            return;
+          }
+          attachmentReady = true;
+          startPrompt();
+        });
+        readinessPipe.once("error", () => {
+          if (readinessSettled || terminating) return;
+          readinessSettled = true;
+          failReadiness("Subagent readiness transfer failed.");
+        });
+        readinessPipe.once("close", () => {
+          if (readinessSettled || terminating) return;
+          readinessSettled = true;
+          failReadiness("Subagent readiness pipe closed without a result.");
+        });
+      }
+    }
     process.stdout?.on("data", (chunk) => decoder.push(chunk));
     process.stderr?.on("data", (chunk) => {
       const limited = truncateTail(`${stderr}${chunk.toString()}`, MAX_ERROR_BYTES);
@@ -409,7 +505,12 @@ async function executeProcess(
       credentialPipe.on("error", onCredentialError);
       credentialPipe.once("close", removeCredentialListeners);
       try {
-        credentialPipe.end(serializeBrokerCredentials(request.communication));
+        credentialPipe.end(
+          serializeChildBootstrap({
+            communication: request.communication,
+            expectedTools: expectReadiness ? expectedTools : [],
+          }),
+        );
       } catch {
         onCredentialError();
       }
@@ -432,7 +533,10 @@ async function executeProcess(
       truncated,
     };
   }
-  const error = settlement.launchError || errorMessage || stderr.trim();
+  const combinedError = combineErrors(settlement.launchError, errorMessage, stderr.trim());
+  const error = combinedError.text;
+  if (combinedError.truncated && !truncated) limitations.push("Child output was truncated to runtime limits.");
+  truncated ||= combinedError.truncated;
   if (settlement.completed && terminalStopReason === "stop" && !assistantFailed && !errorMessage) {
     return {
       state: "completed",
@@ -568,6 +672,43 @@ function killImmediateChild(process: ChildProcess): void {
   } catch {
     // The process may already be terminal.
   }
+}
+
+function parseReadinessFrame(buffer: Buffer): { ok: true } | { ok: false; error: string } {
+  if (buffer.byteLength === 0) {
+    throw new Error("Subagent readiness pipe closed without a result.");
+  }
+  const text = buffer.toString("utf8");
+  const newline = text.indexOf("\n");
+  if (newline < 0 || newline !== text.length - 1) {
+    throw new Error("Subagent readiness pipe returned an invalid frame.");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text.slice(0, newline));
+  } catch {
+    throw new Error("Subagent readiness pipe returned malformed JSON.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Subagent readiness pipe returned an invalid result.");
+  }
+  const record = value as Record<string, unknown>;
+  if (record.ok === true && Object.keys(record).length === 1) return { ok: true };
+  if (
+    record.ok === false &&
+    Object.keys(record).length === 2 &&
+    typeof record.error === "string" &&
+    record.error.length > 0 &&
+    Buffer.byteLength(record.error, "utf8") <= MAX_ERROR_BYTES
+  ) {
+    return { ok: false, error: sanitizeTerminalText(record.error) };
+  }
+  throw new Error("Subagent readiness pipe returned an invalid result.");
+}
+
+function combineErrors(...messages: Array<string | undefined>): { text: string; truncated: boolean } {
+  const unique = [...new Set(messages.filter((message): message is string => Boolean(message)))];
+  return truncateText(unique.join("\n"), MAX_ERROR_BYTES);
 }
 
 function abortError(message: string): Error {

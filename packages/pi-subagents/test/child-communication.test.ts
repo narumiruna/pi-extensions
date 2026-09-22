@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { afterEach, test } from "vitest";
 import { createMockPi } from "../../../test/support.js";
-import { BROKER_CREDENTIAL_FD, BROKER_CREDENTIAL_FD_ENV, captureBrokerCredentials } from "../src/broker-credentials.js";
+import {
+  BROKER_CREDENTIAL_FD,
+  BROKER_CREDENTIAL_FD_ENV,
+  CHILD_READINESS_FD,
+  CHILD_READINESS_FD_ENV,
+  captureChildBootstrap,
+  takeCapturedReadiness,
+} from "../src/broker-credentials.js";
 import { type ChildCommunicationClient, createChildCommunicationExtension } from "../src/child-communication-tools.js";
+import { createChildReadinessProbe } from "../src/child-readiness-probe.js";
 import { MAX_MESSAGE_BYTES } from "../src/message-broker.js";
 import type { BrokerCredentials } from "../src/types.js";
 
@@ -23,6 +31,8 @@ interface RegisteredTool {
 
 afterEach(() => {
   delete process.env[BROKER_CREDENTIAL_FD_ENV];
+  delete process.env[CHILD_READINESS_FD_ENV];
+  takeCapturedReadiness();
 });
 
 test("registers fixed send and wait schemas and returns bounded results", async () => {
@@ -146,26 +156,121 @@ test("child tool failures throw and preserve AbortError", async () => {
   );
 });
 
-test("captures credentials from the declared private descriptor", () => {
-  const expected: BrokerCredentials = {
+test("captures child bootstrap state from private descriptors", () => {
+  const communication: BrokerCredentials = {
     host: "127.0.0.1",
     port: 31_337,
     token: "a".repeat(64),
   };
   process.env[BROKER_CREDENTIAL_FD_ENV] = String(BROKER_CREDENTIAL_FD);
+  process.env[CHILD_READINESS_FD_ENV] = String(CHILD_READINESS_FD);
   assert.deepEqual(
-    captureBrokerCredentials(() => JSON.stringify(expected)),
-    expected,
+    captureChildBootstrap(() => JSON.stringify({ communication, expectedTools: ["read", "custom_search"] })),
+    {
+      communication,
+      expectedTools: ["read", "custom_search"],
+      readinessFd: CHILD_READINESS_FD,
+    },
   );
+  assert.deepEqual(takeCapturedReadiness(), {
+    fd: CHILD_READINESS_FD,
+    expectedTools: ["read", "custom_search"],
+  });
   assert.equal(process.env[BROKER_CREDENTIAL_FD_ENV], undefined);
+  assert.equal(process.env[CHILD_READINESS_FD_ENV], undefined);
 });
 
-test("rejects invalid credential descriptors and payloads after deleting the marker", () => {
+test("rejects invalid bootstrap descriptors and payloads after deleting markers", () => {
+  process.env[CHILD_READINESS_FD_ENV] = String(CHILD_READINESS_FD);
+  assert.throws(() => captureChildBootstrap(() => "{}"), /unexpected.*readiness descriptor/i);
+  assert.equal(process.env[CHILD_READINESS_FD_ENV], undefined);
+
   process.env[BROKER_CREDENTIAL_FD_ENV] = "4";
-  assert.throws(() => captureBrokerCredentials(() => "{}"), /invalid.*descriptor/i);
+  assert.throws(() => captureChildBootstrap(() => "{}"), /invalid.*descriptor/i);
   assert.equal(process.env[BROKER_CREDENTIAL_FD_ENV], undefined);
 
   process.env[BROKER_CREDENTIAL_FD_ENV] = String(BROKER_CREDENTIAL_FD);
-  assert.throws(() => captureBrokerCredentials(() => "{}"), /invalid.*credentials/i);
+  assert.throws(() => captureChildBootstrap(() => "{}"), /invalid.*bootstrap/i);
   assert.equal(process.env[BROKER_CREDENTIAL_FD_ENV], undefined);
+
+  process.env[BROKER_CREDENTIAL_FD_ENV] = String(BROKER_CREDENTIAL_FD);
+  assert.throws(
+    () =>
+      captureChildBootstrap(() =>
+        JSON.stringify({
+          communication: { host: "127.0.0.1", port: 31_337, token: "a".repeat(64) },
+          expectedTools: ["custom_search"],
+        }),
+      ),
+    /readiness descriptor/i,
+  );
+
+  for (const expectedTools of [
+    ["bad,name"],
+    ["bad\u001bname"],
+    Array.from({ length: 67 }, (_, index) => `tool_${index}`),
+  ]) {
+    process.env[BROKER_CREDENTIAL_FD_ENV] = String(BROKER_CREDENTIAL_FD);
+    process.env[CHILD_READINESS_FD_ENV] = String(CHILD_READINESS_FD);
+    assert.throws(
+      () =>
+        captureChildBootstrap(() =>
+          JSON.stringify({
+            communication: { host: "127.0.0.1", port: 31_337, token: "a".repeat(64) },
+            expectedTools,
+          }),
+        ),
+      /invalid.*bootstrap/i,
+    );
+  }
+});
+
+test("readiness probe runs after earlier resource hooks", async () => {
+  const frames: string[] = [];
+  const mock = createMockPi({ activeTools: ["read"] });
+  mock.rawPi.on("resources_discover", () => {
+    mock.rawPi.setActiveTools(["read", "factory_tool", "session_tool", "resource_tool"]);
+  });
+  createChildReadinessProbe(
+    {
+      fd: CHILD_READINESS_FD,
+      expectedTools: ["read", "factory_tool", "session_tool", "resource_tool"],
+    },
+    (_fd, frame) => frames.push(frame),
+    () => undefined,
+  )(mock.pi);
+  for (const handler of mock.events.get("resources_discover") ?? []) {
+    await handler({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }, {});
+  }
+  assert.deepEqual(
+    frames.map((frame) => JSON.parse(frame)),
+    [{ ok: true }],
+  );
+});
+
+test("readiness probe reports success or missing requested tools once", async () => {
+  for (const [activeTools, expectedTools, expectedFrame] of [
+    [["read", "custom_search"], ["read", "custom_search"], { ok: true }],
+    [["read"], ["read", "custom_search"], { ok: false, error: "Unavailable subagent tools: custom_search." }],
+  ] as const) {
+    const frames: string[] = [];
+    const closed: number[] = [];
+    const mock = createMockPi({ activeTools: [...activeTools] });
+    createChildReadinessProbe(
+      { fd: CHILD_READINESS_FD, expectedTools: [...expectedTools] },
+      (_fd, frame) => frames.push(frame),
+      (fd) => closed.push(fd),
+    )(mock.pi);
+    for (const handler of mock.events.get("resources_discover") ?? []) {
+      await handler({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }, {});
+    }
+    for (const handler of mock.events.get("session_shutdown") ?? []) {
+      await handler({ type: "session_shutdown", reason: "quit" }, {});
+    }
+    assert.deepEqual(
+      frames.map((frame) => JSON.parse(frame)),
+      [expectedFrame],
+    );
+    assert.deepEqual(closed, [CHILD_READINESS_FD]);
+  }
 });

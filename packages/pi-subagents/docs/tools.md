@@ -5,29 +5,57 @@
 | Parameter | Type | Required | Constraint / default |
 | --- | --- | --- | --- |
 | `task` | `string` | Yes | Self-contained task, up to 50 KiB of UTF-8 text. |
-| `tools` | `string[]` | No | Up to 64 names from `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`; defaults to `read`, `grep`, `find`, and `ls`. |
+| `tools` | `string[]` | No | Up to 64 total selected names after extension tools are included; core names are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`; defaults to `read`, `grep`, `find`, and `ls`. |
+| `skills` | `string[]` | No | Up to 16 explicit local skill files or directories; automatic discovery remains disabled. |
+| `extensions` | `{ path: string; tools: string[] }[]` | No | Up to 16 trusted local extension files or directories and the exact extension tools to activate initially. |
 | `thinkingLevel` | `string` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to the main agent's effective thinking level. |
 | `timeout` | `number` | No | Seconds; `> 0` through `2,147,483.647`; no default timeout. |
 
-Starts one task-specialized subagent job with the selected tool capabilities and returns its job ID immediately.
+Starts one task-specialized subagent job with the selected capabilities and returns its job ID immediately.
 
 The runtime always adds `subagent_send` and `subagent_wait` to the selected tools.
 
+`tools` accepts only the fixed Pi core names in the table.
+
+Extension tools are selected only through each `extensions[].tools` list, and an empty list loads provider or lifecycle behavior without exposing extension tools initially.
+
+Every requested extension tool name must be non-empty, at most 128 characters, and contain no comma or control character.
+
+The parent verifies that the complete initial allowlist is active after extension factory, session, and resource-discovery hooks and before submitting the task to the model.
+
+A missing tool, malformed readiness response, attachment startup failure, or cancellation fails the job without sending the task.
+
+`skills` uses Pi's progressive disclosure, so an attached skill becomes available for relevant discovery but does not inject its full body, add tools, or force invocation.
+
+Each attachment path is resolved relative to the child working directory when not absolute, must already name a regular file or directory, and is canonicalized before launch.
+
+Only local paths are accepted; npm, Git, URL, and other scheme-based sources throw before queuing.
+
+Paths are limited to 4 KiB of UTF-8 text, duplicate skills are removed, and repeated extension paths merge their tool names in first-use order.
+
+When the project is untrusted, an attachment throws if either its lexical path or symlink-resolved target is within the child working directory; explicit external paths remain valid.
+
+An attached extension executes trusted code with full child-process permissions and may alter prompts, tools, providers, or active tools after the initial readiness check, so its tool list is not a sandbox.
+
+Canonical attachment paths are passed to Pi as child-process arguments but are omitted from inspection, completion, and broker results.
+
 The child inherits the main agent's effective provider and model at spawn time.
 
-Providers registered by a parent extension throw before the job is queued because children disable unrelated extensions.
+A provider registered only by a parent extension throws before queuing unless at least one extension is attached.
 
-A process-local runtime API key, including a parent-only `--api-key` value, also throws before queuing.
+With an attachment, child startup is authoritative because that extension may register the provider before model resolution.
 
-Use Pi's stored credentials or environment credentials that the child process can read.
+A process-local runtime API key, including a parent-only `--api-key`, always throws before queuing; attached providers must use stored or inherited environment credentials independently.
 
-Unavailable or extension-only tool names throw before the job is queued.
+Unavailable core tool names and invalid attachments throw without launching a child.
 
-Throws without launching a child when the session broker is unavailable.
+The session broker must also be available before a child can launch.
 
 ## `subagent_inspect`
 
 No parameters.
+
+Returns privacy-filtered retained-job metadata without task text, child output, selected tools, attachment paths or totals, credentials, or broker messages.
 
 ## `subagent_cancel`
 

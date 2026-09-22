@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import {
   buildPiArgs,
   childCommunicationBridgePath,
+  childReadinessProbePath,
   resolveTimeoutMs,
   runChild,
   terminateWindowsProcessTree,
@@ -18,12 +19,14 @@ let directory: string;
 let previousPackageDirectory: string | undefined;
 let previousExecPath: string;
 let previousBunVersion: string | undefined;
+let previousReadinessDescriptor: string | undefined;
 
 beforeEach(() => {
   directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-process-"));
   previousPackageDirectory = process.env.PI_PACKAGE_DIR;
   previousExecPath = process.execPath;
   previousBunVersion = process.versions.bun;
+  previousReadinessDescriptor = process.env.PI_SUBAGENT_READINESS_FD;
 });
 
 afterEach(() => {
@@ -32,6 +35,8 @@ afterEach(() => {
   process.execPath = previousExecPath;
   if (previousBunVersion === undefined) delete process.versions.bun;
   else process.versions.bun = previousBunVersion;
+  if (previousReadinessDescriptor === undefined) delete process.env.PI_SUBAGENT_READINESS_FD;
+  else process.env.PI_SUBAGENT_READINESS_FD = previousReadinessDescriptor;
   rmSync(directory, { recursive: true, force: true });
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -69,6 +74,46 @@ test("buildPiArgs isolates the RPC child and preserves selected communication to
 
   const noWorkTools = buildPiArgs(childRequest({ tools: [] }));
   assert.equal(noWorkTools[noWorkTools.indexOf("--tools") + 1], "subagent_send,subagent_wait");
+
+  const attached = buildPiArgs(
+    childRequest({
+      tools: ["read"],
+      skills: ["/tmp/review-skill", "/tmp/test-skill"],
+      extensions: [
+        { path: "/tmp/search-extension.ts", tools: ["search_code"] },
+        { path: "/tmp/provider-extension.ts", tools: [] },
+      ],
+    }),
+  );
+  assert.deepEqual(
+    attached.filter((argument, index) => attached[index - 1] === "-e" || argument === "-e"),
+    [
+      "-e",
+      childCommunicationBridgePath(),
+      "-e",
+      "/tmp/search-extension.ts",
+      "-e",
+      "/tmp/provider-extension.ts",
+      "-e",
+      childReadinessProbePath(),
+    ],
+  );
+  assert.deepEqual(
+    attached.filter((argument, index) => attached[index - 1] === "--skill" || argument === "--skill"),
+    ["--skill", "/tmp/review-skill", "--skill", "/tmp/test-skill"],
+  );
+  assert.equal(attached[attached.indexOf("--tools") + 1], "read,subagent_send,subagent_wait,search_code");
+
+  const skillOnly = buildPiArgs(childRequest({ skills: ["/tmp/review-skill"] }));
+  assert.equal(skillOnly.filter((argument) => argument === "-e").length, 1);
+  assert.equal(skillOnly.includes(childReadinessProbePath()), false);
+
+  const lifecycleOnly = buildPiArgs(childRequest({ extensions: [{ path: "/tmp/provider-extension.ts", tools: [] }] }));
+  assert.deepEqual(
+    lifecycleOnly.filter((argument, index) => lifecycleOnly[index - 1] === "-e" || argument === "-e"),
+    ["-e", childCommunicationBridgePath(), "-e", "/tmp/provider-extension.ts"],
+  );
+  assert.equal(lifecycleOnly.includes(childReadinessProbePath()), false);
 });
 
 test("runChild uses a bundled Pi executable when its manifest CLI is absent", async () => {
@@ -269,6 +314,7 @@ async function handle(command) {
 });
 
 test("passes broker credentials through a private descriptor outside the initial environment", async () => {
+  process.env.PI_SUBAGENT_READINESS_FD = "stale-parent-value";
   installFakePi(`
 async function handle(command) {
   if (command.type !== "prompt") return;
@@ -280,6 +326,7 @@ async function handle(command) {
     credentialsReceived: brokerCredentials.host === "127.0.0.1" && brokerCredentials.port === 31337,
     initialEnvironmentContainsToken: initialEnvironment.includes(Buffer.from(brokerCredentials.token)),
     descriptorMarker: process.env.PI_SUBAGENT_BROKER_FD,
+    readinessMarker: process.env.PI_SUBAGENT_READINESS_FD ?? null,
   });
   event(message(text));
   event({ type: "agent_settled" });
@@ -291,7 +338,9 @@ async function handle(command) {
     credentialsReceived: true,
     initialEnvironmentContainsToken: false,
     descriptorMarker: "3",
+    readinessMarker: null,
   });
+  delete process.env.PI_SUBAGENT_READINESS_FD;
 });
 
 test("handles late credential-pipe errors after child launch failure", async () => {
@@ -345,6 +394,121 @@ setInterval(() => {}, 1000);
   await new Promise<ChildControl>((resolve) => {
     cancelReady = resolve;
   });
+  controller.abort();
+  assert.equal((await work).state, "cancelled");
+});
+
+test("runChild sends an attached task only after readiness and starts its deadline after prompt acceptance", async () => {
+  installFakePi(
+    `
+let readinessSent = false;
+setTimeout(() => {
+  readinessSent = true;
+  signalReadiness(JSON.stringify({ ok: true }) + "\\n");
+}, 50);
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  respond(command);
+  event(message(JSON.stringify({ readinessSent, task: command.message })));
+  event({ type: "agent_settled" });
+}
+`,
+    { readiness: "manual" },
+  );
+  const result = await runChild(
+    childRequest({
+      extensions: [{ path: "/tmp/search-extension.ts", tools: ["custom_search"] }],
+      timeout: 0.025,
+    }),
+  );
+  assert.equal(result.state, "completed");
+  assert.deepEqual(JSON.parse(result.result ?? "{}"), {
+    readinessSent: true,
+    task: "Task: task",
+  });
+});
+
+test("runChild rejects invalid attachment readiness without sending the task", async () => {
+  const cases = [
+    ["failure", /requested extension tool is unavailable/i],
+    ["malformed", /malformed JSON/i],
+    ["oversized", /size limit/i],
+    ["close", /closed without a result/i],
+  ] as const;
+  for (const [readiness, expectedError] of cases) {
+    const promptMarker = path.join(directory, `prompt-${readiness}`);
+    installFakePi(
+      `
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  fs.writeFileSync(${JSON.stringify(promptMarker)}, command.message);
+}
+setInterval(() => {}, 1000);
+`,
+      { readiness },
+    );
+    const result = await runChild(
+      childRequest({
+        extensions: [{ path: "/tmp/search-extension.ts", tools: ["custom_search"] }],
+      }),
+    );
+    assert.equal(result.state, "failed");
+    assert.match(result.error ?? "", expectedError);
+    assert.equal(existsSync(promptMarker), false);
+  }
+});
+
+test("runChild fails an attached job when the child exits before readiness", async () => {
+  installFakePi(
+    `
+console.error("Unable to load attached extension fixture.");
+process.exit(7);
+async function handle() {}
+`,
+    { readiness: "manual" },
+  );
+  const result = await runChild(
+    childRequest({ extensions: [{ path: "/tmp/broken-extension.ts", tools: ["broken_tool"] }] }),
+  );
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /readiness pipe closed without a result/i);
+  assert.match(result.error ?? "", /unable to load attached extension fixture/i);
+});
+
+test("runChild sanitizes a child-provided readiness failure", async () => {
+  installFakePi(
+    `
+signalReadiness(JSON.stringify({ ok: false, error: "Missing tool.\\u001b[31m" }) + "\\n");
+async function handle() {}
+`,
+    { readiness: "manual" },
+  );
+  const result = await runChild(
+    childRequest({ extensions: [{ path: "/tmp/search-extension.ts", tools: ["custom_search"] }] }),
+  );
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /missing tool/i);
+  assert.equal((result.error ?? "").includes(String.fromCharCode(27)), false);
+});
+
+test("runChild cancels while waiting for attachment readiness", async () => {
+  const startedMarker = path.join(directory, "readiness-started");
+  installFakePi(
+    `
+fs.writeFileSync(${JSON.stringify(startedMarker)}, "started");
+async function handle() {}
+setInterval(() => {}, 1000);
+`,
+    { readiness: "manual" },
+  );
+  const controller = new AbortController();
+  const work = runChild(
+    childRequest({
+      signal: controller.signal,
+      extensions: [{ path: "/tmp/search-extension.ts", tools: ["custom_search"] }],
+    }),
+  );
+  await waitForFile(startedMarker);
   controller.abort();
   assert.equal((await work).state, "cancelled");
 });
@@ -430,10 +594,20 @@ test("Windows process-tree termination bounds a hung taskkill helper", async () 
   assert.deepEqual(childKill.mock.calls, [["SIGKILL"]]);
 });
 
+async function waitForFile(file: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!existsSync(file)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${file}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function childRequest(overrides: Partial<ChildRequest> = {}): ChildRequest {
   return {
     task: "task",
     tools: ["read", "grep", "find", "ls"],
+    skills: [],
+    extensions: [],
     model: "test-provider/test-model",
     thinkingLevel: "medium",
     cwd: directory,
@@ -448,15 +622,44 @@ function childRequest(overrides: Partial<ChildRequest> = {}): ChildRequest {
   };
 }
 
-function installFakePi(source: string, options: { bundled?: boolean } = {}): void {
+function installFakePi(
+  source: string,
+  options: {
+    bundled?: boolean;
+    readiness?: "success" | "manual" | "failure" | "malformed" | "oversized" | "close";
+  } = {},
+): void {
   const packageDirectory = path.join(directory, "pi-core");
   const executableName = options.bundled ? "pi" : "fake-pi.mjs";
   const executablePath = path.join(packageDirectory, executableName);
+  const readinessSetup = {
+    success: 'signalReadiness(JSON.stringify({ ok: true }) + "\\n");',
+    manual: "",
+    failure:
+      'signalReadiness(JSON.stringify({ ok: false, error: "Requested extension tool is unavailable." }) + "\\n");',
+    malformed: 'signalReadiness("not-json\\n");',
+    oversized: 'signalReadiness("x".repeat(16 * 1024 + 1));',
+    close: "closeReadiness();",
+  }[options.readiness ?? "success"];
   mkdirSync(packageDirectory, { recursive: true });
   writeFileSync(
     executablePath,
     `${options.bundled ? "#!/usr/bin/env node\n" : ""}import fs from "node:fs";
-const brokerCredentials = JSON.parse(fs.readFileSync(3, "utf8"));
+const childBootstrap = JSON.parse(fs.readFileSync(3, "utf8"));
+const brokerCredentials = childBootstrap.communication;
+const expectedTools = childBootstrap.expectedTools;
+const closeReadiness = () => {
+  if (expectedTools.length > 0) fs.closeSync(4);
+};
+const signalReadiness = (frame) => {
+  if (expectedTools.length === 0) return;
+  try {
+    fs.writeFileSync(4, frame, "utf8");
+  } finally {
+    fs.closeSync(4);
+  }
+};
+${readinessSetup}
 const event = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const respond = (command, success = true, error) => event({
   id: command.id,
