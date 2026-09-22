@@ -56,6 +56,7 @@ These extensions are part of my daily Pi setup:
 | Package | Use it for | Install |
 | --- | --- | --- |
 | [`pi-codex-compact`](./packages/pi-codex-compact) | Use OpenAI Codex Remote Compaction V2 to persist and replay bounded opaque checkpoints, with `/codex-compact` manual controls and safe Pi-native fallback. | `pi install npm:@narumitw/pi-codex-compact` |
+| [`pi-context-management`](./packages/pi-context-management) | Opt into experimental summary-free context rollover with bounded branch-history recall and branch-local notes. | `pi install npm:@narumitw/pi-context-management` |
 | [`pi-file-context`](./packages/pi-file-context) | Browse project files, preview text, select exact lines or Git diff hunks, and attach immutable snapshots with Git provenance to the next prompt. Open it with configurable `Ctrl+Shift+X` or `/file-context`. | `pi install npm:@narumitw/pi-file-context` |
 | [`pi-lsp`](./packages/pi-lsp) | Language-server diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
 | [`pi-plan-mode`](./packages/pi-plan-mode) | Codex-like, read-only `/plan` collaboration before implementation begins. | `pi install npm:@narumitw/pi-plan-mode` |
@@ -85,6 +86,8 @@ These TypeSafe AI integrations are experimental and may change as they are evalu
 | [`pi-btw`](./packages/pi-btw) | Ask a quick `/btw` side question without adding it to the main conversation. | `pi install npm:@narumitw/pi-btw` |
 | [`pi-caffeinate`](./packages/pi-caffeinate) | Prevent system sleep while Pi processes a long-running prompt. | `pi install npm:@narumitw/pi-caffeinate` |
 | [`pi-goal`](./packages/pi-goal) | Keep the agent working until a goal is verified complete; optionally enable an experimental ordered queue. | `pi install npm:@narumitw/pi-goal` |
+| [`pi-notes`](./packages/pi-notes) | Browse and edit global Markdown notes in an isolated embedded-agent workspace. | `pi install npm:@narumitw/pi-notes` |
+| [`pi-progress`](./packages/pi-progress) | Keep branch-aware multi-step work visible above the editor with the `update_progress` model tool. | `pi install npm:@narumitw/pi-progress` |
 | [`pi-worktree`](./packages/pi-worktree) | Create, switch, remove, and prune Git worktrees while carrying the Pi session into another workspace. | `pi install npm:@narumitw/pi-worktree` |
 
 Current Plan and Goal releases can coexist on the characterized Pi runtime through their anonymous cooperative workflow mutex.
@@ -120,6 +123,7 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | [`pi-starship`](./packages/pi-starship) | Use a native Starship-style TOML footer with Pi-specific modules and no Starship binary dependency. | `pi install npm:@narumitw/pi-starship` |
 | [`pi-statusline`](./packages/pi-statusline) | Show model, tools, Git state, context usage, tokens, cost, and time in a preset or JSON-configured footer. | `pi install npm:@narumitw/pi-statusline` |
 | [`pi-tool`](./packages/pi-tool) | Browse every configured tool and inspect its active state, source, parameter schema, and prompt guidelines with `/tool`. | `pi install npm:@narumitw/pi-tool` |
+| [`pi-ticker`](./packages/pi-ticker) | Show configurable Yahoo Finance market quotes in a width-aware widget above the editor. | `pi install npm:@narumitw/pi-ticker` |
 
 Choose either `pi-starship` or `pi-statusline`; do not enable both footer extensions together.
 
