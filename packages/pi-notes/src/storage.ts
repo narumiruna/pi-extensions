@@ -136,20 +136,29 @@ export class NotesStorage {
     const root = await canonicalDirectory(this.paths.notes, options.signal);
     const sessionsRoot = await canonicalDirectory(this.paths.sessions, options.signal);
     return withFileMutationQueue(root, async () => {
-      for (let index = 1; index <= MAX_DISCOVERED_FILES + 1; index += 1) {
-        throwIfAborted(options.signal);
-        const relativePath = index === 1 ? "untitled.md" : `untitled-${index}.md`;
+      const createIfAvailable = async (relativePath: string): Promise<NoteSnapshot | undefined> => {
         const target = resolve(root, relativePath);
-        if (await entryExists(join(sessionsRoot, noteSessionKey(relativePath)), options.signal)) continue;
+        if (await entryExists(join(sessionsRoot, noteSessionKey(relativePath)), options.signal)) return undefined;
         try {
           await assertMissingNote(target, relativePath, options.signal);
           await atomicCreate(root, target, relativePath, content, options.signal, this.beforePublish);
           return snapshot(relativePath, content);
         } catch (error) {
           if (!(error instanceof NoteAlreadyExistsError)) throw error;
+          return undefined;
         }
+      };
+
+      for (let index = 1; index <= MAX_DISCOVERED_FILES + 1; index += 1) {
+        throwIfAborted(options.signal);
+        const note = await createIfAvailable(index === 1 ? "untitled.md" : `untitled-${index}.md`);
+        if (note) return note;
       }
-      throw new Error("Pi Notes could not allocate a temporary note filename");
+      while (true) {
+        throwIfAborted(options.signal);
+        const note = await createIfAvailable(`untitled-${randomUUID()}.md`);
+        if (note) return note;
+      }
     });
   }
 

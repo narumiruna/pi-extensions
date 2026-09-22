@@ -293,6 +293,25 @@ test("automatic creation chooses collision-safe temporary names without promptin
   assert.equal(await readFile(join(storage.paths.notes, "untitled.md"), "utf8"), "existing");
 });
 
+test("automatic creation uses a generated fallback after every numbered path has history", async () => {
+  const { storage } = await fixture();
+  await Promise.all(
+    Array.from({ length: MAX_DISCOVERED_FILES + 1 }, (_, offset) => {
+      const index = offset + 1;
+      const relativePath = index === 1 ? "untitled.md" : `untitled-${index}.md`;
+      return mkdir(join(storage.paths.sessions, noteSessionKey(relativePath)));
+    }),
+  );
+
+  const created = await storage.createAutomaticNote();
+
+  assert.match(
+    created.relativePath,
+    /^untitled-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.md$/u,
+  );
+  assert.equal((await storage.readNote(created.relativePath)).content, "");
+});
+
 test("same-process concurrent creation publishes once without overwriting the winner", async () => {
   const { storage } = await fixture();
   await writeFile(join(storage.paths.templates, "first.md"), "first", "utf8");
