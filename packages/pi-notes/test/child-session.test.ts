@@ -128,6 +128,73 @@ test("embedded AgentSession streams, invokes scoped current-note tools, persists
   }
 });
 
+test.each([
+  {
+    toolName: "edit_current_note",
+    mutationArguments: (revision: string) => ({
+      revision,
+      oldText: "old text",
+      newText: "renamed and edited",
+    }),
+    expectedContent: "# Current\n\nrenamed and edited\n",
+  },
+  {
+    toolName: "replace_current_note",
+    mutationArguments: (revision: string) => ({ revision, content: "# Renamed and replaced\n" }),
+    expectedContent: "# Renamed and replaced\n",
+  },
+] as const)(
+  "embedded AgentSession serializes a rename-first $toolName batch against the renamed path",
+  async ({ toolName, mutationArguments, expectedContent }) => {
+    const { agentDir, storage } = await fixture();
+    const { runtime, faux, model } = await fauxRuntime();
+    const initial = await storage.readNote("current.md");
+    const newPath = `topics/${toolName}.md`;
+    faux.setResponses([
+      fauxAssistantMessage([
+        fauxToolCall("rename_current_note", {
+          revision: initial.revision,
+          newPath,
+        }),
+        fauxToolCall(toolName, mutationArguments(initial.revision)),
+      ]),
+      fauxAssistantMessage("Renamed and updated the note."),
+    ]);
+    const noteChanges: string[] = [];
+    const child = await createNotesChildSession(
+      {
+        agentDir,
+        storage,
+        notePath: "current.md",
+        parentModel: model,
+        thinkingLevel: "off",
+        onNoteChanged: ({ relativePath }) => noteChanges.push(relativePath),
+      },
+      { createModelRuntime: async () => runtime },
+    );
+
+    try {
+      assert.match(child.session.systemPrompt, /call rename_current_note first/iu);
+      assert.match(child.session.systemPrompt, /calls execute in source order/iu);
+      await child.session.prompt("Rename and update the note in one response.", { expandPromptTemplates: false });
+      await assert.rejects(storage.readNote("current.md"), /ENOENT|no such/iu);
+      assert.equal((await storage.readNote(newPath)).content, expectedContent);
+      assert.deepEqual(noteChanges, [newPath, newPath]);
+      const toolResults = child.session.messages.filter((message) => message.role === "toolResult");
+      assert.deepEqual(
+        toolResults.map(({ toolName: resultToolName }) => resultToolName),
+        ["rename_current_note", toolName],
+      );
+      assert.equal(
+        toolResults.every(({ isError }) => !isError),
+        true,
+      );
+    } finally {
+      child.session.dispose();
+    }
+  },
+);
+
 test("current-note tools enforce revisions, keep the source path implicit, and follow a successful rename", async () => {
   const { storage } = await fixture();
   const tools = createCurrentNoteTools(storage, "current.md", () => {
@@ -140,6 +207,7 @@ test("current-note tools enforce revisions, keep the source path implicit, and f
   for (const tool of tools.slice(0, 3)) assert.doesNotMatch(JSON.stringify(tool.parameters), /path/iu);
   assert.match(JSON.stringify(tools[3]?.parameters), /newPath/u);
   assert.doesNotMatch(JSON.stringify(tools[3]?.parameters), /sourcePath|oldPath/iu);
+  assert.equal(tools[3]?.executionMode, "sequential");
 
   const readTool = tools[0];
   assert.ok(readTool);

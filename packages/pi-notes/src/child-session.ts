@@ -192,7 +192,7 @@ export function createCurrentNoteTools(
     name: "rename_current_note",
     label: "Rename current note",
     description:
-      "Rename the current note to a concise, descriptive relative Markdown path. This tool accepts no source path, rejects stale revisions, and never overwrites another note.",
+      "Rename the current note to a concise, descriptive relative Markdown path. When combining this with one content mutation in the same response, call this tool first and give both calls the same latest revision; renaming preserves the content revision. This tool accepts no source path, rejects stale revisions, and never overwrites another note.",
     parameters: Type.Object({
       revision: Type.String({ description: "Latest revision returned by a current-note tool" }),
       newPath: Type.String({
@@ -201,6 +201,7 @@ export function createCurrentNoteTools(
         description: "New relative path below the notes root, ending in .md",
       }),
     }),
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal) {
       const previousPath = currentPath;
       const note = await storage.renameNote(previousPath, params.revision, params.newPath, signal);

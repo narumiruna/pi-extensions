@@ -102,7 +102,7 @@ The child receives only these tools:
 - `replace_current_note` replaces the complete open note using the latest revision.
 - `rename_current_note` renames the open note using the latest revision and a new relative `.md` destination.
 
-The content tools accept no path, and the rename tool accepts no source path. A successful rename updates the live workspace title and keeps subsequent tools bound to the renamed note. Templates affect initial note content only and never become skills, prompt instructions, persistent types, or durable template associations.
+The content tools accept no path, and the rename tool accepts no source path. A batch containing `rename_current_note` executes in source order. To rename and change content in one response, the assistant must call rename first and then at most one content mutation with the same latest revision; renaming preserves that revision. Any later mutation must wait for the preceding content mutation's returned revision. A successful rename updates the live workspace title and keeps subsequent tools bound to the renamed note. Templates affect initial note content only and never become skills, prompt instructions, persistent types, or durable template associations.
 
 ## 🔒 Security and privacy
 
