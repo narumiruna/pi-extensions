@@ -23,10 +23,10 @@ import {
   VStack,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { BtwFullscreenLayoutComponent } from "./fullscreen-ui.js";
 import { BtwPasteGuard, type BtwShortcuts, getBtwShortcuts } from "./keybindings.js";
 import type { BtwThinkingLevel, SideThreadTurn } from "./side-thread.js";
 import { sanitizeSingleLine } from "./text.js";
+import type { BtwFullscreenLayoutComponent } from "./workspace-layout.js";
 
 const TRANSCRIPT_CHROME_LINES = 2;
 const MAX_STEERING_DISPLAY_LINES = 3;
@@ -144,6 +144,10 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 
   getFullscreenLayout(): Component {
     return this.layoutRoot;
+  }
+
+  getPrimaryScrollView(): ScrollView {
+    return this.scrollView;
   }
 
   render(width: number): string[] {
@@ -395,6 +399,10 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 
   getFullscreenLayout(): Component {
     return this.layoutRoot;
+  }
+
+  getPrimaryScrollView(): ScrollView {
+    return this.scrollView;
   }
 
   render(width: number): string[] {

@@ -8,6 +8,7 @@ import {
   getKeybindings,
   isKittyProtocolActive,
   KeybindingsManager,
+  ScrollView,
   setKeybindings,
   setKittyProtocolActive,
   type Terminal,
@@ -15,6 +16,7 @@ import {
   TUI_KEYBINDINGS,
   TuiAltScreen,
   TuiMainScreen,
+  VStack,
 } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { type BtwFullscreenTuiFactory, runBtwFullscreen } from "../src/fullscreen-ui.js";
@@ -250,8 +252,16 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function waitForCondition(condition: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+  }
+  assert.fail(message);
+}
+
 class InputHandoffTerminal implements Terminal {
-  readonly columns = 80;
+  columns = 80;
   readonly rows = 12;
   readonly kittyProtocolActive = false;
   readonly lifecycle: Array<"start" | "stop"> = [];
@@ -337,16 +347,63 @@ class InputHandoffTerminal implements Terminal {
 class MainInput implements Component, Focusable {
   focused = false;
   text = "";
+  readonly inputs: string[] = [];
 
   render(): string[] {
     return [this.text];
   }
 
   handleInput(data: string): void {
+    this.inputs.push(data);
     if (data.charCodeAt(0) >= 32) this.text += data;
   }
 
   invalidate(): void {}
+}
+
+class SideInput implements Component, Focusable {
+  focused = false;
+  readonly inputs: string[] = [];
+
+  render(): string[] {
+    return Array.from({ length: 12 }, () => "side thread");
+  }
+
+  handleInput(data: string): void {
+    this.inputs.push(data);
+  }
+
+  invalidate(): void {}
+}
+
+class ScrollableSideInput implements Component, Focusable {
+  focused = false;
+  readonly scrollView = new ScrollView(
+    {
+      render: () =>
+        Array.from({ length: 80 }, (_, index) => (index === 4 ? "SIDE NEEDLE" : `side history ${index + 1}`)),
+      invalidate() {},
+    },
+    { follow: "end", primary: true },
+  );
+
+  getFullscreenLayout(): Component {
+    return this.scrollView;
+  }
+
+  getPrimaryScrollView(): ScrollView {
+    return this.scrollView;
+  }
+
+  render(width: number): string[] {
+    return this.scrollView.render(width);
+  }
+
+  handleInput(): void {}
+
+  invalidate(): void {
+    this.scrollView.invalidate();
+  }
 }
 
 function createInputHandoffHarness(
@@ -358,19 +415,43 @@ function createInputHandoffHarness(
   const editorContainer = new Container();
   const mainInput = new MainInput();
   mainInput.text = options.editorText ?? "";
-  if (options.fullscreenParent) {
-    parent.addChild({
-      render: () => Array.from({ length: 80 }, (_, index) => `history ${index + 1}`),
-      invalidate() {},
-    });
-  }
   editorContainer.addChild(mainInput);
-  parent.addChild(editorContainer);
+  let mainScrollView: ScrollView | undefined;
+  if (options.fullscreenParent) {
+    mainScrollView = new ScrollView(
+      {
+        render: () =>
+          Array.from({ length: 80 }, (_, index) => {
+            if (index === 4) return "\u001b]133;A\u0007MAIN NEEDLE";
+            if (index === 60) return "\u001b]133;A\u0007MAIN PROMPT";
+            return `history ${index + 1}`;
+          }),
+        invalidate() {},
+      },
+      { follow: "end", primary: true },
+    );
+    (parent as TuiAltScreen).setLayoutRoot(
+      new VStack([
+        { component: mainScrollView, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+        { component: editorContainer, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+      ]),
+    );
+  } else {
+    parent.addChild(editorContainer);
+  }
   parent.setFocus(mainInput);
   parent.start();
   if (options.fullscreenParent) parent.renderNow(true);
 
   const ctx = {
+    sessionManager: {
+      getBranch: () => [
+        {
+          type: "message",
+          message: { role: "user", content: "main thread context" },
+        },
+      ],
+    },
     ui: {
       custom: <Value>(
         factory: (
@@ -416,7 +497,7 @@ function createInputHandoffHarness(
       },
     },
   } as never;
-  return { ctx, mainInput, parent, terminal };
+  return { ctx, mainInput, mainScrollView, parent, terminal };
 }
 
 function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings()) {
@@ -436,9 +517,20 @@ function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings())
     hideCursor() {},
     showCursor() {},
   } as never;
+  let mainFrame = "initial";
+  let mainRenderCount = 0;
   const parent = {
     mode: "regular",
     terminal,
+    render(width: number) {
+      mainRenderCount += 1;
+      return [
+        ...Array.from({ length: 30 }, (_, index) => `main history ${index + 1}`),
+        `\u001b[44mMAIN ${mainFrame}\u001b[49m`,
+        "main editor draft",
+      ].map((line) => line.slice(0, width));
+    },
+    invalidate() {},
     getShowHardwareCursor: () => false,
     stop(options?: { preserveScreen?: boolean }) {
       events.push(`parent.stop:${String(options?.preserveScreen)}`);
@@ -462,6 +554,14 @@ function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings())
     bold: (text: string) => text,
   };
   const ctx = {
+    sessionManager: {
+      getBranch: () => [
+        {
+          type: "message",
+          message: { role: "user", content: "main thread context" },
+        },
+      ],
+    },
     ui: {
       custom: async (factory: (...args: never[]) => FakeComponent) => {
         const result = new Promise<unknown>((resolve) => {
@@ -491,6 +591,12 @@ function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings())
     get input() {
       assert.ok(handleInput);
       return handleInput;
+    },
+    setMainFrame(value: string) {
+      mainFrame = value;
+    },
+    get mainRenderCount() {
+      return mainRenderCount;
     },
   };
 }
@@ -544,13 +650,309 @@ async function startClipboardSelection(
 }
 
 test.each([
-  ["custom exit", "\u0011", false],
-  ["hard cancel", "\u0003", false],
-  ["custom exit with overlay", "\u0011", true],
-  ["hard cancel with overlay", "\u0003", true],
+  ["left-pane", /SIDE.*MAIN initial/u],
+  ["right-pane", /MAIN initial.*SIDE/u],
+] as const)("dedicated workspace renders the configured %s split with Pi's live main TUI", async (layout, order) => {
+  const harness = createNativeFullscreenHarness();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  let notifyMainThreadUpdate = () => {};
+  let mainThreadSubscribed = false;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return {
+          render: () => Array.from({ length: 12 }, () => "SIDE"),
+          invalidate() {},
+        };
+      }),
+    {
+      layout,
+      subscribeMainThreadUpdates: (listener) => {
+        mainThreadSubscribed = true;
+        notifyMainThreadUpdate = listener;
+        return () => {
+          mainThreadSubscribed = false;
+          if (notifyMainThreadUpdate === listener) notifyMainThreadUpdate = () => {};
+        };
+      },
+    },
+  );
+  await flushAsyncWork();
+  assert.ok(sideTui);
+  assert.ok(closeSide);
+  sideTui.renderNow(true);
+  const styledOutput = harness.writes.join("");
+  const output = stripVTControlCharacters(styledOutput);
+  assert.match(output, order);
+  assert.equal(styledOutput.includes("\u001b[44mMAIN initial\u001b[49m"), true);
+
+  const mainPaneColumn = layout === "left-pane" ? 70 : 10;
+  harness.input(`\u001b[<0;${mainPaneColumn};5M`);
+  await Promise.resolve();
+
+  harness.writes.length = 0;
+  harness.setMainFrame("updated");
+  notifyMainThreadUpdate();
+  await waitForCondition(
+    () => stripVTControlCharacters(harness.writes.join("")).includes("MAIN updated"),
+    "live main-thread refresh should render the updated parent TUI after main-pane focus",
+  );
+
+  harness.writes.length = 0;
+  harness.input(`\u001b[<64;${mainPaneColumn};5M`);
+  sideTui.renderNow(true);
+  assert.match(stripVTControlCharacters(harness.writes.join("")), /main history 20/u);
+
+  closeSide();
+  assert.equal(await running, "closed");
+  assert.equal(mainThreadSubscribed, false);
+  const renderCountAfterClose = harness.mainRenderCount;
+  notifyMainThreadUpdate();
+  await flushAsyncWork();
+  assert.equal(harness.mainRenderCount, renderCountAfterClose);
+});
+
+test.each([
+  ["left-pane", 70, 10],
+  ["right-pane", 10, 70],
+] as const)(
+  "native terminal click focus routes %s keyboard and paste input to either pane",
+  async (layout, mainColumn, sideColumn) => {
+    const harness = createInputHandoffHarness();
+    const sideInput = new SideInput();
+    let closeSide: (() => void) | undefined;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((_tui, _theme, _keys, done) => {
+          closeSide = () => done("closed");
+          return sideInput;
+        }),
+      { layout },
+    );
+
+    try {
+      await flushAsyncWork();
+      assert.ok(closeSide);
+      assert.equal(sideInput.focused, true);
+      assert.equal(harness.mainInput.focused, false);
+
+      harness.terminal.send("side key");
+      assert.deepEqual(sideInput.inputs, ["side key"]);
+
+      harness.terminal.send(`\u001b[<0;${mainColumn};5M`);
+      await Promise.resolve();
+      assert.equal(sideInput.focused, false);
+      assert.equal(harness.mainInput.focused, true);
+
+      harness.terminal.send("main key");
+      harness.terminal.send(`\u001b[<64;${sideColumn};5M`);
+      harness.terminal.send(`\u001b[<32;${sideColumn};5M`);
+      await Promise.resolve();
+      harness.terminal.send("still main");
+      assert.equal(harness.mainInput.focused, true);
+      assert.deepEqual(harness.mainInput.inputs.slice(0, 2), ["main key", "still main"]);
+
+      const pasted = ["\u001b[200~", `\u001b[<0;${sideColumn};5M`, "mouse-shaped text", "\u001b[201~"];
+      for (const chunk of pasted) harness.terminal.send(chunk);
+      await Promise.resolve();
+      assert.equal(harness.mainInput.focused, true);
+      assert.deepEqual(harness.mainInput.inputs.slice(2), pasted);
+
+      harness.terminal.send(`\u001b[<0;${sideColumn};5M`);
+      await Promise.resolve();
+      assert.equal(sideInput.focused, true);
+      assert.equal(harness.mainInput.focused, false);
+      harness.terminal.send("side again");
+      assert.deepEqual(sideInput.inputs, ["side key", "side again"]);
+
+      closeSide();
+      assert.equal(await running, "closed");
+      assert.equal(harness.mainInput.focused, true);
+      harness.terminal.send("restored");
+      assert.equal(harness.mainInput.inputs.at(-1), "restored");
+    } finally {
+      closeSide?.();
+      await running.catch(() => {});
+      harness.parent.stop();
+    }
+  },
+);
+
+test.each(["left-pane", "right-pane"] as const)(
+  "fullscreen main-thread layout is constrained inside the %s workspace pane",
+  async (layout) => {
+    const harness = createInputHandoffHarness(createBtwTestKeybindings(), { fullscreenParent: true });
+    let sideTui: TUI | undefined;
+    let closeSide: (() => void) | undefined;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+          sideTui = tui;
+          closeSide = () => done("closed");
+          return new SideInput();
+        }),
+      { layout },
+    );
+
+    try {
+      await flushAsyncWork();
+      assert.ok(sideTui);
+      assert.ok(closeSide);
+      assert.ok(harness.mainScrollView);
+      sideTui.renderNow(true);
+
+      assert.equal(harness.mainScrollView.viewportHeight, harness.terminal.rows - 1);
+      assert.equal(harness.mainScrollView.scrollTop, 80 - (harness.terminal.rows - 1));
+
+      closeSide();
+      assert.equal(await running, "closed");
+      assert.equal(harness.mainScrollView.primary, true);
+    } finally {
+      closeSide?.();
+      await running.catch(() => {});
+      harness.parent.stop();
+    }
+  },
+);
+
+test.each([
+  ["left-pane", 70],
+  ["right-pane", 10],
+] as const)("resizing the %s workspace returns focus to its visible side pane", async (layout, mainColumn) => {
+  const harness = createInputHandoffHarness();
+  const side = new SideInput();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    { layout },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+
+    harness.terminal.send(`\u001b[<0;${mainColumn};5M`);
+    await Promise.resolve();
+    assert.equal(harness.mainInput.focused, true);
+    assert.equal(side.focused, false);
+
+    harness.terminal.columns = 79;
+    sideTui.renderNow(true);
+    assert.equal(harness.mainInput.focused, false);
+    assert.equal(side.focused, true);
+
+    closeSide();
+    assert.equal(await running, "closed");
+  } finally {
+    closeSide?.();
+    await running.catch(() => {});
+    harness.parent.stop();
+  }
+});
+
+test.each([
+  ["left-pane", 70],
+  ["right-pane", 10],
+] as const)("%s click focus routes native viewport actions to the main pane", async (layout, mainColumn) => {
+  const keybindings = new KeybindingsManager(BTW_TEST_KEYBINDINGS, {
+    "app.message.copy": "ctrl+y",
+    "tui.altScreen.pageUp": "ctrl+u",
+    "tui.altScreen.previousPrompt": "ctrl+p",
+    "tui.altScreen.search": "ctrl+f",
+    "tui.altScreen.bottom": "ctrl+b",
+  });
+  const previous = getKeybindings();
+  setKeybindings(keybindings);
+  const harness = createInputHandoffHarness(keybindings, { fullscreenParent: true });
+  const side = new ScrollableSideInput();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    { layout },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    assert.ok(harness.mainScrollView);
+    sideTui.renderNow(true);
+
+    const initialSideTop = side.scrollView.scrollTop;
+    const initialMainTop = harness.mainScrollView.scrollTop;
+    harness.terminal.send("\u0015");
+    sideTui.renderNow(true);
+    assert.ok(side.scrollView.scrollTop < initialSideTop);
+    assert.equal(harness.mainScrollView.scrollTop, initialMainTop);
+
+    harness.terminal.send(`\u001b[<0;${mainColumn};5M`);
+    await Promise.resolve();
+    sideTui.renderNow(true);
+
+    const sideTopBeforeMainActions = side.scrollView.scrollTop;
+    harness.terminal.send("\u0015");
+    sideTui.renderNow(true);
+    assert.ok(harness.mainScrollView.scrollTop < initialMainTop);
+    assert.equal(side.scrollView.scrollTop, sideTopBeforeMainActions);
+
+    harness.terminal.send("\u0002");
+    sideTui.renderNow(true);
+    assert.equal(harness.mainScrollView.scrollTop, initialMainTop);
+    harness.terminal.send("\u0010");
+    sideTui.renderNow(true);
+    assert.equal(harness.mainScrollView.scrollTop, 60);
+    assert.equal(side.scrollView.scrollTop, sideTopBeforeMainActions);
+
+    harness.terminal.send("\u0006");
+    harness.terminal.send("MAIN NEEDLE");
+    sideTui.renderNow(true);
+    assert.ok(harness.mainScrollView.scrollTop < 60);
+    assert.equal(side.scrollView.scrollTop, sideTopBeforeMainActions);
+    harness.terminal.send("\u001b");
+
+    closeSide();
+    assert.equal(await running, "closed");
+    assert.equal(harness.mainScrollView.primary, true);
+    assert.equal(side.scrollView.primary, true);
+  } finally {
+    closeSide?.();
+    await running.catch(() => {});
+    harness.parent.stop();
+    setKeybindings(previous);
+  }
+});
+
+test.each([
+  ["custom exit", "\u0011", false, undefined],
+  ["hard cancel", "\u0003", false, undefined],
+  ["custom exit with overlay", "\u0011", true, undefined],
+  ["hard cancel with overlay", "\u0003", true, undefined],
+  ["hard cancel from a split pane", "\u0003", false, "left-pane"],
 ] as const)(
   "native terminal smoke: %s restores parent input after cycling thinking",
-  async (_label, exitInput, nested) => {
+  async (_label, exitInput, nested, layout) => {
     initTheme("dark");
     const keys = createBtwTestKeybindings();
     const previous = getKeybindings();
@@ -575,7 +977,10 @@ test.each([
             },
           });
         }),
-      { keybindings: { exit: "ctrl+q", cycleThinkingLevel: "f6", bringToMain: "f7" } },
+      {
+        keybindings: { exit: "ctrl+q", cycleThinkingLevel: "f6", bringToMain: "f7" },
+        ...(layout ? { layout } : {}),
+      },
     );
     try {
       await flushAsyncWork();

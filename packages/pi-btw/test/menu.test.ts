@@ -426,6 +426,7 @@ test("btw menu opens Pi-style thinking settings and cancellation is read-only", 
     assert.match(tui.render().join("\n"), /Currently medium/);
     assert.match(settings, /Remember thinking level changes\s+On/);
     assert.match(settings, /Copy selection automatically\s+On/);
+    assert.match(settings, /Side-thread layout\s+Fullscreen/);
     tui.press("ctrl+c");
 
     assert.equal(await running, "closed");
@@ -762,6 +763,56 @@ test("btw settings save automatic selection copying immediately and preserve unk
     });
     assert.match(tui.render().join("\n"), /Copy selection automatically\s+Off/);
     assert.ok(notifications.some(({ message }) => /automatically: Off/i.test(message)));
+    tui.press("ctrl+c");
+    assert.equal(await running, "closed");
+  });
+});
+
+test("btw settings save the side-thread pane placement immediately and preserve unknown fields", async () => {
+  await withMenu(async ({ settingsPath, tui, ctx, notifications }) => {
+    await writeFile(settingsPath, '{"future":{"kept":true}}\n', "utf8");
+    const running = showBtwCommandMenu(ctx, {
+      settingsPath,
+      currentThinkingLevel: "medium",
+      availableThinkingLevels: ["off", "low", "medium", "high"],
+    });
+    await openSettings(tui);
+    tui.type("Side-thread layout");
+    assert.match(tui.render().join("\n"), /Side-thread layout\s+Fullscreen/);
+    tui.press("tui.select.confirm");
+    await tui.waitForPending();
+    await tui.waitForOpen();
+
+    assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+      future: { kept: true },
+      layout: "left-pane",
+    });
+    assert.match(tui.render().join("\n"), /Side-thread layout\s+Side thread left/);
+    assert.ok(notifications.some(({ message }) => /layout: Side thread left.*next opens/i.test(message)));
+    tui.press("ctrl+c");
+    assert.equal(await running, "closed");
+  });
+});
+
+test("btw layout settings reject failed saves and restore fullscreen", async () => {
+  await withMenu(async ({ settingsPath, tui, ctx, notifications }) => {
+    const running = showBtwCommandMenu(ctx, {
+      settingsPath,
+      currentThinkingLevel: "medium",
+      availableThinkingLevels: ["off", "low", "medium", "high"],
+      updateSettings: async () => {
+        throw new Error("disk full");
+      },
+    });
+    await openSettings(tui);
+    tui.type("Side-thread layout");
+    tui.press("tui.select.confirm");
+    await tui.waitForPending();
+    await tui.waitForOpen();
+
+    assert.match(tui.render().join("\n"), /Side-thread layout\s+Fullscreen/);
+    assert.ok(notifications.some(({ message }) => /previous value remains active.*disk full/i.test(message)));
+    await assert.rejects(readFile(settingsPath, "utf8"), { code: "ENOENT" });
     tui.press("ctrl+c");
     assert.equal(await running, "closed");
   });

@@ -7,6 +7,9 @@ import { BTW_SHORTCUT_ACTIONS, type BtwKeybindingOverrides, normalizeBtwKey } fr
 import { BTW_THINKING_LEVELS, type BtwThinkingLevel } from "./side-thread.js";
 
 export const BTW_SETTINGS_FILE = "pi-btw.json";
+export const BTW_LAYOUTS = ["fullscreen", "left-pane", "right-pane"] as const;
+export type BtwLayout = (typeof BTW_LAYOUTS)[number];
+export const DEFAULT_BTW_LAYOUT: BtwLayout = "fullscreen";
 export const DEFAULT_FULLSCREEN_COPY_ON_SELECT = true;
 export const DEFAULT_REMEMBER_THINKING_LEVEL_CHANGES = true;
 const MAX_SETTINGS_BYTES = 64 * 1024;
@@ -17,6 +20,7 @@ export interface BtwSettings {
   thinkingLevel?: BtwThinkingLevel;
   rememberThinkingLevelChanges?: boolean;
   fullscreenCopyOnSelect?: boolean;
+  layout?: BtwLayout;
 }
 
 export type BtwSettingsLoadResult =
@@ -30,6 +34,7 @@ export interface BtwSettingsPatch {
   thinkingLevel?: BtwThinkingLevel;
   rememberThinkingLevelChanges?: boolean;
   fullscreenCopyOnSelect?: boolean;
+  layout?: BtwLayout;
 }
 
 export interface UpdateBtwSettingsOptions {
@@ -83,6 +88,11 @@ export function normalizeBtwSettings(value: unknown): BtwSettings | undefined {
     if (typeof copyOnSelect !== "boolean") return undefined;
     settings.fullscreenCopyOnSelect = copyOnSelect;
   }
+  if (Object.hasOwn(value, "layout")) {
+    const layout = Reflect.get(value, "layout");
+    if (!isBtwLayout(layout)) return undefined;
+    settings.layout = layout;
+  }
   return settings;
 }
 
@@ -91,6 +101,10 @@ export function parseBtwModelReference(reference: string): { provider: string; m
   const separator = reference.indexOf("/");
   if (separator <= 0 || separator === reference.length - 1) return undefined;
   return { provider: reference.slice(0, separator), modelId: reference.slice(separator + 1) };
+}
+
+export function effectiveBtwLayout(settings: BtwSettings): BtwLayout {
+  return settings.layout ?? DEFAULT_BTW_LAYOUT;
 }
 
 export function effectiveFullscreenCopyOnSelect(settings: BtwSettings): boolean {
@@ -270,6 +284,10 @@ function applyBtwSettingsPatch(current: SettingsDocument, patch: BtwSettingsPatc
     if (patch.fullscreenCopyOnSelect === undefined) delete updated.fullscreenCopyOnSelect;
     else updated.fullscreenCopyOnSelect = patch.fullscreenCopyOnSelect;
   }
+  if (Object.hasOwn(patch, "layout")) {
+    if (patch.layout === undefined) delete updated.layout;
+    else updated.layout = patch.layout;
+  }
   return updated;
 }
 
@@ -279,6 +297,10 @@ function isSettingsDocument(value: unknown): value is SettingsDocument {
 
 function isBtwThinkingLevel(value: unknown): value is BtwThinkingLevel {
   return BTW_THINKING_LEVELS.includes(value as BtwThinkingLevel);
+}
+
+function isBtwLayout(value: unknown): value is BtwLayout {
+  return BTW_LAYOUTS.includes(value as BtwLayout);
 }
 
 function invalidSettingsError(settingsPath: string, reason: string): Error {
