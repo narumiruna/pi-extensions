@@ -5,6 +5,7 @@ import {
   type Focusable,
   fuzzyFilter,
   Input,
+  isKittyProtocolActive,
   Key,
   type KeyId,
   matchesKey,
@@ -23,6 +24,10 @@ const BRACKETED_PASTE_END = "\u001b[201~";
 const INPUT_PREFIX_TIMEOUT_MS = 10;
 const MAX_SEARCH_QUERY_LENGTH = 256;
 const MAX_VISIBLE_NOTES = 12;
+
+type KeyboardProtocolTerminal = TUI["terminal"] & {
+  readonly modifyOtherKeysActive?: boolean;
+};
 
 const PICKER_BINDINGS = [
   "tui.select.up",
@@ -326,7 +331,7 @@ export class NotePicker implements Component, Focusable {
   }
 
   private interactionHint(): string {
-    const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled);
+    const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled, this.options.tui.terminal);
     return formatInteractionHints(this.options.keybindings, [
       { bindings: ["tui.select.up", "tui.select.down"], label: "navigate" },
       { bindings: ["tui.select.confirm"], label: "open" },
@@ -448,11 +453,11 @@ export class NotePicker implements Component, Focusable {
     else if (this.options.keybindings.matches(data, "tui.select.down")) this.move(1);
     else if (this.options.keybindings.matches(data, "tui.select.pageUp")) this.move(-this.viewportSize(), false);
     else if (this.options.keybindings.matches(data, "tui.select.pageDown")) this.move(this.viewportSize(), false);
-    else if (matchesKey(data, Key.home)) this.selectAt(0);
-    else if (matchesKey(data, Key.end)) this.selectAt(this.filteredNotes.length - 1);
+    else if (!this.searchEnabled && matchesKey(data, Key.home)) this.selectAt(0);
+    else if (!this.searchEnabled && matchesKey(data, Key.end)) this.selectAt(this.filteredNotes.length - 1);
     else if (this.options.keybindings.matches(data, "tui.select.confirm")) this.openSelected();
     else {
-      const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled);
+      const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled, this.options.tui.terminal);
       if (deleteKey && matchesKey(data, deleteKey)) this.deleteSelected();
       else if (this.searchEnabled) {
         const safeInput = sanitizeInsertableSearchInput(data, this.options.keybindings);
@@ -577,6 +582,7 @@ function initializeSearchInput(input: Input, value: string): void {
 export function resolveNoteDeleteKey(
   keybindings: Pick<KeybindingsManager, "getKeys">,
   searchEnabled: boolean,
+  terminal?: KeyboardProtocolTerminal,
 ): KeyId | undefined {
   const activeBindings = [...PICKER_BINDINGS, ...(searchEnabled ? SEARCH_INPUT_BINDINGS : [])];
   const reserved = [
@@ -592,9 +598,15 @@ export function resolveNoteDeleteKey(
       return keybindings.getKeys(binding);
     }),
   ];
+  const disambiguatedKeyProtocol =
+    isKittyProtocolActive() || terminal?.kittyProtocolActive === true || terminal?.modifyOtherKeysActive === true;
   for (const candidate of keybindings.getKeys("app.session.delete")) {
     const normalized = normalizeKey(candidate);
     if (!normalized || (searchEnabled && isTextKey(normalized))) continue;
+    if (disambiguatedKeyProtocol) {
+      if (reserved.some((other) => normalizeKey(other) === normalized)) continue;
+      return normalized as KeyId;
+    }
     const inputs = inputsFor(normalized);
     if (inputs.length === 0 || inputs.some((input) => !routesAsSingleNonPasteInput(input))) continue;
     if (reserved.some((other) => inputs.some((input) => matchesKey(input, other as KeyId)))) continue;

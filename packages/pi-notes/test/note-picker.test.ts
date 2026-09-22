@@ -50,13 +50,21 @@ function keybindings(overrides: Record<string, readonly string[]> = {}) {
 
 function createPicker(
   notes: readonly MarkdownEntry[],
-  options: { bindings?: Record<string, readonly string[]>; rows?: number; query?: string } = {},
+  options: {
+    bindings?: Record<string, readonly string[]>;
+    rows?: number;
+    query?: string;
+    modifyOtherKeysActive?: boolean;
+  } = {},
 ) {
   let result: unknown;
   let renders = 0;
   const picker = new NotePicker({
     tui: {
-      terminal: { rows: options.rows ?? 24 },
+      terminal: {
+        rows: options.rows ?? 24,
+        modifyOtherKeysActive: options.modifyOtherKeysActive,
+      },
       requestRender: () => {
         renders += 1;
       },
@@ -125,6 +133,20 @@ test("restored search query places the fresh cursor at the conventional end", ()
   picker.handleInput("\u0003");
 
   assert.deepEqual(result(), { kind: "close", selectedPath: "xnotex-0.md", query: "notex" });
+});
+
+test("Home and End edit the active search query instead of moving the note selection", () => {
+  const notes = Array.from({ length: 9 }, (_, index) => note(`alpha-${index}.md`, index));
+  const { picker, result } = createPicker(notes, { query: "lph" });
+  picker.focused = true;
+
+  picker.handleInput("\u001b[H");
+  picker.handleInput("a");
+  picker.handleInput("\u001b[F");
+  picker.handleInput("a");
+  picker.handleInput("\u0003");
+
+  assert.deepEqual(result(), { kind: "close", selectedPath: "alpha-0.md", query: "alpha" });
 });
 
 test.each([
@@ -327,16 +349,29 @@ test.each(deleteKeyCases)("resolves delete key: $name", ({ deleteKeys, reserved,
   assert.equal(resolveNoteDeleteKey(keys as never, search), expected);
 });
 
-test("legacy and Kitty terminal modes resolve live matcher collisions independently", () => {
-  const keys = keybindings({
+test("legacy, Kitty, and modifyOtherKeys modes resolve live matcher collisions independently", () => {
+  const bindings = {
     "app.session.delete": ["alt+b", "f9"],
     "tui.editor.cursorWordLeft": ["alt+left"],
-  });
+  };
+  const keys = keybindings(bindings);
 
   setKittyProtocolActive(false);
   assert.equal(resolveNoteDeleteKey(keys as never, true), "f9");
   setKittyProtocolActive(true);
   assert.equal(resolveNoteDeleteKey(keys as never, true), "alt+b");
+
+  setKittyProtocolActive(false);
+  const notes = Array.from({ length: 9 }, (_, index) => note(`note-${index}.md`));
+  const { picker, result } = createPicker(notes, { bindings, modifyOtherKeysActive: true });
+  assert.match(picker.render(100).join("\n"), /alt\+b delete/iu);
+  picker.handleInput("\u001b[27;3;98~");
+  assert.deepEqual(result(), {
+    kind: "delete",
+    notePath: "note-0.md",
+    nextSelectedPath: "note-1.md",
+    query: "",
+  });
 });
 
 test("paste-prefix routing rejects a split legacy delete encoding but retains its Kitty encoding", () => {
