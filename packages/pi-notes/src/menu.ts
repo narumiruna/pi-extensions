@@ -7,22 +7,24 @@ interface NotesMenuState {
   templates: DiscoveryResult;
 }
 
-type NotesScreen = "notes" | "templates" | "path";
-type NotesAction = "chooseNote" | "chooseTemplate" | "createNote";
+type NotesScreen = "notes" | "openNote" | "templates" | "path" | "pastePath" | "manageTemplates";
+type NotesAction = "chooseRoute" | "chooseNote" | "chooseTemplate" | "createNote" | "pastePath" | "editTemplate";
 
-export interface NotesManagerResult {
-  kind: "open" | "closed";
-  notePath?: string;
-}
+export type NotesManagerResult =
+  | { kind: "open"; notePath: string }
+  | { kind: "pastePath"; notePath: string }
+  | { kind: "editTemplate"; templatePath: string }
+  | { kind: "closed" };
 
 export function createNotesMenu(storage: NotesStorage) {
   let selectedTemplate: string | undefined;
-  let selectedNote: string | undefined;
+  let result: Exclude<NotesManagerResult, { kind: "closed" }> | undefined;
 
   const getState = async ({ signal }: { signal: AbortSignal }): Promise<NotesMenuState> => {
     const notes = await storage.discoverNotes(signal);
     if (signal.aborted) throw signal.reason;
     const templates = await storage.discoverTemplates(signal);
+    if (signal.aborted) throw signal.reason;
     return { notes, templates };
   };
 
@@ -35,22 +37,48 @@ export function createNotesMenu(storage: NotesStorage) {
         lines: discoveryLines(state.notes, "note"),
         items: [
           {
+            id: "open",
+            label: "Open a note…",
+            description: "Choose an existing Markdown note.",
+            searchText: "open browse existing note",
+          },
+          {
             id: "create",
             label: "Create a note…",
             description: "Start blank or copy a user template.",
             searchText: "new create blank template",
           },
-          ...state.notes.entries.map((note, index) => ({
-            id: `note:${index}`,
-            label: note.displayPath,
-            description: `${note.size} bytes`,
-            searchText: note.displayPath,
-          })),
+          {
+            id: "paste-path",
+            label: "Paste a note path…",
+            description: "Insert a note's absolute path into the parent editor.",
+            searchText: "paste insert absolute path",
+          },
+          {
+            id: "manage-templates",
+            label: "Manage templates…",
+            description: "Edit existing Markdown templates.",
+            searchText: "manage edit templates",
+          },
         ],
+        action: "chooseRoute",
+        viewportSize: 12,
+        hint: "close",
+      }),
+      openNote: ({ state }) => ({
+        kind: "choice",
+        title: "Open a note",
+        lines: discoveryLines(state.notes, "note"),
+        items: state.notes.entries.map((note, index) => ({
+          id: `note:${index}`,
+          label: note.displayPath,
+          description: `${note.size} bytes`,
+          searchText: note.displayPath,
+        })),
         action: "chooseNote",
         enableSearch: state.notes.entries.length > 8,
         viewportSize: 12,
-        hint: "close",
+        hint: "back",
       }),
       templates: ({ state }) => ({
         kind: "choice",
@@ -85,13 +113,49 @@ export function createNotesMenu(storage: NotesStorage) {
         action: "createNote",
         hint: "back",
       }),
+      pastePath: ({ state }) => ({
+        kind: "choice",
+        title: "Paste a note path",
+        lines: discoveryLines(state.notes, "note"),
+        items: state.notes.entries.map((note, index) => ({
+          id: `paste:${index}`,
+          label: note.displayPath,
+          description: `${note.size} bytes`,
+          searchText: note.displayPath,
+        })),
+        action: "pastePath",
+        enableSearch: state.notes.entries.length > 8,
+        viewportSize: 12,
+        hint: "back",
+      }),
+      manageTemplates: ({ state }) => ({
+        kind: "choice",
+        title: "Manage templates",
+        lines: discoveryLines(state.templates, "template"),
+        items: state.templates.entries.map((template, index) => ({
+          id: `manage-template:${index}`,
+          label: template.displayPath,
+          description: `${template.size} bytes`,
+          searchText: template.displayPath,
+        })),
+        action: "editTemplate",
+        enableSearch: state.templates.entries.length > 8,
+        viewportSize: 12,
+        hint: "back",
+      }),
     },
     actions: {
-      chooseNote: ({ state, itemId }) => {
+      chooseRoute: ({ itemId }) => {
+        if (itemId === "open") return { kind: "to", screen: "openNote" };
         if (itemId === "create") return { kind: "to", screen: "templates" };
+        if (itemId === "paste-path") return { kind: "to", screen: "pastePath" };
+        if (itemId === "manage-templates") return { kind: "to", screen: "manageTemplates" };
+        return { kind: "rejected", error: new Error("The selected notes action is no longer available") };
+      },
+      chooseNote: ({ state, itemId }) => {
         const note = indexedEntry(state.notes.entries, itemId, "note:");
         if (!note) return { kind: "rejected", error: new Error("The selected note is no longer available") };
-        selectedNote = note.relativePath;
+        result = { kind: "open", notePath: note.relativePath };
         return { kind: "close" };
       },
       chooseTemplate: ({ state, itemId }) => {
@@ -110,7 +174,21 @@ export function createNotesMenu(storage: NotesStorage) {
         if (typeof value !== "string") return { kind: "rejected", error: new Error("Note path is required") };
         const note = await storage.createNote(value, { templatePath: selectedTemplate, signal });
         if (signal.aborted) return { kind: "close" };
-        selectedNote = note.relativePath;
+        result = { kind: "open", notePath: note.relativePath };
+        return { kind: "close" };
+      },
+      pastePath: ({ state, itemId }) => {
+        const note = indexedEntry(state.notes.entries, itemId, "paste:");
+        if (!note) return { kind: "rejected", error: new Error("The selected note is no longer available") };
+        result = { kind: "pastePath", notePath: note.relativePath };
+        return { kind: "close" };
+      },
+      editTemplate: ({ state, itemId }) => {
+        const template = indexedEntry(state.templates.entries, itemId, "manage-template:");
+        if (!template) {
+          return { kind: "rejected", error: new Error("The selected template is no longer available") };
+        }
+        result = { kind: "editTemplate", templatePath: template.relativePath };
         return { kind: "close" };
       },
     },
@@ -119,7 +197,7 @@ export function createNotesMenu(storage: NotesStorage) {
   return {
     menu,
     getState,
-    getSelectedNote: () => selectedNote,
+    getResult: () => result,
   };
 }
 
@@ -140,10 +218,8 @@ export async function showNotesManager(
     },
   });
   if (result.kind === "error") throw result.error;
-  const selected = controller.getSelectedNote();
-  return selected && ownership.isCurrent() && !ownership.signal.aborted
-    ? { kind: "open", notePath: selected }
-    : { kind: "closed" };
+  const selected = controller.getResult();
+  return selected && ownership.isCurrent() && !ownership.signal.aborted ? selected : { kind: "closed" };
 }
 
 function indexedEntry(entries: readonly MarkdownEntry[], itemId: string, prefix: string): MarkdownEntry | undefined {

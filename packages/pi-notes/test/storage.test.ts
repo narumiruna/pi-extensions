@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
@@ -92,6 +92,25 @@ test("discovery keeps raw identities separate from terminal-safe labels and repo
   );
 });
 
+test("canonical note paths resolve exactly and reject missing, traversal, special, and symbolic-link entries", async () => {
+  const { storage, root } = await fixture();
+  const notePath = join(storage.paths.notes, "nested", "note.md");
+  await mkdir(join(storage.paths.notes, "nested"));
+  await writeFile(notePath, "# Note", "utf8");
+  assert.equal(await storage.resolveCanonicalNotePath("nested/note.md"), await realpath(notePath));
+
+  await mkdir(join(storage.paths.notes, "directory.md"));
+  const outside = join(root, "outside.md");
+  await writeFile(outside, "outside", "utf8");
+  await symlink(outside, join(storage.paths.notes, "linked.md"));
+
+  await assert.rejects(storage.resolveCanonicalNotePath("missing.md"), /ENOENT|no such/iu);
+  await assert.rejects(storage.resolveCanonicalNotePath("../outside.md"), /relative|segments/iu);
+  await assert.rejects(storage.resolveCanonicalNotePath(outside), /relative/iu);
+  await assert.rejects(storage.resolveCanonicalNotePath("directory.md"), /regular file/iu);
+  await assert.rejects(storage.resolveCanonicalNotePath("linked.md"), /symbolic link/iu);
+});
+
 test("operations reject a managed root replaced by a symbolic link after initialization", async () => {
   const { storage, root } = await fixture();
   const outside = join(root, "replacement-root");
@@ -126,7 +145,7 @@ test("templates are copied exactly and rescanned after add, edit, rename, and re
   const first = await storage.createNote("topics/first.md", { templatePath: "draft.md" });
   assert.equal(first.content, "# Draft\n\n{{literal}}\n");
   await writeFile(join(storage.paths.templates, "draft.md"), "changed", "utf8");
-  assert.equal(await storage.readTemplate("draft.md"), "changed");
+  assert.equal((await storage.readTemplate("draft.md")).content, "changed");
   await rename(join(storage.paths.templates, "draft.md"), join(storage.paths.templates, "renamed.md"));
   assert.deepEqual(
     (await storage.discoverTemplates()).entries.map(({ relativePath }) => relativePath),
@@ -135,6 +154,109 @@ test("templates are copied exactly and rescanned after add, edit, rename, and re
   await rm(join(storage.paths.templates, "renamed.md"));
   assert.deepEqual((await storage.discoverTemplates()).entries, []);
   assert.equal((await storage.readNote("topics/first.md")).content, "# Draft\n\n{{literal}}\n");
+});
+
+test("template snapshots preserve exact content and replacement rejects stale concurrent writes", async () => {
+  const { storage } = await fixture();
+  const templatePath = join(storage.paths.templates, "nested", "draft.md");
+  const initialContent = "# Draft\n\n  keep whitespace  \n{{literal}}\n";
+  await mkdir(join(storage.paths.templates, "nested"));
+  await writeFile(templatePath, initialContent, "utf8");
+
+  const initial = await storage.readTemplate("nested/draft.md");
+  assert.equal(initial.relativePath, "nested/draft.md");
+  assert.equal(initial.content, initialContent);
+  assert.equal(initial.size, Buffer.byteLength(initialContent, "utf8"));
+  const results = await Promise.allSettled([
+    storage.replaceTemplate(initial.relativePath, initial.revision, "first replacement\n"),
+    storage.replaceTemplate(initial.relativePath, initial.revision, "second replacement\n"),
+  ]);
+
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
+  assert.match((await storage.readTemplate(initial.relativePath)).content, /^(first|second) replacement\n$/u);
+});
+
+test("template replacement rejects cancellation, limits, traversal, special files, and symbolic links", async () => {
+  const { storage, root, agentDir } = await fixture();
+  await writeFile(join(storage.paths.templates, "kept.md"), "kept", "utf8");
+  const kept = await storage.readTemplate("kept.md");
+  const controller = new AbortController();
+  controller.abort(new DOMException("cancelled", "AbortError"));
+  await assert.rejects(
+    storage.replaceTemplate("kept.md", kept.revision, "cancelled", controller.signal),
+    /cancelled|aborted/iu,
+  );
+
+  const publicationController = new AbortController();
+  const cancelling = new NotesStorage(agentDir, {
+    beforePublish: () => publicationController.abort(new DOMException("cancelled publication", "AbortError")),
+  });
+  await cancelling.initialize();
+  await assert.rejects(
+    cancelling.replaceTemplate("kept.md", kept.revision, "cancelled", publicationController.signal),
+    /cancelled publication/iu,
+  );
+  assert.equal((await cancelling.readTemplate("kept.md")).content, "kept");
+  assert.equal(
+    (await readdir(cancelling.paths.templates)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+
+  await assert.rejects(
+    storage.replaceTemplate("kept.md", kept.revision, "x".repeat(MAX_MARKDOWN_BYTES + 1)),
+    /byte limit/iu,
+  );
+  await assert.rejects(storage.readTemplate("../escape.md"), /relative|segments/iu);
+  await assert.rejects(storage.replaceTemplate("/absolute.md", kept.revision, "escape"), /relative/iu);
+
+  await mkdir(join(storage.paths.templates, "directory.md"));
+  const outside = join(root, "outside-template.md");
+  await writeFile(outside, "outside", "utf8");
+  await symlink(outside, join(storage.paths.templates, "linked.md"));
+  await assert.rejects(storage.readTemplate("directory.md"), /regular file/iu);
+  await assert.rejects(storage.readTemplate("linked.md"), /symbolic link/iu);
+  assert.equal((await storage.readTemplate("kept.md")).content, "kept");
+  assert.equal(
+    (await readdir(storage.paths.templates)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+});
+
+test("failed or stale template publication preserves external content and removes temporary files", async () => {
+  const base = await fixture();
+  const templatePath = join(base.storage.paths.templates, "kept.md");
+  await writeFile(templatePath, "old", "utf8");
+  const failing = new NotesStorage(base.agentDir, {
+    beforePublish: () => {
+      throw new Error("publish failed");
+    },
+  });
+  await failing.initialize();
+  const current = await failing.readTemplate("kept.md");
+  await assert.rejects(failing.replaceTemplate("kept.md", current.revision, "new"), /publish failed/iu);
+  assert.equal((await failing.readTemplate("kept.md")).content, "old");
+  assert.equal(
+    (await readdir(failing.paths.templates)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+
+  const racing = new NotesStorage(base.agentDir, {
+    beforePublish: async () => {
+      await writeFile(templatePath, "external", "utf8");
+    },
+  });
+  await racing.initialize();
+  const beforeRace = await racing.readTemplate("kept.md");
+  await assert.rejects(
+    racing.replaceTemplate("kept.md", beforeRace.revision, "replacement"),
+    /changed before publication/iu,
+  );
+  assert.equal((await racing.readTemplate("kept.md")).content, "external");
+  assert.equal(
+    (await readdir(racing.paths.templates)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
 });
 
 test("safe creation supports Blank and refuses overwrite, traversal, absolute, non-Markdown, and symlink parents", async () => {

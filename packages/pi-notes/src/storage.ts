@@ -48,6 +48,13 @@ export interface NoteSnapshot {
   size: number;
 }
 
+export interface TemplateSnapshot {
+  relativePath: string;
+  content: string;
+  revision: string;
+  size: number;
+}
+
 export interface NotesStorageOptions {
   /** Test seam invoked after a complete temporary file is synced and before publication. */
   beforePublish?(targetPath: string, temporaryPath: string): Promise<void> | void;
@@ -88,14 +95,19 @@ export class NotesStorage {
   }
 
   async readNote(relativePath: string, signal?: AbortSignal): Promise<NoteSnapshot> {
-    const resolved = await resolveExistingMarkdown(this.paths.notes, relativePath, signal);
+    const resolved = await resolveExistingMarkdown(this.paths.notes, relativePath, "Note", signal);
     const content = await readBoundedMarkdown(resolved.absolutePath, "Note", signal);
     return snapshot(resolved.relativePath, content);
   }
 
-  async readTemplate(relativePath: string, signal?: AbortSignal): Promise<string> {
-    const resolved = await resolveExistingMarkdown(this.paths.templates, relativePath, signal);
-    return readBoundedMarkdown(resolved.absolutePath, "Template", signal);
+  async resolveCanonicalNotePath(relativePath: string, signal?: AbortSignal): Promise<string> {
+    return (await resolveExistingMarkdown(this.paths.notes, relativePath, "Note", signal)).absolutePath;
+  }
+
+  async readTemplate(relativePath: string, signal?: AbortSignal): Promise<TemplateSnapshot> {
+    const resolved = await resolveExistingMarkdown(this.paths.templates, relativePath, "Template", signal);
+    const content = await readBoundedMarkdown(resolved.absolutePath, "Template", signal);
+    return snapshot(resolved.relativePath, content);
   }
 
   async createNote(
@@ -103,7 +115,7 @@ export class NotesStorage {
     options: { templatePath?: string; signal?: AbortSignal } = {},
   ): Promise<NoteSnapshot> {
     const normalized = normalizeRelativeMarkdownPath(relativePath);
-    const content = options.templatePath ? await this.readTemplate(options.templatePath, options.signal) : "";
+    const content = options.templatePath ? (await this.readTemplate(options.templatePath, options.signal)).content : "";
     validateMarkdownContent(content, "Note");
     const root = await canonicalDirectory(this.paths.notes, options.signal);
     const target = resolve(root, ...normalized.split("/"));
@@ -141,7 +153,7 @@ export class NotesStorage {
       }
       const content = `${current.content.slice(0, index)}${newText}${current.content.slice(index + oldText.length)}`;
       validateMarkdownContent(content, "Note");
-      await atomicReplace(root, target, content, current.revision, signal, this.beforePublish);
+      await atomicReplace(root, target, content, current.revision, "Note", signal, this.beforePublish);
       return snapshot(normalized, content);
     });
   }
@@ -161,7 +173,27 @@ export class NotesStorage {
       throwIfAborted(signal);
       const current = await this.readNote(normalized, signal);
       assertRevision(current, expectedRevision);
-      await atomicReplace(root, target, content, current.revision, signal, this.beforePublish);
+      await atomicReplace(root, target, content, current.revision, "Note", signal, this.beforePublish);
+      return snapshot(normalized, content);
+    });
+  }
+
+  async replaceTemplate(
+    relativePath: string,
+    expectedRevision: string,
+    content: string,
+    signal?: AbortSignal,
+  ): Promise<TemplateSnapshot> {
+    const normalized = normalizeExistingMarkdownPath(relativePath);
+    validateMarkdownContent(content, "Template");
+    const root = await canonicalDirectory(this.paths.templates, signal);
+    const target = resolve(root, ...normalized.split("/"));
+    assertContained(root, target);
+    return withFileMutationQueue(root, async () => {
+      throwIfAborted(signal);
+      const current = await this.readTemplate(normalized, signal);
+      assertRevision(current, expectedRevision, "Template");
+      await atomicReplace(root, target, content, current.revision, "Template", signal, this.beforePublish);
       return snapshot(normalized, content);
     });
   }
@@ -305,6 +337,7 @@ async function discoverMarkdown(rootPath: string, signal?: AbortSignal): Promise
 async function resolveExistingMarkdown(
   rootPath: string,
   relativePath: string,
+  label: string,
   signal?: AbortSignal,
 ): Promise<{ relativePath: string; absolutePath: string }> {
   const normalized = normalizeExistingMarkdownPath(relativePath);
@@ -314,12 +347,12 @@ async function resolveExistingMarkdown(
   throwIfAborted(signal);
   const linkInfo = await lstat(candidate);
   throwIfAborted(signal);
-  if (linkInfo.isSymbolicLink()) throw new Error(`Symbolic-link notes are not supported: ${normalized}`);
-  if (!linkInfo.isFile()) throw new Error(`Note is not a regular file: ${normalized}`);
+  if (linkInfo.isSymbolicLink()) throw new Error(`${label} path is a symbolic link: ${normalized}`);
+  if (!linkInfo.isFile()) throw new Error(`${label} is not a regular file: ${normalized}`);
   const canonical = await realpath(candidate);
   throwIfAborted(signal);
   assertContained(root, canonical);
-  if (canonical !== candidate) throw new Error(`Note path is not canonical: ${normalized}`);
+  if (canonical !== candidate) throw new Error(`${label} path is not canonical: ${normalized}`);
   return { relativePath: normalized, absolutePath: canonical };
 }
 
@@ -424,13 +457,14 @@ async function atomicReplace(
   targetPath: string,
   content: string,
   expectedRevision: string,
+  label: string,
   signal?: AbortSignal,
   beforePublish?: NotesStorageOptions["beforePublish"],
 ): Promise<void> {
   const relativePath = relative(rootPath, targetPath).split(sep).join("/");
-  const resolved = await resolveExistingMarkdown(rootPath, relativePath, signal);
-  const current = await readBoundedMarkdown(resolved.absolutePath, "Note", signal);
-  if (revisionFor(current) !== expectedRevision) throw new Error("Note changed before publication; read it again");
+  const resolved = await resolveExistingMarkdown(rootPath, relativePath, label, signal);
+  const current = await readBoundedMarkdown(resolved.absolutePath, label, signal);
+  if (revisionFor(current) !== expectedRevision) throw new Error(`${label} changed before publication; read it again`);
   const info = await stat(resolved.absolutePath);
   throwIfAborted(signal);
   const temporaryPath = temporaryName(targetPath);
@@ -439,12 +473,14 @@ async function atomicReplace(
     throwIfAborted(signal);
     await beforePublish?.(targetPath, temporaryPath);
     throwIfAborted(signal);
-    const latestResolved = await resolveExistingMarkdown(rootPath, relativePath, signal);
+    const latestResolved = await resolveExistingMarkdown(rootPath, relativePath, label, signal);
     if (latestResolved.absolutePath !== resolved.absolutePath) {
-      throw new Error("Note path changed before publication; read it again");
+      throw new Error(`${label} path changed before publication; read it again`);
     }
-    const latest = await readBoundedMarkdown(latestResolved.absolutePath, "Note", signal);
-    if (revisionFor(latest) !== expectedRevision) throw new Error("Note changed before publication; read it again");
+    const latest = await readBoundedMarkdown(latestResolved.absolutePath, label, signal);
+    if (revisionFor(latest) !== expectedRevision) {
+      throw new Error(`${label} changed before publication; read it again`);
+    }
     throwIfAborted(signal);
     await rename(temporaryPath, latestResolved.absolutePath);
   } catch (error) {
@@ -486,9 +522,10 @@ function snapshot(relativePath: string, content: string): NoteSnapshot {
   };
 }
 
-function assertRevision(current: NoteSnapshot, expectedRevision: string): void {
-  if (current.revision !== expectedRevision)
-    throw new Error("Note revision is stale; read the current note before editing");
+function assertRevision(current: NoteSnapshot | TemplateSnapshot, expectedRevision: string, label = "Note"): void {
+  if (current.revision !== expectedRevision) {
+    throw new Error(`${label} revision is stale; read the current ${label.toLowerCase()} before editing`);
+  }
 }
 
 function assertContained(root: string, candidate: string): void {
