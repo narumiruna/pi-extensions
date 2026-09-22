@@ -2,12 +2,19 @@ import { stripVTControlCharacters } from "node:util";
 import { type ExtensionCommandContext, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import { errorMessage } from "./core.js";
-import type { UsageSettingsRuntime } from "./settings.js";
+import type { UsageSettings, UsageSettingsRuntime } from "./settings.js";
 
 const OFF = "Off";
 const ON = "On";
+const REMAINING = "Remaining";
+const USED = "Used";
 
-type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown";
+type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown" | "codexStatusPercentage";
+
+function settingValueLabel(id: UsageSettingId, value: UsageSettings[UsageSettingId]): string {
+  if (id === "codexStatusPercentage") return value === "used" ? USED : REMAINING;
+  return value === true ? ON : OFF;
+}
 
 export async function showUsageSettings(
   ctx: ExtensionCommandContext,
@@ -45,6 +52,13 @@ export async function showUsageSettings(
           currentValue: state.settings.codexStatusResetCountdown ? ON : OFF,
           values: [OFF, ON],
         },
+        {
+          id: "codexStatusPercentage",
+          label: "Codex percentage",
+          description: "Show remaining or used Codex quota in the statusline.",
+          currentValue: settingValueLabel("codexStatusPercentage", state.settings.codexStatusPercentage),
+          values: [REMAINING, USED],
+        },
       ];
       const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
 
@@ -55,11 +69,11 @@ export async function showUsageSettings(
         localController.abort();
         done(changed);
       };
-      const queueUpdate = (id: UsageSettingId, requested: boolean, display: string) => {
+      const queueUpdate = <Id extends UsageSettingId>(id: Id, requested: UsageSettings[Id], display: string) => {
         saveQueue = saveQueue.then(async () => {
           const previous = settingsRuntime.get().settings[id];
           if (settingsRuntime.get().kind === "invalid") {
-            settingsList.updateValue(id, previous ? ON : OFF);
+            settingsList.updateValue(id, settingValueLabel(id, previous));
             if (!signal.aborted && isCurrent()) {
               ctx.ui.notify("Repair pi-usage.json and reload before changing settings.", "error");
               tui.requestRender();
@@ -67,10 +81,12 @@ export async function showUsageSettings(
             return;
           }
           try {
-            await settingsRuntime.update({ [id]: requested }, signal);
+            const patch: Partial<UsageSettings> = {};
+            patch[id] = requested;
+            await settingsRuntime.update(patch, signal);
           } catch (error) {
             if (signal.aborted || !isCurrent()) return;
-            settingsList.updateValue(id, previous ? ON : OFF);
+            settingsList.updateValue(id, settingValueLabel(id, previous));
             ctx.ui.notify(`Could not save pi-usage.json: ${errorMessage(error)}`, "error");
             tui.requestRender();
             return;
@@ -90,7 +106,11 @@ export async function showUsageSettings(
         getSettingsListTheme(),
         (id, value) => {
           if (closing || signal.aborted || !isCurrent()) return;
-          queueUpdate(id as UsageSettingId, value !== OFF, value);
+          if (id === "codexStatusPercentage") {
+            queueUpdate(id, value === USED ? "used" : "remaining", value);
+          } else if (id === "codexFastMode" || id === "codexStatusResetCountdown") {
+            queueUpdate(id, value === ON, value);
+          }
         },
         cancel,
       );

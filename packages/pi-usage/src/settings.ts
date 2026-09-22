@@ -9,15 +9,19 @@ import { isBoundedTargetId } from "./usage-targets.js";
 export const USAGE_SETTINGS_FILE = "pi-usage.json";
 export const MAX_USAGE_SETTINGS_BYTES = 64 * 1024;
 
+export type CodexStatusPercentage = "remaining" | "used";
+
 export interface UsageSettings {
   codexFastMode: boolean;
   codexStatusResetCountdown: boolean;
+  codexStatusPercentage: CodexStatusPercentage;
   selectedTargets: Record<string, string>;
 }
 
 export const DEFAULT_USAGE_SETTINGS: Readonly<UsageSettings> = Object.freeze({
   codexFastMode: false,
   codexStatusResetCountdown: true,
+  codexStatusPercentage: "remaining",
   selectedTargets: Object.freeze({}),
 });
 
@@ -66,6 +70,13 @@ export function normalizeUsageSettings(value: unknown): UsageSettings | undefine
   if (Object.hasOwn(value, "codexStatusResetCountdown") && typeof value.codexStatusResetCountdown !== "boolean") {
     return undefined;
   }
+  if (
+    Object.hasOwn(value, "codexStatusPercentage") &&
+    value.codexStatusPercentage !== "remaining" &&
+    value.codexStatusPercentage !== "used"
+  ) {
+    return undefined;
+  }
   if (Object.hasOwn(value, "fireworksAccountId") && !isFireworksAccountId(value.fireworksAccountId)) {
     return undefined;
   }
@@ -82,6 +93,8 @@ export function normalizeUsageSettings(value: unknown): UsageSettings | undefine
       typeof value.codexStatusResetCountdown === "boolean"
         ? value.codexStatusResetCountdown
         : DEFAULT_USAGE_SETTINGS.codexStatusResetCountdown,
+    codexStatusPercentage:
+      value.codexStatusPercentage === "used" ? "used" : DEFAULT_USAGE_SETTINGS.codexStatusPercentage,
     selectedTargets: effectiveTargets,
   };
 }

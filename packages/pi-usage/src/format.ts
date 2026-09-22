@@ -1,3 +1,4 @@
+import type { CodexStatusPercentage } from "./settings.js";
 import type { ProviderUsageState, UsageBucket, UsageDisplayState, UsageModel, UsageReport } from "./types.js";
 
 const BAR_SEGMENTS = 20;
@@ -54,10 +55,11 @@ export function formatUsageStatusline(
   model?: UsageModel,
   now = Date.now(),
   showCodexResetCountdown = true,
+  codexStatusPercentage: CodexStatusPercentage = "remaining",
 ): string | undefined {
   if (report.providerId === "baseten") return formatBasetenStatusline(report);
   if (report.providerId === "openai-codex") {
-    return formatCodexStatusline(report, model, now, showCodexResetCountdown);
+    return formatCodexStatusline(report, model, now, showCodexResetCountdown, codexStatusPercentage);
   }
   if (report.providerId === "deepseek") return formatDeepSeekStatusline(report);
   if (report.providerId === "fireworks") return formatFireworksStatusline(report);
@@ -521,6 +523,7 @@ function formatCodexStatusline(
   model?: UsageModel,
   now = Date.now(),
   showResetCountdown = true,
+  percentage: CodexStatusPercentage = "remaining",
 ): string | undefined {
   const group = selectCodexGroup(report, model);
   if (!group) return formatCodexCreditsStatus(report);
@@ -529,7 +532,8 @@ function formatCodexStatusline(
   const parts = [group === "codex" ? "codex" : `codex ${compactLimitLabel(labelBucket?.groupLabel ?? group)}`];
   for (const bucket of buckets) {
     if (bucket.remaining === undefined) continue;
-    const percent = `${clampPercent(bucket.remaining).toFixed(0)}%`;
+    const displayedPercentage = percentage === "used" ? (bucket.used ?? 100 - bucket.remaining) : bucket.remaining;
+    const percent = `${clampPercent(displayedPercentage).toFixed(0)}%`;
     const fallback = bucket.id.endsWith(":secondary") ? "weekly" : "5h";
     const window = formatWindowLabel(bucket.windowMinutes, fallback, true);
     if (!showResetCountdown) {

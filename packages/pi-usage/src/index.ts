@@ -65,6 +65,7 @@ export {
   XAI_ADAPTER,
 } from "./query.js";
 export type {
+  CodexStatusPercentage,
   UsageSettings,
   UsageSettingsRuntime,
   UsageSettingsState,
