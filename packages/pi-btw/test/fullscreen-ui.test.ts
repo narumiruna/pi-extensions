@@ -1038,6 +1038,69 @@ test("a failed divider save restores the last confirmed ratio and reports a sani
   }
 });
 
+test("a failed divider save still rolls back when a later press does not move", async () => {
+  const harness = createInputHandoffHarness();
+  const side = new SideInput();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  let rejectSave!: (error: Error) => void;
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve;
+  });
+  let saveAttempts = 0;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    {
+      layout: "left-pane",
+      sidePaneRatio: 0.6,
+      persistSidePaneRatio: () => {
+        saveAttempts += 1;
+        markSaveStarted();
+        return new Promise<void>((_resolve, reject) => {
+          rejectSave = reject;
+        });
+      },
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;48;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;25;5m");
+    await saveStarted;
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;25;5M");
+    rejectSave(new Error("disk full"));
+    await flushAsyncWork();
+    harness.terminal.send("\u001b[<0;25;5m");
+    await flushAsyncWork();
+    sideTui.renderNow(true);
+
+    assert.equal(side.widths.at(-1), 47);
+    assert.equal(saveAttempts, 1);
+
+    closeSide();
+    assert.equal(await running, "closed");
+  } finally {
+    closeSide?.();
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
+
 test("hard cancellation aborts a pending divider save without reporting a persistence failure", async () => {
   const harness = createInputHandoffHarness();
   let sideTui: TUI | undefined;

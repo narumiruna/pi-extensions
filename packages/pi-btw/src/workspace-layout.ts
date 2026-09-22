@@ -118,7 +118,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   private focusGeneration = 0;
   private ratioSaveGeneration = 0;
   private confirmedRatioSaveGeneration = 0;
-  private ratioDisplayGeneration = 0;
+  private failedRatioSaveGenerationDuringDrag: number | undefined;
   private disposed = false;
 
   constructor(private readonly options: BtwSplitPaneOptions) {
@@ -213,8 +213,8 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     if (this.disposed) return;
     this.disposed = true;
     this.focusGeneration += 1;
-    this.ratioDisplayGeneration += 1;
     this.dividerDragStartRatio = undefined;
+    this.failedRatioSaveGenerationDuringDrag = undefined;
     this.viewportRouter.dispose();
   }
 
@@ -225,13 +225,11 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   private handleDividerMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (this.disposed) return undefined;
     if (this.options.hasFocusedOverlay()) {
-      this.dividerDragStartRatio = undefined;
-      return { handled: true, render: false };
+      return { handled: true, render: this.cancelDividerDrag() };
     }
     if (event.type === "press" && event.button === "left") {
       if (this.terminalColumns() < MIN_BTW_SPLIT_COLUMNS) return undefined;
       this.focusGeneration += 1;
-      this.ratioDisplayGeneration += 1;
       this.dividerDragStartRatio = this.sidePaneRatio;
       return { handled: true, capture: true, render: false };
     }
@@ -243,9 +241,18 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     if (event.type === "release") {
       const changed = this.updateSidePaneRatio(event.screenX);
       const startRatio = this.dividerDragStartRatio;
+      const failedDuringDrag = this.failedRatioSaveGenerationDuringDrag === this.ratioSaveGeneration;
       this.dividerDragStartRatio = undefined;
-      if (this.sidePaneRatio !== startRatio) this.persistCurrentSidePaneRatio();
-      return { handled: true, render: changed };
+      this.failedRatioSaveGenerationDuringDrag = undefined;
+      if (failedDuringDrag && this.sidePaneRatio === this.persistedSidePaneRatio) {
+        return { handled: true, render: changed };
+      }
+      if (this.sidePaneRatio !== startRatio) {
+        this.persistCurrentSidePaneRatio();
+        return { handled: true, render: changed };
+      }
+      const restored = failedDuringDrag && this.restorePersistedSidePaneRatio();
+      return { handled: true, render: changed || restored };
     }
     return { handled: true, render: false };
   }
@@ -262,6 +269,15 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     return true;
   }
 
+  private cancelDividerDrag(): boolean {
+    const startRatio = this.dividerDragStartRatio;
+    if (startRatio === undefined) return false;
+    const failedDuringDrag = this.failedRatioSaveGenerationDuringDrag === this.ratioSaveGeneration;
+    this.dividerDragStartRatio = undefined;
+    this.failedRatioSaveGenerationDuringDrag = undefined;
+    return this.setSidePaneRatio(failedDuringDrag ? this.persistedSidePaneRatio : startRatio);
+  }
+
   private persistCurrentSidePaneRatio(): void {
     const persist = this.options.persistSidePaneRatio;
     const ratio = this.sidePaneRatio;
@@ -269,8 +285,8 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
       this.persistedSidePaneRatio = ratio;
       return;
     }
+    this.failedRatioSaveGenerationDuringDrag = undefined;
     const saveGeneration = ++this.ratioSaveGeneration;
-    const displayGeneration = this.ratioDisplayGeneration;
     void Promise.resolve()
       .then(() => persist(ratio))
       .then(() => {
@@ -279,17 +295,23 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
         this.persistedSidePaneRatio = ratio;
       })
       .catch(() => {
-        if (
-          this.disposed ||
-          saveGeneration !== this.ratioSaveGeneration ||
-          displayGeneration !== this.ratioDisplayGeneration
-        ) {
-          return;
-        }
-        this.sidePaneRatio = this.persistedSidePaneRatio;
-        this.layoutRoot.invalidate();
-        this.options.requestRender();
+        if (this.disposed || saveGeneration !== this.ratioSaveGeneration) return;
+        const dragActive = this.dividerDragStartRatio !== undefined;
+        const changed = this.restorePersistedSidePaneRatio();
+        if (dragActive) this.failedRatioSaveGenerationDuringDrag = saveGeneration;
+        if (changed) this.options.requestRender();
       });
+  }
+
+  private restorePersistedSidePaneRatio(): boolean {
+    return this.setSidePaneRatio(this.persistedSidePaneRatio);
+  }
+
+  private setSidePaneRatio(ratio: number): boolean {
+    if (ratio === this.sidePaneRatio) return false;
+    this.sidePaneRatio = ratio;
+    this.layoutRoot.invalidate();
+    return true;
   }
 
   private queuePaneFocus(pane: BtwActivePane): void {
