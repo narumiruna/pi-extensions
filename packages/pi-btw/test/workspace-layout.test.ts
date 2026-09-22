@@ -54,7 +54,12 @@ class MainThreadComponent implements Component {
   invalidate(): void {}
 }
 
-function split(layout: "left-pane" | "right-pane", rows = 8, paneTheme = theme()) {
+function split(
+  layout: "left-pane" | "right-pane",
+  rows = 8,
+  paneTheme = theme(),
+  options: { sidePaneRatio?: number; persistSidePaneRatio?(ratio: number): Promise<void> } = {},
+) {
   const side = new SideComponent(rows);
   const main = new MainThreadComponent();
   const mainInput = new InputComponent();
@@ -82,6 +87,8 @@ function split(layout: "left-pane" | "right-pane", rows = 8, paneTheme = theme()
     requestRender: () => {
       renders.count += 1;
     },
+    ...(options.sidePaneRatio === undefined ? {} : { sidePaneRatio: options.sidePaneRatio }),
+    ...(options.persistSidePaneRatio ? { persistSidePaneRatio: options.persistSidePaneRatio } : {}),
   });
   return { component, focus, main, mainInput, overlay, renders, side, terminal };
 }
@@ -174,6 +181,37 @@ test("split panes use one muted divider column", async () => {
   const focusedMain = component.render(120)[0] ?? "";
   assert.equal(focusedMain.split(divider).length - 1, 1);
   assert.equal(visibleWidth(focusedMain), 120);
+});
+
+test.each([
+  ["left-pane", 30],
+  ["right-pane", 89],
+] as const)("%s preserves the side-thread ratio across direct and HStack rendering", (layout, dividerColumn) => {
+  const { component, terminal } = split(layout, 3, theme(), { sidePaneRatio: 0.25 });
+
+  const direct = stripVTControlCharacters(component.render(120)[0] ?? "");
+  const layoutLine = stripVTControlCharacters(component.getFullscreenLayout().render(120)[0] ?? "");
+  assert.equal(direct.indexOf("│"), dividerColumn);
+  assert.equal(layoutLine.indexOf("│"), dividerColumn);
+  assert.equal(visibleWidth(direct), 120);
+  assert.equal(visibleWidth(layoutLine), 120);
+
+  terminal.columns = 100;
+  const resized = stripVTControlCharacters(component.getFullscreenLayout().render(100)[0] ?? "");
+  assert.equal(resized.indexOf("│"), layout === "left-pane" ? 25 : 74);
+  assert.equal(visibleWidth(resized), 100);
+});
+
+test("ratio-based divider clicks do not switch panes", async () => {
+  const { component, focus, mainInput, side } = split("left-pane", 3, theme(), { sidePaneRatio: 0.25 });
+
+  component.handleTerminalInput(mouse(0, 31));
+  await Promise.resolve();
+  assert.equal(focus.current, side);
+
+  component.handleTerminalInput(mouse(0, 70));
+  await Promise.resolve();
+  assert.equal(focus.current, mainInput);
 });
 
 test("wheel, pointer movement, divider clicks, and focused overlays do not switch panes", async () => {

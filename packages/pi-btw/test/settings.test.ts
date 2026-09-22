@@ -6,9 +6,11 @@ import { test } from "vitest";
 import {
   BTW_SETTINGS_FILE,
   DEFAULT_BTW_LAYOUT,
+  DEFAULT_BTW_SIDE_PANE_RATIO,
   DEFAULT_FULLSCREEN_COPY_ON_SELECT,
   DEFAULT_REMEMBER_THINKING_LEVEL_CHANGES,
   effectiveBtwLayout,
+  effectiveBtwSidePaneRatio,
   effectiveFullscreenCopyOnSelect,
   effectiveRememberThinkingLevelChanges,
   normalizeBtwSettings,
@@ -30,36 +32,54 @@ test("btw settings defaults remain side-effect free when the file is missing", a
     assert.equal(DEFAULT_BTW_LAYOUT, "fullscreen");
     assert.equal(DEFAULT_FULLSCREEN_COPY_ON_SELECT, true);
     assert.equal(DEFAULT_REMEMBER_THINKING_LEVEL_CHANGES, true);
+    assert.equal(DEFAULT_BTW_SIDE_PANE_RATIO, 0.5);
     assert.deepEqual(await readBtwSettings(settingsPath), { kind: "missing" });
     assert.equal(effectiveBtwLayout({}), "fullscreen");
     assert.equal(effectiveFullscreenCopyOnSelect({}), true);
     assert.equal(effectiveRememberThinkingLevelChanges({}), true);
+    assert.equal(effectiveBtwSidePaneRatio({}), 0.5);
     await assert.rejects(readFile(settingsPath, "utf8"), { code: "ENOENT" });
   });
 });
 
-test("btw settings validate optional booleans and workspace layouts", () => {
+test("btw settings validate optional booleans, workspace layouts, and side-pane ratios", () => {
   assert.deepEqual(
     normalizeBtwSettings({
       rememberThinkingLevelChanges: true,
       fullscreenCopyOnSelect: false,
       layout: "left-pane",
+      sidePaneRatio: 0.2,
     }),
-    { rememberThinkingLevelChanges: true, fullscreenCopyOnSelect: false, layout: "left-pane" },
+    {
+      rememberThinkingLevelChanges: true,
+      fullscreenCopyOnSelect: false,
+      layout: "left-pane",
+      sidePaneRatio: 0.2,
+    },
   );
   assert.deepEqual(
     normalizeBtwSettings({
       rememberThinkingLevelChanges: false,
       fullscreenCopyOnSelect: true,
       layout: "right-pane",
+      sidePaneRatio: 0.8,
     }),
-    { rememberThinkingLevelChanges: false, fullscreenCopyOnSelect: true, layout: "right-pane" },
+    {
+      rememberThinkingLevelChanges: false,
+      fullscreenCopyOnSelect: true,
+      layout: "right-pane",
+      sidePaneRatio: 0.8,
+    },
   );
   assert.equal(effectiveBtwLayout({ layout: "right-pane" }), "right-pane");
+  assert.equal(effectiveBtwSidePaneRatio({ sidePaneRatio: 0.35 }), 0.35);
   assert.equal(effectiveFullscreenCopyOnSelect({ fullscreenCopyOnSelect: false }), false);
   assert.equal(normalizeBtwSettings({ rememberThinkingLevelChanges: "yes" }), undefined);
   assert.equal(normalizeBtwSettings({ fullscreenCopyOnSelect: "no" }), undefined);
   assert.equal(normalizeBtwSettings({ layout: "left" }), undefined);
+  for (const sidePaneRatio of [0.19, 0.81, Number.NaN, Number.POSITIVE_INFINITY, "0.5"]) {
+    assert.equal(normalizeBtwSettings({ sidePaneRatio }), undefined);
+  }
 });
 
 test("btw settings preserve omitted thinking levels for backward compatibility", async () => {
@@ -122,6 +142,7 @@ test("btw settings updates preserve unknown fields and create only on explicit s
         rememberThinkingLevelChanges: true,
         fullscreenCopyOnSelect: false,
         layout: "left-pane",
+        sidePaneRatio: 0.35,
       },
       { settingsPath },
     );
@@ -131,6 +152,7 @@ test("btw settings updates preserve unknown fields and create only on explicit s
       rememberThinkingLevelChanges: true,
       fullscreenCopyOnSelect: false,
       layout: "left-pane",
+      sidePaneRatio: 0.35,
     });
 
     await writeFile(
@@ -156,6 +178,7 @@ test("btw settings reject malformed or invalid documents without changing their 
       '{"thinkingLevel":"huge"}\n',
       '{"fullscreenCopyOnSelect":"yes"}\n',
       '{"layout":"side"}\n',
+      '{"sidePaneRatio":0.1}\n',
     ]) {
       await writeFile(settingsPath, contents, "utf8");
       await assert.rejects(

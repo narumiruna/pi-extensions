@@ -26,6 +26,7 @@ import {
 import {
   type BtwSettings,
   effectiveBtwLayout,
+  effectiveBtwSidePaneRatio,
   effectiveFullscreenCopyOnSelect,
   effectiveRememberThinkingLevelChanges,
   parseBtwModelReference,
@@ -155,7 +156,7 @@ export async function loadBtwThinkingLevel(
 
   options.warn?.(
     sanitizeSingleLine(
-      `pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", omitted thinkingLevel for Same as main thread or thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", boolean rememberThinkingLevelChanges, boolean fullscreenCopyOnSelect, and layout "fullscreen" | "left-pane" | "right-pane". Using current Pi thinking level.`,
+      `pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", omitted thinkingLevel for Same as main thread or thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", boolean rememberThinkingLevelChanges, boolean fullscreenCopyOnSelect, layout "fullscreen" | "left-pane" | "right-pane", and sidePaneRatio from 0.2 to 0.8. Using current Pi thinking level.`,
     ),
   );
   return currentThinkingLevel;
@@ -308,6 +309,9 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
           {
             copyOnSelect: effectiveFullscreenCopyOnSelect(settings),
             layout: effectiveBtwLayout(settings),
+            sidePaneRatio: effectiveBtwSidePaneRatio(settings),
+            persistSidePaneRatio: (ratio, signal) =>
+              updateBtwSettings({ sidePaneRatio: ratio }, { signal }).then(() => undefined),
             subscribeMainThreadUpdates: (listener) => subscribeMainThreadUpdates(ctx.sessionManager, listener),
             ...(settings.keybindings ? { keybindings: settings.keybindings } : {}),
           },
