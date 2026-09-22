@@ -215,6 +215,30 @@ test("sanitizes pasted search text before Input advances the cursor", () => {
   assert.deepEqual(result(), { kind: "close", selectedPath: "abcdXYZef-0.md", query: "abcdXYZef" });
 });
 
+test.each([
+  { name: "plain IME text", data: "X\u202eY", expectedQuery: "abcdXYZef", kitty: false },
+  { name: "Kitty printable text", data: "\u001b[8238u", expectedQuery: "abcdZef", kitty: true },
+])("sanitizes $name before Input advances the cursor", ({ data, expectedQuery, kitty }) => {
+  setKittyProtocolActive(kitty);
+  const notes = Array.from({ length: 9 }, (_, index) => note(`${expectedQuery}-${index}.md`));
+  const { picker, result } = createPicker(notes, { query: "abcdef" });
+  picker.focused = true;
+  const width = 100;
+  const frame = picker.render(width);
+  const searchRow = frame.findIndex((line) => line.includes("Search:"));
+  assert.notEqual(searchRow, -1);
+  assert.deepEqual(
+    picker.handleMouse({ type: "press", x: 14, y: searchRow, width, height: frame.length, button: "left" } as never),
+    { handled: true, focus: true },
+  );
+
+  picker.handleInput(data);
+  picker.handleInput("Z");
+  picker.handleInput("\u0003");
+
+  assert.deepEqual(result(), { kind: "close", selectedPath: `${expectedQuery}-0.md`, query: expectedQuery });
+});
+
 test("Escape returns Back and Ctrl+C remains a hard Close under remapped cancellation", () => {
   vi.useFakeTimers();
   const remapped = { "tui.select.cancel": ["ctrl+q"] };
@@ -313,4 +337,19 @@ test("legacy and Kitty terminal modes resolve live matcher collisions independen
   assert.equal(resolveNoteDeleteKey(keys as never, true), "f9");
   setKittyProtocolActive(true);
   assert.equal(resolveNoteDeleteKey(keys as never, true), "alt+b");
+});
+
+test("paste-prefix routing rejects a split legacy delete encoding but retains its Kitty encoding", () => {
+  const bindings = { "app.session.delete": ["ctrl+alt+[", "f12"] };
+  const keys = keybindings(bindings);
+
+  setKittyProtocolActive(false);
+  assert.equal(resolveNoteDeleteKey(keys as never, false), "f12");
+  const { picker, result } = createPicker([note("one.md"), note("two.md")], { bindings });
+  assert.match(picker.render(100).join("\n"), /f12 delete/iu);
+  picker.handleInput("\u001b[24~");
+  assert.deepEqual(result(), { kind: "delete", notePath: "one.md", nextSelectedPath: "two.md", query: "" });
+
+  setKittyProtocolActive(true);
+  assert.equal(resolveNoteDeleteKey(keys as never, false), "alt+ctrl+[");
 });

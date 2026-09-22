@@ -1,6 +1,7 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  decodeKittyPrintable,
   type Focusable,
   fuzzyFilter,
   Input,
@@ -453,7 +454,10 @@ export class NotePicker implements Component, Focusable {
     else {
       const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled);
       if (deleteKey && matchesKey(data, deleteKey)) this.deleteSelected();
-      else if (this.searchEnabled) this.applySearchInput(data);
+      else if (this.searchEnabled) {
+        const safeInput = sanitizeInsertableSearchInput(data, this.options.keybindings);
+        if (safeInput !== undefined) this.applySearchInput(safeInput);
+      }
     }
     if (!this.completed) this.options.tui.requestRender();
   }
@@ -535,6 +539,21 @@ function sanitizePastedSearchText(value: string): string {
   return sanitizeTerminalText(singleLine);
 }
 
+function sanitizeInsertableSearchInput(
+  data: string,
+  keybindings: Pick<KeybindingsManager, "matches">,
+): string | undefined {
+  if (data === "\n" || SEARCH_INPUT_BINDINGS.some((binding) => keybindings.matches(data, binding))) return data;
+  const kittyPrintable = decodeKittyPrintable(data);
+  if (kittyPrintable !== undefined) return sanitizeTerminalText(kittyPrintable) || undefined;
+  const hasControlCharacters = [...data].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f);
+  });
+  if (hasControlCharacters) return data;
+  return sanitizeTerminalText(data) || undefined;
+}
+
 function initializeSearchInput(input: Input, value: string): void {
   input.setValue(value);
   // Input.setValue() preserves its cursor, so use its public mouse contract to place a fresh cursor at the end.
@@ -577,7 +596,7 @@ export function resolveNoteDeleteKey(
     const normalized = normalizeKey(candidate);
     if (!normalized || (searchEnabled && isTextKey(normalized))) continue;
     const inputs = inputsFor(normalized);
-    if (inputs.length === 0) continue;
+    if (inputs.length === 0 || inputs.some((input) => !routesAsSingleNonPasteInput(input))) continue;
     if (reserved.some((other) => inputs.some((input) => matchesKey(input, other as KeyId)))) continue;
     return normalized as KeyId;
   }
@@ -612,6 +631,12 @@ function inputsFor(key: string): string[] {
   const code = SPECIAL_CODEPOINTS[base] ?? (base.length === 1 ? base.charCodeAt(0) : undefined);
   const inputs = code === undefined ? LEGACY_INPUTS : [...LEGACY_INPUTS, `\u001b[${code};${modifier + 1}u`];
   return inputs.filter((input) => matchesKey(input, key as KeyId));
+}
+
+function routesAsSingleNonPasteInput(input: string): boolean {
+  if (input.includes(BRACKETED_PASTE_START)) return false;
+  const prefixLength = trailingMarkerPrefixLength(input, BRACKETED_PASTE_START);
+  return prefixLength === 0 || prefixLength === input.length;
 }
 
 function trailingMarkerPrefixLength(value: string, marker: string): number {
