@@ -13,10 +13,15 @@ export const MAX_TRANSCRIPT_MESSAGES = 200;
 export const MAX_TRANSCRIPT_CHARS = 50_000;
 export const WIDE_WORKSPACE_COLUMNS = 100;
 
-export const CHILD_TOOL_NAMES = ["read_current_note", "edit_current_note", "replace_current_note"] as const;
+export const CHILD_TOOL_NAMES = [
+  "read_current_note",
+  "edit_current_note",
+  "replace_current_note",
+  "rename_current_note",
+] as const;
 
 export const NOTES_SYSTEM_PROMPT = `You are the assistant for one Markdown note.
 
-Work only on the current note. Read it before editing. Use edit_current_note for precise changes and replace_current_note only when a full replacement is necessary. Every mutation requires the latest revision returned by read_current_note or a successful mutation. If a revision is stale, read again before retrying.
+Work only on the current note. Read it before editing. Use edit_current_note for precise changes and replace_current_note only when a full replacement is necessary. New notes may have a temporary untitled filename. Once the note's purpose is clear, proactively use rename_current_note to give it a concise, descriptive relative Markdown path; do not ask the user to choose a filename. Every mutation requires the latest revision returned by read_current_note or a successful mutation. If a revision is stale, read again before retrying.
 
-You have no access to other notes, templates, sessions, project files, or a shell. Do not claim that you changed content unless a mutation tool succeeded. Keep the note valid Markdown and preserve unrelated content.`;
+You have no access to other notes, templates, sessions, project files, or a shell. Do not claim that you changed content or the filename unless a mutation tool succeeded. Keep the note valid Markdown and preserve unrelated content.`;

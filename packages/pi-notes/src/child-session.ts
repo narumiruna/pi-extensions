@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Dir } from "node:fs";
 import { lstat, mkdir, opendir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
@@ -15,7 +14,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { CHILD_TOOL_NAMES, MAX_SESSION_FILES_PER_NOTE, NOTES_SYSTEM_PROMPT } from "./constants.js";
-import type { NoteSnapshot, NotesStorage } from "./storage.js";
+import { type NoteSnapshot, type NotesStorage, noteSessionKey } from "./storage.js";
+
+export { noteSessionKey };
 
 export interface CreateNotesChildSessionOptions {
   agentDir: string;
@@ -133,21 +134,23 @@ export function createCurrentNoteTools(
   notePath: string,
   onNoteChanged?: (snapshot: NoteSnapshot) => void,
 ) {
+  let currentPath = notePath;
+
   const readTool = defineTool({
     name: "read_current_note",
     label: "Read current note",
-    description: "Read the complete current Markdown note and return its revision. This tool never accepts a path.",
+    description: "Read the complete current Markdown note and return its relative path and revision.",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal) {
-      const note = await storage.readNote(notePath, signal);
+      const note = await storage.readNote(currentPath, signal);
       return {
         content: [
           {
             type: "text" as const,
-            text: `Revision: ${note.revision}\nBytes: ${note.size}\n\n${note.content}`,
+            text: `Path: ${note.relativePath}\nRevision: ${note.revision}\nBytes: ${note.size}\n\n${note.content}`,
           },
         ],
-        details: { revision: note.revision, size: note.size },
+        details: { relativePath: note.relativePath, revision: note.revision, size: note.size },
       };
     },
   });
@@ -163,7 +166,7 @@ export function createCurrentNoteTools(
       newText: Type.String({ description: "Replacement text" }),
     }),
     async execute(_toolCallId, params, signal) {
-      const note = await storage.editNote(notePath, params.revision, params.oldText, params.newText, signal);
+      const note = await storage.editNote(currentPath, params.revision, params.oldText, params.newText, signal);
       notifyNoteChanged(onNoteChanged, note);
       return mutationResult(note);
     },
@@ -179,17 +182,35 @@ export function createCurrentNoteTools(
       content: Type.String({ description: "Complete replacement Markdown" }),
     }),
     async execute(_toolCallId, params, signal) {
-      const note = await storage.replaceNote(notePath, params.revision, params.content, signal);
+      const note = await storage.replaceNote(currentPath, params.revision, params.content, signal);
       notifyNoteChanged(onNoteChanged, note);
       return mutationResult(note);
     },
   });
 
-  return [readTool, editTool, replaceTool];
-}
+  const renameTool = defineTool({
+    name: "rename_current_note",
+    label: "Rename current note",
+    description:
+      "Rename the current note to a concise, descriptive relative Markdown path. This tool accepts no source path, rejects stale revisions, and never overwrites another note.",
+    parameters: Type.Object({
+      revision: Type.String({ description: "Latest revision returned by a current-note tool" }),
+      newPath: Type.String({
+        minLength: 4,
+        maxLength: 1_024,
+        description: "New relative path below the notes root, ending in .md",
+      }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const previousPath = currentPath;
+      const note = await storage.renameNote(previousPath, params.revision, params.newPath, signal);
+      currentPath = note.relativePath;
+      notifyNoteChanged(onNoteChanged, note);
+      return renameResult(previousPath, note);
+    },
+  });
 
-export function noteSessionKey(notePath: string): string {
-  return createHash("sha256").update(notePath).digest("hex");
+  return [readTool, editTool, replaceTool, renameTool];
 }
 
 async function selectNoteSessionManager(
@@ -330,10 +351,27 @@ function mutationResult(note: NoteSnapshot) {
     content: [
       {
         type: "text" as const,
-        text: `Updated the current note.\nRevision: ${note.revision}\nBytes: ${note.size}`,
+        text: `Updated the current note.\nPath: ${note.relativePath}\nRevision: ${note.revision}\nBytes: ${note.size}`,
       },
     ],
-    details: { revision: note.revision, size: note.size },
+    details: { relativePath: note.relativePath, revision: note.revision, size: note.size },
+  };
+}
+
+function renameResult(previousPath: string, note: NoteSnapshot) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Renamed the current note from ${previousPath} to ${note.relativePath}.\nRevision: ${note.revision}\nBytes: ${note.size}`,
+      },
+    ],
+    details: {
+      previousPath,
+      relativePath: note.relativePath,
+      revision: note.revision,
+      size: note.size,
+    },
   };
 }
 

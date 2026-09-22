@@ -14,7 +14,7 @@ import {
   MAX_TRANSCRIPT_CHARS,
   MAX_TRANSCRIPT_MESSAGES,
 } from "../src/constants.js";
-import { NotesStorage, normalizeRelativeMarkdownPath } from "../src/storage.js";
+import { NotesStorage, normalizeRelativeMarkdownPath, noteSessionKey } from "../src/storage.js";
 
 const roots: string[] = [];
 
@@ -277,6 +277,22 @@ test("safe creation supports Blank and refuses overwrite, traversal, absolute, n
   await assert.rejects(readFile(join(outside, "escape.md")), /ENOENT/u);
 });
 
+test("automatic creation chooses collision-safe temporary names without prompting for a path", async () => {
+  const { storage } = await fixture();
+  await writeFile(join(storage.paths.notes, "untitled.md"), "existing", "utf8");
+  await mkdir(join(storage.paths.sessions, noteSessionKey("untitled-2.md")));
+  await writeFile(join(storage.paths.templates, "draft.md"), "# Draft\n", "utf8");
+
+  const created = await Promise.all([
+    storage.createAutomaticNote(),
+    storage.createAutomaticNote({ templatePath: "draft.md" }),
+  ]);
+
+  assert.deepEqual(created.map(({ relativePath }) => relativePath).sort(), ["untitled-3.md", "untitled-4.md"]);
+  assert.deepEqual(created.map(({ content }) => content).sort(), ["", "# Draft\n"]);
+  assert.equal(await readFile(join(storage.paths.notes, "untitled.md"), "utf8"), "existing");
+});
+
 test("same-process concurrent creation publishes once without overwriting the winner", async () => {
   const { storage } = await fixture();
   await writeFile(join(storage.paths.templates, "first.md"), "first", "utf8");
@@ -348,6 +364,63 @@ test("creation rechecks the destination before rename without overwriting an ext
     (await readdir(racing.paths.notes)).some((name) => name.endsWith(".tmp")),
     false,
   );
+});
+
+test("note rename preserves content and rejects stale, conflicting, unsafe, and cancelled destinations", async () => {
+  const { storage, root } = await fixture();
+  await writeFile(join(storage.paths.notes, "source.md"), "# Source\n", "utf8");
+  await writeFile(join(storage.paths.notes, "existing.md"), "# Existing\n", "utf8");
+  const source = await storage.readNote("source.md");
+
+  await assert.rejects(storage.renameNote("source.md", "stale", "stale.md"), /stale/iu);
+  await assert.rejects(storage.renameNote("source.md", source.revision, "existing.md"), /already exists/iu);
+  await assert.rejects(storage.renameNote("source.md", source.revision, "../escape.md"), /relative|segments/iu);
+
+  const outside = join(root, "rename-outside");
+  await mkdir(outside);
+  await symlink(outside, join(storage.paths.notes, "linked-rename"), "dir");
+  await assert.rejects(
+    storage.renameNote("source.md", source.revision, "linked-rename/escape.md"),
+    /symbolic|canonical|escapes/iu,
+  );
+
+  const controller = new AbortController();
+  controller.abort(new DOMException("cancelled rename", "AbortError"));
+  await assert.rejects(
+    storage.renameNote("source.md", source.revision, "cancelled.md", controller.signal),
+    /cancelled rename/iu,
+  );
+
+  const renamed = await storage.renameNote("source.md", source.revision, "topics/descriptive.md");
+  assert.equal(renamed.relativePath, "topics/descriptive.md");
+  assert.equal(renamed.content, "# Source\n");
+  await assert.rejects(storage.readNote("source.md"), /ENOENT|no such/iu);
+  assert.equal((await storage.readNote("topics/descriptive.md")).content, "# Source\n");
+  assert.equal((await storage.readNote("existing.md")).content, "# Existing\n");
+  await assert.rejects(
+    storage.renameNote("topics/descriptive.md", renamed.revision, "topics/descriptive.md"),
+    /already named/iu,
+  );
+});
+
+test("concurrent note renames publish one destination without duplicating or overwriting content", async () => {
+  const { storage } = await fixture();
+  await writeFile(join(storage.paths.notes, "source.md"), "source", "utf8");
+  const source = await storage.readNote("source.md");
+
+  const results = await Promise.allSettled([
+    storage.renameNote("source.md", source.revision, "first.md"),
+    storage.renameNote("source.md", source.revision, "second.md"),
+  ]);
+
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
+  const discovered = await storage.discoverNotes();
+  assert.deepEqual(
+    discovered.entries.map(({ relativePath }) => relativePath),
+    [results[0]?.status === "fulfilled" ? "first.md" : "second.md"],
+  );
+  assert.equal((await storage.readNote(discovered.entries[0]?.relativePath ?? "missing.md")).content, "source");
 });
 
 test("note edits require current revisions and unique exact text", async () => {
@@ -440,6 +513,7 @@ test("content and cancellation limits fail before publication", async () => {
   const controller = new AbortController();
   controller.abort(new DOMException("cancelled", "AbortError"));
   await assert.rejects(storage.createNote("cancelled.md", { signal: controller.signal }), /cancelled|aborted/iu);
+  await assert.rejects(storage.createAutomaticNote({ signal: controller.signal }), /cancelled|aborted/iu);
   await assert.rejects(readFile(join(storage.paths.notes, "cancelled.md")), /ENOENT/u);
   assert.equal((await storage.readNote("limit.md")).content, "ok");
 });

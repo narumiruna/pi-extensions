@@ -7,8 +7,8 @@ interface NotesMenuState {
   templates: DiscoveryResult;
 }
 
-type NotesScreen = "notes" | "openNote" | "templates" | "path" | "pastePath" | "manageTemplates";
-type NotesAction = "chooseRoute" | "chooseNote" | "chooseTemplate" | "createNote" | "pastePath" | "editTemplate";
+type NotesScreen = "notes" | "openNote" | "templates" | "pastePath" | "manageTemplates";
+type NotesAction = "chooseRoute" | "chooseNote" | "chooseTemplate" | "pastePath" | "editTemplate";
 
 export type NotesManagerResult =
   | { kind: "open"; notePath: string }
@@ -17,7 +17,6 @@ export type NotesManagerResult =
   | { kind: "closed" };
 
 export function createNotesMenu(storage: NotesStorage) {
-  let selectedTemplate: string | undefined;
   let result: Exclude<NotesManagerResult, { kind: "closed" }> | undefined;
 
   const getState = async ({ signal }: { signal: AbortSignal }): Promise<NotesMenuState> => {
@@ -45,8 +44,8 @@ export function createNotesMenu(storage: NotesStorage) {
           {
             id: "create",
             label: "Create a note…",
-            description: "Start blank or copy a user template.",
-            searchText: "new create blank template",
+            description: "Open an automatically named blank note or user template.",
+            searchText: "new create blank template automatic filename",
           },
           {
             id: "paste-path",
@@ -102,17 +101,6 @@ export function createNotesMenu(storage: NotesStorage) {
         viewportSize: 12,
         hint: "back",
       }),
-      path: () => ({
-        kind: "input",
-        title: "New note path",
-        lines: [
-          "Enter a relative Markdown path below pi-notes/notes.",
-          selectedTemplate ? `Template: ${sanitizeTerminalText(selectedTemplate)}` : "Template: Blank",
-        ],
-        placeholder: "topic.md or folder/topic.md",
-        action: "createNote",
-        hint: "back",
-      }),
       pastePath: ({ state }) => ({
         kind: "choice",
         title: "Paste a note path",
@@ -158,21 +146,13 @@ export function createNotesMenu(storage: NotesStorage) {
         result = { kind: "open", notePath: note.relativePath };
         return { kind: "close" };
       },
-      chooseTemplate: ({ state, itemId }) => {
-        if (itemId === "blank") {
-          selectedTemplate = undefined;
-          return { kind: "to", screen: "path" };
-        }
-        const template = indexedEntry(state.templates.entries, itemId, "template:");
-        if (!template) {
+      chooseTemplate: async ({ state, itemId, signal }) => {
+        const templatePath =
+          itemId === "blank" ? undefined : indexedEntry(state.templates.entries, itemId, "template:")?.relativePath;
+        if (itemId !== "blank" && !templatePath) {
           return { kind: "rejected", error: new Error("The selected template is no longer available") };
         }
-        selectedTemplate = template.relativePath;
-        return { kind: "to", screen: "path" };
-      },
-      createNote: async ({ value, signal }) => {
-        if (typeof value !== "string") return { kind: "rejected", error: new Error("Note path is required") };
-        const note = await storage.createNote(value, { templatePath: selectedTemplate, signal });
+        const note = await storage.createAutomaticNote({ ...(templatePath ? { templatePath } : {}), signal });
         if (signal.aborted) return { kind: "close" };
         result = { kind: "open", notePath: note.relativePath };
         return { kind: "close" };
