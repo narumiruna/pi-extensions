@@ -1,0 +1,50 @@
+{
+  "name": "@narumitw/pi-notes",
+  "version": "0.0.0",
+  "description": "Pi extension for managing global Markdown notes with an isolated embedded agent.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "notes",
+    "markdown",
+    "agent"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.65.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.86.0",
+    "@earendil-works/pi-coding-agent": "0.86.0",
+    "@earendil-works/pi-tui": "0.86.0",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-notes"
+  }
+}
