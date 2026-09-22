@@ -148,6 +148,25 @@ test("template editor protects typed Pi paste-marker text for legacy and Kitty i
   }
 });
 
+test("template editor preserves hash identity during Pi character jumps", async () => {
+  const tui = createTuiHarness({ width: 72, rows: 20 });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot("# one # two"), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.send("\u0001");
+  tui.send("\u001d");
+  tui.send("#");
+  tui.type("X");
+  tui.press("tui.input.submit");
+
+  assert.equal(await editing, "# one X# two");
+});
+
 test("template editor accepts split paste chunks and a later distinct paste", async () => {
   const start = "\u001b[200~";
   const end = "\u001b[201~";

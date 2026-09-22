@@ -265,6 +265,7 @@ class TemplateEditor implements Component, Focusable {
 class RawPreservingEditor implements Focusable {
   private editor: Editor;
   private readonly rawByMarker = new Map<string, { raw: string; hidden: boolean }>();
+  private readonly markerByVisibleRaw = new Map<string, string>();
   private readonly reservedRawCharacters = new Set<string>();
   private markerCodePoint = 0xe000;
   private pasteBuffer: string | undefined;
@@ -355,6 +356,7 @@ class RawPreservingEditor implements Focusable {
 
   setText(value: string): void {
     this.rawByMarker.clear();
+    this.markerByVisibleRaw.clear();
     this.reservedRawCharacters.clear();
     this.markerCodePoint = 0xe000;
     this.pasteBuffer = undefined;
@@ -440,6 +442,7 @@ class RawPreservingEditor implements Focusable {
   private restorePasteSnapshot(value: string): void {
     const focused = this.editor.focused;
     this.rawByMarker.clear();
+    this.markerByVisibleRaw.clear();
     this.reservedRawCharacters.clear();
     this.markerCodePoint = 0xe000;
     this.pasteBuffer = undefined;
@@ -468,8 +471,12 @@ class RawPreservingEditor implements Focusable {
     return [...value]
       .map((character) => {
         if (!needsRawMarker(character, this.rawByMarker)) return character;
+        const hidden = isUnsafeEditorCharacter(character);
+        const existing = hidden ? undefined : this.markerByVisibleRaw.get(character);
+        if (existing) return existing;
         const marker = this.nextMarker(forbidden);
-        this.rawByMarker.set(marker, { raw: character, hidden: isUnsafeEditorCharacter(character) });
+        this.rawByMarker.set(marker, { raw: character, hidden });
+        if (!hidden) this.markerByVisibleRaw.set(character, marker);
         forbidden.add(marker);
         return marker;
       })
