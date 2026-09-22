@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { CURSOR_MARKER, type Focusable, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { BtwSplitPane, MIN_BTW_SPLIT_COLUMNS } from "../src/workspace-layout.js";
 
@@ -10,65 +10,76 @@ function theme() {
   } as never;
 }
 
-class SideComponent implements Focusable {
-  focused = false;
-  inputs: string[] = [];
+class SideComponent implements Component {
+  constructor(private readonly rows: number) {}
 
   render(width: number): string[] {
-    return [`SIDE${this.focused ? CURSOR_MARKER : ""}`.slice(0, width)];
+    return Array.from({ length: this.rows }, () => truncateToWidth("SIDE", width));
   }
 
-  handleInput(data: string): void {
-    this.inputs.push(data);
+  invalidate(): void {}
+}
+
+class MainThreadComponent implements Component {
+  frame = "initial";
+  renderCount = 0;
+
+  render(_width: number): string[] {
+    this.renderCount += 1;
+    return ["main history", `\u001b[44mMAIN ${this.frame}\u001b[49m`, "main editor"];
   }
 
   invalidate(): void {}
 }
 
 function split(layout: "left-pane" | "right-pane", rows = 8) {
-  const side = new SideComponent();
+  const side = new SideComponent(rows);
+  const main = new MainThreadComponent();
   const component = new BtwSplitPane({
     sideComponent: side,
     sideLayout: side,
+    mainThread: main,
     layout,
-    mainThreadContext: "User: unsafe \u001b]52;c;c2VjcmV0\u0007 context\n\u202eAssistant: answer",
-    mainEditorDraft: "draft text",
     theme: theme(),
     terminalRows: () => rows,
   });
-  return { component, side };
+  return { component, main };
 }
 
 test.each([
   ["left-pane", true],
   ["right-pane", false],
-] as const)("%s keeps the side thread on the configured side with a sanitized main snapshot", (layout, sideFirst) => {
+] as const)("%s renders Pi's native main-thread component on the configured side", (layout, sideFirst) => {
   const { component } = split(layout);
   const lines = component.render(120);
-  const plain = lines.map((line) => stripVTControlCharacters(line));
-  const first = plain[0] ?? "";
+  const styledLine = lines.find((line) => line.includes("MAIN initial"));
+  assert.ok(styledLine);
+  const plainLine = stripVTControlCharacters(styledLine);
 
-  assert.equal(first.indexOf("SIDE") < first.indexOf("main thread"), sideFirst);
-  assert.match(plain.join("\n"), /main thread · context snapshot/u);
-  assert.match(plain.join("\n"), /draft text/u);
-  const rendered = lines.join("\n");
-  assert.equal(rendered.includes("\u001b]52"), false);
-  assert.equal(rendered.includes("c2VjcmV0"), false);
-  assert.equal(rendered.includes("\u202e"), false);
+  assert.equal(plainLine.indexOf("SIDE") < plainLine.indexOf("MAIN initial"), sideFirst);
+  assert.equal(styledLine.includes("\u001b[44mMAIN initial\u001b[49m"), true);
   assert.ok(lines.every((line) => visibleWidth(line) <= 120));
 });
 
-test("split panes collapse to the focused side thread on narrow terminals and preserve input ownership", () => {
-  const { component, side } = split("right-pane", 5);
-  component.focused = true;
-  component.handleInput("x");
+test("split panes render live main-thread state instead of an opening snapshot", () => {
+  const { component, main } = split("right-pane");
+  assert.match(stripVTControlCharacters(component.render(120).join("\n")), /MAIN initial/u);
+
+  main.frame = "updated";
+  const updated = stripVTControlCharacters(component.render(120).join("\n"));
+
+  assert.match(updated, /MAIN updated/u);
+  assert.doesNotMatch(updated, /MAIN initial/u);
+  assert.equal(main.renderCount, 2);
+});
+
+test("split panes collapse to the side thread on narrow terminals without rendering main", () => {
+  const { component, main } = split("right-pane", 5);
   const lines = component.render(MIN_BTW_SPLIT_COLUMNS - 1);
 
-  assert.equal(side.focused, true);
-  assert.deepEqual(side.inputs, ["x"]);
   assert.match(lines.join("\n"), /SIDE/u);
-  assert.doesNotMatch(lines.join("\n"), /main thread/u);
-  assert.equal(lines.join("\n").includes(CURSOR_MARKER), true);
+  assert.doesNotMatch(lines.join("\n"), /MAIN/u);
+  assert.equal(main.renderCount, 0);
   assert.ok(lines.every((line) => visibleWidth(line) <= MIN_BTW_SPLIT_COLUMNS - 1));
 });
 

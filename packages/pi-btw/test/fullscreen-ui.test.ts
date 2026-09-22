@@ -250,6 +250,14 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function waitForCondition(condition: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+  }
+  assert.fail(message);
+}
+
 class InputHandoffTerminal implements Terminal {
   readonly columns = 80;
   readonly rows = 12;
@@ -444,9 +452,20 @@ function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings())
     hideCursor() {},
     showCursor() {},
   } as never;
+  let mainFrame = "initial";
+  let mainRenderCount = 0;
   const parent = {
     mode: "regular",
     terminal,
+    render(width: number) {
+      mainRenderCount += 1;
+      return [
+        ...Array.from({ length: 30 }, (_, index) => `main history ${index + 1}`),
+        `\u001b[44mMAIN ${mainFrame}\u001b[49m`,
+        "main editor draft",
+      ].map((line) => line.slice(0, width));
+    },
+    invalidate() {},
     getShowHardwareCursor: () => false,
     stop(options?: { preserveScreen?: boolean }) {
       events.push(`parent.stop:${String(options?.preserveScreen)}`);
@@ -508,6 +527,12 @@ function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings())
       assert.ok(handleInput);
       return handleInput;
     },
+    setMainFrame(value: string) {
+      mainFrame = value;
+    },
+    get mainRenderCount() {
+      return mainRenderCount;
+    },
   };
 }
 
@@ -560,41 +585,68 @@ async function startClipboardSelection(
 }
 
 test.each([
-  ["left-pane", /SIDE.*main thread · context snapshot/u],
-  ["right-pane", /main thread · context snapshot.*SIDE/u],
-] as const)(
-  "dedicated workspace renders the configured %s split around a main-thread snapshot",
-  async (layout, order) => {
-    const harness = createNativeFullscreenHarness();
-    let sideTui: TUI | undefined;
-    let closeSide: (() => void) | undefined;
-    const running = runBtwFullscreen(
-      harness.ctx,
-      (ctx) =>
-        ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
-          sideTui = tui;
-          closeSide = () => done("closed");
-          return {
-            render: () => ["SIDE"],
-            invalidate() {},
-          };
-        }),
-      { layout },
-    );
-    await flushAsyncWork();
-    assert.ok(sideTui);
-    assert.ok(closeSide);
-    sideTui.renderNow(true);
-    const output = stripVTControlCharacters(harness.writes.join(""));
-    assert.match(output, order);
-    assert.match(output, /main thread context/u);
-    assert.match(output, /Main editor draft:/u);
-    assert.match(output, /main draft/u);
+  ["left-pane", /SIDE.*MAIN initial/u],
+  ["right-pane", /MAIN initial.*SIDE/u],
+] as const)("dedicated workspace renders the configured %s split with Pi's live main TUI", async (layout, order) => {
+  const harness = createNativeFullscreenHarness();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  let notifyMainThreadUpdate = () => {};
+  let mainThreadSubscribed = false;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return {
+          render: () => Array.from({ length: 12 }, () => "SIDE"),
+          invalidate() {},
+        };
+      }),
+    {
+      layout,
+      subscribeMainThreadUpdates: (listener) => {
+        mainThreadSubscribed = true;
+        notifyMainThreadUpdate = listener;
+        return () => {
+          mainThreadSubscribed = false;
+          if (notifyMainThreadUpdate === listener) notifyMainThreadUpdate = () => {};
+        };
+      },
+    },
+  );
+  await flushAsyncWork();
+  assert.ok(sideTui);
+  assert.ok(closeSide);
+  sideTui.renderNow(true);
+  const styledOutput = harness.writes.join("");
+  const output = stripVTControlCharacters(styledOutput);
+  assert.match(output, order);
+  assert.equal(styledOutput.includes("\u001b[44mMAIN initial\u001b[49m"), true);
 
-    closeSide();
-    assert.equal(await running, "closed");
-  },
-);
+  harness.writes.length = 0;
+  harness.setMainFrame("updated");
+  notifyMainThreadUpdate();
+  await waitForCondition(
+    () => stripVTControlCharacters(harness.writes.join("")).includes("MAIN updated"),
+    "live main-thread refresh should render the updated parent TUI",
+  );
+
+  harness.writes.length = 0;
+  const mainPaneColumn = layout === "left-pane" ? 70 : 10;
+  harness.input(`\u001b[<64;${mainPaneColumn};5M`);
+  sideTui.renderNow(true);
+  assert.match(stripVTControlCharacters(harness.writes.join("")), /main history 20/u);
+
+  closeSide();
+  assert.equal(await running, "closed");
+  assert.equal(mainThreadSubscribed, false);
+  const renderCountAfterClose = harness.mainRenderCount;
+  notifyMainThreadUpdate();
+  await flushAsyncWork();
+  assert.equal(harness.mainRenderCount, renderCountAfterClose);
+});
 
 test.each([
   ["custom exit", "\u0011", false, undefined],

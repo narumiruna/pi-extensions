@@ -14,6 +14,7 @@ import {
 } from "./bring-to-main.js";
 import { buildConversationContext } from "./conversation-context.js";
 import { type RunBtwFullscreen, runBtwFullscreen } from "./fullscreen-ui.js";
+import { registerBtwMainThreadUpdates } from "./main-thread-updates.js";
 import { pickMainEntry } from "./main-tree-picker.js";
 import {
   type BtwCommandMenuResult,
@@ -206,6 +207,7 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
   const resolveModel = dependencies.resolveModel ?? resolveBtwModelForCommand;
   const runThread = dependencies.runThread ?? runBtwThread;
   const runFullscreen = dependencies.runFullscreen ?? runBtwFullscreen;
+  const subscribeMainThreadUpdates = registerBtwMainThreadUpdates(pi);
   // Pi creates a fresh extension instance after session replacement or reload.
   const resumableThreads = new Map<string, BtwThreadState>();
   let nextThreadNumber = 1;
@@ -306,6 +308,7 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
           {
             copyOnSelect: effectiveFullscreenCopyOnSelect(settings),
             layout: effectiveBtwLayout(settings),
+            subscribeMainThreadUpdates: (listener) => subscribeMainThreadUpdates(ctx.sessionManager, listener),
             ...(settings.keybindings ? { keybindings: settings.keybindings } : {}),
           },
         );

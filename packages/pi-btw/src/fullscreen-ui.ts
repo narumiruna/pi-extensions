@@ -18,8 +18,8 @@ import {
   type TuiInputListenerResult,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { buildConversationContext } from "./conversation-context.js";
 import { type BtwKeybindingOverrides, BtwPasteGuard, resolveBtwShortcuts, setBtwShortcuts } from "./keybindings.js";
+import type { BtwMainThreadUpdateSubscription } from "./main-thread-updates.js";
 import type { BtwLayout } from "./settings.js";
 import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
 import { type BtwFullscreenLayoutComponent, BtwSplitPane } from "./workspace-layout.js";
@@ -43,6 +43,7 @@ export interface BtwFullscreenOptions {
   keybindings?: BtwKeybindingOverrides;
   copyOnSelect?: boolean;
   layout?: BtwLayout;
+  subscribeMainThreadUpdates?: BtwMainThreadUpdateSubscription;
 }
 
 export type BtwFullscreenTuiFactory = (
@@ -93,8 +94,6 @@ export async function runBtwFullscreen<T>(
         dependencies.copyToClipboard ?? copyToHostClipboard,
       ));
   let liveEditorText = ctx.ui.getEditorText();
-  const layout = options.layout ?? "fullscreen";
-  const mainThreadContext = layout === "fullscreen" ? "" : buildConversationContext(ctx.sessionManager.getBranch());
   let restoreEditor = false;
   let host: BtwFullscreenHost<T> | undefined;
   const outcome = await ctx.ui.custom<FullscreenOutcome<T>>(
@@ -116,8 +115,6 @@ export async function runBtwFullscreen<T>(
         },
         createTui,
         options,
-        mainThreadContext,
-        liveEditorText,
       );
       return host;
     },
@@ -423,6 +420,8 @@ class BtwFullscreenHost<T> implements Component {
   private parentRestoreQueued = false;
   private parentRestorePromise: Promise<void> | undefined;
   private cleanupError: unknown;
+  private removeMainThreadUpdateListener: (() => void) | undefined;
+  private mainThreadRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly lifetimeController = new AbortController();
 
   constructor(
@@ -434,8 +433,6 @@ class BtwFullscreenHost<T> implements Component {
     private readonly done: (outcome: FullscreenOutcome<T>) => void,
     private readonly createTui: BtwFullscreenTuiFactory,
     private readonly options: BtwFullscreenOptions,
-    private readonly mainThreadContext: string,
-    private readonly mainEditorDraft: string,
   ) {
     queueMicrotask(() => void this.start());
   }
@@ -470,6 +467,7 @@ class BtwFullscreenHost<T> implements Component {
       this.fullscreen = this.createTui(this.parent, this.theme, this.keybindings, this.options);
       this.fullscreenCreated = true;
       this.fullscreen.start();
+      this.watchMainThreadUpdates();
       const shortcuts = resolveBtwShortcuts(
         this.options.keybindings,
         this.keybindings,
@@ -553,7 +551,30 @@ class BtwFullscreenHost<T> implements Component {
     });
   }
 
+  private watchMainThreadUpdates(): void {
+    if ((this.options.layout ?? "fullscreen") === "fullscreen") return;
+    this.removeMainThreadUpdateListener = this.options.subscribeMainThreadUpdates?.(() => {
+      if (this.mainThreadRefreshTimer || this.disposed || this.finished) return;
+      this.mainThreadRefreshTimer = setTimeout(() => {
+        this.mainThreadRefreshTimer = undefined;
+        if (!this.disposed && !this.finished) this.fullscreen?.requestRender();
+      }, 0);
+      this.mainThreadRefreshTimer.unref();
+    });
+  }
+
   private restoreParent(): void {
+    if (this.mainThreadRefreshTimer) {
+      clearTimeout(this.mainThreadRefreshTimer);
+      this.mainThreadRefreshTimer = undefined;
+    }
+    const removeMainThreadUpdateListener = this.removeMainThreadUpdateListener;
+    this.removeMainThreadUpdateListener = undefined;
+    try {
+      removeMainThreadUpdateListener?.();
+    } catch (error) {
+      this.cleanupError ??= error;
+    }
     const removeUpstreamAbortListener = this.removeUpstreamAbortListener;
     this.removeUpstreamAbortListener = undefined;
     try {
@@ -759,9 +780,8 @@ class BtwFullscreenHost<T> implements Component {
               const splitPane = new BtwSplitPane({
                 sideComponent: component,
                 sideLayout: isFullscreenLayoutComponent(component) ? component.getFullscreenLayout() : component,
+                mainThread: this.parent,
                 layout: workspaceLayout,
-                mainThreadContext: this.mainThreadContext,
-                mainEditorDraft: this.mainEditorDraft,
                 theme: this.theme,
                 terminalRows: () => fullscreen.terminal.rows,
               });

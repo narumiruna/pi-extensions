@@ -19,9 +19,10 @@ Opening and closing without a new result does not reorder them.
 
 The dedicated workspace keeps answers above the editor and identifies itself with a fixed `btw · side thread` header.
 The default **Fullscreen** layout gives the side thread the complete workspace.
-**Side thread left** and **Side thread right** place it beside a read-only snapshot of the active main-thread context and editor draft captured when BTW opens; terminals narrower than 80 columns show only the side thread.
-A branch selected through **Start from main thread tree…** supplies side-model context but does not replace the active-main-thread snapshot.
-The main agent may keep running, but its live rendering is suspended; returning to Pi redraws any new output.
+**Side thread left** and **Side thread right** place it beside Pi's native, live main-thread rendering; terminals narrower than 80 columns show only the side thread.
+The main pane is read-only, reflows to its pane width, and supports mouse-wheel scrolling while side-thread input keeps keyboard focus.
+A branch selected through **Start from main thread tree…** supplies side-model context but does not replace the active main thread shown in the other pane.
+The main agent may keep running, and the main pane redraws its progress while BTW remains open.
 Submit each question with Enter; successful prior questions and answers remain available to the side model.
 
 Drag the primary mouse button across the transcript to select text.
