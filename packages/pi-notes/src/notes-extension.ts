@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import type { NotesManagerResult } from "./menu.js";
-import { NotesStorage } from "./storage.js";
+import { NotesStorage, type TemplateSnapshot } from "./storage.js";
 import type { OpenNotesWorkspaceOptions } from "./workspace.js";
 
 interface NotesExtensionDependencies {
@@ -17,6 +17,11 @@ interface NotesExtensionDependencies {
     storage: NotesStorage,
     ownership: { signal: AbortSignal; isCurrent(): boolean },
   ): Promise<NotesManagerResult>;
+  editTemplate(
+    ctx: ExtensionCommandContext,
+    template: TemplateSnapshot,
+    ownership: { signal: AbortSignal; isCurrent(): boolean },
+  ): Promise<string | undefined>;
   openWorkspace(options: OpenNotesWorkspaceOptions): Promise<void>;
 }
 
@@ -32,6 +37,13 @@ export function createNotesExtension(
         const { showNotesManager } = await import("./menu.js");
         if (ownership.signal.aborted || !ownership.isCurrent()) return { kind: "closed" };
         return showNotesManager(ctx, storage, ownership);
+      }),
+    editTemplate:
+      dependencies.editTemplate ??
+      (async (ctx, template, ownership) => {
+        const { showTemplateEditor } = await import("./template-editor.js");
+        if (ownership.signal.aborted || !ownership.isCurrent()) return undefined;
+        return showTemplateEditor(ctx, template, ownership);
       }),
     openWorkspace:
       dependencies.openWorkspace ??
@@ -84,6 +96,10 @@ export function createNotesExtension(
         if (selected.kind === "pastePath") {
           const absolutePath = await storage.resolveCanonicalNotePath(selected.notePath, signal);
           if (!isOwned()) return;
+          if (sanitizeTerminalText(absolutePath) !== absolutePath) {
+            safeNotify(ctx, "Pi Notes cannot paste a path that contains terminal or direction controls.", "error");
+            continue;
+          }
           ctx.ui.pasteToEditor(absolutePath);
           return;
         }
@@ -91,10 +107,7 @@ export function createNotesExtension(
         if (selected.kind === "editTemplate") {
           const template = await storage.readTemplate(selected.templatePath, signal);
           if (!isOwned()) return;
-          const content = await ctx.ui.editor(
-            `Edit template · ${sanitizeTerminalText(template.relativePath)}`,
-            template.content,
-          );
+          const content = await deps.editTemplate(ctx, template, { signal, isCurrent });
           if (!isOwned()) return;
           if (content === undefined || content === template.content) continue;
           try {

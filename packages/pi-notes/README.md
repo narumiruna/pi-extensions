@@ -82,9 +82,9 @@ New managed directories use mode `0700` and newly created notes use `0600` where
 
 `/notes` opens the browse/create manager and accepts no arguments. It requires Pi TUI mode and rejects RPC, print, and JSON modes.
 
-The manager rescans notes and templates when each screen opens. **Paste a note path…** resolves the selected regular file again, closes the manager, and inserts its canonical absolute path at the parent editor's current cursor without replacing the existing draft.
+The manager rescans notes and templates when each screen opens. **Paste a note path…** resolves the selected regular file again, closes the manager, and inserts its canonical absolute path at the parent editor's current cursor without replacing the existing draft. Paths containing terminal or display-direction controls are rejected because Pi's paste handling cannot preserve them safely.
 
-**Manage templates…** opens an existing template in Pi's standard multiline editor. Cancelling or submitting unchanged content returns to the manager without writing. A changed template is published atomically only if its revision is still current; if another process changed it, Pi Notes preserves that external content, reports the conflict, and refreshes the manager.
+**Manage templates…** opens an existing template in a Pi-style multiline editor. The editor preserves leading and trailing whitespace and hides terminal controls as spaces without changing their raw values. Cancelling or submitting unchanged content returns to the manager without writing. A changed template is published atomically only if its revision is still current; if another process changed it, Pi Notes preserves that external content, reports the conflict, and refreshes the manager.
 
 Creating a note copies the selected template exactly once; later template changes do not classify or alter that note.
 
@@ -118,7 +118,7 @@ These tools accept no path. Templates affect initial note content only and never
 - Renaming a note outside the extension keeps the Markdown usable but starts a new path-associated child conversation.
 - Parent-only dynamic providers and runtime-only provider state are unavailable to the child; use a provider reconstructable from Pi's normal model and credential files.
 - The first release has no note rename or delete, tags, backlinks, full-text index, direct `/notes <path>` route, template language, settings, or bundled skill.
-- Template management edits existing files only; create, rename, delete, and agent-assisted template work are not supported.
+- Template management edits existing files only; create, rename, delete, agent-assisted template work, and Pi's external-editor shortcut are not supported.
 - Cross-process locking, large notes, rich-text editing, attachments, synchronization, and collaborative editing are not supported.
 
 ## 🗂️ Package layout

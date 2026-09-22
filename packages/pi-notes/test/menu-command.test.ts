@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { showNotesManager } from "../src/menu.js";
@@ -217,6 +218,42 @@ test("path paste re-resolves the selected note and rejects a file removed before
   assert.equal(context.editorText, "parent draft");
 });
 
+test("path paste rejects terminal-control paths without changing the parent draft", async () => {
+  const { agentDir, storage } = await fixture();
+  const unsafePath = "unsafe\t\u001b[201~\u202e.md";
+  await writeFile(join(storage.paths.notes, unsafePath), "# Unsafe\n", "utf8");
+  const mock = createMockPi();
+  let managerCalls = 0;
+  let thinkingReads = 0;
+  let workspaceCalls = 0;
+  mock.rawPi.getThinkingLevel = () => {
+    thinkingReads += 1;
+    return "off";
+  };
+  createNotesExtension({
+    getAgentDir: () => agentDir,
+    createStorage: () => storage,
+    showManager: async () => {
+      managerCalls += 1;
+      return managerCalls === 1 ? { kind: "pastePath", notePath: unsafePath } : { kind: "closed" };
+    },
+    openWorkspace: async () => {
+      workspaceCalls += 1;
+    },
+  })(mock.pi);
+  const context = createMockContext({ mode: "tui", hasUI: true, editorText: "parent draft" });
+
+  await mock.commands.get("notes")?.handler("", context.ctx);
+
+  assert.equal(managerCalls, 2);
+  assert.deepEqual(context.pastedEditorTexts, []);
+  assert.equal(context.editorText, "parent draft");
+  assert.equal(thinkingReads, 0);
+  assert.equal(workspaceCalls, 0);
+  assert.equal(context.notifications.length, 1);
+  assert.match(context.notifications[0]?.message ?? "", /cannot paste.*control/iu);
+});
+
 test("/notes initializes lazily, opens the selected note, and does not touch parent conversation state", async () => {
   const { agentDir, storage } = await fixture();
   await writeFile(join(storage.paths.notes, "open.md"), "# Open\n", "utf8");
@@ -279,19 +316,18 @@ test("template management preserves raw identity, sanitizes labels, saves, and r
       managerRenders.push(title);
       return choices.shift();
     },
-    editor: async (title: string, prefill: string) => {
-      editorCalls += 1;
-      assert.equal(title.includes("\u001b"), false);
-      assert.equal(title.includes("\u0007"), false);
-      assert.equal(prefill, "old");
-      return updated;
-    },
   });
   const mock = createMockPi();
   createNotesExtension({
     getAgentDir: () => agentDir,
     createStorage: () => storage,
     showManager: showNotesManager,
+    editTemplate: async (_ctx, template) => {
+      editorCalls += 1;
+      assert.equal(template.relativePath, rawTemplatePath);
+      assert.equal(template.content, "old");
+      return updated;
+    },
     openWorkspace: async () => {
       workspaceCalls += 1;
     },
@@ -334,15 +370,12 @@ test("template editor cancellation and unchanged content reopen the manager with
         managerCalls += 1;
         return managerCalls === 1 ? { kind: "editTemplate", templatePath: "draft.md" } : { kind: "closed" };
       },
+      editTemplate: async () => editorResult,
       openWorkspace: async () => {
         workspaceCalls += 1;
       },
     })(mock.pi);
-    const context = createMockContext({
-      mode: "tui",
-      hasUI: true,
-      editor: async () => editorResult,
-    });
+    const context = createMockContext({ mode: "tui", hasUI: true });
 
     await mock.commands.get("notes")?.handler("", context.ctx);
 
@@ -368,18 +401,15 @@ test("a stale template save preserves external content, reports the conflict, an
       managerCalls += 1;
       return managerCalls === 1 ? { kind: "editTemplate", templatePath: "draft.md" } : { kind: "closed" };
     },
+    editTemplate: async () => {
+      await writeFile(templatePath, "external", "utf8");
+      return "editor update";
+    },
     openWorkspace: async () => {
       workspaceCalls += 1;
     },
   })(mock.pi);
-  const context = createMockContext({
-    mode: "tui",
-    hasUI: true,
-    editor: async () => {
-      await writeFile(templatePath, "external", "utf8");
-      return "editor update";
-    },
-  });
+  const context = createMockContext({ mode: "tui", hasUI: true });
 
   await mock.commands.get("notes")?.handler("", context.ctx);
 
@@ -498,18 +528,11 @@ test("a replaced session cannot paste a path resolved by a stale command", async
   assert.equal(workspaceCalls, 0);
 });
 
-test("session replacement and shutdown after template editing prevent every stale continuation", async () => {
+test("session replacement and shutdown release template editing and prevent every stale continuation", async () => {
   for (const boundary of ["replacement", "shutdown"] as const) {
     const { agentDir, storage } = await fixture();
     await writeFile(join(storage.paths.templates, "draft.md"), "original", "utf8");
-    let signalEditorStarted!: () => void;
-    let releaseEditor!: (value: string | undefined) => void;
-    const editorStarted = new Promise<void>((resolve) => {
-      signalEditorStarted = resolve;
-    });
-    const editorResult = new Promise<string | undefined>((resolve) => {
-      releaseEditor = resolve;
-    });
+    const tui = createTuiHarness({ width: 72, rows: 20 });
     let managerCalls = 0;
     let replaceCalls = 0;
     let workspaceCalls = 0;
@@ -538,11 +561,8 @@ test("session replacement and shutdown after template editing prevent every stal
     const first = createMockContext({
       mode: "tui",
       hasUI: true,
+      custom: tui.custom,
       sessionManager: { id: `${boundary}-first` },
-      editor: async () => {
-        signalEditorStarted();
-        return editorResult;
-      },
     });
     const second = createMockContext({
       mode: "tui",
@@ -555,14 +575,13 @@ test("session replacement and shutdown after template editing prevent every stal
     assert.ok(shutdown);
     await start({}, first.ctx);
     const command = Promise.resolve(mock.commands.get("notes")?.handler("", first.ctx));
-    await editorStarted;
+    await tui.waitForOpen();
 
-    const crossing =
-      boundary === "replacement" ? Promise.resolve(start({}, second.ctx)) : Promise.resolve(shutdown({}, first.ctx));
-    releaseEditor("stale update");
-    await crossing;
+    if (boundary === "replacement") await start({}, second.ctx);
+    else await shutdown({}, first.ctx);
     await command;
 
+    assert.equal(tui.isOpen, false);
     assert.equal((await storage.readTemplate("draft.md")).content, "original");
     assert.equal(replaceCalls, 0);
     assert.equal(managerCalls, 1);
