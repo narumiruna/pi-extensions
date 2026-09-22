@@ -12,7 +12,7 @@ import { BtwPasteGuard } from "./keybindings.js";
 import type { BtwLayout } from "./settings.js";
 
 export const MIN_BTW_SPLIT_COLUMNS = 80;
-const PANE_DIVIDER_COLUMNS = 3;
+const PANE_DIVIDER_COLUMNS = 1;
 // biome-ignore lint/complexity/useRegexLiterals: the constructor keeps a raw ESC control character out of source.
 const SGR_MOUSE_PATTERN = new RegExp("^\\u001b\\[<(\\d+);(\\d+);\\d+[Mm]$");
 type BtwActivePane = "side" | "main";
@@ -188,11 +188,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   }
 
   private renderDivider(): string {
-    const leftPane: BtwActivePane = this.options.layout === "left-pane" ? "side" : "main";
-    const rightPane: BtwActivePane = leftPane === "side" ? "main" : "side";
-    const border = (pane: BtwActivePane) =>
-      this.options.theme.fg(pane === this.activePane ? "accent" : "borderMuted", pane === this.activePane ? "┃" : "│");
-    return `${border(leftPane)} ${border(rightPane)}`;
+    return this.options.theme.fg("borderMuted", "│");
   }
 
   private queuePaneFocus(pane: BtwActivePane): void {
