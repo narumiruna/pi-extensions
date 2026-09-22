@@ -68,12 +68,42 @@ test("template editor preserves hidden raw content and boundary whitespace while
   tui.setFocused(true);
   tui.type("x");
   tui.send(`${streamed}\u001b[200~${pasted}\u001b[201~`);
+  await Promise.resolve();
   const frame = tui.render();
   assert.equal(frame.join("\n").includes("\u001b]52"), false);
   assert.equal(frame.join("\n").includes("QQ==\u0007"), false);
+  assert.equal(frame.join("\n").includes("\u001b[201~"), false);
   tui.press("tui.input.submit");
 
   assert.equal(await editing, `${content}x${streamed}${pasted}`);
+});
+
+test("template editor rejects ambiguous literal paste terminators without changing content", async () => {
+  const start = "\u001b[200~";
+  const end = "\u001b[201~";
+  for (const inputs of [
+    [`${start}a${end}b${end}`],
+    [`${start}a${end}`, "\r", "b", end],
+    [`${start}a${end}`, "\u0003", "b", end],
+  ]) {
+    const tui = createTuiHarness({ width: 72, rows: 20 });
+    const context = editorContext(tui);
+    const editing = showTemplateEditor(context.ctx, snapshot("before "), {
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+    });
+
+    await tui.waitForOpen();
+    tui.setFocused(true);
+    for (const input of inputs) tui.send(input);
+    const frame = tui.render().join("\n");
+    assert.equal(frame.includes(end), false);
+    assert.match(stripVTControlCharacters(frame), /Paste rejected.*ambiguous/iu);
+    assert.equal(tui.isOpen, true);
+    tui.press("tui.input.submit");
+
+    assert.equal(await editing, "before ");
+  }
 });
 
 test("template editor honors configured submit and newline keys while Ctrl+C remains a hard cancel", async (t) => {

@@ -99,24 +99,32 @@ class TemplateEditor implements Component, Focusable {
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
     const title = truncateToWidth(this.theme.fg("accent", this.theme.bold(this.title)), safeWidth);
-    const warning = this.editor.hasHiddenCharacters()
-      ? [
-          truncateToWidth(
-            this.theme.fg("warning", "Terminal controls are hidden as spaces and preserved unless removed."),
-            safeWidth,
-          ),
-        ]
-      : [];
+    const warnings: string[] = [];
+    const pasteError = this.editor.getPasteError();
+    if (pasteError) warnings.push(truncateToWidth(this.theme.fg("error", pasteError), safeWidth));
+    if (this.editor.hasHiddenCharacters()) {
+      warnings.push(
+        truncateToWidth(
+          this.theme.fg("warning", "Terminal controls are hidden as spaces and preserved unless removed."),
+          safeWidth,
+        ),
+      );
+    }
     const editorLines = this.editor.render(safeWidth);
-    this.editorStartRow = 1 + warning.length;
+    this.editorStartRow = 1 + warnings.length;
     this.editorRows = editorLines.length;
     const hint = truncateToWidth(this.theme.fg("muted", this.hintText()), safeWidth);
-    return [title, ...warning, ...editorLines, hint];
+    return [title, ...warnings, ...editorLines, hint];
   }
 
   handleInput(data: string): void {
     if (this.finished) return;
-    if (this.editor.isPasting || data.includes(BRACKETED_PASTE_START)) {
+    if (
+      this.editor.isPasting ||
+      this.editor.isPasteBurstGuarded ||
+      data.includes(BRACKETED_PASTE_START) ||
+      data.includes(BRACKETED_PASTE_END)
+    ) {
       this.editor.handleInput(data);
       this.tui.requestRender();
       return;
@@ -160,13 +168,13 @@ class TemplateEditor implements Component, Focusable {
 
   dispose(): void {
     this.finished = true;
-    this.editor.focused = false;
+    this.editor.dispose();
   }
 
   private finish(value: string | undefined): void {
     if (this.finished) return;
     this.finished = true;
-    this.editor.focused = false;
+    this.editor.dispose();
     this.onDone(value);
   }
 
@@ -185,6 +193,10 @@ class RawPreservingEditor implements Focusable {
   private readonly rawByMarker = new Map<string, string>();
   private markerCodePoint = 0xe000;
   private pasteBuffer: string | undefined;
+  private pasteSnapshot: string | undefined;
+  private pasteError: string | undefined;
+  private pasteBurstGuarded = false;
+  private pasteBurstGeneration = 0;
 
   constructor(tui: TUI, theme: EditorTheme) {
     this.editor = new Editor(tui, theme, { paddingX: 0 });
@@ -203,6 +215,10 @@ class RawPreservingEditor implements Focusable {
     return this.pasteBuffer !== undefined;
   }
 
+  get isPasteBurstGuarded(): boolean {
+    return this.pasteBurstGuarded;
+  }
+
   handleInput(data: string): void {
     if (this.pasteBuffer !== undefined) {
       this.pasteBuffer += data;
@@ -212,10 +228,17 @@ class RawPreservingEditor implements Focusable {
     const pasteStart = data.indexOf(BRACKETED_PASTE_START);
     if (pasteStart >= 0) {
       if (pasteStart > 0) this.handleInput(data.slice(0, pasteStart));
+      this.pasteSnapshot = this.getExpandedText();
+      this.pasteError = undefined;
       this.pasteBuffer = data.slice(pasteStart + BRACKETED_PASTE_START.length);
       this.flushPasteBuffer();
       return;
     }
+    if (data.includes(BRACKETED_PASTE_END) && this.pasteSnapshot !== undefined) {
+      this.rejectAmbiguousPaste();
+      return;
+    }
+    this.pasteError = undefined;
     if (
       parseKey(data) === undefined &&
       [...data].some((character) => isUnsafeEditorCharacter(character) || this.rawByMarker.has(character))
@@ -244,11 +267,19 @@ class RawPreservingEditor implements Focusable {
     this.rawByMarker.clear();
     this.markerCodePoint = 0xe000;
     this.pasteBuffer = undefined;
+    this.pasteSnapshot = undefined;
+    this.pasteError = undefined;
+    this.pasteBurstGuarded = false;
+    this.pasteBurstGeneration += 1;
     this.editor.setText(this.encode(value));
   }
 
   getExpandedText(): string {
     return this.decode(this.editor.getExpandedText());
+  }
+
+  getPasteError(): string | undefined {
+    return this.pasteError;
   }
 
   hasHiddenCharacters(): boolean {
@@ -266,15 +297,43 @@ class RawPreservingEditor implements Focusable {
     this.editor.handleInput("\u001b\r");
   }
 
+  dispose(): void {
+    this.editor.focused = false;
+    this.pasteBuffer = undefined;
+    this.pasteSnapshot = undefined;
+    this.pasteBurstGuarded = false;
+    this.pasteBurstGeneration += 1;
+  }
+
   private flushPasteBuffer(): void {
     if (this.pasteBuffer === undefined) return;
     const pasteEnd = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
     if (pasteEnd < 0) return;
+    if (this.pasteBuffer.includes(BRACKETED_PASTE_END, pasteEnd + BRACKETED_PASTE_END.length)) {
+      this.rejectAmbiguousPaste();
+      return;
+    }
     const raw = this.pasteBuffer.slice(0, pasteEnd);
     const remaining = this.pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
     this.pasteBuffer = undefined;
     this.editor.handleInput(`${BRACKETED_PASTE_START}${this.encode(raw)}${BRACKETED_PASTE_END}`);
+    this.armPasteBurstGuard();
     if (remaining) this.handleInput(remaining);
+  }
+
+  private armPasteBurstGuard(): void {
+    this.pasteBurstGuarded = true;
+    const generation = ++this.pasteBurstGeneration;
+    queueMicrotask(() => {
+      if (generation === this.pasteBurstGeneration) this.pasteBurstGuarded = false;
+    });
+  }
+
+  private rejectAmbiguousPaste(): void {
+    const snapshot = this.pasteSnapshot;
+    if (snapshot === undefined) return;
+    this.setText(snapshot);
+    this.pasteError = "Paste rejected because it contains an ambiguous bracketed-paste terminator.";
   }
 
   private encode(value: string): string {

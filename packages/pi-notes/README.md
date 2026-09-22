@@ -84,7 +84,7 @@ New managed directories use mode `0700` and newly created notes use `0600` where
 
 The manager rescans notes and templates when each screen opens. **Paste a note path…** resolves the selected regular file again, closes the manager, and inserts its canonical absolute path at the parent editor's current cursor without replacing the existing draft. Paths containing terminal or display-direction controls are rejected because Pi's paste handling cannot preserve them safely.
 
-**Manage templates…** opens an existing template in a Pi-style multiline editor. The editor preserves leading and trailing whitespace and hides terminal controls as spaces without changing their raw values. Cancelling or submitting unchanged content returns to the manager without writing. A changed template is published atomically only if its revision is still current; if another process changed it, Pi Notes preserves that external content, reports the conflict, and refreshes the manager.
+**Manage templates…** opens an existing template in a Pi-style multiline editor. The editor preserves leading and trailing whitespace and hides terminal controls as spaces without changing their raw values. It rejects pasted text containing an ambiguous bracketed-paste terminator rather than silently reordering it. Cancelling or submitting unchanged content returns to the manager without writing. A changed template is published atomically only if its revision is still current; if another process changed it, Pi Notes preserves that external content, reports the conflict, and refreshes the manager.
 
 Creating a note copies the selected template exactly once; later template changes do not classify or alter that note.
 
