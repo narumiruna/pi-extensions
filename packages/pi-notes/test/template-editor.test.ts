@@ -3,6 +3,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import {
   getKeybindings,
+  type KeybindingsConfig,
   KeybindingsManager,
   setKeybindings,
   TUI_KEYBINDINGS,
@@ -85,6 +86,36 @@ test("template editor preserves hidden raw content and boundary whitespace while
   await confirmPasteAndSubmit(tui);
 
   assert.equal(await editing, `${content}x${streamed}${pasted}`);
+});
+
+test("template editor decodes tmux CSI-u paste controls before preserving raw content", async () => {
+  const cases = [
+    { input: "\u001b[97;5u", expected: "\u0001" },
+    { input: "\u001b[122;5u", expected: "\u001a" },
+    { input: "\u001b[65;5u", expected: "\u0001" },
+    { input: "\u001b[90;5u", expected: "\u001a" },
+    { input: "\u001b[106;5u", expected: "\n" },
+    { input: "\u001b[74;5u", expected: "\n" },
+    { input: "\u001b[96;5u", expected: "\u001b[96;5u" },
+    { input: "\u001b[123;5u", expected: "\u001b[123;5u" },
+    { input: "\u001b[106;4u", expected: "\u001b[106;4u" },
+  ];
+  const tui = createTuiHarness({ width: 72, rows: 20 });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot(""), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.send(`\u001b[200~${cases.map(({ input }) => input).join("|")}\u001b[201~`);
+  const frame = tui.render().join("\n");
+  assert.equal(frame.includes("\u0001"), false);
+  assert.equal(frame.includes("\u001a"), false);
+  await confirmPasteAndSubmit(tui);
+
+  assert.equal(await editing, cases.map(({ expected }) => expected).join("|"));
 });
 
 test("template editor reserves literal private-use characters across normal undo history", async () => {
@@ -272,6 +303,100 @@ test("template editor undo after paste rejection cannot restore rejected content
   tui.press("tui.input.submit");
 
   assert.equal(await editing, "");
+});
+
+test("template editor gives focused editing actions priority over a colliding cancel binding", async (t) => {
+  const previousKeybindings = getKeybindings();
+  t.onTestFinished(() => setKeybindings(previousKeybindings));
+  const bindings = {
+    "tui.select.cancel": [
+      "backspace",
+      "shift+backspace",
+      "shift+delete",
+      "shift+space",
+      "enter",
+      "alt+enter",
+      "shift+enter",
+      "ctrl+j",
+    ],
+    "tui.input.newLine": "ctrl+n",
+  } satisfies KeybindingsConfig;
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
+  setKeybindings(keybindings);
+  const tui = createTuiHarness({ width: 72, rows: 20, keybindings });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot("wrongxy"), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  const frame = stripVTControlCharacters(tui.render().join("\n"));
+  assert.match(frame, /ctrl\+c cancel/iu);
+  assert.doesNotMatch(frame, /backspace.*cancel/iu);
+  tui.send("\u007f");
+  tui.send("\u001b[127;2u");
+  tui.send("\u001b[32;2u");
+  tui.type("x");
+  tui.send("\u001b[D");
+  tui.send("\u001b[3;2~");
+  tui.send("\u007f");
+  tui.send("\u001b\r");
+  tui.type("second");
+  tui.send("\u001b[13;2~");
+  tui.type("third");
+  tui.send("\n");
+  tui.type("fourth");
+  tui.send("\r");
+
+  assert.equal(await editing, "wrong\nsecond\nthird\nfourth");
+});
+
+test("template editor resolves custom cancel bindings without preempting printable input", async (t) => {
+  const previousKeybindings = getKeybindings();
+  t.onTestFinished(() => setKeybindings(previousKeybindings));
+  const cases: Array<{
+    name: string;
+    cancel: KeybindingsConfig["tui.select.cancel"];
+    input: string;
+    expected?: string;
+  }> = [
+    { name: "modifier order", cancel: "shift+ctrl+x", input: "\u001b[120;6u" },
+    {
+      name: "first usable fallback",
+      cancel: ["not-a-key", "ctrl+x"] as unknown as KeybindingsConfig["tui.select.cancel"],
+      input: "\u0018",
+    },
+    {
+      name: "hard-cancel fallback",
+      cancel: "not-a-key" as unknown as KeybindingsConfig["tui.select.cancel"],
+      input: "\u0003",
+    },
+    { name: "legacy printable collision", cancel: "x", input: "x", expected: "x" },
+    { name: "Kitty printable collision", cancel: "x", input: "\u001b[120u", expected: "x" },
+    { name: "modifyOtherKeys collision", cancel: "shift+x", input: "\u001b[27;2;88~", expected: "X" },
+  ];
+
+  for (const testCase of cases) {
+    const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.select.cancel": testCase.cancel,
+    });
+    setKeybindings(keybindings);
+    const tui = createTuiHarness({ width: 72, rows: 20, keybindings });
+    const context = editorContext(tui);
+    const editing = showTemplateEditor(context.ctx, snapshot(""), {
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+    });
+
+    await tui.waitForOpen();
+    tui.setFocused(true);
+    tui.send(testCase.input);
+    if (testCase.expected !== undefined) tui.press("tui.input.submit");
+
+    assert.equal(await editing, testCase.expected, testCase.name);
+  }
 });
 
 test("template editor honors configured submit and newline keys while Ctrl+C remains a hard cancel", async (t) => {
