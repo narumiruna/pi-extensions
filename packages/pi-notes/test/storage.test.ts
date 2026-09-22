@@ -422,6 +422,30 @@ test("note rename preserves content and rejects stale, conflicting, unsafe, and 
   );
 });
 
+test("note rename accepts the discovery depth boundary and rejects deeper destinations", async () => {
+  const { storage } = await fixture();
+  await writeFile(join(storage.paths.notes, "visible-source.md"), "visible", "utf8");
+  const visibleSource = await storage.readNote("visible-source.md");
+  const visiblePath = `${Array.from({ length: MAX_SCAN_DEPTH }, (_, index) => `level-${index}`).join("/")}/visible.md`;
+
+  const renamed = await storage.renameNote("visible-source.md", visibleSource.revision, visiblePath);
+  assert.equal(renamed.relativePath, visiblePath);
+  assert.deepEqual(
+    (await storage.discoverNotes()).entries.map(({ relativePath }) => relativePath),
+    [visiblePath],
+  );
+
+  await writeFile(join(storage.paths.notes, "hidden-source.md"), "hidden", "utf8");
+  const hiddenSource = await storage.readNote("hidden-source.md");
+  const hiddenPath = `${Array.from({ length: MAX_SCAN_DEPTH + 1 }, (_, index) => `too-deep-${index}`).join("/")}/hidden.md`;
+
+  await assert.rejects(
+    storage.renameNote("hidden-source.md", hiddenSource.revision, hiddenPath),
+    new RegExp(`at most ${MAX_SCAN_DEPTH} parent directories`, "iu"),
+  );
+  assert.equal((await storage.readNote("hidden-source.md")).content, "hidden");
+});
+
 test("concurrent note renames publish one destination without duplicating or overwriting content", async () => {
   const { storage } = await fixture();
   await writeFile(join(storage.paths.notes, "source.md"), "source", "utf8");

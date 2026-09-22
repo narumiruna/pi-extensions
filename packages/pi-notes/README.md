@@ -109,7 +109,7 @@ The content tools accept no path, and the rename tool accepts no source path. A 
 - The managed notes-root path, note content, child prompts, tool results, and relevant child conversation history are sent to the selected model provider when the embedded agent runs.
 - Model and credential configuration is read from Pi's configured agent directory. A provider registered only in another extension's in-memory runtime is not inherited.
 - Child history remains on disk under `pi-notes/sessions/` until the user removes it.
-- Note and template operations reject absolute paths, traversal, special files, and symlinked managed paths. Rename refuses an existing destination. Same-directory temporary files and atomic publication preserve the previous content when a managed write fails.
+- Note and template operations reject absolute paths, traversal, special files, and symlinked managed paths. Rename refuses an existing destination and paths deeper than the discovery limit so renamed notes remain available in menus. Same-directory temporary files and atomic publication preserve the previous content when a managed write fails.
 - Revision checks detect stale writes and renames, but another process can still change a file immediately around publication; this extension does not provide cross-process locking or an OS sandbox.
 - Note paths and content are treated as untrusted terminal text and sanitized only for display; raw Markdown content and valid raw file identities remain unchanged on disk.
 - The extension has no delete operation. Removing or disabling the package leaves `getAgentDir()/pi-notes/` untouched.

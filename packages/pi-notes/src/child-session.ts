@@ -13,7 +13,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
-import { CHILD_TOOL_NAMES, MAX_SESSION_FILES_PER_NOTE, NOTES_SYSTEM_PROMPT } from "./constants.js";
+import { CHILD_TOOL_NAMES, MAX_SCAN_DEPTH, MAX_SESSION_FILES_PER_NOTE, NOTES_SYSTEM_PROMPT } from "./constants.js";
 import { type NoteSnapshot, type NotesStorage, noteSessionKey } from "./storage.js";
 
 export { noteSessionKey };
@@ -198,7 +198,7 @@ export function createCurrentNoteTools(
       newPath: Type.String({
         minLength: 4,
         maxLength: 1_024,
-        description: "New relative path below the notes root, ending in .md",
+        description: `New relative path below the notes root, ending in .md, with at most ${MAX_SCAN_DEPTH} parent directories`,
       }),
     }),
     executionMode: "sequential",

@@ -170,6 +170,9 @@ export class NotesStorage {
   ): Promise<NoteSnapshot> {
     const normalized = normalizeExistingMarkdownPath(relativePath);
     const renamed = normalizeRelativeMarkdownPath(newRelativePath);
+    if (renamed.split("/").length - 1 > MAX_SCAN_DEPTH) {
+      throw new Error(`Rename destination must contain at most ${MAX_SCAN_DEPTH} parent directories`);
+    }
     if (renamed === normalized) throw new Error(`The current note is already named ${renamed}`);
     const root = await canonicalDirectory(this.paths.notes, signal);
     const source = resolve(root, ...normalized.split("/"));

@@ -10,6 +10,7 @@ import { createCurrentNoteTools, createNotesChildSession, noteSessionKey } from 
 import {
   CHILD_TOOL_NAMES,
   MAX_MARKDOWN_BYTES,
+  MAX_SCAN_DEPTH,
   MAX_SESSION_FILES_PER_NOTE,
   NOTES_SYSTEM_PROMPT,
 } from "../src/constants.js";
@@ -206,6 +207,7 @@ test("current-note tools enforce revisions, keep the source path implicit, and f
   );
   for (const tool of tools.slice(0, 3)) assert.doesNotMatch(JSON.stringify(tool.parameters), /path/iu);
   assert.match(JSON.stringify(tools[3]?.parameters), /newPath/u);
+  assert.match(JSON.stringify(tools[3]?.parameters), new RegExp(`at most ${MAX_SCAN_DEPTH}`, "u"));
   assert.doesNotMatch(JSON.stringify(tools[3]?.parameters), /sourcePath|oldPath/iu);
   assert.equal(tools[3]?.executionMode, "sequential");
 
