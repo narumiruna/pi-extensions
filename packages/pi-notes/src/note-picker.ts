@@ -141,7 +141,7 @@ export class NotePicker implements Component, Focusable {
 
   constructor(private readonly options: NotePickerOptions) {
     this.searchEnabled = options.notes.length > 8;
-    this.searchInput.setValue(sanitizeTerminalText(options.initialQuery ?? ""));
+    initializeSearchInput(this.searchInput, sanitizeTerminalText(options.initialQuery ?? ""));
     this.searchInput.focused = false;
     this.filteredNotes = this.filterNotes();
     this.selectedPath = this.filteredNotes.some(({ relativePath }) => relativePath === options.initialSelectedPath)
@@ -524,6 +524,25 @@ export class NotePicker implements Component, Focusable {
     this.pasteBuffer = undefined;
     this.options.complete(result);
   }
+}
+
+function initializeSearchInput(input: Input, value: string): void {
+  input.setValue(value);
+  // Input.setValue() preserves its cursor, so use its public mouse contract to place a fresh cursor at the end.
+  const x = visibleWidth(value) + 2;
+  input.handleMouse({
+    type: "press",
+    button: "left",
+    x,
+    y: 0,
+    screenX: x,
+    screenY: 0,
+    width: x + 1,
+    height: 1,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
 }
 
 /** Resolve the first effective delete binding that remains reachable in this picker. */

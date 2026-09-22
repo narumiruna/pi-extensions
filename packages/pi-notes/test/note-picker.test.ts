@@ -116,6 +116,17 @@ test("search keeps printable remapped delete keys editable and uses the first no
   });
 });
 
+test("restored search query places the fresh cursor at the conventional end", () => {
+  const notes = Array.from({ length: 9 }, (_, index) => note(`xnotex-${index}.md`, index));
+  const { picker, result } = createPicker(notes, { query: "note" });
+  picker.focused = true;
+
+  picker.handleInput("x");
+  picker.handleInput("\u0003");
+
+  assert.deepEqual(result(), { kind: "close", selectedPath: "xnotex-0.md", query: "notex" });
+});
+
 test.each([
   {
     name: "Backspace",
