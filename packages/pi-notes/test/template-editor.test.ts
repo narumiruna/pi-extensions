@@ -320,6 +320,7 @@ test("template editor gives focused editing actions priority over a colliding ca
       "ctrl+j",
     ],
     "tui.input.newLine": "ctrl+n",
+    "tui.editor.deleteWordBackward": "alt+enter",
   } satisfies KeybindingsConfig;
   const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
   setKeybindings(keybindings);
@@ -342,7 +343,7 @@ test("template editor gives focused editing actions priority over a colliding ca
   tui.send("\u001b[D");
   tui.send("\u001b[3;2~");
   tui.send("\u007f");
-  tui.send("\u001b\r");
+  tui.send("\u000e");
   tui.type("second");
   tui.send("\u001b[13;2~");
   tui.type("third");

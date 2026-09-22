@@ -423,7 +423,7 @@ class RawPreservingEditor implements Focusable {
   addNewline(): void {
     this.pasteSubmissionArmed = false;
     this.pasteError = undefined;
-    this.editor.handleInput("\u001b\r");
+    this.editor.insertTextAtCursor("\n");
   }
 
   replaceBackslashWithNewline(): void {
