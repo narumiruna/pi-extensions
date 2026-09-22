@@ -18,7 +18,7 @@ import type { TemplateSnapshot } from "./storage.js";
 
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
-const PASTE_TAIL_SETTLE_MS = 50;
+const PASTE_TAIL_GUARD_MS = 50;
 
 interface TemplateEditorOwnership {
   signal: AbortSignal;
@@ -183,6 +183,10 @@ class TemplateEditor implements Component, Focusable {
         this.tui.requestRender();
         return;
       }
+      if (!this.editor.confirmPasteSubmission()) {
+        this.tui.requestRender();
+        return;
+      }
       this.finish(this.editor.getExpandedText());
       return;
     }
@@ -210,7 +214,7 @@ class TemplateEditor implements Component, Focusable {
       });
     }
     if (this.pasteTailTimer) clearTimeout(this.pasteTailTimer);
-    this.pasteTailTimer = setTimeout(() => this.flushPendingPasteInputs(), PASTE_TAIL_SETTLE_MS);
+    this.pasteTailTimer = setTimeout(() => this.flushPendingPasteInputs(), PASTE_TAIL_GUARD_MS);
   }
 
   private flushPendingPasteInputs(): void {
@@ -260,10 +264,13 @@ class TemplateEditor implements Component, Focusable {
 
 class RawPreservingEditor implements Focusable {
   private editor: Editor;
-  private readonly rawByMarker = new Map<string, string>();
+  private readonly rawByMarker = new Map<string, { raw: string; hidden: boolean }>();
+  private readonly reservedRawCharacters = new Set<string>();
   private markerCodePoint = 0xe000;
   private pasteBuffer: string | undefined;
   private pasteSnapshot: string | undefined;
+  private pasteTailGuarded = false;
+  private pasteSubmissionArmed = false;
   private pasteError: string | undefined;
 
   constructor(
@@ -286,7 +293,7 @@ class RawPreservingEditor implements Focusable {
   }
 
   get hasPendingPaste(): boolean {
-    return this.pasteSnapshot !== undefined && this.pasteBuffer === undefined;
+    return this.pasteSnapshot !== undefined && this.pasteTailGuarded && this.pasteBuffer === undefined;
   }
 
   handleInput(data: string): string | undefined {
@@ -297,7 +304,9 @@ class RawPreservingEditor implements Focusable {
     const pasteStart = data.indexOf(BRACKETED_PASTE_START);
     if (pasteStart >= 0) {
       if (pasteStart > 0) this.handleInput(data.slice(0, pasteStart));
-      this.pasteSnapshot = this.getExpandedText();
+      this.pasteSnapshot ??= this.getExpandedText();
+      this.pasteTailGuarded = false;
+      this.pasteSubmissionArmed = false;
       this.pasteError = undefined;
       this.pasteBuffer = data.slice(pasteStart + BRACKETED_PASTE_START.length);
       return this.flushPasteBuffer();
@@ -306,26 +315,33 @@ class RawPreservingEditor implements Focusable {
       this.rejectPendingPaste();
       return undefined;
     }
+    this.pasteSubmissionArmed = false;
     this.pasteError = undefined;
-    if (
-      parseKey(data) === undefined &&
-      [...data].some((character) => isUnsafeEditorCharacter(character) || this.rawByMarker.has(character))
-    ) {
-      this.editor.handleInput(this.encode(data));
-      return undefined;
+    if (parseKey(data) === undefined) {
+      this.reserveRawCharacters(data);
+      if ([...data].some((character) => needsRawMarker(character, this.rawByMarker))) {
+        this.editor.handleInput(this.encode(data));
+        return undefined;
+      }
     }
     this.editor.handleInput(data);
     return undefined;
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    this.pasteSubmissionArmed = false;
     return this.editor.handleMouse(event);
   }
 
   render(width: number): string[] {
-    return this.editor
-      .render(width)
-      .map((line) => [...line].map((character) => (this.rawByMarker.has(character) ? " " : character)).join(""));
+    return this.editor.render(width).map((line) =>
+      [...line]
+        .map((character) => {
+          const marker = this.rawByMarker.get(character);
+          return marker ? (marker.hidden ? " " : marker.raw) : character;
+        })
+        .join(""),
+    );
   }
 
   invalidate(): void {
@@ -334,9 +350,12 @@ class RawPreservingEditor implements Focusable {
 
   setText(value: string): void {
     this.rawByMarker.clear();
+    this.reservedRawCharacters.clear();
     this.markerCodePoint = 0xe000;
     this.pasteBuffer = undefined;
     this.pasteSnapshot = undefined;
+    this.pasteTailGuarded = false;
+    this.pasteSubmissionArmed = false;
     this.pasteError = undefined;
     this.editor.setText(this.encode(value));
   }
@@ -350,7 +369,7 @@ class RawPreservingEditor implements Focusable {
   }
 
   hasHiddenCharacters(): boolean {
-    return [...this.editor.getExpandedText()].some((character) => this.rawByMarker.has(character));
+    return [...this.editor.getExpandedText()].some((character) => this.rawByMarker.get(character)?.hidden);
   }
 
   hasBackslashBeforeCursor(): boolean {
@@ -365,7 +384,21 @@ class RawPreservingEditor implements Focusable {
   }
 
   commitPendingPaste(): void {
+    this.pasteTailGuarded = false;
+  }
+
+  confirmPasteSubmission(): boolean {
+    if (this.pasteSnapshot === undefined) return true;
+    if (!this.pasteSubmissionArmed) {
+      this.pasteSubmissionArmed = true;
+      this.pasteError = "Paste boundary pending; review the content and press save again to confirm.";
+      return false;
+    }
     this.pasteSnapshot = undefined;
+    this.pasteTailGuarded = false;
+    this.pasteSubmissionArmed = false;
+    this.pasteError = undefined;
+    return true;
   }
 
   rejectPendingPaste(): void {
@@ -379,6 +412,8 @@ class RawPreservingEditor implements Focusable {
     this.editor.focused = false;
     this.pasteBuffer = undefined;
     this.pasteSnapshot = undefined;
+    this.pasteTailGuarded = false;
+    this.pasteSubmissionArmed = false;
   }
 
   private flushPasteBuffer(): string | undefined {
@@ -393,15 +428,19 @@ class RawPreservingEditor implements Focusable {
     const remaining = this.pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
     this.pasteBuffer = undefined;
     this.editor.handleInput(`${BRACKETED_PASTE_START}${this.encode(raw)}${BRACKETED_PASTE_END}`);
+    this.pasteTailGuarded = true;
     return remaining || undefined;
   }
 
   private restorePasteSnapshot(value: string): void {
     const focused = this.editor.focused;
     this.rawByMarker.clear();
+    this.reservedRawCharacters.clear();
     this.markerCodePoint = 0xe000;
     this.pasteBuffer = undefined;
     this.pasteSnapshot = undefined;
+    this.pasteTailGuarded = false;
+    this.pasteSubmissionArmed = false;
     this.pasteError = undefined;
     this.editor = this.createEditor();
     this.editor.focused = focused;
@@ -415,12 +454,17 @@ class RawPreservingEditor implements Focusable {
   }
 
   private encode(value: string): string {
-    const forbidden = new Set([...value, ...this.editor.getExpandedText(), ...this.rawByMarker.keys()]);
+    this.reserveRawCharacters(value);
+    const forbidden = new Set([
+      ...this.reservedRawCharacters,
+      ...this.editor.getExpandedText(),
+      ...this.rawByMarker.keys(),
+    ]);
     return [...value]
       .map((character) => {
-        if (!isUnsafeEditorCharacter(character) && !this.rawByMarker.has(character)) return character;
+        if (!needsRawMarker(character, this.rawByMarker)) return character;
         const marker = this.nextMarker(forbidden);
-        this.rawByMarker.set(marker, character);
+        this.rawByMarker.set(marker, { raw: character, hidden: isUnsafeEditorCharacter(character) });
         forbidden.add(marker);
         return marker;
       })
@@ -428,7 +472,11 @@ class RawPreservingEditor implements Focusable {
   }
 
   private decode(value: string): string {
-    return [...value].map((character) => this.rawByMarker.get(character) ?? character).join("");
+    return [...value].map((character) => this.rawByMarker.get(character)?.raw ?? character).join("");
+  }
+
+  private reserveRawCharacters(value: string): void {
+    for (const character of value) this.reservedRawCharacters.add(character);
   }
 
   private nextMarker(forbidden: ReadonlySet<string>): string {
@@ -465,6 +513,10 @@ function keyHint(
 function cancelHint(keybindings: KeybindingsManager): string {
   const keys = [...new Set([...keybindings.getKeys("tui.select.cancel"), "ctrl+c"])];
   return `${sanitizeTerminalText(keys.join("/"))} cancel`;
+}
+
+function needsRawMarker(character: string, rawByMarker: ReadonlyMap<string, unknown>): boolean {
+  return character === "#" || isUnsafeEditorCharacter(character) || rawByMarker.has(character);
 }
 
 function isUnsafeEditorCharacter(character: string): boolean {

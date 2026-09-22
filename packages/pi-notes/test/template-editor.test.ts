@@ -27,6 +27,14 @@ function editorContext(tui: ReturnType<typeof createTuiHarness>) {
   return createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
 }
 
+async function confirmPasteAndSubmit(tui: ReturnType<typeof createTuiHarness>): Promise<void> {
+  await tui.waitForPending();
+  tui.press("tui.input.submit");
+  assert.equal(tui.isOpen, true);
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /Paste boundary pending/iu);
+  tui.press("tui.input.submit");
+}
+
 test("template editor hides terminal controls and submits exact boundary whitespace", async () => {
   const content = " \tlead\u001b]52;c;QQ==\u0007\nbody\u001b[31m\u009b32m\u007f\u202e\u2028\n ";
   const tui = createTuiHarness({ width: 52, rows: 20 });
@@ -74,9 +82,49 @@ test("template editor preserves hidden raw content and boundary whitespace while
   assert.equal(frame.join("\n").includes("\u001b]52"), false);
   assert.equal(frame.join("\n").includes("QQ==\u0007"), false);
   assert.equal(frame.join("\n").includes("\u001b[201~"), false);
-  tui.press("tui.input.submit");
+  await confirmPasteAndSubmit(tui);
 
   assert.equal(await editing, `${content}x${streamed}${pasted}`);
+});
+
+test("template editor reserves literal private-use characters across normal undo history", async () => {
+  const content = "\ue000";
+  const tui = createTuiHarness({ width: 72, rows: 20 });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot(content), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.send("\u007f");
+  tui.send("\u202e");
+  tui.send("\u001f");
+  tui.send("\u001f");
+  tui.press("tui.input.submit");
+
+  assert.equal(await editing, content);
+});
+
+test("template editor preserves literal Pi paste-marker text around a large paste", async () => {
+  const content = "[paste #1 1100 chars]";
+  const pasted = "p".repeat(1_100);
+  const tui = createTuiHarness({ width: 72, rows: 20 });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot(content), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  assert.equal(stripVTControlCharacters(tui.render().join("\n")).includes(content), true);
+  tui.send(`\u001b[200~${pasted}\u001b[201~`);
+  await tui.waitForPending();
+  await confirmPasteAndSubmit(tui);
+
+  assert.equal(await editing, `${content}${pasted}`);
 });
 
 test("template editor accepts split paste chunks and a later distinct paste", async () => {
@@ -98,9 +146,35 @@ test("template editor accepts split paste chunks and a later distinct paste", as
   await tui.waitForPending();
   tui.send(`${start}second${end}`);
   await tui.waitForPending();
-  tui.press("tui.input.submit");
+  await confirmPasteAndSubmit(tui);
 
   assert.equal(await editing, "before first-tailsecond");
+});
+
+test("template editor rejects a paste tail that arrives after the shortcut guard drains", async () => {
+  const start = "\u001b[200~";
+  const end = "\u001b[201~";
+  const tui = createTuiHarness({ width: 72, rows: 20 });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot("before "), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.send(`${start}a${end}`);
+  await tui.waitForPending();
+  tui.send("\r");
+  assert.equal(tui.isOpen, true);
+  tui.send("b");
+  await nextEventLoopTurn();
+  tui.send(end);
+  const frame = tui.render().join("\n");
+  assert.match(stripVTControlCharacters(frame), /Paste rejected.*ambiguous/iu);
+  tui.press("tui.input.submit");
+
+  assert.equal(await editing, "before ");
 });
 
 test("template editor rejects ambiguous literal paste terminators across later input callbacks", async () => {
@@ -181,6 +255,20 @@ test("template editor honors configured submit and newline keys while Ctrl+C rem
   assert.equal(submitTui.isOpen, true);
   submitTui.send("\u0013");
   assert.equal(await submitted, "edge \n");
+
+  const pasteTui = createTuiHarness({ width: 60, rows: 20, keybindings });
+  const pasteContext = editorContext(pasteTui);
+  const pasteSubmitted = showTemplateEditor(pasteContext.ctx, snapshot("edge "), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  await pasteTui.waitForOpen();
+  pasteTui.send("\u001b[200~paste\u001b[201~");
+  await pasteTui.waitForPending();
+  pasteTui.send("\u0013");
+  assert.equal(pasteTui.isOpen, true);
+  pasteTui.send("\u0013");
+  assert.equal(await pasteSubmitted, "edge paste");
 
   for (const cancelInput of ["\u0018", "\u0003"]) {
     const cancelTui = createTuiHarness({ width: 60, rows: 20, keybindings });
