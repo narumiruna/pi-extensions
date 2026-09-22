@@ -157,17 +157,23 @@ test.each([
   assert.equal(renders.count, 2);
 });
 
-test("the accent divider follows the clicked pane", async () => {
+test("split panes use one muted divider column", async () => {
   const paneTheme = {
     fg: (role: string, text: string) =>
       role === "accent" ? `\u001b[31m${text}\u001b[39m` : `\u001b[90m${text}\u001b[39m`,
   } as never;
   const { component } = split("left-pane", 3, paneTheme);
 
-  assert.equal((component.render(120)[0] ?? "").includes("\u001b[31m┃\u001b[39m \u001b[90m│\u001b[39m"), true);
+  const divider = "\u001b[90m│\u001b[39m";
+  const initial = component.render(120)[0] ?? "";
+  assert.equal(initial.split(divider).length - 1, 1);
+  assert.equal(visibleWidth(initial), 120);
+
   component.handleTerminalInput(mouse(0, 110));
   await Promise.resolve();
-  assert.equal((component.render(120)[0] ?? "").includes("\u001b[90m│\u001b[39m \u001b[31m┃\u001b[39m"), true);
+  const focusedMain = component.render(120)[0] ?? "";
+  assert.equal(focusedMain.split(divider).length - 1, 1);
+  assert.equal(visibleWidth(focusedMain), 120);
 });
 
 test("wheel, pointer movement, divider clicks, and focused overlays do not switch panes", async () => {

@@ -20,7 +20,7 @@ Opening and closing without a new result does not reorder them.
 The dedicated workspace keeps answers above the editor and identifies itself with a fixed `btw · side thread` header.
 The default **Fullscreen** layout gives the side thread the complete workspace.
 **Side thread left** and **Side thread right** place it beside Pi's native, live main-thread rendering; terminals narrower than 80 columns show only the side thread.
-Click either pane to move keyboard focus to it; the heavier accent divider marks the active pane.
+A single muted divider separates the panes; click either pane to move keyboard focus to it.
 Pi's search and keyboard viewport controls apply to the active pane.
 The mouse wheel scrolls the pane under the pointer without moving keyboard focus, and a narrow terminal returns focus to the visible side thread.
 A branch selected through **Start from main thread tree…** supplies side-model context but does not replace the active main thread shown in the other pane.
