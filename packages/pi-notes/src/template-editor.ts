@@ -317,7 +317,12 @@ class RawPreservingEditor implements Focusable {
     }
     this.pasteSubmissionArmed = false;
     this.pasteError = undefined;
-    if (parseKey(data) === undefined) {
+    const parsedKey = parseKey(data);
+    if (parsedKey === "#") {
+      this.editor.handleInput(this.encode(parsedKey));
+      return undefined;
+    }
+    if (parsedKey === undefined) {
       this.reserveRawCharacters(data);
       if ([...data].some((character) => needsRawMarker(character, this.rawByMarker))) {
         this.editor.handleInput(this.encode(data));

@@ -127,6 +127,27 @@ test("template editor preserves literal Pi paste-marker text around a large past
   assert.equal(await editing, `${content}${pasted}`);
 });
 
+test("template editor protects typed Pi paste-marker text for legacy and Kitty input", async () => {
+  const literal = "[paste #1 1100 chars]";
+  const pasted = "p".repeat(1_100);
+  for (const hashInput of ["#", "\u001b[35u"]) {
+    const tui = createTuiHarness({ width: 72, rows: 20 });
+    const context = editorContext(tui);
+    const editing = showTemplateEditor(context.ctx, snapshot(""), {
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+    });
+
+    await tui.waitForOpen();
+    tui.setFocused(true);
+    for (const character of literal) tui.send(character === "#" ? hashInput : character);
+    tui.send(`\u001b[200~${pasted}\u001b[201~`);
+    await confirmPasteAndSubmit(tui);
+
+    assert.equal(await editing, `${literal}${pasted}`);
+  }
+});
+
 test("template editor accepts split paste chunks and a later distinct paste", async () => {
   const start = "\u001b[200~";
   const end = "\u001b[201~";
