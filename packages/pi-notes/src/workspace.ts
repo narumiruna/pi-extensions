@@ -121,6 +121,7 @@ export class NotesWorkspace {
   private child: NotesChildSession | undefined;
   private unsubscribe = () => {};
   private note: NoteSnapshot | undefined;
+  private notePath: string;
   private status = "Opening embedded note session…";
   private error: string | undefined;
   private pane: Pane = "chat";
@@ -145,6 +146,7 @@ export class NotesWorkspace {
 
   constructor(options: NotesWorkspaceOptions) {
     this.options = options;
+    this.notePath = options.notePath;
     this.tui = options.tui;
     this.theme = options.theme;
     this.keybindings = options.keybindings;
@@ -187,7 +189,7 @@ export class NotesWorkspace {
     const availableRows = Math.max(1, this.tui.terminal.rows - (this.tui.mode === "fullscreen" ? 0 : 4));
     this.editorMouseBounds = undefined;
     const title = truncateToWidth(
-      this.theme.fg("accent", this.theme.bold(sanitizeTerminalText(this.options.notePath))),
+      this.theme.fg("accent", this.theme.bold(sanitizeTerminalText(this.notePath))),
       safeWidth,
     );
     const hint = truncateToWidth(this.theme.fg("muted", this.hintText()), safeWidth);
@@ -296,19 +298,20 @@ export class NotesWorkspace {
   private async start(): Promise<void> {
     const generation = this.generation;
     try {
-      const note = await this.options.storage.readNote(this.options.notePath, this.signal());
+      const note = await this.options.storage.readNote(this.notePath, this.signal());
       if (!this.isCurrent(generation)) return;
       this.note = note;
       const child = await this.options.createChildSession({
         agentDir: this.options.agentDir,
         storage: this.options.storage,
-        notePath: this.options.notePath,
+        notePath: this.notePath,
         parentModel: this.options.parentModel,
         thinkingLevel: this.options.thinkingLevel,
         signal: this.signal(),
         onNoteChanged: (changed) => {
           if (!this.isCurrent(generation)) return;
           this.note = changed;
+          this.notePath = changed.relativePath;
           this.previewScroll = Math.min(this.previewScroll, this.maxPreviewScroll());
           this.tui.requestRender();
         },
@@ -372,7 +375,7 @@ export class NotesWorkspace {
       })
       .then(async () => {
         if (!this.isCurrent(generation)) return;
-        const note = await this.options.storage.readNote(this.options.notePath, this.signal());
+        const note = await this.options.storage.readNote(this.notePath, this.signal());
         if (!this.isCurrent(generation)) return;
         this.note = note;
         this.status = "Ready";

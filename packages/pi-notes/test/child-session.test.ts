@@ -10,6 +10,7 @@ import { createCurrentNoteTools, createNotesChildSession, noteSessionKey } from 
 import {
   CHILD_TOOL_NAMES,
   MAX_MARKDOWN_BYTES,
+  MAX_SCAN_DEPTH,
   MAX_SESSION_FILES_PER_NOTE,
   NOTES_SYSTEM_PROMPT,
 } from "../src/constants.js";
@@ -60,7 +61,7 @@ async function fauxRuntime() {
   return { runtime, faux, model };
 }
 
-test("embedded AgentSession streams, invokes pathless current-note tools, persists, and leaves parent state unchanged", async () => {
+test("embedded AgentSession streams, invokes scoped current-note tools, persists, and leaves parent state unchanged", async () => {
   const { agentDir, storage } = await fixture();
   const { runtime, faux, model } = await fauxRuntime();
   const initial = await storage.readNote("current.md");
@@ -128,7 +129,74 @@ test("embedded AgentSession streams, invokes pathless current-note tools, persis
   }
 });
 
-test("tool definitions have no path parameter, enforce revisions, and keep output bounded", async () => {
+test.each([
+  {
+    toolName: "edit_current_note",
+    mutationArguments: (revision: string) => ({
+      revision,
+      oldText: "old text",
+      newText: "renamed and edited",
+    }),
+    expectedContent: "# Current\n\nrenamed and edited\n",
+  },
+  {
+    toolName: "replace_current_note",
+    mutationArguments: (revision: string) => ({ revision, content: "# Renamed and replaced\n" }),
+    expectedContent: "# Renamed and replaced\n",
+  },
+] as const)(
+  "embedded AgentSession serializes a rename-first $toolName batch against the renamed path",
+  async ({ toolName, mutationArguments, expectedContent }) => {
+    const { agentDir, storage } = await fixture();
+    const { runtime, faux, model } = await fauxRuntime();
+    const initial = await storage.readNote("current.md");
+    const newPath = `topics/${toolName}.md`;
+    faux.setResponses([
+      fauxAssistantMessage([
+        fauxToolCall("rename_current_note", {
+          revision: initial.revision,
+          newPath,
+        }),
+        fauxToolCall(toolName, mutationArguments(initial.revision)),
+      ]),
+      fauxAssistantMessage("Renamed and updated the note."),
+    ]);
+    const noteChanges: string[] = [];
+    const child = await createNotesChildSession(
+      {
+        agentDir,
+        storage,
+        notePath: "current.md",
+        parentModel: model,
+        thinkingLevel: "off",
+        onNoteChanged: ({ relativePath }) => noteChanges.push(relativePath),
+      },
+      { createModelRuntime: async () => runtime },
+    );
+
+    try {
+      assert.match(child.session.systemPrompt, /call rename_current_note first/iu);
+      assert.match(child.session.systemPrompt, /calls execute in source order/iu);
+      await child.session.prompt("Rename and update the note in one response.", { expandPromptTemplates: false });
+      await assert.rejects(storage.readNote("current.md"), /ENOENT|no such/iu);
+      assert.equal((await storage.readNote(newPath)).content, expectedContent);
+      assert.deepEqual(noteChanges, [newPath, newPath]);
+      const toolResults = child.session.messages.filter((message) => message.role === "toolResult");
+      assert.deepEqual(
+        toolResults.map(({ toolName: resultToolName }) => resultToolName),
+        ["rename_current_note", toolName],
+      );
+      assert.equal(
+        toolResults.every(({ isError }) => !isError),
+        true,
+      );
+    } finally {
+      child.session.dispose();
+    }
+  },
+);
+
+test("current-note tools enforce revisions, keep the source path implicit, and follow a successful rename", async () => {
   const { storage } = await fixture();
   const tools = createCurrentNoteTools(storage, "current.md", () => {
     throw new Error("render callback failed after publication");
@@ -137,12 +205,17 @@ test("tool definitions have no path parameter, enforce revisions, and keep outpu
     tools.map(({ name }) => name),
     CHILD_TOOL_NAMES,
   );
-  for (const tool of tools) assert.doesNotMatch(JSON.stringify(tool.parameters), /path/iu);
+  for (const tool of tools.slice(0, 3)) assert.doesNotMatch(JSON.stringify(tool.parameters), /path/iu);
+  assert.match(JSON.stringify(tools[3]?.parameters), /newPath/u);
+  assert.match(JSON.stringify(tools[3]?.parameters), new RegExp(`at most ${MAX_SCAN_DEPTH}`, "u"));
+  assert.doesNotMatch(JSON.stringify(tools[3]?.parameters), /sourcePath|oldPath/iu);
+  assert.equal(tools[3]?.executionMode, "sequential");
 
   const readTool = tools[0];
   assert.ok(readTool);
   const read = await readTool.execute("read", {}, undefined, undefined, {} as never);
   const text = read.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(text, /Path: current\.md/u);
   assert.ok(Buffer.byteLength(text, "utf8") < 50_000);
   const initial = await storage.readNote("current.md");
   const editTool = tools[1];
@@ -164,7 +237,37 @@ test("tool definitions have no path parameter, enforce revisions, and keep outpu
     ),
     /stale/iu,
   );
-  assert.equal((await storage.readNote("current.md")).content, "# Current\n\nbounded\n");
+
+  const edited = await storage.readNote("current.md");
+  const renameTool = tools[3];
+  assert.ok(renameTool);
+  const rename = await renameTool.execute(
+    "rename",
+    { revision: edited.revision, newPath: "topics/bounded-note.md" },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  const renameText = rename.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(renameText, /current\.md.*topics\/bounded-note\.md/iu);
+  assert.ok(Buffer.byteLength(renameText, "utf8") < 50_000);
+  await assert.rejects(storage.readNote("current.md"), /ENOENT|no such/iu);
+
+  const afterRename = await readTool.execute("read-renamed", {}, undefined, undefined, {} as never);
+  const afterRenameText = afterRename.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(afterRenameText, /Path: topics\/bounded-note\.md/u);
+  const renamed = await storage.readNote("topics/bounded-note.md");
+  const replaceTool = tools[2];
+  assert.ok(replaceTool);
+  await replaceTool.execute(
+    "replace-renamed",
+    { revision: renamed.revision, content: "# Renamed\n" },
+    undefined,
+    undefined,
+    {} as never,
+  );
+
+  assert.equal((await storage.readNote("topics/bounded-note.md")).content, "# Renamed\n");
   assert.equal((await storage.readNote("other.md")).content, "# Other\n");
 });
 

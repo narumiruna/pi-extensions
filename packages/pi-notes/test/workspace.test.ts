@@ -239,7 +239,8 @@ test("workspace preserves remapped editing, newline, paste, streaming, preview r
   const fake = createFakeChild({
     onPrompt: async () => {
       const current = await storage.readNote("current.md");
-      const changed = await storage.replaceNote("current.md", current.revision, "# Updated\n\nFresh preview\n");
+      const renamed = await storage.renameNote("current.md", current.revision, "topics/updated-note.md");
+      const changed = await storage.replaceNote(renamed.relativePath, renamed.revision, "# Updated\n\nFresh preview\n");
       noteChanged?.(changed);
       signalPromptStarted();
       await promptRelease;
@@ -286,9 +287,14 @@ test("workspace preserves remapped editing, newline, paste, streaming, preview r
   releasePrompt();
   await tui.waitForPending();
   tui.send("\u0011");
-  const preview = stripVTControlCharacters(tui.render().join("\n"));
+  const previewLines = tui.render();
+  const preview = stripVTControlCharacters(previewLines.join("\n"));
+  assert.equal(stripVTControlCharacters(previewLines[0] ?? ""), "topics/updated-note.md");
   assert.match(preview, /Preview ·/u);
   assert.match(preview, /Updated|Fresh preview/u);
+  assert.doesNotMatch(preview, /ENOENT|no such/iu);
+  await assert.rejects(storage.readNote("current.md"), /ENOENT|no such/iu);
+  assert.equal((await storage.readNote("topics/updated-note.md")).content, "# Updated\n\nFresh preview\n");
   tui.send("\u000e");
   assert.equal(tui.isOpen, true);
   tui.send("\u0018");

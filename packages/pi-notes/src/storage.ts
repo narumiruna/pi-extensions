@@ -130,6 +130,71 @@ export class NotesStorage {
     });
   }
 
+  async createAutomaticNote(options: { templatePath?: string; signal?: AbortSignal } = {}): Promise<NoteSnapshot> {
+    const content = options.templatePath ? (await this.readTemplate(options.templatePath, options.signal)).content : "";
+    validateMarkdownContent(content, "Note");
+    const root = await canonicalDirectory(this.paths.notes, options.signal);
+    const sessionsRoot = await canonicalDirectory(this.paths.sessions, options.signal);
+    return withFileMutationQueue(root, async () => {
+      const createIfAvailable = async (relativePath: string): Promise<NoteSnapshot | undefined> => {
+        const target = resolve(root, relativePath);
+        if (await entryExists(join(sessionsRoot, noteSessionKey(relativePath)), options.signal)) return undefined;
+        try {
+          await assertMissingNote(target, relativePath, options.signal);
+          await atomicCreate(root, target, relativePath, content, options.signal, this.beforePublish);
+          return snapshot(relativePath, content);
+        } catch (error) {
+          if (!(error instanceof NoteAlreadyExistsError)) throw error;
+          return undefined;
+        }
+      };
+
+      for (let index = 1; index <= MAX_DISCOVERED_FILES + 1; index += 1) {
+        throwIfAborted(options.signal);
+        const note = await createIfAvailable(index === 1 ? "untitled.md" : `untitled-${index}.md`);
+        if (note) return note;
+      }
+      while (true) {
+        throwIfAborted(options.signal);
+        const note = await createIfAvailable(`untitled-${randomUUID()}.md`);
+        if (note) return note;
+      }
+    });
+  }
+
+  async renameNote(
+    relativePath: string,
+    expectedRevision: string,
+    newRelativePath: string,
+    signal?: AbortSignal,
+  ): Promise<NoteSnapshot> {
+    const normalized = normalizeExistingMarkdownPath(relativePath);
+    const renamed = normalizeRelativeMarkdownPath(newRelativePath);
+    if (renamed.split("/").length - 1 > MAX_SCAN_DEPTH) {
+      throw new Error(`Rename destination must contain at most ${MAX_SCAN_DEPTH} parent directories`);
+    }
+    if (renamed === normalized) throw new Error(`The current note is already named ${renamed}`);
+    const root = await canonicalDirectory(this.paths.notes, signal);
+    const source = resolve(root, ...normalized.split("/"));
+    const target = resolve(root, ...renamed.split("/"));
+    assertContained(root, source);
+    assertContained(root, target);
+    return withFileMutationQueue(root, async () => {
+      throwIfAborted(signal);
+      const current = await this.readNote(normalized, signal);
+      assertRevision(current, expectedRevision);
+      await ensureSafeParent(root, dirname(target), signal);
+      await assertMissingNote(target, renamed, signal);
+      await revalidateCanonicalParent(root, target, signal);
+      const latest = await this.readNote(normalized, signal);
+      assertRevision(latest, expectedRevision);
+      await assertMissingNote(target, renamed, signal);
+      throwIfAborted(signal);
+      await rename(source, target);
+      return snapshot(renamed, latest.content);
+    });
+  }
+
   async editNote(
     relativePath: string,
     expectedRevision: string,
@@ -233,6 +298,10 @@ function normalizeExistingMarkdownPath(input: string): string {
 
 export function revisionFor(content: string): string {
   return createHash("sha256").update(content).digest("hex");
+}
+
+export function noteSessionKey(notePath: string): string {
+  return createHash("sha256").update(notePath).digest("hex");
 }
 
 export function validateMarkdownContent(content: string, label: string): void {
@@ -441,15 +510,30 @@ async function atomicCreate(
   }
 }
 
+class NoteAlreadyExistsError extends Error {}
+
 async function assertMissingNote(targetPath: string, relativePath: string, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   try {
     await lstat(targetPath);
-    throw new Error(`Note already exists: ${relativePath}`);
+    throw new NoteAlreadyExistsError(`Note already exists: ${relativePath}`);
   } catch (error) {
     if (!isNodeError(error, "ENOENT")) throw error;
   }
   throwIfAborted(signal);
+}
+
+async function entryExists(path: string, signal?: AbortSignal): Promise<boolean> {
+  throwIfAborted(signal);
+  try {
+    await lstat(path);
+    throwIfAborted(signal);
+    return true;
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) throw error;
+    throwIfAborted(signal);
+    return false;
+  }
 }
 
 async function atomicReplace(

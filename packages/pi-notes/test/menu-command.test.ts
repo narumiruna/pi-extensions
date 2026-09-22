@@ -24,7 +24,7 @@ async function fixture() {
   return { root, agentDir, storage };
 }
 
-test("manager rescans templates while navigating, copies one exactly, and opens the new note", async () => {
+test("manager rescans templates, creates without a filename prompt, and opens the new note", async () => {
   const { storage } = await fixture();
   const choices = ["Create a note…", "added.md"];
   let selectCount = 0;
@@ -38,7 +38,9 @@ test("manager rescans templates while navigating, copies one exactly, and opens 
       }
       return choices.shift();
     },
-    input: async () => "folder/new.md",
+    input: async () => {
+      throw new Error("filename input must not open");
+    },
   });
   const controller = new AbortController();
   const result = await showNotesManager(context.ctx, storage, {
@@ -46,8 +48,8 @@ test("manager rescans templates while navigating, copies one exactly, and opens 
     isCurrent: () => true,
   });
 
-  assert.deepEqual(result, { kind: "open", notePath: "folder/new.md" });
-  assert.equal(await readFile(join(storage.paths.notes, "folder", "new.md"), "utf8"), "# Added\n\nLiteral {{value}}\n");
+  assert.deepEqual(result, { kind: "open", notePath: "untitled.md" });
+  assert.equal(await readFile(join(storage.paths.notes, "untitled.md"), "utf8"), "# Added\n\nLiteral {{value}}\n");
   assert.equal(choices.length, 0);
 });
 
@@ -102,7 +104,7 @@ test("manager shows an empty template manager and returns without selecting a te
   assert.ok(renders.some((render) => render.includes("Manage templates") && render.includes("No templates found.")));
 });
 
-test("manager cancellation leaves notes unchanged and Blank needs no seeded template", async () => {
+test("manager cancellation leaves notes unchanged and Blank opens without a filename prompt", async () => {
   const { storage } = await fixture();
   const cancelled = createMockContext({ mode: "tui", hasUI: true, select: async () => undefined });
   assert.deepEqual(
@@ -119,16 +121,18 @@ test("manager cancellation leaves notes unchanged and Blank needs no seeded temp
     mode: "tui",
     hasUI: true,
     select: async () => choices.shift(),
-    input: async () => "blank.md",
+    input: async () => {
+      throw new Error("filename input must not open");
+    },
   });
   assert.deepEqual(
     await showNotesManager(blank.ctx, storage, {
       signal: new AbortController().signal,
       isCurrent: () => true,
     }),
-    { kind: "open", notePath: "blank.md" },
+    { kind: "open", notePath: "untitled.md" },
   );
-  assert.equal(await readFile(join(storage.paths.notes, "blank.md"), "utf8"), "");
+  assert.equal(await readFile(join(storage.paths.notes, "untitled.md"), "utf8"), "");
 });
 
 test("/notes pastes a selected note's canonical path without replacing the parent draft", async () => {
