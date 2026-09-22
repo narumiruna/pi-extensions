@@ -20,6 +20,7 @@ import type { MarkdownEntry } from "./storage.js";
 
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
+const INPUT_PREFIX_TIMEOUT_MS = 10;
 const MAX_SEARCH_QUERY_LENGTH = 256;
 const MAX_VISIBLE_NOTES = 12;
 
@@ -102,7 +103,9 @@ export class NotePicker implements Component, Focusable {
   private selectedPath: string | undefined;
   private restoreSelectedPath: string | undefined;
   private scrollOffset = 0;
-  private pasteActive = false;
+  private pasteStartBuffer = "";
+  private pasteBuffer: string | undefined;
+  private pasteStartTimer: ReturnType<typeof setTimeout> | undefined;
   private mousePressedIndex: number | undefined;
   private mouseLayout: MouseLayout | undefined;
   private disposed = false;
@@ -207,34 +210,7 @@ export class NotePicker implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.disposed || this.completed) return;
-    this.mousePressedIndex = undefined;
-    this.mouseLayout = undefined;
-    if (this.searchEnabled && this.consumePaste(data)) {
-      this.applySearchInput(data);
-      this.options.tui.requestRender();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("c"))) {
-      this.finish({ kind: "close", ...this.pickerState() });
-      return;
-    }
-    if (matchesKey(data, Key.escape) || this.options.keybindings.matches(data, "tui.select.cancel")) {
-      this.finish({ kind: "back", ...this.pickerState() });
-      return;
-    }
-    if (this.options.keybindings.matches(data, "tui.select.up")) this.move(-1);
-    else if (this.options.keybindings.matches(data, "tui.select.down")) this.move(1);
-    else if (this.options.keybindings.matches(data, "tui.select.pageUp")) this.move(-this.viewportSize(), false);
-    else if (this.options.keybindings.matches(data, "tui.select.pageDown")) this.move(this.viewportSize(), false);
-    else if (matchesKey(data, Key.home)) this.selectAt(0);
-    else if (matchesKey(data, Key.end)) this.selectAt(this.filteredNotes.length - 1);
-    else if (this.options.keybindings.matches(data, "tui.select.confirm")) this.openSelected();
-    else {
-      const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled);
-      if (deleteKey && matchesKey(data, deleteKey)) this.deleteSelected();
-      else if (this.searchEnabled) this.applySearchInput(data);
-    }
-    if (!this.completed) this.options.tui.requestRender();
+    this.routeInput(data);
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -290,7 +266,9 @@ export class NotePicker implements Component, Focusable {
 
   dispose(): void {
     this.disposed = true;
-    this.pasteActive = false;
+    this.clearPasteStartTimer();
+    this.pasteStartBuffer = "";
+    this.pasteBuffer = undefined;
     this.mousePressedIndex = undefined;
     this.mouseLayout = undefined;
     this.isFocused = false;
@@ -371,12 +349,85 @@ export class NotePicker implements Component, Focusable {
     this.scrollOffset = 0;
   }
 
-  private consumePaste(data: string): boolean {
-    const wasActive = this.pasteActive;
-    const starts = data.includes(BRACKETED_PASTE_START);
-    if (starts) this.pasteActive = true;
-    if (this.pasteActive && data.includes(BRACKETED_PASTE_END)) this.pasteActive = false;
-    return wasActive || starts;
+  private routeInput(data: string): void {
+    this.clearPasteStartTimer();
+    if (this.pasteBuffer !== undefined) {
+      this.pasteBuffer += data;
+      this.flushPasteBuffer();
+      return;
+    }
+
+    const combined = this.pasteStartBuffer + data;
+    this.pasteStartBuffer = "";
+    const pasteStart = combined.indexOf(BRACKETED_PASTE_START);
+    if (pasteStart >= 0) {
+      if (pasteStart > 0) this.handleNonPasteInput(combined.slice(0, pasteStart));
+      if (this.disposed || this.completed) return;
+      this.pasteBuffer = combined.slice(pasteStart + BRACKETED_PASTE_START.length);
+      this.flushPasteBuffer();
+      return;
+    }
+
+    const prefixLength = trailingMarkerPrefixLength(combined, BRACKETED_PASTE_START);
+    const outsidePaste = combined.slice(0, combined.length - prefixLength);
+    if (outsidePaste) this.handleNonPasteInput(outsidePaste);
+    if (this.disposed || this.completed) return;
+    const prefix = combined.slice(combined.length - prefixLength);
+    if (!prefix) return;
+    this.pasteStartBuffer = prefix;
+    this.pasteStartTimer = setTimeout(() => {
+      this.pasteStartTimer = undefined;
+      const pending = this.pasteStartBuffer;
+      this.pasteStartBuffer = "";
+      if (!this.disposed && !this.completed && pending) this.handleNonPasteInput(pending);
+    }, INPUT_PREFIX_TIMEOUT_MS);
+  }
+
+  private flushPasteBuffer(): void {
+    if (this.pasteBuffer === undefined) return;
+    const pasteEnd = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
+    if (pasteEnd < 0) return;
+    const pasted = this.pasteBuffer.slice(0, pasteEnd);
+    const remaining = this.pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
+    this.pasteBuffer = undefined;
+    if (this.searchEnabled) {
+      this.applySearchInput(`${BRACKETED_PASTE_START}${pasted}${BRACKETED_PASTE_END}`);
+      this.options.tui.requestRender();
+    }
+    if (remaining && !this.disposed && !this.completed) this.routeInput(remaining);
+  }
+
+  private clearPasteStartTimer(): void {
+    if (!this.pasteStartTimer) return;
+    clearTimeout(this.pasteStartTimer);
+    this.pasteStartTimer = undefined;
+  }
+
+  private handleNonPasteInput(data: string): void {
+    if (this.disposed || this.completed) return;
+    this.mousePressedIndex = undefined;
+    this.mouseLayout = undefined;
+    if (matchesKey(data, Key.ctrl("c"))) {
+      this.finish({ kind: "close", ...this.pickerState() });
+      return;
+    }
+    if (matchesKey(data, Key.escape) || this.options.keybindings.matches(data, "tui.select.cancel")) {
+      this.finish({ kind: "back", ...this.pickerState() });
+      return;
+    }
+    if (this.options.keybindings.matches(data, "tui.select.up")) this.move(-1);
+    else if (this.options.keybindings.matches(data, "tui.select.down")) this.move(1);
+    else if (this.options.keybindings.matches(data, "tui.select.pageUp")) this.move(-this.viewportSize(), false);
+    else if (this.options.keybindings.matches(data, "tui.select.pageDown")) this.move(this.viewportSize(), false);
+    else if (matchesKey(data, Key.home)) this.selectAt(0);
+    else if (matchesKey(data, Key.end)) this.selectAt(this.filteredNotes.length - 1);
+    else if (this.options.keybindings.matches(data, "tui.select.confirm")) this.openSelected();
+    else {
+      const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled);
+      if (deleteKey && matchesKey(data, deleteKey)) this.deleteSelected();
+      else if (this.searchEnabled) this.applySearchInput(data);
+    }
+    if (!this.completed) this.options.tui.requestRender();
   }
 
   private selectedIndex(): number {
@@ -441,6 +492,9 @@ export class NotePicker implements Component, Focusable {
   private finish(result: NotePickerResult): void {
     if (this.completed) return;
     this.completed = true;
+    this.clearPasteStartTimer();
+    this.pasteStartBuffer = "";
+    this.pasteBuffer = undefined;
     this.options.complete(result);
   }
 }
@@ -500,6 +554,14 @@ function inputsFor(key: string): string[] {
   const code = SPECIAL_CODEPOINTS[base] ?? (base.length === 1 ? base.charCodeAt(0) : undefined);
   const inputs = code === undefined ? LEGACY_INPUTS : [...LEGACY_INPUTS, `\u001b[${code};${modifier + 1}u`];
   return inputs.filter((input) => matchesKey(input, key as KeyId));
+}
+
+function trailingMarkerPrefixLength(value: string, marker: string): number {
+  const maximum = Math.min(value.length, marker.length - 1);
+  for (let length = maximum; length > 0; length -= 1) {
+    if (value.endsWith(marker.slice(0, length))) return length;
+  }
+  return 0;
 }
 
 function isTextKey(key: string): boolean {

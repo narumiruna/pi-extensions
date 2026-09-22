@@ -7,13 +7,14 @@ import {
   setKittyProtocolActive,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import { NotePicker, resolveNoteDeleteKey } from "../src/note-picker.js";
 import type { MarkdownEntry } from "../src/storage.js";
 
 const initialKittyProtocol = isKittyProtocolActive();
 
 afterEach(() => {
+  vi.useRealTimers();
   setKittyProtocolActive(initialKittyProtocol);
 });
 
@@ -131,25 +132,53 @@ test("mouse selection and activation preserve the standard open-note behavior", 
   assert.deepEqual(result(), { kind: "open", notePath: "two.md", query: "" });
 });
 
-test("paste payload controls cannot trigger delete or hard close while search owns input", () => {
+test("every split paste-marker boundary keeps controls out of delete and hard-close shortcuts", () => {
   const notes = Array.from({ length: 9 }, (_, index) => note(`note-${index}.md`));
-  const { picker, result } = createPicker(notes);
+  const pasteStart = "\u001b[200~";
+  const pasteEnd = "\u001b[201~";
 
-  picker.handleInput("\u001b[200~note\u0004\u0003\u001b[201~");
+  for (let startSplit = 1; startSplit < pasteStart.length; startSplit += 1) {
+    for (let endSplit = 1; endSplit < pasteEnd.length; endSplit += 1) {
+      const { picker, result } = createPicker(notes);
+      picker.handleInput(pasteStart.slice(0, startSplit));
+      picker.handleInput(`${pasteStart.slice(startSplit)}note`);
+      picker.handleInput("\u0004");
+      picker.handleInput("\u0003");
+      picker.handleInput(pasteEnd.slice(0, endSplit));
+      picker.handleInput(pasteEnd.slice(endSplit));
 
-  assert.equal(result(), undefined);
-  assert.match(picker.render(100).join("\n"), /Search: .*note/u);
+      assert.equal(result(), undefined);
+      assert.match(picker.render(100).join("\n"), /Search: .*note/u);
+
+      picker.handleInput("\u0003");
+      assert.equal((result() as { kind: string }).kind, "close");
+    }
+  }
 });
 
 test("Escape returns Back and Ctrl+C remains a hard Close under remapped cancellation", () => {
+  vi.useFakeTimers();
   const remapped = { "tui.select.cancel": ["ctrl+q"] };
   const back = createPicker([note("one.md")], { bindings: remapped });
   back.picker.handleInput("\u001b");
+  assert.equal(back.result(), undefined);
+  vi.runAllTimers();
   assert.deepEqual(back.result(), { kind: "back", selectedPath: "one.md" });
 
   const close = createPicker([note("one.md")], { bindings: remapped });
   close.picker.handleInput("\u0003");
   assert.deepEqual(close.result(), { kind: "close", selectedPath: "one.md" });
+});
+
+test("disposing clears a buffered paste prefix without dispatching it", () => {
+  vi.useFakeTimers();
+  const { picker, result } = createPicker([note("one.md")]);
+
+  picker.handleInput("\u001b");
+  picker.dispose();
+  vi.runAllTimers();
+
+  assert.equal(result(), undefined);
 });
 
 const deleteKeyCases: readonly {
