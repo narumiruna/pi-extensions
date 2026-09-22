@@ -1,0 +1,207 @@
+import assert from "node:assert/strict";
+import {
+  CURSOR_MARKER,
+  isKittyProtocolActive,
+  type KeyId,
+  matchesKey,
+  setKittyProtocolActive,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { afterEach, test } from "vitest";
+import { NotePicker, resolveNoteDeleteKey } from "../src/note-picker.js";
+import type { MarkdownEntry } from "../src/storage.js";
+
+const initialKittyProtocol = isKittyProtocolActive();
+
+afterEach(() => {
+  setKittyProtocolActive(initialKittyProtocol);
+});
+
+function note(relativePath: string, size = 10): MarkdownEntry {
+  return { relativePath, displayPath: relativePath, size };
+}
+
+function keybindings(overrides: Record<string, readonly string[]> = {}) {
+  const defaults: Record<string, readonly string[]> = {
+    "tui.select.up": ["up"],
+    "tui.select.down": ["down"],
+    "tui.select.pageUp": ["pageUp"],
+    "tui.select.pageDown": ["pageDown"],
+    "tui.select.confirm": ["enter"],
+    "tui.select.cancel": ["escape", "ctrl+c"],
+    "tui.input.tab": ["tab"],
+    "tui.editor.deleteCharBackward": ["backspace"],
+    "tui.editor.deleteCharForward": ["delete", "ctrl+d"],
+    "app.session.delete": ["ctrl+d"],
+    ...overrides,
+  };
+  return {
+    matches(data: string, binding: string) {
+      return (defaults[binding] ?? []).some((key) => matchesKey(data, key as KeyId));
+    },
+    getKeys(binding: string) {
+      return [...(defaults[binding] ?? [])] as KeyId[];
+    },
+  };
+}
+
+function createPicker(
+  notes: readonly MarkdownEntry[],
+  options: { bindings?: Record<string, readonly string[]>; rows?: number; query?: string } = {},
+) {
+  let result: unknown;
+  let renders = 0;
+  const picker = new NotePicker({
+    tui: {
+      terminal: { rows: options.rows ?? 24 },
+      requestRender: () => {
+        renders += 1;
+      },
+    } as never,
+    theme: {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as never,
+    keybindings: keybindings(options.bindings) as never,
+    notes,
+    initialQuery: options.query,
+    complete: (value) => {
+      result = value;
+    },
+  });
+  return { picker, result: () => result, renders: () => renders };
+}
+
+test("renders a width-safe note picker with effective open, delete, Back, and hard-close hints", () => {
+  const unsafe = note("unsafe\u001b]52;c;QQ==\u0007\u202e.md", 42);
+  unsafe.displayPath = "unsafe.md";
+  const { picker } = createPicker([unsafe]);
+
+  for (const width of [1, 8, 24, 80]) {
+    const frame = picker.render(width);
+    assert.ok(frame.every((line) => visibleWidth(line) <= width));
+  }
+  const rendered = picker.render(80).join("\n");
+  assert.match(rendered, /Open a note/u);
+  assert.match(rendered, /ctrl\+d delete/iu);
+  assert.match(rendered, /enter open/iu);
+  assert.match(rendered, /esc back/iu);
+  assert.match(rendered, /ctrl\+c close/iu);
+  assert.equal(rendered.includes("\u001b]"), false);
+  assert.equal(rendered.includes("\u202e"), false);
+});
+
+test("search keeps printable remapped delete keys editable and uses the first non-conflicting fallback", () => {
+  const notes = Array.from({ length: 9 }, (_, index) => note(`x-note-${index}.md`, index));
+  const { picker, result } = createPicker(notes, {
+    bindings: { "app.session.delete": ["x", "ctrl+x"] },
+  });
+  picker.focused = true;
+  assert.equal(picker.render(100).join("\n").includes(CURSOR_MARKER), true);
+  assert.match(picker.render(100).join("\n"), /ctrl\+x delete/iu);
+
+  picker.handleInput("x");
+  assert.equal(result(), undefined);
+  assert.match(picker.render(100).join("\n"), /Search: .*x/u);
+  picker.handleInput("\u0018");
+  assert.deepEqual(result(), {
+    kind: "delete",
+    notePath: "x-note-0.md",
+    nextSelectedPath: "x-note-1.md",
+    query: "x",
+  });
+});
+
+test("mouse selection and activation preserve the standard open-note behavior", () => {
+  const { picker, result } = createPicker([note("one.md"), note("two.md"), note("three.md")]);
+  const width = 100;
+  const frame = picker.render(width);
+  const y = frame.findIndex((line) => line.includes("two.md"));
+  assert.notEqual(y, -1);
+
+  assert.deepEqual(
+    picker.handleMouse({ type: "press", x: 3, y, width, height: frame.length, button: "left" } as never),
+    { handled: true, focus: true, render: true },
+  );
+  assert.deepEqual(
+    picker.handleMouse({ type: "click", x: 3, y, width, height: frame.length, button: "left" } as never),
+    { handled: true },
+  );
+  assert.deepEqual(result(), { kind: "open", notePath: "two.md", query: "" });
+});
+
+test("paste payload controls cannot trigger delete or hard close while search owns input", () => {
+  const notes = Array.from({ length: 9 }, (_, index) => note(`note-${index}.md`));
+  const { picker, result } = createPicker(notes);
+
+  picker.handleInput("\u001b[200~note\u0004\u0003\u001b[201~");
+
+  assert.equal(result(), undefined);
+  assert.match(picker.render(100).join("\n"), /Search: .*note/u);
+});
+
+test("Escape returns Back and Ctrl+C remains a hard Close under remapped cancellation", () => {
+  const remapped = { "tui.select.cancel": ["ctrl+q"] };
+  const back = createPicker([note("one.md")], { bindings: remapped });
+  back.picker.handleInput("\u001b");
+  assert.deepEqual(back.result(), { kind: "back", selectedPath: "one.md" });
+
+  const close = createPicker([note("one.md")], { bindings: remapped });
+  close.picker.handleInput("\u0003");
+  assert.deepEqual(close.result(), { kind: "close", selectedPath: "one.md" });
+});
+
+const deleteKeyCases: readonly {
+  name: string;
+  deleteKeys: readonly string[];
+  reserved: Record<string, readonly string[]>;
+  search: boolean;
+  expected: string;
+}[] = [
+  {
+    name: "normalizes aliases before checking standard controls",
+    deleteKeys: ["return", "f6"],
+    reserved: { "tui.select.confirm": ["enter"] },
+    search: false,
+    expected: "f6",
+  },
+  {
+    name: "normalizes modifier order before checking collisions",
+    deleteKeys: ["shift+ctrl+p", "f7"],
+    reserved: { "tui.select.up": ["ctrl+shift+p"] },
+    search: false,
+    expected: "f7",
+  },
+  {
+    name: "skips invalid configured strings",
+    deleteKeys: ["meta+x", "ctrl+ctrl+x", "f8"],
+    reserved: {},
+    search: false,
+    expected: "f8",
+  },
+  {
+    name: "skips printable search collisions",
+    deleteKeys: ["d", "shift+d", "ctrl+x"],
+    reserved: {},
+    search: true,
+    expected: "ctrl+x",
+  },
+];
+
+test.each(deleteKeyCases)("resolves delete key: $name", ({ deleteKeys, reserved, search, expected }) => {
+  const keys = keybindings({ ...reserved, "app.session.delete": deleteKeys });
+  assert.equal(resolveNoteDeleteKey(keys as never, search), expected);
+});
+
+test("legacy and Kitty terminal modes resolve live matcher collisions independently", () => {
+  const keys = keybindings({
+    "app.session.delete": ["alt+b", "f9"],
+    "tui.editor.cursorWordLeft": ["alt+left"],
+  });
+
+  setKittyProtocolActive(false);
+  assert.equal(resolveNoteDeleteKey(keys as never, true), "f9");
+  setKittyProtocolActive(true);
+  assert.equal(resolveNoteDeleteKey(keys as never, true), "alt+b");
+});

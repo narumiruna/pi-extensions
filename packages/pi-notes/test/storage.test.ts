@@ -111,6 +111,51 @@ test("canonical note paths resolve exactly and reject missing, traversal, specia
   await assert.rejects(storage.resolveCanonicalNotePath("linked.md"), /symbolic link/iu);
 });
 
+test("note deletion requires the current revision and rejects cancellation, traversal, and symbolic links", async () => {
+  const { storage, root } = await fixture();
+  const notePath = join(storage.paths.notes, "delete.md");
+  await writeFile(notePath, "original", "utf8");
+  const original = await storage.readNote("delete.md");
+
+  await writeFile(notePath, "external", "utf8");
+  await assert.rejects(storage.deleteNote("delete.md", original.revision), /stale|changed/iu);
+  assert.equal((await storage.readNote("delete.md")).content, "external");
+
+  const current = await storage.readNote("delete.md");
+  const controller = new AbortController();
+  controller.abort(new DOMException("cancelled deletion", "AbortError"));
+  await assert.rejects(storage.deleteNote("delete.md", current.revision, controller.signal), /cancelled deletion/iu);
+  await assert.rejects(storage.deleteNote("../outside.md", current.revision), /relative|segments/iu);
+
+  const outside = join(root, "outside-delete.md");
+  await writeFile(outside, "outside", "utf8");
+  await symlink(outside, join(storage.paths.notes, "linked-delete.md"));
+  await assert.rejects(storage.deleteNote("linked-delete.md", current.revision), /symbolic link/iu);
+  assert.equal(await readFile(outside, "utf8"), "outside");
+
+  await storage.deleteNote("delete.md", current.revision);
+  await assert.rejects(storage.readNote("delete.md"), /ENOENT|no such/iu);
+});
+
+test("concurrent note deletion and replacement serialize without deleting a newer revision", async () => {
+  const { storage } = await fixture();
+  await writeFile(join(storage.paths.notes, "race-delete.md"), "base", "utf8");
+  const initial = await storage.readNote("race-delete.md");
+
+  const results = await Promise.allSettled([
+    storage.deleteNote("race-delete.md", initial.revision),
+    storage.replaceNote("race-delete.md", initial.revision, "replacement"),
+  ]);
+
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
+  try {
+    assert.equal((await storage.readNote("race-delete.md")).content, "replacement");
+  } catch (error) {
+    assert.match(String(error), /ENOENT|no such/iu);
+  }
+});
+
 test("operations reject a managed root replaced by a symbolic link after initialization", async () => {
   const { storage, root } = await fixture();
   const outside = join(root, "replacement-root");

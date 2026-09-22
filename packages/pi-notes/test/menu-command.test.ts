@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -22,6 +23,30 @@ async function fixture() {
   const storage = new NotesStorage(agentDir);
   await storage.initialize();
   return { root, agentDir, storage };
+}
+
+function createNotesTui(deleteKeys: readonly KeyId[] = ["ctrl+d"]) {
+  const bindings: Record<string, readonly KeyId[]> = {
+    "tui.select.up": ["up"],
+    "tui.select.down": ["down"],
+    "tui.select.pageUp": ["pageUp"],
+    "tui.select.pageDown": ["pageDown"],
+    "tui.select.confirm": ["enter"],
+    "tui.select.cancel": ["escape", "ctrl+c"],
+    "app.session.delete": deleteKeys,
+  };
+  return createTuiHarness({
+    width: 72,
+    rows: 20,
+    keybindings: {
+      matches(data, binding) {
+        return (bindings[binding] ?? []).some((key) => matchesKey(data, key));
+      },
+      getKeys(binding) {
+        return [...(bindings[binding] ?? [])];
+      },
+    },
+  });
 }
 
 test("manager rescans templates, creates without a filename prompt, and opens the new note", async () => {
@@ -56,29 +81,171 @@ test("manager rescans templates, creates without a filename prompt, and opens th
 test("manager keeps note names off the first level and opens one from its own screen", async () => {
   const { storage } = await fixture();
   await writeFile(join(storage.paths.notes, "open.md"), "# Open", "utf8");
-  const choices = ["Open a note…", "open.md"];
+  const choices = ["Open a note…"];
   const renders: string[] = [];
+  const tui = createNotesTui();
   const context = createMockContext({
     mode: "tui",
     hasUI: true,
+    custom: tui.custom,
     select: async (title: string) => {
       renders.push(title);
       return choices.shift();
     },
   });
 
-  assert.deepEqual(
-    await showNotesManager(context.ctx, storage, {
-      signal: new AbortController().signal,
-      isCurrent: () => true,
-    }),
-    { kind: "open", notePath: "open.md" },
-  );
+  const running = showNotesManager(context.ctx, storage, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  await tui.waitForOpen();
+  renders.push(tui.render().join("\n"));
+  tui.press("tui.select.confirm");
+
+  assert.deepEqual(await running, { kind: "open", notePath: "open.md" });
   assert.equal(renders.length, 2);
   assert.match(renders[0] ?? "", /Pi Notes · 1 note/u);
   assert.equal((renders[0] ?? "").includes("open.md"), false);
   assert.match(renders[1] ?? "", /Open a note/u);
   assert.equal((renders[1] ?? "").includes("open.md"), true);
+});
+
+test("Open a note deletes the highlighted note with a remapped binding, confirms the exact target, and opens the neighbor", async () => {
+  const { storage } = await fixture();
+  await writeFile(join(storage.paths.notes, "delete.md"), "delete me", "utf8");
+  await writeFile(join(storage.paths.notes, "keep.md"), "keep me", "utf8");
+  const tui = createNotesTui(["ctrl+x"]);
+  let confirmation = "";
+  let mainSelections = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: tui.custom,
+    select: async () => (mainSelections++ === 0 ? "Open a note…" : undefined),
+    confirm: async (_title: string, message: string) => {
+      confirmation = message;
+      return true;
+    },
+  });
+  const running = showNotesManager(context.ctx, storage, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  await tui.waitForOpen();
+
+  assert.match(tui.render().join("\n"), /ctrl\+x delete/iu);
+  tui.send("\u0018");
+  await tui.waitForOpen();
+
+  await assert.rejects(readFile(join(storage.paths.notes, "delete.md"), "utf8"), /ENOENT/u);
+  assert.equal(await readFile(join(storage.paths.notes, "keep.md"), "utf8"), "keep me");
+  assert.match(confirmation, /Note: delete\.md/iu);
+  assert.match(confirmation, /Size: 9 bytes/iu);
+  assert.match(confirmation, /cannot be undone/iu);
+  assert.match(confirmation, /child conversation.*remain/iu);
+  assert.match(tui.render().join("\n"), /keep\.md/iu);
+  tui.press("tui.select.confirm");
+
+  assert.deepEqual(await running, { kind: "open", notePath: "keep.md" });
+  assert.equal(context.notifications.length, 1);
+  assert.deepEqual(context.notifications[0], { message: "Deleted note: delete.md", level: "info" });
+});
+
+test("cancelled note deletion preserves the file and returns to the same picker selection", async () => {
+  const { storage } = await fixture();
+  await writeFile(join(storage.paths.notes, "keep.md"), "keep", "utf8");
+  const tui = createNotesTui();
+  let mainSelections = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: tui.custom,
+    select: async () => (mainSelections++ === 0 ? "Open a note…" : undefined),
+    confirm: async () => false,
+  });
+  const running = showNotesManager(context.ctx, storage, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  await tui.waitForOpen();
+  tui.send("\u0004");
+  await tui.waitForOpen();
+
+  assert.equal(await readFile(join(storage.paths.notes, "keep.md"), "utf8"), "keep");
+  assert.match(tui.render().join("\n"), /→ keep\.md/iu);
+  tui.press("tui.select.cancel");
+  assert.deepEqual(await running, { kind: "closed" });
+  assert.deepEqual(context.notifications, []);
+});
+
+test("note deletion rejects a revision changed after confirmation and refreshes without removing external content", async () => {
+  const { storage } = await fixture();
+  const notePath = join(storage.paths.notes, "changed.md");
+  await writeFile(notePath, "original", "utf8");
+  const tui = createNotesTui();
+  let mainSelections = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: tui.custom,
+    select: async () => (mainSelections++ === 0 ? "Open a note…" : undefined),
+    confirm: async () => {
+      await writeFile(notePath, "external", "utf8");
+      return true;
+    },
+  });
+  const running = showNotesManager(context.ctx, storage, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  await tui.waitForOpen();
+  tui.send("\u0004");
+  await tui.waitForOpen();
+
+  assert.equal(await readFile(notePath, "utf8"), "external");
+  assert.equal(context.notifications.length, 1);
+  assert.equal(context.notifications[0]?.level, "error");
+  assert.match(context.notifications[0]?.message ?? "", /failed to delete.*stale/iu);
+  tui.send("\u0003");
+  assert.deepEqual(await running, { kind: "closed" });
+});
+
+test("owner cancellation during delete confirmation preserves the note and suppresses stale UI", async () => {
+  const { storage } = await fixture();
+  const notePath = join(storage.paths.notes, "keep.md");
+  await writeFile(notePath, "keep", "utf8");
+  const tui = createNotesTui();
+  const owner = new AbortController();
+  let confirmStarted!: () => void;
+  const confirmationStarted = new Promise<void>((resolve) => {
+    confirmStarted = resolve;
+  });
+  let mainSelections = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: tui.custom,
+    select: async () => (mainSelections++ === 0 ? "Open a note…" : undefined),
+    confirm: async (_title: string, _message: string, options: { signal?: AbortSignal }) => {
+      confirmStarted();
+      await new Promise<void>((_resolve, reject) =>
+        options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true }),
+      );
+      return false;
+    },
+  });
+  const running = showNotesManager(context.ctx, storage, {
+    signal: owner.signal,
+    isCurrent: () => !owner.signal.aborted,
+  });
+  await tui.waitForOpen();
+  tui.send("\u0004");
+  await confirmationStarted;
+  owner.abort(new DOMException("session replaced", "AbortError"));
+
+  assert.deepEqual(await running, { kind: "closed" });
+  assert.equal(await readFile(notePath, "utf8"), "keep");
+  assert.deepEqual(context.notifications, []);
 });
 
 test("manager shows an empty template manager and returns without selecting a template", async () => {
