@@ -864,6 +864,126 @@ test.each([
   },
 );
 
+test("a divider release at a new column preserves side-pane keyboard focus", async () => {
+  const harness = createInputHandoffHarness();
+  const side = new SideInput();
+  const savedRatios: number[] = [];
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    {
+      layout: "left-pane",
+      sidePaneRatio: 0.5,
+      persistSidePaneRatio: async (ratio) => {
+        savedRatios.push(ratio);
+      },
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;41;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;50;5m");
+    await flushAsyncWork();
+    sideTui.renderNow(true);
+
+    assert.equal(side.widths.at(-1), 49);
+    assert.equal(side.focused, true);
+    assert.equal(harness.mainInput.focused, false);
+    assert.deepEqual(savedRatios, [0.6203]);
+
+    closeSide();
+    assert.equal(await running, "closed");
+  } finally {
+    closeSide?.();
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
+
+test("a saved divider ratio carries into the next split pane", async () => {
+  const harness = createInputHandoffHarness();
+  const firstSide = new SideInput();
+  const secondSide = new SideInput();
+  let sideTui: TUI | undefined;
+  let closeFirst: (() => void) | undefined;
+  let closeSecond: (() => void) | undefined;
+  let releaseSave!: () => void;
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve;
+  });
+  const saveGate = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  const running = runBtwFullscreen(
+    harness.ctx,
+    async (ctx) => {
+      await ctx.ui.custom<"first closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeFirst = () => done("first closed");
+        return firstSide;
+      });
+      return ctx.ui.custom<"second closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSecond = () => done("second closed");
+        return secondSide;
+      });
+    },
+    {
+      layout: "left-pane",
+      sidePaneRatio: 0.5,
+      persistSidePaneRatio: async (_ratio, signal) => {
+        assert.equal(signal.aborted, false);
+        markSaveStarted();
+        await saveGate;
+      },
+    },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeFirst);
+    sideTui.renderNow(true);
+
+    harness.terminal.send("\u001b[<0;41;5M");
+    harness.terminal.send("\u001b[<32;25;5M");
+    harness.terminal.send("\u001b[<0;25;5m");
+    await saveStarted;
+
+    closeFirst();
+    await flushAsyncWork();
+    assert.ok(closeSecond);
+    assert.deepEqual(secondSide.widths, [], "the next split must wait for the current ratio write");
+
+    releaseSave();
+    await waitForCondition(() => secondSide.widths.length > 0, "the next split pane did not mount");
+    assert.equal(secondSide.widths.at(-1), 24);
+
+    closeSecond();
+    assert.equal(await running, "second closed");
+  } finally {
+    releaseSave?.();
+    closeFirst?.();
+    closeSecond?.();
+    await running.catch(() => undefined);
+    harness.parent.stop();
+  }
+});
+
 test("a failed divider save restores the last confirmed ratio and reports a sanitized error", async () => {
   const harness = createInputHandoffHarness();
   const side = new SideInput();

@@ -145,24 +145,31 @@ test("split-pane rendering remains bounded at minimal widths", () => {
 test.each([
   ["left-pane", 110, 10],
   ["right-pane", 10, 110],
-] as const)("%s click switches keyboard input between main and side panes", async (layout, mainColumn, sideColumn) => {
-  const { component, focus, mainInput, renders, side } = split(layout);
+] as const)(
+  "%s press switches keyboard input between panes while release does not",
+  async (layout, mainColumn, sideColumn) => {
+    const { component, focus, mainInput, renders, side } = split(layout);
 
-  component.handleTerminalInput(mouse(0, mainColumn));
-  assert.equal(focus.current, side);
-  await Promise.resolve();
-  assert.equal(focus.current, mainInput);
-  focus.current?.handleInput?.("main key");
+    component.handleTerminalInput(mouse(0, mainColumn));
+    assert.equal(focus.current, side);
+    await Promise.resolve();
+    assert.equal(focus.current, mainInput);
+    focus.current?.handleInput?.("main key");
 
-  component.handleTerminalInput(mouse(0, sideColumn, "m"));
-  await Promise.resolve();
-  assert.equal(focus.current, side);
-  focus.current?.handleInput?.("side key");
+    component.handleTerminalInput(mouse(0, sideColumn, "m"));
+    await Promise.resolve();
+    assert.equal(focus.current, mainInput);
 
-  assert.deepEqual(mainInput.inputs, ["main key"]);
-  assert.deepEqual(side.inputs, ["side key"]);
-  assert.equal(renders.count, 2);
-});
+    component.handleTerminalInput(mouse(0, sideColumn));
+    await Promise.resolve();
+    assert.equal(focus.current, side);
+    focus.current?.handleInput?.("side key");
+
+    assert.deepEqual(mainInput.inputs, ["main key"]);
+    assert.deepEqual(side.inputs, ["side key"]);
+    assert.equal(renders.count, 2);
+  },
+);
 
 test("split panes use one muted divider column", async () => {
   const paneTheme = {

@@ -440,6 +440,9 @@ class BtwFullscreenHost<T> implements Component {
   private readonly mainThreadInput: BtwMainThreadInput;
   private readonly lifetimeController = new AbortController();
   private readonly pendingSidePaneWrites = new Set<Promise<void>>();
+  private sidePaneRatio: number | undefined;
+  private sidePaneWriteGeneration = 0;
+  private confirmedSidePaneWriteGeneration = 0;
 
   constructor(
     private readonly parent: TUI,
@@ -460,6 +463,7 @@ class BtwFullscreenHost<T> implements Component {
       },
       () => this.fullscreen?.requestRender(),
     );
+    this.sidePaneRatio = options.sidePaneRatio;
     queueMicrotask(() => void this.start());
   }
 
@@ -797,7 +801,7 @@ class BtwFullscreenHost<T> implements Component {
         return;
       }
       Promise.resolve(created)
-        .then((value) => {
+        .then(async (value) => {
           component = value;
           factorySettled = true;
           if (promiseSettled) {
@@ -808,6 +812,22 @@ class BtwFullscreenHost<T> implements Component {
             complete();
             return;
           }
+          const workspaceLayout = this.options.layout ?? "fullscreen";
+          if (!options?.overlay && workspaceLayout !== "fullscreen") {
+            await this.waitForSidePaneWrites();
+            if (promiseSettled) {
+              disposeComponent();
+              return;
+            }
+            if (closed) {
+              complete();
+              return;
+            }
+            if (this.disposed || this.finished || this.fullscreen !== fullscreen) {
+              fail(new FullscreenUiDisposedError());
+              return;
+            }
+          }
           if (options?.overlay) {
             const overlayOptions =
               typeof options.overlayOptions === "function" ? options.overlayOptions() : options.overlayOptions;
@@ -816,7 +836,6 @@ class BtwFullscreenHost<T> implements Component {
           } else {
             fullscreen.clear();
             mounted = true;
-            const workspaceLayout = this.options.layout ?? "fullscreen";
             if (workspaceLayout !== "fullscreen") {
               layoutMounted = true;
               const sideLayout = isFullscreenLayoutComponent(component) ? component.getFullscreenLayout() : component;
@@ -835,7 +854,7 @@ class BtwFullscreenHost<T> implements Component {
                 setFocus: (target) => fullscreen.setFocus(target),
                 setViewportTarget: (target) => fullscreen.setViewportTarget?.(target),
                 requestRender: () => fullscreen.requestRender(),
-                sidePaneRatio: this.options.sidePaneRatio,
+                sidePaneRatio: this.sidePaneRatio,
                 ...(this.options.persistSidePaneRatio
                   ? { persistSidePaneRatio: (ratio: number) => this.persistSidePaneRatio(ratio) }
                   : {}),
@@ -864,10 +883,21 @@ class BtwFullscreenHost<T> implements Component {
 
   private persistSidePaneRatio(ratio: number): Promise<void> {
     const persist = this.options.persistSidePaneRatio;
-    if (!persist) return Promise.resolve();
+    if (!persist) {
+      this.sidePaneRatio = ratio;
+      return Promise.resolve();
+    }
+    const writeGeneration = ++this.sidePaneWriteGeneration;
     let task!: Promise<void>;
     task = Promise.resolve()
       .then(() => persist(ratio, this.lifetimeController.signal))
+      .then(() => {
+        if (this.lifetimeController.signal.aborted || writeGeneration <= this.confirmedSidePaneWriteGeneration) {
+          return;
+        }
+        this.confirmedSidePaneWriteGeneration = writeGeneration;
+        this.sidePaneRatio = ratio;
+      })
       .catch((error: unknown) => {
         if (!this.lifetimeController.signal.aborted) {
           const message = sanitizeSingleLine(

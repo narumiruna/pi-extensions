@@ -21,7 +21,7 @@ import {
 export const MIN_BTW_SPLIT_COLUMNS = 80;
 const PANE_DIVIDER_COLUMNS = 1;
 // biome-ignore lint/complexity/useRegexLiterals: the constructor keeps a raw ESC control character out of source.
-const SGR_MOUSE_PATTERN = new RegExp("^\\u001b\\[<(\\d+);(\\d+);\\d+[Mm]$");
+const SGR_MOUSE_PRESS_PATTERN = new RegExp("^\\u001b\\[<(\\d+);(\\d+);\\d+M$");
 type BtwActivePane = "side" | "main";
 
 export interface BtwFullscreenLayoutComponent extends Component {
@@ -487,7 +487,7 @@ function paneForMouseClick(
   layout: Exclude<BtwLayout, "fullscreen">,
   sidePaneRatio: number,
 ): BtwActivePane | undefined {
-  const match = SGR_MOUSE_PATTERN.exec(data);
+  const match = SGR_MOUSE_PRESS_PATTERN.exec(data);
   if (!match) return undefined;
   const button = Number.parseInt(match[1] ?? "", 10);
   if ((button & 32) !== 0 || (button & 64) !== 0 || (button & 3) !== 0) return undefined;
