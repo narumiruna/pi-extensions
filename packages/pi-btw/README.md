@@ -116,6 +116,7 @@ Pi-btw does not inherit Pi core's setting of the same name because Pi's public e
 Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
 The pane names identify the side thread's position; the other pane reuses Pi's native main-thread rendering at pane width and stays current while BTW is open.
 Click either pane to move keyboard focus to it; the heavier accent divider marks the active pane.
+Pi's search and keyboard viewport controls apply to the active pane.
 The mouse wheel scrolls the pane under the pointer without moving keyboard focus, and both panes continue redrawing while either pane is active.
 If you selected context from the main-thread tree, the main pane still shows the active main thread while the side model receives the selected branch.
 Pane layouts collapse to the side thread alone below 80 terminal columns and return keyboard focus to it.

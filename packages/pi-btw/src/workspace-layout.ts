@@ -19,6 +19,7 @@ type BtwActivePane = "side" | "main";
 
 export interface BtwFullscreenLayoutComponent extends Component {
   getFullscreenLayout(): Component;
+  getPrimaryScrollView?(): ScrollView;
 }
 
 export class BtwMainThreadInput implements Component, Focusable {
@@ -83,13 +84,16 @@ export interface BtwSplitPaneOptions {
   sideComponent: Component;
   sideLayout: Component;
   mainThread: Component;
+  mainLayout?: Component;
   mainInput: Component;
+  sideScrollView?: ScrollView;
   layout: Exclude<BtwLayout, "fullscreen">;
   theme: Theme;
   terminalColumns(): number;
   terminalRows(): number;
   hasFocusedOverlay(): boolean;
   setFocus(component: Component): void;
+  setViewportTarget(scrollView: ScrollView | undefined): void;
   requestRender(): void;
 }
 
@@ -97,12 +101,19 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   private readonly pasteGuard = new BtwPasteGuard();
   private readonly mainPane: MainThreadPane;
   private readonly layoutRoot: HStack;
+  private readonly viewportRouter: PaneViewportRouter;
   private activePane: BtwActivePane = "side";
   private focusGeneration = 0;
   private disposed = false;
 
   constructor(private readonly options: BtwSplitPaneOptions) {
-    this.mainPane = new MainThreadPane(options.mainThread, options.theme, options.terminalRows);
+    this.mainPane = new MainThreadPane(options.mainThread, options.mainLayout, options.theme, options.terminalRows);
+    this.viewportRouter = new PaneViewportRouter(
+      options.sideScrollView ?? findPrimaryScrollView(options.sideLayout),
+      this.mainPane.getPrimaryScrollView(),
+      options.setViewportTarget,
+    );
+    this.viewportRouter.activate("side");
     const separator: Component = {
       render: (width) =>
         Array.from({ length: Math.max(1, options.terminalRows()) }, () => truncateToWidth(this.renderDivider(), width)),
@@ -169,8 +180,10 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     this.focusGeneration += 1;
+    this.viewportRouter.dispose();
   }
 
   private renderDivider(): string {
@@ -196,6 +209,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   private activatePane(pane: BtwActivePane): void {
     if (this.disposed) return;
     this.activePane = pane;
+    this.viewportRouter.activate(pane);
     this.options.setFocus(pane === "side" ? this.options.sideComponent : this.options.mainInput);
     this.options.requestRender();
   }
@@ -256,10 +270,12 @@ class ResponsivePaneRow extends HStack {
 
 class MainThreadPane {
   private readonly body: Component;
-  private readonly scroll: ScrollView;
+  private readonly layout: Component;
+  private readonly scroll: ScrollView | undefined;
 
   constructor(
     mainThread: Component,
+    mainLayout: Component | undefined,
     theme: Theme,
     private readonly terminalRows: () => number,
   ) {
@@ -267,15 +283,25 @@ class MainThreadPane {
       render: (width) => mainThread.render(Math.max(1, width)).map((line) => truncateToWidth(line, Math.max(1, width))),
       invalidate() {},
     };
+    if (mainLayout) {
+      this.layout = mainLayout;
+      this.scroll = findPrimaryScrollView(mainLayout);
+      return;
+    }
     this.scroll = new ScrollView(this.body, {
       follow: "end",
       scrollbar: "auto",
       scrollbarTrackStyle: (text) => theme.fg("borderMuted", text),
       scrollbarThumbStyle: (text) => theme.fg("muted", text),
     });
+    this.layout = this.scroll;
   }
 
   getLayout(): Component {
+    return this.layout;
+  }
+
+  getPrimaryScrollView(): ScrollView | undefined {
     return this.scroll;
   }
 
@@ -286,6 +312,60 @@ class MainThreadPane {
     const visible = this.body.render(safeWidth).slice(-rows);
     return [...Array.from({ length: Math.max(0, rows - visible.length) }, () => ""), ...visible];
   }
+}
+
+class PaneViewportRouter {
+  private readonly originalPrimary = new Map<ScrollView, boolean>();
+  private disposed = false;
+
+  constructor(
+    private readonly side: ScrollView | undefined,
+    private readonly main: ScrollView | undefined,
+    private readonly setViewportTarget: (scrollView: ScrollView | undefined) => void,
+  ) {
+    for (const scrollView of [side, main]) {
+      if (scrollView) this.originalPrimary.set(scrollView, scrollView.primary);
+    }
+  }
+
+  activate(pane: BtwActivePane): void {
+    if (this.disposed) return;
+    const target = pane === "side" ? this.side : this.main;
+    for (const scrollView of this.originalPrimary.keys()) setScrollViewPrimary(scrollView, scrollView === target);
+    this.setViewportTarget(target);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const [scrollView, primary] of this.originalPrimary) setScrollViewPrimary(scrollView, primary);
+    this.setViewportTarget(undefined);
+  }
+}
+
+// Pi exposes primary as a constructor-time ScrollView option but has no public
+// active-pane viewport router. Preserve and restore this runtime field so Pi's
+// native search, prompt navigation, and scrolling keep their standard behavior.
+function setScrollViewPrimary(scrollView: ScrollView, primary: boolean): void {
+  Reflect.set(scrollView, "primary", primary);
+}
+
+function findPrimaryScrollView(root: Component): ScrollView | undefined {
+  const visited = new Set<Component>();
+  let fallback: ScrollView | undefined;
+  let primary: ScrollView | undefined;
+  const visit = (component: Component) => {
+    if (visited.has(component)) return;
+    visited.add(component);
+    if (component instanceof ScrollView) {
+      fallback ??= component;
+      if (component.primary) primary = component;
+    }
+    if (!("children" in component) || !Array.isArray(component.children)) return;
+    for (const child of component.children) visit(child);
+  };
+  visit(root);
+  return primary ?? fallback;
 }
 
 function paneForMouseClick(

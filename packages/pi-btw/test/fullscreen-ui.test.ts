@@ -8,6 +8,7 @@ import {
   getKeybindings,
   isKittyProtocolActive,
   KeybindingsManager,
+  ScrollView,
   setKeybindings,
   setKittyProtocolActive,
   type Terminal,
@@ -15,6 +16,7 @@ import {
   TUI_KEYBINDINGS,
   TuiAltScreen,
   TuiMainScreen,
+  VStack,
 } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { type BtwFullscreenTuiFactory, runBtwFullscreen } from "../src/fullscreen-ui.js";
@@ -374,6 +376,36 @@ class SideInput implements Component, Focusable {
   invalidate(): void {}
 }
 
+class ScrollableSideInput implements Component, Focusable {
+  focused = false;
+  readonly scrollView = new ScrollView(
+    {
+      render: () =>
+        Array.from({ length: 80 }, (_, index) => (index === 4 ? "SIDE NEEDLE" : `side history ${index + 1}`)),
+      invalidate() {},
+    },
+    { follow: "end", primary: true },
+  );
+
+  getFullscreenLayout(): Component {
+    return this.scrollView;
+  }
+
+  getPrimaryScrollView(): ScrollView {
+    return this.scrollView;
+  }
+
+  render(width: number): string[] {
+    return this.scrollView.render(width);
+  }
+
+  handleInput(): void {}
+
+  invalidate(): void {
+    this.scrollView.invalidate();
+  }
+}
+
 function createInputHandoffHarness(
   keybindings = createBtwTestKeybindings(),
   options: { editorText?: string; fullscreenParent?: boolean } = {},
@@ -383,14 +415,30 @@ function createInputHandoffHarness(
   const editorContainer = new Container();
   const mainInput = new MainInput();
   mainInput.text = options.editorText ?? "";
-  if (options.fullscreenParent) {
-    parent.addChild({
-      render: () => Array.from({ length: 80 }, (_, index) => `history ${index + 1}`),
-      invalidate() {},
-    });
-  }
   editorContainer.addChild(mainInput);
-  parent.addChild(editorContainer);
+  let mainScrollView: ScrollView | undefined;
+  if (options.fullscreenParent) {
+    mainScrollView = new ScrollView(
+      {
+        render: () =>
+          Array.from({ length: 80 }, (_, index) => {
+            if (index === 4) return "\u001b]133;A\u0007MAIN NEEDLE";
+            if (index === 60) return "\u001b]133;A\u0007MAIN PROMPT";
+            return `history ${index + 1}`;
+          }),
+        invalidate() {},
+      },
+      { follow: "end", primary: true },
+    );
+    (parent as TuiAltScreen).setLayoutRoot(
+      new VStack([
+        { component: mainScrollView, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+        { component: editorContainer, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+      ]),
+    );
+  } else {
+    parent.addChild(editorContainer);
+  }
   parent.setFocus(mainInput);
   parent.start();
   if (options.fullscreenParent) parent.renderNow(true);
@@ -449,7 +497,7 @@ function createInputHandoffHarness(
       },
     },
   } as never;
-  return { ctx, mainInput, parent, terminal };
+  return { ctx, mainInput, mainScrollView, parent, terminal };
 }
 
 function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings()) {
@@ -734,6 +782,123 @@ test.each([
     }
   },
 );
+
+test.each(["left-pane", "right-pane"] as const)(
+  "fullscreen main-thread layout is constrained inside the %s workspace pane",
+  async (layout) => {
+    const harness = createInputHandoffHarness(createBtwTestKeybindings(), { fullscreenParent: true });
+    let sideTui: TUI | undefined;
+    let closeSide: (() => void) | undefined;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+          sideTui = tui;
+          closeSide = () => done("closed");
+          return new SideInput();
+        }),
+      { layout },
+    );
+
+    try {
+      await flushAsyncWork();
+      assert.ok(sideTui);
+      assert.ok(closeSide);
+      assert.ok(harness.mainScrollView);
+      sideTui.renderNow(true);
+
+      assert.equal(harness.mainScrollView.viewportHeight, harness.terminal.rows - 1);
+      assert.equal(harness.mainScrollView.scrollTop, 80 - (harness.terminal.rows - 1));
+
+      closeSide();
+      assert.equal(await running, "closed");
+      assert.equal(harness.mainScrollView.primary, true);
+    } finally {
+      closeSide?.();
+      await running.catch(() => {});
+      harness.parent.stop();
+    }
+  },
+);
+
+test.each([
+  ["left-pane", 70],
+  ["right-pane", 10],
+] as const)("%s click focus routes native viewport actions to the main pane", async (layout, mainColumn) => {
+  const keybindings = new KeybindingsManager(BTW_TEST_KEYBINDINGS, {
+    "app.message.copy": "ctrl+y",
+    "tui.altScreen.pageUp": "ctrl+u",
+    "tui.altScreen.previousPrompt": "ctrl+p",
+    "tui.altScreen.search": "ctrl+f",
+    "tui.altScreen.bottom": "ctrl+b",
+  });
+  const previous = getKeybindings();
+  setKeybindings(keybindings);
+  const harness = createInputHandoffHarness(keybindings, { fullscreenParent: true });
+  const side = new ScrollableSideInput();
+  let sideTui: TUI | undefined;
+  let closeSide: (() => void) | undefined;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+        sideTui = tui;
+        closeSide = () => done("closed");
+        return side;
+      }),
+    { layout },
+  );
+
+  try {
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    assert.ok(harness.mainScrollView);
+    sideTui.renderNow(true);
+
+    const initialSideTop = side.scrollView.scrollTop;
+    const initialMainTop = harness.mainScrollView.scrollTop;
+    harness.terminal.send("\u0015");
+    sideTui.renderNow(true);
+    assert.ok(side.scrollView.scrollTop < initialSideTop);
+    assert.equal(harness.mainScrollView.scrollTop, initialMainTop);
+
+    harness.terminal.send(`\u001b[<0;${mainColumn};5M`);
+    await Promise.resolve();
+    sideTui.renderNow(true);
+
+    const sideTopBeforeMainActions = side.scrollView.scrollTop;
+    harness.terminal.send("\u0015");
+    sideTui.renderNow(true);
+    assert.ok(harness.mainScrollView.scrollTop < initialMainTop);
+    assert.equal(side.scrollView.scrollTop, sideTopBeforeMainActions);
+
+    harness.terminal.send("\u0002");
+    sideTui.renderNow(true);
+    assert.equal(harness.mainScrollView.scrollTop, initialMainTop);
+    harness.terminal.send("\u0010");
+    sideTui.renderNow(true);
+    assert.equal(harness.mainScrollView.scrollTop, 60);
+    assert.equal(side.scrollView.scrollTop, sideTopBeforeMainActions);
+
+    harness.terminal.send("\u0006");
+    harness.terminal.send("MAIN NEEDLE");
+    sideTui.renderNow(true);
+    assert.ok(harness.mainScrollView.scrollTop < 60);
+    assert.equal(side.scrollView.scrollTop, sideTopBeforeMainActions);
+    harness.terminal.send("\u001b");
+
+    closeSide();
+    assert.equal(await running, "closed");
+    assert.equal(harness.mainScrollView.primary, true);
+    assert.equal(side.scrollView.primary, true);
+  } finally {
+    closeSide?.();
+    await running.catch(() => {});
+    harness.parent.stop();
+    setKeybindings(previous);
+  }
+});
 
 test.each([
   ["custom exit", "\u0011", false, undefined],

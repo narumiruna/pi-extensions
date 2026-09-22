@@ -146,6 +146,10 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
     return this.layoutRoot;
   }
 
+  getPrimaryScrollView(): ScrollView {
+    return this.scrollView;
+  }
+
   render(width: number): string[] {
     if (width <= 0) return [];
     const safeWidth = Math.max(1, width);
@@ -395,6 +399,10 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 
   getFullscreenLayout(): Component {
     return this.layoutRoot;
+  }
+
+  getPrimaryScrollView(): ScrollView {
+    return this.scrollView;
   }
 
   render(width: number): string[] {

@@ -12,6 +12,7 @@ import {
   Key,
   type OverlayHandle,
   parseKey,
+  type ScrollView,
   type TUI,
   TuiAltScreen,
   type TuiInputListener,
@@ -38,6 +39,7 @@ type BtwFullscreenTui = TUI & {
   hasFocusedOverlay?(): boolean;
   addInputListenerBeforeAll?(listener: TuiInputListener): () => void;
   addInputListenerBeforeViewport?(listener: TuiInputListener): () => void;
+  setViewportTarget?(scrollView: ScrollView | undefined): void;
 };
 
 type FocusInspectableTui = TUI & {
@@ -162,6 +164,12 @@ function dispatchBtwInput(listeners: BtwInputListeners, data: string): TuiInputL
 class BtwTuiAltScreen extends TuiAltScreen {
   hasFocusedOverlay(): boolean {
     return this.isOverlayFocused();
+  }
+
+  setViewportTarget(scrollView: ScrollView | undefined): void {
+    if (!scrollView) return;
+    const layout = Reflect.get(this, "currentLayout") as { primaryScrollView?: ScrollView } | undefined;
+    if (layout) layout.primaryScrollView = scrollView;
   }
 
   override addInputListener(listener: TuiInputListener): () => void {
@@ -805,17 +813,21 @@ class BtwFullscreenHost<T> implements Component {
             const workspaceLayout = this.options.layout ?? "fullscreen";
             if (workspaceLayout !== "fullscreen") {
               layoutMounted = true;
+              const sideLayout = isFullscreenLayoutComponent(component) ? component.getFullscreenLayout() : component;
               splitPane = new BtwSplitPane({
                 sideComponent: component,
-                sideLayout: isFullscreenLayoutComponent(component) ? component.getFullscreenLayout() : component,
+                sideLayout,
                 mainThread: this.parent,
+                mainLayout: getParentFullscreenLayout(this.parent),
                 mainInput: this.mainThreadInput,
+                sideScrollView: isFullscreenLayoutComponent(component) ? component.getPrimaryScrollView?.() : undefined,
                 layout: workspaceLayout,
                 theme: this.theme,
                 terminalColumns: () => fullscreen.terminal.columns,
                 terminalRows: () => fullscreen.terminal.rows,
                 hasFocusedOverlay: () => fullscreen.hasFocusedOverlay?.() ?? false,
                 setFocus: (target) => fullscreen.setFocus(target),
+                setViewportTarget: (target) => fullscreen.setViewportTarget?.(target),
                 requestRender: () => fullscreen.requestRender(),
               });
               const addPaneFocusListener =
@@ -843,6 +855,25 @@ class BtwFullscreenHost<T> implements Component {
 
 function getFocusedComponent(tui: TUI): Component | null {
   return (tui as FocusInspectableTui).getFocusedComponent?.() ?? null;
+}
+
+// Pi does not expose the mounted fullscreen layout root. Reusing this runtime
+// field lets Pi's own layout engine constrain its transcript and dock to the pane.
+function getParentFullscreenLayout(tui: TUI): Component | undefined {
+  if (tui.mode !== "fullscreen") return undefined;
+  const layoutRoot = Reflect.get(tui, "layoutRoot") as unknown;
+  return isComponent(layoutRoot) ? layoutRoot : undefined;
+}
+
+function isComponent(value: unknown): value is Component {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "render" in value &&
+    typeof value.render === "function" &&
+    "invalidate" in value &&
+    typeof value.invalidate === "function"
+  );
 }
 
 function isFullscreenLayoutComponent(component: Component): component is BtwFullscreenLayoutComponent {

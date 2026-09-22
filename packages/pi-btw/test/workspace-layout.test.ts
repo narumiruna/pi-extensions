@@ -78,6 +78,7 @@ function split(layout: "left-pane" | "right-pane", rows = 8, paneTheme = theme()
       focus.current = next;
       if (isFocusable(next)) next.focused = true;
     },
+    setViewportTarget() {},
     requestRender: () => {
       renders.count += 1;
     },
