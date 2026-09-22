@@ -4,6 +4,7 @@ import {
   type ExtensionContext,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import type { NotesManagerResult } from "./menu.js";
 import { NotesStorage } from "./storage.js";
 import type { OpenNotesWorkspaceOptions } from "./workspace.js";
@@ -67,25 +68,61 @@ export function createNotesExtension(
       const signal = ctx.signal ? AbortSignal.any([ctx.signal, ownerController.signal]) : ownerController.signal;
       const isCurrent = () =>
         activeSessionManager === owner && generation === ownerGeneration && !ownerController.signal.aborted;
-      if (!isCurrent()) throw new Error("Pi Notes session is no longer active.");
+      const isOwned = () => isCurrent() && !signal.aborted;
+      if (!isOwned()) throw new Error("Pi Notes session is no longer active.");
 
       const agentDir = deps.getAgentDir();
       const storage = deps.createStorage(agentDir);
       await storage.initialize(signal);
-      if (!isCurrent() || signal.aborted) return;
-      const selected = await deps.showManager(ctx, storage, { signal, isCurrent });
-      if (!isCurrent() || signal.aborted || selected.kind !== "open" || !selected.notePath) return;
-      const thinkingLevel = pi.getThinkingLevel();
-      if (!isCurrent() || signal.aborted) return;
-      await deps.openWorkspace({
-        ctx,
-        agentDir,
-        storage,
-        notePath: selected.notePath,
-        thinkingLevel,
-        signal,
-        isCurrent,
-      });
+      if (!isOwned()) return;
+
+      while (isOwned()) {
+        const selected = await deps.showManager(ctx, storage, { signal, isCurrent });
+        if (!isOwned()) return;
+        if (selected.kind === "closed") return;
+
+        if (selected.kind === "pastePath") {
+          const absolutePath = await storage.resolveCanonicalNotePath(selected.notePath, signal);
+          if (!isOwned()) return;
+          ctx.ui.pasteToEditor(absolutePath);
+          return;
+        }
+
+        if (selected.kind === "editTemplate") {
+          const template = await storage.readTemplate(selected.templatePath, signal);
+          if (!isOwned()) return;
+          const content = await ctx.ui.editor(
+            `Edit template · ${sanitizeTerminalText(template.relativePath)}`,
+            template.content,
+          );
+          if (!isOwned()) return;
+          if (content === undefined || content === template.content) continue;
+          try {
+            await storage.replaceTemplate(template.relativePath, template.revision, content, signal);
+          } catch (error) {
+            if (!isOwned()) return;
+            safeNotify(ctx, `Pi Notes failed to save template: ${safeErrorMessage(error)}`, "error");
+            continue;
+          }
+          if (!isOwned()) return;
+          safeNotify(ctx, `Saved template: ${template.relativePath}`, "info");
+          continue;
+        }
+
+        const thinkingLevel = pi.getThinkingLevel();
+        if (!isOwned()) return;
+        await deps.openWorkspace({
+          ctx,
+          agentDir,
+          storage,
+          notePath: selected.notePath,
+          thinkingLevel,
+          signal,
+          isCurrent,
+        });
+        if (!isOwned()) return;
+        return;
+      }
     };
 
     pi.registerCommand("notes", {
@@ -117,6 +154,18 @@ export function createNotesExtension(
       await Promise.allSettled([...activeCommands]);
     });
   };
+}
+
+function safeNotify(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error"): void {
+  try {
+    ctx.ui.notify(sanitizeTerminalText(message), level);
+  } catch {
+    // A replaced session can invalidate the old UI immediately.
+  }
+}
+
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function rejectCommand(ctx: ExtensionContext, message: string): void {

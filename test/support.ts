@@ -219,6 +219,8 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
   const widgets = new Map<string, unknown>();
   let footer: unknown;
   let editorText = String(overrides.editorText ?? "");
+  const pastedEditorTexts: string[] = [];
+  const pasteOverride = overrides.pasteToEditor as ((text: string) => void) | undefined;
   const selectOverride = overrides.select as
     | ((title: string, options: string[]) => Promise<string | undefined>)
     | undefined;
@@ -313,6 +315,11 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
       setFooter(value: unknown) {
         footer = value;
       },
+      pasteToEditor(value: string) {
+        pastedEditorTexts.push(value);
+        if (pasteOverride) pasteOverride(value);
+        else editorText += value;
+      },
       setEditorText(value: string) {
         editorText = value;
       },
@@ -352,6 +359,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
     notifications,
     statuses,
     widgets,
+    pastedEditorTexts,
     get footer() {
       return footer;
     },

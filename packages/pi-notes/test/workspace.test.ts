@@ -10,6 +10,7 @@ import {
   KeybindingsManager,
   setKeybindings,
   TUI_KEYBINDINGS,
+  truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit/custom-interaction";
@@ -159,6 +160,7 @@ test("workspace renders bounded wide and narrow layouts, sanitizes text, and har
 
   const wide = tui.render();
   const wideText = stripVTControlCharacters(wide.join("\n"));
+  assert.equal(stripVTControlCharacters(wide[0] ?? ""), "current.md");
   assert.match(wideText, /Chat · Ready · new note conversation/u);
   assert.match(wideText, /Preview ·/u);
   assert.equal(wide.join("\n").includes("\u001b]52"), false);
@@ -174,6 +176,7 @@ test("workspace renders bounded wide and narrow layouts, sanitizes text, and har
   assert.notEqual(afterPreviewWheel.preview, afterChatWheel.preview, "wheel over Preview scrolls the note");
 
   const narrowChat = tui.resize({ width: 60, rows: 16 });
+  assert.equal(stripVTControlCharacters(narrowChat[0] ?? ""), "current.md");
   assert.match(stripVTControlCharacters(narrowChat.join("\n")), /Chat · Ready/u);
   tui.press("tui.input.tab");
   const narrowPreview = tui.render();
@@ -188,6 +191,10 @@ test("workspace renders bounded wide and narrow layouts, sanitizes text, and har
     { width: 1, rows: 1 },
   ]) {
     const lines = tui.resize(size);
+    assert.equal(
+      stripVTControlCharacters(lines[0] ?? ""),
+      stripVTControlCharacters(truncateToWidth("current.md", size.width)),
+    );
     assert.ok(lines.length <= Math.max(1, size.rows - 4));
     assert.ok(lines.every((line) => visibleWidth(line) <= size.width));
   }

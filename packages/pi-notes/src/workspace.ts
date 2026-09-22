@@ -187,7 +187,7 @@ export class NotesWorkspace {
     const availableRows = Math.max(1, this.tui.terminal.rows - (this.tui.mode === "fullscreen" ? 0 : 4));
     this.editorMouseBounds = undefined;
     const title = truncateToWidth(
-      this.theme.fg("accent", this.theme.bold(`Pi Notes · ${sanitizeTerminalText(this.options.notePath)}`)),
+      this.theme.fg("accent", this.theme.bold(sanitizeTerminalText(this.options.notePath))),
       safeWidth,
     );
     const hint = truncateToWidth(this.theme.fg("muted", this.hintText()), safeWidth);
