@@ -139,7 +139,7 @@ test("Open a note deletes the highlighted note with a remapped binding, confirms
 
   await assert.rejects(readFile(join(storage.paths.notes, "delete.md"), "utf8"), /ENOENT/u);
   assert.equal(await readFile(join(storage.paths.notes, "keep.md"), "utf8"), "keep me");
-  assert.match(confirmation, /Note: delete\.md/iu);
+  assert.match(confirmation, /Note: "delete\.md"/iu);
   assert.match(confirmation, /Size: 9 bytes/iu);
   assert.match(confirmation, /cannot be undone/iu);
   assert.match(confirmation, /child conversation.*remain/iu);
@@ -148,7 +148,49 @@ test("Open a note deletes the highlighted note with a remapped binding, confirms
 
   assert.deepEqual(await running, { kind: "open", notePath: "keep.md" });
   assert.equal(context.notifications.length, 1);
-  assert.deepEqual(context.notifications[0], { message: "Deleted note: delete.md", level: "info" });
+  assert.deepEqual(context.notifications[0], { message: 'Deleted note: "delete.md"', level: "info" });
+});
+
+test("delete confirmation distinguishes colliding terminal-safe note labels", async () => {
+  const { storage } = await fixture();
+  const safePath = " ab.md";
+  const unsafePath = " a\u202eb.md";
+  await writeFile(join(storage.paths.notes, safePath), "same", "utf8");
+  await writeFile(join(storage.paths.notes, unsafePath), "same", "utf8");
+  const entries = (await storage.discoverNotes()).entries;
+  const unsafeIndex = entries.findIndex(({ relativePath }) => relativePath === unsafePath);
+  assert.notEqual(unsafeIndex, -1);
+  assert.equal(entries.find(({ relativePath }) => relativePath === safePath)?.displayPath, " ab.md");
+  assert.equal(entries[unsafeIndex]?.displayPath, " ab.md");
+
+  const tui = createNotesTui();
+  let confirmation = "";
+  let mainSelections = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: tui.custom,
+    select: async () => (mainSelections++ === 0 ? "Open a note…" : undefined),
+    confirm: async (_title: string, message: string) => {
+      confirmation = message;
+      return false;
+    },
+  });
+  const running = showNotesManager(context.ctx, storage, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  await tui.waitForOpen();
+  for (let index = 0; index < unsafeIndex; index += 1) tui.press("tui.select.down");
+  tui.send("\u0004");
+  await tui.waitForOpen();
+
+  assert.equal(confirmation.includes("\u202e"), false);
+  assert.ok(confirmation.includes('Note: " a\\u{202e}b.md"'));
+  assert.equal(await readFile(join(storage.paths.notes, safePath), "utf8"), "same");
+  assert.equal(await readFile(join(storage.paths.notes, unsafePath), "utf8"), "same");
+  tui.send("\u0003");
+  assert.deepEqual(await running, { kind: "closed" });
 });
 
 test("cancelled note deletion preserves the file and returns to the same picker selection", async () => {

@@ -289,7 +289,20 @@ function deleteConfirmationMessage(note: MarkdownEntry, size: number): string {
 }
 
 function displayNotePath(note: MarkdownEntry): string {
-  return sanitizeTerminalText(note.displayPath).trim() || "(unprintable note path)";
+  let display = '"';
+  for (const character of note.relativePath) {
+    if (character === '"' || character === "\\") {
+      display += `\\${character}`;
+      continue;
+    }
+    if (sanitizeTerminalText(character) !== character) {
+      const codePoint = character.codePointAt(0) ?? 0;
+      display += codePoint <= 0xff ? `\\x${codePoint.toString(16).padStart(2, "0")}` : `\\u{${codePoint.toString(16)}}`;
+      continue;
+    }
+    display += character;
+  }
+  return `${display}"`;
 }
 
 function indexedEntry(entries: readonly MarkdownEntry[], itemId: string, prefix: string): MarkdownEntry | undefined {
