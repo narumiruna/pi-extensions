@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  decodeKittyPrintable,
   Editor,
   type EditorTheme,
   type Focusable,
@@ -19,6 +20,59 @@ import type { TemplateSnapshot } from "./storage.js";
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
 const PASTE_TAIL_GUARD_MS = 50;
+// biome-ignore lint/complexity/useRegexLiterals: A literal ESC pattern violates noControlCharactersInRegex.
+const TMUX_PASTE_CONTROL_PATTERN = new RegExp("\\x1b\\[(\\d+);5u", "gu");
+
+// Pi 0.86 Editor checks these actions before newline and submit. Autocomplete-only
+// selection actions are omitted because this editor has no autocomplete provider.
+const EDITOR_ACTIONS_BEFORE_NEWLINE = [
+  "tui.input.copy",
+  "tui.editor.undo",
+  "tui.input.tab",
+  "tui.editor.deleteCharBackward",
+  "tui.editor.deleteCharForward",
+  "tui.editor.deleteWordBackward",
+  "tui.editor.deleteWordForward",
+  "tui.editor.deleteToLineStart",
+  "tui.editor.deleteToLineEnd",
+  "tui.editor.yank",
+  "tui.editor.yankPop",
+  "tui.editor.historyPrevious",
+  "tui.editor.historyNext",
+  "tui.editor.cursorLineStart",
+  "tui.editor.cursorLineEnd",
+  "tui.editor.cursorWordLeft",
+  "tui.editor.cursorWordRight",
+] as const;
+
+const EDITOR_PRIORITY_ACTIONS = [
+  "tui.editor.cursorUp",
+  "tui.editor.cursorDown",
+  "tui.editor.historyPrevious",
+  "tui.editor.historyNext",
+  "tui.editor.cursorLeft",
+  "tui.editor.cursorRight",
+  "tui.editor.cursorWordLeft",
+  "tui.editor.cursorWordRight",
+  "tui.editor.cursorLineStart",
+  "tui.editor.cursorLineEnd",
+  "tui.editor.jumpForward",
+  "tui.editor.jumpBackward",
+  "tui.editor.pageUp",
+  "tui.editor.pageDown",
+  "tui.editor.deleteCharBackward",
+  "tui.editor.deleteCharForward",
+  "tui.editor.deleteWordBackward",
+  "tui.editor.deleteWordForward",
+  "tui.editor.deleteToLineStart",
+  "tui.editor.deleteToLineEnd",
+  "tui.editor.yank",
+  "tui.editor.yankPop",
+  "tui.editor.undo",
+  "tui.input.newLine",
+  "tui.input.submit",
+  "tui.input.tab",
+] as const;
 
 interface TemplateEditorOwnership {
   signal: AbortSignal;
@@ -168,12 +222,21 @@ class TemplateEditor implements Component, Focusable {
       if (remaining) this.handleInput(remaining);
       return;
     }
-    if (matchesKey(data, Key.ctrl("c")) || this.keybindings.matches(data, "tui.select.cancel")) {
+    if (matchesKey(data, Key.ctrl("c"))) {
+      this.finish(undefined);
+      return;
+    }
+    if (isEditorActionBeforeNewline(data, this.keybindings)) {
+      this.editor.handleKeyInput(data);
+      this.tui.requestRender();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.cancel") && !isFocusedEditorInput(data, this.keybindings)) {
       this.finish(undefined);
       return;
     }
     if (isEditorNewlineInput(data, this.keybindings)) {
-      this.editor.handleInput(data);
+      this.editor.handleKeyInput(data);
       this.tui.requestRender();
       return;
     }
@@ -256,7 +319,7 @@ class TemplateEditor implements Component, Focusable {
     const groups = [
       keyHint(this.keybindings, "tui.input.submit", "save"),
       keyHint(this.keybindings, "tui.input.newLine", "newline"),
-      cancelHint(this.keybindings),
+      "ctrl+c cancel",
     ].filter(Boolean);
     return groups.join("  ");
   }
@@ -385,9 +448,15 @@ class RawPreservingEditor implements Focusable {
     return cursor.col > 0 && line[cursor.col - 1] === "\\";
   }
 
+  handleKeyInput(data: string): void {
+    this.pasteSubmissionArmed = false;
+    this.pasteError = undefined;
+    this.editor.handleInput(data);
+  }
+
   replaceBackslashWithNewline(): void {
     this.editor.handleInput(Key.backspace);
-    this.editor.handleInput("\u001b\r");
+    this.editor.insertTextAtCursor("\n");
   }
 
   commitPendingPaste(): void {
@@ -434,7 +503,8 @@ class RawPreservingEditor implements Focusable {
     const raw = this.pasteBuffer.slice(0, pasteEnd);
     const remaining = this.pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
     this.pasteBuffer = undefined;
-    this.editor.handleInput(`${BRACKETED_PASTE_START}${this.encode(raw)}${BRACKETED_PASTE_END}`);
+    const decoded = decodeTmuxPasteControls(raw);
+    this.editor.handleInput(`${BRACKETED_PASTE_START}${this.encode(decoded)}${BRACKETED_PASTE_END}`);
     this.pasteTailGuarded = true;
     return remaining || undefined;
   }
@@ -502,6 +572,25 @@ class RawPreservingEditor implements Focusable {
   }
 }
 
+function isEditorActionBeforeNewline(data: string, keybindings: KeybindingsManager): boolean {
+  return (
+    EDITOR_ACTIONS_BEFORE_NEWLINE.some((action) => keybindings.matches(data, action)) ||
+    matchesKey(data, "shift+backspace") ||
+    matchesKey(data, "shift+delete")
+  );
+}
+
+function isFocusedEditorInput(data: string, keybindings: KeybindingsManager): boolean {
+  return (
+    EDITOR_PRIORITY_ACTIONS.some((action) => keybindings.matches(data, action)) ||
+    matchesKey(data, "shift+backspace") ||
+    matchesKey(data, "shift+delete") ||
+    matchesKey(data, "shift+space") ||
+    isEditorNewlineInput(data, keybindings) ||
+    isEditorPrintableInput(data)
+  );
+}
+
 function isEditorNewlineInput(data: string, keybindings: KeybindingsManager): boolean {
   return (
     keybindings.matches(data, "tui.input.newLine") ||
@@ -513,6 +602,32 @@ function isEditorNewlineInput(data: string, keybindings: KeybindingsManager): bo
   );
 }
 
+function isEditorPrintableInput(data: string): boolean {
+  if (decodeKittyPrintable(data) !== undefined || data.charCodeAt(0) >= 32) return true;
+  const modifyOtherKeysPrefix = "\u001b[27;";
+  if (!data.startsWith(modifyOtherKeysPrefix)) return false;
+  const match = data.slice(modifyOtherKeysPrefix.length).match(/^(\d+);(\d+)~$/u);
+  if (!match) return false;
+  const modifier = (Number.parseInt(match[1] ?? "", 10) - 1) & ~(64 | 128);
+  const codepoint = Number.parseInt(match[2] ?? "", 10);
+  if ((modifier & ~1) !== 0 || !Number.isFinite(codepoint) || codepoint < 32) return false;
+  try {
+    String.fromCodePoint(codepoint);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function decodeTmuxPasteControls(value: string): string {
+  return value.replace(TMUX_PASTE_CONTROL_PATTERN, (match, code: string) => {
+    const codePoint = Number(code);
+    if (codePoint >= 97 && codePoint <= 122) return String.fromCharCode(codePoint - 96);
+    if (codePoint >= 65 && codePoint <= 90) return String.fromCharCode(codePoint - 64);
+    return match;
+  });
+}
+
 function keyHint(
   keybindings: KeybindingsManager,
   binding: "tui.input.submit" | "tui.input.newLine",
@@ -520,11 +635,6 @@ function keyHint(
 ): string {
   const keys = keybindings.getKeys(binding);
   return keys.length > 0 ? `${sanitizeTerminalText(keys.join("/"))} ${label}` : "";
-}
-
-function cancelHint(keybindings: KeybindingsManager): string {
-  const keys = [...new Set([...keybindings.getKeys("tui.select.cancel"), "ctrl+c"])];
-  return `${sanitizeTerminalText(keys.join("/"))} cancel`;
 }
 
 function needsRawMarker(character: string, rawByMarker: ReadonlyMap<string, unknown>): boolean {
