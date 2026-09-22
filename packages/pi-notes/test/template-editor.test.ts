@@ -86,6 +86,7 @@ test("template editor rejects ambiguous literal paste terminators across later i
     [`${start}a${end}b${end}`],
     [`${start}a${end}`, "\r", "b", end],
     [`${start}a${end}`, "\u0003", "b", end],
+    [`${start}a${end}`, `${start}b${end}`],
   ]) {
     const tui = createTuiHarness({ width: 72, rows: 20 });
     const context = editorContext(tui);

@@ -190,12 +190,7 @@ class TemplateEditor implements Component, Focusable {
   }
 
   private handlePendingPasteInput(data: string): void {
-    if (data.includes(BRACKETED_PASTE_START)) {
-      this.flushPendingPasteInputs();
-      if (!this.finished) this.dispatchInput(data);
-      return;
-    }
-    if (data.includes(BRACKETED_PASTE_END)) {
+    if (data.includes(BRACKETED_PASTE_START) || data.includes(BRACKETED_PASTE_END)) {
       const resolve = this.detachPendingPasteWork();
       this.deferredPasteInputs = [];
       this.editor.rejectPendingPaste();
