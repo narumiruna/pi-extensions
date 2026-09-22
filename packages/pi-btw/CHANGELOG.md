@@ -1,5 +1,16 @@
 # @narumitw/pi-btw
 
+## 0.61.0
+
+### Minor Changes
+
+- 865f1d3: Make the split-pane divider draggable and remember the side-thread width.
+- 129f324: Add configurable fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view and click-to-focus input.
+
+### Patch Changes
+
+- 2bacc07: Use one muted column for the split-pane divider.
+
 ## 0.60.3
 
 ### Patch Changes

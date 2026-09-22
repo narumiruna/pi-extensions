@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-btw",
-  "version": "0.60.3",
+  "version": "0.61.0",
   "description": "Pi extension that adds a /btw side-question command.",
   "type": "module",
   "license": "MIT",
