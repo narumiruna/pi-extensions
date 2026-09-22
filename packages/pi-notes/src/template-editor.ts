@@ -332,8 +332,17 @@ class RawPreservingEditor implements Focusable {
   private rejectAmbiguousPaste(): void {
     const snapshot = this.pasteSnapshot;
     if (snapshot === undefined) return;
-    this.setText(snapshot);
+    this.restorePasteSnapshot(snapshot);
     this.pasteError = "Paste rejected because it contains an ambiguous bracketed-paste terminator.";
+  }
+
+  private restorePasteSnapshot(value: string): void {
+    this.pasteBuffer = undefined;
+    this.pasteSnapshot = undefined;
+    this.pasteError = undefined;
+    this.pasteBurstGuarded = false;
+    this.pasteBurstGeneration += 1;
+    this.editor.setText(this.encode(value));
   }
 
   private encode(value: string): string {

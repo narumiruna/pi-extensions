@@ -106,6 +106,28 @@ test("template editor rejects ambiguous literal paste terminators without changi
   }
 });
 
+test("template editor undo after paste rejection cannot expose private markers", async () => {
+  const content = "before \u001b]0;title\u0007 ";
+  const start = "\u001b[200~";
+  const end = "\u001b[201~";
+  const tui = createTuiHarness({ width: 72, rows: 20 });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot(content), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.send(`${start}a${end}b${end}`);
+  tui.send("\u001f");
+  const frame = tui.render().join("\n");
+  assert.equal(frame.includes("\ue000"), false);
+  tui.press("tui.input.submit");
+
+  assert.equal(await editing, content);
+});
+
 test("template editor honors configured submit and newline keys while Ctrl+C remains a hard cancel", async (t) => {
   const previousKeybindings = getKeybindings();
   t.onTestFinished(() => setKeybindings(previousKeybindings));
