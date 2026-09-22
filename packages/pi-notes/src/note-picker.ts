@@ -8,7 +8,6 @@ import {
   type KeyId,
   matchesKey,
   type TUI,
-  TUI_KEYBINDINGS,
   type TuiMouseEvent,
   type TuiMouseEventResult,
   truncateToWidth,
@@ -23,6 +22,34 @@ const BRACKETED_PASTE_END = "\u001b[201~";
 const INPUT_PREFIX_TIMEOUT_MS = 10;
 const MAX_SEARCH_QUERY_LENGTH = 256;
 const MAX_VISIBLE_NOTES = 12;
+
+const PICKER_BINDINGS = [
+  "tui.select.up",
+  "tui.select.down",
+  "tui.select.pageUp",
+  "tui.select.pageDown",
+  "tui.select.confirm",
+  "tui.select.cancel",
+] as const;
+// These are the configurable actions Pi Input consumes before printable insertion.
+const SEARCH_INPUT_BINDINGS = [
+  "tui.editor.undo",
+  "tui.input.submit",
+  "tui.editor.deleteCharBackward",
+  "tui.editor.deleteCharForward",
+  "tui.editor.deleteWordBackward",
+  "tui.editor.deleteWordForward",
+  "tui.editor.deleteToLineStart",
+  "tui.editor.deleteToLineEnd",
+  "tui.editor.yank",
+  "tui.editor.yankPop",
+  "tui.editor.cursorLeft",
+  "tui.editor.cursorRight",
+  "tui.editor.cursorLineStart",
+  "tui.editor.cursorLineEnd",
+  "tui.editor.cursorWordLeft",
+  "tui.editor.cursorWordRight",
+] as const;
 
 const MODIFIERS = ["shift", "alt", "ctrl", "super"] as const;
 const SYMBOLS = "`-=[]\\;',./!@#$%^&*()_|~{}:<>?";
@@ -504,15 +531,18 @@ export function resolveNoteDeleteKey(
   keybindings: Pick<KeybindingsManager, "getKeys">,
   searchEnabled: boolean,
 ): KeyId | undefined {
+  const activeBindings = [...PICKER_BINDINGS, ...(searchEnabled ? SEARCH_INPUT_BINDINGS : [])];
   const reserved = [
     "ctrl+c",
+    "escape",
     "home",
     "end",
-    ...Object.keys(TUI_KEYBINDINGS).flatMap((binding) => {
+    ...(searchEnabled ? ["ctrl+j"] : []),
+    ...activeBindings.flatMap((binding) => {
       if (binding === "tui.editor.deleteCharForward") {
         return keybindings.getKeys(binding).filter((key) => normalizeKey(key) !== "ctrl+d");
       }
-      return keybindings.getKeys(binding as keyof typeof TUI_KEYBINDINGS);
+      return keybindings.getKeys(binding);
     }),
   ];
   for (const candidate of keybindings.getKeys("app.session.delete")) {

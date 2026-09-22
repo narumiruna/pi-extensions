@@ -30,9 +30,11 @@ function keybindings(overrides: Record<string, readonly string[]> = {}) {
     "tui.select.pageDown": ["pageDown"],
     "tui.select.confirm": ["enter"],
     "tui.select.cancel": ["escape", "ctrl+c"],
+    "tui.input.submit": ["enter"],
     "tui.input.tab": ["tab"],
     "tui.editor.deleteCharBackward": ["backspace"],
     "tui.editor.deleteCharForward": ["delete", "ctrl+d"],
+    "tui.editor.deleteWordBackward": ["ctrl+w"],
     "app.session.delete": ["ctrl+d"],
     ...overrides,
   };
@@ -112,6 +114,32 @@ test("search keeps printable remapped delete keys editable and uses the first no
     nextSelectedPath: "x-note-1.md",
     query: "x",
   });
+});
+
+test.each([
+  {
+    name: "Backspace",
+    deleteKey: "backspace",
+    editorBinding: "tui.editor.deleteCharBackward",
+    data: "\u007f",
+  },
+  {
+    name: "Ctrl+W",
+    deleteKey: "ctrl+w",
+    editorBinding: "tui.editor.deleteWordBackward",
+    data: "\u0017",
+  },
+])("uses inactive $name editor binding to delete when search is hidden", ({ deleteKey, editorBinding, data }) => {
+  const { picker, result } = createPicker([note("one.md"), note("two.md")], {
+    bindings: {
+      "app.session.delete": [deleteKey],
+      [editorBinding]: [deleteKey],
+    },
+  });
+
+  assert.match(picker.render(100).join("\n"), new RegExp(`${deleteKey.replace("+", "\\+")} delete`, "iu"));
+  picker.handleInput(data);
+  assert.deepEqual(result(), { kind: "delete", notePath: "one.md", nextSelectedPath: "two.md", query: "" });
 });
 
 test("mouse selection and activation preserve the standard open-note behavior", () => {
@@ -215,6 +243,27 @@ const deleteKeyCases: readonly {
     reserved: {},
     search: true,
     expected: "ctrl+x",
+  },
+  {
+    name: "reserves active editor bindings while searching",
+    deleteKeys: ["backspace", "f9"],
+    reserved: { "tui.editor.deleteCharBackward": ["backspace"] },
+    search: true,
+    expected: "f9",
+  },
+  {
+    name: "reserves hard Escape even when configured cancellation is remapped",
+    deleteKeys: ["escape", "f10"],
+    reserved: { "tui.select.cancel": ["ctrl+q"] },
+    search: false,
+    expected: "f10",
+  },
+  {
+    name: "reserves raw newline while searching",
+    deleteKeys: ["ctrl+j", "f11"],
+    reserved: { "tui.input.submit": [] },
+    search: true,
+    expected: "f11",
   },
 ];
 
