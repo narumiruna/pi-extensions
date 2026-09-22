@@ -23,6 +23,28 @@ const PASTE_TAIL_GUARD_MS = 50;
 // biome-ignore lint/complexity/useRegexLiterals: A literal ESC pattern violates noControlCharactersInRegex.
 const TMUX_PASTE_CONTROL_PATTERN = new RegExp("\\x1b\\[(\\d+);5u", "gu");
 
+// Pi 0.86 Editor checks these actions before newline and submit. Autocomplete-only
+// selection actions are omitted because this editor has no autocomplete provider.
+const EDITOR_ACTIONS_BEFORE_NEWLINE = [
+  "tui.input.copy",
+  "tui.editor.undo",
+  "tui.input.tab",
+  "tui.editor.deleteCharBackward",
+  "tui.editor.deleteCharForward",
+  "tui.editor.deleteWordBackward",
+  "tui.editor.deleteWordForward",
+  "tui.editor.deleteToLineStart",
+  "tui.editor.deleteToLineEnd",
+  "tui.editor.yank",
+  "tui.editor.yankPop",
+  "tui.editor.historyPrevious",
+  "tui.editor.historyNext",
+  "tui.editor.cursorLineStart",
+  "tui.editor.cursorLineEnd",
+  "tui.editor.cursorWordLeft",
+  "tui.editor.cursorWordRight",
+] as const;
+
 const EDITOR_PRIORITY_ACTIONS = [
   "tui.editor.cursorUp",
   "tui.editor.cursorDown",
@@ -200,15 +222,21 @@ class TemplateEditor implements Component, Focusable {
       if (remaining) this.handleInput(remaining);
       return;
     }
-    if (
-      matchesKey(data, Key.ctrl("c")) ||
-      (this.keybindings.matches(data, "tui.select.cancel") && !isFocusedEditorInput(data, this.keybindings))
-    ) {
+    if (matchesKey(data, Key.ctrl("c"))) {
+      this.finish(undefined);
+      return;
+    }
+    if (isEditorActionBeforeNewline(data, this.keybindings)) {
+      this.editor.handleKeyInput(data);
+      this.tui.requestRender();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.cancel") && !isFocusedEditorInput(data, this.keybindings)) {
       this.finish(undefined);
       return;
     }
     if (isEditorNewlineInput(data, this.keybindings)) {
-      this.editor.addNewline();
+      this.editor.handleKeyInput(data);
       this.tui.requestRender();
       return;
     }
@@ -420,15 +448,15 @@ class RawPreservingEditor implements Focusable {
     return cursor.col > 0 && line[cursor.col - 1] === "\\";
   }
 
-  addNewline(): void {
+  handleKeyInput(data: string): void {
     this.pasteSubmissionArmed = false;
     this.pasteError = undefined;
-    this.editor.insertTextAtCursor("\n");
+    this.editor.handleInput(data);
   }
 
   replaceBackslashWithNewline(): void {
     this.editor.handleInput(Key.backspace);
-    this.addNewline();
+    this.editor.insertTextAtCursor("\n");
   }
 
   commitPendingPaste(): void {
@@ -542,6 +570,14 @@ class RawPreservingEditor implements Focusable {
       if (!forbidden.has(marker)) return marker;
     }
   }
+}
+
+function isEditorActionBeforeNewline(data: string, keybindings: KeybindingsManager): boolean {
+  return (
+    EDITOR_ACTIONS_BEFORE_NEWLINE.some((action) => keybindings.matches(data, action)) ||
+    matchesKey(data, "shift+backspace") ||
+    matchesKey(data, "shift+delete")
+  );
 }
 
 function isFocusedEditorInput(data: string, keybindings: KeybindingsManager): boolean {
