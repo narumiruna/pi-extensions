@@ -238,12 +238,41 @@ test("sanitizes pasted search text before Input advances the cursor", () => {
 });
 
 test.each([
-  { name: "plain IME text", data: "X\u202eY", expectedQuery: "abcdXYZef", kitty: false },
-  { name: "Kitty printable text", data: "\u001b[8238u", expectedQuery: "abcdZef", kitty: true },
-])("sanitizes $name before Input advances the cursor", ({ data, expectedQuery, kitty }) => {
+  {
+    name: "plain IME text",
+    data: "X\u202eY",
+    expectedQuery: "abcdXYZef",
+    kitty: false,
+    modifyOtherKeys: false,
+  },
+  {
+    name: "Kitty printable text",
+    data: "\u001b[8238u",
+    expectedQuery: "abcdZef",
+    kitty: true,
+    modifyOtherKeys: false,
+  },
+  {
+    name: "modifyOtherKeys uppercase text",
+    data: "\u001b[27;2;88~",
+    expectedQuery: "abcdXZef",
+    kitty: false,
+    modifyOtherKeys: true,
+  },
+  {
+    name: "modifyOtherKeys shifted punctuation",
+    data: "\u001b[27;2;33~",
+    expectedQuery: "abcd!Zef",
+    kitty: false,
+    modifyOtherKeys: true,
+  },
+])("sanitizes $name before Input advances the cursor", ({ data, expectedQuery, kitty, modifyOtherKeys }) => {
   setKittyProtocolActive(kitty);
   const notes = Array.from({ length: 9 }, (_, index) => note(`${expectedQuery}-${index}.md`));
-  const { picker, result } = createPicker(notes, { query: "abcdef" });
+  const { picker, result } = createPicker(notes, {
+    query: "abcdef",
+    modifyOtherKeysActive: modifyOtherKeys,
+  });
   picker.focused = true;
   const width = 100;
   const frame = picker.render(width);

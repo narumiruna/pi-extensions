@@ -549,14 +549,30 @@ function sanitizeInsertableSearchInput(
   keybindings: Pick<KeybindingsManager, "matches">,
 ): string | undefined {
   if (data === "\n" || SEARCH_INPUT_BINDINGS.some((binding) => keybindings.matches(data, binding))) return data;
-  const kittyPrintable = decodeKittyPrintable(data);
-  if (kittyPrintable !== undefined) return sanitizeTerminalText(kittyPrintable) || undefined;
+  const printable = decodeKittyPrintable(data) ?? decodeModifyOtherKeysPrintable(data);
+  if (printable !== undefined) return sanitizeTerminalText(printable) || undefined;
   const hasControlCharacters = [...data].some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f);
   });
   if (hasControlCharacters) return data;
   return sanitizeTerminalText(data) || undefined;
+}
+
+function decodeModifyOtherKeysPrintable(data: string): string | undefined {
+  // Pi exposes the Kitty decoder from its root; mirror Editor's xterm modifyOtherKeys fallback.
+  const prefix = "\u001b[27;";
+  if (!data.startsWith(prefix)) return undefined;
+  const match = data.slice(prefix.length).match(/^(\d+);(\d+)~$/u);
+  if (!match) return undefined;
+  const modifier = (Number.parseInt(match[1] ?? "", 10) - 1) & ~(64 | 128);
+  const codePoint = Number.parseInt(match[2] ?? "", 10);
+  if ((modifier & ~1) !== 0 || !Number.isFinite(codePoint) || codePoint < 32) return undefined;
+  try {
+    return String.fromCodePoint(codePoint);
+  } catch {
+    return undefined;
+  }
 }
 
 function initializeSearchInput(input: Input, value: string): void {
