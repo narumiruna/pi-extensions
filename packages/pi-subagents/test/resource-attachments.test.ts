@@ -53,6 +53,77 @@ test("canonicalizes, deduplicates, and merges explicit local attachments", () =>
   });
 });
 
+test("accepts only skill paths that Pi loads", () => {
+  const directSkill = path.join(external, "direct.md");
+  const disabledSkill = path.join(external, "disabled.md");
+  const skillDirectory = path.join(external, "skill-directory");
+  const rootMarkdownDirectory = path.join(external, "root-markdown-directory");
+  const nestedSkillDirectory = path.join(external, "nested-skill-directory");
+  writeFileSync(directSkill, "---\nname: direct\ndescription: Direct skill.\n---\n");
+  writeFileSync(
+    disabledSkill,
+    "---\nname: disabled\ndescription: Explicit-only skill.\ndisable-model-invocation: true\n---\n",
+  );
+  mkdirSync(skillDirectory);
+  writeFileSync(path.join(skillDirectory, "SKILL.md"), "---\nname: directory\ndescription: Directory skill.\n---\n");
+  mkdirSync(rootMarkdownDirectory);
+  writeFileSync(
+    path.join(rootMarkdownDirectory, "root.md"),
+    "---\nname: root-markdown\ndescription: Root Markdown skill.\n---\n",
+  );
+  mkdirSync(path.join(nestedSkillDirectory, "nested"), { recursive: true });
+  writeFileSync(
+    path.join(nestedSkillDirectory, "nested", "SKILL.md"),
+    "---\nname: nested\ndescription: Nested skill.\n---\n",
+  );
+
+  assert.deepEqual(
+    resolveResourceAttachments(
+      { skills: [directSkill, disabledSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory] },
+      { cwd: project, projectTrusted: true, coreTools: [] },
+    ).skills,
+    [directSkill, disabledSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory],
+  );
+
+  const nonMarkdownFile = path.join(external, "not-a-skill.txt");
+  const missingDescription = path.join(external, "missing-description.md");
+  const emptyDirectory = path.join(external, "empty-directory");
+  const shadowedDirectory = path.join(external, "shadowed-directory");
+  const nestedMarkdownDirectory = path.join(external, "nested-markdown-directory");
+  const ignoredDirectory = path.join(external, "ignored-directory");
+  writeFileSync(nonMarkdownFile, "not a skill\n");
+  writeFileSync(missingDescription, "---\nname: missing-description\n---\n");
+  mkdirSync(emptyDirectory);
+  mkdirSync(path.join(shadowedDirectory, "nested"), { recursive: true });
+  writeFileSync(path.join(shadowedDirectory, "SKILL.md"), "---\nname: shadowed\n---\n");
+  writeFileSync(
+    path.join(shadowedDirectory, "nested", "SKILL.md"),
+    "---\nname: hidden-valid\ndescription: Hidden by the root declaration.\n---\n",
+  );
+  mkdirSync(path.join(nestedMarkdownDirectory, "nested"), { recursive: true });
+  writeFileSync(
+    path.join(nestedMarkdownDirectory, "nested", "ordinary.md"),
+    "---\nname: ignored-nested-markdown\ndescription: Nested ordinary Markdown is ignored.\n---\n",
+  );
+  mkdirSync(ignoredDirectory);
+  writeFileSync(path.join(ignoredDirectory, ".gitignore"), "SKILL.md\n");
+  writeFileSync(path.join(ignoredDirectory, "SKILL.md"), "---\nname: ignored\ndescription: Ignored skill.\n---\n");
+
+  for (const skill of [
+    nonMarkdownFile,
+    missingDescription,
+    emptyDirectory,
+    shadowedDirectory,
+    nestedMarkdownDirectory,
+    ignoredDirectory,
+  ]) {
+    assert.throws(
+      () => resolveResourceAttachments({ skills: [skill] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+      /at least one loadable Pi skill/i,
+    );
+  }
+});
+
 test("allows an explicit external resource but rejects lexical and canonical project paths when untrusted", () => {
   const externalExtension = path.join(external, "external.ts");
   const projectExtension = path.join(project, "project.ts");

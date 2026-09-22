@@ -53,7 +53,8 @@ const SpawnParameters = Type.Object(
     skills: Type.Optional(
       Type.Array(
         Type.String({
-          description: "Local skill file or directory path, resolved from the child working directory.",
+          description:
+            "Local Markdown skill file or directory containing a loadable Pi skill, resolved from the child working directory.",
           minLength: 1,
           maxLength: MAX_RESOURCE_PATH_BYTES,
         }),

@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "./message-broker.js";
 
 export const MAX_ATTACHED_SKILLS = 16;
@@ -46,6 +47,7 @@ export function resolveResourceAttachments(
   for (const candidate of skillInputs) {
     const resolved = resolveResourcePath(candidate, "skill", cwd, canonicalCwd, options.projectTrusted);
     if (!seenSkills.has(resolved)) {
+      assertLoadableSkill(resolved, cwd);
       seenSkills.add(resolved);
       skills.push(resolved);
     }
@@ -109,6 +111,18 @@ function resolveResourcePath(
     throw new Error(`Subagent ${kind} cannot load a project path because the project is not trusted.`);
   }
   return canonicalPath;
+}
+
+function assertLoadableSkill(skillPath: string, cwd: string): void {
+  const result = loadSkills({
+    cwd,
+    agentDir: cwd,
+    skillPaths: [skillPath],
+    includeDefaults: false,
+  });
+  if (result.skills.length === 0) {
+    throw new Error("Subagent skill path must contain at least one loadable Pi skill.");
+  }
 }
 
 function resolveExtensionToolName(value: unknown): string {

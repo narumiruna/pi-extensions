@@ -138,7 +138,8 @@ Omitting it selects `read`, `grep`, `find`, and `ls`, while an empty list gives 
 The runtime always adds `subagent_send` and child `subagent_wait` and removes duplicate names.
 Adding `edit` or `write` lets the child modify files, while `bash` or `powershell` grants unrestricted command execution.
 
-The optional `skills` list attaches local skill files or directories through Pi's progressive disclosure mechanism.
+The optional `skills` list attaches local Markdown skill files or directories through Pi's progressive disclosure mechanism.
+Each path must contain at least one skill Pi can load; non-Markdown files and directories without a loadable skill are rejected before launch.
 A skill is available for the child to discover and read when relevant; attaching it does not inject its complete body, add `read` or `bash`, or force the child to invoke it.
 
 Each `extensions` entry loads one trusted local extension file or directory and names the exact extension tools to activate initially.

@@ -441,6 +441,25 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
     () => spawn.execute("missing-model", { task: "missing model" }, undefined, undefined, missingModelContext.ctx),
     /no main-agent model is selected/i,
   );
+  const trustedContext = createMockContext({
+    model: { provider: "test-provider", id: "test-model" },
+    modelRegistry: {
+      getProviderAuthStatus: () => ({ configured: true, source: "environment" as const }),
+      getRegisteredProviderIds: () => [],
+    },
+    isProjectTrusted: () => true,
+  });
+  await assert.rejects(
+    () =>
+      spawn.execute(
+        "unloadable-skill",
+        { task: "unloadable skill", skills: ["package.json"] },
+        undefined,
+        undefined,
+        trustedContext.ctx,
+      ),
+    /at least one loadable Pi skill/i,
+  );
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(

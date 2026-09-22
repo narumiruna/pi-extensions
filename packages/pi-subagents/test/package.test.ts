@@ -43,6 +43,7 @@ test("repository example skill documents every minimal-runtime operating respons
     /smallest sufficient tool set/i,
     /`bash` and `powershell` as unrestricted command execution/i,
     /Attach `skills`.*progressive disclosure/is,
+    /Each attached skill path.*at least one skill Pi can load/is,
     /Attaching a skill does not inject its complete body.*add `read` or `bash`/is,
     /Attach `extensions`.*trust.*executable code/is,
     /extension tool list.*not a sandbox/is,
@@ -89,6 +90,7 @@ test("published documentation defines attachment behavior and its security bound
     assert.match(document, /`skills`/u);
     assert.match(document, /`extensions`/u);
     assert.match(document, /progressive disclosure/iu);
+    assert.match(document, /at least one.*(?:skill Pi can load|loadable.*skill)/iu);
     assert.match(document, /local path/iu);
     assert.match(document, /project.*untrusted|untrusted.*project/iu);
     assert.match(document, /not (?:an? )?(?:operating-system )?sandbox/iu);
