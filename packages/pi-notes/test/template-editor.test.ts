@@ -79,6 +79,30 @@ test("template editor preserves hidden raw content and boundary whitespace while
   assert.equal(await editing, `${content}x${streamed}${pasted}`);
 });
 
+test("template editor accepts split paste chunks and a later distinct paste", async () => {
+  const start = "\u001b[200~";
+  const end = "\u001b[201~";
+  const tui = createTuiHarness({ width: 72, rows: 20 });
+  const context = editorContext(tui);
+  const editing = showTemplateEditor(context.ctx, snapshot("before "), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  for (const input of [`${start}first`, "-tail", end]) {
+    tui.send(input);
+    await nextEventLoopTurn();
+  }
+  await tui.waitForPending();
+  tui.send(`${start}second${end}`);
+  await tui.waitForPending();
+  tui.press("tui.input.submit");
+
+  assert.equal(await editing, "before first-tailsecond");
+});
+
 test("template editor rejects ambiguous literal paste terminators across later input callbacks", async () => {
   const start = "\u001b[200~";
   const end = "\u001b[201~";

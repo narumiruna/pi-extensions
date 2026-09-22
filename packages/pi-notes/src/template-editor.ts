@@ -163,6 +163,7 @@ class TemplateEditor implements Component, Focusable {
   private dispatchInput(data: string): void {
     if (this.editor.isPasting || data.includes(BRACKETED_PASTE_START) || data.includes(BRACKETED_PASTE_END)) {
       const remaining = this.editor.handleInput(data);
+      if (this.editor.hasPendingPaste) this.armPasteTailTimer();
       this.tui.requestRender();
       if (remaining) this.handleInput(remaining);
       return;
@@ -285,7 +286,7 @@ class RawPreservingEditor implements Focusable {
   }
 
   get hasPendingPaste(): boolean {
-    return this.pasteSnapshot !== undefined;
+    return this.pasteSnapshot !== undefined && this.pasteBuffer === undefined;
   }
 
   handleInput(data: string): string | undefined {
