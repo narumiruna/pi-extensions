@@ -10,6 +10,7 @@ Only context you explicitly bring back is loaded into the main editor.
 - Starts a side thread immediately with `/btw <question>` or opens the manager with `/btw`.
 - Uses any persisted main-session branch as context without switching branches.
 - Supports scrollable answers, transcript search, a clickable jump-to-latest control, follow-up questions, queued steering, and in-memory resume.
+- Offers fullscreen, side-thread-left, and side-thread-right workspaces with an optional read-only main-thread snapshot.
 - Renders supported Mermaid fences as width-safe, themed Unicode diagrams without a browser or network request.
 - Keeps side questions and answers out of the main conversation by default.
 - Brings back the latest answer, a question suffix, an exact range, or the complete thread only when requested.
@@ -77,7 +78,8 @@ The normal location is `~/.pi/agent/pi-btw.json`.
   "model": "anthropic/claude-sonnet-4-5",
   "thinkingLevel": "low",
   "rememberThinkingLevelChanges": true,
-  "fullscreenCopyOnSelect": true
+  "fullscreenCopyOnSelect": true,
+  "layout": "left-pane"
 }
 ```
 
@@ -106,9 +108,16 @@ When **Same as main thread** is selected, shortcut changes stay local even when 
 If a shortcut write fails, the local change remains active and pi-btw warns that it was not remembered.
 A failed Settings-screen save instead restores the previous displayed value.
 
-`fullscreenCopyOnSelect` controls only pi-btw's dedicated fullscreen view and defaults to `true` when omitted.
+`fullscreenCopyOnSelect` controls only pi-btw's dedicated workspace and defaults to `true` when omitted.
 Turn **Copy selection automatically** off to retain highlighted selections and copy them with Pi's effective `app.message.copy` binding.
 Pi-btw does not inherit Pi core's setting of the same name because Pi's public extension API does not expose its effective value.
+
+`layout` controls the dedicated workspace and defaults to `fullscreen` when omitted.
+Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
+The pane names identify the side thread's position; the other pane is a read-only snapshot of the active main-thread context and editor draft captured when BTW opens.
+If you selected context from the main-thread tree, the snapshot still shows the active main thread while the side model receives the selected branch.
+Pane layouts collapse to the side thread alone below 80 terminal columns.
+Choose **Side-thread layout** in Settings; changes apply the next time a new or resumed BTW workspace opens.
 
 ### Keybindings
 
@@ -160,6 +169,7 @@ The file is read for every `/btw` invocation, so edits apply without `/reload`.
 ## 🚧 Limitations
 
 - `/btw` supports TUI mode only.
+- The main-thread pane is a read-only opening snapshot, not a live or interactive copy of Pi's main TUI.
 - Resume state is memory-only and lasts only for the current extension instance.
 - A side thread retains the latest 40,000 characters of main-conversation context and adds a truncation notice when earlier content is omitted.
 - Clipboard access depends on Pi's host helper, the operating system, and the terminal.

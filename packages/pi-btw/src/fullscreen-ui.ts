@@ -18,8 +18,11 @@ import {
   type TuiInputListenerResult,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
+import { buildConversationContext } from "./conversation-context.js";
 import { type BtwKeybindingOverrides, BtwPasteGuard, resolveBtwShortcuts, setBtwShortcuts } from "./keybindings.js";
+import type { BtwLayout } from "./settings.js";
 import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
+import { type BtwFullscreenLayoutComponent, BtwSplitPane } from "./workspace-layout.js";
 
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
 type BtwCustomFactory<T> = (
@@ -36,13 +39,10 @@ type BtwFullscreenTui = TUI & {
   addInputListenerBeforeViewport?(listener: TuiInputListener): () => void;
 };
 
-export interface BtwFullscreenLayoutComponent extends Component {
-  getFullscreenLayout(): Component;
-}
-
 export interface BtwFullscreenOptions {
   keybindings?: BtwKeybindingOverrides;
   copyOnSelect?: boolean;
+  layout?: BtwLayout;
 }
 
 export type BtwFullscreenTuiFactory = (
@@ -93,6 +93,8 @@ export async function runBtwFullscreen<T>(
         dependencies.copyToClipboard ?? copyToHostClipboard,
       ));
   let liveEditorText = ctx.ui.getEditorText();
+  const layout = options.layout ?? "fullscreen";
+  const mainThreadContext = layout === "fullscreen" ? "" : buildConversationContext(ctx.sessionManager.getBranch());
   let restoreEditor = false;
   let host: BtwFullscreenHost<T> | undefined;
   const outcome = await ctx.ui.custom<FullscreenOutcome<T>>(
@@ -114,6 +116,8 @@ export async function runBtwFullscreen<T>(
         },
         createTui,
         options,
+        mainThreadContext,
+        liveEditorText,
       );
       return host;
     },
@@ -430,6 +434,8 @@ class BtwFullscreenHost<T> implements Component {
     private readonly done: (outcome: FullscreenOutcome<T>) => void,
     private readonly createTui: BtwFullscreenTuiFactory,
     private readonly options: BtwFullscreenOptions,
+    private readonly mainThreadContext: string,
+    private readonly mainEditorDraft: string,
   ) {
     queueMicrotask(() => void this.start());
   }
@@ -747,7 +753,20 @@ class BtwFullscreenHost<T> implements Component {
           } else {
             fullscreen.clear();
             mounted = true;
-            if (isFullscreenLayoutComponent(component)) {
+            const workspaceLayout = this.options.layout ?? "fullscreen";
+            if (workspaceLayout !== "fullscreen") {
+              layoutMounted = true;
+              const splitPane = new BtwSplitPane({
+                sideComponent: component,
+                sideLayout: isFullscreenLayoutComponent(component) ? component.getFullscreenLayout() : component,
+                layout: workspaceLayout,
+                mainThreadContext: this.mainThreadContext,
+                mainEditorDraft: this.mainEditorDraft,
+                theme: this.theme,
+                terminalRows: () => fullscreen.terminal.rows,
+              });
+              fullscreen.setLayoutRoot(splitPane.getFullscreenLayout());
+            } else if (isFullscreenLayoutComponent(component)) {
               layoutMounted = true;
               fullscreen.setLayoutRoot(component.getFullscreenLayout());
             } else {

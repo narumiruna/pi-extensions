@@ -15,9 +15,11 @@ import {
   validateBtwShortcutEdit,
 } from "./keybindings.js";
 import {
+  type BtwLayout,
   type BtwSettings,
   type BtwSettingsPatch,
   btwSettingsPath,
+  effectiveBtwLayout,
   effectiveFullscreenCopyOnSelect,
   effectiveRememberThinkingLevelChanges,
   parseBtwModelReference,
@@ -65,10 +67,17 @@ type BtwMenuAction =
   | "set-thinking"
   | "set-remember"
   | "set-fullscreen-copy"
+  | "set-layout"
   | "edit-shortcut"
   | "save-shortcut"
   | "reset-shortcut";
 const SAME_AS_MAIN_THREAD = "Same as main thread";
+const BTW_LAYOUT_LABELS: Record<BtwLayout, string> = {
+  fullscreen: "Fullscreen",
+  "left-pane": "Side thread left",
+  "right-pane": "Side thread right",
+};
+const BTW_LAYOUT_VALUES = Object.values(BTW_LAYOUT_LABELS);
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
 
 type BtwCustomFactory<T> = (
@@ -331,7 +340,7 @@ export async function showBtwCommandMenu(
         lines: [
           `Model: ${displayModelValue(state.settings)}`,
           `Thinking: ${displayThinkingSummary(state.settings)} · Remember changes: ${displayRememberSummary(state.settings)}`,
-          `Copy on select: ${effectiveFullscreenCopyOnSelect(state.settings) ? "On" : "Off"}`,
+          `Layout: ${BTW_LAYOUT_LABELS[effectiveBtwLayout(state.settings)]} · Copy on select: ${effectiveFullscreenCopyOnSelect(state.settings) ? "On" : "Off"}`,
         ],
         items: [
           {
@@ -359,7 +368,7 @@ export async function showBtwCommandMenu(
           {
             id: "settings",
             label: "Settings",
-            description: "Choose model, thinking, keybindings, and selection copying",
+            description: "Choose model, thinking, layout, keybindings, and selection copying",
             to: state.kind === "invalid" ? "invalid" : "settings",
           },
         ],
@@ -413,6 +422,14 @@ export async function showBtwCommandMenu(
             currentValue: effectiveFullscreenCopyOnSelect(state.settings) ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-fullscreen-copy",
+          },
+          {
+            id: "layout",
+            label: "Side-thread layout",
+            description: "Use the full workspace or place BTW beside a read-only main-thread snapshot.",
+            currentValue: BTW_LAYOUT_LABELS[effectiveBtwLayout(state.settings)],
+            values: BTW_LAYOUT_VALUES,
+            action: "set-layout",
           },
           ...BTW_SHORTCUT_ACTIONS.map((action) => ({
             id: action,
@@ -549,6 +566,21 @@ export async function showBtwCommandMenu(
           await updateSettings({ fullscreenCopyOnSelect: value === "On" }, { settingsPath, signal });
           if (signal.aborted) return { kind: "rejected" };
           notifySafely(ctx, `Copy selection automatically: ${value}.`, "info");
+          return { kind: "stay" };
+        } catch (error) {
+          if (!signal.aborted) notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
+      "set-layout": async ({ value, signal }) => {
+        const layout = Object.entries(BTW_LAYOUT_LABELS).find(([, label]) => label === value)?.[0] as
+          | BtwLayout
+          | undefined;
+        if (!layout) return { kind: "rejected" };
+        try {
+          await updateSettings({ layout }, { settingsPath, signal });
+          if (signal.aborted) return { kind: "rejected" };
+          notifySafely(ctx, `Pi BTW layout: ${BTW_LAYOUT_LABELS[layout]}. Applies when BTW next opens.`, "info");
           return { kind: "stay" };
         } catch (error) {
           if (!signal.aborted) notifySaveFailure(ctx, error);

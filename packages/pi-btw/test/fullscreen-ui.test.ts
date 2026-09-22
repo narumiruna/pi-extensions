@@ -371,6 +371,14 @@ function createInputHandoffHarness(
   if (options.fullscreenParent) parent.renderNow(true);
 
   const ctx = {
+    sessionManager: {
+      getBranch: () => [
+        {
+          type: "message",
+          message: { role: "user", content: "main thread context" },
+        },
+      ],
+    },
     ui: {
       custom: <Value>(
         factory: (
@@ -462,6 +470,14 @@ function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings())
     bold: (text: string) => text,
   };
   const ctx = {
+    sessionManager: {
+      getBranch: () => [
+        {
+          type: "message",
+          message: { role: "user", content: "main thread context" },
+        },
+      ],
+    },
     ui: {
       custom: async (factory: (...args: never[]) => FakeComponent) => {
         const result = new Promise<unknown>((resolve) => {
@@ -544,13 +560,51 @@ async function startClipboardSelection(
 }
 
 test.each([
-  ["custom exit", "\u0011", false],
-  ["hard cancel", "\u0003", false],
-  ["custom exit with overlay", "\u0011", true],
-  ["hard cancel with overlay", "\u0003", true],
+  ["left-pane", /SIDE.*main thread · context snapshot/u],
+  ["right-pane", /main thread · context snapshot.*SIDE/u],
+] as const)(
+  "dedicated workspace renders the configured %s split around a main-thread snapshot",
+  async (layout, order) => {
+    const harness = createNativeFullscreenHarness();
+    let sideTui: TUI | undefined;
+    let closeSide: (() => void) | undefined;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+          sideTui = tui;
+          closeSide = () => done("closed");
+          return {
+            render: () => ["SIDE"],
+            invalidate() {},
+          };
+        }),
+      { layout },
+    );
+    await flushAsyncWork();
+    assert.ok(sideTui);
+    assert.ok(closeSide);
+    sideTui.renderNow(true);
+    const output = stripVTControlCharacters(harness.writes.join(""));
+    assert.match(output, order);
+    assert.match(output, /main thread context/u);
+    assert.match(output, /Main editor draft:/u);
+    assert.match(output, /main draft/u);
+
+    closeSide();
+    assert.equal(await running, "closed");
+  },
+);
+
+test.each([
+  ["custom exit", "\u0011", false, undefined],
+  ["hard cancel", "\u0003", false, undefined],
+  ["custom exit with overlay", "\u0011", true, undefined],
+  ["hard cancel with overlay", "\u0003", true, undefined],
+  ["hard cancel from a split pane", "\u0003", false, "left-pane"],
 ] as const)(
   "native terminal smoke: %s restores parent input after cycling thinking",
-  async (_label, exitInput, nested) => {
+  async (_label, exitInput, nested, layout) => {
     initTheme("dark");
     const keys = createBtwTestKeybindings();
     const previous = getKeybindings();
@@ -575,7 +629,10 @@ test.each([
             },
           });
         }),
-      { keybindings: { exit: "ctrl+q", cycleThinkingLevel: "f6", bringToMain: "f7" } },
+      {
+        keybindings: { exit: "ctrl+q", cycleThinkingLevel: "f6", bringToMain: "f7" },
+        ...(layout ? { layout } : {}),
+      },
     );
     try {
       await flushAsyncWork();
