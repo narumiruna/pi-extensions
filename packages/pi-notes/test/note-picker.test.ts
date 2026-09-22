@@ -195,6 +195,26 @@ test("every split paste-marker boundary keeps controls out of delete and hard-cl
   }
 });
 
+test("sanitizes pasted search text before Input advances the cursor", () => {
+  const notes = Array.from({ length: 9 }, (_, index) => note(`abcdXYZef-${index}.md`));
+  const { picker, result } = createPicker(notes, { query: "abcdef" });
+  picker.focused = true;
+  const width = 100;
+  const frame = picker.render(width);
+  const searchRow = frame.findIndex((line) => line.includes("Search:"));
+  assert.notEqual(searchRow, -1);
+  assert.deepEqual(
+    picker.handleMouse({ type: "press", x: 14, y: searchRow, width, height: frame.length, button: "left" } as never),
+    { handled: true, focus: true },
+  );
+
+  picker.handleInput("\u001b[200~\u001b[31mXY\u001b[0m\u001b[201~");
+  picker.handleInput("Z");
+  picker.handleInput("\u0003");
+
+  assert.deepEqual(result(), { kind: "close", selectedPath: "abcdXYZef-0.md", query: "abcdXYZef" });
+});
+
 test("Escape returns Back and Ctrl+C remains a hard Close under remapped cancellation", () => {
   vi.useFakeTimers();
   const remapped = { "tui.select.cancel": ["ctrl+q"] };

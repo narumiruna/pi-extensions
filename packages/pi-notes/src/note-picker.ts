@@ -418,7 +418,8 @@ export class NotePicker implements Component, Focusable {
     const remaining = this.pasteBuffer.slice(pasteEnd + BRACKETED_PASTE_END.length);
     this.pasteBuffer = undefined;
     if (this.searchEnabled) {
-      this.applySearchInput(`${BRACKETED_PASTE_START}${pasted}${BRACKETED_PASTE_END}`);
+      const safePaste = sanitizePastedSearchText(pasted);
+      this.applySearchInput(`${BRACKETED_PASTE_START}${safePaste}${BRACKETED_PASTE_END}`);
       this.options.tui.requestRender();
     }
     if (remaining && !this.disposed && !this.completed) this.routeInput(remaining);
@@ -524,6 +525,14 @@ export class NotePicker implements Component, Focusable {
     this.pasteBuffer = undefined;
     this.options.complete(result);
   }
+}
+
+function sanitizePastedSearchText(value: string): string {
+  const singleLine = value
+    .replace(/\r\n/gu, "")
+    .replace(/[\r\n]/gu, "")
+    .replace(/\t/gu, "    ");
+  return sanitizeTerminalText(singleLine);
 }
 
 function initializeSearchInput(input: Input, value: string): void {
