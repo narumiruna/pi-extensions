@@ -101,6 +101,7 @@ function codexAccessToken(accountId: string): string {
 function memorySettingsRuntime(
   options: {
     codexStatusResetCountdown?: boolean;
+    codexStatusPercentage?: "remaining" | "used";
     fireworksAccountId?: string;
     selectedTargets?: Record<string, string>;
     document?: Record<string, unknown>;
@@ -116,6 +117,7 @@ function memorySettingsRuntime(
     settings: {
       codexFastMode: false,
       codexStatusResetCountdown: options.codexStatusResetCountdown ?? false,
+      codexStatusPercentage: options.codexStatusPercentage ?? "remaining",
       selectedTargets: {
         ...(options.fireworksAccountId ? { fireworks: options.fireworksAccountId } : {}),
         ...options.selectedTargets,
@@ -1920,7 +1922,7 @@ test("session shutdown clears status through the shutdown context", async (t) =>
   assert.equal(statuses.get("usage"), undefined);
 });
 
-test("Codex reset countdown repaints locally and stops across replacement and shutdown", async (t) => {
+test("Codex used percentage and reset countdown repaint locally and stop across replacement and shutdown", async (t) => {
   const originalFetch = globalThis.fetch;
   vi.useFakeTimers();
   t.onTestFinished(() => {
@@ -1945,7 +1947,7 @@ test("Codex reset countdown repaints locally and stops across replacement and sh
       { status: 200 },
     );
   };
-  const settings = memorySettingsRuntime({ codexStatusResetCountdown: true });
+  const settings = memorySettingsRuntime({ codexStatusResetCountdown: true, codexStatusPercentage: "used" });
   const mock = createMockPi();
   usageExtension(mock.pi, { settingsRuntime: settings.runtime });
   const { ctx, statuses } = createMockContext({
@@ -1961,11 +1963,11 @@ test("Codex reset countdown repaints locally and stops across replacement and sh
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await vi.advanceTimersByTimeAsync(0);
-  assert.equal(statuses.get("usage"), "codex 80% ↻ 3m");
+  assert.equal(statuses.get("usage"), "codex 20% ↻ 3m");
   assert.equal(fetches, 1);
 
   await vi.advanceTimersByTimeAsync(60_000);
-  assert.equal(statuses.get("usage"), "codex 80% ↻ 2m");
+  assert.equal(statuses.get("usage"), "codex 20% ↻ 2m");
   assert.equal(fetches, 1);
 
   Object.assign(ctx, { model: undefined });
@@ -1977,7 +1979,7 @@ test("Codex reset countdown repaints locally and stops across replacement and sh
   Object.assign(ctx, { model: codexModel });
   mock.events.get("model_select")?.[0]?.({ model: codexModel }, ctx);
   await vi.advanceTimersByTimeAsync(0);
-  assert.equal(statuses.get("usage"), "codex 80% ↻ 1m");
+  assert.equal(statuses.get("usage"), "codex 20% ↻ 1m");
   assert.equal(fetches, 2);
 
   mock.events.get("session_shutdown")?.[0]?.({}, ctx);
@@ -2549,7 +2551,11 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
         setImmediate(() => {
           component.handleInput("j");
           component.handleInput("x");
-          setImmediate(() => component.handleInput("q"));
+          setImmediate(() => {
+            component.handleInput("j");
+            component.handleInput("x");
+            setImmediate(() => component.handleInput("q"));
+          });
         });
       }),
   });
@@ -2565,7 +2571,8 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
   assert.equal(changed, true);
   assert.equal(settings.state().settings.codexFastMode, true);
   assert.equal(settings.state().settings.codexStatusResetCountdown, true);
-  assert.deepEqual(applied, new Set(["codexFastMode", "codexStatusResetCountdown"]));
+  assert.equal(settings.state().settings.codexStatusPercentage, "used");
+  assert.deepEqual(applied, new Set(["codexFastMode", "codexStatusResetCountdown", "codexStatusPercentage"]));
   const renderedSettings = rendered.map((lines) => lines.join("\n"));
   assert.ok(
     rendered.some((frame) => {
@@ -2574,6 +2581,7 @@ test("the TUI SettingsList describes and applies usage preferences immediately",
     }),
   );
   assert.ok(renderedSettings.some((frame) => /Show time remaining until each Codex usage limit resets/.test(frame)));
+  assert.ok(renderedSettings.some((frame) => /Show remaining or used Codex quota in the statusline/.test(frame)));
   assert.ok(renderedSettings.some((frame) => /Use faster Codex routing/.test(frame)));
   assert.doesNotMatch(renderedSettings.join("\n"), /Fireworks account/u);
   assert.doesNotMatch(renderedSettings.join("\n"), /xAI|warning|undocumented|experimental/iu);
@@ -2705,6 +2713,7 @@ test("Ctrl+C hard-cancels Settings before conflicting configurable actions", asy
   assert.deepEqual(settings.state().settings, {
     codexFastMode: false,
     codexStatusResetCountdown: false,
+    codexStatusPercentage: "remaining",
     selectedTargets: {},
   });
   assert.equal(applied, 0);
@@ -2847,7 +2856,7 @@ test("a durable settings save still applies lifecycle cleanup when disposal wins
   assert.equal(applied, 1);
 });
 
-test("the TUI SettingsList rolls back its displayed and effective value after save failure", async () => {
+test("the TUI SettingsList rolls back a Codex percentage change after save failure", async () => {
   const settings = memorySettingsRuntime({ failUpdates: true });
   let latest: string[] = [];
   const { ctx, notifications } = createMockContext({
@@ -2882,6 +2891,7 @@ test("the TUI SettingsList rolls back its displayed and effective value after sa
           done,
         );
         component.handleInput("\u001b[B");
+        component.handleInput("\u001b[B");
         component.handleInput("\r");
         setImmediate(() => component.handleInput("\u0003"));
       }),
@@ -2896,9 +2906,9 @@ test("the TUI SettingsList rolls back its displayed and effective value after sa
   );
 
   assert.equal(changed, false);
-  assert.equal(settings.state().settings.codexStatusResetCountdown, false);
+  assert.equal(settings.state().settings.codexStatusPercentage, "remaining");
   assert.match(notifications[0]?.message ?? "", /disk full/);
-  assert.match(latest.join("\n"), /Codex reset countdown.*Off/su);
+  assert.match(latest.join("\n"), /Codex percentage.*Remaining/su);
 });
 
 test("shutdown cancels an explicit xAI identity body before billing or status publication", async (t) => {

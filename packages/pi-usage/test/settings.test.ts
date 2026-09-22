@@ -27,11 +27,13 @@ test("normalizes owned settings and ignores the retired xAI field", () => {
   assert.deepEqual(normalizeUsageSettings({ codexFastMode: true }), {
     codexFastMode: true,
     codexStatusResetCountdown: true,
+    codexStatusPercentage: "remaining",
     selectedTargets: {},
   });
   assert.deepEqual(normalizeUsageSettings({ fireworksAccountId: "acme-prod" }), {
     codexFastMode: false,
     codexStatusResetCountdown: true,
+    codexStatusPercentage: "remaining",
     selectedTargets: { fireworks: "acme-prod" },
   });
   assert.deepEqual(
@@ -42,6 +44,7 @@ test("normalizes owned settings and ignores the retired xAI field", () => {
     {
       codexFastMode: false,
       codexStatusResetCountdown: true,
+      codexStatusPercentage: "remaining",
       selectedTargets: { fireworks: "current", custom: "project-1" },
     },
   );
@@ -281,7 +284,35 @@ test("normalizes the Codex reset countdown status preference", () => {
   assert.deepEqual(normalizeUsageSettings({ codexStatusResetCountdown: false }), {
     codexFastMode: false,
     codexStatusResetCountdown: false,
+    codexStatusPercentage: "remaining",
     selectedTargets: {},
   });
   assert.equal(normalizeUsageSettings({ codexStatusResetCountdown: "false" }), undefined);
+});
+
+test("normalizes the Codex status percentage preference", () => {
+  assert.deepEqual(normalizeUsageSettings({ codexStatusPercentage: "used" }), {
+    codexFastMode: false,
+    codexStatusResetCountdown: true,
+    codexStatusPercentage: "used",
+    selectedTargets: {},
+  });
+  assert.equal(normalizeUsageSettings({ codexStatusPercentage: "remaining" })?.codexStatusPercentage, "remaining");
+  assert.equal(normalizeUsageSettings({ codexStatusPercentage: "consumed" }), undefined);
+  assert.equal(normalizeUsageSettings({ codexStatusPercentage: true }), undefined);
+});
+
+test("persists the Codex status percentage preference without replacing unknown fields", async () => {
+  const path = await tempSettingsPath();
+  await writeFile(path, '{"future":"kept"}\n');
+  const runtime = createUsageSettingsRuntime(path);
+  await runtime.reload();
+
+  await runtime.update({ codexStatusPercentage: "used" });
+
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+    future: "kept",
+    codexStatusPercentage: "used",
+  });
+  assert.equal((await runtime.reload()).settings.codexStatusPercentage, "used");
 });

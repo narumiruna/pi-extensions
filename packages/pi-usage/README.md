@@ -66,7 +66,7 @@ Read the [query and reset guide](./docs/operations.md) for target selection, can
 
 ## ⚙️ Settings
 
-Choose **Settings** in `/usage` to edit Codex Fast mode and the Codex reset countdown through Pi's settings-list interaction in TUI mode.
+Choose **Settings** in `/usage` to edit Codex Fast mode, percentage display, and the reset countdown through Pi's settings-list interaction in TUI mode.
 RPC mode reports the active manual settings path instead of opening terminal UI.
 
 These preferences live in `pi-usage.json` under Pi's user agent directory, normally `~/.pi/agent/pi-usage.json`.
@@ -94,6 +94,20 @@ Unsupported models and custom or proxy origins are left unchanged.
 
 A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
 Repair or remove an invalid file, then run `/reload` before trying the toggle again.
+
+### Codex statusline percentage
+
+The `codexStatusPercentage` preference accepts `"remaining"` or `"used"` and defaults to `"remaining"` to preserve existing output.
+Choose **Codex percentage** in the TUI Settings screen, or set the field manually and run `/reload`:
+
+```json
+{
+  "codexStatusPercentage": "used"
+}
+```
+
+With `"used"`, a limit with 70% remaining appears as `30%`; its reset countdown or window label stays unchanged.
+This preference changes only Codex statusline formatting, not provider data or the detailed `/usage` report.
 
 ### Codex statusline reset countdown
 

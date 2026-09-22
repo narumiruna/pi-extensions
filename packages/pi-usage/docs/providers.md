@@ -28,9 +28,10 @@ The README contains the capability overview and shared security requirements.
 - Source: the Codex usage and earned-reset endpoints using Pi's resolved runtime authorization
 - Displayed data: returned duration-based windows, resets, credits, earned usage-limit resets, and additional model buckets
 - Reset mutation: `POST /wham/rate-limit-reset-credits/consume` with a unique redemption request ID and, when available, the selected opaque credit ID
-- Statusline examples: `codex 59% ↻ 2h30m 61% ↻ 2d15m`, `codex fast 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusResetCountdown` to `false` for the legacy `5h` and `wk` labels.
+- Statusline examples: `codex 59% ↻ 2h30m 61% ↻ 2d15m`, `codex fast 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusPercentage` to `"used"` to show consumed percentages, or set `codexStatusResetCountdown` to `false` for the legacy `5h` and `wk` labels.
 
 The statusline selects a returned bucket that matches the current Codex model when one is available.
+The percentage preference affects only this compact status and defaults to remaining quota; it does not change the detailed report or returned usage data.
 Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
 
 Reset redemption is available only when Codex is the current provider.

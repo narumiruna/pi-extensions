@@ -21,7 +21,12 @@ function runtime(kind: UsageSettingsState["kind"] = "loaded") {
   let state: UsageSettingsState = {
     kind,
     path: "/tmp/pi-usage.json",
-    settings: { codexFastMode: false, codexStatusResetCountdown: false, selectedTargets: {} },
+    settings: {
+      codexFastMode: false,
+      codexStatusResetCountdown: false,
+      codexStatusPercentage: "remaining",
+      selectedTargets: {},
+    },
     ...(kind === "invalid" ? { issue: "bad file" } : { document: {} }),
   };
   const patches: unknown[] = [];

@@ -166,10 +166,17 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       }
       return;
     }
+    const settings = settingsRuntime.get().settings;
     const showCodexResetCountdown =
-      outcome.state.report.providerId === "openai-codex" && settingsRuntime.get().settings.codexStatusResetCountdown;
+      outcome.state.report.providerId === "openai-codex" && settings.codexStatusResetCountdown;
     const now = Date.now();
-    const rawValue = formatUsageStatusline(outcome.state.report, model, now, showCodexResetCountdown);
+    const rawValue = formatUsageStatusline(
+      outcome.state.report,
+      model,
+      now,
+      showCodexResetCountdown,
+      settings.codexStatusPercentage,
+    );
     const value = rawValue ? fastRuntime.decorateStatus(model, rawValue) : undefined;
     if (!safeSetStatus(ctx, value)) return;
     if (shouldSchedule && sessionActive) scheduleStatusRefresh(ctx, model);
@@ -998,7 +1005,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
               () => statusGeneration === menuGeneration && !controller.signal.aborted,
               (id) => {
                 if (
-                  id === "codexStatusResetCountdown" &&
+                  (id === "codexStatusResetCountdown" || id === "codexStatusPercentage") &&
                   stableCurrent &&
                   statusGeneration === menuGeneration &&
                   !controller.signal.aborted
