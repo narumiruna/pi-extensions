@@ -426,7 +426,7 @@ export async function showBtwCommandMenu(
           {
             id: "layout",
             label: "Side-thread layout",
-            description: "Use the full workspace or place BTW beside a read-only main-thread snapshot.",
+            description: "Use the full workspace or place BTW beside the live, click-to-focus main thread.",
             currentValue: BTW_LAYOUT_LABELS[effectiveBtwLayout(state.settings)],
             values: BTW_LAYOUT_VALUES,
             action: "set-layout",

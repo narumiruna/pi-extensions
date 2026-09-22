@@ -22,7 +22,7 @@ import { type BtwKeybindingOverrides, BtwPasteGuard, resolveBtwShortcuts, setBtw
 import type { BtwMainThreadUpdateSubscription } from "./main-thread-updates.js";
 import type { BtwLayout } from "./settings.js";
 import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
-import { type BtwFullscreenLayoutComponent, BtwSplitPane } from "./workspace-layout.js";
+import { type BtwFullscreenLayoutComponent, BtwMainThreadInput, BtwSplitPane } from "./workspace-layout.js";
 
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
 type BtwCustomFactory<T> = (
@@ -35,8 +35,13 @@ type BtwCustomFactory<T> = (
 type BtwFullscreenTui = TUI & {
   flash?: (message: string, durationMs?: number) => void;
   setLayoutRoot(component: Component | undefined): void;
+  hasFocusedOverlay?(): boolean;
   addInputListenerBeforeAll?(listener: TuiInputListener): () => void;
   addInputListenerBeforeViewport?(listener: TuiInputListener): () => void;
+};
+
+type FocusInspectableTui = TUI & {
+  getFocusedComponent?(): Component | null;
 };
 
 export interface BtwFullscreenOptions {
@@ -422,6 +427,7 @@ class BtwFullscreenHost<T> implements Component {
   private cleanupError: unknown;
   private removeMainThreadUpdateListener: (() => void) | undefined;
   private mainThreadRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly mainThreadInput: BtwMainThreadInput;
   private readonly lifetimeController = new AbortController();
 
   constructor(
@@ -434,6 +440,15 @@ class BtwFullscreenHost<T> implements Component {
     private readonly createTui: BtwFullscreenTuiFactory,
     private readonly options: BtwFullscreenOptions,
   ) {
+    const initialMainInput = getFocusedComponent(parent);
+    this.mainThreadInput = new BtwMainThreadInput(
+      initialMainInput,
+      () => {
+        const target = getFocusedComponent(parent);
+        return target === this ? initialMainInput : target;
+      },
+      () => this.fullscreen?.requestRender(),
+    );
     queueMicrotask(() => void this.start());
   }
 
@@ -554,6 +569,7 @@ class BtwFullscreenHost<T> implements Component {
   private watchMainThreadUpdates(): void {
     if ((this.options.layout ?? "fullscreen") === "fullscreen") return;
     this.removeMainThreadUpdateListener = this.options.subscribeMainThreadUpdates?.(() => {
+      this.mainThreadInput.refreshTarget();
       if (this.mainThreadRefreshTimer || this.disposed || this.finished) return;
       this.mainThreadRefreshTimer = setTimeout(() => {
         this.mainThreadRefreshTimer = undefined;
@@ -575,6 +591,7 @@ class BtwFullscreenHost<T> implements Component {
     } catch (error) {
       this.cleanupError ??= error;
     }
+    this.mainThreadInput.dispose();
     const removeUpstreamAbortListener = this.removeUpstreamAbortListener;
     this.removeUpstreamAbortListener = undefined;
     try {
@@ -656,6 +673,8 @@ class BtwFullscreenHost<T> implements Component {
     return new Promise<Value>((resolve, reject) => {
       let component: (Component & { dispose?(): void }) | undefined;
       let overlay: OverlayHandle | undefined;
+      let splitPane: BtwSplitPane | undefined;
+      let removePaneFocusListener: (() => void) | undefined;
       let mounted = false;
       let layoutMounted = false;
       let factorySettled = false;
@@ -676,12 +695,21 @@ class BtwFullscreenHost<T> implements Component {
       };
       const unmount = () => {
         let cleanupError: unknown;
+        const removeFocusListener = removePaneFocusListener;
+        removePaneFocusListener = undefined;
+        try {
+          removeFocusListener?.();
+        } catch (error) {
+          cleanupError = error;
+        }
+        splitPane?.dispose();
+        splitPane = undefined;
         try {
           if (overlay) overlay.hide();
           else if (mounted && layoutMounted) fullscreen.setLayoutRoot(undefined);
           else if (mounted && component) fullscreen.removeChild(component);
         } catch (error) {
-          cleanupError = error;
+          cleanupError ??= error;
         }
         if (overlay || mounted) {
           try {
@@ -777,13 +805,25 @@ class BtwFullscreenHost<T> implements Component {
             const workspaceLayout = this.options.layout ?? "fullscreen";
             if (workspaceLayout !== "fullscreen") {
               layoutMounted = true;
-              const splitPane = new BtwSplitPane({
+              splitPane = new BtwSplitPane({
                 sideComponent: component,
                 sideLayout: isFullscreenLayoutComponent(component) ? component.getFullscreenLayout() : component,
                 mainThread: this.parent,
+                mainInput: this.mainThreadInput,
                 layout: workspaceLayout,
                 theme: this.theme,
+                terminalColumns: () => fullscreen.terminal.columns,
                 terminalRows: () => fullscreen.terminal.rows,
+                hasFocusedOverlay: () => fullscreen.hasFocusedOverlay?.() ?? false,
+                setFocus: (target) => fullscreen.setFocus(target),
+                requestRender: () => fullscreen.requestRender(),
+              });
+              const addPaneFocusListener =
+                fullscreen.addInputListenerBeforeViewport?.bind(fullscreen) ??
+                fullscreen.addInputListener.bind(fullscreen);
+              removePaneFocusListener = addPaneFocusListener((data) => {
+                const consumed = splitPane?.handleTerminalInput(data);
+                return consumed ? { consume: true } : undefined;
               });
               fullscreen.setLayoutRoot(splitPane.getFullscreenLayout());
             } else if (isFullscreenLayoutComponent(component)) {
@@ -799,6 +839,10 @@ class BtwFullscreenHost<T> implements Component {
         .catch(fail);
     });
   }
+}
+
+function getFocusedComponent(tui: TUI): Component | null {
+  return (tui as FocusInspectableTui).getFocusedComponent?.() ?? null;
 }
 
 function isFullscreenLayoutComponent(component: Component): component is BtwFullscreenLayoutComponent {

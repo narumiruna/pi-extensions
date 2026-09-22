@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, type Focusable, isFocusable, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { BtwSplitPane, MIN_BTW_SPLIT_COLUMNS } from "../src/workspace-layout.js";
+import { BtwMainThreadInput, BtwSplitPane, MIN_BTW_SPLIT_COLUMNS } from "../src/workspace-layout.js";
 
 function theme() {
   return {
@@ -10,11 +10,33 @@ function theme() {
   } as never;
 }
 
-class SideComponent implements Component {
+class SideComponent implements Component, Focusable {
+  focused = false;
+  readonly inputs: string[] = [];
+
   constructor(private readonly rows: number) {}
 
   render(width: number): string[] {
     return Array.from({ length: this.rows }, () => truncateToWidth("SIDE", width));
+  }
+
+  handleInput(data: string): void {
+    this.inputs.push(data);
+  }
+
+  invalidate(): void {}
+}
+
+class InputComponent implements Component, Focusable {
+  focused = false;
+  readonly inputs: string[] = [];
+
+  render(): string[] {
+    return [];
+  }
+
+  handleInput(data: string): void {
+    this.inputs.push(data);
   }
 
   invalidate(): void {}
@@ -32,18 +54,39 @@ class MainThreadComponent implements Component {
   invalidate(): void {}
 }
 
-function split(layout: "left-pane" | "right-pane", rows = 8) {
+function split(layout: "left-pane" | "right-pane", rows = 8, paneTheme = theme()) {
   const side = new SideComponent(rows);
   const main = new MainThreadComponent();
+  const mainInput = new InputComponent();
+  const focus = { current: side as Component | null };
+  const overlay = { focused: false };
+  const renders = { count: 0 };
+  const terminal = { columns: 120 };
+  side.focused = true;
   const component = new BtwSplitPane({
     sideComponent: side,
     sideLayout: side,
     mainThread: main,
+    mainInput,
     layout,
-    theme: theme(),
+    theme: paneTheme,
+    terminalColumns: () => terminal.columns,
     terminalRows: () => rows,
+    hasFocusedOverlay: () => overlay.focused,
+    setFocus: (next) => {
+      if (focus.current && isFocusable(focus.current)) focus.current.focused = false;
+      focus.current = next;
+      if (isFocusable(next)) next.focused = true;
+    },
+    requestRender: () => {
+      renders.count += 1;
+    },
   });
-  return { component, main };
+  return { component, focus, main, mainInput, overlay, renders, side, terminal };
+}
+
+function mouse(button: number, column: number, suffix: "M" | "m" = "M"): string {
+  return `\u001b[<${button};${column};2${suffix}`;
 }
 
 test.each([
@@ -89,4 +132,142 @@ test("split-pane rendering remains bounded at minimal widths", () => {
     const lines = component.render(width);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
   }
+});
+
+test.each([
+  ["left-pane", 110, 10],
+  ["right-pane", 10, 110],
+] as const)("%s click switches keyboard input between main and side panes", async (layout, mainColumn, sideColumn) => {
+  const { component, focus, mainInput, renders, side } = split(layout);
+
+  component.handleTerminalInput(mouse(0, mainColumn));
+  assert.equal(focus.current, side);
+  await Promise.resolve();
+  assert.equal(focus.current, mainInput);
+  focus.current?.handleInput?.("main key");
+
+  component.handleTerminalInput(mouse(0, sideColumn, "m"));
+  await Promise.resolve();
+  assert.equal(focus.current, side);
+  focus.current?.handleInput?.("side key");
+
+  assert.deepEqual(mainInput.inputs, ["main key"]);
+  assert.deepEqual(side.inputs, ["side key"]);
+  assert.equal(renders.count, 2);
+});
+
+test("the accent divider follows the clicked pane", async () => {
+  const paneTheme = {
+    fg: (role: string, text: string) =>
+      role === "accent" ? `\u001b[31m${text}\u001b[39m` : `\u001b[90m${text}\u001b[39m`,
+  } as never;
+  const { component } = split("left-pane", 3, paneTheme);
+
+  assert.equal((component.render(120)[0] ?? "").includes("\u001b[31m┃\u001b[39m \u001b[90m│\u001b[39m"), true);
+  component.handleTerminalInput(mouse(0, 110));
+  await Promise.resolve();
+  assert.equal((component.render(120)[0] ?? "").includes("\u001b[90m│\u001b[39m \u001b[31m┃\u001b[39m"), true);
+});
+
+test("wheel, pointer movement, divider clicks, and focused overlays do not switch panes", async () => {
+  const { component, focus, mainInput, overlay, side } = split("left-pane");
+
+  component.handleTerminalInput(mouse(64, 110));
+  component.handleTerminalInput(mouse(32, 110));
+  component.handleTerminalInput(mouse(0, 60));
+  overlay.focused = true;
+  component.handleTerminalInput(mouse(0, 110));
+  assert.equal(component.handleTerminalInput("\u001b[200~"), false);
+  assert.equal(component.handleTerminalInput("\u001b[201~"), false);
+  overlay.focused = false;
+  assert.equal(component.handleTerminalInput("x"), false);
+  await Promise.resolve();
+
+  assert.equal(focus.current, side);
+  assert.equal(mainInput.focused, false);
+  assert.deepEqual(side.inputs, []);
+});
+
+test("queued clicks revalidate overlays and terminal width before changing focus", async () => {
+  const { component, focus, overlay, side, terminal } = split("left-pane");
+
+  component.handleTerminalInput(mouse(0, 110));
+  overlay.focused = true;
+  await Promise.resolve();
+  assert.equal(focus.current, side);
+
+  overlay.focused = false;
+  component.handleTerminalInput(mouse(0, 110));
+  terminal.columns = MIN_BTW_SPLIT_COLUMNS - 1;
+  await Promise.resolve();
+  assert.equal(focus.current, side);
+});
+
+test("bracketed paste is forwarded verbatim without interpreting mouse-shaped text as pane focus", async () => {
+  const { component, focus, mainInput } = split("left-pane");
+  component.handleTerminalInput(mouse(0, 110));
+  await Promise.resolve();
+  assert.equal(focus.current, mainInput);
+
+  const chunks = ["\u001b[200~", mouse(0, 10), "payload", "\u001b[201~"];
+  for (const chunk of chunks) assert.equal(component.handleTerminalInput(chunk), true);
+  await Promise.resolve();
+
+  assert.equal(focus.current, mainInput);
+  assert.deepEqual(mainInput.inputs, chunks);
+});
+
+test("narrow terminals synchronously return input focus to the visible side pane", async () => {
+  const { component, focus, mainInput, side, terminal } = split("right-pane");
+  component.handleTerminalInput(mouse(0, 10));
+  await Promise.resolve();
+  assert.equal(focus.current, mainInput);
+
+  terminal.columns = MIN_BTW_SPLIT_COLUMNS - 1;
+  assert.equal(component.handleTerminalInput("x"), false);
+  assert.equal(focus.current, side);
+  focus.current?.handleInput?.("x");
+  assert.deepEqual(side.inputs, ["x"]);
+});
+
+test("disposing a split pane invalidates a queued click focus change", async () => {
+  const { component, focus, side } = split("left-pane");
+  component.handleTerminalInput(mouse(0, 110));
+  component.dispose();
+  await Promise.resolve();
+
+  assert.equal(focus.current, side);
+});
+
+test("main-thread input follows Pi's current native target and releases it on disposal", () => {
+  const first = new InputComponent();
+  const second = new InputComponent();
+  let current: Component | null = first;
+  let renders = 0;
+  const input = new BtwMainThreadInput(
+    first,
+    () => current,
+    () => {
+      renders += 1;
+    },
+  );
+
+  input.focused = true;
+  input.handleInput("first");
+  current = second;
+  input.handleInput("second");
+  current = first;
+  input.handleInput("first again");
+
+  assert.deepEqual(first.inputs, ["first", "first again"]);
+  assert.deepEqual(second.inputs, ["second"]);
+  assert.equal(first.focused, true);
+  assert.equal(second.focused, false);
+  assert.equal(renders, 3);
+
+  input.dispose();
+  input.handleInput("ignored");
+  assert.equal(input.focused, false);
+  assert.equal(first.focused, false);
+  assert.deepEqual(first.inputs, ["first", "first again"]);
 });

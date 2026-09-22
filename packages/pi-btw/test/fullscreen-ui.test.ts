@@ -345,13 +345,30 @@ class InputHandoffTerminal implements Terminal {
 class MainInput implements Component, Focusable {
   focused = false;
   text = "";
+  readonly inputs: string[] = [];
 
   render(): string[] {
     return [this.text];
   }
 
   handleInput(data: string): void {
+    this.inputs.push(data);
     if (data.charCodeAt(0) >= 32) this.text += data;
+  }
+
+  invalidate(): void {}
+}
+
+class SideInput implements Component, Focusable {
+  focused = false;
+  readonly inputs: string[] = [];
+
+  render(): string[] {
+    return Array.from({ length: 12 }, () => "side thread");
+  }
+
+  handleInput(data: string): void {
+    this.inputs.push(data);
   }
 
   invalidate(): void {}
@@ -625,16 +642,19 @@ test.each([
   assert.match(output, order);
   assert.equal(styledOutput.includes("\u001b[44mMAIN initial\u001b[49m"), true);
 
+  const mainPaneColumn = layout === "left-pane" ? 70 : 10;
+  harness.input(`\u001b[<0;${mainPaneColumn};5M`);
+  await Promise.resolve();
+
   harness.writes.length = 0;
   harness.setMainFrame("updated");
   notifyMainThreadUpdate();
   await waitForCondition(
     () => stripVTControlCharacters(harness.writes.join("")).includes("MAIN updated"),
-    "live main-thread refresh should render the updated parent TUI",
+    "live main-thread refresh should render the updated parent TUI after main-pane focus",
   );
 
   harness.writes.length = 0;
-  const mainPaneColumn = layout === "left-pane" ? 70 : 10;
   harness.input(`\u001b[<64;${mainPaneColumn};5M`);
   sideTui.renderNow(true);
   assert.match(stripVTControlCharacters(harness.writes.join("")), /main history 20/u);
@@ -647,6 +667,73 @@ test.each([
   await flushAsyncWork();
   assert.equal(harness.mainRenderCount, renderCountAfterClose);
 });
+
+test.each([
+  ["left-pane", 70, 10],
+  ["right-pane", 10, 70],
+] as const)(
+  "native terminal click focus routes %s keyboard and paste input to either pane",
+  async (layout, mainColumn, sideColumn) => {
+    const harness = createInputHandoffHarness();
+    const sideInput = new SideInput();
+    let closeSide: (() => void) | undefined;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((_tui, _theme, _keys, done) => {
+          closeSide = () => done("closed");
+          return sideInput;
+        }),
+      { layout },
+    );
+
+    try {
+      await flushAsyncWork();
+      assert.ok(closeSide);
+      assert.equal(sideInput.focused, true);
+      assert.equal(harness.mainInput.focused, false);
+
+      harness.terminal.send("side key");
+      assert.deepEqual(sideInput.inputs, ["side key"]);
+
+      harness.terminal.send(`\u001b[<0;${mainColumn};5M`);
+      await Promise.resolve();
+      assert.equal(sideInput.focused, false);
+      assert.equal(harness.mainInput.focused, true);
+
+      harness.terminal.send("main key");
+      harness.terminal.send(`\u001b[<64;${sideColumn};5M`);
+      harness.terminal.send(`\u001b[<32;${sideColumn};5M`);
+      await Promise.resolve();
+      harness.terminal.send("still main");
+      assert.equal(harness.mainInput.focused, true);
+      assert.deepEqual(harness.mainInput.inputs.slice(0, 2), ["main key", "still main"]);
+
+      const pasted = ["\u001b[200~", `\u001b[<0;${sideColumn};5M`, "mouse-shaped text", "\u001b[201~"];
+      for (const chunk of pasted) harness.terminal.send(chunk);
+      await Promise.resolve();
+      assert.equal(harness.mainInput.focused, true);
+      assert.deepEqual(harness.mainInput.inputs.slice(2), pasted);
+
+      harness.terminal.send(`\u001b[<0;${sideColumn};5M`);
+      await Promise.resolve();
+      assert.equal(sideInput.focused, true);
+      assert.equal(harness.mainInput.focused, false);
+      harness.terminal.send("side again");
+      assert.deepEqual(sideInput.inputs, ["side key", "side again"]);
+
+      closeSide();
+      assert.equal(await running, "closed");
+      assert.equal(harness.mainInput.focused, true);
+      harness.terminal.send("restored");
+      assert.equal(harness.mainInput.inputs.at(-1), "restored");
+    } finally {
+      closeSide?.();
+      await running.catch(() => {});
+      harness.parent.stop();
+    }
+  },
+);
 
 test.each([
   ["custom exit", "\u0011", false, undefined],
