@@ -1,5 +1,16 @@
 # @narumitw/pi-usage
 
+## 0.61.0
+
+### Minor Changes
+
+- d6aea79: Add a Codex statusline preference for showing used quota percentages while keeping remaining quota as the default.
+
+### Patch Changes
+
+- 89b1a87: Enable Codex Fast routing for official `gpt-6-sol` requests.
+- 56a1635: Display Kimi Coding monthly ratio quotas in usage reports and the statusline, and accept the top-level snake-case booster wallet.
+
 ## 0.60.11
 
 ### Patch Changes
