@@ -114,6 +114,32 @@ test("/fast toggles one persistent setting on and off with visible usage guidanc
   assert.equal(refreshes, 2);
 });
 
+test("/fast enables priority for gpt-6-sol and restores default when disabled", async () => {
+  const memory = memoryRuntime();
+  const mock = createMockPi();
+  const fast = registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
+  const gpt6 = { ...codexModel, id: "gpt-6-sol", name: "GPT-6 Sol" };
+  const current = context({ model: gpt6 });
+  const command = mock.commands.get("fast");
+  const hook = mock.events.get("before_provider_request")?.[0];
+  assert.ok(command);
+  assert.ok(hook);
+  assert.deepEqual(fast.availability(gpt6 as never), { kind: "available", enabled: false });
+  await command.handler("", current.ctx);
+  assert.equal(memory.state.settings.codexFastMode, true);
+  assert.equal(fast.decorateStatus(gpt6 as never, "codex 80% 5h"), "codex fast 80% 5h");
+  assert.deepEqual(await hook({ payload: { model: "gpt-6-sol" } }, current.ctx), {
+    model: "gpt-6-sol",
+    service_tier: "priority",
+  });
+  await command.handler("", current.ctx);
+  assert.equal(memory.state.settings.codexFastMode, false);
+  assert.deepEqual(await hook({ payload: { model: "gpt-6-sol" } }, current.ctx), {
+    model: "gpt-6-sol",
+    service_tier: "default",
+  });
+});
+
 test("/fast rejects arguments and unsafe modes before mutation", async () => {
   const memory = memoryRuntime();
   const mock = createMockPi();
