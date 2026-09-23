@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 3.1.0
+
+### Minor Changes
+
+- aec9773: Allow each subagent job to attach validated local skills and trusted extensions with an attested initial tool allowlist.
+
 ## 3.0.2
 
 ### Patch Changes
