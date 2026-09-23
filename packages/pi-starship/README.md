@@ -96,7 +96,9 @@ format = "$model$directory$git_branch"
 style = "bold blue"
 ```
 
-Provider, model, and thinking modules also accept ordered exact-match `style_rules`; see [Configuration and format](./skills/configuring-pi-starship/references/configuration.md).
+Provider, model, and thinking modules also accept ordered exact-match `style_rules`.
+For per-extension status colors, add `[extension_status.styles]` entries using raw Pi status keys (or `namespace:*`); unmatched statuses keep the module style.
+See [Configuration and format](./skills/configuring-pi-starship/references/configuration.md) for examples and matching rules.
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
 

@@ -171,6 +171,7 @@ style_root = "red bold"
 [extension_status]
 format = "([$statuses ]($style))"
 icons = { "foo:*" = "🧪", "third_party/key" = "◎", fallback = "•" }
+styles = { "foo:*" = "bold green", "foo:error" = "bold red", fallback = "dimmed white" }
 ```
 
 Every module table supports `format`, `symbol`, and `disabled`.
@@ -185,6 +186,8 @@ A leading `!` is supported by language detection arrays and rejects a matching p
 Icon matching uses the exact key, the longest `:*` wildcard, a leading status emoji, then `fallback`/`🔌`.
 An empty configured icon suppresses only the icon.
 `foo:*` matches `foo:server` but not `foo`, `foobar`, or `foo/server`.
+`[extension_status].styles` applies a Starship style to each complete status (icon and text) by exact raw key, then longest `:*` wildcard, then optional `fallback`; unmatched statuses inherit the module's `style`.
+Separators retain the module style. An explicit `none` style removes the inherited module style for that status.
 
 Pi does not expose status ownership, so exact raw keys are the reliable third-party contract.
 pi-starship does not inspect installed packages, infer aliases, assign known-extension icons, or bridge compatibility keys.
@@ -235,8 +238,9 @@ Unknown display fields warn.
 Invalid display entries are discarded independently.
 When no valid entries remain, the complete module display default is restored.
 
-`extension_status` additionally accepts `separator`, `max_statuses`, and `icons`.
-`separator` is a string, `max_statuses` is an integer from 0 through 100, and `icons` is a string-to-string table.
+`extension_status` additionally accepts `separator`, `max_statuses`, `icons`, and `styles`.
+`separator` is a string, `max_statuses` is an integer from 0 through 100, `icons` is a string-to-string table, and `styles` maps raw status keys to valid Starship style strings.
+Invalid `styles` entries warn and are ignored independently; a non-table value warns and uses an empty table.
 
 ### Module option types
 

@@ -1,5 +1,6 @@
 import type { UIPromptKind } from "@earendil-works/pi-coding-agent";
-import type { StyledChunk } from "../format/style.js";
+import type { FormatValue } from "../format/formatter.js";
+import type { ColorPalette, StyledChunk } from "../format/style.js";
 
 export interface GitBranchSnapshot {
   name: string;
@@ -120,12 +121,14 @@ export interface ExtensionStatusPresentation {
   separator: string;
   maxStatuses: number;
   icons: Readonly<Record<string, string>>;
+  styles: Readonly<Record<string, string>>;
 }
 
 export type ModuleOptionValue = string | boolean | number | readonly string[] | Readonly<Record<string, string>>;
 
 export interface ModuleValueContext {
   runtime: StarshipRuntimeSnapshot;
+  palette: ColorPalette;
   symbol: string;
   options: Readonly<Record<string, ModuleOptionValue>>;
   extensionStatus: ExtensionStatusPresentation;
@@ -159,7 +162,6 @@ export interface ModuleDefaults {
 
 export interface ModuleStyleContext {
   runtime: StarshipRuntimeSnapshot;
-  values: Readonly<Record<string, string>>;
   style: string;
   styles: Readonly<Record<string, string>>;
   display: readonly ModuleDisplayConfig[];
@@ -179,7 +181,7 @@ export interface ModuleDefinition<Name extends string> {
   resolveStyleVariables?(context: ModuleStyleContext): Readonly<Record<string, string>> | undefined;
   options?: Readonly<Record<string, ModuleOptionSchema>>;
   layout?: "fill";
-  values(context: ModuleValueContext): Record<string, string> | undefined;
+  values(context: ModuleValueContext): Record<string, FormatValue> | undefined;
 }
 
 export function defineModule<const Name extends string>(definition: ModuleDefinition<Name>): ModuleDefinition<Name> {

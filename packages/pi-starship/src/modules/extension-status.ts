@@ -1,3 +1,4 @@
+import { parseStyle } from "../format/style.js";
 import { defineModule } from "./types.js";
 
 export const extensionStatusModule = defineModule({
@@ -9,16 +10,25 @@ export const extensionStatusModule = defineModule({
     style: "dimmed white",
     disabled: false,
   },
-  values: ({ runtime, extensionStatus }) => {
+  values: ({ runtime, extensionStatus, palette }) => {
     const statuses = [...runtime.extensionStatuses.entries()]
       .filter(([key, value]) => key !== "starship" && value.trim())
-      .map(([key, value]) => formatExtensionStatus(key, value, extensionStatus.icons))
-      .slice(0, extensionStatus.maxStatuses);
+      .slice(0, extensionStatus.maxStatuses)
+      .map(([key, value]) => ({ key, text: formatExtensionStatus(key, value, extensionStatus.icons) }));
     if (statuses.length === 0) return undefined;
-    return {
-      statuses: statuses.join(extensionStatus.separator),
-      count: `${statuses.length}`,
-    };
+    const { separator, styles } = extensionStatus;
+    const content =
+      Object.keys(styles).length === 0
+        ? statuses.map(({ text }) => text).join(separator)
+        : statuses.flatMap(({ key, text }, index) => {
+            const configured = configuredStatusValue(key, styles);
+            const style = configured ?? (Object.hasOwn(styles, "fallback") ? styles.fallback : undefined);
+            return [
+              ...(index > 0 ? [{ text: separator }] : []),
+              { text, style: style === undefined ? undefined : (parseStyle(style, palette) ?? {}) },
+            ];
+          });
+    return { statuses: content, count: `${statuses.length}` };
   },
 });
 
@@ -38,22 +48,22 @@ function extensionStatusIcon(
   leadingIcon: string | undefined,
   configuredIcons: Readonly<Record<string, string>>,
 ): string {
-  if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key] ?? "";
-  const namespaceIcon = configuredNamespaceIcon(key, configuredIcons);
-  if (namespaceIcon !== undefined) return namespaceIcon;
-  const fallbackIcon = Object.hasOwn(configuredIcons, "fallback") ? configuredIcons.fallback : undefined;
-  return leadingIcon ?? fallbackIcon ?? "🔌";
+  const configured = configuredStatusValue(key, configuredIcons);
+  if (configured !== undefined) return configured;
+  const fallback = Object.hasOwn(configuredIcons, "fallback") ? configuredIcons.fallback : undefined;
+  return leadingIcon ?? fallback ?? "🔌";
 }
 
-function configuredNamespaceIcon(key: string, configuredIcons: Readonly<Record<string, string>>): string | undefined {
-  let match: { baseLength: number; icon: string } | undefined;
-  for (const [selector, icon] of Object.entries(configuredIcons)) {
+function configuredStatusValue(key: string, configured: Readonly<Record<string, string>>): string | undefined {
+  if (Object.hasOwn(configured, key)) return configured[key];
+  let match: { baseLength: number; value: string } | undefined;
+  for (const [selector, value] of Object.entries(configured)) {
     if (!selector.endsWith(":*")) continue;
     const base = selector.slice(0, -2);
     if (!base || !key.startsWith(`${base}:`)) continue;
-    if (!match || base.length > match.baseLength) match = { baseLength: base.length, icon };
+    if (!match || base.length > match.baseLength) match = { baseLength: base.length, value };
   }
-  return match?.icon;
+  return match?.value;
 }
 
 function splitExtensionStatusIcon(value: string): { icon?: string; text: string } {
