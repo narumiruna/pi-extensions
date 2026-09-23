@@ -1,5 +1,11 @@
 # @narumitw/pi-notes
 
+## 0.2.0
+
+### Minor Changes
+
+- 648b8c3: Delete the highlighted note from the Open a note picker with confirmation, stale-revision protection, and configurable Pi keybindings.
+
 ## 0.1.0
 
 ### Minor Changes
