@@ -464,6 +464,35 @@ test("bounds extension-package skill content before synchronous loading", async 
   );
 });
 
+test("deduplicates canonical package skill paths before applying shared content limits", async () => {
+  const sharedSkill = path.join(external, "shared-large-skill.md");
+  writeFileSync(
+    sharedSkill,
+    `---\nname: shared-large\ndescription: Shared large package skill.\n---\n${"x".repeat(Math.floor(MAX_SKILL_SCAN_BYTES / 2) + 1)}`,
+  );
+  const packageDirectories = ["first-shared-package", "second-shared-package"].map((name) => path.join(external, name));
+  for (const packageDirectory of packageDirectories) {
+    mkdirSync(packageDirectory);
+    writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+    writeFileSync(
+      path.join(packageDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["../shared-large-skill.md"] } }),
+    );
+  }
+
+  const packageOnly = await resolveResourceAttachments(
+    { extensions: packageDirectories.map((extensionPath) => ({ path: extensionPath, tools: [] })) },
+    { cwd: project, projectTrusted: true, coreTools: [] },
+  );
+  assert.equal(packageOnly.extensions.length, 2);
+
+  const explicitAndPackage = await resolveResourceAttachments(
+    { skills: [sharedSkill], extensions: [{ path: packageDirectories[0], tools: [] }] },
+    { cwd: project, projectTrusted: true, coreTools: [] },
+  );
+  assert.deepEqual(explicitAndPackage.skills, [sharedSkill]);
+});
+
 test("allows explicit external resources but rejects every loaded project path when untrusted", async () => {
   const externalExtension = path.join(external, "external.ts");
   const externalSkill = path.join(external, "external-skill.md");

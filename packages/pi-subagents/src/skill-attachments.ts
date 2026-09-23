@@ -307,12 +307,13 @@ export async function assertLoadablePackageSkills(
   cwd: string,
   scanState: SkillScanState,
 ): Promise<void> {
-  for (const [index, skillPath] of packageSkillPaths.entries()) {
+  const uniquePackageSkillPaths = deduplicatePackageSkillPaths(packageSkillPaths, explicitSkillPaths);
+  for (const [index, skillPath] of uniquePackageSkillPaths.entries()) {
     if (index > 0 && index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
     throwIfAttachmentAborted(scanState.signal);
     await collectBoundedSkillCandidates(skillPath, scanState);
   }
-  for (const [index, skillPath] of packageSkillPaths.entries()) {
+  for (const [index, skillPath] of uniquePackageSkillPaths.entries()) {
     if (index > 0 && index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
     throwIfAttachmentAborted(scanState.signal);
     const result = loadExplicitSkills([skillPath], cwd);
@@ -320,5 +321,17 @@ export async function assertLoadablePackageSkills(
     assertNoOmittedSkillDiagnostics(result);
   }
   throwIfAttachmentAborted(scanState.signal);
-  assertNoSkillNameCollisions(loadExplicitSkills([...packageSkillPaths, ...explicitSkillPaths], cwd).diagnostics);
+  assertNoSkillNameCollisions(loadExplicitSkills([...uniquePackageSkillPaths, ...explicitSkillPaths], cwd).diagnostics);
+}
+
+function deduplicatePackageSkillPaths(packageSkillPaths: string[], explicitSkillPaths: string[]): string[] {
+  const seenPaths = new Set(explicitSkillPaths.map((skillPath) => realpath(skillPath, "Loaded subagent skill")));
+  const uniquePaths: string[] = [];
+  for (const skillPath of packageSkillPaths) {
+    const canonicalPath = realpath(skillPath, "Loaded subagent package skill");
+    if (seenPaths.has(canonicalPath)) continue;
+    seenPaths.add(canonicalPath);
+    uniquePaths.push(skillPath);
+  }
+  return uniquePaths;
 }
