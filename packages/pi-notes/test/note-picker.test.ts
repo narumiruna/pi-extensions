@@ -103,6 +103,40 @@ test("renders a width-safe note picker with effective open, delete, Back, and ha
   assert.equal(rendered.includes("\u202e"), false);
 });
 
+test("hints omit keys consumed by earlier hard-cancel and navigation handlers", () => {
+  const { picker } = createPicker([note("one.md"), note("two.md")], {
+    bindings: {
+      "tui.select.up": ["ctrl+c", "f6"],
+      "tui.select.down": ["escape", "f7"],
+      "tui.select.confirm": ["ctrl+c", "escape", "f6", "pageUp", "home", "ctrl+alt+[", "f8"],
+    },
+  });
+
+  const rendered = picker.render(120).join("\n");
+  assert.match(rendered, /f6\/f7 navigate • f8 open • ctrl\+d delete • esc back • ctrl\+c close/u);
+});
+
+test("hint collisions follow legacy and disambiguated terminal modes", () => {
+  const bindings = {
+    "tui.select.up": ["alt+left"],
+    "tui.select.down": [],
+    "tui.select.confirm": ["alt+b", "f8"],
+  };
+
+  setKittyProtocolActive(false);
+  const legacy = createPicker([note("one.md")], { bindings });
+  assert.match(legacy.picker.render(120).join("\n"), /f8 open/iu);
+  assert.doesNotMatch(legacy.picker.render(120).join("\n"), /alt\+b\/f8 open/iu);
+
+  setKittyProtocolActive(true);
+  const kitty = createPicker([note("one.md")], { bindings });
+  assert.match(kitty.picker.render(120).join("\n"), /alt\+b\/f8 open/iu);
+
+  setKittyProtocolActive(false);
+  const modifyOtherKeys = createPicker([note("one.md")], { bindings, modifyOtherKeysActive: true });
+  assert.match(modifyOtherKeys.picker.render(120).join("\n"), /alt\+b\/f8 open/iu);
+});
+
 test("search keeps printable remapped delete keys editable and uses the first non-conflicting fallback", () => {
   const notes = Array.from({ length: 9 }, (_, index) => note(`x-note-${index}.md`, index));
   const { picker, result } = createPicker(notes, {

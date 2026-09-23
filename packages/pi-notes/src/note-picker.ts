@@ -29,6 +29,12 @@ type KeyboardProtocolTerminal = TUI["terminal"] & {
   readonly modifyOtherKeysActive?: boolean;
 };
 
+interface NotePickerHintKeys {
+  navigation: readonly KeyId[];
+  confirm: readonly KeyId[];
+  back: readonly KeyId[];
+}
+
 const PICKER_BINDINGS = [
   "tui.select.up",
   "tui.select.down",
@@ -331,12 +337,13 @@ export class NotePicker implements Component, Focusable {
   }
 
   private interactionHint(): string {
+    const hintKeys = resolveNotePickerHintKeys(this.options.keybindings, this.searchEnabled, this.options.tui.terminal);
     const deleteKey = resolveNoteDeleteKey(this.options.keybindings, this.searchEnabled, this.options.tui.terminal);
     return formatInteractionHints(this.options.keybindings, [
-      { bindings: ["tui.select.up", "tui.select.down"], label: "navigate" },
-      { bindings: ["tui.select.confirm"], label: "open" },
+      { keys: hintKeys.navigation, label: "navigate" },
+      { keys: hintKeys.confirm, label: "open" },
       ...(deleteKey ? [{ keys: [deleteKey], label: "delete" }] : []),
-      { bindings: ["tui.select.cancel"], keys: ["escape"], excludeKeys: ["ctrl+c"], label: "back" },
+      { keys: hintKeys.back, label: "back" },
       { keys: ["ctrl+c"], label: "close" },
     ]);
   }
@@ -594,6 +601,39 @@ function initializeSearchInput(input: Input, value: string): void {
   });
 }
 
+function resolveNotePickerHintKeys(
+  keybindings: Pick<KeybindingsManager, "getKeys">,
+  searchEnabled: boolean,
+  terminal?: KeyboardProtocolTerminal,
+): NotePickerHintKeys {
+  const disambiguatedKeyProtocol = usesDisambiguatedKeyProtocol(terminal);
+  const claimed = ["ctrl+c"];
+  const claim = (candidates: readonly unknown[]): KeyId[] => {
+    const available: KeyId[] = [];
+    for (const candidate of candidates) {
+      const normalized = normalizeKey(candidate);
+      if (!normalized || !keyRoutesAsSingleInput(normalized, disambiguatedKeyProtocol)) continue;
+      if (claimed.some((other) => keysOverlap(normalized, other, disambiguatedKeyProtocol))) continue;
+      claimed.push(normalized);
+      available.push(normalized as KeyId);
+    }
+    return available;
+  };
+
+  // Match handleNonPasteInput() branch order so every displayed key reaches its labeled action.
+  const back = claim([...keybindings.getKeys("tui.select.cancel"), "escape"]);
+  const up = claim(keybindings.getKeys("tui.select.up"));
+  const down = claim(keybindings.getKeys("tui.select.down"));
+  claim(keybindings.getKeys("tui.select.pageUp"));
+  claim(keybindings.getKeys("tui.select.pageDown"));
+  if (!searchEnabled) {
+    claim(["home"]);
+    claim(["end"]);
+  }
+  const confirm = claim(keybindings.getKeys("tui.select.confirm"));
+  return { navigation: [...up, ...down], confirm, back };
+}
+
 /** Resolve the first effective delete binding that remains reachable in this picker. */
 export function resolveNoteDeleteKey(
   keybindings: Pick<KeybindingsManager, "getKeys">,
@@ -614,8 +654,7 @@ export function resolveNoteDeleteKey(
       return keybindings.getKeys(binding);
     }),
   ];
-  const disambiguatedKeyProtocol =
-    isKittyProtocolActive() || terminal?.kittyProtocolActive === true || terminal?.modifyOtherKeysActive === true;
+  const disambiguatedKeyProtocol = usesDisambiguatedKeyProtocol(terminal);
   for (const candidate of keybindings.getKeys("app.session.delete")) {
     const normalized = normalizeKey(candidate);
     if (!normalized || (searchEnabled && isTextKey(normalized))) continue;
@@ -659,6 +698,21 @@ function inputsFor(key: string): string[] {
   const code = SPECIAL_CODEPOINTS[base] ?? (base.length === 1 ? base.charCodeAt(0) : undefined);
   const inputs = code === undefined ? LEGACY_INPUTS : [...LEGACY_INPUTS, `\u001b[${code};${modifier + 1}u`];
   return inputs.filter((input) => matchesKey(input, key as KeyId));
+}
+
+function usesDisambiguatedKeyProtocol(terminal?: KeyboardProtocolTerminal): boolean {
+  return isKittyProtocolActive() || terminal?.kittyProtocolActive === true || terminal?.modifyOtherKeysActive === true;
+}
+
+function keysOverlap(first: string, second: string, disambiguatedKeyProtocol: boolean): boolean {
+  if (disambiguatedKeyProtocol) return first === second;
+  return inputsFor(first).some((input) => matchesKey(input, second as KeyId));
+}
+
+function keyRoutesAsSingleInput(key: string, disambiguatedKeyProtocol: boolean): boolean {
+  if (disambiguatedKeyProtocol) return true;
+  const inputs = inputsFor(key);
+  return inputs.length > 0 && inputs.every(routesAsSingleNonPasteInput);
 }
 
 function routesAsSingleNonPasteInput(input: string): boolean {
