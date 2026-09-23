@@ -34,6 +34,13 @@ The statusline selects a returned bucket that matches the current Codex model wh
 The percentage preference affects only this compact status and defaults to remaining quota; it does not change the detailed report or returned usage data.
 Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
 
+When the usage summary reports banked resets, the report also reads `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` with the same resolved authorization as `/wham/usage`.
+Each returned Codex reset shows its title, backend status, and expiration in the machine's local timezone with an explicit UTC offset (including the expiration date's daylight-saving adjustment).
+Missing or malformed dates show expiration unavailable, not a promise that the reset never expires.
+These details share the account-scoped usage cache; no extra request is made when the summary has no banked resets.
+The optional request is capped at 1.5 seconds within the remaining query budget; failure leaves usage and the summary's available count intact.
+Viewing this report never consumes a reset, and the compact statusline is unchanged.
+
 Reset redemption is available only when Codex is the current provider.
 Pi's freshly resolved access token must exactly match an OAuth credential from Pi's stored login or a compatible credential source.
 `pi-usage` forwards only the bearer authorization and matching `chatgpt-account-id` to the official ChatGPT origin.

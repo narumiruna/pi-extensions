@@ -93,6 +93,100 @@ test("zero Codex reset availability is visible and cannot mutate", async (t) => 
   assert.equal(posts, 0);
 });
 
+test("read-only Codex details appear in RPC without redeeming credits", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.onTestFinished(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requests: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    assert.equal(init?.method, "GET");
+    requests.push(String(input));
+    if (String(input).endsWith("/rate-limit-reset-credits"))
+      return Response.json({
+        credits: [
+          {
+            reset_type: "codex_rate_limits",
+            title: "Full reset",
+            status: "available",
+            expires_at: "2026-10-04T05:32:41Z",
+          },
+          { reset_type: "codex_rate_limits", title: "Earlier reset", status: "redeemed", expires_at: null },
+        ],
+      });
+    return usageResponse(2);
+  };
+  const mock = createMockPi();
+  usageExtension(mock.pi);
+  let shown = "";
+  const { ctx } = createMockContext({
+    hasUI: true,
+    mode: "rpc",
+    model: codexModel,
+    modelRegistry: codexRegistry(() => "codex-token"),
+    select: async (title: string) => {
+      shown = title;
+      return "Close";
+    },
+  });
+  await mock.commands.get("usage")?.handler("", ctx);
+  assert.match(shown, /2 available/);
+  assert.match(shown, /Full reset · available · expires .*2026.*GMT/);
+  assert.match(shown, /Earlier reset · redeemed · expiration unavailable/);
+  assert.equal(requests.length, 2);
+});
+
+test("Codex detail report stays width-safe in TUI", async (t) => {
+  let resolveUsage: (response: Response) => void = () => undefined;
+  const pendingUsage = new Promise<Response>((resolve) => {
+    resolveUsage = resolve;
+  });
+  const originalFetch = globalThis.fetch;
+  t.onTestFinished(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async (input) =>
+    String(input).endsWith("/rate-limit-reset-credits")
+      ? Response.json({
+          credits: [
+            {
+              reset_type: "codex_rate_limits",
+              title: "Full reset",
+              status: "available",
+              expires_at: "2026-10-04T05:32:41Z",
+            },
+          ],
+        })
+      : pendingUsage;
+  const tui = createTuiHarness({ width: 80, rows: 40 });
+  const mock = createMockPi();
+  usageExtension(mock.pi);
+  const base = createMockContext({
+    hasUI: true,
+    mode: "tui",
+    model: codexModel,
+    modelRegistry: codexRegistry(() => "codex-token"),
+  }).ctx as unknown as { ui: Record<string, unknown>; [key: string]: unknown };
+  const running = mock.commands.get("usage")?.handler("", { ...base, ui: { ...base.ui, custom: tui.custom } } as never);
+  try {
+    await tui.waitForOpen();
+    const initialTask = tui.resultPromise;
+    resolveUsage(usageResponse(1));
+    await initialTask;
+    await tui.waitForOpen();
+    const wide = tui.render(100).join("\n");
+    assert.match(wide, /Full reset/);
+    assert.match(wide, /expires/);
+    for (const width of [1, 24, 80]) {
+      for (const line of tui.render(width)) assert.ok(visibleWidth(line) <= width);
+    }
+    tui.press("tui.select.cancel");
+    await running;
+  } finally {
+    tui.dispose();
+  }
+});
+
 test("missing reset summary keeps the current Codex availability check reachable", async (t) => {
   const originalFetch = globalThis.fetch;
   t.onTestFinished(() => {
@@ -242,6 +336,7 @@ test("TUI reset confirmation is width-safe and external disposal aborts confirme
   const pendingUsage = new Promise<Response>((resolve) => {
     resolveUsage = resolve;
   });
+  let detailRequests = 0;
   let resolveDetails: (response: Response) => void = () => undefined;
   const pendingDetails = new Promise<Response>((resolve) => {
     resolveDetails = resolve;
@@ -264,7 +359,11 @@ test("TUI reset confirmation is width-safe and external disposal aborts confirme
         else init?.signal?.addEventListener("abort", abort, { once: true });
       });
     }
-    if (url.endsWith("/rate-limit-reset-credits")) return pendingDetails;
+    if (url.endsWith("/rate-limit-reset-credits")) {
+      detailRequests += 1;
+      // Report enrichment precedes the separate, freshly authenticated redemption check.
+      return detailRequests === 1 ? Response.json({ credits: [] }) : pendingDetails;
+    }
     return pendingUsage;
   };
 

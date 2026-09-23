@@ -11,7 +11,7 @@ xAI OAuth subscription reporting follows the reviewed Grok Build contract and ru
 - Shows active-account usage and next actions through `/usage`.
 - Reports subscription allowances, API balances, and spending for the supported providers listed below without mixing their billing semantics.
 - Toggles persistent Codex Fast routing through `/fast` or the usage menu.
-- Redeems eligible Codex resets only after fresh account matching and explicit confirmation.
+- Shows banked Codex reset statuses and local-time expirations; redeems eligible resets only after fresh account matching and explicit confirmation.
 - Refreshes one or all configured providers with bounded concurrency while preserving partial results.
 - Scopes statusline and cache data to the active provider and runtime account.
 - Resolves credentials through Pi or the process-local OAuth credential-source protocol, waits for compatible pending account activation, and validates the effective provider endpoint before sending them.

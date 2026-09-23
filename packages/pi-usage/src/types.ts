@@ -35,6 +35,13 @@ export interface UsageMetric {
   currency?: string;
 }
 
+export interface CodexResetCreditDetail {
+  title: string;
+  status: string;
+  /** Epoch milliseconds; absent means unavailable, not non-expiring. */
+  expiresAt?: number;
+}
+
 export interface UsageReport {
   providerId: string;
   providerName: string;
@@ -45,6 +52,7 @@ export interface UsageReport {
   buckets: UsageBucket[];
   metrics: UsageMetric[];
   notes?: string[];
+  codexResetCredits?: CodexResetCreditDetail[];
 }
 
 export interface ResolvedUsageAuth {

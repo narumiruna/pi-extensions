@@ -1,5 +1,5 @@
 import { sanitizeDisplayText } from "../core.js";
-import type { CodexBackendPayload, UsageBucket, UsageMetric, UsageReport } from "../types.js";
+import type { CodexBackendPayload, CodexResetCreditDetail, UsageBucket, UsageMetric, UsageReport } from "../types.js";
 
 export function normalizeCodexBackendPayload(payload: CodexBackendPayload, capturedAt: number): UsageReport {
   const buckets: UsageBucket[] = [];
@@ -61,6 +61,33 @@ export function normalizeCodexBackendPayload(payload: CodexBackendPayload, captu
     metrics,
     ...(planType ? { notes: [`Plan: ${planType}`] } : {}),
   };
+}
+
+export function normalizeCodexResetDetails(payload: unknown): CodexResetCreditDetail[] | undefined {
+  const credits = asObject(payload)?.credits;
+  if (!Array.isArray(credits)) return undefined;
+  return credits.flatMap((raw): CodexResetCreditDetail[] => {
+    const credit = asObject(raw);
+    if (credit?.reset_type !== "codex_rate_limits") return [];
+    return [
+      {
+        title: typeof credit.title === "string" ? credit.title : "Full reset",
+        status: typeof credit.status === "string" ? credit.status : "unavailable",
+        expiresAt: resetExpiration(credit.expires_at),
+      },
+    ];
+  });
+}
+
+function resetExpiration(value: unknown): number | undefined {
+  // Require an explicit timezone; Date.parse otherwise silently assumes local time.
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value))
+    return undefined;
+  const date = value.slice(0, 10);
+  const calendarDate = new Date(`${date}T00:00:00Z`);
+  if (!Number.isFinite(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== date) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function normalizeRateLimitGroup(

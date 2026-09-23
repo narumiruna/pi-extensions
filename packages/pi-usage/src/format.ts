@@ -1,3 +1,4 @@
+import { sanitizeDisplayText } from "./core.js";
 import type { CodexStatusPercentage } from "./settings.js";
 import type { ProviderUsageState, UsageBucket, UsageDisplayState, UsageModel, UsageReport } from "./types.js";
 
@@ -131,10 +132,33 @@ function formatCodexReport(lines: string[], report: UsageReport): void {
   for (const metric of report.metrics) {
     if (metric.id === "reset-credits") {
       lines.push(`${"Usage limit resets:".padEnd(VALUE_COLUMN)}${metric.value} available`);
+      for (const [index, credit] of (report.codexResetCredits ?? []).entries()) {
+        const title = sanitizeDisplayText(credit.title, 160) || "Full reset";
+        const status = sanitizeDisplayText(credit.status, 80) || "unavailable";
+        const expiration =
+          credit.expiresAt === undefined || !Number.isFinite(credit.expiresAt)
+            ? "expiration unavailable"
+            : `expires ${formatCreditExpiration(credit.expiresAt)}`;
+        lines.push(`  ${index + 1}. ${title} · ${status} · ${expiration}`);
+      }
     } else if (metric.id === "credits") {
       lines.push(`${"Credits:".padEnd(VALUE_COLUMN)}${formatMetricValue(metric.value, metric.unit)}`);
     }
   }
+}
+
+function formatCreditExpiration(epochMs: number): string {
+  const date = new Date(epochMs);
+  if (!Number.isFinite(date.getTime())) return "at an unknown time";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "longOffset",
+  });
 }
 
 function formatDeepSeekReport(lines: string[], report: UsageReport): void {

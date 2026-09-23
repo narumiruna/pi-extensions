@@ -5,7 +5,7 @@ import { type ExtensionContext, readStoredCredential } from "@earendil-works/pi-
 import { errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.js";
 import { fallbackOAuthCredentialCandidates, type OAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
-import { normalizeCodexBackendPayload } from "./providers/codex.js";
+import { normalizeCodexBackendPayload, normalizeCodexResetDetails } from "./providers/codex.js";
 import { normalizeDeepSeekBalancePayload } from "./providers/deepseek.js";
 import { createFireworksAdapter } from "./providers/fireworks.js";
 import { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
@@ -102,9 +102,37 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
       kind: "consumer-subscription",
       label: "ChatGPT subscription limits",
     },
-    async query(auth, signal, timeoutMs) {
-      const payload = await fetchProviderJson(CODEX_USAGE_URL, auth, signal, timeoutMs, "Codex usage endpoint");
-      return normalizeCodexBackendPayload(payload as CodexBackendPayload, Date.now());
+    async query(auth, signal, timeoutMs, guard) {
+      const startedAt = Date.now();
+      const payload = await fetchProviderJson(CODEX_USAGE_URL, auth, signal, timeoutMs, "Codex usage endpoint", {
+        redirect: "error",
+      });
+      const report = normalizeCodexBackendPayload(payload as CodexBackendPayload, Date.now());
+      // Reuse the account-scoped report cache; do not poll details without banked credits.
+      const count = report.metrics.find((metric) => metric.id === "reset-credits")?.value;
+      if (typeof count !== "number" || count <= 0) return report;
+      await guard?.();
+      signal.throwIfAborted();
+      // Optional metadata must not use the entire remaining usage/auth deadline.
+      const budget = Math.min(1_500, timeoutMs - (Date.now() - startedAt) - 100);
+      if (budget <= 0) return report;
+      try {
+        const details = await fetchProviderJson(
+          "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+          auth,
+          signal,
+          budget,
+          "Codex reset details endpoint",
+          { redirect: "error" },
+        );
+        report.codexResetCredits = normalizeCodexResetDetails(details);
+      } catch (error) {
+        if (signal.aborted || isAbortError(error)) throw error;
+        // Optional endpoint failures never hide the primary usage or reset count.
+      }
+      await guard?.();
+      signal.throwIfAborted();
+      return report;
     },
   },
   {

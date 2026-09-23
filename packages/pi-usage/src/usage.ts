@@ -295,7 +295,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     let retryableAuthChanged = false;
     const guard = async () => {
       if (signal.aborted || requestContextChanged()) throw abortError();
-      if (!requiresRequestBoundaryGuard) return;
+      if (!requiresRequestBoundaryGuard && adapter.id !== "openai-codex") return;
       const revalidated = await awaitWithDeadline(
         resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
         signal,
@@ -399,7 +399,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         auth,
         signal,
         Math.max(1, deadlineAt - Date.now()),
-        requiresRequestBoundaryGuard ? guard : undefined,
+        requiresRequestBoundaryGuard || adapter.id === "openai-codex" ? guard : undefined,
         target.targetId,
       );
       if (requiresRequestBoundaryGuard) await guard();
