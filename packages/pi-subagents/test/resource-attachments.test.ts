@@ -56,6 +56,7 @@ test("canonicalizes, deduplicates, and merges explicit local attachments", () =>
 test("accepts only skill paths that Pi loads", () => {
   const directSkill = path.join(external, "direct.md");
   const disabledSkill = path.join(external, "disabled.md");
+  const warningSkill = path.join(external, "warning.md");
   const skillDirectory = path.join(external, "skill-directory");
   const rootMarkdownDirectory = path.join(external, "root-markdown-directory");
   const nestedSkillDirectory = path.join(external, "nested-skill-directory");
@@ -64,6 +65,7 @@ test("accepts only skill paths that Pi loads", () => {
     disabledSkill,
     "---\nname: disabled\ndescription: Explicit-only skill.\ndisable-model-invocation: true\n---\n",
   );
+  writeFileSync(warningSkill, "---\nname: Invalid_Name\ndescription: Pi loads this skill with a warning.\n---\n");
   mkdirSync(skillDirectory);
   writeFileSync(path.join(skillDirectory, "SKILL.md"), "---\nname: directory\ndescription: Directory skill.\n---\n");
   mkdirSync(rootMarkdownDirectory);
@@ -79,10 +81,12 @@ test("accepts only skill paths that Pi loads", () => {
 
   assert.deepEqual(
     resolveResourceAttachments(
-      { skills: [directSkill, disabledSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory] },
+      {
+        skills: [directSkill, disabledSkill, warningSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory],
+      },
       { cwd: project, projectTrusted: true, coreTools: [] },
     ).skills,
-    [directSkill, disabledSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory],
+    [directSkill, disabledSkill, warningSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory],
   );
 
   const nonMarkdownFile = path.join(external, "not-a-skill.txt");
@@ -122,6 +126,19 @@ test("accepts only skill paths that Pi loads", () => {
       /at least one loadable Pi skill/i,
     );
   }
+});
+
+test("rejects a skill directory when Pi omits an invalid declared skill", () => {
+  const partialDirectory = path.join(external, "partial-directory");
+  mkdirSync(path.join(partialDirectory, "broken"), { recursive: true });
+  writeFileSync(path.join(partialDirectory, "valid.md"), "---\nname: valid\ndescription: Valid skill.\n---\n");
+  writeFileSync(path.join(partialDirectory, "broken", "SKILL.md"), "---\nname: broken\n---\n");
+
+  assert.throws(
+    () =>
+      resolveResourceAttachments({ skills: [partialDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+    /invalid or unreadable declared skill/i,
+  );
 });
 
 test("rejects skill-name collisions using Pi's combined load behavior", () => {

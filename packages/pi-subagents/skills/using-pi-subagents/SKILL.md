@@ -45,6 +45,7 @@ The runtime always adds `subagent_send` and child `subagent_wait` for communicat
 Attach `skills` only when the child needs reusable instructions that should remain available through Pi's progressive disclosure.
 
 Each attached skill path must be a local Markdown skill file or a directory containing at least one skill Pi can load, with skill names unique across all attachments.
+Every declared skill discovered within a directory must load successfully; one valid skill does not make a partially invalid directory acceptable.
 
 Attaching a skill does not inject its complete body, add `read` or `bash`, or force invocation, so select any tools needed to read or follow it separately.
 

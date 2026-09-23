@@ -119,6 +119,7 @@ function assertLoadableSkills(skillPaths: string[], cwd: string): void {
     if (result.skills.length === 0) {
       throw new Error("Subagent skill path must contain at least one loadable Pi skill.");
     }
+    assertNoOmittedSkillDiagnostics(result);
     assertNoSkillNameCollisions(result.diagnostics);
   }
   if (skillPaths.length > 1) {
@@ -128,6 +129,18 @@ function assertLoadableSkills(skillPaths: string[], cwd: string): void {
 
 function loadExplicitSkills(skillPaths: string[], cwd: string): ReturnType<typeof loadSkills> {
   return loadSkills({ cwd, agentDir: cwd, skillPaths, includeDefaults: false });
+}
+
+function assertNoOmittedSkillDiagnostics(result: ReturnType<typeof loadSkills>): void {
+  const loadedPaths = new Set(result.skills.map((skill) => skill.filePath));
+  const omitted = result.diagnostics.some(
+    (diagnostic) =>
+      diagnostic.type === "error" ||
+      (diagnostic.type === "warning" && (!diagnostic.path || !loadedPaths.has(diagnostic.path))),
+  );
+  if (omitted) {
+    throw new Error("Subagent skill attachment must not contain an invalid or unreadable declared skill.");
+  }
 }
 
 function assertNoSkillNameCollisions(diagnostics: ReturnType<typeof loadSkills>["diagnostics"]): void {

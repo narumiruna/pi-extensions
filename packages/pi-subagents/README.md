@@ -141,6 +141,7 @@ Adding `edit` or `write` lets the child modify files, while `bash` or `powershel
 The optional `skills` list attaches local Markdown skill files or directories through Pi's progressive disclosure mechanism.
 Each path must contain at least one skill Pi can load, and skill names must be unique across all attachments.
 Non-Markdown files, directories without a loadable skill, and duplicate skill names are rejected before launch.
+Every declared skill discovered within an attached directory must load successfully; a valid sibling does not hide an invalid or unreadable declared skill.
 A skill is available for the child to discover and read when relevant; attaching it does not inject its complete body, add `read` or `bash`, or force the child to invoke it.
 
 Each `extensions` entry loads one trusted local extension file or directory and names the exact extension tools to activate initially.

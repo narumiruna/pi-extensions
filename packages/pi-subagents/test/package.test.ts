@@ -45,6 +45,7 @@ test("repository example skill documents every minimal-runtime operating respons
     /Attach `skills`.*progressive disclosure/is,
     /Each attached skill path.*at least one skill Pi can load/is,
     /skill names unique across all attachments/is,
+    /Every declared skill.*must load successfully/is,
     /Attaching a skill does not inject its complete body.*add `read` or `bash`/is,
     /Attach `extensions`.*trust.*executable code/is,
     /16 KiB.*startup bootstrap/is,
@@ -94,6 +95,7 @@ test("published documentation defines attachment behavior and its security bound
     assert.match(document, /progressive disclosure/iu);
     assert.match(document, /at least one.*(?:skill Pi can load|loadable.*skill)/iu);
     assert.match(document, /skill names?.*unique|duplicate skill names/iu);
+    assert.match(document, /every declared skill.*must load successfully/iu);
     assert.match(document, /local path/iu);
     assert.match(document, /project.*untrusted|untrusted.*project/iu);
     assert.match(document, /not (?:an? )?(?:operating-system )?sandbox/iu);
