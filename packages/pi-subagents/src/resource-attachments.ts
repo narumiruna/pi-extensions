@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs";
+import { type Dirent, readdirSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "./message-broker.js";
@@ -121,6 +121,7 @@ function assertLoadableSkills(skillPaths: string[], cwd: string): void {
     }
     assertNoOmittedSkillDiagnostics(result);
     assertNoSkillNameCollisions(result.diagnostics);
+    assertNoSilentlyOmittedSkills(skillPath, cwd, result);
   }
   if (skillPaths.length > 1) {
     assertNoSkillNameCollisions(loadExplicitSkills(skillPaths, cwd).diagnostics);
@@ -149,6 +150,74 @@ function assertNoSkillNameCollisions(diagnostics: ReturnType<typeof loadSkills>[
   ) {
     throw new Error("Subagent skill attachments must not contain duplicate skill names.");
   }
+}
+
+function assertNoSilentlyOmittedSkills(skillPath: string, cwd: string, result: ReturnType<typeof loadSkills>): void {
+  if (!statSync(skillPath).isDirectory()) return;
+  const loadedPaths = new Set(result.skills.map((skill) => realpath(skill.filePath, "Loaded subagent skill")));
+  const candidates = collectSkillCandidates(skillPath, true, new Set<string>());
+  for (const candidate of candidates) {
+    const candidateResult = loadExplicitSkills([candidate], cwd);
+    if (candidateResult.skills.length === 0) {
+      if (path.basename(candidate) === "SKILL.md") throwInvalidDeclaredSkill();
+      continue;
+    }
+    const loaded = candidateResult.skills.some((skill) =>
+      loadedPaths.has(realpath(skill.filePath, "Loaded subagent skill")),
+    );
+    if (!loaded) throwInvalidDeclaredSkill();
+  }
+}
+
+function collectSkillCandidates(
+  directory: string,
+  includeRootMarkdown: boolean,
+  visitedDirectories: Set<string>,
+): string[] {
+  const canonicalDirectory = realpath(directory, "Subagent skill directory");
+  if (visitedDirectories.has(canonicalDirectory)) return [];
+  visitedDirectories.add(canonicalDirectory);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    throwInvalidDeclaredSkill();
+  }
+
+  const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
+  if (rootSkill) {
+    const rootPath = path.join(directory, rootSkill.name);
+    try {
+      if (statSync(rootPath).isFile()) return [rootPath];
+    } catch {
+      throwInvalidDeclaredSkill();
+    }
+  }
+
+  const candidates: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const candidate = path.join(directory, entry.name);
+    let stats: ReturnType<typeof statSync>;
+    try {
+      stats = statSync(candidate);
+    } catch {
+      if (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md"))) {
+        throwInvalidDeclaredSkill();
+      }
+      continue;
+    }
+    if (stats.isDirectory()) {
+      candidates.push(...collectSkillCandidates(candidate, false, visitedDirectories));
+    } else if (stats.isFile() && (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md")))) {
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+function throwInvalidDeclaredSkill(): never {
+  throw new Error("Subagent skill attachment must not contain an invalid or unreadable declared skill.");
 }
 
 function resolveExtensionToolName(value: unknown): string {

@@ -454,6 +454,27 @@ setInterval(() => {}, 1000);
   }
 });
 
+test("runChild fails closed on oversized RPC output during attachment startup", async () => {
+  const promptMarker = path.join(directory, "prompt-oversized-startup-event");
+  installFakePi(`
+event({
+  type: "extension_error",
+  extensionPath: "/tmp/lifecycle-extension.ts",
+  event: "session_start",
+  error: "x".repeat(300 * 1024),
+});
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  fs.writeFileSync(${JSON.stringify(promptMarker)}, command.message);
+}
+setInterval(() => {}, 1000);
+`);
+  const result = await runChild(childRequest({ extensions: [{ path: "/tmp/lifecycle-extension.ts", tools: [] }] }));
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /startup emitted malformed or oversized RPC output/i);
+  assert.equal(existsSync(promptMarker), false);
+});
+
 test("runChild rejects an oversized tool bootstrap before child launch", async () => {
   const launchMarker = path.join(directory, "oversized-bootstrap-launch");
   installFakePi(`

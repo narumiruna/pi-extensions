@@ -152,6 +152,7 @@ async function executeProcess(
   let truncated = false;
   let malformedEvents = 0;
   let rpcCounter = 0;
+  let attachmentStartupPending = expectReadiness;
   let attachmentStartupError: string | undefined;
   const pendingCommands = new Map<string, PendingRpcCommand>();
   let rpcInputError: Error | undefined;
@@ -250,6 +251,9 @@ async function executeProcess(
     },
     () => {
       malformedEvents++;
+      if (attachmentStartupPending && !attachmentStartupError) {
+        attachmentStartupError = "Subagent attachment startup emitted malformed or oversized RPC output.";
+      }
     },
   );
 
@@ -437,6 +441,7 @@ async function executeProcess(
         { type: "get_state" },
         () => {
           if (attachmentStartupError) throw new Error(attachmentStartupError);
+          attachmentStartupPending = false;
           attachmentReady = true;
           startPrompt();
         },

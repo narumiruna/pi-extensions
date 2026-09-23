@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -488,6 +488,27 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         spawn.execute(
           "partially-invalid-skills",
           { task: "partially invalid skills", skills: [partialSkillDirectory] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /invalid or unreadable declared skill/i,
+    );
+    const brokenLinkSkillDirectory = path.join(collisionRoot, "broken-link");
+    mkdirSync(path.join(brokenLinkSkillDirectory, "broken"), { recursive: true });
+    writeFileSync(
+      path.join(brokenLinkSkillDirectory, "valid.md"),
+      "---\nname: valid-link\ndescription: Valid skill.\n---\n",
+    );
+    symlinkSync(
+      path.join(brokenLinkSkillDirectory, "missing.md"),
+      path.join(brokenLinkSkillDirectory, "broken", "SKILL.md"),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "broken-link-skills",
+          { task: "broken-link skills", skills: [brokenLinkSkillDirectory] },
           undefined,
           undefined,
           trustedContext.ctx,

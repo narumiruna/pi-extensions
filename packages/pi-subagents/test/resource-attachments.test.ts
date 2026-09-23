@@ -139,6 +139,33 @@ test("rejects a skill directory when Pi omits an invalid declared skill", () => 
       resolveResourceAttachments({ skills: [partialDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
     /invalid or unreadable declared skill/i,
   );
+
+  const brokenLinkDirectory = path.join(external, "broken-link-directory");
+  mkdirSync(path.join(brokenLinkDirectory, "broken"), { recursive: true });
+  writeFileSync(path.join(brokenLinkDirectory, "valid.md"), "---\nname: valid-link\ndescription: Valid skill.\n---\n");
+  symlinkSync(path.join(brokenLinkDirectory, "missing.md"), path.join(brokenLinkDirectory, "broken", "SKILL.md"));
+  assert.throws(
+    () =>
+      resolveResourceAttachments(
+        { skills: [brokenLinkDirectory] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /invalid or unreadable declared skill/i,
+  );
+
+  const ignoredDirectory = path.join(external, "partially-ignored-directory");
+  mkdirSync(path.join(ignoredDirectory, "ignored"), { recursive: true });
+  writeFileSync(path.join(ignoredDirectory, ".gitignore"), "ignored/SKILL.md\n");
+  writeFileSync(path.join(ignoredDirectory, "valid.md"), "---\nname: valid-ignore\ndescription: Valid skill.\n---\n");
+  writeFileSync(
+    path.join(ignoredDirectory, "ignored", "SKILL.md"),
+    "---\nname: ignored-partial\ndescription: Ignored skill.\n---\n",
+  );
+  assert.throws(
+    () =>
+      resolveResourceAttachments({ skills: [ignoredDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+    /invalid or unreadable declared skill/i,
+  );
 });
 
 test("rejects skill-name collisions using Pi's combined load behavior", () => {
