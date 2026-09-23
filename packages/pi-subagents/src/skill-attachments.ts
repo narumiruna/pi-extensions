@@ -31,7 +31,7 @@ export async function assertLoadableSkills(
   canonicalCwd: string,
   projectTrusted: boolean,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<SkillScanState> {
   const scanState: SkillScanState = {
     entries: 0,
     skillBytes: 0,
@@ -58,6 +58,7 @@ export async function assertLoadableSkills(
     assertNoUntrustedProjectSkills(result, cwd, canonicalCwd, projectTrusted);
     assertNoSkillNameCollisions(result.diagnostics);
   }
+  return scanState;
 }
 
 function loadExplicitSkills(skillPaths: string[], cwd: string): ReturnType<typeof loadSkills> {
@@ -304,15 +305,20 @@ export async function assertLoadablePackageSkills(
   packageSkillPaths: string[],
   explicitSkillPaths: string[],
   cwd: string,
-  signal?: AbortSignal,
+  scanState: SkillScanState,
 ): Promise<void> {
   for (const [index, skillPath] of packageSkillPaths.entries()) {
     if (index > 0 && index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
-    throwIfAttachmentAborted(signal);
+    throwIfAttachmentAborted(scanState.signal);
+    await collectBoundedSkillCandidates(skillPath, scanState);
+  }
+  for (const [index, skillPath] of packageSkillPaths.entries()) {
+    if (index > 0 && index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    throwIfAttachmentAborted(scanState.signal);
     const result = loadExplicitSkills([skillPath], cwd);
     if (result.skills.length === 0) throwInvalidDeclaredSkill();
     assertNoOmittedSkillDiagnostics(result);
   }
-  throwIfAttachmentAborted(signal);
+  throwIfAttachmentAborted(scanState.signal);
   assertNoSkillNameCollisions(loadExplicitSkills([...packageSkillPaths, ...explicitSkillPaths], cwd).diagnostics);
 }

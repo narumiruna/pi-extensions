@@ -85,7 +85,7 @@ export async function resolveResourceAttachments(
       skills.push(resolved);
     }
   }
-  await assertLoadableSkills(skills, cwd, canonicalCwd, options.projectTrusted, options.signal);
+  const skillScanState = await assertLoadableSkills(skills, cwd, canonicalCwd, options.projectTrusted, options.signal);
 
   const extensions: ExtensionAttachment[] = [];
   const extensionsByPath = new Map<string, ExtensionAttachment>();
@@ -123,7 +123,7 @@ export async function resolveResourceAttachments(
   }
 
   if (packageSkillPaths.length > 0) {
-    await assertLoadablePackageSkills(packageSkillPaths, skills, cwd, options.signal);
+    await assertLoadablePackageSkills(packageSkillPaths, skills, cwd, skillScanState);
   }
 
   const effectiveTools = [...new Set([...options.coreTools, ...extensions.flatMap((extension) => extension.tools)])];

@@ -437,6 +437,33 @@ test("rejects every invalid enabled extension-package skill", async () => {
   }
 });
 
+test("bounds extension-package skill content before synchronous loading", async () => {
+  const packageDirectory = path.join(external, "oversized-package-skills");
+  const skillBodyBytes = Math.floor(MAX_SKILL_SCAN_BYTES / 2);
+  mkdirSync(packageDirectory);
+  writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+  writeFileSync(path.join(packageDirectory, "first.md"), `Not a skill.\n${"x".repeat(skillBodyBytes)}`);
+  writeFileSync(
+    path.join(packageDirectory, "second.md"),
+    `---\nname: second\ndescription: Second package skill.\n---\n${"x".repeat(skillBodyBytes)}`,
+  );
+  writeFileSync(
+    path.join(packageDirectory, "package.json"),
+    JSON.stringify({
+      pi: { extensions: ["./extension.ts"], skills: ["./first.md", "./second.md"] },
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: packageDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /skill attachment exceeds traversal limits/i,
+  );
+});
+
 test("allows explicit external resources but rejects every loaded project path when untrusted", async () => {
   const externalExtension = path.join(external, "external.ts");
   const externalSkill = path.join(external, "external-skill.md");
