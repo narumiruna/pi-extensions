@@ -51,7 +51,7 @@ export function resolveResourceAttachments(
       skills.push(resolved);
     }
   }
-  assertLoadableSkills(skills, cwd);
+  assertLoadableSkills(skills, cwd, canonicalCwd, options.projectTrusted);
 
   const extensions: ExtensionAttachment[] = [];
   const extensionsByPath = new Map<string, ExtensionAttachment>();
@@ -113,18 +113,21 @@ function resolveResourcePath(
   return canonicalPath;
 }
 
-function assertLoadableSkills(skillPaths: string[], cwd: string): void {
+function assertLoadableSkills(skillPaths: string[], cwd: string, canonicalCwd: string, projectTrusted: boolean): void {
   for (const skillPath of skillPaths) {
     const result = loadExplicitSkills([skillPath], cwd);
     if (result.skills.length === 0) {
       throw new Error("Subagent skill path must contain at least one loadable Pi skill.");
     }
+    assertNoUntrustedProjectSkills(result, cwd, canonicalCwd, projectTrusted);
     assertNoOmittedSkillDiagnostics(result);
     assertNoSkillNameCollisions(result.diagnostics);
-    assertNoSilentlyOmittedSkills(skillPath, cwd, result);
+    assertNoSilentlyOmittedSkills(skillPath, cwd, result, canonicalCwd, projectTrusted);
   }
   if (skillPaths.length > 1) {
-    assertNoSkillNameCollisions(loadExplicitSkills(skillPaths, cwd).diagnostics);
+    const result = loadExplicitSkills(skillPaths, cwd);
+    assertNoUntrustedProjectSkills(result, cwd, canonicalCwd, projectTrusted);
+    assertNoSkillNameCollisions(result.diagnostics);
   }
 }
 
@@ -152,12 +155,35 @@ function assertNoSkillNameCollisions(diagnostics: ReturnType<typeof loadSkills>[
   }
 }
 
-function assertNoSilentlyOmittedSkills(skillPath: string, cwd: string, result: ReturnType<typeof loadSkills>): void {
+function assertNoUntrustedProjectSkills(
+  result: ReturnType<typeof loadSkills>,
+  cwd: string,
+  canonicalCwd: string,
+  projectTrusted: boolean,
+): void {
+  if (projectTrusted) return;
+  for (const skill of result.skills) {
+    const lexicalPath = path.resolve(skill.filePath);
+    const canonicalPath = realpath(skill.filePath, "Loaded subagent skill");
+    if (isWithin(cwd, lexicalPath) || isWithin(canonicalCwd, canonicalPath)) {
+      throw new Error("Subagent skill cannot load a project path because the project is not trusted.");
+    }
+  }
+}
+
+function assertNoSilentlyOmittedSkills(
+  skillPath: string,
+  cwd: string,
+  result: ReturnType<typeof loadSkills>,
+  canonicalCwd: string,
+  projectTrusted: boolean,
+): void {
   if (!statSync(skillPath).isDirectory()) return;
   const loadedPaths = new Set(result.skills.map((skill) => realpath(skill.filePath, "Loaded subagent skill")));
   const candidates = collectSkillCandidates(skillPath, true, new Set<string>());
   for (const candidate of candidates) {
     const candidateResult = loadExplicitSkills([candidate], cwd);
+    assertNoUntrustedProjectSkills(candidateResult, cwd, canonicalCwd, projectTrusted);
     if (candidateResult.skills.length === 0) {
       if (path.basename(candidate) === "SKILL.md") throwInvalidDeclaredSkill();
       continue;

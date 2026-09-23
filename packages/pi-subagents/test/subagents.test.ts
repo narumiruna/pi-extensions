@@ -515,6 +515,20 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /invalid or unreadable declared skill/i,
     );
+    const projectTreeDirectory = path.join(collisionRoot, "project-tree");
+    mkdirSync(projectTreeDirectory);
+    symlinkSync(path.resolve("packages/pi-subagents/skills"), path.join(projectTreeDirectory, "project-skills"));
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "untrusted-project-tree",
+          { task: "untrusted project tree", skills: [projectTreeDirectory] },
+          undefined,
+          undefined,
+          context.ctx,
+        ),
+      /project.*not trusted/i,
+    );
   } finally {
     rmSync(collisionRoot, { recursive: true, force: true });
   }

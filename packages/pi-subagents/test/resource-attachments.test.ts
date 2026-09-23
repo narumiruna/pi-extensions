@@ -205,23 +205,28 @@ test("rejects skill-name collisions using Pi's combined load behavior", () => {
   );
 });
 
-test("allows an explicit external resource but rejects lexical and canonical project paths when untrusted", () => {
+test("allows explicit external resources but rejects every loaded project path when untrusted", () => {
   const externalExtension = path.join(external, "external.ts");
+  const externalSkill = path.join(external, "external-skill.md");
   const projectExtension = path.join(project, "project.ts");
+  const projectSkillDirectory = path.join(project, "project-skill");
   const externalLink = path.join(project, "external-link.ts");
   const projectLink = path.join(external, "project-link.ts");
+  const projectTreeLink = path.join(external, "project-tree");
   writeFileSync(externalExtension, "export default () => {};\n");
+  writeFileSync(externalSkill, "---\nname: external\ndescription: External skill.\n---\n");
   writeFileSync(projectExtension, "export default () => {};\n");
+  mkdirSync(projectSkillDirectory);
+  writeFileSync(path.join(projectSkillDirectory, "SKILL.md"), "---\nname: project\ndescription: Project skill.\n---\n");
   symlinkSync(externalExtension, externalLink);
   symlinkSync(projectExtension, projectLink);
 
-  assert.deepEqual(
-    resolveResourceAttachments(
-      { extensions: [{ path: externalExtension, tools: [] }] },
-      { cwd: project, projectTrusted: false, coreTools: [] },
-    ).extensions,
-    [{ path: externalExtension, tools: [] }],
+  const externalResult = resolveResourceAttachments(
+    { skills: [externalSkill], extensions: [{ path: externalExtension, tools: [] }] },
+    { cwd: project, projectTrusted: false, coreTools: [] },
   );
+  assert.deepEqual(externalResult.skills, [externalSkill]);
+  assert.deepEqual(externalResult.extensions, [{ path: externalExtension, tools: [] }]);
   assert.throws(
     () =>
       resolveResourceAttachments(
@@ -236,6 +241,16 @@ test("allows an explicit external resource but rejects lexical and canonical pro
         { extensions: [{ path: projectLink, tools: [] }] },
         { cwd: project, projectTrusted: false, coreTools: [] },
       ),
+    /project.*not trusted/i,
+  );
+  assert.throws(
+    () => resolveResourceAttachments({ skills: [root] }, { cwd: project, projectTrusted: false, coreTools: [] }),
+    /project.*not trusted/i,
+  );
+
+  symlinkSync(projectSkillDirectory, projectTreeLink);
+  assert.throws(
+    () => resolveResourceAttachments({ skills: [external] }, { cwd: project, projectTrusted: false, coreTools: [] }),
     /project.*not trusted/i,
   );
 });
