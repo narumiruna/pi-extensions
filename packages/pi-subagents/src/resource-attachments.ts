@@ -616,9 +616,9 @@ async function inspectAutoExtensionDirectory(
     const entryPath = path.join(directory, entry.name);
     const entryStats = await statIfPresent(entryPath);
     if (!entryStats) continue;
-    assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
     const relativePath = toPosixPath(path.relative(directory, entryPath));
     if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
+    assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
     if (entryStats.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
       found = true;
     } else if (entryStats.isDirectory() && (await inspectAutoExtensionDirectory(entryPath, false, state))) {
@@ -709,9 +709,11 @@ async function inspectPackageSkillDirectory(
     if (rootSkill) {
       const skillPath = path.join(directory, rootSkill.name);
       const skillStats = await statIfPresent(skillPath);
-      if (skillStats) assertExtensionPackagePathTrusted(skillPath, "extension package resource", state);
       const relativePath = toPosixPath(path.relative(rootDirectory, skillPath));
-      if (skillStats?.isFile() && !ignoreMatcher.ignores(relativePath)) return;
+      if (skillStats?.isFile() && !ignoreMatcher.ignores(relativePath)) {
+        assertExtensionPackagePathTrusted(skillPath, "extension package resource", state);
+        return;
+      }
     }
     for (const entry of entries) {
       throwIfAttachmentAborted(state.signal);
@@ -719,10 +721,10 @@ async function inspectPackageSkillDirectory(
       const entryPath = path.join(directory, entry.name);
       const entryStats = await statIfPresent(entryPath);
       if (!entryStats) continue;
+      const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
+      if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
       assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
       if (!entryStats.isDirectory()) continue;
-      const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
-      if (ignoreMatcher.ignores(`${relativePath}/`)) continue;
       await inspectPackageSkillDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state);
     }
   } finally {
@@ -748,10 +750,10 @@ async function inspectRecursivePackageDirectory(
       const entryPath = path.join(directory, entry.name);
       const entryStats = await statIfPresent(entryPath);
       if (!entryStats) continue;
+      const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
+      if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
       assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
       if (!entryStats.isDirectory()) continue;
-      const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
-      if (ignoreMatcher.ignores(`${relativePath}/`)) continue;
       await inspectRecursivePackageDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state);
     }
   } finally {

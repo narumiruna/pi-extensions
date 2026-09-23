@@ -479,6 +479,54 @@ test("allows explicit external resources but rejects every loaded project path w
   );
 });
 
+test("skips ignored project symlinks before enforcing untrusted-project boundaries", async () => {
+  const packageDirectory = path.join(external, "ignored-project-symlinks");
+  const extensionsDirectory = path.join(packageDirectory, "extensions");
+  const skillsDirectory = path.join(packageDirectory, "skills");
+  const promptsDirectory = path.join(packageDirectory, "prompts");
+  const themesDirectory = path.join(packageDirectory, "themes");
+  for (const directory of [extensionsDirectory, skillsDirectory, promptsDirectory, themesDirectory]) {
+    mkdirSync(directory, { recursive: true });
+  }
+
+  const projectExtension = path.join(project, "ignored-extension.ts");
+  const projectSkill = path.join(project, "ignored-skill.md");
+  const projectSkillDirectory = path.join(project, "ignored-skill-directory");
+  const projectPrompt = path.join(project, "ignored-prompt.md");
+  const projectThemeDirectory = path.join(project, "ignored-theme-directory");
+  writeFileSync(projectExtension, "export default () => {};\n");
+  writeFileSync(projectSkill, "---\nname: ignored-skill\ndescription: Ignored project skill.\n---\n");
+  mkdirSync(projectSkillDirectory);
+  writeFileSync(
+    path.join(projectSkillDirectory, "SKILL.md"),
+    "---\nname: ignored-directory\ndescription: Ignored project skill directory.\n---\n",
+  );
+  writeFileSync(projectPrompt, "Ignored project prompt.\n");
+  mkdirSync(projectThemeDirectory);
+  writeFileSync(path.join(projectThemeDirectory, "ignored.json"), "{}\n");
+
+  writeFileSync(path.join(extensionsDirectory, "valid.ts"), "export default () => {};\n");
+  symlinkSync(projectExtension, path.join(extensionsDirectory, "ignored.ts"));
+  writeFileSync(path.join(extensionsDirectory, ".gitignore"), "ignored.ts\n");
+
+  symlinkSync(projectSkill, path.join(skillsDirectory, "ignored.md"));
+  symlinkSync(projectSkillDirectory, path.join(skillsDirectory, "ignored-directory"));
+  writeFileSync(path.join(skillsDirectory, ".gitignore"), "ignored.md\nignored-directory/\n");
+
+  symlinkSync(projectPrompt, path.join(promptsDirectory, "ignored.md"));
+  writeFileSync(path.join(promptsDirectory, ".gitignore"), "ignored.md\n");
+
+  symlinkSync(projectThemeDirectory, path.join(themesDirectory, "ignored-directory"));
+  writeFileSync(path.join(themesDirectory, ".gitignore"), "ignored-directory/\n");
+
+  const result = await resolveResourceAttachments(
+    { extensions: [{ path: packageDirectory, tools: [] }] },
+    { cwd: project, projectTrusted: false, coreTools: [] },
+  );
+
+  assert.deepEqual(result.extensions, [{ path: packageDirectory, tools: [] }]);
+});
+
 test("matches Pi package resolution and rejects incomplete or extensionless manifests", async () => {
   const packageDirectory = path.join(external, "package-extension");
   const indexTsDirectory = path.join(external, "index-ts-extension");
