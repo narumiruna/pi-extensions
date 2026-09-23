@@ -444,11 +444,15 @@ async function inspectPackageResourceTree(
   state: ExtensionScanState,
   enforceTrust: boolean,
 ): Promise<void> {
-  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state, enforceTrust);
+  const canonicalDirectory = await enterPackageResourceDirectory(directory, resourceType, depth, state, enforceTrust);
   if (!canonicalDirectory) return;
   try {
     await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state, enforceTrust);
-    const entries = await readBoundedPackageEntries(directory, state, "skip");
+    const entries = await readBoundedPackageEntries(
+      directory,
+      state,
+      resourceType === "skills" ? "reject-skill" : "skip",
+    );
     if (resourceType === "skills") {
       const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
       if (rootSkill) {
@@ -509,6 +513,7 @@ async function inspectPackageResourceTree(
 
 async function enterPackageResourceDirectory(
   directory: string,
+  resourceType: PackageResourceType,
   depth: number,
   state: ExtensionScanState,
   enforceTrust: boolean,
@@ -519,6 +524,8 @@ async function enterPackageResourceDirectory(
   try {
     canonicalDirectory = await realpathAsync(directory);
   } catch {
+    throwIfAttachmentAborted(state.signal);
+    if (resourceType === "skills") throwUnreadablePackageSkillDirectory();
     return undefined;
   }
   throwIfAttachmentAborted(state.signal);
@@ -597,14 +604,15 @@ async function addPackageIgnoreRules(
 async function readBoundedPackageEntries(
   directory: string,
   state: ExtensionScanState,
-  onFailure: "skip" | "reject",
+  onFailure: "skip" | "reject" | "reject-skill",
 ): Promise<Dirent[]> {
   let directoryHandle: Awaited<ReturnType<typeof opendirAsync>>;
   try {
     directoryHandle = await opendirAsync(directory);
-  } catch {
-    if (onFailure === "reject") throwUnresolvableExtensionEntrypoint();
-    return [];
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throwIfAttachmentAborted(state.signal);
+    return failedPackageDirectoryRead(onFailure);
   }
   const entries: Dirent[] = [];
   try {
@@ -616,10 +624,21 @@ async function readBoundedPackageEntries(
     }
   } catch (error) {
     if (isAbortError(error) || isExtensionScanLimitError(error)) throw error;
-    if (onFailure === "reject") throwUnresolvableExtensionEntrypoint();
-    return [];
+    throwIfAttachmentAborted(state.signal);
+    return failedPackageDirectoryRead(onFailure);
   }
+  throwIfAttachmentAborted(state.signal);
   return entries;
+}
+
+function failedPackageDirectoryRead(onFailure: "skip" | "reject" | "reject-skill"): Dirent[] {
+  if (onFailure === "reject") throwUnresolvableExtensionEntrypoint();
+  if (onFailure === "reject-skill") throwUnreadablePackageSkillDirectory();
+  return [];
+}
+
+function throwUnreadablePackageSkillDirectory(): never {
+  throw new Error("Subagent extension package must not contain an unreadable declared skill directory.");
 }
 
 async function hasRegularExtensionIndex(

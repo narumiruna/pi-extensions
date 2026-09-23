@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { Check } from "typebox/value";
@@ -1540,6 +1540,63 @@ test("session shutdown waits for child teardown without delivering stale complet
     ),
     false,
   );
+});
+
+test("rejects a spawn validated across session replacement with the same context", async () => {
+  let launches = 0;
+  const { mock, context } = await setup({
+    runChild: async (request) => {
+      launches++;
+      return waitForCancellation(request);
+    },
+  });
+  const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-stale-spawn-"));
+  const extensionPath = path.join(directory, "index.ts");
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const originalResolve = DefaultPackageManager.prototype.resolveExtensionSources;
+  vi.spyOn(DefaultPackageManager.prototype, "resolveExtensionSources").mockImplementation(async function (
+    this: DefaultPackageManager,
+    sources,
+    options,
+  ) {
+    if (sources[0] === extensionPath) {
+      entered();
+      await blocked;
+    }
+    return originalResolve.call(this, sources, options);
+  });
+  try {
+    writeFileSync(extensionPath, "export default () => {};\n");
+    const pending = tool(mock, "subagent_spawn").execute(
+      "stale-spawn",
+      { task: "old session", extensions: [{ path: extensionPath, tools: [] }] },
+      undefined,
+      undefined,
+      context.ctx,
+    );
+    await started;
+    try {
+      await emit(mock, "session_start", { reason: "replacement" }, context.ctx);
+    } finally {
+      release();
+    }
+    await assert.rejects(pending, /session changed/i);
+    assert.equal(launches, 0);
+    const next = await spawnJob(mock, context, "new session");
+    await Promise.resolve();
+    assert.equal(launches, 1);
+    await cancelJob(mock, context, String(next.details.jobId));
+  } finally {
+    release();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("session replacement cancels old jobs and permits a clean new session", async () => {

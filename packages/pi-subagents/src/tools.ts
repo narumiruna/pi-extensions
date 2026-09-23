@@ -197,11 +197,15 @@ export function registerSubagentTools(
       const tools = resolveTools(params.tools);
       const cwd = ctx.cwd;
       const projectTrusted = ctx.isProjectTrusted();
+      const sessionGeneration = runtime.getSessionGeneration();
       const attachments = await resolveResourceAttachments(
         { skills: params.skills, extensions: params.extensions },
         { cwd, projectTrusted, coreTools: tools, signal },
       );
       throwIfAborted(signal, "Subagent spawn was cancelled");
+      if (runtime.getSessionGeneration() !== sessionGeneration) {
+        throw new Error("Subagent spawn session changed during attachment validation; retry the request.");
+      }
       if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {
         throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
       }

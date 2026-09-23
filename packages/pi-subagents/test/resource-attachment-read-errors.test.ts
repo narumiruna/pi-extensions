@@ -11,6 +11,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const filesystem = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...filesystem,
+    async realpath(...args: Parameters<typeof filesystem.realpath>) {
+      if (args[0] === failure.directory && failure.phase === "realpath") throw new Error("simulated directory failure");
+      return filesystem.realpath(...args);
+    },
     async opendir(...args: Parameters<typeof filesystem.opendir>) {
       const [directory] = args;
       if (directory === failure.directory && failure.phase === "open") throw new Error("simulated directory failure");
@@ -53,7 +57,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-for (const phase of ["open", "read"]) {
+for (const phase of ["realpath", "open", "read"]) {
   test(`ignores optional resource directory ${phase} failures`, async () => {
     failure.directory = path.join(packageDirectory, "prompts");
     failure.phase = phase;
@@ -64,6 +68,44 @@ for (const phase of ["open", "read"]) {
     assert.deepEqual(resolved.extensions, [{ path: packageDirectory, tools: [] }]);
   });
 
+  test(`rejects declared skill directory ${phase} failures`, async () => {
+    const skillsDirectory = path.join(packageDirectory, "skills");
+    mkdirSync(skillsDirectory);
+    writeFileSync(path.join(skillsDirectory, "SKILL.md"), "---\nname: declared\ndescription: Valid skill.\n---\n");
+    writeFileSync(
+      path.join(packageDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extensions/valid.ts"], skills: ["./skills"] } }),
+    );
+    failure.directory = skillsDirectory;
+    failure.phase = phase;
+    await assert.rejects(
+      () =>
+        resolveResourceAttachments(
+          { extensions: [{ path: packageDirectory, tools: [] }] },
+          { cwd: project, projectTrusted: true, coreTools: [] },
+        ),
+      /unreadable declared skill directory/i,
+    );
+  });
+
+  test(`rejects convention skill directory ${phase} failures`, async () => {
+    const skillsDirectory = path.join(packageDirectory, "skills");
+    mkdirSync(skillsDirectory);
+    writeFileSync(path.join(skillsDirectory, "SKILL.md"), "---\nname: convention\ndescription: Valid skill.\n---\n");
+    failure.directory = skillsDirectory;
+    failure.phase = phase;
+    await assert.rejects(
+      () =>
+        resolveResourceAttachments(
+          { extensions: [{ path: packageDirectory, tools: [] }] },
+          { cwd: project, projectTrusted: true, coreTools: [] },
+        ),
+      /unreadable declared skill directory/i,
+    );
+  });
+}
+
+for (const phase of ["open", "read"]) {
   test(`rejects required extension directory ${phase} failures`, async () => {
     failure.directory = path.join(packageDirectory, "extensions");
     failure.phase = phase;

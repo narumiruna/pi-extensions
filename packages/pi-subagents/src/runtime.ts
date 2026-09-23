@@ -97,6 +97,10 @@ export class SubagentRuntime {
     this.notifyJobsChanged();
   }
 
+  getSessionGeneration(): number {
+    return this.generation;
+  }
+
   subscribeJobs(listener: () => void): () => void {
     this.jobListeners.add(listener);
     return () => this.jobListeners.delete(listener);
