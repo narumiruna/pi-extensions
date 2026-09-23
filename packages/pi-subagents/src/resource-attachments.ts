@@ -1,4 +1,10 @@
 import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  opendir as opendirAsync,
+  readFile as readFileAsync,
+  realpath as realpathAsync,
+  stat as statAsync,
+} from "node:fs/promises";
 import * as path from "node:path";
 import { DefaultPackageManager, loadSkills, SettingsManager } from "@earendil-works/pi-coding-agent";
 import ignore from "ignore";
@@ -11,6 +17,10 @@ export const MAX_ATTACHED_EXTENSIONS = 16;
 export const MAX_SELECTED_TOOLS = 64;
 export const MAX_RESOURCE_PATH_BYTES = 4 * 1024;
 export const MAX_EXTENSION_TOOL_NAME_LENGTH = 128;
+export const MAX_SKILL_SCAN_DEPTH = 32;
+export const MAX_SKILL_SCAN_ENTRIES = 4_096;
+export const MAX_SKILL_SCAN_BYTES = 4 * 1024 * 1024;
+export const MAX_SKILL_IGNORE_BYTES = 1024 * 1024;
 
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 const RESERVED_CHILD_TOOL_NAMES = new Set<string>([...CHILD_CORE_TOOL_NAMES, ...CHILD_COMMUNICATION_TOOL_NAMES]);
@@ -40,6 +50,7 @@ export interface ResolveResourceAttachmentOptions {
   cwd: string;
   projectTrusted: boolean;
   coreTools: readonly string[];
+  signal?: AbortSignal;
 }
 
 export async function resolveResourceAttachments(
@@ -59,7 +70,7 @@ export async function resolveResourceAttachments(
       skills.push(resolved);
     }
   }
-  assertLoadableSkills(skills, cwd, canonicalCwd, options.projectTrusted);
+  await assertLoadableSkills(skills, cwd, canonicalCwd, options.projectTrusted, options.signal);
 
   const extensions: ExtensionAttachment[] = [];
   const extensionsByPath = new Map<string, ExtensionAttachment>();
@@ -127,8 +138,24 @@ function resolveResourcePath(
   return canonicalPath;
 }
 
-function assertLoadableSkills(skillPaths: string[], cwd: string, canonicalCwd: string, projectTrusted: boolean): void {
+async function assertLoadableSkills(
+  skillPaths: string[],
+  cwd: string,
+  canonicalCwd: string,
+  projectTrusted: boolean,
+  signal?: AbortSignal,
+): Promise<void> {
+  const scanState: SkillScanState = {
+    entries: 0,
+    skillBytes: 0,
+    ignoreBytes: 0,
+    ancestors: new Set<string>(),
+    signal,
+  };
   for (const skillPath of skillPaths) {
+    throwIfAttachmentAborted(signal);
+    const candidates = await collectBoundedSkillCandidates(skillPath, scanState);
+    throwIfAttachmentAborted(signal);
     const result = loadExplicitSkills([skillPath], cwd);
     if (result.skills.length === 0) {
       throw new Error("Subagent skill path must contain at least one loadable Pi skill.");
@@ -136,9 +163,10 @@ function assertLoadableSkills(skillPaths: string[], cwd: string, canonicalCwd: s
     assertNoUntrustedProjectSkills(result, cwd, canonicalCwd, projectTrusted);
     assertNoOmittedSkillDiagnostics(result);
     assertNoSkillNameCollisions(result.diagnostics);
-    assertNoSilentlyOmittedSkills(skillPath, cwd, result, canonicalCwd, projectTrusted);
+    await assertNoSilentlyOmittedSkills(skillPath, cwd, result, canonicalCwd, projectTrusted, candidates, signal);
   }
   if (skillPaths.length > 1) {
+    throwIfAttachmentAborted(signal);
     const result = loadExplicitSkills(skillPaths, cwd);
     assertNoUntrustedProjectSkills(result, cwd, canonicalCwd, projectTrusted);
     assertNoSkillNameCollisions(result.diagnostics);
@@ -185,17 +213,20 @@ function assertNoUntrustedProjectSkills(
   }
 }
 
-function assertNoSilentlyOmittedSkills(
+async function assertNoSilentlyOmittedSkills(
   skillPath: string,
   cwd: string,
   result: ReturnType<typeof loadSkills>,
   canonicalCwd: string,
   projectTrusted: boolean,
-): void {
+  candidates: string[],
+  signal?: AbortSignal,
+): Promise<void> {
   if (!statSync(skillPath).isDirectory()) return;
   const loadedPaths = new Set(result.skills.map((skill) => realpath(skill.filePath, "Loaded subagent skill")));
-  const candidates = collectSkillCandidates(skillPath, true, new Set<string>(), ignore(), skillPath);
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
+    if (index > 0 && index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    throwIfAttachmentAborted(signal);
     const candidateResult = loadExplicitSkills([candidate], cwd);
     assertNoUntrustedProjectSkills(candidateResult, cwd, canonicalCwd, projectTrusted);
     if (candidateResult.skills.length === 0) {
@@ -209,57 +240,184 @@ function assertNoSilentlyOmittedSkills(
   }
 }
 
-function collectSkillCandidates(
+interface SkillScanState {
+  entries: number;
+  skillBytes: number;
+  ignoreBytes: number;
+  ancestors: Set<string>;
+  signal?: AbortSignal;
+}
+
+async function collectBoundedSkillCandidates(skillPath: string, state: SkillScanState): Promise<string[]> {
+  throwIfAttachmentAborted(state.signal);
+  const stats = await statAsync(skillPath);
+  throwIfAttachmentAborted(state.signal);
+  if (!stats.isDirectory()) {
+    if (stats.isFile() && skillPath.endsWith(".md")) addSkillBytes(state, stats.size);
+    return [];
+  }
+  return collectSkillCandidates(skillPath, true, ignore(), skillPath, 0, state);
+}
+
+async function collectSkillCandidates(
   directory: string,
   includeRootMarkdown: boolean,
-  visitedDirectories: Set<string>,
   ignoreMatcher: IgnoreMatcher,
   rootDirectory: string,
-): string[] {
-  const canonicalDirectory = realpath(directory, "Subagent skill directory");
-  if (visitedDirectories.has(canonicalDirectory)) return [];
-  visitedDirectories.add(canonicalDirectory);
-  addIgnoreRules(ignoreMatcher, directory, rootDirectory);
-  let entries: Dirent[];
+  depth: number,
+  state: SkillScanState,
+): Promise<string[]> {
+  throwIfAttachmentAborted(state.signal);
+  if (depth > MAX_SKILL_SCAN_DEPTH) throwSkillScanLimit();
+  let canonicalDirectory: string;
   try {
-    entries = readdirSync(directory, { withFileTypes: true });
+    canonicalDirectory = await realpathAsync(directory);
   } catch {
     throwInvalidDeclaredSkill();
   }
-
-  const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
-  if (rootSkill) {
-    const rootPath = path.join(directory, rootSkill.name);
+  throwIfAttachmentAborted(state.signal);
+  if (state.ancestors.has(canonicalDirectory)) {
+    throw new Error("Subagent skill attachment must not contain a recursive directory link.");
+  }
+  state.ancestors.add(canonicalDirectory);
+  try {
+    await addSkillIgnoreRules(ignoreMatcher, directory, rootDirectory, state);
+    let directoryHandle: Awaited<ReturnType<typeof opendirAsync>>;
     try {
-      const relativePath = toPosixPath(path.relative(rootDirectory, rootPath));
-      if (statSync(rootPath).isFile() && !ignoreMatcher.ignores(relativePath)) return [rootPath];
+      directoryHandle = await opendirAsync(directory);
     } catch {
       throwInvalidDeclaredSkill();
     }
-  }
-
-  const candidates: string[] = [];
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    const candidate = path.join(directory, entry.name);
-    let stats: ReturnType<typeof statSync>;
+    const entries: Dirent[] = [];
     try {
-      stats = statSync(candidate);
-    } catch {
-      if (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md"))) {
+      for await (const entry of directoryHandle) {
+        throwIfAttachmentAborted(state.signal);
+        state.entries++;
+        if (state.entries > MAX_SKILL_SCAN_ENTRIES) throwSkillScanLimit();
+        entries.push(entry);
+      }
+    } catch (error) {
+      if (isAbortError(error) || isSkillScanLimitError(error)) throw error;
+      throwInvalidDeclaredSkill();
+    }
+
+    const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
+    if (rootSkill) {
+      const rootPath = path.join(directory, rootSkill.name);
+      let rootStats: Awaited<ReturnType<typeof statAsync>>;
+      try {
+        rootStats = await statAsync(rootPath);
+      } catch (error) {
+        if (isAbortError(error)) throw error;
         throwInvalidDeclaredSkill();
       }
+      throwIfAttachmentAborted(state.signal);
+      const relativePath = toPosixPath(path.relative(rootDirectory, rootPath));
+      if (rootStats.isFile() && !ignoreMatcher.ignores(relativePath)) {
+        addSkillBytes(state, rootStats.size);
+        return [rootPath];
+      }
+    }
+
+    const candidates: string[] = [];
+    for (const entry of entries) {
+      throwIfAttachmentAborted(state.signal);
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const candidate = path.join(directory, entry.name);
+      let candidateStats: Awaited<ReturnType<typeof statAsync>>;
+      try {
+        candidateStats = await statAsync(candidate);
+      } catch {
+        if (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md"))) {
+          throwInvalidDeclaredSkill();
+        }
+        continue;
+      }
+      throwIfAttachmentAborted(state.signal);
+      const relativePath = toPosixPath(path.relative(rootDirectory, candidate));
+      if (ignoreMatcher.ignores(candidateStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
+      if (candidateStats.isDirectory()) {
+        candidates.push(
+          ...(await collectSkillCandidates(candidate, false, ignoreMatcher, rootDirectory, depth + 1, state)),
+        );
+      } else if (
+        candidateStats.isFile() &&
+        (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md")))
+      ) {
+        addSkillBytes(state, candidateStats.size);
+        candidates.push(candidate);
+      }
+    }
+    return candidates;
+  } finally {
+    state.ancestors.delete(canonicalDirectory);
+  }
+}
+
+function addSkillBytes(state: SkillScanState, bytes: number): void {
+  state.skillBytes += bytes;
+  if (state.skillBytes > MAX_SKILL_SCAN_BYTES) throwSkillScanLimit();
+}
+
+async function addSkillIgnoreRules(
+  ignoreMatcher: IgnoreMatcher,
+  directory: string,
+  rootDirectory: string,
+  state: SkillScanState,
+): Promise<void> {
+  const relativeDirectory = path.relative(rootDirectory, directory);
+  const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
+  for (const filename of IGNORE_FILE_NAMES) {
+    throwIfAttachmentAborted(state.signal);
+    const ignorePath = path.join(directory, filename);
+    let ignoreStats: Awaited<ReturnType<typeof statAsync>>;
+    try {
+      ignoreStats = await statAsync(ignorePath);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throwIfAttachmentAborted(state.signal);
       continue;
     }
-    const relativePath = toPosixPath(path.relative(rootDirectory, candidate));
-    if (ignoreMatcher.ignores(stats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
-    if (stats.isDirectory()) {
-      candidates.push(...collectSkillCandidates(candidate, false, visitedDirectories, ignoreMatcher, rootDirectory));
-    } else if (stats.isFile() && (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md")))) {
-      candidates.push(candidate);
+    if (!ignoreStats.isFile()) continue;
+    state.ignoreBytes += ignoreStats.size;
+    if (state.ignoreBytes > MAX_SKILL_IGNORE_BYTES) throwSkillScanLimit();
+    try {
+      const content = await readFileAsync(ignorePath, { encoding: "utf8", signal: state.signal });
+      throwIfAttachmentAborted(state.signal);
+      const patterns = content
+        .split(/\r?\n/u)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => line !== null);
+      if (patterns.length > 0) ignoreMatcher.add(patterns);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throwIfAttachmentAborted(state.signal);
+      // Pi ignores unreadable ignore files.
     }
   }
-  return candidates;
+}
+
+function throwIfAttachmentAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const error = new Error("Subagent attachment validation was cancelled.");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function isSkillScanLimitError(error: unknown): boolean {
+  return error instanceof Error && error.name === "SkillScanLimitError";
+}
+
+function throwSkillScanLimit(): never {
+  const error = new Error(
+    `Subagent skill attachment exceeds traversal limits (${MAX_SKILL_SCAN_ENTRIES} entries, depth ${MAX_SKILL_SCAN_DEPTH}, ${MAX_SKILL_SCAN_BYTES} skill bytes, or ${MAX_SKILL_IGNORE_BYTES} ignore bytes).`,
+  );
+  error.name = "SkillScanLimitError";
+  throw error;
 }
 
 function addIgnoreRules(ignoreMatcher: IgnoreMatcher, directory: string, rootDirectory: string): void {

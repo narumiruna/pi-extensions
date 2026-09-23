@@ -8,6 +8,10 @@ import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
   MAX_SELECTED_TOOLS,
+  MAX_SKILL_IGNORE_BYTES,
+  MAX_SKILL_SCAN_BYTES,
+  MAX_SKILL_SCAN_DEPTH,
+  MAX_SKILL_SCAN_ENTRIES,
   resolveResourceAttachments,
 } from "../src/resource-attachments.js";
 
@@ -187,6 +191,79 @@ test("rejects invalid declared skills while honoring Pi ignore files", async () 
       [ignoredDirectory],
     );
   }
+});
+
+test("bounds and cancels skill-directory preflight", async () => {
+  const wideDirectory = path.join(external, "wide-directory");
+  mkdirSync(wideDirectory);
+  for (let index = 0; index <= MAX_SKILL_SCAN_ENTRIES; index++) {
+    writeFileSync(path.join(wideDirectory, String(index)), "");
+  }
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments({ skills: [wideDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+    /skill attachment exceeds traversal limits/i,
+  );
+
+  const deepDirectory = path.join(external, "deep-directory");
+  let nestedDirectory = deepDirectory;
+  mkdirSync(nestedDirectory);
+  for (let depth = 0; depth <= MAX_SKILL_SCAN_DEPTH; depth++) {
+    nestedDirectory = path.join(nestedDirectory, "nested");
+    mkdirSync(nestedDirectory);
+  }
+  writeFileSync(path.join(nestedDirectory, "SKILL.md"), "---\nname: deep\ndescription: Deep skill.\n---\n");
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments({ skills: [deepDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+    /skill attachment exceeds traversal limits/i,
+  );
+
+  const oversizedSkill = path.join(external, "oversized.md");
+  writeFileSync(oversizedSkill, Buffer.alloc(MAX_SKILL_SCAN_BYTES + 1));
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments({ skills: [oversizedSkill] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+    /skill attachment exceeds traversal limits/i,
+  );
+
+  const oversizedIgnoreDirectory = path.join(external, "oversized-ignore-directory");
+  mkdirSync(oversizedIgnoreDirectory);
+  writeFileSync(path.join(oversizedIgnoreDirectory, ".gitignore"), Buffer.alloc(MAX_SKILL_IGNORE_BYTES + 1));
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { skills: [oversizedIgnoreDirectory] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /skill attachment exceeds traversal limits/i,
+  );
+
+  const recursiveDirectory = path.join(external, "recursive-directory");
+  mkdirSync(path.join(recursiveDirectory, "nested"), { recursive: true });
+  symlinkSync(recursiveDirectory, path.join(recursiveDirectory, "nested", "recursive"));
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { skills: [recursiveDirectory] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /recursive directory link/i,
+  );
+
+  const cancellableDirectory = path.join(external, "cancellable-directory");
+  mkdirSync(cancellableDirectory);
+  writeFileSync(
+    path.join(cancellableDirectory, "SKILL.md"),
+    "---\nname: cancellable\ndescription: Cancellable skill.\n---\n",
+  );
+  const controller = new AbortController();
+  const pending = resolveResourceAttachments(
+    { skills: [cancellableDirectory] },
+    { cwd: project, projectTrusted: true, coreTools: [], signal: controller.signal },
+  );
+  queueMicrotask(() => controller.abort());
+  await assert.rejects(pending, (error: Error) => error.name === "AbortError");
 });
 
 test("rejects skill-name collisions using Pi's combined load behavior", async () => {

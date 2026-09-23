@@ -197,7 +197,7 @@ export function registerSubagentTools(
       const projectTrusted = ctx.isProjectTrusted();
       const attachments = await resolveResourceAttachments(
         { skills: params.skills, extensions: params.extensions },
-        { cwd, projectTrusted, coreTools: tools },
+        { cwd, projectTrusted, coreTools: tools, signal },
       );
       throwIfAborted(signal, "Subagent spawn was cancelled");
       if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {

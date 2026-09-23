@@ -12,6 +12,7 @@ import { createBrokerClient } from "../src/child-communication-bridge.js";
 import { createChildCommunicationExtension } from "../src/child-communication-tools.js";
 import { MAX_MESSAGE_BYTES, MAX_MESSAGE_LINES, MessageBroker } from "../src/message-broker.js";
 import { MAX_MODEL_TEXT_BYTES, MAX_MODEL_TEXT_LINES } from "../src/model-output.js";
+import { MAX_SKILL_SCAN_DEPTH } from "../src/resource-attachments.js";
 import subagents, { type SubagentsDependencies } from "../src/subagents.js";
 import type { ChildRequest, ChildResult } from "../src/types.js";
 import { SUBAGENT_WIDGET_KEY } from "../src/widget.js";
@@ -515,6 +516,45 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /invalid or unreadable declared skill/i,
     );
+    const deepSkillDirectory = path.join(collisionRoot, "deep-skill");
+    let nestedSkillDirectory = deepSkillDirectory;
+    mkdirSync(nestedSkillDirectory);
+    for (let depth = 0; depth <= MAX_SKILL_SCAN_DEPTH; depth++) {
+      nestedSkillDirectory = path.join(nestedSkillDirectory, "nested");
+      mkdirSync(nestedSkillDirectory);
+    }
+    writeFileSync(
+      path.join(nestedSkillDirectory, "SKILL.md"),
+      "---\nname: deep-skill\ndescription: Deep skill.\n---\n",
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "deep-skill-directory",
+          { task: "deep skill directory", skills: [deepSkillDirectory] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /skill attachment exceeds traversal limits/i,
+    );
+    const cancellableSkillDirectory = path.join(collisionRoot, "cancellable-skill");
+    mkdirSync(cancellableSkillDirectory);
+    writeFileSync(
+      path.join(cancellableSkillDirectory, "SKILL.md"),
+      "---\nname: cancellable-skill\ndescription: Cancellable skill.\n---\n",
+    );
+    const validationController = new AbortController();
+    const pendingValidation = spawn.execute(
+      "cancelled-skill-validation",
+      { task: "cancel skill validation", skills: [cancellableSkillDirectory] },
+      validationController.signal,
+      undefined,
+      trustedContext.ctx,
+    );
+    queueMicrotask(() => validationController.abort());
+    await assert.rejects(pendingValidation, (error: Error) => error.name === "AbortError");
+
     const projectTreeDirectory = path.join(collisionRoot, "project-tree");
     mkdirSync(projectTreeDirectory);
     symlinkSync(path.resolve("packages/pi-subagents/skills"), path.join(projectTreeDirectory, "project-skills"));
