@@ -1,14 +1,15 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { type MenuDefinition, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
-import type { DiscoveryResult, MarkdownEntry, NotesStorage } from "./storage.js";
+import { type MenuDefinition, runCustomInteraction, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import { NotePicker, type NotePickerResult } from "./note-picker.js";
+import type { DiscoveryResult, MarkdownEntry, NoteSnapshot, NotesStorage } from "./storage.js";
 
 interface NotesMenuState {
   notes: DiscoveryResult;
   templates: DiscoveryResult;
 }
 
-type NotesScreen = "notes" | "openNote" | "templates" | "pastePath" | "manageTemplates";
-type NotesAction = "chooseRoute" | "chooseNote" | "chooseTemplate" | "pastePath" | "editTemplate";
+type NotesScreen = "notes" | "templates" | "pastePath" | "manageTemplates";
+type NotesAction = "chooseRoute" | "chooseTemplate" | "pastePath" | "editTemplate";
 
 export type NotesManagerResult =
   | { kind: "open"; notePath: string }
@@ -16,7 +17,7 @@ export type NotesManagerResult =
   | { kind: "editTemplate"; templatePath: string }
   | { kind: "closed" };
 
-export function createNotesMenu(storage: NotesStorage) {
+export function createNotesMenu(storage: NotesStorage, ownership: { isCurrent?: () => boolean } = {}) {
   let result: Exclude<NotesManagerResult, { kind: "closed" }> | undefined;
 
   const getState = async ({ signal }: { signal: AbortSignal }): Promise<NotesMenuState> => {
@@ -63,21 +64,6 @@ export function createNotesMenu(storage: NotesStorage) {
         action: "chooseRoute",
         viewportSize: 12,
         hint: "close",
-      }),
-      openNote: ({ state }) => ({
-        kind: "choice",
-        title: "Open a note",
-        lines: discoveryLines(state.notes, "note"),
-        items: state.notes.entries.map((note, index) => ({
-          id: `note:${index}`,
-          label: note.displayPath,
-          description: `${note.size} bytes`,
-          searchText: note.displayPath,
-        })),
-        action: "chooseNote",
-        enableSearch: state.notes.entries.length > 8,
-        viewportSize: 12,
-        hint: "back",
       }),
       templates: ({ state }) => ({
         kind: "choice",
@@ -133,18 +119,19 @@ export function createNotesMenu(storage: NotesStorage) {
       }),
     },
     actions: {
-      chooseRoute: ({ itemId }) => {
-        if (itemId === "open") return { kind: "to", screen: "openNote" };
+      chooseRoute: async ({ ctx, itemId, signal }) => {
+        if (itemId === "open") {
+          const selected = await chooseOpenNote(ctx, storage, signal, ownership);
+          if (selected.kind === "open") {
+            result = selected;
+            return { kind: "close" };
+          }
+          return { kind: selected.kind === "close" ? "close" : "stay" };
+        }
         if (itemId === "create") return { kind: "to", screen: "templates" };
         if (itemId === "paste-path") return { kind: "to", screen: "pastePath" };
         if (itemId === "manage-templates") return { kind: "to", screen: "manageTemplates" };
         return { kind: "rejected", error: new Error("The selected notes action is no longer available") };
-      },
-      chooseNote: ({ state, itemId }) => {
-        const note = indexedEntry(state.notes.entries, itemId, "note:");
-        if (!note) return { kind: "rejected", error: new Error("The selected note is no longer available") };
-        result = { kind: "open", notePath: note.relativePath };
-        return { kind: "close" };
       },
       chooseTemplate: async ({ state, itemId, signal }) => {
         const templatePath =
@@ -186,7 +173,7 @@ export async function showNotesManager(
   storage: NotesStorage,
   ownership: { signal: AbortSignal; isCurrent(): boolean },
 ): Promise<NotesManagerResult> {
-  const controller = createNotesMenu(storage);
+  const controller = createNotesMenu(storage, ownership);
   const result = await runMenu(ctx, controller.menu, {
     getState: controller.getState,
     signal: ownership.signal,
@@ -200,6 +187,122 @@ export async function showNotesManager(
   if (result.kind === "error") throw result.error;
   const selected = controller.getResult();
   return selected && ownership.isCurrent() && !ownership.signal.aborted ? selected : { kind: "closed" };
+}
+
+async function chooseOpenNote(
+  ctx: ExtensionCommandContext,
+  storage: NotesStorage,
+  signal: AbortSignal,
+  ownership: { isCurrent?: () => boolean },
+): Promise<{ kind: "open"; notePath: string } | { kind: "back" | "close" }> {
+  let selectedPath: string | undefined;
+  let query = "";
+  const isCurrent = () => ownership.isCurrent?.() ?? true;
+
+  while (!signal.aborted && isCurrent()) {
+    const notes = await storage.discoverNotes(signal);
+    if (signal.aborted || !isCurrent()) return { kind: "close" };
+    const interaction = await runCustomInteraction<NotePickerResult>(ctx, {
+      signal,
+      isCurrent,
+      onError: (currentCtx, error) => {
+        if (!signal.aborted && isCurrent()) {
+          safeNotify(currentCtx, `Pi Notes picker failed: ${safeErrorMessage(error)}`, "error");
+        }
+      },
+      create: ({ tui, theme, keybindings, complete }) =>
+        new NotePicker({
+          tui,
+          theme,
+          keybindings,
+          notes: notes.entries,
+          lines: discoveryLines(notes, "note"),
+          initialSelectedPath: selectedPath,
+          initialQuery: query,
+          complete,
+        }),
+    });
+    if (signal.aborted || !isCurrent() || interaction.kind === "stale") return { kind: "close" };
+    if (interaction.kind !== "completed") return { kind: "close" };
+
+    const choice = interaction.value;
+    if ("query" in choice && choice.query !== undefined) query = choice.query;
+    if ("selectedPath" in choice) selectedPath = choice.selectedPath;
+    if (choice.kind === "back" || choice.kind === "close") return { kind: choice.kind };
+    if (choice.kind === "open") return { kind: "open", notePath: choice.notePath };
+
+    selectedPath = choice.nextSelectedPath;
+    const selected = notes.entries.find(({ relativePath }) => relativePath === choice.notePath);
+    if (!selected) {
+      safeNotify(ctx, "The selected note is no longer available; refreshed the note list.", "warning");
+      continue;
+    }
+
+    let snapshot: NoteSnapshot;
+    try {
+      snapshot = await storage.readNote(selected.relativePath, signal);
+    } catch (error) {
+      if (signal.aborted || !isCurrent()) return { kind: "close" };
+      safeNotify(ctx, `Pi Notes failed to read the selected note: ${safeErrorMessage(error)}`, "error");
+      continue;
+    }
+    if (signal.aborted || !isCurrent()) return { kind: "close" };
+
+    let confirmed: boolean;
+    try {
+      confirmed = await ctx.ui.confirm("Delete note?", deleteConfirmationMessage(selected, snapshot.size), {
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted || !isCurrent()) return { kind: "close" };
+      throw error;
+    }
+    if (signal.aborted || !isCurrent()) return { kind: "close" };
+    if (!confirmed) {
+      selectedPath = selected.relativePath;
+      continue;
+    }
+
+    try {
+      await storage.deleteNote(snapshot.relativePath, snapshot.revision, signal);
+    } catch (error) {
+      if (signal.aborted || !isCurrent()) return { kind: "close" };
+      safeNotify(ctx, `Pi Notes failed to delete the selected note: ${safeErrorMessage(error)}`, "error");
+      selectedPath = selected.relativePath;
+      continue;
+    }
+    if (signal.aborted || !isCurrent()) return { kind: "close" };
+    safeNotify(ctx, `Deleted note: ${displayNotePath(selected)}`, "info");
+  }
+
+  return { kind: "close" };
+}
+
+function deleteConfirmationMessage(note: MarkdownEntry, size: number): string {
+  return [
+    `Note: ${displayNotePath(note)}`,
+    `Size: ${size} bytes`,
+    "",
+    "Delete this Markdown note? This cannot be undone.",
+    "Its saved child conversation will remain under pi-notes/sessions/.",
+  ].join("\n");
+}
+
+function displayNotePath(note: MarkdownEntry): string {
+  let display = '"';
+  for (const character of note.relativePath) {
+    if (character === '"' || character === "\\") {
+      display += `\\${character}`;
+      continue;
+    }
+    if (sanitizeTerminalText(character) !== character) {
+      const codePoint = character.codePointAt(0) ?? 0;
+      display += codePoint <= 0xff ? `\\x${codePoint.toString(16).padStart(2, "0")}` : `\\u{${codePoint.toString(16)}}`;
+      continue;
+    }
+    display += character;
+  }
+  return `${display}"`;
 }
 
 function indexedEntry(entries: readonly MarkdownEntry[], itemId: string, prefix: string): MarkdownEntry | undefined {

@@ -104,6 +104,32 @@ export class NotesStorage {
     return (await resolveExistingMarkdown(this.paths.notes, relativePath, "Note", signal)).absolutePath;
   }
 
+  async deleteNote(relativePath: string, expectedRevision: string, signal?: AbortSignal): Promise<void> {
+    const normalized = normalizeExistingMarkdownPath(relativePath);
+    const root = await canonicalDirectory(this.paths.notes, signal);
+    const target = resolve(root, ...normalized.split("/"));
+    assertContained(root, target);
+    await withFileMutationQueue(root, async () => {
+      throwIfAborted(signal);
+      const resolved = await resolveExistingMarkdown(root, normalized, "Note", signal);
+      const current = await readBoundedMarkdown(resolved.absolutePath, "Note", signal);
+      if (revisionFor(current) !== expectedRevision) {
+        throw new Error("Note revision is stale; read the current note before deleting it");
+      }
+      throwIfAborted(signal);
+      const latest = await resolveExistingMarkdown(root, normalized, "Note", signal);
+      if (latest.absolutePath !== resolved.absolutePath) {
+        throw new Error("Note path changed before deletion; read it again");
+      }
+      const latestContent = await readBoundedMarkdown(latest.absolutePath, "Note", signal);
+      if (revisionFor(latestContent) !== expectedRevision) {
+        throw new Error("Note changed before deletion; read it again");
+      }
+      throwIfAborted(signal);
+      await unlink(latest.absolutePath);
+    });
+  }
+
   async readTemplate(relativePath: string, signal?: AbortSignal): Promise<TemplateSnapshot> {
     const resolved = await resolveExistingMarkdown(this.paths.templates, relativePath, "Template", signal);
     const content = await readBoundedMarkdown(resolved.absolutePath, "Template", signal);

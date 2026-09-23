@@ -10,7 +10,7 @@
 - Discovers notes and user-managed templates dynamically under Pi's configured agent directory.
 - Creates a blank or templated note immediately under a collision-safe temporary name without asking for a filename.
 - Lets the embedded agent proactively rename the current note when its purpose becomes clear.
-- Opens notes directly or inserts a selected note's canonical absolute path into the parent editor without replacing its draft.
+- Opens notes directly, deletes a highlighted note after confirmation, or inserts its canonical absolute path into the parent editor without replacing the draft.
 - Edits existing templates with cancellation and stale-write protection.
 - Shows a fullscreen split Chat/Preview workspace on wide terminals and fullscreen tabs on narrow terminals.
 - Gives the embedded agent only tools scoped to the currently open note.
@@ -49,7 +49,7 @@ Run Pi in TUI mode, then open the manager:
 /notes
 ```
 
-Choose **Open a note…**, **Create a note…**, **Paste a note path…**, or **Manage templates…**. Existing note names appear only after opening the dedicated note list. New notes can be blank or copy a Markdown template found at `${getAgentDir()}/pi-notes/templates/`; the extension opens the note immediately as `untitled.md`, an available numbered variant, or a generated fallback, then the embedded agent renames it when the note's purpose is clear. The extension does not seed templates.
+Choose **Open a note…**, **Create a note…**, **Paste a note path…**, or **Manage templates…**. Existing note names appear only after opening the dedicated note list. In that list, Enter opens the highlighted note and the configured `app.session.delete` binding (`Ctrl+D` by default) asks to delete it. New notes can be blank or copy a Markdown template found at `${getAgentDir()}/pi-notes/templates/`; the extension opens the note immediately as `untitled.md`, an available numbered variant, or a generated fallback, then the embedded agent renames it when the note's purpose is clear. The extension does not seed templates.
 
 ## 🧭 How it works
 
@@ -57,6 +57,7 @@ Choose **Open a note…**, **Create a note…**, **Paste a note path…**, or **
 flowchart LR
     P[Parent Pi session] -->|/notes| M[Notes manager]
     M --> W[Temporary notes workspace]
+    M --> D[Confirm and delete note]
     M --> I[Paste canonical path into parent draft]
     M --> E[Edit existing template]
     W --> C[Isolated child AgentSession]
@@ -85,7 +86,9 @@ New managed directories use mode `0700` and newly created notes use `0600` where
 
 `/notes` opens the browse/create manager and accepts no arguments. It requires Pi TUI mode and rejects RPC, print, and JSON modes.
 
-The manager rescans notes and templates when each screen opens. Its first level contains actions only; **Open a note…** shows the current note list on a separate screen. **Paste a note path…** resolves the selected regular file again, closes the manager, and inserts its canonical absolute path at the parent editor's current cursor without replacing the existing draft. Paths containing terminal or display-direction controls are rejected because Pi's paste handling cannot preserve them safely.
+The manager rescans notes and templates when each screen opens. Its first level contains actions only; **Open a note…** shows the current note list on a separate screen. Enter opens the highlighted note. The effective `app.session.delete` binding (`Ctrl+D` by default) shows the exact relative path in quoted, terminal-safe escaped form and its byte size before deletion. Cancelling leaves the note unchanged. A confirmed deletion succeeds only while the selected file still has the reviewed revision, then refreshes the list and highlights a neighboring note. It removes the Markdown file but preserves its path-keyed child conversation under `pi-notes/sessions/`.
+
+**Paste a note path…** resolves the selected regular file again, closes the manager, and inserts its canonical absolute path at the parent editor's current cursor without replacing the existing draft. Paths containing terminal or display-direction controls are rejected because Pi's paste handling cannot preserve them safely.
 
 **Manage templates…** opens an existing template in a Pi-style multiline editor. The editor preserves leading and trailing whitespace and hides terminal controls as spaces without changing their raw values. It rejects pasted text containing an ambiguous bracketed-paste terminator rather than silently reordering it. Because terminal paste framing cannot represent a literal terminator unambiguously, the first save after a paste asks you to review the content and press save again. Cancelling or submitting unchanged content returns to the manager without writing. A changed template is published atomically only if its revision is still current; if another process changed it, Pi Notes preserves that external content, reports the conflict, and refreshes the manager.
 
@@ -110,9 +113,9 @@ The content tools accept no path, and the rename tool accepts no source path. A 
 - Model and credential configuration is read from Pi's configured agent directory. A provider registered only in another extension's in-memory runtime is not inherited.
 - Child history remains on disk under `pi-notes/sessions/` until the user removes it.
 - Note and template operations reject absolute paths, traversal, special files, and symlinked managed paths. Rename refuses an existing destination and paths deeper than the discovery limit so renamed notes remain available in menus. Same-directory temporary files and atomic publication preserve the previous content when a managed write fails.
-- Revision checks detect stale writes and renames, but another process can still change a file immediately around publication; this extension does not provide cross-process locking or an OS sandbox.
+- Revision checks detect stale writes, renames, and deletions, but another process can still change a file immediately around publication; this extension does not provide cross-process locking or an OS sandbox.
 - Note paths and content are treated as untrusted terminal text and sanitized only for display; raw Markdown content and valid raw file identities remain unchanged on disk.
-- The extension has no delete operation. Removing or disabling the package leaves `getAgentDir()/pi-notes/` untouched.
+- Deleting a note does not delete its child-session history. Removing or disabling the package leaves all data under `getAgentDir()/pi-notes/` untouched.
 
 ## 🚧 Limitations
 
@@ -121,7 +124,7 @@ The content tools accept no path, and the rename tool accepts no source path. A 
 - Each note path supports at most 100 saved child-session files. The visible transcript is bounded to the latest 200 messages and 50,000 characters.
 - A rename keeps the currently open child conversation, but reopening the renamed note starts a separate child conversation unless the new path already has history. Renaming a note outside the extension has the same path-associated behavior.
 - Parent-only dynamic providers and runtime-only provider state are unavailable to the child; use a provider reconstructable from Pi's normal model and credential files.
-- There is no manual rename UI, delete operation, tags, backlinks, full-text index, direct `/notes <path>` route, template language, settings, or bundled skill.
+- There is no manual rename UI, child-history deletion UI, tags, backlinks, full-text index, direct `/notes <path>` route, template language, settings, or bundled skill.
 - Template management edits existing files only; create, rename, delete, agent-assisted template work, and Pi's external-editor shortcut are not supported.
 - Cross-process locking, large notes, rich-text editing, attachments, synchronization, and collaborative editing are not supported.
 
