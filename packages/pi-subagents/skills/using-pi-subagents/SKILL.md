@@ -51,6 +51,7 @@ Attaching a skill does not inject its complete body, add `read` or `bash`, or fo
 Attach `extensions` only from existing local files or directories that you trust as executable code with the child process's full user permissions.
 
 Name only the extension tools that must be active initially, and use an empty extension tool list only for required provider or lifecycle behavior.
+Keep tool names concise because the selected and communication tool names must fit the child's 16 KiB startup bootstrap.
 
 Treat the extension tool list as a least-privilege initial loadout, not a sandbox, because trusted extension code can modify prompts, tool behavior, providers, and active tools.
 

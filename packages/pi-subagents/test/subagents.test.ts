@@ -482,6 +482,26 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
   } finally {
     rmSync(collisionRoot, { recursive: true, force: true });
   }
+  await assert.rejects(
+    () =>
+      spawn.execute(
+        "oversized-tool-bootstrap",
+        {
+          task: "oversized tool bootstrap",
+          tools: [],
+          extensions: [
+            {
+              path: "packages/pi-subagents/src/index.ts",
+              tools: Array.from({ length: 64 }, (_, index) => `${String(index).padStart(2, "0")}${"界".repeat(126)}`),
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        trustedContext.ctx,
+      ),
+    /child bootstrap size limit/i,
+  );
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(

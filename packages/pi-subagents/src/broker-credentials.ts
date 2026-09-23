@@ -32,6 +32,16 @@ export function serializeChildBootstrap(bootstrap: ChildBootstrap): string {
   return JSON.stringify(bootstrap);
 }
 
+export function assertChildBootstrapCapacity(expectedTools: string[]): void {
+  const serialized = serializeChildBootstrap({
+    communication: { host: "127.0.0.1", port: 65_535, token: "f".repeat(64) },
+    expectedTools,
+  });
+  if (Buffer.byteLength(serialized, "utf8") > MAX_BOOTSTRAP_BYTES) {
+    throw new Error(`Subagent selected tool names exceed the ${MAX_BOOTSTRAP_BYTES}-byte child bootstrap size limit.`);
+  }
+}
+
 export function captureChildBootstrap(
   readBootstrap: () => string = readBootstrapPipe,
 ): CapturedChildBootstrap | undefined {

@@ -152,6 +152,7 @@ Attachment paths may be relative to the child working directory or absolute, mus
 Only local paths are accepted; npm, Git, URLs, and other scheme-based sources are rejected.
 Duplicate skill paths are removed, and repeated extension paths are merged in first-use order.
 A job accepts up to 16 skills, 16 extension entries, and 64 selected core and extension tool names; each path is limited to 4 KiB of UTF-8 text and each extension tool name to 128 characters.
+The complete child bootstrap, including selected and communication tool names, must fit 16 KiB of UTF-8 JSON and oversized combinations are rejected before launch.
 When the project is untrusted, both lexical and symlink-resolved paths inside the child working directory are rejected, while explicit external paths remain available.
 
 The optional `thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
@@ -170,7 +171,7 @@ The session starts one TCP broker on `127.0.0.1` with an operating-system-assign
 Each job receives one cryptographically random token bound to its job identity and session generation.
 The parent passes broker credentials and non-secret expected tool names once through a private inherited pipe instead of placing them in the child's initial environment or command line.
 The child bridge reads and closes that descriptor before attached extensions load.
-When extension tools are requested, a separate readiness probe loaded after the attachments reports whether the complete initial tool allowlist is active through a second private descriptor.
+When any extension is attached, a separate readiness probe loaded after the attachments reports whether the complete initial tool allowlist is active through a second private descriptor.
 The parent then uses an ordered RPC barrier to reject attachment errors from startup hooks before sending the task, and the execution timeout still starts only after Pi accepts the RPC prompt.
 
 Each child runs in Pi RPC mode so the parent can inject a main-originated request through `steer` after the initial prompt is accepted.

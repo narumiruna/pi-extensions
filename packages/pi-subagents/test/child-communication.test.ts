@@ -3,6 +3,7 @@ import { Check } from "typebox/value";
 import { afterEach, test } from "vitest";
 import { createMockPi } from "../../../test/support.js";
 import {
+  assertChildBootstrapCapacity,
   BROKER_CREDENTIAL_FD,
   BROKER_CREDENTIAL_FD_ENV,
   CHILD_READINESS_FD,
@@ -154,6 +155,14 @@ test("child tool failures throw and preserve AbortError", async () => {
     () => tools[1]?.execute("wait", { requestId: "req_1" }),
     (error: Error) => error.name === "AbortError",
   );
+});
+
+test("bounds the child bootstrap by serialized UTF-8 bytes", () => {
+  const toolNames = (character: string) =>
+    Array.from({ length: 66 }, (_, index) => `${String(index).padStart(2, "0")}${character.repeat(126)}`);
+  assert.doesNotThrow(() => assertChildBootstrapCapacity(toolNames("a")));
+  assert.throws(() => assertChildBootstrapCapacity(toolNames("界")), /child bootstrap size limit/i);
+  assert.throws(() => assertChildBootstrapCapacity(toolNames('"')), /child bootstrap size limit/i);
 });
 
 test("captures child bootstrap state from private descriptors", () => {

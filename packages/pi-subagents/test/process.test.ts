@@ -111,9 +111,8 @@ test("buildPiArgs isolates the RPC child and preserves selected communication to
   const lifecycleOnly = buildPiArgs(childRequest({ extensions: [{ path: "/tmp/provider-extension.ts", tools: [] }] }));
   assert.deepEqual(
     lifecycleOnly.filter((argument, index) => lifecycleOnly[index - 1] === "-e" || argument === "-e"),
-    ["-e", childCommunicationBridgePath(), "-e", "/tmp/provider-extension.ts"],
+    ["-e", childCommunicationBridgePath(), "-e", "/tmp/provider-extension.ts", "-e", childReadinessProbePath()],
   );
-  assert.equal(lifecycleOnly.includes(childReadinessProbePath()), false);
 });
 
 test("runChild uses a bundled Pi executable when its manifest CLI is absent", async () => {
@@ -429,9 +428,10 @@ async function handle(command) {
 });
 
 test("runChild rejects attachment startup hook errors before sending the task", async () => {
-  for (const hook of ["session_start", "resources_discover"] as const) {
-    const promptMarker = path.join(directory, `prompt-${hook}`);
-    installFakePi(`
+  for (const tools of [[], ["custom_search"]] as const) {
+    for (const hook of ["session_start", "resources_discover"] as const) {
+      const promptMarker = path.join(directory, `prompt-${tools.length}-${hook}`);
+      installFakePi(`
 event({
   type: "extension_error",
   extensionPath: "/tmp/search-extension.ts",
@@ -444,13 +444,36 @@ async function handle(command) {
 }
 setInterval(() => {}, 1000);
 `);
-    const result = await runChild(
-      childRequest({ extensions: [{ path: "/tmp/search-extension.ts", tools: ["custom_search"] }] }),
-    );
-    assert.equal(result.state, "failed");
-    assert.match(result.error ?? "", new RegExp(`startup failed during ${hook}.*fixture hook failed`, "i"));
-    assert.equal(existsSync(promptMarker), false);
+      const result = await runChild(
+        childRequest({ extensions: [{ path: "/tmp/search-extension.ts", tools: [...tools] }] }),
+      );
+      assert.equal(result.state, "failed");
+      assert.match(result.error ?? "", new RegExp(`startup failed during ${hook}.*fixture hook failed`, "i"));
+      assert.equal(existsSync(promptMarker), false);
+    }
   }
+});
+
+test("runChild rejects an oversized tool bootstrap before child launch", async () => {
+  const launchMarker = path.join(directory, "oversized-bootstrap-launch");
+  installFakePi(`
+fs.writeFileSync(${JSON.stringify(launchMarker)}, "launched");
+async function handle() {}
+`);
+  const result = await runChild(
+    childRequest({
+      tools: [],
+      extensions: [
+        {
+          path: "/tmp/search-extension.ts",
+          tools: Array.from({ length: 64 }, (_, index) => `${String(index).padStart(2, "0")}${"界".repeat(126)}`),
+        },
+      ],
+    }),
+  );
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /child bootstrap size limit/i);
+  assert.equal(existsSync(launchMarker), false);
 });
 
 test("runChild rejects invalid attachment readiness without sending the task", async () => {

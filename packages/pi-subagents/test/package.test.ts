@@ -47,6 +47,7 @@ test("repository example skill documents every minimal-runtime operating respons
     /skill names unique across all attachments/is,
     /Attaching a skill does not inject its complete body.*add `read` or `bash`/is,
     /Attach `extensions`.*trust.*executable code/is,
+    /16 KiB.*startup bootstrap/is,
     /extension tool list.*not a sandbox/is,
     /never pass npm, Git, URL/is,
     /missing tool.*fails the job without a model request/is,
@@ -97,6 +98,8 @@ test("published documentation defines attachment behavior and its security bound
     assert.match(document, /project.*untrusted|untrusted.*project/iu);
     assert.match(document, /not (?:an? )?(?:operating-system )?sandbox/iu);
     assert.match(document, /process-local runtime API key/iu);
+    assert.match(document, /16 KiB.*(?:bootstrap|UTF-8 JSON)/iu);
+    assert.match(document, /(?:when any|whenever an) extension.*attached/iu);
     assert.match(document, /startup.*(?:hook|failure)|failed extension startup/iu);
     assert.match(document, /before.*(?:task|submitting).*model|before.*model request/isu);
     assert.doesNotMatch(document, /skillCount|extensionCount/u);

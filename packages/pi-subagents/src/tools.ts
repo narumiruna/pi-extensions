@@ -1,6 +1,8 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { assertChildBootstrapCapacity } from "./broker-credentials.js";
+import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
 import {
   type BrokerInboundMessage,
   MAX_IDENTIFIER_LENGTH,
@@ -80,7 +82,8 @@ const SpawnParameters = Type.Object(
                 maxLength: MAX_EXTENSION_TOOL_NAME_LENGTH,
               }),
               {
-                description: "Extension tools to activate. Use an empty list for lifecycle or provider behavior only.",
+                description:
+                  "Extension tools to activate. Use an empty list for lifecycle or provider behavior only. All child tool names share a 16 KiB startup bootstrap.",
                 maxItems: MAX_SELECTED_TOOLS,
               },
             ),
@@ -196,6 +199,9 @@ export function registerSubagentTools(
         { skills: params.skills, extensions: params.extensions },
         { cwd, projectTrusted, coreTools: tools },
       );
+      if (attachments.extensions.length > 0) {
+        assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])]);
+      }
       const model = resolveChildModel(ctx, attachments.extensions.length > 0);
       const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? ctx.thinkingLevel ?? pi.getThinkingLevel());
       resolveTimeoutMs(params.timeout);

@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import {
+  assertChildBootstrapCapacity,
   BROKER_CREDENTIAL_FD,
   CHILD_READINESS_FD,
   CHILD_READINESS_FD_ENV,
@@ -121,7 +122,7 @@ export function childReadinessProbePath(): string {
 }
 
 function requiresReadinessAttestation(request: ChildRequest): boolean {
-  return request.extensions.some((extension) => extension.tools.length > 0);
+  return request.extensions.length > 0;
 }
 
 function selectedChildTools(request: ChildRequest): string[] {
@@ -141,6 +142,7 @@ async function executeProcess(
   const timeoutMs = resolveTimeoutMs(request.timeout);
   const expectedTools = selectedChildTools(request);
   const expectReadiness = requiresReadinessAttestation(request);
+  if (expectReadiness) assertChildBootstrapCapacity(expectedTools);
   let latestOutput = "";
   let terminalOutput: string | undefined;
   let terminalStopReason: "stop" | "length" | undefined;
