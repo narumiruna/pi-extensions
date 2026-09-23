@@ -547,9 +547,10 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
     mkdirSync(partialExtensionDirectory);
     writeFileSync(
       path.join(partialExtensionDirectory, "package.json"),
-      JSON.stringify({ pi: { extensions: ["./valid.ts", "./missing.ts"] } }),
+      JSON.stringify({ pi: { extensions: ["./valid.ts", "./empty"] } }),
     );
     writeFileSync(path.join(partialExtensionDirectory, "valid.ts"), "export default () => {};\n");
+    mkdirSync(path.join(partialExtensionDirectory, "empty"));
     await assert.rejects(
       () =>
         spawn.execute(
@@ -559,7 +560,7 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
           undefined,
           trustedContext.ctx,
         ),
-      /missing declared extension entrypoint/i,
+      /missing or unresolvable declared entrypoint/i,
     );
     const extensionlessManifestDirectory = path.join(collisionRoot, "extensionless-manifest");
     mkdirSync(extensionlessManifestDirectory);

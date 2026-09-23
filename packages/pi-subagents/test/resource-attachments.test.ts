@@ -308,6 +308,7 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
   const extensionsDirectory = path.join(conventionPackage, "extensions");
   const manifestOnlyDirectory = path.join(external, "manifest-without-extensions");
   const partialDirectory = path.join(external, "partial-extension");
+  const unresolvableDirectory = path.join(external, "unresolvable-extension");
   for (const directory of [
     packageDirectory,
     indexTsDirectory,
@@ -315,6 +316,7 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
     extensionsDirectory,
     manifestOnlyDirectory,
     partialDirectory,
+    unresolvableDirectory,
   ]) {
     mkdirSync(directory, { recursive: true });
   }
@@ -322,7 +324,7 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
   mkdirSync(path.join(packageDirectory, "nested"));
   writeFileSync(
     path.join(packageDirectory, "package.json"),
-    JSON.stringify({ pi: { extensions: ["./first.ts", "./nested/second.js"] } }),
+    JSON.stringify({ pi: { extensions: ["./first.ts", "./nested"] } }),
   );
   writeFileSync(path.join(packageDirectory, "first.ts"), "export default () => {};\n");
   writeFileSync(path.join(packageDirectory, "nested", "second.js"), "export default () => {};\n");
@@ -377,7 +379,22 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
         { extensions: [{ path: partialDirectory, tools: [] }] },
         { cwd: project, projectTrusted: true, coreTools: [] },
       ),
-    /missing declared extension entrypoint/i,
+    /missing or unresolvable declared entrypoint/i,
+  );
+
+  writeFileSync(
+    path.join(unresolvableDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./valid.ts", "./empty"] } }),
+  );
+  writeFileSync(path.join(unresolvableDirectory, "valid.ts"), "export default () => {};\n");
+  mkdirSync(path.join(unresolvableDirectory, "empty"));
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: unresolvableDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /missing or unresolvable declared entrypoint/i,
   );
 });
 

@@ -356,7 +356,7 @@ function assertNoMissingDeclaredExtensionEntrypoints(extensionPath: string): voi
   if (!statSync(extensionPath).isDirectory()) return;
   const manifest = readPiManifest(extensionPath);
   if (manifest) {
-    assertDeclaredExtensionEntrypointsExist(extensionPath, manifest.extensions);
+    assertDeclaredExtensionEntrypointsResolve(extensionPath, manifest.extensions, true);
     return;
   }
 
@@ -398,7 +398,7 @@ function assertNoMissingAutoExtensionEntrypoints(directory: string): void {
 function extensionDirectoryStopsDiscovery(directory: string): boolean {
   const manifest = readPiManifest(directory);
   if (manifest?.extensions && manifest.extensions.length > 0) {
-    assertDeclaredExtensionEntrypointsExist(directory, manifest.extensions);
+    assertDeclaredExtensionEntrypointsResolve(directory, manifest.extensions, false);
     if (
       manifest.extensions.some(
         (entrypoint) =>
@@ -413,17 +413,59 @@ function extensionDirectoryStopsDiscovery(directory: string): boolean {
   return existsSync(path.join(directory, "index.ts")) || existsSync(path.join(directory, "index.js"));
 }
 
-function assertDeclaredExtensionEntrypointsExist(directory: string, entries: string[] | undefined): void {
+function assertDeclaredExtensionEntrypointsResolve(
+  directory: string,
+  entries: string[] | undefined,
+  expandDirectories: boolean,
+): void {
   if (!entries) return;
-  const missing = entries.some(
-    (entrypoint) =>
-      !isExtensionOverridePattern(entrypoint) &&
-      !hasExtensionGlob(entrypoint) &&
-      !existsSync(path.resolve(directory, entrypoint)),
-  );
-  if (missing) {
-    throw new Error("Subagent extension package must not contain a missing declared extension entrypoint.");
+  const unresolved = entries.some((entrypoint) => {
+    if (isExtensionOverridePattern(entrypoint) || hasExtensionGlob(entrypoint)) return false;
+    const resolved = path.resolve(directory, entrypoint);
+    if (!existsSync(resolved)) return true;
+    try {
+      const stats = statSync(resolved);
+      if (stats.isFile()) return false;
+      return !stats.isDirectory() || (expandDirectories && !hasAutoExtensionEntrypoints(resolved));
+    } catch {
+      return true;
+    }
+  });
+  if (unresolved) {
+    throw new Error("Subagent extension package must not contain a missing or unresolvable declared entrypoint.");
   }
+}
+
+function hasAutoExtensionEntrypoints(directory: string): boolean {
+  if (extensionDirectoryStopsDiscovery(directory)) return true;
+  const ignoreMatcher = ignore();
+  addIgnoreRules(ignoreMatcher, directory, directory);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const entryPath = path.join(directory, entry.name);
+    let isDirectory = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      try {
+        const stats = statSync(entryPath);
+        isDirectory = stats.isDirectory();
+        isFile = stats.isFile();
+      } catch {
+        continue;
+      }
+    }
+    const relativePath = toPosixPath(path.relative(directory, entryPath));
+    if (ignoreMatcher.ignores(isDirectory ? `${relativePath}/` : relativePath)) continue;
+    if (isFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) return true;
+    if (isDirectory && extensionDirectoryStopsDiscovery(entryPath)) return true;
+  }
+  return false;
 }
 
 function readPiManifest(directory: string): PiManifest | undefined {
