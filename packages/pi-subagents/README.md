@@ -151,7 +151,8 @@ Extension-package preflight is asynchronous and cancellation-aware, rejects sour
 Extension tool names cannot overlap Pi core tools or the built-in `subagent_send` and `subagent_wait` communication tools.
 Use an empty `tools` list to load provider or lifecycle behavior without exposing an extension tool.
 The initial child allowlist contains only selected core tools, communication tools, and explicitly named extension tools.
-The parent verifies that every requested tool is active before it sends the task; otherwise the job fails without a model request.
+The parent verifies that every requested tool is active and registered by an entrypoint of its specified attachment before it sends the task; otherwise the job fails without a model request.
+The same extension tool name cannot be requested by different attachments.
 
 Attachment paths may be relative to the child working directory or absolute, must already exist as files or directories, and are canonicalized before launch.
 Only local paths are accepted; npm, Git, URLs, and other scheme-based sources are rejected.
@@ -178,7 +179,8 @@ Each job receives one cryptographically random token bound to its job identity a
 The parent passes broker credentials and non-secret expected tool names once through a private inherited pipe instead of placing them in the child's initial environment or command line.
 The child bridge reads and closes that descriptor before attached extensions load.
 When any extension is attached, a separate readiness probe loaded after the attachments reports whether the complete initial tool allowlist is active through a second private descriptor.
-The parent then uses an ordered RPC barrier to reject attachment errors from startup hooks before sending the task, and the execution timeout still starts only after Pi accepts the RPC prompt.
+The child reports tool-source fingerprints over the readiness pipe; the parent matches them against preflight-resolved attachment entrypoints and uses an ordered RPC barrier to reject attachment errors from startup hooks before sending the task.
+The execution timeout still starts only after Pi accepts the RPC prompt.
 
 Each child runs in Pi RPC mode so the parent can inject a main-originated request through `steer` after the initial prompt is accepted.
 Each child broker call uses one request-scoped connection, while a response wait uses an abortable long poll.

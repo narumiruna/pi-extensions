@@ -192,18 +192,20 @@ async function collectSkillCandidates(
     const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
     if (rootSkill) {
       const rootPath = path.join(directory, rootSkill.name);
-      let rootStats: Awaited<ReturnType<typeof statAsync>>;
-      try {
-        rootStats = await statAsync(rootPath);
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        throwInvalidDeclaredSkill();
-      }
-      throwIfAttachmentAborted(state.signal);
       const relativePath = toPosixPath(path.relative(rootDirectory, rootPath));
-      if (rootStats.isFile() && !ignoreMatcher.ignores(relativePath)) {
-        addSkillBytes(state, rootStats.size);
-        return [rootPath];
+      if (!ignoreMatcher.ignores(relativePath)) {
+        let rootStats: Awaited<ReturnType<typeof statAsync>>;
+        try {
+          rootStats = await statAsync(rootPath);
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          throwInvalidDeclaredSkill();
+        }
+        throwIfAttachmentAborted(state.signal);
+        if (rootStats.isFile()) {
+          addSkillBytes(state, rootStats.size);
+          return [rootPath];
+        }
       }
     }
 
@@ -212,17 +214,22 @@ async function collectSkillCandidates(
       throwIfAttachmentAborted(state.signal);
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
       const candidate = path.join(directory, entry.name);
+      const relativePath = toPosixPath(path.relative(rootDirectory, candidate));
       let candidateStats: Awaited<ReturnType<typeof statAsync>>;
       try {
         candidateStats = await statAsync(candidate);
-      } catch {
-        if (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md"))) {
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throwIfAttachmentAborted(state.signal);
+        if (
+          !ignoreMatcher.ignores(relativePath) &&
+          (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md")))
+        ) {
           throwInvalidDeclaredSkill();
         }
         continue;
       }
       throwIfAttachmentAborted(state.signal);
-      const relativePath = toPosixPath(path.relative(rootDirectory, candidate));
       if (ignoreMatcher.ignores(candidateStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
       if (candidateStats.isDirectory()) {
         candidates.push(

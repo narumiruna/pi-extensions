@@ -12,7 +12,7 @@ import {
   validateMessage,
 } from "./message-broker.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
-import { assertChildCommandCapacity, resolveTimeoutMs } from "./process.js";
+import { assertChildCommandCapacity } from "./process.js";
 import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
@@ -22,6 +22,7 @@ import {
   resolveResourceAttachments,
 } from "./resource-attachments.js";
 import { type RuntimeDependencies, SubagentRuntime } from "./runtime.js";
+import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
 import {
   CHILD_CORE_TOOL_NAMES,
   DEFAULT_SUBAGENT_TOOLS,
@@ -228,6 +229,7 @@ export function registerSubagentTools(
           tools,
           skills: attachments.skills,
           extensions: attachments.extensions,
+          toolSources: attachments.toolSources,
           model,
           thinkingLevel,
           cwd,
@@ -410,16 +412,6 @@ function prepareSpawnArguments(args: unknown): SpawnArguments {
 
 function prepareWaitArguments(args: unknown): WaitArguments {
   return prepareTimeoutArguments(args) as WaitArguments;
-}
-
-function prepareTimeoutArguments(args: unknown): Record<string, unknown> {
-  if (!args || typeof args !== "object") return args as Record<string, unknown>;
-  if (!Object.hasOwn(args, "timeoutMs")) return args as Record<string, unknown>;
-  const record = args as Record<string, unknown>;
-  if (typeof record.timeoutMs !== "number") return record;
-  const { timeoutMs, ...prepared } = record;
-  if (prepared.timeout === undefined) return { ...prepared, timeout: timeoutMs / 1000 };
-  return prepared;
 }
 
 function resolveMainSendArguments(params: SendArguments): MainSendSelection {

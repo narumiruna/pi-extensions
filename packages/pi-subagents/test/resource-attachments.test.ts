@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, test } from "vitest";
+import { toolSourceId } from "../src/attachment-utils.js";
 import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
@@ -56,6 +58,10 @@ test("canonicalizes, deduplicates, and merges explicit local attachments", async
     skills: [skill],
     extensions: [{ path: extension, tools: ["search_code", "fetch_issue"] }],
     effectiveTools: ["read", "grep", "search_code", "fetch_issue"],
+    toolSources: {
+      search_code: [toolSourceId(extension)],
+      fetch_issue: [toolSourceId(extension)],
+    },
   });
 });
 
@@ -195,6 +201,81 @@ test("rejects invalid declared skills while honoring Pi ignore files", async () 
   }
 });
 
+test("ignores broken declared skill links excluded by Pi ignore files", async () => {
+  for (const [index, filename] of [".gitignore", ".ignore", ".fdignore"].entries()) {
+    const directory = path.join(external, `ignored-broken-${index}`);
+    mkdirSync(path.join(directory, "nested"), { recursive: true });
+    writeFileSync(path.join(directory, filename), "SKILL.md\nnested/SKILL.md\ndraft.md\n");
+    writeFileSync(path.join(directory, "valid.md"), `---\nname: valid-${index}\ndescription: Valid.\n---\n`);
+    for (const ignored of ["SKILL.md", "nested/SKILL.md", "draft.md"]) {
+      symlinkSync(path.join(directory, "missing.md"), path.join(directory, ignored));
+    }
+    const resolved = await resolveResourceAttachments(
+      { skills: [directory] },
+      { cwd: project, projectTrusted: true, coreTools: [] },
+    );
+    assert.deepEqual(resolved.skills, [directory]);
+  }
+});
+
+test("ties selected extension tools to their resolved entrypoints", async () => {
+  const first = path.join(external, "first.ts");
+  const second = path.join(external, "second.ts");
+  writeFileSync(first, "export default () => {};\n");
+  writeFileSync(second, "export default () => {};\n");
+  const resolved = await resolveResourceAttachments(
+    {
+      extensions: [
+        { path: first, tools: [] },
+        { path: second, tools: ["search_custom"] },
+      ],
+    },
+    { cwd: project, projectTrusted: true, coreTools: [] },
+  );
+  assert.deepEqual(resolved.toolSources, { search_custom: [toolSourceId(second)] });
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        {
+          extensions: [
+            { path: first, tools: ["search_custom"] },
+            { path: second, tools: ["search_custom"] },
+          ],
+        },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /requested by multiple attachments/i,
+  );
+});
+
+test("matches Pi's tool source for a package entrypoint outside its root", async () => {
+  const packageDirectory = path.join(external, "package-with-external-entry");
+  const entrypoint = path.join(external, "outside.js");
+  mkdirSync(packageDirectory);
+  writeFileSync(path.join(packageDirectory, "package.json"), JSON.stringify({ pi: { extensions: ["../outside.js"] } }));
+  writeFileSync(
+    entrypoint,
+    'export default (pi) => pi.registerTool({ name: "outside_tool", label: "Outside", description: "Test", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [] }) });\n',
+  );
+  const resolved = await resolveResourceAttachments(
+    { extensions: [{ path: packageDirectory, tools: ["outside_tool"] }] },
+    { cwd: project, projectTrusted: true, coreTools: [] },
+  );
+  const loader = new DefaultResourceLoader({
+    cwd: project,
+    agentDir: project,
+    settingsManager: SettingsManager.inMemory(),
+    additionalExtensionPaths: [packageDirectory],
+  });
+  await loader.reload();
+  const loaded = loader.getExtensions();
+  assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.extensions.length, 1);
+  const owner = loaded.extensions[0]?.tools.get("outside_tool")?.sourceInfo.path;
+  assert.ok(owner);
+  assert.ok(resolved.toolSources.outside_tool?.includes(toolSourceId(owner)));
+});
+
 test("bounds and cancels attachment directory preflight", async () => {
   const wideDirectory = path.join(external, "wide-directory");
   mkdirSync(wideDirectory);
@@ -276,6 +357,22 @@ test("bounds and cancels attachment directory preflight", async () => {
     () =>
       resolveResourceAttachments(
         { extensions: [{ path: wideExtensionDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /extension attachment exceeds preflight limits/i,
+  );
+
+  const widePackageDirectory = path.join(external, "wide-package-directory");
+  mkdirSync(path.join(widePackageDirectory, "extensions"), { recursive: true });
+  mkdirSync(path.join(widePackageDirectory, "prompts"));
+  writeFileSync(path.join(widePackageDirectory, "extensions", "valid.ts"), "export default () => {};\n");
+  for (let index = 0; index < MAX_EXTENSION_SCAN_ENTRIES; index++) {
+    writeFileSync(path.join(widePackageDirectory, "prompts", `${index}.md`), "");
+  }
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: widePackageDirectory, tools: [] }] },
         { cwd: project, projectTrusted: true, coreTools: [] },
       ),
     /extension attachment exceeds preflight limits/i,

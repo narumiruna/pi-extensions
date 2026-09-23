@@ -8,6 +8,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { Check } from "typebox/value";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { toolSourceId } from "../src/attachment-utils.js";
 import { createBrokerClient } from "../src/child-communication-bridge.js";
 import { createChildCommunicationExtension } from "../src/child-communication-tools.js";
 import { MAX_MESSAGE_BYTES, MAX_MESSAGE_LINES, MessageBroker } from "../src/message-broker.js";
@@ -113,13 +114,24 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
     jobId: "job_old",
     timeout: 30,
   });
-  for (const [candidate, malformedAlias] of [
-    [tools[0], { task: "legacy", timeoutMs: "1500" }],
-    [tools[3], { jobId: "job_old", timeoutMs: "30000" }],
+  for (const [candidate, fields] of [
+    [tools[0], { task: "legacy" }],
+    [tools[3], { jobId: "job_old" }],
   ] as const) {
-    const preparedMalformed = candidate?.prepareArguments?.(malformedAlias);
-    assert.deepEqual(preparedMalformed, malformedAlias);
-    assert.equal(Check(candidate?.parameters, preparedMalformed), false);
+    assert.deepEqual(candidate?.prepareArguments?.({ ...fields, timeoutMs: 250, timeout: 3 }), {
+      ...fields,
+      timeout: 3,
+    });
+    assert.deepEqual(candidate?.prepareArguments?.({ ...fields, timeoutMs: 250, timeout: undefined }), {
+      ...fields,
+      timeout: 0.25,
+    });
+    for (const timeoutMs of ["250", null]) {
+      const malformedAlias = { ...fields, timeoutMs };
+      const preparedMalformed = candidate?.prepareArguments?.(malformedAlias);
+      assert.deepEqual(preparedMalformed, malformedAlias);
+      assert.equal(Check(candidate?.parameters, preparedMalformed), false);
+    }
   }
   assert.match(tools[0]?.description ?? "", /task defines.*skills or extensions define/is);
   for (const candidate of tools) {
@@ -284,6 +296,9 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
       },
     ],
   );
+  assert.deepEqual(requests[1]?.toolSources, {
+    custom_review: [toolSourceId(path.resolve("packages/pi-subagents/src/index.ts"))],
+  });
   for (const request of requests) {
     assert.equal(request.communication.host, "127.0.0.1");
     assert.ok(request.communication.port > 0);

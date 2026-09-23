@@ -49,6 +49,7 @@ export interface ChildRequest {
   tools: string[];
   skills: string[];
   extensions: ExtensionAttachment[];
+  toolSources: Record<string, string[]>;
   model: string;
   thinkingLevel: SubagentThinkingLevel;
   cwd: string;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import * as path from "node:path";
 import type ignore from "ignore";
@@ -40,6 +41,10 @@ export function prefixIgnorePattern(line: string, prefix: string): string | null
 
 export function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
+}
+
+export function toolSourceId(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 export function realpath(value: string, label: string): string {

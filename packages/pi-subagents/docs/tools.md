@@ -22,7 +22,9 @@ Extension tools are selected only through each `extensions[].tools` list, and an
 Every requested extension tool name must be non-empty, at most 128 characters, and contain no comma or control character.
 The complete child bootstrap, including selected and communication tool names, must fit 16 KiB of UTF-8 JSON or spawn throws before launch.
 
-Whenever an extension is attached, the parent verifies that the complete initial allowlist is active after extension factory, session, and resource-discovery hooks and uses an ordered RPC barrier to observe startup hook errors before submitting the task to the model.
+Whenever an extension is attached, the parent verifies that the complete initial allowlist is active after extension factory, session, and resource-discovery hooks, and that requested extension tools come from their specified attachment's resolved entrypoints.
+It uses an ordered RPC barrier to observe startup hook errors before submitting the task to the model.
+Different attachments cannot request the same extension tool name.
 
 A missing tool, malformed readiness response, attachment startup failure, or cancellation fails the job without sending the task.
 

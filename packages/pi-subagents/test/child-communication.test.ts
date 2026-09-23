@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { afterEach, test } from "vitest";
 import { createMockPi } from "../../../test/support.js";
+import { toolSourceId } from "../src/attachment-utils.js";
 import {
   assertChildBootstrapCapacity,
   BROKER_CREDENTIAL_FD,
@@ -81,10 +82,20 @@ test("registers fixed send and wait schemas and returns bounded results", async 
     requestId: "req_1",
     timeout: 1.5,
   });
-  const malformedAlias = { requestId: "req_1", timeoutMs: "1500" };
-  const preparedMalformed = tools[1]?.prepareArguments?.(malformedAlias);
-  assert.deepEqual(preparedMalformed, malformedAlias);
-  assert.equal(Check(tools[1]?.parameters, preparedMalformed), false);
+  assert.deepEqual(tools[1]?.prepareArguments?.({ requestId: "req_1", timeoutMs: 250, timeout: 3 }), {
+    requestId: "req_1",
+    timeout: 3,
+  });
+  assert.deepEqual(tools[1]?.prepareArguments?.({ requestId: "req_1", timeoutMs: 250, timeout: undefined }), {
+    requestId: "req_1",
+    timeout: 0.25,
+  });
+  for (const timeoutMs of ["1500", null]) {
+    const malformedAlias = { requestId: "req_1", timeoutMs };
+    const preparedMalformed = tools[1]?.prepareArguments?.(malformedAlias);
+    assert.deepEqual(preparedMalformed, malformedAlias);
+    assert.equal(Check(tools[1]?.parameters, preparedMalformed), false);
+  }
   const sent = await tools[0]?.execute("send", { message: "Question" });
   assert.deepEqual(sent, {
     content: [
@@ -112,6 +123,14 @@ test("registers fixed send and wait schemas and returns bounded results", async 
     details: { requestId: "req_1" },
   });
   assert.equal(calls[2]?.timeoutMs, 1_250);
+  for (const [timeout, error] of [
+    [0, /finite number of seconds/],
+    [Number.NaN, /finite number of seconds/],
+    [2_147_483.648, /maximum is 2147483\.647 seconds/],
+  ] as const) {
+    await assert.rejects(() => tools[1]?.execute("invalid-wait", { requestId: "req_1", timeout }), error);
+  }
+  assert.equal(calls.length, 3);
 });
 
 test("child send validates optional response IDs before transport", async () => {
@@ -236,7 +255,11 @@ test("rejects invalid bootstrap descriptors and payloads after deleting markers"
 
 test("readiness probe runs after earlier resource hooks", async () => {
   const frames: string[] = [];
-  const mock = createMockPi({ activeTools: ["read"] });
+  const allTools = ["read", "factory_tool", "session_tool", "resource_tool"].map((name) => ({
+    name,
+    sourceInfo: { path: `/tmp/${name}.ts` },
+  }));
+  const mock = createMockPi({ activeTools: ["read"], allTools });
   mock.rawPi.on("resources_discover", () => {
     mock.rawPi.setActiveTools(["read", "factory_tool", "session_tool", "resource_tool"]);
   });
@@ -253,7 +276,7 @@ test("readiness probe runs after earlier resource hooks", async () => {
   }
   assert.deepEqual(
     frames.map((frame) => JSON.parse(frame)),
-    [{ ok: true }],
+    [{ ok: true, sources: allTools.map((tool) => toolSourceId(tool.sourceInfo.path)) }],
   );
 });
 
@@ -264,7 +287,8 @@ test("readiness probe reports success or missing requested tools once", async ()
   ] as const) {
     const frames: string[] = [];
     const closed: number[] = [];
-    const mock = createMockPi({ activeTools: [...activeTools] });
+    const allTools = activeTools.map((name) => ({ name, sourceInfo: { path: `/tmp/${name}.ts` } }));
+    const mock = createMockPi({ activeTools: [...activeTools], allTools });
     createChildReadinessProbe(
       { fd: CHILD_READINESS_FD, expectedTools: [...expectedTools] },
       (_fd, frame) => frames.push(frame),
@@ -278,7 +302,11 @@ test("readiness probe reports success or missing requested tools once", async ()
     }
     assert.deepEqual(
       frames.map((frame) => JSON.parse(frame)),
-      [expectedFrame],
+      [
+        expectedFrame.ok
+          ? { ok: true, sources: expectedTools.map((tool) => toolSourceId(`/tmp/${tool}.ts`)) }
+          : expectedFrame,
+      ],
     );
     assert.deepEqual(closed, [CHILD_READINESS_FD]);
   }

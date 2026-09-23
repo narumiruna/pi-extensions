@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import { toolSourceId } from "../src/attachment-utils.js";
 import {
   assertChildCommandCapacity,
   buildPiArgs,
@@ -376,9 +377,10 @@ test("resolves optional execution timeouts with Pi bash semantics", () => {
   assert.equal(resolveTimeoutMs(undefined), undefined);
   assert.equal(resolveTimeoutMs(0.025), 25);
   assert.equal(resolveTimeoutMs(2_147_483.647), 2_147_483_647);
-  assert.throws(() => resolveTimeoutMs(0), /finite number of seconds/);
-  assert.throws(() => resolveTimeoutMs(Number.POSITIVE_INFINITY), /finite number of seconds/);
-  assert.throws(() => resolveTimeoutMs(2_147_483.648), /maximum is 2147483\.647 seconds/);
+  for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => resolveTimeoutMs(invalid), /^Error: Invalid timeout: must be a finite number of seconds$/);
+  }
+  assert.throws(() => resolveTimeoutMs(2_147_483.648), /^Error: Invalid timeout: maximum is 2147483\.647 seconds$/);
 });
 
 test("runChild starts its deadline after RPC readiness and honors cancellation", async () => {
@@ -421,7 +423,7 @@ test("runChild sends an attached task only after readiness and starts its deadli
 let readinessSent = false;
 setTimeout(() => {
   readinessSent = true;
-  signalReadiness(JSON.stringify({ ok: true }) + "\\n");
+  signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => sourceId("/tmp/search-extension.ts")) }) + "\\n");
 }, 50);
 async function handle(command) {
   if (command.type !== "prompt") return;
@@ -443,6 +445,28 @@ async function handle(command) {
     readinessSent: true,
     task: "Task: task",
   });
+});
+
+test("runChild rejects a tool registered by a different attachment before prompting", async () => {
+  const promptMarker = path.join(directory, "wrong-tool-owner-prompt");
+  installFakePi(`
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  fs.writeFileSync(${JSON.stringify(promptMarker)}, command.message);
+}
+setInterval(() => {}, 1000);
+`);
+  const result = await runChild(
+    childRequest({
+      extensions: [
+        { path: "/tmp/first-extension.ts", tools: [] },
+        { path: "/tmp/second-extension.ts", tools: ["custom_search"] },
+      ],
+    }),
+  );
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /tool custom_search was not provided by its requested attachment/i);
+  assert.equal(existsSync(promptMarker), false);
 });
 
 test("runChild rejects attachment startup hook errors before sending the task", async () => {
@@ -559,6 +583,9 @@ test("runChild rejects invalid attachment readiness without sending the task", a
   const cases = [
     ["failure", /requested extension tool is unavailable/i],
     ["malformed", /malformed JSON/i],
+    ["missingSources", /invalid result/i],
+    ["wrongCount", /invalid result/i],
+    ["invalidFingerprint", /invalid result/i],
     ["oversized", /size limit/i],
     ["close", /closed without a result/i],
   ] as const;
@@ -730,11 +757,15 @@ async function waitForFile(file: string): Promise<void> {
 }
 
 function childRequest(overrides: Partial<ChildRequest> = {}): ChildRequest {
+  const extensions = overrides.extensions ?? [];
   return {
     task: "task",
     tools: ["read", "grep", "find", "ls"],
     skills: [],
     extensions: [],
+    toolSources: Object.fromEntries(
+      extensions.flatMap((extension) => extension.tools.map((tool) => [tool, [toolSourceId(extension.path)]])),
+    ),
     model: "test-provider/test-model",
     thinkingLevel: "medium",
     cwd: directory,
@@ -753,18 +784,32 @@ function installFakePi(
   source: string,
   options: {
     bundled?: boolean;
-    readiness?: "success" | "manual" | "failure" | "malformed" | "oversized" | "close";
+    readiness?:
+      | "success"
+      | "manual"
+      | "failure"
+      | "malformed"
+      | "missingSources"
+      | "wrongCount"
+      | "invalidFingerprint"
+      | "oversized"
+      | "close";
   } = {},
 ): void {
   const packageDirectory = path.join(directory, "pi-core");
   const executableName = options.bundled ? "pi" : "fake-pi.mjs";
   const executablePath = path.join(packageDirectory, executableName);
   const readinessSetup = {
-    success: 'signalReadiness(JSON.stringify({ ok: true }) + "\\n");',
+    success:
+      'signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => sourceId(firstExtension)) }) + "\\n");',
     manual: "",
     failure:
       'signalReadiness(JSON.stringify({ ok: false, error: "Requested extension tool is unavailable." }) + "\\n");',
     malformed: 'signalReadiness("not-json\\n");',
+    missingSources: 'signalReadiness(JSON.stringify({ ok: true }) + "\\n");',
+    wrongCount: 'signalReadiness(JSON.stringify({ ok: true, sources: [] }) + "\\n");',
+    invalidFingerprint:
+      'signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => "wrong") }) + "\\n");',
     oversized: 'signalReadiness("x".repeat(16 * 1024 + 1));',
     close: "closeReadiness();",
   }[options.readiness ?? "success"];
@@ -772,9 +817,13 @@ function installFakePi(
   writeFileSync(
     executablePath,
     `${options.bundled ? "#!/usr/bin/env node\n" : ""}import fs from "node:fs";
+import { createHash } from "node:crypto";
 const childBootstrap = JSON.parse(fs.readFileSync(3, "utf8"));
 const brokerCredentials = childBootstrap.communication;
 const expectedTools = childBootstrap.expectedTools;
+const sourceId = (value) => createHash("sha256").update(value).digest("hex");
+const firstExtensionFlag = process.argv.indexOf("-e", process.argv.indexOf("-e") + 1);
+const firstExtension = firstExtensionFlag < 0 ? "" : process.argv[firstExtensionFlag + 1];
 const closeReadiness = () => {
   if (expectedTools.length > 0) fs.closeSync(4);
 };

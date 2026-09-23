@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { toolSourceId } from "./attachment-utils.js";
 import { MAX_READINESS_FRAME_BYTES, takeCapturedReadiness } from "./broker-credentials.js";
 
 export interface ChildReadinessState {
@@ -20,7 +21,7 @@ export function createChildReadinessProbe(
 ): ExtensionFactory {
   return (pi) => {
     let settled = false;
-    const publish = (value: { ok: true } | { ok: false; error: string }) => {
+    const publish = (value: { ok: true; sources: string[] } | { ok: false; error: string }) => {
       if (settled) return;
       settled = true;
       const frame = `${JSON.stringify(value)}\n`;
@@ -42,7 +43,14 @@ export function createChildReadinessProbe(
         publish({ ok: false, error: `Unavailable subagent tools: ${missing.join(", ")}.` });
         return;
       }
-      publish({ ok: true });
+      const sources = new Map(pi.getAllTools().map((tool) => [tool.name, tool.sourceInfo.path]));
+      publish({
+        ok: true,
+        sources: readiness.expectedTools.map((tool) => {
+          const source = sources.get(tool);
+          return source ? toolSourceId(source) : "";
+        }),
+      });
     });
 
     pi.on("session_shutdown", () => {

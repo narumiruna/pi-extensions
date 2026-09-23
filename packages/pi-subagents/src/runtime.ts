@@ -59,6 +59,7 @@ export interface StartJobInput {
   tools: string[];
   skills: string[];
   extensions: ExtensionAttachment[];
+  toolSources: Record<string, string[]>;
   model: string;
   thinkingLevel: SubagentThinkingLevel;
   cwd: string;
@@ -181,6 +182,9 @@ export class SubagentRuntime {
             path: extension.path,
             tools: [...extension.tools],
           })),
+          toolSources: Object.fromEntries(
+            Object.entries(input.toolSources).map(([tool, sources]) => [tool, [...sources]]),
+          ),
           model: input.model,
           thinkingLevel: input.thinkingLevel,
           cwd: input.cwd,

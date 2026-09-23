@@ -18,6 +18,7 @@ import {
   realpath,
   throwIfAttachmentAborted,
   throwInvalidAttachmentIgnoreFile,
+  toolSourceId,
   toPosixPath,
 } from "./attachment-utils.js";
 import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
@@ -54,6 +55,7 @@ export interface ResourceAttachments {
 
 export interface ResolvedResourceAttachments extends ResourceAttachments {
   effectiveTools: string[];
+  toolSources: Record<string, string[]>;
 }
 
 export interface ResourceAttachmentInput {
@@ -89,6 +91,7 @@ export async function resolveResourceAttachments(
 
   const extensions: ExtensionAttachment[] = [];
   const extensionsByPath = new Map<string, ExtensionAttachment>();
+  const entrypointsByPath = new Map<string, string[]>();
   const packageSkillPaths: string[] = [];
   for (const candidate of extensionInputs) {
     if (!isRecord(candidate) || Object.keys(candidate).some((key) => key !== "path" && key !== "tools")) {
@@ -104,15 +107,15 @@ export async function resolveResourceAttachments(
     }
     let attachment = extensionsByPath.get(resolved);
     if (!attachment) {
-      packageSkillPaths.push(
-        ...(await assertResolvableExtensionAttachment(
-          resolved,
-          cwd,
-          canonicalCwd,
-          options.projectTrusted,
-          options.signal,
-        )),
+      const resources = await assertResolvableExtensionAttachment(
+        resolved,
+        cwd,
+        canonicalCwd,
+        options.projectTrusted,
+        options.signal,
       );
+      packageSkillPaths.push(...resources.skills);
+      entrypointsByPath.set(resolved, resources.entrypoints);
       attachment = { path: resolved, tools: [] };
       extensionsByPath.set(resolved, attachment);
       extensions.push(attachment);
@@ -130,7 +133,17 @@ export async function resolveResourceAttachments(
   if (effectiveTools.length > MAX_SELECTED_TOOLS) {
     throw new Error(`Subagent jobs may select at most ${MAX_SELECTED_TOOLS} total tools.`);
   }
-  return { skills, extensions, effectiveTools };
+  const toolSources = new Map<string, string[]>();
+  for (const extension of extensions) {
+    const sourceIds = (entrypointsByPath.get(extension.path) ?? []).map(toolSourceId);
+    for (const tool of extension.tools) {
+      if (toolSources.has(tool)) {
+        throw new Error(`Subagent extension tool ${tool} is requested by multiple attachments.`);
+      }
+      toolSources.set(tool, sourceIds);
+    }
+  }
+  return { skills, extensions, effectiveTools, toolSources: Object.fromEntries(toolSources) };
 }
 
 function optionalArray(value: unknown, field: string, maxItems: number, optional = true): unknown[] {
@@ -172,7 +185,7 @@ async function assertResolvableExtensionAttachment(
   canonicalCwd: string,
   projectTrusted: boolean,
   signal?: AbortSignal,
-): Promise<string[]> {
+): Promise<{ skills: string[]; entrypoints: string[] }> {
   await inspectExtensionAttachment(extensionPath, cwd, canonicalCwd, projectTrusted, signal);
   throwIfAttachmentAborted(signal);
   const resolved = await resolveAttachedExtensionResources(extensionPath, cwd);
@@ -181,7 +194,8 @@ async function assertResolvableExtensionAttachment(
   if (entrypoints.length === 0) {
     throw new Error("Subagent extension directory must contain at least one loadable Pi extension entrypoint.");
   }
-  for (const entrypoint of entrypoints.flatMap(resolveDirectExtensionLoadPaths)) {
+  const loadPaths = entrypoints.flatMap(resolveDirectExtensionLoadPaths);
+  for (const entrypoint of loadPaths) {
     assertTrustedResolvedPath(entrypoint, "extension entrypoint", cwd, canonicalCwd, projectTrusted);
   }
   const packageSkills = enabledResourcePaths(resolved.skills);
@@ -193,7 +207,7 @@ async function assertResolvableExtensionAttachment(
   for (const resource of packageResources) {
     assertTrustedResolvedPath(resource, "extension package resource", cwd, canonicalCwd, projectTrusted);
   }
-  return packageSkills;
+  return { skills: packageSkills, entrypoints: loadPaths };
 }
 
 function resolveDirectExtensionLoadPaths(entrypoint: string): string[] {
@@ -330,7 +344,7 @@ async function inspectAutoExtensionDirectory(
 
   const ignoreMatcher = ignore();
   await addPackageIgnoreRules(ignoreMatcher, directory, directory, state, enforceTrust);
-  const entries = await readBoundedExtensionEntries(directory, state);
+  const entries = await readBoundedPackageEntries(directory, state, "reject");
   let found = false;
   for (const entry of entries) {
     throwIfAttachmentAborted(state.signal);
@@ -430,7 +444,7 @@ async function inspectPackageSkillDirectory(
   if (!canonicalDirectory) return;
   try {
     await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state, enforceTrust);
-    const entries = await readBoundedPackageResourceEntries(directory, state);
+    const entries = await readBoundedPackageEntries(directory, state, "skip");
     const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
     if (rootSkill) {
       const skillPath = path.join(directory, rootSkill.name);
@@ -477,7 +491,7 @@ async function inspectRecursivePackageDirectory(
   if (!canonicalDirectory) return;
   try {
     await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state, enforceTrust);
-    const entries = await readBoundedPackageResourceEntries(directory, state);
+    const entries = await readBoundedPackageEntries(directory, state, "skip");
     for (const entry of entries) {
       throwIfAttachmentAborted(state.signal);
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
@@ -617,11 +631,16 @@ async function addPackageIgnoreRules(
   }
 }
 
-async function readBoundedPackageResourceEntries(directory: string, state: ExtensionScanState): Promise<Dirent[]> {
+async function readBoundedPackageEntries(
+  directory: string,
+  state: ExtensionScanState,
+  onFailure: "skip" | "reject",
+): Promise<Dirent[]> {
   let directoryHandle: Awaited<ReturnType<typeof opendirAsync>>;
   try {
     directoryHandle = await opendirAsync(directory);
   } catch {
+    if (onFailure === "reject") throwUnresolvableExtensionEntrypoint();
     return [];
   }
   const entries: Dirent[] = [];
@@ -634,29 +653,8 @@ async function readBoundedPackageResourceEntries(directory: string, state: Exten
     }
   } catch (error) {
     if (isAbortError(error) || isExtensionScanLimitError(error)) throw error;
+    if (onFailure === "reject") throwUnresolvableExtensionEntrypoint();
     return [];
-  }
-  return entries;
-}
-
-async function readBoundedExtensionEntries(directory: string, state: ExtensionScanState): Promise<Dirent[]> {
-  let directoryHandle: Awaited<ReturnType<typeof opendirAsync>>;
-  try {
-    directoryHandle = await opendirAsync(directory);
-  } catch {
-    throwUnresolvableExtensionEntrypoint();
-  }
-  const entries: Dirent[] = [];
-  try {
-    for await (const entry of directoryHandle) {
-      throwIfAttachmentAborted(state.signal);
-      state.entries++;
-      if (state.entries > MAX_EXTENSION_SCAN_ENTRIES) throwExtensionScanLimit();
-      entries.push(entry);
-    }
-  } catch (error) {
-    if (isAbortError(error) || isExtensionScanLimitError(error)) throw error;
-    throwUnresolvableExtensionEntrypoint();
   }
   return entries;
 }

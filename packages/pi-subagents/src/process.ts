@@ -15,11 +15,12 @@ import {
 } from "./broker-credentials.js";
 import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
 import { sanitizeTerminalText } from "./message-broker.js";
+import { resolveTimeoutMs } from "./timeout.js";
 import type { ChildControl, ChildRequest, ChildResult } from "./types.js";
 
+export { resolveTimeoutMs };
+
 const CORE_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
-const MAX_TIMEOUT_MS = 2_147_483_647;
-const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 const MAX_OUTPUT_BYTES = 32 * 1024;
 const MAX_ERROR_BYTES = 8 * 1024;
 const MAX_EVENT_LINE_BYTES = 256 * 1024;
@@ -60,18 +61,6 @@ interface PendingRpcCommand {
 }
 
 type ChildRpcCommand = { type: "get_state" } | { type: "prompt" | "steer"; message: string };
-
-export function resolveTimeoutMs(timeout: number | undefined): number | undefined {
-  if (timeout === undefined) return undefined;
-  if (!Number.isFinite(timeout) || timeout <= 0) {
-    throw new Error("Invalid timeout: must be a finite number of seconds");
-  }
-  const timeoutMs = timeout * 1000;
-  if (timeoutMs > MAX_TIMEOUT_MS) {
-    throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
-  }
-  return timeoutMs;
-}
 
 export async function runChild(request: ChildRequest): Promise<ChildResult> {
   if (request.signal.aborted) return cancelledResult();
@@ -550,9 +539,9 @@ async function executeProcess(
         readinessPipe.once("end", () => {
           if (readinessSettled || terminating) return;
           readinessSettled = true;
-          let frame: { ok: true } | { ok: false; error: string };
+          let frame: { ok: true; sources: string[] } | { ok: false; error: string };
           try {
-            frame = parseReadinessFrame(buffer);
+            frame = parseReadinessFrame(buffer, expectedTools.length);
           } catch (error) {
             failReadiness(error instanceof Error ? error.message : String(error));
             return;
@@ -560,6 +549,19 @@ async function executeProcess(
           if (!frame.ok) {
             failReadiness(frame.error);
             return;
+          }
+          for (const extension of request.extensions) {
+            for (const tool of extension.tools) {
+              const source = frame.sources[expectedTools.indexOf(tool)];
+              if (
+                !source ||
+                !Object.hasOwn(request.toolSources, tool) ||
+                !request.toolSources[tool]?.includes(source)
+              ) {
+                failReadiness(`Subagent extension tool ${tool} was not provided by its requested attachment.`);
+                return;
+              }
+            }
           }
           confirmAttachmentStartup();
         });
@@ -782,7 +784,10 @@ function killImmediateChild(process: ChildProcess): void {
   }
 }
 
-function parseReadinessFrame(buffer: Buffer): { ok: true } | { ok: false; error: string } {
+function parseReadinessFrame(
+  buffer: Buffer,
+  expectedToolCount: number,
+): { ok: true; sources: string[] } | { ok: false; error: string } {
   if (buffer.byteLength === 0) {
     throw new Error("Subagent readiness pipe closed without a result.");
   }
@@ -801,7 +806,15 @@ function parseReadinessFrame(buffer: Buffer): { ok: true } | { ok: false; error:
     throw new Error("Subagent readiness pipe returned an invalid result.");
   }
   const record = value as Record<string, unknown>;
-  if (record.ok === true && Object.keys(record).length === 1) return { ok: true };
+  if (
+    record.ok === true &&
+    Object.keys(record).length === 2 &&
+    Array.isArray(record.sources) &&
+    record.sources.length === expectedToolCount &&
+    record.sources.every((source) => typeof source === "string" && /^[a-f0-9]{64}$/u.test(source))
+  ) {
+    return { ok: true, sources: record.sources };
+  }
   if (
     record.ok === false &&
     Object.keys(record).length === 2 &&
