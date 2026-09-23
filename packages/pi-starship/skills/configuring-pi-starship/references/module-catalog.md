@@ -997,3 +997,4 @@ Additional options:
 | `separator` | string | `" • "` | May be empty. Text inserted between rendered extension statuses. |
 | `max_statuses` | integer | `5` | Inclusive range 0 through 100. Maximum number of extension statuses rendered; zero hides all status values. |
 | `icons` | string-to-string table | `{}` | Keys and values are strings. Exact status-key and explicit `namespace:*` icon mappings, plus optional `fallback`. |
+| `styles` | string-to-style table | `{}` | Valid Starship style strings for exact raw status keys or explicit `namespace:*` mappings, plus optional `fallback`. Unmatched statuses inherit the module style. |

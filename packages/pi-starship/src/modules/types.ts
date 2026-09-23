@@ -120,6 +120,7 @@ export interface ExtensionStatusPresentation {
   separator: string;
   maxStatuses: number;
   icons: Readonly<Record<string, string>>;
+  styles: Readonly<Record<string, string>>;
 }
 
 export type ModuleOptionValue = string | boolean | number | readonly string[] | Readonly<Record<string, string>>;

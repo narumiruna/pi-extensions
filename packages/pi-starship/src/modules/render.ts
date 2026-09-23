@@ -3,6 +3,7 @@ import { activePalette, type ModuleConfig, type StarshipConfig } from "../config
 import { type FormatValue, formatVariables, renderFormat } from "../format/formatter.js";
 import { isFillChunk, type LayoutChunk, renderChunksToAnsi, type StyledChunk } from "../format/style.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./catalog.js";
+import { styledExtensionStatuses } from "./extension-status.js";
 import { resolveStyleRule } from "./style-rules.js";
 import type { ModuleStyleContext, ModuleValueContext, RenderedStatusline, StarshipRuntimeSnapshot } from "./types.js";
 
@@ -39,11 +40,14 @@ export function renderStatusline(
       ? resolveStyleRule(module.styleRules, definition.styleRuleSelectors, styleContext)
       : undefined;
     const styleVariables = ruleStyle === undefined ? baseStyleVariables : { ...baseStyleVariables, style: ruleStyle };
-    const contentValues = Object.fromEntries(
+    const contentValues: Record<string, FormatValue> = Object.fromEntries(
       definition.variables.flatMap((variable) =>
         variable !== "symbol" && Object.hasOwn(values, variable) ? [[variable, values[variable]]] : [],
       ),
     );
+    if (name === "extension_status" && Object.keys(config.extensionStatus.styles).length > 0) {
+      contentValues.statuses = styledExtensionStatuses(runtime.extensionStatuses, config.extensionStatus, palette);
+    }
     const rendered = renderModule(module, contentValues, styleVariables, palette);
     modules[name] = rendered;
     layoutModules[name] =

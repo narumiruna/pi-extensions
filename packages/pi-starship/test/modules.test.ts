@@ -1102,6 +1102,80 @@ test("extension status icons honor only explicit keys, suppression, leading icon
   assert.doesNotMatch(rendered, /🧪|👤/u);
 });
 
+test("TOML extension status styles color the matching Pi status without styling neighbors", () => {
+  const { config, diagnostics } = validateConfigDocument(
+    "/tmp/pi-starship.toml",
+    `format = '$extension_status'\npalette = 'mine'\n[palettes.mine]\naccent = '#123456'\n[extension_status.styles]\n'goal' = 'bold accent'\n`,
+  );
+  assert.deepEqual(diagnostics, []);
+  const rendered = renderStatusline(
+    config,
+    fixture({
+      extensionStatuses: new Map([
+        ["goal", "active"],
+        ["other", "idle"],
+      ]),
+    }),
+  );
+  assert.ok(rendered.ansi.includes(`${ESC}[38;2;18;52;86;1m🔌 active${ESC}[0m`));
+  assert.ok(rendered.ansi.includes(`${ESC}[37;2m • 🔌 idle${ESC}[0m`));
+});
+
+test("extension status styles match raw keys and preserve module styling on separators and unmatched keys", () => {
+  const config = structuredClone(BUILT_IN_CONFIG);
+  config.format = "$extension_status";
+  config.formatAst = parseFormat(config.format);
+  config.modules.extension_status.format = "[$symbol$statuses | $count]($style)";
+  config.modules.extension_status.formatAst = parseFormat(config.modules.extension_status.format);
+  config.modules.extension_status.style = "dimmed white";
+  config.extensionStatus.separator = " / ";
+  config.extensionStatus.maxStatuses = 6;
+  config.extensionStatus.icons = { fallback: "" };
+  config.extensionStatus.styles = {
+    "foo:*": "green",
+    "foo:deep:*": "bold blue",
+    "foo:deep:error": "bold red",
+    fallback: "yellow",
+  };
+  const runtime = fixture({
+    extensionStatuses: new Map([
+      ["starship", "self"],
+      ["foo:deep:error", "failed"],
+      ["foo:deep:info", "running"],
+      ["foo:task", "pending"],
+      ["foo", "base"],
+      ["foobar:task", "other"],
+      ["toString", "prototype safe"],
+      ["ignored", "over limit"],
+    ]),
+  });
+  const rendered = renderStatusline(config, runtime);
+  assert.equal(stripAnsi(rendered.ansi), "failed / running / pending / base / other / prototype safe | 6");
+  assert.deepEqual(
+    rendered.modules.extension_status.filter(({ text }) => text).map(({ text, style }) => [text, style]),
+    [
+      ["failed", { foreground: { kind: "named", name: "red" }, bold: true }],
+      [" / ", { foreground: { kind: "named", name: "white" }, dimmed: true }],
+      ["running", { foreground: { kind: "named", name: "blue" }, bold: true }],
+      [" / ", { foreground: { kind: "named", name: "white" }, dimmed: true }],
+      ["pending", { foreground: { kind: "named", name: "green" } }],
+      [" / ", { foreground: { kind: "named", name: "white" }, dimmed: true }],
+      ["base", { foreground: { kind: "named", name: "yellow" } }],
+      [" / ", { foreground: { kind: "named", name: "white" }, dimmed: true }],
+      ["other", { foreground: { kind: "named", name: "yellow" } }],
+      [" / ", { foreground: { kind: "named", name: "white" }, dimmed: true }],
+      ["prototype safe", { foreground: { kind: "named", name: "yellow" } }],
+      [" | ", { foreground: { kind: "named", name: "white" }, dimmed: true }],
+      ["6", { foreground: { kind: "named", name: "white" }, dimmed: true }],
+    ],
+  );
+  delete config.extensionStatus.styles.fallback;
+  Object.defineProperty(config.extensionStatus.styles, "toString", { value: "none", enumerable: true });
+  const withoutFallback = renderStatusline(config, runtime).modules.extension_status;
+  assert.equal(withoutFallback.find((chunk) => chunk.text === "base")?.style?.dimmed, true);
+  assert.deepEqual(withoutFallback.find((chunk) => chunk.text === "prototype safe")?.style, {});
+});
+
 test("format helpers stay compact and OSC links retain visible width", () => {
   assert.equal(formatCount(1530), "1.5k");
   assert.equal(shortenModel("claude-sonnet-4-20250514"), "sonnet-4");

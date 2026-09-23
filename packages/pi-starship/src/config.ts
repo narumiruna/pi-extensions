@@ -30,6 +30,7 @@ export interface ExtensionStatusConfig {
   separator: string;
   maxStatuses: number;
   icons: Record<string, string>;
+  styles: Record<string, string>;
 }
 
 export interface StarshipConfig {
@@ -91,7 +92,7 @@ export const BUILT_IN_CONFIG: StarshipConfig = {
   palette: undefined,
   palettes: {},
   modules: BUILT_IN_MODULES,
-  extensionStatus: { separator: " • ", maxStatuses: 5, icons: {} },
+  extensionStatus: { separator: " • ", maxStatuses: 5, icons: {}, styles: {} },
 };
 
 export const BUILT_IN_EXAMPLE = `# Native Pi modules with Starship-compatible format and style syntax.\n${BUILT_IN_FORMAT_DOCUMENT}\n`;
@@ -271,6 +272,7 @@ function normalizeModule(
     known.add("separator");
     known.add("max_statuses");
     known.add("icons");
+    known.add("styles");
   }
   for (const key of Object.keys(value)) {
     if (!known.has(key)) diagnostics.push(unknownDiagnostic(`${name}.${key}`));
@@ -365,6 +367,20 @@ function normalizeModule(
         Object.entries(value.icons).flatMap(([key, icon]) => {
           if (typeof icon === "string") return [[key, icon]];
           diagnostics.push(typeDiagnostic(`extension_status.icons.${key}`, "string"));
+          return [];
+        }),
+      );
+    }
+  }
+  if (value.styles !== undefined) {
+    if (!isRecord(value.styles)) diagnostics.push(typeDiagnostic("extension_status.styles", "table"));
+    else {
+      config.extensionStatus.styles = Object.fromEntries(
+        Object.entries(value.styles).flatMap(([key, style]) => {
+          if (typeof style === "string" && isValidStyle(style, activePalette(config))) return [[key, style]];
+          diagnostics.push(
+            diagnostic("warning", `extension_status.styles.${key}`, "Expected a valid Starship style string; ignored"),
+          );
           return [];
         }),
       );
@@ -499,6 +515,7 @@ function cloneBuiltInConfig(): StarshipConfig {
     extensionStatus: {
       ...BUILT_IN_CONFIG.extensionStatus,
       icons: { ...BUILT_IN_CONFIG.extensionStatus.icons },
+      styles: { ...BUILT_IN_CONFIG.extensionStatus.styles },
     },
   };
 }

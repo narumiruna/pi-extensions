@@ -255,6 +255,7 @@ test("complete module catalog covers every public module schema", () => {
     separator: BUILT_IN_CONFIG.extensionStatus.separator,
     max_statuses: BUILT_IN_CONFIG.extensionStatus.maxStatuses,
     icons: BUILT_IN_CONFIG.extensionStatus.icons,
+    styles: BUILT_IN_CONFIG.extensionStatus.styles,
   })) {
     const row = extensionStatus.split("\n").find((line) => line.startsWith(`| \`${field}\` |`));
     assert.ok(row, `extension_status.${field} is missing`);

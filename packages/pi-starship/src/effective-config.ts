@@ -39,6 +39,7 @@ export function projectEffectiveConfig(config: StarshipConfig): TomlTable {
       table.separator = config.extensionStatus.separator;
       table.max_statuses = config.extensionStatus.maxStatuses;
       table.icons = sortedRecord(config.extensionStatus.icons);
+      table.styles = sortedRecord(config.extensionStatus.styles);
     }
     projected[definition.name] = table;
   }

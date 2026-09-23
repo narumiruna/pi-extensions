@@ -1,4 +1,5 @@
-import { defineModule } from "./types.js";
+import { type ColorPalette, parseStyle, type StyledChunk } from "../format/style.js";
+import { defineModule, type ExtensionStatusPresentation } from "./types.js";
 
 export const extensionStatusModule = defineModule({
   name: "extension_status",
@@ -10,10 +11,7 @@ export const extensionStatusModule = defineModule({
     disabled: false,
   },
   values: ({ runtime, extensionStatus }) => {
-    const statuses = [...runtime.extensionStatuses.entries()]
-      .filter(([key, value]) => key !== "starship" && value.trim())
-      .map(([key, value]) => formatExtensionStatus(key, value, extensionStatus.icons))
-      .slice(0, extensionStatus.maxStatuses);
+    const statuses = extensionStatusEntries(runtime.extensionStatuses, extensionStatus).map((entry) => entry.text);
     if (statuses.length === 0) return undefined;
     return {
       statuses: statuses.join(extensionStatus.separator),
@@ -21,6 +19,30 @@ export const extensionStatusModule = defineModule({
     };
   },
 });
+
+export function extensionStatusEntries(
+  statuses: ReadonlyMap<string, string>,
+  config: ExtensionStatusPresentation,
+): Array<{ key: string; text: string }> {
+  return [...statuses.entries()]
+    .filter(([key, value]) => key !== "starship" && value.trim())
+    .slice(0, config.maxStatuses)
+    .map(([key, value]) => ({ key, text: formatExtensionStatus(key, value, config.icons) }));
+}
+
+export function styledExtensionStatuses(
+  statuses: ReadonlyMap<string, string>,
+  config: ExtensionStatusPresentation,
+  palette: ColorPalette,
+): StyledChunk[] {
+  return extensionStatusEntries(statuses, config).flatMap(({ key, text }, index) => {
+    const style = configuredStatusValue(key, config.styles);
+    return [
+      ...(index > 0 ? [{ text: config.separator }] : []),
+      { text, style: style === undefined ? undefined : (parseStyle(style, palette) ?? {}) },
+    ];
+  });
+}
 
 export function formatExtensionStatus(
   key: string,
@@ -38,22 +60,26 @@ function extensionStatusIcon(
   leadingIcon: string | undefined,
   configuredIcons: Readonly<Record<string, string>>,
 ): string {
-  if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key] ?? "";
-  const namespaceIcon = configuredNamespaceIcon(key, configuredIcons);
-  if (namespaceIcon !== undefined) return namespaceIcon;
-  const fallbackIcon = Object.hasOwn(configuredIcons, "fallback") ? configuredIcons.fallback : undefined;
-  return leadingIcon ?? fallbackIcon ?? "🔌";
+  const configured = configuredStatusValue(key, configuredIcons, false);
+  if (configured !== undefined) return configured;
+  const fallback = Object.hasOwn(configuredIcons, "fallback") ? configuredIcons.fallback : undefined;
+  return leadingIcon ?? fallback ?? "🔌";
 }
 
-function configuredNamespaceIcon(key: string, configuredIcons: Readonly<Record<string, string>>): string | undefined {
-  let match: { baseLength: number; icon: string } | undefined;
-  for (const [selector, icon] of Object.entries(configuredIcons)) {
+function configuredStatusValue(
+  key: string,
+  configured: Readonly<Record<string, string>>,
+  includeFallback = true,
+): string | undefined {
+  if (Object.hasOwn(configured, key)) return configured[key];
+  let match: { baseLength: number; value: string } | undefined;
+  for (const [selector, value] of Object.entries(configured)) {
     if (!selector.endsWith(":*")) continue;
     const base = selector.slice(0, -2);
     if (!base || !key.startsWith(`${base}:`)) continue;
-    if (!match || base.length > match.baseLength) match = { baseLength: base.length, icon };
+    if (!match || base.length > match.baseLength) match = { baseLength: base.length, value };
   }
-  return match?.icon;
+  return match?.value ?? (includeFallback && Object.hasOwn(configured, "fallback") ? configured.fallback : undefined);
 }
 
 function splitExtensionStatusIcon(value: string): { icon?: string; text: string } {
