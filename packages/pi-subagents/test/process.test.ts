@@ -454,7 +454,7 @@ event({
   type: "extension_error",
   extensionPath: "/tmp/search-extension.ts",
   event: ${JSON.stringify(hook)},
-  error: "fixture hook failed",
+  error: "fixture hook failed at /tmp/search-extension.ts",
 });
 async function handle(command) {
   if (command.type !== "prompt") return;
@@ -467,9 +467,24 @@ setInterval(() => {}, 1000);
       );
       assert.equal(result.state, "failed");
       assert.match(result.error ?? "", new RegExp(`startup failed during ${hook}.*fixture hook failed`, "i"));
+      assert.match(result.error ?? "", /\[attachment path\]/u);
+      assert.doesNotMatch(result.error ?? "", /\/tmp\/search-extension\.ts/u);
       assert.equal(existsSync(promptMarker), false);
     }
   }
+});
+
+test("runChild redacts attachment paths from child stderr", async () => {
+  const attachmentPath = "/tmp/private-extension";
+  installFakePi(`
+console.error("Failed to load extension \\"/tmp/private-extension/index.ts\\"");
+process.exit(1);
+async function handle() {}
+`);
+  const result = await runChild(childRequest({ extensions: [{ path: attachmentPath, tools: [] }] }));
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /Failed to load extension.*\[attachment path\]\/index\.ts/iu);
+  assert.doesNotMatch(result.error ?? "", /\/tmp\/private-extension/u);
 });
 
 test("runChild fails closed on oversized RPC output during attachment startup", async () => {

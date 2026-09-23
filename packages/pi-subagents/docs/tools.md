@@ -46,7 +46,7 @@ When the project is untrusted, an attachment or any resource resolved from its e
 
 An attached extension executes trusted code with full child-process permissions and may alter prompts, tools, providers, or active tools after the initial readiness check, so its tool list is not a sandbox.
 
-Canonical attachment paths are passed to Pi as child-process arguments but are omitted from inspection, completion, and broker results.
+Canonical attachment paths are passed to Pi as child-process arguments, but parent-generated inspection, completion, and broker metadata omit them and child diagnostic errors redact requested attachment roots before publication; attached code and model output can still disclose paths they can access.
 
 The child inherits the main agent's effective provider and model at spawn time.
 

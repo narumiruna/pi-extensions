@@ -240,8 +240,8 @@ A main-agent request is visible child model context, but it cannot expand the ch
 An attached skill contributes model instructions and may direct already selected tools to bundled helpers.
 An attached extension is fully privileged executable code with the child process's user permissions, can run during factory and lifecycle hooks, can alter prompts or tool behavior, and can change active tools after startup.
 Its requested tool list controls the initial provider-visible loadout but is not an operating-system sandbox.
-Canonical attachment paths are passed to Pi in the child command line, but are omitted from inspection, completion, and broker payloads.
-Attach only code you trust.
+Canonical attachment paths are passed to Pi in the child command line, but parent-generated inspection, completion, and broker metadata omit them and child diagnostic errors redact requested attachment roots before publication.
+Attached code and model output remain untrusted and can disclose paths they can access, so attach only code you trust.
 
 Terminal controls and bidirectional controls are stripped before untrusted child text is displayed.
 Tasks, repository context, requests, responses, and inspected file content may be sent to the selected model provider.

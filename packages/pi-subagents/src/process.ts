@@ -83,7 +83,10 @@ export async function runChild(request: ChildRequest): Promise<ChildResult> {
     if (request.signal.aborted) return cancelledResult();
     return {
       state: "failed",
-      error: truncateText(error instanceof Error ? error.message : String(error), MAX_ERROR_BYTES).text,
+      error: truncateText(
+        redactAttachmentPaths(error instanceof Error ? error.message : String(error), request),
+        MAX_ERROR_BYTES,
+      ).text,
       limitations: [],
       truncated: false,
     };
@@ -187,6 +190,7 @@ async function executeProcess(
   let errorMessage = "";
   let assistantFailed = false;
   let stderr = "";
+  const stderrCaptureBytes = MAX_ERROR_BYTES + maxAttachmentPathBytes(request);
   let truncated = false;
   let malformedEvents = 0;
   let rpcCounter = 0;
@@ -239,7 +243,9 @@ async function executeProcess(
         !attachmentStartupError
       ) {
         const detail =
-          typeof event.error === "string" && event.error ? sanitizeTerminalText(event.error) : "Unknown error.";
+          typeof event.error === "string" && event.error
+            ? redactAttachmentPaths(sanitizeTerminalText(event.error), request)
+            : "Unknown error.";
         attachmentStartupError = `Subagent attachment startup failed during ${event.event}: ${detail}`;
         return;
       }
@@ -281,7 +287,7 @@ async function executeProcess(
           assistantFailed = true;
         }
         if (event.message.errorMessage) {
-          const limited = truncateText(event.message.errorMessage, MAX_ERROR_BYTES);
+          const limited = truncateText(redactAttachmentPaths(event.message.errorMessage, request), MAX_ERROR_BYTES);
           errorMessage = limited.text;
           truncated ||= limited.truncated;
         }
@@ -465,13 +471,16 @@ async function executeProcess(
         request.signal,
       ).catch((error) => {
         if (settled || terminating) return;
-        errorMessage = truncateText(error instanceof Error ? error.message : String(error), MAX_ERROR_BYTES).text;
+        errorMessage = truncateText(
+          redactAttachmentPaths(error instanceof Error ? error.message : String(error), request),
+          MAX_ERROR_BYTES,
+        ).text;
         terminate(1);
       });
     };
     const failReadiness = (message: string) => {
       if (settled || terminating || attachmentReady) return;
-      errorMessage = truncateText(message, MAX_ERROR_BYTES).text;
+      errorMessage = truncateText(redactAttachmentPaths(message, request), MAX_ERROR_BYTES).text;
       terminate(1);
     };
     const confirmAttachmentStartup = () => {
@@ -542,7 +551,7 @@ async function executeProcess(
     }
     process.stdout?.on("data", (chunk) => decoder.push(chunk));
     process.stderr?.on("data", (chunk) => {
-      const limited = truncateTail(`${stderr}${chunk.toString()}`, MAX_ERROR_BYTES);
+      const limited = truncateTail(`${stderr}${chunk.toString()}`, stderrCaptureBytes);
       stderr = limited.text;
       truncated ||= limited.truncated;
     });
@@ -551,7 +560,7 @@ async function executeProcess(
       finish(cancelled ? 130 : timedOut ? 124 : completed ? 0 : (code ?? 1));
     });
     process.once("error", (error) => {
-      const limited = truncateText(error.message, MAX_ERROR_BYTES);
+      const limited = truncateText(redactAttachmentPaths(error.message, request), MAX_ERROR_BYTES);
       errorMessage = limited.text;
       truncated ||= limited.truncated;
       if (spawned) terminate(1);
@@ -602,10 +611,17 @@ async function executeProcess(
       truncated,
     };
   }
-  const combinedError = combineErrors(settlement.launchError, errorMessage, stderr.trim());
+  const redactedStderr = truncateTail(redactAttachmentPaths(stderr.trim(), request), MAX_ERROR_BYTES);
+  const combinedError = combineErrors(
+    redactAttachmentPaths(settlement.launchError ?? "", request),
+    redactAttachmentPaths(errorMessage, request),
+    redactedStderr.text,
+  );
   const error = combinedError.text;
-  if (combinedError.truncated && !truncated) limitations.push("Child output was truncated to runtime limits.");
-  truncated ||= combinedError.truncated;
+  if ((combinedError.truncated || redactedStderr.truncated) && !truncated) {
+    limitations.push("Child output was truncated to runtime limits.");
+  }
+  truncated ||= combinedError.truncated || redactedStderr.truncated;
   if (settlement.completed && terminalStopReason === "stop" && !assistantFailed && !errorMessage) {
     return {
       state: "completed",
@@ -773,6 +789,34 @@ function parseReadinessFrame(buffer: Buffer): { ok: true } | { ok: false; error:
     return { ok: false, error: sanitizeTerminalText(record.error) };
   }
   throw new Error("Subagent readiness pipe returned an invalid result.");
+}
+
+function redactAttachmentPaths(value: string, request: Pick<ChildRequest, "skills" | "extensions">): string {
+  let redacted = value;
+  for (const candidate of attachmentPathVariants(request)) {
+    redacted = redacted.replaceAll(candidate, "[attachment path]");
+  }
+  return redacted;
+}
+
+function maxAttachmentPathBytes(request: Pick<ChildRequest, "skills" | "extensions">): number {
+  return attachmentPathVariants(request).reduce(
+    (maximum, candidate) => Math.max(maximum, Buffer.byteLength(candidate, "utf8")),
+    0,
+  );
+}
+
+function attachmentPathVariants(request: Pick<ChildRequest, "skills" | "extensions">): string[] {
+  const variants = new Set<string>();
+  const paths = [...request.skills, ...request.extensions.map((extension) => extension.path)];
+  for (const resourcePath of paths) {
+    for (const spelling of [resourcePath, resourcePath.replaceAll("\\", "/"), resourcePath.replaceAll("/", "\\")]) {
+      if (!spelling) continue;
+      variants.add(spelling);
+      variants.add(JSON.stringify(spelling).slice(1, -1));
+    }
+  }
+  return [...variants].sort((left, right) => right.length - left.length);
 }
 
 function combineErrors(...messages: Array<string | undefined>): { text: string; truncated: boolean } {
