@@ -28,7 +28,7 @@ A missing tool, malformed readiness response, attachment startup failure, or can
 
 `skills` uses Pi's progressive disclosure, so an attached skill becomes available for relevant discovery but does not inject its full body, add tools, or force invocation.
 
-Pi's skill loader must find at least one loadable skill in every attached skill path, every declared skill discovered within a directory must load successfully, and every loaded skill name must be unique across explicit attachments and attached extension packages.
+Pi's skill loader must find at least one loadable skill in every attached skill path, every declared skill must load successfully, every enabled extension-package skill must load successfully, and every loaded skill name must be unique across explicit attachments and attached extension packages.
 Combined skill preflight is asynchronous and cancellation-aware, and it rejects recursive directory links or requests exceeding 4,096 entries, depth 32, 4 MiB of candidate skill content, or 1 MiB of ignore-file content before Pi's synchronous loader runs.
 Non-Markdown files, unloadable or unreadable declared skills, ignored skills, directories without a loadable skill, and duplicate skill names throw before launch.
 

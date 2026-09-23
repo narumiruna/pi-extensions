@@ -415,6 +415,28 @@ test("rejects skill-name collisions using Pi's combined load behavior", async ()
   );
 });
 
+test("rejects every invalid enabled extension-package skill", async () => {
+  for (const [index, content] of ["Not a skill.\n", "---\nname: missing-description\n---\n"].entries()) {
+    const packageDirectory = path.join(external, `invalid-package-skill-${index}`);
+    mkdirSync(packageDirectory);
+    writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+    writeFileSync(path.join(packageDirectory, "skill.md"), content);
+    writeFileSync(
+      path.join(packageDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skill.md"] } }),
+    );
+
+    await assert.rejects(
+      () =>
+        resolveResourceAttachments(
+          { extensions: [{ path: packageDirectory, tools: [] }] },
+          { cwd: project, projectTrusted: true, coreTools: [] },
+        ),
+      /invalid or unreadable declared skill/i,
+    );
+  }
+});
+
 test("allows explicit external resources but rejects every loaded project path when untrusted", async () => {
   const externalExtension = path.join(external, "external.ts");
   const externalSkill = path.join(external, "external-skill.md");
