@@ -92,24 +92,24 @@ test("bundled presets render their promised Pi-native information", () => {
       return [preset.id, stripAnsi(renderStatusline(loaded.config, fixture(), 80).ansi)];
     }),
   );
-  assert.match(plainById.get("minimal") ?? "", /sonnet-4.*pi-extensions.*feature.*read/u);
+  assert.match(plainById.get("minimal") ?? "", /claude-sonnet-4-20250514.*pi-extensions.*feature.*read/u);
   assert.doesNotMatch(plainById.get("minimal") ?? "", /π|75\.0%|09:05/u);
-  assert.match(plainById.get("bracketed-segments") ?? "", /\[π\].*\[AI sonnet-4\].*\[09:05\]/u);
-  assert.match(plainById.get("catppuccin-powerline") ?? "", /.*.*sonnet-4.*.*/u);
-  assert.match(plainById.get("gruvbox-rainbow") ?? "", /.*.*sonnet-4.*.*/u);
+  assert.match(plainById.get("bracketed-segments") ?? "", /\[π\].*\[AI claude-sonnet-4-20250514\].*\[09:05\]/u);
+  assert.match(plainById.get("catppuccin-powerline") ?? "", /.*.*claude-sonnet-4-20250514.*.*/u);
+  assert.match(plainById.get("gruvbox-rainbow") ?? "", /.*.*claude-sonnet-4-20250514.*.*/u);
   assert.match(plainById.get("jetpack") ?? "", /◄.*read.*◯ 75\.0%.*pi-extensions.*△ feature/u);
   assert.match(plainById.get("nerd-font-symbols") ?? "", /.*󰚩.*󰉋.*.*/u);
-  assert.match(plainById.get("no-empty-icons") ?? "", /model sonnet-4.*in \/work\/pi-extensions/u);
-  assert.match(plainById.get("no-nerd-font") ?? "", /✦.*◆ sonnet-4.*⌂ \/work\/pi-extensions.*◴ 09:05/u);
-  assert.doesNotMatch(plainById.get("no-runtime-versions") ?? "", /sonnet-4|high/u);
+  assert.match(plainById.get("no-empty-icons") ?? "", /model claude-sonnet-4-20250514.*in \/work\/pi-extensions/u);
+  assert.match(plainById.get("no-nerd-font") ?? "", /✦.*◆ claude-sonnet-4-20250514.*⌂ \/work\/pi-extensions.*◴ 09:05/u);
+  assert.doesNotMatch(plainById.get("no-runtime-versions") ?? "", /claude-sonnet-4-20250514|high/u);
   assert.match(plainById.get("no-runtime-versions") ?? "", /π.*AI.*think.*pi-extensions/u);
-  assert.match(plainById.get("pastel-powerline") ?? "", /.*.*sonnet-4.*.*/u);
+  assert.match(plainById.get("pastel-powerline") ?? "", /.*.*claude-sonnet-4-20250514.*.*/u);
   assert.match(
     plainById.get("plain-text-symbols") ?? "",
-    /pi.*model sonnet-4.*dir \/work\/pi-extensions.*git feature/u,
+    /pi.*model claude-sonnet-4-20250514.*dir \/work\/pi-extensions.*git feature/u,
   );
-  assert.match(plainById.get("pure-preset") ?? "", /pi-extensions feature.*\nsonnet-4 high/u);
-  assert.match(plainById.get("tokyo-night") ?? "", /░▒▓.*.*sonnet-4.*.*.*󰑮.*󰍛.*/u);
+  assert.match(plainById.get("pure-preset") ?? "", /pi-extensions feature.*\nclaude-sonnet-4-20250514 high/u);
+  assert.match(plainById.get("tokyo-night") ?? "", /░▒▓.*.*claude-sonnet-4-20250514.*.*.*󰑮.*󰍛.*/u);
   for (const [id, rendered] of plainById) {
     assert.ok(rendered.length > 0, id);
     assert.doesNotMatch(rendered, /undefined|\$[a-z_]+/u, id);
@@ -121,7 +121,7 @@ test("built-in root renders exactly the reachable nine module categories without
   const plain = stripAnsi(rendered.ansi);
   for (const expected of [
     /π/u,
-    /sonnet-4/u,
+    /claude-sonnet-4-20250514/u,
     /high/u,
     /pi-extensions/u,
     /feature/u,
@@ -543,14 +543,35 @@ test("module format, symbol, style, and disabled settings apply", () => {
   config.modules.model.symbol = "M";
   config.modules.model.style = "red bold";
   const rendered = renderStatusline(config, fixture()).ansi;
-  assert.ok(rendered.includes("\u001b[31;1mM:sonnet-4"));
+  assert.ok(rendered.includes("\u001b[31;1mM:claude-sonnet-4-20250514"));
   config.modules.model.style = "bold bg:#86BBD8";
   assert.ok(renderStatusline(config, fixture()).ansi.includes("\u001b[48;2;134;187;216;1m"));
   config.modules.model.disabled = true;
   assert.equal(renderStatusline(config, fixture()).ansi, "");
 });
 
-test("model truncation keeps the configured portions after built-in shortening", () => {
+test("model IDs stay unchanged by default and optional shortening only removes text", () => {
+  const config = structuredClone(BUILT_IN_CONFIG);
+  config.format = "$model";
+  config.formatAst = parseFormat(config.format);
+  config.modules.model.format = "$model";
+  config.modules.model.formatAst = parseFormat(config.modules.model.format);
+  const renderModel = (id: string) =>
+    stripAnsi(renderStatusline(config, fixture({ model: { provider: "custom", id } })).ansi);
+
+  assert.equal(renderModel("gpt-6-sol"), "gpt-6-sol");
+  assert.equal(renderModel("claude-sonnet-4-20250514"), "claude-sonnet-4-20250514");
+  assert.equal(renderModel("gemini-2.5-pro-latest"), "gemini-2.5-pro-latest");
+  assert.equal(renderModel("custom-model-20250101"), "custom-model-20250101");
+
+  config.modules.model.options.shorten_model = true;
+  assert.equal(renderModel("gpt-6-sol"), "gpt-6-sol");
+  assert.equal(renderModel("claude-sonnet-4-20250514"), "sonnet-4");
+  assert.equal(renderModel("gemini-2.5-pro-latest"), "gemini-2.5-pro");
+  assert.equal(renderModel("custom-model-20250101"), "custom-model");
+});
+
+test("model truncation keeps the configured portions of raw IDs or opt-in shortened labels", () => {
   const config = structuredClone(BUILT_IN_CONFIG);
   config.format = "$model";
   config.formatAst = [{ type: "variable", name: "model" }];
@@ -579,6 +600,8 @@ test("model truncation keeps the configured portions after built-in shortening",
   config.modules.model.options.truncation_length = 6;
   config.modules.model.options.truncation_symbol = "…";
   config.modules.model.options.truncation_direction = "end";
+  assert.equal(renderModel("claude-sonnet-20241022"), "claude…");
+  config.modules.model.options.shorten_model = true;
   assert.equal(renderModel("claude-sonnet-20241022"), "sonnet");
   assert.equal(renderModel("A👨‍👩‍👧‍👦BCDEFG"), "A👨‍👩‍👧‍👦BCDE…");
 
@@ -803,7 +826,7 @@ test("Git branch and commit honor Starship truncation options", () => {
   );
 });
 
-test("model exact aliases bypass Pi-specific shortening and then truncate", () => {
+test("model exact aliases bypass opt-in shortening and then truncate", () => {
   const config = structuredClone(BUILT_IN_CONFIG);
   config.format = "$model";
   config.formatAst = parseFormat(config.format);
@@ -812,6 +835,7 @@ test("model exact aliases bypass Pi-specific shortening and then truncate", () =
   config.modules.model.options.model_aliases = {
     "claude-sonnet-4-20250514": "claude-team-latest",
   };
+  config.modules.model.options.shorten_model = true;
   config.modules.model.options.truncation_length = 0;
   config.modules.model.options.truncation_direction = "end";
 
@@ -1206,5 +1230,7 @@ test("extension status styles match raw keys and preserve module styling on sepa
 test("format helpers stay compact and OSC links retain visible width", () => {
   assert.equal(formatCount(1530), "1.5k");
   assert.equal(shortenModel("claude-sonnet-4-20250514"), "sonnet-4");
+  assert.equal(shortenModel("gpt-6-sol"), "gpt-6-sol");
+  assert.equal(shortenModel("gpt-4o-latest"), "gpt-4o");
   assert.equal(visibleWidth(LINK), 4);
 });

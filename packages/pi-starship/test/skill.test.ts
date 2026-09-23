@@ -244,7 +244,7 @@ test("complete module catalog covers every public module schema", () => {
     }
   }
 
-  assert.match(catalog, /model-ID replacements that bypass built-in Claude\/GPT shortening/u);
+  assert.match(catalog, /model-ID replacements that bypass optional shortening/u);
   assert.match(
     catalog,
     /replacements applied to the home- or repository-contracted display path before component truncation/u,

@@ -19,6 +19,7 @@ export const modelModule = defineModule({
     model: ({ runtime }) => runtime.model?.id,
   },
   options: {
+    shorten_model: { kind: "boolean", default: false },
     truncation_length: { kind: "integer", default: 0, minimum: 0, maximum: 1000 },
     truncation_symbol: { kind: "string", default: "…" },
     truncation_direction: {
@@ -39,8 +40,9 @@ export const modelModule = defineModule({
         ? (aliases as Readonly<Record<string, string>>)
         : undefined;
     const alias = aliasMap && Object.hasOwn(aliasMap, runtime.model.id) ? aliasMap[runtime.model.id] : undefined;
+    const model = alias ?? (options.shorten_model === true ? shortenModel(runtime.model.id) : runtime.model.id);
     return {
-      model: truncateModel(alias ?? shortenModel(runtime.model.id), length, symbol, direction),
+      model: truncateModel(model, length, symbol, direction),
     };
   },
 });
@@ -73,7 +75,6 @@ function isTruncationDirection(value: unknown): value is TruncationDirection {
 export function shortenModel(model: string): string {
   return model
     .replace(/^claude-/u, "")
-    .replace(/^gpt-/u, "gpt ")
     .replace(/-20\d{6}$/u, "")
     .replace(/-latest$/u, "");
 }

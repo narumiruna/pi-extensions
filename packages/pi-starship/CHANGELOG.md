@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.57.0
+
+### Minor Changes
+
+- 229ebe9: Show raw Pi model IDs by default. Add `model.shorten_model = true` to opt in to shortening, without changing `gpt-` to `gpt `.
+
 ## 0.56.3
 
 ### Patch Changes

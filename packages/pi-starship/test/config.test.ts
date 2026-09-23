@@ -104,7 +104,7 @@ test("effective configuration projects every public catalog field in stable orde
 test("effective configuration normalizes custom public values without document-only data", () => {
   const loaded = validateConfigDocument(
     "/effective/pi-starship.toml",
-    `format = '$model$git_metrics$context$extension_status'\npalette = 'demo'\nfuture = 'document only'\n\n[palettes.demo]\nz = '#654321'\naccent = '#123456'\n\n[model]\nformat = '[$symbol$model]($style)'\nsymbol = 'M '\nstyle = 'bold accent'\ndisabled = false\ntruncation_length = 12\nmodel_aliases = { z = 'last', a = 'first' }\n\n[[model.style_rules]]\nprovider = 'openai'\nstyle = 'accent'\n\n[[model.style_rules]]\nstyle = 'bold blue'\n\n[git_metrics]\nadded_style = 'green'\ndeleted_style = 'red'\ndisabled = false\n\n[[context.display]]\nthreshold = 0\nstyle = 'accent'\nhidden = false\n\n[extension_status]\nseparator = ' / '\nmax_statuses = 3\nicons = { demo = 'D' }\nstyles = { demo = 'accent', fallback = 'dimmed white' }\n`,
+    `format = '$model$git_metrics$context$extension_status'\npalette = 'demo'\nfuture = 'document only'\n\n[palettes.demo]\nz = '#654321'\naccent = '#123456'\n\n[model]\nformat = '[$symbol$model]($style)'\nsymbol = 'M '\nstyle = 'bold accent'\ndisabled = false\nshorten_model = true\ntruncation_length = 12\nmodel_aliases = { z = 'last', a = 'first' }\n\n[[model.style_rules]]\nprovider = 'openai'\nstyle = 'accent'\n\n[[model.style_rules]]\nstyle = 'bold blue'\n\n[git_metrics]\nadded_style = 'green'\ndeleted_style = 'red'\ndisabled = false\n\n[[context.display]]\nthreshold = 0\nstyle = 'accent'\nhidden = false\n\n[extension_status]\nseparator = ' / '\nmax_statuses = 3\nicons = { demo = 'D' }\nstyles = { demo = 'accent', fallback = 'dimmed white' }\n`,
   );
   const serialized = serializeEffectiveConfig(loaded.config);
   const reparsed = normalizeConfig(parse(serialized));
@@ -114,6 +114,7 @@ test("effective configuration normalizes custom public values without document-o
   assert.match(serialized, /palette = "demo"/u);
   assert.match(serialized, /max_statuses = 3/u);
   assert.match(serialized, /demo = "accent"/u);
+  assert.match(serialized, /shorten_model = true/u);
   assert.match(serialized, /truncation_length = 12/u);
   const openaiRule = serialized.indexOf('provider = "openai"');
   assert.ok(openaiRule >= 0);
@@ -300,8 +301,9 @@ test("Starship-aligned module options normalize their public defaults", () => {
   assert.equal(valid.config.modules.hostname.options.trim_at, "");
 });
 
-test("model truncation options normalize values and reject invalid directions independently", () => {
+test("model display options normalize values and reject invalid settings independently", () => {
   assert.deepEqual(BUILT_IN_CONFIG.modules.model.options, {
+    shorten_model: false,
     truncation_length: 0,
     truncation_symbol: "…",
     truncation_direction: "end",
@@ -309,9 +311,10 @@ test("model truncation options normalize values and reject invalid directions in
   });
 
   const valid = loadFromText(
-    "[model]\ntruncation_length = 36\ntruncation_symbol = ''\ntruncation_direction = 'middle'\nmodel_aliases = { raw = 'short' }\n",
+    "[model]\nshorten_model = true\ntruncation_length = 36\ntruncation_symbol = ''\ntruncation_direction = 'middle'\nmodel_aliases = { raw = 'short' }\n",
   );
   assert.deepEqual(valid.config.modules.model.options, {
+    shorten_model: true,
     truncation_length: 36,
     truncation_symbol: "",
     truncation_direction: "middle",
@@ -320,9 +323,10 @@ test("model truncation options normalize values and reject invalid directions in
   assert.deepEqual(valid.diagnostics, []);
 
   const invalid = loadFromText(
-    "[model]\ntruncation_length = -1\ntruncation_symbol = 7\ntruncation_direction = 'left'\n",
+    "[model]\nshorten_model = 'yes'\ntruncation_length = -1\ntruncation_symbol = 7\ntruncation_direction = 'left'\n",
   );
   assert.deepEqual(invalid.config.modules.model.options, {
+    shorten_model: false,
     truncation_length: 0,
     truncation_symbol: "…",
     truncation_direction: "end",
@@ -330,7 +334,7 @@ test("model truncation options normalize values and reject invalid directions in
   });
   assert.deepEqual(
     invalid.diagnostics.map((item) => item.path),
-    ["model.truncation_length", "model.truncation_symbol", "model.truncation_direction"],
+    ["model.shorten_model", "model.truncation_length", "model.truncation_symbol", "model.truncation_direction"],
   );
 
   const oversized = loadFromText("[model]\ntruncation_length = 1001\n");

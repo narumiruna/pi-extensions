@@ -370,7 +370,7 @@ The exact selectors are:
 | `thinking` | `provider` | Raw Pi provider ID. |
 | `thinking` | `level` | Current Pi thinking-level string. |
 
-Provider and model aliases, built-in model shortening, configured truncation, and terminal display sanitization do not change these raw selector values.
+Provider and model aliases, optional model shortening, configured truncation, and terminal display sanitization do not change these raw selector values.
 Style-rule styles use the selected palette and the same style grammar as other style fields.
 An unknown field, unsupported selector, non-string selector, missing style, or invalid style warns and discards only that rule; valid sibling rules remain ordered and active.
 An invalid non-array `style_rules` value warns and restores the empty default.

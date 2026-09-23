@@ -102,10 +102,11 @@ Additional options:
 
 | Option | Type | Default | Constraints and meaning |
 | --- | --- | --- | --- |
+| `shorten_model` | boolean | `false` | Opt in to removing a leading `claude-`, a trailing `-20` plus six digits, or a trailing `-latest` from model IDs that do not match an alias; `gpt-` is unchanged. |
 | `truncation_length` | integer | `0` | Inclusive range 0 through 1000. Maximum retained model-label grapheme clusters; zero disables truncation. |
 | `truncation_symbol` | string | `"…"` | May be empty. Marker placed at the removed start, middle, or end; an empty string removes text without a marker. |
 | `truncation_direction` | string enum | `"end"` | One of `start`, `middle`, `end`. Which part of the model label is removed when truncating. |
-| `model_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact model-ID replacements that bypass built-in Claude/GPT shortening and are then subject to configured truncation. |
+| `model_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact model-ID replacements that bypass optional shortening and are then subject to configured truncation. |
 
 ### `thinking`
 
