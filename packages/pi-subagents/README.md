@@ -146,7 +146,8 @@ Combined skill preflight is asynchronous and cancellation-aware, and it rejects 
 A skill is available for the child to discover and read when relevant; attaching it does not inject its complete body, add `read` or `bash`, or force the child to invoke it.
 
 Each `extensions` entry loads one trusted local extension file or directory and names the exact extension tools to activate initially.
-Extension directories must resolve to at least one Pi entrypoint, and every exact `pi.extensions` declaration must contribute an entrypoint; partially resolved packages and authoritative Pi manifests without extensions are rejected before launch.
+Extension directories must resolve to at least one Pi entrypoint, and every exact `pi.extensions` declaration must contribute a directly loadable entrypoint; partially resolved packages and authoritative Pi manifests without extensions are rejected before launch.
+Extension-package preflight is asynchronous and cancellation-aware, rejects source globs in every Pi resource declaration, recursive resource directory links, and non-regular manifests or ignore files, and limits Pi package discovery to 4,096 entries, depth 32, and 1 MiB of metadata.
 Extension tool names cannot overlap Pi core tools or the built-in `subagent_send` and `subagent_wait` communication tools.
 Use an empty `tools` list to load provider or lifecycle behavior without exposing an extension tool.
 The initial child allowlist contains only selected core tools, communication tools, and explicitly named extension tools.

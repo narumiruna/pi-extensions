@@ -7,6 +7,8 @@ import { afterEach, beforeEach, test } from "vitest";
 import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
+  MAX_EXTENSION_METADATA_BYTES,
+  MAX_EXTENSION_SCAN_ENTRIES,
   MAX_SELECTED_TOOLS,
   MAX_SKILL_IGNORE_BYTES,
   MAX_SKILL_SCAN_BYTES,
@@ -193,7 +195,7 @@ test("rejects invalid declared skills while honoring Pi ignore files", async () 
   }
 });
 
-test("bounds and cancels skill-directory preflight", async () => {
+test("bounds and cancels attachment directory preflight", async () => {
   const wideDirectory = path.join(external, "wide-directory");
   mkdirSync(wideDirectory);
   for (let index = 0; index <= MAX_SKILL_SCAN_ENTRIES; index++) {
@@ -264,6 +266,78 @@ test("bounds and cancels skill-directory preflight", async () => {
   );
   queueMicrotask(() => controller.abort());
   await assert.rejects(pending, (error: Error) => error.name === "AbortError");
+
+  const wideExtensionDirectory = path.join(external, "wide-extension-directory");
+  mkdirSync(wideExtensionDirectory);
+  for (let index = 0; index <= MAX_EXTENSION_SCAN_ENTRIES; index++) {
+    writeFileSync(path.join(wideExtensionDirectory, String(index)), "");
+  }
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: wideExtensionDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /extension attachment exceeds preflight limits/i,
+  );
+
+  const oversizedManifestDirectory = path.join(external, "oversized-manifest-directory");
+  mkdirSync(oversizedManifestDirectory);
+  writeFileSync(path.join(oversizedManifestDirectory, "package.json"), Buffer.alloc(MAX_EXTENSION_METADATA_BYTES + 1));
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: oversizedManifestDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /extension attachment exceeds preflight limits/i,
+  );
+
+  const oversizedDeclarationDirectory = path.join(external, "oversized-declaration-directory");
+  mkdirSync(oversizedDeclarationDirectory);
+  writeFileSync(
+    path.join(oversizedDeclarationDirectory, "package.json"),
+    JSON.stringify({
+      pi: {
+        extensions: Array.from({ length: MAX_EXTENSION_SCAN_ENTRIES + 1 }, (_, index) => `!ignored-${index}.ts`),
+      },
+    }),
+  );
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: oversizedDeclarationDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /extension attachment exceeds preflight limits/i,
+  );
+
+  const recursiveResourceDirectory = path.join(external, "recursive-resource-directory");
+  const recursiveExtensionDirectory = path.join(recursiveResourceDirectory, "extensions");
+  const recursivePromptDirectory = path.join(recursiveResourceDirectory, "prompts");
+  mkdirSync(recursiveExtensionDirectory, { recursive: true });
+  mkdirSync(path.join(recursivePromptDirectory, "nested"), { recursive: true });
+  writeFileSync(path.join(recursiveExtensionDirectory, "valid.ts"), "export default () => {};\n");
+  symlinkSync(recursivePromptDirectory, path.join(recursivePromptDirectory, "nested", "recursive"));
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: recursiveResourceDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /recursive resource directory link/i,
+  );
+
+  const cancellableExtensionDirectory = path.join(external, "cancellable-extension-directory");
+  mkdirSync(cancellableExtensionDirectory);
+  writeFileSync(path.join(cancellableExtensionDirectory, "index.ts"), "export default () => {};\n");
+  const extensionController = new AbortController();
+  const pendingExtension = resolveResourceAttachments(
+    { extensions: [{ path: cancellableExtensionDirectory, tools: [] }] },
+    { cwd: project, projectTrusted: true, coreTools: [], signal: extensionController.signal },
+  );
+  queueMicrotask(() => extensionController.abort());
+  await assert.rejects(pendingExtension, (error: Error) => error.name === "AbortError");
 });
 
 test("rejects skill-name collisions using Pi's combined load behavior", async () => {
@@ -386,6 +460,9 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
   const manifestOnlyDirectory = path.join(external, "manifest-without-extensions");
   const partialDirectory = path.join(external, "partial-extension");
   const unresolvableDirectory = path.join(external, "unresolvable-extension");
+  const nestedUnresolvableDirectory = path.join(external, "nested-unresolvable-extension");
+  const globDirectory = path.join(external, "glob-extension");
+  const resourceGlobDirectory = path.join(external, "resource-glob-extension");
   for (const directory of [
     packageDirectory,
     indexTsDirectory,
@@ -394,6 +471,9 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
     manifestOnlyDirectory,
     partialDirectory,
     unresolvableDirectory,
+    nestedUnresolvableDirectory,
+    globDirectory,
+    resourceGlobDirectory,
   ]) {
     mkdirSync(directory, { recursive: true });
   }
@@ -401,7 +481,7 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
   mkdirSync(path.join(packageDirectory, "nested"));
   writeFileSync(
     path.join(packageDirectory, "package.json"),
-    JSON.stringify({ pi: { extensions: ["./first.ts", "./nested"] } }),
+    JSON.stringify({ pi: { extensions: ["./first.ts", "./nested", "!**/*.test.ts"] } }),
   );
   writeFileSync(path.join(packageDirectory, "first.ts"), "export default () => {};\n");
   writeFileSync(path.join(packageDirectory, "nested", "second.js"), "export default () => {};\n");
@@ -472,6 +552,54 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
         { cwd: project, projectTrusted: true, coreTools: [] },
       ),
     /missing or unresolvable declared entrypoint/i,
+  );
+
+  const nestedPackage = path.join(nestedUnresolvableDirectory, "nested");
+  mkdirSync(path.join(nestedPackage, "empty"), { recursive: true });
+  writeFileSync(
+    path.join(nestedUnresolvableDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./nested"] } }),
+  );
+  writeFileSync(
+    path.join(nestedPackage, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./valid.ts", "./empty"] } }),
+  );
+  writeFileSync(path.join(nestedPackage, "valid.ts"), "export default () => {};\n");
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: nestedUnresolvableDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /missing or unresolvable declared entrypoint/i,
+  );
+
+  writeFileSync(
+    path.join(globDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./valid.ts", "./**/*.ts"] } }),
+  );
+  writeFileSync(path.join(globDirectory, "valid.ts"), "export default () => {};\n");
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: globDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /must not contain glob entrypoint declarations/i,
+  );
+
+  writeFileSync(
+    path.join(resourceGlobDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./valid.ts"], skills: ["./**/*.md"] } }),
+  );
+  writeFileSync(path.join(resourceGlobDirectory, "valid.ts"), "export default () => {};\n");
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: resourceGlobDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /must not contain glob resource declarations/i,
   );
 });
 
@@ -553,5 +681,62 @@ test("rejects unsupported filesystem object types", { skip: process.platform ===
   await assert.rejects(
     () => resolveResourceAttachments({ skills: [fifoPath] }, { cwd: project, projectTrusted: true, coreTools: [] }),
     /file or directory/i,
+  );
+
+  const skillDirectory = path.join(external, "fifo-ignore-skill");
+  mkdirSync(skillDirectory);
+  writeFileSync(path.join(skillDirectory, "SKILL.md"), "---\nname: fifo-skill\ndescription: FIFO skill.\n---\n");
+  const skillIgnore = path.join(skillDirectory, ".gitignore");
+  const skillIgnoreCreated = spawnSync("mkfifo", [skillIgnore], { encoding: "utf8" });
+  assert.equal(skillIgnoreCreated.status, 0, skillIgnoreCreated.stderr);
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments({ skills: [skillDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+    /ignore files must be regular files/i,
+  );
+
+  const extensionManifestDirectory = path.join(external, "fifo-manifest-extension");
+  mkdirSync(extensionManifestDirectory);
+  const extensionManifest = path.join(extensionManifestDirectory, "package.json");
+  const extensionManifestCreated = spawnSync("mkfifo", [extensionManifest], { encoding: "utf8" });
+  assert.equal(extensionManifestCreated.status, 0, extensionManifestCreated.stderr);
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: extensionManifestDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /manifest must be a regular file/i,
+  );
+
+  const packageResourceDirectory = path.join(external, "fifo-ignore-package-resource");
+  mkdirSync(path.join(packageResourceDirectory, "extensions"), { recursive: true });
+  mkdirSync(path.join(packageResourceDirectory, "prompts"));
+  writeFileSync(path.join(packageResourceDirectory, "extensions", "valid.ts"), "export default () => {};\n");
+  const packageResourceIgnore = path.join(packageResourceDirectory, "prompts", ".fdignore");
+  const packageResourceIgnoreCreated = spawnSync("mkfifo", [packageResourceIgnore], { encoding: "utf8" });
+  assert.equal(packageResourceIgnoreCreated.status, 0, packageResourceIgnoreCreated.stderr);
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: packageResourceDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /ignore files must be regular files/i,
+  );
+
+  const extensionDirectory = path.join(external, "fifo-ignore-extension");
+  mkdirSync(extensionDirectory);
+  writeFileSync(path.join(extensionDirectory, "valid.ts"), "export default () => {};\n");
+  const extensionIgnore = path.join(extensionDirectory, ".ignore");
+  const extensionIgnoreCreated = spawnSync("mkfifo", [extensionIgnore], { encoding: "utf8" });
+  assert.equal(extensionIgnoreCreated.status, 0, extensionIgnoreCreated.stderr);
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: extensionDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /ignore files must be regular files/i,
   );
 });

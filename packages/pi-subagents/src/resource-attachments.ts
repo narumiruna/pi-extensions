@@ -1,4 +1,4 @@
-import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { type Dirent, existsSync, realpathSync, type Stats, statSync } from "node:fs";
 import {
   opendir as opendirAsync,
   readFile as readFileAsync,
@@ -21,6 +21,9 @@ export const MAX_SKILL_SCAN_DEPTH = 32;
 export const MAX_SKILL_SCAN_ENTRIES = 4_096;
 export const MAX_SKILL_SCAN_BYTES = 4 * 1024 * 1024;
 export const MAX_SKILL_IGNORE_BYTES = 1024 * 1024;
+export const MAX_EXTENSION_SCAN_DEPTH = 32;
+export const MAX_EXTENSION_SCAN_ENTRIES = 4_096;
+export const MAX_EXTENSION_METADATA_BYTES = 1024 * 1024;
 
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 const RESERVED_CHILD_TOOL_NAMES = new Set<string>([...CHILD_CORE_TOOL_NAMES, ...CHILD_COMMUNICATION_TOOL_NAMES]);
@@ -88,7 +91,7 @@ export async function resolveResourceAttachments(
     }
     let attachment = extensionsByPath.get(resolved);
     if (!attachment) {
-      await assertResolvableExtensionAttachment(resolved, cwd, canonicalCwd, options.projectTrusted);
+      await assertResolvableExtensionAttachment(resolved, cwd, canonicalCwd, options.projectTrusted, options.signal);
       attachment = { path: resolved, tools: [] };
       extensionsByPath.set(resolved, attachment);
       extensions.push(attachment);
@@ -378,7 +381,7 @@ async function addSkillIgnoreRules(
       throwIfAttachmentAborted(state.signal);
       continue;
     }
-    if (!ignoreStats.isFile()) continue;
+    if (!ignoreStats.isFile()) throwInvalidIgnoreFile();
     state.ignoreBytes += ignoreStats.size;
     if (state.ignoreBytes > MAX_SKILL_IGNORE_BYTES) throwSkillScanLimit();
     try {
@@ -395,6 +398,10 @@ async function addSkillIgnoreRules(
       // Pi ignores unreadable ignore files.
     }
   }
+}
+
+function throwInvalidIgnoreFile(): never {
+  throw new Error("Subagent attachment ignore files must be regular files.");
 }
 
 function throwIfAttachmentAborted(signal: AbortSignal | undefined): void {
@@ -418,24 +425,6 @@ function throwSkillScanLimit(): never {
   );
   error.name = "SkillScanLimitError";
   throw error;
-}
-
-function addIgnoreRules(ignoreMatcher: IgnoreMatcher, directory: string, rootDirectory: string): void {
-  const relativeDirectory = path.relative(rootDirectory, directory);
-  const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
-  for (const filename of IGNORE_FILE_NAMES) {
-    const ignorePath = path.join(directory, filename);
-    if (!existsSync(ignorePath)) continue;
-    try {
-      const patterns = readFileSync(ignorePath, "utf8")
-        .split(/\r?\n/u)
-        .map((line) => prefixIgnorePattern(line, prefix))
-        .filter((line): line is string => line !== null);
-      if (patterns.length > 0) ignoreMatcher.add(patterns);
-    } catch {
-      // Pi ignores unreadable ignore files.
-    }
-  }
 }
 
 function prefixIgnorePattern(line: string, prefix: string): string | null {
@@ -467,9 +456,12 @@ async function assertResolvableExtensionAttachment(
   cwd: string,
   canonicalCwd: string,
   projectTrusted: boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
-  assertNoMissingDeclaredExtensionEntrypoints(extensionPath);
+  await inspectExtensionAttachment(extensionPath, signal);
+  throwIfAttachmentAborted(signal);
   const entrypoints = await resolveAttachedExtensionEntrypoints(extensionPath, cwd);
+  throwIfAttachmentAborted(signal);
   if (entrypoints.length === 0) {
     throw new Error("Subagent extension directory must contain at least one loadable Pi extension entrypoint.");
   }
@@ -491,9 +483,9 @@ function resolveDirectExtensionLoadPaths(entrypoint: string): string[] {
   if (!statSync(entrypoint).isDirectory()) return [entrypoint];
   for (const filename of ["index.ts", "index.js"]) {
     const indexPath = path.join(entrypoint, filename);
-    if (existsSync(indexPath)) return [entrypoint, indexPath];
+    if (existsSync(indexPath) && statSync(indexPath).isFile()) return [entrypoint, indexPath];
   }
-  return [entrypoint];
+  throwUnresolvableExtensionEntrypoint();
 }
 
 async function resolveAttachedExtensionEntrypoints(extensionPath: string, cwd: string): Promise<string[]> {
@@ -508,140 +500,380 @@ async function resolveAttachedExtensionEntrypoints(extensionPath: string, cwd: s
 
 interface PiManifest {
   extensions?: string[];
+  skills?: string[];
+  prompts?: string[];
+  themes?: string[];
 }
 
-function assertNoMissingDeclaredExtensionEntrypoints(extensionPath: string): void {
+type PackageResourceType = "skills" | "prompts" | "themes";
+
+interface InspectedPiManifest {
+  hasPiManifest: boolean;
+  manifest?: PiManifest;
+}
+
+interface ExtensionScanState {
+  entries: number;
+  metadataBytes: number;
+  ancestors: Set<string>;
+  signal?: AbortSignal;
+}
+
+async function inspectExtensionAttachment(extensionPath: string, signal?: AbortSignal): Promise<void> {
   if (!statSync(extensionPath).isDirectory()) return;
-  const manifest = readPiManifest(extensionPath);
-  if (manifest) {
-    assertDeclaredExtensionEntrypointsResolve(extensionPath, manifest.extensions, true);
+  const state: ExtensionScanState = { entries: 0, metadataBytes: 0, ancestors: new Set<string>(), signal };
+  const inspected = await inspectPiManifest(extensionPath, state);
+  if (inspected.hasPiManifest) {
+    await inspectDeclaredExtensionEntries(extensionPath, inspected.manifest?.extensions, true, state);
+    for (const resourceType of ["skills", "prompts", "themes"] as const) {
+      await inspectDeclaredPackageResourceEntries(
+        extensionPath,
+        inspected.manifest?.[resourceType],
+        resourceType,
+        state,
+      );
+    }
     return;
   }
 
   const resourceDirectories = ["extensions", "skills", "prompts", "themes"].map((name) =>
     path.join(extensionPath, name),
   );
-  if (!resourceDirectories.some((directory) => existsSync(directory))) return;
-  const extensionsDirectory = path.join(extensionPath, "extensions");
-  if (existsSync(extensionsDirectory)) assertNoMissingAutoExtensionEntrypoints(extensionsDirectory);
-}
-
-function assertNoMissingAutoExtensionEntrypoints(directory: string): void {
-  if (extensionDirectoryStopsDiscovery(directory)) return;
-  const ignoreMatcher = ignore();
-  addIgnoreRules(ignoreMatcher, directory, directory);
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    const entryPath = path.join(directory, entry.name);
-    let isDirectory = entry.isDirectory();
-    if (entry.isSymbolicLink()) {
-      try {
-        isDirectory = statSync(entryPath).isDirectory();
-      } catch {
-        continue;
+  const resourceStats = await Promise.all(resourceDirectories.map((directory) => statIfPresent(directory)));
+  if (resourceStats.some((stats) => stats?.isDirectory())) {
+    if (resourceStats[0]?.isDirectory()) await inspectAutoExtensionDirectory(resourceDirectories[0], true, state);
+    for (const [index, resourceType] of (["skills", "prompts", "themes"] as const).entries()) {
+      if (resourceStats[index + 1]?.isDirectory()) {
+        await inspectPackageResourceDirectory(resourceDirectories[index + 1], resourceType, state);
       }
     }
-    const relativePath = toPosixPath(path.relative(directory, entryPath));
-    if (ignoreMatcher.ignores(isDirectory ? `${relativePath}/` : relativePath)) continue;
-    if (isDirectory) extensionDirectoryStopsDiscovery(entryPath);
+    return;
   }
+  await inspectAutoExtensionDirectory(extensionPath, true, state);
 }
 
-function extensionDirectoryStopsDiscovery(directory: string): boolean {
-  const manifest = readPiManifest(directory);
-  if (manifest?.extensions && manifest.extensions.length > 0) {
-    assertDeclaredExtensionEntrypointsResolve(directory, manifest.extensions, false);
-    if (
-      manifest.extensions.some(
-        (entrypoint) =>
-          !isExtensionOverridePattern(entrypoint) &&
-          !hasExtensionGlob(entrypoint) &&
-          existsSync(path.resolve(directory, entrypoint)),
-      )
-    ) {
-      return true;
+async function inspectAutoExtensionDirectory(
+  directory: string,
+  discoverContents: boolean,
+  state: ExtensionScanState,
+): Promise<boolean> {
+  throwIfAttachmentAborted(state.signal);
+  const inspected = await inspectPiManifest(directory, state);
+  const sourceEntries = inspected.manifest?.extensions?.filter((entrypoint) => !isExtensionOverridePattern(entrypoint));
+  if (sourceEntries && sourceEntries.length > 0) {
+    await inspectDeclaredExtensionEntries(directory, inspected.manifest?.extensions, false, state);
+    return true;
+  }
+  if (await hasRegularExtensionIndex(directory)) return true;
+  if (!discoverContents) return false;
+
+  const ignoreMatcher = ignore();
+  await addPackageIgnoreRules(ignoreMatcher, directory, directory, state);
+  const entries = await readBoundedExtensionEntries(directory, state);
+  let found = false;
+  for (const entry of entries) {
+    throwIfAttachmentAborted(state.signal);
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const entryPath = path.join(directory, entry.name);
+    const entryStats = await statIfPresent(entryPath);
+    if (!entryStats) continue;
+    const relativePath = toPosixPath(path.relative(directory, entryPath));
+    if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
+    if (entryStats.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
+      found = true;
+    } else if (entryStats.isDirectory() && (await inspectAutoExtensionDirectory(entryPath, false, state))) {
+      found = true;
     }
   }
-  return existsSync(path.join(directory, "index.ts")) || existsSync(path.join(directory, "index.js"));
+  return found;
 }
 
-function assertDeclaredExtensionEntrypointsResolve(
+async function inspectDeclaredExtensionEntries(
   directory: string,
   entries: string[] | undefined,
   expandDirectories: boolean,
-): void {
+  state: ExtensionScanState,
+): Promise<void> {
   if (!entries) return;
-  const unresolved = entries.some((entrypoint) => {
-    if (isExtensionOverridePattern(entrypoint) || hasExtensionGlob(entrypoint)) return false;
-    const resolved = path.resolve(directory, entrypoint);
-    if (!existsSync(resolved)) return true;
-    try {
-      const stats = statSync(resolved);
-      if (stats.isFile()) return false;
-      return !stats.isDirectory() || (expandDirectories && !hasAutoExtensionEntrypoints(resolved));
-    } catch {
-      return true;
+  for (const entrypoint of entries) {
+    throwIfAttachmentAborted(state.signal);
+    state.entries++;
+    if (state.entries > MAX_EXTENSION_SCAN_ENTRIES) throwExtensionScanLimit();
+    if (isExtensionOverridePattern(entrypoint)) continue;
+    if (hasExtensionGlob(entrypoint)) {
+      throw new Error("Subagent extension package must not contain glob entrypoint declarations.");
     }
-  });
-  if (unresolved) {
-    throw new Error("Subagent extension package must not contain a missing or unresolvable declared entrypoint.");
+    const resolved = path.resolve(directory, entrypoint);
+    const resolvedStats = await statIfPresent(resolved);
+    if (!resolvedStats) throwUnresolvableExtensionEntrypoint();
+    if (resolvedStats.isFile()) continue;
+    if (!resolvedStats.isDirectory()) throwUnresolvableExtensionEntrypoint();
+    if (expandDirectories) {
+      if (!(await inspectAutoExtensionDirectory(resolved, true, state))) throwUnresolvableExtensionEntrypoint();
+    } else if (!(await hasRegularExtensionIndex(resolved))) {
+      throwUnresolvableExtensionEntrypoint();
+    }
   }
 }
 
-function hasAutoExtensionEntrypoints(directory: string): boolean {
-  if (extensionDirectoryStopsDiscovery(directory)) return true;
-  const ignoreMatcher = ignore();
-  addIgnoreRules(ignoreMatcher, directory, directory);
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    const entryPath = path.join(directory, entry.name);
-    let isDirectory = entry.isDirectory();
-    let isFile = entry.isFile();
-    if (entry.isSymbolicLink()) {
-      try {
-        const stats = statSync(entryPath);
-        isDirectory = stats.isDirectory();
-        isFile = stats.isFile();
-      } catch {
-        continue;
-      }
+async function inspectDeclaredPackageResourceEntries(
+  directory: string,
+  entries: string[] | undefined,
+  resourceType: PackageResourceType,
+  state: ExtensionScanState,
+): Promise<void> {
+  if (!entries) return;
+  for (const entrypoint of entries) {
+    throwIfAttachmentAborted(state.signal);
+    state.entries++;
+    if (state.entries > MAX_EXTENSION_SCAN_ENTRIES) throwExtensionScanLimit();
+    if (isExtensionOverridePattern(entrypoint)) continue;
+    if (hasExtensionGlob(entrypoint)) {
+      throw new Error("Subagent extension package must not contain glob resource declarations.");
     }
-    const relativePath = toPosixPath(path.relative(directory, entryPath));
-    if (ignoreMatcher.ignores(isDirectory ? `${relativePath}/` : relativePath)) continue;
-    if (isFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) return true;
-    if (isDirectory && extensionDirectoryStopsDiscovery(entryPath)) return true;
+    const resolved = path.resolve(directory, entrypoint);
+    const resolvedStats = await statIfPresent(resolved);
+    if (resolvedStats?.isDirectory()) await inspectPackageResourceDirectory(resolved, resourceType, state);
+  }
+}
+
+async function inspectPackageResourceDirectory(
+  directory: string,
+  resourceType: PackageResourceType,
+  state: ExtensionScanState,
+): Promise<void> {
+  const ignoreMatcher = ignore();
+  if (resourceType === "skills") {
+    await inspectPackageSkillDirectory(directory, ignoreMatcher, directory, 0, state);
+  } else {
+    await inspectRecursivePackageDirectory(directory, ignoreMatcher, directory, 0, state);
+  }
+}
+
+async function inspectPackageSkillDirectory(
+  directory: string,
+  ignoreMatcher: IgnoreMatcher,
+  rootDirectory: string,
+  depth: number,
+  state: ExtensionScanState,
+): Promise<void> {
+  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state);
+  if (!canonicalDirectory) return;
+  try {
+    await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state);
+    const entries = await readBoundedPackageResourceEntries(directory, state);
+    const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
+    if (rootSkill) {
+      const skillPath = path.join(directory, rootSkill.name);
+      const skillStats = await statIfPresent(skillPath);
+      const relativePath = toPosixPath(path.relative(rootDirectory, skillPath));
+      if (skillStats?.isFile() && !ignoreMatcher.ignores(relativePath)) return;
+    }
+    for (const entry of entries) {
+      throwIfAttachmentAborted(state.signal);
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const entryPath = path.join(directory, entry.name);
+      const entryStats = await statIfPresent(entryPath);
+      if (!entryStats?.isDirectory()) continue;
+      const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
+      if (ignoreMatcher.ignores(`${relativePath}/`)) continue;
+      await inspectPackageSkillDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state);
+    }
+  } finally {
+    state.ancestors.delete(canonicalDirectory);
+  }
+}
+
+async function inspectRecursivePackageDirectory(
+  directory: string,
+  ignoreMatcher: IgnoreMatcher,
+  rootDirectory: string,
+  depth: number,
+  state: ExtensionScanState,
+): Promise<void> {
+  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state);
+  if (!canonicalDirectory) return;
+  try {
+    await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state);
+    const entries = await readBoundedPackageResourceEntries(directory, state);
+    for (const entry of entries) {
+      throwIfAttachmentAborted(state.signal);
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const entryPath = path.join(directory, entry.name);
+      const entryStats = await statIfPresent(entryPath);
+      if (!entryStats?.isDirectory()) continue;
+      const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
+      if (ignoreMatcher.ignores(`${relativePath}/`)) continue;
+      await inspectRecursivePackageDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state);
+    }
+  } finally {
+    state.ancestors.delete(canonicalDirectory);
+  }
+}
+
+async function enterPackageResourceDirectory(
+  directory: string,
+  depth: number,
+  state: ExtensionScanState,
+): Promise<string | undefined> {
+  throwIfAttachmentAborted(state.signal);
+  if (depth > MAX_EXTENSION_SCAN_DEPTH) throwExtensionScanLimit();
+  let canonicalDirectory: string;
+  try {
+    canonicalDirectory = await realpathAsync(directory);
+  } catch {
+    return undefined;
+  }
+  throwIfAttachmentAborted(state.signal);
+  if (state.ancestors.has(canonicalDirectory)) {
+    throw new Error("Subagent extension package must not contain a recursive resource directory link.");
+  }
+  state.ancestors.add(canonicalDirectory);
+  return canonicalDirectory;
+}
+
+async function inspectPiManifest(directory: string, state: ExtensionScanState): Promise<InspectedPiManifest> {
+  const manifestPath = path.join(directory, "package.json");
+  const manifestStats = await statIfPresent(manifestPath);
+  if (!manifestStats) return { hasPiManifest: false };
+  if (!manifestStats.isFile()) {
+    throw new Error("Subagent extension package manifest must be a regular file.");
+  }
+  state.metadataBytes += manifestStats.size;
+  if (state.metadataBytes > MAX_EXTENSION_METADATA_BYTES) throwExtensionScanLimit();
+  let document: unknown;
+  try {
+    document = JSON.parse(
+      (await readFileAsync(manifestPath, { encoding: "utf8", signal: state.signal })).replace(/^\uFEFF/u, ""),
+    );
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throwIfAttachmentAborted(state.signal);
+    return { hasPiManifest: false };
+  }
+  if (!isRecord(document) || !isRecord(document.pi)) return { hasPiManifest: false };
+  return {
+    hasPiManifest: true,
+    manifest: {
+      extensions: readManifestEntries(document.pi, "extensions"),
+      skills: readManifestEntries(document.pi, "skills"),
+      prompts: readManifestEntries(document.pi, "prompts"),
+      themes: readManifestEntries(document.pi, "themes"),
+    },
+  };
+}
+
+function readManifestEntries(manifest: Record<string, unknown>, resourceType: string): string[] | undefined {
+  const entries = manifest[resourceType];
+  return Array.isArray(entries) && entries.every((entrypoint) => typeof entrypoint === "string") ? entries : undefined;
+}
+
+async function addPackageIgnoreRules(
+  ignoreMatcher: IgnoreMatcher,
+  directory: string,
+  rootDirectory: string,
+  state: ExtensionScanState,
+): Promise<void> {
+  const relativeDirectory = path.relative(rootDirectory, directory);
+  const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
+  for (const filename of IGNORE_FILE_NAMES) {
+    throwIfAttachmentAborted(state.signal);
+    const ignorePath = path.join(directory, filename);
+    const ignoreStats = await statIfPresent(ignorePath);
+    if (!ignoreStats) continue;
+    if (!ignoreStats.isFile()) throwInvalidIgnoreFile();
+    state.metadataBytes += ignoreStats.size;
+    if (state.metadataBytes > MAX_EXTENSION_METADATA_BYTES) throwExtensionScanLimit();
+    try {
+      const content = await readFileAsync(ignorePath, { encoding: "utf8", signal: state.signal });
+      throwIfAttachmentAborted(state.signal);
+      const patterns = content
+        .split(/\r?\n/u)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => line !== null);
+      if (patterns.length > 0) ignoreMatcher.add(patterns);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throwIfAttachmentAborted(state.signal);
+      // Pi ignores unreadable ignore files.
+    }
+  }
+}
+
+async function readBoundedPackageResourceEntries(directory: string, state: ExtensionScanState): Promise<Dirent[]> {
+  let directoryHandle: Awaited<ReturnType<typeof opendirAsync>>;
+  try {
+    directoryHandle = await opendirAsync(directory);
+  } catch {
+    return [];
+  }
+  const entries: Dirent[] = [];
+  try {
+    for await (const entry of directoryHandle) {
+      throwIfAttachmentAborted(state.signal);
+      state.entries++;
+      if (state.entries > MAX_EXTENSION_SCAN_ENTRIES) throwExtensionScanLimit();
+      entries.push(entry);
+    }
+  } catch (error) {
+    if (isAbortError(error) || isExtensionScanLimitError(error)) throw error;
+    return [];
+  }
+  return entries;
+}
+
+async function readBoundedExtensionEntries(directory: string, state: ExtensionScanState): Promise<Dirent[]> {
+  let directoryHandle: Awaited<ReturnType<typeof opendirAsync>>;
+  try {
+    directoryHandle = await opendirAsync(directory);
+  } catch {
+    throwUnresolvableExtensionEntrypoint();
+  }
+  const entries: Dirent[] = [];
+  try {
+    for await (const entry of directoryHandle) {
+      throwIfAttachmentAborted(state.signal);
+      state.entries++;
+      if (state.entries > MAX_EXTENSION_SCAN_ENTRIES) throwExtensionScanLimit();
+      entries.push(entry);
+    }
+  } catch (error) {
+    if (isAbortError(error) || isExtensionScanLimitError(error)) throw error;
+    throwUnresolvableExtensionEntrypoint();
+  }
+  return entries;
+}
+
+async function hasRegularExtensionIndex(directory: string): Promise<boolean> {
+  for (const filename of ["index.ts", "index.js"]) {
+    const stats = await statIfPresent(path.join(directory, filename));
+    if (stats) return stats.isFile();
   }
   return false;
 }
 
-function readPiManifest(directory: string): PiManifest | undefined {
-  const manifestPath = path.join(directory, "package.json");
-  if (!existsSync(manifestPath)) return undefined;
+async function statIfPresent(value: string): Promise<Stats | undefined> {
   try {
-    const document: unknown = JSON.parse(readFileSync(manifestPath, "utf8").replace(/^\uFEFF/u, ""));
-    if (!isRecord(document) || !isRecord(document.pi)) return undefined;
-    const extensions = document.pi.extensions;
-    return {
-      extensions:
-        Array.isArray(extensions) && extensions.every((entrypoint) => typeof entrypoint === "string")
-          ? extensions
-          : undefined,
-    };
+    return await statAsync(value);
   } catch {
     return undefined;
   }
+}
+
+function throwUnresolvableExtensionEntrypoint(): never {
+  throw new Error("Subagent extension package must not contain a missing or unresolvable declared entrypoint.");
+}
+
+function isExtensionScanLimitError(error: unknown): boolean {
+  return error instanceof Error && error.name === "ExtensionScanLimitError";
+}
+
+function throwExtensionScanLimit(): never {
+  const error = new Error(
+    `Subagent extension attachment exceeds preflight limits (${MAX_EXTENSION_SCAN_ENTRIES} entries, depth ${MAX_EXTENSION_SCAN_DEPTH}, or ${MAX_EXTENSION_METADATA_BYTES} metadata bytes).`,
+  );
+  error.name = "ExtensionScanLimitError";
+  throw error;
 }
 
 function isExtensionOverridePattern(value: string): boolean {

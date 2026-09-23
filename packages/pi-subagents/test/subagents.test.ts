@@ -602,6 +602,68 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /missing or unresolvable declared entrypoint/i,
     );
+    const nestedExtensionDirectory = path.join(collisionRoot, "nested-extension");
+    const nestedExtensionPackage = path.join(nestedExtensionDirectory, "nested");
+    mkdirSync(path.join(nestedExtensionPackage, "empty"), { recursive: true });
+    writeFileSync(
+      path.join(nestedExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./nested"] } }),
+    );
+    writeFileSync(
+      path.join(nestedExtensionPackage, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts", "./empty"] } }),
+    );
+    writeFileSync(path.join(nestedExtensionPackage, "valid.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "nested-unresolvable-extension",
+          { task: "nested unresolvable extension", extensions: [{ path: nestedExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /missing or unresolvable declared entrypoint/i,
+    );
+    const globExtensionDirectory = path.join(collisionRoot, "glob-extension");
+    mkdirSync(globExtensionDirectory);
+    writeFileSync(
+      path.join(globExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts", "./**/*.ts"] } }),
+    );
+    writeFileSync(path.join(globExtensionDirectory, "valid.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "glob-extension",
+          { task: "glob extension", extensions: [{ path: globExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /must not contain glob entrypoint declarations/i,
+    );
+    const resourceGlobExtensionDirectory = path.join(collisionRoot, "resource-glob-extension");
+    mkdirSync(resourceGlobExtensionDirectory);
+    writeFileSync(
+      path.join(resourceGlobExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts"], prompts: ["./**/*.md"] } }),
+    );
+    writeFileSync(path.join(resourceGlobExtensionDirectory, "valid.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "resource-glob-extension",
+          {
+            task: "resource glob extension",
+            extensions: [{ path: resourceGlobExtensionDirectory, tools: [] }],
+          },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /must not contain glob resource declarations/i,
+    );
     const extensionlessManifestDirectory = path.join(collisionRoot, "extensionless-manifest");
     mkdirSync(extensionlessManifestDirectory);
     writeFileSync(

@@ -32,6 +32,8 @@ Pi's skill loader must find at least one loadable skill in every attached skill 
 Combined skill preflight is asynchronous and cancellation-aware, and it rejects recursive directory links or requests exceeding 4,096 entries, depth 32, 4 MiB of candidate skill content, or 1 MiB of ignore-file content before Pi's synchronous loader runs.
 Non-Markdown files, unloadable or unreadable declared skills, ignored skills, directories without a loadable skill, and duplicate skill names throw before launch.
 
+Extension-package preflight is asynchronous and cancellation-aware, rejects source globs in every Pi resource declaration, recursive resource directory links, and non-regular manifests or ignore files, requires every exact extension declaration to contribute a directly loadable entrypoint, and limits Pi package discovery to 4,096 entries, depth 32, and 1 MiB of metadata.
+
 Each attachment path is resolved relative to the child working directory when not absolute, must already name a regular file or directory, and is canonicalized before launch.
 
 Only local paths are accepted; npm, Git, URL, and other scheme-based sources throw before queuing.
