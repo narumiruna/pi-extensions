@@ -141,6 +141,24 @@ test("Kimi adapter displays a ratio-only monthly plan alongside a count-based fi
   assert.doesNotMatch(rendered, /78\.77 of 100 used/u);
 });
 
+test("Kimi ratio report percentages remain complementary at half-percent boundaries", () => {
+  for (const [ratio, used, left] of [
+    [0, 0, 100],
+    [0.005, 0, 100],
+    [0.125, 12, 88],
+    [0.875, 87, 13],
+    [0.995, 99, 1],
+    [1, 100, 0],
+  ]) {
+    const report = normalizeKimiCodingUsagePayload({ usages: { limit_month_total: { used_ratio: ratio } } }, 0);
+    assert.match(
+      formatUsageReport(report, "current"),
+      new RegExp(`Monthly window:\\s+${used}% used · ${left}% left`, "u"),
+    );
+    assert.equal(formatUsageStatusline(report), `kimi ${left}% mo`);
+  }
+});
+
 test("Kimi ratio-only plans show five-hour, weekly, and monthly windows without guessed month duration", () => {
   const payload = fixture("monthly") as KimiCodingUsagePayload & { usages: Record<string, unknown> };
   delete payload.limits;

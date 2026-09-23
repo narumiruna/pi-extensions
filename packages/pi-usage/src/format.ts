@@ -283,10 +283,11 @@ function formatKimiCodingReport(lines: string[], report: UsageReport): void {
   for (const bucket of report.buckets) {
     const reset = bucket.resetsAt ? ` (resets ${formatReset(bucket.resetsAt)})` : "";
     if (bucket.unit === "percent") {
+      const remaining = bucket.remaining === undefined ? undefined : Math.round(clampPercent(bucket.remaining));
       const value =
-        bucket.used === undefined || bucket.remaining === undefined
+        bucket.used === undefined || remaining === undefined
           ? "unavailable"
-          : `${clampPercent(bucket.used).toFixed(0)}% used · ${clampPercent(bucket.remaining).toFixed(0)}% left`;
+          : `${100 - remaining}% used · ${remaining}% left`;
       lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${value}${reset}`);
       continue;
     }
