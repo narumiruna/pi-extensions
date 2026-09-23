@@ -641,12 +641,12 @@ export function resolveNoteDeleteKey(
   terminal?: KeyboardProtocolTerminal,
 ): KeyId | undefined {
   const activeBindings = [...PICKER_BINDINGS, ...(searchEnabled ? SEARCH_INPUT_BINDINGS : [])];
+  const disambiguatedKeyProtocol = usesDisambiguatedKeyProtocol(terminal);
   const reserved = [
     "ctrl+c",
     "escape",
-    "home",
-    "end",
-    ...(searchEnabled ? ["ctrl+j"] : []),
+    ...(!searchEnabled ? ["home", "end"] : []),
+    ...(searchEnabled && !disambiguatedKeyProtocol ? ["ctrl+j"] : []),
     ...activeBindings.flatMap((binding) => {
       if (binding === "tui.editor.deleteCharForward") {
         return keybindings.getKeys(binding).filter((key) => normalizeKey(key) !== "ctrl+d");
@@ -654,7 +654,6 @@ export function resolveNoteDeleteKey(
       return keybindings.getKeys(binding);
     }),
   ];
-  const disambiguatedKeyProtocol = usesDisambiguatedKeyProtocol(terminal);
   for (const candidate of keybindings.getKeys("app.session.delete")) {
     const normalized = normalizeKey(candidate);
     if (!normalized || (searchEnabled && isTextKey(normalized))) continue;

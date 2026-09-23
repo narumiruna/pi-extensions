@@ -185,6 +185,40 @@ test("Home and End edit the active search query instead of moving the note selec
 
 test.each([
   {
+    name: "Home",
+    deleteKey: "home",
+    editorBinding: "tui.editor.cursorLineStart",
+    editorKey: "f6",
+    data: "\u001b[H",
+  },
+  {
+    name: "End",
+    deleteKey: "end",
+    editorBinding: "tui.editor.cursorLineEnd",
+    editorKey: "f7",
+    data: "\u001b[F",
+  },
+])("uses remapped $name as delete while search is active", ({ deleteKey, editorBinding, editorKey, data }) => {
+  const notes = Array.from({ length: 9 }, (_, index) => note(`note-${index}.md`));
+  const { picker, result } = createPicker(notes, {
+    bindings: {
+      "app.session.delete": [deleteKey],
+      [editorBinding]: [editorKey],
+    },
+  });
+
+  assert.match(picker.render(100).join("\n"), new RegExp(`${deleteKey} delete`, "iu"));
+  picker.handleInput(data);
+  assert.deepEqual(result(), {
+    kind: "delete",
+    notePath: "note-0.md",
+    nextSelectedPath: "note-1.md",
+    query: "",
+  });
+});
+
+test.each([
+  {
     name: "Backspace",
     deleteKey: "backspace",
     editorBinding: "tui.editor.deleteCharBackward",
@@ -399,9 +433,21 @@ const deleteKeyCases: readonly {
     expected: "f10",
   },
   {
+    name: "reserves raw Home and End while search is hidden",
+    deleteKeys: ["home", "end", "f11"],
+    reserved: {
+      "tui.select.up": [],
+      "tui.select.down": [],
+      "tui.select.pageUp": [],
+      "tui.select.pageDown": [],
+    },
+    search: false,
+    expected: "f11",
+  },
+  {
     name: "reserves raw newline while searching",
     deleteKeys: ["ctrl+j", "f11"],
-    reserved: { "tui.input.submit": [] },
+    reserved: { "tui.input.submit": [], "tui.select.confirm": [] },
     search: true,
     expected: "f11",
   },
@@ -410,6 +456,45 @@ const deleteKeyCases: readonly {
 test.each(deleteKeyCases)("resolves delete key: $name", ({ deleteKeys, reserved, search, expected }) => {
   const keys = keybindings({ ...reserved, "app.session.delete": deleteKeys });
   assert.equal(resolveNoteDeleteKey(keys as never, search), expected);
+});
+
+test("Ctrl+J delete reservations distinguish legacy, disambiguated, and actively claimed input", () => {
+  const notes = Array.from({ length: 9 }, (_, index) => note(`note-${index}.md`));
+  const bindings = {
+    "app.session.delete": ["ctrl+j", "f11"],
+    "tui.input.submit": [],
+    "tui.select.confirm": [],
+  };
+  const keys = keybindings(bindings);
+
+  setKittyProtocolActive(false);
+  assert.equal(resolveNoteDeleteKey(keys as never, true), "f11");
+
+  setKittyProtocolActive(true);
+  assert.equal(resolveNoteDeleteKey(keys as never, true), "ctrl+j");
+  const kitty = createPicker(notes, { bindings });
+  assert.match(kitty.picker.render(100).join("\n"), /ctrl\+j delete/iu);
+  kitty.picker.handleInput("\u001b[106;5u");
+  assert.deepEqual(kitty.result(), {
+    kind: "delete",
+    notePath: "note-0.md",
+    nextSelectedPath: "note-1.md",
+    query: "",
+  });
+
+  setKittyProtocolActive(false);
+  const modifyOtherKeys = createPicker(notes, { bindings, modifyOtherKeysActive: true });
+  assert.match(modifyOtherKeys.picker.render(100).join("\n"), /ctrl\+j delete/iu);
+  modifyOtherKeys.picker.handleInput("\u001b[27;5;106~");
+  assert.deepEqual(modifyOtherKeys.result(), {
+    kind: "delete",
+    notePath: "note-0.md",
+    nextSelectedPath: "note-1.md",
+    query: "",
+  });
+
+  const claimed = keybindings({ ...bindings, "tui.input.submit": ["ctrl+j"] });
+  assert.equal(resolveNoteDeleteKey(claimed as never, true, { modifyOtherKeysActive: true } as never), "f11");
 });
 
 test("legacy, Kitty, and modifyOtherKeys modes resolve live matcher collisions independently", () => {
