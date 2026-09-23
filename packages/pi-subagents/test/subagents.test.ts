@@ -643,6 +643,24 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /missing or unresolvable declared entrypoint/i,
     );
+    const missingPackageSkillDirectory = path.join(collisionRoot, "missing-package-skill");
+    mkdirSync(missingPackageSkillDirectory);
+    writeFileSync(path.join(missingPackageSkillDirectory, "extension.ts"), "export default () => {};\n");
+    writeFileSync(
+      path.join(missingPackageSkillDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./missing.md"] } }),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "missing-package-skill",
+          { task: "missing package skill", extensions: [{ path: missingPackageSkillDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /missing or unreadable declared skill/i,
+    );
     const nestedExtensionDirectory = path.join(collisionRoot, "nested-extension");
     const nestedExtensionPackage = path.join(nestedExtensionDirectory, "nested");
     mkdirSync(path.join(nestedExtensionPackage, "empty"), { recursive: true });
@@ -710,6 +728,10 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
     writeFileSync(
       path.join(extensionlessManifestDirectory, "package.json"),
       JSON.stringify({ pi: { skills: ["./SKILL.md"] } }),
+    );
+    writeFileSync(
+      path.join(extensionlessManifestDirectory, "SKILL.md"),
+      "---\nname: extensionless-manifest\ndescription: Valid skill.\n---\n",
     );
     writeFileSync(path.join(extensionlessManifestDirectory, "index.ts"), "export default () => {};\n");
     await assert.rejects(

@@ -534,6 +534,52 @@ test("rejects every invalid enabled extension-package skill", async () => {
   }
 });
 
+test("rejects missing exact package skills before Pi silently omits them", async () => {
+  const packageDirectory = path.join(external, "missing-package-skill");
+  mkdirSync(packageDirectory);
+  writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+  writeFileSync(path.join(packageDirectory, "valid.md"), "---\nname: valid\ndescription: Valid skill.\n---\n");
+  const manifestPath = path.join(packageDirectory, "package.json");
+  for (const missing of ["./missing.md", "./missing-directory"]) {
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        pi: {
+          extensions: ["./extension.ts"],
+          skills: ["./valid.md", missing],
+          prompts: ["./missing-prompt.md"],
+          themes: ["./missing-theme.json"],
+        },
+      }),
+    );
+    await assert.rejects(
+      () =>
+        resolveResourceAttachments(
+          { extensions: [{ path: packageDirectory, tools: [] }] },
+          { cwd: project, projectTrusted: true, coreTools: [] },
+        ),
+      /missing or unreadable declared skill/i,
+    );
+  }
+
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      pi: {
+        extensions: ["./extension.ts"],
+        skills: ["./valid.md"],
+        prompts: ["./missing-prompt.md"],
+        themes: ["./missing-theme.json"],
+      },
+    }),
+  );
+  const resolved = await resolveResourceAttachments(
+    { extensions: [{ path: packageDirectory, tools: [] }] },
+    { cwd: project, projectTrusted: true, coreTools: [] },
+  );
+  assert.deepEqual(resolved.extensions, [{ path: packageDirectory, tools: [] }]);
+});
+
 test("bounds extension-package skill content before synchronous loading", async () => {
   const packageDirectory = path.join(external, "oversized-package-skills");
   const skillBodyBytes = Math.floor(MAX_SKILL_SCAN_BYTES / 2);
@@ -894,6 +940,10 @@ test("matches Pi package resolution and rejects incomplete or extensionless mani
   );
 
   writeFileSync(path.join(manifestOnlyDirectory, "package.json"), JSON.stringify({ pi: { skills: ["./SKILL.md"] } }));
+  writeFileSync(
+    path.join(manifestOnlyDirectory, "SKILL.md"),
+    "---\nname: manifest-only\ndescription: Valid skill.\n---\n",
+  );
   writeFileSync(path.join(manifestOnlyDirectory, "index.ts"), "export default () => {};\n");
   await assert.rejects(
     () =>
@@ -1086,6 +1136,24 @@ test("rejects unsupported filesystem object types", { skip: process.platform ===
         { cwd: project, projectTrusted: true, coreTools: [] },
       ),
     /manifest must be a regular file/i,
+  );
+
+  const fifoPackageSkillDirectory = path.join(external, "fifo-package-skill");
+  mkdirSync(fifoPackageSkillDirectory);
+  writeFileSync(path.join(fifoPackageSkillDirectory, "extension.ts"), "export default () => {};\n");
+  const fifoPackageSkill = path.join(fifoPackageSkillDirectory, "SKILL.md");
+  assert.equal(spawnSync("mkfifo", [fifoPackageSkill], { encoding: "utf8" }).status, 0);
+  writeFileSync(
+    path.join(fifoPackageSkillDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./SKILL.md"] } }),
+  );
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: fifoPackageSkillDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /missing or unreadable declared skill/i,
   );
 
   const packageResourceDirectory = path.join(external, "fifo-ignore-package-resource");

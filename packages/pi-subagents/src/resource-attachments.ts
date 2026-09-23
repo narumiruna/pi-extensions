@@ -411,8 +411,11 @@ async function inspectDeclaredPackageResourceEntries(
     }
     const resolved = path.resolve(directory, entrypoint);
     const resolvedStats = await statIfPresent(resolved);
-    if (!resolvedStats) continue;
-    if (resolvedStats.isDirectory()) await inspectPackageResourceDirectory(resolved, resourceType, state, false);
+    throwIfAttachmentAborted(state.signal);
+    if (resourceType === "skills" && (!resolvedStats || (!resolvedStats.isFile() && !resolvedStats.isDirectory()))) {
+      throw new Error("Subagent extension package must not contain a missing or unreadable declared skill.");
+    }
+    if (resolvedStats?.isDirectory()) await inspectPackageResourceDirectory(resolved, resourceType, state, false);
   }
 }
 
