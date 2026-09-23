@@ -485,6 +485,31 @@ async function handle() {}
   assert.equal(result.state, "failed");
   assert.match(result.error ?? "", /Failed to load extension.*\[attachment path\]\/index\.ts/iu);
   assert.doesNotMatch(result.error ?? "", /\/tmp\/private-extension/u);
+
+  const longAttachmentPath = `/tmp/${"nested/".repeat(400)}private-attachment-root`;
+  const repeatedDiagnostic = Array.from(
+    { length: 8 },
+    () => `Failed to load extension "${longAttachmentPath}/index.ts"`,
+  ).join("\n");
+  installFakePi(`
+process.stderr.write(${JSON.stringify(repeatedDiagnostic)});
+process.exit(1);
+async function handle() {}
+`);
+  const repeated = await runChild(childRequest({ extensions: [{ path: longAttachmentPath, tools: [] }] }));
+  assert.equal(repeated.state, "failed");
+  assert.match(repeated.error ?? "", /\[attachment path\]\/index\.ts/u);
+  assert.doesNotMatch(repeated.error ?? "", /private-attachment-root/u);
+
+  installFakePi(`
+process.stderr.write(${JSON.stringify(longAttachmentPath.slice(0, -4))});
+process.exit(1);
+async function handle() {}
+`);
+  const partial = await runChild(childRequest({ extensions: [{ path: longAttachmentPath, tools: [] }] }));
+  assert.equal(partial.state, "failed");
+  assert.match(partial.error ?? "", /\[attachment path\]/u);
+  assert.doesNotMatch(partial.error ?? "", /\/tmp\/nested/u);
 });
 
 test("runChild fails closed on oversized RPC output during attachment startup", async () => {

@@ -190,8 +190,34 @@ async function executeProcess(
   let errorMessage = "";
   let assistantFailed = false;
   let stderr = "";
-  const stderrCaptureBytes = MAX_ERROR_BYTES + maxAttachmentPathBytes(request);
+  let stderrRedactionCarry = "";
+  const stderrDecoder = new StringDecoder("utf8");
+  const diagnosticAttachmentPaths = attachmentPathVariants(request);
   let truncated = false;
+  const appendStderr = (value: string) => {
+    if (!value) return;
+    const limited = truncateTail(`${stderr}${value}`, MAX_ERROR_BYTES);
+    stderr = limited.text;
+    truncated ||= limited.truncated;
+  };
+  const pushStderr = (chunk: Buffer | string) => {
+    const combined = `${stderrRedactionCarry}${typeof chunk === "string" ? chunk : stderrDecoder.write(chunk)}`;
+    const carryLength = attachmentPathCarryLength(combined, diagnosticAttachmentPaths);
+    const boundary = combined.length - carryLength;
+    appendStderr(redactAttachmentPathVariants(combined.slice(0, boundary), diagnosticAttachmentPaths));
+    stderrRedactionCarry = combined.slice(boundary);
+  };
+  const flushStderr = () => {
+    const combined = `${stderrRedactionCarry}${stderrDecoder.end()}`;
+    const carryLength = attachmentPathCarryLength(combined, diagnosticAttachmentPaths);
+    const boundary = combined.length - carryLength;
+    appendStderr(
+      `${redactAttachmentPathVariants(combined.slice(0, boundary), diagnosticAttachmentPaths)}${
+        carryLength > 0 ? "[attachment path]" : ""
+      }`,
+    );
+    stderrRedactionCarry = "";
+  };
   let malformedEvents = 0;
   let rpcCounter = 0;
   let attachmentStartupPending = expectReadiness;
@@ -550,12 +576,9 @@ async function executeProcess(
       }
     }
     process.stdout?.on("data", (chunk) => decoder.push(chunk));
-    process.stderr?.on("data", (chunk) => {
-      const limited = truncateTail(`${stderr}${chunk.toString()}`, stderrCaptureBytes);
-      stderr = limited.text;
-      truncated ||= limited.truncated;
-    });
+    process.stderr?.on("data", (chunk: Buffer | string) => pushStderr(chunk));
     process.once("close", (code) => {
+      flushStderr();
       decoder.finish();
       finish(cancelled ? 130 : timedOut ? 124 : completed ? 0 : (code ?? 1));
     });
@@ -792,18 +815,25 @@ function parseReadinessFrame(buffer: Buffer): { ok: true } | { ok: false; error:
 }
 
 function redactAttachmentPaths(value: string, request: Pick<ChildRequest, "skills" | "extensions">): string {
+  return redactAttachmentPathVariants(value, attachmentPathVariants(request));
+}
+
+function redactAttachmentPathVariants(value: string, candidates: readonly string[]): string {
   let redacted = value;
-  for (const candidate of attachmentPathVariants(request)) {
-    redacted = redacted.replaceAll(candidate, "[attachment path]");
-  }
+  for (const candidate of candidates) redacted = redacted.replaceAll(candidate, "[attachment path]");
   return redacted;
 }
 
-function maxAttachmentPathBytes(request: Pick<ChildRequest, "skills" | "extensions">): number {
-  return attachmentPathVariants(request).reduce(
-    (maximum, candidate) => Math.max(maximum, Buffer.byteLength(candidate, "utf8")),
-    0,
+function attachmentPathCarryLength(value: string, candidates: readonly string[]): number {
+  const maximum = Math.min(
+    value.length,
+    candidates.reduce((length, candidate) => Math.max(length, candidate.length - 1), 0),
   );
+  for (let length = maximum; length > 0; length--) {
+    const suffix = value.slice(-length);
+    if (candidates.some((candidate) => candidate.length > length && candidate.startsWith(suffix))) return length;
+  }
+  return 0;
 }
 
 function attachmentPathVariants(request: Pick<ChildRequest, "skills" | "extensions">): string[] {
