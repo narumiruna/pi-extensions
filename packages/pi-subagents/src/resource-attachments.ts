@@ -1,4 +1,4 @@
-import { type Dirent, readdirSync, realpathSync, statSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "./message-broker.js";
@@ -64,6 +64,7 @@ export function resolveResourceAttachments(
     const tools = toolInputs.map(resolveExtensionToolName);
     let attachment = extensionsByPath.get(resolved);
     if (!attachment) {
+      assertResolvableExtensionAttachment(resolved, cwd, canonicalCwd, options.projectTrusted);
       attachment = { path: resolved, tools: [] };
       extensionsByPath.set(resolved, attachment);
       extensions.push(attachment);
@@ -244,6 +245,90 @@ function collectSkillCandidates(
 
 function throwInvalidDeclaredSkill(): never {
   throw new Error("Subagent skill attachment must not contain an invalid or unreadable declared skill.");
+}
+
+function assertResolvableExtensionAttachment(
+  extensionPath: string,
+  cwd: string,
+  canonicalCwd: string,
+  projectTrusted: boolean,
+): void {
+  const entrypoints = resolveAttachedExtensionEntrypoints(extensionPath);
+  if (entrypoints.length === 0) {
+    throw new Error("Subagent extension directory must contain at least one loadable Pi extension entrypoint.");
+  }
+  for (const entrypoint of entrypoints) {
+    const lexicalPath = path.resolve(entrypoint);
+    const canonicalPath = realpath(entrypoint, "Subagent extension entrypoint");
+    const stats = statSync(canonicalPath);
+    if (!stats.isFile() && !stats.isDirectory()) {
+      throw new Error("Subagent extension entrypoint must reference a file or directory.");
+    }
+    if (!projectTrusted && (isWithin(cwd, lexicalPath) || isWithin(canonicalCwd, canonicalPath))) {
+      throw new Error("Subagent extension cannot load a project path because the project is not trusted.");
+    }
+  }
+}
+
+function resolveAttachedExtensionEntrypoints(extensionPath: string): string[] {
+  if (!statSync(extensionPath).isDirectory()) return [extensionPath];
+  const explicit = resolveExtensionDirectoryEntrypoints(extensionPath);
+  const entrypoints = explicit ?? discoverExtensionEntrypoints(extensionPath);
+  return [...new Set(entrypoints.map((entrypoint) => path.resolve(entrypoint)))];
+}
+
+function resolveExtensionDirectoryEntrypoints(directory: string): string[] | null {
+  const manifestEntries = readExtensionManifestEntries(directory);
+  if (manifestEntries) {
+    const entrypoints = manifestEntries.map((entrypoint) => path.resolve(directory, entrypoint));
+    if (entrypoints.some((entrypoint) => !existsSync(entrypoint))) {
+      throw new Error("Subagent extension package must not contain a missing declared extension entrypoint.");
+    }
+    return entrypoints;
+  }
+  for (const filename of ["index.ts", "index.js"]) {
+    const entrypoint = path.join(directory, filename);
+    if (existsSync(entrypoint)) return [entrypoint];
+  }
+  return null;
+}
+
+function readExtensionManifestEntries(directory: string): string[] | undefined {
+  const manifestPath = path.join(directory, "package.json");
+  if (!existsSync(manifestPath)) return undefined;
+  try {
+    const document: unknown = JSON.parse(readFileSync(manifestPath, "utf8").replace(/^\uFEFF/u, ""));
+    if (!isRecord(document) || !isRecord(document.pi)) return undefined;
+    const entries = document.pi.extensions;
+    if (!Array.isArray(entries) || entries.length === 0 || !entries.every((entry) => typeof entry === "string")) {
+      return undefined;
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
+}
+
+function discoverExtensionEntrypoints(directory: string): string[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const entrypoints: string[] = [];
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if ((entry.isFile() || entry.isSymbolicLink()) && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
+      entrypoints.push(entryPath);
+      continue;
+    }
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      const nested = resolveExtensionDirectoryEntrypoints(entryPath);
+      if (nested) entrypoints.push(...nested);
+    }
+  }
+  return entrypoints;
 }
 
 function resolveExtensionToolName(value: unknown): string {

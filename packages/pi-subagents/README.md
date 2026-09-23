@@ -145,6 +145,7 @@ Every declared skill discovered within an attached directory must load successfu
 A skill is available for the child to discover and read when relevant; attaching it does not inject its complete body, add `read` or `bash`, or force the child to invoke it.
 
 Each `extensions` entry loads one trusted local extension file or directory and names the exact extension tools to activate initially.
+Extension directories must resolve to at least one Pi entrypoint, and every `pi.extensions` declaration must exist; partially resolved packages are rejected before launch.
 Use an empty `tools` list to load provider or lifecycle behavior without exposing an extension tool.
 The initial child allowlist contains only selected core tools, communication tools, and explicitly named extension tools.
 The parent verifies that every requested tool is active before it sends the task; otherwise the job fails without a model request.
@@ -154,7 +155,7 @@ Only local paths are accepted; npm, Git, URLs, and other scheme-based sources ar
 Duplicate skill paths are removed, and repeated extension paths are merged in first-use order.
 A job accepts up to 16 skills, 16 extension entries, and 64 selected core and extension tool names; each path is limited to 4 KiB of UTF-8 text and each extension tool name to 128 characters.
 The complete child bootstrap, including selected and communication tool names, must fit 16 KiB of UTF-8 JSON and oversized combinations are rejected before launch.
-When the project is untrusted, both lexical and symlink-resolved paths inside the child working directory are rejected, while explicit external paths remain available.
+When the project is untrusted, both lexical and symlink-resolved paths inside the child working directory are rejected, including skills discovered below an ancestor and entrypoints resolved from an extension directory, while explicit external paths remain available.
 
 The optional `thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
 Omitting it captures the main agent's effective level when `subagent_spawn` executes.

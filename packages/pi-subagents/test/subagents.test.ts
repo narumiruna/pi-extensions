@@ -529,6 +529,38 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /project.*not trusted/i,
     );
+    const projectExtensionDirectory = path.join(collisionRoot, "project-extension");
+    mkdirSync(projectExtensionDirectory);
+    symlinkSync(path.resolve("packages/pi-subagents/src/index.ts"), path.join(projectExtensionDirectory, "index.ts"));
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "untrusted-project-extension",
+          { task: "untrusted project extension", extensions: [{ path: projectExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          context.ctx,
+        ),
+      /project.*not trusted/i,
+    );
+    const partialExtensionDirectory = path.join(collisionRoot, "partial-extension");
+    mkdirSync(partialExtensionDirectory);
+    writeFileSync(
+      path.join(partialExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts", "./missing.ts"] } }),
+    );
+    writeFileSync(path.join(partialExtensionDirectory, "valid.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "partially-missing-extension",
+          { task: "partially missing extension", extensions: [{ path: partialExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /missing declared extension entrypoint/i,
+    );
   } finally {
     rmSync(collisionRoot, { recursive: true, force: true });
   }

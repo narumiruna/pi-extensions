@@ -253,6 +253,104 @@ test("allows explicit external resources but rejects every loaded project path w
     () => resolveResourceAttachments({ skills: [external] }, { cwd: project, projectTrusted: false, coreTools: [] }),
     /project.*not trusted/i,
   );
+
+  writeFileSync(path.join(project, "package.json"), JSON.stringify({ pi: { extensions: ["./project.ts"] } }));
+  assert.throws(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: root, tools: [] }] },
+        { cwd: project, projectTrusted: false, coreTools: [] },
+      ),
+    /project.*not trusted/i,
+  );
+
+  const symlinkedExtensionDirectory = path.join(external, "symlinked-extension");
+  mkdirSync(symlinkedExtensionDirectory);
+  symlinkSync(projectExtension, path.join(symlinkedExtensionDirectory, "index.ts"));
+  assert.throws(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: symlinkedExtensionDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: false, coreTools: [] },
+      ),
+    /project.*not trusted/i,
+  );
+});
+
+test("matches Pi extension directory resolution and rejects missing declared entrypoints", () => {
+  const packageDirectory = path.join(external, "package-extension");
+  const indexTsDirectory = path.join(external, "index-ts-extension");
+  const indexJsDirectory = path.join(external, "index-js-extension");
+  const discoveryDirectory = path.join(external, "discovered-extensions");
+  const emptyDirectory = path.join(external, "empty-extension");
+  const partialDirectory = path.join(external, "partial-extension");
+  for (const directory of [
+    packageDirectory,
+    indexTsDirectory,
+    indexJsDirectory,
+    discoveryDirectory,
+    emptyDirectory,
+    partialDirectory,
+  ]) {
+    mkdirSync(directory);
+  }
+
+  mkdirSync(path.join(packageDirectory, "nested"));
+  writeFileSync(
+    path.join(packageDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./first.ts", "./nested/second.js"] } }),
+  );
+  writeFileSync(path.join(packageDirectory, "first.ts"), "export default () => {};\n");
+  writeFileSync(path.join(packageDirectory, "nested", "second.js"), "export default () => {};\n");
+  writeFileSync(path.join(indexTsDirectory, "index.ts"), "export default () => {};\n");
+  writeFileSync(path.join(indexTsDirectory, "index.js"), "export default () => {};\n");
+  writeFileSync(path.join(indexJsDirectory, "index.js"), "export default () => {};\n");
+
+  mkdirSync(path.join(discoveryDirectory, "indexed"));
+  mkdirSync(path.join(discoveryDirectory, "packaged"));
+  writeFileSync(path.join(discoveryDirectory, "direct.ts"), "export default () => {};\n");
+  writeFileSync(path.join(discoveryDirectory, "indexed", "index.ts"), "export default () => {};\n");
+  writeFileSync(
+    path.join(discoveryDirectory, "packaged", "package.json"),
+    JSON.stringify({ pi: { extensions: ["./entry.ts"] } }),
+  );
+  writeFileSync(path.join(discoveryDirectory, "packaged", "entry.ts"), "export default () => {};\n");
+
+  assert.deepEqual(
+    resolveResourceAttachments(
+      {
+        extensions: [packageDirectory, indexTsDirectory, indexJsDirectory, discoveryDirectory].map((path) => ({
+          path,
+          tools: [],
+        })),
+      },
+      { cwd: project, projectTrusted: true, coreTools: [] },
+    ).extensions.map(({ path }) => path),
+    [packageDirectory, indexTsDirectory, indexJsDirectory, discoveryDirectory],
+  );
+
+  assert.throws(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: emptyDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /at least one loadable Pi extension entrypoint/i,
+  );
+
+  writeFileSync(
+    path.join(partialDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./valid.ts", "./missing.ts"] } }),
+  );
+  writeFileSync(path.join(partialDirectory, "valid.ts"), "export default () => {};\n");
+  assert.throws(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: partialDirectory, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /missing declared extension entrypoint/i,
+  );
 });
 
 test("rejects remote, missing, invalid, and oversized attachment inputs", () => {
