@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { isWithin } from "./attachment-utils.js";
 import {
   assertChildBootstrapCapacity,
   BROKER_CREDENTIAL_FD,
@@ -42,6 +43,7 @@ interface AssistantEvent {
   success?: boolean;
   error?: string;
   event?: string;
+  data?: unknown;
   message?: {
     role?: string;
     content?: Array<{ type?: string; text?: string }>;
@@ -55,12 +57,12 @@ interface PendingRpcCommand {
   resolve: () => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
-  onAccepted?: () => void;
+  onAccepted?: (response: AssistantEvent) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
 
-type ChildRpcCommand = { type: "get_state" } | { type: "prompt" | "steer"; message: string };
+type ChildRpcCommand = { type: "get_state" | "get_commands" } | { type: "prompt" | "steer"; message: string };
 
 export async function runChild(request: ChildRequest): Promise<ChildResult> {
   if (request.signal.aborted) return cancelledResult();
@@ -213,8 +215,11 @@ async function executeProcess(
   let attachmentStartupError: string | undefined;
   const pendingCommands = new Map<string, PendingRpcCommand>();
   let rpcInputError: Error | undefined;
-  let sendCommand: (command: ChildRpcCommand, onAccepted?: () => void, signal?: AbortSignal) => Promise<void> = () =>
-    Promise.reject(new Error("Subagent RPC process is unavailable."));
+  let sendCommand: (
+    command: ChildRpcCommand,
+    onAccepted?: (response: AssistantEvent) => void,
+    signal?: AbortSignal,
+  ) => Promise<void> = () => Promise.reject(new Error("Subagent RPC process is unavailable."));
   let onAgentSettled: () => void = () => undefined;
 
   const takePendingCommand = (id: string): PendingRpcCommand | undefined => {
@@ -233,11 +238,11 @@ async function executeProcess(
   const rejectPendingCommands = (error: Error) => {
     for (const id of [...pendingCommands.keys()]) rejectPendingCommand(id, error);
   };
-  const resolvePendingCommand = (id: string) => {
+  const resolvePendingCommand = (id: string, response: AssistantEvent) => {
     const pending = takePendingCommand(id);
     if (!pending) return;
     try {
-      pending.onAccepted?.();
+      pending.onAccepted?.(response);
       pending.resolve();
     } catch (error) {
       pending.reject(error instanceof Error ? error : new Error(String(error)));
@@ -268,12 +273,16 @@ async function executeProcess(
         const pending = pendingCommands.get(event.id);
         if (!pending) return;
         if (event.success === true) {
-          resolvePendingCommand(event.id);
+          resolvePendingCommand(event.id, event);
         } else {
           rejectPendingCommand(
             event.id,
             new Error(
-              typeof event.error === "string" ? event.error : `Subagent RPC ${pending.command} command failed.`,
+              pending.command === "get_commands"
+                ? "Subagent child resource attestation failed."
+                : typeof event.error === "string"
+                  ? event.error
+                  : `Subagent RPC ${pending.command} command failed.`,
             ),
           );
         }
@@ -499,18 +508,26 @@ async function executeProcess(
       terminate(1);
     };
     const confirmAttachmentStartup = () => {
-      void sendCommand(
-        { type: "get_state" },
-        () => {
+      void sendCommand({ type: "get_state" }, undefined, request.signal)
+        .then(async () => {
+          if (attachmentStartupError) throw new Error(attachmentStartupError);
+          if (!request.projectTrusted) {
+            // Pi's RPC get_commands includes effective skills and prompts after resources_discover.
+            // RPC themes have no UI or model-visible representation.
+            await sendCommand(
+              { type: "get_commands" },
+              (response) => assertTrustedChildResources(response.data, request.cwd),
+              request.signal,
+            );
+          }
           if (attachmentStartupError) throw new Error(attachmentStartupError);
           attachmentStartupPending = false;
           attachmentReady = true;
           startPrompt();
-        },
-        request.signal,
-      ).catch((error) => {
-        failReadiness(error instanceof Error ? error.message : String(error));
-      });
+        })
+        .catch((error) => {
+          failReadiness(error instanceof Error ? error.message : String(error));
+        });
     };
 
     request.signal.addEventListener("abort", onAbort, { once: true });
@@ -781,6 +798,36 @@ function killImmediateChild(process: ChildProcess): void {
     process.kill("SIGKILL");
   } catch {
     // The process may already be terminal.
+  }
+}
+
+function assertTrustedChildResources(value: unknown, cwd: string): void {
+  const invalid = () => new Error("Subagent child resource attestation returned invalid commands.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
+  const commands = (value as { commands?: unknown }).commands;
+  if (!Array.isArray(commands)) throw invalid();
+  let canonicalCwd: string;
+  try {
+    canonicalCwd = fs.realpathSync(cwd);
+  } catch {
+    throw invalid();
+  }
+  for (const command of commands) {
+    if (!command || typeof command !== "object" || Array.isArray(command)) throw invalid();
+    const entry = command as { source?: unknown; sourceInfo?: { path?: unknown } };
+    if (entry.source !== "skill" && entry.source !== "prompt") continue;
+    const resourcePath = entry.sourceInfo?.path;
+    if (typeof resourcePath !== "string" || !resourcePath) throw invalid();
+    const lexicalPath = path.resolve(cwd, resourcePath);
+    let canonicalPath: string;
+    try {
+      canonicalPath = fs.realpathSync(lexicalPath);
+    } catch {
+      throw invalid();
+    }
+    if (isWithin(cwd, lexicalPath) || isWithin(canonicalCwd, canonicalPath)) {
+      throw new Error("Subagent child cannot load project resources because the project is not trusted.");
+    }
   }
 }
 

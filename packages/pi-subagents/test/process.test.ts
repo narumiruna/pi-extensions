@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -447,6 +447,85 @@ async function handle(command) {
   });
 });
 
+test("runChild rejects hook-loaded project skills and prompts before sending the task", async () => {
+  const project = path.join(directory, "project");
+  mkdirSync(project);
+  const projectSkill = path.join(project, "SKILL.md");
+  writeFileSync(projectSkill, "---\nname: injected\ndescription: Injected\n---\n");
+  const outsideLink = path.join(directory, "outside-link.md");
+  symlinkSync(projectSkill, outsideLink);
+  for (const [resource, resourcePath] of [
+    ["skill", projectSkill],
+    ["prompt", projectSkill],
+    ["skill", outsideLink],
+  ] as const) {
+    const marker = path.join(directory, `prompt-${resource}-${resourcePath === outsideLink ? "symlink" : "direct"}`);
+    installFakePi(`
+globalThis.fakeCommands = [{ source: ${JSON.stringify(resource)}, sourceInfo: { path: ${JSON.stringify(resourcePath)} } }];
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  fs.writeFileSync(${JSON.stringify(marker)}, command.message);
+}
+setInterval(() => {}, 1000);
+`);
+    const result = await runChild(
+      childRequest({ cwd: project, extensions: [{ path: "/tmp/lifecycle-extension.ts", tools: [] }] }),
+    );
+    assert.equal(result.state, "failed");
+    assert.match(result.error ?? "", /cannot load project resources.*not trusted/i);
+    assert.equal(existsSync(marker), false);
+  }
+});
+
+test("runChild fails closed when loaded resource provenance is missing", async () => {
+  const marker = path.join(directory, "prompt-without-provenance");
+  installFakePi(`
+globalThis.fakeCommands = [{ source: "skill" }];
+async function handle(command) {
+  if (command.type === "prompt") fs.writeFileSync(${JSON.stringify(marker)}, command.message);
+}
+setInterval(() => {}, 1000);
+`);
+  const result = await runChild(childRequest({ extensions: [{ path: "/tmp/lifecycle-extension.ts", tools: [] }] }));
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /resource attestation returned invalid commands/i);
+  assert.equal(existsSync(marker), false);
+});
+
+test("runChild permits hook-loaded project resources only in a trusted project", async () => {
+  const projectSkill = path.join(directory, "SKILL.md");
+  writeFileSync(projectSkill, "---\nname: approved\ndescription: Approved\n---\n");
+  installFakePi(`
+globalThis.fakeCommands = [{ source: "skill", sourceInfo: { path: ${JSON.stringify(projectSkill)} } }];
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  respond(command);
+  event(message("trusted resource accepted"));
+  event({ type: "agent_settled" });
+}
+`);
+  const result = await runChild(
+    childRequest({ extensions: [{ path: "/tmp/lifecycle-extension.ts", tools: [] }], projectTrusted: true }),
+  );
+  assert.equal(result.state, "completed");
+  assert.equal(result.result, "trusted resource accepted");
+});
+
+test("runChild allows hook-loaded resources outside the untrusted project", async () => {
+  installFakePi(`
+globalThis.fakeCommands = [{ source: "skill", sourceInfo: { path: ${JSON.stringify(os.tmpdir())} } }];
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  respond(command);
+  event(message("accepted outside resource"));
+  event({ type: "agent_settled" });
+}
+`);
+  const result = await runChild(childRequest({ extensions: [{ path: "/tmp/lifecycle-extension.ts", tools: [] }] }));
+  assert.equal(result.state, "completed");
+  assert.equal(result.result, "accepted outside resource");
+});
+
 test("runChild rejects a tool registered by a different attachment before prompting", async () => {
   const promptMarker = path.join(directory, "wrong-tool-owner-prompt");
   installFakePi(`
@@ -852,6 +931,10 @@ ${source}
 const dispatch = async (command) => {
   if (command.type === "get_state") {
     respond(command);
+    return;
+  }
+  if (command.type === "get_commands") {
+    event({ id: command.id, type: "response", command: command.type, success: true, data: { commands: globalThis.fakeCommands ?? [] } });
     return;
   }
   await handle(command);
