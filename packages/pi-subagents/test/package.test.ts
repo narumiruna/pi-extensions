@@ -84,26 +84,40 @@ test("repository example skill documents every minimal-runtime operating respons
   }
 });
 
-test("published documentation defines attachment behavior and its security boundary", () => {
-  const documents = [
-    readFileSync(path.join(packageDirectory, "README.md"), "utf8"),
-    readFileSync(path.join(packageDirectory, "docs", "tools.md"), "utf8"),
-  ];
-  for (const document of documents) {
+test("published documentation separates tool usage from attachment behavior and safety", () => {
+  const readme = readFileSync(path.join(packageDirectory, "README.md"), "utf8");
+  const tools = readFileSync(path.join(packageDirectory, "docs", "tools.md"), "utf8");
+  const attachments = readFileSync(path.join(packageDirectory, "docs", "attachments.md"), "utf8");
+  const messaging = readFileSync(path.join(packageDirectory, "docs", "messaging.md"), "utf8");
+
+  assert.match(readme, /\]\(\.\/docs\/tools\.md\)/u);
+  assert.match(readme, /\]\(\.\/docs\/attachments\.md\)/u);
+  assert.match(readme, /\]\(\.\/docs\/messaging\.md\)/u);
+  assert.match(tools, /\]\(\.\/attachments\.md\)/u);
+  assert.match(tools, /\]\(\.\/messaging\.md\)/u);
+  assert.match(attachments, /\]\(\.\/tools\.md\)/u);
+  assert.match(messaging, /\]\(\.\/tools\.md\)/u);
+  for (const document of [readme, tools, attachments]) {
     assert.match(document, /`skills`/u);
     assert.match(document, /`extensions`/u);
-    assert.match(document, /progressive disclosure/iu);
-    assert.match(document, /at least one.*(?:skill Pi can load|loadable.*skill)/iu);
-    assert.match(document, /skill names?.*unique|duplicate skill names/iu);
-    assert.match(document, /every declared skill.*must load successfully/iu);
-    assert.match(document, /local path/iu);
-    assert.match(document, /project.*untrusted|untrusted.*project/iu);
-    assert.match(document, /not (?:an? )?(?:operating-system )?sandbox/iu);
-    assert.match(document, /process-local runtime API key/iu);
-    assert.match(document, /16 KiB.*(?:bootstrap|UTF-8 JSON)/iu);
-    assert.match(document, /(?:when any|whenever an) extension.*attached/iu);
-    assert.match(document, /startup.*(?:hook|failure)|failed extension startup/iu);
-    assert.match(document, /before.*(?:task|submitting).*model|before.*model request/isu);
     assert.doesNotMatch(document, /skillCount|extensionCount/u);
   }
+  for (const document of [readme, tools]) {
+    assert.match(document, /progressive disclosure/iu);
+    assert.match(document, /at least one.*loadable.*skill/iu);
+    assert.match(document, /skill names?.*unique/iu);
+    assert.match(document, /every non-ignored declared skill.*must load successfully/iu);
+    assert.match(document, /local path/iu);
+    assert.match(document, /not (?:in a |an? )?(?:operating-system )?sandbox/iu);
+    assert.match(document, /before.*(?:task|model)/iu);
+  }
+  assert.match(readme, /project.*trust/iu);
+  assert.match(readme, /process-local runtime API key/iu);
+  assert.match(attachments, /project is untrusted/iu);
+  assert.match(attachments, /bootstrap.*16 KiB/iu);
+  assert.match(attachments, /startup-hook errors/iu);
+  assert.match(attachments, /process-local runtime API key/iu);
+  assert.match(messaging, /first accepted response wins/iu);
+  assert.match(messaging, /cross-job responses/iu);
+  assert.match(messaging, /cancellation before RPC delivery/iu);
 });

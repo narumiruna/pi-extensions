@@ -111,7 +111,7 @@ Each job may have up to four unresolved or answered-but-not-consumed requests ac
 The terminal states are `completed`, `partial`, `failed`, `timed_out`, and `cancelled`.
 `subagent_inspect` never returns complete task text, child output, prompts, selected tools, attachment paths or totals, context, credentials, environment variables, requests, responses, or secrets.
 
-See [`docs/tools.md`](./docs/tools.md) for the concise schema reference.
+See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/attachments.md`](./docs/attachments.md) for attachment validation, and [`docs/messaging.md`](./docs/messaging.md) for messaging behavior.
 
 ## ⚙️ Job configuration
 
@@ -138,67 +138,32 @@ Omitting it selects `read`, `grep`, `find`, and `ls`, while an empty list gives 
 The runtime always adds `subagent_send` and child `subagent_wait` and removes duplicate names.
 Adding `edit` or `write` lets the child modify files, while `bash` or `powershell` grants unrestricted command execution.
 
-The optional `skills` list attaches local Markdown skill files or directories through Pi's progressive disclosure mechanism.
-Each path must contain at least one skill Pi can load, and skill names must be unique across explicit attachments and skills contributed by attached extension packages.
-Non-Markdown files, directories without a loadable skill, and duplicate skill names are rejected before launch.
-Every declared skill discovered within an attached directory and every enabled skill contributed by an attached extension package must load successfully; a valid sibling does not hide an invalid or unreadable declared skill, while Pi-ignored draft skills remain excluded.
-Combined explicit and extension-package skill preflight is asynchronous and cancellation-aware, and it rejects recursive directory links or requests exceeding 4,096 entries, depth 32, 4 MiB of candidate skill content, or 1 MiB of ignore-file content before Pi's synchronous loader runs.
-A skill is available for the child to discover and read when relevant; attaching it does not inject its complete body, add `read` or `bash`, or force the child to invoke it.
+The optional `skills` list attaches local Pi skills through progressive disclosure without injecting their full bodies or adding tools.
+Every attached skill path must contain at least one loadable skill, every non-ignored declared skill must load successfully, and skill names must be unique across attachments.
 
-Each `extensions` entry loads one trusted local extension file or directory and names the exact extension tools to activate initially.
-Extension directories must resolve to at least one Pi entrypoint, and every exact `pi.extensions` declaration must contribute a directly loadable entrypoint; partially resolved packages and authoritative Pi manifests without extensions are rejected before launch.
-Extension-package preflight is asynchronous and cancellation-aware, rejects source globs in every Pi resource declaration, recursive resource directory links, and non-regular manifests or ignore files, and limits Pi package discovery to 4,096 entries, depth 32, and 1 MiB of metadata.
-Extension tool names cannot overlap Pi core tools or the built-in `subagent_send` and `subagent_wait` communication tools.
-Use an empty `tools` list to load provider or lifecycle behavior without exposing an extension tool.
-The initial child allowlist contains only selected core tools, communication tools, and explicitly named extension tools.
-The parent verifies that every requested tool is active and registered by an entrypoint of its specified attachment before it sends the task; otherwise the job fails without a model request.
-The same extension tool name cannot be requested by different attachments.
+Each `extensions` entry loads a trusted local extension file or directory and selects its initial extension tools.
+An empty `tools` list loads provider or lifecycle behavior without initially exposing extension tools.
+The parent checks that each requested tool comes from its specified attachment before the child model receives the task.
+Attached extensions run with the child's user permissions and are not a sandbox.
 
-Attachment paths may be relative to the child working directory or absolute, must already exist as files or directories, and are canonicalized before launch.
-Only local paths are accepted; npm, Git, URLs, and other scheme-based sources are rejected.
-Duplicate skill paths are removed, and repeated extension paths are merged in first-use order.
-A job accepts up to 16 skills, 16 extension entries, and 64 selected core and extension tool names; each path is limited to 4 KiB of UTF-8 text and each extension tool name to 128 characters.
-The complete child bootstrap, including selected and communication tool names, must fit 16 KiB of UTF-8 JSON and oversized combinations are rejected before launch.
-On Windows, the complete child command line must also fit the 32,767 UTF-16 code-unit process limit before the job is queued.
-When the project is untrusted, both lexical and symlink-resolved paths inside the child working directory are rejected for attachments and every resource an extension package resolves, while explicit external paths remain available.
+Attachments must be existing local paths, not npm, Git, or URL sources.
+Project-local attachments and resources resolved from their packages require project trust, including paths that symlink into the project.
+A job accepts up to 16 skill paths, 16 extension entries, and 64 selected work tools.
+The child inherits the main agent's effective model and thinking level by default; there is no per-job model override.
+Parent-only extension providers require an attached extension that registers them in the child.
+Process-local runtime API keys, including a parent-only `--api-key`, are unavailable to the child; use stored or inherited environment credentials.
 
-The optional `thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
-Omitting it captures the main agent's effective level when `subagent_spawn` executes.
-The child inherits the main agent's effective provider and model at that time.
-
-Without an attached extension, spawn rejects a provider registered only by a parent extension.
-With an attachment, spawn allows child startup because that extension may register the provider; child startup fails normally if it does not.
-Process-local runtime API keys, including a parent-only `--api-key`, are always rejected.
-Attached providers must use stored or inherited environment credentials that the child can read independently.
-The extension does not expose a per-job model override.
+See [Attachment behavior](./docs/attachments.md) for detailed path checks, package preflight, tool ownership, and resource limits.
 
 ## 🔄 Messaging, lifecycle, and retention
 
-The session starts one TCP broker on `127.0.0.1` with an operating-system-assigned ephemeral port.
-Each job receives one cryptographically random token bound to its job identity and session generation.
-The parent passes broker credentials and non-secret expected tool names once through a private inherited pipe instead of placing them in the child's initial environment or command line.
-The child bridge reads and closes that descriptor before attached extensions load.
-When any extension is attached, a separate readiness probe loaded after the attachments reports whether the complete initial tool allowlist is active through a second private descriptor.
-The child reports tool-source fingerprints over the readiness pipe; the parent matches them against preflight-resolved attachment entrypoints and uses an ordered RPC barrier to reject attachment errors from startup hooks before sending the task.
-The execution timeout still starts only after Pi accepts the RPC prompt.
+A main-originated request to a queued job waits for Pi RPC readiness before delivery. After delivery starts, cancellation stops only the caller's wait; the request may still arrive. An interrupted child-originated request remains active and can be waited on again.
 
-Each child runs in Pi RPC mode so the parent can inject a main-originated request through `steer` after the initial prompt is accepted.
-Each child broker call uses one request-scoped connection, while a response wait uses an abortable long poll.
-A main-originated request to a queued job waits for RPC readiness before delivery is accepted.
-After RPC accepts the steering message, the runtime interrupts active child response waits so the queued request can reach the child model.
-Caller cancellation before RPC delivery starts rolls the request back.
-Once RPC delivery starts, cancellation stops only the caller's wait; the request may still arrive and remains answerable until delivery fails or the job terminates.
-The interrupted child-originated requests remain active and retryable.
+The first accepted `subagent_send` response wins; repeated responses do not replace it. The execution timeout starts only after Pi accepts the RPC prompt. Jobs reach exactly one terminal state, and inspection retains up to 32 terminal records for up to 24 hours within the current session.
 
-The first accepted `subagent_send` response wins.
-Repeated responses acknowledge the existing answer without replacing it.
-A child may retry `subagent_wait` after a wait timeout because the underlying request remains active.
+The broker uses loopback connections and per-job credentials passed through a private pipe, not the child's initial environment or command line. Cancelling a job or replacing the session revokes those credentials, stops pending work, and prevents stale completion delivery.
 
-A new job starts as `queued`, transitions to `running`, and reaches exactly one terminal state.
-The runtime retains up to 32 recent terminal records for up to 24 hours within the current extension session.
-Inspection reports older records removed by retention bounds through `omitted.jobs`.
-Cancelling or terminalizing a job revokes its token and rejects pending child waits before stale output can replace the terminal state.
-Session replacement and shutdown cancel active work, suppress stale completion delivery, revoke credentials, close sockets, and stop the broker.
+See [Messaging and lifecycle](./docs/messaging.md) for delivery, retry, retention, and shutdown details.
 
 ## 🔀 Migrating from 2.x
 
