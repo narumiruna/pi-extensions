@@ -1,22 +1,15 @@
 import { type Dirent, statSync } from "node:fs";
-import {
-  opendir as opendirAsync,
-  readFile as readFileAsync,
-  realpath as realpathAsync,
-  stat as statAsync,
-} from "node:fs/promises";
+import { opendir as opendirAsync, realpath as realpathAsync, stat as statAsync } from "node:fs/promises";
 import * as path from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import ignore from "ignore";
 import {
-  ATTACHMENT_IGNORE_FILE_NAMES,
+  addAttachmentIgnoreRules,
   type IgnoreMatcher,
   isAbortError,
   isWithin,
-  prefixIgnorePattern,
   realpath,
   throwIfAttachmentAborted,
-  throwInvalidAttachmentIgnoreFile,
   toPosixPath,
 } from "./attachment-utils.js";
 
@@ -169,7 +162,10 @@ async function collectSkillCandidates(
   }
   state.ancestors.add(canonicalDirectory);
   try {
-    await addSkillIgnoreRules(ignoreMatcher, directory, rootDirectory, state);
+    await addAttachmentIgnoreRules(ignoreMatcher, directory, rootDirectory, state.signal, (_ignorePath, bytes) => {
+      state.ignoreBytes += bytes;
+      if (state.ignoreBytes > MAX_SKILL_IGNORE_BYTES) throwSkillScanLimit();
+    });
     let directoryHandle: Awaited<ReturnType<typeof opendirAsync>>;
     try {
       directoryHandle = await opendirAsync(directory);
@@ -252,44 +248,6 @@ async function collectSkillCandidates(
 function addSkillBytes(state: SkillScanState, bytes: number): void {
   state.skillBytes += bytes;
   if (state.skillBytes > MAX_SKILL_SCAN_BYTES) throwSkillScanLimit();
-}
-
-async function addSkillIgnoreRules(
-  ignoreMatcher: IgnoreMatcher,
-  directory: string,
-  rootDirectory: string,
-  state: SkillScanState,
-): Promise<void> {
-  const relativeDirectory = path.relative(rootDirectory, directory);
-  const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
-  for (const filename of ATTACHMENT_IGNORE_FILE_NAMES) {
-    throwIfAttachmentAborted(state.signal);
-    const ignorePath = path.join(directory, filename);
-    let ignoreStats: Awaited<ReturnType<typeof statAsync>>;
-    try {
-      ignoreStats = await statAsync(ignorePath);
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-      throwIfAttachmentAborted(state.signal);
-      continue;
-    }
-    if (!ignoreStats.isFile()) throwInvalidAttachmentIgnoreFile();
-    state.ignoreBytes += ignoreStats.size;
-    if (state.ignoreBytes > MAX_SKILL_IGNORE_BYTES) throwSkillScanLimit();
-    try {
-      const content = await readFileAsync(ignorePath, { encoding: "utf8", signal: state.signal });
-      throwIfAttachmentAborted(state.signal);
-      const patterns = content
-        .split(/\r?\n/u)
-        .map((line) => prefixIgnorePattern(line, prefix))
-        .filter((line): line is string => line !== null);
-      if (patterns.length > 0) ignoreMatcher.add(patterns);
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-      throwIfAttachmentAborted(state.signal);
-      // Pi ignores unreadable ignore files.
-    }
-  }
 }
 
 function isSkillScanLimitError(error: unknown): boolean {

@@ -9,15 +9,13 @@ import * as path from "node:path";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import ignore from "ignore";
 import {
-  ATTACHMENT_IGNORE_FILE_NAMES,
+  addAttachmentIgnoreRules,
   type IgnoreMatcher,
   isAbortError,
   isRecord,
   isWithin,
-  prefixIgnorePattern,
   realpath,
   throwIfAttachmentAborted,
-  throwInvalidAttachmentIgnoreFile,
   toolSourceId,
   toPosixPath,
 } from "./attachment-utils.js";
@@ -424,16 +422,12 @@ async function inspectPackageResourceDirectory(
   state: ExtensionScanState,
   enforceTrust = true,
 ): Promise<void> {
-  const ignoreMatcher = ignore();
-  if (resourceType === "skills") {
-    await inspectPackageSkillDirectory(directory, ignoreMatcher, directory, 0, state, enforceTrust);
-  } else {
-    await inspectRecursivePackageDirectory(directory, resourceType, ignoreMatcher, directory, 0, state, enforceTrust);
-  }
+  await inspectPackageResourceTree(directory, resourceType, ignore(), directory, 0, state, enforceTrust);
 }
 
-async function inspectPackageSkillDirectory(
+async function inspectPackageResourceTree(
   directory: string,
+  resourceType: PackageResourceType,
   ignoreMatcher: IgnoreMatcher,
   rootDirectory: string,
   depth: number,
@@ -445,53 +439,18 @@ async function inspectPackageSkillDirectory(
   try {
     await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state, enforceTrust);
     const entries = await readBoundedPackageEntries(directory, state, "skip");
-    const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
-    if (rootSkill) {
-      const skillPath = path.join(directory, rootSkill.name);
-      const skillStats = await statIfPresent(skillPath);
-      const relativePath = toPosixPath(path.relative(rootDirectory, skillPath));
-      if (skillStats?.isFile() && !ignoreMatcher.ignores(relativePath)) {
-        if (enforceTrust) assertExtensionPackagePathTrusted(skillPath, "extension package resource", state);
-        return;
-      }
-    }
-    for (const entry of entries) {
-      throwIfAttachmentAborted(state.signal);
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-      const entryPath = path.join(directory, entry.name);
-      const entryStats = await statIfPresent(entryPath);
-      if (!entryStats) continue;
-      const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
-      if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
-      if (entryStats.isFile()) {
-        if (enforceTrust && directory === rootDirectory && entry.name.endsWith(".md")) {
-          assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+    if (resourceType === "skills") {
+      const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
+      if (rootSkill) {
+        const skillPath = path.join(directory, rootSkill.name);
+        const skillStats = await statIfPresent(skillPath);
+        const relativePath = toPosixPath(path.relative(rootDirectory, skillPath));
+        if (skillStats?.isFile() && !ignoreMatcher.ignores(relativePath)) {
+          if (enforceTrust) assertExtensionPackagePathTrusted(skillPath, "extension package resource", state);
+          return;
         }
-        continue;
       }
-      if (!entryStats.isDirectory()) continue;
-      if (enforceTrust) assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
-      await inspectPackageSkillDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state, enforceTrust);
     }
-  } finally {
-    state.ancestors.delete(canonicalDirectory);
-  }
-}
-
-async function inspectRecursivePackageDirectory(
-  directory: string,
-  resourceType: Exclude<PackageResourceType, "skills">,
-  ignoreMatcher: IgnoreMatcher,
-  rootDirectory: string,
-  depth: number,
-  state: ExtensionScanState,
-  enforceTrust: boolean,
-): Promise<void> {
-  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state, enforceTrust);
-  if (!canonicalDirectory) return;
-  try {
-    await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state, enforceTrust);
-    const entries = await readBoundedPackageEntries(directory, state, "skip");
     for (const entry of entries) {
       throwIfAttachmentAborted(state.signal);
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
@@ -501,7 +460,9 @@ async function inspectRecursivePackageDirectory(
       const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
       if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
       if (entryStats.isFile()) {
-        const isResourceFile = resourceType === "themes" ? entry.name.endsWith(".json") : entry.name.endsWith(".md");
+        const isResourceFile =
+          entry.name.endsWith(resourceType === "themes" ? ".json" : ".md") &&
+          (resourceType !== "skills" || directory === rootDirectory);
         if (enforceTrust && isResourceFile) {
           assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
         }
@@ -509,7 +470,7 @@ async function inspectRecursivePackageDirectory(
       }
       if (!entryStats.isDirectory()) continue;
       if (enforceTrust) assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
-      await inspectRecursivePackageDirectory(
+      await inspectPackageResourceTree(
         entryPath,
         resourceType,
         ignoreMatcher,
@@ -604,31 +565,11 @@ async function addPackageIgnoreRules(
   state: ExtensionScanState,
   enforceTrust: boolean,
 ): Promise<void> {
-  const relativeDirectory = path.relative(rootDirectory, directory);
-  const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
-  for (const filename of ATTACHMENT_IGNORE_FILE_NAMES) {
-    throwIfAttachmentAborted(state.signal);
-    const ignorePath = path.join(directory, filename);
-    const ignoreStats = await statIfPresent(ignorePath);
-    if (!ignoreStats) continue;
-    if (!ignoreStats.isFile()) throwInvalidAttachmentIgnoreFile();
+  await addAttachmentIgnoreRules(ignoreMatcher, directory, rootDirectory, state.signal, (ignorePath, bytes) => {
     if (enforceTrust) assertExtensionPackagePathTrusted(ignorePath, "extension package resource", state);
-    state.metadataBytes += ignoreStats.size;
+    state.metadataBytes += bytes;
     if (state.metadataBytes > MAX_EXTENSION_METADATA_BYTES) throwExtensionScanLimit();
-    try {
-      const content = await readFileAsync(ignorePath, { encoding: "utf8", signal: state.signal });
-      throwIfAttachmentAborted(state.signal);
-      const patterns = content
-        .split(/\r?\n/u)
-        .map((line) => prefixIgnorePattern(line, prefix))
-        .filter((line): line is string => line !== null);
-      if (patterns.length > 0) ignoreMatcher.add(patterns);
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-      throwIfAttachmentAborted(state.signal);
-      // Pi ignores unreadable ignore files.
-    }
-  }
+  });
 }
 
 async function readBoundedPackageEntries(

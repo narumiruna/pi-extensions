@@ -785,6 +785,51 @@ test("skips ignored or undiscoverable project symlinks before enforcing trust", 
   assert.deepEqual(result.extensions, [{ path: packageDirectory, tools: [] }]);
 });
 
+test("package skill roots shadow nested project paths", async () => {
+  const packageDirectory = path.join(external, "root-skill-package");
+  const skillsDirectory = path.join(packageDirectory, "skills");
+  const projectSkillDirectory = path.join(project, "project-skill");
+  mkdirSync(skillsDirectory, { recursive: true });
+  mkdirSync(projectSkillDirectory);
+  writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+  writeFileSync(path.join(skillsDirectory, "SKILL.md"), "---\nname: root\ndescription: Root skill.\n---\n");
+  writeFileSync(path.join(projectSkillDirectory, "SKILL.md"), "---\nname: project\ndescription: Project skill.\n---\n");
+  symlinkSync(projectSkillDirectory, path.join(skillsDirectory, "shadowed"));
+  writeFileSync(
+    path.join(packageDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skills"] } }),
+  );
+
+  const result = await resolveResourceAttachments(
+    { extensions: [{ path: packageDirectory, tools: [] }] },
+    { cwd: project, projectTrusted: false, coreTools: [] },
+  );
+  assert.deepEqual(result.extensions, [{ path: packageDirectory, tools: [] }]);
+});
+
+test("nested package skill ignores skip project paths before trust checks", async () => {
+  const packageDirectory = path.join(external, "nested-ignore-package");
+  const nestedDirectory = path.join(packageDirectory, "skills", "nested");
+  const projectSkillDirectory = path.join(project, "project-skill");
+  mkdirSync(path.join(nestedDirectory, "valid"), { recursive: true });
+  mkdirSync(projectSkillDirectory);
+  writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+  writeFileSync(path.join(nestedDirectory, "valid", "SKILL.md"), "---\nname: valid\ndescription: Valid skill.\n---\n");
+  writeFileSync(path.join(projectSkillDirectory, "SKILL.md"), "---\nname: project\ndescription: Project skill.\n---\n");
+  symlinkSync(projectSkillDirectory, path.join(nestedDirectory, "ignored"));
+  writeFileSync(path.join(nestedDirectory, ".fdignore"), "ignored/\n");
+  writeFileSync(
+    path.join(packageDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skills"] } }),
+  );
+
+  const result = await resolveResourceAttachments(
+    { extensions: [{ path: packageDirectory, tools: [] }] },
+    { cwd: project, projectTrusted: false, coreTools: [] },
+  );
+  assert.deepEqual(result.extensions, [{ path: packageDirectory, tools: [] }]);
+});
+
 test("matches Pi package resolution and rejects incomplete or extensionless manifests", async () => {
   const packageDirectory = path.join(external, "package-extension");
   const indexTsDirectory = path.join(external, "index-ts-extension");

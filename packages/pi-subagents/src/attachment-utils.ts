@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type ignore from "ignore";
 import { sanitizeTerminalText } from "./message-broker.js";
 
-export const ATTACHMENT_IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+const ATTACHMENT_IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 
 export type IgnoreMatcher = ReturnType<typeof ignore>;
 
-export function throwInvalidAttachmentIgnoreFile(): never {
+function throwInvalidAttachmentIgnoreFile(): never {
   throw new Error("Subagent attachment ignore files must be regular files.");
 }
 
@@ -23,7 +24,7 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-export function prefixIgnorePattern(line: string, prefix: string): string | null {
+function prefixIgnorePattern(line: string, prefix: string): string | null {
   const trimmed = line.trim();
   if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) return null;
   let pattern = line;
@@ -37,6 +38,44 @@ export function prefixIgnorePattern(line: string, prefix: string): string | null
   if (pattern.startsWith("/")) pattern = pattern.slice(1);
   const prefixed = prefix ? `${prefix}${pattern}` : pattern;
   return negated ? `!${prefixed}` : prefixed;
+}
+
+export async function addAttachmentIgnoreRules(
+  ignoreMatcher: IgnoreMatcher,
+  directory: string,
+  rootDirectory: string,
+  signal: AbortSignal | undefined,
+  accountForFile: (ignorePath: string, bytes: number) => void,
+): Promise<void> {
+  const relativeDirectory = path.relative(rootDirectory, directory);
+  const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
+  for (const filename of ATTACHMENT_IGNORE_FILE_NAMES) {
+    throwIfAttachmentAborted(signal);
+    const ignorePath = path.join(directory, filename);
+    let ignoreStats: Awaited<ReturnType<typeof stat>>;
+    try {
+      ignoreStats = await stat(ignorePath);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throwIfAttachmentAborted(signal);
+      continue;
+    }
+    if (!ignoreStats.isFile()) throwInvalidAttachmentIgnoreFile();
+    accountForFile(ignorePath, ignoreStats.size);
+    try {
+      const content = await readFile(ignorePath, { encoding: "utf8", signal });
+      throwIfAttachmentAborted(signal);
+      const patterns = content
+        .split(/\r?\n/u)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => line !== null);
+      if (patterns.length > 0) ignoreMatcher.add(patterns);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throwIfAttachmentAborted(signal);
+      // Pi ignores unreadable ignore files.
+    }
+  }
 }
 
 export function toPosixPath(value: string): string {
