@@ -77,6 +77,7 @@ export async function resolveResourceAttachments(
 
   const extensions: ExtensionAttachment[] = [];
   const extensionsByPath = new Map<string, ExtensionAttachment>();
+  const packageSkillPaths: string[] = [];
   for (const candidate of extensionInputs) {
     if (!isRecord(candidate) || Object.keys(candidate).some((key) => key !== "path" && key !== "tools")) {
       throw new Error("Each subagent extension must contain only path and tools.");
@@ -91,7 +92,15 @@ export async function resolveResourceAttachments(
     }
     let attachment = extensionsByPath.get(resolved);
     if (!attachment) {
-      await assertResolvableExtensionAttachment(resolved, cwd, canonicalCwd, options.projectTrusted, options.signal);
+      packageSkillPaths.push(
+        ...(await assertResolvableExtensionAttachment(
+          resolved,
+          cwd,
+          canonicalCwd,
+          options.projectTrusted,
+          options.signal,
+        )),
+      );
       attachment = { path: resolved, tools: [] };
       extensionsByPath.set(resolved, attachment);
       extensions.push(attachment);
@@ -99,6 +108,11 @@ export async function resolveResourceAttachments(
     for (const tool of tools) {
       if (!attachment.tools.includes(tool)) attachment.tools.push(tool);
     }
+  }
+
+  if (packageSkillPaths.length > 0) {
+    throwIfAttachmentAborted(options.signal);
+    assertNoSkillNameCollisions(loadExplicitSkills([...packageSkillPaths, ...skills], cwd).diagnostics);
   }
 
   const effectiveTools = [...new Set([...options.coreTools, ...extensions.flatMap((extension) => extension.tools)])];
@@ -457,7 +471,7 @@ async function assertResolvableExtensionAttachment(
   canonicalCwd: string,
   projectTrusted: boolean,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<string[]> {
   await inspectExtensionAttachment(extensionPath, cwd, canonicalCwd, projectTrusted, signal);
   throwIfAttachmentAborted(signal);
   const resolved = await resolveAttachedExtensionResources(extensionPath, cwd);
@@ -469,10 +483,16 @@ async function assertResolvableExtensionAttachment(
   for (const entrypoint of entrypoints.flatMap(resolveDirectExtensionLoadPaths)) {
     assertTrustedResolvedPath(entrypoint, "extension entrypoint", cwd, canonicalCwd, projectTrusted);
   }
-  const packageResources = [resolved.skills, resolved.prompts, resolved.themes].flatMap(enabledResourcePaths);
+  const packageSkills = enabledResourcePaths(resolved.skills);
+  const packageResources = [
+    packageSkills,
+    enabledResourcePaths(resolved.prompts),
+    enabledResourcePaths(resolved.themes),
+  ].flat();
   for (const resource of packageResources) {
     assertTrustedResolvedPath(resource, "extension package resource", cwd, canonicalCwd, projectTrusted);
   }
+  return packageSkills;
 }
 
 function resolveDirectExtensionLoadPaths(entrypoint: string): string[] {
@@ -594,20 +614,21 @@ async function inspectAutoExtensionDirectory(
   directory: string,
   discoverContents: boolean,
   state: ExtensionScanState,
+  enforceTrust = true,
 ): Promise<boolean> {
   throwIfAttachmentAborted(state.signal);
-  assertExtensionPackagePathTrusted(directory, "extension entrypoint", state);
-  const inspected = await inspectPiManifest(directory, state);
+  if (enforceTrust) assertExtensionPackagePathTrusted(directory, "extension entrypoint", state);
+  const inspected = await inspectPiManifest(directory, state, enforceTrust);
   const sourceEntries = inspected.manifest?.extensions?.filter((entrypoint) => !isExtensionOverridePattern(entrypoint));
   if (sourceEntries && sourceEntries.length > 0) {
     await inspectDeclaredExtensionEntries(directory, inspected.manifest?.extensions, false, state);
     return true;
   }
-  if (await hasRegularExtensionIndex(directory, state)) return true;
+  if (await hasRegularExtensionIndex(directory, state, enforceTrust)) return true;
   if (!discoverContents) return false;
 
   const ignoreMatcher = ignore();
-  await addPackageIgnoreRules(ignoreMatcher, directory, directory, state);
+  await addPackageIgnoreRules(ignoreMatcher, directory, directory, state, enforceTrust);
   const entries = await readBoundedExtensionEntries(directory, state);
   let found = false;
   for (const entry of entries) {
@@ -620,11 +641,11 @@ async function inspectAutoExtensionDirectory(
     if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
     if (entryStats.isFile()) {
       if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".js")) continue;
-      assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
+      if (enforceTrust) assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
       found = true;
     } else if (entryStats.isDirectory()) {
-      assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
-      if (await inspectAutoExtensionDirectory(entryPath, false, state)) found = true;
+      if (enforceTrust) assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
+      if (await inspectAutoExtensionDirectory(entryPath, false, state, enforceTrust)) found = true;
     }
   }
   return found;
@@ -637,6 +658,7 @@ async function inspectDeclaredExtensionEntries(
   state: ExtensionScanState,
 ): Promise<void> {
   if (!entries) return;
+  // Bound declared trees here, then trust-gate only Pi's final enabled resources after manifest overrides.
   for (const entrypoint of entries) {
     throwIfAttachmentAborted(state.signal);
     state.entries++;
@@ -648,12 +670,11 @@ async function inspectDeclaredExtensionEntries(
     const resolved = path.resolve(directory, entrypoint);
     const resolvedStats = await statIfPresent(resolved);
     if (!resolvedStats) throwUnresolvableExtensionEntrypoint();
-    assertExtensionPackagePathTrusted(resolved, "extension entrypoint", state);
     if (resolvedStats.isFile()) continue;
     if (!resolvedStats.isDirectory()) throwUnresolvableExtensionEntrypoint();
     if (expandDirectories) {
-      if (!(await inspectAutoExtensionDirectory(resolved, true, state))) throwUnresolvableExtensionEntrypoint();
-    } else if (!(await hasRegularExtensionIndex(resolved, state))) {
+      if (!(await inspectAutoExtensionDirectory(resolved, true, state, false))) throwUnresolvableExtensionEntrypoint();
+    } else if (!(await hasRegularExtensionIndex(resolved, state, false))) {
       throwUnresolvableExtensionEntrypoint();
     }
   }
@@ -666,6 +687,7 @@ async function inspectDeclaredPackageResourceEntries(
   state: ExtensionScanState,
 ): Promise<void> {
   if (!entries) return;
+  // Bound declared trees here, then trust-gate only Pi's final enabled resources after manifest overrides.
   for (const entrypoint of entries) {
     throwIfAttachmentAborted(state.signal);
     state.entries++;
@@ -677,8 +699,7 @@ async function inspectDeclaredPackageResourceEntries(
     const resolved = path.resolve(directory, entrypoint);
     const resolvedStats = await statIfPresent(resolved);
     if (!resolvedStats) continue;
-    assertExtensionPackagePathTrusted(resolved, "extension package resource", state);
-    if (resolvedStats.isDirectory()) await inspectPackageResourceDirectory(resolved, resourceType, state);
+    if (resolvedStats.isDirectory()) await inspectPackageResourceDirectory(resolved, resourceType, state, false);
   }
 }
 
@@ -686,12 +707,13 @@ async function inspectPackageResourceDirectory(
   directory: string,
   resourceType: PackageResourceType,
   state: ExtensionScanState,
+  enforceTrust = true,
 ): Promise<void> {
   const ignoreMatcher = ignore();
   if (resourceType === "skills") {
-    await inspectPackageSkillDirectory(directory, ignoreMatcher, directory, 0, state);
+    await inspectPackageSkillDirectory(directory, ignoreMatcher, directory, 0, state, enforceTrust);
   } else {
-    await inspectRecursivePackageDirectory(directory, resourceType, ignoreMatcher, directory, 0, state);
+    await inspectRecursivePackageDirectory(directory, resourceType, ignoreMatcher, directory, 0, state, enforceTrust);
   }
 }
 
@@ -701,11 +723,12 @@ async function inspectPackageSkillDirectory(
   rootDirectory: string,
   depth: number,
   state: ExtensionScanState,
+  enforceTrust: boolean,
 ): Promise<void> {
-  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state);
+  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state, enforceTrust);
   if (!canonicalDirectory) return;
   try {
-    await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state);
+    await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state, enforceTrust);
     const entries = await readBoundedPackageResourceEntries(directory, state);
     const rootSkill = entries.find((entry) => entry.name === "SKILL.md");
     if (rootSkill) {
@@ -713,7 +736,7 @@ async function inspectPackageSkillDirectory(
       const skillStats = await statIfPresent(skillPath);
       const relativePath = toPosixPath(path.relative(rootDirectory, skillPath));
       if (skillStats?.isFile() && !ignoreMatcher.ignores(relativePath)) {
-        assertExtensionPackagePathTrusted(skillPath, "extension package resource", state);
+        if (enforceTrust) assertExtensionPackagePathTrusted(skillPath, "extension package resource", state);
         return;
       }
     }
@@ -726,14 +749,14 @@ async function inspectPackageSkillDirectory(
       const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
       if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
       if (entryStats.isFile()) {
-        if (directory === rootDirectory && entry.name.endsWith(".md")) {
+        if (enforceTrust && directory === rootDirectory && entry.name.endsWith(".md")) {
           assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
         }
         continue;
       }
       if (!entryStats.isDirectory()) continue;
-      assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
-      await inspectPackageSkillDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state);
+      if (enforceTrust) assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+      await inspectPackageSkillDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state, enforceTrust);
     }
   } finally {
     state.ancestors.delete(canonicalDirectory);
@@ -747,11 +770,12 @@ async function inspectRecursivePackageDirectory(
   rootDirectory: string,
   depth: number,
   state: ExtensionScanState,
+  enforceTrust: boolean,
 ): Promise<void> {
-  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state);
+  const canonicalDirectory = await enterPackageResourceDirectory(directory, depth, state, enforceTrust);
   if (!canonicalDirectory) return;
   try {
-    await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state);
+    await addPackageIgnoreRules(ignoreMatcher, directory, rootDirectory, state, enforceTrust);
     const entries = await readBoundedPackageResourceEntries(directory, state);
     for (const entry of entries) {
       throwIfAttachmentAborted(state.signal);
@@ -763,12 +787,22 @@ async function inspectRecursivePackageDirectory(
       if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
       if (entryStats.isFile()) {
         const isResourceFile = resourceType === "themes" ? entry.name.endsWith(".json") : entry.name.endsWith(".md");
-        if (isResourceFile) assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+        if (enforceTrust && isResourceFile) {
+          assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+        }
         continue;
       }
       if (!entryStats.isDirectory()) continue;
-      assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
-      await inspectRecursivePackageDirectory(entryPath, resourceType, ignoreMatcher, rootDirectory, depth + 1, state);
+      if (enforceTrust) assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+      await inspectRecursivePackageDirectory(
+        entryPath,
+        resourceType,
+        ignoreMatcher,
+        rootDirectory,
+        depth + 1,
+        state,
+        enforceTrust,
+      );
     }
   } finally {
     state.ancestors.delete(canonicalDirectory);
@@ -779,6 +813,7 @@ async function enterPackageResourceDirectory(
   directory: string,
   depth: number,
   state: ExtensionScanState,
+  enforceTrust: boolean,
 ): Promise<string | undefined> {
   throwIfAttachmentAborted(state.signal);
   if (depth > MAX_EXTENSION_SCAN_DEPTH) throwExtensionScanLimit();
@@ -789,14 +824,16 @@ async function enterPackageResourceDirectory(
     return undefined;
   }
   throwIfAttachmentAborted(state.signal);
-  assertProjectPathTrusted(
-    directory,
-    canonicalDirectory,
-    "extension package resource",
-    state.cwd,
-    state.canonicalCwd,
-    state.projectTrusted,
-  );
+  if (enforceTrust) {
+    assertProjectPathTrusted(
+      directory,
+      canonicalDirectory,
+      "extension package resource",
+      state.cwd,
+      state.canonicalCwd,
+      state.projectTrusted,
+    );
+  }
   if (state.ancestors.has(canonicalDirectory)) {
     throw new Error("Subagent extension package must not contain a recursive resource directory link.");
   }
@@ -804,14 +841,18 @@ async function enterPackageResourceDirectory(
   return canonicalDirectory;
 }
 
-async function inspectPiManifest(directory: string, state: ExtensionScanState): Promise<InspectedPiManifest> {
+async function inspectPiManifest(
+  directory: string,
+  state: ExtensionScanState,
+  enforceTrust = true,
+): Promise<InspectedPiManifest> {
   const manifestPath = path.join(directory, "package.json");
   const manifestStats = await statIfPresent(manifestPath);
   if (!manifestStats) return { hasPiManifest: false };
   if (!manifestStats.isFile()) {
     throw new Error("Subagent extension package manifest must be a regular file.");
   }
-  assertExtensionPackagePathTrusted(manifestPath, "extension package resource", state);
+  if (enforceTrust) assertExtensionPackagePathTrusted(manifestPath, "extension package resource", state);
   state.metadataBytes += manifestStats.size;
   if (state.metadataBytes > MAX_EXTENSION_METADATA_BYTES) throwExtensionScanLimit();
   let document: unknown;
@@ -846,6 +887,7 @@ async function addPackageIgnoreRules(
   directory: string,
   rootDirectory: string,
   state: ExtensionScanState,
+  enforceTrust: boolean,
 ): Promise<void> {
   const relativeDirectory = path.relative(rootDirectory, directory);
   const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
@@ -855,7 +897,7 @@ async function addPackageIgnoreRules(
     const ignoreStats = await statIfPresent(ignorePath);
     if (!ignoreStats) continue;
     if (!ignoreStats.isFile()) throwInvalidIgnoreFile();
-    assertExtensionPackagePathTrusted(ignorePath, "extension package resource", state);
+    if (enforceTrust) assertExtensionPackagePathTrusted(ignorePath, "extension package resource", state);
     state.metadataBytes += ignoreStats.size;
     if (state.metadataBytes > MAX_EXTENSION_METADATA_BYTES) throwExtensionScanLimit();
     try {
@@ -918,12 +960,16 @@ async function readBoundedExtensionEntries(directory: string, state: ExtensionSc
   return entries;
 }
 
-async function hasRegularExtensionIndex(directory: string, state: ExtensionScanState): Promise<boolean> {
+async function hasRegularExtensionIndex(
+  directory: string,
+  state: ExtensionScanState,
+  enforceTrust = true,
+): Promise<boolean> {
   for (const filename of ["index.ts", "index.js"]) {
     const indexPath = path.join(directory, filename);
     const stats = await statIfPresent(indexPath);
     if (stats) {
-      assertExtensionPackagePathTrusted(indexPath, "extension entrypoint", state);
+      if (enforceTrust) assertExtensionPackagePathTrusted(indexPath, "extension entrypoint", state);
       return stats.isFile();
     }
   }

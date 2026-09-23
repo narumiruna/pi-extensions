@@ -139,7 +139,7 @@ The runtime always adds `subagent_send` and child `subagent_wait` and removes du
 Adding `edit` or `write` lets the child modify files, while `bash` or `powershell` grants unrestricted command execution.
 
 The optional `skills` list attaches local Markdown skill files or directories through Pi's progressive disclosure mechanism.
-Each path must contain at least one skill Pi can load, and skill names must be unique across all attachments.
+Each path must contain at least one skill Pi can load, and skill names must be unique across explicit attachments and skills contributed by attached extension packages.
 Non-Markdown files, directories without a loadable skill, and duplicate skill names are rejected before launch.
 Every declared skill discovered within an attached directory must load successfully; a valid sibling does not hide an invalid or unreadable declared skill, while Pi-ignored draft skills remain excluded.
 Combined skill preflight is asynchronous and cancellation-aware, and it rejects recursive directory links or requests exceeding 4,096 entries, depth 32, 4 MiB of candidate skill content, or 1 MiB of ignore-file content before Pi's synchronous loader runs.

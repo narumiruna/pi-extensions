@@ -377,6 +377,42 @@ test("rejects skill-name collisions using Pi's combined load behavior", async ()
     ).skills,
     [overlappingDirectory, overlappingSkill],
   );
+
+  const firstPackage = path.join(external, "first-skill-package");
+  const secondPackage = path.join(external, "second-skill-package");
+  for (const [packageDirectory, description] of [
+    [firstPackage, "First package skill."],
+    [secondPackage, "Second package skill."],
+  ]) {
+    mkdirSync(packageDirectory);
+    writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+    writeFileSync(path.join(packageDirectory, "skill.md"), `---\nname: shared\ndescription: ${description}\n---\n`);
+    writeFileSync(
+      path.join(packageDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skill.md"] } }),
+    );
+  }
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { skills: [first], extensions: [{ path: firstPackage, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /duplicate skill names/i,
+  );
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        {
+          extensions: [
+            { path: firstPackage, tools: [] },
+            { path: secondPackage, tools: [] },
+          ],
+        },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /duplicate skill names/i,
+  );
 });
 
 test("allows explicit external resources but rejects every loaded project path when untrusted", async () => {
@@ -477,6 +513,44 @@ test("allows explicit external resources but rejects every loaded project path w
       ),
     /project.*not trusted/i,
   );
+});
+
+test("applies manifest overrides before trust-gating resolved resources", async () => {
+  const packageDirectory = path.join(external, "overridden-project-resources");
+  const extension = path.join(packageDirectory, "extension.ts");
+  const projectExtension = path.join(project, "disabled-extension.ts");
+  const projectSkill = path.join(project, "disabled-skill.md");
+  const projectPrompt = path.join(project, "disabled-prompt.md");
+  const projectTheme = path.join(project, "disabled-theme.json");
+  mkdirSync(packageDirectory);
+  writeFileSync(extension, "export default () => {};\n");
+  writeFileSync(projectExtension, "export default () => {};\n");
+  writeFileSync(projectSkill, "---\nname: disabled-skill\ndescription: Disabled skill.\n---\n");
+  writeFileSync(projectPrompt, "Disabled prompt.\n");
+  writeFileSync(projectTheme, "{}\n");
+
+  const manifestEntries = (resourcePath: string) => {
+    const relativePath = path.relative(packageDirectory, resourcePath).split(path.sep).join("/");
+    return [relativePath, `-${relativePath}`];
+  };
+  writeFileSync(
+    path.join(packageDirectory, "package.json"),
+    JSON.stringify({
+      pi: {
+        extensions: ["./extension.ts", ...manifestEntries(projectExtension)],
+        skills: manifestEntries(projectSkill),
+        prompts: manifestEntries(projectPrompt),
+        themes: manifestEntries(projectTheme),
+      },
+    }),
+  );
+
+  const result = await resolveResourceAttachments(
+    { extensions: [{ path: packageDirectory, tools: [] }] },
+    { cwd: project, projectTrusted: false, coreTools: [] },
+  );
+
+  assert.deepEqual(result.extensions, [{ path: packageDirectory, tools: [] }]);
 });
 
 test("skips ignored or undiscoverable project symlinks before enforcing trust", async () => {
