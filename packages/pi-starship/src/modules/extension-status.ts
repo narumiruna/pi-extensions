@@ -1,5 +1,5 @@
-import { type ColorPalette, parseStyle, type StyledChunk } from "../format/style.js";
-import { defineModule, type ExtensionStatusPresentation } from "./types.js";
+import { parseStyle } from "../format/style.js";
+import { defineModule } from "./types.js";
 
 export const extensionStatusModule = defineModule({
   name: "extension_status",
@@ -10,39 +10,27 @@ export const extensionStatusModule = defineModule({
     style: "dimmed white",
     disabled: false,
   },
-  values: ({ runtime, extensionStatus }) => {
-    const statuses = extensionStatusEntries(runtime.extensionStatuses, extensionStatus).map((entry) => entry.text);
+  values: ({ runtime, extensionStatus, palette }) => {
+    const statuses = [...runtime.extensionStatuses.entries()]
+      .filter(([key, value]) => key !== "starship" && value.trim())
+      .slice(0, extensionStatus.maxStatuses)
+      .map(([key, value]) => ({ key, text: formatExtensionStatus(key, value, extensionStatus.icons) }));
     if (statuses.length === 0) return undefined;
-    return {
-      statuses: statuses.join(extensionStatus.separator),
-      count: `${statuses.length}`,
-    };
+    const { separator, styles } = extensionStatus;
+    const content =
+      Object.keys(styles).length === 0
+        ? statuses.map(({ text }) => text).join(separator)
+        : statuses.flatMap(({ key, text }, index) => {
+            const configured = configuredStatusValue(key, styles);
+            const style = configured ?? (Object.hasOwn(styles, "fallback") ? styles.fallback : undefined);
+            return [
+              ...(index > 0 ? [{ text: separator }] : []),
+              { text, style: style === undefined ? undefined : (parseStyle(style, palette) ?? {}) },
+            ];
+          });
+    return { statuses: content, count: `${statuses.length}` };
   },
 });
-
-export function extensionStatusEntries(
-  statuses: ReadonlyMap<string, string>,
-  config: ExtensionStatusPresentation,
-): Array<{ key: string; text: string }> {
-  return [...statuses.entries()]
-    .filter(([key, value]) => key !== "starship" && value.trim())
-    .slice(0, config.maxStatuses)
-    .map(([key, value]) => ({ key, text: formatExtensionStatus(key, value, config.icons) }));
-}
-
-export function styledExtensionStatuses(
-  statuses: ReadonlyMap<string, string>,
-  config: ExtensionStatusPresentation,
-  palette: ColorPalette,
-): StyledChunk[] {
-  return extensionStatusEntries(statuses, config).flatMap(({ key, text }, index) => {
-    const style = configuredStatusValue(key, config.styles);
-    return [
-      ...(index > 0 ? [{ text: config.separator }] : []),
-      { text, style: style === undefined ? undefined : (parseStyle(style, palette) ?? {}) },
-    ];
-  });
-}
 
 export function formatExtensionStatus(
   key: string,
@@ -60,17 +48,13 @@ function extensionStatusIcon(
   leadingIcon: string | undefined,
   configuredIcons: Readonly<Record<string, string>>,
 ): string {
-  const configured = configuredStatusValue(key, configuredIcons, false);
+  const configured = configuredStatusValue(key, configuredIcons);
   if (configured !== undefined) return configured;
   const fallback = Object.hasOwn(configuredIcons, "fallback") ? configuredIcons.fallback : undefined;
   return leadingIcon ?? fallback ?? "🔌";
 }
 
-function configuredStatusValue(
-  key: string,
-  configured: Readonly<Record<string, string>>,
-  includeFallback = true,
-): string | undefined {
+function configuredStatusValue(key: string, configured: Readonly<Record<string, string>>): string | undefined {
   if (Object.hasOwn(configured, key)) return configured[key];
   let match: { baseLength: number; value: string } | undefined;
   for (const [selector, value] of Object.entries(configured)) {
@@ -79,7 +63,7 @@ function configuredStatusValue(
     if (!base || !key.startsWith(`${base}:`)) continue;
     if (!match || base.length > match.baseLength) match = { baseLength: base.length, value };
   }
-  return match?.value ?? (includeFallback && Object.hasOwn(configured, "fallback") ? configured.fallback : undefined);
+  return match?.value;
 }
 
 function splitExtensionStatusIcon(value: string): { icon?: string; text: string } {

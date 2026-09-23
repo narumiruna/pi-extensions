@@ -1121,6 +1121,33 @@ test("TOML extension status styles color the matching Pi status without styling 
   assert.ok(rendered.ansi.includes(`${ESC}[37;2m • 🔌 idle${ESC}[0m`));
 });
 
+test("icon and style fallbacks retain their distinct precedence", () => {
+  const config = structuredClone(BUILT_IN_CONFIG);
+  config.format = "$extension_status";
+  config.formatAst = parseFormat(config.format);
+  config.extensionStatus.icons = { fallback: "•" };
+  config.extensionStatus.styles = { "foo:*": "green", fallback: "bold red" };
+  const rendered = renderStatusline(
+    config,
+    fixture({
+      extensionStatuses: new Map([
+        ["foo:task", "⚡ running"],
+        ["other", "⚡ waiting"],
+        ["fallback", "idle"],
+      ]),
+    }),
+  );
+  const statuses = rendered.modules.extension_status.filter(({ text }) => /running|waiting|idle/u.test(text));
+  assert.deepEqual(
+    statuses.map(({ text, style }) => [text, style?.foreground, style?.bold]),
+    [
+      ["⚡ running", { kind: "named", name: "green" }, undefined],
+      ["⚡ waiting", { kind: "named", name: "red" }, true],
+      ["• idle", { kind: "named", name: "red" }, true],
+    ],
+  );
+});
+
 test("extension status styles match raw keys and preserve module styling on separators and unmatched keys", () => {
   const config = structuredClone(BUILT_IN_CONFIG);
   config.format = "$extension_status";

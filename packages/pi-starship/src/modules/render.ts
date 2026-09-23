@@ -1,9 +1,14 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { activePalette, type ModuleConfig, type StarshipConfig } from "../config.js";
 import { type FormatValue, formatVariables, renderFormat } from "../format/formatter.js";
-import { isFillChunk, type LayoutChunk, renderChunksToAnsi, type StyledChunk } from "../format/style.js";
+import {
+  type ColorPalette,
+  isFillChunk,
+  type LayoutChunk,
+  renderChunksToAnsi,
+  type StyledChunk,
+} from "../format/style.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./catalog.js";
-import { styledExtensionStatuses } from "./extension-status.js";
 import { resolveStyleRule } from "./style-rules.js";
 import type { ModuleStyleContext, ModuleValueContext, RenderedStatusline, StarshipRuntimeSnapshot } from "./types.js";
 
@@ -23,11 +28,10 @@ export function renderStatusline(
   for (const definition of MODULE_DEFINITIONS) {
     const name = definition.name;
     const module = config.modules[name];
-    const values = definition.values(valueContext(config, name, runtime));
+    const values = definition.values(valueContext(config, name, runtime, palette));
     if (!values) continue;
     const styleContext: ModuleStyleContext = {
       runtime,
-      values,
       style: module.style,
       styles: module.styles,
       display: module.display,
@@ -45,9 +49,6 @@ export function renderStatusline(
         variable !== "symbol" && Object.hasOwn(values, variable) ? [[variable, values[variable]]] : [],
       ),
     );
-    if (name === "extension_status" && Object.keys(config.extensionStatus.styles).length > 0) {
-      contentValues.statuses = styledExtensionStatuses(runtime.extensionStatuses, config.extensionStatus, palette);
-    }
     const rendered = renderModule(module, contentValues, styleVariables, palette);
     modules[name] = rendered;
     layoutModules[name] =
@@ -69,9 +70,15 @@ export function renderStatusline(
   };
 }
 
-function valueContext(config: StarshipConfig, name: ModuleName, runtime: StarshipRuntimeSnapshot): ModuleValueContext {
+function valueContext(
+  config: StarshipConfig,
+  name: ModuleName,
+  runtime: StarshipRuntimeSnapshot,
+  palette: ColorPalette,
+): ModuleValueContext {
   return {
     runtime,
+    palette,
     symbol: config.modules[name].symbol,
     options: config.modules[name].options,
     extensionStatus: config.extensionStatus,
