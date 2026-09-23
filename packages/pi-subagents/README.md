@@ -139,7 +139,8 @@ The runtime always adds `subagent_send` and child `subagent_wait` and removes du
 Adding `edit` or `write` lets the child modify files, while `bash` or `powershell` grants unrestricted command execution.
 
 The optional `skills` list attaches local Markdown skill files or directories through Pi's progressive disclosure mechanism.
-Each path must contain at least one skill Pi can load; non-Markdown files and directories without a loadable skill are rejected before launch.
+Each path must contain at least one skill Pi can load, and skill names must be unique across all attachments.
+Non-Markdown files, directories without a loadable skill, and duplicate skill names are rejected before launch.
 A skill is available for the child to discover and read when relevant; attaching it does not inject its complete body, add `read` or `bash`, or force the child to invoke it.
 
 Each `extensions` entry loads one trusted local extension file or directory and names the exact extension tools to activate initially.
@@ -170,7 +171,7 @@ Each job receives one cryptographically random token bound to its job identity a
 The parent passes broker credentials and non-secret expected tool names once through a private inherited pipe instead of placing them in the child's initial environment or command line.
 The child bridge reads and closes that descriptor before attached extensions load.
 When extension tools are requested, a separate readiness probe loaded after the attachments reports whether the complete initial tool allowlist is active through a second private descriptor.
-The parent sends the task only after that report succeeds, and the execution timeout still starts only after Pi accepts the RPC prompt.
+The parent then uses an ordered RPC barrier to reject attachment errors from startup hooks before sending the task, and the execution timeout still starts only after Pi accepts the RPC prompt.
 
 Each child runs in Pi RPC mode so the parent can inject a main-originated request through `steer` after the initial prompt is accepted.
 Each child broker call uses one request-scoped connection, while a response wait uses an abortable long poll.

@@ -47,11 +47,11 @@ export function resolveResourceAttachments(
   for (const candidate of skillInputs) {
     const resolved = resolveResourcePath(candidate, "skill", cwd, canonicalCwd, options.projectTrusted);
     if (!seenSkills.has(resolved)) {
-      assertLoadableSkill(resolved, cwd);
       seenSkills.add(resolved);
       skills.push(resolved);
     }
   }
+  assertLoadableSkills(skills, cwd);
 
   const extensions: ExtensionAttachment[] = [];
   const extensionsByPath = new Map<string, ExtensionAttachment>();
@@ -113,15 +113,28 @@ function resolveResourcePath(
   return canonicalPath;
 }
 
-function assertLoadableSkill(skillPath: string, cwd: string): void {
-  const result = loadSkills({
-    cwd,
-    agentDir: cwd,
-    skillPaths: [skillPath],
-    includeDefaults: false,
-  });
-  if (result.skills.length === 0) {
-    throw new Error("Subagent skill path must contain at least one loadable Pi skill.");
+function assertLoadableSkills(skillPaths: string[], cwd: string): void {
+  for (const skillPath of skillPaths) {
+    const result = loadExplicitSkills([skillPath], cwd);
+    if (result.skills.length === 0) {
+      throw new Error("Subagent skill path must contain at least one loadable Pi skill.");
+    }
+    assertNoSkillNameCollisions(result.diagnostics);
+  }
+  if (skillPaths.length > 1) {
+    assertNoSkillNameCollisions(loadExplicitSkills(skillPaths, cwd).diagnostics);
+  }
+}
+
+function loadExplicitSkills(skillPaths: string[], cwd: string): ReturnType<typeof loadSkills> {
+  return loadSkills({ cwd, agentDir: cwd, skillPaths, includeDefaults: false });
+}
+
+function assertNoSkillNameCollisions(diagnostics: ReturnType<typeof loadSkills>["diagnostics"]): void {
+  if (
+    diagnostics.some((diagnostic) => diagnostic.type === "collision" && diagnostic.collision?.resourceType === "skill")
+  ) {
+    throw new Error("Subagent skill attachments must not contain duplicate skill names.");
   }
 }
 

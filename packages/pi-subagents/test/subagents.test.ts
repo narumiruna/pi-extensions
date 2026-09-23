@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
@@ -460,6 +462,26 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
       ),
     /at least one loadable Pi skill/i,
   );
+  const collisionRoot = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-collision-"));
+  const firstSkill = path.join(collisionRoot, "first.md");
+  const secondSkill = path.join(collisionRoot, "second.md");
+  try {
+    writeFileSync(firstSkill, "---\nname: shared\ndescription: First skill.\n---\n");
+    writeFileSync(secondSkill, "---\nname: shared\ndescription: Second skill.\n---\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "colliding-skills",
+          { task: "colliding skills", skills: [firstSkill, secondSkill] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /duplicate skill names/i,
+    );
+  } finally {
+    rmSync(collisionRoot, { recursive: true, force: true });
+  }
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(

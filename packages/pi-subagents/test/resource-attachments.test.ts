@@ -124,6 +124,43 @@ test("accepts only skill paths that Pi loads", () => {
   }
 });
 
+test("rejects skill-name collisions using Pi's combined load behavior", () => {
+  const first = path.join(external, "first.md");
+  const second = path.join(external, "second.md");
+  writeFileSync(first, "---\nname: shared\ndescription: First skill.\n---\n");
+  writeFileSync(second, "---\nname: shared\ndescription: Second skill.\n---\n");
+  assert.throws(
+    () =>
+      resolveResourceAttachments({ skills: [first, second] }, { cwd: project, projectTrusted: true, coreTools: [] }),
+    /duplicate skill names/i,
+  );
+
+  const collidingDirectory = path.join(external, "colliding-directory");
+  mkdirSync(collidingDirectory);
+  writeFileSync(path.join(collidingDirectory, "one.md"), "---\nname: nested-shared\ndescription: One.\n---\n");
+  writeFileSync(path.join(collidingDirectory, "two.md"), "---\nname: nested-shared\ndescription: Two.\n---\n");
+  assert.throws(
+    () =>
+      resolveResourceAttachments(
+        { skills: [collidingDirectory] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /duplicate skill names/i,
+  );
+
+  const overlappingDirectory = path.join(external, "overlapping-directory");
+  const overlappingSkill = path.join(overlappingDirectory, "skill.md");
+  mkdirSync(overlappingDirectory);
+  writeFileSync(overlappingSkill, "---\nname: overlapping\ndescription: Same file.\n---\n");
+  assert.deepEqual(
+    resolveResourceAttachments(
+      { skills: [overlappingDirectory, overlappingSkill] },
+      { cwd: project, projectTrusted: true, coreTools: [] },
+    ).skills,
+    [overlappingDirectory, overlappingSkill],
+  );
+});
+
 test("allows an explicit external resource but rejects lexical and canonical project paths when untrusted", () => {
   const externalExtension = path.join(external, "external.ts");
   const projectExtension = path.join(project, "project.ts");

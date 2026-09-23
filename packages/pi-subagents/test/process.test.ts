@@ -428,6 +428,31 @@ async function handle(command) {
   });
 });
 
+test("runChild rejects attachment startup hook errors before sending the task", async () => {
+  for (const hook of ["session_start", "resources_discover"] as const) {
+    const promptMarker = path.join(directory, `prompt-${hook}`);
+    installFakePi(`
+event({
+  type: "extension_error",
+  extensionPath: "/tmp/search-extension.ts",
+  event: ${JSON.stringify(hook)},
+  error: "fixture hook failed",
+});
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  fs.writeFileSync(${JSON.stringify(promptMarker)}, command.message);
+}
+setInterval(() => {}, 1000);
+`);
+    const result = await runChild(
+      childRequest({ extensions: [{ path: "/tmp/search-extension.ts", tools: ["custom_search"] }] }),
+    );
+    assert.equal(result.state, "failed");
+    assert.match(result.error ?? "", new RegExp(`startup failed during ${hook}.*fixture hook failed`, "i"));
+    assert.equal(existsSync(promptMarker), false);
+  }
+});
+
 test("runChild rejects invalid attachment readiness without sending the task", async () => {
   const cases = [
     ["failure", /requested extension tool is unavailable/i],
@@ -673,6 +698,13 @@ const message = (text, stopReason = "stop") => ({
   message: { role: "assistant", content: [{ type: "text", text }], stopReason },
 });
 ${source}
+const dispatch = async (command) => {
+  if (command.type === "get_state") {
+    respond(command);
+    return;
+  }
+  await handle(command);
+};
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -682,7 +714,7 @@ process.stdin.on("data", (chunk) => {
     if (newline < 0) break;
     const line = input.slice(0, newline);
     input = input.slice(newline + 1);
-    if (line.trim()) void handle(JSON.parse(line));
+    if (line.trim()) void dispatch(JSON.parse(line));
   }
 });
 `,

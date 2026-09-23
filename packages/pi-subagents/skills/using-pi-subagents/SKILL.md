@@ -44,7 +44,7 @@ The runtime always adds `subagent_send` and child `subagent_wait` for communicat
 
 Attach `skills` only when the child needs reusable instructions that should remain available through Pi's progressive disclosure.
 
-Each attached skill path must be a local Markdown skill file or a directory containing at least one skill Pi can load.
+Each attached skill path must be a local Markdown skill file or a directory containing at least one skill Pi can load, with skill names unique across all attachments.
 
 Attaching a skill does not inject its complete body, add `read` or `bash`, or force invocation, so select any tools needed to read or follow it separately.
 
@@ -58,7 +58,7 @@ Use paths relative to the child working directory or absolute local paths, and n
 
 Project-local attachments require a trusted project, including when an external symlink resolves back into the project.
 
-The parent verifies requested extension tools before sending the task, so a missing tool or failed extension startup fails the job without a model request.
+The parent verifies requested extension tools and startup hooks before sending the task, so a missing tool or failed extension startup fails the job without a model request.
 
 The child inherits the main agent's effective provider and model at spawn time.
 

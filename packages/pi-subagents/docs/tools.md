@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | `task` | `string` | Yes | Self-contained task, up to 50 KiB of UTF-8 text. |
 | `tools` | `string[]` | No | Up to 64 total selected names after extension tools are included; core names are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`; defaults to `read`, `grep`, `find`, and `ls`. |
-| `skills` | `string[]` | No | Up to 16 explicit local Markdown skill files or directories containing a loadable Pi skill; automatic discovery remains disabled. |
+| `skills` | `string[]` | No | Up to 16 explicit local Markdown skill files or directories containing a loadable Pi skill; skill names must be unique and automatic discovery remains disabled. |
 | `extensions` | `{ path: string; tools: string[] }[]` | No | Up to 16 trusted local extension files or directories and the exact extension tools to activate initially. |
 | `thinkingLevel` | `string` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to the main agent's effective thinking level. |
 | `timeout` | `number` | No | Seconds; `> 0` through `2,147,483.647`; no default timeout. |
@@ -21,13 +21,14 @@ Extension tools are selected only through each `extensions[].tools` list, and an
 
 Every requested extension tool name must be non-empty, at most 128 characters, and contain no comma or control character.
 
-The parent verifies that the complete initial allowlist is active after extension factory, session, and resource-discovery hooks and before submitting the task to the model.
+The parent verifies that the complete initial allowlist is active after extension factory, session, and resource-discovery hooks and uses an ordered RPC barrier to observe startup hook errors before submitting the task to the model.
 
 A missing tool, malformed readiness response, attachment startup failure, or cancellation fails the job without sending the task.
 
 `skills` uses Pi's progressive disclosure, so an attached skill becomes available for relevant discovery but does not inject its full body, add tools, or force invocation.
 
-Pi's skill loader must find at least one loadable skill in every attached skill path; non-Markdown files, invalid skill files, ignored skills, and directories without a loadable skill throw before launch.
+Pi's skill loader must find at least one loadable skill in every attached skill path, and every loaded skill name must be unique across the combined attachments.
+Non-Markdown files, invalid skill files, ignored skills, directories without a loadable skill, and duplicate skill names throw before launch.
 
 Each attachment path is resolved relative to the child working directory when not absolute, must already name a regular file or directory, and is canonicalized before launch.
 

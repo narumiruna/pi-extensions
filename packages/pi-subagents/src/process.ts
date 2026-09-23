@@ -38,6 +38,7 @@ interface AssistantEvent {
   id?: string;
   success?: boolean;
   error?: string;
+  event?: string;
   message?: {
     role?: string;
     content?: Array<{ type?: string; text?: string }>;
@@ -55,6 +56,8 @@ interface PendingRpcCommand {
   signal?: AbortSignal;
   onAbort?: () => void;
 }
+
+type ChildRpcCommand = { type: "get_state" } | { type: "prompt" | "steer"; message: string };
 
 export function resolveTimeoutMs(timeout: number | undefined): number | undefined {
   if (timeout === undefined) return undefined;
@@ -147,13 +150,11 @@ async function executeProcess(
   let truncated = false;
   let malformedEvents = 0;
   let rpcCounter = 0;
+  let attachmentStartupError: string | undefined;
   const pendingCommands = new Map<string, PendingRpcCommand>();
   let rpcInputError: Error | undefined;
-  let sendCommand: (
-    command: { type: "prompt" | "steer"; message: string },
-    onAccepted?: () => void,
-    signal?: AbortSignal,
-  ) => Promise<void> = () => Promise.reject(new Error("Subagent RPC process is unavailable."));
+  let sendCommand: (command: ChildRpcCommand, onAccepted?: () => void, signal?: AbortSignal) => Promise<void> = () =>
+    Promise.reject(new Error("Subagent RPC process is unavailable."));
   let onAgentSettled: () => void = () => undefined;
 
   const takePendingCommand = (id: string): PendingRpcCommand | undefined => {
@@ -190,6 +191,17 @@ async function executeProcess(
   const decoder = new JsonLineDecoder(
     (value) => {
       const event = value as AssistantEvent;
+      if (
+        expectReadiness &&
+        event.type === "extension_error" &&
+        (event.event === "session_start" || event.event === "resources_discover") &&
+        !attachmentStartupError
+      ) {
+        const detail =
+          typeof event.error === "string" && event.error ? sanitizeTerminalText(event.error) : "Unknown error.";
+        attachmentStartupError = `Subagent attachment startup failed during ${event.event}: ${detail}`;
+        return;
+      }
       if (event.type === "response" && typeof event.id === "string") {
         const pending = pendingCommands.get(event.id);
         if (!pending) return;
@@ -418,6 +430,19 @@ async function executeProcess(
       errorMessage = truncateText(message, MAX_ERROR_BYTES).text;
       terminate(1);
     };
+    const confirmAttachmentStartup = () => {
+      void sendCommand(
+        { type: "get_state" },
+        () => {
+          if (attachmentStartupError) throw new Error(attachmentStartupError);
+          attachmentReady = true;
+          startPrompt();
+        },
+        request.signal,
+      ).catch((error) => {
+        failReadiness(error instanceof Error ? error.message : String(error));
+      });
+    };
 
     request.signal.addEventListener("abort", onAbort, { once: true });
     if (request.signal.aborted) onAbort();
@@ -456,8 +481,7 @@ async function executeProcess(
             failReadiness(frame.error);
             return;
           }
-          attachmentReady = true;
-          startPrompt();
+          confirmAttachmentStartup();
         });
         readinessPipe.once("error", () => {
           if (readinessSettled || terminating) return;

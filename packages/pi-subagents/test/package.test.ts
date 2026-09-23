@@ -44,6 +44,7 @@ test("repository example skill documents every minimal-runtime operating respons
     /`bash` and `powershell` as unrestricted command execution/i,
     /Attach `skills`.*progressive disclosure/is,
     /Each attached skill path.*at least one skill Pi can load/is,
+    /skill names unique across all attachments/is,
     /Attaching a skill does not inject its complete body.*add `read` or `bash`/is,
     /Attach `extensions`.*trust.*executable code/is,
     /extension tool list.*not a sandbox/is,
@@ -91,10 +92,12 @@ test("published documentation defines attachment behavior and its security bound
     assert.match(document, /`extensions`/u);
     assert.match(document, /progressive disclosure/iu);
     assert.match(document, /at least one.*(?:skill Pi can load|loadable.*skill)/iu);
+    assert.match(document, /skill names?.*unique|duplicate skill names/iu);
     assert.match(document, /local path/iu);
     assert.match(document, /project.*untrusted|untrusted.*project/iu);
     assert.match(document, /not (?:an? )?(?:operating-system )?sandbox/iu);
     assert.match(document, /process-local runtime API key/iu);
+    assert.match(document, /startup.*(?:hook|failure)|failed extension startup/iu);
     assert.match(document, /before.*(?:task|submitting).*model|before.*model request/isu);
     assert.doesNotMatch(document, /skillCount|extensionCount/u);
   }
