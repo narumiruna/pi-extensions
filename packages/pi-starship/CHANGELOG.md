@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.58.0
+
+### Minor Changes
+
+- ba40826: Allow per-status colors in `extension_status.styles` using exact Pi status keys, explicit namespace wildcards, and an optional fallback style.
+
 ## 0.57.0
 
 ### Minor Changes
