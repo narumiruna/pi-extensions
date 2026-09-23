@@ -479,7 +479,7 @@ test("allows explicit external resources but rejects every loaded project path w
   );
 });
 
-test("skips ignored project symlinks before enforcing untrusted-project boundaries", async () => {
+test("skips ignored or undiscoverable project symlinks before enforcing trust", async () => {
   const packageDirectory = path.join(external, "ignored-project-symlinks");
   const extensionsDirectory = path.join(packageDirectory, "extensions");
   const skillsDirectory = path.join(packageDirectory, "skills");
@@ -494,6 +494,7 @@ test("skips ignored project symlinks before enforcing untrusted-project boundari
   const projectSkillDirectory = path.join(project, "ignored-skill-directory");
   const projectPrompt = path.join(project, "ignored-prompt.md");
   const projectThemeDirectory = path.join(project, "ignored-theme-directory");
+  const projectNonResource = path.join(project, "notes.txt");
   writeFileSync(projectExtension, "export default () => {};\n");
   writeFileSync(projectSkill, "---\nname: ignored-skill\ndescription: Ignored project skill.\n---\n");
   mkdirSync(projectSkillDirectory);
@@ -504,19 +505,27 @@ test("skips ignored project symlinks before enforcing untrusted-project boundari
   writeFileSync(projectPrompt, "Ignored project prompt.\n");
   mkdirSync(projectThemeDirectory);
   writeFileSync(path.join(projectThemeDirectory, "ignored.json"), "{}\n");
+  writeFileSync(projectNonResource, "Not a Pi package resource.\n");
 
   writeFileSync(path.join(extensionsDirectory, "valid.ts"), "export default () => {};\n");
   symlinkSync(projectExtension, path.join(extensionsDirectory, "ignored.ts"));
+  symlinkSync(projectNonResource, path.join(extensionsDirectory, "notes.txt"));
   writeFileSync(path.join(extensionsDirectory, ".gitignore"), "ignored.ts\n");
 
+  const nestedSkillsDirectory = path.join(skillsDirectory, "nested");
+  mkdirSync(nestedSkillsDirectory);
   symlinkSync(projectSkill, path.join(skillsDirectory, "ignored.md"));
   symlinkSync(projectSkillDirectory, path.join(skillsDirectory, "ignored-directory"));
+  symlinkSync(projectNonResource, path.join(skillsDirectory, "notes.txt"));
+  symlinkSync(projectSkill, path.join(nestedSkillsDirectory, "notes.md"));
   writeFileSync(path.join(skillsDirectory, ".gitignore"), "ignored.md\nignored-directory/\n");
 
   symlinkSync(projectPrompt, path.join(promptsDirectory, "ignored.md"));
+  symlinkSync(projectNonResource, path.join(promptsDirectory, "notes.txt"));
   writeFileSync(path.join(promptsDirectory, ".gitignore"), "ignored.md\n");
 
   symlinkSync(projectThemeDirectory, path.join(themesDirectory, "ignored-directory"));
+  symlinkSync(projectNonResource, path.join(themesDirectory, "notes.txt"));
   writeFileSync(path.join(themesDirectory, ".gitignore"), "ignored-directory/\n");
 
   const result = await resolveResourceAttachments(

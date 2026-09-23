@@ -618,11 +618,13 @@ async function inspectAutoExtensionDirectory(
     if (!entryStats) continue;
     const relativePath = toPosixPath(path.relative(directory, entryPath));
     if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
-    assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
-    if (entryStats.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
+    if (entryStats.isFile()) {
+      if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".js")) continue;
+      assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
       found = true;
-    } else if (entryStats.isDirectory() && (await inspectAutoExtensionDirectory(entryPath, false, state))) {
-      found = true;
+    } else if (entryStats.isDirectory()) {
+      assertExtensionPackagePathTrusted(entryPath, "extension entrypoint", state);
+      if (await inspectAutoExtensionDirectory(entryPath, false, state)) found = true;
     }
   }
   return found;
@@ -689,7 +691,7 @@ async function inspectPackageResourceDirectory(
   if (resourceType === "skills") {
     await inspectPackageSkillDirectory(directory, ignoreMatcher, directory, 0, state);
   } else {
-    await inspectRecursivePackageDirectory(directory, ignoreMatcher, directory, 0, state);
+    await inspectRecursivePackageDirectory(directory, resourceType, ignoreMatcher, directory, 0, state);
   }
 }
 
@@ -723,8 +725,14 @@ async function inspectPackageSkillDirectory(
       if (!entryStats) continue;
       const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
       if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
-      assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+      if (entryStats.isFile()) {
+        if (directory === rootDirectory && entry.name.endsWith(".md")) {
+          assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+        }
+        continue;
+      }
       if (!entryStats.isDirectory()) continue;
+      assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
       await inspectPackageSkillDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state);
     }
   } finally {
@@ -734,6 +742,7 @@ async function inspectPackageSkillDirectory(
 
 async function inspectRecursivePackageDirectory(
   directory: string,
+  resourceType: Exclude<PackageResourceType, "skills">,
   ignoreMatcher: IgnoreMatcher,
   rootDirectory: string,
   depth: number,
@@ -752,9 +761,14 @@ async function inspectRecursivePackageDirectory(
       if (!entryStats) continue;
       const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
       if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
-      assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+      if (entryStats.isFile()) {
+        const isResourceFile = resourceType === "themes" ? entry.name.endsWith(".json") : entry.name.endsWith(".md");
+        if (isResourceFile) assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+        continue;
+      }
       if (!entryStats.isDirectory()) continue;
-      await inspectRecursivePackageDirectory(entryPath, ignoreMatcher, rootDirectory, depth + 1, state);
+      assertExtensionPackagePathTrusted(entryPath, "extension package resource", state);
+      await inspectRecursivePackageDirectory(entryPath, resourceType, ignoreMatcher, rootDirectory, depth + 1, state);
     }
   } finally {
     state.ancestors.delete(canonicalDirectory);
