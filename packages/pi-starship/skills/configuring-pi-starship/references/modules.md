@@ -190,21 +190,23 @@ Collectors retain bounded, control-sanitized source metadata.
 
 ### Model and provider aliases and model truncation
 
-The model module accepts exact `model_aliases`, Starship-style `truncation_length` and `truncation_symbol` options, plus the Pi-specific `truncation_direction` option:
+The model module displays the raw Pi model ID by default. Set `shorten_model = true` to remove the leading `claude-`, a trailing `-20` followed by six digits, or a trailing `-latest`. Shortening does not replace `gpt-` with `gpt `; model IDs such as `gpt-6-sol` retain their hyphens. These rules match the ID text regardless of provider and apply only when no exact alias matches.
+The model module also accepts exact `model_aliases`, Starship-style `truncation_length` and `truncation_symbol` options, plus the Pi-specific `truncation_direction` option:
 
 ```toml
 [model]
+shorten_model = true # optional; false by default
 model_aliases = { "/models/Qwen3.6-35B-Q4.gguf" = "Qwen 35B Q4" }
 truncation_length = 36
 truncation_symbol = "…"
 truncation_direction = "middle"
 ```
 
-An exact alias replaces the label that the built-in Claude/GPT shortening rules would otherwise produce, bypasses those rules, and is then subject to the configured truncation.
+An exact alias replaces the raw model ID, bypasses optional shortening, and is then subject to the configured truncation.
 `truncation_length` counts model grapheme clusters retained before the symbol; `0` disables truncation and is the default.
 The direction names the removed portion: `start` retains the suffix, `end` retains the prefix and is the default, and `middle` retains both ends.
-When no alias matches, truncation runs after the built-in Claude/GPT shortening rules.
-Truncation changes display only; the provider model ID is untouched.
+When no alias matches, truncation runs on the raw ID or the optionally shortened label.
+Shortening and truncation change display only; the provider model ID is untouched.
 Terminal control sequences in model IDs and truncation symbols are removed at render time.
 An empty symbol truncates without a marker.
 
@@ -217,7 +219,7 @@ provider_aliases = { "openai-codex" = "codex", "amazon-bedrock" = "bedrock" }
 
 An empty alias hides only the provider text.
 Provider names and aliases are stripped of terminal controls at render time.
-The `provider`, `model`, and `thinking` modules match `style_rules` against raw provider/model IDs and thinking levels before aliases, built-in model shortening, configured truncation, or display sanitization.
+The `provider`, `model`, and `thinking` modules match `style_rules` against raw provider/model IDs and thinking levels before aliases, optional model shortening, configured truncation, or display sanitization.
 A selector whose runtime value is unavailable does not match; exact selector fields and precedence are documented in [Configuration and Format](configuration.md#content-selected-styles).
 For example, `middle` can retain both a Hugging Face model family and its variant, while `start` is useful when a llama.cpp server reports an absolute model path.
 pi-starship treats model IDs as opaque strings and does not parse paths, repositories, GGUF suffixes, or quantization names.
