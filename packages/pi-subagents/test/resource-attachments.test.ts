@@ -276,6 +276,44 @@ test("matches Pi's tool source for a package entrypoint outside its root", async
   assert.ok(resolved.toolSources.outside_tool?.includes(toolSourceId(owner)));
 });
 
+test("attests a shared extension entrypoint using Pi's first lexical alias", async () => {
+  const shared = path.join(external, "shared-extension.js");
+  writeFileSync(
+    shared,
+    'export default (pi) => pi.registerTool({ name: "alias_tool", label: "Alias", description: "Test", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [] }) });\n',
+  );
+  const packageDirectories = ["first-alias", "second-alias"].map((name) => path.join(external, name));
+  for (const packageDirectory of packageDirectories) {
+    mkdirSync(packageDirectory);
+    symlinkSync(shared, path.join(packageDirectory, "entry.js"));
+    writeFileSync(path.join(packageDirectory, "package.json"), JSON.stringify({ pi: { extensions: ["./entry.js"] } }));
+  }
+  const resolved = await resolveResourceAttachments(
+    {
+      extensions: [
+        { path: packageDirectories[0], tools: [] },
+        { path: packageDirectories[1], tools: ["alias_tool"] },
+      ],
+    },
+    { cwd: project, projectTrusted: true, coreTools: [] },
+  );
+  const loader = new DefaultResourceLoader({
+    cwd: project,
+    agentDir: project,
+    settingsManager: SettingsManager.inMemory(),
+    additionalExtensionPaths: packageDirectories,
+    noExtensions: true,
+  });
+  await loader.reload();
+  const loaded = loader.getExtensions();
+  assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.extensions.length, 1);
+  const owner = loaded.extensions[0]?.tools.get("alias_tool")?.sourceInfo.path;
+  assert.ok(owner);
+  assert.equal(owner, path.join(packageDirectories[0], "entry.js"));
+  assert.deepEqual(resolved.toolSources, { alias_tool: [toolSourceId(owner)] });
+});
+
 test("bounds and cancels attachment directory preflight", async () => {
   const wideDirectory = path.join(external, "wide-directory");
   mkdirSync(wideDirectory);

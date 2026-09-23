@@ -132,8 +132,15 @@ export async function resolveResourceAttachments(
     throw new Error(`Subagent jobs may select at most ${MAX_SELECTED_TOOLS} total tools.`);
   }
   const toolSources = new Map<string, string[]>();
+  const firstSourceIdByCanonicalPath = new Map<string, string>();
   for (const extension of extensions) {
-    const sourceIds = (entrypointsByPath.get(extension.path) ?? []).map(toolSourceId);
+    // Pi keeps the first lexical source when multiple entrypoints resolve to the same file.
+    const sourceIds = (entrypointsByPath.get(extension.path) ?? []).map((entrypoint) => {
+      const canonicalPath = realpath(entrypoint, "Subagent extension entrypoint");
+      const sourceId = firstSourceIdByCanonicalPath.get(canonicalPath) ?? toolSourceId(entrypoint);
+      firstSourceIdByCanonicalPath.set(canonicalPath, sourceId);
+      return sourceId;
+    });
     for (const tool of extension.tools) {
       if (toolSources.has(tool)) {
         throw new Error(`Subagent extension tool ${tool} is requested by multiple attachments.`);
