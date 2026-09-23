@@ -580,6 +580,65 @@ test("rejects missing exact package skills before Pi silently omits them", async
   assert.deepEqual(resolved.extensions, [{ path: packageDirectory, tools: [] }]);
 });
 
+test("rejects omitted skill candidates in package directories but preserves Pi ignores", async () => {
+  const packageDirectory = path.join(external, "partial-package-skill-directory");
+  const skillsDirectory = path.join(packageDirectory, "skills");
+  const nestedDirectory = path.join(skillsDirectory, "nested");
+  mkdirSync(nestedDirectory, { recursive: true });
+  writeFileSync(path.join(packageDirectory, "extension.ts"), "export default () => {};\n");
+  writeFileSync(path.join(skillsDirectory, "valid.md"), "---\nname: valid\ndescription: Valid skill.\n---\n");
+  writeFileSync(
+    path.join(packageDirectory, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skills"] } }),
+  );
+  const resolvePackage = () =>
+    resolveResourceAttachments(
+      { extensions: [{ path: packageDirectory, tools: [] }] },
+      { cwd: project, projectTrusted: true, coreTools: [] },
+    );
+
+  for (const relativePath of ["SKILL.md", "draft.md", "nested/SKILL.md"]) {
+    const broken = path.join(skillsDirectory, relativePath);
+    symlinkSync(path.join(skillsDirectory, "missing.md"), broken);
+    await assert.rejects(resolvePackage, /invalid or unreadable declared skill/i);
+    rmSync(broken);
+  }
+
+  for (const [relativePath, ignorePath] of [
+    ["SKILL.md", path.join(skillsDirectory, ".gitignore")],
+    ["nested/SKILL.md", path.join(nestedDirectory, ".fdignore")],
+  ]) {
+    const broken = path.join(skillsDirectory, relativePath);
+    symlinkSync(path.join(skillsDirectory, "missing.md"), broken);
+    writeFileSync(ignorePath, "SKILL.md\n");
+    assert.deepEqual((await resolvePackage()).extensions, [{ path: packageDirectory, tools: [] }]);
+    rmSync(broken);
+    rmSync(ignorePath);
+  }
+
+  const undiscoverable = path.join(nestedDirectory, "notes.md");
+  symlinkSync(path.join(skillsDirectory, "missing.md"), undiscoverable);
+  assert.deepEqual((await resolvePackage()).extensions, [{ path: packageDirectory, tools: [] }]);
+
+  const conventionPackage = path.join(external, "partial-convention-skills");
+  mkdirSync(path.join(conventionPackage, "extensions"), { recursive: true });
+  mkdirSync(path.join(conventionPackage, "skills"));
+  writeFileSync(path.join(conventionPackage, "extensions", "valid.ts"), "export default () => {};\n");
+  writeFileSync(
+    path.join(conventionPackage, "skills", "valid.md"),
+    "---\nname: convention\ndescription: Valid skill.\n---\n",
+  );
+  symlinkSync(path.join(conventionPackage, "skills", "missing.md"), path.join(conventionPackage, "skills", "SKILL.md"));
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: conventionPackage, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /invalid or unreadable declared skill/i,
+  );
+});
+
 test("bounds extension-package skill content before synchronous loading", async () => {
   const packageDirectory = path.join(external, "oversized-package-skills");
   const skillBodyBytes = Math.floor(MAX_SKILL_SCAN_BYTES / 2);
@@ -1154,6 +1213,25 @@ test("rejects unsupported filesystem object types", { skip: process.platform ===
         { cwd: project, projectTrusted: true, coreTools: [] },
       ),
     /missing or unreadable declared skill/i,
+  );
+
+  const fifoSkillTreePackage = path.join(external, "fifo-skill-tree-package");
+  const fifoSkillTree = path.join(fifoSkillTreePackage, "skills");
+  mkdirSync(fifoSkillTree, { recursive: true });
+  writeFileSync(path.join(fifoSkillTreePackage, "extension.ts"), "export default () => {};\n");
+  writeFileSync(path.join(fifoSkillTree, "valid.md"), "---\nname: valid-fifo-sibling\ndescription: Valid.\n---\n");
+  assert.equal(spawnSync("mkfifo", [path.join(fifoSkillTree, "SKILL.md")], { encoding: "utf8" }).status, 0);
+  writeFileSync(
+    path.join(fifoSkillTreePackage, "package.json"),
+    JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skills"] } }),
+  );
+  await assert.rejects(
+    () =>
+      resolveResourceAttachments(
+        { extensions: [{ path: fifoSkillTreePackage, tools: [] }] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      ),
+    /invalid or unreadable declared skill/i,
   );
 
   const packageResourceDirectory = path.join(external, "fifo-ignore-package-resource");

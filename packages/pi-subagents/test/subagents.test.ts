@@ -661,6 +661,30 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /missing or unreadable declared skill/i,
     );
+    const omittedPackageSkillDirectory = path.join(collisionRoot, "omitted-package-skill");
+    const omittedSkillDirectory = path.join(omittedPackageSkillDirectory, "skills", "nested");
+    mkdirSync(omittedSkillDirectory, { recursive: true });
+    writeFileSync(path.join(omittedPackageSkillDirectory, "extension.ts"), "export default () => {};\n");
+    writeFileSync(
+      path.join(omittedPackageSkillDirectory, "skills", "valid.md"),
+      "---\nname: valid-package\ndescription: Valid skill.\n---\n",
+    );
+    symlinkSync(path.join(omittedSkillDirectory, "missing.md"), path.join(omittedSkillDirectory, "SKILL.md"));
+    writeFileSync(
+      path.join(omittedPackageSkillDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skills"] } }),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "omitted-package-skill",
+          { task: "omitted package skill", extensions: [{ path: omittedPackageSkillDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /invalid or unreadable declared skill/i,
+    );
     const nestedExtensionDirectory = path.join(collisionRoot, "nested-extension");
     const nestedExtensionPackage = path.join(nestedExtensionDirectory, "nested");
     mkdirSync(path.join(nestedExtensionPackage, "empty"), { recursive: true });

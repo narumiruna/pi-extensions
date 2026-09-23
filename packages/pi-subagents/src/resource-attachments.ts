@@ -458,9 +458,21 @@ async function inspectPackageResourceTree(
       throwIfAttachmentAborted(state.signal);
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
       const entryPath = path.join(directory, entry.name);
-      const entryStats = await statIfPresent(entryPath);
-      if (!entryStats) continue;
       const relativePath = toPosixPath(path.relative(rootDirectory, entryPath));
+      const entryStats = await statIfPresent(entryPath);
+      throwIfAttachmentAborted(state.signal);
+      const isSkillCandidate =
+        resourceType === "skills" &&
+        (entry.name === "SKILL.md" || (directory === rootDirectory && entry.name.endsWith(".md")));
+      if (
+        isSkillCandidate &&
+        (!entryStats || (!entryStats.isFile() && !entryStats.isDirectory())) &&
+        !ignoreMatcher.ignores(relativePath) &&
+        !ignoreMatcher.ignores(`${relativePath}/`)
+      ) {
+        throw new Error("Subagent extension package must not contain an invalid or unreadable declared skill.");
+      }
+      if (!entryStats) continue;
       if (ignoreMatcher.ignores(entryStats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
       if (entryStats.isFile()) {
         const isResourceFile =
