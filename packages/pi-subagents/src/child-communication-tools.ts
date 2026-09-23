@@ -7,11 +7,9 @@ import {
   sanitizeTerminalText,
   validateMessage,
 } from "./message-broker.js";
+import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
 
 export const CHILD_COMMUNICATION_TOOL_NAMES = ["subagent_send", "subagent_wait"] as const;
-
-const MAX_TIMEOUT_MS = 2_147_483_647;
-const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 
 const SendParameters = Type.Object(
   {
@@ -97,28 +95,8 @@ export function createChildCommunicationExtension(client: ChildCommunicationClie
   };
 }
 
-function resolveTimeoutMs(timeout: number | undefined): number | undefined {
-  if (timeout === undefined) return undefined;
-  if (!Number.isFinite(timeout) || timeout <= 0) {
-    throw new Error("Invalid timeout: must be a finite number of seconds");
-  }
-  const timeoutMs = timeout * 1000;
-  if (timeoutMs > MAX_TIMEOUT_MS) {
-    throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
-  }
-  return timeoutMs;
-}
-
 function prepareWaitArguments(args: unknown): WaitArguments {
-  if (!args || typeof args !== "object") return args as WaitArguments;
-  if (!Object.hasOwn(args, "timeoutMs")) return args as WaitArguments;
-  const record = args as Record<string, unknown>;
-  if (typeof record.timeoutMs !== "number") return record as WaitArguments;
-  const { timeoutMs, ...prepared } = record;
-  if (prepared.timeout === undefined) {
-    return { ...prepared, timeout: timeoutMs / 1000 } as WaitArguments;
-  }
-  return prepared as WaitArguments;
+  return prepareTimeoutArguments(args) as WaitArguments;
 }
 
 function optionalIdentifier(value: unknown, field: string): string | undefined {

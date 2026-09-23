@@ -3,6 +3,7 @@ import { COMPLETION_MESSAGE_TYPE } from "./completion-renderer.js";
 import { type BrokerSendAcknowledgement, type MessageBroker, sanitizeTerminalText } from "./message-broker.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
 import { runChild as defaultRunChild } from "./process.js";
+import type { ExtensionAttachment } from "./resource-attachments.js";
 import {
   type ChildControl,
   type ChildRequest,
@@ -56,6 +57,9 @@ export interface ActiveJobDisplay {
 export interface StartJobInput {
   task: string;
   tools: string[];
+  skills: string[];
+  extensions: ExtensionAttachment[];
+  toolSources: Record<string, string[]>;
   model: string;
   thinkingLevel: SubagentThinkingLevel;
   cwd: string;
@@ -91,6 +95,10 @@ export class SubagentRuntime {
     this.deliveryEnabled = true;
     this.sessionActive = true;
     this.notifyJobsChanged();
+  }
+
+  getSessionGeneration(): number {
+    return this.generation;
   }
 
   subscribeJobs(listener: () => void): () => void {
@@ -139,13 +147,14 @@ export class SubagentRuntime {
     });
     void controlReady.catch(() => undefined);
     const controller = new AbortController();
+    const effectiveTools = [...new Set([...input.tools, ...input.extensions.flatMap((extension) => extension.tools)])];
     const job: InternalJob = {
       jobId,
       state: "queued",
       createdAt: this.now(),
       ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
       controller,
-      tools: [...input.tools],
+      tools: effectiveTools,
       terminal,
       resolveTerminal,
       controlReady,
@@ -172,6 +181,14 @@ export class SubagentRuntime {
         child = await this.runChild({
           task: input.task,
           tools: [...input.tools],
+          skills: [...input.skills],
+          extensions: input.extensions.map((extension) => ({
+            path: extension.path,
+            tools: [...extension.tools],
+          })),
+          toolSources: Object.fromEntries(
+            Object.entries(input.toolSources).map(([tool, sources]) => [tool, [...sources]]),
+          ),
           model: input.model,
           thinkingLevel: input.thinkingLevel,
           cwd: input.cwd,

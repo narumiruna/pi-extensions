@@ -1,6 +1,8 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { assertChildBootstrapCapacity } from "./broker-credentials.js";
+import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
 import {
   type BrokerInboundMessage,
   MAX_IDENTIFIER_LENGTH,
@@ -10,8 +12,17 @@ import {
   validateMessage,
 } from "./message-broker.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
-import { resolveTimeoutMs } from "./process.js";
+import { assertChildCommandCapacity } from "./process.js";
+import {
+  MAX_ATTACHED_EXTENSIONS,
+  MAX_ATTACHED_SKILLS,
+  MAX_EXTENSION_TOOL_NAME_LENGTH,
+  MAX_RESOURCE_PATH_BYTES,
+  MAX_SELECTED_TOOLS,
+  resolveResourceAttachments,
+} from "./resource-attachments.js";
 import { type RuntimeDependencies, SubagentRuntime } from "./runtime.js";
+import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
 import {
   CHILD_CORE_TOOL_NAMES,
   DEFAULT_SUBAGENT_TOOLS,
@@ -20,7 +31,7 @@ import {
 } from "./types.js";
 
 const MAX_TASK_BYTES = 50 * 1024;
-const MAX_TOOLS = 64;
+const MAX_TOOLS = MAX_SELECTED_TOOLS;
 const MESSAGE_TYPE = "pi-subagents-message";
 const CHILD_CORE_TOOL_SET = new Set<string>(CHILD_CORE_TOOL_NAMES);
 const THINKING_LEVEL_SET = new Set<string>(SUBAGENT_THINKING_LEVELS);
@@ -39,6 +50,50 @@ const SpawnParameters = Type.Object(
         {
           description: "Child work tools. Defaults to read, grep, find, and ls. Communication tools are always added.",
           maxItems: MAX_TOOLS,
+        },
+      ),
+    ),
+    skills: Type.Optional(
+      Type.Array(
+        Type.String({
+          description:
+            "Local Markdown skill file or directory whose declared Pi skills all load and have names unique across attachments, resolved from the child working directory.",
+          minLength: 1,
+          maxLength: MAX_RESOURCE_PATH_BYTES,
+        }),
+        {
+          description: "Explicit local skills available to the child. Automatic skill discovery stays disabled.",
+          maxItems: MAX_ATTACHED_SKILLS,
+        },
+      ),
+    ),
+    extensions: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            path: Type.String({
+              description: "Local extension file or directory path, resolved from the child working directory.",
+              minLength: 1,
+              maxLength: MAX_RESOURCE_PATH_BYTES,
+            }),
+            tools: Type.Array(
+              Type.String({
+                description: "Exact extension-specific tool name to activate initially; built-in names are rejected.",
+                minLength: 1,
+                maxLength: MAX_EXTENSION_TOOL_NAME_LENGTH,
+              }),
+              {
+                description:
+                  "Extension tools to activate. Use an empty list for lifecycle or provider behavior only. All child tool names share a 16 KiB startup bootstrap.",
+                maxItems: MAX_SELECTED_TOOLS,
+              },
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        {
+          description: "Explicit trusted local extensions loaded in the isolated child process.",
+          maxItems: MAX_ATTACHED_EXTENSIONS,
         },
       ),
     ),
@@ -109,6 +164,7 @@ type MainSendSelection =
 
 export interface SubagentToolsDependencies extends RuntimeDependencies {
   createBroker?: (onMessage: (message: BrokerInboundMessage) => void) => MessageBroker;
+  platform?: NodeJS.Platform;
 }
 
 export interface RegisteredSubagentTools {
@@ -130,7 +186,7 @@ export function registerSubagentTools(
     name: "subagent_spawn",
     label: "Subagent · Spawn",
     description:
-      "Use subagent_spawn to start one Pi subagent job and return its jobId immediately. The task defines the child's specialization, and the selected tools define its capabilities. The job may ask the main agent questions and publishes one asynchronous completion when terminal.",
+      "Use subagent_spawn to start one Pi subagent job and return its jobId immediately. The task defines the child's specialization; selected core tools and explicit trusted local skills or extensions define its initial capabilities. The job may ask the main agent questions and publishes one asynchronous completion when terminal.",
     promptSnippet: "Use subagent_spawn to start one Pi subagent job",
     parameters: SpawnParameters,
     prepareArguments: prepareSpawnArguments,
@@ -139,18 +195,50 @@ export function registerSubagentTools(
       assertNotNested();
       const task = validateTask(params.task, "subagent_spawn");
       const tools = resolveTools(params.tools);
-      const model = resolveChildModel(ctx);
+      const cwd = ctx.cwd;
+      const projectTrusted = ctx.isProjectTrusted();
+      const sessionGeneration = runtime.getSessionGeneration();
+      const attachments = await resolveResourceAttachments(
+        { skills: params.skills, extensions: params.extensions },
+        { cwd, projectTrusted, coreTools: tools, signal },
+      );
+      throwIfAborted(signal, "Subagent spawn was cancelled");
+      if (runtime.getSessionGeneration() !== sessionGeneration) {
+        throw new Error("Subagent spawn session changed during attachment validation; retry the request.");
+      }
+      if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {
+        throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
+      }
+      if (attachments.extensions.length > 0) {
+        assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])]);
+      }
+      const model = resolveChildModel(ctx, attachments.extensions.length > 0);
       const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? ctx.thinkingLevel ?? pi.getThinkingLevel());
       resolveTimeoutMs(params.timeout);
+      assertChildCommandCapacity(
+        {
+          tools,
+          skills: attachments.skills,
+          extensions: attachments.extensions,
+          model,
+          thinkingLevel,
+          projectTrusted,
+        },
+        dependencies.platform,
+      );
+      throwIfAborted(signal, "Subagent spawn was cancelled");
       return toolResult(
         runtime.start({
           task,
           tools,
+          skills: attachments.skills,
+          extensions: attachments.extensions,
+          toolSources: attachments.toolSources,
           model,
           thinkingLevel,
-          cwd: ctx.cwd,
+          cwd,
           timeout: params.timeout,
-          projectTrusted: ctx.isProjectTrusted(),
+          projectTrusted,
         }),
       );
     },
@@ -300,11 +388,11 @@ function resolveTools(value: unknown): string[] {
   return tools;
 }
 
-function resolveChildModel(ctx: ExtensionContext): string {
+function resolveChildModel(ctx: ExtensionContext, hasAttachedExtensions: boolean): string {
   const model = ctx.model;
   if (!model) throw new Error("Subagent model is unavailable because no main-agent model is selected.");
   const provider = sanitizeTerminalText(model.provider).slice(0, 128);
-  if (ctx.modelRegistry.getRegisteredProviderIds().includes(model.provider)) {
+  if (!hasAttachedExtensions && ctx.modelRegistry.getRegisteredProviderIds().includes(model.provider)) {
     throw new Error(`Subagent model provider ${provider} is unavailable because children disable parent extensions.`);
   }
   if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source === "runtime") {
@@ -328,16 +416,6 @@ function prepareSpawnArguments(args: unknown): SpawnArguments {
 
 function prepareWaitArguments(args: unknown): WaitArguments {
   return prepareTimeoutArguments(args) as WaitArguments;
-}
-
-function prepareTimeoutArguments(args: unknown): Record<string, unknown> {
-  if (!args || typeof args !== "object") return args as Record<string, unknown>;
-  if (!Object.hasOwn(args, "timeoutMs")) return args as Record<string, unknown>;
-  const record = args as Record<string, unknown>;
-  if (typeof record.timeoutMs !== "number") return record;
-  const { timeoutMs, ...prepared } = record;
-  if (prepared.timeout === undefined) return { ...prepared, timeout: timeoutMs / 1000 };
-  return prepared;
 }
 
 function resolveMainSendArguments(params: SendArguments): MainSendSelection {

@@ -13,10 +13,12 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   entries: {
     index: "src/index.ts",
     "child-communication-bridge": "src/child-communication-bridge.ts",
+    "child-readiness-probe": "src/child-readiness-probe.ts",
   },
 });
 
 const childBridgeSource = "src/child-communication-bridge.ts";
+const childReadinessSource = "src/child-readiness-probe.ts";
 
 function validMetadata(): BuildMetadata {
   return {
@@ -38,6 +40,11 @@ function validMetadata(): BuildMetadata {
         imports: [{ path: "dist/chunks/shared.js", kind: "import-statement" }],
         inputs: { [childBridgeSource]: {} },
       },
+      "dist/child-readiness-probe.js": {
+        entryPoint: childReadinessSource,
+        imports: [{ path: "dist/chunks/shared.js", kind: "import-statement" }],
+        inputs: { [childReadinessSource]: {} },
+      },
       "dist/chunks/shared.js": {
         imports: [],
         inputs: { "src/broker-credentials.ts": {} },
@@ -46,7 +53,7 @@ function validMetadata(): BuildMetadata {
   };
 }
 
-test("eager graph validation keeps the child bridge separate and packages external", async () => {
+test("eager graph validation keeps child-only entries separate and packages external", async () => {
   const builder = await loadBuilder();
   assert.doesNotThrow(() => builder.validateEagerGraph(validMetadata()));
 
@@ -58,6 +65,16 @@ test("eager graph validation keeps the child bridge separate and packages extern
   assert.throws(
     () => builder.validateEagerGraph(eagerBridge),
     /Child-process entry is eager: src\/child-communication-bridge\.ts/u,
+  );
+
+  const eagerReadiness = validMetadata();
+  requireOutput(eagerReadiness, "dist/index.js").inputs = {
+    "src/index.ts": {},
+    [childReadinessSource]: {},
+  };
+  assert.throws(
+    () => builder.validateEagerGraph(eagerReadiness),
+    /Child-process entry is eager: src\/child-readiness-probe\.ts/u,
   );
 
   const bundledDependency = validMetadata();
@@ -81,9 +98,13 @@ test("eager graph validation keeps the child bridge separate and packages extern
   const missingBridge = validMetadata();
   delete missingBridge.outputs?.["dist/child-communication-bridge.js"];
   assert.throws(() => builder.validateEagerGraph(missingBridge), /no src\/child-communication-bridge.ts entrypoint/u);
+
+  const missingReadiness = validMetadata();
+  delete missingReadiness.outputs?.["dist/child-readiness-probe.js"];
+  assert.throws(() => builder.validateEagerGraph(missingReadiness), /no src\/child-readiness-probe.ts entrypoint/u);
 });
 
-test("generated main entry references the generated child bridge", async () => {
+test("generated main entry references the generated child entries", async () => {
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-subagents-build-test-"));
   try {
@@ -92,14 +113,18 @@ test("generated main entry references the generated child bridge", async () => {
     const mainPath = join(output, "index.ts");
     const mainSource = await readFile(mainPath, "utf8");
     assert.match(mainSource, /"\.\/child-communication-bridge\.ts"/u);
-    await writeFile(mainPath, mainSource.replaceAll('"./child-communication-bridge.ts"', '"./wrong-bridge.ts"'));
-    await assert.rejects(builder.validateGeneratedFiles(output), /does not reference the generated child bridge/u);
+    assert.match(mainSource, /"\.\/child-readiness-probe\.ts"/u);
+    await writeFile(mainPath, mainSource.replaceAll('"./child-readiness-probe.ts"', '"./wrong-probe.ts"'));
+    await assert.rejects(
+      builder.validateGeneratedFiles(output),
+      /does not reference the generated child readiness probe/u,
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
 
-test("Pi's Jiti loader loads the generated extension and child bridge", async () => {
+test("Pi's Jiti loader loads the generated extension, child bridge, and readiness probe", async () => {
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-subagents-build-test-"));
   const agentDir = join(root, "agent");
@@ -142,17 +167,22 @@ test("Pi's Jiti loader loads the generated extension and child bridge", async ()
       cwd: root,
       agentDir,
       settingsManager: SettingsManager.inMemory({}),
-      additionalExtensionPaths: [join(output, "child-communication-bridge.ts")],
+      additionalExtensionPaths: [
+        join(output, "child-communication-bridge.ts"),
+        join(output, "child-readiness-probe.ts"),
+      ],
     });
     await childLoader.reload();
     const loadedChild = childLoader.getExtensions();
     assert.deepEqual(loadedChild.errors, []);
-    assert.equal(loadedChild.extensions.length, 1);
+    assert.equal(loadedChild.extensions.length, 2);
     assert.deepEqual([...(loadedChild.extensions[0]?.tools.keys() ?? [])], []);
+    assert.deepEqual([...(loadedChild.extensions[1]?.handlers.keys() ?? [])], []);
     assert.deepEqual(await loadCredentialBackedChild(output, agentDir, root), {
       errors: 0,
       tools: ["subagent_send", "subagent_wait"],
       sendParameters: ["requestId", "message"],
+      readinessHandlers: ["resources_discover", "session_shutdown"],
     });
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -165,15 +195,19 @@ async function loadCredentialBackedChild(
   output: string,
   agentDir: string,
   cwd: string,
-): Promise<{ errors: number; tools: string[]; sendParameters: string[] }> {
+): Promise<{ errors: number; tools: string[]; sendParameters: string[]; readinessHandlers: string[] }> {
   const source = `
+import fs from "node:fs";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 const [output, agentDir, cwd] = process.argv.slice(1);
 const loader = new DefaultResourceLoader({
   cwd,
   agentDir,
   settingsManager: SettingsManager.inMemory({}),
-  additionalExtensionPaths: [output + "/child-communication-bridge.ts"],
+  additionalExtensionPaths: [
+    output + "/child-communication-bridge.ts",
+    output + "/child-readiness-probe.ts",
+  ],
 });
 await loader.reload();
 const loaded = loader.getExtensions();
@@ -182,16 +216,27 @@ process.stdout.write(JSON.stringify({
   errors: loaded.errors.length,
   tools: [...(loaded.extensions[0]?.tools.keys() ?? [])],
   sendParameters: Object.keys(send?.definition.parameters.properties ?? {}),
+  readinessHandlers: [...(loaded.extensions[1]?.handlers.keys() ?? [])],
 }));
+fs.closeSync(4);
 `;
   const child = spawn(process.execPath, ["--input-type=module", "-e", source, output, agentDir, cwd], {
     cwd: resolve("."),
-    env: { ...process.env, PI_SUBAGENT_BROKER_FD: "3" },
-    stdio: ["ignore", "pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      PI_SUBAGENT_BROKER_FD: "3",
+      PI_SUBAGENT_READINESS_FD: "4",
+    },
+    stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
   });
   const credentials = child.stdio[3];
   assert.ok(credentials && "end" in credentials);
-  credentials.end(JSON.stringify({ host: "127.0.0.1", port: 31_337, token: "a".repeat(64) }));
+  credentials.end(
+    JSON.stringify({
+      communication: { host: "127.0.0.1", port: 31_337, token: "a".repeat(64) },
+      expectedTools: ["subagent_send", "subagent_wait"],
+    }),
+  );
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk: Buffer) => {
@@ -205,7 +250,12 @@ process.stdout.write(JSON.stringify({
     child.once("close", resolveExit);
   });
   assert.equal(code, 0, stderr);
-  return JSON.parse(stdout) as { errors: number; tools: string[]; sendParameters: string[] };
+  return JSON.parse(stdout) as {
+    errors: number;
+    tools: string[];
+    sendParameters: string[];
+    readinessHandlers: string[];
+  };
 }
 
 function requireOutput(metadata: BuildMetadata, path: string) {

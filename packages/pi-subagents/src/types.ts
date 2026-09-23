@@ -1,4 +1,5 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ExtensionAttachment } from "./resource-attachments.js";
 
 export const JOB_STATES = ["queued", "running", "completed", "partial", "failed", "timed_out", "cancelled"] as const;
 
@@ -46,6 +47,9 @@ export interface ChildControl {
 export interface ChildRequest {
   task: string;
   tools: string[];
+  skills: string[];
+  extensions: ExtensionAttachment[];
+  toolSources: Record<string, string[]>;
   model: string;
   thinkingLevel: SubagentThinkingLevel;
   cwd: string;

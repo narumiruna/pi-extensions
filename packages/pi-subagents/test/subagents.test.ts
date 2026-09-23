@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DefaultPackageManager, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { Check } from "typebox/value";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { toolSourceId } from "../src/attachment-utils.js";
 import { createBrokerClient } from "../src/child-communication-bridge.js";
 import { createChildCommunicationExtension } from "../src/child-communication-tools.js";
 import { MAX_MESSAGE_BYTES, MAX_MESSAGE_LINES, MessageBroker } from "../src/message-broker.js";
 import { MAX_MODEL_TEXT_BYTES, MAX_MODEL_TEXT_LINES } from "../src/model-output.js";
+import { MAX_SKILL_SCAN_DEPTH } from "../src/resource-attachments.js";
 import subagents, { type SubagentsDependencies } from "../src/subagents.js";
 import type { ChildRequest, ChildResult } from "../src/types.js";
 import { SUBAGENT_WIDGET_KEY } from "../src/widget.js";
@@ -60,7 +65,7 @@ afterEach(async () => {
 });
 
 test("registers five fixed main-agent tools with stable schemas and explicit limits", async () => {
-  const { mock, context } = await setup();
+  const { mock, context } = await setup({ runChild: waitForCancellation });
   assert.ok(mock.messageRenderers.has("pi-subagents-completion"));
   const tools = mock.tools as unknown as RegisteredTool[];
   assert.deepEqual(
@@ -69,6 +74,15 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   );
   assert.equal(tools[0]?.parameters.properties?.task?.maxLength, 50 * 1024);
   assert.equal(tools[0]?.parameters.properties?.tools?.maxItems, 64);
+  assert.equal(tools[0]?.parameters.properties?.skills?.maxItems, 16);
+  assert.equal(tools[0]?.parameters.properties?.extensions?.maxItems, 16);
+  const extensionItem = (
+    tools[0]?.parameters.properties?.extensions as {
+      items?: { properties?: Record<string, { maxLength?: number; maxItems?: number }> };
+    }
+  )?.items;
+  assert.equal(extensionItem?.properties?.path?.maxLength, 4_096);
+  assert.equal(extensionItem?.properties?.tools?.maxItems, 64);
   assert.deepEqual((tools[0]?.parameters.properties?.tools as { items?: { enum?: string[] } })?.items?.enum, [
     "read",
     "bash",
@@ -100,15 +114,26 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
     jobId: "job_old",
     timeout: 30,
   });
-  for (const [candidate, malformedAlias] of [
-    [tools[0], { task: "legacy", timeoutMs: "1500" }],
-    [tools[3], { jobId: "job_old", timeoutMs: "30000" }],
+  for (const [candidate, fields] of [
+    [tools[0], { task: "legacy" }],
+    [tools[3], { jobId: "job_old" }],
   ] as const) {
-    const preparedMalformed = candidate?.prepareArguments?.(malformedAlias);
-    assert.deepEqual(preparedMalformed, malformedAlias);
-    assert.equal(Check(candidate?.parameters, preparedMalformed), false);
+    assert.deepEqual(candidate?.prepareArguments?.({ ...fields, timeoutMs: 250, timeout: 3 }), {
+      ...fields,
+      timeout: 3,
+    });
+    assert.deepEqual(candidate?.prepareArguments?.({ ...fields, timeoutMs: 250, timeout: undefined }), {
+      ...fields,
+      timeout: 0.25,
+    });
+    for (const timeoutMs of ["250", null]) {
+      const malformedAlias = { ...fields, timeoutMs };
+      const preparedMalformed = candidate?.prepareArguments?.(malformedAlias);
+      assert.deepEqual(preparedMalformed, malformedAlias);
+      assert.equal(Check(candidate?.parameters, preparedMalformed), false);
+    }
   }
-  assert.match(tools[0]?.description ?? "", /task defines.*selected tools define/is);
+  assert.match(tools[0]?.description ?? "", /task defines.*skills or extensions define/is);
   for (const candidate of tools) {
     assert.doesNotMatch(
       JSON.stringify({
@@ -139,11 +164,14 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   const definitions = JSON.stringify(
     tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
   );
+  const spawned = await spawnJob(mock, context, "Keep definitions stable");
+  await Promise.resolve();
   await tool(mock, "subagent_inspect").execute("inspect", {}, undefined, undefined, context.ctx);
   assert.equal(
     JSON.stringify(tools.map(({ name, description, parameters }) => ({ name, description, parameters }))),
     definitions,
   );
+  await cancelJob(mock, context, String(spawned.details.jobId));
 });
 
 test("completion renderer follows Pi's tool-output expansion state", async () => {
@@ -208,7 +236,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
       },
     },
     { thinkingLevel: "medium" },
-    { thinkingLevel: "high" },
+    { thinkingLevel: "high", isProjectTrusted: () => true },
   );
   const inherited = await tool(mock, "subagent_spawn").execute(
     "inherited",
@@ -222,6 +250,13 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
     {
       task: "Implement one thing",
       tools: ["read", "edit", "read", "write"],
+      skills: ["packages/pi-subagents/skills/using-pi-subagents"],
+      extensions: [
+        {
+          path: "packages/pi-subagents/src/index.ts",
+          tools: ["custom_review", "custom_review"],
+        },
+      ],
       thinkingLevel: "low",
     },
     undefined,
@@ -232,30 +267,64 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
   assert.equal(explicit.details.state, "queued");
   await Promise.resolve();
   assert.deepEqual(
-    requests.map(({ tools, model, thinkingLevel }) => ({ tools, model, thinkingLevel })),
+    requests.map(({ tools, skills, extensions, model, thinkingLevel }) => ({
+      tools,
+      skills,
+      extensions,
+      model,
+      thinkingLevel,
+    })),
     [
       {
         tools: ["read", "grep", "find", "ls"],
+        skills: [],
+        extensions: [],
         model: "test-provider/test-model",
         thinkingLevel: "high",
       },
       {
         tools: ["read", "edit", "write"],
+        skills: [path.resolve("packages/pi-subagents/skills/using-pi-subagents")],
+        extensions: [
+          {
+            path: path.resolve("packages/pi-subagents/src/index.ts"),
+            tools: ["custom_review"],
+          },
+        ],
         model: "test-provider/test-model",
         thinkingLevel: "low",
       },
     ],
   );
+  assert.deepEqual(requests[1]?.toolSources, {
+    custom_review: [toolSourceId(path.resolve("packages/pi-subagents/src/index.ts"))],
+  });
   for (const request of requests) {
     assert.equal(request.communication.host, "127.0.0.1");
     assert.ok(request.communication.port > 0);
     assert.match(request.communication.token, /^[a-f0-9]{64}$/u);
   }
+  const inspected = await tool(mock, "subagent_inspect").execute(
+    "inspect-attachments",
+    {},
+    undefined,
+    undefined,
+    context.ctx,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(inspected.details),
+    /skills|extensions|using-pi-subagents|index\.ts|custom_review/iu,
+  );
   release();
   await Promise.all([
     waitFor(mock, context, String(inherited.details.jobId)),
     waitFor(mock, context, String(explicit.details.jobId)),
   ]);
+  const completions = mock.sentMessages.filter(
+    (entry) => (entry.message as { customType?: string }).customType === "pi-subagents-completion",
+  );
+  assert.equal(completions.length, 2);
+  assert.doesNotMatch(JSON.stringify(completions), /skills|extensions|using-pi-subagents|index\.ts|custom_review/iu);
 });
 
 test("shows active job timing, timeout, and selected tools above the editor", async () => {
@@ -268,10 +337,19 @@ test("shows active job timing, timeout, and selected tools above the editor", as
   });
   const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
   let now = 0;
-  const { mock, context } = await setup({ now: () => now, runChild: waitForCancellation }, {}, { mode: "tui" });
+  const { mock, context } = await setup(
+    { now: () => now, runChild: waitForCancellation },
+    {},
+    { mode: "tui", isProjectTrusted: () => true },
+  );
   const first = await tool(mock, "subagent_spawn").execute(
     "first",
-    { task: "First", tools: ["read", "edit"], timeout: 120 },
+    {
+      task: "First",
+      tools: ["read", "edit"],
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: ["custom_review"] }],
+      timeout: 120,
+    },
     undefined,
     undefined,
     context.ctx,
@@ -287,7 +365,7 @@ test("shows active job timing, timeout, and selected tools above the editor", as
   assert.equal(lines[1], "Subagents · 2 active");
   assert.match(
     lines[2] ?? "",
-    new RegExp(`^▶ ${String(first.details.jobId)} · running · 1m 5s / 2m · tools: read, edit$`, "u"),
+    new RegExp(`^▶ ${String(first.details.jobId)} · running · 1m 5s / 2m · tools: read, edit, custom_review$`, "u"),
   );
   assert.match(
     lines[3] ?? "",
@@ -357,6 +435,16 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
     { task: "extension tool", tools: ["subagent_spawn"] },
     { task: "bad thinking", thinkingLevel: "turbo" },
     { task: "bad timeout", timeout: 0 },
+    { task: "remote skill", skills: ["https://example.com/skill"] },
+    { task: "missing extension", extensions: [{ path: "/definitely/missing/extension.ts", tools: [] }] },
+    {
+      task: "malformed extension tool",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: ["bad,name"] }],
+    },
+    {
+      task: "untrusted project extension",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+    },
   ]) {
     await assert.rejects(() => spawn.execute("invalid", params, undefined, undefined, context.ctx));
   }
@@ -371,11 +459,483 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
     () => spawn.execute("missing-model", { task: "missing model" }, undefined, undefined, missingModelContext.ctx),
     /no main-agent model is selected/i,
   );
+  const trustedContext = createMockContext({
+    model: { provider: "test-provider", id: "test-model" },
+    modelRegistry: {
+      getProviderAuthStatus: () => ({ configured: true, source: "environment" as const }),
+      getRegisteredProviderIds: () => [],
+    },
+    isProjectTrusted: () => true,
+  });
+  await assert.rejects(
+    () =>
+      spawn.execute(
+        "unloadable-skill",
+        { task: "unloadable skill", skills: ["package.json"] },
+        undefined,
+        undefined,
+        trustedContext.ctx,
+      ),
+    /at least one loadable Pi skill/i,
+  );
+  const collisionRoot = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-collision-"));
+  const firstSkill = path.join(collisionRoot, "first.md");
+  const secondSkill = path.join(collisionRoot, "second.md");
+  try {
+    writeFileSync(firstSkill, "---\nname: shared\ndescription: First skill.\n---\n");
+    writeFileSync(secondSkill, "---\nname: shared\ndescription: Second skill.\n---\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "colliding-skills",
+          { task: "colliding skills", skills: [firstSkill, secondSkill] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /duplicate skill names/i,
+    );
+    const partialSkillDirectory = path.join(collisionRoot, "partial");
+    mkdirSync(path.join(partialSkillDirectory, "broken"), { recursive: true });
+    writeFileSync(path.join(partialSkillDirectory, "valid.md"), "---\nname: valid\ndescription: Valid skill.\n---\n");
+    writeFileSync(path.join(partialSkillDirectory, "broken", "SKILL.md"), "---\nname: broken\n---\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "partially-invalid-skills",
+          { task: "partially invalid skills", skills: [partialSkillDirectory] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /invalid or unreadable declared skill/i,
+    );
+    const brokenLinkSkillDirectory = path.join(collisionRoot, "broken-link");
+    mkdirSync(path.join(brokenLinkSkillDirectory, "broken"), { recursive: true });
+    writeFileSync(
+      path.join(brokenLinkSkillDirectory, "valid.md"),
+      "---\nname: valid-link\ndescription: Valid skill.\n---\n",
+    );
+    symlinkSync(
+      path.join(brokenLinkSkillDirectory, "missing.md"),
+      path.join(brokenLinkSkillDirectory, "broken", "SKILL.md"),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "broken-link-skills",
+          { task: "broken-link skills", skills: [brokenLinkSkillDirectory] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /invalid or unreadable declared skill/i,
+    );
+    const deepSkillDirectory = path.join(collisionRoot, "deep-skill");
+    let nestedSkillDirectory = deepSkillDirectory;
+    mkdirSync(nestedSkillDirectory);
+    for (let depth = 0; depth <= MAX_SKILL_SCAN_DEPTH; depth++) {
+      nestedSkillDirectory = path.join(nestedSkillDirectory, "nested");
+      mkdirSync(nestedSkillDirectory);
+    }
+    writeFileSync(
+      path.join(nestedSkillDirectory, "SKILL.md"),
+      "---\nname: deep-skill\ndescription: Deep skill.\n---\n",
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "deep-skill-directory",
+          { task: "deep skill directory", skills: [deepSkillDirectory] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /skill attachment exceeds traversal limits/i,
+    );
+    const cancellableSkillDirectory = path.join(collisionRoot, "cancellable-skill");
+    mkdirSync(cancellableSkillDirectory);
+    writeFileSync(
+      path.join(cancellableSkillDirectory, "SKILL.md"),
+      "---\nname: cancellable-skill\ndescription: Cancellable skill.\n---\n",
+    );
+    const validationController = new AbortController();
+    const pendingValidation = spawn.execute(
+      "cancelled-skill-validation",
+      { task: "cancel skill validation", skills: [cancellableSkillDirectory] },
+      validationController.signal,
+      undefined,
+      trustedContext.ctx,
+    );
+    queueMicrotask(() => validationController.abort());
+    await assert.rejects(pendingValidation, (error: Error) => error.name === "AbortError");
+
+    const projectTreeDirectory = path.join(collisionRoot, "project-tree");
+    mkdirSync(projectTreeDirectory);
+    symlinkSync(path.resolve("packages/pi-subagents/skills"), path.join(projectTreeDirectory, "project-skills"));
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "untrusted-project-tree",
+          { task: "untrusted project tree", skills: [projectTreeDirectory] },
+          undefined,
+          undefined,
+          context.ctx,
+        ),
+      /project.*not trusted/i,
+    );
+    const projectExtensionDirectory = path.join(collisionRoot, "project-extension");
+    mkdirSync(projectExtensionDirectory);
+    symlinkSync(path.resolve("packages/pi-subagents/src/index.ts"), path.join(projectExtensionDirectory, "index.ts"));
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "untrusted-project-extension",
+          { task: "untrusted project extension", extensions: [{ path: projectExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          context.ctx,
+        ),
+      /project.*not trusted/i,
+    );
+    const untrustedResourcePackage = path.join(collisionRoot, "untrusted-resource-package");
+    mkdirSync(untrustedResourcePackage);
+    writeFileSync(path.join(untrustedResourcePackage, "extension.ts"), "export default () => {};\n");
+    writeFileSync(
+      path.join(untrustedResourcePackage, "package.json"),
+      JSON.stringify({
+        pi: {
+          extensions: ["./extension.ts"],
+          skills: [path.resolve("packages/pi-subagents/skills")],
+        },
+      }),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "untrusted-package-resource",
+          {
+            task: "untrusted package resource",
+            extensions: [{ path: untrustedResourcePackage, tools: [] }],
+          },
+          undefined,
+          undefined,
+          context.ctx,
+        ),
+      /project.*not trusted/i,
+    );
+    const partialExtensionDirectory = path.join(collisionRoot, "partial-extension");
+    mkdirSync(partialExtensionDirectory);
+    writeFileSync(
+      path.join(partialExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts", "./empty"] } }),
+    );
+    writeFileSync(path.join(partialExtensionDirectory, "valid.ts"), "export default () => {};\n");
+    mkdirSync(path.join(partialExtensionDirectory, "empty"));
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "partially-missing-extension",
+          { task: "partially missing extension", extensions: [{ path: partialExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /missing or unresolvable declared entrypoint/i,
+    );
+    const missingPackageSkillDirectory = path.join(collisionRoot, "missing-package-skill");
+    mkdirSync(missingPackageSkillDirectory);
+    writeFileSync(path.join(missingPackageSkillDirectory, "extension.ts"), "export default () => {};\n");
+    writeFileSync(
+      path.join(missingPackageSkillDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./missing.md"] } }),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "missing-package-skill",
+          { task: "missing package skill", extensions: [{ path: missingPackageSkillDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /missing or unreadable declared skill/i,
+    );
+    const omittedPackageSkillDirectory = path.join(collisionRoot, "omitted-package-skill");
+    const omittedSkillDirectory = path.join(omittedPackageSkillDirectory, "skills", "nested");
+    mkdirSync(omittedSkillDirectory, { recursive: true });
+    writeFileSync(path.join(omittedPackageSkillDirectory, "extension.ts"), "export default () => {};\n");
+    writeFileSync(
+      path.join(omittedPackageSkillDirectory, "skills", "valid.md"),
+      "---\nname: valid-package\ndescription: Valid skill.\n---\n",
+    );
+    symlinkSync(path.join(omittedSkillDirectory, "missing.md"), path.join(omittedSkillDirectory, "SKILL.md"));
+    writeFileSync(
+      path.join(omittedPackageSkillDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./extension.ts"], skills: ["./skills"] } }),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "omitted-package-skill",
+          { task: "omitted package skill", extensions: [{ path: omittedPackageSkillDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /invalid or unreadable declared skill/i,
+    );
+    const nestedExtensionDirectory = path.join(collisionRoot, "nested-extension");
+    const nestedExtensionPackage = path.join(nestedExtensionDirectory, "nested");
+    mkdirSync(path.join(nestedExtensionPackage, "empty"), { recursive: true });
+    writeFileSync(
+      path.join(nestedExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./nested"] } }),
+    );
+    writeFileSync(
+      path.join(nestedExtensionPackage, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts", "./empty"] } }),
+    );
+    writeFileSync(path.join(nestedExtensionPackage, "valid.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "nested-unresolvable-extension",
+          { task: "nested unresolvable extension", extensions: [{ path: nestedExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /missing or unresolvable declared entrypoint/i,
+    );
+    const globExtensionDirectory = path.join(collisionRoot, "glob-extension");
+    mkdirSync(globExtensionDirectory);
+    writeFileSync(
+      path.join(globExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts", "./**/*.ts"] } }),
+    );
+    writeFileSync(path.join(globExtensionDirectory, "valid.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "glob-extension",
+          { task: "glob extension", extensions: [{ path: globExtensionDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /must not contain glob entrypoint declarations/i,
+    );
+    const resourceGlobExtensionDirectory = path.join(collisionRoot, "resource-glob-extension");
+    mkdirSync(resourceGlobExtensionDirectory);
+    writeFileSync(
+      path.join(resourceGlobExtensionDirectory, "package.json"),
+      JSON.stringify({ pi: { extensions: ["./valid.ts"], prompts: ["./**/*.md"] } }),
+    );
+    writeFileSync(path.join(resourceGlobExtensionDirectory, "valid.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "resource-glob-extension",
+          {
+            task: "resource glob extension",
+            extensions: [{ path: resourceGlobExtensionDirectory, tools: [] }],
+          },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /must not contain glob resource declarations/i,
+    );
+    const extensionlessManifestDirectory = path.join(collisionRoot, "extensionless-manifest");
+    mkdirSync(extensionlessManifestDirectory);
+    writeFileSync(
+      path.join(extensionlessManifestDirectory, "package.json"),
+      JSON.stringify({ pi: { skills: ["./SKILL.md"] } }),
+    );
+    writeFileSync(
+      path.join(extensionlessManifestDirectory, "SKILL.md"),
+      "---\nname: extensionless-manifest\ndescription: Valid skill.\n---\n",
+    );
+    writeFileSync(path.join(extensionlessManifestDirectory, "index.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "extensionless-manifest",
+          { task: "extensionless manifest", extensions: [{ path: extensionlessManifestDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /at least one loadable Pi extension entrypoint/i,
+    );
+    for (const reservedTool of ["read", "subagent_wait"]) {
+      await assert.rejects(
+        () =>
+          spawn.execute(
+            `reserved-${reservedTool}`,
+            {
+              task: "reserved extension tool",
+              extensions: [{ path: path.join(partialExtensionDirectory, "valid.ts"), tools: [reservedTool] }],
+            },
+            undefined,
+            undefined,
+            trustedContext.ctx,
+          ),
+        new RegExp(`conflicts.*built-in ${reservedTool}`, "i"),
+      );
+    }
+  } finally {
+    rmSync(collisionRoot, { recursive: true, force: true });
+  }
+  await assert.rejects(
+    () =>
+      spawn.execute(
+        "oversized-tool-bootstrap",
+        {
+          task: "oversized tool bootstrap",
+          tools: [],
+          extensions: [
+            {
+              path: "packages/pi-subagents/src/index.ts",
+              tools: Array.from({ length: 64 }, (_, index) => `${String(index).padStart(2, "0")}${"界".repeat(126)}`),
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        trustedContext.ctx,
+      ),
+    /child bootstrap size limit/i,
+  );
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(
     () => spawn.execute("cancelled", { task: "cancelled" }, controller.signal, undefined, context.ctx),
     (error: Error) => error.name === "AbortError",
+  );
+  assert.equal(launches, 0);
+});
+
+test("rejects an oversized Windows child command line before queueing", async () => {
+  let launches = 0;
+  const { mock, context } = await setup(
+    {
+      platform: "win32",
+      runChild: async () => {
+        launches++;
+        return completed("unexpected");
+      },
+    },
+    {},
+    { model: { provider: "test-provider", id: "m".repeat(33_000) } },
+  );
+
+  await assert.rejects(
+    () => spawnJob(mock, context, "oversized Windows child command"),
+    /command line exceeds the Windows process limit/i,
+  );
+  assert.equal(launches, 0);
+});
+
+test("allows an attached extension to recreate a parent-registered provider", async () => {
+  let request!: ChildRequest;
+  const { mock, context } = await setup(
+    {
+      runChild: async (candidate) => {
+        request = candidate;
+        return completed("done");
+      },
+    },
+    {},
+    {
+      isProjectTrusted: () => true,
+      modelRegistry: {
+        getProviderAuthStatus: () => ({ configured: true, source: "stored" as const }),
+        getRegisteredProviderIds: () => ["test-provider"],
+      },
+    },
+  );
+  const spawned = await tool(mock, "subagent_spawn").execute(
+    "attached-provider",
+    {
+      task: "Use the attached provider",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+    },
+    undefined,
+    undefined,
+    context.ctx,
+  );
+  await waitFor(mock, context, String(spawned.details.jobId));
+  assert.equal(request.model, "test-provider/test-model");
+  assert.equal(request.extensions.length, 1);
+});
+
+test("surfaces child startup failure when an attachment does not recreate its provider", async () => {
+  const { mock, context } = await setup(
+    {
+      runChild: async () => ({
+        state: "failed",
+        error: "Unknown provider: test-provider",
+        limitations: [],
+        truncated: false,
+      }),
+    },
+    {},
+    {
+      isProjectTrusted: () => true,
+      modelRegistry: {
+        getProviderAuthStatus: () => ({ configured: true, source: "stored" as const }),
+        getRegisteredProviderIds: () => ["test-provider"],
+      },
+    },
+  );
+  const spawned = await tool(mock, "subagent_spawn").execute(
+    "missing-attached-provider",
+    {
+      task: "Try the attached provider",
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+    },
+    undefined,
+    undefined,
+    context.ctx,
+  );
+  const waited = await waitFor(mock, context, String(spawned.details.jobId));
+  assert.equal(waited.details.state, "failed");
+  assert.match(String(waited.details.error), /unknown provider: test-provider/i);
+});
+
+test("rejects runtime-only provider credentials even when an extension is attached", async () => {
+  let launches = 0;
+  const { mock, context } = await setup(
+    {
+      runChild: async () => {
+        launches++;
+        return completed("unexpected");
+      },
+    },
+    {},
+    {
+      isProjectTrusted: () => true,
+      modelRegistry: {
+        getProviderAuthStatus: () => ({ configured: true, source: "runtime" as const }),
+        getRegisteredProviderIds: () => ["test-provider"],
+      },
+    },
+  );
+  await assert.rejects(
+    () =>
+      tool(mock, "subagent_spawn").execute(
+        "runtime-provider",
+        {
+          task: "Must not launch",
+          extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [] }],
+        },
+        undefined,
+        undefined,
+        context.ctx,
+      ),
+    /process-local runtime API key/i,
   );
   assert.equal(launches, 0);
 });
@@ -980,6 +1540,63 @@ test("session shutdown waits for child teardown without delivering stale complet
     ),
     false,
   );
+});
+
+test("rejects a spawn validated across session replacement with the same context", async () => {
+  let launches = 0;
+  const { mock, context } = await setup({
+    runChild: async (request) => {
+      launches++;
+      return waitForCancellation(request);
+    },
+  });
+  const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-stale-spawn-"));
+  const extensionPath = path.join(directory, "index.ts");
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const originalResolve = DefaultPackageManager.prototype.resolveExtensionSources;
+  vi.spyOn(DefaultPackageManager.prototype, "resolveExtensionSources").mockImplementation(async function (
+    this: DefaultPackageManager,
+    sources,
+    options,
+  ) {
+    if (sources[0] === extensionPath) {
+      entered();
+      await blocked;
+    }
+    return originalResolve.call(this, sources, options);
+  });
+  try {
+    writeFileSync(extensionPath, "export default () => {};\n");
+    const pending = tool(mock, "subagent_spawn").execute(
+      "stale-spawn",
+      { task: "old session", extensions: [{ path: extensionPath, tools: [] }] },
+      undefined,
+      undefined,
+      context.ctx,
+    );
+    await started;
+    try {
+      await emit(mock, "session_start", { reason: "replacement" }, context.ctx);
+    } finally {
+      release();
+    }
+    await assert.rejects(pending, /session changed/i);
+    assert.equal(launches, 0);
+    const next = await spawnJob(mock, context, "new session");
+    await Promise.resolve();
+    assert.equal(launches, 1);
+    await cancelJob(mock, context, String(next.details.jobId));
+  } finally {
+    release();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("session replacement cancels old jobs and permits a clean new session", async () => {

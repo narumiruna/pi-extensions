@@ -1,6 +1,6 @@
 import net from "node:net";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { captureBrokerCredentials } from "./broker-credentials.js";
+import { captureChildBootstrap } from "./broker-credentials.js";
 import { type ChildCommunicationClient, createChildCommunicationExtension } from "./child-communication-tools.js";
 import { MAX_FRAME_BYTES, MAX_IDENTIFIER_LENGTH } from "./message-broker.js";
 import type { BrokerCredentials } from "./types.js";
@@ -8,10 +8,10 @@ import type { BrokerCredentials } from "./types.js";
 const CONNECT_TIMEOUT_MS = 2_000;
 const SEND_RESPONSE_TIMEOUT_MS = 5_000;
 
-const captured = captureBrokerCredentials();
+const captured = captureChildBootstrap();
 
 const childCommunicationBridge: ExtensionFactory = captured
-  ? createChildCommunicationExtension(createBrokerClient(captured))
+  ? createChildCommunicationExtension(createBrokerClient(captured.communication))
   : () => undefined;
 
 export default childCommunicationBridge;

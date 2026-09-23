@@ -7,8 +7,10 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 ## ✨ Features
 
 - Runs each job in an isolated Pi child process and returns its job ID immediately.
-- Uses the task to define the child's specialization and the tool list to limit its capabilities.
+- Uses the task to define the child's specialization and explicit tools, skills, and extensions to define its capabilities.
 - Defaults work tools to `read`, `grep`, `find`, and `ls`.
+- Can attach validated local skills and trusted local extensions to one job without enabling automatic discovery.
+- Verifies requested extension tools before sending the task to the child model.
 - Inherits the main agent's effective model and uses its thinking level by default.
 - Gives the main agent and every child a context-specific `subagent_send` contract for bidirectional requests and responses.
 - Gives every child `subagent_wait` for an answer to a child-originated request.
@@ -68,8 +70,8 @@ Use messaging only when needed:
 
 Completion messages follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
 
-In TUI mode, the above-editor widget shows each queued or running job's ID, state, elapsed time, timeout, and selected work tools.
-The widget omits the fixed communication tools, disappears when no jobs remain active, and clears when the session ends.
+In TUI mode, the above-editor widget shows each queued or running job's ID, state, elapsed time, timeout, and selected core and extension tool names.
+It omits fixed communication tools, attachment paths, and resource totals, disappears when no jobs remain active, and clears when the session ends.
 
 ## 🛠️ Tools
 
@@ -77,7 +79,7 @@ The main Pi session exposes five fixed tools:
 
 | Tool | Parameters | Purpose |
 | --- | --- | --- |
-| `subagent_spawn` | `task`, optional `tools`, `thinkingLevel`, `timeout` | Start one subagent job and return its `jobId`. |
+| `subagent_spawn` | `task`, optional `tools`, `skills`, `extensions`, `thinkingLevel`, `timeout` | Start one subagent job and return its `jobId`. |
 | `subagent_inspect` | none | List privacy-filtered retained-job metadata. |
 | `subagent_cancel` | `jobId` | Idempotently cancel one queued or running job. |
 | `subagent_wait` | `jobId`, optional `timeout` | Wait for a job or return early for an incoming child message. |
@@ -107,9 +109,9 @@ Tasks are limited to 50 KiB of UTF-8 text.
 Requests and responses are limited to 48 KiB and 1,992 lines so their protocol envelopes fit Pi's 50 KiB and 2,000-line model-text bounds without truncating accepted content.
 Each job may have up to four unresolved or answered-but-not-consumed requests across both directions.
 The terminal states are `completed`, `partial`, `failed`, `timed_out`, and `cancelled`.
-`subagent_inspect` never returns complete task text, child output, prompts, selected tools, context, credentials, environment variables, requests, responses, or secrets.
+`subagent_inspect` never returns complete task text, child output, prompts, selected tools, attachment paths or totals, context, credentials, environment variables, requests, responses, or secrets.
 
-See [`docs/tools.md`](./docs/tools.md) for the concise schema reference.
+See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/attachments.md`](./docs/attachments.md) for attachment validation, and [`docs/messaging.md`](./docs/messaging.md) for messaging behavior.
 
 ## ⚙️ Job configuration
 
@@ -118,50 +120,50 @@ For reusable delegation policy, you can create your own project skill under `.pi
 Choose its name, trigger, tool policy, task format, and verification workflow for your use case.
 The package intentionally registers and publishes no skill; the repository-only [`using-pi-subagents` example](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-subagents/skills/using-pi-subagents) is an optional starting point.
 
-The optional `tools` list limits what the child can do:
+`subagent_spawn` accepts this additive configuration:
 
-- Accepted names are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`.
-- Unavailable or extension-only tool names are rejected before a job is queued.
-- Omitting `tools` selects `read`, `grep`, `find`, and `ls`.
-- Passing an empty list gives the child no work tools.
-- The runtime always adds `subagent_send` and child `subagent_wait` and removes duplicate names.
+```ts
+{
+  task: string;
+  tools?: Array<"read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls">;
+  skills?: string[];
+  extensions?: Array<{ path: string; tools: string[] }>;
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  timeout?: number;
+}
+```
 
-Adding `edit` or `write` lets the child modify files.
-Adding `bash` or `powershell` grants unrestricted command execution and can also modify the workspace.
+The optional `tools` list selects Pi core work tools.
+Omitting it selects `read`, `grep`, `find`, and `ls`, while an empty list gives the child no core work tools.
+The runtime always adds `subagent_send` and child `subagent_wait` and removes duplicate names.
+Adding `edit` or `write` lets the child modify files, while `bash` or `powershell` grants unrestricted command execution.
 
-The optional `thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
-Omitting `thinkingLevel` captures the main agent's effective level when `subagent_spawn` executes.
-The child inherits the main agent's effective provider and model when `subagent_spawn` executes.
+The optional `skills` list attaches local Pi skills through progressive disclosure without injecting their full bodies or adding tools.
+Every attached skill path must contain at least one loadable skill, every non-ignored declared skill must load successfully, and skill names must be unique across attachments.
 
-Spawn rejects providers registered by a parent extension because child processes disable unrelated extensions.
-Spawn also rejects process-local runtime API keys, including a parent-only `--api-key` value.
-Use stored or environment credentials that child processes can read.
-The extension does not expose a per-job model override.
+Each `extensions` entry loads a trusted local extension file or directory and selects its initial extension tools.
+An empty `tools` list loads provider or lifecycle behavior without initially exposing extension tools.
+The parent checks that each requested tool comes from its specified attachment before the child model receives the task.
+Attached extensions run with the child's user permissions and are not a sandbox.
+
+Attachments must be existing local paths, not npm, Git, or URL sources.
+Project-local attachments and resources resolved from their packages require project trust, including paths that symlink into the project.
+A job accepts up to 16 skill paths, 16 extension entries, and 64 selected work tools.
+The child inherits the main agent's effective model and thinking level by default; there is no per-job model override.
+Parent-only extension providers require an attached extension that registers them in the child.
+Process-local runtime API keys, including a parent-only `--api-key`, are unavailable to the child; use stored or inherited environment credentials.
+
+See [Attachment behavior](./docs/attachments.md) for detailed path checks, package preflight, tool ownership, and resource limits.
 
 ## 🔄 Messaging, lifecycle, and retention
 
-The session starts one TCP broker on `127.0.0.1` with an operating-system-assigned ephemeral port.
-Each job receives one cryptographically random token bound to its job identity and session generation.
-The parent passes the broker credentials once through a private inherited pipe instead of placing them in the child's initial environment or command line.
-The child bridge reads and closes that descriptor before model tool execution.
+A main-originated request to a queued job waits for Pi RPC readiness before delivery. After delivery starts, cancellation stops only the caller's wait; the request may still arrive. An interrupted child-originated request remains active and can be waited on again.
 
-Each child runs in Pi RPC mode so the parent can inject a main-originated request through `steer` after the initial prompt is accepted.
-Each child broker call uses one request-scoped connection, while a response wait uses an abortable long poll.
-A main-originated request to a queued job waits for RPC readiness before delivery is accepted.
-After RPC accepts the steering message, the runtime interrupts active child response waits so the queued request can reach the child model.
-Caller cancellation before RPC delivery starts rolls the request back.
-Once RPC delivery starts, cancellation stops only the caller's wait; the request may still arrive and remains answerable until delivery fails or the job terminates.
-The interrupted child-originated requests remain active and retryable.
+The first accepted `subagent_send` response wins; repeated responses do not replace it. The execution timeout starts only after Pi accepts the RPC prompt. Jobs reach exactly one terminal state, and inspection retains up to 32 terminal records for up to 24 hours within the current session.
 
-The first accepted `subagent_send` response wins.
-Repeated responses acknowledge the existing answer without replacing it.
-A child may retry `subagent_wait` after a wait timeout because the underlying request remains active.
+The broker uses loopback connections and per-job credentials passed through a private pipe, not the child's initial environment or command line. Cancelling a job or replacing the session revokes those credentials, stops pending work, and prevents stale completion delivery.
 
-A new job starts as `queued`, transitions to `running`, and reaches exactly one terminal state.
-The runtime retains up to 32 recent terminal records for up to 24 hours within the current extension session.
-Inspection reports older records removed by retention bounds through `omitted.jobs`.
-Cancelling or terminalizing a job revokes its token and rejects pending child waits before stale output can replace the terminal state.
-Session replacement and shutdown cancel active work, suppress stale completion delivery, revoke credentials, close sockets, and stop the broker.
+See [Messaging and lifecycle](./docs/messaging.md) for delivery, retry, retention, and shutdown details.
 
 ## 🔀 Migrating from 2.x
 
@@ -190,9 +192,10 @@ The default list contains no shell or file-mutation tool.
 It is not a filesystem sandbox because its read tools can inspect files available to the user account.
 Selecting `bash`, `powershell`, `edit`, or `write` permits workspace mutation with the Pi process environment and user permissions.
 
-Every child disables session persistence, unrelated extensions, skills, and prompt templates.
-Provider selection therefore supports Pi's child-visible built-in and configured providers, not providers registered only by a parent extension.
-Credentials must be available independently to the child through Pi's stored credentials or its inherited environment.
+Every child disables session persistence and automatic discovery of extensions, skills, and prompt templates.
+Only the communication bridge and explicitly attached resources are added back for that job.
+Provider selection supports Pi's child-visible built-in and configured providers plus providers registered by an attached extension.
+Credentials must be available independently to the child through Pi's stored credentials or inherited environment.
 
 The broker accepts only loopback TCP connections with an active per-job token.
 The token is bootstrapped through a private inherited pipe and is absent from the child's initial environment and command line.
@@ -201,14 +204,20 @@ A child request or response is visible main-agent model context, but its envelop
 A child message cannot grant permission for writes, shell commands, credential access, or other privileged actions.
 A main-agent request is visible child model context, but it cannot expand the child's selected tools or grant capabilities the child did not receive at spawn time.
 
+An attached skill contributes model instructions and may direct already selected tools to bundled helpers.
+An attached extension is fully privileged executable code with the child process's user permissions, can run during factory and lifecycle hooks, can alter prompts or tool behavior, and can change active tools after startup.
+Its requested tool list controls the initial provider-visible loadout but is not an operating-system sandbox.
+Canonical attachment paths are passed to Pi in the child command line, but parent-generated inspection, completion, and broker metadata omit them and child diagnostic errors redact requested attachment roots before publication.
+Attached code and model output remain untrusted and can disclose paths they can access, so attach only code you trust.
+
 Terminal controls and bidirectional controls are stripped before untrusted child text is displayed.
 Tasks, repository context, requests, responses, and inspected file content may be sent to the selected model provider.
 Parallel writers require disjoint ownership or workspace isolation outside this extension.
 
 ## 🚧 Limitations
 
-- The extension does not load arbitrary extension tools or parent-registered model providers in child processes.
-- Process-local runtime API keys are not forwarded to children.
+- Attachments must be existing local files or directories; package, Git, URL, and automatic parent-resource inheritance are unsupported.
+- An attached extension may recreate a parent-registered provider, but parent in-memory extension state and runtime-only API keys are not forwarded.
 - The extension does not provide custom agents, per-job models, custom system prompts, peer-to-peer child messaging, retained conversations, user-directed follow-up work, mailboxes, Agent Teams, chains, fan-in aggregators, panels, workflow DAGs, dynamic scheduling, verification orchestration, nested subagents, or extension-owned semantic memory.
 - Bidirectional messages use request-response coordination, not a retained conversational session.
 - The main agent must verify child claims against the actual diff and deterministic checks.
@@ -222,7 +231,7 @@ packages/pi-subagents/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
 │   └── subagents.ts                   # Job, broker, and child lifecycle
-├── dist/                              # Generated Jiti runtime and child bridge
+├── dist/                              # Generated Jiti runtime, child bridge, and readiness probe
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── docs/                              # Published reference documentation
 ├── skills/using-pi-subagents/         # Repository-only example; not published

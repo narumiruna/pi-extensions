@@ -51,5 +51,8 @@
     "type": "git",
     "url": "https://github.com/narumiruna/pi-extensions",
     "directory": "packages/pi-subagents"
+  },
+  "dependencies": {
+    "ignore": "^7.0.8"
   }
 }

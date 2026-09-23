@@ -12,9 +12,15 @@ That isolation is not a limitation—it is the point.
 
 Fresh does not mean empty.
 
-The subagent still receives Pi's standard system prompt, the main agent's effective model, applicable project context, its selected tools, and one explicit task.
+The subagent still receives Pi's standard system prompt, the main agent's effective model, applicable project context, its selected tools, explicit per-job attachments, and one task.
 
-The task defines the child's specialization, while the selected tools define its authority.
+The task defines the child's specialization, while selected tools and trusted attachments define its authority.
+
+Skills add progressively disclosed instructions without automatically adding tools or injecting their complete bodies.
+
+Extensions add fully privileged executable code and may change prompts, providers, tools, or lifecycle behavior, so their initial tool lists are least-privilege loadout declarations rather than a sandbox.
+
+Load only explicit local attachments, require project trust for project-local code, and never infer or inherit parent resources automatically.
 
 Give each subagent a self-contained task containing only the context needed to complete that task.
 
