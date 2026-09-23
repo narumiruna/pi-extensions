@@ -48,7 +48,16 @@ function combinedPlanFixture(): KimiCodingUsagePayload {
 }
 
 test("Kimi fixtures are sanitized and contain no credential or account fields", () => {
-  for (const name of ["weekly", "five-hour", "daily", "malformed", "booster-wallet", "remaining-only", "empty"]) {
+  for (const name of [
+    "weekly",
+    "five-hour",
+    "daily",
+    "monthly",
+    "malformed",
+    "booster-wallet",
+    "remaining-only",
+    "empty",
+  ]) {
     const text = readFileSync(new URL(`./fixtures/kimi-coding-${name}.json`, import.meta.url), "utf8");
     assert.doesNotMatch(text, /authorization|access_token|refresh_token|api[_-]?key|email/iu);
   }
@@ -101,6 +110,149 @@ test("Kimi adapter normalizes weekly, five-hour, and daily numeric-string window
     resetsAt: 1_893_542_400,
   });
   assert.equal(formatUsageStatusline(daily), "kimi 95% 1d");
+});
+
+test("Kimi adapter displays a ratio-only monthly plan alongside a count-based five-hour window", () => {
+  const report = normalizeKimiCodingUsagePayload(fixture("monthly"), 650);
+  assert.deepEqual(report.buckets, [
+    {
+      id: "five-hour",
+      label: "5h window",
+      used: 44,
+      remaining: 56,
+      limit: 100,
+      unit: "count",
+      windowMinutes: 300,
+      resetsAt: Math.floor(Date.parse("2026-09-23T06:47:09.122865Z") / 1_000),
+    },
+    {
+      id: "monthly",
+      label: "Monthly window",
+      used: 78.77,
+      remaining: 100 - 78.77,
+      unit: "percent",
+      resetsAt: Date.parse("2026-10-17T00:00:00Z") / 1_000,
+    },
+  ]);
+  assert.equal(report.notes, undefined);
+  assert.equal(formatUsageStatusline(report), "kimi 56% 5h 21% mo");
+  const rendered = formatUsageReport(report, "current");
+  assert.match(rendered, /Monthly window:\s+79% used · 21% left \(resets /u);
+  assert.doesNotMatch(rendered, /78\.77 of 100 used/u);
+});
+
+test("Kimi ratio report percentages remain complementary at half-percent boundaries", () => {
+  for (const [ratio, used, left] of [
+    [0, 0, 100],
+    [0.005, 0, 100],
+    [0.125, 12, 88],
+    [0.875, 87, 13],
+    [0.995, 99, 1],
+    [1, 100, 0],
+  ]) {
+    const report = normalizeKimiCodingUsagePayload({ usages: { limit_month_total: { used_ratio: ratio } } }, 0);
+    assert.match(
+      formatUsageReport(report, "current"),
+      new RegExp(`Monthly window:\\s+${used}% used · ${left}% left`, "u"),
+    );
+    assert.equal(formatUsageStatusline(report), `kimi ${left}% mo`);
+  }
+});
+
+test("Kimi ratio-only plans show five-hour, weekly, and monthly windows without guessed month duration", () => {
+  const payload = fixture("monthly") as KimiCodingUsagePayload & { usages: Record<string, unknown> };
+  delete payload.limits;
+  payload.usages.limit_week = { used_ratio: 0.25, reset_time: "2026-09-30T00:00:00Z" };
+  const report = normalizeKimiCodingUsagePayload(payload, 675);
+  assert.deepEqual(
+    report.buckets.map(({ id, unit, windowMinutes }) => ({ id, unit, windowMinutes })),
+    [
+      { id: "five-hour", unit: "percent", windowMinutes: 300 },
+      { id: "weekly", unit: "percent", windowMinutes: 10_080 },
+      { id: "monthly", unit: "percent", windowMinutes: undefined },
+    ],
+  );
+  assert.equal(formatUsageStatusline(report), "kimi 56% 5h 75% wk 21% mo");
+});
+
+test("Kimi ratio windows never override explicit windows or mask duplicates", () => {
+  const payload = fixture("monthly") as KimiCodingUsagePayload & { usages: Record<string, unknown> };
+  payload.usage = { limit: "100", used: "10" };
+  payload.usages.limit_week = { used_ratio: 0.25 };
+  const report = normalizeKimiCodingUsagePayload(payload, 680);
+  assert.deepEqual(
+    report.buckets.map((bucket) => [bucket.id, bucket.unit]),
+    [
+      ["five-hour", "count"],
+      ["weekly", "count"],
+      ["monthly", "percent"],
+    ],
+  );
+  assert.equal(formatUsageStatusline(report), "kimi 56% 5h 90% wk 21% mo");
+
+  const duplicate = fixture("malformed") as KimiCodingUsagePayload & { usages: Record<string, unknown> };
+  duplicate.usages = { limit_5h: { used_ratio: 0.25 }, limit_month_total: { used_ratio: 0 } };
+  const withDuplicate = normalizeKimiCodingUsagePayload(duplicate, 685);
+  assert.deepEqual(
+    withDuplicate.buckets.map((bucket) => bucket.id),
+    ["daily", "weekly", "monthly"],
+  );
+  assert.deepEqual(withDuplicate.notes, ["Unsupported, malformed, or duplicate plan windows were unavailable."]);
+});
+
+test("Kimi ratio windows reject invalid values and ignore unrecognized keys", () => {
+  for (const invalid of [-0.1, 1.01, Number.NaN, Number.POSITIVE_INFINITY, "0.5", null]) {
+    const payload: KimiCodingUsagePayload & { usages: unknown } = {
+      usages: { limit_month_total: { used_ratio: invalid } },
+    };
+    assert.throws(() => normalizeKimiCodingUsagePayload(payload, 0), /no displayable usage data/iu);
+  }
+  const payload: KimiCodingUsagePayload & { usages: unknown } = {
+    usages: {
+      limit_month_total: { used_ratio: 1, reset_time: "2030-02-30T00:00:00Z" },
+      limit_month_code: { used_ratio: 0.25 },
+      future_window: { used_ratio: 0.5 },
+    },
+  };
+  const report = normalizeKimiCodingUsagePayload(payload, 690);
+  assert.deepEqual(report.buckets, [
+    { id: "monthly", label: "Monthly window", used: 100, remaining: 0, unit: "percent" },
+  ]);
+  assert.equal(formatUsageStatusline(report), "kimi 0% mo");
+  assert.equal(report.notes, undefined);
+
+  assert.throws(
+    () => normalizeKimiCodingUsagePayload({ usages: { limit_month_code: { used_ratio: 0.25 } } }, 0),
+    /no displayable usage data/iu,
+  );
+  const malformedMap = normalizeKimiCodingUsagePayload({ ...fixture("five-hour"), usages: [] }, 695);
+  assert.deepEqual(
+    malformedMap.buckets.map((bucket) => bucket.id),
+    ["five-hour"],
+  );
+  assert.deepEqual(malformedMap.notes, ["Unsupported, malformed, or duplicate plan windows were unavailable."]);
+  const invalidMonthly = normalizeKimiCodingUsagePayload(
+    { ...fixture("five-hour"), usages: { limit_month_total: { used_ratio: 2 } } },
+    696,
+  );
+  assert.deepEqual(
+    invalidMonthly.buckets.map((bucket) => bucket.id),
+    ["five-hour"],
+  );
+  assert.deepEqual(invalidMonthly.notes, ["Unsupported, malformed, or duplicate plan windows were unavailable."]);
+
+  const invalidCount = normalizeKimiCodingUsagePayload(
+    {
+      limits: [{ window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" }, detail: { limit: "100", used: "bad" } }],
+      usages: { limit_5h: { used_ratio: 0.25 }, limit_month_total: { used_ratio: 0.5 } },
+    },
+    697,
+  );
+  assert.deepEqual(
+    invalidCount.buckets.map((bucket) => bucket.id),
+    ["monthly"],
+  );
+  assert.deepEqual(invalidCount.notes, ["Unsupported, malformed, or duplicate plan windows were unavailable."]);
 });
 
 test("Kimi adapter omits malformed, duplicate, unknown, and unsafe window fields", () => {
@@ -227,6 +379,19 @@ test("Kimi adapter keeps booster-wallet currency separate from plan counts", () 
   assert.match(rendered, /Monthly limit:\s+\$200\.00/);
   assert.doesNotMatch(rendered, /requests|% left/iu);
   assert.equal(formatUsageStatusline(report), undefined);
+});
+
+test("Kimi booster wallet accepts the top-level snake-case alias without mixing plan and money", () => {
+  const wallet = fixture("booster-wallet").boosterWallet;
+  const payload = { ...fixture("monthly"), booster_wallet: wallet };
+  const report = normalizeKimiCodingUsagePayload(payload, 920);
+  assert.deepEqual(report.metrics, normalizeKimiCodingUsagePayload(fixture("booster-wallet"), 900).metrics);
+  assert.match(formatUsageReport(report, "current"), /Extra usage wallet:/u);
+  assert.equal(formatUsageStatusline(report), "kimi 56% 5h 21% mo");
+
+  const both = { ...payload, boosterWallet: { balance: { type: "BOOSTER", amount: "1" } } };
+  assert.deepEqual(normalizeKimiCodingUsagePayload(both, 921).metrics, []);
+  assert.deepEqual(normalizeKimiCodingUsagePayload({ ...payload, boosterWallet: null }, 922).metrics, []);
 });
 
 test("Kimi booster wallet omits unverifiable currency and absent monthly fields", () => {

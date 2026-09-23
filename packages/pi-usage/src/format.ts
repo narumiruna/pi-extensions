@@ -282,6 +282,15 @@ function formatOpenCodeZenStatusline(report: UsageReport): string | undefined {
 function formatKimiCodingReport(lines: string[], report: UsageReport): void {
   for (const bucket of report.buckets) {
     const reset = bucket.resetsAt ? ` (resets ${formatReset(bucket.resetsAt)})` : "";
+    if (bucket.unit === "percent") {
+      const remaining = bucket.remaining === undefined ? undefined : Math.round(clampPercent(bucket.remaining));
+      const value =
+        bucket.used === undefined || remaining === undefined
+          ? "unavailable"
+          : `${100 - remaining}% used · ${remaining}% left`;
+      lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${value}${reset}`);
+      continue;
+    }
     if (bucket.used === undefined || bucket.limit === undefined) {
       lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}unavailable${reset}`);
       continue;
@@ -311,15 +320,18 @@ function formatKimiCodingReport(lines: string[], report: UsageReport): void {
 function formatKimiCodingStatusline(report: UsageReport): string | undefined {
   const fiveHour = report.buckets.find((bucket) => bucket.id === "five-hour");
   const weekly = report.buckets.find((bucket) => bucket.id === "weekly");
-  const subWindow = fiveHour ?? report.buckets.find((bucket) => bucket.id !== "weekly");
-  const selected = [subWindow, weekly].filter(
+  const monthly = report.buckets.find((bucket) => bucket.id === "monthly");
+  const subWindow = fiveHour ?? report.buckets.find((bucket) => bucket.id !== "weekly" && bucket.id !== "monthly");
+  const selected = [subWindow, weekly, monthly].filter(
     (bucket, index, buckets): bucket is UsageBucket => bucket !== undefined && buckets.indexOf(bucket) === index,
   );
   const parts = ["kimi"];
   for (const bucket of selected) {
-    if (!bucket.limit || bucket.remaining === undefined) continue;
+    if (bucket.remaining === undefined || (bucket.unit !== "percent" && !bucket.limit)) continue;
     const fallback = bucket.id === "weekly" ? "weekly" : "5h";
-    parts.push(`${percentRemaining(bucket)}% ${formatWindowLabel(bucket.windowMinutes, fallback, true)}`);
+    const window = bucket.id === "monthly" ? "mo" : formatWindowLabel(bucket.windowMinutes, fallback, true);
+    const remaining = bucket.unit === "percent" ? Math.round(clampPercent(bucket.remaining)) : percentRemaining(bucket);
+    parts.push(`${remaining}% ${window}`);
   }
   return parts.length > 1 ? parts.join(" ") : undefined;
 }

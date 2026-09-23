@@ -5,6 +5,11 @@ const FIVE_HOUR_WINDOW_MINUTES = 300;
 const DAILY_WINDOW_MINUTES = 1_440;
 const WEEKLY_WINDOW_MINUTES = 10_080;
 const FIXED_POINT_UNITS_PER_CENT = 1_000_000;
+const RATIO_WINDOWS = [
+  { key: "limit_5h", id: "five-hour", label: "Five-hour window", windowMinutes: FIVE_HOUR_WINDOW_MINUTES },
+  { key: "limit_week", id: "weekly", label: "Weekly window", windowMinutes: WEEKLY_WINDOW_MINUTES },
+  { key: "limit_month_total", id: "monthly", label: "Monthly window" },
+] as const;
 
 /**
  * Source contract revalidated on 2026-08-27.
@@ -24,7 +29,9 @@ export function normalizeKimiCodingUsagePayload(payload: KimiCodingUsagePayload,
   if (!root) throw new Error("Kimi Coding usage response was not an object.");
 
   const candidates: UsageBucket[] = [];
+  const explicitWindows = new Set<number>();
   let omittedWindow = false;
+  if (root.usage !== undefined) explicitWindows.add(WEEKLY_WINDOW_MINUTES);
   const summary = parseUsageRow(root.usage, WEEKLY_WINDOW_MINUTES, "Weekly window");
   if (summary) candidates.push(summary);
   else if (root.usage !== undefined) omittedWindow = true;
@@ -33,6 +40,7 @@ export function normalizeKimiCodingUsagePayload(payload: KimiCodingUsagePayload,
     for (const raw of root.limits) {
       const item = asObject(raw);
       const windowMinutes = parseWindowMinutes(item?.window);
+      if (windowMinutes !== undefined) explicitWindows.add(windowMinutes);
       const label = sanitizedLabel(item?.name);
       const bucket =
         windowMinutes === undefined
@@ -55,9 +63,24 @@ export function normalizeKimiCodingUsagePayload(payload: KimiCodingUsagePayload,
     if (rows.length === 1) buckets.push(rows[0] as UsageBucket);
     else omittedWindow = true;
   }
-  buckets.sort((left, right) => (left.windowMinutes ?? 0) - (right.windowMinutes ?? 0));
+  const usages = asObject(root.usages);
+  if (root.usages !== undefined && !usages) omittedWindow = true;
+  if (usages) {
+    for (const window of RATIO_WINDOWS) {
+      const raw = usages[window.key];
+      if (raw === undefined || ("windowMinutes" in window && explicitWindows.has(window.windowMinutes))) continue;
+      const bucket = parseRatioWindow(raw, window.id, window.label);
+      if (bucket) {
+        buckets.push({
+          ...bucket,
+          ...("windowMinutes" in window ? { windowMinutes: window.windowMinutes } : {}),
+        });
+      } else omittedWindow = true;
+    }
+  }
+  buckets.sort((left, right) => (left.windowMinutes ?? Infinity) - (right.windowMinutes ?? Infinity));
 
-  const metrics = parseBoosterWallet(root.boosterWallet);
+  const metrics = parseBoosterWallet(root.boosterWallet === undefined ? root.booster_wallet : root.boosterWallet);
   if (buckets.length === 0 && metrics.length === 0) {
     throw new Error("Kimi Coding usage endpoint returned no displayable usage data.");
   }
@@ -100,6 +123,22 @@ function parseUsageRow(value: unknown, windowMinutes: number, label: string): Us
     limit,
     unit: "count",
     windowMinutes,
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+  };
+}
+
+function parseRatioWindow(value: unknown, id: string, label: string): UsageBucket | undefined {
+  const row = asObject(value);
+  const ratio = row?.used_ratio;
+  if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0 || ratio > 1) return undefined;
+  const resetsAt = asIsoEpochSeconds(row?.reset_time);
+  const used = ratio * 100;
+  return {
+    id,
+    label,
+    used,
+    remaining: 100 - used,
+    unit: "percent",
     ...(resetsAt !== undefined ? { resetsAt } : {}),
   };
 }

@@ -214,7 +214,9 @@ export interface ZaiPlanInfo {
 export type KimiCodingUsagePayload = {
   usage?: unknown;
   limits?: unknown;
+  usages?: unknown;
   boosterWallet?: unknown;
+  booster_wallet?: unknown;
 };
 
 export type XaiUserPayload = {
