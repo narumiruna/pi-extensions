@@ -141,11 +141,12 @@ Adding `edit` or `write` lets the child modify files, while `bash` or `powershel
 The optional `skills` list attaches local Markdown skill files or directories through Pi's progressive disclosure mechanism.
 Each path must contain at least one skill Pi can load, and skill names must be unique across all attachments.
 Non-Markdown files, directories without a loadable skill, and duplicate skill names are rejected before launch.
-Every declared skill discovered within an attached directory must load successfully; a valid sibling does not hide an invalid or unreadable declared skill.
+Every declared skill discovered within an attached directory must load successfully; a valid sibling does not hide an invalid or unreadable declared skill, while Pi-ignored draft skills remain excluded.
 A skill is available for the child to discover and read when relevant; attaching it does not inject its complete body, add `read` or `bash`, or force the child to invoke it.
 
 Each `extensions` entry loads one trusted local extension file or directory and names the exact extension tools to activate initially.
-Extension directories must resolve to at least one Pi entrypoint, and every `pi.extensions` declaration must exist; partially resolved packages are rejected before launch.
+Extension directories must resolve to at least one Pi entrypoint, and every `pi.extensions` declaration must exist; partially resolved packages and authoritative Pi manifests without extensions are rejected before launch.
+Extension tool names cannot overlap Pi core tools or the built-in `subagent_send` and `subagent_wait` communication tools.
 Use an empty `tools` list to load provider or lifecycle behavior without exposing an extension tool.
 The initial child allowlist contains only selected core tools, communication tools, and explicitly named extension tools.
 The parent verifies that every requested tool is active before it sends the task; otherwise the job fails without a model request.

@@ -77,7 +77,7 @@ const SpawnParameters = Type.Object(
             }),
             tools: Type.Array(
               Type.String({
-                description: "Exact extension tool name to activate initially.",
+                description: "Exact extension-specific tool name to activate initially; built-in names are rejected.",
                 minLength: 1,
                 maxLength: MAX_EXTENSION_TOOL_NAME_LENGTH,
               }),
@@ -195,10 +195,14 @@ export function registerSubagentTools(
       const tools = resolveTools(params.tools);
       const cwd = ctx.cwd;
       const projectTrusted = ctx.isProjectTrusted();
-      const attachments = resolveResourceAttachments(
+      const attachments = await resolveResourceAttachments(
         { skills: params.skills, extensions: params.extensions },
         { cwd, projectTrusted, coreTools: tools },
       );
+      throwIfAborted(signal, "Subagent spawn was cancelled");
+      if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {
+        throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
+      }
       if (attachments.extensions.length > 0) {
         assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])]);
       }

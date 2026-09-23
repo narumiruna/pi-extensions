@@ -561,6 +561,40 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /missing declared extension entrypoint/i,
     );
+    const extensionlessManifestDirectory = path.join(collisionRoot, "extensionless-manifest");
+    mkdirSync(extensionlessManifestDirectory);
+    writeFileSync(
+      path.join(extensionlessManifestDirectory, "package.json"),
+      JSON.stringify({ pi: { skills: ["./SKILL.md"] } }),
+    );
+    writeFileSync(path.join(extensionlessManifestDirectory, "index.ts"), "export default () => {};\n");
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "extensionless-manifest",
+          { task: "extensionless manifest", extensions: [{ path: extensionlessManifestDirectory, tools: [] }] },
+          undefined,
+          undefined,
+          trustedContext.ctx,
+        ),
+      /at least one loadable Pi extension entrypoint/i,
+    );
+    for (const reservedTool of ["read", "subagent_wait"]) {
+      await assert.rejects(
+        () =>
+          spawn.execute(
+            `reserved-${reservedTool}`,
+            {
+              task: "reserved extension tool",
+              extensions: [{ path: path.join(partialExtensionDirectory, "valid.ts"), tools: [reservedTool] }],
+            },
+            undefined,
+            undefined,
+            trustedContext.ctx,
+          ),
+        new RegExp(`conflicts.*built-in ${reservedTool}`, "i"),
+      );
+    }
   } finally {
     rmSync(collisionRoot, { recursive: true, force: true });
   }

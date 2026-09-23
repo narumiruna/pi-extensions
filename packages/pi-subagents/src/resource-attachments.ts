@@ -1,13 +1,21 @@
 import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
-import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, loadSkills, SettingsManager } from "@earendil-works/pi-coding-agent";
+import ignore from "ignore";
+import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
 import { sanitizeTerminalText } from "./message-broker.js";
+import { CHILD_CORE_TOOL_NAMES } from "./types.js";
 
 export const MAX_ATTACHED_SKILLS = 16;
 export const MAX_ATTACHED_EXTENSIONS = 16;
 export const MAX_SELECTED_TOOLS = 64;
 export const MAX_RESOURCE_PATH_BYTES = 4 * 1024;
 export const MAX_EXTENSION_TOOL_NAME_LENGTH = 128;
+
+const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+const RESERVED_CHILD_TOOL_NAMES = new Set<string>([...CHILD_CORE_TOOL_NAMES, ...CHILD_COMMUNICATION_TOOL_NAMES]);
+
+type IgnoreMatcher = ReturnType<typeof ignore>;
 
 export interface ExtensionAttachment {
   path: string;
@@ -34,10 +42,10 @@ export interface ResolveResourceAttachmentOptions {
   coreTools: readonly string[];
 }
 
-export function resolveResourceAttachments(
+export async function resolveResourceAttachments(
   input: ResourceAttachmentInput,
   options: ResolveResourceAttachmentOptions,
-): ResolvedResourceAttachments {
+): Promise<ResolvedResourceAttachments> {
   const cwd = path.resolve(options.cwd);
   const canonicalCwd = realpath(cwd, "Subagent working directory");
   const skillInputs = optionalArray(input.skills, "skills", MAX_ATTACHED_SKILLS);
@@ -62,9 +70,14 @@ export function resolveResourceAttachments(
     const resolved = resolveResourcePath(candidate.path, "extension", cwd, canonicalCwd, options.projectTrusted);
     const toolInputs = optionalArray(candidate.tools, "extension tools", MAX_SELECTED_TOOLS, false);
     const tools = toolInputs.map(resolveExtensionToolName);
+    for (const tool of tools) {
+      if (RESERVED_CHILD_TOOL_NAMES.has(tool)) {
+        throw new Error(`Subagent extension tool name conflicts with the built-in ${tool} tool.`);
+      }
+    }
     let attachment = extensionsByPath.get(resolved);
     if (!attachment) {
-      assertResolvableExtensionAttachment(resolved, cwd, canonicalCwd, options.projectTrusted);
+      await assertResolvableExtensionAttachment(resolved, cwd, canonicalCwd, options.projectTrusted);
       attachment = { path: resolved, tools: [] };
       extensionsByPath.set(resolved, attachment);
       extensions.push(attachment);
@@ -181,7 +194,7 @@ function assertNoSilentlyOmittedSkills(
 ): void {
   if (!statSync(skillPath).isDirectory()) return;
   const loadedPaths = new Set(result.skills.map((skill) => realpath(skill.filePath, "Loaded subagent skill")));
-  const candidates = collectSkillCandidates(skillPath, true, new Set<string>());
+  const candidates = collectSkillCandidates(skillPath, true, new Set<string>(), ignore(), skillPath);
   for (const candidate of candidates) {
     const candidateResult = loadExplicitSkills([candidate], cwd);
     assertNoUntrustedProjectSkills(candidateResult, cwd, canonicalCwd, projectTrusted);
@@ -200,10 +213,13 @@ function collectSkillCandidates(
   directory: string,
   includeRootMarkdown: boolean,
   visitedDirectories: Set<string>,
+  ignoreMatcher: IgnoreMatcher,
+  rootDirectory: string,
 ): string[] {
   const canonicalDirectory = realpath(directory, "Subagent skill directory");
   if (visitedDirectories.has(canonicalDirectory)) return [];
   visitedDirectories.add(canonicalDirectory);
+  addIgnoreRules(ignoreMatcher, directory, rootDirectory);
   let entries: Dirent[];
   try {
     entries = readdirSync(directory, { withFileTypes: true });
@@ -215,7 +231,8 @@ function collectSkillCandidates(
   if (rootSkill) {
     const rootPath = path.join(directory, rootSkill.name);
     try {
-      if (statSync(rootPath).isFile()) return [rootPath];
+      const relativePath = toPosixPath(path.relative(rootDirectory, rootPath));
+      if (statSync(rootPath).isFile() && !ignoreMatcher.ignores(relativePath)) return [rootPath];
     } catch {
       throwInvalidDeclaredSkill();
     }
@@ -234,8 +251,10 @@ function collectSkillCandidates(
       }
       continue;
     }
+    const relativePath = toPosixPath(path.relative(rootDirectory, candidate));
+    if (ignoreMatcher.ignores(stats.isDirectory() ? `${relativePath}/` : relativePath)) continue;
     if (stats.isDirectory()) {
-      candidates.push(...collectSkillCandidates(candidate, false, visitedDirectories));
+      candidates.push(...collectSkillCandidates(candidate, false, visitedDirectories, ignoreMatcher, rootDirectory));
     } else if (stats.isFile() && (entry.name === "SKILL.md" || (includeRootMarkdown && entry.name.endsWith(".md")))) {
       candidates.push(candidate);
     }
@@ -243,21 +262,61 @@ function collectSkillCandidates(
   return candidates;
 }
 
+function addIgnoreRules(ignoreMatcher: IgnoreMatcher, directory: string, rootDirectory: string): void {
+  const relativeDirectory = path.relative(rootDirectory, directory);
+  const prefix = relativeDirectory ? `${toPosixPath(relativeDirectory)}/` : "";
+  for (const filename of IGNORE_FILE_NAMES) {
+    const ignorePath = path.join(directory, filename);
+    if (!existsSync(ignorePath)) continue;
+    try {
+      const patterns = readFileSync(ignorePath, "utf8")
+        .split(/\r?\n/u)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => line !== null);
+      if (patterns.length > 0) ignoreMatcher.add(patterns);
+    } catch {
+      // Pi ignores unreadable ignore files.
+    }
+  }
+}
+
+function prefixIgnorePattern(line: string, prefix: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) return null;
+  let pattern = line;
+  let negated = false;
+  if (pattern.startsWith("!")) {
+    negated = true;
+    pattern = pattern.slice(1);
+  } else if (pattern.startsWith("\\!")) {
+    pattern = pattern.slice(1);
+  }
+  if (pattern.startsWith("/")) pattern = pattern.slice(1);
+  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  return negated ? `!${prefixed}` : prefixed;
+}
+
+function toPosixPath(value: string): string {
+  return value.split(path.sep).join("/");
+}
+
 function throwInvalidDeclaredSkill(): never {
   throw new Error("Subagent skill attachment must not contain an invalid or unreadable declared skill.");
 }
 
-function assertResolvableExtensionAttachment(
+async function assertResolvableExtensionAttachment(
   extensionPath: string,
   cwd: string,
   canonicalCwd: string,
   projectTrusted: boolean,
-): void {
-  const entrypoints = resolveAttachedExtensionEntrypoints(extensionPath);
+): Promise<void> {
+  assertNoMissingDeclaredExtensionEntrypoints(extensionPath);
+  const entrypoints = await resolveAttachedExtensionEntrypoints(extensionPath, cwd);
   if (entrypoints.length === 0) {
     throw new Error("Subagent extension directory must contain at least one loadable Pi extension entrypoint.");
   }
-  for (const entrypoint of entrypoints) {
+  const trustPaths = entrypoints.flatMap(resolveDirectExtensionLoadPaths);
+  for (const entrypoint of trustPaths) {
     const lexicalPath = path.resolve(entrypoint);
     const canonicalPath = realpath(entrypoint, "Subagent extension entrypoint");
     const stats = statSync(canonicalPath);
@@ -270,65 +329,127 @@ function assertResolvableExtensionAttachment(
   }
 }
 
-function resolveAttachedExtensionEntrypoints(extensionPath: string): string[] {
-  if (!statSync(extensionPath).isDirectory()) return [extensionPath];
-  const explicit = resolveExtensionDirectoryEntrypoints(extensionPath);
-  const entrypoints = explicit ?? discoverExtensionEntrypoints(extensionPath);
-  return [...new Set(entrypoints.map((entrypoint) => path.resolve(entrypoint)))];
-}
-
-function resolveExtensionDirectoryEntrypoints(directory: string): string[] | null {
-  const manifestEntries = readExtensionManifestEntries(directory);
-  if (manifestEntries) {
-    const entrypoints = manifestEntries.map((entrypoint) => path.resolve(directory, entrypoint));
-    if (entrypoints.some((entrypoint) => !existsSync(entrypoint))) {
-      throw new Error("Subagent extension package must not contain a missing declared extension entrypoint.");
-    }
-    return entrypoints;
-  }
+function resolveDirectExtensionLoadPaths(entrypoint: string): string[] {
+  if (!statSync(entrypoint).isDirectory()) return [entrypoint];
   for (const filename of ["index.ts", "index.js"]) {
-    const entrypoint = path.join(directory, filename);
-    if (existsSync(entrypoint)) return [entrypoint];
+    const indexPath = path.join(entrypoint, filename);
+    if (existsSync(indexPath)) return [entrypoint, indexPath];
   }
-  return null;
+  return [entrypoint];
 }
 
-function readExtensionManifestEntries(directory: string): string[] | undefined {
+async function resolveAttachedExtensionEntrypoints(extensionPath: string, cwd: string): Promise<string[]> {
+  const packageManager = new DefaultPackageManager({
+    cwd,
+    agentDir: cwd,
+    settingsManager: SettingsManager.inMemory(),
+  });
+  const resolved = await packageManager.resolveExtensionSources([extensionPath], { temporary: true });
+  return resolved.extensions.filter((entrypoint) => entrypoint.enabled).map((entrypoint) => entrypoint.path);
+}
+
+interface PiManifest {
+  extensions?: string[];
+}
+
+function assertNoMissingDeclaredExtensionEntrypoints(extensionPath: string): void {
+  if (!statSync(extensionPath).isDirectory()) return;
+  const manifest = readPiManifest(extensionPath);
+  if (manifest) {
+    assertDeclaredExtensionEntrypointsExist(extensionPath, manifest.extensions);
+    return;
+  }
+
+  const resourceDirectories = ["extensions", "skills", "prompts", "themes"].map((name) =>
+    path.join(extensionPath, name),
+  );
+  if (!resourceDirectories.some((directory) => existsSync(directory))) return;
+  const extensionsDirectory = path.join(extensionPath, "extensions");
+  if (existsSync(extensionsDirectory)) assertNoMissingAutoExtensionEntrypoints(extensionsDirectory);
+}
+
+function assertNoMissingAutoExtensionEntrypoints(directory: string): void {
+  if (extensionDirectoryStopsDiscovery(directory)) return;
+  const ignoreMatcher = ignore();
+  addIgnoreRules(ignoreMatcher, directory, directory);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const entryPath = path.join(directory, entry.name);
+    let isDirectory = entry.isDirectory();
+    if (entry.isSymbolicLink()) {
+      try {
+        isDirectory = statSync(entryPath).isDirectory();
+      } catch {
+        continue;
+      }
+    }
+    const relativePath = toPosixPath(path.relative(directory, entryPath));
+    if (ignoreMatcher.ignores(isDirectory ? `${relativePath}/` : relativePath)) continue;
+    if (isDirectory) extensionDirectoryStopsDiscovery(entryPath);
+  }
+}
+
+function extensionDirectoryStopsDiscovery(directory: string): boolean {
+  const manifest = readPiManifest(directory);
+  if (manifest?.extensions && manifest.extensions.length > 0) {
+    assertDeclaredExtensionEntrypointsExist(directory, manifest.extensions);
+    if (
+      manifest.extensions.some(
+        (entrypoint) =>
+          !isExtensionOverridePattern(entrypoint) &&
+          !hasExtensionGlob(entrypoint) &&
+          existsSync(path.resolve(directory, entrypoint)),
+      )
+    ) {
+      return true;
+    }
+  }
+  return existsSync(path.join(directory, "index.ts")) || existsSync(path.join(directory, "index.js"));
+}
+
+function assertDeclaredExtensionEntrypointsExist(directory: string, entries: string[] | undefined): void {
+  if (!entries) return;
+  const missing = entries.some(
+    (entrypoint) =>
+      !isExtensionOverridePattern(entrypoint) &&
+      !hasExtensionGlob(entrypoint) &&
+      !existsSync(path.resolve(directory, entrypoint)),
+  );
+  if (missing) {
+    throw new Error("Subagent extension package must not contain a missing declared extension entrypoint.");
+  }
+}
+
+function readPiManifest(directory: string): PiManifest | undefined {
   const manifestPath = path.join(directory, "package.json");
   if (!existsSync(manifestPath)) return undefined;
   try {
     const document: unknown = JSON.parse(readFileSync(manifestPath, "utf8").replace(/^\uFEFF/u, ""));
     if (!isRecord(document) || !isRecord(document.pi)) return undefined;
-    const entries = document.pi.extensions;
-    if (!Array.isArray(entries) || entries.length === 0 || !entries.every((entry) => typeof entry === "string")) {
-      return undefined;
-    }
-    return entries;
+    const extensions = document.pi.extensions;
+    return {
+      extensions:
+        Array.isArray(extensions) && extensions.every((entrypoint) => typeof entrypoint === "string")
+          ? extensions
+          : undefined,
+    };
   } catch {
     return undefined;
   }
 }
 
-function discoverExtensionEntrypoints(directory: string): string[] {
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const entrypoints: string[] = [];
-  for (const entry of entries) {
-    const entryPath = path.join(directory, entry.name);
-    if ((entry.isFile() || entry.isSymbolicLink()) && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
-      entrypoints.push(entryPath);
-      continue;
-    }
-    if (entry.isDirectory() || entry.isSymbolicLink()) {
-      const nested = resolveExtensionDirectoryEntrypoints(entryPath);
-      if (nested) entrypoints.push(...nested);
-    }
-  }
-  return entrypoints;
+function isExtensionOverridePattern(value: string): boolean {
+  return value.startsWith("!") || value.startsWith("+") || value.startsWith("-");
+}
+
+function hasExtensionGlob(value: string): boolean {
+  return value.includes("*") || value.includes("?");
 }
 
 function resolveExtensionToolName(value: unknown): string {

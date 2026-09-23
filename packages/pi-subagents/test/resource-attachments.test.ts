@@ -27,7 +27,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("canonicalizes, deduplicates, and merges explicit local attachments", () => {
+test("canonicalizes, deduplicates, and merges explicit local attachments", async () => {
   const skill = path.join(project, "skills", "review");
   const extension = path.join(project, "extensions", "search.ts");
   mkdirSync(skill, { recursive: true });
@@ -35,7 +35,7 @@ test("canonicalizes, deduplicates, and merges explicit local attachments", () =>
   writeFileSync(path.join(skill, "SKILL.md"), "---\nname: review\ndescription: Review code.\n---\n");
   writeFileSync(extension, "export default () => {};\n");
 
-  const result = resolveResourceAttachments(
+  const result = await resolveResourceAttachments(
     {
       skills: ["./skills/review", skill],
       extensions: [
@@ -53,7 +53,7 @@ test("canonicalizes, deduplicates, and merges explicit local attachments", () =>
   });
 });
 
-test("accepts only skill paths that Pi loads", () => {
+test("accepts only skill paths that Pi loads", async () => {
   const directSkill = path.join(external, "direct.md");
   const disabledSkill = path.join(external, "disabled.md");
   const warningSkill = path.join(external, "warning.md");
@@ -80,11 +80,20 @@ test("accepts only skill paths that Pi loads", () => {
   );
 
   assert.deepEqual(
-    resolveResourceAttachments(
-      {
-        skills: [directSkill, disabledSkill, warningSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory],
-      },
-      { cwd: project, projectTrusted: true, coreTools: [] },
+    (
+      await resolveResourceAttachments(
+        {
+          skills: [
+            directSkill,
+            disabledSkill,
+            warningSkill,
+            skillDirectory,
+            rootMarkdownDirectory,
+            nestedSkillDirectory,
+          ],
+        },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      )
     ).skills,
     [directSkill, disabledSkill, warningSkill, skillDirectory, rootMarkdownDirectory, nestedSkillDirectory],
   );
@@ -121,20 +130,20 @@ test("accepts only skill paths that Pi loads", () => {
     nestedMarkdownDirectory,
     ignoredDirectory,
   ]) {
-    assert.throws(
+    await assert.rejects(
       () => resolveResourceAttachments({ skills: [skill] }, { cwd: project, projectTrusted: true, coreTools: [] }),
       /at least one loadable Pi skill/i,
     );
   }
 });
 
-test("rejects a skill directory when Pi omits an invalid declared skill", () => {
+test("rejects invalid declared skills while honoring Pi ignore files", async () => {
   const partialDirectory = path.join(external, "partial-directory");
   mkdirSync(path.join(partialDirectory, "broken"), { recursive: true });
   writeFileSync(path.join(partialDirectory, "valid.md"), "---\nname: valid\ndescription: Valid skill.\n---\n");
   writeFileSync(path.join(partialDirectory, "broken", "SKILL.md"), "---\nname: broken\n---\n");
 
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments({ skills: [partialDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
     /invalid or unreadable declared skill/i,
@@ -144,7 +153,7 @@ test("rejects a skill directory when Pi omits an invalid declared skill", () => 
   mkdirSync(path.join(brokenLinkDirectory, "broken"), { recursive: true });
   writeFileSync(path.join(brokenLinkDirectory, "valid.md"), "---\nname: valid-link\ndescription: Valid skill.\n---\n");
   symlinkSync(path.join(brokenLinkDirectory, "missing.md"), path.join(brokenLinkDirectory, "broken", "SKILL.md"));
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { skills: [brokenLinkDirectory] },
@@ -153,27 +162,39 @@ test("rejects a skill directory when Pi omits an invalid declared skill", () => 
     /invalid or unreadable declared skill/i,
   );
 
-  const ignoredDirectory = path.join(external, "partially-ignored-directory");
-  mkdirSync(path.join(ignoredDirectory, "ignored"), { recursive: true });
-  writeFileSync(path.join(ignoredDirectory, ".gitignore"), "ignored/SKILL.md\n");
-  writeFileSync(path.join(ignoredDirectory, "valid.md"), "---\nname: valid-ignore\ndescription: Valid skill.\n---\n");
-  writeFileSync(
-    path.join(ignoredDirectory, "ignored", "SKILL.md"),
-    "---\nname: ignored-partial\ndescription: Ignored skill.\n---\n",
-  );
-  assert.throws(
-    () =>
-      resolveResourceAttachments({ skills: [ignoredDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
-    /invalid or unreadable declared skill/i,
-  );
+  for (const [index, ignoreFilename] of [".gitignore", ".ignore", ".fdignore"].entries()) {
+    const ignoredDirectory = path.join(external, `ignored-directory-${index}`);
+    const nestedDirectory = path.join(ignoredDirectory, "nested");
+    mkdirSync(path.join(nestedDirectory, "ignored"), { recursive: true });
+    const ignoreDirectory = index === 0 ? ignoredDirectory : nestedDirectory;
+    const ignorePattern = index === 0 ? "nested/ignored/SKILL.md\n" : "ignored/SKILL.md\n";
+    writeFileSync(path.join(ignoreDirectory, ignoreFilename), ignorePattern);
+    writeFileSync(
+      path.join(ignoredDirectory, "valid.md"),
+      `---\nname: valid-ignore-${index}\ndescription: Valid skill.\n---\n`,
+    );
+    writeFileSync(
+      path.join(ignoredDirectory, "nested", "ignored", "SKILL.md"),
+      `---\nname: ignored-${index}\ndescription: Ignored skill.\n---\n`,
+    );
+    assert.deepEqual(
+      (
+        await resolveResourceAttachments(
+          { skills: [ignoredDirectory] },
+          { cwd: project, projectTrusted: true, coreTools: [] },
+        )
+      ).skills,
+      [ignoredDirectory],
+    );
+  }
 });
 
-test("rejects skill-name collisions using Pi's combined load behavior", () => {
+test("rejects skill-name collisions using Pi's combined load behavior", async () => {
   const first = path.join(external, "first.md");
   const second = path.join(external, "second.md");
   writeFileSync(first, "---\nname: shared\ndescription: First skill.\n---\n");
   writeFileSync(second, "---\nname: shared\ndescription: Second skill.\n---\n");
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments({ skills: [first, second] }, { cwd: project, projectTrusted: true, coreTools: [] }),
     /duplicate skill names/i,
@@ -183,7 +204,7 @@ test("rejects skill-name collisions using Pi's combined load behavior", () => {
   mkdirSync(collidingDirectory);
   writeFileSync(path.join(collidingDirectory, "one.md"), "---\nname: nested-shared\ndescription: One.\n---\n");
   writeFileSync(path.join(collidingDirectory, "two.md"), "---\nname: nested-shared\ndescription: Two.\n---\n");
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { skills: [collidingDirectory] },
@@ -197,15 +218,17 @@ test("rejects skill-name collisions using Pi's combined load behavior", () => {
   mkdirSync(overlappingDirectory);
   writeFileSync(overlappingSkill, "---\nname: overlapping\ndescription: Same file.\n---\n");
   assert.deepEqual(
-    resolveResourceAttachments(
-      { skills: [overlappingDirectory, overlappingSkill] },
-      { cwd: project, projectTrusted: true, coreTools: [] },
+    (
+      await resolveResourceAttachments(
+        { skills: [overlappingDirectory, overlappingSkill] },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      )
     ).skills,
     [overlappingDirectory, overlappingSkill],
   );
 });
 
-test("allows explicit external resources but rejects every loaded project path when untrusted", () => {
+test("allows explicit external resources but rejects every loaded project path when untrusted", async () => {
   const externalExtension = path.join(external, "external.ts");
   const externalSkill = path.join(external, "external-skill.md");
   const projectExtension = path.join(project, "project.ts");
@@ -221,13 +244,13 @@ test("allows explicit external resources but rejects every loaded project path w
   symlinkSync(externalExtension, externalLink);
   symlinkSync(projectExtension, projectLink);
 
-  const externalResult = resolveResourceAttachments(
+  const externalResult = await resolveResourceAttachments(
     { skills: [externalSkill], extensions: [{ path: externalExtension, tools: [] }] },
     { cwd: project, projectTrusted: false, coreTools: [] },
   );
   assert.deepEqual(externalResult.skills, [externalSkill]);
   assert.deepEqual(externalResult.extensions, [{ path: externalExtension, tools: [] }]);
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { extensions: [{ path: "./external-link.ts", tools: [] }] },
@@ -235,7 +258,7 @@ test("allows explicit external resources but rejects every loaded project path w
       ),
     /project.*not trusted/i,
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { extensions: [{ path: projectLink, tools: [] }] },
@@ -243,19 +266,19 @@ test("allows explicit external resources but rejects every loaded project path w
       ),
     /project.*not trusted/i,
   );
-  assert.throws(
+  await assert.rejects(
     () => resolveResourceAttachments({ skills: [root] }, { cwd: project, projectTrusted: false, coreTools: [] }),
     /project.*not trusted/i,
   );
 
   symlinkSync(projectSkillDirectory, projectTreeLink);
-  assert.throws(
+  await assert.rejects(
     () => resolveResourceAttachments({ skills: [external] }, { cwd: project, projectTrusted: false, coreTools: [] }),
     /project.*not trusted/i,
   );
 
-  writeFileSync(path.join(project, "package.json"), JSON.stringify({ pi: { extensions: ["./project.ts"] } }));
-  assert.throws(
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ pi: { extensions: ["./project/project.ts"] } }));
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { extensions: [{ path: root, tools: [] }] },
@@ -267,7 +290,7 @@ test("allows explicit external resources but rejects every loaded project path w
   const symlinkedExtensionDirectory = path.join(external, "symlinked-extension");
   mkdirSync(symlinkedExtensionDirectory);
   symlinkSync(projectExtension, path.join(symlinkedExtensionDirectory, "index.ts"));
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { extensions: [{ path: symlinkedExtensionDirectory, tools: [] }] },
@@ -277,22 +300,23 @@ test("allows explicit external resources but rejects every loaded project path w
   );
 });
 
-test("matches Pi extension directory resolution and rejects missing declared entrypoints", () => {
+test("matches Pi package resolution and rejects incomplete or extensionless manifests", async () => {
   const packageDirectory = path.join(external, "package-extension");
   const indexTsDirectory = path.join(external, "index-ts-extension");
   const indexJsDirectory = path.join(external, "index-js-extension");
-  const discoveryDirectory = path.join(external, "discovered-extensions");
-  const emptyDirectory = path.join(external, "empty-extension");
+  const conventionPackage = path.join(external, "convention-package");
+  const extensionsDirectory = path.join(conventionPackage, "extensions");
+  const manifestOnlyDirectory = path.join(external, "manifest-without-extensions");
   const partialDirectory = path.join(external, "partial-extension");
   for (const directory of [
     packageDirectory,
     indexTsDirectory,
     indexJsDirectory,
-    discoveryDirectory,
-    emptyDirectory,
+    extensionsDirectory,
+    manifestOnlyDirectory,
     partialDirectory,
   ]) {
-    mkdirSync(directory);
+    mkdirSync(directory, { recursive: true });
   }
 
   mkdirSync(path.join(packageDirectory, "nested"));
@@ -306,33 +330,37 @@ test("matches Pi extension directory resolution and rejects missing declared ent
   writeFileSync(path.join(indexTsDirectory, "index.js"), "export default () => {};\n");
   writeFileSync(path.join(indexJsDirectory, "index.js"), "export default () => {};\n");
 
-  mkdirSync(path.join(discoveryDirectory, "indexed"));
-  mkdirSync(path.join(discoveryDirectory, "packaged"));
-  writeFileSync(path.join(discoveryDirectory, "direct.ts"), "export default () => {};\n");
-  writeFileSync(path.join(discoveryDirectory, "indexed", "index.ts"), "export default () => {};\n");
+  mkdirSync(path.join(extensionsDirectory, "indexed"));
+  mkdirSync(path.join(extensionsDirectory, "packaged"));
+  writeFileSync(path.join(extensionsDirectory, "direct.ts"), "export default () => {};\n");
+  writeFileSync(path.join(extensionsDirectory, "indexed", "index.ts"), "export default () => {};\n");
   writeFileSync(
-    path.join(discoveryDirectory, "packaged", "package.json"),
+    path.join(extensionsDirectory, "packaged", "package.json"),
     JSON.stringify({ pi: { extensions: ["./entry.ts"] } }),
   );
-  writeFileSync(path.join(discoveryDirectory, "packaged", "entry.ts"), "export default () => {};\n");
+  writeFileSync(path.join(extensionsDirectory, "packaged", "entry.ts"), "export default () => {};\n");
 
   assert.deepEqual(
-    resolveResourceAttachments(
-      {
-        extensions: [packageDirectory, indexTsDirectory, indexJsDirectory, discoveryDirectory].map((path) => ({
-          path,
-          tools: [],
-        })),
-      },
-      { cwd: project, projectTrusted: true, coreTools: [] },
+    (
+      await resolveResourceAttachments(
+        {
+          extensions: [packageDirectory, indexTsDirectory, indexJsDirectory, conventionPackage].map((path) => ({
+            path,
+            tools: [],
+          })),
+        },
+        { cwd: project, projectTrusted: true, coreTools: [] },
+      )
     ).extensions.map(({ path }) => path),
-    [packageDirectory, indexTsDirectory, indexJsDirectory, discoveryDirectory],
+    [packageDirectory, indexTsDirectory, indexJsDirectory, conventionPackage],
   );
 
-  assert.throws(
+  writeFileSync(path.join(manifestOnlyDirectory, "package.json"), JSON.stringify({ pi: { skills: ["./SKILL.md"] } }));
+  writeFileSync(path.join(manifestOnlyDirectory, "index.ts"), "export default () => {};\n");
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
-        { extensions: [{ path: emptyDirectory, tools: [] }] },
+        { extensions: [{ path: manifestOnlyDirectory, tools: [] }] },
         { cwd: project, projectTrusted: true, coreTools: [] },
       ),
     /at least one loadable Pi extension entrypoint/i,
@@ -343,7 +371,7 @@ test("matches Pi extension directory resolution and rejects missing declared ent
     JSON.stringify({ pi: { extensions: ["./valid.ts", "./missing.ts"] } }),
   );
   writeFileSync(path.join(partialDirectory, "valid.ts"), "export default () => {};\n");
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { extensions: [{ path: partialDirectory, tools: [] }] },
@@ -353,7 +381,7 @@ test("matches Pi extension directory resolution and rejects missing declared ent
   );
 });
 
-test("rejects remote, missing, invalid, and oversized attachment inputs", () => {
+test("rejects remote, missing, invalid, and oversized attachment inputs", async () => {
   const regularFile = path.join(external, "skill.md");
   writeFileSync(regularFile, "---\nname: review\ndescription: Review code.\n---\n");
 
@@ -372,16 +400,21 @@ test("rejects remote, missing, invalid, and oversized attachment inputs", () => 
     { value: { extensions: [{ path: regularFile, tools: ["bad,name"] }] }, error: /tool name/i },
     { value: { extensions: [{ path: regularFile, tools: ["bad\u001bname"] }] }, error: /tool name/i },
     { value: { extensions: [{ path: regularFile, tools: ["x".repeat(129)] }] }, error: /128 characters/i },
+    { value: { extensions: [{ path: regularFile, tools: ["read"] }] }, error: /conflicts.*built-in read/i },
+    {
+      value: { extensions: [{ path: regularFile, tools: ["subagent_send"] }] },
+      error: /conflicts.*built-in subagent_send/i,
+    },
   ];
 
   for (const { value, error } of invalidInputs) {
-    assert.throws(
+    await assert.rejects(
       () => resolveResourceAttachments(value, { cwd: project, projectTrusted: true, coreTools: [] }),
       error,
     );
   }
 
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         { skills: Array.from({ length: MAX_ATTACHED_SKILLS + 1 }, () => regularFile) },
@@ -389,7 +422,7 @@ test("rejects remote, missing, invalid, and oversized attachment inputs", () => 
       ),
     new RegExp(`at most ${MAX_ATTACHED_SKILLS}`, "i"),
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         {
@@ -402,7 +435,7 @@ test("rejects remote, missing, invalid, and oversized attachment inputs", () => 
       ),
     new RegExp(`at most ${MAX_ATTACHED_EXTENSIONS}`, "i"),
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveResourceAttachments(
         {
@@ -419,11 +452,11 @@ test("rejects remote, missing, invalid, and oversized attachment inputs", () => 
   );
 });
 
-test("rejects unsupported filesystem object types", { skip: process.platform === "win32" }, () => {
+test("rejects unsupported filesystem object types", { skip: process.platform === "win32" }, async () => {
   const fifoPath = path.join(external, "fifo");
   const created = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
   assert.equal(created.status, 0, created.stderr);
-  assert.throws(
+  await assert.rejects(
     () => resolveResourceAttachments({ skills: [fifoPath] }, { cwd: project, projectTrusted: true, coreTools: [] }),
     /file or directory/i,
   );
