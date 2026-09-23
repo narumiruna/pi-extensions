@@ -158,7 +158,8 @@ Only local paths are accepted; npm, Git, URLs, and other scheme-based sources ar
 Duplicate skill paths are removed, and repeated extension paths are merged in first-use order.
 A job accepts up to 16 skills, 16 extension entries, and 64 selected core and extension tool names; each path is limited to 4 KiB of UTF-8 text and each extension tool name to 128 characters.
 The complete child bootstrap, including selected and communication tool names, must fit 16 KiB of UTF-8 JSON and oversized combinations are rejected before launch.
-When the project is untrusted, both lexical and symlink-resolved paths inside the child working directory are rejected, including skills discovered below an ancestor and entrypoints resolved from an extension directory, while explicit external paths remain available.
+On Windows, the complete child command line must also fit the 32,767 UTF-16 code-unit process limit before the job is queued.
+When the project is untrusted, both lexical and symlink-resolved paths inside the child working directory are rejected for attachments and every resource an extension package resolves, while explicit external paths remain available.
 
 The optional `thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
 Omitting it captures the main agent's effective level when `subagent_spawn` executes.

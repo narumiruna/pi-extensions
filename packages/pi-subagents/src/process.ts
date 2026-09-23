@@ -25,6 +25,7 @@ const MAX_ERROR_BYTES = 8 * 1024;
 const MAX_EVENT_LINE_BYTES = 256 * 1024;
 const RPC_RESPONSE_TIMEOUT_MS = 30_000;
 const KILL_GRACE_MS = 1_000;
+const MAX_WINDOWS_COMMAND_LINE_CODE_UNITS = 32_767;
 
 interface ProcessSettlement {
   code: number;
@@ -75,6 +76,7 @@ export function resolveTimeoutMs(timeout: number | undefined): number | undefine
 export async function runChild(request: ChildRequest): Promise<ChildResult> {
   if (request.signal.aborted) return cancelledResult();
   try {
+    assertChildCommandCapacity(request);
     const invocation = resolvePiInvocation(buildPiArgs(request));
     return await executeProcess(invocation, request);
   } catch (error) {
@@ -88,7 +90,12 @@ export async function runChild(request: ChildRequest): Promise<ChildResult> {
   }
 }
 
-export function buildPiArgs(request: ChildRequest): string[] {
+type ChildCommandRequest = Pick<
+  ChildRequest,
+  "tools" | "skills" | "extensions" | "model" | "thinkingLevel" | "projectTrusted"
+>;
+
+export function buildPiArgs(request: ChildCommandRequest): string[] {
   const args = [
     "--mode",
     "rpc",
@@ -113,6 +120,37 @@ export function buildPiArgs(request: ChildRequest): string[] {
   return args;
 }
 
+export function assertChildCommandCapacity(
+  request: ChildCommandRequest,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== "win32") return;
+  const invocation = resolvePiInvocation(buildPiArgs(request));
+  const commandLineLength = [invocation.command, ...invocation.args].map(quoteWindowsArgument).join(" ").length;
+  if (commandLineLength + 1 > MAX_WINDOWS_COMMAND_LINE_CODE_UNITS) {
+    throw new Error("Subagent child command line exceeds the Windows process limit.");
+  }
+}
+
+function quoteWindowsArgument(value: string): string {
+  if (value.length > 0 && !/[\s"]/u.test(value)) return value;
+  let quoted = '"';
+  let backslashes = 0;
+  for (const character of value) {
+    if (character === "\\") {
+      backslashes++;
+      continue;
+    }
+    if (character === '"') {
+      quoted += `${"\\".repeat(backslashes * 2 + 1)}"`;
+    } else {
+      quoted += `${"\\".repeat(backslashes)}${character}`;
+    }
+    backslashes = 0;
+  }
+  return `${quoted}${"\\".repeat(backslashes * 2)}"`;
+}
+
 export function childCommunicationBridgePath(): string {
   return fileURLToPath(new URL("./child-communication-bridge.ts", import.meta.url));
 }
@@ -121,11 +159,11 @@ export function childReadinessProbePath(): string {
   return fileURLToPath(new URL("./child-readiness-probe.ts", import.meta.url));
 }
 
-function requiresReadinessAttestation(request: ChildRequest): boolean {
+function requiresReadinessAttestation(request: Pick<ChildRequest, "extensions">): boolean {
   return request.extensions.length > 0;
 }
 
-function selectedChildTools(request: ChildRequest): string[] {
+function selectedChildTools(request: Pick<ChildRequest, "tools" | "extensions">): string[] {
   return [
     ...new Set([
       ...request.tools,

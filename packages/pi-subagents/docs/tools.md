@@ -40,7 +40,9 @@ Only local paths are accepted; npm, Git, URL, and other scheme-based sources thr
 
 Paths are limited to 4 KiB of UTF-8 text, duplicate skills are removed, and repeated extension paths merge their tool names in first-use order.
 
-When the project is untrusted, an attachment throws if either its lexical path or symlink-resolved target is within the child working directory; explicit external paths remain valid.
+On Windows, the complete child command line must fit the 32,767 UTF-16 code-unit process limit before the job is queued.
+
+When the project is untrusted, an attachment or any resource resolved from its extension package throws if either its lexical path or symlink-resolved target is within the child working directory; explicit external paths remain valid.
 
 An attached extension executes trusted code with full child-process permissions and may alter prompts, tools, providers, or active tools after the initial readiness check, so its tool list is not a sandbox.
 

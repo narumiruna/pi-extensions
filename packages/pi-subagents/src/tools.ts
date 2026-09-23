@@ -12,7 +12,7 @@ import {
   validateMessage,
 } from "./message-broker.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
-import { resolveTimeoutMs } from "./process.js";
+import { assertChildCommandCapacity, resolveTimeoutMs } from "./process.js";
 import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
@@ -163,6 +163,7 @@ type MainSendSelection =
 
 export interface SubagentToolsDependencies extends RuntimeDependencies {
   createBroker?: (onMessage: (message: BrokerInboundMessage) => void) => MessageBroker;
+  platform?: NodeJS.Platform;
 }
 
 export interface RegisteredSubagentTools {
@@ -209,6 +210,17 @@ export function registerSubagentTools(
       const model = resolveChildModel(ctx, attachments.extensions.length > 0);
       const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? ctx.thinkingLevel ?? pi.getThinkingLevel());
       resolveTimeoutMs(params.timeout);
+      assertChildCommandCapacity(
+        {
+          tools,
+          skills: attachments.skills,
+          extensions: attachments.extensions,
+          model,
+          thinkingLevel,
+          projectTrusted,
+        },
+        dependencies.platform,
+      );
       throwIfAborted(signal, "Subagent spawn was cancelled");
       return toolResult(
         runtime.start({

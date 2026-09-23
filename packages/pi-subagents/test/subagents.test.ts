@@ -583,6 +583,32 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
         ),
       /project.*not trusted/i,
     );
+    const untrustedResourcePackage = path.join(collisionRoot, "untrusted-resource-package");
+    mkdirSync(untrustedResourcePackage);
+    writeFileSync(path.join(untrustedResourcePackage, "extension.ts"), "export default () => {};\n");
+    writeFileSync(
+      path.join(untrustedResourcePackage, "package.json"),
+      JSON.stringify({
+        pi: {
+          extensions: ["./extension.ts"],
+          skills: [path.resolve("packages/pi-subagents/skills")],
+        },
+      }),
+    );
+    await assert.rejects(
+      () =>
+        spawn.execute(
+          "untrusted-package-resource",
+          {
+            task: "untrusted package resource",
+            extensions: [{ path: untrustedResourcePackage, tools: [] }],
+          },
+          undefined,
+          undefined,
+          context.ctx,
+        ),
+      /project.*not trusted/i,
+    );
     const partialExtensionDirectory = path.join(collisionRoot, "partial-extension");
     mkdirSync(partialExtensionDirectory);
     writeFileSync(
@@ -726,6 +752,27 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
   await assert.rejects(
     () => spawn.execute("cancelled", { task: "cancelled" }, controller.signal, undefined, context.ctx),
     (error: Error) => error.name === "AbortError",
+  );
+  assert.equal(launches, 0);
+});
+
+test("rejects an oversized Windows child command line before queueing", async () => {
+  let launches = 0;
+  const { mock, context } = await setup(
+    {
+      platform: "win32",
+      runChild: async () => {
+        launches++;
+        return completed("unexpected");
+      },
+    },
+    {},
+    { model: { provider: "test-provider", id: "m".repeat(33_000) } },
+  );
+
+  await assert.rejects(
+    () => spawnJob(mock, context, "oversized Windows child command"),
+    /command line exceeds the Windows process limit/i,
   );
   assert.equal(launches, 0);
 });

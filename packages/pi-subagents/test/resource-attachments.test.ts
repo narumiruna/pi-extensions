@@ -384,6 +384,8 @@ test("allows explicit external resources but rejects every loaded project path w
   const externalSkill = path.join(external, "external-skill.md");
   const projectExtension = path.join(project, "project.ts");
   const projectSkillDirectory = path.join(project, "project-skill");
+  const projectPrompt = path.join(project, "project-prompt.md");
+  const projectTheme = path.join(project, "project-theme.json");
   const externalLink = path.join(project, "external-link.ts");
   const projectLink = path.join(external, "project-link.ts");
   const projectTreeLink = path.join(external, "project-tree");
@@ -392,6 +394,8 @@ test("allows explicit external resources but rejects every loaded project path w
   writeFileSync(projectExtension, "export default () => {};\n");
   mkdirSync(projectSkillDirectory);
   writeFileSync(path.join(projectSkillDirectory, "SKILL.md"), "---\nname: project\ndescription: Project skill.\n---\n");
+  writeFileSync(projectPrompt, "Project prompt\n");
+  writeFileSync(projectTheme, "{}\n");
   symlinkSync(externalExtension, externalLink);
   symlinkSync(projectExtension, projectLink);
 
@@ -427,6 +431,30 @@ test("allows explicit external resources but rejects every loaded project path w
     () => resolveResourceAttachments({ skills: [external] }, { cwd: project, projectTrusted: false, coreTools: [] }),
     /project.*not trusted/i,
   );
+
+  const externalPackage = path.join(external, "external-package");
+  const externalPackageExtension = path.join(externalPackage, "extension.ts");
+  mkdirSync(externalPackage);
+  writeFileSync(externalPackageExtension, "export default () => {};\n");
+  for (const [resourceType, resourcePath] of [
+    ["skills", projectSkillDirectory],
+    ["prompts", projectPrompt],
+    ["themes", projectTheme],
+    ["skills", projectTreeLink],
+  ] as const) {
+    writeFileSync(
+      path.join(externalPackage, "package.json"),
+      JSON.stringify({ pi: { extensions: [externalPackageExtension], [resourceType]: [resourcePath] } }),
+    );
+    await assert.rejects(
+      () =>
+        resolveResourceAttachments(
+          { extensions: [{ path: externalPackage, tools: [] }] },
+          { cwd: project, projectTrusted: false, coreTools: [] },
+        ),
+      /project.*not trusted/i,
+    );
+  }
 
   writeFileSync(path.join(root, "package.json"), JSON.stringify({ pi: { extensions: ["./project/project.ts"] } }));
   await assert.rejects(

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import {
+  assertChildCommandCapacity,
   buildPiArgs,
   childCommunicationBridgePath,
   childReadinessProbePath,
@@ -112,6 +113,23 @@ test("buildPiArgs isolates the RPC child and preserves selected communication to
   assert.deepEqual(
     lifecycleOnly.filter((argument, index) => lifecycleOnly[index - 1] === "-e" || argument === "-e"),
     ["-e", childCommunicationBridgePath(), "-e", "/tmp/provider-extension.ts", "-e", childReadinessProbePath()],
+  );
+});
+
+test("bounds the combined Windows child command line", () => {
+  assert.doesNotThrow(() => assertChildCommandCapacity(childRequest(), "win32"));
+
+  const paths = Array.from({ length: 16 }, (_, index) => `C:\\${"a".repeat(2_100)}-${index}`);
+  assert.throws(
+    () =>
+      assertChildCommandCapacity(
+        childRequest({
+          skills: paths.slice(0, 8),
+          extensions: paths.slice(8).map((path) => ({ path, tools: [] })),
+        }),
+        "win32",
+      ),
+    /command line exceeds the Windows process limit/i,
   );
 });
 
