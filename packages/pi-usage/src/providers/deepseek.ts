@@ -76,5 +76,5 @@ function deepSeekCurrency(value: unknown): DeepSeekCurrency | undefined {
 }
 
 function decimalAmount(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 64 && /^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value);
+  return typeof value === "string" && value.length <= 64 && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value);
 }
