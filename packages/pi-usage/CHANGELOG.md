@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.61.1
+
+### Patch Changes
+
+- 55b6a8f: Report DeepSeek balances that went slightly negative instead of failing the whole usage query.
+
 ## 0.61.0
 
 ### Minor Changes
