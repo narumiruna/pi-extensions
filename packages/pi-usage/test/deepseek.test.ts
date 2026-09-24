@@ -95,6 +95,31 @@ test("DeepSeek API balance preserves exact separate currency amounts and determi
   assert.equal(formatUsageStatusline(report), "deepseek CNY 110.00 · USD 0.12345678901234567890");
 });
 
+test("DeepSeek API balance preserves negative totals reported after a slight overdraft", () => {
+  const report = normalizeDeepSeekBalancePayload(
+    {
+      is_available: true,
+      balance_infos: [balance("CNY", "27.02", "0.00", "27.02"), balance("USD", "-0.01", "0.00", "-0.01")],
+    },
+    1_500,
+  );
+
+  assert.deepEqual(
+    report.metrics.map((metric) => [metric.id, metric.value, metric.currency]),
+    [
+      ["api-availability", "available", undefined],
+      ["cny-total", "27.02", "CNY"],
+      ["cny-granted", "0.00", "CNY"],
+      ["cny-topped-up", "27.02", "CNY"],
+      ["usd-total", "-0.01", "USD"],
+      ["usd-granted", "0.00", "USD"],
+      ["usd-topped-up", "-0.01", "USD"],
+    ],
+  );
+  assert.match(formatUsageReport(report, "current"), /Total balance:\s+USD -0\.01/u);
+  assert.equal(formatUsageStatusline(report), "deepseek CNY 27.02 · USD -0.01");
+});
+
 test("DeepSeek API balance reports provider availability without inventing quota semantics", () => {
   const report = normalizeDeepSeekBalancePayload(
     {
@@ -139,7 +164,14 @@ test("DeepSeek API balance rejects malformed, ambiguous, or hostile response fie
     [
       {
         is_available: true,
-        balance_infos: [{ ...balance("USD", "1", "0", "1"), total_balance: "-1" }],
+        balance_infos: [{ ...balance("USD", "1", "0", "1"), total_balance: "1-" }],
+      },
+      /total balance/iu,
+    ],
+    [
+      {
+        is_available: true,
+        balance_infos: [{ ...balance("USD", "1", "0", "1"), total_balance: "--1" }],
       },
       /total balance/iu,
     ],
