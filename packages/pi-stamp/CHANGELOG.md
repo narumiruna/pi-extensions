@@ -1,5 +1,11 @@
 # @narumitw/pi-stamp
 
+## 0.52.0
+
+### Minor Changes
+
+- c045d50: Add opt-in elapsed time since the latest user message. Each non-tool-use assistant response records a fixed duration at completion, including tools and pauses, that remains unchanged across reload, resume, and tree navigation.
+
 ## 0.51.2
 
 ### Patch Changes
