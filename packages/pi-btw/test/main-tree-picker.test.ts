@@ -379,6 +379,99 @@ test("native tree selector renders within narrow terminal widths", async () => {
   });
 });
 
+test("native tree selector opens with omitted and replaced context edits", async () => {
+  for (const replacement of [null, { content: "replacement\u001b[2J" }]) {
+    initTheme("dark", false);
+    const root = userNode("root", null, "original");
+    const edit: SessionTreeNode = {
+      entry: {
+        type: "context_edit",
+        id: "edit",
+        parentId: "root",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        targetId: "root\u001b[2J",
+        replacement,
+      },
+      children: [],
+    };
+    root.children.push(edit);
+    let rendered: string[] | undefined;
+    let renderedWide: string[] | undefined;
+    const mock = createMockContext({
+      mode: "tui",
+      hasUI: true,
+      sessionManager: {
+        getTree: () => [root],
+        getLeafId: () => "edit",
+        getEntry: () => edit.entry,
+      },
+      custom: async (factory: unknown) => {
+        const harness = createCustomSelectorHarness(factory, 28);
+        renderedWide = harness.render(80);
+        rendered = harness.render(28);
+        harness.handleInput("\u0003");
+        return harness.resultPromise;
+      },
+    });
+
+    assert.deepEqual(await pickMainEntry({ setLabel() {} } as never, mock.ctx), { kind: "closed" });
+    assert.ok(renderedWide?.some((line) => line.includes("original")));
+    assert.ok(rendered?.every((line) => visibleWidth(line) <= 28));
+    assert.ok(renderedWide?.every((line) => visibleWidth(line) <= 80));
+    if (edit.entry.type !== "context_edit") throw new Error("Expected a context edit entry");
+    assert.equal(edit.entry.replacement, replacement);
+  }
+});
+
+test("context edit target IDs are display-safe without changing raw entries", async () => {
+  const root = userNode("root", null, "root");
+  const rawTargetId = "root\u001b[2J";
+  const replacement = { content: "raw\u001b]0;title\u0007" };
+  const edit: SessionTreeNode = {
+    entry: {
+      type: "context_edit",
+      id: "edit",
+      parentId: "root",
+      timestamp: "2026-01-01T00:00:01.000Z",
+      targetId: rawTargetId,
+      replacement,
+    },
+    children: [],
+  };
+  root.children.push(edit);
+  let displayedEntry: SessionTreeNode["entry"] | undefined;
+  const mock = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    sessionManager: {
+      getTree: () => [root],
+      getLeafId: () => "edit",
+      getEntry: () => edit.entry,
+    },
+    custom: async (factory: unknown) => {
+      const harness = createCustomSelectorHarness(factory);
+      harness.handleInput("escape");
+      return harness.resultPromise;
+    },
+  });
+
+  assert.deepEqual(
+    await pickMainEntry({ setLabel() {} } as never, mock.ctx, {
+      createSelector: createFakeSelector((options) => {
+        displayedEntry = options.tree[0]?.children[0]?.entry;
+      }),
+    }),
+    { kind: "back" },
+  );
+  assert.equal(displayedEntry?.type, "context_edit");
+  if (displayedEntry?.type !== "context_edit" || edit.entry.type !== "context_edit") {
+    throw new Error("Expected context edit entries");
+  }
+  assert.equal(displayedEntry.targetId, "root[2J");
+  assert.equal(displayedEntry.replacement, replacement);
+  assert.equal(edit.entry.targetId, rawTargetId);
+});
+
 test("disposing the tree picker aborts and drains the pending clipboard operation", async () => {
   const node = userNode("branch-entry", null, "branch");
   let copyAborted = false;
