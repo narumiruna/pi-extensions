@@ -245,6 +245,8 @@ function sanitizeEntryForDisplay(entry: SessionEntry): SessionEntry {
       return { ...entry, thinkingLevel: sanitizeSingleLine(entry.thinkingLevel) };
     case "custom":
       return { ...entry, customType: sanitizeSingleLine(entry.customType) };
+    case "context_edit":
+      return { ...entry, targetId: sanitizeSingleLine(entry.targetId) };
     case "label":
       return {
         ...entry,
