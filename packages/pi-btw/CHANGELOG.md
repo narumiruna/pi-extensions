@@ -1,5 +1,12 @@
 # @narumitw/pi-btw
 
+## 0.61.1
+
+### Patch Changes
+
+- c073bc0: Fix the main-thread tree picker on Pi 0.87 sessions containing context edits.
+- 81be3f7: Send a per-thread routing `sessionId` with side requests so provider overrides that require one, such as subscription attribution transports, no longer reject `/btw`; the main session ID is still used only for OpenCode headers.
+
 ## 0.61.0
 
 ### Minor Changes
