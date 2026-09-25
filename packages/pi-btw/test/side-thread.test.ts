@@ -2908,7 +2908,39 @@ test("side thread forwards Pi session headers to OpenCode Go", async () => {
   assert.equal(capturedOptions?.headers?.["x-opencode-client"], "pi");
   assert.equal(capturedOptions?.headers?.["x-test"], "yes");
   assert.equal(capturedOptions?.transformHeaders, undefined);
-  assert.equal((capturedOptions as { sessionId?: unknown }).sessionId, undefined);
+  assert.equal(capturedOptions?.sessionId, thread.routingSessionId);
+  assert.notEqual(capturedOptions?.sessionId, "session-123");
+});
+
+test("side thread passes one stable routing session ID per thread, never the main session ID", async () => {
+  const captured: Array<string | undefined> = [];
+  const completeSimple = async (_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+    captured.push(options?.sessionId);
+    return response("A");
+  };
+  const model = { provider: "anthropic", id: "claude-test" } as Model<Api>;
+  const first = createSideThread("context");
+  const second = createSideThread("context");
+  for (const [thread, question] of [
+    [first, "Q1"],
+    [first, "Q2"],
+    [second, "Q3"],
+  ] as const) {
+    const result = await completeSideThreadTurn({
+      thread,
+      question,
+      model,
+      thinkingLevel: "off",
+      sessionId: "session-123",
+      completeSimple,
+    });
+    assert.equal(result.kind, "answered");
+  }
+
+  assert.match(first.routingSessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual(captured, [first.routingSessionId, first.routingSessionId, second.routingSessionId]);
+  assert.notEqual(first.routingSessionId, second.routingSessionId);
+  assert.equal(captured.includes("session-123"), false);
 });
 
 test("side thread forwards Pi session headers to OpenCode Zen for parity", async () => {
@@ -3125,7 +3157,7 @@ test("side thread lets exact-case explicit auth headers win", async () => {
   assert.equal(capturedOptions?.transformHeaders, undefined);
 });
 
-test("side question forwards Pi session headers without setting options.sessionId", async () => {
+test("side question forwards Pi session headers with a request-local options.sessionId", async () => {
   let capturedOptions: SimpleStreamOptions | undefined;
   const model = {
     provider: "opencode-go",
@@ -3146,5 +3178,6 @@ test("side question forwards Pi session headers without setting options.sessionI
   });
   assert.equal(capturedOptions?.headers?.["x-opencode-session"], "session-123");
   assert.equal(capturedOptions?.transformHeaders, undefined);
-  assert.equal((capturedOptions as { sessionId?: unknown }).sessionId, undefined);
+  assert.match(capturedOptions?.sessionId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.notEqual(capturedOptions?.sessionId, "session-123");
 });
