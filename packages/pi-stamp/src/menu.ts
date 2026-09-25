@@ -22,6 +22,7 @@ type StampAction =
   | "set-thinking-level"
   | "set-compact-abnormal-outcome"
   | "set-cost-since-user"
+  | "set-time-since-user"
   | "set-tool-stamps"
   | "open-locale"
   | "choose-invariant-locale"
@@ -156,6 +157,14 @@ export function createStampMenu(
             action: "set-cost-since-user",
           },
           {
+            id: "showTimeSinceUser",
+            label: "Time since user message",
+            description: "Record elapsed time through response completion, including tools and pauses.",
+            currentValue: visibilityLabel(state.settings.showTimeSinceUser),
+            values: ["Show", "Hide"],
+            action: "set-time-since-user",
+          },
+          {
             id: "toolStamps",
             label: "Tool stamps",
             description: "Show duration and outcome after newly observed tool blocks.",
@@ -277,6 +286,12 @@ export function createStampMenu(
             state,
             "showCostSinceUser",
           ),
+          settingStatus(
+            "Time since user message",
+            visibilityLabel(state.settings.showTimeSinceUser),
+            state,
+            "showTimeSinceUser",
+          ),
           settingStatus("Tool stamps", toolStampsLabel(state.settings.toolStamps), state, "toolStamps"),
           `Settings file: ${safeTerminalText(runtime.getPath())}`,
           ...(state.issue ? [`Issue: ${safeTerminalText(state.issue.message)}`] : []),
@@ -293,9 +308,10 @@ export function createStampMenu(
           "Thinking level capture requires both assistant metadata and its own setting to be enabled.",
           "Compact abnormal labels require their setting; normal stops always stay quiet there.",
           "Cost since user message resets at every user message and appears on non-tool-use responses.",
+          "Time since user message includes tools and pauses; each non-tool-use response records a fixed duration.",
           "Expanded exact UTC/Unix rows require Exact timeline; debug metadata remains separate.",
           "Tool stamps pair start/end by ID, exclude tool data, and appear after the complete block.",
-          "Assistant timing excludes tool execution and is unavailable on legacy stamp entries.",
+          "Per-response timing excludes tool execution and is unavailable on legacy stamp entries.",
           "Day changes compare the previous recorded message stamp in the selected time zone.",
           "Changes save immediately and reformat compatible mounted and future stamps.",
           "Stamp entries remain outside model context and never use a network request or refresh timer.",
@@ -347,6 +363,8 @@ export function createStampMenu(
         ),
       "set-cost-since-user": ({ ctx, value, signal }) =>
         savePatch(runtime, ctx, signal, { showCostSinceUser: value === "Show" }, `Cost since user message: ${value}.`),
+      "set-time-since-user": ({ ctx, value, signal }) =>
+        savePatch(runtime, ctx, signal, { showTimeSinceUser: value === "Show" }, `Time since user message: ${value}.`),
       "set-tool-stamps": ({ ctx, value, signal }) =>
         savePatch(runtime, ctx, signal, { toolStamps: value === "Show" }, `Tool stamps: ${value}.`),
       "open-locale": async () => {
@@ -466,6 +484,7 @@ function formatCompactStatus(state: StampSettingsState): string {
     `Thinking ${state.settings.showThinkingLevel ? "shown" : "hidden"}`,
     `Abnormal ${state.settings.showCompactAbnormalOutcome ? "shown" : "hidden"}`,
     `Cost since user ${state.settings.showCostSinceUser ? "shown" : "hidden"}`,
+    `Time since user ${state.settings.showTimeSinceUser ? "shown" : "hidden"}`,
     `Tool stamps ${state.settings.toolStamps ? "shown" : "hidden"}`,
   ].join(" · ");
 }

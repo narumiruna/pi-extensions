@@ -893,6 +893,7 @@ function defaultSettingsState(): Readonly<StampSettingsState> {
       showThinkingLevel: "built-in",
       showCompactAbnormalOutcome: "built-in",
       showCostSinceUser: "built-in",
+      showTimeSinceUser: "built-in",
       toolStamps: "built-in",
     },
     canSave: true,

@@ -27,6 +27,7 @@ export interface StampSettings {
   showThinkingLevel: boolean;
   showCompactAbnormalOutcome: boolean;
   showCostSinceUser: boolean;
+  showTimeSinceUser: boolean;
   toolStamps: boolean;
 }
 
@@ -42,6 +43,7 @@ export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
   showThinkingLevel: true,
   showCompactAbnormalOutcome: true,
   showCostSinceUser: false,
+  showTimeSinceUser: false,
   toolStamps: false,
 });
 
@@ -55,6 +57,7 @@ export interface MessageStampFormatInput {
   previousTimestamp?: number;
   completedAt?: number;
   firstContentAt?: number;
+  timeSinceUserMs?: number;
 }
 
 interface ZonedParts {
@@ -149,11 +152,26 @@ export function formatMessageStampLabel(
   environment: Readonly<StampFormatEnvironment> = EMPTY_FORMAT_ENVIRONMENT,
 ): string | undefined {
   const label = formatStampLabel(input.timestamp, input.previousTimestamp, settings, environment);
-  if (!label || settings.responseTiming === "off") return label;
+  if (!label) return undefined;
+  const sinceUser =
+    settings.showTimeSinceUser && input.timeSinceUserMs !== undefined
+      ? formatTimeSinceUser(input.timeSinceUserMs)
+      : undefined;
+  const response = formatResponseTimingLabel(input, settings, label, sinceUser !== undefined);
+  return sinceUser === undefined ? response : `${response} · since user ${sinceUser}`;
+}
+
+function formatResponseTimingLabel(
+  input: Readonly<MessageStampFormatInput>,
+  settings: Readonly<StampSettings>,
+  label: string,
+  labelResponse: boolean,
+): string {
+  if (settings.responseTiming === "off") return label;
   if (!isValidTimestamp(input.completedAt) || input.completedAt < input.timestamp) return label;
   const total = formatResponseElapsed(input.completedAt - input.timestamp);
   if (!total) return label;
-  if (settings.responseTiming === "duration") return `${label} · ${total}`;
+  if (settings.responseTiming === "duration") return `${label} · ${labelResponse ? "response " : ""}${total}`;
   const first =
     isValidTimestamp(input.firstContentAt) &&
     input.firstContentAt >= input.timestamp &&
@@ -161,6 +179,18 @@ export function formatMessageStampLabel(
       ? formatResponseElapsed(input.firstContentAt - input.timestamp)
       : undefined;
   return `${label} · first ${first ?? "n/a"} · total ${total}`;
+}
+
+export function formatTimeSinceUser(elapsedMilliseconds: number): string | undefined {
+  if (!Number.isFinite(elapsedMilliseconds) || elapsedMilliseconds < 0) return undefined;
+  if (elapsedMilliseconds < 60_000) {
+    // Carry rounded seconds into minutes without changing truncation for longer durations.
+    return Math.round(elapsedMilliseconds / 100) === 600 ? "1m 0s" : formatElapsedSeconds(elapsedMilliseconds);
+  }
+  const seconds = Math.floor(elapsedMilliseconds / 1_000);
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
 }
 
 export function formatResponseElapsed(elapsedMilliseconds: number): string | undefined {

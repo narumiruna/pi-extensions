@@ -218,6 +218,7 @@ function settingsRuntimeWithToolStamps(toolStamps = true): StampSettingsRuntime 
       showThinkingLevel: "built-in",
       showCompactAbnormalOutcome: "built-in",
       showCostSinceUser: "built-in",
+      showTimeSinceUser: "built-in",
       toolStamps: "user",
     },
     canSave: true,

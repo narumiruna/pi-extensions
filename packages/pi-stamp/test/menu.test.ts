@@ -36,6 +36,7 @@ test("stamp menu exposes Main, Settings, Status, Help, and read-only invalid sta
       ["showThinkingLevel", "Show"],
       ["showCompactAbnormalOutcome", "Show"],
       ["showCostSinceUser", "Hide"],
+      ["showTimeSinceUser", "Hide"],
       ["toolStamps", "Hide"],
     ],
   );
@@ -45,6 +46,7 @@ test("stamp menu exposes Main, Settings, Status, Help, and read-only invalid sta
   assert.match((main.lines ?? []).join("\n"), /Thinking shown/u);
   assert.match((main.lines ?? []).join("\n"), /Abnormal shown/u);
   assert.match((main.lines ?? []).join("\n"), /Cost since user hidden/u);
+  assert.match((main.lines ?? []).join("\n"), /Time since user hidden/u);
   assert.match((main.lines ?? []).join("\n"), /Tool stamps hidden/u);
 
   const status = resolveMenuScreen(menu, "status", state);
@@ -57,6 +59,7 @@ test("stamp menu exposes Main, Settings, Status, Help, and read-only invalid sta
   assert.match(status.lines.join("\n"), /Thinking level: Show · Built-in/u);
   assert.match(status.lines.join("\n"), /Compact abnormal outcome: Show · Built-in/u);
   assert.match(status.lines.join("\n"), /Cost since user message: Hide · Built-in/u);
+  assert.match(status.lines.join("\n"), /Time since user message: Hide · Built-in/u);
   assert.match(status.lines.join("\n"), /Tool stamps: Hide · Built-in/u);
   assert.match(status.lines.join("\n"), /\/tmp\/pi-stamp\.json/u);
 
@@ -173,6 +176,15 @@ test("bounded setting actions persist exact patches", async () => {
     });
   }
   for (const value of ["Show", "Hide"] as const) {
+    await menu.actions["set-time-since-user"]({
+      ctx,
+      state: runtime.get(),
+      signal: new AbortController().signal,
+      itemId: "showTimeSinceUser",
+      value,
+    });
+  }
+  for (const value of ["Show", "Hide"] as const) {
     await menu.actions["set-tool-stamps"]({
       ctx,
       state: runtime.get(),
@@ -199,6 +211,8 @@ test("bounded setting actions persist exact patches", async () => {
     { showCompactAbnormalOutcome: false },
     { showCostSinceUser: true },
     { showCostSinceUser: false },
+    { showTimeSinceUser: true },
+    { showTimeSinceUser: false },
     { toolStamps: true },
     { toolStamps: false },
   ]);
@@ -299,7 +313,7 @@ test("RPC custom input retries a rejected value before saving", async () => {
     {
       kind: "select",
       title:
-        "Stamp\n24-hour · seconds · Day changes · Invariant · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Tool stamps hidden",
+        "Stamp\n24-hour · seconds · Day changes · Invariant · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Time since user hidden · Tool stamps hidden",
       options: ["Settings", "Status", "Help", "Close"],
       response: "Settings",
     },
@@ -318,6 +332,7 @@ test("RPC custom input retries a rejected value before saving", async () => {
         "Thinking level (Show)",
         "Compact abnormal outcome (Show)",
         "Cost since user message (Hide)",
+        "Time since user message (Hide)",
         "Tool stamps (Hide)",
         "Back",
       ],
@@ -356,6 +371,7 @@ test("RPC custom input retries a rejected value before saving", async () => {
         "Thinking level (Show)",
         "Compact abnormal outcome (Show)",
         "Cost since user message (Hide)",
+        "Time since user message (Hide)",
         "Tool stamps (Hide)",
         "Back",
       ],
@@ -364,7 +380,7 @@ test("RPC custom input retries a rejected value before saving", async () => {
     {
       kind: "select",
       title:
-        "Stamp\n24-hour · seconds · Day changes · en-US · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Tool stamps hidden",
+        "Stamp\n24-hour · seconds · Day changes · en-US · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Time since user hidden · Tool stamps hidden",
       options: ["Settings", "Status", "Help", "Close"],
       response: "Close",
     },
@@ -453,6 +469,7 @@ function memorySettingsRuntime(
       showThinkingLevel: "built-in",
       showCompactAbnormalOutcome: "built-in",
       showCostSinceUser: "built-in",
+      showTimeSinceUser: "built-in",
       toolStamps: "built-in",
     },
     canSave: true,

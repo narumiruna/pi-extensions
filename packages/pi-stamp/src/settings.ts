@@ -83,6 +83,7 @@ const SETTING_FIELDS = [
   "showThinkingLevel",
   "showCompactAbnormalOutcome",
   "showCostSinceUser",
+  "showTimeSinceUser",
   "toolStamps",
 ] as const satisfies readonly StampSettingsField[];
 const SETTING_FIELD_SET = new Set<string>(SETTING_FIELDS);
@@ -160,6 +161,11 @@ export function normalizeStampSettingsDocument(value: unknown): NormalizedStampS
     if (typeof value.showCostSinceUser !== "boolean") return undefined;
     settings.showCostSinceUser = value.showCostSinceUser;
     sources.showCostSinceUser = "user";
+  }
+  if (Object.hasOwn(value, "showTimeSinceUser")) {
+    if (typeof value.showTimeSinceUser !== "boolean") return undefined;
+    settings.showTimeSinceUser = value.showTimeSinceUser;
+    sources.showTimeSinceUser = "user";
   }
   if (Object.hasOwn(value, "toolStamps")) {
     if (typeof value.toolStamps !== "boolean") return undefined;
@@ -394,6 +400,7 @@ function builtInSources(): Record<StampSettingsField, StampSettingsSource> {
     showThinkingLevel: "built-in",
     showCompactAbnormalOutcome: "built-in",
     showCostSinceUser: "built-in",
+    showTimeSinceUser: "built-in",
     toolStamps: "built-in",
   };
 }
