@@ -9,7 +9,7 @@ Optionally show response timing, assistant provenance and usage, or tool duratio
 
 - Shows each message's recorded creation time on a dim, right-aligned row.
 - Supports 12/24-hour clocks, seconds, automatic date context, locales, and time zones.
-- Optionally shows response latency, model and provider identity, effective Pi Thinking level, stop reason, tokens, call cost, and cost since user.
+- Optionally shows response latency, elapsed time since user, model and provider identity, effective Pi Thinking level, stop reason, tokens, call cost, and cost since user.
 - Optionally records tool duration and success or error after each complete tool block.
 - Shows exact UTC ISO 8601 and Unix millisecond observation times only during transcript expansion.
 - Keeps sensitive response IDs and bounded diagnostics behind explicit opt-in and transcript expansion.
@@ -57,7 +57,7 @@ Run `/stamp` to open the presentation menu:
 
 ```text
 Stamp
-24-hour · seconds · Day changes · Invariant · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Tool stamps hidden
+24-hour · seconds · Day changes · Invariant · Local · Timing off · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Time since user hidden · Tool stamps hidden
 
 Settings
 Status
@@ -90,6 +90,7 @@ The `/stamp` Settings screen provides these controls:
 | `showThinkingLevel` | boolean | `true` | Captures and shows Pi's effective turn Thinking level when assistant metadata is enabled. |
 | `showCompactAbnormalOutcome` | boolean | `true` | Shows `length`, `error`, and `aborted` stop reasons in compact assistant metadata. |
 | `showCostSinceUser` | boolean | `false` | Shows the cost since user and final call cost on a non-`toolUse` assistant response. |
+| `showTimeSinceUser` | boolean | `false` | Records and shows fixed elapsed time from the latest user message to a non-`toolUse` assistant response's completion. |
 | `toolStamps` | boolean | `false` | Records and shows duration plus success/error for newly observed tools. |
 
 The compatibility defaults produce local `HH:mm:ss` for ordinary same-day messages.
@@ -104,7 +105,7 @@ The canonical user file is:
 
 Pi's configured agent directory replaces `~/.pi/agent` when applicable.
 The file is a partial JSON object.
-This example shows 12-hour Taipei time without seconds, compact assistant metadata without Thinking or compact abnormal labels, an exact expanded timeline, and tool stamps:
+This example enables 12-hour Taipei time without seconds, compact metadata without Thinking or abnormal labels, cost and time since user, an exact expanded timeline, and tool stamps:
 
 ```json
 {
@@ -117,6 +118,7 @@ This example shows 12-hour Taipei time without seconds, compact assistant metada
   "showThinkingLevel": false,
   "showCompactAbnormalOutcome": false,
   "showCostSinceUser": true,
+  "showTimeSinceUser": true,
   "toolStamps": true
 }
 ```
@@ -173,6 +175,33 @@ These rows are hidden in the collapsed transcript, require no new session data, 
 Timing labels are local Pi lifecycle observations, not provider latency telemetry.
 They require no network request or refresh task.
 Relative labels such as `3m ago` remain unavailable because they would require periodic background refresh and lifecycle cleanup.
+
+### Time since user
+
+Enable `showTimeSinceUser` in `/stamp` Settings to record elapsed wall-clock time from the latest user message's recorded timestamp to each non-`toolUse` assistant response's observed completion:
+
+```text
+14:32:08 · since user 1m 24s
+```
+
+This includes intermediate assistant calls, tools, retry delays, and pauses.
+Every user message resets the starting point, including steering and queued follow-ups.
+Error, aborted, and length-limited responses use the same completion boundary.
+If the agent produces a new response after resuming without another user message, that new response includes the intervening idle time.
+
+Each duration is captured once and persisted; rendering, `/reload`, resume, compaction, and tree navigation never recalculate an existing stamp.
+New responses use the latest user message on their active branch.
+Missing, invalid, or backwards timing boundaries omit the duration rather than inventing one.
+Older stamps are not backfilled, and disabling the setting hides recorded durations without erasing them.
+
+Time since user works independently of assistant metadata, cost since user, and response timing.
+With `responseTiming: "duration"`, the single-response duration is labeled separately:
+
+```text
+14:32:08 · response 3.2s · since user 1m 24s
+```
+
+Sub-minute durations use tenths of a second; longer durations show whole minutes and seconds, with hours when needed.
 
 ## 🧾 Assistant provenance and usage
 
@@ -260,6 +289,8 @@ Message entry compatibility is cumulative:
 - Version 5 assistant entries add Pi's validated effective turn Thinking level when metadata capture is enabled and the runtime exposes it.
 - Version 6 assistant entries add the optional call cost and cost since user.
   Full assistant metadata and Thinking level remain optional in this version.
+- Version 7 assistant entries add fixed elapsed milliseconds since the latest user message and require a completion observation.
+  Cost, full assistant metadata, and Thinking level remain optional.
 - Version 1 tool entries store only bounded association/timing/outcome data.
 
 Existing versions remain readable.
