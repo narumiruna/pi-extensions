@@ -38,8 +38,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.86.0",
-    "@types/node": "26.6.2",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@types/node": "26.6.3",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },
