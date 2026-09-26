@@ -89,7 +89,7 @@
     "@earendil-works/pi-agent-core": "0.86.0",
     "@earendil-works/pi-ai": "0.86.0",
     "@earendil-works/pi-coding-agent": "0.86.0",
-    "@earendil-works/pi-server": "0.86.0",
+    "@earendil-works/pi-server": "0.87.1",
     "@earendil-works/pi-tui": "0.86.0",
     "@types/node": "^26.6.2",
     "concurrently": "^10.0.5",
