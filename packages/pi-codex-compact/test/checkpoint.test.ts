@@ -198,7 +198,7 @@ test("projects the persisted summary without regenerating version-dependent pros
   assert.equal(project([kept, after], details), undefined);
 });
 
-test("projects resumed repeated compaction when Pi interleaves an older summary", () => {
+test("projects resumed repeated compaction when Pi omits an older summary", () => {
   const firstKept = user("first kept", 1);
   const secondKept = user("second kept", 2);
   const thirdKept = user("third kept", 4);
@@ -219,7 +219,7 @@ test("projects resumed repeated compaction when Pi interleaves an older summary"
   const resumed = buildSessionContext(entries, "later").messages;
   assert.deepEqual(
     resumed.map((message) => message.role),
-    ["compactionSummary", "user", "user", "compactionSummary", "user", "user", "user"],
+    ["compactionSummary", "user", "user", "user", "user", "user"],
   );
   const projected = project(resumed, secondDetails);
   assert.ok(projected);

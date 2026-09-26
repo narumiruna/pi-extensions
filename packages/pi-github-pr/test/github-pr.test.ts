@@ -1032,22 +1032,21 @@ test("branch changes abort an in-flight periodic refresh", async () => {
   writeFileSync(headPath, "ref: refs/heads/feature\n");
 
   const periodicPrView = deferred<ExecResult>();
-  const sessionSignal = new AbortController().signal;
+  let prViews = 0;
   let periodicSignal: AbortSignal | undefined;
   const mock = createMockPi();
   installExec(mock, async (command, args, options) => {
     if (command === "git") return textResult(".git/HEAD\n");
     if (args[0] === "pr") {
-      if (options?.signal && options.signal !== sessionSignal) {
-        periodicSignal = options.signal;
-        return periodicPrView.promise;
-      }
-      return okResult(samplePr);
+      prViews += 1;
+      if (prViews === 1) return okResult(samplePr);
+      periodicSignal = options?.signal;
+      return periodicPrView.promise;
     }
     return okResult(sampleCounts);
   });
   githubPr(mock.pi, { refreshIntervalMs: 20 });
-  const context = createMockContext({ cwd: root, signal: sessionSignal });
+  const context = createMockContext({ cwd: root });
   const sessionStart = mock.events.get("session_start")?.[0];
   const sessionShutdown = mock.events.get("session_shutdown")?.[0];
   assert.ok(sessionStart);

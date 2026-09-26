@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@narumitw/pi-tui-kit": "^0.59.0",
-    "smol-toml": "^1.8.0",
+    "smol-toml": "^1.9.0",
     "yaml": "^2.9.1"
   },
   "peerDependencies": {
@@ -48,9 +48,9 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.86.0",
-    "@earendil-works/pi-tui": "0.86.0",
-    "@types/node": "26.6.2",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-tui": "0.87.1",
+    "@types/node": "26.6.3",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },
