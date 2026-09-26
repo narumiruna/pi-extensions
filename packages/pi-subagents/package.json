@@ -53,6 +53,6 @@
     "directory": "packages/pi-subagents"
   },
   "dependencies": {
-    "ignore": "^7.0.8"
+    "ignore": "^7.0.10"
   }
 }
