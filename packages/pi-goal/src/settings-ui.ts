@@ -33,7 +33,13 @@ export async function showGoalSettings(
   const invalid = runtime.settingsLoadIssue?.kind === "invalid";
   const previewGoalIds = new Map<LimitField, string | null>();
   type Screen = "settings" | "automatic" | "no-progress" | "invalid";
-  type Action = "open-automatic" | "open-no-progress" | "choose-automatic" | "choose-no-progress" | "set-rpc";
+  type Action =
+    | "open-automatic"
+    | "open-no-progress"
+    | "choose-automatic"
+    | "choose-no-progress"
+    | "set-rpc"
+    | "set-auto-resume";
   const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
     start: invalid ? "invalid" : (options.initialScreen ?? "settings"),
     screens: {
@@ -64,6 +70,14 @@ export async function showGoalSettings(
             currentValue: runtime.settings.rpc.enabled ? "On" : "Off",
             values: ["Off", "On"],
             action: "set-rpc",
+          },
+          {
+            id: "autoResumeOnRestore",
+            label: "Auto-resume on restore",
+            description: "Automatically continue an active goal when the session is restored.",
+            currentValue: runtime.settings.resume.autoResumeOnRestore ? "On" : "Off",
+            values: ["Off", "On"],
+            action: "set-auto-resume",
           },
         ],
       }),
@@ -124,6 +138,24 @@ export async function showGoalSettings(
             save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
           });
           notifyTerminal(ctx.ui, `Managed run RPC: ${enabled ? "On" : "Off"}.`, "info");
+          return { kind: "stay" };
+        } catch (error) {
+          notifySettingsFailure(ctx, settingsPath, error);
+          return { kind: "rejected" };
+        }
+      },
+      "set-auto-resume": async ({ value }) => {
+        const enabled = value === "On";
+        if (enabled === runtime.settings.resume.autoResumeOnRestore) return { kind: "stay" };
+        try {
+          const next = {
+            ...structuredClone(runtime.settings),
+            resume: { autoResumeOnRestore: enabled },
+          } satisfies GoalSettings;
+          applyGoalSettings(runtime, next, ctx, {
+            save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
+          });
+          notifyTerminal(ctx.ui, `Auto-resume on restore: ${enabled ? "On" : "Off"}.`, "info");
           return { kind: "stay" };
         } catch (error) {
           notifySettingsFailure(ctx, settingsPath, error);

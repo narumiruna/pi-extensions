@@ -124,6 +124,10 @@ export function registerGoalLifecycle(
       }
       runtime.updateStatus(ctx, runtime.activeGoal);
       runtime.restoreGoalWaitTimer(ctx);
+      if (runtime.settings.resume.autoResumeOnRestore) {
+        runtime.requestContinuation(runtime.activeGoal);
+        runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
+      }
       return;
     }
 

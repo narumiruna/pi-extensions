@@ -15,11 +15,15 @@ export interface GoalSettings {
     automaticTurns: ContinuationLimit;
     noProgressTurns: ContinuationLimit;
   };
+  resume: {
+    autoResumeOnRestore: boolean;
+  };
 }
 
 export const DEFAULT_GOAL_SETTINGS: GoalSettings = {
   rpc: { enabled: false },
   continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+  resume: { autoResumeOnRestore: false },
 };
 
 export type GoalSettingsLoadResult =
@@ -74,9 +78,23 @@ export function normalizeGoalSettings(value: unknown): GoalSettings | undefined 
     : DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns;
   if (automaticTurns === undefined || noProgressTurns === undefined) return undefined;
 
+  const resumeValue = Object.hasOwn(value, "resume") ? Reflect.get(value, "resume") : undefined;
+  if (
+    resumeValue !== undefined &&
+    (typeof resumeValue !== "object" || resumeValue === null || Array.isArray(resumeValue))
+  ) {
+    return undefined;
+  }
+  const autoResumeOnRestore =
+    resumeValue && Object.hasOwn(resumeValue, "autoResumeOnRestore")
+      ? Reflect.get(resumeValue, "autoResumeOnRestore")
+      : DEFAULT_GOAL_SETTINGS.resume.autoResumeOnRestore;
+  if (typeof autoResumeOnRestore !== "boolean") return undefined;
+
   return {
     rpc: { enabled: rpcEnabled },
     continuationLimits: { automaticTurns, noProgressTurns },
+    resume: { autoResumeOnRestore },
   };
 }
 
@@ -110,6 +128,7 @@ export function saveGoalSettings(
 
   const rpc = ownRecord(raw.rpc) ?? {};
   const continuationLimits = ownRecord(raw.continuationLimits) ?? {};
+  const resume = ownRecord(raw.resume) ?? {};
   const document = `${JSON.stringify(
     {
       ...raw,
@@ -119,6 +138,7 @@ export function saveGoalSettings(
         automaticTurns: normalized.continuationLimits.automaticTurns,
         noProgressTurns: normalized.continuationLimits.noProgressTurns,
       },
+      resume: { ...resume, autoResumeOnRestore: normalized.resume.autoResumeOnRestore },
     },
     null,
     2,
