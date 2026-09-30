@@ -7,6 +7,8 @@ export const GOAL_SETTINGS_FILE = "pi-goal.json";
 
 export type ContinuationLimit = number | null;
 
+export type ResumeOnRestoreMode = "auto" | "ask" | "off";
+
 export interface GoalSettings {
   rpc: {
     enabled: boolean;
@@ -16,14 +18,14 @@ export interface GoalSettings {
     noProgressTurns: ContinuationLimit;
   };
   resume: {
-    autoResumeOnRestore: boolean;
+    autoResumeOnRestore: ResumeOnRestoreMode;
   };
 }
 
 export const DEFAULT_GOAL_SETTINGS: GoalSettings = {
   rpc: { enabled: false },
   continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
-  resume: { autoResumeOnRestore: false },
+  resume: { autoResumeOnRestore: "ask" },
 };
 
 export type GoalSettingsLoadResult =
@@ -85,17 +87,25 @@ export function normalizeGoalSettings(value: unknown): GoalSettings | undefined 
   ) {
     return undefined;
   }
-  const autoResumeOnRestore =
+  const autoResumeValue =
     resumeValue && Object.hasOwn(resumeValue, "autoResumeOnRestore")
       ? Reflect.get(resumeValue, "autoResumeOnRestore")
       : DEFAULT_GOAL_SETTINGS.resume.autoResumeOnRestore;
-  if (typeof autoResumeOnRestore !== "boolean") return undefined;
+  const autoResumeOnRestore = normalizeResumeOnRestore(autoResumeValue);
+  if (autoResumeOnRestore === undefined) return undefined;
 
   return {
     rpc: { enabled: rpcEnabled },
     continuationLimits: { automaticTurns, noProgressTurns },
     resume: { autoResumeOnRestore },
   };
+}
+
+function normalizeResumeOnRestore(value: unknown): ResumeOnRestoreMode | undefined {
+  // Legacy boolean settings map onto the tri-state: true → auto, false → off.
+  if (value === true) return "auto";
+  if (value === false) return "off";
+  return value === "auto" || value === "ask" || value === "off" ? value : undefined;
 }
 
 function normalizeContinuationLimit(value: unknown, fallback: ContinuationLimit): ContinuationLimit | undefined {

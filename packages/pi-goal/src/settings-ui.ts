@@ -2,7 +2,13 @@ import { join } from "node:path";
 import { type ExtensionCommandContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { notifyTerminal, safeTerminalText } from "./errors.js";
 import type { GoalRuntime } from "./runtime.js";
-import { DEFAULT_GOAL_SETTINGS, GOAL_SETTINGS_FILE, type GoalSettings, saveGoalSettings } from "./settings.js";
+import {
+  DEFAULT_GOAL_SETTINGS,
+  GOAL_SETTINGS_FILE,
+  type GoalSettings,
+  type ResumeOnRestoreMode,
+  saveGoalSettings,
+} from "./settings.js";
 
 interface GoalSettingsUiOptions {
   settingsPath?: string;
@@ -16,6 +22,12 @@ interface GoalSettingsApplyOptions {
 
 type LimitField = "automaticTurns" | "noProgressTurns";
 type LimitSelection = "unlimited" | "default" | "custom" | "off";
+
+const RESUME_ON_RESTORE_CHOICES = ["Ask", "Auto", "Off"] as const;
+
+function formatResumeOnRestoreMode(mode: ResumeOnRestoreMode) {
+  return mode === "auto" ? "Auto" : mode === "ask" ? "Ask" : "Off";
+}
 export async function showGoalSettings(
   runtime: GoalRuntime,
   ctx: ExtensionCommandContext,
@@ -73,10 +85,10 @@ export async function showGoalSettings(
           },
           {
             id: "autoResumeOnRestore",
-            label: "Auto-resume on restore",
-            description: "Automatically continue an active goal when the session is restored.",
-            currentValue: runtime.settings.resume.autoResumeOnRestore ? "On" : "Off",
-            values: ["Off", "On"],
+            label: "On restore",
+            description: "Automatically continue, ask first, or ignore a restored active goal.",
+            currentValue: formatResumeOnRestoreMode(runtime.settings.resume.autoResumeOnRestore),
+            values: RESUME_ON_RESTORE_CHOICES,
             action: "set-auto-resume",
           },
         ],
@@ -145,17 +157,20 @@ export async function showGoalSettings(
         }
       },
       "set-auto-resume": async ({ value }) => {
-        const enabled = value === "On";
-        if (enabled === runtime.settings.resume.autoResumeOnRestore) return { kind: "stay" };
+        const mode = RESUME_ON_RESTORE_CHOICES.find((candidate) => candidate === value)?.toLowerCase() as
+          | ResumeOnRestoreMode
+          | undefined;
+        if (!mode) return { kind: "rejected" };
+        if (mode === runtime.settings.resume.autoResumeOnRestore) return { kind: "stay" };
         try {
           const next = {
             ...structuredClone(runtime.settings),
-            resume: { autoResumeOnRestore: enabled },
+            resume: { autoResumeOnRestore: mode },
           } satisfies GoalSettings;
           applyGoalSettings(runtime, next, ctx, {
             save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
           });
-          notifyTerminal(ctx.ui, `Auto-resume on restore: ${enabled ? "On" : "Off"}.`, "info");
+          notifyTerminal(ctx.ui, `On restore: ${formatResumeOnRestoreMode(mode)}.`, "info");
           return { kind: "stay" };
         } catch (error) {
           notifySettingsFailure(ctx, settingsPath, error);

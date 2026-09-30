@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { currentTokenTotal } from "./accounting.js";
-import { notifyTerminal } from "./errors.js";
+import { notifyTerminal, safeGoalMenuText } from "./errors.js";
 import {
   GOAL_CONTRACT_MESSAGE_TYPE,
   isGoalContextContract,
@@ -124,9 +124,11 @@ export function registerGoalLifecycle(
       }
       runtime.updateStatus(ctx, runtime.activeGoal);
       runtime.restoreGoalWaitTimer(ctx);
-      if (runtime.settings.resume.autoResumeOnRestore) {
-        runtime.requestContinuation(runtime.activeGoal);
-        runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
+      const resumeMode = runtime.settings.resume.autoResumeOnRestore;
+      if (resumeMode === "auto") {
+        resumeRestoredGoal(ctx, runtime.activeGoal.id);
+      } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print") {
+        void promptRestoreChoice(ctx, runtime.activeGoal);
       }
       return;
     }
@@ -146,6 +148,48 @@ export function registerGoalLifecycle(
       ctx.ui.setStatus(STATUS_KEY, undefined);
     }
   });
+
+  function resumeRestoredGoal(ctx: StatusContext, goalId: string) {
+    if (runtime.activeGoal?.id !== goalId) return;
+    runtime.requestContinuation(runtime.activeGoal);
+    runtime.scheduleContinuationDispatch(ctx, goalId);
+  }
+
+  const RESTORE_RESUME = "Resume now";
+  const RESTORE_PAUSE = "Keep paused";
+  const RESTORE_CLEAR = "Clear goal";
+
+  async function promptRestoreChoice(ctx: StatusContext, goal: ActiveGoal) {
+    if (!ctx.ui.select) return;
+    const goalId = goal.id;
+    let choice: string | undefined;
+    try {
+      choice = await ctx.ui.select(
+        `Restore active goal: ${safeGoalMenuText(goal.text, 120)}`,
+        [RESTORE_RESUME, RESTORE_PAUSE, RESTORE_CLEAR],
+        { timeout: 30_000 },
+      );
+    } catch {
+      choice = undefined;
+    }
+    // The dialog may survive a goal transition; only act on the still-restored goal.
+    if (runtime.activeGoal?.id !== goalId || runtime.activeGoal.status !== "active") return;
+    if (choice === RESTORE_RESUME) {
+      resumeRestoredGoal(ctx, goalId);
+      return;
+    }
+    if (choice === RESTORE_CLEAR) {
+      // clearActiveGoal 内部已清状态栏与工作流归属，无需再 updateStatus
+      runtime.clearActiveGoal(ctx, "goal cleared on restore");
+      return;
+    }
+    // "Keep paused" or dialog dismissed: park the goal without scheduling work.
+    runtime.activeGoal = transitionGoal(runtime.activeGoal, "paused");
+    runtime.persistGoal(runtime.activeGoal);
+    runtime.ensureInactiveGoalContextContract(ctx);
+    runtime.releaseWorkflow();
+    runtime.updateStatus(ctx, runtime.activeGoal);
+  }
 
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;
