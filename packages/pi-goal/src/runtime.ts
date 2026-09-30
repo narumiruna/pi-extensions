@@ -17,7 +17,7 @@ import {
   type SafetyPauseCause,
   serializeGoalState,
 } from "./persistence.js";
-import { buildContinuePrompt, type GoalStatus } from "./prompts.js";
+import { buildCompletionClaimPrompt, buildContinuePrompt, type GoalStatus } from "./prompts.js";
 import { nextToolFreeRepeatState, resetGoalSafetyEpoch } from "./safety.js";
 
 export { queueGoalSafetyReset, resetGoalSafetyEpoch } from "./safety.js";
@@ -394,6 +394,35 @@ export class GoalRuntime {
       prompt: buildContinuePrompt(goal, marker),
     };
     return true;
+  }
+
+  // Completion claims that never reach a goal_complete call. A goal only ends
+  // via goal_complete; plain-text claims are not completion.
+  private completionClaimState?: { goalId: string; count: number };
+
+  requestClaimContinuation(goal: ActiveGoal, claimCount: number) {
+    if (!this.ownsWorkflow(goal)) return false;
+    if (goal.waiting || this.hasContinuationWorkForGoal(goal.id)) return false;
+    const marker = continuationMarker(goal);
+    this.continuationIntent = {
+      goalId: goal.id,
+      iteration: goal.iteration,
+      marker,
+      prompt: buildCompletionClaimPrompt(goal, marker, claimCount),
+    };
+    return true;
+  }
+
+  recordCompletionClaim(goalId: string) {
+    if (this.completionClaimState?.goalId !== goalId) {
+      this.completionClaimState = { goalId, count: 0 };
+    }
+    this.completionClaimState.count += 1;
+    return this.completionClaimState.count;
+  }
+
+  clearCompletionClaims() {
+    this.completionClaimState = undefined;
   }
 
   dispatchContinuationIfSettled(ctx: StatusContext) {

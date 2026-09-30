@@ -8,6 +8,7 @@ import {
   reconcileInactiveGoalContextContract,
 } from "./goal-contract.js";
 import { type ActiveGoal, loadGoalStateFromSession } from "./persistence.js";
+import { assistantClaimsCompletion } from "./prompts.js";
 import type { GoalRunController } from "./run-protocol.js";
 import {
   type AssistantMessageLike,
@@ -25,7 +26,7 @@ import {
   transitionGoal,
   truncateNotification,
 } from "./runtime.js";
-import { hasAssistantToolCall } from "./safety.js";
+import { hasAssistantToolCall, normalizeVisibleAssistantOutput } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, readGoalSettings } from "./settings.js";
 
 const REMOVED_QUEUE_SETTING_WARNING =
@@ -124,11 +125,9 @@ export function registerGoalLifecycle(
       }
       runtime.updateStatus(ctx, runtime.activeGoal);
       runtime.restoreGoalWaitTimer(ctx);
-      const resumeMode = runtime.settings.resume.autoResumeOnRestore;
-      if (resumeMode === "auto") {
-        resumeRestoredGoal(ctx, runtime.activeGoal.id);
-      } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print") {
-        void promptRestoreChoice(ctx, runtime.activeGoal);
+      if (runtime.settings.resume.autoResumeOnRestore) {
+        runtime.requestContinuation(runtime.activeGoal);
+        runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
       }
       return;
     }
@@ -160,8 +159,8 @@ export function registerGoalLifecycle(
   const RESTORE_CLEAR = "Clear goal";
 
   async function promptRestoreChoice(ctx: StatusContext, goal: ActiveGoal) {
-    if (!ctx.ui.select) return;
     const goalId = goal.id;
+    if (!ctx.hasUI || !ctx.ui.select) return;
     let choice: string | undefined;
     try {
       choice = await ctx.ui.select(
@@ -556,6 +555,7 @@ export function registerGoalLifecycle(
     const goalId = runtime.activeGoal.id;
     const alreadyAwaitingContinuation = runtime.hasContinuationWorkForGoal(goalId);
     const finalAssistant = findFinalAssistantMessage(event.messages);
+    runtime.clearCompletionClaims();
 
     if (!alreadyAwaitingContinuation) runtime.activeGoal = incrementGoal(runtime.activeGoal);
     runtime.recordGoalUsage(runtime.activeGoal, ctx);
@@ -614,6 +614,37 @@ export function registerGoalLifecycle(
       return;
     }
 
+    // Completion gate: a /goal only ends via goal_complete. A plain-text
+    // completion claim without goal_complete (and without any tool call at
+    // all) never counts as finished — push the claim back as a targeted
+    // continuation, escalating to blocked after repeated claims.
+    if (
+      run.origin === "automatic" &&
+      !run.toolAttempted &&
+      !hasAssistantToolCall(event.messages) &&
+      finalAssistant?.content &&
+      assistantClaimsCompletion(normalizeVisibleAssistantOutput([finalAssistant])) &&
+      runtime.activeGoal?.id === goalId &&
+      runtime.activeGoal.status === "active"
+    ) {
+      const claimCount = runtime.recordCompletionClaim(goalId);
+      if (claimCount >= 3) {
+        stopGoalAfterAgentEnd(
+          ctx,
+          runtime.activeGoal,
+          finalAssistant,
+          "blocked",
+          `agent claimed completion ${claimCount} times without calling goal_complete`,
+        );
+        return;
+      }
+      if (runtime.requestClaimContinuation(runtime.activeGoal, claimCount)) {
+        runtime.persistGoal(runtime.activeGoal);
+        runtime.scheduleContinuationDispatch(ctx, goalId);
+        return;
+      }
+    }
+
     runtime.persistGoal(runtime.activeGoal);
     runtime.updateStatus(ctx, runtime.activeGoal);
 
@@ -655,12 +686,13 @@ export function registerGoalLifecycle(
     goal: ActiveGoal,
     assistant: AssistantMessageLike,
     status: "paused" | "blocked" | "usage_limited",
+    reasonOverride?: string,
   ) {
     const stoppedGoal = runtime.stopActiveGoal(ctx, {
       kind: "agent_interruption",
       expectedGoalId: goal.id,
       status,
-      reason: assistant.errorMessage ?? `goal ${status} after agent interruption`,
+      reason: reasonOverride ?? assistant.errorMessage ?? `goal ${status} after agent interruption`,
     });
     if (!stoppedGoal) return;
 

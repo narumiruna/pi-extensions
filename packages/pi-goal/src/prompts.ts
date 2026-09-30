@@ -52,6 +52,29 @@ export function buildContinuePrompt(goal: GoalPromptContext, marker: string) {
   return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}${budgetLine}\n\nThis is automatic continuation #${goal.iteration}. The full objective persists across turns; continue from the authoritative current state.\n\n${goalModeRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
 }
 
+export function buildCompletionClaimPrompt(goal: GoalPromptContext, marker: string, claimCount: number) {
+  const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+  return (
+    `Your last turn claimed the /goal was complete or submitted, but goal_complete was not called. ` +
+    `A /goal only ends when goal_complete is called with an evidence-backed summary — a plain-text claim does not finish it. ` +
+    `If every requirement is actually verifiably complete, call goal_complete now (this is claim #${claimCount}; repeated claims without goal_complete will block the goal). ` +
+    `Otherwise continue working.\n\n${goalContextBlock(goal)}${budgetLine}\n\nThis is automatic continuation #${goal.iteration}.\n\n${goalModeRules("this goal")}\n\n${continuationMarkerComment(marker)}`
+  );
+}
+
+const COMPLETION_CLAIM_PATTERNS = [
+  /[已全已].{0,6}(完成|搞定|提交)/,
+  /\b(?:all\s+)?done\b/i,
+  /\bcompleted\b/i,
+  /\bfinished\b/i,
+  /\bsubmitted\b/i,
+  /\b(?:merged|pushed)\b/i,
+] as const;
+
+export function assistantClaimsCompletion(text: string) {
+  return COMPLETION_CLAIM_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function goalContextBlock(goal: GoalPromptContext) {
   return `${goalObjectiveTrustBoundary()}\n\n${goalObjectiveBlock(goal)}\n\n${goalCompletionGuardBlock(goal)}`;
 }
