@@ -183,11 +183,13 @@ export function registerGoalLifecycle(
       runtime.clearActiveGoal(ctx, "goal cleared on restore");
       return;
     }
-    // "Keep paused" or dialog dismissed: park the goal without scheduling work.
-    runtime.activeGoal = transitionGoal(runtime.activeGoal, "paused");
-    runtime.persistGoal(runtime.activeGoal);
-    runtime.ensureInactiveGoalContextContract(ctx);
-    runtime.releaseWorkflow();
+    if (choice === RESTORE_PAUSE) {
+      // 显式选择才暂停；超时/取消保持 active 闲置（不派发续跑），契合恢复共用语义
+      runtime.activeGoal = transitionGoal(runtime.activeGoal, "paused");
+      runtime.persistGoal(runtime.activeGoal);
+      runtime.ensureInactiveGoalContextContract(ctx);
+      runtime.releaseWorkflow();
+    }
     runtime.updateStatus(ctx, runtime.activeGoal);
   }
 
