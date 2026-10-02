@@ -74,6 +74,13 @@ const fireworksModel = {
   baseUrl: "https://api.fireworks.ai/inference",
 };
 
+const commandCodeModel = {
+  id: "claude-sonnet-5",
+  name: "Claude Sonnet 5",
+  provider: "command-code",
+  baseUrl: "https://api.commandcode.ai/provider",
+};
+
 function testProviderDisplayName(provider: string): string {
   return (
     {
@@ -85,6 +92,7 @@ function testProviderDisplayName(provider: string): string {
       minimax: "MiniMax",
       xai: "xAI",
       zai: "Z.AI",
+      "command-code": "Command Code",
     }[provider] ?? provider
   );
 }
@@ -1748,6 +1756,65 @@ test("Z.AI providers publish statusline usage and refresh through /usage", async
   assert.equal(fetches, 2);
   assert.match(titles[0] ?? "", /5h window:\s+\[█{18}░{2}\] 90% left/);
   assert.equal(statuses.get("usage"), "zai 90% 5h 80% wk");
+});
+
+test("Command Code publishes statusline usage from the alpha endpoints", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.onTestFinished(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const seen: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    seen.push(url);
+    const body = url.includes("/alpha/whoami")
+      ? { success: true, user: { userName: "yanjieee" }, org: null }
+      : url.includes("/alpha/billing/credits")
+        ? {
+            credits: { monthlyCredits: 67.3314357964, purchasedCredits: 0, freeCredits: 0 },
+            windowLimits: {
+              limited: true,
+              fiveHour: { used: 0.08658048, cap: 14, resetAt: 1_790_666_524_172 },
+              weekly: { used: 2.6685642036, cap: 35, resetAt: 1_790_663_250_022 },
+            },
+          }
+        : url.includes("/alpha/billing/subscriptions")
+          ? {
+              success: true,
+              data: {
+                planId: "individual-goat",
+                status: "active",
+                currentPeriodStart: "2026-09-22T06:17:06.000Z",
+                currentPeriodEnd: "2026-10-22T06:17:06.000Z",
+              },
+            }
+          : { totalCount: 1245, totalCost: 2.6721871936000006, totalTokens: 110_174_751 };
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  const mock = createMockPi();
+  usageExtension(mock.pi);
+  const { ctx, statuses } = createMockContext({
+    model: commandCodeModel,
+    modelRegistry: {
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "command-code-key" }),
+      getProviderAuth: async () => ({ auth: { apiKey: "command-code-key", baseUrl: commandCodeModel.baseUrl } }),
+      getAvailable: () => [commandCodeModel],
+      getAll: () => [commandCodeModel],
+      getProviderAuthStatus: () => ({ configured: true }),
+      getProviderDisplayName: testProviderDisplayName,
+    },
+  });
+
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await settle();
+
+  assert.deepEqual(seen, [
+    "https://api.commandcode.ai/alpha/whoami",
+    "https://api.commandcode.ai/alpha/billing/credits",
+    "https://api.commandcode.ai/alpha/billing/subscriptions",
+    `https://api.commandcode.ai/alpha/usage/summary?since=${encodeURIComponent("2026-09-22T06:17:06.000Z")}`,
+  ]);
+  assert.equal(statuses.get("usage"), "cmd 99% 5h 92% wk 96% mo");
 });
 
 test("automatic provider failures back off instead of retrying every turn", async (t) => {

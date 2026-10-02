@@ -34,6 +34,7 @@ export {
 export { formatProviderStates, formatUsageReport, formatUsageStatusline } from "./format.js";
 export { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
 export { normalizeCodexBackendPayload } from "./providers/codex.js";
+export { commandCodeOrgId, normalizeCommandCodeUsagePayload } from "./providers/command-code.js";
 export { normalizeDeepSeekBalancePayload } from "./providers/deepseek.js";
 export {
   createFireworksAdapter,
@@ -80,6 +81,11 @@ export {
 } from "./settings.js";
 export type {
   BasetenBillingUsagePayload,
+  CommandCodeAccountPayload,
+  CommandCodeCreditsPayload,
+  CommandCodeSubscriptionPayload,
+  CommandCodeUsageBundle,
+  CommandCodeUsageSummaryPayload,
   DeepSeekBalancePayload,
   FireworksAccountsPayload,
   FireworksBillingSummaryPayload,

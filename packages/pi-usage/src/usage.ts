@@ -269,6 +269,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       adapter.targets !== undefined ||
       [
         "baseten",
+        "command-code",
         "deepseek",
         "minimax",
         "minimax-cn",

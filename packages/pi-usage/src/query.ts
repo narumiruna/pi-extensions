@@ -6,6 +6,7 @@ import { errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.
 import { fallbackOAuthCredentialCandidates, type OAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
 import { normalizeCodexBackendPayload } from "./providers/codex.js";
+import { commandCodeOrgId, normalizeCommandCodeUsagePayload } from "./providers/command-code.js";
 import { normalizeDeepSeekBalancePayload } from "./providers/deepseek.js";
 import { createFireworksAdapter } from "./providers/fireworks.js";
 import { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
@@ -26,6 +27,11 @@ import { zaiResponseError } from "./providers/zai-errors.js";
 import type {
   BasetenBillingUsagePayload,
   CodexBackendPayload,
+  CommandCodeAccountPayload,
+  CommandCodeCreditsPayload,
+  CommandCodeSubscriptionPayload,
+  CommandCodeUsageBundle,
+  CommandCodeUsageSummaryPayload,
   DeepSeekBalancePayload,
   GitHubCopilotUsagePayload,
   KimiCodingUsagePayload,
@@ -51,6 +57,11 @@ import { resolveUsageTarget } from "./usage-targets.js";
 const BASETEN_BILLING_USAGE_URL = "https://api.baseten.co/v1/billing/usage_summary";
 const BASETEN_USAGE_WINDOW_DAYS = 30;
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const COMMAND_CODE_API_ORIGIN = "https://api.commandcode.ai";
+const COMMAND_CODE_ACCOUNT_URL = `${COMMAND_CODE_API_ORIGIN}/alpha/whoami`;
+const COMMAND_CODE_CREDITS_URL = `${COMMAND_CODE_API_ORIGIN}/alpha/billing/credits`;
+const COMMAND_CODE_SUBSCRIPTIONS_URL = `${COMMAND_CODE_API_ORIGIN}/alpha/billing/subscriptions`;
+const COMMAND_CODE_USAGE_SUMMARY_URL = `${COMMAND_CODE_API_ORIGIN}/alpha/usage/summary`;
 const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 const GITHUB_COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user";
 const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
@@ -179,6 +190,62 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
       )) as VercelAIGatewayCreditsPayload;
       await guard();
       return normalizeVercelAIGatewayCreditsPayload(payload, Date.now());
+    },
+  },
+  {
+    id: "command-code",
+    displayName: "Command Code",
+    semantics: { kind: "consumer-subscription", label: "Command Code plan credits and rolling limits" },
+    async query(auth, signal, timeoutMs, guard) {
+      if (!guard) throw new Error("Command Code usage requires request-boundary revalidation.");
+      const startedAt = Date.now();
+      await guard();
+      const account = (await fetchProviderJson(
+        COMMAND_CODE_ACCOUNT_URL,
+        auth,
+        signal,
+        remainingTimeout(timeoutMs, startedAt, "fetching the Command Code account"),
+        "Command Code account endpoint",
+        { redirect: "error" },
+      )) as CommandCodeAccountPayload;
+      await guard();
+      const orgId = commandCodeOrgId(account);
+      const [credits, subscription] = await Promise.all([
+        fetchCommandCodeOptional(
+          commandCodeUrl(COMMAND_CODE_CREDITS_URL, { orgId }),
+          auth,
+          signal,
+          remainingTimeout(timeoutMs, startedAt, "fetching Command Code credits"),
+          "Command Code credits endpoint",
+        ),
+        fetchCommandCodeOptional(
+          commandCodeUrl(COMMAND_CODE_SUBSCRIPTIONS_URL, { orgId }),
+          auth,
+          signal,
+          remainingTimeout(timeoutMs, startedAt, "fetching the Command Code plan"),
+          "Command Code plan endpoint",
+        ),
+      ]);
+      await guard();
+      const usage = await fetchCommandCodeOptional(
+        commandCodeUrl(COMMAND_CODE_USAGE_SUMMARY_URL, {
+          orgId,
+          since: commandCodeSubscriptionStart(subscription),
+        }),
+        auth,
+        signal,
+        remainingTimeout(timeoutMs, startedAt, "fetching Command Code billing-period usage"),
+        "Command Code usage summary endpoint",
+      );
+      await guard();
+      // The account response is mandatory; the credits, plan, and period payloads degrade to notes.
+      const bundle: CommandCodeUsageBundle = {
+        account,
+        ...(credits ? { credits: credits as CommandCodeCreditsPayload } : {}),
+        ...(subscription ? { subscription: subscription as CommandCodeSubscriptionPayload } : {}),
+        ...(usage ? { usage: usage as CommandCodeUsageSummaryPayload } : {}),
+      };
+      return normalizeCommandCodeUsagePayload(bundle, Date.now());
     },
   },
   createFireworksAdapter(fetchProviderJson),
@@ -919,6 +986,7 @@ function hasOfficialUrlOrigin(value: string, providerId: string): boolean {
     }
     if (providerId === "openai") return url.origin === "https://api.openai.com";
     if (providerId === "openai-codex") return url.origin === "https://chatgpt.com";
+    if (providerId === "command-code") return url.origin === COMMAND_CODE_API_ORIGIN;
     if (providerId === "deepseek") return url.origin === "https://api.deepseek.com";
     if (providerId === "fireworks") return url.origin === "https://api.fireworks.ai";
     if (providerId === "openrouter") return url.origin === "https://openrouter.ai";
@@ -1091,4 +1159,35 @@ async function fetchZaiPlan(
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+async function fetchCommandCodeOptional(
+  url: string,
+  auth: ResolvedUsageAuth,
+  signal: AbortSignal,
+  timeoutMs: number,
+  description: string,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    return await fetchProviderJson(url, auth, signal, timeoutMs, description, { redirect: "error" });
+  } catch (error) {
+    if (isAbortError(error) || isStaleExtensionContextError(error)) throw error;
+    return undefined;
+  }
+}
+
+function commandCodeUrl(base: string, params: Record<string, string | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) query.set(key, value);
+  }
+  const search = query.toString();
+  return search ? `${base}?${search}` : base;
+}
+
+function commandCodeSubscriptionStart(subscription: Record<string, unknown> | undefined): string | undefined {
+  const data = subscription?.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const value = (data as Record<string, unknown>).currentPeriodStart;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

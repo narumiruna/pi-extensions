@@ -143,6 +143,7 @@ Currencies and billing targets remain separate.
 | Vercel AI Gateway | Team credit balance and lifetime spend |
 | Baseten | Organization-wide trailing 30-day Model APIs spend after credits |
 | OpenCode Go | Rolling, weekly, and monthly plan windows |
+| Command Code | Billing-period plan credits and rolling 5-hour/weekly spending caps |
 | xAI | OAuth subscription allowance and credits; explicit menu queries only |
 | Z.AI | Coding Plan quota windows, MCP allowance, plan name, and renewal date |
 
@@ -258,7 +259,7 @@ The generated runtime is built from `src/index.ts` and does not import back into
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, usage, quota, DeepSeek API balance, DeepSeek balance, Fireworks API spend, Fireworks rated spend, Vercel AI Gateway credits, Vercel AI Gateway usage, Baseten Model APIs spend, Baseten usage, OpenAI Codex usage, ChatGPT subscription limits, Kimi For Coding, Kimi Coding Plan usage, Moonshot AI balance, Moonshot API balance, MiniMax Token Plan, MiniMax API balance, GitHub Copilot AI credits, GitHub Copilot premium requests, OpenRouter credits, xAI OAuth usage, Grok subscription allowance, API-key spend limits, TypeScript Pi package, npm Pi extension.
+Pi extension, Pi coding agent, usage, quota, DeepSeek API balance, DeepSeek balance, Fireworks API spend, Fireworks rated spend, Vercel AI Gateway credits, Vercel AI Gateway usage, Baseten Model APIs spend, Baseten usage, OpenAI Codex usage, ChatGPT subscription limits, Kimi For Coding, Kimi Coding Plan usage, Moonshot AI balance, Moonshot API balance, MiniMax Token Plan, MiniMax API balance, GitHub Copilot AI credits, GitHub Copilot premium requests, OpenRouter credits, Command Code plan credits, xAI OAuth usage, Grok subscription allowance, API-key spend limits, TypeScript Pi package, npm Pi extension.
 
 ## 📄 License
 

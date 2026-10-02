@@ -235,3 +235,32 @@ export type CodexBackendPayload = {
   credits?: unknown;
   rate_limit_reset_credits?: unknown;
 };
+
+export type CommandCodeAccountPayload = {
+  user?: unknown;
+  org?: unknown;
+};
+
+export type CommandCodeCreditsPayload = {
+  credits?: unknown;
+  windowLimits?: unknown;
+};
+
+export type CommandCodeSubscriptionPayload = {
+  data?: unknown;
+};
+
+export type CommandCodeUsageSummaryPayload = {
+  totalCost?: unknown;
+  totalCount?: unknown;
+  totalTokens?: unknown;
+  totalTokensIn?: unknown;
+  totalTokensOut?: unknown;
+};
+
+export interface CommandCodeUsageBundle {
+  account: CommandCodeAccountPayload;
+  credits?: CommandCodeCreditsPayload;
+  subscription?: CommandCodeSubscriptionPayload;
+  usage?: CommandCodeUsageSummaryPayload;
+}
