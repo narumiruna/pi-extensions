@@ -387,14 +387,15 @@ test("busy active edit claims ownership and resets safety only when its queued r
   assert.equal(edited.mock.sentUserMessages.length, 3);
 });
 
-test("resume rejects active goals and exhausted budgets without rotating goal_id", async () => {
+test("resume accepts a restored active idle goal with a fresh goal_id", async () => {
   const active = await startGoalForTest();
   const activeGoal = requireLastGoal(active.mock);
   const activeMessageCount = active.mock.sentUserMessages.length;
   await active.mock.commands.get("goal")?.handler("resume", active.ctx);
-  assert.match(active.notifications.at(-1)?.message ?? "", /only paused, blocked/i);
-  assert.equal(requireLastGoal(active.mock).id, activeGoal.id);
-  assert.equal(active.mock.sentUserMessages.length, activeMessageCount);
+  assert.match(active.notifications.at(-1)?.message ?? "", /resumed/i);
+  // Resume rotates into a new goal instance (nextGoalInstance), so the id changes.
+  assert.notEqual(requireLastGoal(active.mock).id, activeGoal.id);
+  assert.equal(active.mock.sentUserMessages.length, activeMessageCount + 1);
 
   for (const status of ["paused", "blocked", "usage_limited", "budget_limited"] as const) {
     const exhausted = restoreGoalForTest(status, { tokensUsed: 10 });

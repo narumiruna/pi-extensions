@@ -210,12 +210,23 @@ export class GoalCommandController {
       return;
     }
     if (!isResumableGoalStatus(this.runtime.activeGoal.status)) {
-      notifyTerminal(
-        ctx.ui,
-        `Goal is ${this.runtime.activeGoal.status}; only paused, blocked, usage-limited, or budget-limited goals can be resumed.`,
-        "warning",
-      );
-      return;
+      // An active goal with no running agent and no pending continuation is
+      // idle after a session restore; treat it as resumable so the user does
+      // not have to pause first.
+      if (
+        this.runtime.activeGoal.status === "active" &&
+        this.runtime.agentRunGoalId === undefined &&
+        !this.runtime.hasContinuationWorkForGoal(this.runtime.activeGoal.id)
+      ) {
+        // fall through to the resume path below
+      } else {
+        notifyTerminal(
+          ctx.ui,
+          `Goal is ${this.runtime.activeGoal.status}; only paused, blocked, usage-limited, or budget-limited goals can be resumed.`,
+          "warning",
+        );
+        return;
+      }
     }
     if (
       this.runtime.activeGoal.tokenBudget !== undefined &&

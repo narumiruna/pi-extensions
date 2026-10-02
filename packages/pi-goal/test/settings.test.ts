@@ -107,6 +107,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
     {
       rpc: { enabled: false },
       continuationLimits: { automaticTurns: 40, noProgressTurns: null },
+      resume: { autoResumeOnRestore: "ask" },
     },
     settingsPath,
   );
@@ -117,6 +118,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
     experimental: { goals: true, futureQueue: "keep" },
     rpc: { enabled: false, futureRpc: "keep" },
     continuationLimits: { automaticTurns: 40, noProgressTurns: null, futureLimit: 9 },
+    resume: { autoResumeOnRestore: "ask" },
   });
   assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
 });
@@ -159,6 +161,7 @@ test("readGoalSettings distinguishes missing, loaded, legacy, malformed, and unr
     settings: {
       rpc: { enabled: false },
       continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+      resume: { autoResumeOnRestore: "ask" },
     },
     legacyExperimentalGoals: true,
   });

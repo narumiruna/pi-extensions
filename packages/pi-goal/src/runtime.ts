@@ -99,8 +99,10 @@ export type GoalStopRequest =
 export interface StatusContext {
   cwd: string;
   mode?: "tui" | "rpc" | "json" | "print";
+  hasUI?: boolean;
   ui: {
     confirm: (title: string, message: string) => Promise<boolean>;
+    select?: (title: string, options: string[], opts?: { timeout?: number }) => Promise<string | undefined>;
     notify: (message: string, level?: "info" | "warning" | "error") => void;
     setStatus: (key: string, value: string | undefined) => void;
   };
