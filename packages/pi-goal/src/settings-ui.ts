@@ -2,7 +2,13 @@ import { join } from "node:path";
 import { type ExtensionCommandContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { notifyTerminal, safeTerminalText } from "./errors.js";
 import type { GoalRuntime } from "./runtime.js";
-import { DEFAULT_GOAL_SETTINGS, GOAL_SETTINGS_FILE, type GoalSettings, saveGoalSettings } from "./settings.js";
+import {
+  DEFAULT_GOAL_SETTINGS,
+  GOAL_SETTINGS_FILE,
+  type GoalSettings,
+  type ResumeOnRestoreMode,
+  saveGoalSettings,
+} from "./settings.js";
 
 interface GoalSettingsUiOptions {
   settingsPath?: string;
@@ -16,6 +22,12 @@ interface GoalSettingsApplyOptions {
 
 type LimitField = "automaticTurns" | "noProgressTurns";
 type LimitSelection = "unlimited" | "default" | "custom" | "off";
+
+const RESUME_ON_RESTORE_CHOICES = ["Ask", "Auto", "Off"] as const;
+
+function formatResumeOnRestoreMode(mode: ResumeOnRestoreMode) {
+  return mode === "auto" ? "Auto" : mode === "ask" ? "Ask" : "Off";
+}
 export async function showGoalSettings(
   runtime: GoalRuntime,
   ctx: ExtensionCommandContext,
@@ -33,7 +45,13 @@ export async function showGoalSettings(
   const invalid = runtime.settingsLoadIssue?.kind === "invalid";
   const previewGoalIds = new Map<LimitField, string | null>();
   type Screen = "settings" | "automatic" | "no-progress" | "invalid";
-  type Action = "open-automatic" | "open-no-progress" | "choose-automatic" | "choose-no-progress" | "set-rpc";
+  type Action =
+    | "open-automatic"
+    | "open-no-progress"
+    | "choose-automatic"
+    | "choose-no-progress"
+    | "set-rpc"
+    | "set-auto-resume";
   const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
     start: invalid ? "invalid" : (options.initialScreen ?? "settings"),
     screens: {
@@ -64,6 +82,14 @@ export async function showGoalSettings(
             currentValue: runtime.settings.rpc.enabled ? "On" : "Off",
             values: ["Off", "On"],
             action: "set-rpc",
+          },
+          {
+            id: "autoResumeOnRestore",
+            label: "On restore",
+            description: "Automatically continue, ask first, or ignore a restored active goal.",
+            currentValue: formatResumeOnRestoreMode(runtime.settings.resume.autoResumeOnRestore),
+            values: RESUME_ON_RESTORE_CHOICES,
+            action: "set-auto-resume",
           },
         ],
       }),
@@ -124,6 +150,27 @@ export async function showGoalSettings(
             save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
           });
           notifyTerminal(ctx.ui, `Managed run RPC: ${enabled ? "On" : "Off"}.`, "info");
+          return { kind: "stay" };
+        } catch (error) {
+          notifySettingsFailure(ctx, settingsPath, error);
+          return { kind: "rejected" };
+        }
+      },
+      "set-auto-resume": async ({ value }) => {
+        const mode = RESUME_ON_RESTORE_CHOICES.find((candidate) => candidate === value)?.toLowerCase() as
+          | ResumeOnRestoreMode
+          | undefined;
+        if (!mode) return { kind: "rejected" };
+        if (mode === runtime.settings.resume.autoResumeOnRestore) return { kind: "stay" };
+        try {
+          const next = {
+            ...structuredClone(runtime.settings),
+            resume: { autoResumeOnRestore: mode },
+          } satisfies GoalSettings;
+          applyGoalSettings(runtime, next, ctx, {
+            save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
+          });
+          notifyTerminal(ctx.ui, `On restore: ${formatResumeOnRestoreMode(mode)}.`, "info");
           return { kind: "stay" };
         } catch (error) {
           notifySettingsFailure(ctx, settingsPath, error);

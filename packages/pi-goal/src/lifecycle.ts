@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { currentTokenTotal } from "./accounting.js";
-import { notifyTerminal } from "./errors.js";
+import { notifyTerminal, safeGoalMenuText } from "./errors.js";
 import {
   GOAL_CONTRACT_MESSAGE_TYPE,
   isGoalContextContract,
@@ -8,6 +8,7 @@ import {
   reconcileInactiveGoalContextContract,
 } from "./goal-contract.js";
 import { type ActiveGoal, loadGoalStateFromSession } from "./persistence.js";
+import { assistantClaimsCompletion } from "./prompts.js";
 import type { GoalRunController } from "./run-protocol.js";
 import {
   type AssistantMessageLike,
@@ -25,7 +26,7 @@ import {
   transitionGoal,
   truncateNotification,
 } from "./runtime.js";
-import { hasAssistantToolCall } from "./safety.js";
+import { hasAssistantToolCall, normalizeVisibleAssistantOutput } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, readGoalSettings } from "./settings.js";
 
 const REMOVED_QUEUE_SETTING_WARNING =
@@ -124,6 +125,10 @@ export function registerGoalLifecycle(
       }
       runtime.updateStatus(ctx, runtime.activeGoal);
       runtime.restoreGoalWaitTimer(ctx);
+      if (runtime.settings.resume.autoResumeOnRestore) {
+        runtime.requestContinuation(runtime.activeGoal);
+        runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
+      }
       return;
     }
 
@@ -142,6 +147,50 @@ export function registerGoalLifecycle(
       ctx.ui.setStatus(STATUS_KEY, undefined);
     }
   });
+
+  function resumeRestoredGoal(ctx: StatusContext, goalId: string) {
+    if (runtime.activeGoal?.id !== goalId) return;
+    runtime.requestContinuation(runtime.activeGoal);
+    runtime.scheduleContinuationDispatch(ctx, goalId);
+  }
+
+  const RESTORE_RESUME = "Resume now";
+  const RESTORE_PAUSE = "Keep paused";
+  const RESTORE_CLEAR = "Clear goal";
+
+  async function promptRestoreChoice(ctx: StatusContext, goal: ActiveGoal) {
+    const goalId = goal.id;
+    if (!ctx.hasUI || !ctx.ui.select) return;
+    let choice: string | undefined;
+    try {
+      choice = await ctx.ui.select(
+        `Restore active goal: ${safeGoalMenuText(goal.text, 120)}`,
+        [RESTORE_RESUME, RESTORE_PAUSE, RESTORE_CLEAR],
+        { timeout: 30_000 },
+      );
+    } catch {
+      choice = undefined;
+    }
+    // The dialog may survive a goal transition; only act on the still-restored goal.
+    if (runtime.activeGoal?.id !== goalId || runtime.activeGoal.status !== "active") return;
+    if (choice === RESTORE_RESUME) {
+      resumeRestoredGoal(ctx, goalId);
+      return;
+    }
+    if (choice === RESTORE_CLEAR) {
+      // clearActiveGoal 内部已清状态栏与工作流归属，无需再 updateStatus
+      runtime.clearActiveGoal(ctx, "goal cleared on restore");
+      return;
+    }
+    if (choice === RESTORE_PAUSE) {
+      // 显式选择才暂停；超时/取消保持 active 闲置（不派发续跑），契合恢复共用语义
+      runtime.activeGoal = transitionGoal(runtime.activeGoal, "paused");
+      runtime.persistGoal(runtime.activeGoal);
+      runtime.ensureInactiveGoalContextContract(ctx);
+      runtime.releaseWorkflow();
+    }
+    runtime.updateStatus(ctx, runtime.activeGoal);
+  }
 
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;
@@ -506,6 +555,7 @@ export function registerGoalLifecycle(
     const goalId = runtime.activeGoal.id;
     const alreadyAwaitingContinuation = runtime.hasContinuationWorkForGoal(goalId);
     const finalAssistant = findFinalAssistantMessage(event.messages);
+    runtime.clearCompletionClaims();
 
     if (!alreadyAwaitingContinuation) runtime.activeGoal = incrementGoal(runtime.activeGoal);
     runtime.recordGoalUsage(runtime.activeGoal, ctx);
@@ -564,6 +614,37 @@ export function registerGoalLifecycle(
       return;
     }
 
+    // Completion gate: a /goal only ends via goal_complete. A plain-text
+    // completion claim without goal_complete (and without any tool call at
+    // all) never counts as finished — push the claim back as a targeted
+    // continuation, escalating to blocked after repeated claims.
+    if (
+      run.origin === "automatic" &&
+      !run.toolAttempted &&
+      !hasAssistantToolCall(event.messages) &&
+      finalAssistant?.content &&
+      assistantClaimsCompletion(normalizeVisibleAssistantOutput([finalAssistant])) &&
+      runtime.activeGoal?.id === goalId &&
+      runtime.activeGoal.status === "active"
+    ) {
+      const claimCount = runtime.recordCompletionClaim(goalId);
+      if (claimCount >= 3) {
+        stopGoalAfterAgentEnd(
+          ctx,
+          runtime.activeGoal,
+          finalAssistant,
+          "blocked",
+          `agent claimed completion ${claimCount} times without calling goal_complete`,
+        );
+        return;
+      }
+      if (runtime.requestClaimContinuation(runtime.activeGoal, claimCount)) {
+        runtime.persistGoal(runtime.activeGoal);
+        runtime.scheduleContinuationDispatch(ctx, goalId);
+        return;
+      }
+    }
+
     runtime.persistGoal(runtime.activeGoal);
     runtime.updateStatus(ctx, runtime.activeGoal);
 
@@ -605,12 +686,13 @@ export function registerGoalLifecycle(
     goal: ActiveGoal,
     assistant: AssistantMessageLike,
     status: "paused" | "blocked" | "usage_limited",
+    reasonOverride?: string,
   ) {
     const stoppedGoal = runtime.stopActiveGoal(ctx, {
       kind: "agent_interruption",
       expectedGoalId: goal.id,
       status,
-      reason: assistant.errorMessage ?? `goal ${status} after agent interruption`,
+      reason: reasonOverride ?? assistant.errorMessage ?? `goal ${status} after agent interruption`,
     });
     if (!stoppedGoal) return;
 

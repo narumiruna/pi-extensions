@@ -47,6 +47,15 @@ export function hasAssistantToolCall(messages: readonly unknown[]) {
   return false;
 }
 
+export function assistantMessageText(message: unknown) {
+  if (!isRecord(message) || !Array.isArray(message.content)) return "";
+  return message.content
+    .filter((block) => isRecord(block) && block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+}
+
 export function fingerprintVisibleAssistantOutput(messages: readonly unknown[]) {
   const normalized = normalizeVisibleAssistantOutput(messages);
   return createHash("sha256").update(normalized, "utf8").digest("hex");
