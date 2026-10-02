@@ -24,11 +24,42 @@ const MIGRATION_TEMP_STALE_MS = 30_000;
 
 export type StoredOAuthCredential = OAuthCredential;
 
+export type StoredApiKeyCredential = {
+  type: "api_key";
+  key: string;
+  access?: never;
+  refresh?: never;
+  expires?: never;
+  [key: string]: unknown;
+};
+
+export type StoredCredential = StoredOAuthCredential | StoredApiKeyCredential;
+
+export function normalizeApiKeyCredential(key: string): StoredApiKeyCredential {
+  if (!key.trim() || /[\s\p{Cc}\p{Cf}]/u.test(key)) {
+    throw new Error("API key must be non-empty and contain no whitespace or control characters.");
+  }
+  return { type: "api_key", key };
+}
+
+function normalizeAccountCredential(value: unknown, name: string): StoredCredential {
+  if (isRecord(value) && value.type === "api_key") {
+    const cloned = cloneJsonValue(value, new Set(), `${name} credential`) as Record<string, unknown>;
+    if (typeof cloned.key !== "string") throw new Error("API key credential is missing key.");
+    normalizeApiKeyCredential(cloned.key);
+    if (["access", "refresh", "expires"].some((field) => Object.hasOwn(cloned, field))) {
+      throw new Error("API key credential must not contain OAuth fields.");
+    }
+    return cloned as StoredApiKeyCredential;
+  }
+  return normalizeStoredCredential(value, name);
+}
+
 export type ProviderAccountsData = {
   [key: string]: unknown;
   /** Default for sessions without a saved provider selection; not the current session account. */
   active?: string;
-  accounts: Record<string, StoredOAuthCredential>;
+  accounts: Record<string, StoredCredential>;
 };
 
 export type AccountsData = {
@@ -195,14 +226,14 @@ function normalizeProviderState(value: unknown): ProviderAccountsData {
   if (!isRecord(value)) throw new Error("Invalid accounts data: provider state must be an object.");
   const active = parseActiveAccount(value.active);
   if (!isRecord(value.accounts)) throw new Error("Invalid accounts data: accounts must be an object.");
-  const accounts = Object.create(null) as Record<string, StoredOAuthCredential>;
+  const accounts = Object.create(null) as Record<string, StoredCredential>;
   for (const [name, credential] of Object.entries(value.accounts)) {
     const parsedName = parseAccountName(name);
     if (!parsedName.ok) throw new Error(`Invalid accounts data: bad account name "${name}".`);
     Object.defineProperty(accounts, name, {
       configurable: true,
       enumerable: true,
-      value: normalizeStoredCredential(credential, name),
+      value: normalizeAccountCredential(credential, name),
       writable: true,
     });
   }
@@ -458,7 +489,7 @@ function emptyAccountsData(): AccountsData {
 }
 
 function emptyProviderState(): ProviderAccountsData {
-  return { accounts: Object.create(null) as Record<string, StoredOAuthCredential> };
+  return { accounts: Object.create(null) as Record<string, StoredCredential> };
 }
 
 function cloneProviderState(state: ProviderAccountsData | undefined): ProviderAccountsData {
@@ -482,9 +513,9 @@ export function defineOwn<T>(source: Record<string, T>, name: string, value: T):
 }
 
 export function getOwnCredential(
-  accounts: Record<string, StoredOAuthCredential>,
+  accounts: Record<string, StoredCredential>,
   name: string,
-): StoredOAuthCredential | undefined {
+): StoredCredential | undefined {
   return Object.hasOwn(accounts, name) ? accounts[name] : undefined;
 }
 

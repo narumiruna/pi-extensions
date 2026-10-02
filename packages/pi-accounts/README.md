@@ -1,17 +1,21 @@
-# 🔐 pi-accounts — Switch Between OAuth Accounts
+# 🔐 pi-accounts — Switch Between Provider Accounts
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-accounts)](https://www.npmjs.com/package/@narumitw/pi-accounts) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Save and switch named OAuth accounts for Pi's built-in providers.
+Save and switch named OAuth and API key accounts for Pi's built-in login providers.
 Each Pi session keeps its own selection for every provider, and choosing `default` restores Pi's normal authentication only for that session without deleting saved accounts.
 
 > [!WARNING]
 > Anthropic currently treats Claude Pro/Max use through third-party harnesses as **extra usage billed per token**, rather than consumption of the normal plan allowance.
 > Review your Anthropic billing and extra-usage settings before using a named Anthropic account.
 
+> [!CAUTION]
+> Named credentials are stored locally in a private file. API key entry uses visible, unmasked TUI/RPC input; use trusted clients and avoid screen sharing or recording.
+
 ## ✨ Features
 
-- Manages named OpenAI Codex, Anthropic Claude Pro/Max, GitHub Copilot, Kimi For Coding, OpenRouter, Radius, and xAI OAuth accounts through `/accounts`.
+- Manages named OAuth accounts for every built-in `/login` provider: Anthropic, GitHub Copilot, Kimi For Coding, Meta, OpenAI, OpenAI Codex (legacy), OpenRouter, Radius, and xAI.
+- Saves named API key accounts for the same providers except OAuth-only OpenAI Codex (legacy).
 - Selects an account—or Pi's default login—independently for each provider and Pi session.
 - Saves a default account for each provider to use in new sessions without changing existing sessions.
 - Restores session selections after resume or reload while allowing concurrent sessions to use different accounts.
@@ -67,19 +71,24 @@ The first prompt, model switch, or `/accounts` operation that needs a provider w
 
 | Provider | Provider ID | Account-specific behavior |
 | --- | --- | --- |
-| OpenAI Codex | `openai-codex` | ChatGPT Plus/Pro OAuth, OAuth-only native-provider bridge, and Codex WebSocket invalidation |
+| OpenAI | `openai` | Pi's current ChatGPT subscription OAuth or OpenAI API keys, using the native Responses provider |
+| OpenAI Codex (legacy) | `openai-codex` | ChatGPT Plus/Pro OAuth, OAuth-only native-provider bridge, and Codex WebSocket invalidation |
+| Meta | `meta` | Muse subscription device login with provider-owned API key minting and renewal, or Meta API keys |
 | Anthropic | `anthropic` | Claude Pro/Max OAuth without interfering with Anthropic API-key auth after returning to `default` |
 | GitHub Copilot | `github-copilot` | Individual or Enterprise login, credential-derived API endpoint, and account-specific available models |
 | Kimi For Coding | `kimi-coding` | Kimi Code subscription OAuth with provider-owned Bearer-header authentication |
-| OpenRouter | `openrouter` | OpenRouter OAuth that mints a persistent account API key without managing manually entered API-key profiles |
+| OpenRouter | `openrouter` | OAuth that mints a persistent account API key, or manually entered OpenRouter API keys |
 | Radius | `radius` | Gateway-bound OAuth with credential-specific dynamic model-catalog refresh and selected-model rebinding |
 | xAI | `xai` | SuperGrok or X Premium OAuth with the native xAI provider and model catalog |
 
 ## 💬 Commands
 
-Run `/accounts` to log in, switch provider accounts for the current Pi session, set defaults for new sessions, or remove saved accounts in TUI or RPC mode.
+Run `/accounts` to log in with OAuth, add an API key account, switch provider accounts for the current Pi session, set defaults for new sessions, or remove saved accounts in TUI or RPC mode.
 Arguments are ignored for compatibility; print and JSON modes provide no account-manager output.
 Login uses Pi's native OAuth flow, including device codes and cancellation, with equivalent RPC dialogs.
+
+Choose **Add API key account**, select a provider, name the account, and enter its key.
+Blank keys and keys containing whitespace or terminal controls are rejected; `!command` expressions are not resolved by named profiles.
 
 `default` is reserved for Pi's built-in login.
 Switching affects account identity for the chosen provider, not the model or other sessions' selections.
@@ -108,7 +117,8 @@ Malformed settings block saves instead of being replaced, and failed saves do no
 
 ## 🔒 Security and privacy
 
-The extension refreshes each selected account through the provider's OAuth `refresh()` implementation and converts it through `toAuth()`.
+The extension refreshes each selected OAuth account through the provider's `refresh()` implementation and converts it through `toAuth()`.
+Named API key accounts use their saved key directly, without OAuth refresh or conversion, and never publish an OAuth credential offer.
 It applies the returned API key, headers, and endpoint, then verifies the effective runtime state before reporting success.
 
 If refresh, conversion, provider overlay, or verification fails, the extension installs a non-secret failing runtime credential and aborts turns for that provider.
@@ -116,6 +126,11 @@ It does not silently fall back to Pi's built-in login, an environment API key, o
 Other providers remain independent and usable.
 Selecting `default` removes the package-owned runtime override and restores the exact provider registration that existed before activation.
 Pi's built-in credentials are never deleted.
+
+For named accounts that resolve to an API key, the extension also verifies authentication for every available provider model.
+A conflicting provider or model authentication header fails that provider closed, even if the conflicting model is not selected.
+The extension does not rewrite these settings: remove the conflicting configured header or choose `default` from `/accounts` to recover.
+Unrelated headers and native headers that resolve to the selected credential remain supported.
 
 Session selections are stored as versioned, non-model custom entries in Pi's session JSONL.
 The entries contain only provider IDs and account names, not OAuth credentials.
@@ -144,7 +159,10 @@ The extension applies that header and installs a non-secret runtime selector to 
 Activation verifies the effective Bearer header and fails closed before a turn if Pi does not retain it.
 
 OpenRouter's provider-owned OAuth returns a persistent API key represented as an OAuth credential with an empty refresh token.
-The extension preserves that exact provider credential and does not treat it as a manually managed API-key profile.
+The extension preserves that exact provider credential separately from manually entered API key accounts.
+
+OpenAI (`openai`) and OpenAI Codex (legacy, `openai-codex`) have independent accounts and session selections; credentials are not copied between them.
+Meta's provider renews minted API keys using the saved identity token; an expired identity session requires a new named OAuth login.
 
 Radius OAuth is bound to the active `radius` provider's configured gateway.
 The extension refreshes Radius's dynamic model catalog when the session or effective named credential changes, rebinds a retained selected model to its refreshed endpoint, and fails closed if the selected model disappears or catalog publication fails.
@@ -177,7 +195,8 @@ On first load, if `pi-accounts.json` does not exist and released `pi-codex-accou
 If both files exist, `pi-accounts.json` takes precedence and the legacy file is not imported again.
 The retained legacy refresh token may become stale after `pi-accounts` rotates it, so rollback can require a new Codex login.
 Older releases reject files that contain provider sections added later.
-Before downgrading, stop Pi, back up the file, and remove the `kimi-coding`, `openrouter`, `radius`, and `xai` sections.
+Before downgrading, stop Pi, back up the file, and remove provider sections the older release does not support (including `meta` and `openai`).
+Releases without API key profiles also reject accounts with `type: "api_key"`; remove those accounts and any defaults referring to them from the downgrade copy.
 
 ### Rollback
 
@@ -194,9 +213,8 @@ It is excluded from active workspace checks, version bumps, and publishing.
 
 ## 🚧 Limitations
 
-- This package manages only provider-owned OAuth accounts.
-  It does not store or switch manually entered API-key profiles.
-- Continue using Pi's `auth.json`, environment variables, or `!command` secret-manager resolution for API keys.
+- Named API key profiles cover only the supported login providers, not every API-key-only provider in Pi.
+- Named profiles store literal keys locally; continue using Pi's `auth.json`, environment variables, or `!command` secret-manager resolution for externally managed secrets.
 - It does not rotate accounts automatically, evade quotas, or report usage.
 - It does not support arbitrary custom providers.
 - Live OAuth login and model requests depend on provider service availability and account entitlement.
@@ -218,7 +236,7 @@ The generated runtime is built from `src/index.ts` and does not import back into
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, OAuth accounts, OpenAI Codex, ChatGPT Plus, ChatGPT Pro, Anthropic, Claude Pro, Claude Max, GitHub Copilot, GitHub Enterprise, Kimi For Coding, Kimi Code, OpenRouter, Radius, xAI, Grok, SuperGrok, X Premium, account switching.
+Pi extension, Pi coding agent, OAuth accounts, API key profiles, OpenAI, Meta, Muse, OpenAI Codex, ChatGPT Plus, ChatGPT Pro, Anthropic, Claude Pro, Claude Max, GitHub Copilot, GitHub Enterprise, Kimi For Coding, Kimi Code, OpenRouter, Radius, xAI, Grok, SuperGrok, X Premium, account switching.
 
 ## 📄 License
 

@@ -2,6 +2,8 @@
 // verification helpers share generation-checked fail-closed invariants that are reviewed together.
 import type { ModelAuth, OAuthCredential, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { StoredCredential } from "./account-store.js";
+import { verifyModelApiKeyAuth } from "./model-auth-verification.js";
 import { type AccountProviderAdapter, type AccountProviderId, resolveProviderOAuth } from "./oauth.js";
 import { cloneOAuthCredential, parseCredentialRequest } from "./oauth-credential-source.js";
 
@@ -32,12 +34,12 @@ type RuntimeProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1];
 
 type ProviderAccountState = {
   active?: string;
-  accounts: Record<string, OAuthCredential>;
+  accounts: Record<string, StoredCredential>;
 };
 
 type PendingCredentialOffer = {
   accountName: string;
-  credential: OAuthCredential;
+  credential: StoredCredential;
   operation: number;
   session: object;
 };
@@ -127,7 +129,7 @@ export class RuntimeAuthCoordinator {
       );
     }
 
-    if (credential.expires <= now + REFRESH_SKEW_MS) {
+    if (credential.type === "oauth" && credential.expires <= now + REFRESH_SKEW_MS) {
       let refreshError: unknown;
       let current = state;
       try {
@@ -137,7 +139,7 @@ export class RuntimeAuthCoordinator {
             const latestCredential = getOwnCredential(latest.accounts, active);
             if (!latestCredential) return latest;
             credential = latestCredential;
-            if (latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
+            if (latestCredential.type !== "oauth" || latestCredential.expires > now + REFRESH_SKEW_MS) return latest;
             try {
               refreshSignal.throwIfAborted();
               const refreshed = await resolveProviderOAuth(this.provider, ctx).refresh(latestCredential, refreshSignal);
@@ -188,8 +190,14 @@ export class RuntimeAuthCoordinator {
     let auth: ModelAuth;
     let runtimeApiKey: string;
     try {
-      auth = await resolveProviderOAuth(this.provider, ctx).toAuth(credential);
-      runtimeApiKey = validateModelAuth(auth, this.provider);
+      if (credential.type === "api_key") {
+        if (!this.provider.supportsApiKey) throw new Error(`${this.provider.displayName} does not support API keys.`);
+        auth = { apiKey: credential.key };
+        runtimeApiKey = credential.key;
+      } else {
+        auth = await resolveProviderOAuth(this.provider, ctx).toAuth(credential);
+        runtimeApiKey = validateModelAuth(auth, this.provider);
+      }
     } catch (error) {
       const selection = await this.selectedCredentialMatches(store, active, credential, refreshSignal);
       if (selection.error !== undefined) {
@@ -227,7 +235,11 @@ export class RuntimeAuthCoordinator {
         throw new Error(`Pi did not retain the runtime ${this.provider.displayName} credential.`);
       }
       refreshSignal.throwIfAborted();
-      const catalogModelIds = await this.refreshModelCatalog(ctx, refreshSignal, `account:${credential.access}`);
+      const catalogModelIds = await this.refreshModelCatalog(
+        ctx,
+        refreshSignal,
+        `account:${credentialSecret(credential)}`,
+      );
       if (catalogModelIds) availableModelIds = catalogModelIds;
       await this.rebindRefreshedModel(ctx, operation);
       if (!this.overlay.isCurrent(operation)) {
@@ -246,12 +258,16 @@ export class RuntimeAuthCoordinator {
       refreshSignal.throwIfAborted();
       await this.verifyOverlay(ctx, auth, availableModelIds);
       refreshSignal.throwIfAborted();
+      if (auth.apiKey !== undefined) {
+        await verifyModelApiKeyAuth(ctx, this.provider, auth.apiKey, refreshSignal, availableModelIds);
+        refreshSignal.throwIfAborted();
+      }
       if (!this.overlay.isCurrent(operation)) {
         return { status: "inactive", providerId: this.provider.id };
       }
-      const credentialClone = cloneOAuthCredential(credential);
+      const credentialClone = credential.type === "api_key" ? { ...credential } : cloneOAuthCredential(credential);
       if (!credentialClone) {
-        throw new Error(`${this.provider.displayName} OAuth credential could not be cloned safely.`);
+        throw new Error(`${this.provider.displayName} credential could not be cloned safely.`);
       }
       this.availableModelIds = availableModelIds ? new Set(availableModelIds) : undefined;
       this.pendingCredentialOffer = {
@@ -282,7 +298,7 @@ export class RuntimeAuthCoordinator {
     ) {
       throw new Error(`${this.provider.displayName} could not identify the credential applied to this session.`);
     }
-    return `${pending.accountName}:${pending.credential.access}`;
+    return `${pending.accountName}:${credentialSecret(pending.credential)}`;
   }
 
   publishCredentialOffer(ctx: ExtensionContext, result: EnsureActiveProviderAuthResult, activeIdentity: string): void {
@@ -292,7 +308,8 @@ export class RuntimeAuthCoordinator {
     if (result.status !== "active" || !pending) return;
     if (pending.session !== ctx.sessionManager || pending.accountName !== result.accountName) return;
     if (!this.overlay.isCurrent(pending.operation)) return;
-    if (activeIdentity !== `${pending.accountName}:${pending.credential.access}`) return;
+    if (activeIdentity !== `${pending.accountName}:${credentialSecret(pending.credential)}`) return;
+    if (pending.credential.type !== "oauth") return;
     const credential = cloneOAuthCredential(pending.credential);
     if (!credential) return;
     this.activeCredentialOffer = { credential, session: pending.session };
@@ -375,7 +392,7 @@ export class RuntimeAuthCoordinator {
     ctx: ExtensionContext,
     accountName: string,
     error: unknown,
-    credential?: OAuthCredential,
+    credential?: StoredCredential,
   ): Promise<EnsureActiveProviderAuthResult> {
     return this.failClosed(
       ctx,
@@ -421,7 +438,7 @@ export class RuntimeAuthCoordinator {
     runtimeOverride: RuntimeOverrideSnapshot | undefined,
     accountName: string,
     error: unknown,
-    credential?: OAuthCredential,
+    credential?: StoredCredential,
   ): Promise<EnsureActiveProviderAuthResult> {
     if (!this.overlay.isCurrent(operation)) {
       return { status: "inactive", providerId: this.provider.id };
@@ -453,7 +470,7 @@ export class RuntimeAuthCoordinator {
   private async selectedCredentialMatches(
     store: RuntimeAccountStore,
     accountName: string,
-    expected: OAuthCredential,
+    expected: StoredCredential,
     signal?: AbortSignal,
   ): Promise<{ matches: boolean; error?: unknown }> {
     try {
@@ -820,7 +837,8 @@ function validateModelAuth(auth: unknown, provider: AccountProviderAdapter): str
   return RUNTIME_HEADER_AUTH_SELECTOR;
 }
 
-function readAvailableModelIds(credential: OAuthCredential): string[] | undefined {
+function readAvailableModelIds(credential: StoredCredential): string[] | undefined {
+  if (credential.type === "api_key") return undefined;
   if (!Object.hasOwn(credential, "availableModelIds")) return undefined;
   const value = credential.availableModelIds;
   if (
@@ -833,7 +851,7 @@ function readAvailableModelIds(credential: OAuthCredential): string[] | undefine
   return [...new Set(value)];
 }
 
-function safelyReadAvailableModelIds(credential: OAuthCredential): string[] | undefined {
+function safelyReadAvailableModelIds(credential: StoredCredential): string[] | undefined {
   try {
     return readAvailableModelIds(credential);
   } catch {
@@ -869,11 +887,11 @@ async function getApiKeyAndHeaders(
 }
 
 function defineOwn(
-  accounts: Record<string, OAuthCredential>,
+  accounts: Record<string, StoredCredential>,
   name: string,
-  credential: OAuthCredential,
-): Record<string, OAuthCredential> {
-  const next = Object.assign(Object.create(null), accounts) as Record<string, OAuthCredential>;
+  credential: StoredCredential,
+): Record<string, StoredCredential> {
+  const next = Object.assign(Object.create(null), accounts) as Record<string, StoredCredential>;
   Object.defineProperty(next, name, {
     configurable: true,
     enumerable: true,
@@ -883,7 +901,7 @@ function defineOwn(
   return next;
 }
 
-function getOwnCredential(accounts: Record<string, OAuthCredential>, name: string): OAuthCredential | undefined {
+function getOwnCredential(accounts: Record<string, StoredCredential>, name: string): StoredCredential | undefined {
   return Object.hasOwn(accounts, name) ? accounts[name] : undefined;
 }
 
@@ -950,11 +968,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function redactCredentialError(error: unknown, credential: OAuthCredential): string {
-  return redactTokenText(error instanceof Error ? error.message : String(error), [
-    credential.access,
-    credential.refresh,
-  ]);
+function credentialSecret(credential: StoredCredential): string {
+  return credential.type === "api_key" ? credential.key : credential.access;
+}
+
+function redactCredentialError(error: unknown, credential: StoredCredential): string {
+  return redactTokenText(
+    error instanceof Error ? error.message : String(error),
+    credential.type === "api_key" ? [credential.key] : [credential.access, credential.refresh],
+  );
 }
 
 export function redactTokenText(text: string, exactSecrets: readonly string[] = []): string {

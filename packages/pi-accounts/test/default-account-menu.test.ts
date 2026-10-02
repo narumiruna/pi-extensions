@@ -114,8 +114,8 @@ for (const finish of ["save", "cancel", "dispose", "shutdown"] as const) {
         try {
           renders.push(harness.render().join("\n"));
           if (screen === 0) {
-            // Unsupported current model: login, switch, remove, set default.
-            for (let i = 0; i < 3; i++) harness.handleInput("j");
+            // Unsupported current model: login, switch, remove, add API key, set default.
+            for (let i = 0; i < 4; i++) harness.handleInput("j");
           } else if (screen === 2) {
             if (finish === "cancel") harness.handleInput("\u0003");
             else if (finish === "dispose") {

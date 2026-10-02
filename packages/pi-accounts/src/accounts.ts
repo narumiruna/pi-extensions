@@ -5,9 +5,10 @@ import {
   defineOwn,
   defineOwnMap,
   getOwnCredential,
+  normalizeApiKeyCredential,
   normalizeStoredCredential,
   parseAccountName,
-  type StoredOAuthCredential,
+  type StoredCredential,
 } from "./account-store.js";
 import {
   type AccountProviderAdapter,
@@ -47,6 +48,8 @@ export {
   type ProviderAccountsData,
   parseAccountName,
   parseAccountsData,
+  type StoredApiKeyCredential,
+  type StoredCredential,
   type StoredOAuthCredential,
 } from "./account-store.js";
 
@@ -486,7 +489,7 @@ function createAccountCommand(
   getMenuOwner: (owner: SessionSelectionOwner) => { signal: AbortSignal; isCurrent(): boolean },
 ) {
   return {
-    description: "Open the interactive OAuth account manager",
+    description: "Open the interactive OAuth and API key account manager",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const owner = await ensureSessionOwner(ctx);
       const menuOwner = getMenuOwner(owner);
@@ -499,8 +502,8 @@ function createAccountCommand(
         adapters,
         owner,
         {
-          login: (adapter, name, signal, isCurrent) =>
-            loginAccount(ctx, store, adapter, name, signal, syncProvider, persistSelection, owner, isCurrent),
+          login: (adapter, name, signal, isCurrent, method) =>
+            loginAccount(ctx, store, adapter, name, signal, syncProvider, persistSelection, owner, isCurrent, method),
           switch: (adapter, name, signal, isCurrent) =>
             switchAccount(ctx, store, adapter, name, signal, syncProvider, persistSelection, owner, isCurrent),
           remove: (adapter, name, signal, isCurrent) =>
@@ -522,6 +525,7 @@ async function loginAccount(
   persistSelection: PersistSelection,
   session: SessionSelectionOwner,
   isCurrent: () => boolean,
+  method: "oauth" | "api_key" = "oauth",
 ): Promise<void> {
   const parsed = parseAccountName(nameArg);
   if (!parsed.ok) return ctx.ui.notify(parsed.error, "warning");
@@ -544,8 +548,17 @@ async function loginAccount(
   }
   ctx.ui.notify(`Starting ${adapter.displayName} login for "${parsed.name}".`, "info");
   let credentialSaved = false;
+  let enteredKey: string | undefined;
   try {
-    const credential = normalizeStoredCredential(await loginWithOAuthUI(ctx, adapter, signal), parsed.name);
+    let credential: StoredCredential;
+    if (method === "api_key") {
+      if (!adapter.supportsApiKey) throw new Error(`${adapter.displayName} does not support API keys.`);
+      enteredKey = await ctx.ui.input(`${adapter.displayName} API key (visible input):`, "", { signal });
+      if (enteredKey === undefined || !isCurrent() || signal.aborted) return;
+      credential = normalizeApiKeyCredential(enteredKey);
+    } else {
+      credential = normalizeStoredCredential(await loginWithOAuthUI(ctx, adapter, signal), parsed.name);
+    }
     if (!isCurrent()) return;
     await store.updateProvider(adapter.id, (state) =>
       isCurrent()
@@ -566,7 +579,7 @@ async function loginAccount(
     );
   } catch (error) {
     if (!isCurrent()) return;
-    const message = redactTokenText(errorMessage(error));
+    const message = redactTokenText(errorMessage(error), enteredKey ? [enteredKey] : []);
     ctx.ui.notify(
       credentialSaved
         ? `${adapter.displayName} account "${parsed.name}" was saved, but this session could not select it: ${message}`
@@ -757,7 +770,7 @@ async function selectedCredential(
   providerId: AccountProviderId,
   result: EnsureActiveProviderAuthResult,
   signal?: AbortSignal,
-): Promise<StoredOAuthCredential | undefined> {
+): Promise<StoredCredential | undefined> {
   if (result.status === "inactive") return undefined;
   try {
     const state = await store.readProviderAsync(providerId, signal);

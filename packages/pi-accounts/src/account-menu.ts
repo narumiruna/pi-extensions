@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
-import { type AccountStore, defineOwnMap, getOwnCredential, type StoredOAuthCredential } from "./account-store.js";
+import { type AccountStore, defineOwnMap, getOwnCredential, type StoredCredential } from "./account-store.js";
 import { type AccountProviderAdapter, type AccountProviderId, SUPPORTED_PROVIDER_IDS } from "./oauth.js";
 import type { ProviderAccountSelections } from "./session-selection.js";
 
@@ -20,7 +20,13 @@ type AccountMenuOwner = {
 };
 
 type AccountMenuHandlers = {
-  login(adapter: AccountProviderAdapter, name: string, signal: AbortSignal, isCurrent: () => boolean): Promise<void>;
+  login(
+    adapter: AccountProviderAdapter,
+    name: string,
+    signal: AbortSignal,
+    isCurrent: () => boolean,
+    method?: "oauth" | "api_key",
+  ): Promise<void>;
   switch(adapter: AccountProviderAdapter, name: string, signal: AbortSignal, isCurrent: () => boolean): Promise<void>;
   remove(adapter: AccountProviderAdapter, name: string, signal: AbortSignal, isCurrent: () => boolean): Promise<void>;
 };
@@ -31,7 +37,7 @@ type ProviderMenuState = {
   active: string | undefined;
   defaultAccount: string | undefined;
   selectionInvalid: boolean;
-  accounts: Record<string, StoredOAuthCredential>;
+  accounts: Record<string, StoredCredential>;
 };
 
 export async function showAccountsMenu(
@@ -49,6 +55,7 @@ export async function showAccountsMenu(
   const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
   if (!owner.isCurrent()) return;
   let selectedProviderId: AccountProviderId | undefined;
+  let loginMethod: "oauth" | "api_key" = "oauth";
   type State = {
     states: Map<AccountProviderId, ProviderMenuState>;
     currentProviderId: AccountProviderId | undefined;
@@ -68,6 +75,7 @@ export async function showAccountsMenu(
     | "default-provider"
     | "default-account"
     | "login-route"
+    | "api-key-route"
     | "login-provider"
     | "switch-current"
     | "switch-route"
@@ -93,6 +101,15 @@ export async function showAccountsMenu(
               state.hasAnyStoredAccount,
               state.selectionError !== undefined,
             ),
+            ...([...state.states.values()].some((provider) => provider.adapter.supportsApiKey)
+              ? [
+                  {
+                    id: "api-key",
+                    label: "Add API key account",
+                    action: "api-key-route" as const,
+                  },
+                ]
+              : []),
             {
               id: "default",
               label: "Set default account",
@@ -106,11 +123,13 @@ export async function showAccountsMenu(
       "login-providers": ({ state }) => ({
         kind: "actions",
         title: "Select provider",
-        items: sortedProviderStates(state.states).map((provider) => ({
-          id: provider.id,
-          label: provider.adapter.displayName,
-          action: "login-provider",
-        })),
+        items: sortedProviderStates(state.states)
+          .filter((provider) => loginMethod === "oauth" || provider.adapter.supportsApiKey)
+          .map((provider) => ({
+            id: provider.id,
+            label: provider.adapter.displayName,
+            action: "login-provider",
+          })),
         hint: "back",
       }),
       "switch-providers": ({ state }) => ({
@@ -231,15 +250,22 @@ export async function showAccountsMenu(
           return { kind: "rejected" };
         }
       },
-      "login-route": async () => ({ kind: "to", screen: "login-providers" }),
+      "login-route": async () => {
+        loginMethod = "oauth";
+        return { kind: "to", screen: "login-providers" };
+      },
+      "api-key-route": async () => {
+        loginMethod = "api_key";
+        return { kind: "to", screen: "login-providers" };
+      },
       "login-provider": async ({ itemId, signal }) => {
         if (!isAccountProviderId(itemId)) return { kind: "rejected" };
         const adapter = requireAdapter(adapters, itemId);
         const name = await ctx.ui.input(`Name this ${adapter.displayName} account:`, "work", {
           signal,
         });
-        if (name === undefined || !owner.isCurrent()) return { kind: "close" };
-        await handlers.login(adapter, name, signal, owner.isCurrent);
+        if (name === undefined || !owner.isCurrent() || signal.aborted) return { kind: "close" };
+        await handlers.login(adapter, name, signal, () => owner.isCurrent() && !signal.aborted, loginMethod);
         return { kind: "close" };
       },
       "switch-current": async ({ itemId }) => {
@@ -493,6 +519,10 @@ function providerDisplayName(providerId: AccountProviderId): string {
       return "GitHub Copilot";
     case "kimi-coding":
       return "Kimi For Coding";
+    case "meta":
+      return "Meta";
+    case "openai":
+      return "OpenAI";
     case "openai-codex":
       return "OpenAI Codex";
     case "openrouter":

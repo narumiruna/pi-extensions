@@ -57,6 +57,8 @@ function fakeProvider(
     anthropic: "Anthropic",
     "github-copilot": "GitHub Copilot",
     "kimi-coding": "Kimi For Coding",
+    meta: "Meta",
+    openai: "OpenAI",
     "openai-codex": "OpenAI Codex",
     openrouter: "OpenRouter",
     radius: "Radius",
@@ -99,6 +101,8 @@ function runtimeHarness(mock: ReturnType<typeof createMockPi>, options: { isolat
     { provider: "github-copilot", id: "allowed", baseUrl: "https://default.copilot" },
     { provider: "github-copilot", id: "blocked", baseUrl: "https://default.copilot" },
     { provider: "kimi-coding", id: "k3", baseUrl: "https://api.kimi.com/coding" },
+    { provider: "meta", id: "muse", baseUrl: "https://api.meta.ai/v1" },
+    { provider: "openai", id: "gpt-5.5", baseUrl: "https://api.openai.com/v1" },
     { provider: "openrouter", id: "openrouter-model", baseUrl: "https://openrouter.ai/api/v1" },
     { provider: "radius", id: "radius-model", baseUrl: "https://radius.pi.dev" },
     { provider: "xai", id: "grok-4.3", baseUrl: "https://api.x.ai/v1" },
@@ -257,6 +261,24 @@ test("built-in provider adapters preserve each provider's complete OAuth auth sh
   const byId = new Map(adapters.map((adapter) => [adapter.id, adapter]));
   const base = credential("contract");
 
+  for (const id of ["openai", "meta"] as const) {
+    assert.deepEqual(await byId.get(id)?.oauth.toAuth(base), { apiKey: "access-contract" });
+    assert.equal(byId.get(id)?.requiresApiKeyBridge, false);
+    assert.equal(byId.get(id)?.supportsApiKey, true);
+  }
+  const providersModuleId = "@earendil-works/pi-ai/providers/all";
+  const { builtinProviders } = await import(providersModuleId);
+  assert.deepEqual(
+    [...byId.keys()].sort(),
+    builtinProviders()
+      .filter((provider: { auth: { oauth?: unknown } }) => provider.auth.oauth)
+      .map((provider: { id: string }) => provider.id)
+      .sort(),
+  );
+  for (const provider of builtinProviders()) {
+    const adapter = byId.get(provider.id);
+    if (adapter) assert.equal(adapter.supportsApiKey, !!provider.auth.apiKey);
+  }
   assert.equal(typeof byId.get("openai-codex")?.invalidateConnections, "function");
   assert.deepEqual(await byId.get("openai-codex")?.oauth.toAuth(base), {
     apiKey: "access-contract",
@@ -290,6 +312,8 @@ test("built-in provider adapters preserve each provider's complete OAuth auth sh
     "anthropic",
     "github-copilot",
     "kimi-coding",
+    "meta",
+    "openai",
     "openai-codex",
     "openrouter",
     "radius",
@@ -570,6 +594,8 @@ test("accounts menu summarizes all supported providers and prioritizes current p
       fakeProvider("anthropic"),
       fakeProvider("github-copilot"),
       fakeProvider("kimi-coding"),
+      fakeProvider("meta"),
+      fakeProvider("openai"),
       fakeProvider("openrouter"),
       fakeProvider("radius"),
       fakeProvider("xai"),
@@ -588,6 +614,8 @@ test("accounts menu summarizes all supported providers and prioritizes current p
   assert.match(selectCalls[0]?.title ?? "", /OpenAI Codex: default/);
   assert.match(selectCalls[0]?.title ?? "", /GitHub Copilot: default/);
   assert.match(selectCalls[0]?.title ?? "", /Kimi For Coding: default/);
+  assert.match(selectCalls[0]?.title ?? "", /Meta: default/);
+  assert.match(selectCalls[0]?.title ?? "", /OpenAI: default/);
   assert.match(selectCalls[0]?.title ?? "", /OpenRouter: default/);
   assert.match(selectCalls[0]?.title ?? "", /Radius: default/);
   assert.match(selectCalls[0]?.title ?? "", /xAI: default/);

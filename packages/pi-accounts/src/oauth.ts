@@ -17,6 +17,8 @@ export const SUPPORTED_PROVIDER_IDS = [
   "anthropic",
   "github-copilot",
   "kimi-coding",
+  "meta",
+  "openai",
   "openai-codex",
   "openrouter",
   "radius",
@@ -32,6 +34,7 @@ export type AccountProviderAdapter = {
   displayName: string;
   oauth: ProviderOwnedOAuth;
   requiresApiKeyBridge: boolean;
+  supportsApiKey?: boolean;
   runtimeAuthMode: "api-key" | "authorization-header";
   refreshModelCatalogAfterAuth?: boolean;
   resolveOAuth?: (ctx: Pick<ExtensionContext, "modelRegistry">) => ProviderOwnedOAuth;
@@ -58,7 +61,21 @@ export function createBuiltinProviderAdapters(
   } = {},
 ): AccountProviderAdapter[] {
   const loader = options.loader ?? defaultProviderModuleLoader;
-  return [
+  const adapters: AccountProviderAdapter[] = [
+    {
+      id: "openai",
+      displayName: "OpenAI",
+      requiresApiKeyBridge: false,
+      runtimeAuthMode: "api-key",
+      oauth: createLazyProviderOwnedOAuth("openai", loader),
+    },
+    {
+      id: "meta",
+      displayName: "Meta",
+      requiresApiKeyBridge: false,
+      runtimeAuthMode: "api-key",
+      oauth: createLazyProviderOwnedOAuth("meta", loader),
+    },
     {
       id: "openai-codex",
       displayName: "OpenAI Codex",
@@ -117,6 +134,7 @@ export function createBuiltinProviderAdapters(
       oauth: createLazyProviderOwnedOAuth("xai", loader),
     },
   ];
+  return adapters.map((adapter) => ({ ...adapter, supportsApiKey: adapter.id !== "openai-codex" }));
 }
 
 export function resolveProviderOAuth(
