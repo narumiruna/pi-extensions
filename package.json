@@ -91,7 +91,7 @@
     "@earendil-works/pi-coding-agent": "1.0.0",
     "@earendil-works/pi-server": "1.0.0",
     "@earendil-works/pi-tui": "1.0.0",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.3",
     "concurrently": "^10.0.5",
     "esbuild": "0.28.2",
     "husky": "9.1.7",
