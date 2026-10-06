@@ -61,6 +61,13 @@ export class GoalWaitTimer {
     this.timer = setTimeout(() => {
       if (generation !== this.generation) return;
       this.timer = undefined;
+      // Timers run on a monotonic clock, but resumeAt is wall-clock time. A backward
+      // wall-clock correction makes this callback arrive early; re-arm instead of letting
+      // the deadline check discard the only wake-up.
+      if (Date.now() < resumeAt) {
+        this.schedule(resumeAt, onDue);
+        return;
+      }
       onDue();
     }, delay);
   }

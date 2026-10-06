@@ -458,6 +458,32 @@ test("goal_wait deadline dispatches exactly one continuation through settled gat
   assert.equal(waiting.mock.sentUserMessages.length, 2);
 });
 
+test("a backward wall-clock correction during a wait still wakes the goal at its deadline", async () => {
+  const waiting = await startGoalForTest();
+  const goal = requireLastGoal(waiting.mock);
+  await requireGoalTool(waiting.mock, "goal_wait").execute(
+    "wait-clock",
+    { goal_id: goal.id, reason: "Waiting across a clock correction", resume_after_ms: MIN_GOAL_WAIT_DELAY_MS },
+    new AbortController().signal,
+    () => undefined,
+    waiting.ctx,
+  );
+  await waiting.mock.events.get("agent_end")?.[0]?.(
+    { messages: [{ role: "assistant", stopReason: "toolUse" }] },
+    waiting.ctx,
+  );
+  await waiting.mock.events.get("agent_settled")?.[0]?.({}, waiting.ctx);
+  assert.equal(waiting.mock.sentUserMessages.length, 1);
+
+  // Timers keep monotonic time while the wall clock steps back, as NTP corrections do.
+  vi.setSystemTime(Date.now() - 100);
+  await vi.advanceTimersByTimeAsync(MIN_GOAL_WAIT_DELAY_MS);
+  assert.equal(waiting.mock.sentUserMessages.length, 1, "the early timer must not dispatch before the deadline");
+  await vi.advanceTimersByTimeAsync(100);
+  assert.equal(waiting.mock.sentUserMessages.length, 2, "the re-armed timer wakes the goal at its deadline");
+  assert.equal((lastGoal(waiting.mock) as { waiting?: unknown } | null)?.waiting, undefined);
+});
+
 test("a failed deadline delivery restores waiting and retries exactly once", async () => {
   const waiting = await startGoalForTest();
   const goal = requireLastGoal(waiting.mock);
