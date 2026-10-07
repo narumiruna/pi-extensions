@@ -78,6 +78,9 @@ These TypeSafe AI integrations are experimental and may change as they are evalu
 | --- | --- | --- |
 | [`pi-chrome-devtools`](./packages/pi-chrome-devtools) | Inspect tabs, navigate pages, evaluate JavaScript, and capture screenshots through Chrome DevTools Protocol. | `pi install npm:@narumitw/pi-chrome-devtools` |
 | [`pi-firecrawl`](./packages/pi-firecrawl) | Scrape pages, crawl websites, discover URLs, and search the web with Firecrawl. | `pi install npm:@narumitw/pi-firecrawl` |
+| [`pi-web-search`](./packages/pi-web-search) | Search the web through Cloudflare AI Gateway and Ceramic.ai, with structured results for Codemode. | `pi install npm:@narumitw/pi-web-search` |
+
+`pi-web-search` uses the beta Cloudflare Web Search API, requires Cloudflare credentials, and sends queries to external services that may incur charges. See its [setup and privacy guidance](./packages/pi-web-search/README.md).
 
 ### Task and workspace workflows
 

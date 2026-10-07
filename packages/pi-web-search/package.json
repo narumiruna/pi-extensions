@@ -1,0 +1,53 @@
+{
+  "name": "@narumitw/pi-web-search",
+  "version": "0.1.0",
+  "description": "Pi web search through Cloudflare AI Gateway with configurable tool exposure.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "web-search",
+    "cloudflare",
+    "codemode"
+  ],
+  "files": [
+    "src",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "check": "biome check . && npm run typecheck",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-coding-agent": "1.0.2",
+    "@earendil-works/pi-tui": "1.0.2",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-web-search"
+  }
+}
