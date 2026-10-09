@@ -38,6 +38,8 @@ test("Codex Fast availability is limited to approved model IDs", () => {
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
+    "gpt-6-astra",
+    "gpt-6-luna",
     "gpt-6-sol",
     "gpt-6.1-sol",
   ]);
@@ -63,7 +65,7 @@ test("eligibility requires the official Codex provider, API, and origin", () => 
     codexFastAvailability(model("gpt-5.6-sol", { baseUrl: "https://proxy.example.test" }) as never, true).kind,
     "unavailable",
   );
-  for (const id of ["gpt-6-sol", "gpt-6.1-sol"]) {
+  for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
     assert.equal(codexFastAvailability(model(id, { provider: "openai" }) as never, true).kind, "not-codex");
     assert.equal(codexFastAvailability(model(id, { api: "openai-responses" }) as never, true).kind, "unavailable");
     assert.equal(
@@ -76,7 +78,7 @@ test("eligibility requires the official Codex provider, API, and origin", () => 
 test("request tiers use priority for supported Fast and explicit default otherwise", () => {
   assert.equal(codexFastRequestTier(model() as never, true), "priority");
   assert.equal(codexFastRequestTier(model() as never, false), "default");
-  for (const id of ["gpt-6-sol", "gpt-6.1-sol"]) {
+  for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
     assert.equal(codexFastRequestTier(model(id) as never, true), "priority");
     assert.equal(codexFastRequestTier(model(id) as never, false), "default");
   }
@@ -89,7 +91,7 @@ test("payload rewriting is immutable, preserves fields, and ignores foreign payl
   const rewritten = rewriteCodexFastPayload(payload, model() as never, true);
   assert.deepEqual(rewritten, { ...payload, service_tier: "priority" });
   assert.equal(payload.service_tier, "flex");
-  for (const id of ["gpt-6-sol", "gpt-6.1-sol"]) {
+  for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
     const gpt6Payload = { model: id, input: payload.input };
     assert.deepEqual(rewriteCodexFastPayload(gpt6Payload, model(id) as never, true), {
       ...gpt6Payload,
@@ -134,7 +136,7 @@ test("priority cost correction repairs Pi's default-tier echo fallback without d
   ) as { usage: typeof gpt55Usage };
   assert.equal(corrected55.usage.cost.total, gpt55Usage.cost.total * 2.5);
 
-  for (const id of ["gpt-6-sol", "gpt-6.1-sol"]) {
+  for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
     const gpt6 = model(id, { cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 } });
     const gpt6Usage = {
       ...usage,

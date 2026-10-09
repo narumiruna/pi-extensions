@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { onTestFinished, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
 import usageExtension from "../src/usage.js";
@@ -109,16 +109,16 @@ test("/usage shows Fast state and toggles the same persistent preference", async
   assert.match(notifications[0]?.message ?? "", /Fast mode enabled/);
 });
 
-test("/usage offers Fast for gpt-6-sol", async (t) => {
+test.each(["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"])("/usage offers Fast for %s", async (id) => {
   const originalFetch = globalThis.fetch;
-  t.onTestFinished(() => {
+  onTestFinished(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = response;
   const memory = runtime();
   const mock = createMockPi();
   usageExtension(mock.pi, { settingsRuntime: memory.settingsRuntime });
-  const gpt6 = { ...codexModel, id: "gpt-6-sol", name: "GPT-6 Sol" };
+  const gpt6 = { ...codexModel, id, name: id };
   let title = "";
   let options: string[] = [];
   const { ctx } = createMockContext({
