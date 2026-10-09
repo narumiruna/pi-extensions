@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.64.3
+
+### Patch Changes
+
+- d752df0: Enable Codex Fast priority routing for official `gpt-6-astra` and `gpt-6-luna` requests.
+
 ## 0.64.2
 
 ### Patch Changes
