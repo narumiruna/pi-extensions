@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-inspect",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read-only browser inspector for Pi session context and live tool calls.",
   "type": "module",
   "license": "MIT",
