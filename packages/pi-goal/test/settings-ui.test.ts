@@ -191,7 +191,7 @@ test("standard settings keep all three controls on one level", async () => {
   });
   await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
   assert.match(title, /Pi Goal Settings/);
-  assert.deepEqual(options, ["Automatic-work limit", "No-progress guard", "Managed run RPC"]);
+  assert.deepEqual(options, ["Automatic-work limit", "No-progress guard", "Managed run RPC", "On restore"]);
 });
 
 test("automatic-work settings can open directly from the safety recovery flow", async () => {
