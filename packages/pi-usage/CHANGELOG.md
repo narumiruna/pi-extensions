@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.64.2
+
+### Patch Changes
+
+- 5cf3ee2: Recognize `gpt-6.1-sol` for Codex Fast mode on the official OpenAI Codex endpoint.
+
 ## 0.64.1
 
 ### Patch Changes
