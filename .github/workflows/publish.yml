@@ -6,37 +6,41 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  pull-requests: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: changesets-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Create version PR or publish packages
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success')
-    runs-on: ubuntu-latest
+  checks:
+    name: CI
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      test-base: ${{ github.event.before || '' }}
 
+  select-mode:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.select-mode.outputs.mode }}
+      publish-plan-artifact-id: ${{ steps.select-mode.outputs.publish-plan-artifact-id }}
     steps:
-      - name: Check out source revision
+      - name: Check out repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-          registry-url: "https://registry.npmjs.org"
-          cache: npm
+          package-manager-cache: false
 
       - name: Validate installation policy
         run: node scripts/check-install-policy.mjs
@@ -44,40 +48,127 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Create version pull request or publish to npm
-        id: changesets
-        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+      - name: Select Changesets mode
+        id: select-mode
+        uses: changesets/action/select-mode@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+
+  version:
+    needs: select-mode
+    if: needs.select-mode.outputs.mode == 'version'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Validate installation policy
+        run: node scripts/check-install-policy.mjs
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create or update version pull request
+        uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
-          version-script: npm run version-packages
-          publish-script: npm run publish-packages:sequential
+          script: npm run version-packages
           commit-message: "chore(release): version packages"
           pr-title: "chore(release): version packages"
-          create-github-releases: true
           push-with-git-cli: false
+
+  pack:
+    needs: select-mode
+    if: needs.select-mode.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      pack-dir-artifact-id: ${{ steps.pack.outputs.pack-dir-artifact-id }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Validate installation policy
+        run: node scripts/check-install-policy.mjs
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Pack packages
+        id: pack
+        uses: changesets/action/pack@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          publish-plan-artifact-id: ${{ needs.select-mode.outputs.publish-plan-artifact-id }}
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Validate installation policy
+        run: node scripts/check-install-policy.mjs
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish packed packages
+        id: changesets
+        uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          pack-dir-artifact-id: ${{ needs.pack.outputs.pack-dir-artifact-id }}
+          create-github-releases: true
+          push-git-tags: true
         env:
           NPM_CONFIG_PROVENANCE: "true"
-          PUBLISH_FAILURES_FILE: ${{ runner.temp }}/package-publish-failures.ndjson
-          PUBLISHED_PACKAGES_FILE: ${{ runner.temp }}/published-packages.ndjson
 
       - name: Summarize published packages
         if: always()
         env:
-          PUBLISHED_PACKAGES_FILE: ${{ runner.temp }}/published-packages.ndjson
+          PUBLISHED_PACKAGES: ${{ steps.changesets.outputs.published-packages }}
         run: |
-          if [[ ! -s "$PUBLISHED_PACKAGES_FILE" ]]; then
-            exit 0
-          fi
-
           node --input-type=module <<'NODE'
-          import { appendFileSync, readFileSync } from "node:fs";
+          import { appendFileSync } from "node:fs";
 
-          const releases = readFileSync(process.env.PUBLISHED_PACKAGES_FILE, "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line));
+          const releases = JSON.parse(process.env.PUBLISHED_PACKAGES || "[]");
+          if (releases.length === 0) process.exit(0);
           const rows = releases.map(
-            (release) => `| \`${release.packageName}\` | \`${release.version}\` |`,
+            (release) => `| \`${release.name}\` | \`${release.version}\` |`,
           );
           const summary = [
             "## Successfully published packages",
@@ -90,13 +181,3 @@ jobs:
 
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
           NODE
-
-      - name: Fail after package publication errors
-        if: steps.changesets.outcome == 'success'
-        env:
-          PUBLISH_FAILURES_FILE: ${{ runner.temp }}/package-publish-failures.ndjson
-        run: |
-          if [[ -s "$PUBLISH_FAILURES_FILE" ]]; then
-            echo "::error::One or more packages failed to publish or were skipped."
-            exit 1
-          fi
