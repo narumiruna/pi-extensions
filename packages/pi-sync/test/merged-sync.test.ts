@@ -722,9 +722,9 @@ test("review cancellation and a newer local edit never mutate the reviewed files
     assert.equal(await syncBoth(cancelled.ctx, { ...options, yes: false }, () => f.backend), "cancelled");
     const stale = createMockContext({
       mode: "rpc",
-      select: async () => {
+      select: async (_title: string, choices: string[]) => {
         await fs.writeFile(path.join(agentDir, "AGENTS.md"), "newer writer\n");
-        return "Apply merged transfer";
+        return choices.find((choice) => choice.startsWith("Yes,"));
       },
     });
     await assert.rejects(
@@ -1066,9 +1066,9 @@ test("same-manager in-memory session replacement cancels reviewed authorization"
     let id = "original";
     const context = createMockContext({
       mode: "rpc",
-      select: async () => {
+      select: async (_title: string, choices: string[]) => {
         id = "replacement";
-        return "Apply merged transfer";
+        return choices.find((choice) => choice.startsWith("Yes,"));
       },
     });
     Object.defineProperty((context.ctx as ExtensionContext).sessionManager, "getSessionId", { value: () => id });

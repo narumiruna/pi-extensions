@@ -30,7 +30,7 @@ import {
   writeStateForConfig,
 } from "../state/sync-state-store.js";
 import { confirmMergeReview } from "../ui/merge-review.js";
-import { formatApplyPreview, formatPublicationPreview } from "../ui/sync-format.js";
+import { mergedSyncSummary } from "../ui/merged-sync-summary.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { releaseConflictArtifacts } from "./conflict-artifact-ownership.js";
 import {
@@ -402,29 +402,33 @@ export async function mergeSync(
       await validate();
       if (!config.skipSecretScan && scanSnapshot(upload).length)
         throw new Error("Refusing to merge possible secrets. Review managed content before syncing.");
-      if (
-        !options.yes &&
-        !(await confirmMergeReview(
-          ctx,
-          "Merge independent Pi changes?",
-          [
-            `Sync setup: ${safeTerminalText(config.setupName)}`,
-            `Storage location: ${safeTerminalText(backend.destination)}`,
-            `Sessions: ${config.include.includes("sessions") ? "included — may contain private conversations" : "not included"}`,
-            `Local writes/deletions: ${plan.decisions.filter((item) => item.kind === "accepted" && (item.source === "remote" || item.source === "merged")).length}`,
-            formatApplyPreview(localRaw, after).split("\n").map(safeTerminalText).join("\n"),
-            `Unresolved dependency groups: ${groups.length} (withheld versions stay on each side; baselines do not advance)`,
-            ...groups.flatMap((group) => group.paths.map((filePath) => `Withheld: ${safeTerminalText(filePath)}`)),
-            `Remote publication: ${publish ? "yes" : "no"}`,
-            formatPublicationPreview(rawRemote, upload).split("\n").map(safeTerminalText).join("\n"),
-            `Backend publication: ${backend.capability}`,
-            "The current session is protected. A backup and recovery journal are retained. Resources are not reloaded.",
-          ].join("\n"),
-          options.signal,
-          isCurrent,
-        ))
-      )
-        return "cancelled" as const;
+      if (!options.yes) {
+        const summary = mergedSyncSummary({
+          setupName: config.setupName,
+          destination: backend.destination,
+          localBefore: localRaw,
+          localAfter: after,
+          remoteBefore: rawRemote,
+          remoteAfter: upload,
+          publish,
+          sessions: config.include.includes("sessions"),
+          groups,
+          decisions: plan.decisions,
+          capability: backend.capability,
+        });
+        if (
+          !(await confirmMergeReview(
+            ctx,
+            summary.title,
+            summary.content,
+            options.signal,
+            isCurrent,
+            summary.confirmationLabel,
+            summary.lines,
+          ))
+        )
+          return "cancelled" as const;
+      }
       await validate();
       const refreshed = await createSnapshot(config.snapshotIdentity, snapshotOptions);
       if (!sameHashes(fileHashMap(refreshed), fileHashMap(localRaw)))
