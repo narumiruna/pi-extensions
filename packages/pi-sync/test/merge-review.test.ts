@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { hardWrapTerminalDocument } from "@narumitw/pi-tui-kit";
 import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import { confirmMergeReview } from "../src/ui/merge-review.js";
@@ -56,6 +57,24 @@ function tuiDriver(scripts: readonly (readonly string[])[], keys: Keys, width = 
       const component = await ready;
       frames.push(component.render(width));
       for (const data of script) {
+        if (data.startsWith("resize:")) {
+          harness.setTerminalRows(Number(data.slice("resize:".length)));
+          continue;
+        }
+        if (data === "scroll-without-render") {
+          for (let attempt = 0; attempt < 20; attempt++) component.handleInput(keys.down);
+          continue;
+        }
+        if (data === "scroll-summary") {
+          for (let attempt = 0; attempt < 2000; attempt++) {
+            const frame = component.render(width);
+            frames.push(frame);
+            const position = frame.join("\n").match(/Summary \d+-(\d+)\/(\d+)/);
+            if (position && position[1] === position[2]) break;
+            component.handleInput(keys.down);
+          }
+          continue;
+        }
         if (data === "dispose") {
           component.dispose?.();
           return undefined;
@@ -135,6 +154,115 @@ for (const exit of ["\u0003", "dispose"]) {
 test("external confirmation disposal cannot approve", async () => {
   const driver = tuiDriver([["dispose"]], defaultKeys);
   assert.equal(await confirmMergeReview(driver.ctx, "Update?", "detail", undefined, () => true), false);
+});
+
+const materialSummary = [
+  "Setup: default",
+  "Remote: private bucket",
+  "Local changes: 3 update, 1 delete",
+  "  Update local-a.md",
+  "  Update local-b.md",
+  "  Update local-c.md",
+  "  Delete local-old.md",
+  "Remote file changes: 3 update, 1 delete",
+  "  Update remote-a.md",
+  "  Update remote-b.md",
+  "  Update remote-c.md",
+  "  Delete remote-old.md",
+  "Remote snapshot publication: yes",
+  "Sessions: included — may contain private conversations",
+  "Unresolved groups: 1 — these paths stay unchanged on each side",
+  "Warning: simultaneous remote writes can still race; visible changes are rejected.",
+  "The current session is protected. A backup and recovery journal will be saved.",
+  "Resources will not reload automatically.",
+];
+
+for (const rows of [16, 24]) {
+  test(`compact ${rows}-row confirmation cannot approve hidden facts`, async () => {
+    const driver = tuiDriver([[defaultKeys.down, defaultKeys.confirm]], defaultKeys, 80, rows);
+    assert.equal(
+      await confirmMergeReview(
+        driver.ctx,
+        "Apply local and remote changes?",
+        materialSummary.join("\n"),
+        undefined,
+        () => true,
+        "apply local and remote changes",
+        materialSummary,
+      ),
+      false,
+    );
+  });
+}
+
+for (const keys of [defaultKeys, remappedKeys]) {
+  for (const [width, rows] of [
+    [80, 16],
+    [80, 24],
+    [40, 16],
+    [20, 16],
+  ] as const) {
+    test(`scrollable ${width}x${rows} summary exposes all facts before approval with ${keys.confirm}`, async () => {
+      const driver = tuiDriver([["scroll-summary", keys.down, keys.confirm]], keys, width, rows);
+      assert.equal(
+        await confirmMergeReview(
+          driver.ctx,
+          "Apply local and remote changes?",
+          materialSummary.join("\n"),
+          undefined,
+          () => true,
+          "apply local and remote changes",
+          materialSummary,
+        ),
+        true,
+      );
+      assert.ok(driver.frames.flat().some((line) => line.includes("Summary")));
+      assert.ok(driver.frames.every((frame) => frame.length <= rows - 3));
+      assert.ok(driver.frames.flat().every((line) => visibleWidth(line) <= width));
+      const exposed = driver.frames.flat();
+      for (const line of materialSummary) {
+        for (const fragment of hardWrapTerminalDocument(line, width)) {
+          assert.ok(
+            exposed.some((row) => row.includes(fragment)),
+            fragment,
+          );
+        }
+      }
+    });
+  }
+}
+
+test("coalesced scroll input cannot count unseen layout rows as reviewed", async () => {
+  const driver = tuiDriver([["scroll-without-render", defaultKeys.confirm]], defaultKeys, 80, 16);
+  assert.equal(
+    await confirmMergeReview(
+      driver.ctx,
+      "Apply changes?",
+      materialSummary.join("\n"),
+      undefined,
+      () => true,
+      "apply changes",
+      materialSummary,
+    ),
+    false,
+  );
+});
+
+test("resize racing with Yes resets approval to No and requires a fresh summary review", async () => {
+  const driver = tuiDriver([[defaultKeys.down, "resize:16", defaultKeys.confirm]], defaultKeys, 80, 40);
+  assert.equal(
+    await confirmMergeReview(
+      driver.ctx,
+      "Apply local and remote changes?",
+      materialSummary.join("\n"),
+      undefined,
+      () => true,
+      "apply local and remote changes",
+      materialSummary,
+    ),
+    false,
+  );
+  assert.match(driver.frames.at(-1)?.join("\n") ?? "", /→ No, cancel/);
 });
 
 test("RPC exposes optional paginated read-only details and a fresh confirmation", async () => {

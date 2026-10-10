@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { defineMenu, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
+import { defineMenu, runCustomInteraction, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
+import { createSyncConfirmation, type SyncConfirmationChoice } from "./sync-confirmation.js";
 import { safeTerminalText } from "./terminal-text.js";
 
 type ReviewContext = ExtensionCommandContext | ExtensionContext;
@@ -48,13 +49,23 @@ export async function confirmMergeReview(
         },
       },
     });
-    const result = await runMenu(ctx, menu, { getState: () => undefined, signal, isCurrent, onError: () => {} });
+    const result =
+      ctx.mode === "tui" && ctx.hasUI
+        ? await runCustomInteraction<SyncConfirmationChoice, ReviewContext>(ctx, {
+            create: ({ tui, theme, keybindings, complete }) =>
+              createSyncConfirmation({ title, lines, confirmationLabel, tui, theme, keybindings, complete }),
+            signal,
+            isCurrent,
+            onError: () => {},
+          })
+        : await runMenu(ctx, menu, { getState: () => undefined, signal, isCurrent, onError: () => {} });
     if (!isCurrent() || signal?.aborted) return false;
     if (result.kind === "error") throw new Error("Merge review failed; no transfer was performed.");
     if (result.kind === "unsupported")
       throw new Error("Merge review requires observable TUI or RPC; review the plan before using --yes.");
-    if (result.kind !== "closed") return false;
-    // The action callback runs inside Kit. Keep authorization separate from UI termination.
+    if (result.kind === "completed") choice.value = result.value;
+    else if (result.kind !== "closed") return false;
+    // Keep authorization separate from UI termination in both adapters.
     if (choice.value === "approve") return true;
     if (choice.value !== "details") return false;
     const detail = await runDocumentReview(ctx, {
