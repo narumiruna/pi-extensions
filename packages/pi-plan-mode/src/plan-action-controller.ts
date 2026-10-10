@@ -38,10 +38,10 @@ interface PlanActionControllerOptions {
   ): void | Promise<void>;
   exportPlan(ctx: ExtensionContext, path: string, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
   settings(ctx: ExtensionContext, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
-  save(ctx: ExtensionContext): void;
+  save(ctx: ExtensionContext): void | Promise<void>;
   stay(ctx: ExtensionContext): void;
-  exitReady(ctx: ExtensionContext): void;
-  clearSaved(ctx: ExtensionContext): void;
+  exitReady(ctx: ExtensionContext): void | Promise<void>;
+  clearSaved(ctx: ExtensionContext): void | Promise<void>;
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {

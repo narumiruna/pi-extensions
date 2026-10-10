@@ -6,6 +6,7 @@
 - [Enable inactive built-in search tools in Pi](#enable-inactive-built-in-search-tools-in-pi)
 - [Plan reinjection](#plan-reinjection)
 - [Fresh implementation runtime](#fresh-implementation-runtime)
+- [Auto model switch](#auto-model-switch)
 - [Export destination](#export-destination)
 - [Toggle shortcut](#toggle-shortcut)
 - [Safe shell subcommands](#safe-shell-subcommands)
@@ -13,7 +14,7 @@
 
 ## ⚙️ Settings
 
-Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, and **Plan mode shortcut**.
+Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, **Plan mode shortcut**, **Auto switch model**, **Plan enter model**, and **Plan exit model**.
 You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
 `safeSubcommands` is JSON-only.
 The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
@@ -28,6 +29,15 @@ The shortcut is disabled when `toggleShortcut` is omitted.
     "modelId": "claude-sonnet-4-5"
   },
   "defaultImplementationThinkingLevel": "high",
+  "autoSwitchModel": false,
+  "planModel": {
+    "provider": "anthropic",
+    "modelId": "claude-opus-4-1"
+  },
+  "normalModel": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-5"
+  },
   "defaultPlanExportPath": "PLAN.md",
   "safeSubcommands": {
     "git": ["rev-parse", "blame"],
@@ -154,6 +164,23 @@ These persistent values seed each ready-plan **Start fresh and implement** scree
 The saved-plan direct fresh action applies the persistent values without an extra picker and warns when its configured model falls back.
 Changes save immediately and apply to later fresh implementation actions; an already open fresh-action screen keeps its own menu-local draft.
 They never switch the planning session's current model or thinking level.
+
+### Auto model switch
+
+`autoSwitchModel` switches the session model at Plan-mode boundaries and is off by default.
+`planModel` is the target when Plan mode starts; `normalModel` is the target when Plan mode ends: Plan exit, plan save, or an implementation started from an active Plan session.
+Implementing a previously saved plan outside Plan mode is not a boundary and does not switch models.
+Each model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each, matching the `defaultImplementationModel` shape.
+An omitted model leaves that direction unchanged, and a target that is already active is left untouched.
+
+The switch applies Pi's normal model-change behavior and then restores the current thinking level, so `thinkingLevel`, per-model thinking overrides, and manual thinking changes are unaffected.
+A target outside the current catalogue or without authentication keeps the current model and reports the fallback in a notification; the stored preference is not deleted.
+Switching completes inside the transition before any request that transition starts, so a first implementation request already uses the selected model.
+Fresh implementation sessions keep using their own **Fresh model** choice instead of these fields.
+
+Changing these settings applies to later Plan transitions only.
+Invalid values invalidate the settings document like every other field; a settings read failure falls back to no switching.
+A transition that fails after switching restores the model that was active before the transition instead of a configured target.
 
 ### Export destination
 

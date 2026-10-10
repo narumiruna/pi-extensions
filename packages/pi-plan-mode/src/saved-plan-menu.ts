@@ -13,7 +13,7 @@ interface SavedPlanMenuOptions {
   implementFresh(signal: AbortSignal): void | Promise<void>;
   exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
   settings(signal: AbortSignal): Promise<boolean>;
-  clear(): void;
+  clear(): void | Promise<void>;
 }
 
 export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPlanMenuOptions) {
@@ -78,7 +78,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
         return close ? { kind: "close" } : { kind: "stay" };
       },
       clear: async () => {
-        options.clear();
+        await options.clear();
         return { kind: "close" };
       },
     },

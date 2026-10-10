@@ -12,6 +12,7 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 - Reviews the complete plan before implementation, export, save, further planning, or discard.
 - Implements in the planning session or a fresh linked session with the approved plan.
 - Configures persistent or one-shot destination model and thinking choices for fresh implementation.
+- Optionally switches the session model when Plan mode starts or ends.
 - Restores Plan state and one saved plan across resume and compaction.
 - Configures the Plan tool allowlist, reviewed shell commands, user-trusted subcommands, export path, plan reinjection, shortcut, and thinking level.
 - Publishes statusline state and cooperates anonymously with Workflow Mutex Protocol v1 participants.
@@ -369,11 +370,15 @@ The optional file is read at session start and watched for changes; only an expl
     "modelId": "claude-sonnet-4-5"
   },
   "defaultImplementationThinkingLevel": "high",
+  "autoSwitchModel": true,
+  "planModel": { "provider": "anthropic", "modelId": "claude-opus-4-1" },
+  "normalModel": { "provider": "anthropic", "modelId": "claude-sonnet-4-5" },
   "defaultPlanExportPath": "PLAN.md"
 }
 ```
 
 By default, Plan mode inherits thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
+Model switching at Plan boundaries is off unless `autoSwitchModel` is enabled.
 The shortcut is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
 Until then, the current shortcut binding stays unchanged.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
@@ -388,7 +393,7 @@ Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./do
 Saves are ordered within one Pi process, preserve unknown fields, and publish atomically; separate Pi processes can still race.
 Invalid settings remain untouched and make Settings read-only; session-start failures use safe defaults.
 
-Read the [settings reference](./docs/settings.md) for all accepted values, tool-policy resolution, reinjection choices, shortcut configuration, shell-override examples, and legacy-file migration.
+Read the [settings reference](./docs/settings.md) for all accepted values, tool-policy resolution, reinjection choices, auto model switching, shortcut configuration, shell-override examples, and legacy-file migration.
 
 ## 🧠 Codex-like behavior
 

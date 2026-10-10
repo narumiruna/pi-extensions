@@ -185,6 +185,47 @@ test("Plan-mode settings validate fresh implementation runtime defaults", () => 
   }
 });
 
+test("Plan-mode settings validate and patch auto model switch fields", async () => {
+  const planModel = { provider: "openai-codex", modelId: "plan-model" };
+  const normalModel = { provider: "xiaomi-token-plan-cn", modelId: "normal-model" };
+  assert.deepEqual(normalizePlanModeSettings({ autoSwitchModel: true, planModel, normalModel }), {
+    thinkingLevel: "inherit",
+    autoSwitchModel: true,
+    planModel,
+    normalModel,
+  });
+  assert.deepEqual(normalizePlanModeSettings({ autoSwitchModel: false }), {
+    thinkingLevel: "inherit",
+    autoSwitchModel: false,
+  });
+  assert.equal(normalizePlanModeSettings({ autoSwitchModel: "yes" }), undefined);
+  assert.equal(normalizePlanModeSettings({ planModel: "openai-codex/plan-model" }), undefined);
+  assert.equal(normalizePlanModeSettings({ planModel: { provider: "", modelId: "plan-model" } }), undefined);
+  assert.equal(
+    normalizePlanModeSettings({ normalModel: { provider: "xiaomi-token-plan-cn", modelId: "normal-model", extra: 1 } }),
+    undefined,
+  );
+
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-auto-switch-test-"));
+  try {
+    const settingsPath = join(directory, "pi-plan-mode.json");
+    await writeFile(
+      settingsPath,
+      '{"autoSwitchModel":true,"planModel":{"provider":"openai-codex","modelId":"plan-model"}}\n',
+    );
+    const saved = await updatePlanModeSettings(
+      { autoSwitchModel: false, planModel: null, normalModel },
+      { settingsPath },
+    );
+    assert.deepEqual(saved, { thinkingLevel: "inherit", autoSwitchModel: false, normalModel });
+    assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+      autoSwitchModel: false,
+      normalModel,
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 test("Plan-mode settings ignore unknown top-level fields", () => {
   assert.deepEqual(
     normalizePlanModeSettings({

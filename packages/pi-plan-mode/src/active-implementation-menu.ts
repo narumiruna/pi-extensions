@@ -10,8 +10,8 @@ interface ActiveImplementationMenuOptions {
   show(): void;
   exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
   settings(signal: AbortSignal): Promise<boolean>;
-  startNew(): void;
-  clear(): void;
+  startNew(): void | Promise<void>;
+  clear(): void | Promise<void>;
 }
 
 export async function showActiveImplementationMenu(ctx: ExtensionContext, options: ActiveImplementationMenuOptions) {
@@ -48,11 +48,11 @@ export async function showActiveImplementationMenu(ctx: ExtensionContext, option
         return close ? { kind: "close" } : { kind: "stay" };
       },
       "start-new": async () => {
-        options.startNew();
+        await options.startNew();
         return { kind: "close" };
       },
       clear: async () => {
-        options.clear();
+        await options.clear();
         return { kind: "close" };
       },
     },

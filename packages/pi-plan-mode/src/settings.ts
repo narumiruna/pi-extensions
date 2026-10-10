@@ -88,6 +88,9 @@ export interface PlanModeSettings {
   implementationPlanRetention?: ImplementationPlanRetention;
   defaultImplementationModel?: ImplementationModelOverride;
   defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel;
+  autoSwitchModel?: boolean;
+  planModel?: ImplementationModelOverride;
+  normalModel?: ImplementationModelOverride;
   defaultPlanExportPath?: string;
   safeSubcommands?: SafeSubcommands;
   toggleShortcut?: KeyId;
@@ -98,6 +101,9 @@ export interface PlanModeSettingsPatch {
   implementationPlanRetention?: ImplementationPlanRetention;
   defaultImplementationModel?: ImplementationModelOverride | null;
   defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel | null;
+  autoSwitchModel?: boolean;
+  planModel?: ImplementationModelOverride | null;
+  normalModel?: ImplementationModelOverride | null;
   defaultPlanExportPath?: string | null;
   toggleShortcut?: KeyId | null;
 }
@@ -160,6 +166,21 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
       return undefined;
     }
     settings.defaultImplementationThinkingLevel = defaultImplementationThinkingLevel as PlanModeFixedThinkingLevel;
+  }
+  if (Object.hasOwn(value, "autoSwitchModel")) {
+    const autoSwitchModel = Reflect.get(value, "autoSwitchModel");
+    if (typeof autoSwitchModel !== "boolean") return undefined;
+    settings.autoSwitchModel = autoSwitchModel;
+  }
+  if (Object.hasOwn(value, "planModel")) {
+    const planModel = normalizeImplementationModel(Reflect.get(value, "planModel"));
+    if (!planModel) return undefined;
+    settings.planModel = planModel;
+  }
+  if (Object.hasOwn(value, "normalModel")) {
+    const normalModel = normalizeImplementationModel(Reflect.get(value, "normalModel"));
+    if (!normalModel) return undefined;
+    settings.normalModel = normalModel;
   }
   if (Object.hasOwn(value, "defaultPlanExportPath")) {
     const defaultPlanExportPath = normalizePlanExportPath(Reflect.get(value, "defaultPlanExportPath"));
@@ -317,6 +338,19 @@ export function updatePlanModeSettings(
       delete updated.defaultImplementationThinkingLevel;
     } else if (patch.defaultImplementationThinkingLevel !== undefined) {
       updated.defaultImplementationThinkingLevel = patch.defaultImplementationThinkingLevel;
+    }
+    if (patch.autoSwitchModel !== undefined) updated.autoSwitchModel = patch.autoSwitchModel;
+    if (patch.planModel === null) delete updated.planModel;
+    else if (patch.planModel !== undefined) {
+      const model = normalizeImplementationModel(patch.planModel);
+      if (!model) throw invalidSettingsError(settingsPath, "invalid plan model");
+      updated.planModel = model;
+    }
+    if (patch.normalModel === null) delete updated.normalModel;
+    else if (patch.normalModel !== undefined) {
+      const model = normalizeImplementationModel(patch.normalModel);
+      if (!model) throw invalidSettingsError(settingsPath, "invalid normal model");
+      updated.normalModel = model;
     }
     if (patch.defaultPlanExportPath === null) delete updated.defaultPlanExportPath;
     else if (patch.defaultPlanExportPath !== undefined) {
@@ -505,4 +539,15 @@ export function configuredPlanExportPath(settings: PlanModeSettings) {
 
 export function configuredPlanModeToggleShortcut(settings: PlanModeSettings): KeyId | undefined {
   return settings.toggleShortcut;
+}
+
+export function configuredAutoSwitchModel(settings: PlanModeSettings): boolean {
+  return settings.autoSwitchModel === true;
+}
+
+export function configuredAutoSwitchModelTarget(
+  settings: PlanModeSettings,
+  direction: "plan" | "normal",
+): ImplementationModelOverride | undefined {
+  return direction === "plan" ? settings.planModel : settings.normalModel;
 }

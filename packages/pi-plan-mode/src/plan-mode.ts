@@ -69,6 +69,8 @@ import { assertPlanModeHelperToolsAvailable, planModeHelperToolsAvailable } from
 import { preflightSavedPlanImplementation, savedPlanBlocksNewWorkflow } from "./saved-plan-preflight.js";
 import {
   awaitPlanModeSettingsWrites,
+  configuredAutoSwitchModel,
+  configuredAutoSwitchModelTarget,
   configuredImplementationPlanRetention,
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
@@ -81,6 +83,7 @@ import {
   updatePlanModeSettings,
 } from "./settings.js";
 import {
+  type ImplementationModelOverride,
   type ImplementationRuntimeSelection,
   type PlanCompletionSource,
   type PlanModeState,
@@ -163,6 +166,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let workflowOwner: WorkflowMutexOwner | undefined;
   let currentSession: object | undefined;
   let currentSessionContext: ExtensionContext | undefined;
+  // In-flight auto model switch; session_shutdown awaits it so no continuation runs after shutdown.
+  let pendingAutoModelSwitch: Promise<void> | undefined;
   let interactiveUiPromise: Promise<InteractiveUi> | undefined;
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
@@ -203,8 +208,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   const planExports = createPlanExportController({
     getState: () => state,
     getSettings: () => settings,
-    finishReady: (ctx) => {
-      exitPlanMode(ctx);
+    finishReady: async (ctx) => {
+      await exitPlanMode(ctx);
     },
   });
   const planActions = createPlanActionController({
@@ -226,13 +231,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     settings: showSettings,
     save: savePlanForLater,
     stay: updateUi,
-    exitReady: (ctx) => {
-      if (exitPlanMode(ctx)) {
+    exitReady: async (ctx) => {
+      if (await exitPlanMode(ctx)) {
         ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
       }
     },
-    clearSaved: (ctx) => {
-      if (exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
+    clearSaved: async (ctx) => {
+      if (await exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
     },
   });
 
@@ -310,7 +315,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
           ctx.ui.notify("Plan mode is already active.", "info");
           return;
         }
-        if (enterPlanMode(ctx)) {
+        if (await enterPlanMode(ctx)) {
           ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
         }
         return;
@@ -332,7 +337,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         return;
       }
       if (command === "save") {
-        savePlanForLater(ctx);
+        await savePlanForLater(ctx);
         return;
       }
       if (command === "settings") {
@@ -351,7 +356,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
       if (command === "exit" || command === "off") {
         const notification = planModeDisableNotification();
-        if (exitPlanMode(ctx)) ctx.ui.notify(notification, "info");
+        if (await exitPlanMode(ctx)) ctx.ui.notify(notification, "info");
         return;
       }
       if (command === "tools") {
@@ -371,7 +376,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
       if (prompt) {
         if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== undefined && !state.enabled)) return;
-        enterPlanModeWithPrompt(prompt, ctx);
+        await enterPlanModeWithPrompt(prompt, ctx);
         return;
       }
       if (!ctx.hasUI) {
@@ -572,6 +577,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    // Drain any in-flight auto model switch so the cleanup below cannot interleave with its continuation.
+    if (pendingAutoModelSwitch) await pendingAutoModelSwitch;
     cancelDeferredFreshImplementation();
     const shutdownSession = ctx.sessionManager;
     const runtimeApplication =
@@ -862,7 +869,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
   });
 
-  function enterPlanMode(
+  async function enterPlanMode(
     ctx: ExtensionContext,
     candidate: Pick<PlanModeState, "selectedToolNames" | "selectedToolKeys"> = state,
   ) {
@@ -901,6 +908,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       applyPlanThinkingLevel();
       persistState();
       updateUi(ctx);
+      await applyAutoModelSwitch("plan", ctx);
       return true;
     } catch (error: unknown) {
       rollbackNewActivation(previousState, ctx);
@@ -908,20 +916,28 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
   }
 
-  function enterPlanModeWithPrompt(prompt: string, ctx: ExtensionContext) {
+  async function enterPlanModeWithPrompt(prompt: string, ctx: ExtensionContext) {
     const previousState = state;
+    const previousModel = ctx.model;
     const previousOwner = workflowOwner;
     const wasEnabled = state.enabled;
-    if (!enterPlanMode(ctx)) return;
+    if (!(await enterPlanMode(ctx))) return;
     if (!wasEnabled) {
       ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
     }
     if (sendPlanModeUserMessage(prompt, ctx)) return;
     if (wasEnabled) return;
     rollbackNewActivation(previousState, ctx, previousOwner);
+    if (previousModel) {
+      // Restore the pre-switch model instead of the configured exit model, which may be unset.
+      await applyAutoModelSwitch("normal", ctx, {
+        provider: previousModel.provider,
+        modelId: previousModel.id,
+      });
+    }
   }
 
-  function exitPlanMode(ctx: ExtensionContext) {
+  async function exitPlanMode(ctx: ExtensionContext) {
     if (!allowModeTransition(ctx, "leave or clear Plan mode")) return false;
     const wasEnabled = state.enabled;
     if ((wasEnabled || modeContractsRelevant) && !publishModeContract("normal", ctx)) {
@@ -948,7 +964,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
     persistState();
     updateUi(ctx);
-    if (wasEnabled) releaseWorkflowOwner();
+    if (wasEnabled) {
+      releaseWorkflowOwner();
+      await applyAutoModelSwitch("normal", ctx);
+    }
     return true;
   }
 
@@ -1037,14 +1056,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     return completedPlanIsCurrent(intent) && readyPresentationIntent?.nonce === intent.nonce;
   }
 
-  function togglePlanMode(ctx: ExtensionContext) {
+  async function togglePlanMode(ctx: ExtensionContext) {
     if (state.enabled) {
       const notification = planModeDisableNotification();
-      if (exitPlanMode(ctx)) ctx.ui.notify(notification, "info");
+      if (await exitPlanMode(ctx)) ctx.ui.notify(notification, "info");
       return;
     }
     if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== undefined)) return;
-    if (enterPlanMode(ctx)) {
+    if (await enterPlanMode(ctx)) {
       ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
     }
   }
@@ -1068,7 +1087,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (!sendPlanModeUserMessage(FINALIZE_PLAN_PROMPT, ctx)) finalizationRequest.reset();
   }
 
-  function savePlanForLater(ctx: ExtensionContext) {
+  async function savePlanForLater(ctx: ExtensionContext) {
     const plan = state.enabled ? state.latestPlan?.trim() : undefined;
     if (!plan) {
       const message = "No completed plan is available to save.";
@@ -1100,6 +1119,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     persistState();
     updateUi(ctx);
     releaseWorkflowOwner();
+    await applyAutoModelSwitch("normal", ctx);
     ctx.ui.notify("Plan saved for later. Plan mode disabled.", "info");
   }
 
@@ -1256,6 +1276,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
     persistState();
     updateUi(ctx);
+    const preImplementModel = ctx.model;
+    if (wasEnabled) await applyAutoModelSwitch("normal", ctx);
 
     const handoff = usesConversationHistory
       ? wasEnabled
@@ -1270,6 +1292,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         restoreWorkflowToolPolicy(state.workflowToolPolicy);
         publishModeContract("plan", ctx);
         applyPlanThinkingLevel();
+        if (preImplementModel) {
+          // Restore the pre-implementation model instead of the configured enter model, which may be unset.
+          await applyAutoModelSwitch("plan", ctx, {
+            provider: preImplementModel.provider,
+            modelId: preImplementModel.id,
+          });
+        }
       }
       persistState();
       updateUi(ctx);
@@ -1362,19 +1391,19 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         }),
       ],
       ...lifecycle,
-      start: (signal) => {
+      start: async (signal) => {
         if (signal.aborted || !lifecycle.isCurrent()) return;
-        if (enterPlanMode(ctx)) {
+        if (await enterPlanMode(ctx)) {
           ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
         }
       },
-      startWithTools: (names, signal) => {
+      startWithTools: async (names, signal) => {
         if (signal.aborted || !lifecycle.isCurrent()) return;
         const availableNames = new Set(filterAvailableSelectedToolNames(names, tools, activeToolNames));
         const selectedToolNames = Array.from(
           new Set(names.filter((name) => availableNames.has(name) || retainedInactiveNames.has(name))),
         );
-        if (enterPlanMode(ctx, { selectedToolNames, selectedToolKeys: undefined })) {
+        if (await enterPlanMode(ctx, { selectedToolNames, selectedToolKeys: undefined })) {
           ctx.ui.notify("Plan mode enabled with the selected tools.", "info");
         }
       },
@@ -1399,13 +1428,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       show: () => showStoredPlan(pi, ctx, state),
       exportPlan: (path, signal) => planExports.export(path, ctx, signal, lifecycle.isCurrent),
       settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
-      startNew: () => {
-        if (enterPlanMode(ctx)) {
+      startNew: async () => {
+        if (await enterPlanMode(ctx)) {
           ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
         }
       },
-      clear: () => {
-        if (exitPlanMode(ctx)) ctx.ui.notify("Active implementation plan cleared.", "info");
+      clear: async () => {
+        if (await exitPlanMode(ctx)) ctx.ui.notify("Active implementation plan cleared.", "info");
       },
     });
   }
@@ -1868,6 +1897,97 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       pi.setThinkingLevel(previousThinkingLevel);
     }
     state = { ...state, appliedThinkingLevel: undefined, previousThinkingLevel: undefined };
+  }
+
+  /**
+   * Switches the session model at a Plan boundary when autoSwitchModel is enabled.
+   * Restores the pre-switch thinking level because pi.setModel resets it for the new model;
+   * failures only notify and never block the transition.
+   * Concurrent transitions are chained so a later switch never runs against an in-flight one.
+   */
+  async function applyAutoModelSwitch(
+    direction: "plan" | "normal",
+    ctx: ExtensionContext,
+    targetOverride?: ImplementationModelOverride,
+  ): Promise<void> {
+    // Chain onto any in-flight switch: without serialization the later switch can
+    // observe a still-unchanged model, no-op, and let the earlier one finish last.
+    const previous = pendingAutoModelSwitch;
+    const task = (previous ?? Promise.resolve()).then(() => runAutoModelSwitch(direction, ctx, targetOverride));
+    pendingAutoModelSwitch = task;
+    try {
+      await task;
+    } finally {
+      if (pendingAutoModelSwitch === task) pendingAutoModelSwitch = undefined;
+    }
+  }
+
+  async function runAutoModelSwitch(
+    direction: "plan" | "normal",
+    ctx: ExtensionContext,
+    targetOverride?: ImplementationModelOverride,
+  ): Promise<void> {
+    try {
+      if (!configuredAutoSwitchModel(settings)) return;
+      const target = targetOverride ?? configuredAutoSwitchModelTarget(settings, direction);
+      if (!target) return;
+      // Settings validation does not reject control characters; sanitize before any notification.
+      const targetReference = terminalModelReference(target);
+      const current = ctx.model;
+      if (current && current.provider === target.provider && current.id === target.modelId) return;
+      let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+      try {
+        model = ctx.modelRegistry.find(target.provider, target.modelId);
+      } catch (error: unknown) {
+        ctx.ui.notify(
+          `Auto model switch (${direction}) could not resolve ${targetReference}: ${terminalErrorDetail(error)}. Keeping the current model.`,
+          "warning",
+        );
+        return;
+      }
+      if (!model) {
+        ctx.ui.notify(
+          `Auto model switch (${direction}) target ${targetReference} is unavailable. Keeping the current model.`,
+          "warning",
+        );
+        return;
+      }
+      const session = ctx.sessionManager;
+      const generationAtStart = workflowGeneration;
+      const menuGenerationAtStart = menuGeneration;
+      const thinkingLevel = pi.getThinkingLevel();
+      // The session may be replaced or closed, or another transition may advance the workflow while setModel
+      // awaits; afterwards the captured ctx and thinking snapshot are stale and no notification may be sent.
+      const stale = () =>
+        currentSession !== session ||
+        workflowGeneration !== generationAtStart ||
+        menuGeneration !== menuGenerationAtStart;
+      try {
+        const applied = await pi.setModel(model);
+        if (stale()) return;
+        if (!applied) {
+          ctx.ui.notify(
+            `Auto model switch (${direction}) to ${targetReference} was not applied. Keeping the current model.`,
+            "warning",
+          );
+        }
+      } catch (error: unknown) {
+        if (stale()) return;
+        ctx.ui.notify(
+          `Auto model switch (${direction}) to ${targetReference} failed: ${terminalErrorDetail(error)}. Keeping the current model.`,
+          "warning",
+        );
+      } finally {
+        if (!stale() && pi.getThinkingLevel() !== thinkingLevel) pi.setThinkingLevel(thinkingLevel);
+      }
+    } catch (error: unknown) {
+      // The helper must never reject: mode transitions await it directly.
+      try {
+        ctx.ui.notify(`Auto model switch (${direction}) failed: ${terminalErrorDetail(error)}`, "warning");
+      } catch {
+        // Never propagate a notification failure.
+      }
+    }
   }
 
   function safeGetActiveTools() {

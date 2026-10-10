@@ -6,7 +6,7 @@ import type { PlanModeState } from "./state.js";
 interface PlanExportControllerOptions {
   getState(): PlanModeState;
   getSettings(): PlanModeSettings;
-  finishReady(ctx: ExtensionContext): void;
+  finishReady(ctx: ExtensionContext): void | Promise<void>;
 }
 
 export function createPlanExportController(options: PlanExportControllerOptions) {

@@ -52,7 +52,7 @@ export interface PlanModeSettingsMenuOptions {
   onSaved(settings: PlanModeSettings): void;
 }
 
-type Screen = "settings" | "tools" | "implementation-model" | "export" | "shortcut";
+type Screen = "settings" | "tools" | "implementation-model" | "plan-model" | "normal-model" | "export" | "shortcut";
 type Action =
   | "set-thinking"
   | "open-tools"
@@ -62,6 +62,11 @@ type Action =
   | "open-implementation-model"
   | "set-implementation-model"
   | "set-implementation-thinking"
+  | "set-auto-switch"
+  | "open-plan-model"
+  | "set-plan-model"
+  | "open-normal-model"
+  | "set-normal-model"
   | "open-export"
   | "set-export"
   | "open-shortcut"
@@ -166,6 +171,28 @@ export async function showPlanModeSettings(
                   currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
                   action: "open-shortcut",
                 },
+                {
+                  id: "autoSwitchModel",
+                  label: "Auto switch model",
+                  description: "Switch the session model when Plan mode starts or ends.",
+                  currentValue: state.settings.autoSwitchModel ? "true" : "false",
+                  values: ["true", "false"],
+                  action: "set-auto-switch",
+                },
+                {
+                  id: "planModel",
+                  label: "Plan enter model",
+                  description: "Model to switch to when Plan mode starts. Off keeps the current model.",
+                  currentValue: autoSwitchModelValue(state.settings.planModel, implementationModels),
+                  action: "open-plan-model",
+                },
+                {
+                  id: "normalModel",
+                  label: "Plan exit model",
+                  description: "Model to switch to when Plan mode ends. Off keeps the current model.",
+                  currentValue: autoSwitchModelValue(state.settings.normalModel, implementationModels),
+                  action: "open-normal-model",
+                },
               ],
             },
       tools: ({ state }) => ({
@@ -200,6 +227,32 @@ export async function showPlanModeSettings(
           implementationModels,
           modelItemIds,
         ),
+        enableSearch: true,
+        viewportSize: 10,
+        hint: "back",
+      }),
+      "plan-model": ({ state }) => ({
+        kind: "choice",
+        title: "Plan enter model",
+        lines: [
+          "Off keeps the current model. The switch applies at Plan mode start when Auto switch model is enabled.",
+        ],
+        items: autoSwitchModelItems(implementationModels, modelItemIds),
+        action: "set-plan-model",
+        initialItemId: implementationModelItemId(state.settings.planModel, implementationModels, modelItemIds, "off"),
+        enableSearch: true,
+        viewportSize: 10,
+        hint: "back",
+      }),
+      "normal-model": ({ state }) => ({
+        kind: "choice",
+        title: "Plan exit model",
+        lines: [
+          "Off keeps the current model. The switch applies when Plan mode ends and Auto switch model is enabled.",
+        ],
+        items: autoSwitchModelItems(implementationModels, modelItemIds),
+        action: "set-normal-model",
+        initialItemId: implementationModelItemId(state.settings.normalModel, implementationModels, modelItemIds, "off"),
         enableSearch: true,
         viewportSize: 10,
         hint: "back",
@@ -273,6 +326,40 @@ export async function showPlanModeSettings(
           model
             ? `Fresh implementation model: ${safeModelReference({ provider: model.provider, modelId: model.id })}.`
             : "Fresh implementation model: same as plan.",
+        );
+        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+      },
+      "set-auto-switch": async ({ ctx: actionCtx, value, signal }) => {
+        if (value !== "true" && value !== "false") return { kind: "rejected" };
+        return savePatch(actionCtx, { autoSwitchModel: value === "true" }, signal, `Auto model switch: ${value}.`);
+      },
+      "open-plan-model": async () => ({ kind: "to", screen: "plan-model" }),
+      "set-plan-model": async ({ ctx: actionCtx, itemId, signal }) => {
+        const model = itemId ? modelsByItemId.get(itemId) : undefined;
+        if (itemId !== "off" && !model) return { kind: "rejected" };
+        const planModel = model ? { provider: model.provider, modelId: model.id } : null;
+        const result = await savePatch(
+          actionCtx,
+          { planModel },
+          signal,
+          model
+            ? `Plan enter model: ${safeModelReference({ provider: model.provider, modelId: model.id })}.`
+            : "Plan enter model: off.",
+        );
+        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+      },
+      "open-normal-model": async () => ({ kind: "to", screen: "normal-model" }),
+      "set-normal-model": async ({ ctx: actionCtx, itemId, signal }) => {
+        const model = itemId ? modelsByItemId.get(itemId) : undefined;
+        if (itemId !== "off" && !model) return { kind: "rejected" };
+        const normalModel = model ? { provider: model.provider, modelId: model.id } : null;
+        const result = await savePatch(
+          actionCtx,
+          { normalModel },
+          signal,
+          model
+            ? `Plan exit model: ${safeModelReference({ provider: model.provider, modelId: model.id })}.`
+            : "Plan exit model: off.",
         );
         return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
@@ -432,13 +519,14 @@ function implementationModelValue(settings: PlanModeSettings, models: readonly A
 function implementationModelItems(
   models: readonly AvailableImplementationModel[],
   itemIds: ReadonlyMap<AvailableImplementationModel, string>,
+  first: { id: string; label: string; description: string } = {
+    id: "same-as-plan",
+    label: "Same as plan",
+    description: "Use the planning session model.",
+  },
 ) {
   return [
-    {
-      id: "same-as-plan",
-      label: "Same as plan",
-      description: "Use the planning session model.",
-    },
+    first,
     ...models.map((model) => {
       const reference = safeModelReference({ provider: model.provider, modelId: model.id });
       const name = safeModelMetadata(model.name, "");
@@ -456,11 +544,32 @@ function implementationModelItemId(
   configured: ImplementationModelOverride | undefined,
   models: readonly AvailableImplementationModel[],
   itemIds: ReadonlyMap<AvailableImplementationModel, string>,
+  fallback: string = "same-as-plan",
 ) {
   const model = findAvailableImplementationModel(models, configured);
-  return model ? itemIds.get(model) : "same-as-plan";
+  return model ? itemIds.get(model) : fallback;
 }
 
+function autoSwitchModelValue(
+  configured: ImplementationModelOverride | undefined,
+  models: readonly AvailableImplementationModel[],
+) {
+  if (!configured) return "off";
+  return findAvailableImplementationModel(models, configured)
+    ? safeModelReference(configured)
+    : `off · ${safeModelReference(configured)} unavailable`;
+}
+
+function autoSwitchModelItems(
+  models: readonly AvailableImplementationModel[],
+  itemIds: ReadonlyMap<AvailableImplementationModel, string>,
+) {
+  return implementationModelItems(models, itemIds, {
+    id: "off",
+    label: "Off",
+    description: "Do not switch the model in this direction.",
+  });
+}
 function safeModelReference(model: ImplementationModelOverride) {
   return `${safeModelMetadata(model.modelId, "unknown model")} [${safeModelMetadata(model.provider, "unknown provider")}]`;
 }

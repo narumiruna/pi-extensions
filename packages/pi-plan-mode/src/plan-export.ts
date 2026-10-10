@@ -20,7 +20,7 @@ export interface PlanExportLifecycle {
   signal: AbortSignal;
   isCurrent(): boolean;
   getState?(): PlanModeState;
-  finishReady?(): void;
+  finishReady?(): void | Promise<void>;
 }
 
 export async function exportStoredPlan(
@@ -56,7 +56,7 @@ export async function exportStoredPlan(
 
   if (!isCurrent()) return false;
   const finishedReady = state.enabled && Boolean(state.latestPlan?.trim()) && lifecycle?.finishReady !== undefined;
-  if (finishedReady) lifecycle.finishReady?.();
+  if (finishedReady) await lifecycle.finishReady?.();
   const detail = finishedReady ? " Plan mode disabled." : "";
   ctx.ui.notify(safeNotification(`Plan exported to ${result.path}.${detail}`), "info");
   return true;
