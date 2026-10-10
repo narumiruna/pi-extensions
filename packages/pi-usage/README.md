@@ -115,11 +115,17 @@ Run `/fast` without arguments to toggle Fast for the active supported Codex mode
 Fast is about 1.5× faster and uses more of your plan allowance.
 The `codexFastMode` preference defaults to Off.
 
-Fast currently applies only to official `openai-codex-responses` requests for `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, and `gpt-6.1-sol` at `https://chatgpt.com`.
+Fast applies to official `openai-codex-responses` requests at `https://chatgpt.com` when the current account's Codex model directory advertises a `priority` service tier or the legacy `fast` speed tier.
+Discovery validates the active OAuth account and caches its model capabilities for five minutes, with background refresh on session and model changes.
+`/fast` and `/usage` can refresh capability information before enabling Fast or displaying its controls, while provider request hooks use the account-validated cache and leave directory refresh in the background.
+
 The `fast` label indicates requested priority routing, not a measured speedup; actual availability and speed depend on the service.
-It sends `service_tier: "priority"` while enabled and explicit `service_tier: "default"` otherwise.
+It sends `service_tier: "priority"` while enabled and supported, and explicit `service_tier: "default"` otherwise.
 The statusline adds `fast` only while the preference is effective, for example `codex fast 59% ↻ 2h30m` with the default reset countdown.
-Unsupported models and custom or proxy origins are left unchanged.
+A missing model, incomplete capability information, or first directory failure displays **Unknown** and uses standard routing, with `codex (Fast unknown)` shown when the preference remains enabled.
+Temporary network failures reuse successful discovery for the same account, while authentication rejection or malformed directory data invalidates that account's capability information.
+The preference can still be turned off while capability information is unknown.
+Other providers, APIs, and custom or proxy origins retain their own request payloads.
 
 A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
 Repair or remove an invalid file, then run `/reload` before trying the toggle again.
