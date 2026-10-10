@@ -707,7 +707,7 @@ for (const changed of ["local", "remote"] as const)
           if (choices.includes("Next")) return "Next";
           if (changed === "local") await fs.writeFile(path.join(root, "AGENTS.md"), "newer local");
           else await publish(f, { "AGENTS.md": "newer remote" });
-          return "Apply merged transfer";
+          return choices.find((choice) => choice.startsWith("Yes,"));
         },
       });
       await assert.rejects(

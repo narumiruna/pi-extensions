@@ -1,28 +1,88 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { runDocumentReview } from "@narumitw/pi-tui-kit";
+import { truncateToWidth } from "@earendil-works/pi-tui";
+import { defineMenu, runCustomInteraction, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
+import { createSyncConfirmation, type SyncConfirmationChoice } from "./sync-confirmation.js";
+import { safeTerminalText } from "./terminal-text.js";
 
-/** Cell-exact scrolling in TUI and paginated observable confirmation in RPC. */
+type ReviewContext = ExtensionCommandContext | ExtensionContext;
+
+/** One approval screen; full details are optional and never authorize a transfer. */
 export async function confirmMergeReview(
-  ctx: ExtensionCommandContext | ExtensionContext,
+  ctx: ReviewContext,
   title: string,
   content: string,
   signal: AbortSignal | undefined,
   isCurrent: () => boolean,
-  confirmationLabel = "Apply merged transfer",
+  confirmationLabel = "apply changes",
+  summaryLines?: readonly string[],
 ) {
-  const result = await runDocumentReview(ctx, {
-    title,
-    content,
-    format: { kind: "text" },
-    viewportSize: "adaptive",
-    confirmation: { label: confirmationLabel },
-    hint: "close",
-    signal,
-    isCurrent,
-    onError: () => {},
-  });
-  if (result.kind === "error") throw new Error("Merge review failed; no transfer was performed.");
-  if (result.kind === "unsupported")
-    throw new Error("Merge review requires observable TUI or RPC; review the plan before using --yes.");
-  return result.kind === "confirmed";
+  const lines = summaryLines ?? [
+    ...content
+      .split("\n")
+      .slice(0, 6)
+      .map((line) => truncateToWidth(safeTerminalText(line), 100)),
+    "View details for the complete review.",
+  ];
+  while (isCurrent() && !signal?.aborted) {
+    const choice: { value: "cancel" | "approve" | "details" } = { value: "cancel" };
+    const menu = defineMenu<undefined, "confirm", "choose", ReviewContext>({
+      start: "confirm",
+      screens: {
+        confirm: () => ({
+          kind: "choice",
+          title,
+          lines,
+          initialItemId: "cancel",
+          items: [
+            { id: "cancel", label: "No, cancel" },
+            { id: "approve", label: `Yes, ${confirmationLabel}` },
+            { id: "details", label: "View details" },
+          ],
+          action: "choose",
+          hint: "close",
+        }),
+      },
+      actions: {
+        choose: ({ itemId }) => {
+          if (itemId === "approve" || itemId === "details") choice.value = itemId;
+          return { kind: "close" };
+        },
+      },
+    });
+    const result =
+      ctx.mode === "tui" && ctx.hasUI
+        ? await runCustomInteraction<SyncConfirmationChoice, ReviewContext>(ctx, {
+            create: ({ tui, theme, keybindings, complete }) =>
+              createSyncConfirmation({ title, lines, confirmationLabel, tui, theme, keybindings, complete }),
+            signal,
+            isCurrent,
+            onError: () => {},
+          })
+        : await runMenu(ctx, menu, { getState: () => undefined, signal, isCurrent, onError: () => {} });
+    if (!isCurrent() || signal?.aborted) return false;
+    if (result.kind === "error") throw new Error("Merge review failed; no transfer was performed.");
+    if (result.kind === "unsupported")
+      throw new Error("Merge review requires observable TUI or RPC; review the plan before using --yes.");
+    if (result.kind === "completed") choice.value = result.value;
+    else if (result.kind !== "closed") return false;
+    // Keep authorization separate from UI termination in both adapters.
+    if (choice.value === "approve") return true;
+    if (choice.value !== "details") return false;
+    const detail = await runDocumentReview(ctx, {
+      title: "Sync change details",
+      content,
+      format: { kind: "text" },
+      viewportSize: "adaptive",
+      hint: "back",
+      signal,
+      isCurrent,
+      onError: () => {},
+    });
+    if (!isCurrent() || signal?.aborted) return false;
+    if (detail.kind === "error") throw new Error("Merge review failed; no transfer was performed.");
+    if (detail.kind !== "cancelled" || detail.reason !== "back") return false;
+    // A fresh menu discards remembered selection: returning from details always selects No.
+    // Unlike Pi's native Yes-first dialog, approval requires moving off the safe default.
+  }
+  return false;
 }

@@ -88,6 +88,14 @@ On secondary menus, **Back** and Escape return to the previous screen. In setup 
 Specialized operation and masked-credential prompts show the effective cancellation bindings and keep Ctrl+C as a hard-cancel input when Back is remapped.
 Destructive, credential-bearing, and externally visible operations show exact previews and confirmations.
 
+### Confirm merged changes
+
+A merged **Sync now** transfer shows one confirmation with separate local and remote file changes, remote snapshot publication, session inclusion, and unresolved groups. **No, cancel** is initially selected in TUI mode. On short or narrow terminals, the configured navigation keys first scroll the summary. **Yes** can apply changes only after every summary row has been displayed. A terminal resize resets the review and selects **No**. Cancellation remains available throughout. This scrollable summary intentionally replaces Kit's clipped choice context, and the safe default differs from Pi's native Yes-first confirmation.
+
+**View details** is optional. It shows the complete add/update/delete lists and unresolved paths in an exact scrolling review, or bounded pages in RPC. The review cannot apply changes. Back or Escape returns to confirmation with **No** selected; Ctrl+C cancels the whole TUI flow. RPC offers No first but the client controls visual selection, and protocol cancellation from details returns to confirmation. Session replacement or shutdown closes the flow; local files and remote state are rechecked before transfer.
+
+Unresolved paths stay unchanged on each side. A backup and recovery journal protect the transfer; resources do not reload automatically. Remote snapshot publication is shown separately because it can occur without file-content changes. File lists on the main screen are shortened when needed; details retain every path. `--yes` and automatic-transfer policy are unchanged. Push, pull, and rollback retain their existing confirmation flows.
+
 ### Restore sync access
 
 While an operation is running, the manager shows its command and process ID, disables sync and settings changes, and puts **Refresh operation status** first.
