@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
-  CODEX_FAST_MODEL_IDS,
   codexFastAvailability,
   codexFastRequestTier,
   codexFastStatusLabel,
   correctCodexFastMessageCost,
   rewriteCodexFastPayload,
 } from "../src/codex-fast.js";
+
+const supported = { kind: "supported" } as const;
+const unsupported = { kind: "unsupported" } as const;
+const unknown = { kind: "unknown", reason: "Model capability is unknown." } as const;
 
 const model = (id = "gpt-5.6-sol", overrides: Record<string, unknown> = {}) => ({
   id,
@@ -32,99 +35,74 @@ const usage = {
   cost: { input: 0.00025, output: 0.0003, cacheRead: 0.0000025, cacheWrite: 0, total: 0.0005525 },
 };
 
-test("Codex Fast availability is limited to approved model IDs", () => {
-  assert.deepEqual([...CODEX_FAST_MODEL_IDS].sort(), [
-    "gpt-5.5",
-    "gpt-5.6-luna",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-6-astra",
-    "gpt-6-luna",
-    "gpt-6-sol",
-    "gpt-6.1-sol",
-  ]);
-  for (const id of CODEX_FAST_MODEL_IDS) {
-    assert.deepEqual(codexFastAvailability(model(id) as never, true), {
-      kind: "available",
-      enabled: true,
-    });
-  }
-  for (const id of ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2"]) {
-    assert.equal(codexFastAvailability(model(id) as never, true).kind, "unavailable");
+test("Fast availability follows advertised capabilities instead of model names", () => {
+  for (const id of ["gpt-5.6-sol", "future-codex-model", "gpt-5.4-mini"]) {
+    assert.deepEqual(codexFastAvailability(model(id) as never, true, supported), { kind: "available", enabled: true });
+    assert.equal(codexFastAvailability(model(id) as never, true, unsupported).kind, "unavailable");
+    assert.deepEqual(codexFastAvailability(model(id) as never, true, unknown), unknown);
+    assert.equal(codexFastAvailability(model(id) as never, true).kind, "unknown");
   }
 });
 
-test("eligibility requires the official Codex provider, API, and origin", () => {
-  assert.equal(codexFastAvailability(model() as never, false).kind, "available");
-  assert.equal(codexFastAvailability(model("gpt-5.6-sol", { provider: "openai" }) as never, true).kind, "not-codex");
+test("advertised Fast still requires the official Codex provider, API, and origin", () => {
+  assert.equal(codexFastAvailability(model() as never, false, supported).kind, "available");
   assert.equal(
-    codexFastAvailability(model("gpt-5.6-sol", { api: "openai-responses" }) as never, true).kind,
-    "unavailable",
+    codexFastAvailability(model("future-codex-model", { provider: "openai" }) as never, true, supported).kind,
+    "not-codex",
   );
-  assert.equal(
-    codexFastAvailability(model("gpt-5.6-sol", { baseUrl: "https://proxy.example.test" }) as never, true).kind,
-    "unavailable",
-  );
-  for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
-    assert.equal(codexFastAvailability(model(id, { provider: "openai" }) as never, true).kind, "not-codex");
-    assert.equal(codexFastAvailability(model(id, { api: "openai-responses" }) as never, true).kind, "unavailable");
+  for (const overrides of [{ api: "openai-responses" }, { baseUrl: "https://proxy.example.test" }]) {
     assert.equal(
-      codexFastAvailability(model(id, { baseUrl: "https://proxy.example.test" }) as never, true).kind,
+      codexFastAvailability(model("future-codex-model", overrides) as never, true, supported).kind,
       "unavailable",
     );
   }
 });
 
-test("request tiers use priority for supported Fast and explicit default otherwise", () => {
-  assert.equal(codexFastRequestTier(model() as never, true), "priority");
-  assert.equal(codexFastRequestTier(model() as never, false), "default");
-  for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
-    assert.equal(codexFastRequestTier(model(id) as never, true), "priority");
-    assert.equal(codexFastRequestTier(model(id) as never, false), "default");
-  }
-  assert.equal(codexFastRequestTier(model("gpt-5.4-mini") as never, true), "default");
-  assert.equal(codexFastRequestTier(model("gpt-5.6-sol", { provider: "openai" }) as never, true), undefined);
+test("request tiers use priority only for enabled, advertised Fast", () => {
+  assert.equal(codexFastRequestTier(model() as never, true, supported), "priority");
+  assert.equal(codexFastRequestTier(model() as never, false, supported), "default");
+  assert.equal(codexFastRequestTier(model() as never, true, unsupported), "default");
+  assert.equal(codexFastRequestTier(model() as never, true, unknown), "default");
+  assert.equal(codexFastRequestTier(model() as never, true), "default");
+  assert.equal(
+    codexFastRequestTier(model("future-codex-model", { provider: "openai" }) as never, true, supported),
+    undefined,
+  );
 });
 
-test("payload rewriting is immutable, preserves fields, and ignores foreign payloads", () => {
-  const payload = { model: "gpt-5.6-sol", input: [{ type: "message" }], service_tier: "flex" };
-  const rewritten = rewriteCodexFastPayload(payload, model() as never, true);
-  assert.deepEqual(rewritten, { ...payload, service_tier: "priority" });
+test("payload rewriting preserves fields and uses default when capability is unknown", () => {
+  const payload = { model: "future-codex-model", input: [{ type: "message" }], service_tier: "flex" };
+  const current = model(payload.model) as never;
+  assert.deepEqual(rewriteCodexFastPayload(payload, current, true, supported), {
+    ...payload,
+    service_tier: "priority",
+  });
   assert.equal(payload.service_tier, "flex");
-  for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
-    const gpt6Payload = { model: id, input: payload.input };
-    assert.deepEqual(rewriteCodexFastPayload(gpt6Payload, model(id) as never, true), {
-      ...gpt6Payload,
-      service_tier: "priority",
+  for (const capability of [unsupported, unknown]) {
+    assert.deepEqual(rewriteCodexFastPayload(payload, current, true, capability), {
+      ...payload,
+      service_tier: "default",
     });
   }
-  assert.deepEqual(rewriteCodexFastPayload(payload, model() as never, false), {
+  assert.deepEqual(rewriteCodexFastPayload(payload, current, false, supported), {
     ...payload,
     service_tier: "default",
   });
   assert.equal(
-    rewriteCodexFastPayload(payload, model("gpt-5.6-sol", { provider: "openai" }) as never, true),
+    rewriteCodexFastPayload(payload, model(payload.model, { provider: "openai" }) as never, true, supported),
     undefined,
   );
-  assert.equal(rewriteCodexFastPayload([], model() as never, true), undefined);
+  assert.equal(rewriteCodexFastPayload([], current, true, supported), undefined);
 });
 
-test("priority cost correction repairs Pi's default-tier echo fallback without double charging", () => {
+test("captured priority capability preserves existing cost correction without double charging", () => {
   const message = { role: "assistant", provider: "openai-codex", model: "gpt-5.6-sol", usage };
-  const corrected = correctCodexFastMessageCost(message, model() as never, true) as {
-    usage: typeof usage;
-  };
-  assert.equal(corrected.usage.cost.total, usage.cost.total * 2);
+  const corrected = correctCodexFastMessageCost(message, model() as never, true, supported) as { usage: typeof usage };
+  assert.ok(Math.abs(corrected.usage.cost.total - 0.001105) < 1e-12);
   assert.equal(message.usage.cost.total, usage.cost.total);
-  assert.equal(
-    correctCodexFastMessageCost(corrected, model() as never, true),
-    undefined,
-    "already-corrected cost remains unchanged",
-  );
+  assert.equal(correctCodexFastMessageCost(corrected, model() as never, true, supported), undefined);
 
-  const gpt55 = model("gpt-5.5", {
-    cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-  });
+  const gpt55 = model("gpt-5.5", { cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } });
   const gpt55Usage = {
     ...usage,
     cost: { input: 0.0005, output: 0.0006, cacheRead: 0.000005, cacheWrite: 0, total: 0.001105 },
@@ -133,52 +111,34 @@ test("priority cost correction repairs Pi's default-tier echo fallback without d
     { role: "assistant", provider: "openai-codex", model: "gpt-5.5", usage: gpt55Usage },
     gpt55 as never,
     true,
+    supported,
   ) as { usage: typeof gpt55Usage };
-  assert.equal(corrected55.usage.cost.total, gpt55Usage.cost.total * 2.5);
+  assert.ok(Math.abs(corrected55.usage.cost.total - 0.0027625) < 1e-12);
 
   for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]) {
-    const gpt6 = model(id, { cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 } });
+    const current = model(id, { cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 } });
     const gpt6Usage = {
       ...usage,
       cost: { input: 0.0002, output: 0.0002, cacheRead: 0.000002, cacheWrite: 0, total: 0.000402 },
     };
     const corrected6 = correctCodexFastMessageCost(
       { role: "assistant", provider: "openai-codex", model: id, usage: gpt6Usage },
-      gpt6 as never,
+      current as never,
       true,
+      supported,
     ) as { usage: typeof gpt6Usage };
-    assert.ok(Math.abs(corrected6.usage.cost.total - gpt6Usage.cost.total * 2) < 1e-12);
+    assert.ok(Math.abs(corrected6.usage.cost.total - 0.000804) < 1e-12);
   }
 });
 
-test("cost correction and status labels stay scoped to effective Fast", () => {
+test("cost correction and labels stay scoped to effective Fast", () => {
+  const message = { role: "assistant", provider: "openai-codex", model: "gpt-5.6-sol", usage };
+  assert.equal(correctCodexFastMessageCost(message, model() as never, false, supported), undefined);
+  for (const capability of [unsupported, unknown]) {
+    assert.equal(correctCodexFastMessageCost(message, model() as never, true, capability), undefined);
+  }
   assert.equal(
-    correctCodexFastMessageCost(
-      { role: "assistant", provider: "openai-codex", model: "gpt-5.6-sol", usage },
-      model() as never,
-      false,
-    ),
-    undefined,
-  );
-  assert.equal(
-    correctCodexFastMessageCost(
-      {
-        role: "assistant",
-        provider: "openai-codex",
-        model: "gpt-5.4-mini",
-        usage,
-      },
-      model("gpt-5.4-mini") as never,
-      true,
-    ),
-    undefined,
-  );
-  assert.equal(
-    correctCodexFastMessageCost(
-      { role: "assistant", provider: "openai-codex", model: "other", usage },
-      model() as never,
-      true,
-    ),
+    correctCodexFastMessageCost({ ...message, model: "other" }, model() as never, true, supported),
     undefined,
   );
   assert.equal(codexFastStatusLabel("codex 80% 5h", true), "codex fast 80% 5h");

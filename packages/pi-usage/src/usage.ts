@@ -2,6 +2,7 @@
 // account cache, cancellation, and session lifecycle share one consistency boundary.
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isOfficialCodexModel } from "./codex-fast.js";
 import { FAST_USAGE_WARNING, registerCodexFastMode } from "./codex-fast-runtime.js";
 import {
   type CodexResetAvailability,
@@ -919,7 +920,9 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
                 ? [`Fast mode: ${fastAvailability.enabled ? "On" : "Off"}`, FAST_USAGE_WARNING]
                 : fastAvailability.kind === "unavailable"
                   ? [`Fast mode: Unavailable · ${fastAvailability.reason}`]
-                  : [];
+                  : fastAvailability.kind === "unknown"
+                    ? [`Fast mode: Unknown · ${fastAvailability.reason}`]
+                    : [];
             return {
               kind: "actions",
               title: "Provider usage",
@@ -936,11 +939,12 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
                       },
                     ]
                   : []),
-                ...(fastAvailability.kind === "available"
+                ...(fastAvailability.kind === "available" ||
+                (fastState.settings.codexFastMode && isOfficialCodexModel(ctx.model))
                   ? [
                       {
                         id: "toggle-fast",
-                        label: fastAvailability.enabled ? "Turn Fast mode off" : "Turn Fast mode on",
+                        label: fastState.settings.codexFastMode ? "Turn Fast mode off" : "Turn Fast mode on",
                         description:
                           fastState.kind === "invalid"
                             ? "Repair pi-usage.json and reload before changing Fast mode."
@@ -1114,10 +1118,11 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
           },
           "toggle-fast": async () => {
             const availability = fastRuntime.availability(ctx.model);
-            if (availability.kind !== "available" || fastState.kind === "invalid") {
+            const enabled = settingsRuntime.get().settings.codexFastMode;
+            if ((availability.kind !== "available" && !enabled) || fastState.kind === "invalid") {
               return { kind: "rejected" };
             }
-            const changed = await fastRuntime.toggle(ctx, !availability.enabled, controller.signal);
+            const changed = await fastRuntime.toggle(ctx, !enabled, controller.signal);
             if (!changed) return { kind: "rejected" };
             fastState = settingsRuntime.get();
             return { kind: "stay" };
@@ -1398,6 +1403,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         return;
       }
       try {
+        await fastRuntime.refreshCapabilities(ctx);
         await showMenu(ctx);
       } catch (error) {
         if (isStaleExtensionContextError(error) || isAbortError(error)) return;
@@ -1449,5 +1455,8 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
 
   fastRuntime = registerCodexFastMode(pi, settingsRuntime, (ctx) => startStatusRefresh(ctx, ctx.model, false), {
     registerSessionStart: false,
+    credentialReader,
+    candidateReader: credentialCandidates,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
   });
 }

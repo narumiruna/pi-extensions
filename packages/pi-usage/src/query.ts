@@ -679,6 +679,7 @@ export async function fetchProviderJson(
     body?: Record<string, unknown>;
     redirect?: RequestRedirect;
     userAgent?: boolean;
+    maxSuccessBodyBytes?: number;
     responseError?: (status: number, text: string) => string | undefined;
   } = {},
 ): Promise<Record<string, unknown>> {
@@ -710,7 +711,7 @@ export async function fetchProviderJson(
     if (controller.signal.aborted) throw Object.assign(new Error("Usage query aborted."), { name: "AbortError" });
     const text = await readBoundedResponse(
       response,
-      response.ok ? MAX_SUCCESS_BODY_BYTES : MAX_ERROR_BODY_BYTES,
+      response.ok ? (request.maxSuccessBodyBytes ?? MAX_SUCCESS_BODY_BYTES) : MAX_ERROR_BODY_BYTES,
       !response.ok,
       description,
       controller.signal,

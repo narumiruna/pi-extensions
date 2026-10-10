@@ -4,23 +4,24 @@ import type { PiModel } from "./types.js";
 export const CODEX_FAST_SERVICE_TIER = "priority";
 export const CODEX_STANDARD_SERVICE_TIER = "default";
 
-export const CODEX_FAST_MODEL_IDS: ReadonlySet<string> = new Set([
-  "gpt-5.5",
-  "gpt-5.6-luna",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-6-astra",
-  "gpt-6-luna",
-  "gpt-6-sol",
-  "gpt-6.1-sol",
-]);
+export type CodexFastCapability = { kind: "supported" } | { kind: "unsupported" } | { kind: "unknown"; reason: string };
+
+export const UNKNOWN_CODEX_FAST_CAPABILITY = {
+  kind: "unknown",
+  reason: "Codex Fast capability information has not been fetched.",
+} as const;
 
 export type CodexFastAvailability =
   | { kind: "available"; enabled: boolean }
   | { kind: "not-codex" }
-  | { kind: "unavailable"; reason: string };
+  | { kind: "unavailable"; reason: string }
+  | { kind: "unknown"; reason: string };
 
-export function codexFastAvailability(model: PiModel | undefined, enabled: boolean): CodexFastAvailability {
+export function codexFastAvailability(
+  model: PiModel | undefined,
+  enabled: boolean,
+  capability: CodexFastCapability = UNKNOWN_CODEX_FAST_CAPABILITY,
+): CodexFastAvailability {
   if (model?.provider !== "openai-codex") return { kind: "not-codex" };
   if (!isOfficialCodexModel(model)) {
     return {
@@ -28,7 +29,8 @@ export function codexFastAvailability(model: PiModel | undefined, enabled: boole
       reason: "Fast mode requires the official OpenAI Codex Responses endpoint.",
     };
   }
-  if (!CODEX_FAST_MODEL_IDS.has(model.id)) {
+  if (capability.kind === "unknown") return capability;
+  if (capability.kind === "unsupported") {
     return {
       kind: "unavailable",
       reason: `${model.id} does not advertise Codex Fast support.`,
@@ -37,24 +39,30 @@ export function codexFastAvailability(model: PiModel | undefined, enabled: boole
   return { kind: "available", enabled };
 }
 
-export function codexFastIsEffective(model: PiModel | undefined, enabled: boolean): boolean {
-  return codexFastAvailability(model, enabled).kind === "available" && enabled;
+export function codexFastIsEffective(
+  model: PiModel | undefined,
+  enabled: boolean,
+  capability: CodexFastCapability = UNKNOWN_CODEX_FAST_CAPABILITY,
+): boolean {
+  return codexFastAvailability(model, enabled, capability).kind === "available" && enabled;
 }
 
 export function codexFastRequestTier(
   model: PiModel | undefined,
   enabled: boolean,
+  capability: CodexFastCapability = UNKNOWN_CODEX_FAST_CAPABILITY,
 ): typeof CODEX_FAST_SERVICE_TIER | typeof CODEX_STANDARD_SERVICE_TIER | undefined {
   if (!isOfficialCodexModel(model)) return undefined;
-  return enabled && CODEX_FAST_MODEL_IDS.has(model.id) ? CODEX_FAST_SERVICE_TIER : CODEX_STANDARD_SERVICE_TIER;
+  return enabled && capability.kind === "supported" ? CODEX_FAST_SERVICE_TIER : CODEX_STANDARD_SERVICE_TIER;
 }
 
 export function rewriteCodexFastPayload(
   payload: unknown,
   model: PiModel | undefined,
   enabled: boolean,
+  capability: CodexFastCapability = UNKNOWN_CODEX_FAST_CAPABILITY,
 ): unknown | undefined {
-  const serviceTier = codexFastRequestTier(model, enabled);
+  const serviceTier = codexFastRequestTier(model, enabled, capability);
   if (!serviceTier || !isRecord(payload)) return undefined;
   return { ...payload, service_tier: serviceTier };
 }
@@ -63,9 +71,10 @@ export function correctCodexFastMessageCost(
   message: unknown,
   model: PiModel | undefined,
   fastRequested: boolean,
+  capability: CodexFastCapability = UNKNOWN_CODEX_FAST_CAPABILITY,
 ): unknown | undefined {
   if (
-    !codexFastIsEffective(model, fastRequested) ||
+    !codexFastIsEffective(model, fastRequested, capability) ||
     !isRecord(message) ||
     message.role !== "assistant" ||
     message.provider !== model?.provider ||
@@ -92,7 +101,7 @@ export function codexFastStatusLabel(status: string, enabled: boolean): string {
   return status === "codex" ? "codex fast" : `codex fast${status.slice("codex".length)}`;
 }
 
-function isOfficialCodexModel(model: PiModel | undefined): model is PiModel & { api: "openai-codex-responses" } {
+export function isOfficialCodexModel(model: PiModel | undefined): model is PiModel & { api: "openai-codex-responses" } {
   if (model?.provider !== "openai-codex" || !hasApi(model, "openai-codex-responses")) {
     return false;
   }

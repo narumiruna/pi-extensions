@@ -1,5 +1,5 @@
+export type { CodexFastAvailability, CodexFastCapability } from "./codex-fast.js";
 export {
-  CODEX_FAST_MODEL_IDS,
   CODEX_FAST_SERVICE_TIER,
   CODEX_STANDARD_SERVICE_TIER,
   codexFastAvailability,
@@ -7,7 +7,9 @@ export {
   codexFastRequestTier,
   codexFastStatusLabel,
   correctCodexFastMessageCost,
+  isOfficialCodexModel,
   rewriteCodexFastPayload,
+  UNKNOWN_CODEX_FAST_CAPABILITY,
 } from "./codex-fast.js";
 export type {
   CodexResetAvailability,
