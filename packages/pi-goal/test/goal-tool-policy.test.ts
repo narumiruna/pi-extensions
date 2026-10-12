@@ -532,15 +532,15 @@ test("failed first prompt delivery preserves the stable tool set", async () => {
   const context = createMockContext();
   mock.events.get("session_start")?.[0]?.({}, context.ctx);
 
-  const sendUserMessage = mock.rawPi.sendUserMessage.bind(mock.rawPi);
-  mock.rawPi.sendUserMessage = () => {
+  const sendUserMessage = mock.rawPi.sendMessage.bind(mock.rawPi);
+  mock.rawPi.sendMessage = () => {
     throw new Error("delivery failed");
   };
   await mock.commands.get("goal")?.handler("finish the work", context.ctx);
   assert.equal(lastGoalStatus(mock), null);
   assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked", "goal_wait"]);
 
-  mock.rawPi.sendUserMessage = sendUserMessage;
+  mock.rawPi.sendMessage = sendUserMessage;
   await mock.commands.get("goal")?.handler("finish the work again", context.ctx);
   assert.equal(lastGoalStatus(mock), "active");
   assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "goal_complete", "goal_blocked", "goal_wait"]);
@@ -555,7 +555,7 @@ test("failed first prompt delivery preserves a preexisting external goal-tool se
   mock.events.get("session_start")?.[0]?.({}, context.ctx);
   // Another extension exposes both terminal tools while pi-goal remains locked.
   mock.rawPi.setActiveTools(["read", "goal_complete", "goal_blocked", "goal_wait", "scrape"]);
-  mock.rawPi.sendUserMessage = () => {
+  mock.rawPi.sendMessage = () => {
     throw new Error("delivery failed");
   };
 
@@ -570,7 +570,7 @@ describe("failed lazy reactivation deliveries restore the restrictive tool set",
     const replaced = restoreGoalForTest("paused");
     const original = requireLastGoal(replaced.mock);
     replaced.mock.rawPi.setActiveTools(["read", "bash"]);
-    replaced.mock.rawPi.sendUserMessage = () => {
+    replaced.mock.rawPi.sendMessage = () => {
       throw new Error("replacement delivery failed");
     };
 
@@ -585,7 +585,7 @@ describe("failed lazy reactivation deliveries restore the restrictive tool set",
     const resumed = restoreGoalForTest("paused");
     const original = requireLastGoal(resumed.mock);
     resumed.mock.rawPi.setActiveTools(["read", "bash"]);
-    resumed.mock.rawPi.sendUserMessage = () => {
+    resumed.mock.rawPi.sendMessage = () => {
       throw new Error("resume delivery failed");
     };
 
@@ -600,7 +600,7 @@ describe("failed lazy reactivation deliveries restore the restrictive tool set",
     const edited = restoreGoalForTest("budget_limited");
     const original = requireLastGoal(edited.mock);
     edited.mock.rawPi.setActiveTools(["read", "bash"]);
-    edited.mock.rawPi.sendUserMessage = () => {
+    edited.mock.rawPi.sendMessage = () => {
       throw new Error("edit delivery failed");
     };
 
@@ -620,13 +620,18 @@ test("a stale first kickoff cannot run or roll back a newer replacement", async 
   mock.events.get("session_start")?.[0]?.({}, context.ctx);
   const sentPrompts: string[] = [];
   let rejectFirstSend: ((error: Error) => void) | undefined;
-  mock.rawPi.sendUserMessage = (prompt: string) => {
+  let goalPromptSends = 0;
+  mock.rawPi.sendMessage = (message: { content?: string }) => {
+    const prompt = typeof message.content === "string" ? message.content : JSON.stringify(message);
+    if (!prompt.includes("pi-goal-prompt:")) return undefined;
+    goalPromptSends += 1;
     sentPrompts.push(prompt);
-    if (sentPrompts.length === 1) {
+    if (goalPromptSends === 1) {
       return new Promise<void>((_resolve, reject) => {
         rejectFirstSend = reject;
       });
     }
+    return undefined;
   };
 
   const firstStart = mock.commands.get("goal")?.handler("first objective", context.ctx);
@@ -636,11 +641,23 @@ test("a stale first kickoff cannot run or roll back a newer replacement", async 
   assert.equal(replacement.text, "replacement objective");
   assert.equal(replacement.status, "active");
 
-  assert.deepEqual(mock.events.get("input")?.[0]?.({ source: "extension", text: sentPrompts[0] }, context.ctx), {
-    action: "handled",
-  });
-  assert.equal(mock.events.get("input")?.[0]?.({ source: "extension", text: sentPrompts[1] }, context.ctx), undefined);
-  assert.equal(aborts, 0);
+  // Custom-input turns have no input event; a stale kickoff delivers as a
+  // custom message and must abort at message_start without touching the goal.
+  const staleMessage = {
+    role: "custom",
+    customType: "pi.goal.prompt",
+    content: sentPrompts[0],
+  };
+  await mock.events.get("message_start")?.[0]?.({ message: staleMessage }, context.ctx);
+  assert.equal(aborts, 1);
+  const freshMessage = {
+    role: "custom",
+    customType: "pi.goal.prompt",
+    content: sentPrompts[1],
+  };
+  await mock.events.get("message_start")?.[0]?.({ message: freshMessage }, context.ctx);
+  // Only the stale kickoff aborts; the fresh replacement prompt classifies cleanly.
+  assert.equal(aborts, 1);
   assert.equal(requireLastGoal(mock).id, replacement.id);
   assert.equal(requireLastGoal(mock).status, "active");
 

@@ -23,6 +23,7 @@ test("agent_settled dispatches one idle continuation after agent_end records int
   assert.equal(settled.mock.sentUserMessages.length, 2);
   assert.deepEqual(settled.mock.sentUserMessages.at(-1)?.options, {
     deliverAs: "followUp",
+    triggerTurn: true,
   });
   assert.match(settled.mock.sentUserMessages.at(-1)?.text ?? "", /automatic continuation #1/i);
 
@@ -61,15 +62,15 @@ test("failed settled dispatch retains intent for a later idle retry", async () =
     retried.ctx,
   );
 
-  const sendUserMessage = retried.mock.rawPi.sendUserMessage.bind(retried.mock.rawPi);
-  retried.mock.rawPi.sendUserMessage = () => {
+  const sendUserMessage = retried.mock.rawPi.sendMessage.bind(retried.mock.rawPi);
+  retried.mock.rawPi.sendMessage = () => {
     throw new Error("runtime unavailable");
   };
   await retried.mock.events.get("agent_settled")?.[0]?.({}, retried.ctx);
   assert.equal(retried.mock.sentUserMessages.length, 1);
   assert.match(retried.notifications.at(-1)?.message ?? "", /runtime unavailable/i);
 
-  retried.mock.rawPi.sendUserMessage = sendUserMessage;
+  retried.mock.rawPi.sendMessage = sendUserMessage;
   await retried.mock.events.get("agent_settled")?.[0]?.({}, retried.ctx);
   assert.equal(retried.mock.sentUserMessages.length, 2);
 });
@@ -362,7 +363,7 @@ test("failed continuation delivery does not rethrow through a stale notification
     retried.ctx,
   );
 
-  retried.mock.rawPi.sendUserMessage = () => {
+  retried.mock.rawPi.sendMessage = () => {
     throw new Error("runtime unavailable");
   };
   const staleUi = retried.ctx as { ui: { notify: (message: string, level?: string) => void } };

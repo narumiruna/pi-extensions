@@ -694,7 +694,7 @@ test("manual clear emits one cleared terminal event for its managed run", async 
 
 test("failed kickoff emits active then one cleared rollback event", async () => {
   const mock = createMockPi({ activeTools: ["read", "bash"] });
-  mock.rawPi.sendUserMessage = () => {
+  mock.rawPi.sendMessage = () => {
     throw new Error("kickoff failed");
   };
   registerGoal(mock);
@@ -715,7 +715,7 @@ test("failed kickoff emits active then one cleared rollback event", async () => 
 test("a pending start cannot emit for a replacement run after supersession", async () => {
   const mock = createMockPi({ activeTools: ["read", "bash"] });
   let releaseKickoff!: () => void;
-  mock.rawPi.sendUserMessage = () =>
+  mock.rawPi.sendMessage = () =>
     new Promise<void>((resolve) => {
       releaseKickoff = resolve;
     });
@@ -725,7 +725,7 @@ test("a pending start cannot emit for a replacement run after supersession", asy
   startRun(mock, "first-run");
   await mock.commands.get("goal")?.handler("clear", context.ctx);
 
-  mock.rawPi.sendUserMessage = () => undefined;
+  mock.rawPi.sendMessage = () => undefined;
   const secondEvents = observeRun(mock, "second-run");
   startRun(mock, "second-run", { objective: "replacement run" });
   await flush();
@@ -824,7 +824,7 @@ test("shutdown cancels a queued terminal publication from the old session", asyn
 test("shutdown invalidates a start continuation still awaiting kickoff delivery", async () => {
   const mock = createMockPi({ activeTools: ["read", "bash"] });
   let rejectKickoff!: (error: Error) => void;
-  mock.rawPi.sendUserMessage = () =>
+  mock.rawPi.sendMessage = () =>
     new Promise<void>((_resolve, reject) => {
       rejectKickoff = reject;
     });

@@ -8,6 +8,7 @@ import {
   reconcileInactiveGoalContextContract,
 } from "./goal-contract.js";
 import { type ActiveGoal, loadGoalStateFromSession } from "./persistence.js";
+import { goalPromptMessageText, isGoalPromptMessage } from "./prompt-channel.js";
 import { assistantClaimsCompletion } from "./prompts.js";
 import type { GoalRunController } from "./run-protocol.js";
 import {
@@ -125,9 +126,13 @@ export function registerGoalLifecycle(
       }
       runtime.updateStatus(ctx, runtime.activeGoal);
       runtime.restoreGoalWaitTimer(ctx);
-      if (runtime.settings.resume.autoResumeOnRestore) {
+      const resumeMode = runtime.settings.resume.autoResumeOnRestore;
+      if (resumeMode === "auto") {
         runtime.requestContinuation(runtime.activeGoal);
         runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
+      } else if (resumeMode === "ask") {
+        // Fire-and-forget: the dialog may outlive this session_start handler.
+        void promptRestoreChoice(ctx, runtime.activeGoal);
       }
       return;
     }
@@ -327,6 +332,54 @@ export function registerGoalLifecycle(
     if (message.role === "custom") {
       if (Reflect.get(message, "customType") === GOAL_CONTRACT_MESSAGE_TYPE) return;
       if (runtime.isActiveBudgetWrapUpMessage(message)) return;
+      if (isGoalPromptMessage(message)) {
+        // Custom-input turns do not fire before_agent_start, so the full run
+        // classification (owned goal prompt / continuation marker / cancelled
+        // prompt / workflow ownership) runs here at message_start.
+        const prompt = goalPromptMessageText(message);
+        if (runtime.consumeCancelledGoalPrompt(prompt) || runtime.consumeCancelledContinuationPrompt(prompt)) {
+          // Abort kills this run's drain loop, so a newer queued prompt could be
+          // stranded. Schedule a continuation to reclaim the goal afterwards.
+          if (runtime.activeGoal?.status === "active" && runtime.ownsWorkflow(runtime.activeGoal)) {
+            runtime.requestContinuation(runtime.activeGoal);
+            runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
+          }
+          runtime.beginAgentRun(null, undefined);
+          abortCurrentTurn(ctx);
+          return;
+        }
+        const ownedPrompt = runtime.consumeOwnedGoalPrompt(prompt);
+        const continuationGoalId = ownedPrompt ? undefined : runtime.markContinuationStarted(prompt);
+        const ownedGoalId = ownedPrompt?.goalId ?? continuationGoalId;
+        if (runtime.activeGoal?.waiting) runtime.clearGoalWait(ctx, runtime.activeGoal.id);
+        if (runtime.guardAbortGoalId === runtime.activeGoal?.id) {
+          runtime.guardAbortGoalId = undefined;
+        }
+        if (!ownedGoalId) {
+          beginNonGoalFollowUp(ctx, false);
+          return;
+        }
+        if (
+          runtime.activeGoal?.id !== ownedGoalId ||
+          runtime.activeGoal.status !== "active" ||
+          !runtime.ownsWorkflow(runtime.activeGoal)
+        ) {
+          runtime.beginAgentRun(null, undefined);
+          abortCurrentTurn(ctx);
+          return;
+        }
+        runtime.beginAgentRun(ownedGoalId, ownedPrompt ? "manual" : "automatic");
+        if (!runtime.goalToolsAvailable()) {
+          runtime.pauseGoalForUnavailableTools(ctx, true);
+          return;
+        }
+        if (ownedPrompt?.resetSafetyEpoch) {
+          runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
+        }
+        runtime.persistGoal(runtime.activeGoal);
+        runtime.updateStatus(ctx, runtime.activeGoal);
+        return;
+      }
       if (runtime.activeGoal?.waiting) runtime.clearGoalWait(ctx, runtime.activeGoal.id);
       if (runtime.guardAbortGoalId === runtime.activeGoal?.id) {
         runtime.guardAbortGoalId = undefined;

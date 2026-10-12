@@ -146,7 +146,7 @@ test("failed start from inert legacy queue state preserves the old queue", async
   });
 
   mock.events.get("session_start")?.[0]?.({}, context.ctx);
-  mock.rawPi.sendUserMessage = () => {
+  mock.rawPi.sendMessage = () => {
     throw new Error("runtime became busy");
   };
 
@@ -305,7 +305,7 @@ test("stopped input and failed resume preserve the exact safety epoch", async ()
   restored.mock.events.get("input")?.[0]?.({ source: "interactive", text: "what happened?" }, restored.ctx);
   assert.deepEqual(pickSafetyState(requireLastGoal(restored.mock)), safety);
 
-  restored.mock.rawPi.sendUserMessage = () => {
+  restored.mock.rawPi.sendMessage = () => {
     throw new Error("resume delivery failed");
   };
   await restored.mock.commands.get("goal")?.handler("resume", restored.ctx);
@@ -410,7 +410,7 @@ test("resume accepts a restored active idle goal with a fresh goal_id", async ()
 
 test("failed resume delivery restores the stopped state and original goal_id", async () => {
   const restored = restoreGoalForTest("blocked");
-  restored.mock.rawPi.sendUserMessage = () => {
+  restored.mock.rawPi.sendMessage = () => {
     throw new Error("runtime became busy");
   };
 
@@ -480,7 +480,7 @@ test("failed start delivery clears a new goal and restores a replaced stopped go
   registerGoal(freshMock.pi);
   const freshContext = createMockContext();
   freshMock.events.get("session_start")?.[0]?.({}, freshContext.ctx);
-  freshMock.rawPi.sendUserMessage = () => {
+  freshMock.rawPi.sendMessage = () => {
     throw new Error("start delivery failed");
   };
   await freshMock.commands.get("goal")?.handler("new objective", freshContext.ctx);
@@ -499,7 +499,7 @@ test("failed start delivery clears a new goal and restores a replaced stopped go
   });
   const activeOriginal = requireLastGoal(activeReplacement.mock);
   activeReplacementBranch.push(assistantUsageEntry({ totalTokens: 5 }));
-  activeReplacement.mock.rawPi.sendUserMessage = () => {
+  activeReplacement.mock.rawPi.sendMessage = () => {
     throw new Error("active replacement delivery failed");
   };
   await activeReplacement.mock.commands.get("goal")?.handler("active replacement objective", activeReplacement.ctx);
@@ -520,7 +520,7 @@ test("failed start delivery clears a new goal and restores a replaced stopped go
   const replacement = await startGoalForTest();
   await replacement.mock.commands.get("goal")?.handler("pause", replacement.ctx);
   const original = requireLastGoal(replacement.mock);
-  replacement.mock.rawPi.sendUserMessage = () => {
+  replacement.mock.rawPi.sendMessage = () => {
     throw new Error("replacement delivery failed");
   };
   await replacement.mock.commands.get("goal")?.handler("replacement objective", replacement.ctx);
@@ -541,7 +541,7 @@ test("failed active edit delivery restores the exact prior active goal", async (
   let aborts = 0;
   const edited = await startGoalForTest({ abort: () => aborts++ });
   const original = requireLastGoal(edited.mock);
-  edited.mock.rawPi.sendUserMessage = () => {
+  edited.mock.rawPi.sendMessage = () => {
     throw new Error("active edit delivery failed");
   };
 

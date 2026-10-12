@@ -185,7 +185,9 @@ function modelMessageText(message) {
 }
 
 function userMessageText(message) {
-  return message.role === "user" ? modelMessageText(message) : "";
+  if (message.role === "user") return modelMessageText(message);
+  if (message.role === "custom" && message.customType === "pi.goal.prompt") return modelMessageText(message);
+  return "";
 }
 
 async function agentDirectoryIsolationScenario() {
@@ -391,18 +393,61 @@ async function automaticRetryOwnershipScenario() {
 
 async function queuedInputScenario() {
   const observedPrompts = [];
+  const contextDump = [];
   const harness = await createHarness(
     [
       (context) => {
         observedPrompts.push(context.messages.map(userMessageText).filter(Boolean).at(-1) ?? "");
+        contextDump.push(
+          context.messages
+            .map(
+              (m) =>
+                `${m.role}:${
+                  m.role === "user"
+                    ? String(m.content?.[0]?.text ?? m.content ?? "")
+                        .slice(0, 30)
+                        .split("\n")[0]
+                    : ""
+                }`,
+            )
+            .join(" | "),
+        );
         return fauxAssistantMessage("x".repeat(120));
       },
       (context) => {
         observedPrompts.push(context.messages.map(userMessageText).filter(Boolean).at(-1) ?? "");
+        contextDump.push(
+          context.messages
+            .map(
+              (m) =>
+                `${m.role}:${
+                  m.role === "user"
+                    ? String(m.content?.[0]?.text ?? m.content ?? "")
+                        .slice(0, 30)
+                        .split("\n")[0]
+                    : ""
+                }`,
+            )
+            .join(" | "),
+        );
         return fauxAssistantMessage("Queued request handled.");
       },
       (context) => {
         observedPrompts.push(context.messages.map(userMessageText).filter(Boolean).at(-1) ?? "");
+        contextDump.push(
+          context.messages
+            .map(
+              (m) =>
+                `${m.role}:${
+                  m.role === "user"
+                    ? String(m.content?.[0]?.text ?? m.content ?? "")
+                        .slice(0, 30)
+                        .split("\n")[0]
+                    : ""
+                }`,
+            )
+            .join(" | "),
+        );
         return completionResponse(context);
       },
     ],
@@ -416,7 +461,10 @@ async function queuedInputScenario() {
     await harness.session.agent.waitForIdle();
     const queuedIndex = observedPrompts.findIndex((text) => text.includes("queued user work"));
     const continuationIndex = observedPrompts.findIndex((text) => text.includes("pi-goal-continuation:"));
-    assert.ok(queuedIndex >= 0, "expected queued work to reach the model");
+    assert.ok(
+      queuedIndex >= 0,
+      `expected queued work to reach the model; shapes=${JSON.stringify(contextDump)} observed=${JSON.stringify(observedPrompts.map((t) => t.slice(0, 60)))}`,
+    );
     assert.ok(continuationIndex > queuedIndex, "continuation must yield to queued work");
   } finally {
     await harness.cleanup();

@@ -17,6 +17,7 @@ import {
   type SafetyPauseCause,
   serializeGoalState,
 } from "./persistence.js";
+import { type GoalPromptMessageDetails, goalPromptDetails, sendGoalPromptMessage } from "./prompt-channel.js";
 import { buildCompletionClaimPrompt, buildContinuePrompt, type GoalStatus } from "./prompts.js";
 import { nextToolFreeRepeatState, resetGoalSafetyEpoch } from "./safety.js";
 
@@ -39,6 +40,7 @@ export interface ContinuationTicket {
   iteration: number;
   marker: string;
   prompt: string;
+  details: GoalPromptMessageDetails;
 }
 
 export interface BudgetWrapUp {
@@ -392,6 +394,7 @@ export class GoalRuntime {
       iteration: goal.iteration,
       marker,
       prompt: buildContinuePrompt(goal, marker),
+      details: goalPromptDetails("continue", goal, goal.iteration),
     };
     return true;
   }
@@ -409,6 +412,7 @@ export class GoalRuntime {
       iteration: goal.iteration,
       marker,
       prompt: buildCompletionClaimPrompt(goal, marker, claimCount),
+      details: goalPromptDetails("claim", goal, goal.iteration),
     };
     return true;
   }
@@ -454,7 +458,11 @@ export class GoalRuntime {
     this.continuationIntent = undefined;
     this.continuationDelivery = intent;
     try {
-      this.pi.sendUserMessage(intent.prompt, { deliverAs: "followUp" });
+      // Custom-input turns do not fire before_agent_start, so the goal-context
+      // contract that path used to inject must already be in the session before
+      // the prompt is queued.
+      this.ensureGoalContextContract(ctx, this.activeGoal);
+      sendGoalPromptMessage(this.pi, intent.prompt, intent.details, "followUp");
       return true;
     } catch (error) {
       if (this.continuationDelivery?.marker === intent.marker) {
@@ -976,12 +984,22 @@ export class GoalRuntime {
     ctx: StatusContext,
     goalId: string,
     prompt: string,
+    details: GoalPromptMessageDetails,
     resetSafetyEpoch = true,
     isCurrent?: () => boolean,
   ) {
     if (this.activeGoal?.id !== goalId || !this.ownsWorkflow(this.activeGoal)) return false;
     const pending = this.rememberPendingGoalPrompt(goalId, prompt, resetSafetyEpoch);
-    const sent = await sendPrompt(this.pi, ctx, pending.prompt, isCurrent);
+    // Custom-input turns do not fire before_agent_start, so the goal-context
+    // contract that path used to inject must already be in the session before
+    // the prompt is queued. Best effort: a failed contract send must not break
+    // the prompt delivery path.
+    try {
+      this.ensureGoalContextContract(ctx, this.activeGoal);
+    } catch {
+      // ignore — reconcile re-adds the contract at the next context event
+    }
+    const sent = await sendPrompt(this.pi, ctx, pending.prompt, details, isCurrent);
     if (!sent || (isCurrent && !isCurrent()) || this.activeGoal?.id !== goalId || !this.ownsWorkflow(this.activeGoal)) {
       this.pendingGoalPromptMarkers.delete(pending.marker);
       return false;
@@ -1360,6 +1378,21 @@ export class GoalRuntime {
     if (oldest) this.claimedContinuationMarkers.delete(oldest);
   }
 
+  /**
+   * Custom-input turns start asynchronously, so a queued owned prompt can
+   * outlive the goal instance it was recorded for (e.g. /goal edit rotates the
+   * goal while the kickoff turn has not started yet). Cancel those stale
+   * pending prompts so their late delivery aborts instead of conflicting.
+   */
+  cancelPendingGoalPromptsForGoal(goalId: string) {
+    for (const [marker, pending] of this.pendingGoalPromptMarkers) {
+      if (pending.goalId === goalId) {
+        this.pendingGoalPromptMarkers.delete(marker);
+        this.rememberCancelledGoalPromptMarker(marker, pending.prompt);
+      }
+    }
+  }
+
   consumeOwnedGoalPrompt(prompt: string) {
     return this.consumePendingGoalPrompt(prompt);
   }
@@ -1552,9 +1585,15 @@ function goalContractEntries(ctx: StatusContext) {
   };
 }
 
-async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string, isCurrent?: () => boolean) {
+async function sendPrompt(
+  pi: ExtensionAPI,
+  ctx: StatusContext,
+  prompt: string,
+  details: GoalPromptMessageDetails,
+  isCurrent?: () => boolean,
+) {
   try {
-    await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    await sendGoalPromptMessage(pi, prompt, details, "followUp");
     return true;
   } catch (error) {
     if (!isCurrent || isCurrent()) {

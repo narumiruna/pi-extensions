@@ -2,6 +2,7 @@ import { currentTokenTotal, formatTokenCount } from "./accounting.js";
 import { validateObjective } from "./command.js";
 import { notifyTerminal, safeGoalMenuText } from "./errors.js";
 import type { ActiveGoal } from "./persistence.js";
+import { goalPromptDetails } from "./prompt-channel.js";
 import {
   buildGoalPrompt,
   buildObjectiveUpdatedPrompt,
@@ -41,6 +42,7 @@ export class GoalCommandController {
     onActivated?: (goal: ActiveGoal) => void,
     isActivationCurrent?: (goal: ActiveGoal) => boolean,
     isRequestCurrent?: () => boolean,
+    suppressActivationPrompt = false,
   ) {
     if (isRequestCurrent && !isRequestCurrent()) return;
     const validationError = validateObjective(objective);
@@ -88,6 +90,7 @@ export class GoalCommandController {
 
     this.runtime.clearGoalWaitTimer();
     this.runtime.cancelContinuationWork();
+    if (existingGoal) this.runtime.cancelPendingGoalPromptsForGoal(existingGoal.id);
     this.runtime.clearGoalRecovery();
     this.runtime.clearBudgetWrapUp();
     this.runtime.clearStaleGoalToolCallBlock();
@@ -100,10 +103,16 @@ export class GoalCommandController {
       return;
     }
     this.runtime.updateStatus(ctx, startedGoal);
+    if (suppressActivationPrompt) {
+      // RPC-managed kickoff: the caller drives its own turn; the goal continues
+      // through the normal continuation chain afterwards.
+      return;
+    }
     const sent = await this.runtime.sendOwnedGoalPrompt(
       ctx,
       startedGoal.id,
       buildGoalPrompt(startedGoal),
+      goalPromptDetails("set", startedGoal),
       true,
       () => (isRequestCurrent?.() ?? true) && (isActivationCurrent?.(startedGoal) ?? true),
     );
@@ -249,6 +258,7 @@ export class GoalCommandController {
     const stoppedGoal = this.runtime.activeGoal;
     const stoppedStatus = stoppedGoal.status;
     this.runtime.cancelContinuationWork();
+    this.runtime.cancelPendingGoalPromptsForGoal(this.runtime.activeGoal.id);
     this.runtime.clearGoalRecovery();
     this.runtime.clearBudgetWrapUp();
     this.runtime.clearStaleGoalToolCallBlock();
@@ -267,6 +277,7 @@ export class GoalCommandController {
       ctx,
       resumedGoal.id,
       buildResumePrompt(resumedGoal, stoppedStatus),
+      goalPromptDetails("resume", resumedGoal),
     );
     if (!sent) {
       if (this.runtime.activeGoal?.id === resumedGoal.id && this.runtime.activeGoal.status === "active") {
@@ -314,6 +325,7 @@ export class GoalCommandController {
       ctx,
       resumedGoal.id,
       buildWaitingResumePrompt(resumedGoal, waiting.reason),
+      goalPromptDetails("wait", resumedGoal),
       false,
     );
     if (!sent) {
@@ -397,6 +409,9 @@ export class GoalCommandController {
     const previousGoal = { ...currentGoal };
     this.runtime.clearGoalWaitTimer();
     this.runtime.cancelContinuationWork();
+    // The queued kickoff prompt may not have started its turn yet (custom-input
+    // turns start asynchronously); cancel it so late delivery aborts cleanly.
+    this.runtime.cancelPendingGoalPromptsForGoal(currentGoal.id);
     this.runtime.clearGoalRecovery();
     this.runtime.clearBudgetWrapUp();
     const rotatedGoal = nextGoalInstance(currentGoal);
@@ -418,7 +433,12 @@ export class GoalCommandController {
     if (editedGoal.status === "active") {
       if (!this.runtime.ownsWorkflow(editedGoal)) return;
       this.runtime.clearStaleGoalToolCallBlock();
-      const sent = await this.runtime.sendOwnedGoalPrompt(ctx, editedGoal.id, buildObjectiveUpdatedPrompt(editedGoal));
+      const sent = await this.runtime.sendOwnedGoalPrompt(
+        ctx,
+        editedGoal.id,
+        buildObjectiveUpdatedPrompt(editedGoal),
+        goalPromptDetails("edit", editedGoal),
+      );
       if (!sent) {
         if (this.runtime.activeGoal?.id === editedGoal.id) {
           if (previousStatus === "active" && previousGoal.waiting) {

@@ -46,6 +46,7 @@ interface GoalRunStartPayload {
   runId: string;
   objective: string;
   tokenBudget?: number;
+  suppressActivationPrompt?: boolean;
 }
 
 interface BoundSession {
@@ -78,7 +79,7 @@ function isPayloadRecord(data: unknown): data is object {
 
 function readPayloadProperty(
   data: object,
-  key: "runId" | "objective" | "tokenBudget" | "reason",
+  key: "runId" | "objective" | "tokenBudget" | "reason" | "suppressActivationPrompt",
 ): { ok: true; value: unknown } | { ok: false } {
   try {
     return { ok: true, value: Reflect.get(data, key) };
@@ -117,7 +118,15 @@ function parseStartPayload(data: unknown): string | Omit<GoalRunStartPayload, "r
   ) {
     return "tokenBudget must be a positive integer";
   }
-  return { objective, tokenBudget: tokenBudgetValue.value as number | undefined };
+  const suppressValue = readPayloadProperty(data, "suppressActivationPrompt");
+  if (!suppressValue.ok || (suppressValue.value !== undefined && typeof suppressValue.value !== "boolean")) {
+    return "suppressActivationPrompt must be a boolean";
+  }
+  return {
+    objective,
+    tokenBudget: tokenBudgetValue.value as number | undefined,
+    suppressActivationPrompt: (suppressValue as { value: unknown }).value as boolean | undefined,
+  };
 }
 
 function parseCancelReason(data: unknown): string | undefined | { error: string } {
@@ -221,6 +230,8 @@ export class GoalRunController {
           if (this.ownsRun(run, session.generation)) run.goalId = goal.id;
         },
         () => this.ownsRun(run, session.generation),
+        undefined,
+        parsed.suppressActivationPrompt === true,
       );
       if (activation?.kind === "busy" && this.ownsRun(run, session.generation)) {
         this.closeCurrentRun();

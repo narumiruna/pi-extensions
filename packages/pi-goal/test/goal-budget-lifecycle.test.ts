@@ -346,7 +346,7 @@ test("failed budget-increase edit delivery restores the limited goal and stale i
     budgeted.ctx,
   );
   const limited = requireLastGoal(budgeted.mock);
-  budgeted.mock.rawPi.sendUserMessage = () => {
+  budgeted.mock.rawPi.sendMessage = () => {
     throw new Error("edit delivery failed");
   };
 

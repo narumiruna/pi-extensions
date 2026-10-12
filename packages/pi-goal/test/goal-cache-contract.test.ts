@@ -567,11 +567,16 @@ test("failed Goal delivery persists no undelivered contract", async () => {
   registerGoalWithSettingsPath(fresh.pi, DEFAULT_SETTINGS_PATH);
   const freshContext = createMockContext();
   await fresh.events.get("session_start")?.[0]?.({ reason: "startup" }, freshContext.ctx);
-  fresh.rawPi.sendUserMessage = () => {
+  fresh.rawPi.sendMessage = () => {
     throw new Error("fresh delivery failed");
   };
   await fresh.commands.get("goal")?.handler("undelivered fresh objective", freshContext.ctx);
-  assert.equal(fresh.sentMessages.length, 0);
+  assert.equal(
+    fresh.sentMessages.filter(
+      (sent: { message?: { customType?: string } }) => sent.message?.customType !== "pi.goal.prompt",
+    ).length,
+    0,
+  );
   assert.equal(
     fresh.events.get("context")?.[0]?.(
       { messages: [userMessage("retained before failed activation")] },
@@ -603,12 +608,18 @@ test("failed Goal delivery persists no undelivered contract", async () => {
     customType: retainedContract.customType,
     content: retainedContract.content,
   });
-  edited.rawPi.sendUserMessage = () => {
+  edited.rawPi.sendMessage = () => {
     throw new Error("edit delivery failed");
   };
   await edited.commands.get("goal")?.handler("edit undelivered objective", editedContext.ctx);
   assert.equal(requireLastGoal(edited).text, "retained objective");
-  assert.equal(edited.sentMessages.length, 0);
+  assert.equal(
+    edited.sentMessages.filter((sent: { message?: { customType?: string } }) => {
+      const customType = sent.message?.customType;
+      return customType !== "pi.goal.prompt" && customType !== "goal-contract";
+    }).length,
+    0,
+  );
   assert.equal(
     edited.events.get("context")?.[0]?.(
       { messages: [retainedContract, userMessage(retainedPrompt)] },

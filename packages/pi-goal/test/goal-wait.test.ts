@@ -472,8 +472,8 @@ test("a failed deadline delivery restores waiting and retries exactly once", asy
     () => undefined,
     waiting.ctx,
   );
-  const sendUserMessage = waiting.mock.rawPi.sendUserMessage.bind(waiting.mock.rawPi);
-  waiting.mock.rawPi.sendUserMessage = () => {
+  const sendUserMessage = waiting.mock.rawPi.sendMessage.bind(waiting.mock.rawPi);
+  waiting.mock.rawPi.sendMessage = () => {
     throw new Error("deadline delivery failed");
   };
 
@@ -482,7 +482,7 @@ test("a failed deadline delivery restores waiting and retries exactly once", asy
   assert.equal(requireLastGoal(waiting.mock).waiting?.reason, "Waiting for retry");
   assert.equal(requireLastGoal(waiting.mock).activeStartedAt, undefined);
 
-  waiting.mock.rawPi.sendUserMessage = sendUserMessage;
+  waiting.mock.rawPi.sendMessage = sendUserMessage;
   await vi.advanceTimersByTimeAsync(999);
   assert.equal(waiting.mock.sentUserMessages.length, 1);
   await vi.advanceTimersByTimeAsync(1);
@@ -506,7 +506,7 @@ test("two failed deadline deliveries leave a visible wait without retry looping"
     () => undefined,
     waiting.ctx,
   );
-  waiting.mock.rawPi.sendUserMessage = () => {
+  waiting.mock.rawPi.sendMessage = () => {
     throw new Error("deadline delivery failed");
   };
 
@@ -630,8 +630,8 @@ test("failed edit and replacement delivery restore the exact waiting goal and de
       () => undefined,
       waiting.ctx,
     );
-    const sendUserMessage = waiting.mock.rawPi.sendUserMessage.bind(waiting.mock.rawPi);
-    waiting.mock.rawPi.sendUserMessage = () => {
+    const sendUserMessage = waiting.mock.rawPi.sendMessage.bind(waiting.mock.rawPi);
+    waiting.mock.rawPi.sendMessage = () => {
       throw new Error("delivery failed");
     };
 
@@ -643,7 +643,7 @@ test("failed edit and replacement delivery restore the exact waiting goal and de
       resumeAt: Date.now() + MIN_GOAL_WAIT_DELAY_MS,
     });
 
-    waiting.mock.rawPi.sendUserMessage = sendUserMessage;
+    waiting.mock.rawPi.sendMessage = sendUserMessage;
     await vi.advanceTimersByTimeAsync(MIN_GOAL_WAIT_DELAY_MS);
     assert.equal(waiting.mock.sentUserMessages.length, 2);
   }
@@ -665,8 +665,8 @@ test("failed priority delivery restores the waiting head and its deadline", asyn
     () => undefined,
     waiting.ctx,
   );
-  const sendUserMessage = waiting.mock.rawPi.sendUserMessage.bind(waiting.mock.rawPi);
-  waiting.mock.rawPi.sendUserMessage = () => {
+  const sendUserMessage = waiting.mock.rawPi.sendMessage.bind(waiting.mock.rawPi);
+  waiting.mock.rawPi.sendMessage = () => {
     throw new Error("priority delivery failed");
   };
 
@@ -674,7 +674,7 @@ test("failed priority delivery restores the waiting head and its deadline", asyn
   assert.equal(requireLastGoal(waiting.mock).id, goal.id);
   assert.equal(requireLastGoal(waiting.mock).waiting?.reason, "Waiting before failed priority");
 
-  waiting.mock.rawPi.sendUserMessage = sendUserMessage;
+  waiting.mock.rawPi.sendMessage = sendUserMessage;
   await vi.advanceTimersByTimeAsync(MIN_GOAL_WAIT_DELAY_MS);
   assert.equal(waiting.mock.sentUserMessages.length, 2);
 });

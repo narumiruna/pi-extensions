@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerGoalCommand } from "./command-registration.js";
 import { GoalCommandController } from "./commands.js";
 import { registerGoalLifecycle } from "./lifecycle.js";
+import { registerGoalPromptRenderer } from "./prompt-renderer.js";
 import { GoalRunController } from "./run-protocol.js";
 import { GoalRuntime } from "./runtime.js";
 import { registerGoalTools } from "./tools.js";
@@ -18,6 +19,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
   // Keep registration order explicit: managed-run bus listeners exist before tools,
   // command routing, and session lifecycle bind the per-factory runtime.
   runController.register(pi);
+  registerGoalPromptRenderer(pi);
   registerGoalTools(pi, runtime);
   registerGoalCommand(pi, runtime, commands, options);
   registerGoalLifecycle(pi, runtime, runController, options);

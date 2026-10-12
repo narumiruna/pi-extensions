@@ -435,7 +435,7 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
   const started = await startGoalForTest();
   const initialGoal = requireLastGoal(started.mock);
   const initialPrompt = started.mock.sentUserMessages[0]?.text ?? "";
-  assert.deepEqual(started.mock.sentUserMessages[0]?.options, { deliverAs: "followUp" });
+  assert.deepEqual(started.mock.sentUserMessages[0]?.options, { deliverAs: "followUp", triggerTurn: true });
   assertPromptHasGoalId(initialPrompt, initialGoal.id);
   assertHardenedGoalPrompt(initialPrompt);
 
@@ -456,6 +456,7 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
   const continuationPrompt = started.mock.sentUserMessages.at(-1)?.text ?? "";
   assert.deepEqual(started.mock.sentUserMessages.at(-1)?.options, {
     deliverAs: "followUp",
+    triggerTurn: true,
   });
   assertPromptHasGoalId(continuationPrompt, initialGoal.id);
   assertHardenedGoalPrompt(continuationPrompt);
@@ -468,6 +469,7 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
   const resumedPrompt = started.mock.sentUserMessages.at(-1)?.text ?? "";
   assert.deepEqual(started.mock.sentUserMessages.at(-1)?.options, {
     deliverAs: "followUp",
+    triggerTurn: true,
   });
   assertPromptHasGoalId(resumedPrompt, resumedGoal.id);
   assertHardenedGoalPrompt(resumedPrompt);
@@ -478,6 +480,7 @@ test("all goal prompt paths share the goal_id guard and hardened audit", async (
   const editedPrompt = started.mock.sentUserMessages.at(-1)?.text ?? "";
   assert.deepEqual(started.mock.sentUserMessages.at(-1)?.options, {
     deliverAs: "followUp",
+    triggerTurn: true,
   });
   assertPromptHasGoalId(editedPrompt, editedGoal.id);
   assertHardenedGoalPrompt(editedPrompt);

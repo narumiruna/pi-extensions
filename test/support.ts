@@ -177,6 +177,16 @@ export function createMockPi(
     },
     sendMessage(message: unknown, messageOptions?: unknown) {
       sentMessages.push({ message, options: messageOptions });
+      // pi-goal sends its prompts over the custom-message channel; mirror them
+      // into sentUserMessages so prompt-delivery simulations keep working.
+      if (
+        message &&
+        typeof message === "object" &&
+        (message as { customType?: unknown }).customType === "pi.goal.prompt" &&
+        typeof (message as { content?: unknown }).content === "string"
+      ) {
+        sentUserMessages.push({ text: (message as { content: string }).content, options: messageOptions });
+      }
     },
     async setModel(model: unknown) {
       setModels.push(model);
