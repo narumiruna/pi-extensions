@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { currentTokenTotal } from "./accounting.js";
+import type { GoalCommandController } from "./commands.js";
 import { notifyTerminal, safeGoalMenuText } from "./errors.js";
 import {
   GOAL_CONTRACT_MESSAGE_TYPE,
@@ -44,7 +45,21 @@ export function registerGoalLifecycle(
   runtime: GoalRuntime,
   runController: GoalRunController,
   options: GoalLifecycleOptions = {},
+  commands?: GoalCommandController,
 ) {
+  // Ask-dialog「Resume now」与手动 /goal resume 共用同一条已验证路径
+  // （goal 实例轮换 + queueGoalSafetyReset + owned goal-prompt 派发）。
+  // 旧实现走 continuation dispatch（派发→送达→abort→再派发）会形成死循环。
+  async function resumeViaCommandPath(ctx: StatusContext, goalId: string) {
+    if (runtime.activeGoal?.id !== goalId) return;
+    if (commands) {
+      await commands.resumeGoal(ctx);
+      return;
+    }
+    // 后备路径： commands 不可用时保持旧行为（不应发生）。
+    runtime.requestContinuation(runtime.activeGoal);
+    runtime.scheduleContinuationDispatch(ctx, goalId);
+  }
   // Pi invalidates this module's ExtensionContext when the session is replaced
   // or reloaded, but detached prompts and queued emits can still invoke these
   // handlers afterward. After session_shutdown every ctx getter throws a stale
@@ -153,12 +168,6 @@ export function registerGoalLifecycle(
     }
   });
 
-  function resumeRestoredGoal(ctx: StatusContext, goalId: string) {
-    if (runtime.activeGoal?.id !== goalId) return;
-    runtime.requestContinuation(runtime.activeGoal);
-    runtime.scheduleContinuationDispatch(ctx, goalId);
-  }
-
   const RESTORE_RESUME = "Resume now";
   const RESTORE_PAUSE = "Keep paused";
   const RESTORE_CLEAR = "Clear goal";
@@ -179,7 +188,8 @@ export function registerGoalLifecycle(
     // The dialog may survive a goal transition; only act on the still-restored goal.
     if (runtime.activeGoal?.id !== goalId || runtime.activeGoal.status !== "active") return;
     if (choice === RESTORE_RESUME) {
-      resumeRestoredGoal(ctx, goalId);
+      // 与手动 /goal resume 同路径：goal 轮换 + owned prompt 派发（fire-and-forget）。
+      void resumeViaCommandPath(ctx, goalId);
       return;
     }
     if (choice === RESTORE_CLEAR) {
@@ -340,9 +350,29 @@ export function registerGoalLifecycle(
         if (runtime.consumeCancelledGoalPrompt(prompt) || runtime.consumeCancelledContinuationPrompt(prompt)) {
           // Abort kills this run's drain loop, so a newer queued prompt could be
           // stranded. Schedule a continuation to reclaim the goal afterwards.
-          if (runtime.activeGoal?.status === "active" && runtime.ownsWorkflow(runtime.activeGoal)) {
+          // Runaway guard: a fencepost of consecutive birth-aborts (e.g. an
+          // ask→resume loop on a hostile host) pauses the goal instead of
+          // dispatch-forever. Manual /goal resume always escapes the guard.
+          const stalledGoalId = runtime.activeGoal?.id;
+          const claimCount = runtime.recordBirthAbort(stalledGoalId ?? "none");
+          if (runtime.activeGoal?.status === "active" && runtime.ownsWorkflow(runtime.activeGoal) && claimCount < 3) {
             runtime.requestContinuation(runtime.activeGoal);
             runtime.scheduleContinuationDispatch(ctx, runtime.activeGoal.id);
+          } else if (runtime.activeGoal?.status === "active" && claimCount >= 3) {
+            const stalledGoal = runtime.activeGoal;
+            const stoppedGoal = runtime.stopActiveGoal(ctx, {
+              kind: "agent_interruption",
+              expectedGoalId: stalledGoal.id,
+              status: "paused",
+              reason: `paused after ${claimCount} consecutive aborted goal-prompt deliveries`,
+            });
+            if (stoppedGoal) {
+              notifyTerminal(
+                ctx.ui,
+                `Goal paused after ${claimCount} consecutive aborted deliveries. Run /goal resume to continue.`,
+                "warning",
+              );
+            }
           }
           runtime.beginAgentRun(null, undefined);
           abortCurrentTurn(ctx);
@@ -369,6 +399,7 @@ export function registerGoalLifecycle(
           return;
         }
         runtime.beginAgentRun(ownedGoalId, ownedPrompt ? "manual" : "automatic");
+        runtime.clearBirthAborts();
         if (!runtime.goalToolsAvailable()) {
           runtime.pauseGoalForUnavailableTools(ctx, true);
           return;

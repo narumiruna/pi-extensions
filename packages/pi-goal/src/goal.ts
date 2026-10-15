@@ -22,7 +22,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
   registerGoalPromptRenderer(pi);
   registerGoalTools(pi, runtime);
   registerGoalCommand(pi, runtime, commands, options);
-  registerGoalLifecycle(pi, runtime, runController, options);
+  registerGoalLifecycle(pi, runtime, runController, options, commands);
 }
 
 export default function goal(pi: ExtensionAPI, options: GoalOptions = {}) {

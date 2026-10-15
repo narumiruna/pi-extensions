@@ -403,6 +403,23 @@ export class GoalRuntime {
   // via goal_complete; plain-text claims are not completion.
   private completionClaimState?: { goalId: string; count: number };
 
+  // Consecutive aborted goal-prompt deliveries at message_start birth. A small
+  // fencepost turns a dispatch→abort→dispatch loop into a pause; any manual
+  // command (or a truly-owned delivery) clears it.
+  private birthAbortState?: { goalId: string; count: number };
+
+  recordBirthAbort(goalId: string) {
+    if (this.birthAbortState?.goalId !== goalId) {
+      this.birthAbortState = { goalId, count: 0 };
+    }
+    this.birthAbortState.count += 1;
+    return this.birthAbortState.count;
+  }
+
+  clearBirthAborts() {
+    this.birthAbortState = undefined;
+  }
+
   requestClaimContinuation(goal: ActiveGoal, claimCount: number) {
     if (!this.ownsWorkflow(goal)) return false;
     if (goal.waiting || this.hasContinuationWorkForGoal(goal.id)) return false;
