@@ -1,5 +1,11 @@
 # @narumitw/pi-notify
 
+## 0.2.1
+
+### Patch Changes
+
+- 49abb15: Use bold Telegram titles and repository names, with inline monospace branches, paths, and session IDs. Preserve literal punctuation, plain-text confirmation previews, and notification timing.
+
 ## 0.2.0
 
 ### Minor Changes
