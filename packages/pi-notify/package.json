@@ -1,13 +1,14 @@
 {
   "name": "@narumitw/pi-notify",
   "version": "0.2.0",
-  "description": "Telegram notifications when Pi settles, with optional inactivity reminders.",
+  "description": "Telegram and Gotify notifications when Pi settles, with optional inactivity reminders.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
     "telegram",
+    "gotify",
     "notifications"
   ],
   "files": [

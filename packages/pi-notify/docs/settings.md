@@ -14,9 +14,28 @@ Use `/notify` for setup or edit the canonical user JSON file. Settings load on s
 
 Destination IDs contain 1–64 ASCII letters, digits, underscores, or hyphens, starting with a letter or digit; `constructor`, `prototype`, and `__proto__` are reserved. The menu creates IDs automatically.
 
-New destinations require only a bot token and chat ID before review. The menu generates the label as `Telegram <chatId>` and leaves the forum topic unset. The review screen lets you change the label, chat ID, token, or optional topic before saving. Editing an existing destination opens that review with its current values; changing the chat ID preserves its label. Destination changes take effect only after confirmation. For a new chat, Save and use adds it to User `targetIds` in the same atomic save; Save only stores it without selecting it. Editing an existing destination preserves its selection state. Explicit Project selections and saved `enabled: false` values are unchanged. Automatic notifications default to On; Off pauses automatic delivery but still allows manual tests. No delivery occurs without a selected destination.
+Telegram setup requires a bot token and chat ID; Gotify setup requires an application token and server URL. The menu generates a label and opens a review for edits before saving. Editing an existing destination opens the same review with its current values. Destination changes take effect only after confirmation. For a new destination, Save and use adds it to User `targetIds` in the same atomic save; Save only stores it without selecting it. Editing an existing destination preserves its selection state. Explicit Project selections and saved `enabled: false` values are unchanged. Automatic notifications default to On; Off pauses automatic delivery but still allows manual tests. No delivery occurs without a selected destination.
 
 Each Telegram destination has `provider: "telegram"`, a nonempty `label` of at most 128 characters, `botToken`, a numeric string `chatId`, and optional positive safe-integer `messageThreadId`. A group or supergroup ID can be negative. Store IDs as strings, not JSON numbers. Forum topic IDs use Telegram's `message_thread_id` field. Other Telegram chat products with additional required fields are not supported.
+
+Each Gotify destination has `provider: "gotify"`, a nonempty `label` of at most 128 characters, `serverUrl`, `appToken`, and optional `priority`. Use an application token created in the server's Apps tab, not a client token or password. Tokens must contain 1–512 printable ASCII characters without spaces. Server URLs must be absolute HTTP(S) URLs, at most 2048 characters before and after URL normalization, without whitespace, control characters, backslashes, credentials, query strings, or fragments. Include any reverse-proxy base path; do not append `/message`. Trailing slashes are removed on save. HTTP is supported for self-hosted deployments but does not encrypt credentials or metadata; prefer HTTPS. Priority must be a safe integer (including zero or negative values). Leave it unset to use the application's default priority; clear the field in review to restore that default.
+
+```json
+{
+  "targetIds": ["gotify"],
+  "destinations": {
+    "gotify": {
+      "provider": "gotify",
+      "label": "Personal Gotify",
+      "serverUrl": "https://push.example.com/gotify",
+      "appToken": "<application-token>",
+      "priority": 5
+    }
+  }
+}
+```
+
+Gotify and Telegram destinations can share the same `destinations` object and `targetIds` selection. Saved destinations keep their provider; create a new destination to change providers.
 
 Resolve defaults, User fields, then trusted Project overrides. Project arrays replace rather than merge. Project files cannot define destinations or credentials. Unknown provider IDs do not fall back to Telegram. Invalid fields, unreadable files, unsupported destinations, or missing selected IDs produce diagnostics and disable automatic delivery until repaired; no partial routing is attempted.
 
@@ -48,9 +67,13 @@ The coordinator observes `before_agent_start`, with `agent_start` as a fallback,
 
 Metadata is collected at settlement through bounded Git subprocesses. Missing Git information is omitted. Pending metadata work is cancelled with its reminder. Once a delivery attempt starts, new user work does not cancel it; session replacement, reload, shutdown, or explicit test cancellation does. Late results cannot replace newer per-destination status. Test delivery bypasses automatic enablement and inactivity, requires explicit confirmation, and never changes automatic arming or history.
 
-The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains only Telegram. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
+The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains Telegram and Gotify. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
 
-Requests use Telegram's fixed HTTPS origin, reject redirects, and do not enable paid broadcasts. Text is clipped to at most 4096 UTF-16 code units without splitting a Unicode code point. Response reads are capped at 65536 bytes. Telegram's JSON `ok` field and HTTP status are both checked. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions.
+Both transports reject redirects, use a 10-second timeout, make one attempt, and cap success response reads at 65536 bytes. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions.
+
+Telegram requests use its fixed HTTPS origin and do not enable paid broadcasts. Text is clipped to at most 4096 UTF-16 code units without splitting a Unicode code point. Telegram's JSON `ok` field and HTTP status are both checked.
+
+Gotify posts JSON to `<serverUrl>/message` with `X-Gotify-Key` application-token authentication. The title and body are separate fields; emphasis metadata is not sent, and Markdown extras are not enabled. An unset priority is omitted so the server uses the application's default. A successful HTTP response must contain a message with positive integer `id` and `appid`, string `message`, and valid `date`. HTTP failures use a safe `http` code; HTTP 429 uses `rate-limit` and includes a positive integer `Retry-After` value when available. Server response text is never displayed.
 
 ## Authoritative references
 
@@ -59,6 +82,8 @@ Requests use Telegram's fixed HTTPS origin, reject redirects, and do not enable 
 - [Telegram getUpdates](https://core.telegram.org/bots/api#getupdates): manual chat-ID discovery; incompatible with active webhooks.
 - [Telegram ResponseParameters](https://core.telegram.org/bots/api#responseparameters): `retry_after` on flood control.
 - [Telegram rate limits](https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this): avoid more than one message per second in a chat, 20 per minute in a group, and about 30 per second across free broadcasts.
+- [Gotify push messages](https://gotify.net/docs/pushmsg): application setup and application-token authentication.
+- [Gotify API](https://gotify.net/api-docs) and [server API specification](https://raw.githubusercontent.com/gotify/server/v3.1.1/docs/spec.json): `POST /message`, message fields, and response schema.
 - [Pi extension lifecycle](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#agent_start--agent_end--agent_before_settle--agent_settled).
 
 Input classification follows the installed Pi `ProcessTerminal` and `StdinBuffer` sequence splitting, Pi's `parseKey`/`isKeyRelease`, and `TuiAltScreen` SGR mouse handling. Pure classifier tests cover keyboard, Unicode, paste, focus, press/release, motion, wheel, legacy mouse, CSI/OSC/DCS/APC replies, and unknown input. These tests do not prove that an event reaches the extension. Installed-runtime tests also pass events through real regular/fullscreen Pi renderers and check listener order, viewport keys, and focused-overlay branches. Physical terminal and multiplexer behavior remains unverified.

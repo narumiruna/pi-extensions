@@ -7,8 +7,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Coordinator } from "./coordinator.js";
 import { displayPath } from "./metadata.js";
+import { providers } from "./providers.js";
 import { defaults, SettingsStore } from "./settings.js";
-import { providers } from "./telegram.js";
 
 interface Owner {
   controller: AbortController;
@@ -43,7 +43,7 @@ export default function notify(pi: ExtensionAPI): void {
       store,
       coordinator: new Coordinator(defaults(), providers, ctx.mode === "tui", undefined, () => {
         if (owners.get(manager) === owner && !controller.signal.aborted && hasUI)
-          ui.notify("Telegram notification failed. Open /notify → Status for a safe error code.", "warning");
+          ui.notify("Notification failed. Open /notify → Status for a safe error code.", "warning");
       }),
     };
     owners.set(manager, owner);
@@ -85,7 +85,7 @@ export default function notify(pi: ExtensionAPI): void {
     await stop(owner);
   });
   pi.registerCommand("notify", {
-    description: "Configure Telegram notifications and inactivity reminders",
+    description: "Configure Telegram and Gotify notifications and inactivity reminders",
     handler: async (args, ctx) => {
       if (args.trim()) throw new Error("Usage: /notify (no arguments).");
       const owner = current(ctx);

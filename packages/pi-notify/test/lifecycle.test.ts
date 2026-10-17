@@ -112,6 +112,71 @@ it("does not notify intermediate events and uses final error outcome", async () 
   await h.emit("session_shutdown", ctx);
   expect(h.unsubscribe).toHaveBeenCalledTimes(1);
 });
+it("delivers one settled work period to both Telegram and Gotify from the built-in registry", async () => {
+  await enable();
+  const path = join(directory, "pi-notify.json");
+  const settings = JSON.parse(await fs.readFile(path, "utf8"));
+  settings.destinations.gotify = {
+    provider: "gotify",
+    label: "Gotify",
+    serverUrl: "https://push.example.com/base",
+    appToken: "A-token",
+  };
+  settings.targetIds.push("gotify");
+  await fs.writeFile(path, JSON.stringify(settings));
+  fetcher.mockImplementation(
+    async (url) =>
+      new Response(
+        String(url).includes("push.example.com")
+          ? JSON.stringify({ id: 1, appid: 1, message: "accepted", date: "2026-07-06T00:00:00Z" })
+          : '{"ok":true,"result":{}}',
+      ),
+  );
+  const h = await setup();
+  const ctx = h.context("rpc");
+  await h.emit("session_start", ctx);
+  await h.emit("before_agent_start", ctx);
+  await h.emit("agent_settled", ctx, { aborted: false });
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2), { interval: 1 });
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    "https://push.example.com/base/message",
+  ]);
+  expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body)).message).toContain("Example");
+  await h.emit("session_shutdown", ctx);
+});
+it("aborts Gotify delivery on session replacement and shutdown without stale warnings", async () => {
+  await fs.writeFile(
+    join(directory, "pi-notify.json"),
+    JSON.stringify({
+      targetIds: ["gotify"],
+      destinations: {
+        gotify: { provider: "gotify", label: "Gotify", serverUrl: "https://push.example.com", appToken: "A-token" },
+      },
+    }),
+  );
+  fetcher.mockImplementation(
+    async (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("A-token")), { once: true });
+      }),
+  );
+  const h = await setup();
+  const ctx = h.context("rpc");
+  await h.emit("session_start", ctx);
+  for (const boundary of ["session_start", "session_shutdown"]) {
+    await h.emit("before_agent_start", ctx);
+    await h.emit("agent_settled", ctx, { aborted: false });
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(boundary === "session_start" ? 1 : 2), {
+      interval: 1,
+    });
+    const requestSignal = fetcher.mock.calls.at(-1)?.[1]?.signal;
+    expect(requestSignal?.aborted).toBe(false);
+    await h.emit(boundary, ctx);
+    expect(requestSignal?.aborted).toBe(true);
+  }
+  expect(h.notifyUI).not.toHaveBeenCalled();
+});
 it("suppresses aborts even when final assistant error remains after retry cancellation", async () => {
   await enable();
   const h = await setup();
@@ -230,7 +295,7 @@ it("loads through Pi Jiti and exercises the lazy menu command and repeated clean
   assert.ok(notifyCommand);
   const command = notifyCommand.handler("", ctx as ExtensionCommandContext);
   await h.tui.waitForOpen();
-  expect(h.tui.render().join("\n")).toContain("Telegram destinations");
+  expect(h.tui.render().join("\n")).toContain("Destinations");
   h.tui.press("ctrl+c");
   await command;
   await emit("session_shutdown");

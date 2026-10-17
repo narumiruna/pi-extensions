@@ -65,6 +65,7 @@ export function createTelegramProvider(fetcher: typeof fetch = fetch): Notificat
     },
     async send(destination, notification, signal): Promise<DeliveryResult> {
       if (signal.aborted) return { state: "cancelled", code: "cancelled" };
+      if (destination.provider !== "telegram") return { state: "failed", code: "invalid-destination" };
       const timeout = new AbortController();
       const timer = setTimeout(() => timeout.abort(), TIMEOUT_MS);
       const combined = AbortSignal.any([signal, timeout.signal]);
@@ -125,5 +126,3 @@ export function createTelegramProvider(fetcher: typeof fetch = fetch): Notificat
     },
   };
 }
-
-export const providers = new Map([["telegram", createTelegramProvider()]]);

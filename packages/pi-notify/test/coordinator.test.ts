@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Coordinator } from "../src/coordinator.js";
-import type { Destination, Notification, NotificationProvider } from "../src/provider.js";
+import type { Notification, NotificationProvider, TelegramDestination } from "../src/provider.js";
 import { defaults, type Settings } from "../src/settings.js";
 
-const destination: Destination = {
+const destination: TelegramDestination = {
   provider: "telegram",
   label: "one",
   botToken: `123:${"s".repeat(30)}`,

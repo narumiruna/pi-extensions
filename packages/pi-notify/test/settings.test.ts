@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { GotifyDestination } from "../src/provider.js";
+import { providers } from "../src/providers.js";
 import { resolveSettings, SettingsStore, saveDestination, savePolicy } from "../src/settings.js";
-import { providers } from "../src/telegram.js";
 
 let directory: string;
 let store: SettingsStore;
@@ -207,7 +209,10 @@ it("rechecks project selections from disk before removing a destination", async 
 it("clears an optional topic without deleting unknown destination fields", async () => {
   await saveDestination(store, "personal", { ...destination, messageThreadId: 42 }, signal());
   await saveDestination(store, "personal", destination, signal());
-  expect(store.snapshot.effective.destinations.personal?.messageThreadId).toBeUndefined();
+  expect(store.snapshot.effective.destinations.personal).toMatchObject({
+    provider: "telegram",
+    messageThreadId: undefined,
+  });
   expect(JSON.parse(await fs.readFile(store.userPath, "utf8")).destinations.personal).not.toHaveProperty(
     "messageThreadId",
   );
@@ -230,4 +235,73 @@ it("does not accept project credential destinations", () => {
   const snapshot = resolveSettings({ enabled: true }, { destinations: { evil: destination } }, providers);
   expect(snapshot.effective.enabled).toBe(false);
   expect(snapshot.effective.destinations).toEqual({});
+});
+
+const gotify: GotifyDestination = {
+  provider: "gotify",
+  label: "Gotify",
+  serverUrl: "https://push.example.com/base/",
+  appToken: "A-application-token",
+};
+it("persists mixed providers, normalizes Gotify URLs, and clears optional priority without losing unknown fields", async () => {
+  await saveDestination(store, "personal", destination, signal());
+  await saveDestination(store, "gotify", { ...gotify, priority: 5 }, signal());
+  await store.change(
+    "user",
+    (document) => {
+      const entry = (document.destinations as Record<string, Record<string, unknown>>).gotify;
+      assert.ok(entry);
+      entry.future = "keep";
+    },
+    signal(),
+  );
+  await saveDestination(store, "gotify", gotify, signal());
+  const loaded = await store.load();
+  expect(loaded.diagnostics).toEqual([]);
+  expect(loaded.effective.targetIds).toEqual(["personal", "gotify"]);
+  expect(loaded.effective.destinations.gotify).toMatchObject({
+    ...gotify,
+    serverUrl: "https://push.example.com/base",
+    priority: undefined,
+  });
+  const raw = JSON.parse(await fs.readFile(store.userPath, "utf8"));
+  expect(raw.destinations.gotify.future).toBe("keep");
+  expect(raw.destinations.gotify).not.toHaveProperty("priority");
+  expect(raw.destinations.personal).toEqual(destination);
+  if (process.platform !== "win32") expect((await fs.stat(store.userPath)).mode & 0o777).toBe(0o600);
+  await savePolicy(store, "project", "targetIds", ["gotify"], signal());
+  expect(store.snapshot.effective.targetIds).toEqual(["gotify"]);
+  await expect(saveDestination(store, "gotify", undefined, signal())).rejects.toThrow("Project");
+  await savePolicy(store, "project", "targetIds", undefined, signal());
+  await saveDestination(store, "gotify", undefined, signal());
+  expect(store.snapshot.effective.targetIds).toEqual(["personal"]);
+});
+it("rolls back Gotify edits after publication failure and preserves the queue", async () => {
+  await saveDestination(store, "gotify", gotify, signal(), false);
+  const before = await fs.readFile(store.userPath, "utf8");
+  const snapshot = store.snapshot;
+  vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error(gotify.appToken));
+  await expect(saveDestination(store, "gotify", { ...gotify, appToken: "replacement" }, signal())).rejects.toThrow(
+    "not saved",
+  );
+  expect(store.snapshot).toBe(snapshot);
+  expect(await fs.readFile(store.userPath, "utf8")).toBe(before);
+  await saveDestination(store, "gotify", { ...gotify, priority: 0 }, signal());
+  expect(store.snapshot.effective.destinations.gotify).toMatchObject({ priority: 0 });
+  expect(store.snapshot.effective.targetIds).toEqual([]);
+});
+it("fails closed on invalid Gotify settings without exposing URL credentials or tokens", () => {
+  const snapshot = resolveSettings(
+    {
+      destinations: { personal: destination, gotify: { ...gotify, serverUrl: "https://user:secret@host" } },
+      targetIds: ["personal", "gotify"],
+    },
+    {},
+    providers,
+  );
+  expect(snapshot.effective.enabled).toBe(false);
+  expect(JSON.stringify(snapshot.diagnostics)).not.toMatch(/secret|application-token/);
+  const project = resolveSettings({}, { destinations: { gotify } }, providers);
+  expect(project.effective.enabled).toBe(false);
+  expect(project.effective.destinations).toEqual({});
 });

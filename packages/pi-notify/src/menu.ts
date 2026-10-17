@@ -27,6 +27,8 @@ type Screen =
   | "label"
   | "chat"
   | "topic"
+  | "serverUrl"
+  | "priority"
   | "review"
   | "remove"
   | "testSelect"
@@ -41,12 +43,15 @@ type Action =
   | "target"
   | "inheritTargets"
   | "add"
+  | "addGotify"
   | "edit"
   | "select"
   | "token"
   | "label"
   | "chat"
   | "topic"
+  | "serverUrl"
+  | "priority"
   | "save"
   | "saveOnly"
   | "remove"
@@ -66,15 +71,46 @@ export interface MenuOptions {
 export const helpLines = [
   "Create a bot with @BotFather in Telegram, then start a private conversation or add it to your group with permission to send messages.",
   "Obtain the numeric chat ID from Telegram Bot API getUpdates after sending a message. Do not share or paste the token into Pi chat. Stop other update consumers before using getUpdates; this extension does not poll.",
-  "Setup needs only a bot token and chat ID. Labels are generated automatically. Edit the label or optional forum topic ID from the destination review.",
+  "Telegram setup needs a bot token and chat ID. Labels are generated automatically. Edit the label or optional forum topic ID from the destination review.",
+  "For Gotify, create an application on your server and use its application token, not a client token. Enter the server base URL, including any reverse-proxy path. Prefer HTTPS; HTTP sends credentials without encryption.",
+  "Gotify labels are generated automatically. Edit the label or optional safe-integer priority from the destination review. An empty priority uses the server default.",
   "Use a negative group/supergroup chat ID when applicable. Forum topic IDs are optional positive integers.",
   "Destinations are User settings only. Project settings require trust and may select existing destinations but cannot change credentials or addresses.",
   "Notifications disclose hostname, session name/ID, workspace and Git metadata, elapsed time and timestamp. No conversation or code is sent.",
   "Inactivity uses only input Pi forwards to this extension. Fullscreen focus, mouse, and viewport/search keys can be consumed first and do not reliably cancel reminders. Reading without typing can still trigger a notification.",
   "Input or new work cancels a pending reminder. Saved policy/destination changes cancel pending reminders. Settings save immediately; closing does not undo them.",
   "RPC/print/JSON cannot observe terminal activity and deliver at settlement instead. Short-lived processes can exit before delivery completes.",
-  "Delivery is best effort, one attempt, with no automatic retries or history replay. Accepted means Telegram accepted the message, not that it was read.",
-  "Manual file changes require /reload or session start. Repair malformed files before saving. Revoke exposed tokens through BotFather.",
+  "Delivery is best effort, one attempt, with no automatic retries or history replay. Accepted means the provider accepted the message, not that it was read.",
+  "Manual file changes require /reload or session start. Repair malformed files before saving. Revoke exposed Telegram tokens through BotFather or Gotify application tokens on your server.",
+];
+
+const providerLabel = (destination: Destination) => (destination.provider === "telegram" ? "Telegram" : "Gotify");
+function displayServerUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    // Never include URL credentials, query parameters, or fragments in descriptions.
+    return safeText(`${url.protocol}//${url.host}${url.pathname}`);
+  } catch {
+    return "not configured";
+  }
+}
+const destinationDescription = (destination: Destination) =>
+  destination.provider === "telegram"
+    ? `Telegram · ${safeText(destination.chatId)} · token configured`
+    : `Gotify · ${displayServerUrl(destination.serverUrl)} · token configured`;
+const destinationLines = (destination: Destination) => [
+  `Label: ${safeText(destination.label)}`,
+  ...(destination.provider === "telegram"
+    ? [
+        `Chat: ${safeText(destination.chatId)}`,
+        `Topic: ${destination.messageThreadId ?? "none"}`,
+        "Bot token: configured (hidden)",
+      ]
+    : [
+        `Server: ${displayServerUrl(destination.serverUrl)}`,
+        `Priority: ${destination.priority ?? "server default"}`,
+        "Application token: configured (hidden)",
+      ]),
 ];
 
 export async function showNotifyMenu(ctx: ExtensionCommandContext, options: MenuOptions) {
@@ -111,22 +147,31 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
     if (!draft) throw new Error("Destination draft is unavailable.");
     return draft;
   };
+  const telegramDraft = () => {
+    const destination = assertDraft();
+    if (destination.provider !== "telegram") throw new Error("Not a Telegram destination.");
+    return destination;
+  };
+  const gotifyDraft = () => {
+    const destination = assertDraft();
+    if (destination.provider !== "gotify") throw new Error("Not a Gotify destination.");
+    return destination;
+  };
+  const reportError = () => {
+    if (isCurrent())
+      ctx.ui.notify(
+        "Notify operation failed. Check the input, settings file, and Project selections. No credential values are shown.",
+        "error",
+      );
+  };
   const saveDraft = async (actionSignal: AbortSignal, selectNew: boolean) => {
-    const destination = providers.get("telegram")?.validate(assertDraft());
-    if (!destination) throw new Error("Invalid Telegram destination. Check the bot token and chat ID.");
+    const value = assertDraft();
+    const destination = providers.get(value.provider)?.validate(value);
+    if (!destination) throw new Error("Invalid destination settings. Check the required fields.");
     await apply(saveDestination(store, selectedId, destination, actionSignal, selectNew));
     draft = undefined;
     return { kind: "to", screen: "main" } as const;
   };
-  const draftLines = () =>
-    draft
-      ? [
-          `Label: ${safeText(draft.label)}`,
-          `Chat: ${safeText(draft.chatId)}`,
-          `Topic: ${draft.messageThreadId ?? "none"}`,
-          "Bot token: configured (hidden)",
-        ]
-      : ["No destination draft."];
   const menu = defineMenu<State, Screen, Action>({
     start: "main",
     screens: {
@@ -140,8 +185,8 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           ...state.snapshot.diagnostics,
         ],
         items: [
-          { id: "destinations", label: "Telegram destinations", to: "destinations" },
-          { id: "test", label: "Send test to Telegram…", to: "testSelect" },
+          { id: "destinations", label: "Destinations", to: "destinations" },
+          { id: "test", label: "Send test…", to: "testSelect" },
           { id: "settings", label: "Settings", to: "settings" },
           { id: "status", label: "Status", to: "status" },
           { id: "help", label: "Help", to: "help" },
@@ -150,25 +195,23 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       }),
       destinations: ({ state }) => ({
         kind: "actions",
-        title: "Telegram destinations · User",
+        title: "Destinations · User",
         items: [
           ...Object.entries(state.snapshot.effective.destinations).map(([id, value]) => ({
-            id,
+            // Stored IDs cannot contain ':', so rows cannot shadow the add actions.
+            id: `destination:${id}`,
             label: safeText(value.label),
-            description: `Telegram · ${safeText(value.chatId)} · token configured`,
+            description: destinationDescription(value),
             action: "select" as const,
           })),
           { id: "add", label: "Add Telegram destination", action: "add" },
+          { id: "addGotify", label: "Add Gotify destination", action: "addGotify" },
         ],
       }),
       destination: () => ({
         kind: "actions",
-        title: "Telegram destination · User",
-        lines: [
-          `Label: ${safeText(knownDestination().label)}`,
-          `Chat: ${safeText(knownDestination().chatId)}`,
-          "Bot token: configured (hidden)",
-        ],
+        title: `${providerLabel(knownDestination())} destination · User`,
+        lines: destinationLines(knownDestination()),
         items: [
           { id: "edit", label: "Edit destination", action: "edit" },
           { id: "remove", label: "Remove destination…", to: "remove" },
@@ -223,7 +266,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
               label: "Send notifications to",
               currentValue: `${state.editing.targetIds.length}${inherited("targetIds") ? " (inherited)" : ""}`,
               action: "target",
-              description: "Choose which saved Telegram chats receive notifications.",
+              description: "Choose which saved destinations receive notifications.",
             },
           ],
         };
@@ -234,14 +277,14 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         items: Object.entries(state.snapshot.effective.destinations).map(([id, value]) => ({
           id,
           label: safeText(value.label),
-          description: safeText(value.chatId),
+          description: destinationDescription(value),
           selected: state.editing.targetIds.includes(id),
         })),
         action: "target",
         enableSearch: true,
         actions:
           scope === "project"
-            ? [{ id: "inherit", label: "Restore inherited selection", action: "inheritTargets" }]
+            ? [{ id: "inherit:targets", label: "Restore inherited selection", action: "inheritTargets" }]
             : [],
       }),
       delay: () => ({
@@ -265,7 +308,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       }),
       label: () => ({
         kind: "input",
-        title: "Telegram destination label",
+        title: `${providerLabel(assertDraft())} destination label`,
         initialValue: assertDraft().label,
         action: "label",
       }),
@@ -273,27 +316,41 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         kind: "input",
         title: "Telegram chat ID",
         lines: ["Numeric private chat, group, or supergroup ID. Group IDs can be negative."],
-        initialValue: assertDraft().chatId,
+        initialValue: telegramDraft().chatId,
         action: "chat",
       }),
       topic: () => ({
         kind: "input",
         title: "Forum topic ID (optional)",
         lines: ["Leave empty for no topic."],
-        initialValue: String(assertDraft().messageThreadId ?? ""),
+        initialValue: String(telegramDraft().messageThreadId ?? ""),
         action: "topic",
+      }),
+      serverUrl: () => ({
+        kind: "input",
+        title: "Gotify server URL",
+        lines: ["HTTP(S) base URL with an optional reverse-proxy path. No credentials, query, or fragment."],
+        initialValue: gotifyDraft().serverUrl,
+        action: "serverUrl",
+      }),
+      priority: () => ({
+        kind: "input",
+        title: "Gotify priority (optional)",
+        lines: ["Safe integer from -9007199254740991 to 9007199254740991. Leave empty for the server default."],
+        initialValue: String(gotifyDraft().priority ?? ""),
+        action: "priority",
       }),
       review: () => ({
         kind: "actions",
-        title: "Review Telegram destination · User",
+        title: `Review ${providerLabel(assertDraft())} destination · User`,
         lines: [
-          ...draftLines(),
+          ...destinationLines(assertDraft()),
           ...(store.snapshot.effective.destinations[selectedId]
             ? ["Save keeps your current notification selection."]
             : [
-                "Use this chat for notifications?",
-                "Save and use: save this chat and select it for User notifications.",
-                "Save only: save this chat without selecting it.",
+                "Use this destination for notifications?",
+                "Save and use: save this destination and select it for User notifications.",
+                "Save only: save this destination without selecting it.",
               ]),
           "Automatic notifications default to On. Saved Off settings and Project choices are unchanged.",
         ],
@@ -303,10 +360,18 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             label: store.snapshot.effective.destinations[selectedId] ? "Save changes" : "Save and use",
             action: "save",
           },
-          { id: "token", label: "Replace bot token…", action: "token" },
-          { id: "chat", label: "Change chat ID…", to: "chat" },
+          {
+            id: "token",
+            label: assertDraft().provider === "telegram" ? "Replace bot token…" : "Replace application token…",
+            action: "token",
+          },
+          ...(assertDraft().provider === "telegram"
+            ? [{ id: "chat", label: "Change chat ID…", to: "chat" as const }]
+            : [{ id: "serverUrl", label: "Change server URL…", to: "serverUrl" as const }]),
           { id: "label", label: "Change label…", to: "label" },
-          { id: "topic", label: "Set forum topic ID…", to: "topic" },
+          ...(assertDraft().provider === "telegram"
+            ? [{ id: "topic", label: "Set forum topic ID…", to: "topic" as const }]
+            : [{ id: "priority", label: "Set priority…", to: "priority" as const }]),
           ...(!store.snapshot.effective.destinations[selectedId]
             ? [{ id: "saveOnly", label: "Save only", action: "saveOnly" as const }]
             : []),
@@ -314,7 +379,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       }),
       remove: () => ({
         kind: "actions",
-        title: "Remove Telegram destination?",
+        title: `Remove ${providerLabel(knownDestination())} destination?`,
         lines: [
           safeText(knownDestination().label),
           "Also removes its User selection. Existing messages are not recalled.",
@@ -328,15 +393,21 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         items: Object.entries(state.snapshot.effective.destinations).map(([id, value]) => ({
           id,
           label: safeText(value.label),
+          description: destinationDescription(value),
           action: "prepareTest" as const,
         })),
       }),
       testReview: () => ({
         kind: "review",
-        title: `Send test to ${safeText(testDestination?.label ?? "Telegram")}?`,
+        title: `Send test to ${safeText(testDestination?.label ?? "destination")}?`,
+        lines: testDestination ? [destinationDescription(testDestination)] : [],
         content: `${testNotification?.title ?? ""}\n${testNotification?.body ?? ""}`,
         viewportSize: "adaptive",
-        confirm: { id: "send", label: "Send test to Telegram", action: "sendTest" },
+        confirm: {
+          id: "send",
+          label: `Send test to ${testDestination ? providerLabel(testDestination) : "destination"}`,
+          action: "sendTest",
+        },
       }),
       status: ({ state }) => ({
         kind: "detail",
@@ -351,7 +422,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           `Pending reminder: ${coordinator.pendingAt ? new Date(coordinator.pendingAt).toISOString() : "none"}`,
           ...Object.entries(state.snapshot.effective.destinations).map(([id, value]) => {
             const result = coordinator.statuses.get(id)?.result;
-            return `${safeText(value.label)} · ${state.snapshot.effective.targetIds.includes(id) ? "selected" : "not selected"} · token configured (User) · ${result ? (result.state === "failed" ? `${result.code}${result.retryAfterSeconds ? `; retry after ${result.retryAfterSeconds}s (not automatic)` : ""}` : result.state) : "no delivery"}`;
+            return `${safeText(value.label)} · ${destinationDescription(value)} (User) · ${state.snapshot.effective.targetIds.includes(id) ? "selected" : "not selected"} · ${result ? (result.state === "failed" ? `${result.code}${result.retryAfterSeconds ? `; retry after ${result.retryAfterSeconds}s (not automatic)` : ""}` : result.state) : "no delivery"}`;
           }),
           ...state.snapshot.diagnostics,
         ],
@@ -420,11 +491,16 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         return { kind: "stay" };
       },
       select: ({ itemId }) => {
-        selectedId = itemId;
+        selectedId = itemId.slice("destination:".length);
         return { kind: "to", screen: "destination" };
       },
       add: async ({ signal: actionSignal }) => {
-        const result = await runSecretInput(menuCtx, { title: "Telegram bot token", signal: actionSignal, isCurrent });
+        const result = await runSecretInput(menuCtx, {
+          title: "Telegram bot token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
         actionSignal.throwIfAborted();
         current();
         if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
@@ -433,19 +509,40 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         draft = { provider: "telegram", label: "", botToken: result.value.trim(), chatId: "" };
         return { kind: "to", screen: "chat" };
       },
+      addGotify: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Gotify application token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind !== "submitted") return { kind: "stay" };
+        selectedId = randomUUID();
+        draft = { provider: "gotify", label: "", appToken: result.value.trim(), serverUrl: "" };
+        return { kind: "to", screen: "serverUrl" };
+      },
       edit: () => {
         draft = { ...knownDestination() };
         return { kind: "to", screen: "review" };
       },
       token: async ({ signal: actionSignal }) => {
         const result = await runSecretInput(menuCtx, {
-          title: "Replace Telegram bot token",
+          title:
+            assertDraft().provider === "telegram" ? "Replace Telegram bot token" : "Replace Gotify application token",
           signal: actionSignal,
           isCurrent,
+          onError: reportError,
         });
         actionSignal.throwIfAborted();
         current();
-        if (result.kind === "submitted") assertDraft().botToken = result.value.trim();
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          if (destination.provider === "telegram") destination.botToken = result.value.trim();
+          else destination.appToken = result.value.trim();
+        }
         if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
         return { kind: "stay" };
       },
@@ -456,7 +553,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       },
       chat: ({ value }) => {
         if (!value || !/^-?[1-9]\d{0,30}$/.test(value.trim())) throw new Error("Use a numeric Telegram chat ID.");
-        const destination = assertDraft();
+        const destination = telegramDraft();
         destination.chatId = value.trim();
         if (!destination.label) destination.label = `Telegram ${destination.chatId}`;
         return { kind: "to", screen: "review" };
@@ -465,8 +562,31 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         const topic = value?.trim();
         if (topic && (!/^\d+$/.test(topic) || !Number.isSafeInteger(Number(topic)) || Number(topic) <= 0))
           throw new Error("Use a positive whole topic ID or leave it empty.");
-        if (topic) assertDraft().messageThreadId = Number(topic);
-        else delete assertDraft().messageThreadId;
+        if (topic) telegramDraft().messageThreadId = Number(topic);
+        else delete telegramDraft().messageThreadId;
+        return { kind: "to", screen: "review" };
+      },
+      serverUrl: ({ value }) => {
+        const destination = gotifyDraft();
+        const normalized = providers.get("gotify")?.validate({
+          ...destination,
+          label: destination.label || "Gotify",
+          serverUrl: value?.trim(),
+        });
+        if (normalized?.provider !== "gotify")
+          throw new Error(
+            "Use a valid Gotify server URL and application token. No URL credentials, query, or fragment.",
+          );
+        destination.serverUrl = normalized.serverUrl;
+        if (!destination.label) destination.label = `Gotify ${displayServerUrl(destination.serverUrl)}`.slice(0, 128);
+        return { kind: "to", screen: "review" };
+      },
+      priority: ({ value }) => {
+        const priority = value?.trim();
+        if (priority && (!/^-?\d+$/.test(priority) || !Number.isSafeInteger(Number(priority))))
+          throw new Error("Use a safe-integer priority or leave it empty.");
+        if (priority) gotifyDraft().priority = Number(priority);
+        else delete gotifyDraft().priority;
         return { kind: "to", screen: "review" };
       },
       save: ({ signal: actionSignal }) => saveDraft(actionSignal, true),
@@ -502,9 +622,10 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         const destination = testDestination;
         const notification = testNotification;
         const result = await runTask(menuCtx, {
-          label: "Sending Telegram test…",
+          label: `Sending ${providerLabel(destination)} test…`,
           signal: actionSignal,
           isCurrent,
+          onError: reportError,
           task: ({ signal: taskSignal }) => coordinator.send(selectedId, destination, notification, taskSignal),
         });
         actionSignal.throwIfAborted();
@@ -512,8 +633,8 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         if (result.kind === "completed")
           ctx.ui.notify(
             result.value.state === "accepted"
-              ? "Telegram accepted the test notification."
-              : `Telegram test: ${result.value.state === "failed" ? result.value.code : result.value.state}.`,
+              ? `${providerLabel(destination)} accepted the test notification.`
+              : `${providerLabel(destination)} test: ${result.value.state === "failed" ? result.value.code : result.value.state}.`,
             result.value.state === "accepted" ? "info" : "warning",
           );
         if (result.kind === "cancelled") return { kind: "close" };
@@ -530,13 +651,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         editing: resolveSettings(store.snapshot.user, scope === "project" ? store.snapshot.project : {}, providers)
           .effective,
       }),
-      onError: () => {
-        if (isCurrent())
-          ctx.ui.notify(
-            "Notify operation failed. Check the input, settings file, and Project selections. No credential values are shown.",
-            "error",
-          );
-      },
+      onError: reportError,
     });
   } finally {
     draft = undefined;

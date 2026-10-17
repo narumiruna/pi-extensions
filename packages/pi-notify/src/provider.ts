@@ -6,7 +6,15 @@ export interface TelegramDestination {
   messageThreadId?: number;
 }
 
-export type Destination = TelegramDestination;
+export interface GotifyDestination {
+  provider: "gotify";
+  label: string;
+  serverUrl: string;
+  appToken: string;
+  priority?: number;
+}
+
+export type Destination = TelegramDestination | GotifyDestination;
 
 export interface BodyEmphasis {
   style: "bold" | "monospace";
