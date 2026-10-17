@@ -44,7 +44,7 @@ for (const width of [1672, 1115, 900, 375]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(server.url);
     const primary = page.getByRole("tablist", { name: "Inspection source" });
-    await expect(primary.getByRole("tab")).toHaveText(["Context", "Session", "Environment"]);
+    await expect(primary.getByRole("tab")).toHaveText(["Context", "Session", "Cache", "Environment"]);
     const header = await page.locator(".app-header").boundingBox();
     const tabs = await primary.boundingBox();
     expect(tabs?.y).toBeGreaterThanOrEqual((header?.y ?? 0) + (header?.height ?? 0));

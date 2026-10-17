@@ -146,7 +146,8 @@ export function registerInspector(pi: ExtensionAPI, deps: Dependencies = default
   });
   pi.on("agent_settled", (_event, ctx) => {
     owners.get(ctx.sessionManager)?.collector?.settle();
-    changed(ctx, false);
+    // Settled hooks can persist auxiliary usage without a message event.
+    changed(ctx);
   });
 
   async function open(owner: Owner, ctx: ExtensionCommandContext): Promise<void> {

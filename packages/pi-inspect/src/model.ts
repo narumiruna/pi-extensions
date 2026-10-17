@@ -74,6 +74,48 @@ export interface ContextComposition {
   incomplete: boolean;
   unavailable?: string;
 }
+export interface CacheTotals {
+  count: number;
+  input: number | null;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+  promptTokens: number | null;
+  hitRatePercent: number | null;
+  promptCost: number | null;
+  estimatedSavings: number | null;
+}
+export interface CacheRecord extends Omit<CacheTotals, "count"> {
+  entryId: string;
+  epoch: number;
+  kind: "assistant" | "compaction" | "branch_summary" | "cache_warm" | "usage";
+  provider: string;
+  model: string;
+  timestamp: string;
+  status: "recorded" | "error" | "cancelled";
+  costSource: "reported" | "model-estimate" | "mixed" | "unavailable";
+  comparison: {
+    previousEntryId: string;
+    hitRateDeltaPercent: number;
+    hitRateLossPercent: number;
+    promptTokenDelta: number;
+    cacheReadDelta: number;
+    eligibleTokens: number;
+    rebilledTokens: number;
+    estimatedMissPremium: number | null;
+    modelChanged: boolean;
+    requestStartGapMs: number | null;
+  } | null;
+}
+export interface CacheHistory {
+  leafId: string | null;
+  records: CacheRecord[];
+  totalRecords: number;
+  omittedRecords: number;
+  totals: CacheTotals;
+  trend: { entryId: string; hitRatePercent: number | null }[];
+  complete: boolean;
+  unavailable?: string;
+}
 export interface Snapshot {
   protocol: 1;
   generation: string;
@@ -89,6 +131,7 @@ export interface Snapshot {
   invalidEntries?: { index: number; reason: string; raw: Capture }[];
   context?: ContextComposition;
   providerObservation?: { observedAt: number; data: Capture };
+  cache?: CacheHistory;
   currentPrompt: Capture;
   tools: ToolView[];
   skills: SkillView[];

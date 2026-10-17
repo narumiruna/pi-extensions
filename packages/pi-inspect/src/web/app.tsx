@@ -8,6 +8,7 @@ import "./composition.css";
 import "./session.css";
 import type { BranchView, ContextComposition as Composition, Snapshot } from "../model.js";
 import { generation, headers, RequestFailure, request, useDetail } from "./api.js";
+import { Cache } from "./cache.js";
 import { CapturedExecutions } from "./captured-executions.js";
 import { ContextComposition } from "./context-composition.js";
 import { ContextInventory } from "./context-inventory.js";
@@ -22,11 +23,12 @@ import { boundedSearch, searchNeedle } from "./search.js";
 import { SessionFilters } from "./session-filters.js";
 import { Trace } from "./trace.js";
 
-type Surface = "context" | "events" | "environment";
+type Surface = "context" | "events" | "cache" | "environment";
 type SessionView = "history" | "branches" | "executions";
 const surfaces = [
   { value: "context", label: "Context" },
   { value: "events", label: "Session" },
+  { value: "cache", label: "Cache" },
   { value: "environment", label: "Environment" },
 ] as const;
 
@@ -391,6 +393,15 @@ function App() {
                 <ContextComposition context={preview} preview />
               </div>
             )}
+          </div>
+          <div
+            className="cache-surface"
+            role="tabpanel"
+            id="surface-panel-cache"
+            aria-labelledby="surface-tab-cache"
+            hidden={surface !== "cache"}
+          >
+            <Cache report={snapshot?.cache} select={selectEntry} />
           </div>
           <div
             className="environment-surface"

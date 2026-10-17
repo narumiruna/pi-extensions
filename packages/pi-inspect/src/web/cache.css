@@ -1,0 +1,82 @@
+.cache-view {
+  overflow: auto;
+  padding: 24px;
+  min-height: 0;
+  overflow-wrap: anywhere;
+}
+.cache-note {
+  color: var(--gray-11);
+  font-size: 13px;
+}
+.cache-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 16px;
+}
+.cache-metrics dt {
+  color: var(--gray-11);
+  font-size: 12px;
+}
+.cache-metrics dd {
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.cache-totals,
+.cache-record {
+  border: 1px solid var(--gray-6);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--color-panel-solid);
+}
+.cache-trend {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  padding: 0;
+  gap: 10px;
+  font-size: 12px;
+}
+.cache-trend li {
+  display: grid;
+  gap: 4px;
+  width: 90px;
+}
+.cache-trend meter {
+  width: 100%;
+}
+.cache-records {
+  display: grid;
+  gap: 8px;
+}
+.cache-record summary {
+  cursor: pointer;
+}
+.cache-record summary span,
+.cache-record summary time {
+  margin-inline-end: 16px;
+}
+.cache-record summary time {
+  color: var(--gray-11);
+  font-size: 12px;
+}
+.cache-record summary:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: 4px;
+}
+.cache-surface:not([hidden]) {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+.cache-surface .cache-view {
+  flex: 1;
+}
+@media (max-width: 700px) {
+  .cache-view {
+    padding: 12px;
+  }
+  .cache-record summary span,
+  .cache-record summary time {
+    display: block;
+  }
+}

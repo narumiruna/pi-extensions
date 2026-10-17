@@ -15,6 +15,7 @@ import {
 type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
 import { ancestry } from "./ancestry.js";
+import { type CostModelResolver, cacheHistory } from "./cache-history.js";
 import type { Collector } from "./collector.js";
 import { captureContext, sessionContext } from "./context.js";
 import { correlatedCalls } from "./correlation.js";
@@ -87,6 +88,7 @@ export function snapshot(
   skills: SkillView[],
   index = new EntryIndex(manager.getEntries()),
   observedContext?: ContextComposition,
+  resolveCostModel?: CostModelResolver,
 ): Snapshot {
   const entries = index.entries;
   const owning = new Map<string, { id: string; ids: Set<string> }>();
@@ -147,6 +149,7 @@ export function snapshot(
     invalidEntryCount,
     invalidEntries,
     context: observedContext ?? sessionContext(manager, index),
+    cache: cacheHistory(manager, index, resolveCostModel),
     currentPrompt: capture(prompt, 65536),
     tools: tools.slice(0, 256).map((t) => ({
       name: displayText(t.name).slice(0, 512),

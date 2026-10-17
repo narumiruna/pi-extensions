@@ -4,7 +4,7 @@ Detailed views, data provenance, bounds and security for `pi-inspect`.
 
 ## Views and data provenance
 
-The primary tabs below the header are **Context**, **Session** and **Environment**. Session has History, Branch view and Captured executions secondary tabs. Environment has Tools, MCP Servers and Skills secondary tabs. Each tab list supports Left/Right and Home/End with one keyboard tab target and an associated content panel. Environment opens Tools on first use and retains its selected resource tab, scroll and disclosure state across navigation.
+The primary tabs below the header are **Context**, **Session**, **Cache** and **Environment**. Session has History, Branch view and Captured executions secondary tabs. Environment has Tools, MCP Servers and Skills secondary tabs. Each tab list supports Left/Right and Home/End with one keyboard tab target and an associated content panel. Environment opens Tools on first use and retains its selected resource tab, scroll and disclosure state across navigation.
 
 **Context composition is the primary view.** A warm off-white document layout uses muted, consistent system/developer, user, assistant, tool-call, tool-result and neutral colors. Each ordered message or supported content block is an expandable row; assistant thinking/text/tool calls remain distinct. Desktop details place source metadata beside content, with lightweight structured/metadata/raw accordions. Copy acts on captured display data; the raw message and original role remain available. Missing segment token sizes are explicitly unavailable: persisted assistant totalTokens is usage, not the size of an individual context block.
 
@@ -47,6 +47,7 @@ Timeline is an optional shared-axis view. Log timestamps are points, not duratio
 | --- | --- | --- |
 | Ordered model input, search, minimap, inline message/metadata/raw/copy | Context | Last observed Pi context; explicit session-derived active-leaf fallback until observed |
 | Current effective prompt | Context → Current runtime information | Current runtime prompt; may not yet be sent |
+| Cache tokens, weighted hit rate, trend, comparisons and estimated cost | Cache → Recorded usage → Event details | Active branch persisted usage; at most 200 rows and 32 conversational trend points; unknown accounting stays unavailable |
 | Tool metadata, schemas, sources and exposure | Environment → Tools | Current public tool catalog; active ≠ provider-visible; namespace/source metadata does not prove server ownership |
 | Extension-registered MCP server names | Environment → MCP Servers | Partial registration catalog; complete configuration, connection/auth health and authoritative tool ownership unavailable |
 | Startup skill metadata and paths | Environment → Skills | Catalog captured at inspector startup, not continuously refreshed; content and current file availability unavailable |
@@ -63,6 +64,10 @@ Timeline uses log timestamps as points and observed execution callbacks as inter
 Live results come from public `tool_execution_end` events, after the runtime's tool-result transformation pipeline (verified with a real nested call and a transforming hook). Partial updates are provisional. Unknown tools, schema failures, and permission blocks still have nested execution events. Direct transcript results remain authoritative persisted history. The inspector observes only: its context_with_system and before_provider_request handlers return nothing and never mutate messages or payloads; it registers no result-transforming handler.
 
 Codemode discovery helpers (`searchTools`, `describeTool`, `describeNamespace`, catalog helpers), sandbox local variables, and internal Promise scheduling are not normal child-tool events. `models.classify` and `models.generateImages` are also not normal nested tools: their complete input/output is unavailable unless printed. The generic Raw tab can show documented persisted metadata but the inspector never imports another extension or depends on private codemode implementation types.
+
+## Cache usage
+
+Cache follows Pi's active branch independently of browser history selection. It shows weighted branch totals, a bounded conversational hit-rate trend and expandable recorded-usage rows with Event details links. Summary and warming usage stay separate from conversational comparisons. Native disclosure controls support keyboard use; labels render literally in both themes and narrow layouts. The [cache history contract](./cache-history.md) defines formulas, unknown values, estimates, record classes, bounds and refresh behavior. It is a persisted-usage view, not a streaming or transport-attempt trace.
 
 ## Environment resource evidence
 

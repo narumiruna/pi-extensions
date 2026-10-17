@@ -63,6 +63,48 @@ function harness() {
   return { start, launch, context, emit, run, confirm, notifications, command: () => command };
 }
 describe("owned lifecycle and mode contract", () => {
+  it("refreshes settled cache usage without changing normalized model input and revokes old data", async () => {
+    const { cacheAssistant, cacheUsage } = await import("./cache-fixtures.js");
+    const h = harness();
+    const ctx = h.context();
+    const manager = ctx.sessionManager as SessionManager;
+    manager.appendMessage(cacheAssistant());
+    await h.run(ctx);
+    const options = h.start.mock.calls[0]?.[0];
+    expect(options?.snapshot()).toMatchObject({ cache: { totals: { count: 1 } } });
+    const first = {
+      system: "stable prompt",
+      tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      messages: [
+        { role: "system", content: "stable prompt" },
+        { role: "user", content: "request" },
+      ],
+    };
+    const baseline = structuredClone(first);
+    await h.emit("context_with_system", ctx, { messages: first.messages });
+    await h.emit("before_provider_request", ctx, { payload: first });
+    manager.appendUsage("cache_warm", "provider", "model", cacheUsage());
+    await h.emit("agent_settled", ctx);
+    expect(options?.snapshot()).toMatchObject({ cache: { totals: { count: 2 } } });
+    expect(first).toEqual(baseline);
+    const next = {
+      ...structuredClone(first),
+      messages: [...first.messages, { role: "assistant", content: "reply" }, { role: "user", content: "next" }],
+    };
+    const expected = structuredClone(next);
+    await h.emit("context_with_system", ctx, { messages: next.messages });
+    await h.emit("before_provider_request", ctx, { payload: next });
+    expect(next).toEqual(expected);
+    expect(next.messages.slice(0, first.messages.length)).toEqual(baseline.messages);
+    expect(next.system).toBe(baseline.system);
+    expect(next.tools).toEqual(baseline.tools);
+    await h.emit("session_start", ctx);
+    expect(() => options?.snapshot()).toThrow("stopped");
+    await h.run(ctx);
+    expect(h.start.mock.calls[1]?.[0].snapshot()).toMatchObject({ cache: { totals: { count: 2 } } });
+    await h.run(ctx, "stop");
+    expect(() => h.start.mock.calls[1]?.[0].snapshot()).toThrow("stopped");
+  });
   it("preserves the legacy alias with the same consent, owner and stop behavior", async () => {
     const h = harness();
     const ctx = h.context();

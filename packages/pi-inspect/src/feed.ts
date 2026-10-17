@@ -119,6 +119,7 @@ export class SessionFeed {
         this.options.skills,
         this.index(),
         this.observed,
+        (provider, model) => ctx.modelRegistry?.find(provider, model),
       );
       this.cached.calls = []; // Do not retain evicted live results inside the static cache.
       this.dirty = false;
