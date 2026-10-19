@@ -4,7 +4,7 @@
 
 Add an opt-in `@narumitw/pi-goal/durable` API for one persistent objective with explicit completion, blocking, external waits, finite automatic work, and host-controlled pause/resume. Preserve the existing coding-agent `/goal` extension and its safety behavior.
 
-Build a native durable workflow, not an `ExtensionAPI` adapter or an unbounded copy of the reviewer example.
+Build a native durable workflow with a required host-owned request-admission wrapper, not an `ExtensionAPI` adapter or an unbounded copy of the reviewer example. First prove the wrapper against the existing safety requirements using published public APIs; stop if that experiment fails. Changes to Pi upstream are outside this plan.
 
 ## Context
 
@@ -16,9 +16,9 @@ Build a native durable workflow, not an `ExtensionAPI` adapter or an unbounded c
 
 ## Execution status
 
-**Blocked at the first runtime safety gate.** Real-Harness characterization tests against the pinned published release show that native generation hooks cannot deny a request, blocked tools do not stop the enclosing model loop, and deferred/compaction requests bypass generation request hooks. Replay-safe tool recovery also bypasses `beforeTool`. The API implementation must not proceed without the separate supported API/dependency or host-wrapper decision required below.
+**Host-wrapper experiment approved; the safety gate has not passed.** Real-Harness characterization tests show that the pinned native extension hooks cannot enforce the required admission boundary. The user approved trying a host-owned `Models`/provider wrapper first because changing Pi upstream is not the preferred route. This approval permits the bounded experiment below; it does not relax response, token, ownership, or recovery requirements.
 
-The [safety-gate audit](../../packages/pi-goal/test/durable-safety-audit.md) records the public API branches, deterministic probes, available ownership/idempotency behavior, and remaining requirements. The 12 characterization tests pass; several deliberately assert the unsafe boundary behavior, so this is not a passing safety gate. No production API, public exports, settings, or dependencies have changed. All implementation and completion checks remain open; retain this plan.
+The [safety-gate audit](../../packages/pi-goal/test/durable-safety-audit.md) retains the public API findings and 12 passing characterization tests. Several tests deliberately assert the missing native boundary, not Goal safety compliance. No wrapper, production API, public exports, settings, or dependencies have changed. Full API implementation remains gated on the experiment; retain this plan and leave its acceptance checks open. If any required guarantee cannot be proved with the approved public host APIs, record the evidence and stop without changing Pi upstream, adding private workarounds, or silently falling back to weaker limits.
 
 ## Scope
 
@@ -26,13 +26,14 @@ Include host-only start, inspect, edit, pause, resume, wake, and clear operation
 
 Use a dedicated task-owned execution conversation for the first durable API. The host receives its ID and can display its transcript. This is an explicit difference from the existing same-session `/goal` workflow, which remains unchanged. The host supplies the initial task context and reviewed agent configuration; do not copy unrelated conversation history implicitly.
 
-Defer custom UI, slash commands for durable, automatic adoption of arbitrary host input, the coding-agent event-bus RPC/mutex protocols, multi-goal queues, legacy-session migration, and automatic activation of forked goals. No other extension is required or identified.
+Defer custom UI, slash commands for durable, automatic adoption of arbitrary host input, the coding-agent event-bus RPC/mutex protocols, multi-goal queues, legacy-session migration, and automatic activation of forked goals. Do not patch or fork Pi upstream, edit installed dependencies, or change the dependency baseline to bypass a failed experiment. No other extension is required or identified.
 
 ## Applicable MUST rules and verification
 
 | Touched area | Required rule | Verification |
 | --- | --- | --- |
 | Package boundary | Keep the existing Pi entry and independently usable package; isolate optional runtime imports and publish matching output/declarations. | Import/build tests, metadata review, packed consumers, Pi loader smoke. |
+| Host admission | Use public `Models`/provider APIs, persist admission before dispatch, and reject untrusted, stale, exhausted, or uncertain work without changing unrelated conversations. | Real-Harness dispatch-count, concurrent-admission, fault-injection, replay, and isolation tests. |
 | Lifecycle and ownership | Release all owned work, scope cancellation precisely, and revalidate mutable state after every await. | Delayed-operation, replacement, abort, close, and recovery tests. |
 | State and effects | Persist fork-sensitive state; serialize conflicting mutations; do not claim exactly-once external effects. | Atomic transition, replay, fork, and fault-injection tests. |
 | Tools | Reject stale calls, bound input/output, preserve cancellation, and make failures observable. | Native tool and nested-call tests. |
@@ -45,7 +46,7 @@ Apply `docs/extension-conventions.md`, `docs/extension-settings.md`, `docs/readm
 
 ### Public boundary and ownership
 
-Add `src/durable.ts` exporting `createDurableGoal()` with a native extension, typed host control, and read-only state access. Host mutations require an operation ID and expected Goal identity/revision. Construction, inspection, and observer attachment must not start or resume execution.
+After the host-wrapper experiment passes, add `src/durable.ts` exporting `createDurableGoal()` with a native extension, typed host control, and read-only state access. Document the required host admission integration; installing the extension alone must not claim or activate bounded execution. Host mutations require an operation ID and expected Goal identity/revision. Construction, inspection, and observer attachment must not start or resume execution.
 
 The host owns storage, Harness lifecycle, registry, authorization, provider credentials, and execution environments. Persist one foreground supervisor task owned by the source conversation and its dedicated task-owned execution conversation atomically. Source-conversation abort reaches this tree; Goal pause, replacement, and clear target only the supervisor's owned tree, never a broad source-conversation abort that could stop unrelated work. Do not introduce a background cancellation escape in this release.
 
@@ -73,7 +74,17 @@ Reconcile committed assistant entries and documented usage/task/submission recor
 
 A supervisor that waits for a final answer cannot alone bound an internal tool loop. Prove an exact-version public fail-closed request boundary before promising response or token limits. The just-finished response may overshoot a token budget, but no additional Goal-owned provider request or substantive tool may start after exhaustion is known. A token budget is not a dollar cap.
 
-`HookApi` exposes committed document reads and task memos, not arbitrary commits or cancellation. Use native task/tool APIs for authoritative writes. Do not cast hooks to a task runtime, use a throwing notification hook as a stop signal, or assume a read-only `onYield` can persist cumulative counters across successor tasks. The default design has the supervisor admit another submission only after reconciliation; any hook-driven continuation must satisfy the same finite, crash-safe admission rule.
+`HookApi` exposes committed document reads and task memos, not arbitrary commits or cancellation. Use supported host, task, or tool transactions for authoritative writes. Do not cast hooks to a task runtime, use a throwing notification hook as a stop signal, or assume a read-only `onYield` can persist cumulative counters across successor tasks. The supervisor admits another submission only after reconciliation; the host wrapper must independently guard every provider dispatch within that submission.
+
+### Host-owned admission experiment
+
+The host supplies a guarded `Models` implementation through the public Harness options before scheduling Goal work. The wrapper sits between `pi-durable` and the underlying `Models`/provider; interception must occur before the underlying provider operation starts, not in a notification after dispatch. The experiment must first prove reliable trusted binding to the source/execution conversation, Goal identity, activation generation, and logical operation. Do not derive authority from model-visible text or assume deferred polling supplies an identity that the current API does not pass.
+
+Admission must atomically validate current ownership, host profile, limits, and outstanding work, then persist a bounded reservation/receipt before dispatch. For the first supported profile, serialize Goal-owned usage-producing model operations so concurrent generation and compaction cannot invalidate the one-response token-overshoot boundary. Persist final usage before releasing the next admission; reconcile wrapper receipts with native assistant/usage/task records without double counting. A crash or storage failure with an uncertain dispatch/result must stop new work until reconciled, not refund a reservation or blindly resend.
+
+Cover streaming, completion, deferred polling, internal tool-loop successors, compaction, and recovery. Disable provider/SDK internal retries through documented options unless every attempt can be checked individually; if neither is possible, the experiment fails. Preserve cancellation and deferred cancellation after new spend is denied. A model wrapper does not guard tool effects: separately validate substantive tool execution, including nested calls, replay-safe recovery, and state changes across awaits. Prove terminal-receipt reconciliation independently of observers and the failed supervisor.
+
+Use a real Harness and finite synthetic providers for the experiment; do not add a public export or live paid smoke before it passes. Any bypass, unreliable attribution, duplicate or ambiguous accounting, unsafe recovery, lost cancellation, or effect on unrelated conversations fails the gate. Keep failing requirements open and stop with a focused report; do not turn a failed host experiment into upstream work or a weaker safety contract.
 
 ### Waits, interruption, and context
 
@@ -85,7 +96,8 @@ Append a deterministic Goal contract when activated and a superseding inactive c
 
 ## Plan
 
-- [ ] **Resolve the runtime safety gate before implementation.** Against published durable `1.2.0`, build real-Harness fixtures for task-owned conversation cancellation, idempotent submission, tool-loop response accounting, and fail-closed request/tool admission at limit exhaustion. Verify hook authority and retry/compaction ordering from public APIs and runtime behavior. Prove host-profile validation rejects background compaction before Goal work starts, including changed settings and reopen, and prove persisted Goal-state reconciliation after source abort, supervisor fault, and orphaning without observer delivery. If any required admission or reconciliation mechanism is absent, stop this plan and request a separate supported API/dependency decision; do not weaken limits or add a private hook workaround.
+- [x] **Characterize the native-only boundary.** The 12 real-Harness probes in `packages/pi-goal/test/durable-safety-gate.test.ts` and `durable-recovery-gate.test.ts` pass and document why native hooks alone cannot enforce admission; the audit records their limits. This diagnosis does not satisfy the safety gate.
+- [ ] **Pass the safety gate with the approved host-wrapper experiment.** Against the pinned published runtime, build repository-only fixtures for trusted attribution, atomic admission/receipts, finite tool-loop response accounting, and fail-closed provider/tool dispatch. Cover concurrency, deferred polling, compaction, provider/SDK retry policy, native retries, interrupted delivery, reopen, and stale activations. Prove background-compaction profile validation and observer-independent supervisor terminal-receipt reconciliation, including source abort, faults, and orphaning. Acceptance: every requirement in the Host-owned admission experiment passes with zero post-denial provider/tool dispatch and no effect on unrelated conversations. If any requirement fails or cannot be proved through public host APIs, record the blocker and stop; do not implement the full API, modify Pi upstream, change dependencies to bypass the result, or weaken acceptance.
 - [ ] **Specify the ownership and state contracts.** Define host operations, states, identity rotation, operation replay/conflicts, spend attribution, fork behavior, and cancellation scope in `packages/pi-goal/docs/durable.md`. Acceptance: transition/ownership tests cover every allowed edge, new-tree resume with preserved accounting, and rejection of stale or cross-conversation control without effects.
 - [ ] **Extract only required runtime-neutral rules.** Separate objective/evidence validation, prompt escaping, repeat detection, usage normalization, and wait validation from coding-agent dependencies. Acceptance: existing tool schemas, command behavior, safety defaults, settings, and lifecycle suites remain unchanged and pass.
 - [ ] **Implement native state, supervisor, and host controls.** Add `src/durable.ts` and focused state/task modules; create the owned execution conversation and supervisor with one committed identity, and use stable request IDs for delivery. Acceptance: crash injection before/after intent, submission, and receipt commits creates no duplicate logical kickoff/continuation and never controls unrelated tasks.
@@ -121,7 +133,7 @@ The durable API is opt-in and does not rewrite current Pi sessions, settings, or
 
 ## Completion Checklist
 
-- [ ] Published-version safety fixtures prove ownership, accounting, and pre-request/pre-tool enforcement; no private APIs or unbounded fallback remain.
+- [ ] The approved host-wrapper experiment proves trusted attribution, atomic admission, ownership, accounting, and pre-request/pre-tool enforcement across the pinned runtime's relevant paths; no private APIs or unbounded fallback remain.
 - [ ] Host controls and all three tools reject stale, conflicting, exhausted, or cross-conversation authorization.
 - [ ] Limits, evidence rules, deadlines, restart/fork behavior, and provider/compaction failures pass deterministic tests.
 - [ ] The supported host profile rejects background compaction and profile changes before new Goal work, and cancellation leaves no surviving Goal-owned work.

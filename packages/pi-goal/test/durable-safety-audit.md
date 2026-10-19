@@ -2,14 +2,15 @@
 
 ## Result
 
-**Blocked. Do not implement or export the durable Goal API on this evidence.**
+**Native-only safety gate failed. The host-wrapper experiment is approved but has not been validated.**
+Do not implement or export the full durable Goal API on the characterization evidence alone.
 The repository pins `@earendil-works/pi-durable` and `@earendil-works/pi-ai` to `1.2.0` in root `devDependencies`.
 The real-Harness probes use those installed releases, not the newer upstream checkout or a simulated Harness.
 Passing characterization tests demonstrate runtime behavior; they do not establish Goal safety compliance.
 
 The required native fail-closed request boundary is absent from the inspected public extension API.
 A supervisor can reconcile a settled submission, but an internal tool loop can already have sent more provider requests before settlement.
-The plan requires stopping here rather than replacing finite limits with notification hooks, observer callbacks, or private runtime casts.
+These findings still rule out enforcing finite limits with notification hooks, observer callbacks, or private runtime casts. The user has since approved trying the public host-owned admission route first; this changes the next experiment, not the observed runtime behavior or the safety requirements.
 
 ## Reproduce
 
@@ -60,18 +61,13 @@ There is also a separate retry layer: `ConversationStreamOptions.maxRetries` con
 A future supported design must define its spend boundary and prevent hidden transport retries from invalidating the promised admission limit.
 The current probes cover ordinary durable retries, not physical HTTP retries inside real provider SDKs.
 
-## Decision required
+## Approved next experiment
 
-Choose a separately reviewed path before resuming implementation:
+The user selected a host-owned `Models`/provider admission wrapper for a bounded feasibility experiment, rather than changing Pi upstream. The [active plan](../../../docs/plans/2026-10-19_pi-goal-durable-plan.md#host-owned-admission-experiment) defines the acceptance requirements and stop conditions. This route is explicitly approved; it is not yet implemented or proved, and a native extension alone still cannot claim the proposed guarantees.
 
-1. Add or adopt a supported runtime API that can deny requests and tools before dispatch, with authoritative accounting and recovery semantics.
-2. Explicitly approve a host-owned `Models`/provider admission wrapper and its expanded host contract, then prove it against the same limits and recovery cases.
+First prove trusted Goal/activation/operation attribution at the public host boundary. Deferred polling currently forwards only a cancellation signal, not a Goal/conversation identifier, so attribution cannot be assumed. Then prove persistent atomic admission, single-Goal concurrency control, accounting before the next admission, crash recovery, and coverage for streaming, completion, deferred polling, compaction, and retries. Provider/SDK retries must be disabled through documented options unless individually guarded; cancellation of already admitted work must remain possible after new spend is denied. Tool execution and supervisor terminal-state reconciliation need separate proof.
 
-The second option is possible through public host APIs, but is not a guarantee provided by installing a native extension.
-It needs persistent atomic admission, Goal attribution, concurrent/recovered request handling, and coverage for streaming, completion, deferred polling, compaction, and provider/SDK retries.
-Deferred polling currently forwards only a cancellation signal, not a Goal/conversation identifier, so attribution cannot be assumed.
-Cancellation of already admitted deferred work must remain available after new spend is denied.
-Neither option is implemented or implicitly approved by these fixtures.
+If any required guarantee fails or remains unproved, record the evidence, leave the safety gate open, and stop full API implementation. Do not automatically move to upstream patches, dependency changes, private workarounds, or reduced limits. A successful experiment permits continuing the existing plan; an unsuccessful one is a valid stopping result, not permission to weaken acceptance.
 
 ## Verification results
 
