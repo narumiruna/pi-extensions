@@ -13,6 +13,7 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 - Implements in the planning session or a fresh linked session with the approved plan.
 - Configures persistent or one-shot destination model and thinking choices for fresh implementation.
 - Restores Plan state and one saved plan across resume and compaction.
+- Provides an opt-in native durable API for host-controlled, persisted planning and same-conversation approval.
 - Configures the Plan tool allowlist, reviewed shell commands, user-trusted subcommands, export path, plan reinjection, shortcut, and thinking level.
 - Publishes statusline state and cooperates anonymously with Workflow Mutex Protocol v1 participants.
 
@@ -45,6 +46,16 @@ Install only from sources you trust because Pi extensions run with Pi's permissi
 
 Run `/plan` to open the state-aware menu, then start Plan mode and ask the agent to inspect and design the change.
 Run `/plan <prompt>` when the first planning request is already known.
+
+## 🧩 Durable host API
+
+> **Experimental.** `@narumitw/pi-plan-mode/durable` supports the tested durable host release only and has a smaller interface than the coding-agent extension.
+
+Use `createDurablePlanMode()` for headless planning, persisted questions, plan review, and explicit host approval in the same conversation.
+The host owns credentials, storage, tool review, and the human interface; it must use the integration's guarded registry and bind the controller before resuming work.
+No live-provider calls or settings-file integration are implicit.
+See the [durable API, compatibility evidence, security limits, and runnable synthetic example](./docs/durable.md).
+The existing `/plan` commands and settings are unchanged.
 
 ## 🗺️ How it works
 
@@ -407,8 +418,9 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 packages/pi-plan-mode/
 ├── src/                               # Policy, questions, settings, and handoff modules
 │   ├── index.ts                       # Thin Pi entrypoint
-│   └── plan-mode.ts                   # Planning policy and implementation handoff
-├── dist/                              # Generated Jiti runtime
+│   ├── plan-mode.ts                   # Coding-agent policy and implementation handoff
+│   └── durable.ts                     # Opt-in native durable host API
+├── dist/                              # Separate Jiti runtime and durable JavaScript/types
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── docs/                              # Published reference documentation
 └── test/                              # Behavior and lifecycle coverage

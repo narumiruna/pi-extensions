@@ -4,6 +4,27 @@
   "description": "Pi extension that adds a Codex-like read-only /plan collaboration mode.",
   "type": "module",
   "license": "MIT",
+  "exports": {
+    "./durable": {
+      "types": "./dist/durable.d.ts",
+      "import": "./dist/durable.js"
+    },
+    "./package": "./package.json",
+    "./src": "./src/index.ts",
+    "./src/*.ts": "./src/*.ts",
+    "./src/*.js": "./src/*.js",
+    "./src/*": "./src/*.ts",
+    "./dist": "./dist/index.ts",
+    "./dist/*.ts": "./dist/*.ts",
+    "./dist/*.js": "./dist/*.js",
+    "./dist/*.map": "./dist/*.map",
+    "./dist/durable": "./dist/durable.js",
+    "./dist/*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.ts"
+    },
+    "./*": "./*"
+  },
   "private": false,
   "keywords": [
     "pi-package",
@@ -32,11 +53,23 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
+    "@earendil-works/chord": "^1.2.0",
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-durable": "1.2.0",
     "@earendil-works/pi-tui": "*"
   },
+  "peerDependenciesMeta": {
+    "@earendil-works/chord": {
+      "optional": true
+    },
+    "@earendil-works/pi-durable": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@earendil-works/chord": "1.2.0",
     "@earendil-works/pi-coding-agent": "1.2.0",
+    "@earendil-works/pi-durable": "1.2.0",
     "@earendil-works/pi-tui": "1.2.0",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"

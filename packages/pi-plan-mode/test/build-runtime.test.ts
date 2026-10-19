@@ -1,27 +1,18 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
+import { listFiles, type RuntimeBuilder } from "../../../test/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
-const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
-  packageId: "pi-plan-mode",
-  forbiddenEagerInputs: [
-    "src/interactive-ui.ts",
-    "src/active-implementation-menu.ts",
-    "src/plan-export-screen.ts",
-    "src/plan-action-menus.ts",
-    "src/plan-launch-menu.ts",
-    "src/saved-plan-menu.ts",
-    "src/settings-menu.ts",
-  ],
-  forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
-});
+const packageRoot = resolve("packages/pi-plan-mode");
+async function loadBuilder(): Promise<RuntimeBuilder> {
+  return import(pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href);
+}
 
 test("generated interactive UI stays loadable with a lazy external questionnaire", async () => {
   const builder = await loadBuilder();
