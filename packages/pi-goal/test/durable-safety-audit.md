@@ -2,8 +2,8 @@
 
 ## Result
 
-**Native-only safety gate failed. The host-wrapper experiment is approved but has not been validated.**
-Do not implement or export the full durable Goal API on the characterization evidence alone.
+**Native-only safety gate failed. The subsequently approved Host-wrapper candidate was tested and also failed its gate.**
+The [Host experiment audit](durable-host-audit.md) records positive public-API evidence and the failed SDK-attempt and unrelated-deferred isolation cases. Stop full API implementation under the plan's explicit failed-experiment rule; do not export a partially bounded Goal API.
 The repository pins `@earendil-works/pi-durable` and `@earendil-works/pi-ai` to `1.2.0` in root `devDependencies`.
 The real-Harness probes use those installed releases, not the newer upstream checkout or a simulated Harness.
 Passing characterization tests demonstrate runtime behavior; they do not establish Goal safety compliance.
@@ -61,15 +61,15 @@ There is also a separate retry layer: `ConversationStreamOptions.maxRetries` con
 A future supported design must define its spend boundary and prevent hidden transport retries from invalidating the promised admission limit.
 The current probes cover ordinary durable retries, not physical HTTP retries inside real provider SDKs.
 
-## Approved next experiment
+## Approved Host experiment result
 
-The user selected a host-owned `Models`/provider admission wrapper for a bounded feasibility experiment, rather than changing Pi upstream. The [active plan](../../../docs/plans/2026-10-19_pi-goal-durable-plan.md#host-owned-admission-experiment) defines the acceptance requirements and stop conditions. This route is explicitly approved; it is not yet implemented or proved, and a native extension alone still cannot claim the proposed guarantees.
+The user explicitly approved trying a host-owned `Models`/provider wrapper rather than changing Pi upstream. That bounded experiment has now run; it is not waiting for the same approval again. The [active plan](../../../docs/plans/2026-10-19_pi-goal-durable-plan.md#host-owned-admission-experiment) retains the unchanged acceptance requirements and stop conditions.
 
-First prove trusted Goal/activation/operation attribution at the public host boundary. Deferred polling currently forwards only a cancellation signal, not a Goal/conversation identifier, so attribution cannot be assumed. Then prove persistent atomic admission, single-Goal concurrency control, accounting before the next admission, crash recovery, and coverage for streaming, completion, deferred polling, compaction, and retries. Provider/SDK retries must be disabled through documented options unless individually guarded; cancellation of already admitted work must remain possible after new spend is denied. Tool execution and supervisor terminal-state reconciliation need separate proof.
+Public primitives do support trusted native task/session binding, persisted reservations, deferred-handle recovery, execute-time tool guards, and a foreground sibling reconciler. The absence of a poll `sessionId` or a general native stop hook is therefore not, by itself, proof that no Host design can work. The separate Host audit records both those positive results and the two demonstrated failures of this candidate.
 
-If any required guarantee fails or remains unproved, record the evidence, leave the safety gate open, and stop full API implementation. Do not automatically move to upstream patches, dependency changes, private workarounds, or reduced limits. A successful experiment permits continuing the existing plan; an unsuccessful one is a valid stopping result, not permission to weaken acceptance.
+The safety gate remains open and full API implementation stops. Do not automatically move to upstream patches, dependency changes, private workarounds, narrower provider claims, or reduced limits. No production wrapper or integrated Goal API is provided.
 
-## Verification results
+## Native-only baseline verification
 
 - `npm install`: completed without manifest or lockfile changes; npm reported three high-severity dependency advisories, which this test-only work does not resolve.
 - Focused Vitest run: 12 characterization tests passed.
