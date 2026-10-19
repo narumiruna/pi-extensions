@@ -89,7 +89,7 @@ for (const [id, api, header] of [
   ["openai", "openai-responses", "api-key"],
   ["openrouter", "openai-completions", "api-key"],
   ["anthropic", "anthropic-messages", "x-api-key"],
-  ["kimi-coding", "anthropic-messages", "x-api-key"],
+  ["kimi-coding", "openai-completions", "api-key"],
 ] as const) {
   test(`${id} detects a case-insensitive ${header} override`, async () => {
     const f = await fixture(id, api);
@@ -100,6 +100,20 @@ for (const [id, api, header] of [
     await f.coordinator.clear(f.context());
   });
 }
+
+test("Kimi custom Anthropic models still reject a case-insensitive x-api-key override", async () => {
+  const f = await fixture("kimi-coding");
+  f.registry.registerProvider("kimi-coding", {
+    api: "anthropic-messages",
+    models: [{ ...f.model, api: "anthropic-messages" }],
+    headers: { "X-API-KEY": otherKey },
+  });
+  const result = await f.coordinator.ensureActive(f.context(), f.store, "work");
+  assert.equal(result.status, "error");
+  if (result.status === "error") assert.match(result.message, /conflicting authentication header/);
+  assert.doesNotMatch(JSON.stringify(result), /sk-named-fixture|sk-other-fixture/);
+  await f.coordinator.clear(f.context());
+});
 
 for (const account of ["work", "subscription"]) {
   test(`${account} verifies non-selected models as well as the first model`, async () => {
@@ -177,6 +191,7 @@ for (const scope of ["provider", "model"] as const) {
 for (const [id, api] of [
   ["openai", "openai-responses"],
   ["openrouter", "openai-completions"],
+  ["kimi-coding", "openai-completions"],
   ["anthropic", "anthropic-messages"],
   ["radius", "pi-messages"],
 ] as const) {

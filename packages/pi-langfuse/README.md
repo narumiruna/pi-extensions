@@ -37,7 +37,7 @@ pi -e ./packages/pi-langfuse
 
 The package declares `dist/index.ts`, so Pi cannot load an unbuilt local checkout.
 The Langfuse SDK requires Node.js 20 or newer; the supported Pi runtimes require Node.js >=22.19.0.
-The durable adapter targets experimental `pi-durable@1.2.0` exactly; review its [compatibility and upgrade checks](./docs/durable.md#compatibility) before enabling or upgrading it.
+The durable adapter supports only the experimental releases listed in its [peer dependencies](./package.json); review its [compatibility and upgrade checks](./docs/durable.md#compatibility) before enabling or upgrading it.
 Pi extensions run with your user permissions.
 Review this extension and its data-export behavior before installing it.
 
@@ -118,7 +118,7 @@ Treat custom metadata, tags, session IDs, user IDs, request IDs, and trace names
 
 ## 🧱 Durable host applications
 
-**Experimental:** use the dedicated public export with `@earendil-works/pi-durable@1.2.0`, compatible Pi AI, and Chord ^1.2.0.
+**Experimental:** use the dedicated public export with a durable release allowed by the package's peer dependencies and its matching Pi AI and Chord host dependencies.
 Install those host dependencies explicitly; the durable entry does not require or load coding-agent registration.
 
 ```ts

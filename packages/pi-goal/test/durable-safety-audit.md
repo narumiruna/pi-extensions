@@ -4,8 +4,7 @@
 
 **Native-only safety gate failed. The subsequently approved Host-wrapper candidate was tested and also failed its gate.**
 The [Host experiment audit](durable-host-audit.md) records positive public-API evidence and the failed SDK-attempt and unrelated-deferred isolation cases. Stop full API implementation under the plan's explicit failed-experiment rule; do not export a partially bounded Goal API.
-The repository pins `@earendil-works/pi-durable` and `@earendil-works/pi-ai` to `1.2.0` in root `devDependencies`.
-The real-Harness probes use those installed releases, not the newer upstream checkout or a simulated Harness.
+The original native-only audit used published durable and Pi AI `1.2.0`, not a newer upstream checkout or a simulated Harness. The user subsequently approved a published `1.3.0` baseline upgrade; the [runtime upgrade audit](durable-runtime-upgrade-audit.md) records the same probes and unchanged gate result on that release.
 Passing characterization tests demonstrate runtime behavior; they do not establish Goal safety compliance.
 
 The required native fail-closed request boundary is absent from the inspected public extension API.
@@ -44,7 +43,7 @@ The recovery probe intentionally changes only the hook policy; it does not claim
 
 ## Public API and request-path audit
 
-The following paths are relative to `node_modules/@earendil-works/pi-durable/` and refer to the installed release.
+The following paths are relative to `node_modules/@earendil-works/pi-durable/` and describe the original installed baseline. The runtime upgrade audit separately checks the corresponding published upgrade paths.
 No test imports an internal module.
 
 - `dist/harness/types.d.ts`: `HookApi` permits committed document reads, model access, identifiers, and task memos, not authoritative document commits or cancellation. `GenerationHooks.beforeRequest` returns replacement messages only; `afterResponse` and `afterTools` are notifications. `onYield` can continue a final answer, not stop an already admitted tool loop.

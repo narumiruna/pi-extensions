@@ -3,8 +3,7 @@
 ## Outcome
 
 **The approved Host-wrapper experiment ran, but this candidate did not pass the safety gate. Full API implementation stops.**
-The experiment uses the repository-pinned published durable and AI packages through public imports only.
-No Pi upstream, dependency, production extension, public export, or settings file was changed.
+The original experiment used published durable and Pi AI 1.2.0 through public imports only; it changed no Pi upstream, dependency, production extension, public export, or settings file. The separately approved [runtime upgrade retest](durable-runtime-upgrade-audit.md) repeats these probes on published 1.3.0 and confirms the same failed candidate guarantees.
 
 Public Host integration is feasible for several important cases; this is not an API-absence or universal impossibility finding.
 However, the tested candidate fails provider-attempt coverage and isolation of unrelated deferred work.
@@ -80,7 +79,7 @@ This is a failed isolation case, not successful denial of unauthorized Goal work
 Blindly allowing unknown handles is not a demonstrated fix: it would abandon the trusted attribution requirement.
 A durable routing design for both Goal and unrelated handles, including recovery and collision handling, remains unimplemented and unproved.
 
-## Verification and review
+## Original experiment verification and review
 
 - `npm install`: completed with no manifest or lockfile changes; npm still reports three high-severity dependency advisories outside this experiment's scope.
 - Focused native and Host suites: 40 tests passed, including 28 new Host probes.

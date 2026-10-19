@@ -2,23 +2,23 @@
 
 Import `createPiLangfuseDurableConversation` from `@narumitw/pi-langfuse/durable` to observe one existing conversation. This entry uses public durable APIs, the existing Langfuse backend, sanitizer and shared-runtime ownership; it does not create an `AgentSession`, load coding-agent registration, or install a durable extension.
 
-> **Experimental compatibility:** this adapter targets exactly `@earendil-works/pi-durable@1.2.0`. Its upstream APIs can change without notice. Do not upgrade durable without the checks below.
+> **Experimental compatibility:** this adapter supports only the exact durable releases listed in [`peerDependencies`](../package.json). Its upstream APIs can change without notice. Do not upgrade durable without the checks below.
 
 ## Compatibility
 
 | Interface | Supported dependency | Node.js | Verification |
 | --- | --- | --- | --- |
-| Root default extension and `createPiLangfuseSession` | Existing coding-agent peer contract (`*`); regression suite uses 1.2.0 | Follow coding-agent's engine floor (currently >=22.19.0) | Existing extension, session, runtime, root-export and Jiti tests |
-| `/durable` | pi-durable 1.2.0; Chord ^1.2.0; pi-ai compatible with durable's ^1.2.0 dependency | >=22.19.0 | Real Harness, synthetic provider, Memory/JSONL storage and packed consumer tests |
+| Root default extension and `createPiLangfuseSession` | Coding-agent peer contract (`*`); regression version comes from the workspace lockfile | Follow coding-agent's declared engine floor | Existing extension, session, runtime, root-export and Jiti tests |
+| `/durable` | Exact durable alternatives and Chord range in package peer metadata; Pi AI compatible with the selected durable release | Follow the selected durable release's declared engine floor | Real Harness, synthetic provider, Memory/JSONL storage and packed consumer tests |
 
 The coding-agent, durable and Chord peers are optional because each entry only needs its own runtime. Install durable and Chord explicitly for `/durable`. They are host peers rather than adapter-owned execution dependencies so the host's experimental Harness and Context APIs stay aligned. The adapter and host must resolve the same durable module instance: public `watchEvents(harness, ...)` is bound to that instance's Harness observation state. Separate npm roots or bundled runtime copies do not guarantee this identity; use one host install scope, and check `active`/`onError` when attaching. Run the durable and packed-consumer checks on the host's supported Node versions before deployment.
-The Langfuse SDK independently requires Node >=20, but that is not sufficient for these Pi runtimes. The current tested host combination is durable 1.2.0, Chord 1.2.0 and Pi AI 1.2.0. Pi AI's nominal transcript types must resolve consistently with the host's durable dependency resolution; do not pass a Models collection from an incompatible Pi AI release.
+The Langfuse SDK has its own Node engine floor, which is not sufficient to determine the supported Pi host version. Resolve the tested development combination from the workspace manifests and lockfile, and check each selected runtime's engine requirement. Pi AI's nominal transcript types must resolve consistently with the host's durable dependency resolution; do not pass a Models collection from an incompatible Pi AI release.
 
-For an upstream upgrade, inspect the release README and public root exports/types, then review `watchEvents`, snapshot overflow, `Submission.status()`, read-only transactions, committed message projections and cancellation semantics. Update the exact durable peer and test dependency together. Run the focused durable and coding-agent suites, `npm run check`, `npm test`, `npm run package:pack -- langfuse`, packed consumer tests on supported Node versions, and the package-directory Pi loading smoke. Never replace removed public APIs with private imports or coding-agent event casts.
+For an upstream upgrade, inspect the release README and public root exports/types, then review `watchEvents`, snapshot overflow, `Submission.status()`, read-only transactions, committed message projections and cancellation semantics. Add a new exact durable peer alternative only after compatibility tests pass, and update development dependencies together. Retain previously supported alternatives unless an explicitly approved breaking change removes them. Run the focused durable and coding-agent suites, `npm run check`, `npm test`, `npm run package:pack -- langfuse`, packed consumer tests on supported Node versions, and the package-directory Pi loading smoke. Never replace removed public APIs with private imports or coding-agent event casts.
 
 ## Minimal host example
 
-Install `@narumitw/pi-langfuse`, `@earendil-works/pi-durable@1.2.0`, `@earendil-works/chord@^1.2.0` and a compatible `@earendil-works/pi-ai`.
+Install `@narumitw/pi-langfuse`, a durable release allowed by its peer metadata, and that release's compatible Chord and Pi AI host dependencies. Keep them in one host install scope.
 
 ```ts
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
