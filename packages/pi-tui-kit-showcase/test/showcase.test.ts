@@ -146,6 +146,51 @@ describe("Pi TUI Kit showcase", () => {
     ]);
   });
 
+  test.each(["print", "json"])("rejects %s mode before loading the runtime", async (mode) => {
+    const commands = new Map<string, ShowcaseCommand>();
+    let loaded = false;
+    createPiTuiKitShowcaseExtension({
+      loadRuntime: async () => {
+        loaded = true;
+        throw new Error("runtime should not load");
+      },
+    })({
+      registerCommand(name: string, command: ShowcaseCommand) {
+        commands.set(name, command);
+      },
+      on() {},
+    } as never);
+    await expect(commands.get("tui-kit-showcase")?.handler("", { mode, hasUI: false })).rejects.toThrow("TUI mode");
+    expect(loaded).toBe(false);
+  });
+
+  test.each(["session_start", "session_shutdown"])("ignores a delayed runtime after %s", async (eventName) => {
+    const commands = new Map<string, ShowcaseCommand>();
+    const events = new Map<string, () => void>();
+    let resolveRuntime!: (runtime: { showTuiKitShowcase(): Promise<void> }) => void;
+    const loading = new Promise<{ showTuiKitShowcase(): Promise<void> }>((resolve) => {
+      resolveRuntime = resolve;
+    });
+    let opened = false;
+    createPiTuiKitShowcaseExtension({ loadRuntime: () => loading })({
+      registerCommand(name: string, command: ShowcaseCommand) {
+        commands.set(name, command);
+      },
+      on(name: string, handler: () => void) {
+        events.set(name, handler);
+      },
+    } as never);
+    const running = commands.get("tui-kit-showcase")?.handler("", { mode: "tui", hasUI: true });
+    events.get(eventName)?.();
+    resolveRuntime({
+      showTuiKitShowcase: async () => {
+        opened = true;
+      },
+    });
+    await running;
+    expect(opened).toBe(false);
+  });
+
   test("aborts command-owned showcase work on session shutdown", async () => {
     let captured:
       | {

@@ -1,4 +1,5 @@
-import { defineMenu, type MenuDefinition } from "@narumitw/pi-tui-kit";
+import { defineMenu, type MenuDefinition, type ModelSelectorItem, type ThinkingLevel } from "@narumitw/pi-tui-kit";
+import { REVIEW_CODE, REVIEW_MARKDOWN, REVIEW_TEXT } from "./review-examples.js";
 
 export type ShowcaseScreen =
   | "main"
@@ -8,7 +9,12 @@ export type ShowcaseScreen =
   | "choice"
   | "settings"
   | "input"
+  | "reviewFormats"
   | "review"
+  | "reviewText"
+  | "reviewCode"
+  | "reviewMarkdownRich"
+  | "reviewMarkdownSource"
   | "multiSelect";
 
 export type ShowcaseAction =
@@ -23,15 +29,35 @@ export type ShowcaseAction =
   | "openTask"
   | "openConfirmation"
   | "openLiveChoice"
-  | "openQuestionnaire";
+  | "openQuestionnaire"
+  | "openDocumentReview"
+  | "openMultiSelect"
+  | "openSecretInput"
+  | "openModelSelector"
+  | "openThinkingSelector"
+  | "openLiveChoiceSearch";
 
-export type ShowcaseStandaloneInteraction = "task" | "confirmation" | "liveChoice" | "questionnaire";
+export type ShowcaseStandaloneInteraction =
+  | "task"
+  | "confirmation"
+  | "liveChoice"
+  | "questionnaire"
+  | "documentReview"
+  | "multiSelect"
+  | "secretInput"
+  | "modelSelector"
+  | "thinkingSelector"
+  | "liveChoiceSearch";
 
 export interface ShowcaseState {
   profile: "Minimal" | "Balanced" | "Verbose";
   density: "Comfortable" | "Compact";
   accent: "Blue" | "Green" | "Purple";
   inputText: string;
+  model: ModelSelectorItem;
+  defaultModel: ModelSelectorItem;
+  thinkingLevel: ThinkingLevel;
+  defaultThinkingLevel: ThinkingLevel;
   reviewApplied: boolean;
   featureFlags: Record<"search" | "details" | "bulk", boolean>;
   log: readonly string[];
@@ -47,6 +73,10 @@ export function createInitialShowcaseState(): ShowcaseState {
     density: "Comfortable",
     accent: "Blue",
     inputText: "",
+    model: { provider: "demo", id: "compact", name: "Demo Compact" },
+    defaultModel: { provider: "demo", id: "balanced", name: "Demo Balanced" },
+    thinkingLevel: "low",
+    defaultThinkingLevel: "high",
     reviewApplied: false,
     featureFlags: {
       search: true,
@@ -111,8 +141,8 @@ export function createShowcaseMenu(
           {
             id: "review",
             label: "Review screen",
-            description: "Exact text, code, or diff review with confirmation",
-            to: "review",
+            description: "Searchable text, code, diff, and Markdown reviews",
+            to: "reviewFormats",
           },
           {
             id: "multi-select",
@@ -144,6 +174,42 @@ export function createShowcaseMenu(
             label: "Live choice",
             description: "Closes this menu, shows runLiveChoice(), then reopens",
             action: "openLiveChoice",
+          },
+          {
+            id: "documentReview",
+            label: "Standalone document review",
+            description: "Closes this menu, shows runDocumentReview(), then reopens",
+            action: "openDocumentReview",
+          },
+          {
+            id: "multiSelect",
+            label: "Standalone multi-select",
+            description: "Closes this menu, shows runMultiSelect(), then reopens",
+            action: "openMultiSelect",
+          },
+          {
+            id: "secretInput",
+            label: "Secret input",
+            description: "Closes this menu, shows runSecretInput(), then reopens",
+            action: "openSecretInput",
+          },
+          {
+            id: "modelSelector",
+            label: "Model selector",
+            description: `Local demo only: ${state.model.name ?? state.model.id}; default ${state.defaultModel.name ?? state.defaultModel.id}`,
+            action: "openModelSelector",
+          },
+          {
+            id: "thinkingSelector",
+            label: "Thinking selector",
+            description: `Local demo only: ${state.thinkingLevel}; default ${state.defaultThinkingLevel}`,
+            action: "openThinkingSelector",
+          },
+          {
+            id: "liveChoiceSearch",
+            label: "Live choice with search",
+            description: "Closes this menu, shows searchable runLiveChoice(), then reopens",
+            action: "openLiveChoiceSearch",
           },
           { id: "close", label: "Close", close: true },
         ],
@@ -187,6 +253,7 @@ export function createShowcaseMenu(
       browse: () => ({
         kind: "browse",
         title: "Browse screen",
+        enableDetailSearch: true,
         lines: ["Search the list, press Enter for details, Escape returns to the list."],
         items: [
           {
@@ -284,8 +351,59 @@ export function createShowcaseMenu(
         kind: "input",
         title: "Input screen",
         lines: [`Current draft: ${state.inputText || "empty"}`],
-        placeholder: "Type any short demo note",
+        placeholder: "Type a demo note (1–80 characters)",
+        initialValue: state.inputText || "Demo note",
         action: "submitInput",
+        hint: "back",
+      }),
+      reviewFormats: () => ({
+        kind: "actions",
+        title: "Review formats",
+        lines: ["Read-only examples support literal search. Only the diff has an apply action."],
+        items: [
+          { id: "text", label: "Exact text", to: "reviewText" },
+          { id: "code", label: "Exact code", to: "reviewCode" },
+          { id: "diff", label: "Diff with confirmation", to: "review" },
+          { id: "markdown-rich", label: "Markdown with rich diagrams and math", to: "reviewMarkdownRich" },
+          { id: "markdown-source", label: "Markdown with diagram and math source", to: "reviewMarkdownSource" },
+          { id: "back", label: "Back to showcase", to: "main" },
+        ],
+        hint: "back",
+      }),
+      reviewText: () => ({
+        kind: "review",
+        title: "Exact text review",
+        content: REVIEW_TEXT,
+        format: { kind: "text" },
+        viewportSize: "adaptive",
+        enableSearch: true,
+        hint: "back",
+      }),
+      reviewCode: () => ({
+        kind: "review",
+        title: "Exact code review",
+        content: REVIEW_CODE,
+        format: { kind: "code", language: "typescript", filePath: "demo-note.ts" },
+        viewportSize: "adaptive",
+        enableSearch: true,
+        hint: "back",
+      }),
+      reviewMarkdownRich: () => ({
+        kind: "review",
+        title: "Markdown rich review",
+        content: REVIEW_MARKDOWN,
+        format: { kind: "markdown", renderLatex: true, renderMermaid: true },
+        viewportSize: "adaptive",
+        enableSearch: true,
+        hint: "back",
+      }),
+      reviewMarkdownSource: () => ({
+        kind: "review",
+        title: "Markdown source review",
+        content: REVIEW_MARKDOWN,
+        format: { kind: "markdown", renderLatex: false, renderMermaid: false },
+        viewportSize: "adaptive",
+        enableSearch: true,
         hint: "back",
       }),
       review: ({ state }) => ({
@@ -300,6 +418,7 @@ export function createShowcaseMenu(
           "diff --git a/showcase.txt b/showcase.txt\n--- a/showcase.txt\n+++ b/showcase.txt\n@@ -1,3 +1,4 @@\n actions\n detail\n browse\n+review\n",
         format: { kind: "diff", filePath: "showcase.txt" },
         viewportSize: "adaptive",
+        enableSearch: true,
         confirm: {
           id: "apply",
           label: state.reviewApplied ? "Apply again" : "Apply demo",
@@ -371,9 +490,14 @@ export function createShowcaseMenu(
         appendLog(state, `Setting ${itemId} changed to ${value ?? "unknown"}.`);
         return { kind: "stay" };
       },
-      submitInput: ({ state, value }) => {
-        state.inputText = (value ?? "").trim();
-        appendLog(state, `Input submitted: ${state.inputText || "empty"}.`);
+      submitInput: ({ state, value, ctx }) => {
+        const inputText = (value ?? "").trim();
+        if (!inputText || inputText.length > 80) {
+          if (ctx.hasUI) ctx.ui.notify("Enter a demo note with 1–80 characters after trimming.", "warning");
+          return { kind: "rejected" };
+        }
+        state.inputText = inputText;
+        appendLog(state, `Input submitted: ${state.inputText}.`);
         return { kind: "back" };
       },
       applyReview: ({ state }) => {
@@ -412,6 +536,30 @@ export function createShowcaseMenu(
       },
       openQuestionnaire: () => {
         runtime.requestStandalone("questionnaire");
+        return { kind: "close" };
+      },
+      openDocumentReview: () => {
+        runtime.requestStandalone("documentReview");
+        return { kind: "close" };
+      },
+      openMultiSelect: () => {
+        runtime.requestStandalone("multiSelect");
+        return { kind: "close" };
+      },
+      openSecretInput: () => {
+        runtime.requestStandalone("secretInput");
+        return { kind: "close" };
+      },
+      openModelSelector: () => {
+        runtime.requestStandalone("modelSelector");
+        return { kind: "close" };
+      },
+      openThinkingSelector: () => {
+        runtime.requestStandalone("thinkingSelector");
+        return { kind: "close" };
+      },
+      openLiveChoiceSearch: () => {
+        runtime.requestStandalone("liveChoiceSearch");
         return { kind: "close" };
       },
     },
