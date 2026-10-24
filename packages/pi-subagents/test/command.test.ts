@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, SessionManager, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -237,10 +237,115 @@ test.each(["print", "json"])("reports invalid settings through an observable lif
   assert.equal(mock.sentMessages.length, 0);
 });
 
+test.each([false, true])("old-session events cannot abort replacement menus: durable=%s", async (durable) => {
+  await fs.writeFile(join(directory, "pi-subagents.json"), JSON.stringify({ durable }));
+  const tui = createTuiHarness();
+  const { mock, context, children } = await setup({ mode: "tui", custom: tui.custom });
+  if (!durable) await spawnJob(mock, context);
+  const replacement = createMockContext({
+    mode: "tui",
+    custom: tui.custom,
+    model: { provider: "test", id: "model" },
+    sessionManager: SessionManager.inMemory(directory),
+  });
+  sessions.push({ mock, context: replacement });
+  const replacing = emit(mock, "session_start", replacement.ctx);
+  await emit(mock, "session_tree", context.ctx);
+  await emit(mock, "session_shutdown", context.ctx);
+  await replacing;
+  if (!durable) assert.equal(children[0]?.signal.aborted, true);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const command = invoke(mock, replacement, "settings");
+    await tui.waitForOpen();
+    tui.press("ctrl+c");
+    await command;
+  }
+  assert.deepEqual(replacement.notifications, []);
+});
+
+test.each([false, true])("headless widget diagnostics do not shut down durable=%s", async (durable) => {
+  await fs.writeFile(join(directory, "pi-subagents.json"), JSON.stringify({ durable }));
+  const { mock, context, store, children } = await setup({ mode: "json" });
+  const definitions = JSON.stringify(mock.tools);
+  await fs.writeFile(store.userPath, JSON.stringify({ durable, showWidget: "invalid" }));
+  await assert.rejects(() => emit(mock, "session_start", context.ctx), /Ignored invalid.*showWidget/u);
+  const command = mock.commands.get("subagents");
+  assert.ok(command);
+  await command.handler("settings", { ...(context.ctx as ExtensionContext), mode: "rpc", hasUI: true });
+  assert.match(context.notifications.at(-1)?.message ?? "", /Edit user settings:/u);
+  assert.equal(JSON.stringify(mock.tools), definitions);
+  if (!durable) {
+    await spawnJob(mock, context);
+    assert.equal(children.length, 1);
+    assert.equal(children[0]?.signal.aborted, false);
+  }
+});
+
+test("durable mode keeps process controls unavailable without opening storage or changing tools", async () => {
+  await fs.writeFile(join(directory, "pi-subagents.json"), JSON.stringify({ durable: true }));
+  const custom = vi.fn(async () => undefined);
+  const { mock, context } = await setup({ mode: "rpc", custom });
+  const definitions = JSON.stringify(mock.tools);
+  assert.deepEqual(
+    mock.tools.map((tool) => tool.name),
+    ["subagent_spawn", "subagent_send", "subagent_stop", "subagent_status", "subagent_wait"],
+  );
+  await invoke(mock, context, "");
+  assert.match(context.notifications.at(-1)?.message ?? "", /only in process mode.*subagent_status/u);
+  await invoke(mock, context, "settings");
+  assert.match(context.notifications.at(-1)?.message ?? "", /Edit user settings:/u);
+  assert.equal(custom.mock.calls.length, 0);
+  assert.equal(JSON.stringify(mock.tools), definitions);
+  assert.deepEqual(await fs.readdir(directory), ["pi-subagents.json"]);
+});
+
+test("durable mode widget saves preserve the backend flag without activating a process runtime", async () => {
+  await fs.writeFile(join(directory, "pi-subagents.json"), JSON.stringify({ durable: true, future: 42 }));
+  const tui = createTuiHarness();
+  const { mock, context, store, children } = await setup({ mode: "tui", custom: tui.custom });
+  const definitions = JSON.stringify(mock.tools);
+  const command = invoke(mock, context, "settings");
+  await tui.waitForOpen();
+  tui.press("tui.select.confirm");
+  await vi.waitFor(() => assert.equal(store.settings.showWidget, false));
+  tui.press("ctrl+c");
+  await command;
+  assert.deepEqual(JSON.parse(await fs.readFile(store.userPath, "utf8")), {
+    durable: true,
+    future: 42,
+    showWidget: false,
+  });
+  assert.equal(JSON.stringify(mock.tools), definitions);
+  assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
+  assert.equal(children.length, 0);
+  assert.deepEqual(await fs.readdir(directory), ["pi-subagents.json"]);
+});
+
+test.each(["session_tree", "session_shutdown"])("durable %s closes an owned settings screen", async (event) => {
+  await fs.writeFile(join(directory, "pi-subagents.json"), JSON.stringify({ durable: true }));
+  const tui = createTuiHarness();
+  const { mock, context, store } = await setup({ mode: "tui", custom: tui.custom });
+  const flush = vi.spyOn(store, "flush");
+  const command = invoke(mock, context, "settings");
+  await tui.waitForOpen();
+  await emit(mock, event, context.ctx);
+  await command;
+  assert.equal(tui.isOpen, false);
+  assert.equal(flush.mock.calls.length, 1);
+  assert.deepEqual(await fs.readdir(directory), ["pi-subagents.json"]);
+  await invoke(mock, context, "settings");
+  assert.match(context.notifications.at(-1)?.message ?? "", /unavailable/u);
+});
+
 async function setup(overrides: Record<string, unknown> = {}) {
   const mock = createMockPi();
   const store = new SubagentSettingsStore(join(directory, "pi-subagents.json"));
-  const context = createMockContext({ mode: "rpc", model: { provider: "test", id: "model" }, ...overrides });
+  const context = createMockContext({
+    mode: "rpc",
+    model: { provider: "test", id: "model" },
+    sessionManager: SessionManager.inMemory(directory),
+    ...overrides,
+  });
   const children: ChildRequest[] = [];
   extension(mock.pi, {
     settingsStore: store,

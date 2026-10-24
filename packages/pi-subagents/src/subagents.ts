@@ -1,8 +1,10 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sanitizeSubagentDisplayText } from "./display-text.js";
+import type { RegisteredDurableTools } from "./durable-tools.js";
 import { registerMessageRenderers } from "./message-renderers.js";
 import {
   DEFAULT_SUBAGENT_SETTINGS,
+  loadSubagentsSettings,
   type SubagentSettings,
   SubagentSettingsStore,
   subagentSettingsPath,
@@ -16,10 +18,15 @@ export interface SubagentsDependencies extends SubagentToolsDependencies {
 
 export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDependencies = {}): void {
   registerMessageRenderers(pi);
-  const tools = registerSubagentTools(pi, dependencies);
-  const widget = createSubagentWidgetController(tools.runtime);
   const store = dependencies.settingsStore ?? new SubagentSettingsStore(subagentSettingsPath());
+  let legacy: ReturnType<typeof registerSubagentTools> | undefined;
+  let durable: RegisteredDurableTools | undefined;
+  let widget: ReturnType<typeof createSubagentWidgetController> | undefined;
+  let selected: boolean | undefined;
   let activeContext: ExtensionContext | undefined;
+  let requestedSession: ExtensionContext["sessionManager"] | undefined;
+  let legacySession: ExtensionContext["sessionManager"] | undefined;
+  let legacySuspension: Promise<void> | undefined;
   let sessionGeneration = 0;
   let owner = new AbortController();
   let ready = false;
@@ -27,6 +34,35 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
   let settings: SubagentSettings = { ...DEFAULT_SUBAGENT_SETTINGS };
   const menuTasks = new Set<Promise<void>>();
   const ownsSession = (ctx: ExtensionContext) => ctx.sessionManager === activeContext?.sessionManager;
+  let lifecycle = Promise.resolve();
+  const serialize = (operation: () => Promise<void>) => {
+    const work = lifecycle.then(operation, operation);
+    lifecycle = work.catch(() => undefined);
+    return work;
+  };
+  const suspend = (ctx: ExtensionContext) => {
+    if (legacySession === ctx.sessionManager && legacy) {
+      widget?.shutdown(ctx);
+      legacySuspension ??= legacy.runtime.shutdown();
+      return legacySuspension;
+    }
+    return durable?.shutdown(ctx);
+  };
+  const shutdown = async (ctx: ExtensionContext) => {
+    if (legacySession === ctx.sessionManager) {
+      legacySession = undefined;
+      widget?.shutdown(ctx);
+      await legacySuspension;
+      legacySuspension = undefined;
+      await legacy?.shutdown();
+    }
+    await durable?.shutdown(ctx);
+  };
+  const drainControls = async () => {
+    const results = await Promise.allSettled([...menuTasks, store.flush()]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+  };
 
   const openSettings = async (
     ctx: ExtensionCommandContext,
@@ -52,7 +88,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
       apply: (next) => {
         if (!isCurrent()) return;
         settings = { ...next };
-        widget.update(ctx, settings);
+        widget?.update(ctx, settings);
       },
     });
   };
@@ -76,6 +112,14 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
         ctx.ui.notify("Subagent controls are loading, unavailable, or already open.", "warning");
         return;
       }
+      const tools = legacy;
+      if (route === "" && !tools) {
+        ctx.ui.notify(
+          "The job manager is available only in process mode. Use subagent_status, subagent_wait, and subagent_stop for durable conversations; /subagents settings edits process-widget preferences only.",
+          "info",
+        );
+        return;
+      }
       menuOpen = true;
       const generation = sessionGeneration;
       const signal = owner.signal;
@@ -85,6 +129,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
           await openSettings(ctx, signal, isCurrent);
           return;
         }
+        if (!tools) return;
         const { showSubagentsMenu } = await import("./menu.js");
         if (!isCurrent()) return;
         await showSubagentsMenu(ctx, {
@@ -119,40 +164,124 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
 
   pi.on("session_start", async (_event, ctx) => {
     owner.abort();
-    if (activeContext) widget.shutdown(activeContext);
     owner = new AbortController();
-    activeContext = ctx;
     ready = false;
     menuOpen = false;
     const generation = ++sessionGeneration;
-    const isCurrent = () => generation === sessionGeneration && ownsSession(ctx) && !owner.signal.aborted;
-    // Stop old children and broker delivery before waiting for slow UI storage work.
-    await tools.startSession();
-    if (!isCurrent()) return;
-    await Promise.allSettled([...menuTasks]);
-    if (!isCurrent()) return;
-    const loaded = await store.load();
-    if (!isCurrent()) return;
-    settings = { ...loaded.settings };
-    ready = true;
-    widget.start(ctx, settings);
-    if (loaded.diagnostics.length > 0) {
-      const message = sanitizeSubagentDisplayText(`Subagent settings: ${loaded.diagnostics.join(" ")}`);
-      if (ctx.hasUI) ctx.ui.notify(message, "warning");
-      else throw new Error(message);
-    }
+    requestedSession = ctx.sessionManager;
+    // Stop old work synchronously before slow UI saves or settings reads can block cleanup.
+    const suspension = activeContext ? suspend(activeContext) : undefined;
+    void suspension?.catch(() => undefined);
+    return serialize(async () => {
+      await suspension;
+      if (activeContext) {
+        const previous = activeContext;
+        activeContext = undefined;
+        await shutdown(previous);
+      }
+      if (generation !== sessionGeneration) return;
+      await drainControls();
+      if (generation !== sessionGeneration) return;
+      const loaded = await store.load();
+      if (generation !== sessionGeneration) return;
+      const backendSettings = await loadSubagentsSettings(ctx.cwd, ctx.isProjectTrusted());
+      if (generation !== sessionGeneration) return;
+      for (const warning of backendSettings.warnings) {
+        if (ctx.hasUI) ctx.ui.notify(warning, "warning");
+        else process.stderr.write(`pi-subagents: ${warning}\n`);
+      }
+      // Backend-specific definitions remain fixed until /reload creates a fresh runtime.
+      if (selected !== undefined && selected !== backendSettings.durable)
+        throw new Error("Subagent backend changed; use /reload before continuing.");
+      if (selected === undefined) {
+        if (backendSettings.durable) {
+          const { registerDurableTools } = await import("./durable-tools.js");
+          if (generation !== sessionGeneration) return;
+          durable = registerDurableTools(pi);
+        } else {
+          legacy = registerSubagentTools(pi, dependencies);
+          widget = createSubagentWidgetController(legacy.runtime);
+        }
+        selected = backendSettings.durable;
+      }
+      activeContext = ctx;
+      try {
+        if (durable) await durable.startSession(ctx);
+        else {
+          legacySession = ctx.sessionManager;
+          await legacy?.startSession();
+        }
+        if (generation !== sessionGeneration) {
+          activeContext = undefined;
+          await shutdown(ctx);
+          return;
+        }
+        settings = { ...loaded.settings };
+        ready = true;
+        widget?.start(ctx, settings);
+      } catch (error) {
+        ready = false;
+        activeContext = undefined;
+        await shutdown(ctx);
+        throw error;
+      }
+      // Invalid display preferences are observable diagnostics, not backend failures.
+      if (loaded.diagnostics.length > 0) {
+        const message = sanitizeSubagentDisplayText(`Subagent settings: ${loaded.diagnostics.join(" ")}`);
+        if (ctx.hasUI) ctx.ui.notify(message, "warning");
+        else throw new Error(message);
+      }
+    });
   });
 
-  pi.on("session_shutdown", async (_event, ctx) => {
-    if (!ownsSession(ctx)) return;
-    sessionGeneration++;
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (ownsSession(ctx)) await durable?.settled(ctx);
+  });
+  pi.on("session_tree", async (_event, ctx) => {
+    if (!durable || !ownsSession(ctx) || ctx.sessionManager !== requestedSession) return;
+    const generation = ++sessionGeneration;
     owner.abort();
     ready = false;
     menuOpen = false;
     activeContext = undefined;
-    widget.shutdown(ctx);
-    const results = await Promise.allSettled([tools.shutdown(), ...menuTasks, store.flush()]);
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed?.status === "rejected") throw failed.reason;
+    const suspension = suspend(ctx) ?? Promise.resolve();
+    void suspension.catch(() => undefined);
+    await serialize(async () => {
+      await suspension;
+      await shutdown(ctx);
+      await drainControls();
+    });
+    if (generation !== sessionGeneration || ctx.sessionManager !== requestedSession) return;
+    if (ctx.hasUI)
+      ctx.ui.notify(
+        "Durable subagents suspended after tree navigation. Fork into a new session or restore an unbranched session before enabling durable.",
+        "warning",
+      );
+  });
+  pi.on("session_shutdown", async (_event, ctx) => {
+    // A replacement already owns cleanup of the previous session, even before it starts.
+    if (ctx.sessionManager !== requestedSession) return;
+    sessionGeneration++;
+    requestedSession = undefined;
+    owner.abort();
+    ready = false;
+    menuOpen = false;
+    if (ownsSession(ctx)) activeContext = undefined;
+    const suspension = suspend(ctx);
+    void suspension?.catch(() => undefined);
+    // Snapshot old controls now; a queued stale shutdown must not join a newer menu.
+    const controls = drainControls();
+    void controls.catch(() => undefined);
+    await serialize(async () => {
+      const results = await Promise.allSettled([
+        (async () => {
+          await suspension;
+          await shutdown(ctx);
+        })(),
+        controls,
+      ]);
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    });
   });
 }

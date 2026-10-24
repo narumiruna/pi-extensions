@@ -4,6 +4,8 @@
 
 Pi Subagents runs Pi jobs in separate child processes and supports authenticated request-response messaging in both directions while each job is active.
 
+An **experimental, opt-in durable backend** adds persistent, reusable subagent conversations inside the same extension. The default process-backed backend is unchanged. Durable mode requires Linux, util-linux `flock`, an available physical chat model, and a real persisted Pi conversation; it is not available with `--no-session`. Read [Durable Subagents](./docs/durable.md) before enabling it. It does not replace the main Pi session or its model loop.
+
 ## ✨ Features
 
 - Runs each job in an isolated Pi child process and returns its job ID immediately.
@@ -19,6 +21,7 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 - Provides a job manager with confirmed cancellation and immediate widget display settings.
 - Exposes privacy-filtered metadata without task text, output, prompts, selected tools, or broker credentials.
 - Cancels session-owned work and closes the broker during replacement, reload, or shutdown.
+- Optionally retains durable conversations and pending results across reload or process restart, with a separate native tool contract and explicit recovery limits.
 
 ## 📦 Install
 
@@ -58,6 +61,8 @@ Review the source before installing or invoking the extension.
 
 ## 🚀 Quick start
 
+### Default process-backed jobs
+
 Call `subagent_spawn` with a self-contained task and only the work tools that task needs.
 
 The call returns a `jobId` immediately, and the job continues in the background.
@@ -84,9 +89,17 @@ The `thinking: <level>` field shows the resolved configuration passed at spawn, 
 Later main-agent changes do not change this field; it does not track child-side normalization or later setting changes.
 It omits fixed communication tools, attachment paths, and resource totals, disappears when no jobs remain active, and clears when the session ends.
 
+### Experimental durable conversations
+
+On Linux with util-linux `flock`, manually set `{"durable":true}` in `getAgentDir()/pi-subagents.json` (normally `~/.pi/agent/pi-subagents.json`) or the trusted working directory's `.pi/pi-subagents.json`, then run Pi's `/reload`. Keep normal session persistence enabled.
+
+Ask the main agent to call `subagent_spawn` with a self-contained task and `tools: ["read"]`. It returns a string `conversationId`, not a `jobId`. Use `subagent_wait` with that ID for the result, then `subagent_send` with `conversationId` and `message` for another assignment in the same conversation. Automatic completion does not wake an idle main model.
+
+See [native tools, settings, and recovery limits](./docs/durable.md). The job and bidirectional messaging interfaces below remain the default; they are not the durable interface.
+
 ## 💬 Commands
 
-`/subagents` opens a manager for current-session job metadata, confirmed cancellation of active jobs, display settings, status, and help.
+In process mode, `/subagents` opens a manager for current-session job metadata, confirmed cancellation of active jobs, display settings, status, and help.
 `/subagents settings` opens the same settings screen directly.
 These are the only accepted routes; unknown arguments and trailing input are rejected.
 
@@ -95,7 +108,11 @@ Print and JSON modes reject these interactive commands with an error; the model 
 Job lists and details always show job IDs, regardless of widget preferences, and omit task text and child output.
 Jobs do not survive reload or session replacement.
 
+In durable mode, `/subagents` reports the native tools to use instead of opening the process job manager. `/subagents settings` remains available for process-widget preferences only; it does not change the backend or manage durable conversations.
+
 ## 🛠️ Tools
+
+### Default process-backed tools
 
 The main Pi session exposes five fixed tools:
 
@@ -135,6 +152,10 @@ The terminal states are `completed`, `partial`, `failed`, `timed_out`, and `canc
 
 See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/attachments.md`](./docs/attachments.md) for attachment validation, and [`docs/messaging.md`](./docs/messaging.md) for messaging behavior.
 
+### Experimental durable tools
+
+Durable mode exposes `subagent_spawn`, `subagent_send`, `subagent_stop`, `subagent_status`, and `subagent_wait`. Its default work tool is only `read`; supported native coding tools are `read`, `write`, `edit`, `bash`, and `powershell`. Nonempty `skills` or `extensions` and the tools `grep`, `find`, `ls`, and `codemode` are explicitly rejected. Durable `subagent_send` is an assignment tool, not the default bidirectional `requestId` protocol. See the [durable tool reference](./docs/durable.md#native-tools).
+
 ## ⚙️ Settings
 
 Use `/subagents settings` or the manager's Settings action to edit user display preferences.
@@ -153,13 +174,25 @@ Escape returns or closes without undoing completed saves; Ctrl+C closes the enti
 Settings uses Pi's configured selection keys. Its footer shows only the hard-cancel key to avoid displaying fixed keys that do not match your bindings.
 
 Preferences are saved in `<getAgentDir()>/pi-subagents.json`, normally `~/.pi/agent/pi-subagents.json`.
-Only user settings are supported; project files and legacy settings are not read. User fields override code defaults.
+Widget preferences support user settings only; project files and legacy settings are not read for these four fields. User fields override code defaults.
 Manual file edits are re-read on `session_start`, including `/reload`, and before each UI save.
-Reading defaults creates no file. Invalid values produce diagnostics and use their defaults; malformed documents block saves until repaired.
+Reading defaults creates no file. Invalid values produce diagnostics and use their defaults; malformed documents block saves until repaired. Final-component symlinks and special-file settings paths are rejected.
 Saves preserve unknown fields, publish atomically, and keep reads and writes ordered within one Pi process. Separate Pi processes are not locked.
 A failed save keeps the previous effective preference and reports the error.
 
+### Durable backend
+
+Edit the extension-owned `pi-subagents.json` manually; do not add this setting to Pi's `settings.json`:
+
+```json
+{ "durable": true }
+```
+
+The user path is `getAgentDir()/pi-subagents.json`; a trusted `<cwd>/.pi/pi-subagents.json` overrides it. `durable` accepts only a boolean and defaults to `false`. Missing files leave defaults unchanged. Invalid settings are ignored with a warning and are not overwritten. Run `/reload` after changing the backend. The settings UI changes widget preferences only; edit `durable` manually. See [settings and prerequisites](./docs/durable.md#settings-and-prerequisites) for details.
+
 ## ⚙️ Job configuration
+
+This section covers the default backend's per-job parameters, not persistent backend settings.
 
 The task should state the child's role, objective, scope, constraints, and expected result.
 For reusable delegation policy, you can create your own project skill under `.pi/skills/<your-skill>/SKILL.md` or global skill under `~/.pi/agent/skills/<your-skill>/SKILL.md`.
@@ -209,6 +242,8 @@ See [Attachment behavior](./docs/attachments.md) for detailed path checks, packa
 
 ## 🔄 Messaging, lifecycle, and retention
 
+This section describes the default process-backed backend. Durable mode has separate [wait, stop, and recovery behavior](./docs/durable.md#waiting-and-completion-delivery).
+
 A main-originated request to a queued job waits for Pi RPC readiness before delivery. After delivery starts, cancellation stops only the caller's wait; the request may still arrive. An interrupted child-originated request remains active and can be waited on again.
 
 The first accepted `subagent_send` response wins; repeated responses do not replace it. The execution timeout starts only after Pi accepts the RPC prompt. Jobs reach exactly one terminal state, and inspection retains up to 32 terminal records for up to 24 hours within the current session.
@@ -238,7 +273,11 @@ The current `/subagents` manager provides job metadata, cancellation, and widget
 Legacy retained follow-ups, `subagent_mailbox`, `subagent_consult`, custom agent catalogs, advanced orchestration, alternate transports, trust-aware cwd policy, and extension-owned worktrees have no direct replacement.
 Describe the child's specialization in `task` and grant only the required work tools through `tools`.
 
+The experimental `durable` setting selects a new backend; it does not restore or migrate the old settings or interfaces listed above.
+
 ## 🔒 Security and privacy
+
+The following describes default process-backed jobs. The durable backend's different storage and credential behavior is summarized below and detailed in [Durable Subagents](./docs/durable.md#security-and-model-access).
 
 The selected work tools run in the current working directory.
 The default list contains no shell or file-mutation tool.
@@ -267,7 +306,11 @@ Terminal controls and bidirectional controls are stripped before untrusted child
 Tasks, repository context, requests, responses, and inspected file content may be sent to the selected model provider.
 Parallel writers require disjoint ownership or workspace isolation outside this extension.
 
+Durable mode runs native tools with the Pi process's user permissions, not in a separate Pi child or a filesystem sandbox. It persists assignments, transcripts, and results under `getAgentDir()/pi-subagents/<private-binding-hash>`. Model requests use the main session's public `ModelRegistry` at request time without copying keys into that store. Stop cannot undo external effects or retract delivered reports; recovery does not guarantee exactly-once external effects or power-loss durability.
+
 ## 🚧 Limitations
+
+These limits describe the default process-backed backend; see [durable compatibility and recovery limits](./docs/durable.md#compatibility-and-recovery-limits) for the opt-in backend.
 
 - Attachments must be existing local files or directories; package, Git, URL, and automatic parent-resource inheritance are unsupported.
 - An attached extension may recreate a parent-registered provider, but parent in-memory extension state and runtime-only API keys are not forwarded.
@@ -295,6 +338,7 @@ packages/pi-subagents/
 ```
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
+Backend selection lives in `src/settings.ts` and `src/subagents.ts`; `src/durable-*.ts` owns the internal Harness, persistence, native tools, and main-session bridge. The durable reference is published as `docs/durable.md`. There is no separate `/durable` export or extension entrypoint.
 
 ## 🔎 Keywords
 

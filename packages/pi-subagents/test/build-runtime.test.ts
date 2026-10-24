@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { DefaultResourceLoader, initTheme, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createFauxCore, InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  initTheme,
+  ModelRegistry,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterAll, describe, test } from "vitest";
 import { type BuildMetadata, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
@@ -163,42 +172,101 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
     if (root) await rm(root, { force: true, recursive: true });
   });
 
-  test("Pi's Jiti loader preserves the main extension registrations", async ({ signal }) => {
-    await ensureFixture();
-    await loaders.run(
-      () =>
-        new DefaultResourceLoader({
+  for (const durable of [false, true]) {
+    test(`Pi's Jiti loader preserves the selected main registrations: durable=${durable}`, async ({ signal }) => {
+      await ensureFixture();
+      const work = (async () => {
+        const settingsPath = join(agentDir, "pi-subagents.json");
+        await writeFile(settingsPath, JSON.stringify({ durable }));
+        const settingsManager = SettingsManager.inMemory({});
+        const loader = new DefaultResourceLoader({
           cwd: root,
           agentDir,
-          settingsManager: SettingsManager.inMemory({}),
+          settingsManager,
           additionalExtensionPaths: [join(output, "index.ts")],
-        }),
-      signal,
-      (loader) => {
-        const loaded = loader.getExtensions();
-        assert.deepEqual(loaded.errors, []);
-        assert.equal(loaded.extensions.length, 1);
-        const main = loaded.extensions[0];
-        assert.ok(main?.handlers.has("session_start"));
-        assert.ok(main?.handlers.has("session_shutdown"));
-        assert.deepEqual(
-          [...(main?.messageRenderers.keys() ?? [])],
-          ["pi-subagents-completion", "pi-subagents-message"],
-        );
-        assert.deepEqual(
-          [...(main?.tools.keys() ?? [])],
-          ["subagent_spawn", "subagent_inspect", "subagent_cancel", "subagent_wait", "subagent_send"],
-        );
-        assert.deepEqual(
-          Object.keys(
-            (main?.tools.get("subagent_send")?.definition.parameters as { properties?: Record<string, unknown> })
-              ?.properties ?? {},
-          ),
-          ["recipient", "requestId", "message"],
-        );
-      },
-    );
-  });
+        });
+        const originalRuntime = loader.getExtensions().runtime;
+        let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+        try {
+          await loader.reload();
+          signal.throwIfAborted();
+          const loaded = loader.getExtensions();
+          assert.deepEqual(loaded.errors, []);
+          assert.equal(loaded.extensions.length, 1);
+          const main = loaded.extensions[0];
+          assert.ok(main?.handlers.has("session_start"));
+          assert.ok(main?.handlers.has("session_shutdown"));
+          assert.deepEqual(
+            [...(main?.messageRenderers.keys() ?? [])],
+            ["pi-subagents-completion", "pi-subagents-message"],
+          );
+          assert.deepEqual([...(main?.tools.keys() ?? [])], []);
+          const faux = createFauxCore({
+            api: `jiti-${crypto.randomUUID()}`,
+            provider: `jiti-${crypto.randomUUID()}`,
+            models: [{ id: "test" }],
+          });
+          const modelRuntime = await ModelRuntime.create({
+            credentials: new InMemoryCredentialStore(),
+            modelsStore: new InMemoryModelsStore(),
+            modelsPath: null,
+            refreshOnCreate: false,
+          });
+          const registry = new ModelRegistry(modelRuntime);
+          registry.registerProvider(faux.provider, {
+            api: faux.api,
+            apiKey: "synthetic",
+            baseUrl: "http://localhost:0",
+            streamSimple: faux.streamSimple,
+            models: faux.models,
+          });
+          const model = registry.find(faux.provider, "test");
+          assert.ok(model);
+          ({ session } = await createAgentSession({
+            cwd: root,
+            agentDir,
+            modelRuntime,
+            model,
+            resourceLoader: loader,
+            settingsManager,
+            sessionManager: SessionManager.inMemory(root),
+            noTools: "builtin",
+          }));
+          const errors: unknown[] = [];
+          // Await the public startup boundary; durable=true also resolves the generated lazy chunk.
+          await session.bindExtensions({ mode: "json", onError: (error) => errors.push(error) });
+          signal.throwIfAborted();
+          assert.deepEqual(errors, []);
+          const expected = durable
+            ? ["subagent_spawn", "subagent_send", "subagent_stop", "subagent_status", "subagent_wait"]
+            : ["subagent_spawn", "subagent_inspect", "subagent_cancel", "subagent_wait", "subagent_send"];
+          assert.deepEqual([...(main?.tools.keys() ?? [])], expected);
+          assert.deepEqual(session.getActiveToolNames(), expected);
+          assert.deepEqual(
+            Object.keys(
+              (main?.tools.get("subagent_send")?.definition.parameters as { properties?: Record<string, unknown> })
+                ?.properties ?? {},
+            ),
+            durable ? ["conversationId", "message", "whenBusy"] : ["recipient", "requestId", "message"],
+          );
+          assert.equal(faux.state.callCount, 0);
+        } finally {
+          try {
+            if (session) await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+          } finally {
+            session?.dispose();
+            originalRuntime.invalidate("generated Jiti smoke complete");
+            const currentRuntime = loader.getExtensions().runtime;
+            if (currentRuntime !== originalRuntime) currentRuntime.invalidate("generated Jiti smoke complete");
+            await rm(settingsPath, { force: true });
+          }
+        }
+      })();
+      // Keep ownership until asynchronous startup and shutdown settle, including a test timeout.
+      children.push(work);
+      await work;
+    });
+  }
 
   test("generated commands cross both lazy UI boundaries and preserve lifecycle cleanup", async ({ signal }) => {
     await ensureFixture();
