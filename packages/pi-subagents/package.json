@@ -54,6 +54,6 @@
   },
   "dependencies": {
     "@narumitw/pi-tui-kit": "^0.66.0",
-    "ignore": "^7.0.12"
+    "ignore": "^7.0.13"
   }
 }
