@@ -2,7 +2,6 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { assertChildBootstrapCapacity } from "./broker-credentials.js";
-import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
 import {
   type BrokerInboundMessage,
   MAX_IDENTIFIER_LENGTH,
@@ -13,7 +12,7 @@ import {
 } from "./message-broker.js";
 import { BROKER_MESSAGE_TYPE } from "./message-renderers.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
-import { assertChildCommandCapacity } from "./process.js";
+import { assertChildCommandCapacity, selectedChildTools } from "./process.js";
 import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
@@ -235,7 +234,7 @@ export function registerSubagentTools(
         },
         dependencies.platform,
       );
-      assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])], {
+      assertChildBootstrapCapacity(selectedChildTools({ tools, extensions: attachments.extensions }), {
         provider,
         model,
         thinkingLevel,

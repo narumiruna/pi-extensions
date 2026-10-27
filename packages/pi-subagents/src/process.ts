@@ -152,7 +152,7 @@ export function childReadinessProbePath(): string {
   return fileURLToPath(new URL("./child-readiness-probe.ts", import.meta.url));
 }
 
-function selectedChildTools(request: Pick<ChildRequest, "tools" | "extensions">): string[] {
+export function selectedChildTools(request: Pick<ChildRequest, "tools" | "extensions">): string[] {
   return [
     ...new Set([
       ...request.tools,
@@ -206,7 +206,7 @@ async function executeProcess(
   };
   let malformedEvents = 0;
   let rpcCounter = 0;
-  let attachmentStartupPending = true;
+  let attachmentReady = false;
   let attachmentStartupError: string | undefined;
   const pendingCommands = new Map<string, PendingRpcCommand>();
   let rpcInputError: Error | undefined;
@@ -317,7 +317,7 @@ async function executeProcess(
     },
     () => {
       malformedEvents++;
-      if (attachmentStartupPending && !attachmentStartupError) {
+      if (!attachmentReady && !attachmentStartupError) {
         attachmentStartupError = "Subagent attachment startup emitted malformed or oversized RPC output.";
         failRpcInput(new Error(attachmentStartupError));
       }
@@ -334,7 +334,6 @@ async function executeProcess(
     let timedOut = false;
     let completed = false;
     let ready = false;
-    let attachmentReady = false;
     let promptStarted = false;
     let readinessPipe: import("node:stream").Readable | undefined;
     let deadline: NodeJS.Timeout | undefined;
@@ -541,7 +540,6 @@ async function executeProcess(
           }
           if (settled || terminating || request.signal.aborted) return;
           if (attachmentStartupError) throw new Error(attachmentStartupError);
-          attachmentStartupPending = false;
           attachmentReady = true;
           startPrompt();
         })

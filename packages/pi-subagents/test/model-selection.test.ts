@@ -4,6 +4,8 @@ import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { assertChildBootstrapCapacity, serializeChildBootstrap } from "../src/broker-credentials.js";
+import { buildPiArgs } from "../src/process.js";
 import * as resources from "../src/resource-attachments.js";
 import { registerSubagentTools } from "../src/tools.js";
 import type { ChildRequest } from "../src/types.js";
@@ -77,6 +79,39 @@ test.each([
   assert.equal(requests[0]?.model, model);
   assert.equal(requests[0]?.thinkingLevel, "high");
 });
+
+test.each(["plain", "界", 'quoted"tool'])(
+  "admission preserves the exact bootstrap byte limit for %s",
+  async (toolName) => {
+    const { invoke, requests, session } = await setup();
+    const expectedTools = ["read", "subagent_send", "subagent_wait", toolName];
+    const selection = { provider: parent.provider, model: "", thinkingLevel: "high" as const };
+    const overhead = Buffer.byteLength(
+      serializeChildBootstrap({
+        communication: { host: "127.0.0.1", port: 65_535, token: "f".repeat(64) },
+        expectedTools,
+        selection,
+      }),
+    );
+    const model = "m".repeat(16 * 1024 - overhead);
+    const parameters = {
+      model,
+      tools: ["read", "read"],
+      extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: [toolName, toolName] }],
+    };
+    const admitted = await invoke(parameters);
+    await session.runtime.wait(admitted.details.jobId, undefined);
+    assert.equal(requests.length, 1);
+    const child = requests[0];
+    assert.ok(child);
+    assert.equal(child.model, model);
+    const args = buildPiArgs(child);
+    assert.equal(args[args.indexOf("--tools") + 1], expectedTools.join(","));
+    assert.doesNotThrow(() => assertChildBootstrapCapacity(expectedTools, { ...selection, model }));
+    await assert.rejects(() => invoke({ ...parameters, model: `${model}m` }), /child bootstrap size limit/i);
+    assert.equal(requests.length, 1);
+  },
+);
 
 test("a provider-only override never chooses that provider's other model", async () => {
   const { invoke, requests, session } = await setup({

@@ -39,6 +39,42 @@ function request(overrides: Partial<ChildRequest> = {}): ChildRequest {
   };
 }
 
+for (const { name, tools, extensions, expected } of [
+  { name: "empty", tools: [], extensions: [], expected: ["subagent_send", "subagent_wait"] },
+  {
+    name: "core",
+    tools: ["read", "grep"],
+    extensions: [],
+    expected: ["read", "grep", "subagent_send", "subagent_wait"],
+  },
+  {
+    name: "duplicates",
+    tools: ["read", "read", "subagent_send"],
+    extensions: [{ path: "/fixture.ts", tools: ["search", "search"] }],
+    expected: ["read", "subagent_send", "subagent_wait", "search"],
+  },
+  {
+    name: "encoded names",
+    tools: [],
+    extensions: [{ path: "/fixture.ts", tools: ['quoted"tool', "界"] }],
+    expected: ["subagent_send", "subagent_wait", 'quoted"tool', "界"],
+  },
+  {
+    name: "multiple attachments",
+    tools: ["codemode", "read"],
+    extensions: [
+      { path: "/search.ts", tools: ["search"] },
+      { path: "/write.ts", tools: ["rewrite"] },
+    ],
+    expected: ["codemode", "read", "subagent_send", "subagent_wait", "search", "rewrite"],
+  },
+]) {
+  test(`child tool ordering is stable for ${name}`, () => {
+    const args = buildPiArgs(request({ tools, extensions }));
+    assert.equal(args[args.indexOf("--tools") + 1], expected.join(","));
+  });
+}
+
 for (const model of [
   "raw/model",
   "raw:model",
@@ -175,6 +211,35 @@ async function handle(command) { fs.writeFileSync(${JSON.stringify(marker)}, com
     );
     assert.equal(result.state, "failed");
     assert.match(result.error ?? "", expected);
+    assert.equal(existsSync(marker), false);
+    assert.equal(controls, 0);
+  });
+}
+
+for (const position of ["before", "after"] as const) {
+  test(`malformed output ${position} model state remains a startup failure`, async () => {
+    const marker = path.join(directory, "task");
+    let controls = 0;
+    installFakePi(
+      directory,
+      `
+globalThis.fakeStateHandler = async (command) => {
+  if (${position === "before"}) process.stdout.write(Buffer.from([0xff, 0x0a]));
+  respond(command);
+  if (${position === "after"}) process.stdout.write(Buffer.from([0xff, 0x0a]));
+};
+async function handle(command) { fs.writeFileSync(${JSON.stringify(marker)}, command.type); }
+`,
+    );
+    const result = await runChild(
+      request({
+        onControl: () => {
+          controls++;
+        },
+      }),
+    );
+    assert.equal(result.state, "failed");
+    assert.match(result.error ?? "", /startup emitted malformed or oversized RPC output/);
     assert.equal(existsSync(marker), false);
     assert.equal(controls, 0);
   });
