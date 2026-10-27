@@ -11,7 +11,7 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 - Defaults work tools to `read`, `grep`, `find`, and `ls`.
 - Can attach validated local skills and trusted local extensions to one job without enabling automatic discovery.
 - Verifies requested extension tools before sending the task to the child model.
-- Inherits the main agent's effective model and uses its thinking level by default.
+- Supports exact per-job provider and model selection, with independent inheritance and no fallback.
 - Gives the main agent and every child a context-specific `subagent_send` contract for bidirectional requests and responses.
 - Gives every child `subagent_wait` for an answer to a child-originated request.
 - Lets the main agent question a queued or running job through Pi RPC steering without retaining the child after completion.
@@ -101,7 +101,7 @@ The main Pi session exposes five fixed tools:
 
 | Tool | Parameters | Purpose |
 | --- | --- | --- |
-| `subagent_spawn` | `task`, optional `tools`, `skills`, `extensions`, `thinkingLevel`, `timeout` | Start one subagent job and return its `jobId`. |
+| `subagent_spawn` | `task`, optional `provider`, `model`, `tools`, `skills`, `extensions`, `thinkingLevel`, `timeout` | Start one subagent job and return its `jobId`. |
 | `subagent_inspect` | none | List privacy-filtered retained-job metadata. |
 | `subagent_cancel` | `jobId` | Idempotently cancel one queued or running job. |
 | `subagent_wait` | `jobId`, optional `timeout` | Wait for a job or return early for an incoming child message. |
@@ -171,6 +171,8 @@ The package intentionally registers and publishes no skill; the repository-only 
 ```ts
 {
   task: string;
+  provider?: string;
+  model?: string;
   tools?: Array<"read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls" | "codemode">;
   skills?: string[];
   extensions?: Array<{ path: string; tools: string[] }>;
@@ -178,6 +180,17 @@ The package intentionally registers and publishes no skill; the repository-only 
   timeout?: number;
 }
 ```
+
+`provider` and `model` are exact IDs. Each omitted field inherits independently from the main agent at spawn time; later parent changes do not affect the job.
+A provider-only override retains the parent's model ID and fails if that pair is unavailable. To select another pair explicitly:
+
+```ts
+{ task: "Review the parser without changing files.", provider: "openai", model: "gpt-5.5" }
+```
+
+Every job requires a registered chat model and child-visible credentials, including jobs that inherit both fields.
+Unlisted custom IDs previously accepted by Pi's CLI now fail; register the exact model in Pi's `models.json` or attach a trusted extension that registers it in the child.
+See [Model selection](./docs/tools.md#model-selection) for exact matching, error timing, and virtual-model behavior.
 
 The optional `tools` list selects Pi core work tools and the built-in `codemode` tool.
 Omitting it selects `read`, `grep`, `find`, and `ls`, while an empty list gives the child no core work tools.
@@ -201,7 +214,7 @@ Attached extensions run with the child's user permissions and are not a sandbox.
 Attachments must be existing local paths, not npm, Git, or URL sources.
 Project-local attachments and resources resolved from their packages require project trust, including paths that symlink into the project.
 A job accepts up to 16 skill paths, 16 extension entries, and 64 selected work tools.
-The child inherits the main agent's effective model and thinking level by default; there is no per-job model override.
+The child uses the main agent's thinking level unless `thinkingLevel` is supplied; Pi clamps it to the selected model's supported levels.
 Parent-only extension providers require an attached extension that registers them in the child.
 Process-local runtime API keys, including a parent-only `--api-key`, are unavailable to the child; use stored or inherited environment credentials.
 
@@ -271,7 +284,7 @@ Parallel writers require disjoint ownership or workspace isolation outside this 
 
 - Attachments must be existing local files or directories; package, Git, URL, and automatic parent-resource inheritance are unsupported.
 - An attached extension may recreate a parent-registered provider, but parent in-memory extension state and runtime-only API keys are not forwarded.
-- The extension does not provide custom agents, per-job models, custom system prompts, peer-to-peer child messaging, retained conversations, user-directed follow-up work, mailboxes, Agent Teams, chains, fan-in aggregators, panels, workflow DAGs, dynamic scheduling, verification orchestration, nested subagents, or extension-owned semantic memory.
+- The extension does not provide custom agents, custom system prompts, peer-to-peer child messaging, retained conversations, user-directed follow-up work, mailboxes, Agent Teams, chains, fan-in aggregators, panels, workflow DAGs, dynamic scheduling, verification orchestration, nested subagents, or extension-owned semantic memory.
 - Bidirectional messages use request-response coordination, not a retained conversational session.
 - The main agent must verify child claims against the actual diff and deterministic checks.
 - Child requests and responses trigger a main-agent turn, but asynchronous job completions do not wake an otherwise idle model turn automatically.

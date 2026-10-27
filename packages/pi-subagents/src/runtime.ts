@@ -64,6 +64,7 @@ export interface StartJobInput {
   skills: string[];
   extensions: ExtensionAttachment[];
   toolSources: Record<string, string[]>;
+  provider: string;
   model: string;
   thinkingLevel: SubagentThinkingLevel;
   cwd: string;
@@ -136,6 +137,7 @@ export class SubagentRuntime {
     if (active >= MAX_ACTIVE_JOBS) {
       throw new Error(`Active subagent job limit reached (${MAX_ACTIVE_JOBS}).`);
     }
+    const { provider, model } = input;
     const jobId = `job_${this.now().toString(36)}_${(++this.counter).toString(36)}`;
     const communication = this.broker.issueCredentials({
       jobId,
@@ -197,7 +199,8 @@ export class SubagentRuntime {
           toolSources: Object.fromEntries(
             Object.entries(input.toolSources).map(([tool, sources]) => [tool, [...sources]]),
           ),
-          model: input.model,
+          provider,
+          model,
           thinkingLevel: input.thinkingLevel,
           cwd: input.cwd,
           timeout: input.timeout,

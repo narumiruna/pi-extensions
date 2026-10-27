@@ -42,6 +42,19 @@ const SpawnParameters = Type.Object(
       description: "Self-contained task, constraints, and expected result. Maximum 50 KiB.",
       maxLength: MAX_TASK_BYTES,
     }),
+    provider: Type.Optional(
+      Type.String({
+        description: "Exact child provider ID. Defaults to the main agent's effective provider at spawn time.",
+        minLength: 1,
+      }),
+    ),
+    model: Type.Optional(
+      Type.String({
+        description:
+          "Exact model ID within the selected provider. Defaults independently to the main agent's effective model ID at spawn time. Unlisted models fail without fallback.",
+        minLength: 1,
+      }),
+    ),
     tools: Type.Optional(
       Type.Array(
         StringEnum(CHILD_CORE_TOOL_NAMES, {
@@ -209,10 +222,7 @@ export function registerSubagentTools(
       if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {
         throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
       }
-      if (tools.includes("codemode") || attachments.extensions.length > 0) {
-        assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])]);
-      }
-      const model = resolveChildModel(ctx, attachments.extensions.length > 0);
+      const { provider, model } = resolveChildModel(ctx, params, attachments.extensions.length > 0);
       const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? ctx.thinkingLevel ?? pi.getThinkingLevel());
       resolveTimeoutMs(params.timeout);
       assertChildCommandCapacity(
@@ -220,12 +230,18 @@ export function registerSubagentTools(
           tools,
           skills: attachments.skills,
           extensions: attachments.extensions,
+          provider,
           model,
           thinkingLevel,
           projectTrusted,
         },
         dependencies.platform,
       );
+      assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])], {
+        provider,
+        model,
+        thinkingLevel,
+      });
       throwIfAborted(signal, "Subagent spawn was cancelled");
       return toolResult(
         runtime.start({
@@ -234,6 +250,7 @@ export function registerSubagentTools(
           skills: attachments.skills,
           extensions: attachments.extensions,
           toolSources: attachments.toolSources,
+          provider,
           model,
           thinkingLevel,
           cwd,
@@ -388,19 +405,53 @@ function resolveTools(value: unknown): string[] {
   return tools;
 }
 
-function resolveChildModel(ctx: ExtensionContext, hasAttachedExtensions: boolean): string {
-  const model = ctx.model;
-  if (!model) throw new Error("Subagent model is unavailable because no main-agent model is selected.");
-  const provider = sanitizeTerminalText(model.provider).slice(0, 128);
-  if (!hasAttachedExtensions && ctx.modelRegistry.getRegisteredProviderIds().includes(model.provider)) {
-    throw new Error(`Subagent model provider ${provider} is unavailable because children disable parent extensions.`);
+function resolveChildModel(
+  ctx: ExtensionContext,
+  overrides: Pick<SpawnArguments, "provider" | "model">,
+  hasAttachedExtensions: boolean,
+): { provider: string; model: string } {
+  // Read the effective parent pair once, after asynchronous attachment preflight.
+  const parent = ctx.model;
+  if (!parent && (overrides.provider === undefined || overrides.model === undefined)) {
+    throw new Error("Subagent model is unavailable because no main-agent model is selected.");
   }
-  if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source === "runtime") {
+  const provider = validateModelIdentifier(
+    overrides.provider === undefined ? parent?.provider : overrides.provider,
+    "provider",
+  );
+  const model = validateModelIdentifier(overrides.model === undefined ? parent?.id : overrides.model, "model");
+  const displayProvider = sanitizeTerminalText(provider).slice(0, 128);
+  if (!hasAttachedExtensions && ctx.modelRegistry.getRegisteredProviderIds().includes(provider)) {
     throw new Error(
-      `Subagent model provider ${provider} uses a process-local runtime API key. Configure stored or environment credentials that child processes can read.`,
+      `Subagent model provider ${displayProvider} is unavailable because children disable parent extensions.`,
     );
   }
-  return `${model.provider}/${model.id}`;
+  if (ctx.modelRegistry.getProviderAuthStatus(provider).source === "runtime") {
+    throw new Error(
+      `Subagent model provider ${displayProvider} uses a process-local runtime API key. Configure stored or environment credentials that child processes can read.`,
+    );
+  }
+  if (!hasAttachedExtensions && !ctx.modelRegistry.find(provider, model)) {
+    throw new Error(
+      `Subagent model ${displayProvider}/${sanitizeTerminalText(model).slice(0, 128)} is not registered. Register the exact model in Pi's models.json or attach a trusted provider extension.`,
+    );
+  }
+  return { provider, model };
+}
+
+function validateModelIdentifier(value: unknown, field: "provider" | "model"): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    }) ||
+    sanitizeTerminalText(value) !== value
+  ) {
+    throw new Error(`Subagent ${field} must be a non-empty exact ID without control characters.`);
+  }
+  return value;
 }
 
 function resolveThinkingLevel(value: unknown): SubagentThinkingLevel {
