@@ -457,6 +457,7 @@ for (const { model: childModel, provider: selectedProvider, caseCollision, start
       assert.ok(spawnTool);
       for (const field of ["provider", "model"]) {
         assert.ok(spawnTool.parameters.properties[field], `${field} must reach the provider-visible schema`);
+        assert.equal((spawnTool.parameters.properties[field] as { maxLength?: number }).maxLength, 16 * 1024);
         assert.equal(spawnTool.parameters.required?.includes(field) ?? false, false);
       }
       for (const [index, request] of parent.entries()) {

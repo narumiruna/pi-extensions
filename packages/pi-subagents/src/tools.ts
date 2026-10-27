@@ -1,7 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { assertChildBootstrapCapacity } from "./broker-credentials.js";
+import { assertChildBootstrapCapacity, MAX_BOOTSTRAP_BYTES } from "./broker-credentials.js";
 import {
   type BrokerInboundMessage,
   MAX_IDENTIFIER_LENGTH,
@@ -45,6 +45,7 @@ const SpawnParameters = Type.Object(
       Type.String({
         description: "Exact child provider ID. Defaults to the main agent's effective provider at spawn time.",
         minLength: 1,
+        maxLength: MAX_BOOTSTRAP_BYTES,
       }),
     ),
     model: Type.Optional(
@@ -52,6 +53,7 @@ const SpawnParameters = Type.Object(
         description:
           "Exact model ID within the selected provider. Defaults independently to the main agent's effective model ID at spawn time. Unlisted models fail without fallback.",
         minLength: 1,
+        maxLength: MAX_BOOTSTRAP_BYTES,
       }),
     ),
     tools: Type.Optional(
@@ -432,6 +434,13 @@ function resolveChildModel(
 }
 
 function validateModelIdentifier(value: unknown, field: "provider" | "model"): string {
+  // Each ID must fit the shared bootstrap before character scans or sanitization.
+  if (
+    typeof value === "string" &&
+    (value.length > MAX_BOOTSTRAP_BYTES || Buffer.byteLength(value, "utf8") > MAX_BOOTSTRAP_BYTES)
+  ) {
+    throw new Error(`Subagent ${field} exceeds the ${MAX_BOOTSTRAP_BYTES}-byte child bootstrap size limit.`);
+  }
   if (
     typeof value !== "string" ||
     !value.trim() ||

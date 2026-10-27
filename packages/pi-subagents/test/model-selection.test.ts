@@ -18,7 +18,7 @@ interface Pair {
 interface SpawnTool {
   parameters: TSchema & {
     additionalProperties?: boolean;
-    properties: Record<string, { type: string; minLength?: number; enum?: string[] }>;
+    properties: Record<string, { type: string; minLength?: number; maxLength?: number; enum?: string[] }>;
   };
   execute(
     id: string,
@@ -29,6 +29,7 @@ interface SpawnTool {
   ): Promise<{ details: { jobId: string; state: string } }>;
 }
 
+const MAX_BOOTSTRAP_BYTES = 16 * 1024;
 const parent = { provider: "fixture-provider", id: "parent-model" };
 const catalog: Pair[] = [
   parent,
@@ -57,8 +58,10 @@ test("spawn schema adds optional literal IDs without a dynamic model enum", asyn
     const schema = spawn.parameters.properties[field];
     assert.equal(schema.type, "string");
     assert.equal(schema.minLength, 1);
+    assert.equal(schema.maxLength, MAX_BOOTSTRAP_BYTES);
     assert.equal(schema.enum, undefined);
-    for (const value of ["", null, 1, {}, []]) {
+    assert.equal(Check(spawn.parameters, { task: "boundary", [field]: "m".repeat(MAX_BOOTSTRAP_BYTES) }), true);
+    for (const value of ["", null, 1, {}, [], "m".repeat(MAX_BOOTSTRAP_BYTES + 1)]) {
       assert.equal(Check(spawn.parameters, { task: "invalid", [field]: value }), false);
     }
   }
@@ -93,7 +96,7 @@ test.each(["plain", "界", 'quoted"tool'])(
         selection,
       }),
     );
-    const model = "m".repeat(16 * 1024 - overhead);
+    const model = "m".repeat(MAX_BOOTSTRAP_BYTES - overhead);
     const parameters = {
       model,
       tools: ["read", "read"],
@@ -112,6 +115,67 @@ test.each(["plain", "界", 'quoted"tool'])(
     assert.equal(requests.length, 1);
   },
 );
+
+for (const field of ["provider", "model"] as const) {
+  for (const source of ["explicit", "inherited"] as const) {
+    test.each([
+      ["ASCII", () => "m".repeat(MAX_BOOTSTRAP_BYTES + 1)],
+      ["large ASCII", () => "m".repeat(4 * 1024 * 1024)],
+      ["multibyte UTF-8", () => "界".repeat(Math.floor(MAX_BOOTSTRAP_BYTES / 3) + 1)],
+      ["astral UTF-8", () => "😀".repeat(MAX_BOOTSTRAP_BYTES / 4 + 1)],
+    ] as const)(`bounds oversized ${source} ${field} IDs before character scans (%s)`, async (_label, createValue) => {
+      const value = createValue();
+      assert.ok(Buffer.byteLength(value, "utf8") > MAX_BOOTSTRAP_BYTES);
+      const inherited = field === "provider" ? { ...parent, provider: value } : { ...parent, id: value };
+      const { invoke, requests, session } = await setup({ model: source === "inherited" ? inherited : parent });
+      const scans = { trim: 0, iteration: 0 };
+      const trim = String.prototype.trim;
+      const iterate = String.prototype[Symbol.iterator];
+      vi.spyOn(String.prototype, "trim").mockImplementation(function (this: string) {
+        if (this.valueOf() === value) scans.trim++;
+        return trim.call(this);
+      });
+      vi.spyOn(String.prototype, Symbol.iterator).mockImplementation(function (this: string) {
+        if (this.valueOf() === value) scans.iteration++;
+        return iterate.call(this);
+      });
+      await assert.rejects(
+        () => invoke(source === "explicit" ? { [field]: value } : {}),
+        /child bootstrap size limit/i,
+      );
+      assert.deepEqual(scans, { trim: 0, iteration: 0 });
+      assert.deepEqual(requests, []);
+      assert.deepEqual(session.runtime.inspectJobs().jobs, []);
+    });
+  }
+
+  test.each([
+    ["ASCII", "m"],
+    ["multibyte UTF-8", "界"],
+    ["astral UTF-8", "😀"],
+    ["JSON escaping", '"\\'],
+  ] as const)(`preserves the exact combined bootstrap byte limit for ${field} (%s)`, async (_label, chunk) => {
+    const { invoke, requests, session } = await setup();
+    const expectedTools = ["subagent_send", "subagent_wait"];
+    const selection = { provider: parent.provider, model: parent.id, thinkingLevel: "high" as const, [field]: "" };
+    const bootstrap = (id: string) =>
+      serializeChildBootstrap({
+        communication: { host: "127.0.0.1", port: 65_535, token: "f".repeat(64) },
+        expectedTools,
+        selection: { ...selection, [field]: id },
+      });
+    const availableBytes = MAX_BOOTSTRAP_BYTES - Buffer.byteLength(bootstrap(""), "utf8");
+    const chunkBytes = Buffer.byteLength(JSON.stringify(chunk), "utf8") - 2;
+    const value = chunk.repeat(Math.floor(availableBytes / chunkBytes)) + "m".repeat(availableBytes % chunkBytes);
+    assert.equal(Buffer.byteLength(bootstrap(value), "utf8"), MAX_BOOTSTRAP_BYTES);
+    const admitted = await invoke({ tools: [], [field]: value });
+    await session.runtime.wait(admitted.details.jobId, undefined);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.[field], value);
+    await assert.rejects(() => invoke({ tools: [], [field]: `${value}m` }), /child bootstrap size limit/i);
+    assert.equal(requests.length, 1);
+  });
+}
 
 test("a provider-only override never chooses that provider's other model", async () => {
   const { invoke, requests, session } = await setup({

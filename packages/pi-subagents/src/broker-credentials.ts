@@ -7,7 +7,7 @@ export const CHILD_READINESS_FD = 4;
 export const CHILD_READINESS_FD_ENV = "PI_SUBAGENT_READINESS_FD";
 export const MAX_READINESS_FRAME_BYTES = 16 * 1024;
 
-const MAX_BOOTSTRAP_BYTES = 16 * 1024;
+export const MAX_BOOTSTRAP_BYTES = 16 * 1024;
 const MAX_EXPECTED_TOOLS = 66;
 const MAX_TOOL_NAME_LENGTH = 128;
 const READINESS_STATE_KEY = Symbol.for("@narumitw/pi-subagents/child-readiness");
