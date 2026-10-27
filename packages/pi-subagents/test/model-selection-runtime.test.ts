@@ -10,6 +10,7 @@ const parentProvider = "selection-parent";
 const childProvider = "selection-child";
 const parentModel = "parent-model";
 const childModels = ["child/path:high", `${childProvider}/base`, "BASE"];
+type Startup = "normal" | "default" | "late" | "missing" | "unavailable";
 
 interface VisibleTool {
   name: string;
@@ -43,7 +44,14 @@ interface RpcRecord {
 }
 
 // The fixture lives below the package so Jiti resolves its public Pi peers from this checkout.
-function providerFixture(evidence: string, fixture: string, childModel: string): string {
+function providerFixture(
+  evidence: string,
+  fixture: string,
+  childModel: string,
+  selectedProvider: string,
+  caseCollision: boolean,
+  startup: Startup,
+): string {
   return `
 import { appendFileSync } from "node:fs";
 import {
@@ -83,34 +91,79 @@ const resultOf = (context, name) => {
 const call = (name, args, id) => fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
 
 export default function (pi) {
+  const isChild = process.env.PI_SUBAGENT_DEPTH !== undefined;
+  const pair = (model) => model && ({ provider: model.provider, id: model.id });
+  const startup = ${JSON.stringify(startup)};
   const parent = fauxProvider({
     provider: ${JSON.stringify(parentProvider)}, api: "selection-parent-api",
     models: [{ id: ${JSON.stringify(parentModel)}, reasoning: true }],
     tokensPerSecond: 0,
   });
   const child = fauxProvider({
-    provider: ${JSON.stringify(childProvider)}, api: "selection-child-api",
+    provider: ${JSON.stringify(selectedProvider)}, api: "selection-child-api",
     models: [{ id: "base", reasoning: true }, { id: ${JSON.stringify(childModel)}, reasoning: false }],
     tokensPerSecond: 0,
   });
-  pi.registerProvider(parent.provider);
-  pi.registerProvider(child.provider);
+  // No parent's catalog or auth configuration is required for the requested child pair.
+  if (!isChild || startup !== "late") pi.registerProvider(parent.provider);
+  const registerChild = () => pi.registerProvider(startup === "unavailable"
+    ? { ...child.provider, filterModels: () => [] }
+    : child.provider);
+  if (startup === "normal" || (isChild && startup !== "late" && startup !== "missing")) registerChild();
+  if (${caseCollision}) {
+    const rival = fauxProvider({
+      provider: ${JSON.stringify(selectedProvider === "SELECTION-CHILD" ? childProvider : "SELECTION-CHILD")},
+      api: "selection-rival-api", models: [{ id: ${JSON.stringify(childModel)} }], tokensPerSecond: 0,
+    });
+    pi.registerProvider(rival.provider);
+    rival.setResponses([() => { record({ kind: "wrong-child-dispatch" }); throw new Error("Wrong provider"); }]);
+  }
+  pi.on("session_start", (_event, ctx) => {
+    if (!isChild) {
+      record({ kind: "parent-registration", registered: Boolean(ctx.modelRegistry.find(${JSON.stringify(selectedProvider)}, ${JSON.stringify(childModel)})) });
+      return;
+    }
+    record({ kind: "child-start", model: pair(ctx.model),
+      available: ctx.modelRegistry.getAvailable().map(pair),
+      registered: Boolean(ctx.modelRegistry.find(${JSON.stringify(selectedProvider)}, ${JSON.stringify(childModel)})),
+    });
+  });
+  // The attached extension runs before the production exact-selection probe.
+  pi.on("resources_discover", (_event, ctx) => {
+    if (!isChild) return;
+    if (startup === "late") registerChild();
+    record({ kind: "child-before-probe", model: pair(ctx.model),
+      registered: Boolean(ctx.modelRegistry.find(${JSON.stringify(selectedProvider)}, ${JSON.stringify(childModel)})),
+    });
+  });
+  pi.on("model_select", (event) => {
+    if (isChild) record({ kind: "child-selection", model: pair(event.model), previousModel: pair(event.previousModel), source: event.source });
+  });
+  pi.on("session_shutdown", () => {
+    if (isChild) record({ kind: "child-shutdown" });
+  });
   pi.on("before_agent_start", (_event, ctx) => {
-    if (ctx.model?.provider === ${JSON.stringify(childProvider)}) {
+    if (isChild) record({ kind: "child-task-dispatch" });
+    if (ctx.model?.provider === ${JSON.stringify(selectedProvider)}) {
       record({ kind: "child-state", model: { provider: ctx.model.provider, id: ctx.model.id }, thinkingLevel: pi.getThinkingLevel() });
     }
   });
   const respond = (step) => (context, _options, _state, model) => {
+    if (isChild) { record({ kind: "wrong-child-dispatch" }); throw new Error("Provisional model received task"); }
     capture(context, model, "parent");
     return step(context);
   };
   parent.setResponses([
     respond(() => call("subagent_spawn", {
       task: "Return the synthetic child result.",
-      provider: ${JSON.stringify(childProvider)}, model: ${JSON.stringify(childModel)},
+      provider: ${JSON.stringify(selectedProvider)}, model: ${JSON.stringify(childModel)},
       tools: [], extensions: [{ path: ${JSON.stringify(fixture)}, tools: [] }], thinkingLevel: "high",
     }, "spawn-literal-model")),
-    respond((context) => call("subagent_wait", { jobId: resultOf(context, "subagent_spawn").jobId }, "wait-for-child")),
+    respond((context) => {
+      const result = resultOf(context, "subagent_spawn");
+      record({ kind: "spawn-result", result });
+      return call("subagent_wait", { jobId: result.jobId }, "wait-for-child");
+    }),
     respond((context) => {
       record({ kind: "wait-result", result: resultOf(context, "subagent_wait") });
       return fauxAssistantMessage("First ordinary response.");
@@ -127,11 +180,18 @@ export default function (pi) {
 }
 
 function rpcHarness(args: string[], agentDir: string, signal: AbortSignal) {
-  const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
-  // The test can itself run inside a subagent; this CLI is a fresh synthetic parent.
-  for (const key of ["PI_SUBAGENT_DEPTH", "PI_SUBAGENT_BROKER_FD", "PI_SUBAGENT_READINESS_FD", "PI_PACKAGE_DIR"]) {
-    delete env[key];
-  }
+  // Do not inherit provider secrets or real user credential/configuration directories.
+  // This also removes any enclosing subagent's bootstrap environment.
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot,
+    HOME: agentDir,
+    USERPROFILE: agentDir,
+    XDG_CONFIG_HOME: agentDir,
+    XDG_CACHE_HOME: agentDir,
+    PI_CODING_AGENT_DIR: agentDir,
+    PI_OFFLINE: "1",
+  };
   const child = spawn(process.execPath, args, {
     cwd: resolve("."),
     env,
@@ -270,8 +330,31 @@ function rpcHarness(args: string[], agentDir: string, signal: AbortSignal) {
   };
 }
 
-for (const childModel of childModels) {
-  test(`package-directory RPC preserves parent prefixes with exact child model ${childModel}`, async ({ signal }) => {
+const selections = [
+  ...childModels.map((model) => ({
+    model,
+    provider: childProvider,
+    caseCollision: false,
+    startup: "normal" as Startup,
+  })),
+  ...["SELECTION-CHILD", childProvider].map((provider) => ({
+    model: "shared",
+    provider,
+    caseCollision: true,
+    startup: "normal" as Startup,
+  })),
+  ...(["default", "late", "missing", "unavailable"] as const).map((startup) => ({
+    model: "child-only",
+    provider: childProvider,
+    caseCollision: false,
+    startup,
+  })),
+];
+
+for (const { model: childModel, provider: selectedProvider, caseCollision, startup } of selections) {
+  test(`package-directory RPC preserves parent prefixes with exact child model ${selectedProvider}/${childModel} (${startup})`, async ({
+    signal,
+  }) => {
     const root = await mkdtemp(join(packageDirectory, ".model-selection-runtime-"));
     const agentDir = join(root, "agent");
     const fixture = join(root, "provider.ts");
@@ -282,9 +365,17 @@ for (const childModel of childModels) {
       await mkdir(agentDir);
       await writeFile(
         join(agentDir, "settings.json"),
-        JSON.stringify({ retry: { enabled: false }, compaction: { enabled: false } }),
+        JSON.stringify({
+          defaultProvider: parentProvider,
+          defaultModel: parentModel,
+          retry: { enabled: false },
+          compaction: { enabled: false },
+        }),
       );
-      await writeFile(fixture, providerFixture(evidence, fixture, childModel));
+      await writeFile(
+        fixture,
+        providerFixture(evidence, fixture, childModel, selectedProvider, caseCollision, startup),
+      );
       rpc = rpcHarness(
         [
           cli,
@@ -341,7 +432,11 @@ for (const childModel of childModels) {
         model?: { provider: string; id: string };
         thinkingLevel?: string;
         reasoning?: string | null;
-        result?: { state: string; result: string; timedOut: boolean };
+        available?: Array<{ provider: string; id: string }>;
+        registered?: boolean;
+        previousModel?: { provider: string; id: string };
+        source?: string;
+        result?: { jobId: string; state: string; result?: string; error?: string; timedOut?: boolean };
       }>;
       const parent = records.filter((record) => record.kind === "parent").map((record) => record.input);
       assert.equal(
@@ -386,27 +481,80 @@ for (const childModel of childModels) {
         (block) => block.type === "toolCall",
       );
       assert.ok(spawnCall);
-      assert.equal(spawnCall.arguments.provider, childProvider);
+      assert.equal(spawnCall.arguments.provider, selectedProvider);
       assert.equal(spawnCall.arguments.model, childModel);
       assert.deepEqual(spawnCall.arguments.tools, []);
+      const admitted = records.find((record) => record.kind === "spawn-result")?.result;
+      assert.ok(admitted?.jobId, "model lookup must not reject the spawn before job admission");
+      assert.equal(admitted.state, "queued");
+      const result = records.find((record) => record.kind === "wait-result")?.result;
+      assert.ok(result);
+      assert.equal(result.jobId, admitted.jobId);
+      assert.equal(result.timedOut, false);
+      assert.equal(
+        records.some((record) => record.kind === "wrong-child-dispatch"),
+        false,
+      );
+      if (startup !== "normal") {
+        assert.equal(records.find((record) => record.kind === "parent-registration")?.registered, false);
+      }
+      if (startup === "missing" || startup === "unavailable") {
+        assert.equal(result.state, "failed");
+        assert.match(
+          result.error ?? "",
+          startup === "missing" ? /not registered as an exact chat model/ : /unavailable as an exact chat model/,
+        );
+        assert.equal(
+          records.some((record) => ["child", "child-task-dispatch", "child-selection"].includes(record.kind)),
+          false,
+        );
+        assert.equal(
+          records.find((record) => record.kind === "child-before-probe")?.registered,
+          startup === "unavailable",
+        );
+        assert.ok(records.some((record) => record.kind === "child-shutdown"));
+        return;
+      }
+      if (startup === "late") {
+        const start = records.find((record) => record.kind === "child-start");
+        assert.deepEqual(start?.model, { provider: "unknown", id: "unknown" });
+        assert.deepEqual(start?.available, []);
+        assert.equal(start?.registered, false);
+        assert.equal(records.find((record) => record.kind === "child-before-probe")?.registered, true);
+      }
+      if (startup === "late" || startup === "default") {
+        const provisional =
+          startup === "late" ? { provider: "unknown", id: "unknown" } : { provider: parentProvider, id: parentModel };
+        assert.deepEqual(records.find((record) => record.kind === "child-before-probe")?.model, provisional);
+        const selection = records.find((record) => record.kind === "child-selection");
+        assert.ok(selection);
+        assert.deepEqual(selection.previousModel, provisional);
+        assert.deepEqual(selection.model, { provider: selectedProvider, id: childModel });
+        assert.equal(selection.source, "set");
+        const selectionIndex = records.indexOf(selection);
+        assert.ok(selectionIndex > records.findIndex((record) => record.kind === "child-before-probe"));
+        assert.ok(selectionIndex < records.findIndex((record) => record.kind === "child-task-dispatch"));
+      }
       const children = records.filter((record) => record.kind === "child");
-      assert.equal(children.length, 1);
-      assert.deepEqual(children[0]?.input.model, { provider: childProvider, id: childModel });
+      assert.equal(
+        children.length,
+        1,
+        `exact child task must run: ${JSON.stringify(records.find((record) => record.kind === "wait-result"))}`,
+      );
+      assert.deepEqual(children[0]?.input.model, { provider: selectedProvider, id: childModel });
       assert.deepEqual(children[0]?.input.names, ["subagent_send", "subagent_wait"]);
       assert.deepEqual(
         records.find((record) => record.kind === "child-state"),
         {
           kind: "child-state",
-          model: { provider: childProvider, id: childModel },
+          model: { provider: selectedProvider, id: childModel },
           thinkingLevel: "off",
         },
       );
       assert.equal(records.find((record) => record.kind === "child-options")?.reasoning, null);
-      const result = records.find((record) => record.kind === "wait-result")?.result;
-      assert.ok(result);
       assert.equal(result.state, "completed");
       assert.equal(result.result, "Synthetic child result.");
-      assert.equal(result.timedOut, false);
+      assert.ok(records.some((record) => record.kind === "child-shutdown"));
     } finally {
       try {
         await rpc?.dispose();

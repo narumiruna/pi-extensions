@@ -82,9 +82,10 @@ test("a provider-only override never chooses that provider's other model", async
   const { invoke, requests, session } = await setup({
     models: [parent, { provider: "other-provider", id: "different-default" }],
   });
-  await assert.rejects(() => invoke({ provider: "other-provider" }), /other-provider\/parent-model.*not registered/i);
-  assert.deepEqual(requests, []);
-  assert.deepEqual(session.runtime.inspectJobs().jobs, []);
+  const result = await invoke({ provider: "other-provider" });
+  await session.runtime.wait(result.details.jobId, undefined);
+  assert.equal(requests[0]?.provider, "other-provider");
+  assert.equal(requests[0]?.model, parent.id);
 });
 
 test("an explicit pair works without a selected parent model", async () => {
@@ -138,16 +139,23 @@ test.each([
   { model: "fixture-provider/parent-model" },
   { model: "parent-model " },
   { model: "unlisted-model" },
-])("rejects non-exact catalog selections %j", async (overrides) => {
-  const { invoke, requests } = await setup();
-  await assert.rejects(() => invoke(overrides), /not registered/i);
-  assert.deepEqual(requests, []);
+])("leaves literal selection %j for the child to validate", async (overrides) => {
+  const { invoke, requests, session, find, getAvailableOfType } = await setup({ models: [] });
+  const result = await invoke(overrides);
+  assert.equal(result.details.state, "queued");
+  await session.runtime.wait(result.details.jobId, undefined);
+  assert.equal(requests[0]?.provider, overrides.provider ?? parent.provider);
+  assert.equal(requests[0]?.model, overrides.model ?? parent.id);
+  assert.equal(find.mock.calls.length, 0);
+  assert.equal(getAvailableOfType.mock.calls.length, 0);
 });
 
-test("strict catalog validation also rejects inherited unlisted custom IDs", async () => {
-  const { invoke, requests } = await setup({ model: { ...parent, id: "unlisted-model" } });
-  await assert.rejects(() => invoke(), /unlisted-model.*not registered/i);
-  assert.deepEqual(requests, []);
+test("leaves inherited unlisted custom IDs for the child to validate", async () => {
+  const { invoke, requests, session, find } = await setup({ model: { ...parent, id: "unlisted-model" } });
+  const result = await invoke();
+  await session.runtime.wait(result.details.jobId, undefined);
+  assert.equal(requests[0]?.model, "unlisted-model");
+  assert.equal(find.mock.calls.length, 0);
 });
 
 test("explicit trusted attachments can register a pair absent from the parent catalog", async () => {
@@ -242,12 +250,19 @@ test.each(["cancel", "shutdown", "cwd", "trust"] as const)(
 async function setup(options: { model?: Pair; models?: Pair[]; restriction?: "runtime" | "parent-extension" } = {}) {
   const mock = createMockPi({ thinkingLevel: "high" });
   const models = options.models ?? catalog;
+  const find = vi.fn((provider: string, id: string) =>
+    models.find((model) => model.provider === provider && model.id === id),
+  );
+  const getAvailableOfType = vi.fn(() => {
+    throw new Error("The parent must not check child model availability");
+  });
   const context = createMockContext({
     model: Object.hasOwn(options, "model") ? options.model : parent,
     thinkingLevel: "high",
     isProjectTrusted: () => true,
     modelRegistry: {
-      find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id),
+      find,
+      getAvailableOfType,
       getProviderAuthStatus: (provider: string) => ({
         configured: true,
         source: options.restriction === "runtime" && provider === parent.provider ? "runtime" : "environment",
@@ -272,6 +287,8 @@ async function setup(options: { model?: Pair; models?: Pair[]; restriction?: "ru
     session,
     spawn,
     requests,
+    find,
+    getAvailableOfType,
     invoke: (overrides: Record<string, unknown> = {}, signal?: AbortSignal) =>
       spawn.execute("spawn", { task: "Check model selection", ...overrides }, signal, undefined, context.ctx),
   };

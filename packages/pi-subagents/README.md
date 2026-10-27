@@ -188,7 +188,8 @@ A provider-only override retains the parent's model ID and fails if that pair is
 { task: "Review the parser without changing files.", provider: "openai", model: "gpt-5.5" }
 ```
 
-Every job requires a registered chat model and child-visible credentials, including jobs that inherit both fields.
+Only the child checks exact model registration and current availability. Every job requires a registered chat model and child-visible credentials, including jobs that inherit both fields.
+A missing or unavailable model fails the job after `subagent_spawn` returns its `jobId`, before the task reaches any model. Use `subagent_wait` to read the failure.
 Unlisted custom IDs previously accepted by Pi's CLI now fail; register the exact model in Pi's `models.json` or attach a trusted extension that registers it in the child.
 See [Model selection](./docs/tools.md#model-selection) for exact matching, error timing, and virtual-model behavior.
 

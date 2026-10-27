@@ -871,7 +871,7 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
   assert.equal(launches, 0);
 });
 
-test("rejects an oversized Windows child command line before queueing", async () => {
+test("bounds the private model selection before queueing on Windows", async () => {
   let launches = 0;
   const { mock, context } = await setup(
     {
@@ -886,8 +886,8 @@ test("rejects an oversized Windows child command line before queueing", async ()
   );
 
   await assert.rejects(
-    () => spawnJob(mock, context, "oversized Windows child command"),
-    /command line exceeds the Windows process limit/i,
+    () => spawnJob(mock, context, "oversized private model selection"),
+    /child bootstrap size limit/i,
   );
   assert.equal(launches, 0);
 });

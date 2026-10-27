@@ -39,14 +39,36 @@ function request(overrides: Partial<ChildRequest> = {}): ChildRequest {
   };
 }
 
-for (const model of ["raw/model", "raw:model", "provider-looking/model:high", "literal:off"]) {
-  test(`CLI preserves separate literal provider and raw model ${model}`, () => {
-    const args = buildPiArgs(request({ model }));
-    assert.equal(args[args.indexOf("--provider") + 1], "literal-provider");
-    assert.equal(args[args.indexOf("--model") + 1], model);
+for (const model of [
+  "raw/model",
+  "raw:model",
+  "provider-looking/model:high",
+  "literal:off",
+  " raw/model ",
+  "--model",
+]) {
+  test(`private bootstrap preserves the raw model without CLI parsing: ${model}`, async () => {
+    const child = request({ model });
+    const args = buildPiArgs(child);
+    assert.equal(args.includes("--provider"), false);
+    assert.equal(args.includes("--model"), false);
+    assert.equal(args.includes("literal-provider"), false);
     assert.equal(args[args.indexOf("--thinking") + 1], "medium");
     assert.ok(args.includes(childReadinessProbePath()));
     assert.equal(args.includes("private task"), false);
+    installFakePi(
+      directory,
+      `
+async function handle(command) {
+  respond(command);
+  event(message(JSON.stringify(selection)));
+  event({ type: "agent_settled" });
+}
+`,
+    );
+    const result = await runChild(child);
+    assert.equal(result.state, "completed");
+    assert.deepEqual(JSON.parse(result.result ?? "{}"), { provider: child.provider, model, thinkingLevel: "medium" });
   });
 }
 

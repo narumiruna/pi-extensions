@@ -58,8 +58,10 @@ test("buildPiArgs isolates the RPC child and preserves selected communication to
     "-e",
   ]);
   assert.equal(args[7], childCommunicationBridgePath());
-  assert.equal(args[args.indexOf("--provider") + 1], "test-provider");
-  assert.equal(args[args.indexOf("--model") + 1], "test-model");
+  assert.equal(args.includes("--provider"), false);
+  assert.equal(args.includes("--model"), false);
+  assert.equal(args.includes("test-provider"), false);
+  assert.equal(args.includes("test-model"), false);
   assert.equal(args[args.indexOf("--thinking") + 1], "medium");
   assert.ok(args.includes("--no-approve"));
   assert.equal(args[args.indexOf("--tools") + 1], "read,grep,find,ls,subagent_send,subagent_wait");

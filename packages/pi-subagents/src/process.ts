@@ -90,10 +90,7 @@ export async function runChild(request: ChildRequest): Promise<ChildResult> {
   }
 }
 
-type ChildCommandRequest = Pick<
-  ChildRequest,
-  "tools" | "skills" | "extensions" | "provider" | "model" | "thinkingLevel" | "projectTrusted"
->;
+type ChildCommandRequest = Pick<ChildRequest, "tools" | "skills" | "extensions" | "thinkingLevel" | "projectTrusted">;
 
 export function buildPiArgs(request: ChildCommandRequest): string[] {
   const args = [
@@ -110,15 +107,8 @@ export function buildPiArgs(request: ChildCommandRequest): string[] {
   for (const extension of request.extensions) args.push("-e", extension.path);
   args.push("-e", childReadinessProbePath());
   for (const skill of request.skills) args.push("--skill", skill);
-  args.push(
-    "--provider",
-    request.provider,
-    "--model",
-    request.model,
-    "--thinking",
-    request.thinkingLevel,
-    request.projectTrusted ? "--approve" : "--no-approve",
-  );
+  // CLI model flags use pattern matching. The readiness probe binds the private exact selection.
+  args.push("--thinking", request.thinkingLevel, request.projectTrusted ? "--approve" : "--no-approve");
   args.push("--tools", selectedChildTools(request).join(","));
   return args;
 }

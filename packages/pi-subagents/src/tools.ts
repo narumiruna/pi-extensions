@@ -230,8 +230,6 @@ export function registerSubagentTools(
           tools,
           skills: attachments.skills,
           extensions: attachments.extensions,
-          provider,
-          model,
           thinkingLevel,
           projectTrusted,
         },
@@ -429,11 +427,6 @@ function resolveChildModel(
   if (ctx.modelRegistry.getProviderAuthStatus(provider).source === "runtime") {
     throw new Error(
       `Subagent model provider ${displayProvider} uses a process-local runtime API key. Configure stored or environment credentials that child processes can read.`,
-    );
-  }
-  if (!hasAttachedExtensions && !ctx.modelRegistry.find(provider, model)) {
-    throw new Error(
-      `Subagent model ${displayProvider}/${sanitizeTerminalText(model).slice(0, 128)} is not registered. Register the exact model in Pi's models.json or attach a trusted provider extension.`,
     );
   }
   return { provider, model };
