@@ -229,12 +229,12 @@ test("refreshes a changed task even when the remaining display data is unchanged
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), firstFactory);
   jobs.mockReturnValue([{ ...displayJob, task: "Second task" }]);
   refresh();
-  assert.notEqual(context.widgets.get(SUBAGENT_WIDGET_KEY), firstFactory);
-  assert.match(widgetComponent(context).render(200)[2] ?? "", /Second task/u);
-  assert.match(first.render(200)[2] ?? "", /First task/u, "published snapshots must remain independent");
+  assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), firstFactory, "visible changes retain the mount");
+  assert.equal(widgetComponent(context), first);
+  assert.match(first.render(200)[2] ?? "", /Second task/u);
 });
 
-test("refreshes a changed thinking level without changing previous snapshots or republishing unchanged data", async () => {
+test("refreshes a changed thinking level in the retained component without republishing unchanged data", async () => {
   let refresh: (() => void) | undefined;
   vi.spyOn(globalThis, "setInterval").mockImplementation((callback) => {
     refresh = callback as () => void;
@@ -252,9 +252,9 @@ test("refreshes a changed thinking level without changing previous snapshots or 
   jobs.mockReturnValue([{ ...displayJob, thinkingLevel: "max" }]);
   refresh();
   const changedFactory = context.widgets.get(SUBAGENT_WIDGET_KEY);
-  assert.notEqual(changedFactory, firstFactory);
-  assert.match(widgetComponent(context).render(200)[2] ?? "", /thinking: max/u);
-  assert.match(first.render(200)[2] ?? "", /thinking: off/u);
+  assert.equal(changedFactory, firstFactory);
+  assert.equal(widgetComponent(context), first);
+  assert.match(first.render(200)[2] ?? "", /thinking: max/u);
   refresh();
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), changedFactory);
 });
@@ -330,7 +330,8 @@ test("applies display settings immediately and preserves active jobs, payloads, 
   assert.doesNotMatch(rows.join("\n"), /job_|tools:|no timeout/u);
   assert.match(rows[2] ?? "", /▶ Keep running when hidden · running · thinking: off/u);
   assert.match(rows[3] ?? "", /Finish while hidden · running · thinking: max/u);
-  assert.match(original.render(200)[2] ?? "", /job_.*tools:/u, "old snapshots stay independent");
+  assert.equal(widgetComponent(context), original);
+  assert.doesNotMatch(original.render(200).join("\n"), /job_|tools:|no timeout/u);
   controller.update(context.ctx, { ...preferences, showWidget: false });
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
   assert.deepEqual(runtime.inspectJobs(), metadata);
@@ -392,10 +393,17 @@ async function setupWidget() {
   return { mock, context, runtime, controller, children };
 }
 
+const widgetComponents = new WeakMap<object, Component>();
 function widgetComponent(context: ReturnType<typeof createMockContext>, callbackTheme = theme): Component {
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
   assert.ok(factory);
-  return factory({}, callbackTheme);
+  Object.assign((context.ctx as ExtensionContext).ui, { theme: callbackTheme });
+  let component = widgetComponents.get(factory);
+  if (!component) {
+    component = factory({ terminal: { rows: 36 }, requestRender() {} }, callbackTheme);
+    widgetComponents.set(factory, component);
+  }
+  return component;
 }
 
 function jobInput(task: string, thinkingLevel: SubagentThinkingLevel = "medium") {

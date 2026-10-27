@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
@@ -21,6 +22,7 @@ const sessions: { mock: Mock; context: Context }[] = [];
 beforeEach(async () => {
   directory = await fs.mkdtemp(join(tmpdir(), "pi-subagents-command-"));
   vi.stubEnv("PI_CODING_AGENT_DIR", directory);
+  vi.stubEnv("PI_SUBAGENT_DEPTH", "0");
   vi.resetModules();
   const { initTheme } = await import("@earendil-works/pi-coding-agent");
   initTheme("dark");
@@ -219,6 +221,150 @@ test("blocks duplicate screens and loading or stale command contexts", async () 
   await start;
 });
 
+test("public hooks compact on consumed user messages, not input attempts or other roles", async () => {
+  const tui = createTuiHarness();
+  const { mock, context } = await setup({ mode: "tui", custom: tui.custom });
+  await spawnJob(mock, context);
+  const definitions = JSON.stringify(mock.tools);
+  await armTrigger(mock, context, tui, "Next consumed user message");
+  for (const role of ["assistant", "custom", "toolResult"]) {
+    await emit(mock, "message_start", context.ctx, { message: { role } });
+  }
+  await emit(mock, "input", context.ctx, { text: "handled, rejected, or queued input" });
+  await emit(mock, "agent_end", context.ctx);
+  await emit(mock, "message_end", context.ctx, { message: { role: "assistant" } });
+  assert.match(widgetText(context), /thinking:/u);
+  await emit(mock, "agent_start", context.ctx);
+  await emit(mock, "message_start", context.ctx, {
+    message: { role: "user", content: "extension-generated or consumed queue" },
+  });
+  assert.match(widgetText(context), /1 active · 1 running · 0 queued/u);
+  assert.doesNotMatch(widgetText(context), /thinking:/u);
+  assert.equal(JSON.stringify(mock.tools), definitions);
+  assert.deepEqual(mock.sentMessages, []);
+  assert.deepEqual(mock.sentUserMessages, []);
+});
+
+test("public settled hooks group retries and queued continuations and require an eligible turn", async () => {
+  const tui = createTuiHarness();
+  const { mock, context } = await setup({ mode: "tui", custom: tui.custom });
+  await spawnJob(mock, context);
+  await emit(mock, "agent_start", context.ctx);
+  await armTrigger(mock, context, tui, "Next eligible settled cycle");
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+  await emit(mock, "agent_settled", context.ctx, { aborted: false });
+  assert.match(widgetText(context), /thinking:/u, "the arming cycle is excluded");
+  await emit(mock, "agent_start", context.ctx);
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "toolResult", stopReason: "stop" } });
+  await emit(mock, "agent_settled", context.ctx, { aborted: false });
+  assert.match(widgetText(context), /thinking:/u, "a non-assistant turn cannot establish eligibility");
+  await emit(mock, "agent_start", context.ctx);
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "error" } });
+  await emit(mock, "agent_end", context.ctx);
+  await emit(mock, "agent_start", context.ctx); // Automatic retry, still one cycle.
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "toolUse" } });
+  await emit(mock, "agent_end", context.ctx);
+  await emit(mock, "agent_start", context.ctx); // Queued follow-up / continuation.
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+  assert.match(widgetText(context), /thinking:/u);
+  await emit(mock, "agent_settled", context.ctx, { aborted: false });
+  assert.doesNotMatch(widgetText(context), /thinking:/u);
+});
+
+test("menu arming excludes run preparation before the public agent_start hook", async () => {
+  const tui = createTuiHarness();
+  let idle = true;
+  const { mock, context } = await setup({ mode: "tui", custom: tui.custom, isIdle: () => idle });
+  await spawnJob(mock, context);
+  idle = false; // Pi's _prepareRun is busy, but no agent_start has been emitted.
+  await armTrigger(mock, context, tui, "Next eligible settled cycle");
+  await emit(mock, "agent_start", context.ctx);
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+  idle = true;
+  await emit(mock, "agent_settled", context.ctx, { aborted: false });
+  assert.match(widgetText(context), /thinking:/u);
+  await emit(mock, "agent_start", context.ctx);
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+  await emit(mock, "agent_settled", context.ctx, { aborted: false });
+  assert.doesNotMatch(widgetText(context), /thinking:/u);
+});
+
+test("async settings initialization excludes an already-busy cycle even when its start hook was missed", async () => {
+  const tui = createTuiHarness();
+  let idle = true;
+  const { mock, context, store } = await setup({ mode: "tui", custom: tui.custom, isIdle: () => idle });
+  const entered = deferred();
+  const release = deferred();
+  const load = store.load.bind(store);
+  vi.spyOn(store, "load").mockImplementation(async () => {
+    entered.resolve();
+    await release.promise;
+    return load();
+  });
+  const loading = emit(mock, "session_start", context.ctx);
+  await entered.promise;
+  idle = false;
+  await emit(mock, "agent_start", context.ctx);
+  release.resolve();
+  await loading;
+  await spawnJob(mock, context);
+  await armTrigger(mock, context, tui, "Next eligible settled cycle");
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+  await emit(mock, "agent_settled", context.ctx, { aborted: false });
+  assert.match(widgetText(context), /thinking:/u);
+  await emit(mock, "agent_start", context.ctx);
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+  idle = true;
+  await emit(mock, "agent_settled", context.ctx, { aborted: false });
+  assert.doesNotMatch(widgetText(context), /thinking:/u);
+});
+
+test("tree navigation closes the old menu and resets presentation without cancelling jobs", async () => {
+  const tui = createTuiHarness();
+  const { mock, context, children } = await setup({ mode: "tui", custom: tui.custom });
+  await spawnJob(mock, context);
+  await armTrigger(mock, context, tui, "Next consumed user message");
+  const menu = invoke(mock, context, "");
+  await tui.waitForOpen();
+  await emit(mock, "session_tree", context.ctx);
+  await menu;
+  await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+  assert.equal(tui.isOpen, false);
+  assert.match(widgetText(context), /thinking:/u);
+  assert.equal(children[0]?.signal.aborted, false);
+  assert.deepEqual(mock.sentMessages, []);
+});
+
+async function armTrigger(mock: Mock, context: Context, tui: ReturnType<typeof createTuiHarness>, label: string) {
+  const command = invoke(mock, context, "");
+  await tui.waitForOpen();
+  await choose(tui, "Widget view");
+  await choose(tui, "Automatic compaction");
+  await choose(tui, label);
+  tui.press("ctrl+c");
+  await command;
+}
+
+async function choose(tui: ReturnType<typeof createTuiHarness>, label: string) {
+  for (let index = 0; index < 20; index++) {
+    if (tui.render().some((line) => stripVTControlCharacters(line).includes(`→ ${label}`))) {
+      tui.press("tui.select.confirm");
+      await tui.waitForOpen();
+      return;
+    }
+    tui.press("tui.select.down");
+  }
+  throw new Error(`Menu item not found: ${label}`);
+}
+
 test("reports ignored invalid settings without replacing the file", async () => {
   const { mock, context, store } = await setup({ mode: "rpc" });
   const bytes = '{"showWidget":"wrong","showTools":false,"future":123}';
@@ -254,8 +400,8 @@ async function setup(overrides: Record<string, unknown> = {}) {
   return { mock, context, store, children };
 }
 
-async function emit(mock: Mock, name: string, ctx: unknown) {
-  for (const handler of mock.events.get(name) ?? []) await handler({}, ctx);
+async function emit(mock: Mock, name: string, ctx: unknown, event: unknown = {}) {
+  for (const handler of mock.events.get(name) ?? []) await handler(event, ctx);
 }
 
 async function invoke(mock: Mock, context: Context, route: string) {
@@ -273,11 +419,15 @@ async function spawnJob(mock: Mock, context: Context) {
   await tool.execute("spawn", { task: "Run test task", tools: ["read"] }, undefined, undefined, ctx);
 }
 
+const widgetComponents = new WeakMap<object, Component>();
 function widgetText(context: Context) {
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as (tui: unknown, theme: Theme) => Component;
-  return factory({}, { fg: (_role: string, text: string) => text } as Theme)
-    .render(200)
-    .join("\n");
+  let component = widgetComponents.get(factory);
+  if (!component) {
+    component = factory({ terminal: { rows: 36 }, requestRender() {} }, (context.ctx as ExtensionContext).ui.theme);
+    widgetComponents.set(factory, component);
+  }
+  return component.render(200).join("\n");
 }
 
 function deferred() {

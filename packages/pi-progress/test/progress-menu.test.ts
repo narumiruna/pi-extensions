@@ -150,7 +150,15 @@ test("RPC main menu adapts Settings, Status, Help, and Clear widget without cust
   await setProgress(harness, current.ctx, [{ text: "work", status: "pending" }]);
   await openMenu(harness, current.ctx);
   rpc.assertConsumed();
-  assert.deepEqual(rpc.dialogs[0]?.options, ["Clear widget", "Settings", "Status", "Help", "Close"]);
+  assert.deepEqual(rpc.dialogs[0]?.options, [
+    "Clear widget",
+    "Settings",
+    "Status",
+    "Help",
+    "Widget view",
+    "Task items",
+    "Close",
+  ]);
   assert.match(rpc.dialogs[2]?.title ?? "", /Progress Status/u);
   assert.match(rpc.dialogs[4]?.title ?? "", /Progress Help/u);
   assert.match(rpc.dialogs[6]?.title ?? "", /Widget: hidden/u);

@@ -1,7 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runConfirmation, runMenu, runTask, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import type { EditorStatusItemHandle } from "@narumitw/pi-tui-kit/editor-status-collection";
 import type { SubagentSettings } from "./settings.js";
 import { JOB_STATES, type JobSummary } from "./types.js";
+import type { SubagentWidgetControls } from "./widget.js";
 
 interface SubagentsMenuState {
   settings: SubagentSettings;
@@ -16,16 +18,19 @@ interface SubagentsMenuOptions {
   getState(): SubagentsMenuState;
   cancelJob(jobId: string, signal: AbortSignal): Promise<void>;
   showSettings(signal: AbortSignal): Promise<"back" | "close" | "stale">;
+  widget?: SubagentWidgetControls;
 }
 
 export async function showSubagentsMenu(ctx: ExtensionCommandContext, options: SubagentsMenuOptions): Promise<void> {
   if (options.signal.aborted || !options.isCurrent()) return;
   let selectedJobId: string | undefined;
+  let selectedItem: EditorStatusItemHandle | undefined;
+  const widget = ctx.mode === "tui" ? options.widget : undefined;
   const current = (signal: AbortSignal) => !signal.aborted && options.isCurrent();
   const menu = defineMenu<
     SubagentsMenuState,
-    "main" | "jobs" | "job" | "status" | "help",
-    "selectJob" | "cancelJob" | "settings"
+    "main" | "jobs" | "job" | "status" | "help" | "view" | "trigger",
+    "selectJob" | "cancelJob" | "settings" | "view" | "trigger" | "itemView"
   >({
     start: "main",
     screens: {
@@ -36,6 +41,7 @@ export async function showSubagentsMenu(ctx: ExtensionCommandContext, options: S
         items: [
           { id: "jobs", label: "Jobs", to: "jobs" },
           { id: "settings", label: "Settings", action: "settings" },
+          ...(widget ? [{ id: "view", label: "Widget view", to: "view" as const }] : []),
           { id: "status", label: "Status", to: "status" },
           { id: "help", label: "Help", to: "help" },
           { id: "close", label: "Close", close: true },
@@ -60,10 +66,62 @@ export async function showSubagentsMenu(ctx: ExtensionCommandContext, options: S
           kind: "actions",
           title: "Subagent Job",
           lines: job ? jobLines(job) : ["This job is no longer available."],
-          items: job && isActive(job) ? [{ id: "cancel", label: "Cancel job…", action: "cancelJob" }] : [],
+          items:
+            job && isActive(job)
+              ? [
+                  { id: "cancel", label: "Cancel job…", action: "cancelJob" },
+                  ...(widget && selectedItem
+                    ? [
+                        { id: "expand", label: "Widget: job details", action: "itemView" as const },
+                        { id: "compact", label: "Widget: job summary", action: "itemView" as const },
+                        { id: "remove", label: "Remove from widget (keep job)", action: "itemView" as const },
+                      ]
+                    : []),
+                ]
+              : [],
           hint: "back",
         };
       },
+      view: ({ state }) => ({
+        kind: "actions",
+        title: "Subagents Widget View",
+        lines: [
+          `View: ${widget?.state().mode ?? "default"} · pinned: ${widget?.state().pinned ?? false}`,
+          `Automatic compaction: ${widget?.state().trigger ?? "manual"}`,
+          ...(state.settings.showWidget ? [] : ["Disabled by Settings. View controls do not enable the widget."]),
+          "Display changes never cancel jobs. No completed-job history is shown.",
+        ],
+        items: [
+          { id: "expanded", label: "Show details", action: "view" },
+          { id: "compact", label: "Show summary", action: "view" },
+          {
+            id: "visibility",
+            label: widget?.state().mode === "hidden" ? "Show widget" : "Hide widget",
+            action: "view",
+          },
+          { id: "pin", label: widget?.state().pinned ? "Unpin view" : "Pin view", action: "view" },
+          { id: "trigger", label: "Automatic compaction", to: "trigger" },
+          { id: "reset-items", label: "Reset item views", action: "view" },
+        ],
+        hint: "back",
+      }),
+      trigger: () => ({
+        kind: "actions",
+        title: "Subagents Automatic Compaction",
+        lines: [
+          "Opt-in. A pending rule rearms on meaningful active-job changes, not timing ticks.",
+          "User messages count only when consumed, including extension-generated user messages.",
+          "Settlement requires a non-aborted cycle with an observed non-error, non-aborted final turn.",
+          "A later cycle needs its own post-arm consumed user message; queued batches can share a cycle.",
+          "The cycle already active when armed is excluded. Pins and disabled/hidden views prevent compaction.",
+        ],
+        items: [
+          { id: "manual", label: "Manual only", action: "trigger" },
+          { id: "user-message", label: "Next consumed user message", action: "trigger" },
+          { id: "settled-cycle", label: "Next eligible settled cycle", action: "trigger" },
+        ],
+        hint: "back",
+      }),
       status: ({ state }) => ({
         kind: "detail",
         title: "Subagents Status",
@@ -99,10 +157,31 @@ export async function showSubagentsMenu(ctx: ExtensionCommandContext, options: S
       }),
     },
     actions: {
+      view: ({ itemId, signal }) => {
+        if (!current(signal)) return { kind: "close" };
+        if (!widget) return { kind: "stay" };
+        if (itemId === "expanded" || itemId === "compact") widget.setMode(itemId);
+        else if (itemId === "visibility") widget.setMode(widget.state().mode === "hidden" ? "expanded" : "hidden");
+        else if (itemId === "pin") widget.setPinned(!widget.state().pinned);
+        else if (itemId === "reset-items") widget.resetItems();
+        return { kind: "stay" };
+      },
+      trigger: ({ itemId, signal }) => {
+        if (!current(signal)) return { kind: "close" };
+        if (itemId === "manual" || itemId === "user-message" || itemId === "settled-cycle") widget?.setTrigger(itemId);
+        return { kind: "stay" };
+      },
+      itemView: ({ itemId, signal }) => {
+        if (!current(signal)) return { kind: "close" };
+        if (itemId === "compact" || itemId === "expand" || itemId === "remove") selectedItem?.[itemId]();
+        selectedItem = selectedJobId === undefined ? undefined : widget?.item(selectedJobId);
+        return { kind: "stay" };
+      },
       selectJob: ({ itemId, signal }) => {
         if (!current(signal)) return { kind: "close" };
         if (!options.getState().jobs.some((job) => job.jobId === itemId)) return { kind: "stay" };
         selectedJobId = itemId;
+        selectedItem = widget?.item(itemId);
         return { kind: "to", screen: "job" };
       },
       settings: async ({ signal }) => {

@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
-import { createMockContext } from "../../../test/support.js";
+import { createMockContext as createBaseContext } from "../../../test/support.js";
 import type { HerdrRequest } from "../src/herdr-client.js";
 import { createHerdrWidgetObserver } from "../src/herdr-observer.js";
 import { HERDR_WIDGET_KEY } from "../src/herdr-widget.js";
+
+function createMockContext(overrides: Parameters<typeof createBaseContext>[0]) {
+  return createBaseContext({
+    theme: { bold: (text: string) => text, fg: (_role: string, text: string) => text },
+    ...overrides,
+  });
+}
 
 function pane(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -38,10 +45,13 @@ async function until(predicate: () => boolean) {
 
 function render(widget: unknown): string {
   assert.equal(typeof widget, "function");
-  return (widget as (tui: unknown, theme: Theme) => { render(width: number): string[] })({}, {
-    bold: (text: string) => text,
-    fg: (_role: string, text: string) => text,
-  } as Theme)
+  return (widget as (tui: unknown, theme: Theme) => { render(width: number): string[] })(
+    { terminal: { rows: 36 }, requestRender() {} },
+    {
+      bold: (text: string) => text,
+      fg: (_role: string, text: string) => text,
+    } as Theme,
+  )
     .render(120)
     .join("\n");
 }
@@ -199,7 +209,8 @@ test("coalesces burst invalidations and never publishes an invalidated read", as
     assert.equal(f.widgets.get(HERDR_WIDGET_KEY), initialWidget);
     assert.equal(f.state.listReads, reads);
     pending.resolve(undefined);
-    await until(() => f.widgets.get(HERDR_WIDGET_KEY) !== initialWidget);
+    await until(() => f.text().includes("working"));
+    assert.equal(f.widgets.get(HERDR_WIDGET_KEY), initialWidget);
     assert.match(f.text(), /working/);
     assert.doesNotMatch(f.text(), /blocked/);
     assert.equal(f.state.listReads, reads + 1);
@@ -244,7 +255,8 @@ test("pane and workspace invalidations refresh names and clear null or omitted p
         }),
       ];
       f.emit(updated());
-      await until(() => f.state.activeLists === 0 && f.widgets.get(HERDR_WIDGET_KEY) !== oldWidget);
+      await until(() => f.state.activeLists === 0 && f.text().includes("idle") && !f.text().includes("title/p2"));
+      assert.equal(f.widgets.get(HERDR_WIDGET_KEY), oldWidget);
       assert.match(f.text(), /idle.*pi.*p2/);
       assert.doesNotMatch(f.text(), /ready|renamed ·|title\/p2|display/);
       // Set a different value before the next clear so fingerprint suppression cannot hide the regression.

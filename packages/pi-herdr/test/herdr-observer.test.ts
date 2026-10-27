@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { createMockContext } from "../../../test/support.js";
+import { createMockContext as createBaseContext } from "../../../test/support.js";
 import type { HerdrSubscription } from "../src/herdr-client.js";
 import { createHerdrWidgetObserver } from "../src/herdr-observer.js";
 import { HERDR_WIDGET_KEY } from "../src/herdr-widget.js";
+
+function createMockContext(overrides: Parameters<typeof createBaseContext>[0]) {
+  return createBaseContext({
+    theme: { bold: (text: string) => text, fg: (_role: string, text: string) => text },
+    ...overrides,
+  });
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -54,10 +61,13 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 
 function renderWidget(value: unknown): string {
   assert.equal(typeof value, "function");
-  const component = (value as (tui: unknown, theme: Theme) => { render(width: number): string[] })({}, {
-    bold: (text: string) => text,
-    fg: (_role: string, text: string) => text,
-  } as Theme);
+  const component = (value as (tui: unknown, theme: Theme) => { render(width: number): string[] })(
+    { terminal: { rows: 36 }, requestRender() {} },
+    {
+      bold: (text: string) => text,
+      fg: (_role: string, text: string) => text,
+    } as Theme,
+  );
   return component.render(80).join("\n");
 }
 
@@ -152,7 +162,8 @@ test("publishes initial siblings and refreshes live status and exit invalidation
     event: "pane.agent_status_changed",
     data: sibling,
   });
-  await waitUntil(() => widgets.get(HERDR_WIDGET_KEY) !== initialWidget);
+  await waitUntil(() => renderWidget(widgets.get(HERDR_WIDGET_KEY)).includes("waiting"));
+  assert.equal(widgets.get(HERDR_WIDGET_KEY), initialWidget);
   assert.match(renderWidget(widgets.get(HERDR_WIDGET_KEY)), /waiting/u);
   exited = true;
   onEvent?.({ event: "pane_exited", data: { pane_id: "w1:p2", workspace_id: "w1" } });
@@ -250,6 +261,7 @@ test("re-reads initialization invalidations and rejects stale delayed publicatio
       return staleCurrent.promise;
     },
   });
+  await observer.shutdown(ctx);
   replacement.start(ctx);
   await waitUntil(() => requestCount === 1);
   const shuttingDown = replacement.shutdown(ctx);

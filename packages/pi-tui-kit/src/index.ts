@@ -24,6 +24,26 @@ export {
   runDocumentReview,
 } from "./document-review.js";
 export {
+  createEditorStatusCollection,
+  type EditorStatusCollection,
+  type EditorStatusCollectionInput,
+  type EditorStatusCollectionItem,
+  type EditorStatusCollectionOptions,
+  type EditorStatusItemHandle,
+} from "./editor-status-collection.js";
+export {
+  createEditorStatusPublisher,
+  type EditorStatusPublisher,
+  type EditorStatusPublisherOptions,
+} from "./editor-status-publisher.js";
+export {
+  createEditorStatusView,
+  type EditorStatusMode,
+  type EditorStatusTrigger,
+  type EditorStatusView,
+  type EditorStatusViewOptions,
+} from "./editor-status-view.js";
+export {
   EditorStatusWidget,
   type EditorStatusWidgetOptions,
 } from "./editor-status-widget.js";

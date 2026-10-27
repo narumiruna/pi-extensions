@@ -624,6 +624,12 @@ function hasLeadingSummary(messages: ContextEvent["messages"], boundary: number)
 }
 
 // Preserve the historical cluster-counting rules for both legacy decoding and current input.
+export function progressTextLength(value: string): number {
+  let count = 0;
+  for (let index = 0; index < value.length; count++) index = nextGraphemeClusterIndex(value, index);
+  return count;
+}
+
 function hasMaxGraphemeLength(value: string, maximum: number): boolean {
   let count = 0;
   let index = 0;
