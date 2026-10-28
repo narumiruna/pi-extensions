@@ -154,6 +154,23 @@ export class LspClient {
           // capabilities must be advertised statically.
           codeAction: {
             dynamicRegistration: false,
+            // Some servers only advertise resolveProvider when the client
+            // supports literal CodeAction objects as well as resolve.
+            codeActionLiteralSupport: {
+              codeActionKind: {
+                valueSet: [
+                  "",
+                  "quickfix",
+                  "refactor",
+                  "refactor.extract",
+                  "refactor.inline",
+                  "refactor.rewrite",
+                  "source",
+                  "source.organizeImports",
+                  "source.fixAll",
+                ],
+              },
+            },
             resolveSupport: { properties: ["edit"] },
           },
           diagnostic: { dynamicRegistration: false, relatedDocumentSupport: true },
