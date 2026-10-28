@@ -238,25 +238,6 @@ OpenAI API-key auth clears this status.
 Queries for another provider or all providers never publish their results to the statusline.
 `@narumitw/pi-statusline` supplies the default `📊` icon; `pi-usage` publishes text-only values.
 
-## 🔄 Migrating from pi-codex-usage
-
-`pi-codex-usage` is deprecated and its source is archived under `deprecated/`.
-To migrate one installation:
-
-```bash
-pi remove npm:@narumitw/pi-codex-usage
-pi install npm:@narumitw/pi-usage
-```
-
-Remove the deprecated package rather than loading both usage extensions together.
-
-Behavior changes:
-
-- Use `/usage` for usage management; `/codex-status` is no longer registered.
-- Refresh and cross-provider operations are menu actions rather than flags.
-- Codex CLI fallback is removed to preserve active-runtime-account correctness.
-- The status key changes from `codex-usage` to `usage`.
-
 ## 🔒 Security and privacy
 
 Credential candidates are collected synchronously in memory after any compatible readiness promises settle, and are not cached, persisted, logged, formatted, or appended to the Pi session.

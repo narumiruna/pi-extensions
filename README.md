@@ -266,7 +266,6 @@ Reusable libraries publish built ESM and declarations from `dist/`.
 The following packages remain available as source references but are excluded from active workspace scripts:
 
 - `pi-codex-accounts` — replaced by [`pi-accounts`](./packages/pi-accounts)
-- `pi-codex-usage` — replaced by [`pi-usage`](./packages/pi-usage)
 - [`pi-cbmem`](./deprecated/pi-cbmem) — deprecated without a replacement because a simple benchmark found insufficient benefit and substantially higher token usage
 - [`pi-chrome-devtools`](./deprecated/pi-chrome-devtools) — replaced by Chrome DevTools MCP through Pi's native MCP support; review the [migration instructions and compatibility differences](./deprecated/pi-chrome-devtools/README.md#-migration-to-native-mcp)
 - [`pi-firecrawl`](./deprecated/pi-firecrawl) — replaced by Firecrawl MCP through Pi's native MCP support; follow the [migration instructions](./deprecated/pi-firecrawl/README.md#-migration-to-native-mcp)
