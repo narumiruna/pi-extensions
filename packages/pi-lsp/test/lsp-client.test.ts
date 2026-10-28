@@ -308,26 +308,116 @@ test("push diagnostics settle on the latest publication", async () => {
   }
 });
 
-test("code-action resolution follows the advertised server capability", async () => {
+test.each([
+  ["resolve-absent", "fixture action"],
+  ["resolve-disabled", "fixture action"],
+  ["resolve-false", "fixture action"],
+  ["resolve-null", "fixture action"],
+  ["resolve-options-empty", "fixture action"],
+  ["resolve-options-disabled", "fixture action"],
+  ["resolve-null-result", "fixture action"],
+  ["resolve-enabled", "fixture action:resolved"],
+])("code-action resolution follows the server capability: %s", async (scenario, expectedTitle) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-resolve-capability-"));
   const action = { title: "fixture action", data: { id: 1 } };
+  const adapter = fixtureAdapter(scenario, 30);
+  const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
 
   try {
-    for (const [scenario, expectedTitle] of [
-      ["resolve-disabled", "fixture action"],
-      ["resolve-enabled", "fixture action:resolved"],
-    ] as const) {
-      const adapter = fixtureAdapter(scenario, 30);
-      const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
-      try {
-        await client.start();
-        await client.initialize(root);
-        const [resolved] = await client.resolveActions([action]);
-        assert.equal(resolved?.title, expectedTitle);
-      } finally {
-        await client.shutdown();
-      }
+    await client.start();
+    await client.initialize(root);
+    const [resolved] = await client.resolveActions([action]);
+    assert.equal(resolved?.title, expectedTitle);
+    assert.deepEqual(resolved?.data, action.data);
+  } finally {
+    await client.shutdown();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("actions with an edit do not need resolution", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-resolve-inline-"));
+  const adapter = fixtureAdapter("resolve-error", 30);
+  const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+  const action = { title: "fixture action", edit: { changes: {} } };
+
+  try {
+    await client.start();
+    await client.initialize(root);
+    assert.deepEqual(await client.resolveActions([action]), [action]);
+  } finally {
+    await client.shutdown();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("advertised code-action resolution errors propagate", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-resolve-error-"));
+  const adapter = fixtureAdapter("resolve-error", 30);
+  const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+
+  try {
+    await client.start();
+    await client.initialize(root);
+    await assert.rejects(client.resolveActions([{ title: "fixture action" }]), /unexpected code-action resolve/);
+  } finally {
+    await client.shutdown();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.each([false, true])("literal code-action support enables deferred fixes (write=%s)", async (write) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-negotiated-fix-"));
+  const file = path.join(root, "main.go");
+  const log = path.join(root, "events.jsonl");
+  const original = "package main\n";
+  const fixed = "// fixed\npackage main\n";
+  writeFileSync(file, original);
+  const adapter = fixtureAdapter("lifecycle-negotiated", 30);
+  adapter.env = { PI_LSP_TEST_LOG: log };
+
+  try {
+    const result = await runFix(
+      adapter,
+      { path: "main.go", write },
+      1_000,
+      undefined,
+      { cwd: root, ui: { setStatus() {} } },
+      "test",
+    );
+    const details = result.details as {
+      changed: boolean;
+      write: boolean;
+      text?: string;
+      edits: unknown[];
+    };
+    assert.equal(details.changed, true);
+    assert.equal(details.write, write);
+    assert.equal(details.text, write ? undefined : fixed);
+    assert.equal(details.edits.length, 1);
+    assert.equal(readFileSync(file, "utf8"), write ? fixed : original);
+    const events = readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const codeAction = events.find((event) => event.method === "initialize").params.capabilities.textDocument
+      .codeAction;
+    assert.equal(codeAction.dynamicRegistration, false);
+    assert.deepEqual(codeAction.resolveSupport, { properties: ["edit"] });
+    for (const kind of ["source", "source.fixAll", "source.organizeImports"]) {
+      assert.ok(codeAction.codeActionLiteralSupport.codeActionKind.valueSet.includes(kind));
     }
+    const requested = events.find((event) => event.method === "textDocument/codeAction");
+    assert.deepEqual(requested.params.context.only, ["source.fixAll"]);
+    const resolved = events.find((event) => event.method === "codeAction/resolve");
+    assert.deepEqual(resolved.params, {
+      title: "fixture fix",
+      kind: "source.fixAll",
+      data: { uri: pathToFileURL(file).href },
+    });
+    assert.ok(events.some((event) => event.method === "textDocument/didClose"));
+    assert.ok(events.some((event) => event.method === "shutdown"));
+    assert.ok(events.some((event) => event.method === "exited"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
