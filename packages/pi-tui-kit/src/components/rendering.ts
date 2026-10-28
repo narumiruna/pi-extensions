@@ -3,6 +3,7 @@ import {
   type Input,
   type SelectItem,
   SelectList,
+  stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
@@ -53,7 +54,7 @@ export function createMenuSelectList(
 
 /** Inspect the rendered selected row instead of predicting native inline-column branches. */
 export function selectedLabelFallback(label: string | undefined, row: string | undefined): string[] {
-  return label && !stripVTControlCharacters(row ?? "").includes(label) ? [label] : [];
+  return label && !stripTerminalSequences(row ?? "").includes(label) ? [label] : [];
 }
 
 export function actionMenuItemPresentation(item: ActionMenuItem<string, string>): {
