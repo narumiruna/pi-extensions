@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-notes",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Pi extension for managing global Markdown notes with an isolated embedded agent.",
   "type": "module",
   "license": "MIT",
@@ -29,7 +29,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.67.0"
+    "@narumitw/pi-tui-kit": "^0.68.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

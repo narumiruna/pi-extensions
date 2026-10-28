@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-herdr",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Herdr agent-state integration and operating skill for Pi.",
   "type": "module",
   "license": "MIT",
@@ -36,7 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.67.0"
+    "@narumitw/pi-tui-kit": "^0.68.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
