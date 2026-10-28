@@ -275,7 +275,6 @@ The following packages remain available as source references but are excluded fr
 - [`pi-workflow`](./deprecated/pi-workflow) — replaced by focused Plan and Goal products; atomic Plan-to-Goal handoff has [no replacement](./deprecated/pi-workflow/README.md#-migration-from-pi-workflow)
 - `pi-jupyter` — deprecated without a replacement
 - `pi-webui` — deprecated without a replacement
-- `pi-auto-thinking`
 - `pi-sidebar`
 - `pi-telegraph`
 - `pi-wait-what`
