@@ -86,7 +86,14 @@ function handle(message) {
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          capabilities: { diagnosticProvider: {}, codeActionProvider: { resolveProvider: true } },
+          capabilities: {
+            diagnosticProvider: {},
+            codeActionProvider:
+              scenario === "lifecycle-negotiated" &&
+              !message.params.capabilities.textDocument.codeAction.codeActionLiteralSupport
+                ? true
+                : { resolveProvider: true },
+          },
         },
       });
       return;
@@ -162,11 +169,20 @@ function handle(message) {
                   workspaceDiagnostics: false,
                 },
               }
-            : scenario === "resolve-enabled"
-              ? { codeActionProvider: { resolveProvider: true } }
-              : scenario === "resolve-disabled"
-                ? { codeActionProvider: true }
-                : {},
+            : scenario.startsWith("resolve-")
+              ? {
+                  codeActionProvider: {
+                    "resolve-enabled": { resolveProvider: true },
+                    "resolve-error": { resolveProvider: true },
+                    "resolve-null-result": { resolveProvider: true },
+                    "resolve-disabled": true,
+                    "resolve-false": false,
+                    "resolve-null": null,
+                    "resolve-options-empty": {},
+                    "resolve-options-disabled": { resolveProvider: false },
+                  }[scenario],
+                }
+              : {},
       },
     });
     return;
@@ -235,7 +251,9 @@ function handle(message) {
   }
 
   if (message.method === "codeAction/resolve") {
-    if (scenario === "resolve-enabled") {
+    if (scenario === "resolve-null-result") {
+      send({ jsonrpc: "2.0", id: message.id, result: null });
+    } else if (scenario === "resolve-enabled") {
       send({
         jsonrpc: "2.0",
         id: message.id,
